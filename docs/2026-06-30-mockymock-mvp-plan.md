@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Python `>=3.11`, matching `cobolparser`'s floor.
-- Zero hard PyPI runtime dependencies (matches `cobolparser`/`jclparser` convention). `cobolparser` is consumed via editable sibling install (`-e ../cobol-parser`), never listed in `[project.dependencies]`. `pytest>=7.0` is the only dev dependency.
+- Zero hard PyPI runtime dependencies (matches `cobolparser`/`jclparser` convention). `cobolparser` is consumed via editable sibling install (`-e ../cobol-parser`), never listed in `[project.dependencies]`. `pytest>=7.0` and `pytest-cov>=4.0` are the only dev dependencies (matches the dev-extras pattern already used by `cobolparser`'s and `jclparser`'s own `pyproject.toml`).
 - Package/CLI name: `mockymock`. Test file extension: `.cut`.
 - v1 mocks **only static `CALL "LITERAL"` statements**. No file I/O mocking, no DISPLAY mocking, no EXEC SQL/CICS/DLI mocking, no dynamic-CALL mocking. The `splicer/` package is written against a category-agnostic abstraction so these can be added later without touching `stub_writer.py`.
 - One compiled binary per `TESTSUITE` (all its `TESTCASE`s dispatch via a generated `EVALUATE UT-CURRENT-CASE`), not one binary per case.
