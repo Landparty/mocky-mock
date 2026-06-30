@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mockymock"
+version = "0.1.0"
+description = "Mock COBOL CALL statements, compile with GnuCOBOL, run, and assert"
+authors = [
+    {name = "Samuel Dion"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+]
+keywords = ["cobol", "mainframe", "testing", "gnucobol", "mocking"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.scripts]
+mockymock = "mockymock.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["mockymock*"]

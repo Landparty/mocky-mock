@@ -1,0 +1,2 @@
+-e ../cobol-parser
+-e .[dev]
