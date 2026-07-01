@@ -2997,6 +2997,49 @@ git add mockymock/cli/main.py tests/integration/test_cli.py
 git commit -m "feat: wire generate and run subcommands end to end"
 ```
 
+- [ ] **Step 6: Fix `_splice_call_sites` to recurse into nested statement bodies (amendment — required, not optional)**
+
+Code review proved a real, empirically-confirmed correctness gap: `_splice_call_sites`'s inner loop (`for statement in paragraph.statements:`) only scans a paragraph's top-level statements, but `mock_surface.analyze()` (which produces the `static_call_sites()` this splicer consumes) and `refusal.check_test_case` both correctly recurse into `IF`/`EVALUATE`/inline-`PERFORM`/clause bodies — the same fix already applied in Task 5 and Task 6. The mismatch means: a `CALL "DISCRATE"` nested inside `IF WS-FLAG = "Y" ... END-IF` is reported as mockable by `mock_surface`, passes `refusal.check_test_case` as safely reachable-and-mocked, and even gets scaffolded into a starter `.cut` file by `mockymock generate` — but `_splice_call_sites` never finds it, so the REAL, unmocked `CALL` statement survives untouched in the compiled program. Everything upstream reports success while the actual mocking silently didn't happen. This is the third occurrence of this exact bug class in the project (Tasks 5, 6, now this one) — same fix, same reused helper, no new design needed.
+
+Change the inner loop in `_splice_call_sites` from:
+
+```python
+                for statement in paragraph.statements:
+```
+
+to walk nested bodies too, reusing `mock_surface._nested_statement_lists` (already imported cross-module elsewhere in this project — `refusal.py` already does this):
+
+```python
+from mockymock.analysis.mock_surface import _nested_statement_lists
+
+def _walk_all_statements(statements: list) -> list:
+    """Every statement at every nesting depth, depth-first."""
+    result = []
+    for statement in statements:
+        result.append(statement)
+        for nested in _nested_statement_lists(statement):
+            result.extend(_walk_all_statements(nested))
+    return result
+```
+
+and replace `for statement in paragraph.statements:` with `for statement in _walk_all_statements(paragraph.statements):`. The existing `seen_statement_ids` dedup (keyed on `id(statement)`, object identity) already generalizes correctly across recursion with no further change — it dedups by which physical statement object was already spliced, regardless of nesting depth.
+
+Do not refactor `mock_surface.py` or `refusal.py`'s own internal statement-walking to share a single generic generator with this fix — both are already correct, already reviewed and approved, and touching them isn't necessary to close this gap. (A future cleanup consolidating all three call sites behind one shared `walk_statements()` generator is a reasonable idea, but out of scope for this fix — note it as a follow-up, don't act on it here.)
+
+- [ ] **Step 7: Add a regression test**
+
+Add to `tests/integration/test_cli.py` (or a focused unit test against `_splice_call_sites` directly, matching the style of the two existing line-shift/double-splicing regression tests): a program with `PROCESS-ORDER` containing `IF WS-FLAG = "Y" CALL "DISCRATE" USING ... END-IF`, and a `.cut` mocking `"DISCRATE"`. Assert the generated instrumented source has the real `CALL "DISCRATE"` commented out (not left active) and the mock dispatch spliced in. This test should have FAILED against the pre-fix code (same verification discipline as the line-shift/double-splicing tests).
+
+- [ ] **Step 8: Run the full suite and re-commit**
+
+Run: `python -m pytest tests/ -v`
+Expected: all tests pass (new nested-CALL test included), no regressions.
+
+```bash
+git add mockymock/cli/main.py tests/integration/test_cli.py
+git commit -m "fix: recurse into nested statement bodies in call-site splicer"
+```
+
 ---
 
 ## Task 15: ORDRPROC Worked Example
