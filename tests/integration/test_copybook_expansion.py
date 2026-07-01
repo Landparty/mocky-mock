@@ -1,5 +1,6 @@
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -79,3 +80,102 @@ def test_generate_without_copybook_path_leaves_copy_unresolved(tmp_path: Path):
         ]
     )
     assert exit_code == 0
+
+
+class _StopAfterParse(Exception):
+    """Raised by the `parse_cobol` spy to short-circuit the CLI command
+    immediately after capturing the source text it was called with, so the
+    test never needs GnuCOBOL or a real parse/compile to succeed."""
+
+
+def _spy_and_capture(argv: list[str]) -> str:
+    """Run `main(argv)` with `cobolparser.parse_cobol` patched to a spy that
+    records the exact source text it receives and then aborts via
+    `_StopAfterParse`. Returns that captured text.
+
+    Patches `cobolparser.parse_cobol` (not `mockymock.cli.main.parse_cobol`)
+    because both `_cmd_generate` and `_cmd_run` do a function-local
+    `from cobolparser import parse_cobol` on every invocation -- there is no
+    module-level `mockymock.cli.main.parse_cobol` binding to intercept, so
+    the patch must target the name inside the `cobolparser` package itself.
+    """
+    captured: dict[str, str] = {}
+
+    def fake_parse_cobol(source, *args, **kwargs):
+        captured["source"] = source
+        raise _StopAfterParse
+
+    with patch("cobolparser.parse_cobol", side_effect=fake_parse_cobol):
+        with pytest.raises(_StopAfterParse):
+            main(argv)
+
+    assert "source" in captured, "parse_cobol spy was never called"
+    return captured["source"]
+
+
+def test_run_with_copybook_path_expands_before_parsing():
+    """Proves the `--copybook-path` wiring actually does something, rather
+    than silently no-op'ing: inspects the literal source text handed to
+    `parse_cobol` and checks it contains the expanded PIC clauses (and not
+    the unresolved `COPY ORDREC.`) when the flag is given, and the reverse
+    when it is omitted. Covers both `generate` and `run`, since both
+    commands independently gate copybook expansion behind
+    `if args.copybook_path:`.
+    """
+    cut_path = FIXTURE_DIR / "MAINPGM.cut"
+
+    with_flag = _spy_and_capture(
+        [
+            "run",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "--cut",
+            str(cut_path),
+            "--copybook-path",
+            str(FIXTURE_DIR / "copybooks"),
+        ]
+    )
+    assert "PIC 9(5)V99" in with_flag
+    assert "COPY ORDREC" not in with_flag
+
+    without_flag = _spy_and_capture(
+        [
+            "run",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "--cut",
+            str(cut_path),
+        ]
+    )
+    assert "COPY ORDREC" in without_flag
+    assert "PIC 9(5)V99" not in without_flag
+
+
+def test_generate_with_copybook_path_expands_before_parsing(tmp_path: Path):
+    """Same proof as above, against the `generate` command instead of
+    `run` -- both commands have their own independent
+    `if args.copybook_path: expand_copybooks(...)` gate in
+    `mockymock/cli/main.py`, so each needs its own spy assertion."""
+    output = tmp_path / "MAINPGM.cut"
+
+    with_flag = _spy_and_capture(
+        [
+            "generate",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "-o",
+            str(output),
+            "--copybook-path",
+            str(FIXTURE_DIR / "copybooks"),
+        ]
+    )
+    assert "PIC 9(5)V99" in with_flag
+    assert "COPY ORDREC" not in with_flag
+
+    without_flag = _spy_and_capture(
+        [
+            "generate",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "-o",
+            str(output),
+        ]
+    )
+    assert "COPY ORDREC" in without_flag
+    assert "PIC 9(5)V99" not in without_flag
