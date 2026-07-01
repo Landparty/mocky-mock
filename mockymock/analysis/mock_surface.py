@@ -39,6 +39,7 @@ class CallSite:
     kind: CallKind
     paragraph_name: str
     line: int
+    nested: bool = False
 
 
 @dataclass
@@ -121,7 +122,9 @@ def _nested_statement_lists(statement) -> list[list]:
     return lists
 
 
-def _classify_statement(statement, paragraph_name: str, surface: MockSurface) -> None:
+def _classify_statement(
+    statement, paragraph_name: str, surface: MockSurface, nested: bool
+) -> None:
     """Classify a single statement (top-level or nested) into `surface`."""
     if isinstance(statement, CallStatement):
         kind = CallKind.DYNAMIC if statement.is_dynamic else CallKind.STATIC
@@ -131,6 +134,7 @@ def _classify_statement(statement, paragraph_name: str, surface: MockSurface) ->
                 kind=kind,
                 paragraph_name=paragraph_name,
                 line=statement.location.line,
+                nested=nested,
             )
         )
     elif isinstance(statement, _FILE_IO_TYPES):
@@ -139,16 +143,22 @@ def _classify_statement(statement, paragraph_name: str, surface: MockSurface) ->
         surface.exec_paragraphs.add(paragraph_name)
 
 
-def _walk_statements(statements, paragraph_name: str, surface: MockSurface) -> None:
+def _walk_statements(
+    statements, paragraph_name: str, surface: MockSurface, nested: bool = False
+) -> None:
     """Classify `statements` and recurse into every nested statement body.
 
     Nesting depth doesn't change which paragraph a refusal-gate check cares
     about, so nested statements are still attributed to `paragraph_name`.
+    Every recursive call passes `nested=True` literally (not the parent's
+    `nested` value) so a `CallSite` is marked nested at every depth >= 1,
+    while top-level statements (the initial call, where `nested` defaults to
+    `False`) stay correctly unmarked.
     """
     for statement in statements:
-        _classify_statement(statement, paragraph_name, surface)
-        for nested in _nested_statement_lists(statement):
-            _walk_statements(nested, paragraph_name, surface)
+        _classify_statement(statement, paragraph_name, surface, nested)
+        for nested_list in _nested_statement_lists(statement):
+            _walk_statements(nested_list, paragraph_name, surface, nested=True)
 
 
 def analyze(program: CobolProgram) -> MockSurface:

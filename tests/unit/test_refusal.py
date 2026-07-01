@@ -121,6 +121,73 @@ NESTED_IF_SOURCE = """\
            END-IF.
 """
 
+# A CALL nested inside an IF ... END-IF, reachable from START-HERE. Mirrors
+# test_mock_surface.py's NESTED_SOURCE CALL-INSIDE-IF shape. Used to prove
+# refusal.py refuses a MOCK CALL whose only matching site is nested (the
+# splicer cannot safely determine the nested statement's replacement span,
+# since cobolparser has no location data for END-IF/END-EVALUATE).
+NESTED_CALL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTEDCALL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X VALUE "Y".
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-RATE            PIC 9V99.
+
+       PROCEDURE DIVISION.
+       START-HERE.
+           IF WS-FLAG = "Y"
+               CALL "DISCRATE" USING WS-AMOUNT WS-RATE
+           END-IF.
+"""
+
+# Same shape as NESTED_CALL_SOURCE but the CALL "DISCRATE" is top-level, not
+# nested inside the IF -- used as the over-refusal regression guard (Step 7):
+# a top-level MOCK CALL for the same call name must NOT trigger
+# UNSUPPORTED_NESTED_CALL_TARGET.
+TOP_LEVEL_CALL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TOPLEVEL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X VALUE "Y".
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-RATE            PIC 9V99.
+
+       PROCEDURE DIVISION.
+       START-HERE.
+           CALL "DISCRATE" USING WS-AMOUNT WS-RATE.
+           IF WS-FLAG = "Y"
+               DISPLAY "NOOP"
+           END-IF.
+"""
+
+# Same call name ("DISCRATE") appears BOTH top-level AND nested inside an IF
+# in the same reachable paragraph. Per the brief's design note: this must
+# still refuse, since the splicer would attempt to splice every matching
+# site for that name, including the unsafe nested one -- partial safety
+# (only the top-level site being splicable) isn't good enough.
+MIXED_CALL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MIXEDCALL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X VALUE "Y".
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-RATE            PIC 9V99.
+
+       PROCEDURE DIVISION.
+       START-HERE.
+           CALL "DISCRATE" USING WS-AMOUNT WS-RATE.
+           IF WS-FLAG = "Y"
+               CALL "DISCRATE" USING WS-AMOUNT WS-RATE
+           END-IF.
+"""
+
 # PERFORM ... THRU reachable from START-HERE. No dynamic CALL/file-IO/EXEC
 # anywhere, so UNSUPPORTED_PERFORM_THRU should be the only reason surfaced.
 PERFORM_THRU_SOURCE = """\
@@ -175,6 +242,24 @@ def _nested_if_result():
 
 def _perform_thru_result():
     result = parse_cobol(PERFORM_THRU_SOURCE, filename="thrusamp.cbl")
+    assert result.success, result.errors
+    return result
+
+
+def _nested_call_result():
+    result = parse_cobol(NESTED_CALL_SOURCE, filename="nestedcall.cbl")
+    assert result.success, result.errors
+    return result
+
+
+def _top_level_call_result():
+    result = parse_cobol(TOP_LEVEL_CALL_SOURCE, filename="toplevel.cbl")
+    assert result.success, result.errors
+    return result
+
+
+def _mixed_call_result():
+    result = parse_cobol(MIXED_CALL_SOURCE, filename="mixedcall.cbl")
     assert result.success, result.errors
     return result
 
@@ -282,3 +367,46 @@ def test_per_case_check_refuses_reachable_perform_thru():
         surface, result.ast, "START-HERE", mocked_call_names=set()
     )
     assert any(r.code == "UNSUPPORTED_PERFORM_THRU" for r in reasons)
+
+
+def test_per_case_check_refuses_mock_call_targeting_nested_call_site():
+    """A MOCK CALL "DISCRATE" whose only matching CALL site is nested inside
+    an IF must be refused: the splicer cannot safely determine the nested
+    statement's replacement span, since cobolparser has no location data for
+    block terminators like END-IF (see the corrected Task 14 Step 6 design
+    -- recursing the splicer into nested bodies was tried and found unsafe,
+    so refusal.py refuses instead)."""
+    result = _nested_call_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "START-HERE", mocked_call_names={"DISCRATE"}
+    )
+    assert any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)
+
+
+def test_per_case_check_allows_mock_call_targeting_top_level_call_site():
+    """Regression guard against over-refusing: a MOCK CALL for a call name
+    that only has a top-level (non-nested) matching site must NOT trigger
+    UNSUPPORTED_NESTED_CALL_TARGET, even though the same paragraph also
+    contains an unrelated IF block."""
+    result = _top_level_call_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "START-HERE", mocked_call_names={"DISCRATE"}
+    )
+    assert not any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)
+
+
+def test_per_case_check_refuses_mock_call_with_both_top_level_and_nested_site():
+    """A call name with BOTH a top-level occurrence and a nested occurrence
+    (both reachable) must still refuse: the splicer would attempt to splice
+    every matching site for that name, including the unsafe nested one, so
+    partial safety (only the top-level site being splicable) isn't good
+    enough. Guards against a naive `all(nested)` implementation that would
+    wrongly allow this mixed case."""
+    result = _mixed_call_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "START-HERE", mocked_call_names={"DISCRATE"}
+    )
+    assert any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)

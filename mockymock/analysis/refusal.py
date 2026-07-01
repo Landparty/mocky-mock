@@ -1,6 +1,6 @@
 """Refusal gate: whole-program (parse errors) and per-TESTCASE
-(dynamic CALL / file I/O / EXEC reachable from PERFORM target, or an
-unmatched MOCK CALL directive) checks.
+(dynamic CALL / file I/O / EXEC reachable from PERFORM target, an unmatched
+MOCK CALL directive, or a MOCK CALL targeting a nested call site) checks.
 
 Reachability is computed with a self-contained BFS over PerformStatement
 targets within the same program -- not cobolparser's ProgramFlowAnalyzer --
@@ -19,6 +19,18 @@ PERFORM ... THRU targets are deliberately NOT range-expanded (that needs
 paragraph source-order guarantees this module doesn't verify); instead, any
 reachable paragraph containing a PERFORM ... THRU triggers its own
 fail-closed refusal (UNSUPPORTED_PERFORM_THRU).
+
+A MOCK CALL directive whose target call name has a *nested* reachable call
+site (inside an IF/EVALUATE branch, inline PERFORM body, or similar) is
+refused with UNSUPPORTED_NESTED_CALL_TARGET rather than spliced: the
+splicer's replacement span depends on `source_map.py`'s boundary-list
+approach, and cobolparser's AST has no location data for block terminators
+(END-IF, END-EVALUATE, etc.), so a spliced nested CALL could swallow its
+enclosing block's terminator and silently corrupt control flow. This is the
+same fail-closed philosophy as UNSUPPORTED_PERFORM_THRU above -- refuse
+rather than risk a wrong result. (An earlier fix attempt tried recursing the
+splicer into nested bodies instead and discovered it corrupts control flow;
+see task-14-report.md's "BLOCKED" section for the full analysis.)
 """
 
 from __future__ import annotations
@@ -82,6 +94,7 @@ def check_test_case(
         )
 
     reachable_call_names: set[str] = set()
+    nested_call_names: set[str] = set()
     for site in surface.call_sites:
         if site.paragraph_name not in reachable:
             continue
@@ -97,6 +110,8 @@ def check_test_case(
             )
         else:
             reachable_call_names.add(site.program_name)
+            if site.nested:
+                nested_call_names.add(site.program_name)
 
     if reachable & surface.file_io_paragraphs:
         hit = sorted(reachable & surface.file_io_paragraphs)[0]
@@ -113,6 +128,21 @@ def check_test_case(
             RefusalReason(
                 code="UNSUPPORTED_EXEC",
                 message=f"paragraph '{hit}' contains EXEC SQL/CICS/DLI, not supported in v1",
+            )
+        )
+
+    for name in sorted(mocked_call_names & nested_call_names):
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_NESTED_CALL_TARGET",
+                message=(
+                    f'MOCK CALL "{name}" matches a CALL statement nested inside '
+                    f"a conditional/loop body (IF/EVALUATE/inline PERFORM), which "
+                    f"cannot be safely spliced in v1 (cobolparser has no location "
+                    f"data for block terminators like END-IF, so the splicer "
+                    f"cannot determine where the nested statement's replacement "
+                    f"span should end)"
+                ),
             )
         )
 

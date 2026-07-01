@@ -197,6 +197,23 @@ def test_detects_static_call_nested_inside_if():
     assert static[0].kind is CallKind.STATIC
 
 
+def test_call_nested_inside_if_is_marked_nested():
+    surface = analyze(_nested_ast())
+    static = [
+        c for c in surface.static_call_sites() if c.paragraph_name == "CALL-INSIDE-IF"
+    ]
+    assert len(static) == 1
+    assert static[0].nested is True
+
+
+def test_top_level_call_is_not_marked_nested():
+    surface = analyze(_ast())
+    static = surface.static_call_sites()
+    assert len(static) == 1
+    assert static[0].paragraph_name == "PROCESS-ORDER"
+    assert static[0].nested is False
+
+
 @pytest.mark.xfail(
     strict=True,
     reason=(
