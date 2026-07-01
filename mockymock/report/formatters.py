@@ -20,11 +20,18 @@ def format_console(suite: TestSuiteResult) -> str:
 
 
 def format_junit_xml(suite: TestSuiteResult) -> str:
+    # suite.failures is the SUMMARY line's count of failed CHECKS (a case
+    # with 2 failure reasons contributes 2 to that number), but standard CI
+    # tooling (Jenkins, GitHub Actions, GitLab) interprets the <testsuite
+    # failures="..."> attribute as the count of failed test CASES. Derive it
+    # from suite.results instead so e.g. 1 case with 2 failure reasons
+    # reports failures="1", not "2".
+    failed_cases = sum(1 for r in suite.results if not r.passed)
     testsuite_el = Element(
         "testsuite",
         name=suite.suite_name,
         tests=str(suite.tests_run),
-        failures=str(suite.failures),
+        failures=str(failed_cases),
     )
     for result in suite.results:
         testcase_el = SubElement(testsuite_el, "testcase", name=result.case_name)

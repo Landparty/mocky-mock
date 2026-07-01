@@ -72,3 +72,41 @@ def test_format_junit_xml_is_well_formed_and_has_failures():
     assert '<testsuite name="ORDRPROC discount calculation"' in xml_text
     assert xml_text.count("<testcase") == 2
     assert xml_text.count("<failure") == 2
+
+
+def test_format_junit_xml_failures_attribute_counts_failed_cases_not_reasons():
+    """SAMPLE_STDOUT has 1 passing case and 1 failing case with TWO failure
+    reasons (suite.failures == 2, the SUMMARY line's count of failed CHECKS).
+    Standard CI tooling (Jenkins/GitHub Actions/GitLab) interprets the
+    <testsuite failures="..."> attribute as the count of failed test CASES,
+    not failed checks -- so it must report "1" (one failed case), not "2",
+    or CI would misreport "2 failed tests" for what is actually 1 failing
+    test case."""
+    suite = parse_stdout(SAMPLE_STDOUT)
+    assert suite.failures == 2  # sanity: the SUMMARY line's raw check count
+    xml_text = format_junit_xml(suite)
+    assert 'failures="1"' in xml_text
+    # The per-case <failure> elements (one per reason) are unaffected --
+    # only the testsuite-level attribute's semantics change.
+    assert xml_text.count("<failure") == 2
+
+
+def test_format_junit_xml_failures_attribute_with_multiple_failed_cases():
+    """Two failing cases (one reason each) plus one passing case must report
+    failures="2", proving the count tracks failed cases generically, not
+    just as a special case of the two-reasons-one-case fixture above."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: passes\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ CASE 002 START: fails one\n"
+        "__MOCKYMOCK__ CASE 002 FAIL: reason A\n"
+        "__MOCKYMOCK__ CASE 002 END\n"
+        "__MOCKYMOCK__ CASE 003 START: fails two\n"
+        "__MOCKYMOCK__ CASE 003 FAIL: reason B\n"
+        "__MOCKYMOCK__ CASE 003 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=3 FAILURES=2\n"
+    )
+    suite = parse_stdout(stdout)
+    xml_text = format_junit_xml(suite)
+    assert 'failures="2"' in xml_text
