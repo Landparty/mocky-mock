@@ -188,6 +188,25 @@ MIXED_CALL_SOURCE = """\
            END-IF.
 """
 
+# One paragraph with TWO different static CALLs. Used to prove the reverse
+# of UNMATCHED_MOCK: a reachable static CALL that the .cut simply never
+# mocks must be refused too, since an unmocked CALL has nowhere to link
+# (the called program's real source is never part of this compilation unit).
+TWO_CALL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TWOCALL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-RATE            PIC 9V99.
+
+       PROCEDURE DIVISION.
+       START-HERE.
+           CALL "DISCRATE" USING WS-AMOUNT WS-RATE.
+           CALL "TAXCALC" USING WS-AMOUNT WS-RATE.
+"""
+
 # PERFORM ... THRU reachable from START-HERE. No dynamic CALL/file-IO/EXEC
 # anywhere, so UNSUPPORTED_PERFORM_THRU should be the only reason surfaced.
 PERFORM_THRU_SOURCE = """\
@@ -260,6 +279,12 @@ def _top_level_call_result():
 
 def _mixed_call_result():
     result = parse_cobol(MIXED_CALL_SOURCE, filename="mixedcall.cbl")
+    assert result.success, result.errors
+    return result
+
+
+def _two_call_result():
+    result = parse_cobol(TWO_CALL_SOURCE, filename="twocall.cbl")
     assert result.success, result.errors
     return result
 
@@ -410,3 +435,47 @@ def test_per_case_check_refuses_mock_call_with_both_top_level_and_nested_site():
         surface, result.ast, "START-HERE", mocked_call_names={"DISCRATE"}
     )
     assert any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)
+
+
+def test_per_case_check_refuses_reachable_static_call_left_unmocked():
+    """A paragraph with two static CALLs, mocking only one: the other CALL
+    is reachable but has nowhere to link if left unmocked (the called
+    program's real source is never part of this compilation unit), so it
+    must be refused with UNMOCKED_CALL rather than crashing at compile/link
+    time."""
+    result = _two_call_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "START-HERE", mocked_call_names={"DISCRATE"}
+    )
+    unmocked = [r for r in reasons if r.code == "UNMOCKED_CALL"]
+    assert len(unmocked) == 1
+    assert "TAXCALC" in unmocked[0].message
+
+
+def test_per_case_check_allows_when_every_reachable_static_call_is_mocked():
+    """Regression guard against over-refusing: when every reachable static
+    CALL site is mocked, UNMOCKED_CALL must not fire."""
+    result = _two_call_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface,
+        result.ast,
+        "START-HERE",
+        mocked_call_names={"DISCRATE", "TAXCALC"},
+    )
+    assert not any(r.code == "UNMOCKED_CALL" for r in reasons)
+
+
+def test_per_case_check_unmocked_nested_call_gets_only_unmocked_call_code():
+    """A reachable static call that's both nested AND unmocked should get
+    only UNMOCKED_CALL, not UNSUPPORTED_NESTED_CALL_TARGET -- that check
+    only fires when the name IS in mocked_call_names (catches 'tried to mock
+    a nested site'); this catches the separate case of 'didn't even try'."""
+    result = _nested_call_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "START-HERE", mocked_call_names=set()
+    )
+    assert any(r.code == "UNMOCKED_CALL" for r in reasons)
+    assert not any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)

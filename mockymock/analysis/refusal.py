@@ -1,6 +1,7 @@
 """Refusal gate: whole-program (parse errors) and per-TESTCASE
 (dynamic CALL / file I/O / EXEC reachable from PERFORM target, an unmatched
-MOCK CALL directive, or a MOCK CALL targeting a nested call site) checks.
+MOCK CALL directive, a MOCK CALL targeting a nested call site, or a reachable
+static CALL that no MOCK CALL directive mocks) checks.
 
 Reachability is computed with a self-contained BFS over PerformStatement
 targets within the same program -- not cobolparser's ProgramFlowAnalyzer --
@@ -31,6 +32,18 @@ same fail-closed philosophy as UNSUPPORTED_PERFORM_THRU above -- refuse
 rather than risk a wrong result. (An earlier fix attempt tried recursing the
 splicer into nested bodies instead and discovered it corrupts control flow;
 see task-14-report.md's "BLOCKED" section for the full analysis.)
+
+The reverse of UNMATCHED_MOCK is UNMOCKED_CALL: a real, reachable static
+CALL that the .cut file simply never mocks. In mockymock's architecture an
+unmocked CALL has nowhere to link -- the called program's real source is
+never part of the compilation unit -- so it fails to compile/link if left
+in place. This applies uniformly to top-level and nested reachable static
+call sites (both would fail to link if left unmocked); it deliberately does
+not special-case nesting, since UNSUPPORTED_NESTED_CALL_TARGET above already
+separately catches "tried to mock a nested site" (it only fires when the
+name IS in mocked_call_names). A reachable static call that's both nested
+AND unmocked gets only UNMOCKED_CALL, which is correct: don't also flag
+nesting for a call nobody tried to mock.
 """
 
 from __future__ import annotations
@@ -153,6 +166,19 @@ def check_test_case(
                 message=(
                     f"MOCK CALL \"{name}\" does not match any static CALL "
                     f"site reachable from '{perform_target}'"
+                ),
+            )
+        )
+
+    for name in sorted(reachable_call_names - mocked_call_names):
+        reasons.append(
+            RefusalReason(
+                code="UNMOCKED_CALL",
+                message=(
+                    f'CALL "{name}" is reachable from \'{perform_target}\' but not '
+                    f"mocked by any MOCK CALL directive in this test case -- an "
+                    f"unmocked CALL has nowhere to link, since the called "
+                    f"program's real source is never part of this compilation unit"
                 ),
             )
         )
