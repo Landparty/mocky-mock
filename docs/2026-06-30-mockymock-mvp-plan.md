@@ -3249,19 +3249,209 @@ git commit -m "feat: ORDRPROC worked example and end-to-end capstone test"
 
 ---
 
+## Task 16: Copybook Expansion Wiring
+
+The spec (§2 "In scope") lists copybook expansion as MVP scope, but Tasks 1-15 never wire it into the CLI — `_cmd_generate`/`_cmd_run` call `parse_cobol` directly. This task closes that gap.
+
+One non-obvious API fact, verified against `cobolparser/preprocess/copybook_expander.py:704-757`: `parse_cobol_with_expansion()` internally calls `expand_copybooks()` then `parse_cobol()`, but its return value is only the `ParseResult` — it does **not** expose `expansion.expanded_source`. Since the splicer (Task 14's `_cmd_run`) needs the actual expanded text to feed into `normalize_fixed_format()` (not just the parsed AST), this task calls `expand_copybooks()` directly and threads `expansion.expanded_source` through both parsing and normalization itself, rather than using the convenience wrapper.
+
+**Files:**
+- Modify: `mockymock/cli/main.py` (`_cmd_generate`, `_cmd_run`, `build_parser`)
+- Create: `tests/integration/fixtures/copybook_example/MAINPGM.cbl`
+- Create: `tests/integration/fixtures/copybook_example/MAINPGM.cut`
+- Create: `tests/integration/fixtures/copybook_example/copybooks/ORDREC.CPY`
+- Test: `tests/integration/test_copybook_expansion.py`
+
+**Interfaces:**
+- Consumes: `cobolparser.preprocess.expand_copybooks(source_code: str, copybook_paths: list[str]) -> CopybookExpansion` (`.expanded_source: str`, verified).
+- Produces: `--copybook-path` (repeatable) on both `mockymock generate` and `mockymock run`.
+
+- [ ] **Step 1: Write the copybook fixture**
+
+`tests/integration/fixtures/copybook_example/copybooks/ORDREC.CPY`:
+
+```cobol
+       01  ORD-AMOUNT          PIC 9(5)V99.
+       01  WS-DISCOUNT-PCT     PIC 9V99.
+       01  WS-NET-AMOUNT       PIC 9(5)V99.
+```
+
+`tests/integration/fixtures/copybook_example/MAINPGM.cbl`:
+
+```cobol
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MAINPGM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           COPY ORDREC.
+
+       PROCEDURE DIVISION.
+       PROCESS-ORDER.
+           CALL "DISCRATE" USING ORD-AMOUNT WS-DISCOUNT-PCT
+           COMPUTE WS-NET-AMOUNT =
+               ORD-AMOUNT - (ORD-AMOUNT * WS-DISCOUNT-PCT).
+```
+
+`tests/integration/fixtures/copybook_example/MAINPGM.cut`:
+
+```cobol
+TESTSUITE "MAINPGM discount calculation (via copybook)"
+
+TESTCASE "10% discount reduces net amount correctly"
+    MOCK CALL "DISCRATE"
+        MOVE 0.10 TO WS-DISCOUNT-PCT
+    END-MOCK
+    MOVE 100.00 TO ORD-AMOUNT
+    PERFORM PROCESS-ORDER
+    EXPECT WS-NET-AMOUNT TO BE 90.00
+```
+
+- [ ] **Step 2: Write the failing test**
+
+```python
+# tests/integration/test_copybook_expansion.py
+import shutil
+from pathlib import Path
+
+import pytest
+
+from mockymock.cli.main import main
+
+requires_gnucobol = pytest.mark.skipif(
+    shutil.which("cobc") is None, reason="GnuCOBOL (cobc) not installed"
+)
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "copybook_example"
+
+
+@requires_gnucobol
+def test_run_expands_copybook_and_passes():
+    exit_code = main(
+        [
+            "run",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "--cut",
+            str(FIXTURE_DIR / "MAINPGM.cut"),
+            "--copybook-path",
+            str(FIXTURE_DIR / "copybooks"),
+        ]
+    )
+    assert exit_code == 0
+
+
+def test_generate_expands_copybook_and_finds_call_site(tmp_path: Path):
+    output = tmp_path / "MAINPGM.cut"
+    exit_code = main(
+        [
+            "generate",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "-o",
+            str(output),
+            "--copybook-path",
+            str(FIXTURE_DIR / "copybooks"),
+        ]
+    )
+    assert exit_code == 0
+    assert 'MOCK CALL "DISCRATE"' in output.read_text()
+
+
+def test_run_without_copybook_path_refuses_with_parse_error(capsys):
+    exit_code = main(
+        [
+            "run",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "--cut",
+            str(FIXTURE_DIR / "MAINPGM.cut"),
+        ]
+    )
+    assert exit_code == 1
+    assert "PARSE_ERROR" in capsys.readouterr().out
+```
+
+- [ ] **Step 3: Run it to verify it fails**
+
+Run: `python -m pytest tests/integration/test_copybook_expansion.py -v`
+Expected: FAIL — `unrecognized arguments: --copybook-path` (the flag doesn't exist yet).
+
+- [ ] **Step 4: Add `--copybook-path` and copybook expansion to `mockymock/cli/main.py`**
+
+Read the current file first — `_cmd_generate`/`_cmd_run` were extended across Task 14's own fix cycles, so match against what's actually there rather than an earlier snapshot.
+
+In `_cmd_generate`, wherever `raw_source`/`source_path.read_text()` currently feeds into `parse_cobol`, insert copybook expansion first:
+
+```python
+    from cobolparser.preprocess import expand_copybooks
+
+    source_path = Path(args.program)
+    raw_source = source_path.read_text()
+    if args.copybook_path:
+        expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        raw_source = expansion.expanded_source
+    result = parse_cobol(raw_source, filename=source_path.name)
+```
+
+In `_cmd_run`, the same pattern — expand `raw_source` in place BEFORE it's parsed and BEFORE it's later passed to `normalize_fixed_format(raw_source.splitlines())`:
+
+```python
+    from cobolparser.preprocess import expand_copybooks
+
+    source_path = Path(args.program)
+    raw_source = source_path.read_text()
+    if args.copybook_path:
+        expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        raw_source = expansion.expanded_source
+    result = parse_cobol(raw_source, filename=source_path.name)
+```
+
+(`_cmd_run`'s later `normalize_fixed_format(raw_source.splitlines())` call is unchanged — it already operates on whatever `raw_source` holds at that point, so threading the expanded text through the same variable is sufficient; no other line in `_cmd_run` needs to change, including the splice/driver-insertion logic added across Task 14's fix cycles.)
+
+In `build_parser`, add to both subparsers:
+
+```python
+    generate_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+```
+
+```python
+    run_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+```
+
+- [ ] **Step 5: Run it to verify it passes**
+
+Run: `python -m pytest tests/integration/test_copybook_expansion.py -v`
+Expected: PASS (3 passed; 1 of them gated on `cobc` availability — expect a SKIP there if `cobc` is still unavailable on this machine, same tracked situation since Task 3, not a failure).
+
+- [ ] **Step 6: Run the full suite and re-commit**
+
+Run: `python -m pytest tests/ -v`
+Expected: all unit tests pass; integration tests pass if `cobc` is on PATH, otherwise skip; no regressions.
+
+```bash
+git add mockymock/cli/main.py tests/integration/fixtures/copybook_example/ tests/integration/test_copybook_expansion.py
+git commit -m "feat: wire copybook expansion into generate and run"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage** (against `docs/2026-06-30-mockymock-mvp-design.md`):
-- §2 In-scope items: static CALL mocking only (Tasks 5, 11, 14), one binary per TESTSUITE (Task 12), working-storage reset (Task 10), copybook expansion — **not yet wired into the CLI**, flagged below — auto-scaffolding (Task 13), GnuCOBOL self-bootstrap (Task 2), standalone CLI (Task 14). Covered except copybooks.
+- §2 In-scope items: static CALL mocking only (Tasks 5, 11, 14), one binary per TESTSUITE (Task 12), working-storage reset (Task 10), copybook expansion (Task 16), auto-scaffolding (Task 13), GnuCOBOL self-bootstrap (Task 2), standalone CLI (Task 14). Covered.
 - §5.3/5.4/5.5 (dispatch, reset, static/dynamic): Tasks 11, 10, 6/5 respectively. Covered.
 - §6 DSL grammar: Task 7. Covered.
-- §9 Copybook handling: **gap** — `_cmd_run` in Task 14 calls `parse_cobol` directly, not `expand_copybooks`/`parse_cobol_with_expansion`. The ORDRPROC example has no COPY statements so this gap doesn't surface in any test here. Tracked below rather than silently shipped.
-- §10 Refusal conditions: Task 6, wired into `_cmd_run` in Task 14. Covered.
+- §9 Copybook handling: Task 16. Covered.
+- §10 Refusal conditions: Task 6, wired into `_cmd_run` in Task 14 (later extended with `UNSUPPORTED_NESTED_CALL_TARGET`, discovered during Task 14's own review cycle — see that task's history). Covered.
 - §11 Output capture: the `__MOCKYMOCK__` prefix convention, Task 4/12. Covered (wire format made precise, see Global Constraints note).
 - §12 Fidelity framing: not code — a documentation commitment already satisfied by the spec itself; no task needed.
 - §13 Testing strategy: every task follows unit-without-cobc / integration-with-cobc split as designed.
-
-**Gap to flag explicitly (not silently dropped):** copybook expansion (spec §9) is not wired into `_cmd_run`/`_cmd_generate`. Both currently call `parse_cobol(source_path.read_text(), ...)` directly. A follow-up task — "swap `parse_cobol` for `parse_cobol_with_expansion`/`expand_copybooks` in `_cmd_generate`/`_cmd_run`, threading a `--copybook-path` CLI flag through" — is needed before this handles any program with a `COPY` statement, which is realistic for production COBOL. Not included as a task here because no test in this plan exercises a COPY-using program; add it as Task 16 before declaring copybook support done, with its own fixture program that actually has a `COPY` statement.
 
 **Placeholder scan:** no "TBD"/"implement later" left in any step. The one explicit "fix this generated code" moment (Task 13, scaffold output failing its own round-trip test) is resolved inline with working code, not deferred.
 
