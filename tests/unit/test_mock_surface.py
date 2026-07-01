@@ -1,3 +1,4 @@
+import pytest
 from cobolparser import parse_cobol
 
 from mockymock.analysis.mock_surface import CallKind, analyze
@@ -65,6 +66,62 @@ EXEC_SOURCE = """\
 """
 
 
+NESTED_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTED.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT ORDER-FILE ASSIGN TO "ORDERS"
+               ORGANIZATION IS LINE SEQUENTIAL.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  ORDER-FILE.
+       01  ORDER-RECORD       PIC X(11).
+
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X VALUE "Y".
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-RATE            PIC 9V99.
+       01  WS-CUST-ID         PIC 9(5).
+
+       PROCEDURE DIVISION.
+       CALL-INSIDE-IF.
+           IF WS-FLAG = "Y"
+               CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE
+           END-IF.
+
+       CALL-INSIDE-READ-AT-END.
+           READ ORDER-FILE
+               AT END
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE
+           END-READ.
+
+       EXEC-INSIDE-INLINE-PERFORM.
+           PERFORM 3 TIMES
+               EXEC SQL
+                   SELECT CUST_ID INTO :WS-CUST-ID FROM CUSTOMERS
+               END-EXEC
+           END-PERFORM.
+
+       CALL-INSIDE-EVALUATE.
+           EVALUATE WS-FLAG
+               WHEN "Y"
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE
+               WHEN OTHER
+                   DISPLAY "NO"
+           END-EVALUATE.
+
+       CALL-INSIDE-CALL-ON-EXCEPTION.
+           CALL "OUTER-PGM" USING WS-AMOUNT WS-RATE
+               ON EXCEPTION
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE
+           END-CALL.
+"""
+
+
 def _ast():
     result = parse_cobol(SOURCE, filename="sample.cbl")
     assert result.success, result.errors
@@ -73,6 +130,12 @@ def _ast():
 
 def _exec_ast():
     result = parse_cobol(EXEC_SOURCE, filename="execsamp.cbl")
+    assert result.success, result.errors
+    return result.ast
+
+
+def _nested_ast():
+    result = parse_cobol(NESTED_SOURCE, filename="nested.cbl")
     assert result.success, result.errors
     return result.ast
 
@@ -122,3 +185,71 @@ def test_detects_exec_dli_paragraph():
 def test_paragraph_without_exec_is_not_flagged():
     surface = analyze(_exec_ast())
     assert "NO-EXEC-HERE" not in surface.exec_paragraphs
+
+
+def test_detects_static_call_nested_inside_if():
+    surface = analyze(_nested_ast())
+    static = [
+        c for c in surface.static_call_sites() if c.paragraph_name == "CALL-INSIDE-IF"
+    ]
+    assert len(static) == 1
+    assert static[0].program_name == "NESTED-DISCRATE"
+    assert static[0].kind is CallKind.STATIC
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "cobolparser's READ AT END / NOT AT END clause parsing is a documented "
+        "stub: collect_clause_stmts() (cobolparser/parsers/statements/_utils.py:262) "
+        "always discards its tokens and returns [], so IOReadStatement.at_end_clause "
+        "is never populated with real nested statements regardless of source. Our "
+        "recursive walk is ready to pick this up (at_end_clause is in "
+        "_NESTED_STATEMENT_ATTRS) the moment cobolparser implements real clause "
+        "parsing; until then this is a verified upstream limitation, not a bug in "
+        "mock_surface.py. SAFETY NOTE: a CALL/EXEC/file-op hidden in a READ AT END "
+        "or an INVALID KEY body (DELETE/REWRITE/START share the same stub) is "
+        "invisible to the AST today, so Task 6's refusal gate cannot catch it via "
+        "this path."
+    ),
+)
+def test_detects_call_nested_inside_read_at_end():
+    surface = analyze(_nested_ast())
+    static = [
+        c
+        for c in surface.static_call_sites()
+        if c.paragraph_name == "CALL-INSIDE-READ-AT-END"
+    ]
+    assert len(static) == 1
+    assert static[0].program_name == "NESTED-DISCRATE"
+    # The paragraph also has a top-level READ, so file I/O is still flagged.
+    assert "CALL-INSIDE-READ-AT-END" in surface.file_io_paragraphs
+
+
+def test_detects_exec_sql_nested_inside_inline_perform():
+    surface = analyze(_nested_ast())
+    assert "EXEC-INSIDE-INLINE-PERFORM" in surface.exec_paragraphs
+
+
+def test_detects_static_call_nested_inside_evaluate():
+    surface = analyze(_nested_ast())
+    static = [
+        c
+        for c in surface.static_call_sites()
+        if c.paragraph_name == "CALL-INSIDE-EVALUATE"
+    ]
+    assert len(static) == 1
+    assert static[0].program_name == "NESTED-DISCRATE"
+
+
+def test_detects_static_call_nested_inside_call_on_exception():
+    surface = analyze(_nested_ast())
+    static = [
+        c
+        for c in surface.static_call_sites()
+        if c.paragraph_name == "CALL-INSIDE-CALL-ON-EXCEPTION"
+    ]
+    # Two static CALLs in this paragraph: the outer CALL "OUTER-PGM" and the
+    # nested CALL "NESTED-DISCRATE" inside its ON EXCEPTION clause.
+    assert len(static) == 2
+    assert {c.program_name for c in static} == {"OUTER-PGM", "NESTED-DISCRATE"}
