@@ -2997,47 +2997,125 @@ git add mockymock/cli/main.py tests/integration/test_cli.py
 git commit -m "feat: wire generate and run subcommands end to end"
 ```
 
-- [ ] **Step 6: Fix `_splice_call_sites` to recurse into nested statement bodies (amendment — required, not optional)**
+- [ ] **Step 6 (superseded — see below): the originally-planned "make `_splice_call_sites` recurse" fix turned out to be unsafe, not just incomplete**
 
-Code review proved a real, empirically-confirmed correctness gap: `_splice_call_sites`'s inner loop (`for statement in paragraph.statements:`) only scans a paragraph's top-level statements, but `mock_surface.analyze()` (which produces the `static_call_sites()` this splicer consumes) and `refusal.check_test_case` both correctly recurse into `IF`/`EVALUATE`/inline-`PERFORM`/clause bodies — the same fix already applied in Task 5 and Task 6. The mismatch means: a `CALL "DISCRATE"` nested inside `IF WS-FLAG = "Y" ... END-IF` is reported as mockable by `mock_surface`, passes `refusal.check_test_case` as safely reachable-and-mocked, and even gets scaffolded into a starter `.cut` file by `mockymock generate` — but `_splice_call_sites` never finds it, so the REAL, unmocked `CALL` statement survives untouched in the compiled program. Everything upstream reports success while the actual mocking silently didn't happen. This is the third occurrence of this exact bug class in the project (Tasks 5, 6, now this one) — same fix, same reused helper, no new design needed.
+A fix attempt for this step discovered that recursing the splicer into nested statement bodies is NOT a safe fix, unlike the analogous fixes in Task 5 and Task 6. Splicing requires knowing a statement's *end* line (via `source_map.py`'s boundary-list approach, Task 8), and `cobolparser`'s AST carries **no location data at all** for block terminators (`END-IF`, `END-EVALUATE`, etc.). Concretely: splicing a `CALL` that's the last statement inside an `IF` body would comment out the following `END-IF` along with it, leaving the `IF` unterminated — the mock dispatch block would fall inside the `IF`'s conditional body, silently changing control flow in a way neither compilation nor `VERIFY` reliably catches. This is worse than the original gap (an unmocked real CALL), so the fix attempt correctly stopped rather than ship it.
 
-Change the inner loop in `_splice_call_sites` from:
+**Corrected design (human decision, matches the existing PERFORM...THRU precedent from Task 6): refuse a `MOCK CALL` that targets a nested call site, rather than attempt to splice it.** `_splice_call_sites` in `mockymock/cli/main.py` needs NO changes at all — its original flat, top-level-only scan (from Task 14's initial implementation) is correct as long as refusal.py guarantees only top-level call sites ever reach it. The fix moves entirely into `mock_surface.py` (tag each `CallSite` with whether it's nested) and `refusal.py` (refuse a `MOCK CALL` whose only matching site(s) are nested).
+
+**`mockymock/analysis/mock_surface.py` changes:**
+
+Add a `nested: bool = False` field to `CallSite`:
 
 ```python
-                for statement in paragraph.statements:
+@dataclass
+class CallSite:
+    program_name: str | None  # literal name if STATIC, None if DYNAMIC
+    kind: CallKind
+    paragraph_name: str
+    line: int
+    nested: bool = False
 ```
 
-to walk nested bodies too, reusing `mock_surface._nested_statement_lists` (already imported cross-module elsewhere in this project — `refusal.py` already does this):
+Thread a `nested` parameter through `_classify_statement` and `_walk_statements` (top-level calls default to `False`; every recursive call passes `nested=True`):
 
 ```python
-from mockymock.analysis.mock_surface import _nested_statement_lists
+def _classify_statement(
+    statement, paragraph_name: str, surface: MockSurface, nested: bool
+) -> None:
+    """Classify a single statement (top-level or nested) into `surface`."""
+    if isinstance(statement, CallStatement):
+        kind = CallKind.DYNAMIC if statement.is_dynamic else CallKind.STATIC
+        surface.call_sites.append(
+            CallSite(
+                program_name=None if statement.is_dynamic else statement.called_program,
+                kind=kind,
+                paragraph_name=paragraph_name,
+                line=statement.location.line,
+                nested=nested,
+            )
+        )
+    elif isinstance(statement, _FILE_IO_TYPES):
+        surface.file_io_paragraphs.add(paragraph_name)
+    elif isinstance(statement, _EXEC_TYPES):
+        surface.exec_paragraphs.add(paragraph_name)
 
-def _walk_all_statements(statements: list) -> list:
-    """Every statement at every nesting depth, depth-first."""
-    result = []
+
+def _walk_statements(
+    statements, paragraph_name: str, surface: MockSurface, nested: bool = False
+) -> None:
+    """Classify `statements` and recurse into every nested statement body."""
     for statement in statements:
-        result.append(statement)
-        for nested in _nested_statement_lists(statement):
-            result.extend(_walk_all_statements(nested))
-    return result
+        _classify_statement(statement, paragraph_name, surface, nested)
+        for nested_list in _nested_statement_lists(statement):
+            _walk_statements(nested_list, paragraph_name, surface, nested=True)
 ```
 
-and replace `for statement in paragraph.statements:` with `for statement in _walk_all_statements(paragraph.statements):`. The existing `seen_statement_ids` dedup (keyed on `id(statement)`, object identity) already generalizes correctly across recursion with no further change — it dedups by which physical statement object was already spliced, regardless of nesting depth.
+`analyze()`'s existing call site (`_walk_statements(paragraph.statements, paragraph.paragraph_name, surface)`) needs no change — `nested` defaults to `False` there, correctly marking top-level statements.
 
-Do not refactor `mock_surface.py` or `refusal.py`'s own internal statement-walking to share a single generic generator with this fix — both are already correct, already reviewed and approved, and touching them isn't necessary to close this gap. (A future cleanup consolidating all three call sites behind one shared `walk_statements()` generator is a reasonable idea, but out of scope for this fix — note it as a follow-up, don't act on it here.)
+**`mockymock/analysis/refusal.py` changes:**
 
-- [ ] **Step 7: Add a regression test**
+In `check_test_case`, track which mocked call names have at least one *nested* reachable occurrence, alongside the existing `reachable_call_names` tracking:
 
-Add to `tests/integration/test_cli.py` (or a focused unit test against `_splice_call_sites` directly, matching the style of the two existing line-shift/double-splicing regression tests): a program with `PROCESS-ORDER` containing `IF WS-FLAG = "Y" CALL "DISCRATE" USING ... END-IF`, and a `.cut` mocking `"DISCRATE"`. Assert the generated instrumented source has the real `CALL "DISCRATE"` commented out (not left active) and the mock dispatch spliced in. This test should have FAILED against the pre-fix code (same verification discipline as the line-shift/double-splicing tests).
+```python
+    reachable_call_names: set[str] = set()
+    nested_call_names: set[str] = set()
+    for site in surface.call_sites:
+        if site.paragraph_name not in reachable:
+            continue
+        if site.kind.value == "dynamic":
+            reasons.append(
+                RefusalReason(
+                    code="DYNAMIC_CALL",
+                    message=(
+                        f"paragraph '{site.paragraph_name}' (line {site.line}) "
+                        f"contains a dynamic CALL, not supported in v1"
+                    ),
+                )
+            )
+        else:
+            reachable_call_names.add(site.program_name)
+            if site.nested:
+                nested_call_names.add(site.program_name)
+```
+
+Add a new refusal check (placement doesn't matter relative to the other checks — e.g., right after the `UNSUPPORTED_EXEC` check, before `UNMATCHED_MOCK`):
+
+```python
+    for name in sorted(mocked_call_names & nested_call_names):
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_NESTED_CALL_TARGET",
+                message=(
+                    f'MOCK CALL "{name}" matches a CALL statement nested inside '
+                    f"a conditional/loop body (IF/EVALUATE/inline PERFORM), which "
+                    f"cannot be safely spliced in v1 (cobolparser has no location "
+                    f"data for block terminators like END-IF, so the splicer "
+                    f"cannot determine where the nested statement's replacement "
+                    f"span should end)"
+                ),
+            )
+        )
+```
+
+If a call name has BOTH a top-level occurrence and a nested occurrence (both reachable), it still gets refused — the splicer would attempt to splice every matching site for that name, including the unsafe nested one, so partial safety isn't good enough here.
+
+Update the module docstring to mention this new refusal category, matching the existing style for `UNSUPPORTED_PERFORM_THRU`.
+
+- [ ] **Step 7: Add regression tests**
+
+Add to `tests/unit/test_mock_surface.py`: a test parsing real COBOL with a `CALL` nested inside an `IF`, asserting the resulting `CallSite.nested is True`; and a test confirming a top-level `CallSite.nested is False` (covering the existing tests still pass unmodified — `nested` defaulting to `False` shouldn't change any prior assertion).
+
+Add to `tests/unit/test_refusal.py`: a test mirroring the `_reachable_paragraphs`/`NESTED_IF_SOURCE`-style fixtures already in this file — a paragraph with `CALL "DISCRATE"` nested inside `IF WS-FLAG = "Y" ... END-IF`, `mocked_call_names={"DISCRATE"}`. Assert `UNSUPPORTED_NESTED_CALL_TARGET` is in the returned reasons. Also add a test confirming a top-level (non-nested) `MOCK CALL` for the same call name does NOT trigger this refusal (regression guard against over-refusing).
 
 - [ ] **Step 8: Run the full suite and re-commit**
 
 Run: `python -m pytest tests/ -v`
-Expected: all tests pass (new nested-CALL test included), no regressions.
+Expected: all tests pass (new tests included), no regressions in `test_mock_surface.py`'s or `test_refusal.py`'s existing tests. `_splice_call_sites` in `main.py` is unchanged by this fix — confirm `tests/integration/test_cli.py`'s existing line-shift/double-splicing regression tests still pass exactly as before.
 
 ```bash
-git add mockymock/cli/main.py tests/integration/test_cli.py
-git commit -m "fix: recurse into nested statement bodies in call-site splicer"
+git add mockymock/analysis/mock_surface.py mockymock/analysis/refusal.py tests/unit/test_mock_surface.py tests/unit/test_refusal.py
+git commit -m "fix: refuse MOCK CALL targeting a nested (unsplicable) call site"
 ```
 
 ---
