@@ -26,12 +26,17 @@ def _cmd_setup(args: argparse.Namespace) -> int:
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
+    from cobolparser.preprocess import expand_copybooks
 
     from mockymock.analysis.mock_surface import analyze
     from mockymock.dsl.generator import scaffold_cut
 
     source_path = Path(args.program)
-    result = parse_cobol(source_path.read_text(), filename=source_path.name)
+    raw_source = source_path.read_text()
+    if args.copybook_path:
+        expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        raw_source = expansion.expanded_source
+    result = parse_cobol(raw_source, filename=source_path.name)
     if not result.success:
         print(f"mockymock generate: {len(result.errors)} parse error(s):")
         for error in result.errors:
@@ -52,7 +57,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
-    from cobolparser.preprocess import normalize_fixed_format
+    from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
 
     from mockymock.analysis.mock_surface import analyze
     from mockymock.analysis.refusal import check_test_case, check_whole_program
@@ -68,6 +73,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     source_path = Path(args.program)
     raw_source = source_path.read_text()
+    if args.copybook_path:
+        expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        raw_source = expansion.expanded_source
     result = parse_cobol(raw_source, filename=source_path.name)
 
     for reason in check_whole_program(result):
@@ -230,6 +238,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument("program")
     generate_parser.add_argument("-o", "--output")
+    generate_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
     generate_parser.set_defaults(func=_cmd_generate)
 
     run_parser = subparsers.add_parser(
@@ -238,6 +251,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("program")
     run_parser.add_argument("--cut", required=True)
     run_parser.add_argument("--junit-xml")
+    run_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
     run_parser.set_defaults(func=_cmd_run)
 
     return parser

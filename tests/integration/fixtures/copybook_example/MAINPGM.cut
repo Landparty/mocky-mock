@@ -1,0 +1,9 @@
+TESTSUITE "MAINPGM discount calculation (via copybook)"
+
+TESTCASE "10% discount reduces net amount correctly"
+    MOCK CALL "DISCRATE"
+        MOVE 0.10 TO WS-DISCOUNT-PCT
+    END-MOCK
+    MOVE 100.00 TO ORD-AMOUNT
+    PERFORM PROCESS-ORDER
+    EXPECT WS-NET-AMOUNT TO BE 90.00
