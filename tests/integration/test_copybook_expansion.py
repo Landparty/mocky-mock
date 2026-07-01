@@ -44,20 +44,28 @@ def test_generate_expands_copybook_and_finds_call_site(tmp_path: Path):
     assert 'MOCK CALL "DISCRATE"' in output.read_text()
 
 
-def test_generate_without_copybook_path_leaves_copy_unresolved(tmp_path: Path):
+def test_generate_without_copybook_path_leaves_copy_unresolved(
+    tmp_path: Path, capsys
+):
     """`--copybook-path` is genuinely optional: omitting it must not crash
-    argument parsing, and `generate` still runs to completion. But the CLI
-    must not silently pretend the COPY statement was expanded -- without
-    the flag, `COPY ORDREC.` is left unresolved by cobolparser (it does not
-    raise a parse error; it simply produces zero data items for that
-    section), which is the concrete, observable reason the flag matters and
-    is not a no-op. This is checked directly against parse_cobol's AST
-    rather than via a "PARSE_ERROR" refusal message, because cobolparser
-    does not treat an unexpanded COPY as a parse error (verified: parsing
-    the raw fixture source with no copybook path yields
-    `result.success is True` and an empty `data_items` list for
-    WORKING-STORAGE) -- so asserting a parse-error refusal here would be
-    asserting something that is not true of the underlying parser.
+    argument parsing. But the CLI must not silently pretend the COPY
+    statement was expanded and proceed to scaffold against a program missing
+    WORKING-STORAGE fields -- without the flag, `COPY ORDREC.` is left
+    unresolved by cobolparser (it does not raise a parse error; it simply
+    produces zero data items for that section), which is the concrete,
+    observable reason the flag matters and is not a no-op. This is checked
+    directly against parse_cobol's AST (rather than only via the CLI's
+    refusal message), because cobolparser does not treat an unexpanded COPY
+    as a parse error (verified: parsing the raw fixture source with no
+    copybook path yields `result.success is True` and an empty `data_items`
+    list for WORKING-STORAGE) -- so asserting a "PARSE_ERROR" refusal here
+    would be asserting something that is not true of the underlying parser.
+
+    Since mockymock cannot safely proceed with missing data items, `generate`
+    now refuses cleanly with UNRESOLVED_COPYBOOK (exit 1) instead of the
+    previous silent no-op (exit 0) -- replacing what would otherwise surface
+    as a confusing downstream crash once splicing/compiling depended on the
+    missing fields.
     """
     from cobolparser import parse_cobol
 
@@ -79,7 +87,47 @@ def test_generate_without_copybook_path_leaves_copy_unresolved(tmp_path: Path):
             str(output),
         ]
     )
+    assert exit_code == 1
+    assert "UNRESOLVED_COPYBOOK" in capsys.readouterr().out
+
+
+def test_generate_with_copybook_path_does_not_flag_unresolved_copybook(
+    tmp_path: Path, capsys
+):
+    """With `--copybook-path` given and the copybook properly resolved, the
+    UNRESOLVED_COPYBOOK check must not fire."""
+    output = tmp_path / "MAINPGM.cut"
+    exit_code = main(
+        [
+            "generate",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "-o",
+            str(output),
+            "--copybook-path",
+            str(FIXTURE_DIR / "copybooks"),
+        ]
+    )
     assert exit_code == 0
+    assert "UNRESOLVED_COPYBOOK" not in capsys.readouterr().out
+
+
+def test_run_without_copybook_path_refuses_unresolved_copybook(capsys):
+    """`run` on the copybook fixture without --copybook-path must refuse
+    cleanly with UNRESOLVED_COPYBOOK and exit 1, rather than proceeding to
+    splice/compile a program with missing WORKING-STORAGE fields (which
+    previously surfaced as a confusing compile crash instead of a clean
+    refusal). This must not require GnuCOBOL: the refusal fires before any
+    splicing/compilation is attempted."""
+    exit_code = main(
+        [
+            "run",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "--cut",
+            str(FIXTURE_DIR / "MAINPGM.cut"),
+        ]
+    )
+    assert exit_code == 1
+    assert "UNRESOLVED_COPYBOOK" in capsys.readouterr().out
 
 
 class _StopAfterParse(Exception):

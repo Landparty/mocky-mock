@@ -1,7 +1,7 @@
-"""Refusal gate: whole-program (parse errors) and per-TESTCASE
-(dynamic CALL / file I/O / EXEC reachable from PERFORM target, an unmatched
-MOCK CALL directive, a MOCK CALL targeting a nested call site, or a reachable
-static CALL that no MOCK CALL directive mocks) checks.
+"""Refusal gate: whole-program (parse errors, unresolved COPY statements) and
+per-TESTCASE (dynamic CALL / file I/O / EXEC reachable from PERFORM target,
+an unmatched MOCK CALL directive, a MOCK CALL targeting a nested call site,
+or a reachable static CALL that no MOCK CALL directive mocks) checks.
 
 Reachability is computed with a self-contained BFS over PerformStatement
 targets within the same program -- not cobolparser's ProgramFlowAnalyzer --
@@ -44,13 +44,46 @@ separately catches "tried to mock a nested site" (it only fires when the
 name IS in mocked_call_names). A reachable static call that's both nested
 AND unmocked gets only UNMOCKED_CALL, which is correct: don't also flag
 nesting for a call nobody tried to mock.
+
+check_unresolved_copybooks (UNRESOLVED_COPYBOOK) is a whole-program check,
+not a per-TESTCASE one: an unresolved COPY affects the whole program
+regardless of which TESTCASE runs. It exists because cobolparser's
+parse_cobol does NOT raise a parse error for an unresolved COPY statement --
+verified empirically: parsing raw (unexpanded) source containing
+`COPY ORDREC.` yields `result.success is True` and an empty `data_items`
+list for that DATA DIVISION section (see
+tests/integration/test_copybook_expansion.py's
+test_generate_without_copybook_path_leaves_copy_unresolved for the concrete
+proof). Worse, the AST-node `CopyStatement` class in
+cobolparser/models/statements/misc.py is never instantiated by any parser
+(confirmed empirically: `ast.find_all_by_type("CopyStatement")` returns `[]`
+and `"CopyStatement"` never appears in `ast.to_dict()`'s JSON for a program
+with an unexpanded COPY) -- so an unresolved COPY leaves *zero* trace in the
+AST. The only reliable signal is therefore textual: this function re-lexes
+`raw_source` (the exact text handed to `parse_cobol`, before whatever
+expansion was or wasn't applied) with cobolparser's own `CobolLexer` and
+looks for a `TokenType.COPY` token, rather than a naive substring search
+that could false-positive on the word "COPY" appearing in a comment or
+string literal. Verified empirically against this repo's own COPY-bearing
+fixture (tests/integration/fixtures/copybook_example/MAINPGM.cbl) and a
+constructed false-positive probe (COPY inside a VALUE literal and as part
+of an identifier like WS-COPYRIGHT): the lexer correctly tokenizes COPY as
+a keyword only when it appears in COPY-statement position, never inside a
+string or as a substring of another word. `free_form=True` is required --
+`CobolLexer` defaults to `free_form=False` (fixed-format column rules),
+which garbles already-normalized free-form text (each line loses its first
+few characters, since the lexer treats them as sequence-number/indicator
+columns); cobolparser's own `tokenize_cobol()` convenience function
+hardcodes `free_form=False` too and so is not usable here directly.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cobolparser.lexer import CobolLexer, TokenType
 from cobolparser.models.statements.control import PerformStatement
+from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.mock_surface import (
     MockSurface,
@@ -73,6 +106,41 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
             code="PARSE_ERROR",
             message=f"cobolparser reported {len(parse_result.errors)} parse error(s)",
         )
+    ]
+
+
+def check_unresolved_copybooks(raw_source: str) -> list[RefusalReason]:
+    """Refuse if `raw_source` still contains an unresolved COPY statement.
+
+    Must be called with the exact source text handed to `parse_cobol` (i.e.
+    after whatever `--copybook-path` expansion was or wasn't applied): if
+    expansion succeeded, the COPY statement itself is replaced by the
+    copybook's expanded content and no COPY token remains; if expansion was
+    skipped or didn't fully resolve, the literal `COPY ...` statement is
+    still present and is detected here. See the module docstring for why a
+    textual/lexer-based check is used instead of an AST-based one.
+    """
+    normalized = normalize_fixed_format(raw_source.splitlines())
+    lexer = CobolLexer(normalized, free_form=True)
+    tokens = lexer.tokenize()
+    copy_tokens = [t for t in tokens if t.type == TokenType.COPY]
+    if not copy_tokens:
+        return []
+    lines = sorted({t.location.line for t in copy_tokens})
+    return [
+        RefusalReason(
+            code="UNRESOLVED_COPYBOOK",
+            message=(
+                f"unresolved COPY statement at line {line} -- the DATA "
+                f"DIVISION section it belongs to has no expanded content "
+                f"(cobolparser does not raise a parse error for an "
+                f"unresolved COPY; it silently produces an empty data-item "
+                f"list instead), so splicing/compiling would proceed with "
+                f"missing WORKING-STORAGE fields -- pass --copybook-path "
+                f"pointing at the copybook's directory"
+            ),
+        )
+        for line in lines
     ]
 
 

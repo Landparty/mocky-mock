@@ -29,6 +29,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser.preprocess import expand_copybooks
 
     from mockymock.analysis.mock_surface import analyze
+    from mockymock.analysis.refusal import check_unresolved_copybooks
     from mockymock.dsl.generator import scaffold_cut
 
     source_path = Path(args.program)
@@ -41,6 +42,12 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         print(f"mockymock generate: {len(result.errors)} parse error(s):")
         for error in result.errors:
             print(f"  {error}")
+        return 1
+
+    copybook_reasons = check_unresolved_copybooks(raw_source)
+    for reason in copybook_reasons:
+        print(f"mockymock generate: refused ({reason.code}): {reason.message}")
+    if copybook_reasons:
         return 1
 
     surface = analyze(result.ast)
@@ -60,7 +67,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
 
     from mockymock.analysis.mock_surface import analyze
-    from mockymock.analysis.refusal import check_test_case, check_whole_program
+    from mockymock.analysis.refusal import (
+        check_test_case,
+        check_unresolved_copybooks,
+        check_whole_program,
+    )
     from mockymock.dsl.parser import parse_cut
     from mockymock.report.formatters import format_console, format_junit_xml
     from mockymock.report.results import parse_stdout
@@ -81,6 +92,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     for reason in check_whole_program(result):
         print(f"mockymock run: refused ({reason.code}): {reason.message}")
     if not result.success:
+        return 1
+
+    copybook_reasons = check_unresolved_copybooks(raw_source)
+    for reason in copybook_reasons:
+        print(f"mockymock run: refused ({reason.code}): {reason.message}")
+    if copybook_reasons:
         return 1
 
     suite = parse_cut(Path(args.cut).read_text())

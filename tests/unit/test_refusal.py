@@ -1,7 +1,11 @@
 from cobolparser import parse_cobol
 
 from mockymock.analysis.mock_surface import analyze
-from mockymock.analysis.refusal import check_test_case, check_whole_program
+from mockymock.analysis.refusal import (
+    check_test_case,
+    check_unresolved_copybooks,
+    check_whole_program,
+)
 
 SOURCE = """\
        IDENTIFICATION DIVISION.
@@ -297,6 +301,60 @@ def test_whole_program_check_flags_parse_errors():
     bad = parse_cobol("NOT EVEN VALID COBOL { } [ ]", filename="bad.cbl")
     reasons = check_whole_program(bad)
     assert any(r.code == "PARSE_ERROR" for r in reasons)
+
+
+# Unexpanded COPY statement -- the AST leaves zero trace of this (verified
+# empirically: find_all_by_type("CopyStatement") returns [] and "COPY" never
+# appears in ast.to_dict()'s JSON), so check_unresolved_copybooks must detect
+# it textually via cobolparser's own lexer, not via the AST.
+UNRESOLVED_COPY_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MAINPGM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           COPY ORDREC.
+
+       PROCEDURE DIVISION.
+       PROCESS-ORDER.
+           CALL "DISCRATE" USING ORD-AMOUNT WS-DISCOUNT-PCT.
+"""
+
+# Same shape, but with "COPY" appearing only inside a string literal and as
+# a substring of an identifier -- neither should be detected as an
+# unresolved COPY statement (false-positive probe for the lexer-based
+# detector, not a naive substring search).
+NO_COPY_STATEMENT_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NOCOPY.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-MSG        PIC X(20) VALUE "THIS IS A COPY TEST".
+       01  WS-COPYRIGHT  PIC X(5) VALUE "COPY!".
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY WS-MSG.
+"""
+
+
+def test_check_unresolved_copybooks_flags_unexpanded_copy_statement():
+    reasons = check_unresolved_copybooks(UNRESOLVED_COPY_SOURCE)
+    assert any(r.code == "UNRESOLVED_COPYBOOK" for r in reasons)
+
+
+def test_check_unresolved_copybooks_passes_clean_source():
+    assert check_unresolved_copybooks(SOURCE) == []
+
+
+def test_check_unresolved_copybooks_does_not_false_positive_on_copy_substring():
+    """'COPY' appearing inside a string literal or as part of another
+    identifier (WS-COPYRIGHT) must not be mistaken for a COPY statement --
+    this is the concrete proof the detector is lexer-based, not a naive
+    substring search."""
+    reasons = check_unresolved_copybooks(NO_COPY_STATEMENT_SOURCE)
+    assert reasons == []
 
 
 def test_per_case_check_allows_static_call_only_paragraph():
