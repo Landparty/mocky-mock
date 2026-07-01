@@ -19,12 +19,30 @@ mockymock too.
 - `cobolparser.models.ast_base.SourceLocation.line: int` — refers to lines
   in the NORMALIZED free-form text, not the original file.
 - `cobolparser.models.statements.call.CallStatement.called_program: str | None`,
-  `.is_dynamic: bool` (property)
-- `cobolparser.models.statements.control.PerformStatement.target_paragraph: str | None`
+  `.is_dynamic: bool` (property), `.on_exception`/`.not_on_exception`/`.on_overflow: list[CobolStatement] | None`
+- `cobolparser.models.statements.control.PerformStatement.target_paragraph: str | None`,
+  `.inline_statements: list[CobolStatement]` (populated for inline `PERFORM ... END-PERFORM`)
+- `cobolparser.models.statements.control.IfStatement.then_statements`/`.else_statements: list[CobolStatement]`
+- `cobolparser.models.statements.control.EvaluateStatement.when_clauses: list[WhenClause]`,
+  `.default_when: WhenClause | None`; `WhenClause.statements: list[CobolStatement]`
+- `cobolparser.models.statements.io.*` IO statement clause bodies: `.at_end_clause`,
+  `.not_at_end_clause`, `.invalid_key_clause`, `.not_invalid_key_clause`,
+  `.at_eop_clause: list[CobolStatement] | None`
+- `cobolparser.models.statements.io.{IOOpenStatement,IOCloseStatement,IOReadStatement,
+  IOWriteStatement,IORewriteStatement,IODeleteStatement}` — `mock_surface.py` uses
+  direct `isinstance` checks against these, not `cobolparser.IOLogger`
+  (verified `IOLogger` doesn't detect EXEC CICS/DLI at all, so it couldn't have
+  satisfied this module's requirements regardless of preference).
+- `cobolparser.models.sql_statements.ExecSQLStatement` — **not** detectable via
+  `node_type` (that's hardcoded to `"Statement"` on the `CobolStatement` base
+  class; the `"EXEC-SQL"` string lands in `.statement_type` instead). Detect via
+  `isinstance(statement, ExecSQLStatement)`.
+- `cobolparser.parsers.statements.ibm_exec_statements.ExecCicsStatement`
+  (`node_type == "EXEC_CICS"`), `.ExecImsStatement` (`node_type == "EXEC_IMS"`,
+  covers both EXEC IMS and EXEC DLI syntax — there is no separate `"EXEC_DLI"`
+  node type). Both extend `ASTNode` directly, not `CobolStatement`, so their
+  `node_type` check works, unlike `ExecSQLStatement`'s.
 - `cobolparser.models.data_items.CobolDataItem.name`, `.level`,
   `.picture_clause: PictureClause | None`, `.value_clause: str | None`, `.usage`
 - `cobolparser.models.data_items.PictureClause.pattern: str`
 - `cobolparser.analysis.DynamicCallAnalyzer().analyze(ast)`
-- `cobolparser.HostVariableResolver`, `cobolparser.IMSSegmentAnalyzer`,
-  `cobolparser.IOLogger` — used by `mock_surface.py` to detect (not mock)
-  EXEC SQL/CICS/DLI and file I/O for the refusal gate.

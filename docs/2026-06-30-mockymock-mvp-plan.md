@@ -1121,6 +1121,68 @@ git add mockymock/analysis/ tests/unit/test_mock_surface.py
 git commit -m "feat: mock surface analyzer classifies static/dynamic CALL and detects file/EXEC"
 ```
 
+- [ ] **Step 7: Recursive descent into nested statement bodies (amendment — required, not optional)**
+
+Task 5 as originally drafted only walked `paragraph.statements` — the flat, top-level list. That misses every `CALL`/file-I/O/EXEC statement nested inside an `IF`, `EVALUATE`, an inline `PERFORM ... END-PERFORM`, or an IO statement's `AT END`/`INVALID KEY`/`AT END-OF-PAGE` clause body. Since Task 6 (refusal gate) exists specifically to catch dangerous statements before they reach an unmocked compile/run, a detection gap here directly weakens that safety guarantee — a `CALL` hidden inside an `IF` would silently pass refusal instead of blocking it. This step closes that gap by making `analyze()` recurse.
+
+Verified nested-statement attribute names, read directly from `cobolparser` source (do not re-guess these):
+- `IfStatement.then_statements: list[CobolStatement]`, `.else_statements: list[CobolStatement]` (`cobolparser/models/statements/control.py:197-198`)
+- `EvaluateStatement.when_clauses: list[WhenClause]`, `.default_when: WhenClause | None`; each `WhenClause.statements: list[CobolStatement]` (`cobolparser/models/statements/control.py:100-101`, `:26`)
+- `PerformStatement.inline_statements: list[CobolStatement]` — populated for inline `PERFORM ... END-PERFORM`, distinct from `.target_paragraph` used for `PERFORM paragraph-name` (`cobolparser/models/statements/control.py:240`)
+- IO statements' clause bodies: `at_end_clause`, `not_at_end_clause`, `invalid_key_clause`, `not_invalid_key_clause`, `at_eop_clause` — all `list[CobolStatement] | None` (`cobolparser/models/statements/io.py:85-88,190-192`)
+- `CallStatement.on_exception`, `.not_on_exception`, `.on_overflow` — all `list[CobolStatement] | None` (`cobolparser/models/statements/call.py:34-36`)
+
+Add to `mockymock/analysis/mock_surface.py`:
+
+```python
+from cobolparser.models.statements.control import EvaluateStatement
+
+_NESTED_STATEMENT_ATTRS = (
+    "then_statements",
+    "else_statements",
+    "inline_statements",
+    "at_end_clause",
+    "not_at_end_clause",
+    "invalid_key_clause",
+    "not_invalid_key_clause",
+    "at_eop_clause",
+    "on_exception",
+    "not_on_exception",
+    "on_overflow",
+)
+
+
+def _nested_statement_lists(statement) -> list[list]:
+    lists = [
+        value
+        for attr in _NESTED_STATEMENT_ATTRS
+        if (value := getattr(statement, attr, None))
+    ]
+    if isinstance(statement, EvaluateStatement):
+        for when in statement.when_clauses:
+            if when.statements:
+                lists.append(when.statements)
+        if statement.default_when is not None and statement.default_when.statements:
+            lists.append(statement.default_when.statements)
+    return lists
+```
+
+Replace the flat `for statement in paragraph.statements:` loop in `analyze()` with a recursive walk that classifies each statement (same `if isinstance(statement, CallStatement): ... elif isinstance(statement, _FILE_IO_TYPES): ... elif isinstance(statement, (ExecSQLStatement, ExecCicsStatement, ExecImsStatement)): ...` body as before) and then recurses into every list returned by `_nested_statement_lists(statement)`, still attributing findings to the same enclosing `paragraph.paragraph_name` (nesting depth doesn't change which paragraph a refusal-gate check cares about).
+
+- [ ] **Step 8: Add nested-statement tests**
+
+Add to `tests/unit/test_mock_surface.py`: a paragraph with `CALL "NESTED-DISCRATE"` inside an `IF` (asserting it's classified as a static call site with the correct paragraph name), a paragraph with a `READ` whose `AT END` clause contains a `CALL`, and a paragraph with an inline `PERFORM ... END-PERFORM` containing `EXEC SQL`. Each should be detected exactly as if it were top-level.
+
+- [ ] **Step 9: Run the full suite and re-commit**
+
+Run: `python -m pytest tests/ -v`
+Expected: all tests pass (new nested-statement tests included), no regressions in the four originally-passing tests.
+
+```bash
+git add mockymock/analysis/mock_surface.py tests/unit/test_mock_surface.py
+git commit -m "fix: recurse into nested statement bodies in mock surface analysis"
+```
+
 ---
 
 ## Task 6: Refusal Gate
