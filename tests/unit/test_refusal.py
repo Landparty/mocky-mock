@@ -97,6 +97,51 @@ CHAIN_SOURCE = """\
            CALL WS-PGM-NAME USING WS-AMOUNT.
 """
 
+# The finding's own repro: WRAPPER-PARAGRAPH's PERFORM to DYNAMIC-PARAGRAPH
+# is nested inside an IF, not top-level. A BFS that only reads
+# paragraph.statements (flat) never sees this PERFORM and wrongly reports
+# DYNAMIC-PARAGRAPH's dynamic CALL as unreachable.
+NESTED_IF_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTEDIF.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-PGM-NAME        PIC X(8) VALUE "DISCRATE".
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-FLAG            PIC X VALUE "Y".
+
+       PROCEDURE DIVISION.
+       DYNAMIC-PARAGRAPH.
+           CALL WS-PGM-NAME USING WS-AMOUNT.
+
+       WRAPPER-PARAGRAPH.
+           IF WS-FLAG = "Y"
+               PERFORM DYNAMIC-PARAGRAPH
+           END-IF.
+"""
+
+# PERFORM ... THRU reachable from START-HERE. No dynamic CALL/file-IO/EXEC
+# anywhere, so UNSUPPORTED_PERFORM_THRU should be the only reason surfaced.
+PERFORM_THRU_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. THRUSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMOUNT          PIC 9(5)V99.
+
+       PROCEDURE DIVISION.
+       START-HERE.
+           PERFORM RANGE-START THRU RANGE-END.
+
+       RANGE-START.
+           DISPLAY "START".
+
+       RANGE-END.
+           DISPLAY "END".
+"""
+
 
 def _result():
     result = parse_cobol(SOURCE, filename="sample.cbl")
@@ -118,6 +163,18 @@ def _exec_result():
 
 def _chain_result():
     result = parse_cobol(CHAIN_SOURCE, filename="chainsamp.cbl")
+    assert result.success, result.errors
+    return result
+
+
+def _nested_if_result():
+    result = parse_cobol(NESTED_IF_SOURCE, filename="nestedif.cbl")
+    assert result.success, result.errors
+    return result
+
+
+def _perform_thru_result():
+    result = parse_cobol(PERFORM_THRU_SOURCE, filename="thrusamp.cbl")
     assert result.success, result.errors
     return result
 
@@ -199,3 +256,29 @@ def test_per_case_check_follows_multi_hop_perform_chain_to_dynamic_call():
         surface, result.ast, "PARAGRAPH-A", mocked_call_names=set()
     )
     assert any(r.code == "DYNAMIC_CALL" for r in reasons)
+
+
+def test_per_case_check_finds_perform_nested_inside_if_to_dynamic_call():
+    """Regression for the Task 6 Critical finding: WRAPPER-PARAGRAPH's
+    PERFORM DYNAMIC-PARAGRAPH is nested inside an IF, not a top-level
+    statement. A BFS that only reads paragraph.statements flatly would miss
+    this PERFORM entirely and wrongly report zero refusal reasons even
+    though the dynamic CALL is genuinely reachable."""
+    result = _nested_if_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "WRAPPER-PARAGRAPH", mocked_call_names=set()
+    )
+    assert any(r.code == "DYNAMIC_CALL" for r in reasons)
+
+
+def test_per_case_check_refuses_reachable_perform_thru():
+    """PERFORM ... THRU is never range-expanded by the BFS (source-order
+    guarantees aren't verified); a reachable PERFORM...THRU must instead
+    surface its own fail-closed UNSUPPORTED_PERFORM_THRU refusal."""
+    result = _perform_thru_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "START-HERE", mocked_call_names=set()
+    )
+    assert any(r.code == "UNSUPPORTED_PERFORM_THRU" for r in reasons)

@@ -10,6 +10,15 @@ PerformStatement.target_paragraph) the rest of mockymock already depends
 on, rather than additionally depending on ProgramFlowAnalyzer's full edge
 taxonomy. A CALL is a leaf: it is never traversed into, since the called
 program's source isn't part of this compilation unit.
+
+PerformStatements are discovered at any nesting depth -- including inside
+IF/EVALUATE branches, inline PERFORM bodies, and IO clause bodies (AT END,
+INVALID KEY, etc.) -- by reusing mock_surface.py's `_nested_statement_lists`
+helper (see `_find_performs`), not a flat `paragraph.statements` scan.
+PERFORM ... THRU targets are deliberately NOT range-expanded (that needs
+paragraph source-order guarantees this module doesn't verify); instead, any
+reachable paragraph containing a PERFORM ... THRU triggers its own
+fail-closed refusal (UNSUPPORTED_PERFORM_THRU).
 """
 
 from __future__ import annotations
@@ -18,7 +27,11 @@ from dataclasses import dataclass
 
 from cobolparser.models.statements.control import PerformStatement
 
-from mockymock.analysis.mock_surface import MockSurface, _all_paragraphs
+from mockymock.analysis.mock_surface import (
+    MockSurface,
+    _all_paragraphs,
+    _nested_statement_lists,
+)
 
 
 @dataclass
@@ -45,7 +58,7 @@ def check_test_case(
     mocked_call_names: set[str],
 ) -> list[RefusalReason]:
     reasons: list[RefusalReason] = []
-    reachable = _reachable_paragraphs(program, perform_target)
+    reachable, thru_paragraphs = _reachable_paragraphs(program, perform_target)
 
     if perform_target not in reachable:
         reasons.append(
@@ -55,6 +68,18 @@ def check_test_case(
             )
         )
         return reasons
+
+    for paragraph_name in sorted(thru_paragraphs):
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_PERFORM_THRU",
+                message=(
+                    f"paragraph '{paragraph_name}' uses PERFORM ... THRU, "
+                    f"not supported in v1 (range expansion needs source-order "
+                    f"guarantees not yet verified)"
+                ),
+            )
+        )
 
     reachable_call_names: set[str] = set()
     for site in surface.call_sites:
@@ -105,22 +130,48 @@ def check_test_case(
     return reasons
 
 
-def _reachable_paragraphs(program, start: str) -> set[str]:
+def _find_performs(statements: list) -> list[PerformStatement]:
+    """Recursively collect every PerformStatement in `statements`, including
+    ones nested inside IF/EVALUATE branches, inline PERFORM bodies, and IO
+    clause bodies (AT END, INVALID KEY, etc.) -- reusing mock_surface.py's
+    `_nested_statement_lists` rather than reimplementing nested-statement
+    detection.
+    """
+    found = []
+    for statement in statements:
+        if isinstance(statement, PerformStatement):
+            found.append(statement)
+        for nested in _nested_statement_lists(statement):
+            found.extend(_find_performs(nested))
+    return found
+
+
+def _reachable_paragraphs(program, start: str) -> tuple[set[str], set[str]]:
+    """Return (reachable paragraph names, paragraph names containing a
+    reachable PERFORM ... THRU), both computed in a single BFS pass over
+    PerformStatement.target_paragraph edges. PERFORM ... THRU targets
+    themselves are not followed -- see module docstring / check_test_case's
+    UNSUPPORTED_PERFORM_THRU refusal for why range expansion is out of
+    scope.
+    """
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
-        return set()
+        return set(), set()
     by_name = {p.paragraph_name: p for p in _all_paragraphs(procedure)}
     if start not in by_name:
-        return set()
+        return set(), set()
 
     seen: set[str] = set()
+    thru_paragraphs: set[str] = set()
     stack = [start]
     while stack:
         name = stack.pop()
         if name in seen or name not in by_name:
             continue
         seen.add(name)
-        for statement in by_name[name].statements:
-            if isinstance(statement, PerformStatement) and statement.target_paragraph:
+        for statement in _find_performs(by_name[name].statements):
+            if statement.thru_paragraph:
+                thru_paragraphs.add(name)
+            if statement.target_paragraph:
                 stack.append(statement.target_paragraph)
-    return seen
+    return seen, thru_paragraphs
