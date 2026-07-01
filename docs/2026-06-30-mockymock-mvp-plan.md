@@ -1429,6 +1429,67 @@ git add mockymock/analysis/refusal.py tests/unit/test_refusal.py
 git commit -m "feat: per-testcase and whole-program refusal gate"
 ```
 
+- [ ] **Step 6: Fix reachability BFS to recurse into nested statement bodies (amendment — required, not optional)**
+
+Code review proved this Critical, with a repro: `_reachable_paragraphs` only reads `by_name[name].statements` — a paragraph's top-level statement list — so a `PERFORM` nested inside `IF`/`EVALUATE`/an inline `PERFORM`/an IO-clause body is invisible to the BFS. A program where `WRAPPER-PARAGRAPH` contains `IF WS-FLAG = "Y" PERFORM DYNAMIC-PARAGRAPH END-IF`, and `DYNAMIC-PARAGRAPH` contains a dynamic `CALL`, makes `check_test_case(surface, ast, "WRAPPER-PARAGRAPH", set())` return `[]` — no refusal — even though the dynamic CALL is genuinely reachable. This is the exact class of bug this module exists to prevent, and it's the same root cause as Task 5's original gap (only Step 6/7 there fixed `mock_surface.py`'s own statement classification; `refusal.py`'s separate reachability BFS was never updated to match). Apply the same principle here: don't only look at top-level statements.
+
+Reuse `mock_surface.py`'s existing nested-statement machinery rather than reimplementing it — `_all_paragraphs` is already imported cross-module from there; follow that same precedent for `_nested_statement_lists`:
+
+```python
+from mockymock.analysis.mock_surface import _all_paragraphs, _nested_statement_lists
+```
+
+Change `_reachable_paragraphs`'s inner loop from a flat `for statement in by_name[name].statements:` to one that also walks nested bodies — for example, replace the loop body with a small recursive helper:
+
+```python
+def _find_performs(statements: list) -> list[PerformStatement]:
+    found = []
+    for statement in statements:
+        if isinstance(statement, PerformStatement):
+            found.append(statement)
+        for nested in _nested_statement_lists(statement):
+            found.extend(_find_performs(nested))
+    return found
+```
+
+and call `_find_performs(by_name[name].statements)` instead of iterating `by_name[name].statements` directly when looking for `PerformStatement`s to push onto the BFS stack.
+
+**Second, related gap in the same finding: `PerformStatement.thru_paragraph` (PERFORM ... THRU) is never followed at all.** Correctly expanding a THRU range requires knowing paragraph source order, which `_all_paragraphs`'s current concatenation (`list(procedure_division.paragraphs)` then each section's paragraphs) does not reliably preserve when top-level paragraphs and sectioned paragraphs are interleaved in the source. Rather than risk an incorrect partial expansion, apply the same fail-closed philosophy used everywhere else in this module: if a reachable paragraph contains a `PerformStatement` with `thru_paragraph` set at all, that itself is a new refusal reason.
+
+Add to `RefusalReason` usage in `check_test_case`:
+
+```python
+        if isinstance(statement, PerformStatement) and statement.thru_paragraph:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_PERFORM_THRU",
+                    message=(
+                        f"paragraph '{paragraph_name}' uses PERFORM ... THRU, "
+                        f"not supported in v1 (range expansion needs source-order "
+                        f"guarantees not yet verified)"
+                    ),
+                )
+            )
+```
+
+(exact wiring point — inside the same loop that walks `_find_performs(...)` results, since that's where every reachable-paragraph's `PerformStatement`s are already being visited).
+
+- [ ] **Step 7: Add regression tests**
+
+Add to `tests/unit/test_refusal.py`:
+- A test mirroring the report's own repro: `WRAPPER-PARAGRAPH` containing `IF WS-FLAG = "Y" PERFORM DYNAMIC-PARAGRAPH END-IF`, `DYNAMIC-PARAGRAPH` containing a dynamic CALL. Assert `DYNAMIC_CALL` IS now detected from `WRAPPER-PARAGRAPH`.
+- A test for `PERFORM X THRU Y`: assert `UNSUPPORTED_PERFORM_THRU` is returned when a reachable paragraph performs a THRU range.
+
+- [ ] **Step 8: Run the full suite and re-commit**
+
+Run: `python -m pytest tests/ -v`
+Expected: all tests pass (new tests included), no regressions in the original 9 `test_refusal.py` tests.
+
+```bash
+git add mockymock/analysis/refusal.py tests/unit/test_refusal.py
+git commit -m "fix: recurse into nested statement bodies and refuse PERFORM THRU in reachability BFS"
+```
+
 ---
 
 ## Task 7: `.cut` DSL Model and Parser
