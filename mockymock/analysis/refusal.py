@@ -1,49 +1,53 @@
-"""Refusal gate: whole-program (parse errors, unresolved COPY statements) and
-per-TESTCASE (dynamic CALL / file I/O / EXEC reachable from PERFORM target,
-an unmatched MOCK CALL directive, a MOCK CALL targeting a nested call site,
-or a reachable static CALL that no MOCK CALL directive mocks) checks.
+"""Refusal gate: whole-program (parse errors, unresolved COPY statements,
+nested EXEC blocks) and per-TESTCASE (directive/site matching) checks.
 
-Reachability is computed with a self-contained BFS over PerformStatement
-targets within the same program -- not cobolparser's ProgramFlowAnalyzer --
-because that keeps this module's correctness checkable against the same
-small set of verified attributes (CobolParagraph.statements,
-PerformStatement.target_paragraph) the rest of mockymock already depends
-on, rather than additionally depending on ProgramFlowAnalyzer's full edge
-taxonomy. A CALL is a leaf: it is never traversed into, since the called
-program's source isn't part of this compilation unit.
+Per-TESTCASE checks are computed over the statements reachable from that
+case's PERFORM target. Reachability is a self-contained BFS over
+PerformStatement targets within the same program -- not cobolparser's
+ProgramFlowAnalyzer -- because that keeps this module's correctness
+checkable against the same small set of verified attributes
+(CobolParagraph.statements, PerformStatement.target_paragraph) the rest of
+mockymock already depends on. A CALL is a leaf: it is never traversed into,
+since the called program's source isn't part of this compilation unit.
 
-PerformStatements are discovered at any nesting depth -- including inside
-IF/EVALUATE branches, inline PERFORM bodies, and IO clause bodies (AT END,
-INVALID KEY, etc.) -- by reusing mock_surface.py's `_nested_statement_lists`
-helper (see `_find_performs`), not a flat `paragraph.statements` scan.
-PERFORM ... THRU targets are deliberately NOT range-expanded (that needs
-paragraph source-order guarantees this module doesn't verify); instead, any
-reachable paragraph containing a PERFORM ... THRU triggers its own
-fail-closed refusal (UNSUPPORTED_PERFORM_THRU).
+v2 matching model: every reachable mockable BoundarySite must be matched by
+exactly one MockDirective of the test case --
 
-A MOCK CALL directive whose target call name has a *nested* reachable call
-site (inside an IF/EVALUATE branch, inline PERFORM body, or similar) is
-refused with UNSUPPORTED_NESTED_CALL_TARGET rather than spliced: the
-splicer's replacement span depends on `source_map.py`'s boundary-list
-approach, and cobolparser's AST has no location data for block terminators
-(END-IF, END-EVALUATE, etc.), so a spliced nested CALL could swallow its
-enclosing block's terminator and silently corrupt control flow. This is the
-same fail-closed philosophy as UNSUPPORTED_PERFORM_THRU above -- refuse
-rather than risk a wrong result. (An earlier fix attempt tried recursing the
-splicer into nested bodies instead and discovered it corrupts control flow;
-see task-14-report.md's "BLOCKED" section for the full analysis.)
+- zero matches  -> UNMOCKED_CALL / UNMOCKED_FILE_OP / UNMOCKED_SQL /
+                   UNMOCKED_CICS / UNMOCKED_DLI / UNMOCKED_CONSOLE_ACCEPT
+                   (an unmocked CALL has nowhere to link; unmocked file I/O
+                   would hit a nonexistent file in the sandbox; unmocked
+                   EXEC cannot compile; unmocked console ACCEPT reads
+                   whatever stdin happens to be attached)
+- two+ matches  -> AMBIGUOUS_MOCK (fail closed rather than pick one)
+- matched but nested -> UNSUPPORTED_NESTED_MOCK_TARGET: the splicer's
+                   replacement span depends on source_map.py's
+                   boundary-list approach, and cobolparser's AST has no
+                   location data for block terminators (END-IF,
+                   END-EVALUATE, ...), so a spliced nested statement could
+                   swallow its enclosing block's terminator and silently
+                   corrupt control flow. Refuse rather than risk a wrong
+                   result. (An earlier fix attempt tried recursing the
+                   splicer into nested bodies and discovered it corrupts
+                   control flow; see task-14-report.md.)
 
-The reverse of UNMATCHED_MOCK is UNMOCKED_CALL: a real, reachable static
-CALL that the .cut file simply never mocks. In mockymock's architecture an
-unmocked CALL has nowhere to link -- the called program's real source is
-never part of the compilation unit -- so it fails to compile/link if left
-in place. This applies uniformly to top-level and nested reachable static
-call sites (both would fail to link if left unmocked); it deliberately does
-not special-case nesting, since UNSUPPORTED_NESTED_CALL_TARGET above already
-separately catches "tried to mock a nested site" (it only fires when the
-name IS in mocked_call_names). A reachable static call that's both nested
-AND unmocked gets only UNMOCKED_CALL, which is correct: don't also flag
-nesting for a call nobody tried to mock.
+A directive matching no reachable site is UNMATCHED_MOCK; a VERIFY whose
+(category, key) no MOCK directive of the same case declares is
+VERIFY_WITHOUT_MOCK (its tally field would be stale or undeclared).
+
+Detected-but-unmockable sites keep their own refusals: DYNAMIC_CALL (target
+unknown at parse time) and UNSUPPORTED_SORT_MERGE (SORT/MERGE/RELEASE/
+RETURN mock an algorithm plus its INPUT/OUTPUT PROCEDURE contract, not a
+boundary statement). PERFORM ... THRU targets are deliberately NOT
+range-expanded (that needs paragraph source-order guarantees this module
+doesn't verify); any reachable paragraph containing one triggers
+UNSUPPORTED_PERFORM_THRU.
+
+check_nested_exec (NESTED_EXEC) is a whole-program check: GnuCOBOL cannot
+compile raw EXEC blocks, so every EXEC site must be stubbed program-wide
+regardless of reachability -- and a nested EXEC cannot be stubbed safely
+(same span limitation as above), so its mere existence anywhere in the
+program refuses the file.
 
 check_unresolved_copybooks (UNRESOLVED_COPYBOOK) is a whole-program check,
 not a per-TESTCASE one: an unresolved COPY affects the whole program
@@ -51,30 +55,14 @@ regardless of which TESTCASE runs. It exists because cobolparser's
 parse_cobol does NOT raise a parse error for an unresolved COPY statement --
 verified empirically: parsing raw (unexpanded) source containing
 `COPY ORDREC.` yields `result.success is True` and an empty `data_items`
-list for that DATA DIVISION section (see
-tests/integration/test_copybook_expansion.py's
-test_generate_without_copybook_path_leaves_copy_unresolved for the concrete
-proof). Worse, the AST-node `CopyStatement` class in
-cobolparser/models/statements/misc.py is never instantiated by any parser
-(confirmed empirically: `ast.find_all_by_type("CopyStatement")` returns `[]`
-and `"CopyStatement"` never appears in `ast.to_dict()`'s JSON for a program
-with an unexpanded COPY) -- so an unresolved COPY leaves *zero* trace in the
-AST. The only reliable signal is therefore textual: this function re-lexes
-`raw_source` (the exact text handed to `parse_cobol`, before whatever
-expansion was or wasn't applied) with cobolparser's own `CobolLexer` and
-looks for a `TokenType.COPY` token, rather than a naive substring search
-that could false-positive on the word "COPY" appearing in a comment or
-string literal. Verified empirically against this repo's own COPY-bearing
-fixture (tests/integration/fixtures/copybook_example/MAINPGM.cbl) and a
-constructed false-positive probe (COPY inside a VALUE literal and as part
-of an identifier like WS-COPYRIGHT): the lexer correctly tokenizes COPY as
-a keyword only when it appears in COPY-statement position, never inside a
-string or as a substring of another word. `free_form=True` is required --
-`CobolLexer` defaults to `free_form=False` (fixed-format column rules),
-which garbles already-normalized free-form text (each line loses its first
-few characters, since the lexer treats them as sequence-number/indicator
-columns); cobolparser's own `tokenize_cobol()` convenience function
-hardcodes `free_form=False` too and so is not usable here directly.
+list for that DATA DIVISION section. Worse, the AST-node `CopyStatement`
+class is never instantiated by any parser, so an unresolved COPY leaves
+*zero* trace in the AST. The only reliable signal is therefore textual:
+this function re-lexes `raw_source` with cobolparser's own `CobolLexer`
+(free_form=True -- the default fixed-format column rules would garble
+already-normalized text) and looks for a `TokenType.COPY` token, rather
+than a naive substring search that could false-positive on the word "COPY"
+in a comment or string literal.
 """
 
 from __future__ import annotations
@@ -86,16 +74,48 @@ from cobolparser.models.statements.control import PerformStatement
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.mock_surface import (
+    BoundarySite,
     MockSurface,
     _all_paragraphs,
     _nested_statement_lists,
+    normalize_exec_text,
 )
+from mockymock.dsl.model import (
+    EXEC_CATEGORIES,
+    MockCategory,
+    MockDirective,
+    MockTestCase,
+)
+
+_UNMOCKED_CODES = {
+    MockCategory.CALL: "UNMOCKED_CALL",
+    MockCategory.SQL: "UNMOCKED_SQL",
+    MockCategory.CICS: "UNMOCKED_CICS",
+    MockCategory.DLI: "UNMOCKED_DLI",
+    MockCategory.ACCEPT: "UNMOCKED_CONSOLE_ACCEPT",
+}
+# every file-op category shares one code
+_UNMOCKED_FILE_OP_CODE = "UNMOCKED_FILE_OP"
 
 
 @dataclass
 class RefusalReason:
     code: str
     message: str
+
+
+def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool:
+    """Category must agree; then CALL keys match the call literal exactly,
+    file-op/ACCEPT keys match any of the site's (uppercased) names, and
+    SQL/CICS/DLI keys prefix-match the site's normalized EXEC text."""
+    if site.category is not directive.category:
+        return False
+    if directive.category in EXEC_CATEGORIES:
+        prefix = normalize_exec_text(directive.key)
+        return bool(prefix) and (site.match_text or "").startswith(prefix)
+    if directive.category is MockCategory.CALL:
+        return directive.key in site.keys
+    return directive.key.upper() in site.keys
 
 
 def check_whole_program(parse_result) -> list[RefusalReason]:
@@ -106,6 +126,26 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
             code="PARSE_ERROR",
             message=f"cobolparser reported {len(parse_result.errors)} parse error(s)",
         )
+    ]
+
+
+def check_nested_exec(surface: MockSurface) -> list[RefusalReason]:
+    """Whole-program: any nested EXEC SQL/CICS/DLI refuses the file. Every
+    EXEC block must be commented out for cobc to compile the program at all,
+    and nested statements cannot be spliced/stubbed safely."""
+    return [
+        RefusalReason(
+            code="NESTED_EXEC",
+            message=(
+                f"EXEC {site.label} at line {site.line} (paragraph "
+                f"'{site.paragraph_name}') is nested inside a conditional/"
+                f"loop body -- every EXEC block must be stubbed out for "
+                f"GnuCOBOL to compile the program, and nested statements "
+                f"cannot be stubbed safely (no block-terminator locations)"
+            ),
+        )
+        for site in surface.exec_sites()
+        if site.nested
     ]
 
 
@@ -147,17 +187,19 @@ def check_unresolved_copybooks(raw_source: str) -> list[RefusalReason]:
 def check_test_case(
     surface: MockSurface,
     program,
-    perform_target: str,
-    mocked_call_names: set[str],
+    case: MockTestCase,
 ) -> list[RefusalReason]:
     reasons: list[RefusalReason] = []
-    reachable, thru_paragraphs = _reachable_paragraphs(program, perform_target)
+    reachable, thru_paragraphs = _reachable_paragraphs(program, case.perform_target)
 
-    if perform_target not in reachable:
+    if case.perform_target not in reachable:
         reasons.append(
             RefusalReason(
                 code="UNKNOWN_PARAGRAPH",
-                message=f"PERFORM target '{perform_target}' not found in PROCEDURE DIVISION",
+                message=(
+                    f"PERFORM target '{case.perform_target}' not found in "
+                    f"PROCEDURE DIVISION"
+                ),
             )
         )
         return reasons
@@ -168,102 +210,118 @@ def check_test_case(
                 code="UNSUPPORTED_PERFORM_THRU",
                 message=(
                     f"paragraph '{paragraph_name}' uses PERFORM ... THRU, "
-                    f"not supported in v1 (range expansion needs source-order "
+                    f"not supported (range expansion needs source-order "
                     f"guarantees not yet verified)"
                 ),
             )
         )
 
-    reachable_call_names: set[str] = set()
-    nested_call_names: set[str] = set()
-    for site in surface.call_sites:
-        if site.paragraph_name not in reachable:
+    matched_directives: set[int] = set()
+    for site in surface.sites_in(reachable):
+        if site.category is None:
+            if site.label == "dynamic CALL":
+                reasons.append(
+                    RefusalReason(
+                        code="DYNAMIC_CALL",
+                        message=(
+                            f"paragraph '{site.paragraph_name}' (line {site.line}) "
+                            f"contains a dynamic CALL, not supported"
+                        ),
+                    )
+                )
+            else:
+                reasons.append(
+                    RefusalReason(
+                        code="UNSUPPORTED_SORT_MERGE",
+                        message=(
+                            f"paragraph '{site.paragraph_name}' (line {site.line}) "
+                            f"contains a SORT/MERGE-family statement "
+                            f"(SORT/MERGE/RELEASE/RETURN), which mocks an "
+                            f"algorithm plus its INPUT/OUTPUT PROCEDURE "
+                            f"contract rather than a boundary -- not supported"
+                        ),
+                    )
+                )
             continue
-        if site.kind.value == "dynamic":
+
+        matches = [d for d in case.mocks if directive_matches_site(d, site)]
+        for directive in matches:
+            matched_directives.add(id(directive))
+
+        if not matches:
+            code = _UNMOCKED_CODES.get(site.category, _UNMOCKED_FILE_OP_CODE)
             reasons.append(
                 RefusalReason(
-                    code="DYNAMIC_CALL",
+                    code=code,
                     message=(
-                        f"paragraph '{site.paragraph_name}' (line {site.line}) "
-                        f"contains a dynamic CALL, not supported in v1"
+                        f"{site.label} boundary at line {site.line} (paragraph "
+                        f"'{site.paragraph_name}'"
+                        + (f", keys {'/'.join(site.keys)}" if site.keys else "")
+                        + (
+                            f', text "{site.match_text[:60]}"'
+                            if site.match_text
+                            else ""
+                        )
+                        + f") is reachable from '{case.perform_target}' but "
+                        f"no MOCK directive in this test case matches it"
                     ),
                 )
             )
-        else:
-            reachable_call_names.add(site.program_name)
-            if site.nested:
-                nested_call_names.add(site.program_name)
-
-    if reachable & surface.file_io_paragraphs:
-        hit = sorted(reachable & surface.file_io_paragraphs)[0]
-        reasons.append(
-            RefusalReason(
-                code="UNMOCKED_FILE_IO",
-                message=f"paragraph '{hit}' performs file I/O, not mocked in v1",
+        elif len(matches) > 1:
+            described = ", ".join(d.describe() for d in matches)
+            reasons.append(
+                RefusalReason(
+                    code="AMBIGUOUS_MOCK",
+                    message=(
+                        f"{site.label} boundary at line {site.line} (paragraph "
+                        f"'{site.paragraph_name}') is matched by more than one "
+                        f"MOCK directive ({described}) -- make the keys "
+                        f"unambiguous"
+                    ),
+                )
             )
-        )
-
-    if reachable & surface.exec_paragraphs:
-        hit = sorted(reachable & surface.exec_paragraphs)[0]
-        reasons.append(
-            RefusalReason(
-                code="UNSUPPORTED_EXEC",
-                message=f"paragraph '{hit}' contains EXEC SQL/CICS/DLI, not supported in v1",
+        elif site.nested:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_NESTED_MOCK_TARGET",
+                    message=(
+                        f"MOCK {matches[0].describe()} matches a statement at "
+                        f"line {site.line} nested inside a conditional/loop "
+                        f"body (IF/EVALUATE/inline PERFORM), which cannot be "
+                        f"safely spliced (cobolparser has no location data "
+                        f"for block terminators like END-IF, so the splicer "
+                        f"cannot determine where the nested statement's "
+                        f"replacement span should end)"
+                    ),
+                )
             )
-        )
 
-    if reachable & surface.console_accept_paragraphs:
-        hit = sorted(reachable & surface.console_accept_paragraphs)[0]
-        reasons.append(
-            RefusalReason(
-                code="UNMOCKED_CONSOLE_ACCEPT",
-                message=(
-                    f"paragraph '{hit}' reads console input via ACCEPT, not "
-                    f"mocked in v1 -- at test runtime it would read whatever "
-                    f"stdin happens to be attached, making the result "
-                    f"nondeterministic"
-                ),
+    for directive in case.mocks:
+        if id(directive) not in matched_directives:
+            reasons.append(
+                RefusalReason(
+                    code="UNMATCHED_MOCK",
+                    message=(
+                        f"MOCK {directive.describe()} does not match any "
+                        f"boundary site reachable from '{case.perform_target}'"
+                    ),
+                )
             )
-        )
 
-    for name in sorted(mocked_call_names & nested_call_names):
-        reasons.append(
-            RefusalReason(
-                code="UNSUPPORTED_NESTED_CALL_TARGET",
-                message=(
-                    f'MOCK CALL "{name}" matches a CALL statement nested inside '
-                    f"a conditional/loop body (IF/EVALUATE/inline PERFORM), which "
-                    f"cannot be safely spliced in v1 (cobolparser has no location "
-                    f"data for block terminators like END-IF, so the splicer "
-                    f"cannot determine where the nested statement's replacement "
-                    f"span should end)"
-                ),
+    declared = {(m.category, m.key) for m in case.mocks}
+    for verification in case.verifications:
+        if (verification.category, verification.key) not in declared:
+            reasons.append(
+                RefusalReason(
+                    code="VERIFY_WITHOUT_MOCK",
+                    message=(
+                        f"VERIFY {verification.category.value} "
+                        f"{verification.key!r} has no matching MOCK directive "
+                        f"in this test case -- its tally counter would be "
+                        f"undeclared or stale"
+                    ),
+                )
             )
-        )
-
-    for name in mocked_call_names - reachable_call_names:
-        reasons.append(
-            RefusalReason(
-                code="UNMATCHED_MOCK",
-                message=(
-                    f"MOCK CALL \"{name}\" does not match any static CALL "
-                    f"site reachable from '{perform_target}'"
-                ),
-            )
-        )
-
-    for name in sorted(reachable_call_names - mocked_call_names):
-        reasons.append(
-            RefusalReason(
-                code="UNMOCKED_CALL",
-                message=(
-                    f'CALL "{name}" is reachable from \'{perform_target}\' but not '
-                    f"mocked by any MOCK CALL directive in this test case -- an "
-                    f"unmocked CALL has nowhere to link, since the called "
-                    f"program's real source is never part of this compilation unit"
-                ),
-            )
-        )
 
     return reasons
 

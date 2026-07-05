@@ -2,10 +2,22 @@ from cobolparser import parse_cobol
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.analysis.refusal import (
+    check_nested_exec,
     check_test_case,
     check_unresolved_copybooks,
     check_whole_program,
 )
+from mockymock.dsl.model import MockCategory, MockDirective, MockTestCase
+
+
+def _case(perform_target, call_names=(), mocks=(), verifications=()):
+    return MockTestCase(
+        name="case",
+        mocks=[MockDirective(MockCategory.CALL, n) for n in call_names]
+        + list(mocks),
+        perform_target=perform_target,
+        verifications=list(verifications),
+    )
 
 SOURCE = """\
        IDENTIFICATION DIVISION.
@@ -361,7 +373,7 @@ def test_per_case_check_allows_static_call_only_paragraph():
     result = _result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "SAFE-PARAGRAPH", mocked_call_names={"DISCRATE"}
+        surface, result.ast, _case("SAFE-PARAGRAPH", call_names={"DISCRATE"})
     )
     assert reasons == []
 
@@ -370,7 +382,7 @@ def test_per_case_check_refuses_unreachable_dynamic_call_target():
     result = _result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "DYNAMIC-PARAGRAPH", mocked_call_names=set()
+        surface, result.ast, _case("DYNAMIC-PARAGRAPH", call_names=())
     )
     assert any(r.code == "DYNAMIC_CALL" for r in reasons)
 
@@ -379,7 +391,7 @@ def test_per_case_check_follows_perform_to_find_dynamic_call():
     result = _result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "WRAPPER-PARAGRAPH", mocked_call_names=set()
+        surface, result.ast, _case("WRAPPER-PARAGRAPH", call_names=())
     )
     assert any(r.code == "DYNAMIC_CALL" for r in reasons)
 
@@ -388,10 +400,7 @@ def test_per_case_check_refuses_unmatched_mock_call():
     result = _result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface,
-        result.ast,
-        "SAFE-PARAGRAPH",
-        mocked_call_names={"SOME-OTHER-PROGRAM"},
+        surface, result.ast, _case("SAFE-PARAGRAPH", call_names={"SOME-OTHER-PROGRAM"})
     )
     assert any(r.code == "UNMATCHED_MOCK" for r in reasons)
 
@@ -400,18 +409,18 @@ def test_per_case_check_refuses_reachable_file_io():
     result = _file_io_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "CALLS-READ-AN-ORDER", mocked_call_names=set()
+        surface, result.ast, _case("CALLS-READ-AN-ORDER", call_names=())
     )
-    assert any(r.code == "UNMOCKED_FILE_IO" for r in reasons)
+    assert any(r.code == "UNMOCKED_FILE_OP" for r in reasons)
 
 
 def test_per_case_check_refuses_reachable_exec_sql():
     result = _exec_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "CALLS-RUN-SQL", mocked_call_names=set()
+        surface, result.ast, _case("CALLS-RUN-SQL", call_names=())
     )
-    assert any(r.code == "UNSUPPORTED_EXEC" for r in reasons)
+    assert any(r.code == "UNMOCKED_SQL" for r in reasons)
 
 
 def test_per_case_check_follows_multi_hop_perform_chain_to_dynamic_call():
@@ -421,7 +430,7 @@ def test_per_case_check_follows_multi_hop_perform_chain_to_dynamic_call():
     result = _chain_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "PARAGRAPH-A", mocked_call_names=set()
+        surface, result.ast, _case("PARAGRAPH-A", call_names=())
     )
     assert any(r.code == "DYNAMIC_CALL" for r in reasons)
 
@@ -435,7 +444,7 @@ def test_per_case_check_finds_perform_nested_inside_if_to_dynamic_call():
     result = _nested_if_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "WRAPPER-PARAGRAPH", mocked_call_names=set()
+        surface, result.ast, _case("WRAPPER-PARAGRAPH", call_names=())
     )
     assert any(r.code == "DYNAMIC_CALL" for r in reasons)
 
@@ -447,7 +456,7 @@ def test_per_case_check_refuses_reachable_perform_thru():
     result = _perform_thru_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "START-HERE", mocked_call_names=set()
+        surface, result.ast, _case("START-HERE", call_names=())
     )
     assert any(r.code == "UNSUPPORTED_PERFORM_THRU" for r in reasons)
 
@@ -462,9 +471,9 @@ def test_per_case_check_refuses_mock_call_targeting_nested_call_site():
     result = _nested_call_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "START-HERE", mocked_call_names={"DISCRATE"}
+        surface, result.ast, _case("START-HERE", call_names={"DISCRATE"})
     )
-    assert any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)
+    assert any(r.code == "UNSUPPORTED_NESTED_MOCK_TARGET" for r in reasons)
 
 
 def test_per_case_check_allows_mock_call_targeting_top_level_call_site():
@@ -475,9 +484,9 @@ def test_per_case_check_allows_mock_call_targeting_top_level_call_site():
     result = _top_level_call_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "START-HERE", mocked_call_names={"DISCRATE"}
+        surface, result.ast, _case("START-HERE", call_names={"DISCRATE"})
     )
-    assert not any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)
+    assert not any(r.code == "UNSUPPORTED_NESTED_MOCK_TARGET" for r in reasons)
 
 
 def test_per_case_check_refuses_mock_call_with_both_top_level_and_nested_site():
@@ -490,9 +499,9 @@ def test_per_case_check_refuses_mock_call_with_both_top_level_and_nested_site():
     result = _mixed_call_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "START-HERE", mocked_call_names={"DISCRATE"}
+        surface, result.ast, _case("START-HERE", call_names={"DISCRATE"})
     )
-    assert any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)
+    assert any(r.code == "UNSUPPORTED_NESTED_MOCK_TARGET" for r in reasons)
 
 
 def test_per_case_check_refuses_reachable_static_call_left_unmocked():
@@ -504,7 +513,7 @@ def test_per_case_check_refuses_reachable_static_call_left_unmocked():
     result = _two_call_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "START-HERE", mocked_call_names={"DISCRATE"}
+        surface, result.ast, _case("START-HERE", call_names={"DISCRATE"})
     )
     unmocked = [r for r in reasons if r.code == "UNMOCKED_CALL"]
     assert len(unmocked) == 1
@@ -517,10 +526,7 @@ def test_per_case_check_allows_when_every_reachable_static_call_is_mocked():
     result = _two_call_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface,
-        result.ast,
-        "START-HERE",
-        mocked_call_names={"DISCRATE", "TAXCALC"},
+        surface, result.ast, _case("START-HERE", call_names={"DISCRATE", "TAXCALC"})
     )
     assert not any(r.code == "UNMOCKED_CALL" for r in reasons)
 
@@ -533,10 +539,10 @@ def test_per_case_check_unmocked_nested_call_gets_only_unmocked_call_code():
     result = _nested_call_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "START-HERE", mocked_call_names=set()
+        surface, result.ast, _case("START-HERE", call_names=())
     )
     assert any(r.code == "UNMOCKED_CALL" for r in reasons)
-    assert not any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)
+    assert not any(r.code == "UNSUPPORTED_NESTED_MOCK_TARGET" for r in reasons)
 
 
 # START/UNLOCK/SORT are file I/O just like OPEN/READ/WRITE; console ACCEPT
@@ -593,25 +599,25 @@ def test_per_case_check_refuses_reachable_start_statement():
     result = _file_family_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "CALLS-STARTS-THE-FILE", mocked_call_names=set()
+        surface, result.ast, _case("CALLS-STARTS-THE-FILE", call_names=())
     )
-    assert any(r.code == "UNMOCKED_FILE_IO" for r in reasons)
+    assert any(r.code == "UNMOCKED_FILE_OP" for r in reasons)
 
 
 def test_per_case_check_refuses_reachable_sort_statement():
     result = _file_family_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "SORTS-THE-FILE", mocked_call_names=set()
+        surface, result.ast, _case("SORTS-THE-FILE", call_names=())
     )
-    assert any(r.code == "UNMOCKED_FILE_IO" for r in reasons)
+    assert any(r.code == "UNSUPPORTED_SORT_MERGE" for r in reasons)
 
 
 def test_per_case_check_refuses_reachable_console_accept():
     result = _file_family_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "READS-THE-CONSOLE", mocked_call_names=set()
+        surface, result.ast, _case("READS-THE-CONSOLE", call_names=())
     )
     assert any(r.code == "UNMOCKED_CONSOLE_ACCEPT" for r in reasons)
 
@@ -620,6 +626,6 @@ def test_per_case_check_allows_pure_compute_next_to_file_family():
     result = _file_family_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
-        surface, result.ast, "PURE-COMPUTE", mocked_call_names=set()
+        surface, result.ast, _case("PURE-COMPUTE", call_names=())
     )
     assert reasons == []
