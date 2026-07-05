@@ -110,6 +110,22 @@ def test_verify_without_matching_mock_raises():
         _build(suite)
 
 
+def test_verify_without_matching_mock_in_same_case_raises():
+    case_one = MockTestCase(
+        name="case one",
+        mocks=[MockDirective(MockCategory.READ, "INFILE")],
+        perform_target="P1",
+    )
+    case_two = MockTestCase(
+        name="case two",
+        perform_target="P2",
+        verifications=[VerifyDirective(MockCategory.READ, "INFILE", "ONCE")],
+    )
+    suite = MockTestSuite(name="x", test_cases=[case_one, case_two])
+    with pytest.raises(ValueError, match="this TESTCASE"):
+        _build(suite)
+
+
 def test_quoted_expect_value_is_escaped_in_fail_display():
     """EXPECT WS-STATUS TO BE "OK" -- the IF condition keeps the literal
     as-is, but inside the generated DISPLAY literal the quotes must be
@@ -140,6 +156,16 @@ def test_reset_working_storage_paragraph_included_when_lines_given():
     joined = "\n".join(_build(reset_lines=["MOVE 0 TO ORD-AMOUNT"]).procedure_lines)
     assert "UT-RESET-WORKING-STORAGE." in joined
     assert "MOVE 0 TO ORD-AMOUNT" in joined
+
+
+def test_verify_fail_display_includes_category():
+    suite = _suite()
+    suite.test_cases[0].mocks.append(MockDirective(MockCategory.READ, "INFILE"))
+    suite.test_cases[0].verifications.append(
+        VerifyDirective(MockCategory.READ, "INFILE", "3 TIMES")
+    )
+    joined = "\n".join(_build(suite).procedure_lines)
+    assert "VERIFY READ INFILE WAS CALLED 3 TIMES" in joined
 
 
 def test_suite_paragraph_name_is_a_valid_cobol_word():

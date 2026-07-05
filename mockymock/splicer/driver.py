@@ -85,6 +85,7 @@ def _build_testcase_paragraph(
     index: int, case: MockTestCase, registry: TallyRegistry, has_reset: bool
 ) -> list[str]:
     case_id = f"{index:03d}"
+    case_mocks = {(mock.category, mock.key) for mock in case.mocks}
     lines = [f"       UT-TESTCASE-{case_id}."]
 
     if has_reset:
@@ -116,10 +117,10 @@ def _build_testcase_paragraph(
         lines.append("           END-IF")
 
     for verification in case.verifications:
-        if not registry.known(verification.category, verification.key):
+        if (verification.category, verification.key) not in case_mocks:
             raise ValueError(
                 f"VERIFY references {verification.category.value} "
-                f"{verification.key!r}, which no MOCK directive in the suite "
+                f"{verification.key!r}, which no MOCK directive in this TESTCASE "
                 f"declares (should have been refused before codegen)"
             )
         tally = registry.name(verification.category, verification.key)
@@ -127,7 +128,7 @@ def _build_testcase_paragraph(
         lines.append(f"           IF {condition}")
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY '
-            f'{_display_text(verification.key)} WAS CALLED '
+            f'{verification.category.value} {_display_text(verification.key)} WAS CALLED '
             f'{verification.expectation}"'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
