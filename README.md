@@ -27,13 +27,5 @@ the container up on its own, so `mockymock setup` is optional.
 
 ### Windows notes
 
-- The Chocolatey GnuCOBOL package installs `cobc` under
-  `C:\ProgramData\chocolatey\lib\gnucobol\tools` and sets `COB_CONFIG_DIR`
-  as a **user** environment variable — open a fresh shell after installing,
-  or a stale session's `cobc` will fail with
-  `configuration error: default.conf: No such file or directory`.
-- Windows Smart App Control / Application Control policies can
-  intermittently refuse to launch the freshly compiled unsigned test binary
-  (`WinError 4551`). mockymock reports this as a clean run failure; the fix
-  is an OS-policy exclusion for the sandbox/temp directory, not a code
-  change.
+On Windows, ensure Docker Desktop is running before invoking `mockymock setup` or
+`mockymock run`. COBOL compilation and execution happen entirely inside the container.
