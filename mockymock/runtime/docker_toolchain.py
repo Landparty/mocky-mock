@@ -112,6 +112,16 @@ def ensure_toolchain() -> None:
             )
 
 
+def cobc_version() -> str:
+    """First line of `cobc --version` from inside the container."""
+    result = _docker("exec", CONTAINER, "cobc", "--version", timeout=30)
+    if result.returncode != 0:
+        raise DockerNotAvailableError(
+            f"could not query cobc inside {CONTAINER}:\n{result.stderr.strip()}"
+        )
+    return result.stdout.splitlines()[0] if result.stdout else "unknown"
+
+
 def compile_source(source_path: Path) -> CompileResult:
     """Compile a free-form COBOL source file (which must live under
     WORK_ROOT) inside the container. The binary is written next to the

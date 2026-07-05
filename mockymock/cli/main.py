@@ -10,17 +10,18 @@ from mockymock import __version__
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
-    from mockymock.runtime.gnucobol_bootstrap import (
-        GnuCobolNotFoundError,
-        bootstrap,
-    )
+    from mockymock.runtime import docker_toolchain
 
     try:
-        info = bootstrap()
-    except GnuCobolNotFoundError as exc:
+        docker_toolchain.ensure_toolchain()
+        version = docker_toolchain.cobc_version()
+    except docker_toolchain.DockerNotAvailableError as exc:
         print(f"mockymock setup: {exc}")
         return 1
-    print(f"mockymock setup: found cobc at {info.path} ({info.version})")
+    print(
+        f"mockymock setup: container {docker_toolchain.CONTAINER} ready "
+        f"({version})"
+    )
     return 0
 
 
@@ -107,12 +108,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.dsl.parser import parse_cut
     from mockymock.report.formatters import format_console, format_junit_xml
     from mockymock.report.results import parse_stdout
-    from mockymock.runtime.compiler import compile_source
-    from mockymock.runtime.executor import run_binary
+    from mockymock.runtime import docker_toolchain
     from mockymock.runtime.sandbox import sandbox_dir
     from mockymock.splicer.driver import build_driver
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
+
+    try:
+        docker_toolchain.ensure_toolchain()
+    except docker_toolchain.DockerNotAvailableError as exc:
+        print(f"mockymock run: {exc}")
+        return 1
 
     source_path = Path(args.program)
     raw_source = source_path.read_text()
@@ -162,17 +168,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     instrumented = _insert_driver(lines, artifact)
 
-    with sandbox_dir() as tmp:
+    with sandbox_dir(root=docker_toolchain.WORK_ROOT) as tmp:
         instrumented_path = tmp / source_path.with_suffix(".cbl").name
-        instrumented_path.write_text("\n".join(instrumented) + "\n")
+        instrumented_path.write_text(
+            "\n".join(instrumented) + "\n", newline="\n"
+        )
 
-        compiled = compile_source(instrumented_path)
+        compiled = docker_toolchain.compile_source(instrumented_path)
         if not compiled.success:
             print("mockymock run: compile failed:")
             print(compiled.stderr)
             return 1
 
-        executed = run_binary(compiled.binary_path)
+        executed = docker_toolchain.run_binary(compiled.binary_path)
 
     suite_result = parse_stdout(executed.stdout)
     print(format_console(suite_result))
@@ -293,7 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     setup_parser = subparsers.add_parser(
-        "setup", help="Detect or install GnuCOBOL (cobc)"
+        "setup", help="Build the GnuCOBOL image and start the mockymock-cobc container"
     )
     setup_parser.set_defaults(func=_cmd_setup)
 
