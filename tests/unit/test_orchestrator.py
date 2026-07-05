@@ -196,7 +196,7 @@ def test_mocked_nested_call_is_spliced_and_end_if_survives():
     joined = "\n".join(lines)
     assert '      *>         CALL "NESTED"' in joined
     assert "      *>             USING WS-AMT" in joined
-    assert "ADD 1 TO UT-CALL-NESTED-TALLY" in joined
+    assert "ADD 1 TO UT-NESTED-TALLY" in joined
     # the enclosing block's words are untouched
     assert sum(1 for l in lines if l.strip() == "END-IF.") >= 1
     assert not any(l.startswith('      *>     IF WS-FLAG = "Y"') for l in lines)
