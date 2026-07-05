@@ -20,16 +20,16 @@ exactly one MockDirective of the test case --
                    EXEC cannot compile; unmocked console ACCEPT reads
                    whatever stdin happens to be attached)
 - two+ matches  -> AMBIGUOUS_MOCK (fail closed rather than pick one)
-- matched but nested -> UNSUPPORTED_NESTED_MOCK_TARGET: the splicer's
-                   replacement span depends on source_map.py's
-                   boundary-list approach, and cobolparser's AST has no
-                   location data for block terminators (END-IF,
-                   END-EVALUATE, ...), so a spliced nested statement could
-                   swallow its enclosing block's terminator and silently
-                   corrupt control flow. Refuse rather than risk a wrong
-                   result. (An earlier fix attempt tried recursing the
-                   splicer into nested bodies and discovered it corrupts
-                   control flow; see task-14-report.md.)
+- matched but nested WITHOUT a validated span -> UNSUPPORTED_NESTED_MOCK_
+                   TARGET: nested sites are spliceable when source_map's
+                   annotate_nested_sites validated a replacement span for
+                   them (scope words located by re-lexing; see docs/
+                   2026-07-05-nested-mock-targets-design.md). Sites whose
+                   layout fails a safety precondition -- or that were never
+                   annotated -- refuse with the precise reason rather than
+                   risk swallowing a block terminator and corrupting
+                   control flow (an earlier attempt without the scope map
+                   did exactly that; see task-14-report.md).
 
 A directive matching no reachable site is UNMATCHED_MOCK; a VERIFY whose
 (category, key) no MOCK directive of the same case declares is
@@ -45,9 +45,9 @@ UNSUPPORTED_PERFORM_THRU.
 
 check_nested_exec (NESTED_EXEC) is a whole-program check: GnuCOBOL cannot
 compile raw EXEC blocks, so every EXEC site must be stubbed program-wide
-regardless of reachability -- and a nested EXEC cannot be stubbed safely
-(same span limitation as above), so its mere existence anywhere in the
-program refuses the file.
+regardless of reachability -- a nested EXEC with no validated splice span
+(same preconditions as above) therefore refuses the file by its mere
+existence anywhere in the program.
 
 check_unresolved_copybooks (UNRESOLVED_COPYBOOK) is a whole-program check,
 not a per-TESTCASE one: an unresolved COPY affects the whole program
@@ -104,6 +104,11 @@ class RefusalReason:
     message: str
 
 
+# Shown when a nested site reaches a check before annotate_nested_sites ran
+# (or was skipped): treat it as unspliceable rather than assume it is safe.
+_UNANNOTATED = "nested-site spliceability was not annotated"
+
+
 def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool:
     """Category must agree; then CALL keys match the call literal exactly,
     file-op/ACCEPT keys match any of the site's (uppercased) names, and
@@ -130,22 +135,25 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
 
 
 def check_nested_exec(surface: MockSurface) -> list[RefusalReason]:
-    """Whole-program: any nested EXEC SQL/CICS/DLI refuses the file. Every
-    EXEC block must be commented out for cobc to compile the program at all,
-    and nested statements cannot be spliced/stubbed safely."""
+    """Whole-program: a nested EXEC SQL/CICS/DLI with no validated splice
+    span refuses the file. Every EXEC block must be commented out for cobc
+    to compile the program at all; a nested EXEC whose span was validated
+    by `annotate_nested_sites` can be stubbed like any other site, so only
+    the unspliceable ones (or unannotated ones -- fail closed) refuse."""
     return [
         RefusalReason(
             code="NESTED_EXEC",
             message=(
                 f"EXEC {site.label} at line {site.line} (paragraph "
                 f"'{site.paragraph_name}') is nested inside a conditional/"
-                f"loop body -- every EXEC block must be stubbed out for "
-                f"GnuCOBOL to compile the program, and nested statements "
-                f"cannot be stubbed safely (no block-terminator locations)"
+                f"loop body and cannot be stubbed safely: "
+                f"{site.unspliceable_reason or _UNANNOTATED} -- every EXEC "
+                f"block must be stubbed out for GnuCOBOL to compile the "
+                f"program"
             ),
         )
         for site in surface.exec_sites()
-        if site.nested
+        if site.nested and site.span is None
     ]
 
 
@@ -280,18 +288,16 @@ def check_test_case(
                     ),
                 )
             )
-        elif site.nested:
+        elif site.nested and site.span is None:
             reasons.append(
                 RefusalReason(
                     code="UNSUPPORTED_NESTED_MOCK_TARGET",
                     message=(
                         f"MOCK {matches[0].describe()} matches a statement at "
                         f"line {site.line} nested inside a conditional/loop "
-                        f"body (IF/EVALUATE/inline PERFORM), which cannot be "
-                        f"safely spliced (cobolparser has no location data "
-                        f"for block terminators like END-IF, so the splicer "
-                        f"cannot determine where the nested statement's "
-                        f"replacement span should end)"
+                        f"body (IF/EVALUATE/inline PERFORM) that cannot be "
+                        f"safely spliced: "
+                        f"{site.unspliceable_reason or _UNANNOTATED}"
                     ),
                 )
             )
