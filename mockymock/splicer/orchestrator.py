@@ -13,10 +13,12 @@ verified concretely during Task 14 review: a second top-down splice landed
 one line short and commented out the following paragraph's header instead
 of its CALL statement.
 
-Nested sites never reach this module: a mocked nested site is refused
-(UNSUPPORTED_NESTED_MOCK_TARGET), a nested EXEC is a whole-program refusal
-(NESTED_EXEC), and an unmocked nested non-EXEC site is simply left in
-place (it is plain COBOL; if it was reachable the refusal gate already
+Nested sites ARE spliced here, at the span `annotate_nested_sites`
+validated for them (site.span); the refusal gate guarantees any nested
+site that still needs a splice carries one (UNSUPPORTED_NESTED_MOCK_TARGET
+/ NESTED_EXEC refuse the unspliceable ones first), and this module raises
+if that invariant is violated. An unmocked nested non-EXEC site is left in
+place as before (plain COBOL; if it was reachable the refusal gate already
 fired).
 
 Statements are deduped by id(): several BoundarySite entries can reference
@@ -47,7 +49,7 @@ def splice_program(
     seen_statement_ids: set[int] = set()
 
     for site in surface.boundary_sites:
-        if site.category is None or site.nested:
+        if site.category is None:
             continue
         if id(site.statement) in seen_statement_ids:
             continue
@@ -71,7 +73,17 @@ def splice_program(
             continue
 
         seen_statement_ids.add(id(site.statement))
-        start, end = statement_span(site.statement, boundaries, last_line)
+        if site.nested:
+            if site.span is None:
+                raise ValueError(
+                    f"nested {site.label} site at line {site.line} reached "
+                    f"the splicer without a validated span -- the refusal "
+                    f"gate (UNSUPPORTED_NESTED_MOCK_TARGET / NESTED_EXEC) "
+                    f"should have refused it"
+                )
+            start, end = site.span
+        else:
+            start, end = statement_span(site.statement, boundaries, last_line)
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /
         # paragraph), the replacement block must terminate the sentence too
