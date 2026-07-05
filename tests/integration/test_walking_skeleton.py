@@ -1,24 +1,23 @@
-import shutil
 from pathlib import Path
 
-import pytest
-
-from mockymock.runtime.compiler import compile_source
-from mockymock.runtime.executor import run_binary
+from mockymock.runtime.docker_toolchain import (
+    WORK_ROOT,
+    compile_source,
+    ensure_toolchain,
+    run_binary,
+)
 from mockymock.runtime.sandbox import sandbox_dir
+from tests.integration._docker import requires_docker
 
 FIXTURE = Path(__file__).parent / "fixtures" / "walking_skeleton.cbl"
 
-requires_gnucobol = pytest.mark.skipif(
-    shutil.which("cobc") is None, reason="GnuCOBOL (cobc) not installed"
-)
 
-
-@requires_gnucobol
+@requires_docker
 def test_walking_skeleton_compiles_and_runs():
-    with sandbox_dir() as tmp:
+    ensure_toolchain()
+    with sandbox_dir(root=WORK_ROOT) as tmp:
         source_copy = tmp / "walking_skeleton.cbl"
-        source_copy.write_text(FIXTURE.read_text())
+        source_copy.write_text(FIXTURE.read_text(), newline="\n")
 
         compiled = compile_source(source_copy)
         assert compiled.success, compiled.stderr

@@ -1,19 +1,15 @@
-import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from mockymock.cli.main import main
-
-requires_gnucobol = pytest.mark.skipif(
-    shutil.which("cobc") is None, reason="GnuCOBOL (cobc) not installed"
-)
+from tests.integration._docker import requires_docker
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "copybook_example"
 
 
-@requires_gnucobol
+@requires_docker
 def test_run_expands_copybook_and_passes():
     exit_code = main(
         [

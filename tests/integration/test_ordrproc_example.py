@@ -1,18 +1,12 @@
-import shutil
 from pathlib import Path
 
-import pytest
-
 from mockymock.cli.main import main
-
-requires_gnucobol = pytest.mark.skipif(
-    shutil.which("cobc") is None, reason="GnuCOBOL (cobc) not installed"
-)
+from tests.integration._docker import requires_docker
 
 EXAMPLE_DIR = Path(__file__).parent.parent.parent / "examples" / "ordrproc"
 
 
-@requires_gnucobol
+@requires_docker
 def test_committed_ordrproc_example_passes():
     exit_code = main(
         [
