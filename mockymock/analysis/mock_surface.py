@@ -1,8 +1,12 @@
 """Composes cobolparser analyzers into a single mock-surface report.
 
-v1 only mocks STATIC CALL sites. Dynamic CALL sites, file I/O, and EXEC
-SQL/CICS/DLI are *detected* here (for the refusal gate in Task 6) but not
-mockable — that's the modularity seam for later categories.
+v2 mocks static CALL sites (including MQ API calls), the eight file-op
+verbs (OPEN/CLOSE/READ/WRITE/REWRITE/DELETE/START/UNLOCK), EXEC
+SQL/CICS/DLI, and console ACCEPT. Each mockable statement is recorded as a
+`BoundarySite` carrying its AST statement reference so the splicer can
+compute replacement spans without re-scanning paragraphs. Dynamic CALL and
+the SORT/MERGE family are *detected* (category None) for the refusal gate
+but not mockable.
 """
 
 from __future__ import annotations
@@ -36,10 +40,39 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
     ExecImsStatement,
 )
 
+from mockymock.dsl.model import MockCategory
+
 
 class CallKind(Enum):
     STATIC = "static"
     DYNAMIC = "dynamic"
+
+
+# The IBM MQ MQI is invoked through static CALLs to these bootstrap-stub
+# program names; flagging them lets `generate` label queue boundaries
+# distinctly and lets `.cut` authors write MOCK MQ for intent.
+MQ_API_NAMES = frozenset(
+    {
+        "MQCONN",
+        "MQCONNX",
+        "MQDISC",
+        "MQOPEN",
+        "MQCLOSE",
+        "MQGET",
+        "MQPUT",
+        "MQPUT1",
+        "MQINQ",
+        "MQSET",
+        "MQSUB",
+        "MQSUBRQ",
+        "MQBEGIN",
+        "MQCMIT",
+        "MQBACK",
+        "MQSTAT",
+        "MQCB",
+        "MQCTL",
+    }
+)
 
 
 @dataclass
@@ -52,8 +85,31 @@ class CallSite:
 
 
 @dataclass
+class BoundarySite:
+    """One mockable (or detected-but-unmockable) boundary statement.
+
+    `category` is the MockCategory a directive must use to mock this site,
+    or None for detected-but-unmockable sites (dynamic CALL, SORT/MERGE
+    family). `keys` holds the candidate match keys (call name, file names,
+    record name, ACCEPT target); `match_text` holds the normalized EXEC
+    text that SQL/CICS/DLI prefix keys match against.
+    """
+
+    category: MockCategory | None
+    label: str  # for messages: "CALL", "READ", "SQL", "dynamic CALL", "SORT/MERGE"
+    keys: tuple[str, ...]
+    match_text: str | None
+    paragraph_name: str
+    line: int
+    nested: bool
+    statement: object
+    is_mq: bool = False
+
+
+@dataclass
 class MockSurface:
     call_sites: list[CallSite] = field(default_factory=list)
+    boundary_sites: list[BoundarySite] = field(default_factory=list)
     file_io_paragraphs: set[str] = field(default_factory=set)
     exec_paragraphs: set[str] = field(default_factory=set)
     console_accept_paragraphs: set[str] = field(default_factory=set)
@@ -64,28 +120,40 @@ class MockSurface:
     def dynamic_call_sites(self) -> list[CallSite]:
         return [c for c in self.call_sites if c.kind is CallKind.DYNAMIC]
 
+    def sites_in(self, paragraph_names: set[str]) -> list[BoundarySite]:
+        return [
+            s for s in self.boundary_sites if s.paragraph_name in paragraph_names
+        ]
 
-_FILE_IO_TYPES = (
-    IOOpenStatement,
-    IOCloseStatement,
-    IOReadStatement,
-    IOWriteStatement,
-    IORewriteStatement,
-    IODeleteStatement,
-    # START (keyed positioning) and UNLOCK (record locking) are file
-    # operations exactly like the six above -- cobolparser groups all of
-    # them in models/statements/io.py.
-    IOStartStatement,
-    IOUnlockStatement,
-    # SORT/MERGE read and write real files (USING/GIVING and the SD sort
-    # file); RELEASE/RETURN are the sort-file write/read verbs used inside
-    # INPUT/OUTPUT PROCEDUREs. All four would touch the real filesystem in
-    # the sandbox if reached, so they gate the same way as OPEN/READ/WRITE.
-    SortStatement,
-    MergeStatement,
-    ReleaseStatement,
-    ReturnStatement,
+    def exec_sites(self) -> list[BoundarySite]:
+        return [
+            s
+            for s in self.boundary_sites
+            if s.category in (MockCategory.SQL, MockCategory.CICS, MockCategory.DLI)
+        ]
+
+
+# (statement type, MockCategory, key attribute(s)) for the file-op verbs.
+# OPEN/CLOSE name files in `file_names`; READ/DELETE/START/UNLOCK name one
+# file in `file_name`; WRITE/REWRITE name the *record* (COBOL syntax names
+# the record, not the FD) in `record_name`.
+_FILE_OP_SPECS: tuple[tuple[type, MockCategory], ...] = (
+    (IOOpenStatement, MockCategory.OPEN),
+    (IOCloseStatement, MockCategory.CLOSE),
+    (IOReadStatement, MockCategory.READ),
+    (IOWriteStatement, MockCategory.WRITE),
+    (IORewriteStatement, MockCategory.REWRITE),
+    (IODeleteStatement, MockCategory.DELETE),
+    (IOStartStatement, MockCategory.START),
+    (IOUnlockStatement, MockCategory.UNLOCK),
 )
+
+# SORT/MERGE read and write real files (USING/GIVING and the SD sort file);
+# RELEASE/RETURN are the sort-file write/read verbs used inside INPUT/OUTPUT
+# PROCEDUREs. Mocking a SORT means mocking an algorithm plus its procedure
+# contract, not a boundary statement, so all four stay unmockable and gate
+# a refusal.
+_SORT_MERGE_TYPES = (SortStatement, MergeStatement, ReleaseStatement, ReturnStatement)
 
 # ACCEPT sources that never read the console: system registers and runtime
 # values GnuCOBOL resolves without touching stdin. Anything else (no FROM at
@@ -106,20 +174,16 @@ _NON_INTERACTIVE_ACCEPT_SOURCES = frozenset(
     }
 )
 
-# NOTE: The plan's reference code guessed `statement.node_type in
-# ("EXEC_SQL", "EXEC_CICS", "EXEC_DLI")`. Verified against cobolparser
-# source (not guessed):
+# NOTE: Verified against cobolparser source (not guessed):
 #   - EXEC SQL   -> ExecSQLStatement (cobolparser/models/sql_statements.py),
 #                   node_type == "EXEC-SQL" (hyphen, not underscore)
 #   - EXEC CICS  -> ExecCicsStatement (cobolparser/parsers/statements/
 #                   ibm_exec_statements.py), node_type == "EXEC_CICS"
 #   - EXEC DLI   -> ExecImsStatement (same file), node_type == "EXEC_IMS"
-#                   (NOT "EXEC_DLI" as guessed)
 # isinstance is used instead of node_type string matching so that
 # ExecSQLStatement subclasses (DeclareCursorStatement, FetchStatement,
 # DynamicSQLStatement, etc. — all of which keep node_type == "EXEC-SQL")
 # are caught without hardcoding every subclass's node_type string.
-_EXEC_TYPES = (ExecSQLStatement, ExecCicsStatement, ExecImsStatement)
 
 # Attribute names that hold nested statement bodies (IF/EVALUATE branches,
 # inline PERFORM, IO AT END/INVALID KEY/AT END-OF-PAGE clauses, CALL
@@ -140,6 +204,12 @@ _NESTED_STATEMENT_ATTRS = (
     "not_on_exception",
     "on_overflow",
 )
+
+
+def normalize_exec_text(text: str) -> str:
+    """Uppercase and collapse all whitespace — the form SQL/CICS/DLI mock
+    keys prefix-match against."""
+    return " ".join(text.upper().split())
 
 
 def _nested_statement_lists(statement) -> list[list]:
@@ -164,10 +234,43 @@ def _nested_statement_lists(statement) -> list[list]:
     return lists
 
 
+def _file_op_keys(statement, category: MockCategory) -> tuple[str, ...]:
+    if category in (MockCategory.OPEN, MockCategory.CLOSE):
+        return tuple(name.upper() for name in statement.file_names if name)
+    if category in (MockCategory.WRITE, MockCategory.REWRITE):
+        name = statement.record_name
+    else:
+        name = statement.file_name
+    return (name.upper(),) if name else ()
+
+
 def _classify_statement(
     statement, paragraph_name: str, surface: MockSurface, nested: bool
 ) -> None:
     """Classify a single statement (top-level or nested) into `surface`."""
+    line = statement.location.line
+
+    def add_site(
+        category: MockCategory | None,
+        label: str,
+        keys: tuple[str, ...] = (),
+        match_text: str | None = None,
+        is_mq: bool = False,
+    ) -> None:
+        surface.boundary_sites.append(
+            BoundarySite(
+                category=category,
+                label=label,
+                keys=keys,
+                match_text=match_text,
+                paragraph_name=paragraph_name,
+                line=line,
+                nested=nested,
+                statement=statement,
+                is_mq=is_mq,
+            )
+        )
+
     if isinstance(statement, CallStatement):
         kind = CallKind.DYNAMIC if statement.is_dynamic else CallKind.STATIC
         surface.call_sites.append(
@@ -175,17 +278,71 @@ def _classify_statement(
                 program_name=None if statement.is_dynamic else statement.called_program,
                 kind=kind,
                 paragraph_name=paragraph_name,
-                line=statement.location.line,
+                line=line,
                 nested=nested,
             )
         )
-    elif isinstance(statement, _FILE_IO_TYPES):
+        if statement.is_dynamic:
+            add_site(None, "dynamic CALL")
+        else:
+            name = statement.called_program or ""
+            add_site(
+                MockCategory.CALL,
+                "CALL",
+                keys=(name,),
+                is_mq=name.upper() in MQ_API_NAMES,
+            )
+        return
+
+    for statement_type, category in _FILE_OP_SPECS:
+        if isinstance(statement, statement_type):
+            surface.file_io_paragraphs.add(paragraph_name)
+            add_site(category, category.value, keys=_file_op_keys(statement, category))
+            return
+
+    if isinstance(statement, _SORT_MERGE_TYPES):
         surface.file_io_paragraphs.add(paragraph_name)
-    elif isinstance(statement, _EXEC_TYPES):
+        add_site(None, "SORT/MERGE")
+        return
+
+    if isinstance(statement, ExecSQLStatement):
         surface.exec_paragraphs.add(paragraph_name)
-    elif isinstance(statement, IOAcceptStatement):
+        add_site(
+            MockCategory.SQL,
+            "SQL",
+            match_text=normalize_exec_text(getattr(statement, "sql_text", "") or ""),
+        )
+        return
+
+    if isinstance(statement, ExecCicsStatement):
+        surface.exec_paragraphs.add(paragraph_name)
+        add_site(
+            MockCategory.CICS,
+            "CICS",
+            match_text=normalize_exec_text(
+                f"{statement.cics_command} {statement.cics_text}"
+            ),
+        )
+        return
+
+    if isinstance(statement, ExecImsStatement):
+        surface.exec_paragraphs.add(paragraph_name)
+        add_site(
+            MockCategory.DLI,
+            "DLI",
+            match_text=normalize_exec_text(
+                f"{statement.ims_command} {statement.ims_text}"
+            ),
+        )
+        return
+
+    if isinstance(statement, IOAcceptStatement):
         if statement.from_source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
             surface.console_accept_paragraphs.add(paragraph_name)
+            target = (statement.target or "").upper()
+            add_site(
+                MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ()
+            )
 
 
 def _walk_statements(
@@ -196,8 +353,8 @@ def _walk_statements(
     Nesting depth doesn't change which paragraph a refusal-gate check cares
     about, so nested statements are still attributed to `paragraph_name`.
     Every recursive call passes `nested=True` literally (not the parent's
-    `nested` value) so a `CallSite` is marked nested at every depth >= 1,
-    while top-level statements (the initial call, where `nested` defaults to
+    `nested` value) so a site is marked nested at every depth >= 1, while
+    top-level statements (the initial call, where `nested` defaults to
     `False`) stay correctly unmarked.
     """
     for statement in statements:
@@ -207,7 +364,9 @@ def _walk_statements(
 
 
 def analyze(program: CobolProgram) -> MockSurface:
-    """Walk PROCEDURE DIVISION and classify every CALL/file-IO/EXEC statement.
+    """Walk PROCEDURE DIVISION and classify every CALL/file-IO/EXEC/ACCEPT
+    statement into per-site `BoundarySite` records (plus the v1 paragraph
+    sets).
 
     Recurses into nested statement bodies (IF/EVALUATE branches, inline
     PERFORM, IO AT END/INVALID KEY clauses, CALL exception handlers) so that
