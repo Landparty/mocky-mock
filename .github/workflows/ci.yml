@@ -51,12 +51,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # Package name verified against Ubuntu/Debian package listings (see
-      # this project's task-2-brief.md, which also verified it against
-      # chocolatey/homebrew for the other platforms mockymock's setup
-      # subcommand supports).
-      - name: Install GnuCOBOL
-        run: sudo apt-get update && sudo apt-get install -y gnucobol
+      # No GnuCOBOL install: the toolchain is Docker-only (see
+      # docs/2026-07-04-docker-toolchain-design.md). ubuntu-latest runners
+      # ship with Docker; the integration tests build the mockymock-gnucobol
+      # image on first use (~1 min per job).
 
       - name: Install dependencies
         working-directory: mocky-mock

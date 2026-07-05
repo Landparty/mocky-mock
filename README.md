@@ -9,16 +9,21 @@ repo was built from.
 
 ## Setup
 
+Requires a running Docker daemon (Docker Desktop on Windows/macOS). COBOL
+is compiled and executed inside a GnuCOBOL container — nothing runs on the
+host, and no local GnuCOBOL install is needed.
+
 ```bash
 python -m venv .venv
 .venv/Scripts/activate   # or source .venv/bin/activate on macOS/Linux
 pip install -r requirements-dev.txt
-mockymock setup           # installs GnuCOBOL if not already on PATH
+mockymock setup           # builds the GnuCOBOL image, starts mockymock-cobc
 python -m pytest tests/unit -v
 ```
 
-`tests/integration/` additionally requires `cobc` on PATH and is skipped
-automatically if it isn't found.
+`tests/integration/` additionally requires the Docker daemon to be
+reachable and is skipped automatically if it isn't. `mockymock run` brings
+the container up on its own, so `mockymock setup` is optional.
 
 ### Windows notes
 
