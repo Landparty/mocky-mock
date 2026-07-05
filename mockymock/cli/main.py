@@ -56,40 +56,34 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
     output_path.write_text(cut_text)
-    print(
-        f"mockymock generate: wrote {len(surface.static_call_sites())} "
-        f"test case(s) -> {output_path}"
-    )
+    case_count = cut_text.count("TESTCASE ")
+    print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
     _report_unsupported_boundaries(surface)
     return 0
 
 
 def _report_unsupported_boundaries(surface) -> None:
-    """Name every detected boundary point v1 cannot mock, so the scaffold is
-    never mistaken for complete coverage of the program's outputs. Test cases
+    """Name every detected boundary point that stays unmockable (dynamic
+    CALL, the SORT/MERGE family, nested sites), so the scaffold is never
+    mistaken for complete coverage of the program's outputs. Test cases
     whose PERFORM target reaches one of these are refused by `run`."""
     findings: list[str] = []
-    for site in surface.dynamic_call_sites():
-        findings.append(
-            f"dynamic CALL in paragraph '{site.paragraph_name}' (line {site.line})"
-        )
-    findings.extend(
-        f"file I/O in paragraph '{name}'"
-        for name in sorted(surface.file_io_paragraphs)
-    )
-    findings.extend(
-        f"EXEC SQL/CICS/DLI in paragraph '{name}'"
-        for name in sorted(surface.exec_paragraphs)
-    )
-    findings.extend(
-        f"console ACCEPT in paragraph '{name}'"
-        for name in sorted(surface.console_accept_paragraphs)
-    )
+    for site in surface.boundary_sites:
+        if site.category is None:
+            findings.append(
+                f"{site.label} in paragraph '{site.paragraph_name}' "
+                f"(line {site.line})"
+            )
+        elif site.nested:
+            findings.append(
+                f"nested {site.label} in paragraph '{site.paragraph_name}' "
+                f"(line {site.line}) -- cannot be spliced safely"
+            )
     if not findings:
         return
     print(
         f"mockymock generate: {len(findings)} boundary point(s) detected that "
-        f"are not mockable in v1 (test cases reaching them will be refused):"
+        f"are not mockable (test cases reaching them will be refused):"
     )
     for finding in findings:
         print(f"  - {finding}")
