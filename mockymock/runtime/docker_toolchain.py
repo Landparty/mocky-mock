@@ -14,6 +14,12 @@ import subprocess
 from pathlib import Path
 
 from mockymock.runtime.compiler import CompileResult
+from mockymock.runtime.executor import (
+    NOT_FOUND_EXIT_CODE,
+    TIMEOUT_EXIT_CODE,
+    ExecutionResult,
+    _coerce_output,
+)
 
 IMAGE = "mockymock-gnucobol"
 CONTAINER = "mockymock-cobc"
@@ -137,4 +143,52 @@ def compile_source(source_path: Path) -> CompileResult:
         binary_path=binary_path if success else None,
         stdout=result.stdout,
         stderr=result.stderr,
+    )
+
+
+def run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult:
+    """Run a compiled binary inside the container, from its own sandbox
+    directory. coreutils `timeout` enforces the limit container-side and
+    exits 124 on expiry, matching TIMEOUT_EXIT_CODE; the host-side
+    subprocess timeout is a wider guard against `docker exec` itself
+    hanging."""
+    container_binary = to_container_path(binary_path, WORK_ROOT)
+    container_dir = container_binary.rsplit("/", 1)[0]
+    try:
+        result = subprocess.run(
+            [
+                "docker", "exec", "-w", container_dir, CONTAINER,
+                "timeout", str(timeout_seconds), container_binary,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds + 15,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return ExecutionResult(
+            exit_code=TIMEOUT_EXIT_CODE,
+            stdout=_coerce_output(exc.stdout),
+            stderr=(
+                _coerce_output(exc.stderr)
+                + f"mockymock: docker exec did not return within "
+                f"{timeout_seconds + 15}s (container-side timeout is "
+                f"{timeout_seconds}s; the docker daemon may be wedged)\n"
+            ),
+        )
+    except OSError as exc:
+        return ExecutionResult(
+            exit_code=NOT_FOUND_EXIT_CODE,
+            stdout="",
+            stderr=f"mockymock: could not run docker exec: {exc}\n",
+        )
+    stderr = result.stderr
+    if result.returncode == TIMEOUT_EXIT_CODE:
+        stderr += (
+            f"mockymock: binary timed out after {timeout_seconds}s "
+            f"(a mocked CALL may have removed a loop's terminating "
+            f"condition, producing an infinite loop)\n"
+        )
+    return ExecutionResult(
+        exit_code=result.returncode, stdout=result.stdout, stderr=stderr
     )
