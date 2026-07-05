@@ -162,3 +162,76 @@ def test_ensure_toolchain_is_a_noop_when_everything_is_up():
         c[:2] in (["docker", "build"], ["docker", "run"], ["docker", "start"])
         for c in calls
     )
+
+
+from mockymock.runtime.compiler import CompileResult
+from mockymock.runtime.docker_toolchain import compile_source
+
+
+def _work(tmp_path):
+    """A fake work root with a sandbox and source file inside it."""
+    work = tmp_path / "work"
+    sandbox = work / "mockymock-x"
+    sandbox.mkdir(parents=True)
+    source = sandbox / "PROG.cbl"
+    source.write_text("dummy\n")
+    return work, source
+
+
+def test_compile_source_execs_cobc_with_container_paths(tmp_path):
+    work, source = _work(tmp_path)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        (source.parent / "PROG").write_text("")  # cobc writes via the mount
+        return _completed(argv)
+
+    with mock.patch(
+        "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+    ), mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work):
+        result = compile_source(source)
+
+    assert calls == [[
+        "docker", "exec", CONTAINER,
+        "cobc", "-free", "-x",
+        "/work/mockymock-x/PROG.cbl", "-o", "/work/mockymock-x/PROG",
+    ]]
+    assert result.success
+    assert result.binary_path == source.parent / "PROG"
+
+
+def test_compile_source_failure_carries_cobc_stderr(tmp_path):
+    work, source = _work(tmp_path)
+    with mock.patch(
+        "mockymock.runtime.docker_toolchain.subprocess.run",
+        return_value=_completed([], returncode=1, stderr="PROG.cbl:7: syntax error"),
+    ), mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work):
+        result = compile_source(source)
+    assert result == CompileResult(
+        success=False, binary_path=None, stdout="", stderr="PROG.cbl:7: syntax error"
+    )
+
+
+def test_compile_source_fails_cleanly_when_binary_never_appears(tmp_path):
+    """docker exec exiting 0 without the binary on the host side (e.g. a
+    stale mount) must be a failure, not a phantom success."""
+    work, source = _work(tmp_path)
+    with mock.patch(
+        "mockymock.runtime.docker_toolchain.subprocess.run",
+        return_value=_completed([], returncode=0),
+    ), mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work):
+        result = compile_source(source)
+    assert not result.success
+    assert result.binary_path is None
+
+
+def test_compile_source_wraps_docker_oserror_cleanly(tmp_path):
+    work, source = _work(tmp_path)
+    with mock.patch(
+        "mockymock.runtime.docker_toolchain.subprocess.run",
+        side_effect=OSError("docker went away"),
+    ), mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work):
+        result = compile_source(source)
+    assert not result.success
+    assert "docker went away" in result.stderr

@@ -13,6 +13,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from mockymock.runtime.compiler import CompileResult
+
 IMAGE = "mockymock-gnucobol"
 CONTAINER = "mockymock-cobc"
 WORK_ROOT = Path.home() / ".mockymock" / "work"
@@ -102,3 +104,37 @@ def ensure_toolchain() -> None:
             raise DockerNotAvailableError(
                 f"failed to start container {CONTAINER}:\n{start.stderr.strip()}"
             )
+
+
+def compile_source(source_path: Path) -> CompileResult:
+    """Compile a free-form COBOL source file (which must live under
+    WORK_ROOT) inside the container. The binary is written next to the
+    source with no suffix -- it is a Linux ELF that only ever executes
+    inside the container."""
+    container_source = to_container_path(source_path, WORK_ROOT)
+    binary_path = source_path.with_suffix("")
+    container_binary = to_container_path(binary_path, WORK_ROOT)
+    try:
+        result = subprocess.run(
+            [
+                "docker", "exec", CONTAINER,
+                "cobc", "-free", "-x", container_source, "-o", container_binary,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return CompileResult(
+            success=False,
+            binary_path=None,
+            stdout="",
+            stderr=f"mockymock: could not run docker exec: {exc}\n",
+        )
+    success = result.returncode == 0 and binary_path.exists()
+    return CompileResult(
+        success=success,
+        binary_path=binary_path if success else None,
+        stdout=result.stdout,
+        stderr=result.stderr,
+    )
