@@ -537,3 +537,89 @@ def test_per_case_check_unmocked_nested_call_gets_only_unmocked_call_code():
     )
     assert any(r.code == "UNMOCKED_CALL" for r in reasons)
     assert not any(r.code == "UNSUPPORTED_NESTED_CALL_TARGET" for r in reasons)
+
+
+# START/UNLOCK/SORT are file I/O just like OPEN/READ/WRITE; console ACCEPT
+# reads stdin at runtime. All must hit the per-case refusal gate when
+# reachable, and must NOT when the test only reaches pure-compute paragraphs.
+FILE_FAMILY_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FILEFAM.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT ORDER-FILE ASSIGN TO "ORDERS"
+               ORGANIZATION IS INDEXED
+               RECORD KEY IS ORDER-KEY.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  ORDER-FILE.
+       01  ORDER-RECORD.
+           05  ORDER-KEY      PIC X(5).
+           05  ORDER-BODY     PIC X(6).
+
+       WORKING-STORAGE SECTION.
+       01  WS-KEY             PIC X(5).
+       01  WS-NAME            PIC X(10).
+
+       PROCEDURE DIVISION.
+       STARTS-THE-FILE.
+           START ORDER-FILE KEY IS EQUAL TO ORDER-KEY.
+
+       SORTS-THE-FILE.
+           SORT SORT-FILE ON ASCENDING KEY WS-KEY
+               USING IN-FILE GIVING OUT-FILE.
+
+       READS-THE-CONSOLE.
+           ACCEPT WS-NAME.
+
+       CALLS-STARTS-THE-FILE.
+           PERFORM STARTS-THE-FILE.
+
+       PURE-COMPUTE.
+           MOVE WS-KEY TO WS-NAME.
+"""
+
+
+def _file_family_result():
+    result = parse_cobol(FILE_FAMILY_SOURCE, filename="filefam.cbl")
+    assert result.success, result.errors
+    return result
+
+
+def test_per_case_check_refuses_reachable_start_statement():
+    result = _file_family_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "CALLS-STARTS-THE-FILE", mocked_call_names=set()
+    )
+    assert any(r.code == "UNMOCKED_FILE_IO" for r in reasons)
+
+
+def test_per_case_check_refuses_reachable_sort_statement():
+    result = _file_family_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "SORTS-THE-FILE", mocked_call_names=set()
+    )
+    assert any(r.code == "UNMOCKED_FILE_IO" for r in reasons)
+
+
+def test_per_case_check_refuses_reachable_console_accept():
+    result = _file_family_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "READS-THE-CONSOLE", mocked_call_names=set()
+    )
+    assert any(r.code == "UNMOCKED_CONSOLE_ACCEPT" for r in reasons)
+
+
+def test_per_case_check_allows_pure_compute_next_to_file_family():
+    result = _file_family_result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, "PURE-COMPUTE", mocked_call_names=set()
+    )
+    assert reasons == []

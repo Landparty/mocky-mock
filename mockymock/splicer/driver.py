@@ -27,9 +27,14 @@ class DriverArtifact:
 def build_driver(
     suite: MockTestSuite, reset_lines: list[str], mocked_call_names: list[str]
 ) -> DriverArtifact:
-    suite_paragraph = "UT-TESTSUITE-" + _SUITE_PARAGRAPH_NAME_RE.sub(
-        "-", suite.name.upper()
-    )
+    # Collapse each run of non-COBOL-word characters to a single hyphen and
+    # strip hyphens at the ends: a title like "X (via copybook)" must not
+    # yield "X--VIA-COPYBOOK-" -- a COBOL word cannot end with a hyphen and
+    # cobc rejects the paragraph header outright. Capped well under
+    # GnuCOBOL's 63-character word limit.
+    sanitized = _SUITE_PARAGRAPH_NAME_RE.sub("-", suite.name.upper())
+    sanitized = re.sub(r"-{2,}", "-", sanitized).strip("-")
+    suite_paragraph = ("UT-TESTSUITE-" + sanitized)[:60].rstrip("-")
 
     working_storage = [
         "01  UT-CURRENT-CASE        PIC X(3).",

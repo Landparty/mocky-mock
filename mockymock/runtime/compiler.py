@@ -24,13 +24,24 @@ def compile_source(source_path: Path, cobc_path: str = "cobc") -> CompileResult:
     """
     suffix = ".exe" if platform.system() == "Windows" else ""
     binary_path = source_path.with_suffix(suffix)
-    result = subprocess.run(
-        [cobc_path, "-free", "-x", str(source_path), "-o", str(binary_path)],
-        capture_output=True,
-        text=True,
-        cwd=source_path.parent,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [cobc_path, "-free", "-x", str(source_path), "-o", str(binary_path)],
+            capture_output=True,
+            text=True,
+            cwd=source_path.parent,
+            check=False,
+        )
+    except OSError as exc:
+        # cobc missing (FileNotFoundError) or blocked by an OS execution
+        # policy (e.g. WinError 4551, Windows Smart App Control). Surface a
+        # clean failure; callers already print CompileResult.stderr.
+        return CompileResult(
+            success=False,
+            binary_path=None,
+            stdout="",
+            stderr=f"mockymock: could not run {cobc_path}: {exc}\n",
+        )
     success = result.returncode == 0 and binary_path.exists()
     return CompileResult(
         success=success,

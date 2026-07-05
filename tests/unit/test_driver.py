@@ -97,3 +97,29 @@ def test_reset_working_storage_paragraph_included_when_lines_given():
     joined = "\n".join(artifact.procedure_lines)
     assert "UT-RESET-WORKING-STORAGE." in joined
     assert "MOVE 0 TO ORD-AMOUNT" in joined
+
+
+def test_suite_paragraph_name_is_a_valid_cobol_word():
+    """Suite titles with punctuation ("... (via copybook)") must not produce
+    consecutive or trailing hyphens in the generated paragraph name -- GnuCOBOL
+    rejects a paragraph header like UT-TESTSUITE-X--VIA-COPYBOOK-. outright."""
+    suite = MockTestSuite(
+        name="MAINPGM discount calculation (via copybook)",
+        test_cases=[
+            MockTestCase(
+                name="c",
+                mocks=[],
+                setup_moves=[],
+                perform_target="P",
+                expectations=[],
+                verifications=[],
+            )
+        ],
+    )
+    artifact = build_driver(suite, reset_lines=[], mocked_call_names=[])
+    header = artifact.procedure_lines[0].strip()
+    assert header.endswith(".")
+    word = header[:-1]
+    assert "--" not in word
+    assert not word.endswith("-")
+    assert word == "UT-TESTSUITE-MAINPGM-DISCOUNT-CALCULATION-VIA-COPYBOOK"

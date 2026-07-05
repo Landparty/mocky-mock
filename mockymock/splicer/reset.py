@@ -16,7 +16,17 @@ _REPEAT_GROUP_RE = re.compile(r"\(\d+\)")
 
 
 def reset_move_lines(program) -> list[str]:
-    """One `MOVE <value> TO <name>` line per top-level WORKING-STORAGE item."""
+    """One reset line per top-level (01 or 77) WORKING-STORAGE item.
+
+    Elementary items get `MOVE <value> TO <name>` (declared VALUE clause, or
+    the type default). Group items without a VALUE clause get
+    `INITIALIZE <name>` instead: a MOVE SPACES over a group would write
+    spaces across its numeric children, corrupting them for the next test
+    case's arithmetic, while INITIALIZE resets numeric children to zero and
+    alphanumeric ones to spaces. (INITIALIZE does not restore children's own
+    VALUE clauses -- a known v1 fidelity limit, still strictly better than
+    space-filling.)
+    """
     working_storage = program.get_division("DATA")
     if working_storage is None:
         return []
@@ -27,8 +37,11 @@ def reset_move_lines(program) -> list[str]:
 
     lines: list[str] = []
     for item in _top_level_items(section):
-        value = _default_value_literal(item)
-        lines.append(f"MOVE {value} TO {item.name}")
+        if _is_group(item) and not item.value_clause:
+            lines.append(f"INITIALIZE {item.name}")
+        else:
+            value = _default_value_literal(item)
+            lines.append(f"MOVE {value} TO {item.name}")
     return lines
 
 
@@ -43,7 +56,21 @@ def _find_working_storage_section(data_division):
 
 
 def _top_level_items(section):
-    return [item for item in section.children if getattr(item, "level", None) == 1]
+    # Level 77 items are standalone top-level items just like 01s; leaving
+    # them out would let their state leak between test cases.
+    return [
+        item for item in section.children if getattr(item, "level", None) in (1, 77)
+    ]
+
+
+def _is_group(item) -> bool:
+    """A group item has subordinate data items. cobolparser's `children` list
+    mixes in clause nodes (e.g. PictureClause), so only children that carry a
+    data-item `level` count."""
+    return any(
+        getattr(child, "level", None) is not None
+        for child in getattr(item, "children", [])
+    )
 
 
 def _is_numeric(item) -> bool:

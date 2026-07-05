@@ -122,8 +122,59 @@ NESTED_SOURCE = """\
 """
 
 
+FILE_FAMILY_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FILEFAM.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT ORDER-FILE ASSIGN TO "ORDERS"
+               ORGANIZATION IS INDEXED
+               RECORD KEY IS ORDER-KEY.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  ORDER-FILE.
+       01  ORDER-RECORD.
+           05  ORDER-KEY      PIC X(5).
+           05  ORDER-BODY     PIC X(6).
+
+       WORKING-STORAGE SECTION.
+       01  WS-KEY             PIC X(5).
+       01  WS-NAME            PIC X(10).
+       01  WS-TODAY           PIC 9(6).
+
+       PROCEDURE DIVISION.
+       START-THE-FILE.
+           START ORDER-FILE KEY IS EQUAL TO ORDER-KEY.
+
+       UNLOCK-THE-FILE.
+           UNLOCK ORDER-FILE.
+
+       SORT-THE-FILE.
+           SORT SORT-FILE ON ASCENDING KEY WS-KEY
+               USING IN-FILE GIVING OUT-FILE.
+
+       ACCEPT-FROM-CONSOLE.
+           ACCEPT WS-NAME.
+
+       ACCEPT-FROM-SYSTEM.
+           ACCEPT WS-TODAY FROM DATE.
+
+       PURE-COMPUTE.
+           MOVE WS-KEY TO WS-NAME.
+"""
+
+
 def _ast():
     result = parse_cobol(SOURCE, filename="sample.cbl")
+    assert result.success, result.errors
+    return result.ast
+
+
+def _file_family_ast():
+    result = parse_cobol(FILE_FAMILY_SOURCE, filename="filefam.cbl")
     assert result.success, result.errors
     return result.ast
 
@@ -165,6 +216,37 @@ def test_detects_file_io_paragraph():
 def test_paragraph_without_file_io_is_not_flagged():
     surface = analyze(_ast())
     assert "PROCESS-ORDER" not in surface.file_io_paragraphs
+
+
+def test_detects_start_as_file_io():
+    surface = analyze(_file_family_ast())
+    assert "START-THE-FILE" in surface.file_io_paragraphs
+
+
+def test_detects_unlock_as_file_io():
+    surface = analyze(_file_family_ast())
+    assert "UNLOCK-THE-FILE" in surface.file_io_paragraphs
+
+
+def test_detects_sort_as_file_io():
+    surface = analyze(_file_family_ast())
+    assert "SORT-THE-FILE" in surface.file_io_paragraphs
+
+
+def test_detects_console_accept():
+    surface = analyze(_file_family_ast())
+    assert "ACCEPT-FROM-CONSOLE" in surface.console_accept_paragraphs
+
+
+def test_accept_from_system_source_is_not_console_input():
+    surface = analyze(_file_family_ast())
+    assert "ACCEPT-FROM-SYSTEM" not in surface.console_accept_paragraphs
+
+
+def test_pure_compute_paragraph_is_not_flagged_by_file_family():
+    surface = analyze(_file_family_ast())
+    assert "PURE-COMPUTE" not in surface.file_io_paragraphs
+    assert "PURE-COMPUTE" not in surface.console_accept_paragraphs
 
 
 def test_detects_exec_sql_paragraph():

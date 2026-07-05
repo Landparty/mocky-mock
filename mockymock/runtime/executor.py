@@ -61,6 +61,25 @@ def run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult:
             stdout="",
             stderr=f"mockymock: could not execute {binary_path}: {exc}\n",
         )
+    except OSError as exc:
+        # Seen in practice as WinError 4551 ("An Application Control policy
+        # has blocked this file"): Windows Smart App Control / WDAC can
+        # refuse to launch a freshly compiled unsigned binary, sometimes
+        # intermittently while its cloud reputation check is pending. Return
+        # a clean, explanatory failure instead of a traceback; the fix is an
+        # OS-policy exclusion for the sandbox directory, not a retry.
+        return ExecutionResult(
+            exit_code=NOT_FOUND_EXIT_CODE,
+            stdout="",
+            stderr=(
+                f"mockymock: the operating system refused to execute "
+                f"{binary_path}: {exc}\n"
+                f"(on Windows this is often Smart App Control / an "
+                f"Application Control policy blocking a freshly compiled "
+                f"unsigned binary -- add an exclusion for the sandbox "
+                f"directory or adjust the policy)\n"
+            ),
+        )
     return ExecutionResult(
         exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr
     )

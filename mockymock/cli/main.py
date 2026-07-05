@@ -59,7 +59,39 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         f"mockymock generate: wrote {len(surface.static_call_sites())} "
         f"test case(s) -> {output_path}"
     )
+    _report_unsupported_boundaries(surface)
     return 0
+
+
+def _report_unsupported_boundaries(surface) -> None:
+    """Name every detected boundary point v1 cannot mock, so the scaffold is
+    never mistaken for complete coverage of the program's outputs. Test cases
+    whose PERFORM target reaches one of these are refused by `run`."""
+    findings: list[str] = []
+    for site in surface.dynamic_call_sites():
+        findings.append(
+            f"dynamic CALL in paragraph '{site.paragraph_name}' (line {site.line})"
+        )
+    findings.extend(
+        f"file I/O in paragraph '{name}'"
+        for name in sorted(surface.file_io_paragraphs)
+    )
+    findings.extend(
+        f"EXEC SQL/CICS/DLI in paragraph '{name}'"
+        for name in sorted(surface.exec_paragraphs)
+    )
+    findings.extend(
+        f"console ACCEPT in paragraph '{name}'"
+        for name in sorted(surface.console_accept_paragraphs)
+    )
+    if not findings:
+        return
+    print(
+        f"mockymock generate: {len(findings)} boundary point(s) detected that "
+        f"are not mockable in v1 (test cases reaching them will be refused):"
+    )
+    for finding in findings:
+        print(f"  - {finding}")
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -207,6 +239,21 @@ def _splice_call_sites(
                     seen_statement_ids.add(id(statement))
                     start, end = statement_span(statement, boundaries, last_line)
                     replacement = build_call_dispatch(call_name, suite)
+                    # If the replaced CALL carried its sentence's terminating
+                    # period (i.e. it was the last statement of the sentence /
+                    # paragraph), the dispatch block must terminate the
+                    # sentence too -- otherwise the unterminated sentence runs
+                    # into the next paragraph header and cobc rejects it.
+                    last_span_line = next(
+                        (
+                            lines[i - 1]
+                            for i in range(end, start - 1, -1)
+                            if lines[i - 1].strip()
+                        ),
+                        "",
+                    )
+                    if last_span_line.rstrip().endswith("."):
+                        replacement = replacement[:-1] + [replacement[-1] + "."]
                     spans.append((start, end, replacement))
 
     for start, end, replacement in sorted(spans, key=lambda s: s[0], reverse=True):

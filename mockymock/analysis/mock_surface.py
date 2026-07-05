@@ -15,12 +15,21 @@ from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.models.statements.call import CallStatement
 from cobolparser.models.statements.control import EvaluateStatement
 from cobolparser.models.statements.io import (
+    IOAcceptStatement,
     IOCloseStatement,
     IODeleteStatement,
     IOOpenStatement,
     IOReadStatement,
     IORewriteStatement,
+    IOStartStatement,
+    IOUnlockStatement,
     IOWriteStatement,
+)
+from cobolparser.models.statements.misc import (
+    MergeStatement,
+    ReleaseStatement,
+    ReturnStatement,
+    SortStatement,
 )
 from cobolparser.parsers.statements.ibm_exec_statements import (
     ExecCicsStatement,
@@ -47,6 +56,7 @@ class MockSurface:
     call_sites: list[CallSite] = field(default_factory=list)
     file_io_paragraphs: set[str] = field(default_factory=set)
     exec_paragraphs: set[str] = field(default_factory=set)
+    console_accept_paragraphs: set[str] = field(default_factory=set)
 
     def static_call_sites(self) -> list[CallSite]:
         return [c for c in self.call_sites if c.kind is CallKind.STATIC]
@@ -62,6 +72,38 @@ _FILE_IO_TYPES = (
     IOWriteStatement,
     IORewriteStatement,
     IODeleteStatement,
+    # START (keyed positioning) and UNLOCK (record locking) are file
+    # operations exactly like the six above -- cobolparser groups all of
+    # them in models/statements/io.py.
+    IOStartStatement,
+    IOUnlockStatement,
+    # SORT/MERGE read and write real files (USING/GIVING and the SD sort
+    # file); RELEASE/RETURN are the sort-file write/read verbs used inside
+    # INPUT/OUTPUT PROCEDUREs. All four would touch the real filesystem in
+    # the sandbox if reached, so they gate the same way as OPEN/READ/WRITE.
+    SortStatement,
+    MergeStatement,
+    ReleaseStatement,
+    ReturnStatement,
+)
+
+# ACCEPT sources that never read the console: system registers and runtime
+# values GnuCOBOL resolves without touching stdin. Anything else (no FROM at
+# all, FROM CONSOLE, or an unrecognized mnemonic -- fail closed) is console
+# input: at test runtime it would read whatever stdin happens to be attached,
+# making the run nondeterministic (or hang until the executor timeout).
+_NON_INTERACTIVE_ACCEPT_SOURCES = frozenset(
+    {
+        "DATE",
+        "DAY",
+        "DAY-OF-WEEK",
+        "TIME",
+        "COMMAND-LINE",
+        "ENVIRONMENT",
+        "ENVIRONMENT-VALUE",
+        "ARGUMENT-NUMBER",
+        "ARGUMENT-VALUE",
+    }
 )
 
 # NOTE: The plan's reference code guessed `statement.node_type in
@@ -141,6 +183,9 @@ def _classify_statement(
         surface.file_io_paragraphs.add(paragraph_name)
     elif isinstance(statement, _EXEC_TYPES):
         surface.exec_paragraphs.add(paragraph_name)
+    elif isinstance(statement, IOAcceptStatement):
+        if statement.from_source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
+            surface.console_accept_paragraphs.add(paragraph_name)
 
 
 def _walk_statements(

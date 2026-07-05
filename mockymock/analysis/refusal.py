@@ -212,6 +212,20 @@ def check_test_case(
             )
         )
 
+    if reachable & surface.console_accept_paragraphs:
+        hit = sorted(reachable & surface.console_accept_paragraphs)[0]
+        reasons.append(
+            RefusalReason(
+                code="UNMOCKED_CONSOLE_ACCEPT",
+                message=(
+                    f"paragraph '{hit}' reads console input via ACCEPT, not "
+                    f"mocked in v1 -- at test runtime it would read whatever "
+                    f"stdin happens to be attached, making the result "
+                    f"nondeterministic"
+                ),
+            )
+        )
+
     for name in sorted(mocked_call_names & nested_call_names):
         reasons.append(
             RefusalReason(

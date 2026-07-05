@@ -29,10 +29,20 @@ mockymock too.
   `.not_at_end_clause`, `.invalid_key_clause`, `.not_invalid_key_clause`,
   `.at_eop_clause: list[CobolStatement] | None`
 - `cobolparser.models.statements.io.{IOOpenStatement,IOCloseStatement,IOReadStatement,
-  IOWriteStatement,IORewriteStatement,IODeleteStatement}` — `mock_surface.py` uses
+  IOWriteStatement,IORewriteStatement,IODeleteStatement,IOStartStatement,
+  IOUnlockStatement}` — `mock_surface.py` uses
   direct `isinstance` checks against these, not `cobolparser.IOLogger`
   (verified `IOLogger` doesn't detect EXEC CICS/DLI at all, so it couldn't have
   satisfied this module's requirements regardless of preference).
+- `cobolparser.models.statements.misc.{SortStatement,MergeStatement,
+  ReleaseStatement,ReturnStatement}` — SORT/MERGE read and write real files
+  (USING/GIVING and the SD sort file); RELEASE/RETURN are the sort-file
+  write/read verbs. All four are classified as file I/O by `mock_surface.py`.
+- `cobolparser.models.statements.io.IOAcceptStatement.from_source: str | None`
+  — `None` (plain `ACCEPT x`) or any source outside the known
+  non-interactive set (DATE/DAY/DAY-OF-WEEK/TIME/COMMAND-LINE/ENVIRONMENT/
+  ENVIRONMENT-VALUE/ARGUMENT-NUMBER/ARGUMENT-VALUE) is treated as console
+  input and gates the UNMOCKED_CONSOLE_ACCEPT refusal, fail-closed.
 - `cobolparser.models.sql_statements.ExecSQLStatement` — **not** detectable via
   `node_type` (that's hardcoded to `"Statement"` on the `CobolStatement` base
   class; the `"EXEC-SQL"` string lands in `.statement_type` instead). Detect via
@@ -42,7 +52,20 @@ mockymock too.
   covers both EXEC IMS and EXEC DLI syntax — there is no separate `"EXEC_DLI"`
   node type). Both extend `ASTNode` directly, not `CobolStatement`, so their
   `node_type` check works, unlike `ExecSQLStatement`'s.
-- `cobolparser.models.data_items.CobolDataItem.name`, `.level`,
-  `.picture_clause: PictureClause | None`, `.value_clause: str | None`, `.usage`
+- `cobolparser.models.statements.control.PerformStatement.thru_paragraph: str | None`
+  — a set value triggers the UNSUPPORTED_PERFORM_THRU refusal.
+- `cobolparser.models.data_items.CobolDataItem.name`, `.level` (top-level
+  reset targets are level 1 AND level 77), `.picture_clause: PictureClause | None`,
+  `.value_clause: str | None`, `.usage`, `.children: list` — NOTE: `children`
+  mixes clause nodes (e.g. `PictureClause`) with subordinate data items;
+  `reset.py` treats only children carrying a `level` attribute as data items
+  when deciding group vs elementary.
 - `cobolparser.models.data_items.PictureClause.pattern: str`
+- Requires cobolparser >= the numeric-VALUE-clause fix (upstream
+  `tests/regression/test_numeric_value_clause.py`): before it, `VALUE 5`,
+  `VALUE IS <n>`, and `VALUE -5` parsed as `value_clause=None`, which made
+  `reset.py` silently reset to the type default instead of the declared value.
+- `cobolparser.lexer.CobolLexer(text, free_form=True)` + `TokenType.COPY` —
+  `refusal.py` re-lexes the raw source to detect unresolved COPY statements
+  (they leave zero trace in the AST).
 - `cobolparser.analysis.DynamicCallAnalyzer().analyze(ast)`

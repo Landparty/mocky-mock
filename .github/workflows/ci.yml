@@ -1,0 +1,67 @@
+name: CI
+
+# Mirrors the sibling cobol-parser repo's workflow shape (push/PR to main,
+# ubuntu-latest, Python 3.11-3.13 matrix matching this project's
+# requires-python floor in pyproject.toml).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out mockymock
+        uses: actions/checkout@v4
+        with:
+          path: mocky-mock
+
+      # requirements-dev.txt installs cobolparser via `-e ../cobol-parser`,
+      # i.e. as an editable sibling directory -- mockymock is not on PyPI
+      # and depends on cobol-parser the same way (see this repo's own
+      # CLAUDE.md "Backend Integration" section and interface-contract.md).
+      # A single default checkout only gives CI this one repo, so
+      # cobol-parser must be checked out as a second, sibling job step for
+      # `../cobol-parser` to resolve relative to mocky-mock's working
+      # directory.
+      #
+      # KNOWN GAP (flagged, not silently worked around): this step assumes
+      # samdi94dion/Landparty's cobol-parser repo is either public, or that
+      # `secrets.COBOL_PARSER_PAT` (a personal access token / deploy key
+      # with read access, added as a repo or org secret) is configured. The
+      # default GITHUB_TOKEN cannot check out a different private repo. If
+      # neither holds, this step will fail with a checkout/auth error --
+      # that failure is the intended, visible signal that the cross-repo
+      # dependency needs to be resolved (e.g. by adding the PAT secret, by
+      # vendoring a pinned cobolparser snapshot into this repo instead of an
+      # editable sibling install, or by making cobol-parser public).
+      - name: Check out cobol-parser (sibling editable dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: Landparty/cobol-parser
+          path: cobol-parser
+          token: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Package name verified against Ubuntu/Debian package listings (see
+      # this project's task-2-brief.md, which also verified it against
+      # chocolatey/homebrew for the other platforms mockymock's setup
+      # subcommand supports).
+      - name: Install GnuCOBOL
+        run: sudo apt-get update && sudo apt-get install -y gnucobol
+
+      - name: Install dependencies
+        working-directory: mocky-mock
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        working-directory: mocky-mock
+        run: python -m pytest tests/ -v

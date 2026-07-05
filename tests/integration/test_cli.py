@@ -239,3 +239,102 @@ def test_run_verify_count_is_correct_for_two_calls_in_one_paragraph(tmp_path: Pa
     exit_code = main(["run", str(program), "--cut", str(cut_file)])
 
     assert exit_code == 0
+
+
+BOUNDARY_MIX_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BOUNDMIX.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT ORDER-FILE ASSIGN TO "ORDERS"
+               ORGANIZATION IS LINE SEQUENTIAL.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  ORDER-FILE.
+       01  ORDER-RECORD       PIC X(11).
+
+       WORKING-STORAGE SECTION.
+       01  WS-PGM-NAME        PIC X(8) VALUE "DISCRATE".
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-RATE            PIC 9V99.
+       01  WS-NAME            PIC X(10).
+
+       PROCEDURE DIVISION.
+       CALLS-STATIC.
+           CALL "DISCRATE" USING WS-AMOUNT WS-RATE.
+
+       CALLS-DYNAMIC.
+           CALL WS-PGM-NAME USING WS-AMOUNT.
+
+       READS-A-FILE.
+           READ ORDER-FILE
+               AT END DISPLAY "EOF"
+           END-READ.
+
+       READS-CONSOLE.
+           ACCEPT WS-NAME.
+"""
+
+
+def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys):
+    """The mock surface detects dynamic CALLs, file I/O, and console ACCEPTs
+    that v1 cannot mock. generate must say so, not silently drop them --
+    otherwise the scaffold looks like complete coverage of the program's
+    boundary points when it isn't."""
+    program = tmp_path / "BOUNDMIX.cbl"
+    program.write_text(BOUNDARY_MIX_CBL)
+    output = tmp_path / "BOUNDMIX.cut"
+
+    exit_code = main(["generate", str(program), "-o", str(output)])
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "not mockable in v1" in out
+    assert "dynamic CALL" in out
+    assert "file I/O" in out
+    assert "console ACCEPT" in out
+    # The scaffold itself still only contains the static CALL test case.
+    assert 'MOCK CALL "DISCRATE"' in output.read_text()
+
+
+def test_generate_stays_quiet_when_everything_is_mockable(tmp_path: Path, capsys):
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(ORDRPROC_CBL)
+    output = tmp_path / "ORDRPROC.cut"
+
+    exit_code = main(["generate", str(program), "-o", str(output)])
+
+    assert exit_code == 0
+    assert "not mockable in v1" not in capsys.readouterr().out
+
+
+def test_splice_preserves_sentence_period_of_replaced_call():
+    """When the mocked CALL is the last statement of its paragraph, its line
+    carries the sentence-terminating period. The dispatch block that replaces
+    it must end with a period too -- otherwise the sentence runs into the next
+    paragraph header and cobc rejects the program ('PARA-TWO' undefined)."""
+    result = parse_cobol(TWOSITE_CBL, filename="TWOSITE.cbl")
+    assert result.success, result.errors
+    ast = result.ast
+    surface = analyze(ast)
+
+    suite = parse_cut(TWOSITE_CUT)
+    normalized = normalize_fixed_format(TWOSITE_CBL.splitlines())
+    lines = normalized.splitlines()
+    boundaries = collect_boundaries(ast)
+    mocked_call_names = sorted(
+        {m.program_name for case in suite.test_cases for m in case.mocks}
+    )
+
+    spliced = _splice_call_sites(
+        lines, boundaries, ast, surface, suite, mocked_call_names
+    )
+
+    # Both CALLs were sentence-final, so both dispatch blocks must terminate
+    # their sentence.
+    end_evaluates = [line for line in spliced if line.strip().startswith("END-EVALUATE")]
+    assert len(end_evaluates) == 2
+    assert all(line.rstrip().endswith("END-EVALUATE.") for line in end_evaluates)

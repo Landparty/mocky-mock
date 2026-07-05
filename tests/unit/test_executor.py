@@ -84,3 +84,20 @@ def test_run_binary_still_returns_normal_result_on_success():
     assert result.exit_code == 0
     assert result.stdout == "hello\n"
     assert result.stderr == ""
+
+
+def test_run_binary_returns_clean_result_when_os_blocks_execution():
+    """Windows App Control / Smart App Control can refuse to launch a freshly
+    compiled unsigned binary (WinError 4551), surfacing as OSError from
+    subprocess. run_binary must return a clean failure result, not leak a
+    traceback."""
+    with patch(
+        "subprocess.run",
+        side_effect=OSError(4551, "An Application Control policy has blocked this file"),
+    ):
+        result = run_binary(Path("blocked.exe"))
+
+    assert result.exit_code != 0
+    assert result.stdout == ""
+    assert "blocked.exe" in result.stderr
+    assert "Application Control" in result.stderr

@@ -44,3 +44,52 @@ def test_alphanumeric_item_without_value_clause_resets_to_spaces():
 def test_one_line_per_top_level_item():
     lines = reset_move_lines(_ast())
     assert len(lines) == 4
+
+
+LEVEL_77_AND_GROUP_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SAMPLE2.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  WS-RETRY-LIMIT     PIC 9(2) VALUE 3.
+       77  WS-SCRATCH         PIC X(8).
+       01  WS-ORDER.
+           05  WS-ORDER-QTY   PIC 9(3).
+           05  WS-ORDER-DESC  PIC X(20).
+       01  WS-TOTAL           PIC 9(5)V99.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def _ast_77_and_group():
+    result = parse_cobol(LEVEL_77_AND_GROUP_SOURCE, filename="sample2.cbl")
+    assert result.success, result.errors
+    return result.ast
+
+
+def test_level_77_item_with_value_resets_to_declared_value():
+    lines = reset_move_lines(_ast_77_and_group())
+    assert "MOVE 3 TO WS-RETRY-LIMIT" in lines
+
+
+def test_level_77_item_without_value_resets_to_type_default():
+    lines = reset_move_lines(_ast_77_and_group())
+    assert "MOVE SPACES TO WS-SCRATCH" in lines
+
+
+def test_group_item_without_value_is_initialized_not_space_filled():
+    """MOVE SPACES TO a group would write spaces over its numeric children,
+    corrupting them for the next test case's arithmetic. INITIALIZE sets
+    numeric children to zero and alphanumeric children to spaces."""
+    lines = reset_move_lines(_ast_77_and_group())
+    assert "INITIALIZE WS-ORDER" in lines
+    assert "MOVE SPACES TO WS-ORDER" not in lines
+
+
+def test_every_top_level_item_is_covered():
+    lines = reset_move_lines(_ast_77_and_group())
+    assert len(lines) == 4
