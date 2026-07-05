@@ -138,7 +138,18 @@ def compile_source(source_path: Path) -> CompileResult:
             ],
             capture_output=True,
             text=True,
+            timeout=600,
             check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return CompileResult(
+            success=False,
+            binary_path=None,
+            stdout="",
+            stderr=(
+                f"mockymock: docker exec cobc timed out after 600s "
+                f"(the docker daemon may be wedged): {exc}\n"
+            ),
         )
     except OSError as exc:
         return CompileResult(

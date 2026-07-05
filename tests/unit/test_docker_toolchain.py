@@ -237,6 +237,18 @@ def test_compile_source_wraps_docker_oserror_cleanly(tmp_path):
     assert "docker went away" in result.stderr
 
 
+def test_compile_source_times_out_cleanly_when_docker_exec_hangs(tmp_path):
+    work, source = _work(tmp_path)
+    with mock.patch(
+        "mockymock.runtime.docker_toolchain.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["docker"], timeout=600),
+    ), mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work):
+        result = compile_source(source)
+    assert not result.success
+    assert result.binary_path is None
+    assert "timed out" in result.stderr
+
+
 from mockymock.runtime.docker_toolchain import run_binary
 from mockymock.runtime.executor import NOT_FOUND_EXIT_CODE, TIMEOUT_EXIT_CODE
 
