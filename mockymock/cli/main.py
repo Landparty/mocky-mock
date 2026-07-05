@@ -101,6 +101,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     from mockymock.analysis.mock_surface import analyze
     from mockymock.analysis.refusal import (
+        check_nested_exec,
         check_test_case,
         check_unresolved_copybooks,
         check_whole_program,
@@ -111,8 +112,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.runtime import docker_toolchain
     from mockymock.runtime.sandbox import sandbox_dir
     from mockymock.splicer.driver import build_driver
+    from mockymock.splicer.naming import TallyRegistry
+    from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
+    from mockymock.splicer.sqlca import transform_data_division_exec
 
     try:
         docker_toolchain.ensure_toolchain()
@@ -141,30 +145,39 @@ def _cmd_run(args: argparse.Namespace) -> int:
     suite = parse_cut(Path(args.cut).read_text())
     surface = analyze(result.ast)
 
+    nested_exec_reasons = check_nested_exec(surface)
+    for reason in nested_exec_reasons:
+        print(f"mockymock run: refused ({reason.code}): {reason.message}")
+    if nested_exec_reasons:
+        return 1
+
+    normalized = normalize_fixed_format(raw_source.splitlines())
+    lines = normalized.splitlines()
+
+    # Pre-check the DATA DIVISION EXEC SQL blocks before doing any work; the
+    # actual transform runs after splicing (it inserts/removes lines, which
+    # would shift the AST-derived statement spans the splicer relies on).
+    _, data_exec_reasons = transform_data_division_exec(lines)
+    for reason in data_exec_reasons:
+        print(f"mockymock run: refused ({reason.code}): {reason.message}")
+    if data_exec_reasons:
+        return 1
+
     refused = False
     for case in suite.test_cases:
-        mocked_names = {m.program_name for m in case.mocks}
-        for reason in check_test_case(
-            surface, result.ast, case.perform_target, mocked_names
-        ):
+        for reason in check_test_case(surface, result.ast, case):
             print(f"mockymock run: refused ({reason.code}): {reason.message}")
             refused = True
     if refused:
         return 1
 
-    normalized = normalize_fixed_format(raw_source.splitlines())
-    lines = normalized.splitlines()
     boundaries = collect_boundaries(result.ast)
-
-    mocked_call_names = sorted(
-        {m.program_name for case in suite.test_cases for m in case.mocks}
-    )
-    lines = _splice_call_sites(
-        lines, boundaries, result.ast, surface, suite, mocked_call_names
-    )
+    registry = TallyRegistry(suite)
+    lines = splice_program(lines, boundaries, surface, suite, registry)
+    lines, _ = transform_data_division_exec(lines)
 
     reset_lines = reset_move_lines(result.ast)
-    artifact = build_driver(suite, reset_lines, mocked_call_names)
+    artifact = build_driver(suite, reset_lines, registry)
 
     instrumented = _insert_driver(lines, artifact)
 
@@ -189,91 +202,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         Path(args.junit_xml).write_text(format_junit_xml(suite_result))
 
     return 0 if suite_result.all_passed else 1
-
-
-def _splice_call_sites(
-    lines: list[str],
-    boundaries: list[int],
-    program,
-    surface,
-    suite,
-    mocked_call_names: list[str],
-) -> list[str]:
-    """Replace every static CALL statement to a mocked program with its
-    EVALUATE UT-CURRENT-CASE dispatch block.
-
-    All spans are computed up front from the original (pre-splice)
-    `boundaries`/statement locations, then applied to `lines` in descending
-    start-line order. Applying bottom-up keeps every not-yet-applied span's
-    line numbers valid: `comment_and_replace` returns a list that has grown
-    by `len(replacement)` lines, which would silently shift every later
-    (higher-line-number) span if splices were applied top-down instead --
-    verified concretely during Task 14 review: a second top-down splice
-    landed one line short and commented out the following paragraph's
-    header instead of its CALL statement.
-
-    A paragraph can contain more than one static CALL to the same mocked
-    program (e.g. two separate `CALL "X"` lines in one paragraph). Because
-    the outer loop matches `MockSurface.static_call_sites()` by
-    `paragraph_name` alone (one surface entry per call site) and the inner
-    loop then re-scans every statement in that paragraph, naively appending
-    a span per (site, matching statement) pair double-, triple-, or
-    quadruple-counts the same statement once per site sharing its
-    paragraph. `seen_statement_ids` dedupes by `id(statement)` so each
-    physical CALL gets exactly one span regardless of how many sites in
-    that paragraph reference it.
-    """
-    from mockymock.splicer.injector import build_call_dispatch
-    from mockymock.splicer.source_map import statement_span
-    from mockymock.splicer.stub_writer import comment_and_replace
-
-    last_line = len(lines)
-    spans: list[tuple[int, int, list[str]]] = []
-    seen_statement_ids: set[int] = set()
-    for call_name in mocked_call_names:
-        for site in surface.static_call_sites():
-            if site.program_name != call_name:
-                continue
-            for paragraph in _paragraphs_by_name(program):
-                if paragraph.paragraph_name != site.paragraph_name:
-                    continue
-                for statement in paragraph.statements:
-                    if (
-                        getattr(statement, "called_program", None) != call_name
-                        or statement.is_dynamic
-                        or id(statement) in seen_statement_ids
-                    ):
-                        continue
-                    seen_statement_ids.add(id(statement))
-                    start, end = statement_span(statement, boundaries, last_line)
-                    replacement = build_call_dispatch(call_name, suite)
-                    # If the replaced CALL carried its sentence's terminating
-                    # period (i.e. it was the last statement of the sentence /
-                    # paragraph), the dispatch block must terminate the
-                    # sentence too -- otherwise the unterminated sentence runs
-                    # into the next paragraph header and cobc rejects it.
-                    last_span_line = next(
-                        (
-                            lines[i - 1]
-                            for i in range(end, start - 1, -1)
-                            if lines[i - 1].strip()
-                        ),
-                        "",
-                    )
-                    if last_span_line.rstrip().endswith("."):
-                        replacement = replacement[:-1] + [replacement[-1] + "."]
-                    spans.append((start, end, replacement))
-
-    for start, end, replacement in sorted(spans, key=lambda s: s[0], reverse=True):
-        lines = comment_and_replace(lines, start, end, replacement)
-    return lines
-
-
-def _paragraphs_by_name(program):
-    from mockymock.analysis.mock_surface import _all_paragraphs
-
-    procedure = program.get_division("PROCEDURE")
-    return _all_paragraphs(procedure) if procedure else []
 
 
 def _insert_driver(lines: list[str], artifact) -> list[str]:

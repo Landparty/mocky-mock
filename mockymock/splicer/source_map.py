@@ -13,12 +13,23 @@ from cobolparser.models.program import CobolDivision, CobolParagraph
 
 
 def collect_boundaries(program) -> list[int]:
-    """Every paragraph-header and statement-start line, sorted ascending."""
+    """Every paragraph-header and statement-start line, sorted ascending.
+
+    cobolparser emits a phantom paragraph literally named "." for the
+    sentence-terminating period line after an EXEC ... END-EXEC block
+    (verified empirically: a program with two EXEC SQL paragraphs yields
+    two extra paragraphs named "." anchored at the END-EXEC lines). Those
+    are not real headers -- treating them as boundaries would cut an EXEC
+    statement's span one line short of its END-EXEC, leaving a dangling
+    END-EXEC in the spliced output -- so they are excluded.
+    """
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return []
     lines: set[int] = set()
     for paragraph in _all_paragraphs(procedure):
+        if paragraph.paragraph_name.strip(".") == "":
+            continue
         lines.add(paragraph.location.line)
         for statement in paragraph.statements:
             lines.add(statement.location.line)

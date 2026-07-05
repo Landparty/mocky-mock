@@ -107,8 +107,7 @@ def test_scaffold_multi_call_testcase_mocks_every_reachable_call_when_checked():
     assert len(suite.test_cases) == 1
 
     case = suite.test_cases[0]
-    mocked_names = {m.program_name for m in case.mocks}
-    reasons = check_test_case(surface, result.ast, case.perform_target, mocked_names)
+    reasons = check_test_case(surface, result.ast, case)
     assert not any(r.code == "UNMOCKED_CALL" for r in reasons)
 
 

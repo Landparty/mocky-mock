@@ -1,7 +1,13 @@
-"""Merges every test case's mock body for one (category, key) into a single
-EVALUATE UT-CURRENT-CASE dispatch block -- necessary because all TESTCASEs
-in a suite share one compiled binary and therefore one physical copy of
-each mocked statement (see Global Constraints: one binary per TESTSUITE).
+"""Builds the EVALUATE UT-CURRENT-CASE dispatch block spliced over one
+mocked boundary site -- necessary because all TESTCASEs in a suite share
+one compiled binary and therefore one physical copy of each mocked
+statement (see Global Constraints: one binary per TESTSUITE).
+
+Dispatch is built per SITE, not per mock key: different test cases may
+match the same statement through different keys (case 1 mocks
+`OPEN IN-FILE`, case 2 mocks `OPEN OUT-FILE`, both matching the one
+`OPEN INPUT IN-FILE OUTPUT OUT-FILE` statement), so the tally increment
+lives inside each case's WHEN branch, crediting that case's own directive.
 
 Also builds the trap stub spliced over *unmocked* EXEC SQL/CICS/DLI sites:
 those must be commented out program-wide regardless of reachability (cobc
@@ -11,38 +17,42 @@ trap records a failure instead of silently doing nothing.
 
 from __future__ import annotations
 
-from mockymock.dsl.model import MockCategory, MockTestSuite
+from mockymock.analysis.mock_surface import BoundarySite
+from mockymock.analysis.refusal import directive_matches_site
+from mockymock.dsl.model import MockTestSuite
 from mockymock.splicer.naming import TallyRegistry
 
 
-def build_dispatch(
-    category: MockCategory,
-    key: str,
+def build_site_dispatch(
+    site: BoundarySite,
     suite: MockTestSuite,
     registry: TallyRegistry,
 ) -> list[str]:
-    """Tally increment + EVALUATE block for one mocked boundary site."""
-    tally = registry.name(category, key)
-    lines = [f"           ADD 1 TO {tally}", "           EVALUATE UT-CURRENT-CASE"]
+    """EVALUATE block replacing one mocked boundary statement."""
+    lines = ["           EVALUATE UT-CURRENT-CASE"]
 
     for index, case in enumerate(suite.test_cases, start=1):
-        case_id = f"{index:03d}"
-        for mock in case.mocks:
-            if mock.category is not category or mock.key != key:
-                continue
-            lines.append(f'               WHEN "{case_id}"')
-            body = [f"                   {line}" for line in mock.body_lines]
-            # An empty WHEN branch is invalid COBOL; CONTINUE is the no-op.
-            lines.extend(body or ["                   CONTINUE"])
+        matches = [d for d in case.mocks if directive_matches_site(d, site)]
+        if len(matches) > 1:
+            raise ValueError(
+                f"site at line {site.line} matched by multiple directives of "
+                f"test case {index} -- refusal gate should have caught this "
+                f"(AMBIGUOUS_MOCK)"
+            )
+        if not matches:
+            continue
+        directive = matches[0]
+        lines.append(f'               WHEN "{index:03d}"')
+        lines.append(
+            f"                   ADD 1 TO "
+            f"{registry.name(directive.category, directive.key)}"
+        )
+        lines.extend(f"                   {body}" for body in directive.body_lines)
 
-    describe = (
-        key
-        if category is MockCategory.CALL
-        else f"{category.value} {key}".replace('"', "")
-    )
     lines.append("               WHEN OTHER")
     lines.append(
-        f'                   DISPLAY "__MOCKYMOCK__ ERROR: {describe} reached "'
+        f'                   DISPLAY "__MOCKYMOCK__ ERROR: {site.label} '
+        f'boundary (line {site.line}) reached "'
     )
     lines.append('                       "from unmocked test case " UT-CURRENT-CASE')
     lines.append("                   ADD 1 TO UT-FAIL-COUNT")
