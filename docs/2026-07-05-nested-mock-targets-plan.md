@@ -26,9 +26,9 @@
 **Interfaces:**
 - Produces: `BoundarySite.nested_in_boundary: bool`, `BoundarySite.span: tuple[int, int] | None`, `BoundarySite.unspliceable_reason: str | None`; `_walk_statements(..., in_boundary: bool = False)`.
 
-- [ ] Write failing tests: a CALL inside `CALL ... ON EXCEPTION` has `nested_in_boundary=True`; a CALL inside IF/EVALUATE-WHEN/inline-PERFORM has `nested=True, nested_in_boundary=False`.
-- [ ] Implement: add the three fields (defaults `False`/`None`/`None`); add module tuple `_BOUNDARY_STATEMENT_TYPES` (CallStatement, the eight IO types, EXEC types, IOAcceptStatement, SORT/MERGE types); `_walk_statements` gains `in_boundary` and passes `in_boundary or isinstance(statement, _BOUNDARY_STATEMENT_TYPES)` when recursing; `_classify_statement` forwards it into every `BoundarySite`.
-- [ ] Tests pass; commit.
+- [x] Write failing tests: a CALL inside `CALL ... ON EXCEPTION` has `nested_in_boundary=True`; a CALL inside IF/EVALUATE-WHEN/inline-PERFORM has `nested=True, nested_in_boundary=False`.
+- [x] Implement: add the three fields (defaults `False`/`None`/`None`); add module tuple `_BOUNDARY_STATEMENT_TYPES` (CallStatement, the eight IO types, EXEC types, IOAcceptStatement, SORT/MERGE types); `_walk_statements` gains `in_boundary` and passes `in_boundary or isinstance(statement, _BOUNDARY_STATEMENT_TYPES)` when recursing; `_classify_statement` forwards it into every `BoundarySite`.
+- [x] Tests pass; commit.
 
 ### Task 2: scope map + nested-span annotation in source_map
 
@@ -42,9 +42,9 @@
   - `collect_scope_map(program, lines: list[str]) -> ScopeMap` where `ScopeMap.boundaries: list[ScopeBoundary]` sorted by (line, column). Contents: paragraph headers (phantom `"."` excluded), statement starts at every depth (recursion via `_nested_statement_lists`), and lexer tokens whose uppercase value is in `_SCOPE_WORDS` (ELSE, WHEN, OTHERWISE, END-IF, END-EVALUATE, END-PERFORM, END-CALL, END-READ, END-WRITE, END-REWRITE, END-DELETE, END-START, END-ACCEPT, END-EXEC, END-SEARCH, END-STRING, END-UNSTRING, END-COMPUTE, END-ADD, END-SUBTRACT, END-MULTIPLY, END-DIVIDE, END-DISPLAY, END-RETURN) — excluding tokens on lines inside any `EXEC ... END-EXEC` range (embedded SQL may contain WHEN/ELSE/CASE text).
   - `annotate_nested_sites(surface, scope_map, lines) -> None` — for each `site.nested` BoundarySite sets `site.span` or `site.unspliceable_reason` per the spec's five rules (control-flow ancestry only; no clause bodies of its own; owns its start line; clean next boundary, own-verb terminator exempt; EXEC span must contain END-EXEC).
 
-- [ ] Write failing tests covering: span for a multi-line nested CALL in IF-then; nested CALL in ELSE branch, WHEN branch, WHEN OTHER, inline PERFORM body; explicit `END-CALL` included in span; refusal reasons for `IF X CALL "F" END-IF` one-liner, glued trailing `END-IF`, CALL with ON EXCEPTION handler (clause bodies), CALL inside a CALL handler (boundary ancestry), nested EXEC SQL span includes END-EXEC, and EXEC text containing `CASE WHEN` not truncating the span.
-- [ ] Implement `_SCOPE_WORDS`, `ScopeBoundary`, `ScopeMap`, `collect_scope_map`, `_VERB_TERMINATORS` ({CALL: END-CALL, READ: END-READ, WRITE: END-WRITE, REWRITE: END-REWRITE, DELETE: END-DELETE, START: END-START, ACCEPT: END-ACCEPT}), `annotate_nested_sites`.
-- [ ] Tests pass; commit.
+- [x] Write failing tests covering: span for a multi-line nested CALL in IF-then; nested CALL in ELSE branch, WHEN branch, WHEN OTHER, inline PERFORM body; explicit `END-CALL` included in span; refusal reasons for `IF X CALL "F" END-IF` one-liner, glued trailing `END-IF`, CALL with ON EXCEPTION handler (clause bodies), CALL inside a CALL handler (boundary ancestry), nested EXEC SQL span includes END-EXEC, and EXEC text containing `CASE WHEN` not truncating the span.
+- [x] Implement `_SCOPE_WORDS`, `ScopeBoundary`, `ScopeMap`, `collect_scope_map`, `_VERB_TERMINATORS` ({CALL: END-CALL, READ: END-READ, WRITE: END-WRITE, REWRITE: END-REWRITE, DELETE: END-DELETE, START: END-START, ACCEPT: END-ACCEPT}), `annotate_nested_sites`.
+- [x] Tests pass; commit.
 
 ### Task 3: narrow the refusal gate
 
@@ -56,9 +56,9 @@
 - Consumes: `site.span` / `site.unspliceable_reason` (annotation must have run; `span is None` on a nested site ⇒ refuse — fail closed).
 - Produces: unchanged signatures `check_nested_exec(surface)`, `check_test_case(surface, program, case)`.
 
-- [ ] Write failing tests: a mocked nested CALL in an IF with a clean layout passes the gate (no `UNSUPPORTED_NESTED_MOCK_TARGET`) after annotation; the same program *without* annotation still refuses; a one-liner nested CALL still refuses with the layout reason in the message; a spliceable nested EXEC no longer triggers `NESTED_EXEC`; an EXEC inside a CALL handler still does.
-- [ ] Implement: both nested branches condition on `site.span is None` and append `site.unspliceable_reason or "nested-site spliceability was not annotated"` to the message.
-- [ ] Tests pass; commit.
+- [x] Write failing tests: a mocked nested CALL in an IF with a clean layout passes the gate (no `UNSUPPORTED_NESTED_MOCK_TARGET`) after annotation; the same program *without* annotation still refuses; a one-liner nested CALL still refuses with the layout reason in the message; a spliceable nested EXEC no longer triggers `NESTED_EXEC`; an EXEC inside a CALL handler still does.
+- [x] Implement: both nested branches condition on `site.span is None` and append `site.unspliceable_reason or "nested-site spliceability was not annotated"` to the message.
+- [x] Tests pass; commit.
 
 ### Task 4: splice nested sites in the orchestrator
 
@@ -70,9 +70,9 @@
 - Consumes: `site.span` for nested sites; `statement_span` for top-level (unchanged).
 - Produces: unchanged signature `splice_program(lines, boundaries, surface, suite, registry)`; caller must run `annotate_nested_sites` first.
 
-- [ ] Write failing tests: mocked nested CALL inside IF — original CALL lines commented, dispatch block present, `END-IF` line NOT commented, trailing period preserved on the replacement when the span carried it; unmocked nested EXEC SQL gets the trap stub and its END-EXEC line is commented; unmocked nested non-EXEC site left untouched; nested site with `span=None` that is mocked raises ValueError.
-- [ ] Implement: replace the `site.nested` skip with span/mock handling per design; update module docstring (nested sites *do* reach this module now).
-- [ ] Tests pass; commit.
+- [x] Write failing tests: mocked nested CALL inside IF — original CALL lines commented, dispatch block present, `END-IF` line NOT commented, trailing period preserved on the replacement when the span carried it; unmocked nested EXEC SQL gets the trap stub and its END-EXEC line is commented; unmocked nested non-EXEC site left untouched; nested site with `span=None` that is mocked raises ValueError.
+- [x] Implement: replace the `site.nested` skip with span/mock handling per design; update module docstring (nested sites *do* reach this module now).
+- [x] Tests pass; commit.
 
 ### Task 5: wire generate/run CLI + scaffold nested sites
 
@@ -84,9 +84,9 @@
 - Consumes: `collect_scope_map`, `annotate_nested_sites`.
 - Produces: `generate` scaffolds spliceable nested sites and reports only unspliceable ones (reason included); `run` normalizes + annotates before `check_nested_exec`/`check_test_case`/`splice_program`.
 
-- [ ] Write failing test: scaffold from a program whose only CALL is nested inside an IF includes `MOCK CALL "..."` (today it yields no TESTCASE).
-- [ ] Implement: generator skip condition becomes `site.category is None or (site.nested and site.span is None)`; `_cmd_generate` normalizes source and annotates; `_cmd_run` moves normalization above `check_nested_exec` and annotates; `_report_unsupported_boundaries` prints `site.unspliceable_reason`.
-- [ ] Tests pass; commit.
+- [x] Write failing test: scaffold from a program whose only CALL is nested inside an IF includes `MOCK CALL "..."` (today it yields no TESTCASE).
+- [x] Implement: generator skip condition becomes `site.category is None or (site.nested and site.span is None)`; `_cmd_generate` normalizes source and annotates; `_cmd_run` moves normalization above `check_nested_exec` and annotates; `_report_unsupported_boundaries` prints `site.unspliceable_reason`.
+- [x] Tests pass; commit.
 
 ### Task 6: integration test end-to-end
 
@@ -94,6 +94,6 @@
 - Create: `tests/integration/fixtures/nested_boundaries.cbl`, `tests/integration/fixtures/nested_boundaries.cut`
 - Test: `tests/integration/test_nested_boundaries.py`
 
-- [ ] Fixture: program with a CALL inside IF, a CALL inside EVALUATE WHEN, and an EXEC SQL inside IF; .cut mocking all three with VERIFY tallies.
-- [ ] Test drives `mockymock run` via the CLI (same Docker gating as `test_invupdt_example.py`) and asserts exit 0 + all cases PASS.
-- [ ] Full suite green: `python -m pytest tests/unit -q` and (Docker available) `tests/integration -q`; commit.
+- [x] Fixture: program with a CALL inside IF, a CALL inside EVALUATE WHEN, and an EXEC SQL inside IF; .cut mocking all three with VERIFY tallies.
+- [x] Test drives `mockymock run` via the CLI (same Docker gating as `test_invupdt_example.py`) and asserts exit 0 + all cases PASS.
+- [x] Full suite green: `python -m pytest tests/unit -q` and (Docker available) `tests/integration -q`; commit.
