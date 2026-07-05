@@ -1,7 +1,4 @@
-import shutil
 from pathlib import Path
-
-import pytest
 
 from cobolparser import parse_cobol
 from cobolparser.preprocess import normalize_fixed_format
@@ -10,10 +7,7 @@ from mockymock.analysis.mock_surface import analyze
 from mockymock.cli.main import _splice_call_sites, main
 from mockymock.dsl.parser import parse_cut
 from mockymock.splicer.source_map import collect_boundaries
-
-requires_gnucobol = pytest.mark.skipif(
-    shutil.which("cobc") is None, reason="GnuCOBOL (cobc) not installed"
-)
+from tests.integration._docker import requires_docker
 
 ORDRPROC_CBL = """\
        IDENTIFICATION DIVISION.
@@ -110,7 +104,7 @@ def test_generate_writes_a_parseable_cut_file(tmp_path: Path):
     assert 'MOCK CALL "DISCRATE"' in output.read_text()
 
 
-@requires_gnucobol
+@requires_docker
 def test_run_passes_when_both_cases_are_correct(tmp_path: Path):
     program = tmp_path / "ORDRPROC.cbl"
     program.write_text(ORDRPROC_CBL)
@@ -122,7 +116,7 @@ def test_run_passes_when_both_cases_are_correct(tmp_path: Path):
     assert exit_code == 0
 
 
-@requires_gnucobol
+@requires_docker
 def test_run_fails_when_expectation_is_wrong(tmp_path: Path):
     program = tmp_path / "ORDRPROC.cbl"
     program.write_text(ORDRPROC_CBL)
@@ -146,7 +140,7 @@ def test_run_refuses_program_with_parse_errors(tmp_path: Path, capsys):
     assert "PARSE_ERROR" in capsys.readouterr().out
 
 
-@requires_gnucobol
+@requires_docker
 def test_run_splices_both_call_sites_correctly(tmp_path: Path):
     """Regression test: two static CALL sites to the same mocked program,
     in two different paragraphs. Both must be spliced correctly -- if the
@@ -229,7 +223,7 @@ def test_splice_call_sites_does_not_duplicate_same_program_calls_in_one_paragrap
     assert "PARA-ONE." in spliced_text
 
 
-@requires_gnucobol
+@requires_docker
 def test_run_verify_count_is_correct_for_two_calls_in_one_paragraph(tmp_path: Path):
     program = tmp_path / "SAMEPARA.cbl"
     program.write_text(SAMEPARA_CBL)
