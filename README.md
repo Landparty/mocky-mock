@@ -63,9 +63,14 @@ TESTCASE "totals two records then updates and notifies"
 `mockymock generate <program.cbl>` scaffolds a starter `.cut` covering
 every mockable boundary it finds.
 
-Still refused, fail-closed: dynamic `CALL identifier`, `SORT`/`MERGE`/
-`RELEASE`/`RETURN`, `PERFORM ... THRU`, mocks targeting statements nested
-inside IF/EVALUATE/inline-PERFORM bodies, and nested EXEC blocks. `DISPLAY`
+Boundary statements nested inside IF/EVALUATE/inline-PERFORM bodies
+(including nested EXEC blocks) are mockable when the statement sits on its
+own line(s) — the common layout. Still refused, fail-closed: dynamic
+`CALL identifier`, `SORT`/`MERGE`/`RELEASE`/`RETURN`, `PERFORM ... THRU`,
+nested statements sharing a line with other code (`IF X CALL "F" END-IF`
+one-liners), statements inside another boundary statement's clause body
+(`READ ... AT END`, `CALL ... ON EXCEPTION`), and mocks with clause bodies
+of their own — each refusal names the exact layout problem. `DISPLAY`
 passes through unmocked. See the worked example in `examples/invupdt/`.
 
 ## Setup
