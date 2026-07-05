@@ -13,9 +13,17 @@ import re
 from dataclasses import dataclass
 
 from mockymock.dsl.model import MockTestCase, MockTestSuite
-from mockymock.splicer.injector import tally_field_name
+from mockymock.splicer.naming import TallyRegistry
 
 _SUITE_PARAGRAPH_NAME_RE = re.compile(r"[^A-Z0-9-]")
+
+
+def _display_text(text: str) -> str:
+    """Escape a value for embedding inside a COBOL "..." DISPLAY literal:
+    a quote inside a quoted literal is written as two quotes. Without this,
+    EXPECT values like "OK" split the generated DISPLAY literal and cobc
+    reads the remainder as undefined identifiers."""
+    return text.replace('"', '""')
 
 
 @dataclass
@@ -25,7 +33,7 @@ class DriverArtifact:
 
 
 def build_driver(
-    suite: MockTestSuite, reset_lines: list[str], mocked_call_names: list[str]
+    suite: MockTestSuite, reset_lines: list[str], registry: TallyRegistry
 ) -> DriverArtifact:
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
@@ -40,10 +48,8 @@ def build_driver(
         "01  UT-CURRENT-CASE        PIC X(3).",
         "01  UT-FAIL-COUNT          PIC 9(4) VALUE 0.",
     ]
-    for call_name in mocked_call_names:
-        working_storage.append(
-            f"01  {tally_field_name(call_name)}      PIC 9(4) VALUE 0."
-        )
+    for _, tally in registry.items():
+        working_storage.append(f"01  {tally}      PIC 9(4) VALUE 0.")
 
     procedure: list[str] = []
     procedure.append(f"       {suite_paragraph}.")
@@ -66,7 +72,7 @@ def build_driver(
 
     for index, case in enumerate(suite.test_cases, start=1):
         procedure.extend(
-            _build_testcase_paragraph(index, case, mocked_call_names, bool(reset_lines))
+            _build_testcase_paragraph(index, case, registry, bool(reset_lines))
         )
         procedure.append("")
 
@@ -76,18 +82,20 @@ def build_driver(
 
 
 def _build_testcase_paragraph(
-    index: int, case: MockTestCase, mocked_call_names: list[str], has_reset: bool
+    index: int, case: MockTestCase, registry: TallyRegistry, has_reset: bool
 ) -> list[str]:
     case_id = f"{index:03d}"
+    case_mocks = {(mock.category, mock.key) for mock in case.mocks}
     lines = [f"       UT-TESTCASE-{case_id}."]
 
     if has_reset:
         lines.append("           PERFORM UT-RESET-WORKING-STORAGE")
     lines.append(f'           MOVE "{case_id}" TO UT-CURRENT-CASE')
-    for call_name in {m.program_name for m in case.mocks}:
-        lines.append(f"           MOVE 0 TO {tally_field_name(call_name)}")
+    for category, key in dict.fromkeys((m.category, m.key) for m in case.mocks):
+        lines.append(f"           MOVE 0 TO {registry.name(category, key)}")
     lines.append(
-        f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} START: {case.name}"'
+        f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} START: '
+        f'{_display_text(case.name)}"'
     )
 
     for value, target in case.setup_moves:
@@ -103,18 +111,25 @@ def _build_testcase_paragraph(
         )
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: expected '
-            f'{expectation.data_name} = {expectation.expected_value}"'
+            f'{expectation.data_name} = {_display_text(expectation.expected_value)}"'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")
 
     for verification in case.verifications:
-        tally = tally_field_name(verification.program_name)
+        if (verification.category, verification.key) not in case_mocks:
+            raise ValueError(
+                f"VERIFY references {verification.category.value} "
+                f"{verification.key!r}, which no MOCK directive in this TESTCASE "
+                f"declares (should have been refused before codegen)"
+            )
+        tally = registry.name(verification.category, verification.key)
         condition = _verify_condition(verification.expectation, tally)
         lines.append(f"           IF {condition}")
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY '
-            f'{verification.program_name} WAS CALLED {verification.expectation}"'
+            f'{verification.category.value} {_display_text(verification.key)} WAS CALLED '
+            f'{verification.expectation}"'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")
