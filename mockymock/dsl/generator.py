@@ -1,11 +1,15 @@
 """Auto-scaffolds a starter .cut file from a MockSurface.
 
-One TESTCASE per paragraph that has at least one top-level mockable
-boundary site; the TESTCASE mocks ALL of that paragraph's mockable sites
-(deduped by key) -- a scaffold that mocked only some of them would walk
-users straight into the refusal gate's UNMOCKED_* checks (an unmocked CALL
-has nowhere to link, unmocked file I/O would hit a nonexistent sandbox
-file, unmocked EXEC cannot compile, unmocked console ACCEPT reads stdin).
+One TESTCASE per paragraph that has at least one mockable boundary site;
+the TESTCASE mocks ALL of that paragraph's mockable sites (deduped by
+key) -- a scaffold that mocked only some of them would walk users
+straight into the refusal gate's UNMOCKED_* checks (an unmocked CALL has
+nowhere to link, unmocked file I/O would hit a nonexistent sandbox file,
+unmocked EXEC cannot compile, unmocked console ACCEPT reads stdin).
+
+Nested sites count as mockable only when `annotate_nested_sites` gave
+them a validated splice span; unspliceable nested sites are skipped here
+and reported by the CLI's unsupported-boundaries listing instead.
 
 Placeholder bodies are minimal-but-runnable (MOVE 0 TO RETURN-CODE for
 calls, MOVE 0 TO SQLCODE for SQL, empty for file ops) and are expected to
@@ -32,7 +36,7 @@ def scaffold_cut(suite_name: str, surface: MockSurface) -> str:
     """Generate a starter .cut file from every mockable boundary site."""
     sites_by_paragraph: dict[str, list[BoundarySite]] = {}
     for site in surface.boundary_sites:
-        if site.category is None or site.nested:
+        if site.category is None or (site.nested and site.span is None):
             continue
         sites_by_paragraph.setdefault(site.paragraph_name, []).append(site)
 

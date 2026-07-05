@@ -160,3 +160,48 @@ def test_scaffold_mq_directive_parses_back_as_call_category():
     mq_case = next(c for c in suite.test_cases if "MQ-PARA" in c.name)
     assert mq_case.mocks[0].category is MockCategory.CALL
     assert mq_case.mocks[0].key == "MQPUT"
+
+
+# --- nested sites in the scaffold -------------------------------------------
+
+from cobolparser.preprocess import normalize_fixed_format
+
+from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
+
+NESTED_ONLY_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTGEN.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X.
+       01  WS-AMT             PIC 9(5).
+
+       PROCEDURE DIVISION.
+       NEST-PARA.
+           IF WS-FLAG = "Y"
+               CALL "HIDDEN" USING WS-AMT
+           END-IF.
+           IF WS-FLAG = "Z" CALL "ONELINE" USING WS-AMT END-IF.
+           STOP RUN.
+"""
+
+
+def _annotated(source):
+    result = parse_cobol(source, filename="nestgen.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    return surface
+
+
+def test_scaffold_includes_spliceable_nested_sites():
+    cut_text = scaffold_cut("NESTGEN", _annotated(NESTED_ONLY_SOURCE))
+    assert 'MOCK CALL "HIDDEN"' in cut_text
+    assert "PERFORM NEST-PARA" in cut_text
+
+
+def test_scaffold_still_skips_unspliceable_nested_sites():
+    cut_text = scaffold_cut("NESTGEN", _annotated(NESTED_ONLY_SOURCE))
+    assert "ONELINE" not in cut_text
