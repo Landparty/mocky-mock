@@ -4,7 +4,9 @@ from cobolparser import parse_cobol
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.mock_surface import analyze
-from mockymock.cli.main import _splice_call_sites, main
+from mockymock.cli.main import main
+from mockymock.splicer.naming import TallyRegistry
+from mockymock.splicer.orchestrator import splice_program
 from mockymock.dsl.parser import parse_cut
 from mockymock.splicer.source_map import collect_boundaries
 from tests.integration._docker import requires_docker
@@ -195,7 +197,7 @@ TESTCASE "both calls mocked once each"
 
 
 def test_splice_call_sites_does_not_duplicate_same_program_calls_in_one_paragraph():
-    """Runs for real regardless of cobc: exercises `_splice_call_sites`
+    """Runs for real regardless of cobc: exercises `splice_program`
     directly rather than going through compile+execute."""
     result = parse_cobol(SAMEPARA_CBL, filename="SAMEPARA.cbl")
     assert result.success, result.errors
@@ -206,13 +208,8 @@ def test_splice_call_sites_does_not_duplicate_same_program_calls_in_one_paragrap
     normalized = normalize_fixed_format(SAMEPARA_CBL.splitlines())
     lines = normalized.splitlines()
     boundaries = collect_boundaries(ast)
-    mocked_call_names = sorted(
-        {m.program_name for case in suite.test_cases for m in case.mocks}
-    )
 
-    spliced = _splice_call_sites(
-        lines, boundaries, ast, surface, suite, mocked_call_names
-    )
+    spliced = splice_program(lines, boundaries, surface, suite, TallyRegistry(suite))
     spliced_text = "\n".join(spliced)
 
     # Exactly one tally increment per physical CALL (2 calls -> 2 increments),
@@ -274,10 +271,11 @@ BOUNDARY_MIX_CBL = """\
 
 
 def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys):
-    """The mock surface detects dynamic CALLs, file I/O, and console ACCEPTs
-    that v1 cannot mock. generate must say so, not silently drop them --
+    """The mock surface still detects boundaries no version can mock
+    (dynamic CALL). generate must say so, not silently drop them --
     otherwise the scaffold looks like complete coverage of the program's
-    boundary points when it isn't."""
+    boundary points when it isn't. File I/O and console ACCEPT are mockable
+    in v2 and must NOT be reported."""
     program = tmp_path / "BOUNDMIX.cbl"
     program.write_text(BOUNDARY_MIX_CBL)
     output = tmp_path / "BOUNDMIX.cut"
@@ -286,12 +284,15 @@ def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys
 
     assert exit_code == 0
     out = capsys.readouterr().out
-    assert "not mockable in v1" in out
+    assert "not mockable" in out
     assert "dynamic CALL" in out
-    assert "file I/O" in out
-    assert "console ACCEPT" in out
-    # The scaffold itself still only contains the static CALL test case.
-    assert 'MOCK CALL "DISCRATE"' in output.read_text()
+    assert "file I/O" not in out
+    assert "console ACCEPT" not in out
+    # The scaffold covers the static CALL, the READ, and the ACCEPT.
+    scaffold = output.read_text()
+    assert 'MOCK CALL "DISCRATE"' in scaffold
+    assert "MOCK READ ORDER-FILE" in scaffold
+    assert "MOCK ACCEPT WS-NAME" in scaffold
 
 
 def test_generate_stays_quiet_when_everything_is_mockable(tmp_path: Path, capsys):
@@ -302,7 +303,7 @@ def test_generate_stays_quiet_when_everything_is_mockable(tmp_path: Path, capsys
     exit_code = main(["generate", str(program), "-o", str(output)])
 
     assert exit_code == 0
-    assert "not mockable in v1" not in capsys.readouterr().out
+    assert "not mockable" not in capsys.readouterr().out
 
 
 def test_splice_preserves_sentence_period_of_replaced_call():
@@ -319,13 +320,8 @@ def test_splice_preserves_sentence_period_of_replaced_call():
     normalized = normalize_fixed_format(TWOSITE_CBL.splitlines())
     lines = normalized.splitlines()
     boundaries = collect_boundaries(ast)
-    mocked_call_names = sorted(
-        {m.program_name for case in suite.test_cases for m in case.mocks}
-    )
 
-    spliced = _splice_call_sites(
-        lines, boundaries, ast, surface, suite, mocked_call_names
-    )
+    spliced = splice_program(lines, boundaries, surface, suite, TallyRegistry(suite))
 
     # Both CALLs were sentence-final, so both dispatch blocks must terminate
     # their sentence.

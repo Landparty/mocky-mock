@@ -69,3 +69,34 @@ mockymock too.
   `refusal.py` re-lexes the raw source to detect unresolved COPY statements
   (they leave zero trace in the AST).
 - `cobolparser.analysis.DynamicCallAnalyzer().analyze(ast)`
+
+## v2 (mock-all-boundaries) additions
+
+- `cobolparser.models.statements.io.IOOpenStatement.file_names: list[str]`
+  and `IOCloseStatement.file_names: list[str]` — OPEN/CLOSE mock keys match
+  against any listed file. **Requires cobol-parser branch
+  `fix/open-multi-mode-file-capture`**: before it, `OPEN INPUT A OUTPUT B`
+  silently dropped every file after the second mode keyword, so
+  `MOCK OPEN B` could never match.
+- `IOReadStatement.file_name`, `IODeleteStatement.file_name`,
+  `IOStartStatement.file_name`, `IOUnlockStatement.file_name` — file-keyed
+  mock matching.
+- `IOWriteStatement.record_name`, `IORewriteStatement.record_name` —
+  WRITE/REWRITE mock keys name the record (matching COBOL's own syntax).
+- `IOAcceptStatement.target: str | None` — `MOCK ACCEPT <target>` matching.
+- `cobolparser.models.sql_statements.ExecSQLStatement.sql_text: str` —
+  `MOCK SQL "<prefix>"` prefix-matches its normalized (uppercased,
+  whitespace-collapsed) form.
+- `ExecCicsStatement.cics_command: str` / `.cics_text: str` and
+  `ExecImsStatement.ims_command: str` / `.ims_text: str` — CICS/DLI prefix
+  matching runs against `f"{command} {text}"` normalized (the parser
+  consumes the command token before collecting the rest, so the command is
+  not repeated inside the text).
+- **Phantom "." paragraphs**: cobolparser emits a paragraph literally named
+  `"."` for the sentence-terminating period line after an
+  `EXEC ... END-EXEC` block. `source_map.collect_boundaries` filters them
+  (a boundary there would cut the EXEC statement's splice span one line
+  short of its END-EXEC).
+- `PerformStatement.target_paragraph` is also populated for
+  `PERFORM <para> UNTIL <cond>` — the reachability BFS and the INVUPDT
+  example's read loop rely on this.

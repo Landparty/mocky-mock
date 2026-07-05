@@ -18,6 +18,14 @@ from mockymock.splicer.naming import TallyRegistry
 _SUITE_PARAGRAPH_NAME_RE = re.compile(r"[^A-Z0-9-]")
 
 
+def _display_text(text: str) -> str:
+    """Escape a value for embedding inside a COBOL "..." DISPLAY literal:
+    a quote inside a quoted literal is written as two quotes. Without this,
+    EXPECT values like "OK" split the generated DISPLAY literal and cobc
+    reads the remainder as undefined identifiers."""
+    return text.replace('"', '""')
+
+
 @dataclass
 class DriverArtifact:
     working_storage_lines: list[str]
@@ -85,7 +93,8 @@ def _build_testcase_paragraph(
     for category, key in dict.fromkeys((m.category, m.key) for m in case.mocks):
         lines.append(f"           MOVE 0 TO {registry.name(category, key)}")
     lines.append(
-        f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} START: {case.name}"'
+        f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} START: '
+        f'{_display_text(case.name)}"'
     )
 
     for value, target in case.setup_moves:
@@ -101,7 +110,7 @@ def _build_testcase_paragraph(
         )
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: expected '
-            f'{expectation.data_name} = {expectation.expected_value}"'
+            f'{expectation.data_name} = {_display_text(expectation.expected_value)}"'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")
@@ -118,7 +127,8 @@ def _build_testcase_paragraph(
         lines.append(f"           IF {condition}")
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY '
-            f'{verification.key} WAS CALLED {verification.expectation}"'
+            f'{_display_text(verification.key)} WAS CALLED '
+            f'{verification.expectation}"'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")

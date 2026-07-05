@@ -110,6 +110,18 @@ def test_verify_without_matching_mock_raises():
         _build(suite)
 
 
+def test_quoted_expect_value_is_escaped_in_fail_display():
+    """EXPECT WS-STATUS TO BE "OK" -- the IF condition keeps the literal
+    as-is, but inside the generated DISPLAY literal the quotes must be
+    doubled ("" is COBOL's quote escape) or cobc splits the literal and
+    reads OK as an undefined identifier (found by compiling for real)."""
+    suite = _suite()
+    suite.test_cases[0].expectations.append(ExpectDirective("WS-STATUS", '"OK"'))
+    joined = "\n".join(_build(suite).procedure_lines)
+    assert 'IF WS-STATUS NOT = "OK"' in joined
+    assert 'expected WS-STATUS = ""OK""' in joined
+
+
 def test_testcase_brackets_with_start_and_end_markers():
     joined = "\n".join(_build().procedure_lines)
     assert (
