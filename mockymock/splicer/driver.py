@@ -102,7 +102,10 @@ def _build_testcase_paragraph(
         lines.append(f"           MOVE {value} TO {target}")
 
     lines.append("")
-    lines.append(f"           PERFORM {case.perform_target}")
+    perform_line = f"           PERFORM {case.perform_target}"
+    if case.perform_thru:
+        perform_line += f" THRU {case.perform_thru}"
+    lines.append(perform_line)
     lines.append("")
 
     for expectation in case.expectations:

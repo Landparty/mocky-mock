@@ -183,3 +183,10 @@ def test_suite_paragraph_name_is_a_valid_cobol_word():
     assert "--" not in word
     assert not word.endswith("-")
     assert word == "UT-TESTSUITE-MAINPGM-DISCOUNT-CALCULATION-VIA-COPYBOOK"
+
+
+def test_testcase_emits_perform_thru_when_set():
+    suite = _suite()
+    suite.test_cases[0].perform_thru = "PROCESS-EXIT"
+    joined = "\n".join(_build(suite).procedure_lines)
+    assert "PERFORM PROCESS-ORDER THRU PROCESS-EXIT" in joined
