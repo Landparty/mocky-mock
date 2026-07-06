@@ -65,10 +65,14 @@ every mockable boundary it finds.
 
 Boundary statements nested inside IF/EVALUATE/inline-PERFORM bodies
 (including nested EXEC blocks) are mockable when the statement sits on its
-own line(s) — the common layout. Still refused, fail-closed: dynamic
-`CALL identifier`, `SORT`/`MERGE`/`RELEASE`/`RETURN`, `PERFORM ... THRU`,
-nested statements sharing a line with other code (`IF X CALL "F" END-IF`
-one-liners), statements inside another boundary statement's clause body
+own line(s) — the common layout. `PERFORM A THRU B` is supported both
+inside the program (the range is expanded in source order for
+reachability) and as a test case's entry point (`PERFORM A THRU B` in the
+.cut, `THROUGH` accepted); degenerate ranges — missing, duplicate, or
+backwards endpoints — are refused. Still refused, fail-closed: dynamic
+`CALL identifier`, `SORT`/`MERGE`/`RELEASE`/`RETURN`, nested statements
+sharing a line with other code (`IF X CALL "F" END-IF` one-liners),
+statements inside another boundary statement's clause body
 (`READ ... AT END`, `CALL ... ON EXCEPTION`), and mocks with clause bodies
 of their own — each refusal names the exact layout problem. `DISPLAY`
 passes through unmocked. See the worked example in `examples/invupdt/`.
