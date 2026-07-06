@@ -155,6 +155,12 @@ def parse_cut(text: str) -> MockTestSuite:
         else:
             raise CutParseError(f"line {line_no}: unrecognized statement: {line!r}")
 
+    if in_mock is not None:
+        raise CutParseError(
+            f"unterminated MOCK {in_mock.describe()}: reached end of file "
+            f"with no END-MOCK"
+        )
+
     if suite is None:
         raise CutParseError("no TESTSUITE found")
     return suite
