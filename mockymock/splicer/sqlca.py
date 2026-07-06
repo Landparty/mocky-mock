@@ -7,8 +7,11 @@ that live in the DATA DIVISION, so before compiling:
   SQLCA group item so mock bodies can set SQLCODE/SQLSTATE/SQLERRD.
 - `EXEC SQL BEGIN/END DECLARE SECTION END-EXEC` is commented out (the host
   variables between them are plain COBOL and stay).
-- `EXEC SQL DECLARE ... TABLE ... END-EXEC` is commented out (declarative
-  only, no runtime effect).
+- `EXEC SQL DECLARE ... TABLE ... END-EXEC` and `EXEC SQL DECLARE <cursor>
+  CURSOR FOR SELECT ... END-EXEC` are commented out (declarative only, no
+  runtime effect -- the cursor's OPEN/FETCH/CLOSE statements later in the
+  PROCEDURE DIVISION are separate EXEC SQL statements handled by the
+  boundary-mocking machinery, not by this module).
 - Any other DATA DIVISION EXEC SQL (INCLUDE <member>, WHENEVER, ...) is a
   whole-program refusal (UNSUPPORTED_DATA_DIVISION_EXEC): an INCLUDE pulls
   in host-variable declarations this tool cannot resolve (same spirit as
@@ -109,7 +112,7 @@ def _handle_block(
         return start + len(replacement)
 
     if re.search(r"\b(BEGIN|END)\s+DECLARE\s+SECTION\b", block) or re.search(
-        r"\bDECLARE\b.*\bTABLE\b", block
+        r"\bDECLARE\b.*\b(TABLE|CURSOR)\b", block
     ):
         for i in range(start, end + 1):
             if result[i].strip():

@@ -19,10 +19,18 @@ class TestResult:
     case_id: str
     case_name: str
     failure_reasons: list[str] = field(default_factory=list)
+    ended: bool = False
+
+    @property
+    def crashed(self) -> bool:
+        """True if the case's START marker printed but its END marker never
+        did -- the process died before this case's checks finished running
+        (e.g. its PERFORM target transitively reached STOP RUN)."""
+        return not self.ended
 
     @property
     def passed(self) -> bool:
-        return not self.failure_reasons
+        return not self.failure_reasons and not self.crashed
 
 
 @dataclass
@@ -56,8 +64,9 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
         elif (m := _SUMMARY_RE.match(line)) is not None:
             suite.tests_run = int(m.group("run"))
             suite.failures = int(m.group("failures"))
-        # _CASE_END_RE intentionally not handled: END only matters for the
-        # COBOL-side bracketing, not for parsing — failures are matched to
-        # cases purely by id, so an END marker carries no information here.
+        elif (m := _CASE_END_RE.match(line)) is not None:
+            target = by_id.get(m.group("id"))
+            if target is not None:
+                target.ended = True
 
     return suite

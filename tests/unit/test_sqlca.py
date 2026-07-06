@@ -67,6 +67,33 @@ def test_declare_table_is_commented_out():
     assert live == []
 
 
+def test_declare_cursor_is_commented_out():
+    src = BASE[:5] + [
+        "    EXEC SQL DECLARE ACCT_CURSOR CURSOR FOR",
+        "        SELECT ACCT_ID, BALANCE FROM ACCOUNTS",
+        "        WHERE STATUS = 'A'",
+        "    END-EXEC.",
+    ] + BASE[5:]
+    lines, reasons = transform_data_division_exec(src)
+    assert reasons == []
+    live = [ln for ln in lines if "DECLARE ACCT_CURSOR CURSOR" in ln and not ln.strip().startswith("*>")]
+    assert live == []
+
+
+def test_declare_cursor_for_update_is_commented_out():
+    src = BASE[:5] + [
+        "    EXEC SQL DECLARE ACCT_CURSOR CURSOR FOR",
+        "        SELECT ACCT_ID, BALANCE FROM ACCOUNTS",
+        "        WHERE STATUS = 'A'",
+        "        FOR UPDATE OF BALANCE",
+        "    END-EXEC.",
+    ] + BASE[5:]
+    lines, reasons = transform_data_division_exec(src)
+    assert reasons == []
+    live = [ln for ln in lines if "DECLARE ACCT_CURSOR CURSOR" in ln and not ln.strip().startswith("*>")]
+    assert live == []
+
+
 def test_include_other_member_refuses():
     src = BASE[:5] + ["    EXEC SQL INCLUDE ORDHOST END-EXEC."] + BASE[5:]
     lines, reasons = transform_data_division_exec(src)

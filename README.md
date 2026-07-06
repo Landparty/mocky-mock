@@ -90,6 +90,18 @@ statements inside another boundary statement's clause body
 of their own — each refusal names the exact layout problem. `DISPLAY`
 passes through unmocked. See the worked example in `examples/invupdt/`.
 
+### Known limitation: `STOP RUN` inside a test case's PERFORM target
+
+A `.cut` test case's `PERFORM` target running into a `STOP RUN` (directly,
+or transitively through a paragraph it performs) exits the whole compiled
+test binary immediately — before that case's own `EXPECT`/`VERIFY` checks
+run and before any later test case in the same suite gets a chance to run
+at all. `mockymock run` reports this case as `[CRASH]` (console) / `<error>`
+(JUnit XML) rather than `[PASS]`, and the overall exit code is non-zero, but
+any test cases *after* the crashed one in the same suite never execute.
+Don't `PERFORM` a paragraph that reaches `STOP RUN` from a `.cut` test case
+today; split it out or mock around it instead.
+
 ## Setup
 
 Requires a running Docker daemon (Docker Desktop on Windows/macOS). COBOL

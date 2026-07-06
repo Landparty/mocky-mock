@@ -12,6 +12,29 @@ __MOCKYMOCK__ CASE 002 END
 __MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=2
 """
 
+# Simulates a PERFORM target that transitively reaches STOP RUN: the case
+# START marker prints, the program's own DISPLAY output prints, then the
+# process exits -- no CASE 002 END and no SUMMARY line ever print.
+CRASH_STDOUT = (
+    "__MOCKYMOCK__ TESTSUITE: DEPTMQP spike\n"
+    "__MOCKYMOCK__ CASE 001 START: connects to MQ and primes the first read\n"
+    "__MOCKYMOCK__ CASE 001 END\n"
+    "__MOCKYMOCK__ CASE 002 START: full main-process run\n"
+    "DEPTMQP: MQ DEPOSIT PRODUCER STARTED\n"
+    "DEPTMQP: MQ DEPOSIT PRODUCER COMPLETE\n"
+)
+
+# A case FAILS and completes normally, then a later case crashes -- the
+# SUMMARY line (and its FAILURES= count) is still eaten by the crash even
+# though a real failure was recorded and rendered before it.
+FAIL_THEN_CRASH_STDOUT = (
+    "__MOCKYMOCK__ TESTSUITE: X\n"
+    "__MOCKYMOCK__ CASE 001 START: fails a check\n"
+    "__MOCKYMOCK__ CASE 001 FAIL: expected 5, got 6\n"
+    "__MOCKYMOCK__ CASE 001 END\n"
+    "__MOCKYMOCK__ CASE 002 START: crashes\n"
+)
+
 
 def test_parse_stdout_extracts_suite_name():
     suite = parse_stdout(SAMPLE_STDOUT)
@@ -89,6 +112,68 @@ def test_format_junit_xml_failures_attribute_counts_failed_cases_not_reasons():
     # The per-case <failure> elements (one per reason) are unaffected --
     # only the testsuite-level attribute's semantics change.
     assert xml_text.count("<failure") == 2
+
+
+def test_parse_stdout_case_with_no_end_marker_is_crashed():
+    suite = parse_stdout(CRASH_STDOUT)
+    case_002 = suite.results[1]
+    assert case_002.crashed is True
+
+
+def test_parse_stdout_case_with_no_end_marker_does_not_report_passed():
+    suite = parse_stdout(CRASH_STDOUT)
+    case_002 = suite.results[1]
+    assert case_002.passed is False
+
+
+def test_parse_stdout_case_with_end_marker_is_not_crashed():
+    suite = parse_stdout(CRASH_STDOUT)
+    case_001 = suite.results[0]
+    assert case_001.crashed is False
+    assert case_001.passed is True
+
+
+def test_format_console_reports_crashed_case_distinctly_from_pass():
+    suite = parse_stdout(CRASH_STDOUT)
+    output = format_console(suite)
+    lines = output.splitlines()
+    crashed_line = next(line for line in lines if "full main-process run" in line)
+    assert "[PASS]" not in crashed_line
+    assert "[CRASH]" in crashed_line
+
+
+def test_format_junit_xml_reports_crashed_case_as_error_not_failure():
+    suite = parse_stdout(CRASH_STDOUT)
+    xml_text = format_junit_xml(suite)
+    assert 'errors="1"' in xml_text
+    assert 'failures="0"' in xml_text
+    assert "<error" in xml_text
+
+
+def test_format_console_summary_reflects_cases_seen_when_summary_line_never_printed():
+    # CRASH_STDOUT has no SUMMARY line at all, so suite.tests_run/failures
+    # stay at their zero defaults -- the summary must not just print "0 run"
+    # underneath two case lines that were clearly seen and rendered above it.
+    suite = parse_stdout(CRASH_STDOUT)
+    output = format_console(suite)
+    summary_line = output.splitlines()[-1]
+    assert summary_line == "2 run, 0 failed, 1 crashed"
+
+
+def test_format_junit_xml_tests_attribute_reflects_cases_seen_when_summary_line_never_printed():
+    suite = parse_stdout(CRASH_STDOUT)
+    xml_text = format_junit_xml(suite)
+    assert 'tests="2"' in xml_text
+
+
+def test_format_console_failed_count_reflects_recorded_reasons_when_summary_line_never_printed():
+    # A real FAIL was recorded and rendered before the crash ate the SUMMARY
+    # line -- the console must not print "0 failed" directly underneath the
+    # visible [FAIL] line above it.
+    suite = parse_stdout(FAIL_THEN_CRASH_STDOUT)
+    output = format_console(suite)
+    summary_line = output.splitlines()[-1]
+    assert summary_line == "2 run, 1 failed, 1 crashed"
 
 
 def test_format_junit_xml_failures_attribute_with_multiple_failed_cases():

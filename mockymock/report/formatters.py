@@ -10,12 +10,32 @@ from mockymock.report.results import TestSuiteResult
 
 def format_console(suite: TestSuiteResult) -> str:
     lines = [f"TESTSUITE: {suite.suite_name}"]
+    crashed_count = 0
     for result in suite.results:
-        status = "PASS" if result.passed else "FAIL"
+        if result.crashed:
+            status = "CRASH"
+            crashed_count += 1
+        elif result.passed:
+            status = "PASS"
+        else:
+            status = "FAIL"
         lines.append(f"  [{status}] {result.case_name}")
         for reason in result.failure_reasons:
             lines.append(f"         {reason}")
-    lines.append(f"{suite.tests_run} run, {suite.failures} failed")
+    # suite.tests_run/suite.failures are 0 whenever the SUMMARY line never
+    # printed (a mid-suite crash prevents it), even though case lines were
+    # clearly seen and rendered above -- fall back to counts reconstructed
+    # from suite.results so the summary doesn't claim "0 run"/"0 failed"
+    # underneath a visible PASS/FAIL/CRASH listing. The two are mutually
+    # exclusive (SUMMARY printing means no crash occurred), so falling back
+    # only when the SUMMARY-derived value is falsy never overwrites a real
+    # clean-run count of 0.
+    run_count = suite.tests_run or len(suite.results)
+    failed_count = suite.failures or sum(len(r.failure_reasons) for r in suite.results)
+    summary = f"{run_count} run, {failed_count} failed"
+    if crashed_count:
+        summary += f", {crashed_count} crashed"
+    lines.append(summary)
     return "\n".join(lines)
 
 
@@ -25,16 +45,33 @@ def format_junit_xml(suite: TestSuiteResult) -> str:
     # tooling (Jenkins, GitHub Actions, GitLab) interprets the <testsuite
     # failures="..."> attribute as the count of failed test CASES. Derive it
     # from suite.results instead so e.g. 1 case with 2 failure reasons
-    # reports failures="1", not "2".
-    failed_cases = sum(1 for r in suite.results if not r.passed)
+    # reports failures="1", not "2". Crashed cases (START but no END -- the
+    # process died before their checks finished) are reported separately as
+    # errors="...", matching JUnit's own failure-vs-error distinction, and
+    # are excluded from failures so a crash isn't double-counted as a failure.
+    failed_cases = sum(1 for r in suite.results if r.failure_reasons and not r.crashed)
+    crashed_cases = sum(1 for r in suite.results if r.crashed)
+    # Same fallback as format_console: suite.tests_run is 0 when a mid-suite
+    # crash ate the SUMMARY line, but JUnit consumers expect tests="..." to
+    # match the actual number of <testcase> children below.
+    tests_seen = suite.tests_run or len(suite.results)
     testsuite_el = Element(
         "testsuite",
         name=suite.suite_name,
-        tests=str(suite.tests_run),
+        tests=str(tests_seen),
         failures=str(failed_cases),
+        errors=str(crashed_cases),
     )
     for result in suite.results:
         testcase_el = SubElement(testsuite_el, "testcase", name=result.case_name)
+        if result.crashed:
+            message = (
+                "process exited before this case's END marker printed -- "
+                "its checks did not finish running (PERFORM target reached "
+                "STOP RUN?)"
+            )
+            error_el = SubElement(testcase_el, "error", message=message)
+            error_el.text = message
         for reason in result.failure_reasons:
             failure_el = SubElement(testcase_el, "failure", message=reason)
             failure_el.text = reason

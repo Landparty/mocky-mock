@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-07-06T00:00:00Z
+timestamp: 2026-07-06T01:00:00Z
 ---
 
 # Overview
@@ -220,6 +220,7 @@ splicing above:
 | `EXEC SQL INCLUDE SQLCA END-EXEC` | replaced by the literal `SQLCA_FIELDS` group item (standard SQLCA layout: SQLCAID, SQLCABC, SQLCODE, SQLERRM/SQLERRML/SQLERRMC, SQLERRP, SQLERRD OCCURS 6, SQLWARN0-7, SQLSTATE) |
 | `EXEC SQL BEGIN/END DECLARE SECTION END-EXEC` | commented out; host variables between the markers are plain COBOL and stay |
 | `EXEC SQL DECLARE ... TABLE ... END-EXEC` | commented out (declarative only, no runtime effect) |
+| `EXEC SQL DECLARE <cursor> CURSOR FOR SELECT ... END-EXEC` | commented out (declarative only; the standard `PERFORM ... UNTIL SQLCODE = 100` fetch-loop idiom's OPEN/FETCH/CLOSE are separate PROCEDURE DIVISION EXEC SQL statements the boundary-mocking machinery already handles) |
 | `EXEC SQL INCLUDE <member>` (anything else) | whole-program refusal `UNSUPPORTED_DATA_DIVISION_EXEC` — an INCLUDE pulls in host-variable declarations this tool cannot resolve, same spirit as `UNRESOLVED_COPYBOOK` |
 | anything unrecognized | `UNSUPPORTED_DATA_DIVISION_EXEC`, fail closed |
 
