@@ -21,10 +21,19 @@ from mockymock.runtime.docker_toolchain import (
 
 
 def test_constants_have_the_agreed_names():
-    assert IMAGE == "mockymock-gnucobol"
+    assert IMAGE.startswith("mockymock-gnucobol:")
     assert CONTAINER == "mockymock-cobc"
     assert WORK_ROOT == Path.home() / ".mockymock" / "work"
     assert issubclass(DockerNotAvailableError, RuntimeError)
+
+
+def test_image_tag_changes_with_dockerfile():
+    from mockymock.runtime import docker_toolchain as dt
+
+    tag_a = dt._image_tag(dockerfile_text="FROM debian:trixie-slim\n")
+    tag_b = dt._image_tag(dockerfile_text="FROM debian:trixie-slim\nRUN true\n")
+    assert tag_a != tag_b
+    assert dt.IMAGE.startswith("mockymock-gnucobol:")
 
 
 def test_to_container_path_maps_work_root_child_to_slash_work(tmp_path: Path):

@@ -10,6 +10,7 @@ there is no local-cobc fallback.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -21,13 +22,24 @@ from mockymock.runtime.executor import (
     _coerce_output,
 )
 
-IMAGE = "mockymock-gnucobol"
-CONTAINER = "mockymock-cobc"
-WORK_ROOT = Path.home() / ".mockymock" / "work"
-
 # Repo-root docker/ directory, resolved relative to this file so the build
 # context is found under editable installs (the only supported install mode).
 _DOCKER_CONTEXT = Path(__file__).resolve().parents[2] / "docker"
+
+
+def _image_tag(dockerfile_text: str | None = None) -> str:
+    """8-char content hash of docker/Dockerfile, used as the image tag so
+    that editing the Dockerfile changes the tag, `docker image inspect`
+    misses, and `ensure_toolchain` rebuilds instead of silently reusing a
+    stale image."""
+    if dockerfile_text is None:
+        dockerfile_text = (_DOCKER_CONTEXT / "Dockerfile").read_text()
+    return hashlib.sha256(dockerfile_text.encode()).hexdigest()[:8]
+
+
+IMAGE = f"mockymock-gnucobol:{_image_tag()}"
+CONTAINER = "mockymock-cobc"
+WORK_ROOT = Path.home() / ".mockymock" / "work"
 
 
 class DockerNotAvailableError(RuntimeError):
