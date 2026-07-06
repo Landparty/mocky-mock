@@ -124,3 +124,7 @@ the container up on its own, so `mockymock setup` is optional.
 
 On Windows, ensure Docker Desktop is running before invoking `mockymock setup` or
 `mockymock run`. COBOL compilation and execution happen entirely inside the container.
+
+## License
+
+mockymock is licensed under the MIT License. See [LICENSE](LICENSE) for details.
