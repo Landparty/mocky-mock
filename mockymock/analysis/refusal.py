@@ -6,9 +6,11 @@ case's PERFORM target. Reachability is a self-contained BFS over
 PerformStatement targets within the same program -- not cobolparser's
 ProgramFlowAnalyzer -- because that keeps this module's correctness
 checkable against the same small set of verified attributes
-(CobolParagraph.statements, PerformStatement.target_paragraph) the rest of
-mockymock already depends on. A CALL is a leaf: it is never traversed into,
-since the called program's source isn't part of this compilation unit.
+(CobolParagraph.statements, CobolParagraph.location.line,
+PerformStatement.target_paragraph, PerformStatement.thru_paragraph) the
+rest of mockymock already depends on. A CALL is a leaf: it is never
+traversed into, since the called program's source isn't part of this
+compilation unit.
 
 v2 matching model: every reachable mockable BoundarySite must be matched by
 exactly one MockDirective of the test case --
@@ -38,10 +40,14 @@ VERIFY_WITHOUT_MOCK (its tally field would be stale or undeclared).
 Detected-but-unmockable sites keep their own refusals: DYNAMIC_CALL (target
 unknown at parse time) and UNSUPPORTED_SORT_MERGE (SORT/MERGE/RELEASE/
 RETURN mock an algorithm plus its INPUT/OUTPUT PROCEDURE contract, not a
-boundary statement). PERFORM ... THRU targets are deliberately NOT
-range-expanded (that needs paragraph source-order guarantees this module
-doesn't verify); any reachable paragraph containing one triggers
-UNSUPPORTED_PERFORM_THRU.
+boundary statement). PERFORM ... THRU ranges ARE expanded: every paragraph
+in the source-order slice [target..thru] is reachable (fall-through
+executes them all), with the required source-order guarantee checked at
+runtime (_source_ordered_paragraphs). UNSUPPORTED_PERFORM_THRU survives
+only for degenerate ranges -- unverifiable order, missing or ambiguous
+endpoints, backwards ranges -- and a test case's own PERFORM ... THRU
+seeds the BFS with its range (missing driver-side endpoints are
+UNKNOWN_PARAGRAPH).
 
 check_nested_exec (NESTED_EXEC) is a whole-program check: GnuCOBOL cannot
 compile raw EXEC blocks, so every EXEC site must be stubbed program-wide
@@ -198,7 +204,9 @@ def check_test_case(
     case: MockTestCase,
 ) -> list[RefusalReason]:
     reasons: list[RefusalReason] = []
-    reachable, thru_paragraphs = _reachable_paragraphs(program, case.perform_target)
+    reachable, thru_reasons = _reachable_paragraphs(
+        program, case.perform_target, case.perform_thru
+    )
 
     if case.perform_target not in reachable:
         reasons.append(
@@ -212,17 +220,7 @@ def check_test_case(
         )
         return reasons
 
-    for paragraph_name in sorted(thru_paragraphs):
-        reasons.append(
-            RefusalReason(
-                code="UNSUPPORTED_PERFORM_THRU",
-                message=(
-                    f"paragraph '{paragraph_name}' uses PERFORM ... THRU, "
-                    f"not supported (range expansion needs source-order "
-                    f"guarantees not yet verified)"
-                ),
-            )
-        )
+    reasons.extend(thru_reasons)
 
     matched_directives: set[int] = set()
     for site in surface.sites_in(reachable):
@@ -348,32 +346,121 @@ def _find_performs(statements: list) -> list[PerformStatement]:
     return found
 
 
-def _reachable_paragraphs(program, start: str) -> tuple[set[str], set[str]]:
-    """Return (reachable paragraph names, paragraph names containing a
-    reachable PERFORM ... THRU), both computed in a single BFS pass over
-    PerformStatement.target_paragraph edges. PERFORM ... THRU targets
-    themselves are not followed -- see module docstring / check_test_case's
-    UNSUPPORTED_PERFORM_THRU refusal for why range expansion is out of
-    scope.
-    """
+def _source_ordered_paragraphs(procedure) -> list | None:
+    """All paragraphs sorted by location.line, or None when the sorted
+    line sequence is not strictly increasing -- the runtime check behind
+    the source-order guarantee THRU range expansion depends on. Verified
+    to hold for plain and sectioned programs; a parser regression trips
+    the None path and every expansion refuses fail-closed."""
+    paragraphs = sorted(_all_paragraphs(procedure), key=lambda p: p.location.line)
+    lines = [p.location.line for p in paragraphs]
+    if any(later <= earlier for earlier, later in zip(lines, lines[1:])):
+        return None
+    return paragraphs
+
+
+def _expand_thru_range(
+    ordered,
+    start: str,
+    thru: str,
+    origin: str,
+    missing_code: str = "UNSUPPORTED_PERFORM_THRU",
+) -> tuple[list[str], RefusalReason | None]:
+    """Names of every paragraph in the source-order slice [start..thru]
+    inclusive (phantom '.' members ride along; they are empty artifacts),
+    or ([], reason) for a degenerate range: unverifiable order, missing
+    endpoint, ambiguous endpoint name, or thru preceding start. Never
+    best-effort -- cobolparser's flow analyzer degrades to [start, end]
+    endpoints when a range is malformed, but the refusal gate must not."""
+    if ordered is None:
+        return [], RefusalReason(
+            code="UNSUPPORTED_PERFORM_THRU",
+            message=(
+                f"{origin}: PERFORM {start} THRU {thru} cannot be "
+                f"range-expanded -- paragraph source order could not be "
+                f"verified (location lines are not strictly increasing)"
+            ),
+        )
+    names = [p.paragraph_name for p in ordered]
+    for endpoint in (start, thru):
+        count = names.count(endpoint)
+        if count == 0:
+            return [], RefusalReason(
+                code=missing_code,
+                message=(
+                    f"{origin}: PERFORM {start} THRU {thru} endpoint "
+                    f"'{endpoint}' not found in PROCEDURE DIVISION"
+                ),
+            )
+        if count > 1:
+            return [], RefusalReason(
+                code="UNSUPPORTED_PERFORM_THRU",
+                message=(
+                    f"{origin}: PERFORM {start} THRU {thru} endpoint "
+                    f"'{endpoint}' names {count} paragraphs -- the range "
+                    f"is ambiguous"
+                ),
+            )
+    i, j = names.index(start), names.index(thru)
+    if j < i:
+        return [], RefusalReason(
+            code="UNSUPPORTED_PERFORM_THRU",
+            message=(
+                f"{origin}: PERFORM {start} THRU {thru} is a backwards "
+                f"range ('{thru}' precedes '{start}' in source order)"
+            ),
+        )
+    return names[i : j + 1], None
+
+
+def _reachable_paragraphs(
+    program, start: str, thru: str | None = None
+) -> tuple[set[str], list[RefusalReason]]:
+    """Return (reachable paragraph names, degenerate-THRU-range refusals),
+    computed in a single BFS pass over PerformStatement edges. A
+    PERFORM ... THRU pushes every paragraph of its source-order range
+    (fall-through executes them all); `thru` seeds the BFS with the test
+    case's own driver-side range, whose missing endpoints are the .cut
+    author's typo and use UNKNOWN_PARAGRAPH."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
-        return set(), set()
-    by_name = {p.paragraph_name: p for p in _all_paragraphs(procedure)}
-    if start not in by_name:
-        return set(), set()
+        return set(), []
+    ordered = _source_ordered_paragraphs(procedure)
+    by_name: dict[str, object] = {}
+    for paragraph in _all_paragraphs(procedure):
+        by_name.setdefault(paragraph.paragraph_name, paragraph)
+
+    reasons: list[RefusalReason] = []
+    stack = [start]
+    if thru is not None and start in by_name:
+        members, problem = _expand_thru_range(
+            ordered,
+            start,
+            thru,
+            "test case PERFORM",
+            missing_code="UNKNOWN_PARAGRAPH",
+        )
+        if problem is not None:
+            reasons.append(problem)
+        stack.extend(members)
 
     seen: set[str] = set()
-    thru_paragraphs: set[str] = set()
-    stack = [start]
     while stack:
         name = stack.pop()
         if name in seen or name not in by_name:
             continue
         seen.add(name)
         for statement in _find_performs(by_name[name].statements):
-            if statement.thru_paragraph:
-                thru_paragraphs.add(name)
             if statement.target_paragraph:
                 stack.append(statement.target_paragraph)
-    return seen, thru_paragraphs
+                if statement.thru_paragraph:
+                    members, problem = _expand_thru_range(
+                        ordered,
+                        statement.target_paragraph,
+                        statement.thru_paragraph,
+                        f"paragraph '{name}'",
+                    )
+                    if problem is not None:
+                        reasons.append(problem)
+                    stack.extend(members)
+    return seen, reasons
