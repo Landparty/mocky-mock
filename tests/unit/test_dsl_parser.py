@@ -85,3 +85,14 @@ def test_unterminated_mock_body_raises():
     )
     with pytest.raises(CutParseError, match="unterminated MOCK"):
         parse_cut(text)
+
+
+def test_duplicate_perform_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    PERFORM ONE\n'
+        '    PERFORM TWO\n'
+    )
+    with pytest.raises(CutParseError, match="already has a PERFORM"):
+        parse_cut(text)

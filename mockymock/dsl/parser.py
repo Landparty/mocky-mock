@@ -124,6 +124,12 @@ def parse_cut(text: str) -> MockTestSuite:
         elif (m := _PERFORM_RE.match(line)) is not None:
             if case is None:
                 raise CutParseError(f"line {line_no}: PERFORM outside TESTCASE")
+            if case.perform_target:
+                raise CutParseError(
+                    f"line {line_no}: TESTCASE {case.name!r} already has a "
+                    f"PERFORM target {case.perform_target!r}; one PERFORM "
+                    f"per test case"
+                )
             case.perform_target = m.group("target")
             case.perform_thru = m.group("thru")
         elif (m := _EXPECT_RE.match(line)) is not None:
