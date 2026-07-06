@@ -35,7 +35,9 @@ _MOCK_BARE_RE = re.compile(
 )
 _END_MOCK_RE = re.compile(r"^END-MOCK$")
 _MOVE_RE = re.compile(r"^MOVE\s+(?P<value>.+?)\s+TO\s+(?P<target>\S+)$")
-_PERFORM_RE = re.compile(r"^PERFORM\s+(?P<target>\S+)$")
+_PERFORM_RE = re.compile(
+    r"^PERFORM\s+(?P<target>\S+)(?:\s+(?:THRU|THROUGH)\s+(?P<thru>\S+))?$"
+)
 _EXPECT_RE = re.compile(r"^EXPECT\s+(?P<name>\S+)\s+TO\s+BE\s+(?P<value>.+)$")
 _VERIFY_QUOTED_RE = re.compile(
     rf'^VERIFY\s+(?:(?P<cat>{_QUOTED_CATS})\s+)?"(?P<key>[^"]*)"'
@@ -114,6 +116,7 @@ def parse_cut(text: str) -> MockTestSuite:
             if case is None:
                 raise CutParseError(f"line {line_no}: PERFORM outside TESTCASE")
             case.perform_target = m.group("target")
+            case.perform_thru = m.group("thru")
         elif (m := _EXPECT_RE.match(line)) is not None:
             if case is None:
                 raise CutParseError(f"line {line_no}: EXPECT outside TESTCASE")
