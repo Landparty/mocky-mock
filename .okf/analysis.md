@@ -1,0 +1,167 @@
+---
+type: Module
+title: Analysis
+description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed.
+tags: [analysis, reachability, refusal, fail-closed]
+timestamp: 2026-07-06T00:00:00Z
+---
+
+# Overview
+
+Two cooperating modules under `mockymock/analysis/`:
+
+| Module | Job |
+|--------|-----|
+| `mock_surface.py` | Walk `PROCEDURE DIVISION`, classify every statement that touches an external resource into a `BoundarySite`/`CallSite`. Whole-program, category-generic, no knowledge of any test case. |
+| `refusal.py` | Whole-program checks (parse errors, unresolved COPY, nested EXEC) + per-`MockTestCase` checks (reachability via BFS, directive-to-site matching, fail-closed refusals). |
+
+```
+CobolProgram
+   |
+   v
+mock_surface.analyze()  --------------> MockSurface
+   walks PROCEDURE DIVISION              - call_sites: list[CallSite]      (v1 shape, kept)
+   recurses into nested bodies           - boundary_sites: list[BoundarySite]
+   (IF/EVALUATE/inline PERFORM/          - file_io_paragraphs / exec_paragraphs /
+    IO clause bodies)                      console_accept_paragraphs (v1 sets, kept)
+   |
+   v
+refusal.check_whole_program()      -> PARSE_ERROR
+refusal.check_unresolved_copybooks() -> UNRESOLVED_COPYBOOK  (textual, re-lexes raw source)
+refusal.check_nested_exec()        -> NESTED_EXEC            (program-wide, ignores reachability)
+   |
+   v
+per MockTestCase:
+refusal.check_test_case(surface, program, case)
+   1. _reachable_paragraphs(program, case.perform_target, case.perform_thru)  (BFS + THRU expansion)
+   2. surface.sites_in(reachable) -> match against case.mocks via directive_matches_site
+   3. emit UNMOCKED_*/AMBIGUOUS_MOCK/UNSUPPORTED_NESTED_MOCK_TARGET/UNMATCHED_MOCK/VERIFY_WITHOUT_MOCK
+```
+
+Both modules depend only on the small set of cobolparser attributes pinned in [integration](integration.md) — not on cobolparser's own `ProgramFlowAnalyzer` or `DynamicCallAnalyzer` for the reachability/classification paths, specifically so this module's correctness stays checkable against attributes mockymock has independently verified (see Gotchas).
+
+# mock_surface.py — What Counts as a Boundary
+
+`analyze(program)` returns a `MockSurface`. It fetches `PROCEDURE DIVISION`, gathers every paragraph via `_all_paragraphs` (top-level + every section's paragraphs — mirrors `CoverageAnalyzer._analyze_paragraphs`), and calls `_walk_statements` per paragraph.
+
+## Categories classified (`_classify_statement`)
+
+| Statement type | `MockCategory` | Keys captured | Notes |
+|---|---|---|---|
+| `CallStatement`, static | `CALL` | called program literal | `is_mq` flag set if name in `MQ_API_NAMES` (MQCONN, MQGET, MQPUT, …) |
+| `CallStatement`, dynamic, identifier captured | `DYNCALL` | uppercased identifier name | `called_program` holds the *identifier*, not a resolved target — splicer never needs to resolve it |
+| `CallStatement`, dynamic, identifier empty | `None` (detected, unmockable) | — | label `"dynamic CALL"`; fail-closed — gates `DYNAMIC_CALL` refusal |
+| `IOOpenStatement` / `IOCloseStatement` | `OPEN` / `CLOSE` | every name in `.file_names` | multi-file OPEN/CLOSE both keyed |
+| `IOReadStatement` / `IODeleteStatement` / `IOStartStatement` / `IOUnlockStatement` | `READ`/`DELETE`/`START`/`UNLOCK` | `.file_name` | one file each |
+| `IOWriteStatement` / `IORewriteStatement` | `WRITE`/`REWRITE` | `.record_name` | keyed by **record**, not FD — matches COBOL's own syntax |
+| `SortStatement`/`MergeStatement`/`ReleaseStatement`/`ReturnStatement` | `None` (detected, unmockable) | — | label `"SORT/MERGE"`; gates `UNSUPPORTED_SORT_MERGE` |
+| `ExecSQLStatement` (incl. subclasses: DeclareCursor, Fetch, DynamicSQL, …) | `SQL` | `match_text` = normalized `sql_text` | detected via `isinstance`, not `node_type` (base `CobolStatement.node_type` is hardcoded `"Statement"`) |
+| `ExecCicsStatement` | `CICS` | `match_text` = normalized `f"{cics_command} {cics_text}"` | |
+| `ExecImsStatement` | `DLI` | `match_text` = normalized `f"{ims_command} {ims_text}"` | covers both `EXEC IMS` and `EXEC DLI` syntax; no separate DLI node type |
+| `IOAcceptStatement`, source not in `_NON_INTERACTIVE_ACCEPT_SOURCES` | `ACCEPT` | uppercased `.target` | fail-closed: no FROM, `FROM CONSOLE`, or unrecognized mnemonic all count as console input |
+| `IOAcceptStatement`, source in `_NON_INTERACTIVE_ACCEPT_SOURCES` | not recorded at all | — | DATE/DAY/DAY-OF-WEEK/TIME/COMMAND-LINE/ENVIRONMENT/ENVIRONMENT-VALUE/ARGUMENT-NUMBER/ARGUMENT-VALUE never touch stdin |
+
+`normalize_exec_text` uppercases and collapses whitespace — the form all SQL/CICS/DLI keys prefix-match against.
+
+`DISPLAY` is not classified at all — passthrough forever, not a boundary.
+
+## Walking nested bodies
+
+`_nested_statement_lists(statement)` returns every nested `list[CobolStatement]` hanging off one statement, by `getattr`-ing a fixed attribute tuple (`_NESTED_STATEMENT_ATTRS`): `then_statements`, `else_statements`, `inline_statements` (inline `PERFORM…END-PERFORM`), `at_end_clause`/`not_at_end_clause`, `invalid_key_clause`/`not_invalid_key_clause`, `at_eop_clause`, `on_exception`/`not_on_exception`, `on_overflow`. `EvaluateStatement` is special-cased outside that tuple: every `when_clauses[].statements` and `default_when.statements` is appended too.
+
+`_walk_statements` recurses depth-first over these lists:
+- **`nested` flag**: every recursive call passes `nested=True` literally, not the parent's value — so a site is `nested=True` at *every* depth ≥ 1, while only true top-level statements stay `nested=False`.
+- **`in_boundary` flag is sticky**: `child_in_boundary = in_boundary or isinstance(statement, _BOUNDARY_STATEMENT_TYPES)`. Once recursion enters a boundary statement's own clause body (e.g. inside a CALL's `ON EXCEPTION`, or a READ's `AT END`), every site found below is `nested_in_boundary=True` forever, regardless of further nesting shape — because splicing the *enclosing* boundary statement removes that whole clause body wholesale, so a site inside it can never be spliced independently no matter what directive matches it.
+
+`_BOUNDARY_STATEMENT_TYPES` = `CallStatement` + all 8 file-op types + the 4 SORT/MERGE types + `ExecSQLStatement`/`ExecCicsStatement`/`ExecImsStatement` + `IOAcceptStatement`.
+
+Paragraph attribution is depth-independent: nested statements stay attributed to the *enclosing paragraph name*, since that's the granularity the refusal gate's reachability check cares about.
+
+## `BoundarySite` fields relevant to refusal
+
+`category` (None for detected-but-unmockable), `label` (message string), `keys` (candidate match tuple), `match_text` (normalized EXEC text), `nested`, `nested_in_boundary`, and two fields **not set by mock_surface.py** — filled in later by the splicer's `source_map.annotate_nested_sites`: `span: tuple[int,int] | None` (validated replacement span) and `unspliceable_reason: str | None`.
+
+# refusal.py — What Gets Refused, and Why
+
+## Whole-program checks (independent of any test case)
+
+| Check | Code | Trigger |
+|---|---|---|
+| `check_whole_program` | `PARSE_ERROR` | `parse_result.success is False` |
+| `check_unresolved_copybooks` | `UNRESOLVED_COPYBOOK` | raw source, re-lexed with `CobolLexer(free_form=True)`, still contains a `TokenType.COPY` token |
+| `check_nested_exec` | `NESTED_EXEC` | any EXEC (SQL/CICS/DLI) site with `nested=True` and `span is None` — **regardless of reachability** |
+
+**Why `UNRESOLVED_COPYBOOK` is textual, not AST-based:** cobolparser's `parse_cobol` does *not* raise a parse error for an unresolved `COPY` statement — verified empirically: raw source containing `COPY ORDREC.` yields `result.success is True` and an empty `data_items` list. Worse, the AST node class `CopyStatement` is never instantiated by any parser path, so an unresolved COPY leaves **zero trace in the AST**. The only reliable signal is textual: re-lex `raw_source` (with `free_form=True` — fixed-format column rules would garble already-normalized text) and look for a `TokenType.COPY` token, rather than a substring search that could false-positive on the word "COPY" inside a comment or string literal.
+
+**Why `NESTED_EXEC` is whole-program, not per-case:** GnuCOBOL cannot compile a raw `EXEC SQL`/`EXEC CICS`/`EXEC DLI` block at all — every EXEC site must be stubbed out program-wide for `cobc` to compile, independent of whether any test case reaches it. A nested EXEC with no validated splice span therefore refuses the whole file by its mere existence anywhere in the program, not by being on some case's reachable path.
+
+## Per-test-case checks (`check_test_case`)
+
+Reachability is computed by `_reachable_paragraphs`, a **self-contained BFS over `PerformStatement` targets** — deliberately *not* cobolparser's `ProgramFlowAnalyzer` — so this module's correctness stays checkable against the same small verified-attribute set the rest of mockymock depends on (`CobolParagraph.statements`, `.location.line`, `PerformStatement.target_paragraph`/`.thru_paragraph`). **A CALL is a leaf**: never traversed into, since the called program's source isn't part of the compilation unit.
+
+For every `BoundarySite` in the reachable set:
+
+| Condition | Code | Why |
+|---|---|---|
+| `category is None`, label `"dynamic CALL"` | `DYNAMIC_CALL` | identifier cobolparser failed to capture — no static match key exists at all |
+| `category is None`, label `"SORT/MERGE"` | `UNSUPPORTED_SORT_MERGE` | mocks an algorithm + its INPUT/OUTPUT PROCEDURE contract, not a boundary statement |
+| zero directives match | `UNMOCKED_CALL`/`UNMOCKED_FILE_OP`/`UNMOCKED_SQL`/`UNMOCKED_CICS`/`UNMOCKED_DLI`/`UNMOCKED_CONSOLE_ACCEPT` | unmocked CALL has nowhere to link; unmocked file I/O hits a nonexistent sandbox file; unmocked EXEC can't compile; unmocked console ACCEPT reads whatever stdin is attached |
+| 2+ directives match | `AMBIGUOUS_MOCK` | fail closed rather than pick one |
+| exactly 1 match, `site.nested and site.span is None` | `UNSUPPORTED_NESTED_MOCK_TARGET` | no validated replacement span — splicing could swallow a block terminator and corrupt control flow (an earlier attempt without the scope map did exactly that) |
+
+After the site loop: any directive in `case.mocks` never matched → `UNMATCHED_MOCK`. Any `VERIFY` whose `(category, key)` isn't in `{(m.category, m.key) for m in case.mocks}` → `VERIFY_WITHOUT_MOCK` (its tally counter would be undeclared/stale).
+
+`directive_matches_site` matching rules:
+1. `site.category is not directive.category` → never matches (this is what keeps a quoted static-CALL directive from ever cross-matching a dynamic-CALL site, and vice versa — category identity alone does the work).
+2. `EXEC_CATEGORIES` (SQL/CICS/DLI): normalized-prefix match against `site.match_text`.
+3. `MockCategory.CALL`: exact match, `directive.key in site.keys`.
+4. Everything else (file ops, ACCEPT, DYNCALL): `directive.key.upper() in site.keys`.
+
+## Dynamic CALL as its own category (`DYNCALL`)
+
+A dynamic `CALL WS-PGM-NAME` is mockable because mockymock never *links* a mocked CALL — the splicer comments out the whole statement and replaces it with an EVALUATE dispatch block, so nothing at runtime needs to resolve a program name. What the machinery needs is a static match key, and the identifier the CALL goes through is exactly that (`CallStatement.called_program == "WS-PGM-NAME"` when `is_dynamic` is True — verified against cobolparser 1.1.0/1.2.0).
+
+`DYNCALL` is a category distinct from `CALL`, not a flag on it, because:
+- Matching semantics genuinely differ: quoted keys match a static site's literal **exactly** (case-sensitive as written); bare keys match the dynamic site's **uppercased** identifier.
+- A flag would force `MOCK CALL "X"` and `MOCK CALL X` to collide into one tally/verify slot, or change the `(category, key)` tuple shape used throughout (`TallyRegistry`, `all_mock_keys()`, the driver's declared-set check).
+- With a distinct category, `directive_matches_site`'s existing default branch (`key.upper() in site.keys`) already implements dynamic matching for free — no special-casing needed.
+- Fail-closed cross-matching falls out for free: category mismatch alone guarantees a quoted directive can never match a dynamic site.
+
+Matching is **per-identifier, not per-target-program**: two dynamic sites calling through the same identifier are both satisfied by one directive (same as two `OPEN INFILE` sites today); sites through different identifiers need their own directives. `_UNMOCKED_CODES[MockCategory.DYNCALL] = "UNMOCKED_CALL"` — same code as static CALL; the message's `"dynamic CALL"` label and identifier key are what distinguish it in output.
+
+## PERFORM THRU range expansion (reachability only — never a splice target)
+
+`PERFORM A THRU B` is **not a boundary statement**; it only affects which paragraphs are reachable. Fall-through means the range A..B executes every paragraph in source order — idiomatic mainframe shape is `MAIN-PROCESS ... GO TO MAIN-EXIT ... MAIN-EXIT. EXIT.`
+
+`_source_ordered_paragraphs(procedure)`: all paragraphs sorted by `location.line`, or `None` if the sorted line sequence is **not strictly increasing** (a parser regression trips this — every expansion in the program then refuses fail-closed rather than guessing an order). This differs deliberately from cobolparser's own `ProgramFlowAnalyzer._range_members`, which degrades to best-effort `[start, end]` endpoints on a malformed range — the refusal gate must never do that.
+
+`_expand_thru_range(ordered, start, thru, origin, missing_code)` returns either the inclusive name-slice `[start..thru]` (phantom `"."` paragraphs ride along inertly — see Gotchas) or a `RefusalReason` for a degenerate range:
+
+| Degenerate case | Code | Detail |
+|---|---|---|
+| `ordered is None` | `UNSUPPORTED_PERFORM_THRU` | order verification failed |
+| endpoint name count == 0 | `missing_code` (`UNSUPPORTED_PERFORM_THRU` for in-program PERFORMs, `UNKNOWN_PARAGRAPH` for the test case's own driver-side range) | endpoint not found |
+| endpoint name count > 1 | `UNSUPPORTED_PERFORM_THRU` | ambiguous — could silently cover the wrong slice |
+| `thru` index < `start` index | `UNSUPPORTED_PERFORM_THRU` | backwards range, runtime behavior is implementation-defined |
+
+`_reachable_paragraphs` seeds the BFS stack with the test case's own `perform_target`/`perform_thru` range (missing driver-side endpoints are the `.cut` author's typo → `UNKNOWN_PARAGRAPH`), then for every reachable paragraph's `PerformStatement`s with a `thru_paragraph`, expands and pushes that range too (`_expand_thru_range` reused, default `missing_code="UNSUPPORTED_PERFORM_THRU"` since these are in-program). `_find_performs` recursively collects `PerformStatement`s from nested bodies too, reusing `mock_surface._nested_statement_lists` rather than reimplementing nested traversal.
+
+A THRU range covering a paragraph with an unspliceable nested site just makes that site reachable — `UNSUPPORTED_NESTED_MOCK_TARGET` fires through the ordinary per-site path, no special casing needed.
+
+# Gotchas
+
+**Phantom `"."` paragraphs are inert but change reachability tracking, not classification.** cobolparser emits a paragraph literally named `"."` for the sentence-terminating period line after an `EXEC ... END-EXEC` block (or after any PERFORM/PERFORM THRU/DISPLAY sentence followed by another statement). They are empty artifacts — no boundary site is ever attributed to `"."` in any verified layout — but a THRU range slice includes them positionally by name. If a future cobolparser version ever attributed real statements to one, every `"."` site program-wide would become reachable at once — an over-approximation in the fail-closed direction (spurious `UNMOCKED_*`, never a silently-unmocked boundary). `source_map.collect_boundaries` separately filters `"."` paragraphs when computing splice spans, because a boundary there would cut an EXEC statement's span one line short of its `END-EXEC`.
+
+**`ExecSQLStatement` is not detectable via `node_type`.** Its base class `CobolStatement` hardcodes `node_type == "Statement"`; the `"EXEC-SQL"` string lands in `.statement_type` instead. `mock_surface.py` uses `isinstance` checks for this reason — which also transparently catches every `ExecSQLStatement` subclass (`DeclareCursorStatement`, `FetchStatement`, `DynamicSQLStatement`, …) without hardcoding each one's `node_type`. `ExecCicsStatement`/`ExecImsStatement` extend `ASTNode` directly (not `CobolStatement`), so their `node_type` (`"EXEC_CICS"`/`"EXEC_IMS"`) works fine as a discriminator — but isinstance is used uniformly anyway.
+
+**OPEN/CLOSE multi-file capture required a cobolparser fix.** Before branch `fix/open-multi-mode-file-capture`, `OPEN INPUT A OUTPUT B` silently dropped every file after the second mode keyword, so `MOCK OPEN B` could never match. mockymock's `_file_op_keys` depends on the fixed `file_names` list capturing all of them.
+
+**An earlier nested-splice attempt corrupted control flow.** Before `source_map.annotate_nested_sites` existed to validate replacement spans, a nested site's splice could swallow a block terminator it had no location data for. `UNSUPPORTED_NESTED_MOCK_TARGET` / `NESTED_EXEC` now refuse fail-closed (`span is None`) rather than risk repeating that.
+
+**`_source_ordered_paragraphs` returning `None` fails every THRU expansion in the program, not just the offending one** — there's no per-range fallback once order can't be verified.
+
+# See Also
+
+- [splicer](splicer.md) — consumes `BoundarySite`/`CallSite` to compute and validate replacement spans (`annotate_nested_sites` fills in `span`/`unspliceable_reason`), then emits the EVALUATE dispatch blocks.
+- [dsl](dsl.md) — `MockCategory`, `MockDirective`, `MockTestCase` (including `perform_target`/`perform_thru`) that `refusal.py` matches sites against.
+- [integration](integration.md) — the exact cobolparser AST fields both modules key on, and the empirically-verified facts (dynamic CALL identifier capture, OPEN/CLOSE fix requirement, numeric VALUE clause fix) this module's correctness depends on.
