@@ -36,6 +36,10 @@ def format_console(suite: TestSuiteResult) -> str:
     if crashed_count:
         summary += f", {crashed_count} crashed"
     lines.append(summary)
+    if suite.orphan_failures:
+        lines.append("ORPHANED FAILURES (unknown case id):")
+        for case_id, reason in suite.orphan_failures:
+            lines.append(f"  [{case_id}] {reason}")
     return "\n".join(lines)
 
 
@@ -49,8 +53,14 @@ def format_junit_xml(suite: TestSuiteResult) -> str:
     # process died before their checks finished) are reported separately as
     # errors="...", matching JUnit's own failure-vs-error distinction, and
     # are excluded from failures so a crash isn't double-counted as a failure.
+    # FAIL lines whose case id was never seen in a START marker (orphans) are
+    # likewise unattributable to any test case's pass/fail lifecycle, so
+    # they're folded into the same errors= total rather than a separate
+    # attribute -- otherwise a CI consumer that only reads failures=/errors=
+    # would still see a "clean" run despite orphaned output being present.
     failed_cases = sum(1 for r in suite.results if r.failure_reasons and not r.crashed)
     crashed_cases = sum(1 for r in suite.results if r.crashed)
+    error_count = crashed_cases + len(suite.orphan_failures)
     # Same fallback as format_console: suite.tests_run is 0 when a mid-suite
     # crash ate the SUMMARY line, but JUnit consumers expect tests="..." to
     # match the actual number of <testcase> children below.
@@ -60,7 +70,7 @@ def format_junit_xml(suite: TestSuiteResult) -> str:
         name=suite.suite_name,
         tests=str(tests_seen),
         failures=str(failed_cases),
-        errors=str(crashed_cases),
+        errors=str(error_count),
     )
     for result in suite.results:
         testcase_el = SubElement(testsuite_el, "testcase", name=result.case_name)
@@ -75,5 +85,11 @@ def format_junit_xml(suite: TestSuiteResult) -> str:
         for reason in result.failure_reasons:
             failure_el = SubElement(testcase_el, "failure", message=reason)
             failure_el.text = reason
+    for case_id, reason in suite.orphan_failures:
+        orphan_el = SubElement(
+            testsuite_el, "testcase", name=f"orphan-{case_id}"
+        )
+        error_el = SubElement(orphan_el, "error", message=reason)
+        error_el.text = reason
     rough = tostring(testsuite_el, encoding="unicode")
     return minidom.parseString(rough).toprettyxml(indent="  ")
