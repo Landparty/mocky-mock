@@ -136,3 +136,40 @@ def test_quoted_category_requires_quotes():
 def test_file_category_rejects_quoted_key():
     with pytest.raises(CutParseError):
         parse_cut('TESTSUITE "x"\nTESTCASE "y"\n    MOCK READ "INFILE"\n    END-MOCK\n    PERFORM p\n')
+
+
+THRU_CUT = """\
+TESTSUITE "THRU driver"
+
+TESTCASE "invokes a range"
+    MOCK CALL "RATELKP"
+    END-MOCK
+    PERFORM PROCESS-ORDER THRU PROCESS-EXIT
+"""
+
+
+def test_parses_perform_thru():
+    case = parse_cut(THRU_CUT).test_cases[0]
+    assert case.perform_target == "PROCESS-ORDER"
+    assert case.perform_thru == "PROCESS-EXIT"
+
+
+def test_parses_perform_through_synonym():
+    case = parse_cut(THRU_CUT.replace(" THRU ", " THROUGH ")).test_cases[0]
+    assert case.perform_thru == "PROCESS-EXIT"
+
+
+def test_plain_perform_leaves_thru_unset():
+    case = parse_cut(ALL_BOUNDARIES_CUT).test_cases[0]
+    assert case.perform_target == "MAIN-PARA"
+    assert case.perform_thru is None
+
+
+def test_perform_thru_with_trailing_junk_rejected():
+    with pytest.raises(CutParseError):
+        parse_cut(THRU_CUT.replace("THRU PROCESS-EXIT", "THRU PROCESS-EXIT EXTRA"))
+
+
+def test_perform_thru_missing_endpoint_rejected():
+    with pytest.raises(CutParseError):
+        parse_cut(THRU_CUT.replace(" PROCESS-EXIT", ""))

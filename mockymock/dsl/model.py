@@ -106,6 +106,7 @@ class MockTestCase:
     mocks: list[MockDirective] = field(default_factory=list)
     setup_moves: list[tuple[str, str]] = field(default_factory=list)  # (value, target)
     perform_target: str = ""
+    perform_thru: str | None = None  # PERFORM <target> THRU <perform_thru>
     expectations: list[ExpectDirective] = field(default_factory=list)
     verifications: list[VerifyDirective] = field(default_factory=list)
 

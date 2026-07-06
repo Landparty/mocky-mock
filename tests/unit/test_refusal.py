@@ -2,6 +2,7 @@ from cobolparser import parse_cobol
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.analysis.refusal import (
+    _expand_thru_range,
     check_nested_exec,
     check_test_case,
     check_unresolved_copybooks,
@@ -10,12 +11,13 @@ from mockymock.analysis.refusal import (
 from mockymock.dsl.model import MockCategory, MockDirective, MockTestCase
 
 
-def _case(perform_target, call_names=(), mocks=(), verifications=()):
+def _case(perform_target, call_names=(), mocks=(), verifications=(), perform_thru=None):
     return MockTestCase(
         name="case",
         mocks=[MockDirective(MockCategory.CALL, n) for n in call_names]
         + list(mocks),
         perform_target=perform_target,
+        perform_thru=perform_thru,
         verifications=list(verifications),
     )
 
@@ -223,8 +225,15 @@ TWO_CALL_SOURCE = """\
            CALL "TAXCALC" USING WS-AMOUNT WS-RATE.
 """
 
-# PERFORM ... THRU reachable from START-HERE. No dynamic CALL/file-IO/EXEC
-# anywhere, so UNSUPPORTED_PERFORM_THRU should be the only reason surfaced.
+# PERFORM ... THRU reachable from START-HERE: the RANGE-START..RANGE-END
+# range is expanded in source order, so the CALL in RANGE-MID (a range
+# member never PERFORMed directly) and the CALL in HELPER-PARA (reached
+# via RANGE-MID's own nested single-member THRU) are both reachable; the
+# in-range GO TO RANGE-END is covered positionally. RANGE-MID's
+# "PERFORM ... THRU <x>." sentence followed by another statement is the
+# (verified) layout that makes cobolparser emit an empty phantom "."
+# paragraph INSIDE the outer range -- expansion must tolerate phantom
+# members.
 PERFORM_THRU_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. THRUSAMP.
@@ -236,12 +245,53 @@ PERFORM_THRU_SOURCE = """\
        PROCEDURE DIVISION.
        START-HERE.
            PERFORM RANGE-START THRU RANGE-END.
+           STOP RUN.
 
        RANGE-START.
            DISPLAY "START".
 
+       RANGE-MID.
+           PERFORM HELPER-PARA THRU HELPER-PARA.
+           CALL "MIDCALL" USING WS-AMOUNT.
+           GO TO RANGE-END.
+
        RANGE-END.
            DISPLAY "END".
+
+       HELPER-PARA.
+           CALL "HELPCALL" USING WS-AMOUNT.
+"""
+
+# Degenerate ranges: endpoints reversed in source order / endpoint that
+# does not exist. Both must refuse fail-closed, never best-effort.
+BACKWARDS_THRU_SOURCE = PERFORM_THRU_SOURCE.replace(
+    "PERFORM RANGE-START THRU RANGE-END.", "PERFORM RANGE-END THRU RANGE-START."
+)
+MISSING_THRU_SOURCE = PERFORM_THRU_SOURCE.replace(
+    "PERFORM RANGE-START THRU RANGE-END.", "PERFORM RANGE-START THRU NO-SUCH-PARA."
+)
+
+# Duplicate endpoint name across two sections: the range is ambiguous.
+DUP_THRU_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DUPSAMP.
+
+       PROCEDURE DIVISION.
+       MAIN SECTION.
+       START-HERE.
+           PERFORM DUP-PARA THRU LAST-PARA.
+           STOP RUN.
+
+       WORK-A SECTION.
+       DUP-PARA.
+           DISPLAY "A".
+
+       WORK-B SECTION.
+       DUP-PARA.
+           DISPLAY "B".
+
+       LAST-PARA.
+           DISPLAY "Z".
 """
 
 
@@ -452,16 +502,96 @@ def test_per_case_check_finds_perform_nested_inside_if_to_dynamic_call():
     assert any(r.code == "UNMOCKED_CALL" for r in reasons)
 
 
-def test_per_case_check_refuses_reachable_perform_thru():
-    """PERFORM ... THRU is never range-expanded by the BFS (source-order
-    guarantees aren't verified); a reachable PERFORM...THRU must instead
-    surface its own fail-closed UNSUPPORTED_PERFORM_THRU refusal."""
+def test_per_case_check_expands_perform_thru_range():
+    """The THRU range is expanded in source order: both the CALL in a
+    mid-range paragraph and the CALL reached transitively from it are
+    reachable -- unmocked they surface UNMOCKED_CALL, mocked the case is
+    clean. UNSUPPORTED_PERFORM_THRU no longer fires for a well-formed
+    range."""
     result = _perform_thru_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
         surface, result.ast, _case("START-HERE", call_names=())
     )
-    assert any(r.code == "UNSUPPORTED_PERFORM_THRU" for r in reasons)
+    codes = [r.code for r in reasons]
+    assert "UNSUPPORTED_PERFORM_THRU" not in codes
+    assert codes.count("UNMOCKED_CALL") == 2
+
+    reasons = check_test_case(
+        surface,
+        result.ast,
+        _case("START-HERE", call_names=("MIDCALL", "HELPCALL")),
+    )
+    assert reasons == []
+
+
+def test_per_case_check_refuses_backwards_thru_range():
+    result = parse_cobol(BACKWARDS_THRU_SOURCE, filename="backthru.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("START-HERE", call_names=())
+    )
+    thru = [r for r in reasons if r.code == "UNSUPPORTED_PERFORM_THRU"]
+    assert len(thru) == 1
+    assert "backwards" in thru[0].message
+
+
+def test_per_case_check_refuses_missing_thru_endpoint():
+    result = parse_cobol(MISSING_THRU_SOURCE, filename="missthru.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("START-HERE", call_names=())
+    )
+    thru = [r for r in reasons if r.code == "UNSUPPORTED_PERFORM_THRU"]
+    assert len(thru) == 1
+    assert "NO-SUCH-PARA" in thru[0].message
+
+
+def test_per_case_check_refuses_ambiguous_thru_endpoint():
+    result = parse_cobol(DUP_THRU_SOURCE, filename="dupthru.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("START-HERE", call_names=())
+    )
+    thru = [r for r in reasons if r.code == "UNSUPPORTED_PERFORM_THRU"]
+    assert len(thru) == 1
+    assert "DUP-PARA" in thru[0].message
+
+
+def test_per_case_check_seeds_driver_side_thru_range():
+    """A .cut `PERFORM RANGE-START THRU RANGE-END` seeds reachability with
+    the whole range even though no in-program PERFORM points at it."""
+    result = _perform_thru_result()
+    surface = analyze(result.ast)
+    case = _case(
+        "RANGE-START", call_names=("MIDCALL", "HELPCALL"), perform_thru="RANGE-END"
+    )
+    assert check_test_case(surface, result.ast, case) == []
+
+    unmocked = _case("RANGE-START", call_names=(), perform_thru="RANGE-END")
+    codes = [r.code for r in check_test_case(surface, result.ast, unmocked)]
+    assert codes.count("UNMOCKED_CALL") == 2
+
+
+def test_per_case_check_unknown_driver_side_thru_endpoint():
+    result = _perform_thru_result()
+    surface = analyze(result.ast)
+    case = _case("RANGE-START", call_names=(), perform_thru="NO-SUCH-PARA")
+    reasons = check_test_case(surface, result.ast, case)
+    assert any(r.code == "UNKNOWN_PARAGRAPH" for r in reasons)
+
+
+def test_expand_thru_range_refuses_unverifiable_order():
+    """The runtime source-order guarantee: when ordering could not be
+    verified (`ordered is None`, a parser-regression guard no real program
+    triggers), expansion refuses instead of guessing."""
+    members, problem = _expand_thru_range(None, "A", "B", "paragraph 'X'")
+    assert members == []
+    assert problem.code == "UNSUPPORTED_PERFORM_THRU"
+    assert "source order" in problem.message
 
 
 def test_per_case_check_refuses_mock_call_targeting_nested_call_site():
