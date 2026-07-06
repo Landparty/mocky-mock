@@ -10,9 +10,16 @@ from enum import Enum
 
 class MockCategory(Enum):
     """Every mockable boundary category. `MOCK MQ` is parsed as CALL (MQ is
-    invoked through static CALL statements), so MQ is not a category here."""
+    invoked through static CALL statements), so MQ is not a category here.
+    DYNCALL is never written in .cut files either: `MOCK CALL <bare-word>`
+    parses to it (a dynamic CALL keyed by the identifier it calls through),
+    while `MOCK CALL "<literal>"` stays CALL. Distinct categories keep the
+    two from colliding in every (category, key)-keyed structure (tally
+    registry, declared-VERIFY set) and make cross-matching impossible:
+    a quoted directive can never match a dynamic site or vice versa."""
 
     CALL = "CALL"
+    DYNCALL = "DYNCALL"
     OPEN = "OPEN"
     CLOSE = "CLOSE"
     READ = "READ"
@@ -25,6 +32,13 @@ class MockCategory(Enum):
     CICS = "CICS"
     DLI = "DLI"
     ACCEPT = "ACCEPT"
+
+    @property
+    def keyword(self) -> str:
+        """The .cut-level keyword: what a user actually writes after MOCK/
+        VERIFY. DYNCALL is spelled CALL (the bare-key form); everything
+        else is its own name."""
+        return "CALL" if self is MockCategory.DYNCALL else self.value
 
 
 # File-op categories key on a bare COBOL word (file or record name);
@@ -58,10 +72,14 @@ class MockDirective:
 
     def describe(self) -> str:
         """Human-readable form used in refusal messages and codegen traps,
-        mirroring the .cut syntax: `CALL "X"`, `READ INFILE`, `SQL "SELECT"`."""
-        if self.category in FILE_OP_CATEGORIES or self.category is MockCategory.ACCEPT:
-            return f"{self.category.value} {self.key}"
-        return f'{self.category.value} "{self.key}"'
+        mirroring the .cut syntax: `CALL "X"`, `CALL WS-PGM` (dynamic),
+        `READ INFILE`, `SQL "SELECT"`."""
+        if (
+            self.category in FILE_OP_CATEGORIES
+            or self.category in (MockCategory.ACCEPT, MockCategory.DYNCALL)
+        ):
+            return f"{self.category.keyword} {self.key}"
+        return f'{self.category.keyword} "{self.key}"'
 
 
 @dataclass

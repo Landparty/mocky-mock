@@ -1,12 +1,16 @@
 """Composes cobolparser analyzers into a single mock-surface report.
 
-v2 mocks static CALL sites (including MQ API calls), the eight file-op
+v2 mocks static CALL sites (including MQ API calls), dynamic CALL sites
+(keyed by the identifier they call through -- `CALL WS-PGM-NAME` is
+mockable as `MOCK CALL WS-PGM-NAME`; the splicer replaces the whole
+statement, so the runtime target never needs resolving), the eight file-op
 verbs (OPEN/CLOSE/READ/WRITE/REWRITE/DELETE/START/UNLOCK), EXEC
 SQL/CICS/DLI, and console ACCEPT. Each mockable statement is recorded as a
 `BoundarySite` carrying its AST statement reference so the splicer can
-compute replacement spans without re-scanning paragraphs. Dynamic CALL and
-the SORT/MERGE family are *detected* (category None) for the refusal gate
-but not mockable.
+compute replacement spans without re-scanning paragraphs. The SORT/MERGE
+family -- and, fail closed, a dynamic CALL whose identifier cobolparser
+did not capture -- are *detected* (category None) for the refusal gate but
+not mockable.
 """
 
 from __future__ import annotations
@@ -310,7 +314,14 @@ def _classify_statement(
             )
         )
         if statement.is_dynamic:
-            add_site(None, "dynamic CALL")
+            # called_program holds the identifier NAME for a dynamic call
+            # (verified empirically; see interface-contract.md). No name
+            # captured -> keep the site unmockable, fail closed.
+            identifier = (statement.called_program or "").upper()
+            if identifier:
+                add_site(MockCategory.DYNCALL, "dynamic CALL", keys=(identifier,))
+            else:
+                add_site(None, "dynamic CALL")
         else:
             name = statement.called_program or ""
             add_site(

@@ -241,11 +241,18 @@ BOUNDARY_MIX_CBL = """\
        FILE-CONTROL.
            SELECT ORDER-FILE ASSIGN TO "ORDERS"
                ORGANIZATION IS LINE SEQUENTIAL.
+           SELECT SORTED-FILE ASSIGN TO "SORTED"
+               ORGANIZATION IS LINE SEQUENTIAL.
+           SELECT SORT-WORK ASSIGN TO "SRTWRK".
 
        DATA DIVISION.
        FILE SECTION.
        FD  ORDER-FILE.
        01  ORDER-RECORD       PIC X(11).
+       FD  SORTED-FILE.
+       01  SORTED-RECORD      PIC X(11).
+       SD  SORT-WORK.
+       01  SORT-RECORD        PIC X(11).
 
        WORKING-STORAGE SECTION.
        01  WS-PGM-NAME        PIC X(8) VALUE "DISCRATE".
@@ -260,6 +267,10 @@ BOUNDARY_MIX_CBL = """\
        CALLS-DYNAMIC.
            CALL WS-PGM-NAME USING WS-AMOUNT.
 
+       SORTS-DATA.
+           SORT SORT-WORK ON ASCENDING KEY SORT-RECORD
+               USING ORDER-FILE GIVING SORTED-FILE.
+
        READS-A-FILE.
            READ ORDER-FILE
                AT END DISPLAY "EOF"
@@ -272,10 +283,11 @@ BOUNDARY_MIX_CBL = """\
 
 def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys):
     """The mock surface still detects boundaries no version can mock
-    (dynamic CALL). generate must say so, not silently drop them --
+    (SORT/MERGE family). generate must say so, not silently drop them --
     otherwise the scaffold looks like complete coverage of the program's
-    boundary points when it isn't. File I/O and console ACCEPT are mockable
-    in v2 and must NOT be reported."""
+    boundary points when it isn't. File I/O, console ACCEPT, and (since
+    the 2026-07-06 design) dynamic CALL are mockable and must NOT be
+    reported."""
     program = tmp_path / "BOUNDMIX.cbl"
     program.write_text(BOUNDARY_MIX_CBL)
     output = tmp_path / "BOUNDMIX.cut"
@@ -285,12 +297,15 @@ def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "not mockable" in out
-    assert "dynamic CALL" in out
+    assert "SORT/MERGE" in out
+    assert "dynamic CALL" not in out
     assert "file I/O" not in out
     assert "console ACCEPT" not in out
-    # The scaffold covers the static CALL, the READ, and the ACCEPT.
+    # The scaffold covers the static CALL, the dynamic CALL (bare key),
+    # the READ, and the ACCEPT.
     scaffold = output.read_text()
     assert 'MOCK CALL "DISCRATE"' in scaffold
+    assert "MOCK CALL WS-PGM-NAME" in scaffold
     assert "MOCK READ ORDER-FILE" in scaffold
     assert "MOCK ACCEPT WS-NAME" in scaffold
 

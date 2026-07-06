@@ -112,6 +112,7 @@ _SCOPE_WORDS = frozenset(
 # therefore part of its span, not a boundary after it (CALL ... END-CALL).
 _VERB_TERMINATORS: dict[MockCategory, str] = {
     MockCategory.CALL: "END-CALL",
+    MockCategory.DYNCALL: "END-CALL",
     MockCategory.READ: "END-READ",
     MockCategory.WRITE: "END-WRITE",
     MockCategory.REWRITE: "END-REWRITE",

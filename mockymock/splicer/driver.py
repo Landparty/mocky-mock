@@ -119,7 +119,7 @@ def _build_testcase_paragraph(
     for verification in case.verifications:
         if (verification.category, verification.key) not in case_mocks:
             raise ValueError(
-                f"VERIFY references {verification.category.value} "
+                f"VERIFY references {verification.category.keyword} "
                 f"{verification.key!r}, which no MOCK directive in this TESTCASE "
                 f"declares (should have been refused before codegen)"
             )
@@ -128,7 +128,7 @@ def _build_testcase_paragraph(
         lines.append(f"           IF {condition}")
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY '
-            f'{verification.category.value} {_display_text(verification.key)} WAS CALLED '
+            f'{verification.category.keyword} {_display_text(verification.key)} WAS CALLED '
             f'{verification.expectation}"'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")

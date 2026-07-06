@@ -1,0 +1,18 @@
+TESTSUITE "DYNCALL dynamic call boundaries"
+
+*> One MOCK CALL <identifier> directive (bare key = dynamic CALL) matches
+*> every CALL through WS-PGM-NAME, including the nested one inside the IF.
+*> The mock body branches on the identifier's runtime value -- per-target
+*> behavior without any runtime program resolution: the splicer replaced
+*> the whole CALL statement, so nothing is ever really called.
+TESTCASE "one identifier mock dispatches on the runtime target"
+    MOCK CALL WS-PGM-NAME
+        IF WS-PGM-NAME = "PGMA"
+            MOVE 1 TO WS-RC
+        ELSE
+            MOVE 2 TO WS-RC
+        END-IF
+    END-MOCK
+    PERFORM MAIN-PROCESS
+    EXPECT WS-TOTAL TO BE 5
+    VERIFY CALL WS-PGM-NAME WAS CALLED 3 TIMES
