@@ -38,6 +38,8 @@ def reset_move_lines(program) -> list[str]:
 
     lines: list[str] = []
     for item in _top_level_items(section):
+        if _is_filler(item):
+            continue  # a top-level FILLER cannot be a valid MOVE/INITIALIZE target
         if _is_group(item) and not item.value_clause:
             lines.append(f"INITIALIZE {item.name}")
             lines.extend(_child_value_restores(item))
@@ -65,6 +67,13 @@ def _top_level_items(section):
     ]
 
 
+def _is_filler(item) -> bool:
+    """FILLER items are unaddressable in COBOL: MOVE/INITIALIZE cannot target
+    them by name, so reset generation must never emit a line for one."""
+    name = getattr(item, "name", None)
+    return not name or name.upper() == "FILLER"
+
+
 def _is_group(item) -> bool:
     """A group item has subordinate data items. cobolparser's `children` list
     mixes in clause nodes (e.g. PictureClause), so only children that carry a
@@ -82,6 +91,8 @@ def _child_value_restores(group) -> list[str]:
     for child in getattr(group, "children", []):
         if getattr(child, "level", None) is None:
             continue  # clause node, not a data item
+        if _is_filler(child):
+            continue  # FILLER is unaddressable; its VALUE already survives INITIALIZE
         if _is_group(child):
             out.extend(_child_value_restores(child))
         elif getattr(child, "value_clause", None):

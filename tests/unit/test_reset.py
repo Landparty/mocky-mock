@@ -161,3 +161,37 @@ def test_value_less_group_still_emits_only_initialize():
     lines = reset_move_lines(_ast_77_and_group())
     order_related = [ln for ln in lines if "WS-ORDER" in ln]
     assert order_related == ["INITIALIZE WS-ORDER"]
+
+
+GROUP_WITH_FILLER_CHILD_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SAMPLE5.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-HDR.
+           05  FILLER         PIC X(5) VALUE "CIF  ".
+           05  WS-NAMED       PIC X(3) VALUE "ABC".
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def _ast_group_with_filler_child():
+    result = parse_cobol(GROUP_WITH_FILLER_CHILD_SOURCE, filename="sample5.cbl")
+    assert result.success, result.errors
+    return result.ast
+
+
+def test_filler_child_is_never_targeted_by_reset():
+    """FILLER is unaddressable in COBOL -- MOVE ... TO FILLER is a syntax
+    error. A group's FILLER child with a VALUE clause must be skipped when
+    restoring child VALUEs after INITIALIZE (INITIALIZE also never disturbs
+    FILLER, so there's nothing to restore anyway). Named siblings must still
+    be restored normally."""
+    lines = reset_move_lines(_ast_group_with_filler_child())
+    assert "INITIALIZE WS-HDR" in lines
+    assert any('MOVE "ABC" TO WS-NAMED' in ln for ln in lines)
+    assert not any("TO FILLER" in ln for ln in lines)
