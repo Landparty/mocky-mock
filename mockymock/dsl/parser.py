@@ -2,11 +2,15 @@
 
 v2 grammar: MOCK takes a category — quoted-key categories
 (CALL/MQ/SQL/CICS/DLI) vs bare-COBOL-word categories (the eight file-op
-verbs and ACCEPT). `MOCK MQ "X"` is sugar for `MOCK CALL "X"`. VERIFY
-mirrors the same key syntax; a bare `VERIFY "X"` stays CALL for v1
-back-compat, and CALLED/PERFORMED are interchangeable. Lines starting with
-`*>` outside MOCK bodies are comments; inside a body they pass through
-(they're valid free-form COBOL).
+verbs and ACCEPT). `MOCK MQ "X"` is sugar for `MOCK CALL "X"`. CALL alone
+takes both forms: `MOCK CALL "X"` mocks a static CALL with literal 'X',
+while `MOCK CALL WS-PGM` (bare word) mocks a *dynamic* CALL through the
+identifier WS-PGM (parsed as MockCategory.DYNCALL; MQ stays quoted-only —
+the MQI is invoked through static CALLs by definition). VERIFY mirrors the
+same key syntax; a bare `VERIFY "X"` stays CALL for v1 back-compat, and
+CALLED/PERFORMED are interchangeable. Lines starting with `*>` outside
+MOCK bodies are comments; inside a body they pass through (they're valid
+free-form COBOL).
 """
 
 from __future__ import annotations
@@ -23,7 +27,8 @@ from mockymock.dsl.model import (
 )
 
 _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
-_BARE_CATS = "OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
+# CALL also appears here: the bare-key form is the dynamic-CALL mock.
+_BARE_CATS = "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
 _TESTCASE_RE = re.compile(r'^TESTCASE\s+"(?P<name>[^"]*)"$')
@@ -54,9 +59,11 @@ class CutParseError(ValueError):
     """Raised when a .cut file doesn't match the grammar."""
 
 
-def _resolve_category(cat: str | None) -> MockCategory:
+def _resolve_category(cat: str | None, bare_key: bool = False) -> MockCategory:
     if cat is None or cat == "MQ":  # bare VERIFY "X" and MOCK MQ are CALL
         return MockCategory.CALL
+    if cat == "CALL" and bare_key:  # CALL <identifier> is the dynamic form
+        return MockCategory.DYNCALL
     return MockCategory(cat)
 
 
@@ -98,15 +105,17 @@ def parse_cut(text: str) -> MockTestSuite:
             if case is None:
                 raise CutParseError(f"line {line_no}: MOCK outside TESTCASE")
             in_mock = MockDirective(
-                category=_resolve_category(m.group("cat")),
+                category=_resolve_category(m.group("cat"), bare_key=True),
                 key=m.group("key").upper(),
             )
             case.mocks.append(in_mock)
         elif line.startswith("MOCK"):
             raise CutParseError(
                 f"line {line_no}: malformed MOCK directive: {line!r} "
-                f"(CALL/MQ/SQL/CICS/DLI take a quoted key; "
-                f"{_BARE_CATS.replace('|', '/')} take a bare COBOL name)"
+                f"(MQ/SQL/CICS/DLI take a quoted key; "
+                f"{_BARE_CATS.replace('|', '/')} take a bare COBOL name; "
+                f'CALL takes both -- quoted "X" for a static CALL, bare '
+                f"WS-NAME for a dynamic CALL through that identifier)"
             )
         elif (m := _MOVE_RE.match(line)) is not None:
             if case is None:
@@ -138,7 +147,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             case.verifications.append(
                 VerifyDirective(
-                    category=_resolve_category(m.group("cat")),
+                    category=_resolve_category(m.group("cat"), bare_key=True),
                     key=m.group("key").upper(),
                     expectation=m.group("expectation"),
                 )

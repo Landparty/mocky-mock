@@ -428,13 +428,16 @@ def test_per_case_check_allows_static_call_only_paragraph():
     assert reasons == []
 
 
-def test_per_case_check_refuses_unreachable_dynamic_call_target():
+def test_per_case_check_refuses_unmocked_dynamic_call():
+    """Identifier-carrying dynamic CALLs are mockable since the 2026-07-06
+    dynamic-call design; reachable-but-unmocked ones refuse UNMOCKED_CALL
+    like any other unmocked call."""
     result = _result()
     surface = analyze(result.ast)
     reasons = check_test_case(
         surface, result.ast, _case("DYNAMIC-PARAGRAPH", call_names=())
     )
-    assert any(r.code == "DYNAMIC_CALL" for r in reasons)
+    assert any(r.code == "UNMOCKED_CALL" for r in reasons)
 
 
 def test_per_case_check_follows_perform_to_find_dynamic_call():
@@ -443,7 +446,7 @@ def test_per_case_check_follows_perform_to_find_dynamic_call():
     reasons = check_test_case(
         surface, result.ast, _case("WRAPPER-PARAGRAPH", call_names=())
     )
-    assert any(r.code == "DYNAMIC_CALL" for r in reasons)
+    assert any(r.code == "UNMOCKED_CALL" for r in reasons)
 
 
 def test_per_case_check_refuses_unmatched_mock_call():
@@ -482,7 +485,7 @@ def test_per_case_check_follows_multi_hop_perform_chain_to_dynamic_call():
     reasons = check_test_case(
         surface, result.ast, _case("PARAGRAPH-A", call_names=())
     )
-    assert any(r.code == "DYNAMIC_CALL" for r in reasons)
+    assert any(r.code == "UNMOCKED_CALL" for r in reasons)
 
 
 def test_per_case_check_finds_perform_nested_inside_if_to_dynamic_call():
@@ -496,7 +499,7 @@ def test_per_case_check_finds_perform_nested_inside_if_to_dynamic_call():
     reasons = check_test_case(
         surface, result.ast, _case("WRAPPER-PARAGRAPH", call_names=())
     )
-    assert any(r.code == "DYNAMIC_CALL" for r in reasons)
+    assert any(r.code == "UNMOCKED_CALL" for r in reasons)
 
 
 def test_per_case_check_expands_perform_thru_range():

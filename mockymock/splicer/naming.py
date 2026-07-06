@@ -3,6 +3,10 @@
 CALL keeps v1's UT-<NAME>-TALLY shape so existing .cut files whose mock
 bodies reference tally fields keep working; every other category prefixes
 the category word (UT-READ-INFILE-TALLY, UT-SQL-UPDATE-ORDERS-TALLY).
+DYNCALL prefixes its .cut keyword CALL, not the internal category name
+(UT-CALL-WS-PGM-NAME-TALLY): that is what a .cut author would guess from
+writing MOCK CALL WS-PGM-NAME, and it can never collide with a static
+CALL's un-prefixed shape for the same spelling.
 
 Sanitized keys can collide (two SQL prefixes that differ only in
 punctuation, or only beyond the length cap), so names are assigned through
@@ -40,7 +44,7 @@ class TallyRegistry:
             body = (
                 _sanitize(key)
                 if category is MockCategory.CALL
-                else _sanitize(f"{category.value} {key}")
+                else _sanitize(f"{category.keyword} {key}")
             )
             body = body[:_MAX_BODY].rstrip("-") or "MOCK"
             name = f"UT-{body}-TALLY"

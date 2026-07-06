@@ -37,17 +37,19 @@ A directive matching no reachable site is UNMATCHED_MOCK; a VERIFY whose
 (category, key) no MOCK directive of the same case declares is
 VERIFY_WITHOUT_MOCK (its tally field would be stale or undeclared).
 
-Detected-but-unmockable sites keep their own refusals: DYNAMIC_CALL (target
-unknown at parse time) and UNSUPPORTED_SORT_MERGE (SORT/MERGE/RELEASE/
-RETURN mock an algorithm plus its INPUT/OUTPUT PROCEDURE contract, not a
-boundary statement). PERFORM ... THRU ranges ARE expanded: every paragraph
-in the source-order slice [target..thru] is reachable (fall-through
-executes them all), with the required source-order guarantee checked at
-runtime (_source_ordered_paragraphs). UNSUPPORTED_PERFORM_THRU survives
-only for degenerate ranges -- unverifiable order, missing or ambiguous
-endpoints, backwards ranges -- and a test case's own PERFORM ... THRU
-seeds the BFS with its range (missing driver-side endpoints are
-UNKNOWN_PARAGRAPH).
+Detected-but-unmockable sites keep their own refusals: DYNAMIC_CALL (now
+only for a dynamic CALL whose target identifier cobolparser failed to
+capture -- identifier-carrying dynamic CALLs are mockable via
+MOCK CALL <identifier>, see docs/2026-07-06-dynamic-call-mocks-design.md)
+and UNSUPPORTED_SORT_MERGE (SORT/MERGE/RELEASE/RETURN mock an algorithm
+plus its INPUT/OUTPUT PROCEDURE contract, not a boundary statement).
+PERFORM ... THRU ranges ARE expanded: every paragraph in the source-order
+slice [target..thru] is reachable (fall-through executes them all), with
+the required source-order guarantee checked at runtime
+(_source_ordered_paragraphs). UNSUPPORTED_PERFORM_THRU survives only for
+degenerate ranges -- unverifiable order, missing or ambiguous endpoints,
+backwards ranges -- and a test case's own PERFORM ... THRU seeds the BFS
+with its range (missing driver-side endpoints are UNKNOWN_PARAGRAPH).
 
 check_nested_exec (NESTED_EXEC) is a whole-program check: GnuCOBOL cannot
 compile raw EXEC blocks, so every EXEC site must be stubbed program-wide
@@ -95,6 +97,7 @@ from mockymock.dsl.model import (
 
 _UNMOCKED_CODES = {
     MockCategory.CALL: "UNMOCKED_CALL",
+    MockCategory.DYNCALL: "UNMOCKED_CALL",
     MockCategory.SQL: "UNMOCKED_SQL",
     MockCategory.CICS: "UNMOCKED_CICS",
     MockCategory.DLI: "UNMOCKED_DLI",
@@ -117,8 +120,11 @@ _UNANNOTATED = "nested-site spliceability was not annotated"
 
 def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool:
     """Category must agree; then CALL keys match the call literal exactly,
-    file-op/ACCEPT keys match any of the site's (uppercased) names, and
-    SQL/CICS/DLI keys prefix-match the site's normalized EXEC text."""
+    file-op/ACCEPT/DYNCALL keys match any of the site's (uppercased) names
+    (the identifier a dynamic CALL calls through), and SQL/CICS/DLI keys
+    prefix-match the site's normalized EXEC text. The category identity
+    check is what keeps quoted (static) and bare (dynamic) CALL keys from
+    ever cross-matching."""
     if site.category is not directive.category:
         return False
     if directive.category in EXEC_CATEGORIES:
@@ -231,7 +237,10 @@ def check_test_case(
                         code="DYNAMIC_CALL",
                         message=(
                             f"paragraph '{site.paragraph_name}' (line {site.line}) "
-                            f"contains a dynamic CALL, not supported"
+                            f"contains a dynamic CALL whose target identifier "
+                            f"could not be determined -- dynamic CALLs are "
+                            f"mockable only through their identifier "
+                            f"(MOCK CALL <identifier>)"
                         ),
                     )
                 )
@@ -319,7 +328,7 @@ def check_test_case(
                 RefusalReason(
                     code="VERIFY_WITHOUT_MOCK",
                     message=(
-                        f"VERIFY {verification.category.value} "
+                        f"VERIFY {verification.category.keyword} "
                         f"{verification.key!r} has no matching MOCK directive "
                         f"in this test case -- its tally counter would be "
                         f"undeclared or stale"

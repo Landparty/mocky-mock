@@ -28,6 +28,7 @@ from mockymock.dsl.model import FILE_OP_CATEGORIES, MockCategory
 
 _PLACEHOLDER_BODIES: dict[MockCategory, list[str]] = {
     MockCategory.CALL: ["MOVE 0 TO RETURN-CODE"],
+    MockCategory.DYNCALL: ["MOVE 0 TO RETURN-CODE"],
     MockCategory.SQL: ["MOVE 0 TO SQLCODE"],
 }
 
@@ -81,6 +82,11 @@ def _directive_for(
         name = site.keys[0] if site.keys else ""
         keyword = "MQ" if site.is_mq else "CALL"
         return f'MOCK {keyword} "{name}"', body
+
+    if category is MockCategory.DYNCALL:
+        # bare key = dynamic CALL through this identifier; quoting it would
+        # turn the directive into a static-literal mock that never matches
+        return f"MOCK CALL {site.keys[0]}", body
 
     if category in FILE_OP_CATEGORIES:
         if not site.keys:

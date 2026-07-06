@@ -7,8 +7,9 @@ the MQ API), file I/O (`OPEN`/`CLOSE`/`READ`/`WRITE`/`REWRITE`/`DELETE`/
 reports pass/fail.
 
 See `docs/2026-06-30-mockymock-mvp-design.md` for the original CALL-only
-design and `docs/2026-07-05-mock-all-boundaries-design.md` for the v2
-all-boundaries design.
+design, `docs/2026-07-05-mock-all-boundaries-design.md` for the v2
+all-boundaries design, and `docs/2026-07-06-dynamic-call-mocks-design.md`
+for identifier-keyed dynamic CALL mocks.
 
 ## The `.cut` DSL at a glance
 
@@ -49,6 +50,12 @@ TESTCASE "totals two records then updates and notifies"
   CALLs) / `MOCK SQL "<prefix>"` / `MOCK CICS "<prefix>"` /
   `MOCK DLI "<prefix>"` take a quoted key; SQL/CICS/DLI keys prefix-match
   the statement's normalized text.
+- `MOCK CALL WS-PGM-NAME` (bare COBOL word) mocks a **dynamic** CALL by
+  the identifier it calls through — the whole statement is replaced, so
+  the runtime target never needs resolving, and the mock body can branch
+  on the identifier's value (`IF WS-PGM-NAME = "PGMA" ...`) for
+  per-target behavior. `VERIFY CALL WS-PGM-NAME WAS CALLED ...` mirrors
+  it; the tally field is `UT-CALL-<IDENTIFIER>-TALLY`.
 - `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK <file>` and
   `MOCK WRITE|REWRITE <record>` take a bare COBOL name (WRITE/REWRITE name
   the record, matching COBOL's own syntax); `MOCK ACCEPT <data-name>` mocks
@@ -70,7 +77,8 @@ inside the program (the range is expanded in source order for
 reachability) and as a test case's entry point (`PERFORM A THRU B` in the
 .cut, `THROUGH` accepted); degenerate ranges — missing, duplicate, or
 backwards endpoints — are refused. Still refused, fail-closed: dynamic
-`CALL identifier`, `SORT`/`MERGE`/`RELEASE`/`RETURN`, nested statements
+CALLs whose target identifier the parser cannot determine,
+`SORT`/`MERGE`/`RELEASE`/`RETURN`, nested statements
 sharing a line with other code (`IF X CALL "F" END-IF` one-liners),
 statements inside another boundary statement's clause body
 (`READ ... AT END`, `CALL ... ON EXCEPTION`), and mocks with clause bodies
