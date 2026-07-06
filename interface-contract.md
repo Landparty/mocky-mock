@@ -20,6 +20,10 @@ mockymock too.
   in the NORMALIZED free-form text, not the original file.
 - `cobolparser.models.statements.call.CallStatement.called_program: str | None`,
   `.is_dynamic: bool` (property), `.on_exception`/`.not_on_exception`/`.on_overflow: list[CobolStatement] | None`
+  — when `.is_dynamic` is True, `.called_program` holds the *identifier
+  name* the CALL goes through (verified empirically: `CALL WS-PGM-NAME`
+  yields `called_program == "WS-PGM-NAME"`); dynamic-CALL mocking keys on
+  this.
 - `cobolparser.models.statements.control.PerformStatement.target_paragraph: str | None`,
   `.inline_statements: list[CobolStatement]` (populated for inline `PERFORM ... END-PERFORM`)
 - `cobolparser.models.statements.control.IfStatement.then_statements`/`.else_statements: list[CobolStatement]`

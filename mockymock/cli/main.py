@@ -66,11 +66,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
 
 def _report_unsupported_boundaries(surface) -> None:
-    """Name every detected boundary point that stays unmockable (dynamic
-    CALL, the SORT/MERGE family, unspliceable nested sites), so the
-    scaffold is never mistaken for complete coverage of the program's
-    outputs. Test cases whose PERFORM target reaches one of these are
-    refused by `run`."""
+    """Name every detected boundary point that stays unmockable (the
+    SORT/MERGE family, identifier-less dynamic CALLs, unspliceable nested
+    sites), so the scaffold is never mistaken for complete coverage of the
+    program's outputs. Test cases whose PERFORM target reaches one of
+    these are refused by `run`."""
     findings: list[str] = []
     for site in surface.boundary_sites:
         if site.category is None:
