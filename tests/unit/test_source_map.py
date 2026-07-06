@@ -74,3 +74,196 @@ def test_span_ends_before_next_paragraph_header():
         i + 1 for i, line in enumerate(lines) if "SECOND-PARAGRAPH" in line
     )
     assert end < second_paragraph_line
+
+
+# --- nested-site scope map + span annotation -------------------------------
+
+from mockymock.analysis.mock_surface import analyze
+from mockymock.dsl.model import MockCategory
+from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
+
+NESTED_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTSPAN.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X.
+       01  WS-AMT             PIC 9(5).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           IF WS-FLAG = "Y"
+               CALL "IFCALL"
+                   USING WS-AMT
+           ELSE
+               CALL "ELSECALL" USING WS-AMT
+           END-IF.
+           EVALUATE WS-FLAG
+               WHEN "A"
+                   CALL "WHENCALL" USING WS-AMT
+               WHEN OTHER
+                   CALL "OTHERCALL" USING WS-AMT
+           END-EVALUATE.
+           PERFORM UNTIL WS-FLAG = "N"
+               CALL "LOOPCALL" USING WS-AMT
+           END-PERFORM.
+           IF WS-FLAG = "T"
+               CALL "TERMCALL" USING WS-AMT
+               END-CALL
+           END-IF.
+           STOP RUN.
+"""
+
+UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTBAD.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X.
+       01  WS-AMT             PIC 9(5).
+
+       PROCEDURE DIVISION.
+       ONE-LINER.
+           IF WS-FLAG = "Y" CALL "INLINE" USING WS-AMT END-IF.
+
+       GLUED.
+           IF WS-FLAG = "Y"
+               CALL "GLUE"
+                   USING WS-AMT END-IF.
+
+       HANDLER-PARA.
+           IF WS-FLAG = "Y"
+               CALL "CLAUSED" USING WS-AMT
+                   ON EXCEPTION
+                       CALL "INHANDLER" USING WS-AMT
+               END-CALL
+           END-IF.
+"""
+
+EXEC_NESTED_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTEXEC.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X.
+       01  WS-AMT             PIC 9(5).
+
+       PROCEDURE DIVISION.
+       SQL-PARA.
+           IF WS-FLAG = "Y"
+               EXEC SQL
+                   UPDATE ORDERS
+                       SET STATUS = CASE WHEN 1 > 0 THEN 'Y' ELSE 'N' END
+                       WHERE ID = :WS-AMT
+               END-EXEC
+           END-IF.
+
+       STOP-PARA.
+           STOP RUN.
+"""
+
+
+def _annotated_surface(source, name):
+    result = parse_cobol(source, filename=name)
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    return surface, lines
+
+
+def _site(surface, key):
+    for site in surface.boundary_sites:
+        if key in site.keys:
+            return site
+    raise AssertionError(f"no site with key {key}")
+
+
+def _line_of(lines, needle):
+    return next(i + 1 for i, line in enumerate(lines) if needle in line)
+
+
+def test_scope_map_locates_block_words():
+    result = parse_cobol(NESTED_SOURCE, filename="nestspan.cbl")
+    lines = normalize_fixed_format(NESTED_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    words = {b.word for b in scope_map.boundaries}
+    assert {"ELSE", "END-IF", "WHEN", "END-EVALUATE", "END-PERFORM"} <= words
+
+
+def test_if_branch_call_span_stops_before_else():
+    surface, lines = _annotated_surface(NESTED_SOURCE, "nestspan.cbl")
+    site = _site(surface, "IFCALL")
+    assert site.unspliceable_reason is None
+    start, end = site.span
+    assert start == _line_of(lines, 'CALL "IFCALL"')
+    assert end == start + 1  # USING continuation line
+    assert "ELSE" in lines[end]  # next line is the ELSE
+
+
+def test_else_when_other_and_loop_bodies_get_spans():
+    surface, lines = _annotated_surface(NESTED_SOURCE, "nestspan.cbl")
+    for key, stopper in (
+        ("ELSECALL", "END-IF"),
+        ("WHENCALL", "WHEN OTHER"),
+        ("OTHERCALL", "END-EVALUATE"),
+        ("LOOPCALL", "END-PERFORM"),
+    ):
+        site = _site(surface, key)
+        assert site.unspliceable_reason is None, (key, site.unspliceable_reason)
+        start, end = site.span
+        assert start == _line_of(lines, f'CALL "{key}"')
+        assert stopper in lines[end]  # line after span is the block word
+
+
+def test_own_end_call_terminator_is_inside_span():
+    surface, lines = _annotated_surface(NESTED_SOURCE, "nestspan.cbl")
+    site = _site(surface, "TERMCALL")
+    assert site.unspliceable_reason is None
+    start, end = site.span
+    assert "END-CALL" in lines[end - 1]  # last span line is the END-CALL
+    assert "END-IF" in lines[end]
+
+
+def test_one_liner_nested_call_is_unspliceable():
+    surface, _ = _annotated_surface(UNSAFE_SOURCE, "nestbad.cbl")
+    site = _site(surface, "INLINE")
+    assert site.span is None
+    assert site.unspliceable_reason is not None
+
+
+def test_glued_trailing_end_if_is_unspliceable():
+    surface, _ = _annotated_surface(UNSAFE_SOURCE, "nestbad.cbl")
+    site = _site(surface, "GLUE")
+    assert site.span is None
+    assert "does not start its own line" in site.unspliceable_reason
+
+
+def test_call_with_handler_clause_is_unspliceable():
+    surface, _ = _annotated_surface(UNSAFE_SOURCE, "nestbad.cbl")
+    site = _site(surface, "CLAUSED")
+    assert site.span is None
+    assert "clause bodies" in site.unspliceable_reason
+
+
+def test_site_inside_handler_clause_is_unspliceable():
+    surface, _ = _annotated_surface(UNSAFE_SOURCE, "nestbad.cbl")
+    site = _site(surface, "INHANDLER")
+    assert site.span is None
+    assert "boundary statement" in site.unspliceable_reason
+
+
+def test_nested_exec_sql_span_includes_end_exec():
+    surface, lines = _annotated_surface(EXEC_NESTED_SOURCE, "nestexec.cbl")
+    site = next(
+        s for s in surface.boundary_sites if s.category is MockCategory.SQL
+    )
+    assert site.unspliceable_reason is None, site.unspliceable_reason
+    start, end = site.span
+    assert start == _line_of(lines, "EXEC SQL")
+    assert "END-EXEC" in lines[end - 1]  # last span line
+    assert "END-IF" in lines[end]  # CASE WHEN/ELSE in SQL text didn't truncate

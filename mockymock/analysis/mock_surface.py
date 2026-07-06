@@ -104,6 +104,14 @@ class BoundarySite:
     nested: bool
     statement: object
     is_mq: bool = False
+    # True when an ancestor statement is itself a boundary statement (a
+    # CALL/file-op clause body): the ancestor's splice would remove this
+    # site, so it can never be spliced independently.
+    nested_in_boundary: bool = False
+    # Filled in by splicer.source_map.annotate_nested_sites for nested
+    # sites: a validated replacement span, or the reason none exists.
+    span: tuple[int, int] | None = None
+    unspliceable_reason: str | None = None
 
 
 @dataclass
@@ -154,6 +162,20 @@ _FILE_OP_SPECS: tuple[tuple[type, MockCategory], ...] = (
 # contract, not a boundary statement, so all four stay unmockable and gate
 # a refusal.
 _SORT_MERGE_TYPES = (SortStatement, MergeStatement, ReleaseStatement, ReturnStatement)
+
+# Statement types whose nested clause bodies (AT END, INVALID KEY, ON
+# EXCEPTION, ...) belong to a *boundary* statement: sites found inside them
+# are marked nested_in_boundary because splicing the enclosing statement
+# removes them wholesale.
+_BOUNDARY_STATEMENT_TYPES = (
+    CallStatement,
+    *(statement_type for statement_type, _ in _FILE_OP_SPECS),
+    *_SORT_MERGE_TYPES,
+    ExecSQLStatement,
+    ExecCicsStatement,
+    ExecImsStatement,
+    IOAcceptStatement,
+)
 
 # ACCEPT sources that never read the console: system registers and runtime
 # values GnuCOBOL resolves without touching stdin. Anything else (no FROM at
@@ -245,7 +267,11 @@ def _file_op_keys(statement, category: MockCategory) -> tuple[str, ...]:
 
 
 def _classify_statement(
-    statement, paragraph_name: str, surface: MockSurface, nested: bool
+    statement,
+    paragraph_name: str,
+    surface: MockSurface,
+    nested: bool,
+    in_boundary: bool = False,
 ) -> None:
     """Classify a single statement (top-level or nested) into `surface`."""
     line = statement.location.line
@@ -268,6 +294,7 @@ def _classify_statement(
                 nested=nested,
                 statement=statement,
                 is_mq=is_mq,
+                nested_in_boundary=in_boundary,
             )
         )
 
@@ -346,7 +373,11 @@ def _classify_statement(
 
 
 def _walk_statements(
-    statements, paragraph_name: str, surface: MockSurface, nested: bool = False
+    statements,
+    paragraph_name: str,
+    surface: MockSurface,
+    nested: bool = False,
+    in_boundary: bool = False,
 ) -> None:
     """Classify `statements` and recurse into every nested statement body.
 
@@ -355,12 +386,23 @@ def _walk_statements(
     Every recursive call passes `nested=True` literally (not the parent's
     `nested` value) so a site is marked nested at every depth >= 1, while
     top-level statements (the initial call, where `nested` defaults to
-    `False`) stay correctly unmarked.
+    `False`) stay correctly unmarked. `in_boundary`, by contrast, is
+    sticky: once the recursion enters a boundary statement's clause body,
+    everything below it is nested_in_boundary.
     """
     for statement in statements:
-        _classify_statement(statement, paragraph_name, surface, nested)
+        _classify_statement(statement, paragraph_name, surface, nested, in_boundary)
+        child_in_boundary = in_boundary or isinstance(
+            statement, _BOUNDARY_STATEMENT_TYPES
+        )
         for nested_list in _nested_statement_lists(statement):
-            _walk_statements(nested_list, paragraph_name, surface, nested=True)
+            _walk_statements(
+                nested_list,
+                paragraph_name,
+                surface,
+                nested=True,
+                in_boundary=child_in_boundary,
+            )
 
 
 def analyze(program: CobolProgram) -> MockSurface:

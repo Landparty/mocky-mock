@@ -27,11 +27,12 @@ def _cmd_setup(args: argparse.Namespace) -> int:
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
-    from cobolparser.preprocess import expand_copybooks
+    from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
 
     from mockymock.analysis.mock_surface import analyze
     from mockymock.analysis.refusal import check_unresolved_copybooks
     from mockymock.dsl.generator import scaffold_cut
+    from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
     source_path = Path(args.program)
     raw_source = source_path.read_text()
@@ -52,6 +53,8 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
 
     surface = analyze(result.ast)
+    lines = normalize_fixed_format(raw_source.splitlines()).splitlines()
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
     cut_text = scaffold_cut(result.ast.program_name, surface)
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
@@ -64,9 +67,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
 def _report_unsupported_boundaries(surface) -> None:
     """Name every detected boundary point that stays unmockable (dynamic
-    CALL, the SORT/MERGE family, nested sites), so the scaffold is never
-    mistaken for complete coverage of the program's outputs. Test cases
-    whose PERFORM target reaches one of these are refused by `run`."""
+    CALL, the SORT/MERGE family, unspliceable nested sites), so the
+    scaffold is never mistaken for complete coverage of the program's
+    outputs. Test cases whose PERFORM target reaches one of these are
+    refused by `run`."""
     findings: list[str] = []
     for site in surface.boundary_sites:
         if site.category is None:
@@ -74,10 +78,10 @@ def _report_unsupported_boundaries(surface) -> None:
                 f"{site.label} in paragraph '{site.paragraph_name}' "
                 f"(line {site.line})"
             )
-        elif site.nested:
+        elif site.nested and site.span is None:
             findings.append(
                 f"nested {site.label} in paragraph '{site.paragraph_name}' "
-                f"(line {site.line}) -- cannot be spliced safely"
+                f"(line {site.line}) -- {site.unspliceable_reason}"
             )
     if not findings:
         return
@@ -109,7 +113,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.naming import TallyRegistry
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
-    from mockymock.splicer.source_map import collect_boundaries
+    from mockymock.splicer.source_map import (
+        annotate_nested_sites,
+        collect_boundaries,
+        collect_scope_map,
+    )
     from mockymock.splicer.sqlca import transform_data_division_exec
 
     try:
@@ -139,14 +147,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     suite = parse_cut(Path(args.cut).read_text())
     surface = analyze(result.ast)
 
+    normalized = normalize_fixed_format(raw_source.splitlines())
+    lines = normalized.splitlines()
+
+    # Nested-site spliceability must be annotated before any refusal check
+    # or splice looks at nested sites (unannotated nested sites refuse).
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+
     nested_exec_reasons = check_nested_exec(surface)
     for reason in nested_exec_reasons:
         print(f"mockymock run: refused ({reason.code}): {reason.message}")
     if nested_exec_reasons:
         return 1
-
-    normalized = normalize_fixed_format(raw_source.splitlines())
-    lines = normalized.splitlines()
 
     # Pre-check the DATA DIVISION EXEC SQL blocks before doing any work; the
     # actual transform runs after splicing (it inserts/removes lines, which

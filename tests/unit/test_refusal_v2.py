@@ -233,3 +233,104 @@ def test_nested_exec_is_whole_program_refusal():
 def test_clean_program_has_no_nested_exec():
     surface, _ = _surface_and_ast()
     assert check_nested_exec(surface) == []
+
+
+# --- nested sites: refusals narrow to genuinely unspliceable layouts -------
+
+from cobolparser.preprocess import normalize_fixed_format
+
+from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
+
+NESTED_OK_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTOK.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X.
+       01  WS-AMT             PIC 9(5).
+
+       PROCEDURE DIVISION.
+       NEST-PARA.
+           IF WS-FLAG = "Y"
+               CALL "NESTED" USING WS-AMT
+           END-IF.
+           IF WS-FLAG = "S"
+               EXEC SQL
+                   UPDATE ORDERS SET STATUS = 'Y' WHERE ID = :WS-AMT
+               END-EXEC
+           END-IF.
+           STOP RUN.
+"""
+
+NESTED_BAD_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTBAD2.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X.
+       01  WS-AMT             PIC 9(5).
+
+       PROCEDURE DIVISION.
+       BAD-PARA.
+           IF WS-FLAG = "Y" CALL "INLINE" USING WS-AMT END-IF.
+           STOP RUN.
+"""
+
+
+def _nested_fixture(source, name, annotate=True):
+    result = parse_cobol(source, filename=name)
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    if annotate:
+        lines = normalize_fixed_format(source.splitlines()).splitlines()
+        annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    return surface, result.ast
+
+
+def _nested_ok_case():
+    return MockTestCase(
+        name="nested case",
+        mocks=[
+            MockDirective(MockCategory.CALL, "NESTED"),
+            MockDirective(MockCategory.SQL, "UPDATE ORDERS"),
+        ],
+        perform_target="NEST-PARA",
+    )
+
+
+def test_spliceable_nested_sites_pass_the_gate():
+    surface, program = _nested_fixture(NESTED_OK_SOURCE, "nestok.cbl")
+    reasons = check_test_case(surface, program, _nested_ok_case())
+    assert reasons == [], [r.message for r in reasons]
+
+
+def test_spliceable_nested_exec_is_not_a_whole_program_refusal():
+    surface, _ = _nested_fixture(NESTED_OK_SOURCE, "nestok.cbl")
+    assert check_nested_exec(surface) == []
+
+
+def test_unannotated_nested_sites_still_refuse():
+    surface, program = _nested_fixture(
+        NESTED_OK_SOURCE, "nestok.cbl", annotate=False
+    )
+    codes = {r.code for r in check_test_case(surface, program, _nested_ok_case())}
+    assert "UNSUPPORTED_NESTED_MOCK_TARGET" in codes
+    assert {r.code for r in check_nested_exec(surface)} == {"NESTED_EXEC"}
+
+
+def test_one_liner_nested_call_still_refuses_with_reason():
+    surface, program = _nested_fixture(NESTED_BAD_SOURCE, "nestbad2.cbl")
+    case = MockTestCase(
+        name="bad case",
+        mocks=[MockDirective(MockCategory.CALL, "INLINE")],
+        perform_target="BAD-PARA",
+    )
+    reasons = [
+        r
+        for r in check_test_case(surface, program, case)
+        if r.code == "UNSUPPORTED_NESTED_MOCK_TARGET"
+    ]
+    assert len(reasons) == 1
+    assert "start its own line" in reasons[0].message

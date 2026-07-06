@@ -153,3 +153,65 @@ def test_normalize_exec_text_collapses_whitespace_and_uppercases():
         normalize_exec_text("  update\n   Orders   set X = 1 ")
         == "UPDATE ORDERS SET X = 1"
     )
+
+
+NESTED_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTBOUND.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X.
+       01  WS-AMT             PIC 9(5).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           IF WS-FLAG = "Y"
+               CALL "IFCALL" USING WS-AMT
+           END-IF.
+           EVALUATE WS-FLAG
+               WHEN "A"
+                   CALL "WHENCALL" USING WS-AMT
+           END-EVALUATE.
+           PERFORM UNTIL WS-FLAG = "N"
+               CALL "LOOPCALL" USING WS-AMT
+           END-PERFORM.
+           CALL "OUTER" USING WS-AMT
+               ON EXCEPTION
+                   CALL "HANDLER" USING WS-AMT
+           END-CALL.
+           STOP RUN.
+"""
+
+
+def _nested_surface():
+    result = parse_cobol(NESTED_SOURCE, filename="nestbound.cbl")
+    assert result.success, result.errors
+    return analyze(result.ast)
+
+
+def _call_site(surface, name):
+    for site in surface.boundary_sites:
+        if site.category is MockCategory.CALL and site.keys == (name,):
+            return site
+    raise AssertionError(f"no CALL site for {name}")
+
+
+def test_control_flow_nested_sites_are_not_nested_in_boundary():
+    surface = _nested_surface()
+    for name in ("IFCALL", "WHENCALL", "LOOPCALL"):
+        site = _call_site(surface, name)
+        assert site.nested, name
+        assert not site.nested_in_boundary, name
+
+
+def test_call_handler_body_is_nested_in_boundary():
+    site = _call_site(_nested_surface(), "HANDLER")
+    assert site.nested
+    assert site.nested_in_boundary
+
+
+def test_boundary_sites_default_to_unannotated():
+    for site in _nested_surface().boundary_sites:
+        assert site.span is None
+        assert site.unspliceable_reason is None

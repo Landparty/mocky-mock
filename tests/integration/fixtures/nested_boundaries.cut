@@ -1,0 +1,23 @@
+TESTSUITE "NESTBND nested boundaries"
+
+*> All three boundary statements live inside conditional bodies: a CALL
+*> in an IF branch, a CALL in an EVALUATE WHEN branch, and an EXEC SQL
+*> inside an IF -- the layouts the nested-mock-targets design makes
+*> spliceable.
+TESTCASE "nested call, when-branch call, nested sql all fire"
+    MOCK CALL "DISCRATE"
+        MOVE 5 TO WS-DISC-RATE
+    END-MOCK
+    MOCK CALL "TAXCALC"
+        MOVE 7 TO WS-TAX-RATE
+    END-MOCK
+    MOCK SQL "UPDATE ORDERS"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    PERFORM MAIN-PROCESS
+    EXPECT WS-DISC-RATE TO BE 5
+    EXPECT WS-TAX-RATE TO BE 7
+    EXPECT WS-SQL-STATUS TO BE "OK"
+    VERIFY CALL "DISCRATE" WAS CALLED ONCE
+    VERIFY CALL "TAXCALC" WAS CALLED ONCE
+    VERIFY SQL "UPDATE ORDERS" WAS PERFORMED ONCE
