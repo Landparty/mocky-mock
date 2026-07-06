@@ -1,4 +1,3 @@
-import pytest
 from cobolparser import parse_cobol
 
 from mockymock.analysis.mock_surface import CallKind, analyze
@@ -296,23 +295,10 @@ def test_top_level_call_is_not_marked_nested():
     assert static[0].nested is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "cobolparser's READ AT END / NOT AT END clause parsing is a documented "
-        "stub: collect_clause_stmts() (cobolparser/parsers/statements/_utils.py:262) "
-        "always discards its tokens and returns [], so IOReadStatement.at_end_clause "
-        "is never populated with real nested statements regardless of source. Our "
-        "recursive walk is ready to pick this up (at_end_clause is in "
-        "_NESTED_STATEMENT_ATTRS) the moment cobolparser implements real clause "
-        "parsing; until then this is a verified upstream limitation, not a bug in "
-        "mock_surface.py. SAFETY NOTE: a CALL/EXEC/file-op hidden in a READ AT END "
-        "or an INVALID KEY body (DELETE/REWRITE/START share the same stub) is "
-        "invisible to the AST today, so Task 6's refusal gate cannot catch it via "
-        "this path."
-    ),
-)
 def test_detects_call_nested_inside_read_at_end():
+    # cobolparser >= 1.2.0 populates IO clause bodies (at_end_clause etc.);
+    # this was a strict xfail while collect_clause_stmts() was a stub that
+    # discarded them.
     surface = analyze(_nested_ast())
     static = [
         c
@@ -323,6 +309,16 @@ def test_detects_call_nested_inside_read_at_end():
     assert static[0].program_name == "NESTED-DISCRATE"
     # The paragraph also has a top-level READ, so file I/O is still flagged.
     assert "CALL-INSIDE-READ-AT-END" in surface.file_io_paragraphs
+    # The CALL lives inside a boundary statement's clause body, so it must
+    # be flagged unspliceable-by-ancestry for the refusal gate.
+    site = next(
+        s
+        for s in surface.boundary_sites
+        if s.keys == ("NESTED-DISCRATE",)
+        and s.paragraph_name == "CALL-INSIDE-READ-AT-END"
+    )
+    assert site.nested is True
+    assert site.nested_in_boundary is True
 
 
 def test_detects_exec_sql_nested_inside_inline_perform():

@@ -39,11 +39,19 @@ refusal for the layouts where it cannot.
    therefore invisible to analysis (they are, however, physically removed
    whenever the enclosing IO statement is spliced, so they can never
    execute behind a mock).
+   **Update (2026-07-05, post-implementation):** fixed upstream in
+   cobolparser 1.2.0 ("fix: parse IO-statement clause bodies into the
+   AST"). Clause-body statements now surface as nested sites with
+   `nested_in_boundary=True` and are refused by rule 1 below — the
+   detection blind spot is closed; the design needed no change.
 4. `CALL ... ON EXCEPTION` bodies *are* populated — over-eagerly: the
    parser can misattribute statements that follow END-CALL into the
    exception body, marking genuinely top-level statements as nested. Those
    statements are refused today and remain refused under this design
    (fail-closed, no regression).
+   **Update (2026-07-05, post-implementation):** also fixed upstream;
+   END-CALL/period now terminate handler bodies, so top-level statements
+   after a CALL are no longer misflagged as nested.
 
 ## Approaches considered
 
