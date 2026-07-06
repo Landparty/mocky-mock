@@ -11,6 +11,11 @@ design, `docs/2026-07-05-mock-all-boundaries-design.md` for the v2
 all-boundaries design, and `docs/2026-07-06-dynamic-call-mocks-design.md`
 for identifier-keyed dynamic CALL mocks.
 
+For a deeper reference (DSL grammar, splicer internals, Docker/GnuCOBOL
+runtime, analysis/refusal rules, CLI, testing), see the
+[OKF knowledge bundle](.okf/index.md) in `.okf/` — start there before making
+non-trivial changes.
+
 ## The `.cut` DSL at a glance
 
 ```
