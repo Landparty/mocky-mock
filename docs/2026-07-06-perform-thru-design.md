@@ -1,7 +1,7 @@
 # PERFORM ... THRU Support — Design
 
 Date: 2026-07-06
-Status: awaiting review
+Status: approved for implementation
 
 ## Problem
 
@@ -38,11 +38,13 @@ reachable. Matching, splicing, tallies, and reset are untouched.
    (Verified by parsing sample programs and checking the sequence; lines
    index the normalized text, the same coordinate space the splicer
    already trusts for spans.)
-3. Phantom `"."` paragraphs (statements after a sentence-ending period,
-   e.g. a trailing `STOP RUN`) appear in `_all_paragraphs` **interleaved
-   at their true source position**, all sharing the name `"."`. One can
-   therefore sit *inside* a THRU range, and its statements do execute as
-   part of the fall-through.
+3. Phantom `"."` paragraphs appear in `_all_paragraphs` interleaved at
+   their source position (e.g. after a `PERFORM ... THRU` sentence that
+   is followed by another statement), all sharing the name `"."` — but
+   they are **empty artifacts**: the trailing statements stay attributed
+   to the real enclosing paragraph, and no boundary site ever reports
+   `"."` as its paragraph name (verified for statements after sentence
+   periods following PERFORM, PERFORM THRU, and DISPLAY).
 4. cobolparser's `ProgramFlowAnalyzer._range_members` implements the same
    first-occurrence, source-order slice semantics (order[i..j] inclusive,
    best-effort endpoints when out of order) — confirming the expansion
@@ -112,14 +114,13 @@ this code for the rest), each message naming the exact problem:
 
 ### Phantom `"."` paragraph caveat
 
-A `"."` paragraph inside a range is included positionally, so its
-boundary sites are considered reachable. Because reachability is tracked
-by *name* and all phantom paragraphs share `"."`, this over-approximates:
-every `"."` site program-wide becomes reachable once any one is. That is
-the fail-closed direction — at worst a spurious UNMOCKED_* refusal
-naming a real statement, never a silently unmocked boundary — and the
-layout (a boundary statement stranded after a sentence period) is rare.
-Documented in the refusal-message text when it happens.
+A `"."` paragraph inside a range is included positionally in the slice
+and its name lands in the reachable set. Per fact 3 they are empty in
+every verified layout, so this is inert today. If a future parser
+version ever attributed statements to one, reachability is tracked by
+*name* — every `"."` site program-wide would become reachable at once,
+which over-approximates in the fail-closed direction (at worst a
+spurious UNMOCKED_* refusal, never a silently unmocked boundary).
 
 ### `.cut` driver-side THRU
 
