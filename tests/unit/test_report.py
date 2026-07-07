@@ -152,6 +152,25 @@ def test_format_junit_xml_reports_crashed_case_as_error_not_failure():
     assert "<error" in xml_text
 
 
+def test_format_junit_xml_case_that_fails_then_crashes_is_error_only():
+    # A case can print FAIL lines before the process dies mid-case (e.g. a
+    # VERIFY fails, then a later statement in the same PERFORM target
+    # crashes) -- <error> and <failure> are mutually exclusive per <testcase>
+    # in JUnit's model, so this must not emit both for the same case.
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: fails then crashes\n"
+        "__MOCKYMOCK__ CASE 001 FAIL: expected 5, got 6\n"
+    )
+    suite = parse_stdout(stdout)
+    xml_text = format_junit_xml(suite)
+    assert 'errors="1"' in xml_text
+    assert 'failures="0"' in xml_text
+    assert "<failure" not in xml_text
+    assert "<error" in xml_text
+    assert "expected 5, got 6" in xml_text
+
+
 def test_format_console_summary_reflects_cases_seen_when_summary_line_never_printed():
     # CRASH_STDOUT has no SUMMARY line at all, so suite.tests_run/failures
     # stay at their zero defaults -- the summary must not just print "0 run"

@@ -106,17 +106,32 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
             testsuite_el, "testcase", name=_xml_safe(result.case_name)
         )
         if result.crashed:
-            message = _xml_safe(
+            # A crashed case is reported as a single <error>, never also as
+            # <failure> -- even when it printed FAIL lines before dying
+            # mid-case (a VERIFY failure followed by a crash in the same
+            # PERFORM target is a real sequence, not a hypothetical). JUnit
+            # consumers treat error and failure as mutually exclusive
+            # outcomes for a single <testcase>; emitting both would count
+            # the case twice. Any pre-crash failure reasons are folded into
+            # the error message so they aren't lost.
+            detail = crash_detail or _DEFAULT_CRASH_HYPOTHESIS
+            message_parts = [
                 "process exited before this case's END marker printed -- "
-                "its checks did not finish running "
-                f"({crash_detail or _DEFAULT_CRASH_HYPOTHESIS})"
-            )
+                f"its checks did not finish running ({detail})"
+            ]
+            if result.failure_reasons:
+                message_parts.append(
+                    "failures observed before the crash: "
+                    + "; ".join(result.failure_reasons)
+                )
+            message = _xml_safe(" | ".join(message_parts))
             error_el = SubElement(testcase_el, "error", message=message)
             error_el.text = message
-        for reason in result.failure_reasons:
-            safe_reason = _xml_safe(reason)
-            failure_el = SubElement(testcase_el, "failure", message=safe_reason)
-            failure_el.text = safe_reason
+        else:
+            for reason in result.failure_reasons:
+                safe_reason = _xml_safe(reason)
+                failure_el = SubElement(testcase_el, "failure", message=safe_reason)
+                failure_el.text = safe_reason
     for case_id, reason in suite.orphan_failures:
         orphan_el = SubElement(
             testsuite_el, "testcase", name=_xml_safe(f"orphan-{case_id}")

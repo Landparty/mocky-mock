@@ -218,3 +218,44 @@ def test_leading_content_before_exec_sql_refuses():
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_DATA_DIVISION_EXEC"
     assert "shares its first line" in reasons[0].message
+
+
+def test_commented_out_exec_sql_is_not_a_block():
+    """A `*>` inline comment containing `EXEC SQL ... END-EXEC` (a
+    commented-out declaration, or a stray line starting right after the
+    indicator area) must not start a bogus block scan -- normalize_fixed_
+    format only drops column-7 `*`/`/` full-line comments, so `*>` inline
+    comments still reach this scanner as ordinary text unless it accounts
+    for them itself."""
+    src = (
+        BASE[:4]
+        + [
+            "*> EXEC SQL INCLUDE SQLCA END-EXEC -- disabled for now",
+            "01  WS-LIVE PIC X(5).",
+        ]
+        + BASE[5:]
+    )
+    lines, reasons = transform_data_division_exec(src)
+    assert reasons == []
+    assert "*> EXEC SQL INCLUDE SQLCA END-EXEC -- disabled for now" in lines
+    assert "01  WS-LIVE PIC X(5)." in lines
+    assert "01  SQLCA." not in "\n".join(lines)
+
+
+def test_commented_out_end_exec_does_not_terminate_a_real_block():
+    """A `*> END-EXEC` inline comment inside a real block must not
+    terminate the scan early -- the real END-EXEC further down still
+    closes it."""
+    src = (
+        BASE[:4]
+        + [
+            "    EXEC SQL",
+            "        INCLUDE SQLCA",
+            "*> reminder: END-EXEC below closes this block",
+            "    END-EXEC.",
+        ]
+        + BASE[5:]
+    )
+    lines, reasons = transform_data_division_exec(src)
+    assert reasons == []
+    assert "01  SQLCA." in "\n".join(lines)

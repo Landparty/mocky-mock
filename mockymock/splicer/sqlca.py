@@ -74,11 +74,41 @@ def _in_literal(line: str, position: int) -> bool:
     return quote is not None
 
 
+def _comment_start(line: str) -> int | None:
+    """Index of the first `*>` inline comment marker in `line` that is not
+    inside a string literal, or None if there is none. Everything from that
+    index onward is a COBOL free-form comment, live nowhere -- normalized
+    free-form text only drops *column-7* `*`/`/` full-line comments
+    upstream, so an inline `*>` (including one that starts right after the
+    indicator area, e.g. `      *> EXEC SQL ...`) still reaches this
+    scanner as ordinary text unless this function's caller strips it."""
+    quote: str | None = None
+    index = 0
+    length = len(line)
+    while index < length:
+        character = line[index]
+        if quote is None:
+            if character in "'\"":
+                quote = character
+            elif character == "*" and index + 1 < length and line[index + 1] == ">":
+                return index
+        elif character == quote:
+            quote = None
+        index += 1
+    return None
+
+
 def _search_outside_literals(pattern: re.Pattern, line: str):
     """First match of `pattern` in `line` that is not inside a string
-    literal, or None -- so `VALUE "EXEC SQL ERROR"` never starts a bogus
-    block scan and `VALUE "END-EXEC"` never terminates a real one early."""
+    literal and not inside a `*>` inline comment, or None -- so
+    `VALUE "EXEC SQL ERROR"` never starts a bogus block scan, `VALUE
+    "END-EXEC"` never terminates a real one early, and a commented-out
+    `*> EXEC SQL ...` / `*> END-EXEC` never starts or ends a block scan
+    either."""
+    comment_start = _comment_start(line)
     for match in pattern.finditer(line):
+        if comment_start is not None and match.start() >= comment_start:
+            continue
         if not _in_literal(line, match.start()):
             return match
     return None
