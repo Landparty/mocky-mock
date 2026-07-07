@@ -73,3 +73,160 @@ def test_testcase_before_testsuite_raises():
 def test_unrecognized_line_raises():
     with pytest.raises(CutParseError):
         parse_cut('TESTSUITE "X"\n\nTESTCASE "Y"\nNOT-A-REAL-DIRECTIVE\n')
+
+
+def test_unterminated_mock_body_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL "X"\n'
+        "        MOVE 0 TO RETURN-CODE\n"
+        "    PERFORM MAIN\n"  # no END-MOCK: silently swallowed today
+    )
+    with pytest.raises(CutParseError, match="unterminated MOCK"):
+        parse_cut(text)
+
+
+def test_duplicate_perform_raises():
+    text = 'TESTSUITE "s"\n' 'TESTCASE "c"\n' "    PERFORM ONE\n" "    PERFORM TWO\n"
+    with pytest.raises(CutParseError, match="already has a PERFORM"):
+        parse_cut(text)
+
+
+# --- audit 3.1: a second TESTSUITE must be an error --------------------------
+
+
+def test_second_testsuite_line_raises_with_line_number():
+    text = (
+        'TESTSUITE "first"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        'TESTSUITE "second"\n'
+    )
+    with pytest.raises(CutParseError, match="line 4: second TESTSUITE"):
+        parse_cut(text)
+
+
+# --- audit 3.2: END-MOCK robustness ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "terminator", ["END-MOCK", "END-MOCK.", "end-mock", "End-Mock."]
+)
+def test_end_mock_accepts_trailing_period_and_any_case(terminator):
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL "X"\n'
+        "        MOVE 0 TO RETURN-CODE\n"
+        f"    {terminator}\n"
+        "    PERFORM MAIN\n"
+    )
+    case = parse_cut(text).test_cases[0]
+    assert case.mocks[0].body_lines == ["MOVE 0 TO RETURN-CODE"]
+    assert case.perform_target == "MAIN"  # the terminator really closed the body
+
+
+def test_other_keywords_stay_case_sensitive():
+    with pytest.raises(CutParseError, match="unrecognized statement"):
+        parse_cut('testsuite "s"\n')
+
+
+# --- audit 3.3: VERIFY expectations validated at parse time ------------------
+
+
+@pytest.mark.parametrize(
+    "expectation", ["ONCE", "NEVER", "AT LEAST ONCE", "3 TIMES", "once"]
+)
+def test_valid_verify_expectations_parse(expectation):
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        f'    VERIFY "X" WAS CALLED {expectation}\n'
+    )
+    suite = parse_cut(text)
+    assert suite.test_cases[0].verifications[0].expectation == expectation
+
+
+@pytest.mark.parametrize("expectation", ["TWICE", "SOMETIMES", "TIMES 3"])
+def test_invalid_verify_expectation_raises_with_line_number(expectation):
+    """Previously exploded much later in driver codegen as a raw ValueError
+    traceback with no .cut line number (audit 3.3)."""
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        f'    VERIFY "X" WAS CALLED {expectation}\n'
+    )
+    with pytest.raises(CutParseError, match="line 4: unrecognized VERIFY expectation"):
+        parse_cut(text)
+
+
+def test_invalid_bare_verify_expectation_also_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        "    VERIFY READ INFILE WAS PERFORMED TWICE\n"
+    )
+    with pytest.raises(CutParseError, match="line 4"):
+        parse_cut(text)
+
+
+# --- audit 3.5/3.6: duplicate MOCKs, unterminated line no., empty keys -------
+
+
+def test_duplicate_mock_key_in_one_testcase_raises_with_both_lines():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL "X"\n'
+        "    END-MOCK\n"
+        '    MOCK CALL "X"\n'
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r"line 5: duplicate MOCK .*first declared at line 3",
+    ):
+        parse_cut(text)
+
+
+def test_same_mock_key_in_different_testcases_is_fine():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "one"\n'
+        '    MOCK CALL "X"\n'
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+        'TESTCASE "two"\n'
+        '    MOCK CALL "X"\n'
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+    )
+    assert len(parse_cut(text).test_cases) == 2
+
+
+def test_unterminated_mock_error_carries_its_opening_line_number():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL "X"\n'
+        "        MOVE 0 TO RETURN-CODE\n"
+    )
+    with pytest.raises(CutParseError, match="line 3: unterminated MOCK"):
+        parse_cut(text)
+
+
+def test_empty_quoted_mock_key_rejected_at_parse_time():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL ""\n'
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+    )
+    with pytest.raises(CutParseError, match="line 3: empty MOCK CALL key"):
+        parse_cut(text)

@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, run) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-07-06T00:00:00Z
+timestamp: 2026-07-07T00:00:00Z
 ---
 
 # Overview
@@ -47,10 +47,17 @@ Docker/GnuCOBOL — pure parse-and-analyze.
 
 Flow (`_cmd_generate`):
 
-1. Read `program`; if `--copybook-path` given (repeatable), run
+1. Check `program` exists (`_check_input_files` -- clean `no such file`
+   message, exit 1, no traceback), then read it; if `--copybook-path`
+   given (repeatable), run
    `expand_copybooks` first and use the expanded source from then on.
+   `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
+   on a lossy copybook decode before the corrupted text is ever parsed.
 2. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
-   and exit 1 (never reaches analysis).
+   and exit 1 (never reaches analysis). On a successful parse,
+   `check_whole_program(result)` still refuses (PARSE_WARNING, exit 1) if
+   `ParseResult.warnings` reports dropped statements — a scaffold built from
+   an incomplete AST would silently miss boundaries.
 3. `check_unresolved_copybooks(raw_source)` — a **refusal** check run even
    though the program parsed; any reason printed as
    `mockymock generate: refused (<code>): <message>` and exit 1.
@@ -75,23 +82,48 @@ test cases `run` will later refuse if a case's PERFORM reaches one of these
 sites. Comment in the source explicitly frames this as "so the scaffold is
 never mistaken for complete coverage of the program's outputs."
 
-## `mockymock run <program> --cut PATH [--junit-xml PATH] [--copybook-path DIR ...]`
+## `mockymock run <program> --cut PATH [--junit-xml PATH] [--copybook-path DIR ...] [--keep-sandbox] [--verbose]`
 
 The full pipeline: parse, analyze, refuse-or-splice, compile in Docker, run,
 report. This is the only subcommand requiring the GnuCOBOL container.
 
+Flags beyond the pipeline inputs:
+
+- `--junit-xml PATH` — write `format_junit_xml(...)` there after a run that
+  reaches execution (refusals/compile failures exit earlier and write no
+  XML).
+- `--keep-sandbox` — never delete the sandbox directory; its path is
+  printed at the start of the run for inspection.
+- `--verbose` — on compile failure, print the path to the instrumented
+  source. Implementation detail: this also forces sandbox retention through
+  the context manager (the printed path must still exist when the user
+  reads it), but the CLI explicitly removes the sandbox afterwards when the
+  run got past compilation, so plain `--verbose` leaves no cruft on
+  success.
+
 Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
 
+0. `_check_input_files("mockymock run", program, cut)` — both paths must
+   exist; each missing one prints a clean `mockymock run: no such file:`
+   line and the command exits 1 **before** `ensure_toolchain()` runs, so a
+   typo'd path never pays for (or tracebacks after) a multi-minute image
+   build.
 1. `docker_toolchain.ensure_toolchain()` — brings the container up if needed
-   (so `mockymock setup` is optional before `run`). `DockerNotAvailableError`
-   -> print and exit 1.
+   (so `mockymock setup` is optional before `run`); also recreates the
+   container when its image tag is stale (see [runtime](runtime.md)).
+   `DockerNotAvailableError` -> print and exit 1.
 2. Read `program`, apply `--copybook-path` expansion same as `generate`.
-3. `parse_cobol` -> `check_whole_program(result)` refusals are printed
-   regardless of parse success, but if `result.success` is false the command
-   exits 1 right after (parse errors take priority even over whole-program
-   refusal messages already printed).
+   `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
+   on a lossy copybook decode before the corrupted text is ever parsed.
+3. `parse_cobol` -> `check_whole_program(result)` refusals (PARSE_ERROR on
+   a failed parse, PARSE_WARNING per `ParseResult.warnings` entry — dropped
+   statements on an otherwise "clean" parse) are printed and any of them
+   exits 1.
 4. `check_unresolved_copybooks(raw_source)` — same refusal gate as `generate`.
-5. Parse the `.cut` file: `parse_cut(Path(args.cut).read_text())` -> `suite`.
+5. Parse the `.cut` file: `parse_cut(cut_path.read_text())` -> `suite`.
+   `CutParseError` is caught and printed as
+   `mockymock run: invalid .cut file <path>: <line-numbered message>`,
+   exit 1 — never a raw traceback.
 6. `analyze(result.ast)` -> `surface`; normalize source to `lines`.
 7. **`annotate_nested_sites` must run before any refusal check or splice looks
    at nested sites** (explicit comment in source) — unannotated nested sites
@@ -125,9 +157,21 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
 15. `docker_toolchain.compile_source(...)` — on failure, print stderr and exit 1.
 16. `docker_toolchain.run_binary(compiled.binary_path)` — executes inside the
     container.
-17. `parse_stdout(executed.stdout)` -> `suite_result`; `format_console(...)`
-    printed always; `format_junit_xml(...)` written to `--junit-xml` if given.
-18. Exit 0 only if `suite_result.all_passed`.
+17. `parse_stdout(executed.stdout)` -> `suite_result`. The binary's exit
+    code is translated into `crash_detail` evidence for the formatters:
+    exit 124 (TIMEOUT_EXIT_CODE) -> `"binary timed out (exit 124); see
+    stderr below"`; any other nonzero exit -> `"binary exited with code
+    <n>"`; exit 0 -> `None` (the formatters then fall back to the STOP RUN
+    hypothesis for crashed cases — a reached STOP RUN exits 0).
+    `format_console(suite_result, crash_detail=...)` is printed always;
+    then, if `executed.stderr` is non-empty, it is printed under a
+    `mockymock run: binary stderr:` header — this is how run_binary's
+    exit-124 infinite-loop hint and libcob runtime aborts reach the user.
+    `format_junit_xml(suite_result, crash_detail=...)` is written to
+    `--junit-xml` if given.
+18. Exit 0 only if `suite_result.all_passed` **and** `executed.exit_code
+    == 0` — a nonzero binary exit after the SUMMARY line still fails the
+    run.
 
 # Gotchas
 

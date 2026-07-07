@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-07-06T01:00:00Z
+timestamp: 2026-07-07T00:00:00Z
 ---
 
 # Overview
@@ -35,9 +35,26 @@ driver.build_driver ──▶ UT-TESTSUITE-*/UT-TESTCASE-*/UT-RESET-WORKING-STOR
 reset.reset_move_lines ──▶ MOVE/INITIALIZE lines consumed by build_driver
                             as UT-RESET-WORKING-STORAGE's body
 
-sqlca.transform_data_division_exec ──▶ runs on DATA DIVISION before any of
-                                        the above, independently
+sqlca.transform_data_division_exec ──▶ runs on DATA DIVISION AFTER
+                                        splice_program (see below), independently
 ```
+
+**Ordering correction (fixes audit finding 7.1 — this file previously said
+SQLCA ran "before any of the above"):** `mockymock/cli/main.py`'s `_cmd_run`
+calls `transform_data_division_exec` **after** `splice_program`, not before.
+The reason is line-number safety, not codegen convenience: every
+PROCEDURE DIVISION splice span in `splice_program` is computed from
+`SourceLocation.line` values the AST assigned against the pre-SQLCA-transform
+text. `transform_data_division_exec` inserts/removes lines in the DATA
+DIVISION (the generated `SQLCA_FIELDS` block is longer than the one-line
+`EXEC SQL INCLUDE SQLCA END-EXEC.` it replaces); running it first would
+shift every PROCEDURE DIVISION line number the splicer's spans depend on,
+corrupting every span in a program that uses `INCLUDE SQLCA`. The CLI does
+call `transform_data_division_exec` once, read-only-style, **before**
+`splice_program` too — but only to collect `UNSUPPORTED_DATA_DIVISION_EXEC`
+refusal reasons up front (so a bad DATA DIVISION EXEC SQL block is reported
+before any compile attempt); it discards that call's transformed lines and
+re-runs the transform for real after splicing, on the post-splice `lines`.
 
 One compiled binary serves an entire TESTSUITE (Global Constraint), which
 drives most of the design here: all TESTCASEs share one physical copy of
@@ -53,9 +70,24 @@ depending on whether the site is top-level or nested.
 
 **Top-level sites** (`collect_boundaries` + `statement_span`): the span
 runs from the statement's start line to one line before the next
-paragraph-header-or-statement-start, or EOF if it's the program's last
-statement. `collect_boundaries` walks every paragraph (including nested
-`_sections`) and every statement's `.location.line`.
+SECTION-header/paragraph-header-or-statement-start, or EOF if it's the
+program's last statement. `collect_boundaries` walks every SECTION header
+(`procedure._sections.values()`, keyed by `.location.line`), every
+paragraph (including nested `_sections`), and every statement's
+`.location.line`.
+
+**SECTION headers are boundaries (2026-07-07 fix, audit finding 2.2):**
+before this fix `collect_boundaries` collected only paragraph headers and
+statement starts, so a paragraph's last statement immediately followed by
+an `X SECTION.` header (no intervening paragraph header) had no boundary
+between them — its span extended over and commented out the following
+section header. Verified concretely: span `(6, 7)` swallowing a
+`NEXT-SEC SECTION.` line. If that previous section were itself PERFORMed
+as a section (see [analysis](analysis.md)'s PERFORM-section reachability
+fix), its extent would then silently include the following section's
+paragraphs too. `collect_scope_map` gained the identical fix, as a
+`top_level=True` `ScopeBoundary` — both maps must agree on where a
+top-level span may legally end.
 
 **Phantom `"."` paragraphs**: cobolparser emits a paragraph literally named
 `"."` for the sentence-terminating period line after an `EXEC ... END-EXEC`
@@ -65,6 +97,49 @@ yields two extra `"."` paragraphs anchored at the END-EXEC lines).
 `paragraph.paragraph_name.strip(".") == ""`: treating one as a real
 boundary would cut an EXEC statement's span one line short of its
 END-EXEC, leaving a dangling END-EXEC in the spliced output.
+
+## Top-Level Own-Line Guard (2026-07-07 fix, audit finding 2.1)
+
+Before this fix, only NESTED sites got a "does this statement own its
+source line(s)" check — top-level sites had none. Because a top-level
+splice comments out *whole lines* (`stub_writer.comment_and_replace`),
+that meant sibling code sharing a top-level boundary statement's line was
+silently deleted: `MOVE 1 TO WS-A CALL "X" USING WS-A.` on one line got
+its entire line commented out, deleting the MOVE, and the program still
+compiled — a silent correctness bug, not a loud refusal. Same class: a
+one-line paragraph `P1. CALL "X".` lost its paragraph header; two mocked
+statements sharing one line could corrupt each other's replacement.
+
+`annotate_nested_sites` now also walks every **top-level** `BoundarySite`
+(previously it skipped anything with `site.nested is False`) and computes
+`_top_level_site_problem`: a `str | None` reason stored in
+`site.unspliceable_reason` (the site's `.span` stays `None` for top-level
+sites — their replacement span still comes from `statement_span`, not this
+field). The check is deliberately narrower than the nested one, because a
+top-level span already extends up to (but not including) the *next*
+boundary line — the only way sibling code can be swallowed is by sharing
+the **start** line:
+
+1. Text before the statement's column on its start line (`lines[start-1][:col-1].strip()`)
+   → `"does not start its own line"` (catches both mid-line siblings and
+   one-line paragraph headers, since a paragraph header text before the
+   statement fails the same check).
+2. Another top-level `ScopeBoundary` (`b.top_level` — a different
+   statement or a paragraph/SECTION header) on the same line, at a
+   different column → `"shares its line with another statement or
+   paragraph header"` (this is what makes two mocked statements on one
+   line mutually refuse instead of corrupting each other: the first
+   statement fails check 2, the second fails check 1).
+
+`refusal.check_test_case` turns a matched top-level site's
+`unspliceable_reason` into `UNSUPPORTED_MOCK_TARGET_LAYOUT`;
+`refusal.check_nested_exec` turns an EXEC site's into `UNSPLICEABLE_EXEC`
+(EXEC sites are stubbed program-wide regardless of mock/reachability, so
+that check lives in the whole-program EXEC gate, not the per-case one).
+`orchestrator.splice_program` raises defensively if a top-level site with
+a nonempty `unspliceable_reason` reaches it anyway — the refusal gate is
+supposed to have caught it first, mirroring the existing nested-span
+invariant check.
 
 **Nested sites** (inside IF/ELSE, EVALUATE WHEN, inline PERFORM) need a
 richer map because the AST has no location data for block words (ELSE,
@@ -176,6 +251,22 @@ beyond the length cap) — collisions are resolved by suffixing `-2`, `-3`,
 pattern (a title like `"X (via copybook)"` must not yield a
 trailing-hyphen COBOL word — cobc rejects that outright).
 
+**Field widths widened (2026-07-07 fix, audit findings 2.5, 2.7):**
+`UT-FAIL-COUNT` and every `UT-*-TALLY` field were `PIC 9(4)` and wrapped
+silently at 10,000 — `VERIFY ... 500 TIMES` would pass with 10,500 actual
+calls, `VERIFY ... NEVER` would pass at exactly 10,000 calls, and the
+`SUMMARY` fail count wrapped identically. Batch loops of that size are
+realistic in the target domain, so both are now `PIC 9(9)`.
+`UT-CURRENT-CASE` was `PIC X(3)` and unguarded — a suite with 1000+ test
+cases would `MOVE "1000" TO UT-CURRENT-CASE` truncated to `"100"`, so
+case 1000 would actually execute case 100's mock dispatch branches (a
+silent misattribution, not a compile error). It is now `PIC X(9)`,
+matching `_build_testcase_paragraph`'s `f"{index:03d}"` zero-padding
+convention (still 3-digit-padded for small suites, but no longer
+truncating past 999) and the injector's `WHEN "{index:03d}"` literals in
+`injector.build_site_dispatch`, which must stay in sync with this field's
+width.
+
 # WORKING-STORAGE Reset (reset.py)
 
 Because one binary serves the whole suite, case N's leftover state would
@@ -187,12 +278,43 @@ skipped.
 | Item shape | Reset line | Why |
 |---|---|---|
 | Elementary, has `VALUE` clause | `MOVE <value> TO <name>` | restores the declared initial value |
-| Elementary, no `VALUE` clause | `MOVE 0 \| SPACES TO <name>` | COBOL's conventional type default (numeric vs alphanumeric), a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |
+| Elementary, no `VALUE`, numeric or numeric-edited PIC | `MOVE 0 TO <name>` | numeric-edited PICs (e.g. `PIC ZZZ9`) reject `MOVE SPACES` — `_is_numeric` treats any of `9 V P Z * $ + -` in the (repeat-group-stripped) picture as numeric, not just `9`/`V`/`P` |
+| Elementary, no `VALUE`, alphanumeric PIC | `MOVE SPACES TO <name>` | COBOL's conventional type default, a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |
+| Elementary, no `PICTURE` (usage-typed), `USAGE POINTER`/`PROCEDURE-POINTER`/`FUNCTION-POINTER`/`PROGRAM-POINTER` | `SET <name> TO NULL` | pointers can only be assigned with `SET`; `NULL` is their only legal literal value — `MOVE SPACES` (the old picture-blind fallback) is rejected by cobc |
+| Elementary, no `PICTURE`, `USAGE COMP-1`/`COMP-2` (or `COMPUTATIONAL-1`/`-2`) | `MOVE 0 TO <name>` | floats have no `PICTURE`, so the old numeric test (`item.picture_clause is None → False`) misclassified them alphanumeric and emitted an illegal `MOVE SPACES` |
+| Elementary, no `PICTURE`, `USAGE INDEX` | *(skipped — no line emitted)* | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; skipping is the only reset that never emits illegal COBOL (documented fidelity limit) |
+| Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE |
 | Group, no `VALUE` clause | `INITIALIZE <name>` | a `MOVE SPACES` over a group would write spaces across numeric children, corrupting them for the next case's arithmetic; `INITIALIZE` zeros numeric children and space-fills alphanumeric ones |
 
-**Known v1 fidelity limit**: `INITIALIZE` does not restore a group's
-children's own `VALUE` clauses — still strictly better than
-space-filling, but not perfect fidelity to declared initial state.
+`_elementary_reset(item)` is the single function these rules route
+through (used both for top-level elementary items and, recursively, for
+`_child_value_restores`'s per-child VALUE restoration below) — it returns
+`str | None`, and callers append the line only when it isn't `None`, so
+"skip rather than emit illegal COBOL" is enforced in one place.
+
+**Correcting a stale claim (audit finding 7.2):** this file previously
+said `INITIALIZE does not restore a group's children's own VALUE clauses`
+was a "known v1 fidelity limit." That was **false even before this
+revision** — `_child_value_restores` (added prior to this fix, covered by
+`test_reset.py`'s existing `test_group_children_value_clauses_are_restored`
+and `test_nested_group_child_value_clause_is_restored`) already walked
+every child of a `VALUE`-less group recursively and emitted a `MOVE
+<value> TO <child>` for each one that declared its own `VALUE` clause,
+specifically because `INITIALIZE` does not restore them. The real,
+still-current fidelity limit is narrower and is documented next.
+
+**Current fidelity limit: OCCURS-with-VALUE children are skipped, not
+restored (audit finding 2.4).** `_child_value_restores` now checks
+`getattr(child, "occurs_clause", None) is not None` and skips that child
+(and its subtree) entirely — before this fix, a child like
+`05 WS-CELL PIC 9 OCCURS 5 TIMES VALUE 7` produced `MOVE 7 TO WS-CELL`,
+which is illegal COBOL (an OCCURS item needs a subscript on every
+reference) and cobc rejected the whole program. A sound fix needs
+subscripted MOVEs in a loop over the table's bounds; that's out of scope
+for this pass, so such a child is left at `INITIALIZE`'s type default
+(zero/spaces) instead of its declared `VALUE` — strictly better than not
+compiling at all, but not full fidelity. Non-OCCURS siblings of a skipped
+child are unaffected and still get their own restore line.
 
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.
@@ -211,9 +333,10 @@ declared value.
 # Generated SQLCA (sqlca.py)
 
 GnuCOBOL cannot process any EXEC SQL block at all, including declarative
-ones in the DATA DIVISION, so `transform_data_division_exec` runs on the
-normalized lines independently of (and before) the PROCEDURE DIVISION
-splicing above:
+ones in the DATA DIVISION, so `transform_data_division_exec` handles them
+on the normalized lines, independently of the PROCEDURE DIVISION splicing
+above but run **after** it in the CLI (see the ordering correction under
+Overview — this file previously and incorrectly said "before"):
 
 | DATA DIVISION construct | Transform |
 |---|---|
@@ -230,6 +353,34 @@ parsing** and is therefore not part of the parsed AST at all. This means
 are expected to survive across test cases unless a mock body explicitly
 sets them, which is why the scaffold generator's placeholder EXEC SQL mock
 bodies always set SQLCODE explicitly in every case.
+
+**Literal-text and shared-line hardening (2026-07-07 fix, audit finding
+2.6):** the block scanner previously keyed off the literal substring
+`EXEC SQL` anywhere in a DATA DIVISION line and `END-EXEC` anywhere in a
+line to close the block. A `VALUE "EXEC SQL ERROR"` string literal in a
+data item's `VALUE` clause would start a bogus block scan; if a real EXEC
+block followed before a real `END-EXEC` line, every intervening *live*
+data item would be swallowed and commented out as if it were part of the
+(fictitious) block. `_search_outside_literals` fixes this: it scans a
+line for the first `EXEC SQL` / `END-EXEC` match that is NOT inside a
+`'...'`/`"..."` string literal, using `_in_literal` (a simple quote-parity
+scan across the line up to the candidate match's column — a doubled quote
+inside a literal toggles closed-then-open again, which correctly leaves
+the scan "inside"). Both the block-start search and the block-end search
+now route through this helper.
+
+Whole-line replacement/commenting is also now guarded against **sharing a
+line with other content**: `_shared_line_problem` checks the text before
+the matched `EXEC SQL` on the start line and the text after the matched
+`END-EXEC` (and its optional trailing period) on the end line. Either one
+being non-blank refuses `UNSUPPORTED_DATA_DIVISION_EXEC` naming the
+offending content, instead of silently deleting a data item declared on
+the same line as `EXEC SQL INCLUDE SQLCA END-EXEC.` or after it on the
+`END-EXEC.` line. A full general fix (splitting a shared line into a kept
+part and a transformed part) was judged riskier than refusing the
+ambiguous layout — this mirrors the splicer's own top-level own-line
+guard (finding 2.1) in spirit: detect the unsafe layout and fail closed
+rather than guess.
 
 # Statement Splicing Mechanics (stub_writer.py)
 
@@ -268,6 +419,15 @@ conditions from `_verify_condition`: `ONCE` → `NOT = 1`, `NEVER` → `NOT =
 in a generated `DISPLAY "..."` literal — without it, an EXPECT/VERIFY
 value containing a quote (e.g. an expected string `OK"`) would split the
 literal and cobc would read the remainder as undefined identifiers.
+
+**`suite.name` escaping (2026-07-07 fix, audit finding 2.8):** the
+`__MOCKYMOCK__ TESTSUITE: <name>` `DISPLAY` line interpolated `suite.name`
+directly while `case.name` already went through `_display_text` — a
+latent trap on the public `build_driver` API (not reachable via
+`parse_cut` today, since the `.cut` grammar doesn't let a `TESTSUITE`
+title contain an embedded quote, but real for any other caller). Fixed by
+routing `suite.name` through `_display_text` too, matching `case.name`'s
+existing treatment.
 
 A `verifications` entry whose `(category, key)` isn't in the test case's
 own declared mock set raises `ValueError` at codegen time — this is a

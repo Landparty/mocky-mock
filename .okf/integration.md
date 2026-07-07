@@ -27,7 +27,8 @@ cobolparser.parse_cobol(source, filename) -> ParseResult
         │                                            └─ .paragraphs
         │
         ├─ .success: bool
-        └─ .errors: list[ParseError]
+        ├─ .errors: list[ParseError]
+        └─ .warnings: list[str]   ── dropped-content signal (refused fail-closed)
 
 CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
         └─ statements are CobolStatement subclasses inspected by mock_surface.py / refusal.py
@@ -37,7 +38,8 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 
 | Symbol | mockymock use |
 |---|---|
-| `cobolparser.parse_cobol(source, filename) -> ParseResult` | entry point; `.ast`, `.success`, `.errors` |
+| `cobolparser.parse_cobol(source, filename) -> ParseResult` | entry point; `.ast`, `.success`, `.errors`, `.warnings` (PARSE_WARNING refusal per entry — see Gotchas) |
+| `CopybookExpansion.statistics.warnings: list[str]` | lossy-decode entries (`"Lossy decode of"`) gate the EXPANSION_WARNING refusal; advisory lint entries in the same list are ignored |
 | `cobolparser.expand_copybooks` / `parse_cobol_with_expansion` | copybook-expanded parse path |
 | `cobolparser.preprocess.normalize_fixed_format(lines) -> str` | **splicer input** — see Gotchas |
 | `CobolProgram.get_division(name)` → `CobolDivision` | division lookup |
@@ -80,7 +82,9 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 
 **Upstream numeric-VALUE-clause bug (now fixed, version-gated).** Before cobolparser's numeric-VALUE-clause fix (pinned by upstream `tests/regression/test_numeric_value_clause.py`), `VALUE 5`, `VALUE IS <n>`, and `VALUE -5` all parsed with `value_clause=None`. This silently made `reset.py` fall back to the type default instead of the declared VALUE — mockymock requires a cobolparser build at or after that fix.
 
-**v2 OPEN/CLOSE multi-file capture bug (fix required upstream).** Before cobol-parser branch `fix/open-multi-mode-file-capture`, `OPEN INPUT A OUTPUT B` silently dropped every file listed after the second mode keyword, so `MOCK OPEN B` could never match. `IOOpenStatement.file_names`/`IOCloseStatement.file_names` matching requires that fix.
+**v2 OPEN/CLOSE multi-file capture bug (fixed upstream, version-gated).** Before cobol-parser PR #68 (`fix/open-multi-mode-file-capture`, merged to `main` 2026-07-05), `OPEN INPUT A OUTPUT B` silently dropped every file listed after the second mode keyword, so `MOCK OPEN B` could never match. `IOOpenStatement.file_names`/`IOCloseStatement.file_names` matching requires a cobolparser build at or after that merge.
+
+**`ParseResult.warnings` is a dropped-content signal, not advice (cobolparser ≥ the 2026-07-07 silent-drop remediation, PR #77).** A "clean" parse (`success=True, errors=0`) can still be missing statements: unsupported verbs (INVOKE, EXHIBIT, ...), unparsed clause leftovers, and multi-program compilation units (everything after the first `END PROGRAM` lands in `ast.contained_programs`, which the splicer and reachability BFS never look at) are reported ONLY through `.warnings`. `check_whole_program` therefore refuses per warning (PARSE_WARNING). Known upstream residual: an unknown verb directly following a period-less statement (e.g. `MOVE 1 TO X` newline `INVOKE ...`) can still be swallowed by the preceding statement's parser with no warning — period-terminated statements (the normal layout) are covered.
 
 # See Also
 - [analysis](analysis.md)

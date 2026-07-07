@@ -214,8 +214,10 @@ def test_unmatched_file_mock_refuses():
     surface, ast = _surface_and_ast()
     case = MockTestCase(
         name="c",
-        mocks=[MockDirective(MockCategory.ACCEPT, "WS-CHOICE"),
-               MockDirective(MockCategory.READ, "NO-SUCH-FILE")],
+        mocks=[
+            MockDirective(MockCategory.ACCEPT, "WS-CHOICE"),
+            MockDirective(MockCategory.READ, "NO-SUCH-FILE"),
+        ],
         perform_target="ASK-USER",
     )
     reasons = check_test_case(surface, ast, case)
@@ -312,9 +314,7 @@ def test_spliceable_nested_exec_is_not_a_whole_program_refusal():
 
 
 def test_unannotated_nested_sites_still_refuse():
-    surface, program = _nested_fixture(
-        NESTED_OK_SOURCE, "nestok.cbl", annotate=False
-    )
+    surface, program = _nested_fixture(NESTED_OK_SOURCE, "nestok.cbl", annotate=False)
     codes = {r.code for r in check_test_case(surface, program, _nested_ok_case())}
     assert "UNSUPPORTED_NESTED_MOCK_TARGET" in codes
     assert {r.code for r in check_nested_exec(surface)} == {"NESTED_EXEC"}

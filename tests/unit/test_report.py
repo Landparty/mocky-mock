@@ -1,3 +1,5 @@
+from xml.etree import ElementTree
+
 from mockymock.report.formatters import format_console, format_junit_xml
 from mockymock.report.results import parse_stdout
 
@@ -150,6 +152,25 @@ def test_format_junit_xml_reports_crashed_case_as_error_not_failure():
     assert "<error" in xml_text
 
 
+def test_format_junit_xml_case_that_fails_then_crashes_is_error_only():
+    # A case can print FAIL lines before the process dies mid-case (e.g. a
+    # VERIFY fails, then a later statement in the same PERFORM target
+    # crashes) -- <error> and <failure> are mutually exclusive per <testcase>
+    # in JUnit's model, so this must not emit both for the same case.
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: fails then crashes\n"
+        "__MOCKYMOCK__ CASE 001 FAIL: expected 5, got 6\n"
+    )
+    suite = parse_stdout(stdout)
+    xml_text = format_junit_xml(suite)
+    assert 'errors="1"' in xml_text
+    assert 'failures="0"' in xml_text
+    assert "<failure" not in xml_text
+    assert "<error" in xml_text
+    assert "expected 5, got 6" in xml_text
+
+
 def test_format_console_summary_reflects_cases_seen_when_summary_line_never_printed():
     # CRASH_STDOUT has no SUMMARY line at all, so suite.tests_run/failures
     # stay at their zero defaults -- the summary must not just print "0 run"
@@ -176,6 +197,71 @@ def test_format_console_failed_count_reflects_recorded_reasons_when_summary_line
     assert summary_line == "2 run, 1 failed, 1 crashed"
 
 
+def test_fail_line_with_unknown_case_id_is_surfaced():
+    out = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphaned reason\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(out)
+    assert ("999", "orphaned reason") in suite.orphan_failures
+    assert suite.all_passed is False
+
+
+def test_format_console_reports_orphaned_failures():
+    out = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphaned reason\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(out)
+    output = format_console(suite)
+    assert "ORPHANED FAILURES (unknown case id):" in output
+    assert "999" in output
+    assert "orphaned reason" in output
+
+
+def test_format_junit_xml_reports_orphaned_failures_as_error_testcase():
+    out = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphaned reason\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(out)
+    xml_text = format_junit_xml(suite)
+    assert '<testcase name="orphan-999"' in xml_text
+    assert 'message="orphaned reason"' in xml_text
+    # No crashed cases here -- the single orphan is the only contributor to
+    # errors=, proving orphans are counted into the same errors= total used
+    # for crashed cases rather than a separate untracked attribute.
+    assert 'errors="1"' in xml_text
+
+
+def test_format_junit_xml_tests_attribute_counts_orphan_testcases():
+    """The root tests="..." attribute must equal the actual number of
+    <testcase> children. format_junit_xml emits one <testcase> per orphan
+    failure in addition to the ones from suite.results, so tests= has to
+    add len(suite.orphan_failures) or it undercounts against a suite that
+    has orphans."""
+    out = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphaned reason\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(out)
+    xml_text = format_junit_xml(suite)
+    root = ElementTree.fromstring(xml_text)
+    assert int(root.get("tests")) == len(root.findall("testcase"))
+
+
 def test_format_junit_xml_failures_attribute_with_multiple_failed_cases():
     """Two failing cases (one reason each) plus one passing case must report
     failures="2", proving the count tracks failed cases generically, not
@@ -195,3 +281,68 @@ def test_format_junit_xml_failures_attribute_with_multiple_failed_cases():
     suite = parse_stdout(stdout)
     xml_text = format_junit_xml(suite)
     assert 'failures="2"' in xml_text
+
+
+# --- audit 5.2: control characters must not crash the JUnit formatter --------
+
+
+def test_format_junit_xml_survives_control_characters():
+    """Suite/case names and failure reasons come from the .cut file and the
+    binary's stdout, either of which can carry control characters; the
+    formatter used to hand them to ElementTree verbatim and minidom then
+    died with an ExpatError (verified with \\x01)."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: bad\x01suite\n"
+        "__MOCKYMOCK__ CASE 001 START: bad\x01case\n"
+        "__MOCKYMOCK__ CASE 001 FAIL: reason with \x01 control char\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphan \x02 reason\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=1\n"
+    )
+    suite = parse_stdout(stdout)
+    xml_text = format_junit_xml(suite)  # must not raise
+    root = ElementTree.fromstring(xml_text)  # and must be well-formed
+    assert root.get("name") == "bad\\x01suite"
+    assert "reason with \\x01 control char" in xml_text
+    assert "orphan \\x02 reason" in xml_text
+
+
+def test_format_junit_xml_crashed_case_with_control_char_in_name():
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: s\n" "__MOCKYMOCK__ CASE 001 START: crash\x1bname\n"
+    )
+    xml_text = format_junit_xml(parse_stdout(stdout))
+    ElementTree.fromstring(xml_text)
+    assert "crash\\x1bname" in xml_text
+
+
+# --- audit 5.1: crash framing uses real evidence when the CLI has it ---------
+
+
+def test_format_junit_xml_default_crash_message_keeps_stop_run_hypothesis():
+    suite = parse_stdout(CRASH_STDOUT)
+    xml_text = format_junit_xml(suite)
+    assert "PERFORM target reached STOP RUN?" in xml_text
+
+
+def test_format_junit_xml_crash_detail_replaces_stop_run_hypothesis():
+    suite = parse_stdout(CRASH_STDOUT)
+    xml_text = format_junit_xml(
+        suite, crash_detail="binary timed out (exit 124); see stderr below"
+    )
+    assert "binary timed out (exit 124)" in xml_text
+    assert "STOP RUN" not in xml_text
+
+
+def test_format_console_crash_detail_rendered_under_crashed_case():
+    suite = parse_stdout(CRASH_STDOUT)
+    output = format_console(suite, crash_detail="binary exited with code 134")
+    lines = output.splitlines()
+    crash_index = next(i for i, line in enumerate(lines) if "[CRASH]" in line)
+    assert lines[crash_index + 1].strip() == "binary exited with code 134"
+
+
+def test_format_console_without_crash_detail_is_unchanged():
+    suite = parse_stdout(CRASH_STDOUT)
+    output = format_console(suite)
+    assert "binary exited" not in output

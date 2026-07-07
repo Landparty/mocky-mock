@@ -32,13 +32,18 @@ _BARE_CATS = "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
 _TESTCASE_RE = re.compile(r'^TESTCASE\s+"(?P<name>[^"]*)"$')
-_MOCK_QUOTED_RE = re.compile(
-    rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"$'
-)
+_MOCK_QUOTED_RE = re.compile(rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"$')
 _MOCK_BARE_RE = re.compile(
     rf"^MOCK\s+(?P<cat>{_BARE_CATS})\s+(?P<key>[A-Za-z0-9][A-Za-z0-9-]*)$"
 )
-_END_MOCK_RE = re.compile(r"^END-MOCK$")
+# END-MOCK is deliberately more forgiving than the other keywords: an
+# optional trailing period (the natural COBOL habit) and any letter case
+# are accepted, because a missed END-MOCK doesn't fail at this line -- it
+# silently swallows the rest of the file into the mock body and surfaces
+# later as a confusing refusal or compile error. Every other DSL keyword
+# stays case-sensitive uppercase (see the "Case rules" section in
+# .okf/dsl.md).
+_END_MOCK_RE = re.compile(r"^END-MOCK\.?$", re.IGNORECASE)
 _MOVE_RE = re.compile(r"^MOVE\s+(?P<value>.+?)\s+TO\s+(?P<target>\S+)$")
 _PERFORM_RE = re.compile(
     r"^PERFORM\s+(?P<target>\S+)(?:\s+(?:THRU|THROUGH)\s+(?P<thru>\S+))?$"
@@ -67,10 +72,46 @@ def _resolve_category(cat: str | None, bare_key: bool = False) -> MockCategory:
     return MockCategory(cat)
 
 
+def _validate_expectation(expectation: str, line_no: int) -> None:
+    """Reject a VERIFY expectation the driver codegen cannot compile.
+
+    Must accept exactly what splicer/driver.py's `_verify_condition`
+    accepts (it upper-cases and strips before matching) -- keep the two in
+    sync. Validating here turns a late, tracebacking ValueError in codegen
+    into a line-numbered CutParseError at parse time."""
+    normalized = expectation.strip().upper()
+    if normalized in ("ONCE", "NEVER", "AT LEAST ONCE"):
+        return
+    if re.match(r"^\d+\s+TIMES$", normalized):
+        return
+    raise CutParseError(
+        f"line {line_no}: unrecognized VERIFY expectation {expectation!r} "
+        f"(expected ONCE, NEVER, AT LEAST ONCE, or <n> TIMES)"
+    )
+
+
 def parse_cut(text: str) -> MockTestSuite:
     suite: MockTestSuite | None = None
     case: MockTestCase | None = None
     in_mock: MockDirective | None = None
+    in_mock_line = 0
+    # (category, key) -> declaring line, reset per TESTCASE: a duplicate
+    # MOCK would otherwise parse fine and surface much later as an
+    # AMBIGUOUS_MOCK refusal with no line numbers and misleading advice.
+    mock_lines: dict[tuple[MockCategory, str], int] = {}
+
+    def _open_mock(directive: MockDirective, line_no: int) -> MockDirective:
+        assert case is not None
+        mock_id = (directive.category, directive.key)
+        if mock_id in mock_lines:
+            raise CutParseError(
+                f"line {line_no}: duplicate MOCK {directive.describe()} in "
+                f"TESTCASE {case.name!r} (first declared at line "
+                f"{mock_lines[mock_id]})"
+            )
+        mock_lines[mock_id] = line_no
+        case.mocks.append(directive)
+        return directive
 
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
@@ -88,27 +129,47 @@ def parse_cut(text: str) -> MockTestSuite:
             continue
 
         if (m := _TESTSUITE_RE.match(line)) is not None:
+            if suite is not None:
+                raise CutParseError(
+                    f"line {line_no}: second TESTSUITE line (suite "
+                    f"{suite.name!r} is already open); a .cut file holds "
+                    f"exactly one TESTSUITE -- concatenated files would "
+                    f"silently run only the last suite"
+                )
             suite = MockTestSuite(name=m.group("name"))
         elif (m := _TESTCASE_RE.match(line)) is not None:
             if suite is None:
                 raise CutParseError(f"line {line_no}: TESTCASE before TESTSUITE")
             case = MockTestCase(name=m.group("name"))
             suite.test_cases.append(case)
+            mock_lines = {}
         elif (m := _MOCK_QUOTED_RE.match(line)) is not None:
             if case is None:
                 raise CutParseError(f"line {line_no}: MOCK outside TESTCASE")
-            in_mock = MockDirective(
-                category=_resolve_category(m.group("cat")), key=m.group("key")
+            if not m.group("key"):
+                raise CutParseError(
+                    f'line {line_no}: empty MOCK {m.group("cat")} key -- '
+                    f"the quoted key must name what to mock"
+                )
+            in_mock = _open_mock(
+                MockDirective(
+                    category=_resolve_category(m.group("cat")),
+                    key=m.group("key"),
+                ),
+                line_no,
             )
-            case.mocks.append(in_mock)
+            in_mock_line = line_no
         elif (m := _MOCK_BARE_RE.match(line)) is not None:
             if case is None:
                 raise CutParseError(f"line {line_no}: MOCK outside TESTCASE")
-            in_mock = MockDirective(
-                category=_resolve_category(m.group("cat"), bare_key=True),
-                key=m.group("key").upper(),
+            in_mock = _open_mock(
+                MockDirective(
+                    category=_resolve_category(m.group("cat"), bare_key=True),
+                    key=m.group("key").upper(),
+                ),
+                line_no,
             )
-            case.mocks.append(in_mock)
+            in_mock_line = line_no
         elif line.startswith("MOCK"):
             raise CutParseError(
                 f"line {line_no}: malformed MOCK directive: {line!r} "
@@ -124,17 +185,26 @@ def parse_cut(text: str) -> MockTestSuite:
         elif (m := _PERFORM_RE.match(line)) is not None:
             if case is None:
                 raise CutParseError(f"line {line_no}: PERFORM outside TESTCASE")
+            if case.perform_target:
+                raise CutParseError(
+                    f"line {line_no}: TESTCASE {case.name!r} already has a "
+                    f"PERFORM target {case.perform_target!r}; one PERFORM "
+                    f"per test case"
+                )
             case.perform_target = m.group("target")
             case.perform_thru = m.group("thru")
         elif (m := _EXPECT_RE.match(line)) is not None:
             if case is None:
                 raise CutParseError(f"line {line_no}: EXPECT outside TESTCASE")
             case.expectations.append(
-                ExpectDirective(data_name=m.group("name"), expected_value=m.group("value"))
+                ExpectDirective(
+                    data_name=m.group("name"), expected_value=m.group("value")
+                )
             )
         elif (m := _VERIFY_QUOTED_RE.match(line)) is not None:
             if case is None:
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
+            _validate_expectation(m.group("expectation"), line_no)
             case.verifications.append(
                 VerifyDirective(
                     category=_resolve_category(m.group("cat")),
@@ -145,6 +215,7 @@ def parse_cut(text: str) -> MockTestSuite:
         elif (m := _VERIFY_BARE_RE.match(line)) is not None:
             if case is None:
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
+            _validate_expectation(m.group("expectation"), line_no)
             case.verifications.append(
                 VerifyDirective(
                     category=_resolve_category(m.group("cat"), bare_key=True),
@@ -154,6 +225,12 @@ def parse_cut(text: str) -> MockTestSuite:
             )
         else:
             raise CutParseError(f"line {line_no}: unrecognized statement: {line!r}")
+
+    if in_mock is not None:
+        raise CutParseError(
+            f"line {in_mock_line}: unterminated MOCK {in_mock.describe()}: "
+            f"reached end of file with no END-MOCK"
+        )
 
     if suite is None:
         raise CutParseError("no TESTSUITE found")

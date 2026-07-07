@@ -6,8 +6,23 @@ cobolparser change that breaks one of these is a breaking change for
 mockymock too.
 
 - `cobolparser.parse_cobol(source: str, filename: str) -> ParseResult`
-  - `.ast: CobolProgram | None`, `.success: bool`, `.errors: list[ParseError]`
+  - `.ast: CobolProgram | None`, `.success: bool`, `.errors: list[ParseError]`,
+    `.warnings: list[str]` — since cobolparser's 2026-07-07 silent-drop
+    remediation (upstream PR #77), a warning on an otherwise clean parse
+    (`success=True, errors=0`) is the only signal that content was dropped
+    from the AST (unsupported verbs like INVOKE/EXHIBIT, unparsed clause
+    leftovers, multi-program compilation units whose extra programs land in
+    `ast.contained_programs` — a place mockymock's splicer and reachability
+    BFS never look). `refusal.check_whole_program` refuses per warning
+    (PARSE_WARNING), fail-closed.
 - `cobolparser.expand_copybooks` / `cobolparser.parse_cobol_with_expansion`
+- `cobolparser.preprocess.models.ExpansionStatistics.warnings: list[str]`
+  (via `CopybookExpansion.statistics`) — entries containing
+  `"Lossy decode of"` mean U+FFFD replacement characters were substituted
+  into the expanded source; `refusal.check_expansion_warnings` refuses those
+  (EXPANSION_WARNING). The same list carries advisory lint heuristics
+  ("may be missing terminating period", "contains only comments") that
+  false-positive on valid copybooks and are deliberately not refused.
 - `cobolparser.preprocess.normalize_fixed_format(lines: list[str]) -> str`
   — mockymock splices THIS output, not the original file. See Global
   Constraints in the implementation plan for why.
@@ -78,10 +93,10 @@ mockymock too.
 
 - `cobolparser.models.statements.io.IOOpenStatement.file_names: list[str]`
   and `IOCloseStatement.file_names: list[str]` — OPEN/CLOSE mock keys match
-  against any listed file. **Requires cobol-parser branch
-  `fix/open-multi-mode-file-capture`**: before it, `OPEN INPUT A OUTPUT B`
-  silently dropped every file after the second mode keyword, so
-  `MOCK OPEN B` could never match.
+  against any listed file. **Requires cobol-parser at or after PR #68**
+  (`fix/open-multi-mode-file-capture`, merged to `main` 2026-07-05): before
+  it, `OPEN INPUT A OUTPUT B` silently dropped every file after the second
+  mode keyword, so `MOCK OPEN B` could never match.
 - `IOReadStatement.file_name`, `IODeleteStatement.file_name`,
   `IOStartStatement.file_name`, `IOUnlockStatement.file_name` — file-keyed
   mock matching.

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 
 @contextmanager
@@ -23,3 +23,16 @@ def sandbox_dir(root: Path | None = None) -> Iterator[Path]:
         yield path
     finally:
         shutil.rmtree(path, ignore_errors=True)
+
+
+@contextmanager
+def sandbox_dir_maybe_kept(root: Path | None, keep: bool) -> Iterator[Path]:
+    """Like `sandbox_dir`, but when `keep` is True the directory is left on
+    disk (and never deleted) instead of being cleaned up on exit."""
+    if not keep:
+        with sandbox_dir(root=root) as path:
+            yield path
+        return
+    if root is not None:
+        root.mkdir(parents=True, exist_ok=True)
+    yield Path(tempfile.mkdtemp(prefix="mockymock-", dir=root))

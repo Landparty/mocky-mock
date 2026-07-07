@@ -10,6 +10,7 @@ there is no local-cobc fallback.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -21,13 +22,76 @@ from mockymock.runtime.executor import (
     _coerce_output,
 )
 
-IMAGE = "mockymock-gnucobol"
-CONTAINER = "mockymock-cobc"
-WORK_ROOT = Path.home() / ".mockymock" / "work"
-
 # Repo-root docker/ directory, resolved relative to this file so the build
 # context is found under editable installs (the only supported install mode).
 _DOCKER_CONTEXT = Path(__file__).resolve().parents[2] / "docker"
+
+
+def _image_tag(dockerfile_text: str | None = None) -> str:
+    """8-char content hash of docker/Dockerfile, used as the image tag so
+    that editing the Dockerfile changes the tag, `docker image inspect`
+    misses, and `ensure_toolchain` rebuilds instead of silently reusing a
+    stale image."""
+    if dockerfile_text is None:
+        dockerfile_text = (_DOCKER_CONTEXT / "Dockerfile").read_text()
+    return hashlib.sha256(dockerfile_text.encode()).hexdigest()[:8]
+
+
+IMAGE = f"mockymock-gnucobol:{_image_tag()}"
+CONTAINER = "mockymock-cobc"
+WORK_ROOT = Path.home() / ".mockymock" / "work"
+
+# Container hardening (2026-07-07 audit finding 4.3). The container compiles
+# and *runs untrusted COBOL*: a hostile `.cbl` -- or a MOCK body, which the
+# splicer injects verbatim -- can `CALL "SYSTEM"` and run arbitrary shell
+# inside the container. There is no host escape, but an unhardened container
+# lets that shell exfiltrate over the network, fork-bomb, or exhaust memory,
+# and tamper with other concurrent runs' sandboxes under the shared /work
+# mount. These `docker run` flags defang it with controls that are portable
+# across the Linux and Windows Docker Desktop hosts mockymock targets:
+#
+#   --network none                    no outbound network -> no exfiltration
+#   --pids-limit <n>                  fork-bomb ceiling
+#   --memory / --memory-swap <limit>  memory ceiling; swap pinned to the same
+#                                     value so the limit actually bites
+#   --cap-drop ALL + --cap-add DAC_OVERRIDE  drop every Linux capability except
+#                                     the one root needs for the bind mount
+#   --security-opt no-new-privileges  setuid binaries cannot escalate
+#
+# The container still runs as root: the bind-mounted work root is owned by the
+# host user, whose uid is not portable across machines and is absent on
+# Windows, so a fixed non-root uid would break cobc's write of the compiled
+# binary into /work. Root is *neutralized* by the controls above (network,
+# pids, memory, capabilities, privilege escalation) rather than dropped. See
+# `.okf/runtime.md` (Threat model) for the full rationale and residual risk.
+#
+# Why DAC_OVERRIDE is added back: sandboxes are created host-side by
+# `tempfile.mkdtemp` (mode 0700, owned by the host uid) and bind-mounted in.
+# Container-root reads the .cbl and writes the compiled binary through that
+# mount purely via CAP_DAC_OVERRIDE -- the capability that lets root bypass
+# file permission bits -- so `--cap-drop ALL` alone makes cobc fail with
+# "Permission denied" on host-owned files. DAC_OVERRIDE only bypasses DAC
+# checks on the already-isolated /work mount; the caps that matter for
+# container escape (SYS_ADMIN, NET_RAW, SETUID/SETGID, MKNOD, ...) stay dropped.
+PIDS_LIMIT = 512
+MEMORY_LIMIT = "1g"
+
+_HARDENING_FLAGS: tuple[str, ...] = (
+    "--network",
+    "none",
+    "--pids-limit",
+    str(PIDS_LIMIT),
+    "--memory",
+    MEMORY_LIMIT,
+    "--memory-swap",
+    MEMORY_LIMIT,
+    "--cap-drop",
+    "ALL",
+    "--cap-add",
+    "DAC_OVERRIDE",
+    "--security-opt",
+    "no-new-privileges",
+)
 
 
 class DockerNotAvailableError(RuntimeError):
@@ -72,10 +136,67 @@ def _docker(*args: str, timeout: int = 600) -> subprocess.CompletedProcess:
         raise DockerNotAvailableError(f"{_DAEMON_HINT} ({exc})") from exc
 
 
+# One docker inspect yields both facts ensure_toolchain needs about the
+# container: whether it is running, and which image it was created from.
+_CONTAINER_INSPECT_FORMAT = "{{.State.Running}} {{.Config.Image}}"
+
+
+def _inspect_container() -> tuple[bool, str] | None:
+    """Return (running, image) for the toolchain container, or None if no
+    container with that name exists."""
+    state = _docker("inspect", "-f", _CONTAINER_INSPECT_FORMAT, CONTAINER, timeout=30)
+    if state.returncode != 0:
+        return None
+    running, _, image = state.stdout.strip().partition(" ")
+    return running == "true", image
+
+
+def _start_container() -> None:
+    start = _docker("start", CONTAINER, timeout=60)
+    if start.returncode != 0:
+        raise DockerNotAvailableError(
+            f"failed to start container {CONTAINER}:\n{start.stderr.strip()}"
+        )
+
+
+def _create_container() -> None:
+    WORK_ROOT.mkdir(parents=True, exist_ok=True)
+    run = _docker(
+        "run",
+        "-d",
+        "--name",
+        CONTAINER,
+        *_HARDENING_FLAGS,
+        "-v",
+        f"{WORK_ROOT.as_posix()}:/work",
+        IMAGE,
+        "sleep",
+        "infinity",
+    )
+    if run.returncode != 0:
+        # Concurrent first invocations race on `docker run --name`: the
+        # loser gets "name already in use" even though the winner's
+        # container is perfectly usable. Re-check instead of failing.
+        if "already in use" in run.stderr:
+            found = _inspect_container()
+            if found is not None:
+                running, _image = found
+                if running:
+                    return
+                _start_container()
+                return
+        raise DockerNotAvailableError(
+            f"failed to start container {CONTAINER}:\n{run.stderr.strip()}"
+        )
+
+
 def ensure_toolchain() -> None:
     """Bring the toolchain up: daemon reachable, image built, container
-    running. Idempotent; called by both `mockymock setup` and every
-    `mockymock run` (so the container is restarted if it died)."""
+    running *and created from the current image*. Idempotent; called by
+    both `mockymock setup` and every `mockymock run` (so the container is
+    restarted if it died, and recreated if docker/Dockerfile changed --
+    the content-hash tag in IMAGE only helps if a stale container is not
+    silently reused)."""
     info = _docker("info", timeout=30)
     if info.returncode != 0:
         raise DockerNotAvailableError(f"{_DAEMON_HINT}\n{info.stderr.strip()}")
@@ -88,28 +209,27 @@ def ensure_toolchain() -> None:
                 f"failed to build image {IMAGE}:\n{build.stderr.strip()}"
             )
 
-    state = _docker(
-        "inspect", "-f", "{{.State.Running}}", CONTAINER, timeout=30
-    )
-    if state.returncode != 0:
-        WORK_ROOT.mkdir(parents=True, exist_ok=True)
-        run = _docker(
-            "run", "-d",
-            "--name", CONTAINER,
-            "-v", f"{WORK_ROOT.as_posix()}:/work",
-            IMAGE,
-            "sleep", "infinity",
-        )
-        if run.returncode != 0:
+    found = _inspect_container()
+    if found is None:
+        _create_container()
+        return
+    running, container_image = found
+    if container_image != IMAGE:
+        # The container was created from a different image tag (the
+        # Dockerfile changed since it was started). Reusing it would defeat
+        # the content-hash tag entirely: every compile would keep running
+        # in the stale toolchain forever. Remove and recreate.
+        rm = _docker("rm", "-f", CONTAINER, timeout=60)
+        if rm.returncode != 0:
             raise DockerNotAvailableError(
-                f"failed to start container {CONTAINER}:\n{run.stderr.strip()}"
+                f"container {CONTAINER} was created from image "
+                f"{container_image!r} (expected {IMAGE}) and could not be "
+                f"removed for recreation:\n{rm.stderr.strip()}"
             )
-    elif state.stdout.strip() != "true":
-        start = _docker("start", CONTAINER, timeout=60)
-        if start.returncode != 0:
-            raise DockerNotAvailableError(
-                f"failed to start container {CONTAINER}:\n{start.stderr.strip()}"
-            )
+        _create_container()
+        return
+    if not running:
+        _start_container()
 
 
 def cobc_version() -> str:
@@ -133,8 +253,15 @@ def compile_source(source_path: Path) -> CompileResult:
     try:
         result = subprocess.run(
             [
-                "docker", "exec", CONTAINER,
-                "cobc", "-free", "-x", container_source, "-o", container_binary,
+                "docker",
+                "exec",
+                CONTAINER,
+                "cobc",
+                "-free",
+                "-x",
+                container_source,
+                "-o",
+                container_binary,
             ],
             capture_output=True,
             text=True,
@@ -170,16 +297,26 @@ def compile_source(source_path: Path) -> CompileResult:
 def run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult:
     """Run a compiled binary inside the container, from its own sandbox
     directory. coreutils `timeout` enforces the limit container-side and
-    exits 124 on expiry, matching TIMEOUT_EXIT_CODE; the host-side
-    subprocess timeout is a wider guard against `docker exec` itself
-    hanging."""
+    exits 124 on expiry, matching TIMEOUT_EXIT_CODE; `-k 5` escalates to
+    SIGKILL five seconds later so a binary that ignores SIGTERM cannot
+    keep burning CPU as an orphan in the persistent container. The
+    host-side subprocess timeout is a wider guard against `docker exec`
+    itself hanging."""
     container_binary = to_container_path(binary_path, WORK_ROOT)
     container_dir = container_binary.rsplit("/", 1)[0]
     try:
         result = subprocess.run(
             [
-                "docker", "exec", "-w", container_dir, CONTAINER,
-                "timeout", str(timeout_seconds), container_binary,
+                "docker",
+                "exec",
+                "-w",
+                container_dir,
+                CONTAINER,
+                "timeout",
+                "-k",
+                "5",
+                str(timeout_seconds),
+                container_binary,
             ],
             capture_output=True,
             text=True,

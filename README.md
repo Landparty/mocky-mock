@@ -75,20 +75,37 @@ TESTCASE "totals two records then updates and notifies"
 `mockymock generate <program.cbl>` scaffolds a starter `.cut` covering
 every mockable boundary it finds.
 
-Boundary statements nested inside IF/EVALUATE/inline-PERFORM bodies
+Boundary statements nested inside IF/EVALUATE/SEARCH/inline-PERFORM bodies
 (including nested EXEC blocks) are mockable when the statement sits on its
-own line(s) — the common layout. `PERFORM A THRU B` is supported both
-inside the program (the range is expanded in source order for
-reachability) and as a test case's entry point (`PERFORM A THRU B` in the
-.cut, `THROUGH` accepted); degenerate ranges — missing, duplicate, or
-backwards endpoints — are refused. Still refused, fail-closed: dynamic
-CALLs whose target identifier the parser cannot determine,
-`SORT`/`MERGE`/`RELEASE`/`RETURN`, nested statements
-sharing a line with other code (`IF X CALL "F" END-IF` one-liners),
-statements inside another boundary statement's clause body
-(`READ ... AT END`, `CALL ... ON EXCEPTION`), and mocks with clause bodies
-of their own — each refusal names the exact layout problem. `DISPLAY`
-passes through unmocked. See the worked example in `examples/invupdt/`.
+own line(s) — the common layout. Reachability follows `PERFORM` **and**
+`GO TO` edges (including every target of `GO TO A B C DEPENDING ON X`),
+and both may name a paragraph or a SECTION (a performed section makes all
+of its paragraphs reachable). `PERFORM A THRU B` is supported both inside
+the program (the range is expanded in source order for reachability) and
+as a test case's entry point (`PERFORM A THRU B` in the .cut, `THROUGH`
+accepted); degenerate ranges — missing, duplicate, or backwards endpoints
+— are refused, and so is any `PERFORM`/`GO TO` whose target resolves to
+neither a paragraph nor a section (`UNRESOLVED_FLOW_TARGET` — never a
+silent skip). Refused outright, program-wide: `DECLARATIVES` (USE
+procedures run outside any PERFORM/GO TO edge) and `ALTER` (it rewrites
+GO TO targets at runtime). Also refused, fail-closed: dynamic CALLs whose
+target identifier the parser cannot determine,
+`SORT`/`MERGE`/`RELEASE`/`RETURN`, statements — nested *or top-level* —
+sharing a line with other code (`IF X CALL "F" END-IF` one-liners,
+`P1. CALL "F".` one-line paragraphs), statements inside another boundary
+statement's clause body (`READ ... AT END`, `CALL ... ON EXCEPTION`), and
+mocks with clause bodies of their own — each refusal names the exact
+layout problem. `CANCEL "X"` is left in place and counts as covered when
+the test case mocks `CALL "X"` (the mocked CALL never loads a real module,
+so the CANCEL is a guaranteed no-op); otherwise it refuses
+(`UNMOCKED_CANCEL`). Programs whose parse reports a warning are also
+refused (`PARSE_WARNING`): since cobolparser's silent-drop remediation, a
+warning on an otherwise clean parse means statements were dropped from the
+AST (unsupported verbs like `INVOKE`, multi-program source members), and
+splicing an incomplete AST would silently skip real program behavior.
+Likewise a copybook whose bytes can't be decoded losslessly refuses with
+`EXPANSION_WARNING`. `DISPLAY` passes through unmocked. See the worked
+example in `examples/invupdt/`.
 
 ### Known limitation: `STOP RUN` inside a test case's PERFORM target
 
@@ -124,3 +141,23 @@ the container up on its own, so `mockymock setup` is optional.
 
 On Windows, ensure Docker Desktop is running before invoking `mockymock setup` or
 `mockymock run`. COBOL compilation and execution happen entirely inside the container.
+
+### Sandboxing
+
+The program under test — and any `MOCK` body, which is spliced in verbatim —
+runs as untrusted code inside the GnuCOBOL container, which is launched locked
+down:
+
+- `--network none` — no outbound network.
+- `--pids-limit`, `--memory` / `--memory-swap` — bounded processes and memory.
+- `--cap-drop ALL --cap-add DAC_OVERRIDE` — every Linux capability dropped
+  except the one root needs to read/write the bind mount.
+- `--security-opt no-new-privileges` — no privilege escalation.
+
+This contains the blast radius of a hostile `.cbl` or mock body (e.g. a
+`CALL "SYSTEM"`), though it is not a substitute for reviewing what you run. See
+`.okf/runtime.md` (Threat model) for the full rationale and residual risk.
+
+## License
+
+mockymock is licensed under the MIT License. See [LICENSE](LICENSE) for details.
