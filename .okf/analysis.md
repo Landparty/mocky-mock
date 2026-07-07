@@ -26,7 +26,8 @@ mock_surface.analyze()  --------------> MockSurface
     IO clause bodies)                      console_accept_paragraphs (v1 sets, kept)
    |
    v
-refusal.check_whole_program()      -> PARSE_ERROR
+refusal.check_whole_program()      -> PARSE_ERROR / PARSE_WARNING
+refusal.check_expansion_warnings() -> EXPANSION_WARNING      (lossy copybook decode only)
 refusal.check_unresolved_copybooks() -> UNRESOLVED_COPYBOOK  (textual, re-lexes raw source)
 refusal.check_nested_exec()        -> NESTED_EXEC            (program-wide, ignores reachability)
    |
@@ -88,6 +89,8 @@ Paragraph attribution is depth-independent: nested statements stay attributed to
 | Check | Code | Trigger |
 |---|---|---|
 | `check_whole_program` | `PARSE_ERROR` | `parse_result.success is False` |
+| `check_whole_program` | `PARSE_WARNING` | each `ParseResult.warnings` entry — since cobolparser's 2026-07-07 silent-drop remediation, a warning on a "clean" parse (`success=True, errors=0`) is the only signal that content was dropped from the AST: unsupported verbs (INVOKE, EXHIBIT, ...), unparsed clause leftovers, multi-program compilation units (`ast.contained_programs` — the splicer/BFS only see the first program). An incomplete AST would splice into a program that silently skips real behavior, so every warning refuses fail-closed |
+| `check_expansion_warnings` | `EXPANSION_WARNING` | any `CopybookExpansion.statistics.warnings` entry containing `"Lossy decode of"` — U+FFFD replacement characters are already substituted into the expanded source the run would compile. The same channel carries advisory lint heuristics ("may be missing terminating period", "contains only comments", "possible unbalanced quotes") that false-positive on valid copybooks (verified against `tests/integration/fixtures/copybook_example`), so ONLY the lossy-decode class refuses |
 | `check_unresolved_copybooks` | `UNRESOLVED_COPYBOOK` | raw source, re-lexed with `CobolLexer(free_form=True)`, still contains a `TokenType.COPY` token |
 | `check_nested_exec` | `NESTED_EXEC` | any EXEC (SQL/CICS/DLI) site with `nested=True` and `span is None` — **regardless of reachability** |
 

@@ -87,7 +87,13 @@ CALLs whose target identifier the parser cannot determine,
 sharing a line with other code (`IF X CALL "F" END-IF` one-liners),
 statements inside another boundary statement's clause body
 (`READ ... AT END`, `CALL ... ON EXCEPTION`), and mocks with clause bodies
-of their own — each refusal names the exact layout problem. `DISPLAY`
+of their own — each refusal names the exact layout problem. Programs whose
+parse reports a warning are also refused (`PARSE_WARNING`): since
+cobolparser's silent-drop remediation, a warning on an otherwise clean
+parse means statements were dropped from the AST (unsupported verbs like
+`INVOKE`, multi-program source members), and splicing an incomplete AST
+would silently skip real program behavior. Likewise a copybook whose bytes
+can't be decoded losslessly refuses with `EXPANSION_WARNING`. `DISPLAY`
 passes through unmocked. See the worked example in `examples/invupdt/`.
 
 ### Known limitation: `STOP RUN` inside a test case's PERFORM target

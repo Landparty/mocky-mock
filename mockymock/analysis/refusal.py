@@ -57,6 +57,16 @@ regardless of reachability -- a nested EXEC with no validated splice span
 (same preconditions as above) therefore refuses the file by its mere
 existence anywhere in the program.
 
+check_whole_program refuses on parse errors (PARSE_ERROR) and — since
+cobolparser's 2026-07-07 silent-drop remediation gave dropped content a
+signal — on every `ParseResult.warnings` entry (PARSE_WARNING): unsupported
+verbs, unparsed clause leftovers, and multi-program compilation units all
+mean the AST is incomplete, so a "clean" splice would silently drop program
+behavior. check_expansion_warnings (EXPANSION_WARNING) does the same for
+lossy-decode copybook-expansion warnings (U+FFFD already substituted into
+the source this run would compile); the advisory lint heuristics sharing
+that channel are deliberately NOT refused (see the marker constant).
+
 check_unresolved_copybooks (UNRESOLVED_COPYBOOK) is a whole-program check,
 not a per-TESTCASE one: an unresolved COPY affects the whole program
 regardless of which TESTCASE runs. It exists because cobolparser's
@@ -136,13 +146,69 @@ def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool
 
 
 def check_whole_program(parse_result) -> list[RefusalReason]:
-    if parse_result.success:
-        return []
+    """PARSE_ERROR for a failed parse; PARSE_WARNING for each entry in
+    `ParseResult.warnings`. Since cobolparser's 2026-07-07 silent-drop fixes,
+    a warning is the only signal that content was dropped from a "clean"
+    parse (`success=True, errors=0`): unsupported verbs (INVOKE, EXHIBIT,
+    ...), unparsed clause leftovers, multi-program compilation units (only
+    the first program's divisions are where mockymock looks), and lossy
+    copybook-expansion decoding all surface here. Any of them means the AST
+    the splicer would work from is incomplete, so each warning refuses
+    fail-closed."""
+    reasons: list[RefusalReason] = []
+    if not parse_result.success:
+        reasons.append(
+            RefusalReason(
+                code="PARSE_ERROR",
+                message=(
+                    f"cobolparser reported {len(parse_result.errors)} parse "
+                    f"error(s)"
+                ),
+            )
+        )
+    for warning in getattr(parse_result, "warnings", None) or []:
+        reasons.append(
+            RefusalReason(
+                code="PARSE_WARNING",
+                message=(
+                    f"cobolparser reported a parse warning -- the AST is "
+                    f"missing content, so splicing would silently drop "
+                    f"program behavior: {warning}"
+                ),
+            )
+        )
+    return reasons
+
+
+# The only `ExpansionStatistics.warnings` class that means the expanded text
+# is NOT a faithful copy of the copybook bytes. The same channel also carries
+# advisory lint heuristics ("may be missing terminating period", "contains
+# only comments", "possible unbalanced quotes") that false-positive on valid
+# copybooks (verified against tests/integration/fixtures/copybook_example) --
+# refusing on those would reject working programs, so only the lossy-decode
+# diagnostics gate.
+_LOSSY_DECODE_MARKER = "Lossy decode of"
+
+
+def check_expansion_warnings(expansion) -> list[RefusalReason]:
+    """EXPANSION_WARNING for each lossy-decode warning recorded on a
+    `CopybookExpansion.statistics` — a copybook whose bytes could not be
+    decoded losslessly has U+FFFD replacement characters already substituted
+    into the expanded source this run would splice and compile. Corrupted
+    DATA DIVISION content compiles into wrong PIC/VALUE clauses, so refuse
+    instead."""
+    warnings = getattr(getattr(expansion, "statistics", None), "warnings", None)
     return [
         RefusalReason(
-            code="PARSE_ERROR",
-            message=f"cobolparser reported {len(parse_result.errors)} parse error(s)",
+            code="EXPANSION_WARNING",
+            message=(
+                f"copybook expansion reported a warning -- the expanded "
+                f"source is not a faithful copy of the copybook content: "
+                f"{warning}"
+            ),
         )
+        for warning in warnings or []
+        if _LOSSY_DECODE_MARKER in warning
     ]
 
 

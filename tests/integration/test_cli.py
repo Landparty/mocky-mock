@@ -94,6 +94,55 @@ TESTCASE "PARA-TWO calls DISCRATE"
 """
 
 
+# INVOKE has no registered statement parser: cobolparser drops it from the
+# AST with success=True, errors=0, and a ParseResult.warnings entry (its
+# 2026-07-07 silent-drop remediation). A scaffold or splice built from that
+# AST would silently miss program behavior, so both commands refuse.
+INVOKER_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. INVOKER.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           INVOKE SOME-OBJECT "someMethod".
+           DISPLAY "done".
+"""
+
+INVOKER_CUT = """\
+TESTSUITE "INVOKER"
+
+TESTCASE "display runs"
+    PERFORM MAIN-PARA
+"""
+
+
+def test_generate_refuses_program_with_dropped_statements(
+    tmp_path: Path, capsys
+):
+    program = tmp_path / "INVOKER.cbl"
+    program.write_text(INVOKER_CBL)
+    output = tmp_path / "INVOKER.cut"
+
+    exit_code = main(["generate", str(program), "-o", str(output)])
+
+    assert exit_code == 1
+    assert "PARSE_WARNING" in capsys.readouterr().out
+    assert not output.exists()
+
+
+@requires_docker
+def test_run_refuses_program_with_dropped_statements(tmp_path: Path, capsys):
+    program = tmp_path / "INVOKER.cbl"
+    program.write_text(INVOKER_CBL)
+    cut_file = tmp_path / "INVOKER.cut"
+    cut_file.write_text(INVOKER_CUT)
+
+    exit_code = main(["run", str(program), "--cut", str(cut_file)])
+
+    assert exit_code == 1
+    assert "PARSE_WARNING" in capsys.readouterr().out
+
+
 def test_generate_writes_a_parseable_cut_file(tmp_path: Path):
     program = tmp_path / "ORDRPROC.cbl"
     program.write_text(ORDRPROC_CBL)
