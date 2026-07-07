@@ -63,8 +63,11 @@ def format_junit_xml(suite: TestSuiteResult) -> str:
     error_count = crashed_cases + len(suite.orphan_failures)
     # Same fallback as format_console: suite.tests_run is 0 when a mid-suite
     # crash ate the SUMMARY line, but JUnit consumers expect tests="..." to
-    # match the actual number of <testcase> children below.
-    tests_seen = suite.tests_run or len(suite.results)
+    # match the actual number of <testcase> children below. Orphan failures
+    # each get their own <testcase> (see the loop below) but aren't part of
+    # suite.results/suite.tests_run, so they must be added here too or
+    # tests= undercounts the real number of <testcase> children.
+    tests_seen = (suite.tests_run or len(suite.results)) + len(suite.orphan_failures)
     testsuite_el = Element(
         "testsuite",
         name=suite.suite_name,
