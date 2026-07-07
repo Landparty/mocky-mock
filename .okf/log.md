@@ -1,5 +1,36 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-07 (corpus sweep refreshed: 26/26 clean)
+* **Re-ran `scripts/corpus_sweep.py`** against `legacy-application` now that
+  the `EVALUATE`/`WHEN`-selector cobolparser bug (which blocked 5/17
+  real-world programs on the original sweep) is fixed and pinned. The
+  re-sweep surfaced three further, different cobolparser content-drop bugs
+  (`PARSE_WARNING` on `ACCTMNT.cbl`, `GLRECON.cbl`, `LOANPMT.cbl`): a
+  subscripted `DISPLAY` operand, `WRITE ... FROM` with a string-literal
+  source, and `SUBTRACT ... FROM ... GIVING` dropping its `GIVING` clause
+  (root cause: a shared newline-skipping helper only looked for optional
+  clause keywords after skipping newlines *between* the keyword and its
+  operand, not before checking for the keyword itself — so a clause on its
+  own continuation line was missed). All three fixed upstream (cobol-parser
+  PR #80); this repo's own code needed no changes. `docs/corpus-sweep-
+  report.md` rewritten with the refreshed results (26/26 programs parse and
+  `generate` clean, zero refusals, zero unmockable-boundary categories);
+  the original findings are kept below it for history.
+  `.github/workflows/ci.yml`'s cobol-parser pin bumped to the fix commit
+  (full cobolparser suite run green before bumping); re-pin to PR #80's
+  merge commit on `main` once it lands.
+* **Found, not fixed (out of scope here):** running this repo's own test
+  suite without a Docker daemon available surfaced that
+  `test_run_refuses_program_with_parse_errors` and two tests in
+  `test_copybook_expansion.py` aren't `@requires_docker`-gated but still
+  fail without Docker — `_cmd_run` (`mockymock/cli/main.py`) calls
+  `docker_toolchain.ensure_toolchain()` before `check_whole_program()`, so
+  a program that would refuse before ever touching Docker (parse error,
+  unresolved copybook) still hits the Docker-unavailable path first in a
+  Docker-less environment. Pre-existing, unrelated to the corpus-sweep
+  fixes above (no mockymock source was touched by this pass) — flagging
+  for a future task rather than fixing here.
+
 ## 2026-07-07
 * **Refuse on cobolparser's new dropped-content warnings**
   ([analysis](analysis.md), [cli](cli.md), [integration](integration.md)):
