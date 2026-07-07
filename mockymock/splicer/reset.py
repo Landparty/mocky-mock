@@ -30,9 +30,7 @@ _REPEAT_GROUP_RE = re.compile(r"\(\d+\)")
 _NUMERIC_PIC_CHARS = frozenset("9VPZ*$+-")
 
 # usage strings as cobolparser stores them (verified empirically).
-_FLOAT_USAGES = frozenset(
-    {"COMP-1", "COMP-2", "COMPUTATIONAL-1", "COMPUTATIONAL-2"}
-)
+_FLOAT_USAGES = frozenset({"COMP-1", "COMP-2", "COMPUTATIONAL-1", "COMPUTATIONAL-2"})
 _POINTER_USAGES = frozenset(
     {"POINTER", "PROCEDURE-POINTER", "FUNCTION-POINTER", "PROGRAM-POINTER"}
 )

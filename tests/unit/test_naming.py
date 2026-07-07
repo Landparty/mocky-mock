@@ -15,7 +15,9 @@ def test_call_keeps_v1_field_shape():
 
 
 def test_call_sanitizes_non_cobol_name_chars():
-    registry = TallyRegistry(_suite_with(MockDirective(MockCategory.CALL, "sub.pgm 01")))
+    registry = TallyRegistry(
+        _suite_with(MockDirective(MockCategory.CALL, "sub.pgm 01"))
+    )
     assert registry.name(MockCategory.CALL, "sub.pgm 01") == "UT-SUB-PGM-01-TALLY"
 
 

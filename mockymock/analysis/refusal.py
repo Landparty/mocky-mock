@@ -120,6 +120,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from cobolparser.lexer import CobolLexer, TokenType
+from cobolparser.models.program import CobolParagraph
 from cobolparser.models.statements.control import GoStatement, PerformStatement
 from cobolparser.models.statements.misc import AlterStatement
 from cobolparser.preprocess import normalize_fixed_format
@@ -259,9 +260,7 @@ def _check_unsupported_control_flow(program) -> list[RefusalReason]:
             )
             break
     for paragraph in _all_paragraphs(procedure):
-        for statement in _find_statements_of_type(
-            paragraph.statements, AlterStatement
-        ):
+        for statement in _find_statements_of_type(paragraph.statements, AlterStatement):
             reasons.append(
                 RefusalReason(
                     code="UNSUPPORTED_ALTER",
@@ -621,7 +620,7 @@ def _source_ordered_paragraphs(procedure) -> list | None:
     the None path and every expansion refuses fail-closed."""
     paragraphs = sorted(_all_paragraphs(procedure), key=lambda p: p.location.line)
     lines = [p.location.line for p in paragraphs]
-    if any(later <= earlier for earlier, later in zip(lines, lines[1:])):
+    if any(later <= earlier for earlier, later in zip(lines, lines[1:], strict=False)):
         return None
     return paragraphs
 
@@ -701,7 +700,7 @@ def _reachable_paragraphs(
     if procedure is None:
         return set(), []
     ordered = _source_ordered_paragraphs(procedure)
-    by_name: dict[str, object] = {}
+    by_name: dict[str, CobolParagraph] = {}
     for paragraph in _all_paragraphs(procedure):
         by_name.setdefault(paragraph.paragraph_name, paragraph)
     section_members: dict[str, list[str]] = {}

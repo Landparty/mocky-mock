@@ -31,9 +31,7 @@ def test_dynamic_call_fails_when_expectation_is_wrong(tmp_path: Path):
     cut = (FIXTURES / "dynamic_call.cut").read_text()
     broken = tmp_path / "dynamic_call.cut"
     broken.write_text(cut.replace("EXPECT WS-TOTAL TO BE 5", "EXPECT WS-TOTAL TO BE 6"))
-    exit_code = main(
-        ["run", str(FIXTURES / "dynamic_call.cbl"), "--cut", str(broken)]
-    )
+    exit_code = main(["run", str(FIXTURES / "dynamic_call.cbl"), "--cut", str(broken)])
     assert exit_code == 1
 
 
@@ -41,10 +39,6 @@ def test_dynamic_call_fails_when_expectation_is_wrong(tmp_path: Path):
 def test_dynamic_call_fails_when_verify_count_is_wrong(tmp_path: Path):
     cut = (FIXTURES / "dynamic_call.cut").read_text()
     broken = tmp_path / "dynamic_call.cut"
-    broken.write_text(
-        cut.replace("WAS CALLED 3 TIMES", "WAS CALLED 2 TIMES")
-    )
-    exit_code = main(
-        ["run", str(FIXTURES / "dynamic_call.cbl"), "--cut", str(broken)]
-    )
+    broken.write_text(cut.replace("WAS CALLED 3 TIMES", "WAS CALLED 2 TIMES"))
+    exit_code = main(["run", str(FIXTURES / "dynamic_call.cbl"), "--cut", str(broken)])
     assert exit_code == 1

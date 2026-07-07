@@ -31,8 +31,10 @@ docs/2026-07-05-nested-mock-targets-design.md for the safety rules.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from cobolparser.lexer import CobolLexer
+from cobolparser.models.ast_base import ASTNode
 from cobolparser.models.program import CobolDivision, CobolParagraph
 from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.parsers.statements.ibm_exec_statements import (
@@ -207,7 +209,9 @@ def collect_scope_map(program, lines: list[str]) -> ScopeMap:
             continue
         if _inside_exec_range(exec_ranges, token.location.line, token.location.column):
             continue
-        boundaries.append(ScopeBoundary(token.location.line, token.location.column, word))
+        boundaries.append(
+            ScopeBoundary(token.location.line, token.location.column, word)
+        )
 
     boundaries.sort(key=lambda b: (b.line, b.column))
     return ScopeMap(boundaries)
@@ -274,9 +278,7 @@ def annotate_nested_sites(
             site.span = span
             site.unspliceable_reason = reason
         else:
-            site.unspliceable_reason = _top_level_site_problem(
-                site, scope_map, lines
-            )
+            site.unspliceable_reason = _top_level_site_problem(site, scope_map, lines)
 
 
 def _top_level_site_problem(
@@ -301,7 +303,7 @@ def _top_level_site_problem(
     ON EXCEPTION handler) share its span legitimately and are not checked
     here -- they are part of the statement being replaced.
     """
-    statement = site.statement
+    statement = cast(ASTNode, site.statement)
     start = statement.location.line
     column = statement.location.column
     if lines[start - 1][: column - 1].strip():
@@ -310,16 +312,14 @@ def _top_level_site_problem(
         b.top_level and b.line == start and b.column != column
         for b in scope_map.boundaries
     ):
-        return (
-            "shares its line with another statement or paragraph header"
-        )
+        return "shares its line with another statement or paragraph header"
     return None
 
 
 def _nested_site_span(
     site: BoundarySite, scope_map: ScopeMap, lines: list[str]
 ) -> tuple[tuple[int, int] | None, str | None]:
-    statement = site.statement
+    statement = cast(ASTNode, site.statement)
     if site.nested_in_boundary:
         return None, (
             "nested inside another boundary statement's clause body -- "
@@ -336,7 +336,9 @@ def _nested_site_span(
     if lines[start - 1][: column - 1].strip():
         return None, "does not start its own line"
 
-    own_terminator = _VERB_TERMINATORS.get(site.category, "")
+    own_terminator = (
+        _VERB_TERMINATORS.get(site.category, "") if site.category is not None else ""
+    )
     relevant = [
         b
         for b in scope_map.boundaries
@@ -344,8 +346,7 @@ def _nested_site_span(
     ]
 
     if any(
-        b.line == start and not (b.column == column and b.word == "")
-        for b in relevant
+        b.line == start and not (b.column == column and b.word == "") for b in relevant
     ):
         return None, "shares its start line with another statement or scope word"
 

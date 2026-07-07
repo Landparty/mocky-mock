@@ -259,9 +259,7 @@ def test_site_inside_handler_clause_is_unspliceable():
 
 def test_nested_exec_sql_span_includes_end_exec():
     surface, lines = _annotated_surface(EXEC_NESTED_SOURCE, "nestexec.cbl")
-    site = next(
-        s for s in surface.boundary_sites if s.category is MockCategory.SQL
-    )
+    site = next(s for s in surface.boundary_sites if s.category is MockCategory.SQL)
     assert site.unspliceable_reason is None, site.unspliceable_reason
     start, end = site.span
     assert start == _line_of(lines, "EXEC SQL")

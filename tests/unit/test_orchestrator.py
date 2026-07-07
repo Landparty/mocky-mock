@@ -58,9 +58,7 @@ def _splice(suite):
     normalized = normalize_fixed_format(SOURCE.splitlines())
     lines = normalized.splitlines()
     boundaries = collect_boundaries(result.ast)
-    return splice_program(
-        lines, boundaries, surface, suite, TallyRegistry(suite)
-    )
+    return splice_program(lines, boundaries, surface, suite, TallyRegistry(suite))
 
 
 def _file_suite():
@@ -68,13 +66,9 @@ def _file_suite():
         name="file case",
         mocks=[
             MockDirective(MockCategory.OPEN, "IN-FILE"),
-            MockDirective(
-                MockCategory.READ, "IN-FILE", ['MOVE "Y" TO WS-EOF']
-            ),
+            MockDirective(MockCategory.READ, "IN-FILE", ['MOVE "Y" TO WS-EOF']),
             MockDirective(MockCategory.CLOSE, "IN-FILE"),
-            MockDirective(
-                MockCategory.SQL, "UPDATE ORDERS", ["MOVE 0 TO SQLCODE"]
-            ),
+            MockDirective(MockCategory.SQL, "UPDATE ORDERS", ["MOVE 0 TO SQLCODE"]),
         ],
         perform_target="MAIN-PARA",
     )
@@ -190,43 +184,38 @@ def _nested_suite(mocks):
 
 
 def test_mocked_nested_call_is_spliced_and_end_if_survives():
-    lines = _splice_nested(
-        _nested_suite([MockDirective(MockCategory.CALL, "NESTED")])
-    )
+    lines = _splice_nested(_nested_suite([MockDirective(MockCategory.CALL, "NESTED")]))
     joined = "\n".join(lines)
     assert '      *>         CALL "NESTED"' in joined
     assert "      *>             USING WS-AMT" in joined
     assert "ADD 1 TO UT-NESTED-TALLY" in joined
     # the enclosing block's words are untouched
-    assert sum(1 for l in lines if l.strip() == "END-IF.") >= 1
-    assert not any(l.startswith('      *>     IF WS-FLAG = "Y"') for l in lines)
+    assert sum(1 for line in lines if line.strip() == "END-IF.") >= 1
+    assert not any(line.startswith('      *>     IF WS-FLAG = "Y"') for line in lines)
 
 
 def test_nested_span_trailing_period_reattaches():
     lines = _splice_nested(
         _nested_suite([MockDirective(MockCategory.CALL, "PERIODIC")])
     )
-    commented = next(l for l in lines if 'CALL "PERIODIC"' in l)
+    commented = next(line for line in lines if 'CALL "PERIODIC"' in line)
     assert commented.startswith("      *>")
     replacement_end = next(
-        l for l in lines if l.strip().startswith("END-EVALUATE")
-        and l.rstrip().endswith(".")
+        line
+        for line in lines
+        if line.strip().startswith("END-EVALUATE") and line.rstrip().endswith(".")
     )
     assert replacement_end  # dispatch block re-terminates the sentence
 
 
 def test_unmocked_nested_call_is_left_alone():
-    lines = _splice_nested(
-        _nested_suite([MockDirective(MockCategory.CALL, "NESTED")])
-    )
-    lonely = next(l for l in lines if 'CALL "LONELY"' in l)
+    lines = _splice_nested(_nested_suite([MockDirective(MockCategory.CALL, "NESTED")]))
+    lonely = next(line for line in lines if 'CALL "LONELY"' in line)
     assert not lonely.startswith("      *>")
 
 
 def test_unmocked_nested_exec_gets_trap_and_end_exec_commented():
-    lines = _splice_nested(
-        _nested_suite([MockDirective(MockCategory.CALL, "NESTED")])
-    )
+    lines = _splice_nested(_nested_suite([MockDirective(MockCategory.CALL, "NESTED")]))
     joined = "\n".join(lines)
     assert "      *>         EXEC SQL" in joined
     assert "      *>         END-EXEC" in joined
@@ -277,9 +266,7 @@ def test_splicing_sections_last_statement_leaves_section_header_live():
     )
     suite = MockTestSuite(name="SEC", test_cases=[case])
     boundaries = collect_boundaries(result.ast)
-    spliced = splice_program(
-        lines, boundaries, surface, suite, TallyRegistry(suite)
-    )
+    spliced = splice_program(lines, boundaries, surface, suite, TallyRegistry(suite))
     commented_call = [
         ln for ln in spliced if "LASTCALL" in ln and ln.startswith("      *>")
     ]

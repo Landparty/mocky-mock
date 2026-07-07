@@ -37,7 +37,7 @@ SQLCA_FIELDS = [
     "    05  SQLERRM.",
     "        49  SQLERRML         PIC S9(4) COMP-5 VALUE 0.",
     "        49  SQLERRMC         PIC X(70) VALUE SPACES.",
-    '    05  SQLERRP              PIC X(8)  VALUE SPACES.',
+    "    05  SQLERRP              PIC X(8)  VALUE SPACES.",
     "    05  SQLERRD              PIC S9(9) COMP-5 OCCURS 6 TIMES.",
     "    05  SQLWARN.",
     "        10  SQLWARN0         PIC X(1)  VALUE SPACE.",
@@ -48,7 +48,7 @@ SQLCA_FIELDS = [
     "        10  SQLWARN5         PIC X(1)  VALUE SPACE.",
     "        10  SQLWARN6         PIC X(1)  VALUE SPACE.",
     "        10  SQLWARN7         PIC X(1)  VALUE SPACE.",
-    '    05  SQLSTATE             PIC X(5)  VALUE SPACES.',
+    "    05  SQLSTATE             PIC X(5)  VALUE SPACES.",
 ]
 
 _DATA_DIVISION_RE = re.compile(r"^\s*DATA\s+DIVISION\s*\.", re.IGNORECASE)
@@ -204,8 +204,9 @@ def _handle_block(
                 result[i] = "      *> " + result[i]
         return end + 1
 
-    if re.search(r"\bINCLUDE\s+(\S+)", block):
-        member = re.search(r"\bINCLUDE\s+(\S+)", block).group(1).rstrip(".")
+    include_match = re.search(r"\bINCLUDE\s+(\S+)", block)
+    if include_match:
+        member = include_match.group(1).rstrip(".")
         reasons.append(
             RefusalReason(
                 code="UNSUPPORTED_DATA_DIVISION_EXEC",

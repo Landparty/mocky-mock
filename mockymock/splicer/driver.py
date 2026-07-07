@@ -139,7 +139,7 @@ def _build_testcase_paragraph(
         lines.append(f"           IF {condition}")
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY '
-            f'{verification.category.keyword} {_display_text(verification.key)} WAS CALLED '
+            f"{verification.category.keyword} {_display_text(verification.key)} WAS CALLED "
             f'{verification.expectation}"'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")

@@ -15,12 +15,12 @@ from mockymock.dsl.model import MockCategory, MockDirective, MockTestCase
 def _case(perform_target, call_names=(), mocks=(), verifications=(), perform_thru=None):
     return MockTestCase(
         name="case",
-        mocks=[MockDirective(MockCategory.CALL, n) for n in call_names]
-        + list(mocks),
+        mocks=[MockDirective(MockCategory.CALL, n) for n in call_names] + list(mocks),
         perform_target=perform_target,
         perform_thru=perform_thru,
         verifications=list(verifications),
     )
+
 
 SOURCE = """\
        IDENTIFICATION DIVISION.
@@ -442,9 +442,7 @@ def test_expansion_warnings_refuse_lossy_copybook_decode(tmp_path):
     (tmp_path / "BADREC.CPY").write_bytes(
         b"       01  BAD-FIELD PIC X(5) VALUE 'ab\xffcd'.\n"
     )
-    expansion = expand_copybooks(
-        COPY_PROGRAM_SOURCE, copybook_paths=[str(tmp_path)]
-    )
+    expansion = expand_copybooks(COPY_PROGRAM_SOURCE, copybook_paths=[str(tmp_path)])
     assert expansion.statistics.warnings  # precondition: the loss is warned
     reasons = check_expansion_warnings(expansion)
     assert any(r.code == "EXPANSION_WARNING" for r in reasons)
@@ -456,9 +454,7 @@ def test_expansion_warnings_pass_for_clean_expansion(tmp_path):
     (tmp_path / "BADREC.CPY").write_text(
         "       01  BAD-FIELD PIC X(5) VALUE 'abcde'.\n"
     )
-    expansion = expand_copybooks(
-        COPY_PROGRAM_SOURCE, copybook_paths=[str(tmp_path)]
-    )
+    expansion = expand_copybooks(COPY_PROGRAM_SOURCE, copybook_paths=[str(tmp_path)])
     assert check_expansion_warnings(expansion) == []
 
 
@@ -597,9 +593,7 @@ def test_per_case_check_follows_multi_hop_perform_chain_to_dynamic_call():
     direct PERFORM targets."""
     result = _chain_result()
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("PARAGRAPH-A", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("PARAGRAPH-A", call_names=()))
     assert any(r.code == "UNMOCKED_CALL" for r in reasons)
 
 
@@ -625,9 +619,7 @@ def test_per_case_check_expands_perform_thru_range():
     range."""
     result = _perform_thru_result()
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("START-HERE", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("START-HERE", call_names=()))
     codes = [r.code for r in reasons]
     assert "UNSUPPORTED_PERFORM_THRU" not in codes
     assert codes.count("UNMOCKED_CALL") == 2
@@ -644,9 +636,7 @@ def test_per_case_check_refuses_backwards_thru_range():
     result = parse_cobol(BACKWARDS_THRU_SOURCE, filename="backthru.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("START-HERE", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("START-HERE", call_names=()))
     thru = [r for r in reasons if r.code == "UNSUPPORTED_PERFORM_THRU"]
     assert len(thru) == 1
     assert "backwards" in thru[0].message
@@ -656,9 +646,7 @@ def test_per_case_check_refuses_missing_thru_endpoint():
     result = parse_cobol(MISSING_THRU_SOURCE, filename="missthru.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("START-HERE", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("START-HERE", call_names=()))
     thru = [r for r in reasons if r.code == "UNSUPPORTED_PERFORM_THRU"]
     assert len(thru) == 1
     assert "NO-SUCH-PARA" in thru[0].message
@@ -668,9 +656,7 @@ def test_per_case_check_refuses_ambiguous_thru_endpoint():
     result = parse_cobol(DUP_THRU_SOURCE, filename="dupthru.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("START-HERE", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("START-HERE", call_names=()))
     thru = [r for r in reasons if r.code == "UNSUPPORTED_PERFORM_THRU"]
     assert len(thru) == 1
     assert "DUP-PARA" in thru[0].message
@@ -786,9 +772,7 @@ def test_per_case_check_unmocked_nested_call_gets_only_unmocked_call_code():
     a nested site'); this catches the separate case of 'didn't even try'."""
     result = _nested_call_result()
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("START-HERE", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("START-HERE", call_names=()))
     assert any(r.code == "UNMOCKED_CALL" for r in reasons)
     assert not any(r.code == "UNSUPPORTED_NESTED_MOCK_TARGET" for r in reasons)
 
@@ -873,9 +857,7 @@ def test_per_case_check_refuses_reachable_console_accept():
 def test_per_case_check_allows_pure_compute_next_to_file_family():
     result = _file_family_result()
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("PURE-COMPUTE", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("PURE-COMPUTE", call_names=()))
     assert reasons == []
 
 
@@ -925,9 +907,7 @@ DEPENDING_GOTO_SOURCE = """\
            CALL "THIRDPGM" USING WS-AMOUNT.
 """
 
-BAD_GOTO_SOURCE = GOTO_SOURCE.replace(
-    "GO TO HIDDEN-PARA.", "GO TO NO-SUCH-PARA."
-)
+BAD_GOTO_SOURCE = GOTO_SOURCE.replace("GO TO HIDDEN-PARA.", "GO TO NO-SUCH-PARA.")
 
 
 def test_per_case_check_follows_go_to_edge_to_hidden_call():
@@ -936,9 +916,7 @@ def test_per_case_check_follows_go_to_edge_to_hidden_call():
     result = parse_cobol(GOTO_SOURCE, filename="gotosamp.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("MAIN-PARA", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("MAIN-PARA", call_names=()))
     assert any(r.code == "UNMOCKED_CALL" for r in reasons)
 
     mocked = check_test_case(
@@ -951,9 +929,7 @@ def test_per_case_check_follows_every_depending_on_target():
     result = parse_cobol(DEPENDING_GOTO_SOURCE, filename="depsamp.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("MAIN-PARA", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("MAIN-PARA", call_names=()))
     unmocked = [r for r in reasons if r.code == "UNMOCKED_CALL"]
     assert len(unmocked) == 1
     assert "THIRDPGM" in unmocked[0].message
@@ -965,9 +941,7 @@ def test_per_case_check_refuses_unresolvable_go_to_target():
     result = parse_cobol(BAD_GOTO_SOURCE, filename="badgoto.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("MAIN-PARA", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("MAIN-PARA", call_names=()))
     flow = [r for r in reasons if r.code == "UNRESOLVED_FLOW_TARGET"]
     assert len(flow) == 1
     assert "NO-SUCH-PARA" in flow[0].message
@@ -1013,9 +987,7 @@ def test_per_case_check_follows_perform_of_a_section():
     result = parse_cobol(SECTION_PERFORM_SOURCE, filename="secsamp.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("MAIN-PARA", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("MAIN-PARA", call_names=()))
     unmocked = [r for r in reasons if r.code == "UNMOCKED_CALL"]
     assert len(unmocked) == 1
     assert "SUBPGM" in unmocked[0].message  # TAIL-SECTION stays unreachable
@@ -1044,9 +1016,7 @@ def test_per_case_check_refuses_unresolvable_perform_target():
     result = parse_cobol(BAD_PERFORM_SOURCE, filename="badperf.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("MAIN-PARA", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("MAIN-PARA", call_names=()))
     flow = [r for r in reasons if r.code == "UNRESOLVED_FLOW_TARGET"]
     assert len(flow) == 1
     assert "GHOST-SECTION" in flow[0].message
@@ -1082,9 +1052,7 @@ def test_per_case_check_sees_call_inside_search_when_body():
     result = parse_cobol(SEARCH_WHEN_SOURCE, filename="srchsamp.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("MAIN-PARA", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("MAIN-PARA", call_names=()))
     unmocked = [r for r in reasons if r.code == "UNMOCKED_CALL"]
     assert len(unmocked) == 1
     assert "HIDDENPGM" in unmocked[0].message
@@ -1195,9 +1163,7 @@ def test_reachable_cancel_without_call_mock_refuses():
     result = parse_cobol(CANCEL_SOURCE, filename="cansamp.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    reasons = check_test_case(
-        surface, result.ast, _case("MAIN-PARA", call_names=())
-    )
+    reasons = check_test_case(surface, result.ast, _case("MAIN-PARA", call_names=()))
     codes = [r.code for r in reasons]
     assert "UNMOCKED_CALL" in codes  # the CALL itself still refuses
     assert "UNMOCKED_CANCEL" in codes
@@ -1221,6 +1187,8 @@ from cobolparser.preprocess import normalize_fixed_format as _normalize
 
 from mockymock.splicer.source_map import (
     annotate_nested_sites as _annotate,
+)
+from mockymock.splicer.source_map import (
     collect_scope_map as _scope_map,
 )
 
@@ -1270,9 +1238,7 @@ def test_mocked_call_in_one_line_paragraph_refuses():
     reasons = check_test_case(
         surface, result.ast, _case("ONE-LINER-PARA", call_names={"LINERPGM"})
     )
-    assert any(
-        r.code == "UNSUPPORTED_MOCK_TARGET_LAYOUT" for r in reasons
-    )
+    assert any(r.code == "UNSUPPORTED_MOCK_TARGET_LAYOUT" for r in reasons)
 
 
 def test_mocked_top_level_call_owning_its_line_still_passes():

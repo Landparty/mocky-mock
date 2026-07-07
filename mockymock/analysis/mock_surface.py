@@ -135,9 +135,7 @@ class MockSurface:
         return [c for c in self.call_sites if c.kind is CallKind.DYNAMIC]
 
     def sites_in(self, paragraph_names: set[str]) -> list[BoundarySite]:
-        return [
-            s for s in self.boundary_sites if s.paragraph_name in paragraph_names
-        ]
+        return [s for s in self.boundary_sites if s.paragraph_name in paragraph_names]
 
     def exec_sites(self) -> list[BoundarySite]:
         return [
@@ -399,9 +397,7 @@ def _classify_statement(
         if statement.from_source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
             surface.console_accept_paragraphs.add(paragraph_name)
             target = (statement.target or "").upper()
-            add_site(
-                MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ()
-            )
+            add_site(MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ())
 
 
 def _walk_statements(

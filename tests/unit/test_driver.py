@@ -19,7 +19,9 @@ def _suite() -> MockTestSuite:
         name="10% discount reduces net amount correctly",
         mocks=[
             MockDirective(
-                MockCategory.CALL, "DISCRATE", body_lines=["MOVE 0.10 TO WS-DISCOUNT-PCT"]
+                MockCategory.CALL,
+                "DISCRATE",
+                body_lines=["MOVE 0.10 TO WS-DISCOUNT-PCT"],
             )
         ],
         setup_moves=[("100.00", "ORD-AMOUNT")],
@@ -32,7 +34,9 @@ def _suite() -> MockTestSuite:
 
 def _build(suite=None, reset_lines=None):
     suite = suite or _suite()
-    return build_driver(suite, reset_lines=reset_lines or [], registry=TallyRegistry(suite))
+    return build_driver(
+        suite, reset_lines=reset_lines or [], registry=TallyRegistry(suite)
+    )
 
 
 def test_working_storage_declares_bookkeeping_fields():

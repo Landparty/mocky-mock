@@ -107,11 +107,7 @@ def splice_program(
         # -- otherwise the unterminated sentence runs into the next
         # paragraph header and cobc rejects it.
         last_span_line = next(
-            (
-                lines[i - 1]
-                for i in range(end, start - 1, -1)
-                if lines[i - 1].strip()
-            ),
+            (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
             "",
         )
         if last_span_line.rstrip().endswith("."):

@@ -1,9 +1,7 @@
 def test_cobolparser_is_importable_and_parses():
     from cobolparser import parse_cobol
 
-    result = parse_cobol(
-        "IDENTIFICATION DIVISION.\nPROGRAM-ID. X.\n", filename="x.cbl"
-    )
+    result = parse_cobol("IDENTIFICATION DIVISION.\nPROGRAM-ID. X.\n", filename="x.cbl")
     assert result.ast is not None
 
 

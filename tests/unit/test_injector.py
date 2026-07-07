@@ -13,7 +13,9 @@ from mockymock.splicer.injector import build_exec_trap, build_site_dispatch
 from mockymock.splicer.naming import TallyRegistry
 
 
-def _site(category=MockCategory.CALL, label="CALL", keys=("DISCRATE",), match_text=None):
+def _site(
+    category=MockCategory.CALL, label="CALL", keys=("DISCRATE",), match_text=None
+):
     return BoundarySite(
         category=category,
         label=label,
@@ -100,9 +102,7 @@ def test_sql_site_dispatch_matches_by_prefix():
     )
     case = MockTestCase(
         name="sql",
-        mocks=[
-            MockDirective(MockCategory.SQL, "UPDATE ORDERS", ["MOVE 0 TO SQLCODE"])
-        ],
+        mocks=[MockDirective(MockCategory.SQL, "UPDATE ORDERS", ["MOVE 0 TO SQLCODE"])],
     )
     suite = MockTestSuite(name="S", test_cases=[case])
     joined = "\n".join(_dispatch(suite, site))
