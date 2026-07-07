@@ -189,13 +189,17 @@ TESTCASE "runs MAIN-PARA"
 def test_run_verbose_prints_instrumented_source_path_on_compile_failure(
     tmp_path: Path, capsys
 ):
+    """--verbose alone (no --keep-sandbox) must still leave the printed
+    instrumented-source path actionable: the sandbox has to be retained on
+    compile failure whenever --verbose is set, or the path printed here
+    points at an already-deleted file."""
     program = tmp_path / "BADCOMPILE.cbl"
     program.write_text(BADCOMPILE_CBL)
     cut_file = tmp_path / "BADCOMPILE.cut"
     cut_file.write_text(BADCOMPILE_CUT)
 
     exit_code = main(
-        ["run", str(program), "--cut", str(cut_file), "--keep-sandbox", "--verbose"]
+        ["run", str(program), "--cut", str(cut_file), "--verbose"]
     )
     out = capsys.readouterr().out
 
@@ -212,6 +216,34 @@ def test_run_verbose_prints_instrumented_source_path_on_compile_failure(
 
     assert instrumented_path.is_file()
     assert "BADCOMPILE" in instrumented_path.read_text()
+
+
+@requires_docker
+def test_run_verbose_only_does_not_leave_sandbox_after_successful_run(
+    tmp_path: Path,
+):
+    """--verbose must not leave sandbox cruft behind when compile+run
+    succeed -- it's only retained long enough to make a compile-failure
+    path printout actionable, not kept around unconditionally like
+    --keep-sandbox."""
+    from mockymock.runtime import docker_toolchain
+
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(ORDRPROC_CBL)
+    cut_file = tmp_path / "ORDRPROC.cut"
+    cut_file.write_text(ORDRPROC_CUT)
+
+    docker_toolchain.WORK_ROOT.mkdir(parents=True, exist_ok=True)
+    before = set(docker_toolchain.WORK_ROOT.glob("mockymock-*"))
+
+    exit_code = main(
+        ["run", str(program), "--cut", str(cut_file), "--verbose"]
+    )
+
+    after = set(docker_toolchain.WORK_ROOT.glob("mockymock-*"))
+
+    assert exit_code == 0
+    assert after - before == set()
 
 
 def test_run_refuses_program_with_parse_errors(tmp_path: Path, capsys):

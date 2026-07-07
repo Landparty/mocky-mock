@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -187,8 +188,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     instrumented = _insert_driver(lines, artifact)
 
+    # --verbose needs the sandbox retained too: the instrumented-source path
+    # it prints on compile failure must still exist by the time the user
+    # reads it, but plain --verbose (no --keep-sandbox) shouldn't leave
+    # cruft behind after a run that actually succeeds -- see the explicit
+    # cleanup below.
     with sandbox_dir_maybe_kept(
-        root=docker_toolchain.WORK_ROOT, keep=args.keep_sandbox
+        root=docker_toolchain.WORK_ROOT, keep=args.keep_sandbox or args.verbose
     ) as tmp:
         if args.keep_sandbox:
             print(f"mockymock run: keeping sandbox {tmp}")
@@ -207,6 +213,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             return 1
 
         executed = docker_toolchain.run_binary(compiled.binary_path)
+
+    if args.verbose and not args.keep_sandbox:
+        shutil.rmtree(tmp, ignore_errors=True)
 
     suite_result = parse_stdout(executed.stdout)
     print(format_console(suite_result))
