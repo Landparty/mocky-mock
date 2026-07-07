@@ -31,7 +31,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
 
     from mockymock.analysis.mock_surface import analyze
-    from mockymock.analysis.refusal import check_unresolved_copybooks
+    from mockymock.analysis.refusal import (
+        check_expansion_warnings,
+        check_unresolved_copybooks,
+        check_whole_program,
+    )
     from mockymock.dsl.generator import scaffold_cut
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
@@ -39,12 +43,27 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     raw_source = source_path.read_text()
     if args.copybook_path:
         expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        expansion_reasons = check_expansion_warnings(expansion)
+        for reason in expansion_reasons:
+            print(f"mockymock generate: refused ({reason.code}): {reason.message}")
+        if expansion_reasons:
+            return 1
         raw_source = expansion.expanded_source
     result = parse_cobol(raw_source, filename=source_path.name)
     if not result.success:
         print(f"mockymock generate: {len(result.errors)} parse error(s):")
         for error in result.errors:
             print(f"  {error}")
+        return 1
+
+    # success=True is not enough: cobolparser reports dropped statements
+    # (unsupported verbs, multi-program units, unparsed clause leftovers)
+    # as warnings on an otherwise clean parse. A scaffold built from an
+    # incomplete AST would silently miss boundaries, so refuse.
+    warning_reasons = check_whole_program(result)
+    for reason in warning_reasons:
+        print(f"mockymock generate: refused ({reason.code}): {reason.message}")
+    if warning_reasons:
         return 1
 
     copybook_reasons = check_unresolved_copybooks(raw_source)
@@ -100,6 +119,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     from mockymock.analysis.mock_surface import analyze
     from mockymock.analysis.refusal import (
+        check_expansion_warnings,
         check_nested_exec,
         check_test_case,
         check_unresolved_copybooks,
@@ -131,12 +151,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
     raw_source = source_path.read_text()
     if args.copybook_path:
         expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        expansion_reasons = check_expansion_warnings(expansion)
+        for reason in expansion_reasons:
+            print(f"mockymock run: refused ({reason.code}): {reason.message}")
+        if expansion_reasons:
+            return 1
         raw_source = expansion.expanded_source
     result = parse_cobol(raw_source, filename=source_path.name)
 
-    for reason in check_whole_program(result):
+    whole_program_reasons = check_whole_program(result)
+    for reason in whole_program_reasons:
         print(f"mockymock run: refused ({reason.code}): {reason.message}")
+    # The PARSE_ERROR reason only carries a count; print the individual
+    # errors too (matching `generate`) so a non-parsing program is
+    # diagnosable from the CLI output alone.
     if not result.success:
+        for error in result.errors:
+            print(f"  {error}")
+    if whole_program_reasons:
         return 1
 
     copybook_reasons = check_unresolved_copybooks(raw_source)

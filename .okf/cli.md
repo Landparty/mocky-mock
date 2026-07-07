@@ -49,8 +49,13 @@ Flow (`_cmd_generate`):
 
 1. Read `program`; if `--copybook-path` given (repeatable), run
    `expand_copybooks` first and use the expanded source from then on.
+   `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
+   on a lossy copybook decode before the corrupted text is ever parsed.
 2. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
-   and exit 1 (never reaches analysis).
+   and exit 1 (never reaches analysis). On a successful parse,
+   `check_whole_program(result)` still refuses (PARSE_WARNING, exit 1) if
+   `ParseResult.warnings` reports dropped statements — a scaffold built from
+   an incomplete AST would silently miss boundaries.
 3. `check_unresolved_copybooks(raw_source)` — a **refusal** check run even
    though the program parsed; any reason printed as
    `mockymock generate: refused (<code>): <message>` and exit 1.
@@ -86,10 +91,12 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
    (so `mockymock setup` is optional before `run`). `DockerNotAvailableError`
    -> print and exit 1.
 2. Read `program`, apply `--copybook-path` expansion same as `generate`.
-3. `parse_cobol` -> `check_whole_program(result)` refusals are printed
-   regardless of parse success, but if `result.success` is false the command
-   exits 1 right after (parse errors take priority even over whole-program
-   refusal messages already printed).
+   `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
+   on a lossy copybook decode before the corrupted text is ever parsed.
+3. `parse_cobol` -> `check_whole_program(result)` refusals (PARSE_ERROR on
+   a failed parse, PARSE_WARNING per `ParseResult.warnings` entry — dropped
+   statements on an otherwise "clean" parse) are printed and any of them
+   exits 1.
 4. `check_unresolved_copybooks(raw_source)` — same refusal gate as `generate`.
 5. Parse the `.cut` file: `parse_cut(Path(args.cut).read_text())` -> `suite`.
 6. `analyze(result.ast)` -> `surface`; normalize source to `lines`.

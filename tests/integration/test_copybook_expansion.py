@@ -87,6 +87,32 @@ def test_generate_without_copybook_path_leaves_copy_unresolved(
     assert "UNRESOLVED_COPYBOOK" in capsys.readouterr().out
 
 
+def test_generate_refuses_lossy_copybook_decode(tmp_path: Path, capsys):
+    """A copybook whose bytes cannot be decoded losslessly is expanded with
+    U+FFFD replacement characters; the only signal is
+    `CopybookExpansion.statistics.warnings`. Corrupted DATA DIVISION content
+    must refuse (EXPANSION_WARNING), not scaffold."""
+    copybook_dir = tmp_path / "copybooks"
+    copybook_dir.mkdir()
+    (copybook_dir / "ORDREC.CPY").write_bytes(
+        b"       01  ORD-AMOUNT PIC X(5) VALUE 'ab\xffcd'.\n"
+    )
+    output = tmp_path / "MAINPGM.cut"
+    exit_code = main(
+        [
+            "generate",
+            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            "-o",
+            str(output),
+            "--copybook-path",
+            str(copybook_dir),
+        ]
+    )
+    assert exit_code == 1
+    assert "EXPANSION_WARNING" in capsys.readouterr().out
+    assert not output.exists()
+
+
 def test_generate_with_copybook_path_does_not_flag_unresolved_copybook(
     tmp_path: Path, capsys
 ):

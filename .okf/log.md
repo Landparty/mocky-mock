@@ -1,5 +1,38 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-07
+* **Refuse on cobolparser's new dropped-content warnings**
+  ([analysis](analysis.md), [cli](cli.md), [integration](integration.md)):
+  cobolparser's 2026-07-07 silent-drop remediation (upstream PR #77) made
+  `ParseResult.warnings` the signal for content dropped from an otherwise
+  clean parse — unsupported verbs (INVOKE, EXHIBIT, ...), unparsed clause
+  leftovers, and multi-program compilation units (extra programs land in
+  `ast.contained_programs`, which the splicer and reachability BFS never
+  look at). `check_whole_program` now emits a `PARSE_WARNING` refusal per
+  warning, and both `generate` and `run` gate on the returned reasons
+  instead of `result.success` alone. New `check_expansion_warnings` refuses
+  (`EXPANSION_WARNING`) on lossy copybook decodes surfaced via
+  `CopybookExpansion.statistics.warnings` — but only the `"Lossy decode of"`
+  class: the same channel carries advisory lint heuristics ("may be missing
+  terminating period") that false-positive on valid copybooks (verified
+  against `tests/integration/fixtures/copybook_example`). Tests:
+  `test_refusal.py` (PARSE_WARNING for INVOKE and multi-program units,
+  EXPANSION_WARNING for lossy decode, advisory-lint pass-through),
+  `test_cli.py` (generate + run refuse INVOKER programs),
+  `test_copybook_expansion.py` (generate refuses lossy copybook).
+* **Verified mockymock against cobolparser main after its audit-fix wave**
+  (PRs #68–#77: OPEN multi-mode capture, IO clause bodies, EVALUATE WHEN
+  children, IF-condition precedence, statement-swallow fixes,
+  numeric-literal continuation, C1–C8/H3/H6b silent-drop fixes): full suite
+  green (unit + Docker integration). The `task_c5e3b268` dropped-EXEC-SQL
+  bug no longer reproduces (COMPUTE/statement-boundary fixes); the DEPTMQP
+  xfail was already removed. Stale contract note updated: the
+  `fix/open-multi-mode-file-capture` branch requirement is now "cobol-parser
+  at or after PR #68 on main". Known upstream residual documented in
+  [integration](integration.md): an unknown verb directly after a
+  period-less statement can still be swallowed silently by the preceding
+  statement's parser (no warning) — period-terminated layouts are covered.
+
 ## 2026-07-06
 * **Initialization**: Established the OKF bundle for mocky-mock, matching the
   pattern used by sibling LegacyLens repos (`cobol-parser`, `backend`, etc.).

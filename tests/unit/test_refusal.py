@@ -3,6 +3,7 @@ from cobolparser import parse_cobol
 from mockymock.analysis.mock_surface import analyze
 from mockymock.analysis.refusal import (
     _expand_thru_range,
+    check_expansion_warnings,
     check_nested_exec,
     check_test_case,
     check_unresolved_copybooks,
@@ -363,6 +364,120 @@ def test_whole_program_check_flags_parse_errors():
     bad = parse_cobol("NOT EVEN VALID COBOL { } [ ]", filename="bad.cbl")
     reasons = check_whole_program(bad)
     assert any(r.code == "PARSE_ERROR" for r in reasons)
+
+
+# An unsupported verb parses "clean" (success=True, errors=0) but the
+# statement is dropped from the AST with only a ParseResult.warnings entry
+# (cobolparser 2026-07-07 silent-drop remediation). Splicing an AST that is
+# missing statements would silently drop program behavior, so each warning
+# must refuse fail-closed.
+UNSUPPORTED_VERB_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. INVOKER.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           INVOKE SOME-OBJECT "someMethod".
+           DISPLAY "done".
+"""
+
+
+def test_whole_program_check_flags_parse_warnings():
+    result = parse_cobol(UNSUPPORTED_VERB_SOURCE, filename="invoker.cbl")
+    assert result.success, result.errors
+    assert result.warnings  # precondition: the INVOKE drop is warned about
+    reasons = check_whole_program(result)
+    assert any(r.code == "PARSE_WARNING" for r in reasons)
+    assert any("INVOKE" in r.message for r in reasons)
+
+
+# Multi-program compilation units parse into ast.contained_programs with a
+# summary warning; mockymock's splicer and reachability BFS only ever look
+# at the first program's divisions, so these must refuse rather than test a
+# fraction of the file.
+MULTI_PROGRAM_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FIRSTPGM.
+       PROCEDURE DIVISION.
+       A-PARA.
+           DISPLAY "one".
+       END PROGRAM FIRSTPGM.
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECONDPGM.
+       PROCEDURE DIVISION.
+       B-PARA.
+           DISPLAY "two".
+       END PROGRAM SECONDPGM.
+"""
+
+
+def test_whole_program_check_flags_multi_program_units():
+    result = parse_cobol(MULTI_PROGRAM_SOURCE, filename="multi.cbl")
+    assert result.success, result.errors
+    reasons = check_whole_program(result)
+    assert any(r.code == "PARSE_WARNING" for r in reasons)
+
+
+COPY_PROGRAM_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOSSYPGM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           COPY BADREC.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY BAD-FIELD.
+"""
+
+
+def test_expansion_warnings_refuse_lossy_copybook_decode(tmp_path):
+    """A copybook whose bytes cannot be decoded losslessly is expanded with
+    U+FFFD replacement characters and the loss is reported only via
+    `CopybookExpansion.statistics.warnings` -- the expanded source would
+    still splice and compile, with corrupted PIC/VALUE content. Fail closed."""
+    from cobolparser.preprocess import expand_copybooks
+
+    (tmp_path / "BADREC.CPY").write_bytes(
+        b"       01  BAD-FIELD PIC X(5) VALUE 'ab\xffcd'.\n"
+    )
+    expansion = expand_copybooks(
+        COPY_PROGRAM_SOURCE, copybook_paths=[str(tmp_path)]
+    )
+    assert expansion.statistics.warnings  # precondition: the loss is warned
+    reasons = check_expansion_warnings(expansion)
+    assert any(r.code == "EXPANSION_WARNING" for r in reasons)
+
+
+def test_expansion_warnings_pass_for_clean_expansion(tmp_path):
+    from cobolparser.preprocess import expand_copybooks
+
+    (tmp_path / "BADREC.CPY").write_text(
+        "       01  BAD-FIELD PIC X(5) VALUE 'abcde'.\n"
+    )
+    expansion = expand_copybooks(
+        COPY_PROGRAM_SOURCE, copybook_paths=[str(tmp_path)]
+    )
+    assert check_expansion_warnings(expansion) == []
+
+
+def test_expansion_warnings_ignore_advisory_lint(tmp_path):
+    """`ExpansionStatistics.warnings` also carries advisory heuristics (e.g.
+    "may be missing terminating period") that false-positive on valid
+    copybooks; only lossy-decode diagnostics may refuse, or working programs
+    would be rejected."""
+
+    class _FakeStats:
+        warnings = [
+            "Line 1 in 'X.CPY' may be missing terminating period",
+            "Copybook 'Y.CPY' contains only comments",
+        ]
+
+    class _FakeExpansion:
+        statistics = _FakeStats()
+
+    assert check_expansion_warnings(_FakeExpansion()) == []
 
 
 # Unexpanded COPY statement -- the AST leaves zero trace of this (verified
