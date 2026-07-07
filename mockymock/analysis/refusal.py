@@ -3,14 +3,35 @@ nested EXEC blocks) and per-TESTCASE (directive/site matching) checks.
 
 Per-TESTCASE checks are computed over the statements reachable from that
 case's PERFORM target. Reachability is a self-contained BFS over
-PerformStatement targets within the same program -- not cobolparser's
-ProgramFlowAnalyzer -- because that keeps this module's correctness
-checkable against the same small set of verified attributes
+PerformStatement AND GoStatement targets within the same program -- not
+cobolparser's ProgramFlowAnalyzer -- because that keeps this module's
+correctness checkable against the same small set of verified attributes
 (CobolParagraph.statements, CobolParagraph.location.line,
-PerformStatement.target_paragraph, PerformStatement.thru_paragraph) the
-rest of mockymock already depends on. A CALL is a leaf: it is never
-traversed into, since the called program's source isn't part of this
-compilation unit.
+PerformStatement.target_paragraph, PerformStatement.thru_paragraph,
+GoStatement.target_paragraphs) the rest of mockymock already depends on.
+A CALL is a leaf: it is never traversed into, since the called program's
+source isn't part of this compilation unit.
+
+Flow-edge model (fail closed):
+- PERFORM <paragraph> pushes the paragraph; PERFORM <section> pushes every
+  paragraph of that section (a performed section executes all of them by
+  fall-through).
+- GO TO pushes every target -- a computed `GO TO A B C DEPENDING ON X`
+  carries all of its targets in GoStatement.target_paragraphs. Targets may
+  be paragraphs or sections. (A GO TO that escapes its PERFORM range and
+  relies on falling through *past* its target paragraph is not modeled --
+  such control flow runs off the end of the program at test runtime and is
+  covered by the documented STOP RUN limitation.)
+- Any PERFORM/GO TO target that resolves to neither a paragraph nor a
+  section refuses with UNRESOLVED_FLOW_TARGET instead of being skipped: a
+  target the model cannot resolve means the reachable set is not trusted.
+
+check_whole_program additionally refuses two constructs the flow model
+deliberately does not attempt to handle, by their mere presence anywhere
+in the program: DECLARATIVES (UNSUPPORTED_DECLARATIVES -- USE procedures
+run on I/O conditions, invisible to any PERFORM/GO TO edge) and ALTER
+(UNSUPPORTED_ALTER -- it rewrites GO TO targets at runtime, so no static
+edge set is sound).
 
 v2 matching model: every reachable mockable BoundarySite must be matched by
 exactly one MockDirective of the test case --
@@ -37,12 +58,23 @@ A directive matching no reachable site is UNMATCHED_MOCK; a VERIFY whose
 (category, key) no MOCK directive of the same case declares is
 VERIFY_WITHOUT_MOCK (its tally field would be stale or undeclared).
 
+- matched but sharing a source line with other code (top-level sites) ->
+  UNSUPPORTED_MOCK_TARGET_LAYOUT: a top-level splice comments out whole
+  lines, so a boundary statement that does not own its line(s) -- sibling
+  code before it, a one-line paragraph header, or another statement
+  starting on the same line -- would silently delete that sibling code.
+  annotate_nested_sites stamps the layout problem; the gate refuses it.
+
 Detected-but-unmockable sites keep their own refusals: DYNAMIC_CALL (now
 only for a dynamic CALL whose target identifier cobolparser failed to
 capture -- identifier-carrying dynamic CALLs are mockable via
 MOCK CALL <identifier>, see docs/2026-07-06-dynamic-call-mocks-design.md)
 and UNSUPPORTED_SORT_MERGE (SORT/MERGE/RELEASE/RETURN mock an algorithm
 plus its INPUT/OUTPUT PROCEDURE contract, not a boundary statement).
+A reachable CANCEL is covered when the test case mocks CALL (static or
+dynamic) for the same name -- the mocked CALL never loads a real module,
+so the CANCEL is a guaranteed GnuCOBOL no-op left in place -- and refuses
+UNMOCKED_CANCEL otherwise.
 PERFORM ... THRU ranges ARE expanded: every paragraph in the source-order
 slice [target..thru] is reachable (fall-through executes them all), with
 the required source-order guarantee checked at runtime
@@ -88,7 +120,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from cobolparser.lexer import CobolLexer, TokenType
-from cobolparser.models.statements.control import PerformStatement
+from cobolparser.models.program import CobolParagraph
+from cobolparser.models.statements.control import GoStatement, PerformStatement
+from cobolparser.models.statements.misc import AlterStatement
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.mock_surface import (
@@ -156,7 +190,13 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
     incomplete, so each warning refuses fail-closed. (Lossy copybook-decode
     diagnostics travel a different channel on mockymock's CLI path —
     `CopybookExpansion.statistics.warnings` — and are gated by
-    `check_expansion_warnings` instead.)"""
+    `check_expansion_warnings` instead.)
+
+    Also whole-program, AST-based (both parse warning-free, verified
+    empirically): UNSUPPORTED_DECLARATIVES for any program containing a
+    DECLARATIVES block, and UNSUPPORTED_ALTER for any ALTER statement --
+    see `_check_unsupported_control_flow` for why neither can ever be
+    modeled by the reachability BFS."""
     reasons: list[RefusalReason] = []
     if not parse_result.success:
         reasons.append(
@@ -179,7 +219,77 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
                 ),
             )
         )
+    program = getattr(parse_result, "ast", None)
+    if program is not None:
+        reasons.extend(_check_unsupported_control_flow(program))
     return reasons
+
+
+def _check_unsupported_control_flow(program) -> list[RefusalReason]:
+    """UNSUPPORTED_DECLARATIVES / UNSUPPORTED_ALTER, unconditional
+    whole-program refusals (like SORT/MERGE, but independent of
+    reachability):
+
+    - DECLARATIVES sections hold USE procedures the runtime invokes on I/O
+      conditions -- no PERFORM/GO TO edge ever points at them, so the
+      reachability BFS structurally cannot gate the boundary statements
+      inside them. cobolparser parses a DECLARATIVES block warning-free,
+      leaving a paragraph literally named DECLARATIVES (a reserved word no
+      valid user paragraph can use -- verified empirically), which is the
+      detection signal here.
+    - ALTER rewrites another paragraph's GO TO target at runtime, so no
+      static edge set is sound for a program containing one.
+    """
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return []
+    reasons: list[RefusalReason] = []
+    for paragraph in _all_paragraphs(procedure):
+        if paragraph.paragraph_name.upper() == "DECLARATIVES":
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_DECLARATIVES",
+                    message=(
+                        f"program contains a DECLARATIVES block (line "
+                        f"{paragraph.location.line}) -- USE procedures run "
+                        f"on I/O conditions outside any PERFORM/GO TO edge, "
+                        f"so the reachability gate cannot check the boundary "
+                        f"statements inside them"
+                    ),
+                )
+            )
+            break
+    for paragraph in _all_paragraphs(procedure):
+        for statement in _find_statements_of_type(paragraph.statements, AlterStatement):
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_ALTER",
+                    message=(
+                        f"paragraph '{paragraph.paragraph_name}' (line "
+                        f"{statement.location.line}) contains an ALTER "
+                        f"statement -- ALTER rewrites GO TO targets at "
+                        f"runtime, so no static reachability analysis of "
+                        f"this program is sound"
+                    ),
+                )
+            )
+    return reasons
+
+
+def _find_statements_of_type(
+    statements: list, statement_type: type | tuple[type, ...]
+) -> list:
+    """Recursively collect statements of `statement_type`, including ones
+    nested inside IF/EVALUATE/SEARCH branches, inline PERFORM bodies, and
+    IO clause bodies -- reusing mock_surface.py's `_nested_statement_lists`
+    rather than reimplementing nested-statement detection."""
+    found = []
+    for statement in statements:
+        if isinstance(statement, statement_type):
+            found.append(statement)
+        for nested in _nested_statement_lists(statement):
+            found.extend(_find_statements_of_type(nested, statement_type))
+    return found
 
 
 # The only `ExpansionStatistics.warnings` class that means the expanded text
@@ -215,12 +325,17 @@ def check_expansion_warnings(expansion) -> list[RefusalReason]:
 
 
 def check_nested_exec(surface: MockSurface) -> list[RefusalReason]:
-    """Whole-program: a nested EXEC SQL/CICS/DLI with no validated splice
-    span refuses the file. Every EXEC block must be commented out for cobc
-    to compile the program at all; a nested EXEC whose span was validated
-    by `annotate_nested_sites` can be stubbed like any other site, so only
-    the unspliceable ones (or unannotated ones -- fail closed) refuse."""
-    return [
+    """Whole-program: an EXEC SQL/CICS/DLI site that cannot be spliced
+    safely refuses the file. Every EXEC block must be commented out for
+    cobc to compile the program at all -- even unmocked, unreachable ones
+    get a trap stub -- so spliceability is checked program-wide:
+
+    - NESTED_EXEC: a nested EXEC with no validated splice span (or never
+      annotated -- fail closed).
+    - UNSPLICEABLE_EXEC: a top-level EXEC that shares a source line with
+      sibling code (annotate_nested_sites stamped the layout problem);
+      splicing its whole-line span would delete that sibling code."""
+    reasons = [
         RefusalReason(
             code="NESTED_EXEC",
             message=(
@@ -235,6 +350,21 @@ def check_nested_exec(surface: MockSurface) -> list[RefusalReason]:
         for site in surface.exec_sites()
         if site.nested and site.span is None
     ]
+    reasons.extend(
+        RefusalReason(
+            code="UNSPLICEABLE_EXEC",
+            message=(
+                f"EXEC {site.label} at line {site.line} (paragraph "
+                f"'{site.paragraph_name}') {site.unspliceable_reason} -- "
+                f"every EXEC block must be stubbed out for GnuCOBOL to "
+                f"compile the program, and stubbing this one would comment "
+                f"out the sibling code sharing its line(s)"
+            ),
+        )
+        for site in surface.exec_sites()
+        if not site.nested and site.unspliceable_reason
+    )
+    return reasons
 
 
 def check_unresolved_copybooks(raw_source: str) -> list[RefusalReason]:
@@ -299,7 +429,53 @@ def check_test_case(
     matched_directives: set[int] = set()
     for site in surface.sites_in(reachable):
         if site.category is None:
-            if site.label == "dynamic CALL":
+            if site.label == "CANCEL":
+                # Covered when this case mocks CALL (static: exact key;
+                # dynamic: uppercased identifier) for every name the CANCEL
+                # carries: the mocked CALL never loads a real module, so
+                # the CANCEL -- left in place, never spliced -- is a
+                # guaranteed GnuCOBOL no-op. Anything else fails closed.
+                covering: list[MockDirective] = []
+                uncovered: list[str] = []
+                for key in site.keys:
+                    matches = [
+                        d
+                        for d in case.mocks
+                        if (d.category is MockCategory.CALL and d.key == key)
+                        or (
+                            d.category is MockCategory.DYNCALL
+                            and d.key.upper() == key.upper()
+                        )
+                    ]
+                    if matches:
+                        covering.extend(matches)
+                    else:
+                        uncovered.append(key)
+                if site.keys and not uncovered:
+                    for directive in covering:
+                        matched_directives.add(id(directive))
+                else:
+                    reasons.append(
+                        RefusalReason(
+                            code="UNMOCKED_CANCEL",
+                            message=(
+                                f"CANCEL at line {site.line} (paragraph "
+                                f"'{site.paragraph_name}'"
+                                + (
+                                    f", names {'/'.join(site.keys)}"
+                                    if site.keys
+                                    else ", no program name captured"
+                                )
+                                + f") is reachable from "
+                                f"'{case.perform_target}' but this test case "
+                                f"does not mock a matching CALL -- CANCEL is "
+                                f"only a safe no-op when the CALLs for the "
+                                f"same program are mocked (the module is "
+                                f"then never loaded)"
+                            ),
+                        )
+                    )
+            elif site.label == "dynamic CALL":
                 reasons.append(
                     RefusalReason(
                         code="DYNAMIC_CALL",
@@ -376,6 +552,25 @@ def check_test_case(
                     ),
                 )
             )
+        elif not site.nested and site.unspliceable_reason:
+            # Top-level splices comment out whole source lines: a boundary
+            # statement that shares a line with sibling code (a one-line
+            # paragraph `P1. CALL "X".`, code before it on the line, or a
+            # second statement after it) would silently delete that sibling
+            # code. annotate_nested_sites stamps the layout problem.
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_MOCK_TARGET_LAYOUT",
+                    message=(
+                        f"MOCK {matches[0].describe()} matches a top-level "
+                        f"statement at line {site.line} (paragraph "
+                        f"'{site.paragraph_name}') that {site.unspliceable_reason}"
+                        f" -- splicing it would comment out the sibling code "
+                        f"sharing its line(s); put the statement on its own "
+                        f"line(s)"
+                    ),
+                )
+            )
 
     for directive in case.mocks:
         if id(directive) not in matched_directives:
@@ -407,20 +602,14 @@ def check_test_case(
     return reasons
 
 
-def _find_performs(statements: list) -> list[PerformStatement]:
-    """Recursively collect every PerformStatement in `statements`, including
-    ones nested inside IF/EVALUATE branches, inline PERFORM bodies, and IO
-    clause bodies (AT END, INVALID KEY, etc.) -- reusing mock_surface.py's
-    `_nested_statement_lists` rather than reimplementing nested-statement
-    detection.
+def _find_flow_statements(statements: list) -> list:
+    """Recursively collect every PerformStatement and GoStatement in
+    `statements`, including ones nested inside IF/EVALUATE/SEARCH branches,
+    inline PERFORM bodies, and IO clause bodies (AT END, INVALID KEY, etc.)
+    -- reusing mock_surface.py's `_nested_statement_lists` rather than
+    reimplementing nested-statement detection.
     """
-    found = []
-    for statement in statements:
-        if isinstance(statement, PerformStatement):
-            found.append(statement)
-        for nested in _nested_statement_lists(statement):
-            found.extend(_find_performs(nested))
-    return found
+    return _find_statements_of_type(statements, (PerformStatement, GoStatement))
 
 
 def _source_ordered_paragraphs(procedure) -> list | None:
@@ -431,7 +620,7 @@ def _source_ordered_paragraphs(procedure) -> list | None:
     the None path and every expansion refuses fail-closed."""
     paragraphs = sorted(_all_paragraphs(procedure), key=lambda p: p.location.line)
     lines = [p.location.line for p in paragraphs]
-    if any(later <= earlier for earlier, later in zip(lines, lines[1:])):
+    if any(later <= earlier for earlier, later in zip(lines, lines[1:], strict=False)):
         return None
     return paragraphs
 
@@ -493,19 +682,34 @@ def _expand_thru_range(
 def _reachable_paragraphs(
     program, start: str, thru: str | None = None
 ) -> tuple[set[str], list[RefusalReason]]:
-    """Return (reachable paragraph names, degenerate-THRU-range refusals),
-    computed in a single BFS pass over PerformStatement edges. A
-    PERFORM ... THRU pushes every paragraph of its source-order range
+    """Return (reachable paragraph/section names, flow refusals), computed
+    in a single BFS pass over PerformStatement and GoStatement edges.
+
+    A PERFORM ... THRU pushes every paragraph of its source-order range
     (fall-through executes them all); `thru` seeds the BFS with the test
     case's own driver-side range, whose missing endpoints are the .cut
-    author's typo and use UNKNOWN_PARAGRAPH."""
+    author's typo and use UNKNOWN_PARAGRAPH. A PERFORM or GO TO naming a
+    SECTION pushes every paragraph of that section (a performed section
+    executes all of them by fall-through). Any in-program PERFORM/GO TO
+    target resolving to neither a paragraph nor a section refuses with
+    UNRESOLVED_FLOW_TARGET -- fail closed, never a silent skip: an edge
+    the model cannot resolve means the reachable set cannot be trusted.
+    (The seed `start` is exempt: check_test_case turns an unresolvable
+    driver-side target into UNKNOWN_PARAGRAPH.)"""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
     ordered = _source_ordered_paragraphs(procedure)
-    by_name: dict[str, object] = {}
+    by_name: dict[str, CobolParagraph] = {}
     for paragraph in _all_paragraphs(procedure):
         by_name.setdefault(paragraph.paragraph_name, paragraph)
+    section_members: dict[str, list[str]] = {}
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        if not section_name:
+            continue
+        section_members.setdefault(
+            section_name, [p.paragraph_name for p in section.paragraphs]
+        )
 
     reasons: list[RefusalReason] = []
     stack = [start]
@@ -521,15 +725,61 @@ def _reachable_paragraphs(
             reasons.append(problem)
         stack.extend(members)
 
+    def push_target(target: str, origin: str, verb: str) -> None:
+        if target in by_name or target in section_members:
+            stack.append(target)
+        else:
+            reasons.append(
+                RefusalReason(
+                    code="UNRESOLVED_FLOW_TARGET",
+                    message=(
+                        f"paragraph '{origin}': {verb} target '{target}' is "
+                        f"neither a paragraph nor a section of the PROCEDURE "
+                        f"DIVISION -- the reachability analysis cannot "
+                        f"resolve this control-flow edge, so the reachable "
+                        f"set cannot be trusted"
+                    ),
+                )
+            )
+
     seen: set[str] = set()
     while stack:
         name = stack.pop()
-        if name in seen or name not in by_name:
+        if name in seen:
+            continue
+        if name not in by_name:
+            if name in section_members:
+                # A performed/jumped-to section executes every one of its
+                # paragraphs by fall-through.
+                seen.add(name)
+                stack.extend(section_members[name])
+            # else: only the driver-side seed can be unresolved here (every
+            # in-program edge was resolvability-checked before pushing);
+            # check_test_case reports it as UNKNOWN_PARAGRAPH.
             continue
         seen.add(name)
-        for statement in _find_performs(by_name[name].statements):
+        for statement in _find_flow_statements(by_name[name].statements):
+            if isinstance(statement, GoStatement):
+                targets = list(statement.target_paragraphs)
+                if not targets and statement.target_paragraph:
+                    targets = [statement.target_paragraph]
+                if not targets:
+                    reasons.append(
+                        RefusalReason(
+                            code="UNRESOLVED_FLOW_TARGET",
+                            message=(
+                                f"paragraph '{name}' (line "
+                                f"{statement.location.line}) contains a GO TO "
+                                f"whose target(s) the parser did not capture "
+                                f"-- fail closed"
+                            ),
+                        )
+                    )
+                for target in targets:
+                    push_target(target, name, "GO TO")
+                continue
             if statement.target_paragraph:
-                stack.append(statement.target_paragraph)
+                push_target(statement.target_paragraph, name, "PERFORM")
                 if statement.thru_paragraph:
                     members, problem = _expand_thru_range(
                         ordered,

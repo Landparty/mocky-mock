@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-07-06T00:00:00Z
+timestamp: 2026-07-07T00:00:00Z
 ---
 
 # Overview
@@ -39,18 +39,35 @@ TESTCASE "<name>"
     [ VERIFY [<category>] <key> WAS CALLED|PERFORMED <expectation> ]*
 ```
 
+- Exactly one `TESTSUITE` per file — a second `TESTSUITE` line raises
+  `CutParseError` with its line number (it used to silently discard every
+  previously parsed test case, so concatenated .cut files ran only the
+  last suite).
 - `TESTCASE` must follow a `TESTSUITE`; `MOCK`/`MOVE`/`PERFORM`/`EXPECT`/`VERIFY`
   must all be inside a `TESTCASE`. Violating order raises `CutParseError` at
   the offending line.
-- One `PERFORM` per test case — a later `PERFORM` line overwrites
-  `case.perform_target`/`case.perform_thru` rather than appending.
-- `<expectation>` is free text captured as-is: `ONCE`, `AT LEAST ONCE`,
-  `NEVER`, or `"<n> TIMES"` — the parser doesn't validate the phrase, the
-  splicer's codegen does.
+- One `PERFORM` per test case — a second `PERFORM` line raises
+  `CutParseError` (`already has a PERFORM target`).
+- `<expectation>` is validated **at parse time**: `ONCE`, `NEVER`,
+  `AT LEAST ONCE`, or `<n> TIMES` (case-insensitive), matching exactly what
+  `splicer/driver.py`'s `_verify_condition` compiles — anything else raises
+  `CutParseError` with the .cut line number instead of exploding later in
+  codegen as a raw `ValueError`. Keep `_validate_expectation` (parser) and
+  `_verify_condition` (driver) in sync.
 - Lines starting with `*>` are comments **outside** a `MOCK` body; inside a
   body they pass straight through as valid free-form COBOL (a mock body can
   legitimately contain a COBOL comment).
 - Blank lines are always skipped.
+
+## Case rules
+
+Every DSL keyword is case-sensitive uppercase (`testsuite "x"` is an
+`unrecognized statement` error) with one deliberate exception: **`END-MOCK`
+is case-insensitive and accepts an optional trailing period** (`END-MOCK.`,
+`end-mock` — the trailing period is the natural COBOL habit). The leniency
+exists because a missed END-MOCK doesn't fail at its own line; it silently
+swallows the rest of the file into the mock body. Bare keys are upper-cased
+by the parser; quoted keys are preserved exactly (see below).
 
 ## `MOCK <kind> <key>` forms
 
@@ -113,16 +130,22 @@ directive (`None` when not inside a `MOCK...END-MOCK` block).
 
 Key regexes, matched in this order per non-blank line:
 
-1. If inside a `MOCK` body: look only for `END-MOCK`; anything else is
-   appended verbatim to `body_lines` (no further parsing — a mock body's
-   contents are opaque to the DSL parser).
+1. If inside a `MOCK` body: look only for `END-MOCK` (any case, optional
+   trailing period); anything else is appended verbatim to `body_lines`
+   (no further parsing — a mock body's contents are opaque to the DSL
+   parser).
 2. `*>` comment (only reachable when not inside a mock body).
-3. `TESTSUITE "..."`.
-4. `TESTCASE "..."` — requires `suite` already set.
+3. `TESTSUITE "..."` — errors if a suite is already open (one per file).
+4. `TESTCASE "..."` — requires `suite` already set; resets the per-case
+   duplicate-MOCK tracker.
 5. `MOCK <quoted-cat> "<key>"` then `MOCK <bare-cat> <key>` — requires
    `case` already set; whichever matches opens `in_mock` and appends it to
    `case.mocks` immediately (body lines get attached as they arrive on
-   subsequent iterations, single object mutated in place).
+   subsequent iterations, single object mutated in place). An empty quoted
+   key (`MOCK CALL ""`) and a duplicate `(category, key)` within the same
+   TESTCASE both raise `CutParseError` here (the duplicate error names both
+   line numbers; it used to surface much later as an `AMBIGUOUS_MOCK`
+   refusal with misleading advice).
 6. A line starting with literal `MOCK` that matched neither pattern raises
    `CutParseError` with a message that spells out the two key-syntax
    families — this is the fail-closed path for typos like `MOCK CALL
@@ -130,17 +153,18 @@ Key regexes, matched in this order per non-blank line:
 7. `MOVE <value> TO <target>` — appended to `setup_moves` as a tuple, in
    file order (order matters: later `MOVE`s to the same target win at
    runtime, same as COBOL).
-8. `PERFORM <target> [THRU|THROUGH <thru>]` — overwrites, does not append.
+8. `PERFORM <target> [THRU|THROUGH <thru>]` — a second PERFORM in the
+   same TESTCASE raises `CutParseError`.
 9. `EXPECT <name> TO BE <value>`.
 10. `VERIFY` quoted then bare (mirrors step 5's two-family split, plus the
-    no-category-means-CALL back-compat case).
+    no-category-means-CALL back-compat case). The expectation phrase is
+    validated here via `_validate_expectation`.
 11. Anything else: `CutParseError: unrecognized statement`.
 
-After the full scan, `suite is None` (no `TESTSUITE` line ever matched) also
-raises `CutParseError`. There is no unterminated-`MOCK`-body check — a `.cut`
-file that opens a `MOCK` and never closes it with `END-MOCK` parses without
-error; the body simply absorbs every remaining line (including what would
-otherwise be `TESTCASE`/`PERFORM`/etc. text) until EOF.
+After the full scan, two more checks raise `CutParseError`: `suite is None`
+(no `TESTSUITE` line ever matched), and `in_mock is not None` — an
+unterminated `MOCK` body errors with the line number of the `MOCK` line
+that opened it (`tests/unit/test_dsl_parser.py` pins both).
 
 # Generator (`generator.py`)
 
@@ -172,7 +196,10 @@ Rules:
   empty body; `ACCEPT` → `MOVE SPACES TO <target>` (built per-site, not from
   the static dict, since it needs the target name).
 - Per-category directive-line shape (`_directive_for`):
-  - `CALL`: `MOCK CALL "name"` normally, `MOCK MQ "name"` if `site.is_mq`.
+  - `CALL`: `MOCK CALL "name"` normally, `MOCK MQ "name"` if `site.is_mq`;
+    returns `None` (site skipped) if no key was captured — emitting
+    `MOCK CALL ""` would no longer round-trip, since the parser rejects
+    empty quoted keys.
   - `DYNCALL`: `MOCK CALL <identifier>` — bare, unquoted, from
     `site.keys[0]`.
   - File-op categories: `MOCK <CATEGORY> <key>`; returns `None` (site
@@ -195,6 +222,10 @@ Rules:
   ```
   `labels` are deduped `site.label` values joined with `", "`, used only in
   the human-readable `TESTCASE` name.
+- Suite and TESTCASE names pass through `_quote_safe` (double quotes
+  become single quotes): the .cut grammar has no escape syntax for a `"`
+  inside a quoted name, so interpolating one raw would make the scaffold
+  unparseable.
 
 # Gotchas
 
@@ -213,14 +244,13 @@ Rules:
   a new bare-key category must extend `_BARE_CATS` in `parser.py` **and**
   add the category to `FILE_OP_CATEGORIES`/handle it explicitly in
   `_resolve_category`, or it will silently fall through.
-- **An unterminated `MOCK` body doesn't error.** `parse_cut` has no
-  end-of-file check for `in_mock is not None`; a missing `END-MOCK` silently
-  swallows the rest of the file into that mock's `body_lines` rather than
-  raising `CutParseError`. There is no regression test pinning this as
-  intentional — it is simply what the single-pass state machine does.
-- **`PERFORM` is last-write-wins, not additive.** A `.cut` file with two
-  `PERFORM` lines in one `TESTCASE` silently keeps only the second; nothing
-  in the grammar or parser prevents writing two.
+- **A missing `END-MOCK` still swallows lines until EOF before erroring.**
+  The unterminated-body check fires only at end of file (with the opening
+  MOCK's line number); everything between the `MOCK` line and EOF —
+  including what would otherwise be `TESTCASE`/`PERFORM` text — has already
+  been absorbed into `body_lines` by the time the error raises. Mid-file,
+  a forgotten `END-MOCK` therefore usually surfaces as this EOF error, not
+  as an error at the next directive.
 - **Bare keys are case-normalized, quoted keys are not.** `MOCK OPEN
   inv-file` and `MOCK OPEN INV-FILE` parse to the same key (`.upper()`
   applied); `MOCK SQL "select"` and `MOCK SQL "SELECT"` are different keys

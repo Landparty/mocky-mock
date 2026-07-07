@@ -5,9 +5,9 @@ from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.cli.main import main
+from mockymock.dsl.parser import parse_cut
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.orchestrator import splice_program
-from mockymock.dsl.parser import parse_cut
 from mockymock.splicer.source_map import collect_boundaries
 from tests.integration._docker import requires_docker
 
@@ -116,9 +116,7 @@ TESTCASE "display runs"
 """
 
 
-def test_generate_refuses_program_with_dropped_statements(
-    tmp_path: Path, capsys
-):
+def test_generate_refuses_program_with_dropped_statements(tmp_path: Path, capsys):
     program = tmp_path / "INVOKER.cbl"
     program.write_text(INVOKER_CBL)
     output = tmp_path / "INVOKER.cut"
@@ -189,17 +187,13 @@ def test_run_keep_sandbox_leaves_instrumented_source_on_disk(tmp_path: Path, cap
     cut_file = tmp_path / "ORDRPROC.cut"
     cut_file.write_text(ORDRPROC_CUT)
 
-    exit_code = main(
-        ["run", str(program), "--cut", str(cut_file), "--keep-sandbox"]
-    )
+    exit_code = main(["run", str(program), "--cut", str(cut_file), "--keep-sandbox"])
     out = capsys.readouterr().out
 
     assert exit_code == 0
     assert "mockymock run: keeping sandbox " in out
 
-    kept_line = next(
-        line for line in out.splitlines() if "keeping sandbox " in line
-    )
+    kept_line = next(line for line in out.splitlines() if "keeping sandbox " in line)
     kept_dir = Path(kept_line.split("keeping sandbox ", 1)[1].strip())
 
     assert kept_dir.is_dir()
@@ -247,9 +241,7 @@ def test_run_verbose_prints_instrumented_source_path_on_compile_failure(
     cut_file = tmp_path / "BADCOMPILE.cut"
     cut_file.write_text(BADCOMPILE_CUT)
 
-    exit_code = main(
-        ["run", str(program), "--cut", str(cut_file), "--verbose"]
-    )
+    exit_code = main(["run", str(program), "--cut", str(cut_file), "--verbose"])
     out = capsys.readouterr().out
 
     assert exit_code == 1
@@ -259,9 +251,7 @@ def test_run_verbose_prints_instrumented_source_path_on_compile_failure(
     source_line = next(
         line for line in out.splitlines() if "instrumented source at " in line
     )
-    instrumented_path = Path(
-        source_line.split("instrumented source at ", 1)[1].strip()
-    )
+    instrumented_path = Path(source_line.split("instrumented source at ", 1)[1].strip())
 
     assert instrumented_path.is_file()
     assert "BADCOMPILE" in instrumented_path.read_text()
@@ -285,9 +275,7 @@ def test_run_verbose_only_does_not_leave_sandbox_after_successful_run(
     docker_toolchain.WORK_ROOT.mkdir(parents=True, exist_ok=True)
     before = set(docker_toolchain.WORK_ROOT.glob("mockymock-*"))
 
-    exit_code = main(
-        ["run", str(program), "--cut", str(cut_file), "--verbose"]
-    )
+    exit_code = main(["run", str(program), "--cut", str(cut_file), "--verbose"])
 
     after = set(docker_toolchain.WORK_ROOT.glob("mockymock-*"))
 
@@ -505,6 +493,8 @@ def test_splice_preserves_sentence_period_of_replaced_call():
 
     # Both CALLs were sentence-final, so both dispatch blocks must terminate
     # their sentence.
-    end_evaluates = [line for line in spliced if line.strip().startswith("END-EVALUATE")]
+    end_evaluates = [
+        line for line in spliced if line.strip().startswith("END-EVALUATE")
+    ]
     assert len(end_evaluates) == 2
     assert all(line.rstrip().endswith("END-EVALUATE.") for line in end_evaluates)

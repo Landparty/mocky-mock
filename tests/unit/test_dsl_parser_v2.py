@@ -130,12 +130,16 @@ TESTCASE "y"
 
 def test_quoted_category_requires_quotes():
     with pytest.raises(CutParseError):
-        parse_cut('TESTSUITE "x"\nTESTCASE "y"\n    MOCK SQL SELECT\n    END-MOCK\n    PERFORM p\n')
+        parse_cut(
+            'TESTSUITE "x"\nTESTCASE "y"\n    MOCK SQL SELECT\n    END-MOCK\n    PERFORM p\n'
+        )
 
 
 def test_file_category_rejects_quoted_key():
     with pytest.raises(CutParseError):
-        parse_cut('TESTSUITE "x"\nTESTCASE "y"\n    MOCK READ "INFILE"\n    END-MOCK\n    PERFORM p\n')
+        parse_cut(
+            'TESTSUITE "x"\nTESTCASE "y"\n    MOCK READ "INFILE"\n    END-MOCK\n    PERFORM p\n'
+        )
 
 
 THRU_CUT = """\

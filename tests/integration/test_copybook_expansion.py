@@ -40,9 +40,7 @@ def test_generate_expands_copybook_and_finds_call_site(tmp_path: Path):
     assert 'MOCK CALL "DISCRATE"' in output.read_text()
 
 
-def test_generate_without_copybook_path_leaves_copy_unresolved(
-    tmp_path: Path, capsys
-):
+def test_generate_without_copybook_path_leaves_copy_unresolved(tmp_path: Path, capsys):
     """`--copybook-path` is genuinely optional: omitting it must not crash
     argument parsing. But the CLI must not silently pretend the COPY
     statement was expanded and proceed to scaffold against a program missing

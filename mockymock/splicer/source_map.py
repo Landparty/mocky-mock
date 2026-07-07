@@ -2,9 +2,20 @@
 
 cobolparser's SourceLocation gives only a statement's start line. A
 statement's span end is derived as "one line before whatever comes next":
-the next statement in the same paragraph, or the next paragraph's header
-if this is the last statement in its paragraph, or end-of-file if it's the
-very last paragraph's last statement.
+the next statement in the same paragraph, or the next paragraph's or
+SECTION's header if this is the last statement in its paragraph, or
+end-of-file if it's the very last paragraph's last statement. SECTION
+header lines are boundaries in their own right -- without them the span
+of a section's last statement would extend over (and comment out) the
+following `X SECTION.` header.
+
+Because a top-level splice comments out whole lines, `annotate_nested_sites`
+also stamps top-level sites with an `unspliceable_reason` when the
+statement does not own its line (sibling code before it -- including a
+one-line paragraph header -- or another top-level statement/paragraph
+header sharing the line). The refusal gate turns that into
+UNSUPPORTED_MOCK_TARGET_LAYOUT / UNSPLICEABLE_EXEC before the splicer
+could delete the sibling code.
 
 For NESTED statements (inside IF/EVALUATE/inline-PERFORM bodies) the plain
 boundary list is not enough: the AST has no location data for block words
@@ -20,8 +31,10 @@ docs/2026-07-05-nested-mock-targets-design.md for the safety rules.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from cobolparser.lexer import CobolLexer
+from cobolparser.models.ast_base import ASTNode
 from cobolparser.models.program import CobolDivision, CobolParagraph
 from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.parsers.statements.ibm_exec_statements import (
@@ -38,7 +51,13 @@ from mockymock.dsl.model import EXEC_CATEGORIES, MockCategory
 
 
 def collect_boundaries(program) -> list[int]:
-    """Every paragraph-header and statement-start line, sorted ascending.
+    """Every SECTION-header, paragraph-header, and statement-start line,
+    sorted ascending.
+
+    SECTION headers must be boundaries too: a paragraph's last statement
+    followed by an `X SECTION.` header has no paragraph-header boundary
+    between them, so without the section line the statement's span would
+    swallow (and comment out) the header.
 
     cobolparser emits a phantom paragraph literally named "." for the
     sentence-terminating period line after an EXEC ... END-EXEC block
@@ -52,10 +71,15 @@ def collect_boundaries(program) -> list[int]:
     if procedure is None:
         return []
     lines: set[int] = set()
+    for section in procedure._sections.values():
+        if (section.section_name or "").strip("."):
+            lines.add(section.location.line)
     for paragraph in _all_paragraphs(procedure):
-        if paragraph.paragraph_name.strip(".") == "":
-            continue
-        lines.add(paragraph.location.line)
+        # Phantom paragraphs ("." after END-EXEC, "" for a section's
+        # pre-paragraph statements) contribute no header boundary, but any
+        # statements they hold (section bodies) are real boundaries.
+        if paragraph.paragraph_name.strip("."):
+            lines.add(paragraph.location.line)
         for statement in paragraph.statements:
             lines.add(statement.location.line)
     return sorted(lines)
@@ -129,6 +153,9 @@ class ScopeBoundary:
     line: int
     column: int
     word: str  # uppercase scope word, or "" for statement/paragraph starts
+    # True for paragraph/SECTION headers and depth-0 statement starts --
+    # the entries the top-level "owns its line" guard checks against.
+    top_level: bool = False
 
 
 @dataclass
@@ -137,11 +164,11 @@ class ScopeMap:
 
 
 def collect_scope_map(program, lines: list[str]) -> ScopeMap:
-    """Every span boundary relevant to nested statements: paragraph headers,
-    statement starts at EVERY depth, and scope-word token locations from
-    re-lexing `lines`. Tokens inside EXEC ... END-EXEC ranges are excluded:
-    embedded SQL/CICS text may legally contain WHEN/ELSE/CASE words that are
-    not COBOL block words.
+    """Every span boundary relevant to nested statements: SECTION and
+    paragraph headers, statement starts at EVERY depth, and scope-word token
+    locations from re-lexing `lines`. Tokens inside EXEC ... END-EXEC ranges
+    are excluded: embedded SQL/CICS text may legally contain WHEN/ELSE/CASE
+    words that are not COBOL block words.
     """
     boundaries: list[ScopeBoundary] = []
     exec_starts: list[int] = []
@@ -149,12 +176,29 @@ def collect_scope_map(program, lines: list[str]) -> ScopeMap:
     if procedure is None:
         return ScopeMap([])
 
+    for section in procedure._sections.values():
+        if (section.section_name or "").strip("."):
+            boundaries.append(
+                ScopeBoundary(
+                    section.location.line,
+                    section.location.column,
+                    "",
+                    top_level=True,
+                )
+            )
     for paragraph in _all_paragraphs(procedure):
-        if paragraph.paragraph_name.strip(".") == "":
-            continue  # phantom END-EXEC paragraphs, see collect_boundaries
-        boundaries.append(
-            ScopeBoundary(paragraph.location.line, paragraph.location.column, "")
-        )
+        # Phantom paragraphs ("." after END-EXEC, "" for a section's
+        # pre-paragraph statements) have no real header, but any statements
+        # they hold (section bodies) still count.
+        if paragraph.paragraph_name.strip("."):
+            boundaries.append(
+                ScopeBoundary(
+                    paragraph.location.line,
+                    paragraph.location.column,
+                    "",
+                    top_level=True,
+                )
+            )
         _collect_statement_starts(paragraph.statements, boundaries, exec_starts)
 
     exec_ranges = [_exec_range(lines, start) for start in exec_starts]
@@ -165,23 +209,33 @@ def collect_scope_map(program, lines: list[str]) -> ScopeMap:
             continue
         if _inside_exec_range(exec_ranges, token.location.line, token.location.column):
             continue
-        boundaries.append(ScopeBoundary(token.location.line, token.location.column, word))
+        boundaries.append(
+            ScopeBoundary(token.location.line, token.location.column, word)
+        )
 
     boundaries.sort(key=lambda b: (b.line, b.column))
     return ScopeMap(boundaries)
 
 
 def _collect_statement_starts(
-    statements, boundaries: list[ScopeBoundary], exec_starts: list[int]
+    statements,
+    boundaries: list[ScopeBoundary],
+    exec_starts: list[int],
+    top_level: bool = True,
 ) -> None:
     for statement in statements:
         boundaries.append(
-            ScopeBoundary(statement.location.line, statement.location.column, "")
+            ScopeBoundary(
+                statement.location.line,
+                statement.location.column,
+                "",
+                top_level=top_level,
+            )
         )
         if isinstance(statement, _EXEC_STATEMENT_TYPES):
             exec_starts.append(statement.location.line)
         for nested in _nested_statement_lists(statement):
-            _collect_statement_starts(nested, boundaries, exec_starts)
+            _collect_statement_starts(nested, boundaries, exec_starts, top_level=False)
 
 
 def _exec_range(lines: list[str], start: int) -> tuple[int, int, int]:
@@ -210,20 +264,62 @@ def annotate_nested_sites(
     surface: MockSurface, scope_map: ScopeMap, lines: list[str]
 ) -> None:
     """Stamp every nested BoundarySite with a validated `span` or the
-    `unspliceable_reason` it has none. Idempotent; must run before the
-    refusal gate and the splicer look at nested sites."""
+    `unspliceable_reason` it has none, and every TOP-LEVEL site with the
+    `unspliceable_reason` its whole-line span cannot be applied safely
+    (statement does not own its source line -- see
+    `_top_level_site_problem`; `span` stays None for top-level sites, the
+    splicer keeps deriving it from `statement_span`). Idempotent; must run
+    before the refusal gate and the splicer look at any site."""
     for site in surface.boundary_sites:
-        if not site.nested or site.category is None:
+        if site.category is None:
             continue
-        span, reason = _nested_site_span(site, scope_map, lines)
-        site.span = span
-        site.unspliceable_reason = reason
+        if site.nested:
+            span, reason = _nested_site_span(site, scope_map, lines)
+            site.span = span
+            site.unspliceable_reason = reason
+        else:
+            site.unspliceable_reason = _top_level_site_problem(site, scope_map, lines)
+
+
+def _top_level_site_problem(
+    site: BoundarySite, scope_map: ScopeMap, lines: list[str]
+) -> str | None:
+    """The reason a top-level site's whole-line splice would corrupt sibling
+    code, or None when it owns its line.
+
+    A top-level span runs from the statement's start line to one line
+    before the next boundary, and `comment_and_replace` comments out whole
+    lines -- so the only way sibling code can be swallowed is by sharing
+    the START line (any later top-level statement/header line is itself a
+    boundary that ends the span before it):
+
+    - code before the statement on its line (`MOVE ... CALL "X" ...` or a
+      one-line paragraph `P1. CALL "X".`) -- the sibling would be deleted;
+    - another top-level statement or paragraph/SECTION header after it on
+      the same line (`CALL "A" CALL "B".`) -- ditto, and two mocked
+      statements on one line would corrupt each other's replacement.
+
+    Nested statements inside the site's own clause bodies (e.g. a CALL's
+    ON EXCEPTION handler) share its span legitimately and are not checked
+    here -- they are part of the statement being replaced.
+    """
+    statement = cast(ASTNode, site.statement)
+    start = statement.location.line
+    column = statement.location.column
+    if lines[start - 1][: column - 1].strip():
+        return "does not start its own line"
+    if any(
+        b.top_level and b.line == start and b.column != column
+        for b in scope_map.boundaries
+    ):
+        return "shares its line with another statement or paragraph header"
+    return None
 
 
 def _nested_site_span(
     site: BoundarySite, scope_map: ScopeMap, lines: list[str]
 ) -> tuple[tuple[int, int] | None, str | None]:
-    statement = site.statement
+    statement = cast(ASTNode, site.statement)
     if site.nested_in_boundary:
         return None, (
             "nested inside another boundary statement's clause body -- "
@@ -240,7 +336,9 @@ def _nested_site_span(
     if lines[start - 1][: column - 1].strip():
         return None, "does not start its own line"
 
-    own_terminator = _VERB_TERMINATORS.get(site.category, "")
+    own_terminator = (
+        _VERB_TERMINATORS.get(site.category, "") if site.category is not None else ""
+    )
     relevant = [
         b
         for b in scope_map.boundaries
@@ -248,8 +346,7 @@ def _nested_site_span(
     ]
 
     if any(
-        b.line == start and not (b.column == column and b.word == "")
-        for b in relevant
+        b.line == start and not (b.column == column and b.word == "") for b in relevant
     ):
         return None, "shares its start line with another statement or scope word"
 

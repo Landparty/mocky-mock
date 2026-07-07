@@ -74,9 +74,9 @@ class MockDirective:
         """Human-readable form used in refusal messages and codegen traps,
         mirroring the .cut syntax: `CALL "X"`, `CALL WS-PGM` (dynamic),
         `READ INFILE`, `SQL "SELECT"`."""
-        if (
-            self.category in FILE_OP_CATEGORIES
-            or self.category in (MockCategory.ACCEPT, MockCategory.DYNCALL)
+        if self.category in FILE_OP_CATEGORIES or self.category in (
+            MockCategory.ACCEPT,
+            MockCategory.DYNCALL,
         ):
             return f"{self.category.keyword} {self.key}"
         return f'{self.category.keyword} "{self.key}"'

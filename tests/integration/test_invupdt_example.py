@@ -31,8 +31,8 @@ def test_committed_invupdt_example_passes():
 def test_invupdt_fails_when_expectation_is_wrong(tmp_path: Path):
     cut = (EXAMPLE_DIR / "INVUPDT.cut").read_text()
     broken = tmp_path / "INVUPDT.cut"
-    broken.write_text(cut.replace("EXPECT WS-TOTAL-QTY TO BE 10", "EXPECT WS-TOTAL-QTY TO BE 11"))
-    exit_code = main(
-        ["run", str(EXAMPLE_DIR / "INVUPDT.cbl"), "--cut", str(broken)]
+    broken.write_text(
+        cut.replace("EXPECT WS-TOTAL-QTY TO BE 10", "EXPECT WS-TOTAL-QTY TO BE 11")
     )
+    exit_code = main(["run", str(EXAMPLE_DIR / "INVUPDT.cbl"), "--cut", str(broken)])
     assert exit_code == 1

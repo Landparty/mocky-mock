@@ -4,7 +4,6 @@ identifier name and mocked/verified with the bare-word form
 literals. See docs/2026-07-06-dynamic-call-mocks-design.md."""
 
 import pytest
-
 from cobolparser import parse_cobol
 from cobolparser.models.ast_base import SourceLocation
 from cobolparser.models.statements.call import CallStatement
@@ -239,9 +238,7 @@ def test_verify_dyncall_with_matching_mock_is_declared():
         name="c",
         mocks=[MockDirective(MockCategory.DYNCALL, "WS-PGM-NAME")],
         perform_target="DYNAMIC-PARAGRAPH",
-        verifications=[
-            VerifyDirective(MockCategory.DYNCALL, "WS-PGM-NAME", "ONCE")
-        ],
+        verifications=[VerifyDirective(MockCategory.DYNCALL, "WS-PGM-NAME", "ONCE")],
     )
     assert check_test_case(surface, ast, case) == []
 
