@@ -1,5 +1,17 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-07 (cobol-parser pin re-bumped to merged commit)
+* **Follow-up to the corpus-sweep refresh below:** cobol-parser PR #80
+  (the SUBTRACT-GIVING / DISPLAY-subscript / WRITE-FROM-literal fixes, plus
+  the two review-driven follow-on fixes for nested-paren subscripts and
+  `consume_keyword_and_operand`'s continuation-token handling) has merged
+  to `Landparty/cobol-parser` `main`. `.github/workflows/ci.yml`'s pin
+  bumped from the feature-branch commit to the actual merge commit
+  (`8c3c881`), closing out the "re-pin once it lands" note from the prior
+  entry. Full cobolparser suite (6691 passed) and this repo's own suite
+  (370 passed, 24 skipped) run green against it; `scripts/corpus_sweep.py`
+  still reports 26/26 clean.
+
 ## 2026-07-07 (corpus sweep refreshed: 26/26 clean)
 * **Re-ran `scripts/corpus_sweep.py`** against `legacy-application` now that
   the `EVALUATE`/`WHEN`-selector cobolparser bug (which blocked 5/17
