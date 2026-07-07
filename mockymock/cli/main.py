@@ -20,10 +20,21 @@ def _cmd_setup(args: argparse.Namespace) -> int:
         print(f"mockymock setup: {exc}")
         return 1
     print(
-        f"mockymock setup: container {docker_toolchain.CONTAINER} ready "
-        f"({version})"
+        f"mockymock setup: container {docker_toolchain.CONTAINER} ready " f"({version})"
     )
     return 0
+
+
+def _check_input_files(command: str, *paths: Path) -> bool:
+    """Print a clean error for every input path that doesn't exist. Runs
+    before any toolchain/parse work so a typo'd path fails in milliseconds
+    with no traceback -- never after a multi-minute image build."""
+    ok = True
+    for path in paths:
+        if not path.is_file():
+            print(f"{command}: no such file: {path}")
+            ok = False
+    return ok
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
@@ -40,6 +51,8 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
     source_path = Path(args.program)
+    if not _check_input_files("mockymock generate", source_path):
+        return 1
     raw_source = source_path.read_text()
     if args.copybook_path:
         expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
@@ -125,10 +138,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         check_unresolved_copybooks,
         check_whole_program,
     )
-    from mockymock.dsl.parser import parse_cut
+    from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.report.formatters import format_console, format_junit_xml
     from mockymock.report.results import parse_stdout
     from mockymock.runtime import docker_toolchain
+    from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.splicer.driver import build_driver
     from mockymock.splicer.naming import TallyRegistry
@@ -141,13 +155,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     from mockymock.splicer.sqlca import transform_data_division_exec
 
+    # Input existence is the one check that runs even before the toolchain
+    # comes up: ensure_toolchain can spend minutes building the image, and
+    # a typo'd path must not pay that cost (or traceback afterwards).
+    source_path = Path(args.program)
+    cut_path = Path(args.cut)
+    if not _check_input_files("mockymock run", source_path, cut_path):
+        return 1
+
     try:
         docker_toolchain.ensure_toolchain()
     except docker_toolchain.DockerNotAvailableError as exc:
         print(f"mockymock run: {exc}")
         return 1
 
-    source_path = Path(args.program)
     raw_source = source_path.read_text()
     if args.copybook_path:
         expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
@@ -177,7 +198,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if copybook_reasons:
         return 1
 
-    suite = parse_cut(Path(args.cut).read_text())
+    try:
+        suite = parse_cut(cut_path.read_text())
+    except CutParseError as exc:
+        print(f"mockymock run: invalid .cut file {cut_path}: {exc}")
+        return 1
     surface = analyze(result.ast)
 
     normalized = normalize_fixed_format(raw_source.splitlines())
@@ -232,9 +257,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             print(f"mockymock run: keeping sandbox {tmp}")
 
         instrumented_path = tmp / source_path.with_suffix(".cbl").name
-        instrumented_path.write_text(
-            "\n".join(instrumented) + "\n", newline="\n"
-        )
+        instrumented_path.write_text("\n".join(instrumented) + "\n", newline="\n")
 
         compiled = docker_toolchain.compile_source(instrumented_path)
         if not compiled.success:
@@ -244,18 +267,39 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 print(f"mockymock run: instrumented source at {instrumented_path}")
             return 1
 
+        assert compiled.binary_path is not None  # implied by compiled.success
         executed = docker_toolchain.run_binary(compiled.binary_path)
 
     if args.verbose and not args.keep_sandbox:
         shutil.rmtree(tmp, ignore_errors=True)
 
     suite_result = parse_stdout(executed.stdout)
-    print(format_console(suite_result))
+
+    # Real evidence about why the binary died beats the formatters'
+    # default STOP-RUN hypothesis: a timeout (exit 124, with run_binary's
+    # infinite-loop hint on stderr) and a runtime abort (nonzero exit,
+    # libcob's message on stderr) are distinct failure modes and must not
+    # both render as a generic crash.
+    if executed.exit_code == TIMEOUT_EXIT_CODE:
+        crash_detail = "binary timed out (exit 124); see stderr below"
+    elif executed.exit_code != 0:
+        crash_detail = f"binary exited with code {executed.exit_code}"
+    else:
+        crash_detail = None
+    print(format_console(suite_result, crash_detail=crash_detail))
+    if executed.stderr:
+        print("mockymock run: binary stderr:")
+        print(executed.stderr.rstrip("\n"))
 
     if args.junit_xml:
-        Path(args.junit_xml).write_text(format_junit_xml(suite_result))
+        Path(args.junit_xml).write_text(
+            format_junit_xml(suite_result, crash_detail=crash_detail)
+        )
 
-    return 0 if suite_result.all_passed else 1
+    # A nonzero binary exit is a failed run even when every case that got
+    # to print its markers passed (e.g. libcob aborted after the SUMMARY
+    # line, or the timeout killed a straggler).
+    return 0 if suite_result.all_passed and executed.exit_code == 0 else 1
 
 
 def _insert_driver(lines: list[str], artifact) -> list[str]:
@@ -268,7 +312,9 @@ def _insert_driver(lines: list[str], artifact) -> list[str]:
         result.append(line)
         upper = line.strip().upper()
         if not inserted_ws and upper.startswith("WORKING-STORAGE SECTION"):
-            result.extend(f"       {ws_line}" for ws_line in artifact.working_storage_lines)
+            result.extend(
+                f"       {ws_line}" for ws_line in artifact.working_storage_lines
+            )
             inserted_ws = True
         if not inserted_proc and upper.startswith("PROCEDURE DIVISION"):
             result.append("")
@@ -300,7 +346,8 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.set_defaults(func=_cmd_generate)
 
     run_parser = subparsers.add_parser(
-        "run", help="Splice, compile, run, and assert a COBOL program against a .cut file"
+        "run",
+        help="Splice, compile, run, and assert a COBOL program against a .cut file",
     )
     run_parser.add_argument("program")
     run_parser.add_argument("--cut", required=True)

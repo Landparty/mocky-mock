@@ -205,3 +205,38 @@ def test_scaffold_includes_spliceable_nested_sites():
 def test_scaffold_still_skips_unspliceable_nested_sites():
     cut_text = scaffold_cut("NESTGEN", _annotated(NESTED_ONLY_SOURCE))
     assert "ONELINE" not in cut_text
+
+
+# --- audit 3.7: no MOCK CALL "" for key-less sites; quote-safe names ---------
+
+from mockymock.analysis.mock_surface import BoundarySite
+
+
+def test_scaffold_skips_static_call_site_with_no_captured_key():
+    """A static CALL whose literal never parsed must be skipped (like the
+    file-op and ACCEPT branches), not emitted as `MOCK CALL ""` -- the
+    parser now rejects empty keys, so the scaffold would not round-trip."""
+    surface = MockSurface()
+    surface.boundary_sites.append(
+        BoundarySite(
+            category=MockCategory.CALL,
+            label="CALL",
+            keys=(),
+            match_text=None,
+            paragraph_name="MAIN-PARA",
+            line=10,
+            nested=False,
+            statement=None,
+        )
+    )
+    text = scaffold_cut("NOKEY", surface)
+    assert 'MOCK CALL ""' not in text
+    parse_cut(text)  # still valid .cut syntax
+
+
+def test_scaffold_suite_name_with_double_quote_stays_parseable():
+    """The .cut grammar has no escape for quotes inside quoted names, so a
+    quote in the suite name must be substituted, not interpolated raw."""
+    text = scaffold_cut('BAD"NAME', MockSurface())
+    suite = parse_cut(text)
+    assert suite.name == "BAD'NAME"

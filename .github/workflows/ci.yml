@@ -10,6 +10,25 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # ruff/black/mypy read their config from pyproject.toml. mypy runs
+      # with ignore_missing_imports (see [tool.mypy]), so the cobol-parser
+      # sibling checkout is not needed for this job.
+      - name: Install lint tools
+        run: pip install ruff black mypy
+      - name: ruff
+        run: python -m ruff check .
+      - name: black
+        run: python -m black --check .
+      - name: mypy
+        run: python -m mypy mockymock/
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -46,6 +65,14 @@ jobs:
           repository: Landparty/cobol-parser
           path: cobol-parser
           token: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
+          # Pinned: mockymock's refusal gate leans on cobolparser behavior
+          # (PARSE_WARNING reporting, the 2026-07-07 silent-drop
+          # remediation); an unpinned checkout lets a sibling regression
+          # silently weaken this repo's guarantees with no signal here.
+          # Bump deliberately, with a test run, when adopting new
+          # cobol-parser work. (Landparty/cobol-parser main as of
+          # 2026-07-07.)
+          ref: 77c6e07ba2c995d0adcf5853e9463ee5741c4d34
 
       - uses: actions/setup-python@v5
         with:

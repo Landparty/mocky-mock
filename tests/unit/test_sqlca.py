@@ -114,3 +114,57 @@ def test_program_without_data_division_exec_is_unchanged():
     lines, reasons = transform_data_division_exec(src)
     assert lines == src
     assert reasons == []
+
+
+# --- literal-text false positive and shared-line guards (audit 2.6) ----------
+
+
+def test_exec_sql_inside_value_literal_is_not_a_block():
+    """`VALUE "EXEC SQL ERROR"` used to start a bogus block scan that could
+    comment out every live data item up to the next real END-EXEC."""
+    src = BASE[:5] + [
+        '01  WS-MSG PIC X(20) VALUE "EXEC SQL ERROR".',
+        "01  WS-LIVE PIC X(5).",
+    ] + BASE[5:]
+    lines, reasons = transform_data_division_exec(src)
+    assert reasons == []
+    assert '01  WS-MSG PIC X(20) VALUE "EXEC SQL ERROR".' in lines
+    assert "01  WS-LIVE PIC X(5)." in lines
+
+
+def test_end_exec_inside_value_literal_does_not_terminate_a_block():
+    """A literal containing END-EXEC must not end a real block early; the
+    real END-EXEC further down still terminates it."""
+    src = BASE[:4] + [
+        "    EXEC SQL",
+        '        INCLUDE SQLCA',
+        "    END-EXEC.",
+        '01  WS-NOTE PIC X(10) VALUE "END-EXEC".',
+    ] + BASE[5:]
+    lines, reasons = transform_data_division_exec(src)
+    assert reasons == []
+    assert '01  WS-NOTE PIC X(10) VALUE "END-EXEC".' in lines
+    assert "01  SQLCA." in "\n".join(lines)
+
+
+def test_trailing_content_on_end_exec_line_refuses():
+    """Whole-line replacement would delete a data item sharing the
+    END-EXEC. line -- refuse instead."""
+    src = BASE[:4] + [
+        "    EXEC SQL INCLUDE SQLCA END-EXEC. 01  WS-GLUED PIC X.",
+    ] + BASE[5:]
+    lines, reasons = transform_data_division_exec(src)
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_DATA_DIVISION_EXEC"
+    assert "trailing content" in reasons[0].message
+    assert "    EXEC SQL INCLUDE SQLCA END-EXEC. 01  WS-GLUED PIC X." in lines
+
+
+def test_leading_content_before_exec_sql_refuses():
+    src = BASE[:4] + [
+        "01  WS-BEFORE PIC X. EXEC SQL INCLUDE SQLCA END-EXEC.",
+    ] + BASE[5:]
+    lines, reasons = transform_data_division_exec(src)
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_DATA_DIVISION_EXEC"
+    assert "shares its first line" in reasons[0].message

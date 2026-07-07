@@ -3,7 +3,7 @@ type: Module
 title: Docker Runtime
 description: mockymock-cobc container lifecycle, docker exec-based compile/run, and the Docker-only sandbox model that replaced the local cobc toolchain.
 tags: [runtime, docker, gnucobol]
-timestamp: 2026-07-06T00:00:00Z
+timestamp: 2026-07-07T00:00:00Z
 ---
 
 # Overview
@@ -20,17 +20,18 @@ mockymock setup / mockymock run
    │
    ├─ ensure_toolchain()                 docker_toolchain.py
    │     docker daemon unreachable ───▶ DockerNotAvailableError (exit 1)
-   │     image "mockymock-gnucobol" missing ───▶ docker build -t ... docker/
+   │     image "mockymock-gnucobol:<hash>" missing ───▶ docker build -t ... docker/
    │     container "mockymock-cobc" missing ───▶ docker run -d --name mockymock-cobc
    │                                              -v ~/.mockymock/work:/work ... sleep infinity
+   │     container built from a stale image tag ───▶ docker rm -f + recreate
    │     container stopped ───▶ docker start mockymock-cobc
    │
-   ├─ sandbox_dir(root=WORK_ROOT)         ~/.mockymock/work/mockymock-XXXX/  (host side)
+   ├─ sandbox_dir_maybe_kept(root=WORK_ROOT, keep=...)   ~/.mockymock/work/mockymock-XXXX/
    │     instrumented .cbl written with newline="\n" (cobc runs Linux-side)
    │
    ├─ compile_source()   docker exec mockymock-cobc cobc -free -x /work/<sb>/PROG.cbl -o /work/<sb>/PROG
    │
-   └─ run_binary()       docker exec -w /work/<sb> mockymock-cobc timeout 30 /work/<sb>/PROG
+   └─ run_binary()       docker exec -w /work/<sb> mockymock-cobc timeout -k 5 30 /work/<sb>/PROG
                             stdout parsed by report/results.py, unchanged
 ```
 
@@ -64,17 +65,24 @@ and is called at the start of **both** `mockymock setup` and every
 `mockymock run` (so a container that died between runs is restarted
 automatically; `setup` is therefore optional).
 
-| Step | Check | Action if missing/stopped |
-|------|-------|---------------------------|
+| Step | Check | Action if missing/stopped/stale |
+|------|-------|---------------------------------|
 | 1. Daemon | `docker info` (30s timeout) | non-zero exit -> `DockerNotAvailableError` with `_DAEMON_HINT` |
-| 2. Image | `docker image inspect mockymock-gnucobol` | build via `docker build -t mockymock-gnucobol <repo>/docker/` |
-| 3. Container | `docker inspect -f {{.State.Running}} mockymock-cobc` | absent -> `docker run -d --name mockymock-cobc -v <WORK_ROOT>:/work mockymock-gnucobol sleep infinity`; present but stopped -> `docker start mockymock-cobc` |
+| 2. Image | `docker image inspect <IMAGE>` | build via `docker build -t <IMAGE> <repo>/docker/` |
+| 3. Container | one `docker inspect -f "{{.State.Running}} {{.Config.Image}}" mockymock-cobc` yields both running state and creating image | absent -> `_create_container()` (`docker run -d --name mockymock-cobc -v <WORK_ROOT>:/work <IMAGE> sleep infinity`); **created from a different image tag** -> `docker rm -f` then `_create_container()` (a stale container would otherwise defeat the content-hash tag forever); present-but-stopped -> `docker start mockymock-cobc` |
 
-Constants (fixed, asserted by unit tests, must not drift):
+`_create_container()` also absorbs the concurrent-first-run race: if
+`docker run --name` fails with *"name already in use"* (another invocation
+won the race between our inspect and run), it re-inspects and adopts the
+winner's container — starting it if it exists but is stopped — instead of
+raising. Any other `docker run` failure still raises
+`DockerNotAvailableError`.
+
+Constants (asserted by unit tests, must not drift in shape):
 
 | Name | Value |
 |------|-------|
-| `IMAGE` | `mockymock-gnucobol` |
+| `IMAGE` | `mockymock-gnucobol:<8-char sha256 of docker/Dockerfile>` — computed by `_image_tag()` at import, so editing the Dockerfile changes the tag, the image-inspect misses, a rebuild happens, **and** step 3 recreates the container from the new image |
 | `CONTAINER` | `mockymock-cobc` |
 | `WORK_ROOT` | `Path.home() / ".mockymock" / "work"` |
 
@@ -132,9 +140,11 @@ re-mounted per run. Consequences:
   explanatory `stderr`, never an unhandled exception.
 
 `run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult`:
-- Runs `docker exec -w <container_dir> mockymock-cobc timeout <timeout_seconds> <container_binary>`
+- Runs `docker exec -w <container_dir> mockymock-cobc timeout -k 5 <timeout_seconds> <container_binary>`
   — working directory is set to the binary's own sandbox dir inside the
-  container.
+  container. `-k 5` escalates to SIGKILL five seconds after the SIGTERM,
+  so a binary that ignores SIGTERM cannot keep burning CPU as an orphan
+  inside the persistent container.
 - **Two layered timeouts**: coreutils `timeout` enforces the limit
   container-side and exits `124` on expiry (`TIMEOUT_EXIT_CODE`, defined in
   `runtime/executor.py` and shared with the report layer's `parse_stdout`);
@@ -145,7 +155,9 @@ re-mounted per run. Consequences:
   hint: *"a mocked CALL may have removed a loop's terminating condition,
   producing an infinite loop"* — this is the most common real-world cause in
   this codebase (a mock body that never sets the EOF flag a `PERFORM UNTIL`
-  depends on).
+  depends on). The CLI's `run` prints `executed.stderr` (so this hint
+  actually reaches users) and frames exit 124 as a timeout rather than a
+  generic crash — see [cli](cli.md).
 - On host-side hang (`subprocess.TimeoutExpired`), exit code is coerced to the
   same `TIMEOUT_EXIT_CODE = 124` so downstream consumers never need to
   distinguish "container said timeout" from "docker exec itself hung".
@@ -174,7 +186,7 @@ nothing downstream of compile/run needed to change.
 | Command | Behavior |
 |---------|----------|
 | `mockymock setup` | Calls `ensure_toolchain()` then `cobc_version()` (first line of in-container `cobc --version`). Prints `container mockymock-cobc ready (<version>)` and exits 0, or prints the `DockerNotAvailableError` message and exits 1. Optional — `run` brings the container up on its own. |
-| `mockymock run <program.cbl> --cut <file.cut>` | Calls `ensure_toolchain()` **first**, before any parsing or sandbox creation — a down daemon fails fast with just the actionable message, no wasted parse work. Then creates a sandbox under `WORK_ROOT`, writes the instrumented source with `newline="\n"`, and calls `docker_toolchain.compile_source()` / `docker_toolchain.run_binary()`. |
+| `mockymock run <program.cbl> --cut <file.cut>` | Validates that the program and .cut paths exist (cheap, clean per-file error), then calls `ensure_toolchain()` before any parsing or sandbox creation — a down daemon fails fast with just the actionable message, no wasted parse work, and a typo'd path never pays for an image build. Then creates a sandbox under `WORK_ROOT`, writes the instrumented source with `newline="\n"`, and calls `docker_toolchain.compile_source()` / `docker_toolchain.run_binary()`. The binary's stderr and exit code are surfaced: nonzero exit fails the run even if all case markers passed. |
 
 `cobc_version()` itself runs `docker exec mockymock-cobc cobc --version` and
 raises `DockerNotAvailableError` if that exec fails (e.g. container up but
@@ -182,9 +194,15 @@ raises `DockerNotAvailableError` if that exec fails (e.g. container up but
 
 # Sandbox model
 
-`runtime/sandbox.py`'s `sandbox_dir(root: Path | None = None)` is a
-context-managed temp directory, always removed on exit
-(`shutil.rmtree(..., ignore_errors=True)`). Its only Docker-specific feature:
+`runtime/sandbox.py` has two context managers. `sandbox_dir(root=None)`
+yields a temp directory removed on exit (`shutil.rmtree(...,
+ignore_errors=True)`). `sandbox_dir_maybe_kept(root, keep)` is what the
+CLI's `run` actually uses: with `keep=True` the directory is **left on
+disk** — `--keep-sandbox` keeps it unconditionally (and prints its path);
+`--verbose` keeps it through the context so the instrumented-source path
+printed on compile failure still exists, but the CLI removes it afterwards
+when the run got past compilation. So sandboxes are *not* always removed
+on exit. Their only Docker-specific feature:
 when `root` is given, the temp dir is created *under* that directory (creating
 `root` first if missing) via `tempfile.mkdtemp(prefix="mockymock-", dir=root)`.
 The Docker toolchain always calls it as `sandbox_dir(root=docker_toolchain.WORK_ROOT)`

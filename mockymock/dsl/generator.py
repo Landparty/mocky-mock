@@ -33,6 +33,13 @@ _PLACEHOLDER_BODIES: dict[MockCategory, list[str]] = {
 }
 
 
+def _quote_safe(name: str) -> str:
+    """The .cut grammar cannot represent a double quote inside a quoted
+    name (`"[^"]*"` -- no escape syntax), so a name containing one would
+    make the emitted scaffold unparseable. Substitute single quotes."""
+    return name.replace('"', "'")
+
+
 def scaffold_cut(suite_name: str, surface: MockSurface) -> str:
     """Generate a starter .cut file from every mockable boundary site."""
     sites_by_paragraph: dict[str, list[BoundarySite]] = {}
@@ -41,11 +48,13 @@ def scaffold_cut(suite_name: str, surface: MockSurface) -> str:
             continue
         sites_by_paragraph.setdefault(site.paragraph_name, []).append(site)
 
-    lines = [f'TESTSUITE "{suite_name}"', ""]
+    lines = [f'TESTSUITE "{_quote_safe(suite_name)}"', ""]
     for paragraph_name, sites in sites_by_paragraph.items():
         directives = _directives_for(sites, surface)
         labels = ", ".join(dict.fromkeys(site.label for site in sites))
-        lines.append(f'TESTCASE "{paragraph_name} boundaries: {labels}"')
+        lines.append(
+            f'TESTCASE "{_quote_safe(f"{paragraph_name} boundaries: {labels}")}"'
+        )
         for directive_line, body in directives:
             lines.append(f"    {directive_line}")
             lines.extend(f"        {body_line}" for body_line in body)
@@ -59,7 +68,7 @@ def _directives_for(
     sites: list[BoundarySite], surface: MockSurface
 ) -> list[tuple[str, list[str]]]:
     directives: list[tuple[str, list[str]]] = []
-    seen: set[tuple[MockCategory, str]] = set()
+    seen: set[tuple[MockCategory | None, str]] = set()
     for site in sites:
         directive = _directive_for(site, surface)
         if directive is None:
@@ -76,12 +85,20 @@ def _directive_for(
     site: BoundarySite, surface: MockSurface
 ) -> tuple[str, list[str]] | None:
     category = site.category
+    if category is None:
+        # scaffold_cut filters these out already; guard for direct callers
+        return None
     body = list(_PLACEHOLDER_BODIES.get(category, []))
 
     if category is MockCategory.CALL:
-        name = site.keys[0] if site.keys else ""
+        if not site.keys:
+            # a static CALL whose literal never parsed: emitting
+            # `MOCK CALL ""` would be rejected at parse time (empty key),
+            # so skip it like the file-op/ACCEPT branches do; run's
+            # refusal gate will name the unmocked site.
+            return None
         keyword = "MQ" if site.is_mq else "CALL"
-        return f'MOCK {keyword} "{name}"', body
+        return f'MOCK {keyword} "{site.keys[0]}"', body
 
     if category is MockCategory.DYNCALL:
         # bare key = dynamic CALL through this identifier; quoting it would

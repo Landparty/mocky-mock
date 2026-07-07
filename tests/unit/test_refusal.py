@@ -877,3 +877,435 @@ def test_per_case_check_allows_pure_compute_next_to_file_family():
         surface, result.ast, _case("PURE-COMPUTE", call_names=())
     )
     assert reasons == []
+
+
+# --- GO TO edges (audit 1.1) -------------------------------------------------
+
+# The audit's own repro: MAIN-PARA reaches HIDDEN-PARA only via GO TO. A BFS
+# that traverses only PerformStatement edges never sees HIDDEN-PARA and lets
+# its CALL stay live (fail-open). GO TO EXIT-PARA is idiomatic COBOL, so
+# refusing GO TO outright is not an option -- the edge must be modeled.
+GOTO_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMOUNT          PIC 9(5)V99.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           GO TO HIDDEN-PARA.
+
+       HIDDEN-PARA.
+           CALL "REALPGM" USING WS-AMOUNT.
+"""
+
+# Computed GO TO: every target of GO TO ... DEPENDING ON is a real edge.
+DEPENDING_GOTO_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DEPSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-X               PIC 9.
+       01  WS-AMOUNT          PIC 9(5)V99.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           GO TO P-ONE P-TWO P-THREE DEPENDING ON WS-X.
+
+       P-ONE.
+           DISPLAY "1".
+
+       P-TWO.
+           DISPLAY "2".
+
+       P-THREE.
+           CALL "THIRDPGM" USING WS-AMOUNT.
+"""
+
+BAD_GOTO_SOURCE = GOTO_SOURCE.replace(
+    "GO TO HIDDEN-PARA.", "GO TO NO-SUCH-PARA."
+)
+
+
+def test_per_case_check_follows_go_to_edge_to_hidden_call():
+    """Audit finding 1.1: `MAIN-PARA. GO TO HIDDEN-PARA.` with a CALL in
+    HIDDEN-PARA used to produce zero refusals while the CALL stayed live."""
+    result = parse_cobol(GOTO_SOURCE, filename="gotosamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names=())
+    )
+    assert any(r.code == "UNMOCKED_CALL" for r in reasons)
+
+    mocked = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names={"REALPGM"})
+    )
+    assert mocked == []
+
+
+def test_per_case_check_follows_every_depending_on_target():
+    result = parse_cobol(DEPENDING_GOTO_SOURCE, filename="depsamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names=())
+    )
+    unmocked = [r for r in reasons if r.code == "UNMOCKED_CALL"]
+    assert len(unmocked) == 1
+    assert "THIRDPGM" in unmocked[0].message
+
+
+def test_per_case_check_refuses_unresolvable_go_to_target():
+    """Fail closed: a GO TO target the model cannot resolve refuses instead
+    of being silently skipped."""
+    result = parse_cobol(BAD_GOTO_SOURCE, filename="badgoto.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names=())
+    )
+    flow = [r for r in reasons if r.code == "UNRESOLVED_FLOW_TARGET"]
+    assert len(flow) == 1
+    assert "NO-SUCH-PARA" in flow[0].message
+    assert "GO TO" in flow[0].message
+
+
+# --- PERFORM <section-name> (audit 1.2) -------------------------------------
+
+# PERFORM WORK-SECTION: the section's paragraphs (including the phantom ""
+# paragraph cobolparser emits for statements before the first paragraph
+# header) must all become reachable. Before the fix the target resolved to
+# nothing and was silently dropped mid-BFS.
+SECTION_PERFORM_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMOUNT          PIC 9(5)V99.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM WORK-SECTION.
+           STOP RUN.
+
+       WORK-SECTION SECTION.
+       WORK-PARA.
+           CALL "SUBPGM" USING WS-AMOUNT.
+
+       TAIL-SECTION SECTION.
+       TAIL-PARA.
+           CALL "TAILPGM" USING WS-AMOUNT.
+"""
+
+BAD_PERFORM_SOURCE = SECTION_PERFORM_SOURCE.replace(
+    "PERFORM WORK-SECTION.", "PERFORM GHOST-SECTION."
+)
+
+
+def test_per_case_check_follows_perform_of_a_section():
+    """Audit finding 1.2: PERFORM WORK-SECTION whose section body contains a
+    CALL used to produce no refusal and no mock requirement."""
+    result = parse_cobol(SECTION_PERFORM_SOURCE, filename="secsamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names=())
+    )
+    unmocked = [r for r in reasons if r.code == "UNMOCKED_CALL"]
+    assert len(unmocked) == 1
+    assert "SUBPGM" in unmocked[0].message  # TAIL-SECTION stays unreachable
+
+    mocked = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names={"SUBPGM"})
+    )
+    assert mocked == []
+
+
+def test_per_case_check_accepts_section_name_as_driver_target():
+    """A .cut whose PERFORM target is a SECTION name must not be rejected as
+    UNKNOWN_PARAGRAPH -- performing a section is legal COBOL."""
+    result = parse_cobol(SECTION_PERFORM_SOURCE, filename="secsamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("WORK-SECTION", call_names={"SUBPGM"})
+    )
+    assert reasons == []
+
+
+def test_per_case_check_refuses_unresolvable_perform_target():
+    """Fail closed: before the fix an unresolvable PERFORM target was
+    `continue`d mid-BFS with no refusal at all."""
+    result = parse_cobol(BAD_PERFORM_SOURCE, filename="badperf.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names=())
+    )
+    flow = [r for r in reasons if r.code == "UNRESOLVED_FLOW_TARGET"]
+    assert len(flow) == 1
+    assert "GHOST-SECTION" in flow[0].message
+    assert "PERFORM" in flow[0].message
+
+
+# --- SEARCH ... WHEN bodies (audit 1.3) --------------------------------------
+
+SEARCH_WHEN_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SRCHSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-TAB.
+           05  WS-ENT OCCURS 3 TIMES INDEXED BY WS-IDX PIC X.
+       01  WS-AMOUNT          PIC 9(5)V99.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           SEARCH WS-ENT
+               AT END DISPLAY "NONE"
+               WHEN WS-ENT (WS-IDX) = "A"
+                   CALL "HIDDENPGM" USING WS-AMOUNT
+           END-SEARCH.
+           STOP RUN.
+"""
+
+
+def test_per_case_check_sees_call_inside_search_when_body():
+    """Audit finding 1.3: a CALL inside SEARCH ... WHEN used to be invisible
+    (`boundary_sites == []`) -- no site, no refusal, no splice."""
+    result = parse_cobol(SEARCH_WHEN_SOURCE, filename="srchsamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names=())
+    )
+    unmocked = [r for r in reasons if r.code == "UNMOCKED_CALL"]
+    assert len(unmocked) == 1
+    assert "HIDDENPGM" in unmocked[0].message
+
+
+# --- DECLARATIVES and ALTER (audit 1.4, 1.5) ---------------------------------
+
+DECLARATIVES_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DECLSAMP.
+
+       PROCEDURE DIVISION.
+       DECLARATIVES.
+       ERR-SEC SECTION.
+           USE AFTER ERROR PROCEDURE ON INPUT.
+       ERR-PARA.
+           CALL "ERRPGM".
+       END DECLARATIVES.
+
+       MAIN-SEC SECTION.
+       MAIN-PARA.
+           DISPLAY "HI".
+           STOP RUN.
+"""
+
+ALTER_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ALTSAMP.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           ALTER SWITCH-PARA TO PROCEED TO P-TWO.
+           GO TO SWITCH-PARA.
+
+       SWITCH-PARA.
+           GO TO P-ONE.
+
+       P-ONE.
+           DISPLAY "1".
+
+       P-TWO.
+           DISPLAY "2".
+"""
+
+
+def test_whole_program_check_refuses_declaratives():
+    """Audit finding 1.4: DECLARATIVES parse warning-free, but their USE
+    procedures run on I/O conditions outside any PERFORM/GO TO edge, so the
+    reachability gate structurally cannot check them -- unconditional
+    whole-program refusal, like SORT/MERGE."""
+    result = parse_cobol(DECLARATIVES_SOURCE, filename="declsamp.cbl")
+    assert result.success, result.errors
+    assert not result.warnings  # precondition: nothing else would catch it
+    reasons = check_whole_program(result)
+    assert any(r.code == "UNSUPPORTED_DECLARATIVES" for r in reasons)
+
+
+def test_whole_program_check_refuses_alter():
+    """Audit finding 1.5: ALTER rewrites GO TO targets at runtime, so no
+    static reachability analysis is sound -- unconditional refusal."""
+    result = parse_cobol(ALTER_SOURCE, filename="altsamp.cbl")
+    assert result.success, result.errors
+    assert not result.warnings  # precondition: ALTER parses warning-free
+    reasons = check_whole_program(result)
+    alter = [r for r in reasons if r.code == "UNSUPPORTED_ALTER"]
+    assert len(alter) == 1
+    assert "SWITCH-PARA" in alter[0].message or "MAIN-PARA" in alter[0].message
+
+
+def test_whole_program_check_does_not_flag_clean_programs_for_control_flow():
+    assert check_whole_program(_result()) == []
+
+
+# --- CANCEL coverage (audit 1.6) ----------------------------------------------
+
+CANCEL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CANSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMOUNT          PIC 9(5)V99.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUBPGM" USING WS-AMOUNT.
+           CANCEL "SUBPGM".
+
+       CANCEL-ONLY-PARA.
+           CANCEL "SUBPGM".
+"""
+
+
+def test_reachable_cancel_is_covered_by_matching_call_mock():
+    """CANCEL of a program whose CALLs the case mocks is a guaranteed
+    GnuCOBOL no-op (the mocked CALL never loads the module), so it counts
+    as covered -- left in place, never spliced."""
+    result = parse_cobol(CANCEL_SOURCE, filename="cansamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names={"SUBPGM"})
+    )
+    assert reasons == []
+
+
+def test_reachable_cancel_without_call_mock_refuses():
+    result = parse_cobol(CANCEL_SOURCE, filename="cansamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names=())
+    )
+    codes = [r.code for r in reasons]
+    assert "UNMOCKED_CALL" in codes  # the CALL itself still refuses
+    assert "UNMOCKED_CANCEL" in codes
+
+
+def test_call_mock_covering_only_a_cancel_is_not_unmatched():
+    """A MOCK CALL "SUBPGM" whose only reachable use is covering a CANCEL
+    must not be flagged UNMATCHED_MOCK -- covering the CANCEL is its job."""
+    result = parse_cobol(CANCEL_SOURCE, filename="cansamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("CANCEL-ONLY-PARA", call_names={"SUBPGM"})
+    )
+    assert reasons == []
+
+
+# --- top-level "owns its line" guard (audit 2.1) ------------------------------
+
+from cobolparser.preprocess import normalize_fixed_format as _normalize
+
+from mockymock.splicer.source_map import (
+    annotate_nested_sites as _annotate,
+    collect_scope_map as _scope_map,
+)
+
+SHARED_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SHARESAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A               PIC 9(3).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 1 TO WS-A CALL "SHAREPGM" USING WS-A.
+
+       ONE-LINER-PARA. CALL "LINERPGM" USING WS-A.
+
+       CLEAN-PARA.
+           CALL "CLEANPGM" USING WS-A.
+"""
+
+
+def _annotated_shared_surface():
+    result = parse_cobol(SHARED_LINE_SOURCE, filename="sharesamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = _normalize(SHARED_LINE_SOURCE.splitlines()).splitlines()
+    _annotate(surface, _scope_map(result.ast, lines), lines)
+    return result, surface
+
+
+def test_mocked_top_level_call_sharing_its_line_refuses():
+    """Audit finding 2.1: `MOVE 1 TO WS-A CALL "X" USING WS-A.` on one line
+    used to be spliced whole-line, silently deleting the MOVE."""
+    result, surface = _annotated_shared_surface()
+    reasons = check_test_case(
+        surface, result.ast, _case("MAIN-PARA", call_names={"SHAREPGM"})
+    )
+    layout = [r for r in reasons if r.code == "UNSUPPORTED_MOCK_TARGET_LAYOUT"]
+    assert len(layout) == 1
+    assert "does not start its own line" in layout[0].message
+
+
+def test_mocked_call_in_one_line_paragraph_refuses():
+    """`P1. CALL "X".` -- splicing would comment out the paragraph header."""
+    result, surface = _annotated_shared_surface()
+    reasons = check_test_case(
+        surface, result.ast, _case("ONE-LINER-PARA", call_names={"LINERPGM"})
+    )
+    assert any(
+        r.code == "UNSUPPORTED_MOCK_TARGET_LAYOUT" for r in reasons
+    )
+
+
+def test_mocked_top_level_call_owning_its_line_still_passes():
+    result, surface = _annotated_shared_surface()
+    reasons = check_test_case(
+        surface, result.ast, _case("CLEAN-PARA", call_names={"CLEANPGM"})
+    )
+    assert reasons == []
+
+
+def test_unmocked_top_level_exec_sharing_its_line_refuses_program_wide():
+    """An unmocked EXEC gets a trap splice regardless of reachability, so a
+    layout problem on a top-level EXEC refuses the whole program."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EXECSHARE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-ID              PIC 9(5).
+
+       PROCEDURE DIVISION.
+       SQL-PARA. EXEC SQL DELETE FROM T WHERE ID = :WS-ID END-EXEC.
+
+       OTHER-PARA.
+           DISPLAY "HI".
+"""
+    result = parse_cobol(source, filename="execshare.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = _normalize(source.splitlines()).splitlines()
+    _annotate(surface, _scope_map(result.ast, lines), lines)
+    reasons = check_nested_exec(surface)
+    unspliceable = [r for r in reasons if r.code == "UNSPLICEABLE_EXEC"]
+    assert len(unspliceable) == 1
+    assert "does not start its own line" in unspliceable[0].message

@@ -1,2 +1,8 @@
+# cobolparser is consumed as an editable sibling checkout (mockymock is
+# not on PyPI and neither is cobol-parser). There is no version pin here
+# because pip cannot pin a path install -- the pin lives in
+# .github/workflows/ci.yml, which checks the sibling out at an exact
+# commit (`ref:`). Keep that ref in sync when adopting new cobol-parser
+# behavior.
 -e ../cobol-parser
 -e .[dev]

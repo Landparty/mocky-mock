@@ -348,3 +348,67 @@ def test_detects_static_call_nested_inside_call_on_exception():
     # nested CALL "NESTED-DISCRATE" inside its ON EXCEPTION clause.
     assert len(static) == 2
     assert {c.program_name for c in static} == {"OUTER-PGM", "NESTED-DISCRATE"}
+
+
+# --- SEARCH ... WHEN bodies (audit 1.3) and CANCEL (audit 1.6) ---------------
+
+SEARCH_WHEN_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SRCHSURF.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-TAB.
+           05  WS-ENT OCCURS 3 TIMES INDEXED BY WS-IDX PIC X.
+       01  WS-AMT             PIC 9(5).
+
+       PROCEDURE DIVISION.
+       SEARCH-PARA.
+           SEARCH WS-ENT
+               AT END DISPLAY "NONE"
+               WHEN WS-ENT (WS-IDX) = "A"
+                   CALL "WHENPGM" USING WS-AMT
+           END-SEARCH.
+           STOP RUN.
+"""
+
+
+def test_detects_static_call_nested_inside_search_when():
+    """Audit finding 1.3: _nested_statement_lists never opened
+    SearchStatement.when_clauses (a list[dict] with a "statements" key,
+    unlike EVALUATE's WhenClause nodes), so a CALL inside SEARCH ... WHEN
+    produced no boundary site at all -- no site, no refusal, no splice."""
+    result = parse_cobol(SEARCH_WHEN_SOURCE, filename="srchsurf.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    sites = [s for s in surface.boundary_sites if "WHENPGM" in s.keys]
+    assert len(sites) == 1
+    assert sites[0].nested is True
+    assert sites[0].paragraph_name == "SEARCH-PARA"
+
+
+CANCEL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CANSURF.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMT             PIC 9(5).
+
+       PROCEDURE DIVISION.
+       CANCEL-PARA.
+           CANCEL "SUBPGM".
+"""
+
+
+def test_detects_cancel_as_unmockable_site_with_program_names():
+    """CANCEL is detected (category None -- never spliced, never matched by
+    a directive) with its program names as keys, so the refusal gate can
+    decide covered-by-CALL-mock vs UNMOCKED_CANCEL."""
+    result = parse_cobol(CANCEL_SOURCE, filename="cansurf.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    sites = [s for s in surface.boundary_sites if s.label == "CANCEL"]
+    assert len(sites) == 1
+    assert sites[0].category is None
+    assert sites[0].keys == ("SUBPGM",)

@@ -44,16 +44,24 @@ def build_driver(
     sanitized = re.sub(r"-{2,}", "-", sanitized).strip("-")
     suite_paragraph = ("UT-TESTSUITE-" + sanitized)[:60].rstrip("-")
 
+    # UT-CURRENT-CASE is X(9): case ids are zero-padded to 3 digits but grow
+    # naturally past case 999 ("1000"), and a narrower field would truncate
+    # the MOVE so case 1000 would execute case 100's mock branches. Tally
+    # and fail-count fields are 9(9): at PIC 9(4) they silently wrapped at
+    # 10,000, letting `VERIFY ... 500 TIMES` pass with 10,500 real calls
+    # (batch loops of that size are realistic in the target domain).
     working_storage = [
-        "01  UT-CURRENT-CASE        PIC X(3).",
-        "01  UT-FAIL-COUNT          PIC 9(4) VALUE 0.",
+        "01  UT-CURRENT-CASE        PIC X(9).",
+        "01  UT-FAIL-COUNT          PIC 9(9) VALUE 0.",
     ]
     for _, tally in registry.items():
-        working_storage.append(f"01  {tally}      PIC 9(4) VALUE 0.")
+        working_storage.append(f"01  {tally}      PIC 9(9) VALUE 0.")
 
     procedure: list[str] = []
     procedure.append(f"       {suite_paragraph}.")
-    procedure.append(f'           DISPLAY "__MOCKYMOCK__ TESTSUITE: {suite.name}"')
+    procedure.append(
+        f'           DISPLAY "__MOCKYMOCK__ TESTSUITE: {_display_text(suite.name)}"'
+    )
     for index in range(1, len(suite.test_cases) + 1):
         procedure.append(f"           PERFORM UT-TESTCASE-{index:03d}")
     procedure.append(

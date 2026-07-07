@@ -57,11 +57,45 @@ _EXEC_SQL_RE = re.compile(r"\bEXEC\s+SQL\b", re.IGNORECASE)
 _END_EXEC_RE = re.compile(r"\bEND-EXEC\b", re.IGNORECASE)
 
 
+def _in_literal(line: str, position: int) -> bool:
+    """True when `position` falls inside a COBOL string literal ('...' or
+    "...") opened earlier on the same line. A doubled quote inside a
+    literal toggles closed-then-open again, which leaves the state
+    correctly 'inside'. (Literals spanning normalized lines are not
+    handled -- continuation merging happens upstream in
+    normalize_fixed_format.)"""
+    quote: str | None = None
+    for character in line[:position]:
+        if quote is None:
+            if character in "'\"":
+                quote = character
+        elif character == quote:
+            quote = None
+    return quote is not None
+
+
+def _search_outside_literals(pattern: re.Pattern, line: str):
+    """First match of `pattern` in `line` that is not inside a string
+    literal, or None -- so `VALUE "EXEC SQL ERROR"` never starts a bogus
+    block scan and `VALUE "END-EXEC"` never terminates a real one early."""
+    for match in pattern.finditer(line):
+        if not _in_literal(line, match.start()):
+            return match
+    return None
+
+
 def transform_data_division_exec(
     lines: list[str],
 ) -> tuple[list[str], list[RefusalReason]]:
     """Return (new lines, refusal reasons) for the DATA DIVISION EXEC SQL
-    blocks in already-normalized free-form `lines`."""
+    blocks in already-normalized free-form `lines`.
+
+    All transforms here replace or comment out WHOLE lines, so a block that
+    shares a line with other content -- data-item text before the
+    `EXEC SQL`, or trailing content after the `END-EXEC.` -- refuses
+    (UNSUPPORTED_DATA_DIVISION_EXEC) instead of silently deleting the
+    sibling content. `EXEC SQL` / `END-EXEC` appearing inside VALUE-clause
+    string literals is ignored entirely (see `_search_outside_literals`)."""
     result = list(lines)
     reasons: list[RefusalReason] = []
 
@@ -69,14 +103,21 @@ def transform_data_division_exec(
     index = 0
     while index < len(result):
         line = result[index]
+        exec_match = None
         if _DATA_DIVISION_RE.match(line):
             in_data_division = True
         elif _PROCEDURE_DIVISION_RE.match(line):
             in_data_division = False
-        elif in_data_division and _EXEC_SQL_RE.search(line):
+        elif in_data_division:
+            exec_match = _search_outside_literals(_EXEC_SQL_RE, line)
+        if exec_match is not None:
             end = index
-            while end < len(result) and not _END_EXEC_RE.search(result[end]):
+            end_match = _search_outside_literals(_END_EXEC_RE, result[end])
+            while end_match is None:
                 end += 1
+                if end == len(result):
+                    break
+                end_match = _search_outside_literals(_END_EXEC_RE, result[end])
             if end == len(result):
                 reasons.append(
                     RefusalReason(
@@ -88,6 +129,13 @@ def transform_data_division_exec(
                     )
                 )
                 break
+            shared_line_problem = _shared_line_problem(
+                result, index, exec_match, end, end_match
+            )
+            if shared_line_problem is not None:
+                reasons.append(shared_line_problem)
+                index = end + 1
+                continue
             block = " ".join(
                 " ".join(result[i].upper().split()) for i in range(index, end + 1)
             )
@@ -96,6 +144,43 @@ def transform_data_division_exec(
         index += 1
 
     return result, reasons
+
+
+def _shared_line_problem(
+    result: list[str],
+    start: int,
+    exec_match,
+    end: int,
+    end_match,
+) -> RefusalReason | None:
+    """UNSUPPORTED_DATA_DIVISION_EXEC when the block's first line has
+    content before `EXEC SQL` or its last line has content after the
+    `END-EXEC` (and its optional period) -- whole-line replacement would
+    delete that sibling content, so fail closed instead."""
+    prefix = result[start][: exec_match.start()]
+    if prefix.strip():
+        return RefusalReason(
+            code="UNSUPPORTED_DATA_DIVISION_EXEC",
+            message=(
+                f"EXEC SQL block at line {start + 1} shares its first line "
+                f"with other DATA DIVISION content ({prefix.strip()[:40]!r}) "
+                f"-- whole-line replacement would delete it; put the EXEC "
+                f"SQL block on its own line(s)"
+            ),
+        )
+    trailing = result[end][end_match.end() :].lstrip()
+    trailing = trailing.removeprefix(".").strip()
+    if trailing:
+        return RefusalReason(
+            code="UNSUPPORTED_DATA_DIVISION_EXEC",
+            message=(
+                f"EXEC SQL block ending at line {end + 1} has trailing "
+                f"content after its END-EXEC ({trailing[:40]!r}) -- "
+                f"whole-line replacement would delete it; put the content "
+                f"on its own line"
+            ),
+        )
+    return None
 
 
 def _handle_block(

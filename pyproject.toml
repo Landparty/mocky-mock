@@ -30,6 +30,9 @@ dependencies = []
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+    "mypy>=1.5.0",
 ]
 
 [project.scripts]
@@ -37,3 +40,73 @@ mockymock = "mockymock.cli.main:main"
 
 [tool.setuptools.packages.find]
 include = ["mockymock*"]
+
+[tool.setuptools.package-data]
+# PEP 561: the code is fully annotated; py.typed makes the annotations
+# visible to downstream mypy.
+mockymock = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = [
+    "--strict-markers",
+    "--cov=mockymock",
+    "--cov-report=term-missing",
+    # Measured at 85% on tests/unit (2026-07-07); floor set 2 points below
+    # so genuine regressions fail while normal churn doesn't.
+    "--cov-fail-under=83",
+]
+
+[tool.coverage.run]
+source = ["mockymock"]
+branch = true
+
+[tool.coverage.report]
+precision = 2
+
+# Lint/format configs mirror the sibling cobol-parser repo (same
+# selects/ignores/line length) so contributors move between the two repos
+# without switching styles.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Unused imports in __init__.py files
+# The test suite's established style groups related tests under mid-file
+# section banners with their own imports.
+"tests/**" = ["E402"]
+
+[tool.black]
+target-version = ["py311"]
+line-length = 88
+
+# mypy: deliberately pragmatic rather than the sibling repo's strict mode --
+# settings chosen so the current, fully-annotated code passes; tighten
+# incrementally rather than blanket-ignoring whole modules.
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true

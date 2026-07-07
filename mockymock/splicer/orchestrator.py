@@ -17,7 +17,13 @@ Nested sites ARE spliced here, at the span `annotate_nested_sites`
 validated for them (site.span); the refusal gate guarantees any nested
 site that still needs a splice carries one (UNSUPPORTED_NESTED_MOCK_TARGET
 / NESTED_EXEC refuse the unspliceable ones first), and this module raises
-if that invariant is violated. An unmocked nested non-EXEC site is left in
+if that invariant is violated. Top-level sites get the parallel guard:
+`annotate_nested_sites` stamps an `unspliceable_reason` on any top-level
+site that does not own its source line(s) (sibling code on the statement's
+line -- e.g. a one-line paragraph `P1. CALL "X".` -- would be silently
+deleted by the whole-line splice), the gate refuses those
+(UNSUPPORTED_MOCK_TARGET_LAYOUT / UNSPLICEABLE_EXEC), and this module
+raises if one still arrives. An unmocked nested non-EXEC site is left in
 place as before (plain COBOL; if it was reachable the refusal gate already
 fired).
 
@@ -63,8 +69,10 @@ def splice_program(
             replacement = build_site_dispatch(site, suite, registry)
         elif site.category in EXEC_CATEGORIES:
             # Unmocked EXEC still has to go: cobc cannot compile it. The
-            # refusal gate guarantees it is unreachable from every test
-            # case, so the trap only fires if reachability analysis and
+            # refusal gate refuses any test case that can reach it (PERFORM
+            # and GO TO edges, section PERFORMs, and SEARCH/EVALUATE bodies
+            # are all modeled; DECLARATIVES and ALTER refuse the whole
+            # program), so the trap only fires if reachability analysis and
             # reality disagree -- and then it fails loudly.
             replacement = build_exec_trap(site.label, site.line)
         else:
@@ -83,6 +91,15 @@ def splice_program(
                 )
             start, end = site.span
         else:
+            if site.unspliceable_reason:
+                raise ValueError(
+                    f"top-level {site.label} site at line {site.line} "
+                    f"reached the splicer although it "
+                    f"{site.unspliceable_reason} -- the refusal gate "
+                    f"(UNSUPPORTED_MOCK_TARGET_LAYOUT / UNSPLICEABLE_EXEC) "
+                    f"should have refused it; splicing would delete the "
+                    f"sibling code sharing its line"
+                )
             start, end = statement_span(site.statement, boundaries, last_line)
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /

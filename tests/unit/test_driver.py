@@ -190,3 +190,36 @@ def test_testcase_emits_perform_thru_when_set():
     suite.test_cases[0].perform_thru = "PROCESS-EXIT"
     joined = "\n".join(_build(suite).procedure_lines)
     assert "PERFORM PROCESS-ORDER THRU PROCESS-EXIT" in joined
+
+
+# --- field widths (audit 2.5, 2.7) and suite-name escaping (audit 2.8) -------
+
+
+def test_tally_and_fail_count_fields_are_nine_digits():
+    """PIC 9(4) wrapped silently at 10,000: `VERIFY ... 500 TIMES` passed
+    with 10,500 actual calls and the SUMMARY fail count wrapped the same
+    way. 9(9) keeps counts exact for any realistic batch loop."""
+    joined = "\n".join(_build().working_storage_lines)
+    assert "UT-FAIL-COUNT          PIC 9(9) VALUE 0." in joined
+    assert "UT-DISCRATE-TALLY      PIC 9(9) VALUE 0." in joined
+    assert "PIC 9(4)" not in joined
+
+
+def test_current_case_field_is_wide_enough_for_four_digit_case_ids():
+    """PIC X(3) truncated case 1000's MOVE to "100", executing case 100's
+    mock branches; X(9) keeps the MOVE'd id and the injector's WHEN
+    literals in sync far past any realistic suite size."""
+    joined = "\n".join(_build().working_storage_lines)
+    assert "UT-CURRENT-CASE        PIC X(9)." in joined
+    assert "PIC X(3)" not in joined
+
+
+def test_suite_name_quotes_are_escaped_in_testsuite_display():
+    """suite.name was interpolated unescaped while case.name was escaped --
+    a quote in the suite title would split the generated DISPLAY literal."""
+    suite = MockTestSuite(
+        name='say "hi" suite',
+        test_cases=[MockTestCase(name="c", perform_target="P")],
+    )
+    joined = "\n".join(_build(suite).procedure_lines)
+    assert 'DISPLAY "__MOCKYMOCK__ TESTSUITE: say ""hi"" suite"' in joined

@@ -8,11 +8,12 @@ from mockymock.runtime.docker_toolchain import DockerNotAvailableError
 
 
 def test_setup_reports_container_and_cobc_version(capsys):
-    with mock.patch(
-        "mockymock.runtime.docker_toolchain.ensure_toolchain"
-    ) as ensure, mock.patch(
-        "mockymock.runtime.docker_toolchain.cobc_version",
-        return_value="cobc (GnuCOBOL) 3.2.0",
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain") as ensure,
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.cobc_version",
+            return_value="cobc (GnuCOBOL) 3.2.0",
+        ),
     ):
         exit_code = main(["setup"])
     assert exit_code == 0
@@ -33,17 +34,42 @@ def test_setup_fails_loudly_when_docker_unavailable(capsys):
 
 
 def test_run_fails_loudly_before_parsing_when_docker_unavailable(tmp_path, capsys):
-    """ensure_toolchain runs first: no parse work, no sandbox, just the
-    actionable message. The program/cut paths deliberately don't exist."""
+    """ensure_toolchain runs before any parse work or sandbox creation:
+    just the actionable message. Only the cheap input-existence check
+    precedes it, so the input files must exist here."""
+    program = tmp_path / "PROG.cbl"
+    program.write_text("dummy\n")
+    cut = tmp_path / "PROG.cut"
+    cut.write_text('TESTSUITE "x"\n')
     with mock.patch(
         "mockymock.runtime.docker_toolchain.ensure_toolchain",
         side_effect=DockerNotAvailableError("Docker is required: start Docker Desktop"),
     ):
+        exit_code = main(["run", str(program), "--cut", str(cut)])
+    assert exit_code == 1
+    assert "Docker is required" in capsys.readouterr().out
+
+
+def test_run_reports_missing_input_files_before_touching_docker(tmp_path, capsys):
+    """Nonexistent program/--cut paths must produce a clean per-file error
+    and exit 1 without ever calling ensure_toolchain -- never a
+    FileNotFoundError traceback after a multi-minute image build."""
+    with mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain") as ensure:
         exit_code = main(
             ["run", str(tmp_path / "NOPE.cbl"), "--cut", str(tmp_path / "NOPE.cut")]
         )
     assert exit_code == 1
-    assert "Docker is required" in capsys.readouterr().out
+    ensure.assert_not_called()
+    out = capsys.readouterr().out
+    assert f"mockymock run: no such file: {tmp_path / 'NOPE.cbl'}" in out
+    assert f"mockymock run: no such file: {tmp_path / 'NOPE.cut'}" in out
+
+
+def test_generate_reports_missing_program_cleanly(tmp_path, capsys):
+    exit_code = main(["generate", str(tmp_path / "NOPE.cbl")])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert f"mockymock generate: no such file: {tmp_path / 'NOPE.cbl'}" in out
 
 
 def test_run_parser_accepts_keep_sandbox_and_verbose():
@@ -54,3 +80,156 @@ def test_run_parser_accepts_keep_sandbox_and_verbose():
     )
     assert args.keep_sandbox is True
     assert args.verbose is True
+
+
+# --- full `run` pipeline with the Docker toolchain mocked --------------------
+#
+# These drive _cmd_run end to end (real parse, refusal gate, splice, driver
+# build) and fake only the container: compile always succeeds, and run_binary
+# returns a canned ExecutionResult. This is what pins finding 4.2: stderr,
+# the exit-124 timeout hint, and nonzero binary exit codes must all reach the
+# user instead of being silently discarded.
+
+from pathlib import Path
+
+from mockymock.runtime.compiler import CompileResult
+from mockymock.runtime.executor import TIMEOUT_EXIT_CODE, ExecutionResult
+
+RUN_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ORDRPROC.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMOUNT          PIC 9(5)V99.
+
+       PROCEDURE DIVISION.
+       PROCESS-ORDER.
+           CALL "DISCRATE" USING WS-AMOUNT.
+"""
+
+RUN_CUT = """\
+TESTSUITE "ORDRPROC"
+
+TESTCASE "calls discrate"
+    MOCK CALL "DISCRATE"
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    PERFORM PROCESS-ORDER
+    VERIFY "DISCRATE" WAS CALLED ONCE
+"""
+
+CLEAN_STDOUT = (
+    "__MOCKYMOCK__ TESTSUITE: ORDRPROC\n"
+    "__MOCKYMOCK__ CASE 001 START: calls discrate\n"
+    "__MOCKYMOCK__ CASE 001 END\n"
+    "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+)
+
+
+def _run_cli(tmp_path, executed: ExecutionResult, extra_args=()):
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+
+    def fake_compile(source_path: Path) -> CompileResult:
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=fake_compile,
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
+        ),
+    ):
+        return main(["run", str(program), "--cut", str(cut), *extra_args])
+
+
+def test_run_exits_zero_and_writes_junit_xml_on_clean_pass(tmp_path, capsys):
+    junit_path = tmp_path / "out" / "report.xml"
+    junit_path.parent.mkdir()
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    exit_code = _run_cli(tmp_path, executed, ["--junit-xml", str(junit_path)])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "[PASS] calls discrate" in out
+    xml_text = junit_path.read_text()
+    assert '<testsuite name="ORDRPROC"' in xml_text
+    assert 'failures="0"' in xml_text
+
+
+def test_run_surfaces_timeout_hint_and_fails_on_exit_124(tmp_path, capsys):
+    """The exit-124 infinite-loop hint that run_binary attaches to stderr
+    must reach CLI output, the crash must be framed as a timeout (not the
+    STOP RUN hypothesis), and the run must exit nonzero."""
+    truncated = (
+        "__MOCKYMOCK__ TESTSUITE: ORDRPROC\n"
+        "__MOCKYMOCK__ CASE 001 START: calls discrate\n"
+    )
+    hint = (
+        "mockymock: binary timed out after 30s (a mocked CALL may have "
+        "removed a loop's terminating condition, producing an infinite loop)\n"
+    )
+    junit_path = tmp_path / "report.xml"
+    executed = ExecutionResult(
+        exit_code=TIMEOUT_EXIT_CODE, stdout=truncated, stderr=hint
+    )
+    exit_code = _run_cli(tmp_path, executed, ["--junit-xml", str(junit_path)])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "a mocked CALL may have removed a loop's terminating" in out
+    assert "binary timed out (exit 124)" in out
+    assert "STOP RUN" not in out
+    xml_text = junit_path.read_text()
+    assert "binary timed out (exit 124)" in xml_text
+    assert "STOP RUN" not in xml_text
+
+
+def test_run_surfaces_stderr_and_fails_on_nonzero_exit_after_summary(tmp_path, capsys):
+    """A libcob abort after the SUMMARY line printed used to exit 0 with its
+    stderr discarded; both the exit code and the evidence must surface."""
+    executed = ExecutionResult(
+        exit_code=134,
+        stdout=CLEAN_STDOUT,
+        stderr="libcob: error: numeric overflow\n",
+    )
+    exit_code = _run_cli(tmp_path, executed)
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "libcob: error: numeric overflow" in out
+
+
+def test_run_zero_exit_crash_keeps_stop_run_hypothesis(tmp_path, capsys):
+    """When the binary exits 0 but a case never printed its END marker, the
+    STOP RUN hypothesis is the honest guess (STOP RUN exits 0) and stays."""
+    truncated = (
+        "__MOCKYMOCK__ TESTSUITE: ORDRPROC\n"
+        "__MOCKYMOCK__ CASE 001 START: calls discrate\n"
+    )
+    junit_path = tmp_path / "report.xml"
+    executed = ExecutionResult(exit_code=0, stdout=truncated, stderr="")
+    exit_code = _run_cli(tmp_path, executed, ["--junit-xml", str(junit_path)])
+    assert exit_code == 1  # all_passed is False: no SUMMARY line
+    assert "STOP RUN?" in junit_path.read_text()
+
+
+def test_run_reports_cut_parse_error_cleanly(tmp_path, capsys):
+    """A .cut syntax error must print the parser's line-numbered message and
+    exit 1 -- not a raw CutParseError traceback (finding 3.4)."""
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "BAD.cut"
+    cut.write_text('TESTSUITE "x"\nNOT-A-DIRECTIVE\n')
+    with mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"):
+        exit_code = main(["run", str(program), "--cut", str(cut)])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert f"mockymock run: invalid .cut file {cut}" in out
+    assert "line 2" in out

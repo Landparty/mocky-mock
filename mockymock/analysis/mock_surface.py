@@ -8,9 +8,10 @@ verbs (OPEN/CLOSE/READ/WRITE/REWRITE/DELETE/START/UNLOCK), EXEC
 SQL/CICS/DLI, and console ACCEPT. Each mockable statement is recorded as a
 `BoundarySite` carrying its AST statement reference so the splicer can
 compute replacement spans without re-scanning paragraphs. The SORT/MERGE
-family -- and, fail closed, a dynamic CALL whose identifier cobolparser
-did not capture -- are *detected* (category None) for the refusal gate but
-not mockable.
+family, CANCEL, and -- fail closed -- a dynamic CALL whose identifier
+cobolparser did not capture are *detected* (category None) for the refusal
+gate but never spliced (CANCEL counts as covered when the test case mocks
+the CALL for the same program name; see refusal.py).
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from enum import Enum
 from cobolparser.models.program import CobolDivision, CobolParagraph, CobolProgram
 from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.models.statements.call import CallStatement
-from cobolparser.models.statements.control import EvaluateStatement
+from cobolparser.models.statements.control import EvaluateStatement, SearchStatement
 from cobolparser.models.statements.io import (
     IOAcceptStatement,
     IOCloseStatement,
@@ -34,6 +35,7 @@ from cobolparser.models.statements.io import (
     IOWriteStatement,
 )
 from cobolparser.models.statements.misc import (
+    CancelStatement,
     MergeStatement,
     ReleaseStatement,
     ReturnStatement,
@@ -243,8 +245,8 @@ def _nested_statement_lists(statement) -> list[list]:
 
     Covers IF/ELSE branches, inline PERFORM bodies, IO clause bodies
     (AT END, INVALID KEY, AT END-OF-PAGE), CALL exception handlers, and
-    (via the EvaluateStatement special case) every EVALUATE WHEN/WHEN OTHER
-    branch.
+    (via the EvaluateStatement/SearchStatement special cases) every
+    EVALUATE WHEN/WHEN OTHER branch and every SEARCH WHEN body.
     """
     lists = [
         value
@@ -257,6 +259,14 @@ def _nested_statement_lists(statement) -> list[list]:
                 lists.append(when.statements)
         if statement.default_when is not None and statement.default_when.statements:
             lists.append(statement.default_when.statements)
+    if isinstance(statement, SearchStatement):
+        # SearchStatement.when_clauses is a list[dict] with a "statements"
+        # key (verified against cobolparser's control.py), unlike
+        # EvaluateStatement's WhenClause nodes. SEARCH's AT END body is
+        # already covered by "at_end_clause" in _NESTED_STATEMENT_ATTRS.
+        for when in statement.when_clauses:
+            if when.get("statements"):
+                lists.append(when["statements"])
     return lists
 
 
@@ -341,6 +351,17 @@ def _classify_statement(
     if isinstance(statement, _SORT_MERGE_TYPES):
         surface.file_io_paragraphs.add(paragraph_name)
         add_site(None, "SORT/MERGE")
+        return
+
+    if isinstance(statement, CancelStatement):
+        # CANCEL is never spliced (category None keeps it out of the
+        # splicer and out of directive matching), but it is not unmockable
+        # like SORT/MERGE either: under the refusal gate no mocked CALL
+        # ever loads a real module, so CANCEL of a program whose CALLs the
+        # test case mocks is a guaranteed GnuCOBOL no-op and counts as
+        # covered. The gate checks `keys` against the case's CALL/DYNCALL
+        # directives; a CANCEL naming anything else refuses (UNMOCKED_CANCEL).
+        add_site(None, "CANCEL", keys=tuple(statement.program_names))
         return
 
     if isinstance(statement, ExecSQLStatement):

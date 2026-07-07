@@ -43,11 +43,7 @@ class TestSuiteResult:
 
     @property
     def all_passed(self) -> bool:
-        return (
-            self.failures == 0
-            and self.tests_run > 0
-            and not self.orphan_failures
-        )
+        return self.failures == 0 and self.tests_run > 0 and not self.orphan_failures
 
 
 def parse_stdout(stdout: str) -> TestSuiteResult:

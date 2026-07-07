@@ -2,13 +2,37 @@
 
 from __future__ import annotations
 
+import re
 from xml.dom import minidom
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from mockymock.report.results import TestSuiteResult
 
+# Everything XML 1.0 forbids outright (control characters other than
+# tab/LF/CR, plus lone surrogates). Suite/case names and failure reasons
+# come from the .cut file and the binary's stdout, both of which can carry
+# control characters -- feeding them to ElementTree produces XML that
+# minidom (and any downstream CI collector) rejects with an ExpatError.
+_XML_ILLEGAL_RE = re.compile(
+    "[^\x09\x0a\x0d\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]"
+)
 
-def format_console(suite: TestSuiteResult) -> str:
+# Hardcoding a hypothesis here would be wrong whenever the real cause was
+# a timeout or a runtime abort -- the CLI passes the actual evidence
+# (exit code / timeout) as `crash_detail` when it has any; the STOP RUN
+# hypothesis is only offered when the binary exited cleanly (code 0),
+# which is what STOP RUN does.
+_DEFAULT_CRASH_HYPOTHESIS = "PERFORM target reached STOP RUN?"
+
+
+def _xml_safe(text: str) -> str:
+    """Replace XML-illegal characters with a visible \\xNN escape so the
+    document stays well-formed without silently losing the evidence that
+    a control character was present."""
+    return _XML_ILLEGAL_RE.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
+
+
+def format_console(suite: TestSuiteResult, crash_detail: str | None = None) -> str:
     lines = [f"TESTSUITE: {suite.suite_name}"]
     crashed_count = 0
     for result in suite.results:
@@ -20,6 +44,8 @@ def format_console(suite: TestSuiteResult) -> str:
         else:
             status = "FAIL"
         lines.append(f"  [{status}] {result.case_name}")
+        if result.crashed and crash_detail:
+            lines.append(f"         {crash_detail}")
         for reason in result.failure_reasons:
             lines.append(f"         {reason}")
     # suite.tests_run/suite.failures are 0 whenever the SUMMARY line never
@@ -43,7 +69,7 @@ def format_console(suite: TestSuiteResult) -> str:
     return "\n".join(lines)
 
 
-def format_junit_xml(suite: TestSuiteResult) -> str:
+def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) -> str:
     # suite.failures is the SUMMARY line's count of failed CHECKS (a case
     # with 2 failure reasons contributes 2 to that number), but standard CI
     # tooling (Jenkins, GitHub Actions, GitLab) interprets the <testsuite
@@ -70,29 +96,33 @@ def format_junit_xml(suite: TestSuiteResult) -> str:
     tests_seen = (suite.tests_run or len(suite.results)) + len(suite.orphan_failures)
     testsuite_el = Element(
         "testsuite",
-        name=suite.suite_name,
+        name=_xml_safe(suite.suite_name),
         tests=str(tests_seen),
         failures=str(failed_cases),
         errors=str(error_count),
     )
     for result in suite.results:
-        testcase_el = SubElement(testsuite_el, "testcase", name=result.case_name)
+        testcase_el = SubElement(
+            testsuite_el, "testcase", name=_xml_safe(result.case_name)
+        )
         if result.crashed:
-            message = (
+            message = _xml_safe(
                 "process exited before this case's END marker printed -- "
-                "its checks did not finish running (PERFORM target reached "
-                "STOP RUN?)"
+                "its checks did not finish running "
+                f"({crash_detail or _DEFAULT_CRASH_HYPOTHESIS})"
             )
             error_el = SubElement(testcase_el, "error", message=message)
             error_el.text = message
         for reason in result.failure_reasons:
-            failure_el = SubElement(testcase_el, "failure", message=reason)
-            failure_el.text = reason
+            safe_reason = _xml_safe(reason)
+            failure_el = SubElement(testcase_el, "failure", message=safe_reason)
+            failure_el.text = safe_reason
     for case_id, reason in suite.orphan_failures:
         orphan_el = SubElement(
-            testsuite_el, "testcase", name=f"orphan-{case_id}"
+            testsuite_el, "testcase", name=_xml_safe(f"orphan-{case_id}")
         )
-        error_el = SubElement(orphan_el, "error", message=reason)
-        error_el.text = reason
+        safe_reason = _xml_safe(reason)
+        error_el = SubElement(orphan_el, "error", message=safe_reason)
+        error_el.text = safe_reason
     rough = tostring(testsuite_el, encoding="unicode")
     return minidom.parseString(rough).toprettyxml(indent="  ")

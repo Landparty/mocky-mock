@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs.
 tags: [report, results, cli-output]
-timestamp: 2026-07-06T01:00:00Z
+timestamp: 2026-07-07T00:00:00Z
 ---
 # Overview
 
@@ -30,7 +30,7 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 |---|---|---|
 | `__MOCKYMOCK__ TESTSUITE: <name>` | `name` | sets `suite.suite_name` |
 | `__MOCKYMOCK__ CASE <id> START: <name>` | `id`, `name` | creates a `TestResult`, appended to `suite.results` and indexed in `by_id` |
-| `__MOCKYMOCK__ CASE <id> FAIL: <reason>` | `id`, `reason` | appends `reason` to the matching `TestResult.failure_reasons` (looked up by id; silently ignored if id unknown) |
+| `__MOCKYMOCK__ CASE <id> FAIL: <reason>` | `id`, `reason` | appends `reason` to the matching `TestResult.failure_reasons` (looked up by id); an unknown id is recorded in `suite.orphan_failures` as `(id, reason)` rather than dropped |
 | `__MOCKYMOCK__ CASE <id> END` | `id` | sets the matching `TestResult.ended = True` |
 | `__MOCKYMOCK__ SUMMARY: RUN=<n> FAILURES=<n>` | `run`, `failures` | sets `suite.tests_run` / `suite.failures` |
 
@@ -60,9 +60,11 @@ class TestSuiteResult:
     results: list[TestResult]
     tests_run: int      # from SUMMARY RUN=
     failures: int        # from SUMMARY FAILURES= -- a *check* count, not a case count
+    orphan_failures: list[tuple[str, str]]  # FAIL lines whose id never STARTed
 
     @property
-    def all_passed(self) -> bool: ...  # failures == 0 and tests_run > 0
+    def all_passed(self) -> bool: ...
+    # failures == 0 and tests_run > 0 and not orphan_failures
 ```
 
 Pass/fail/crash is derived, not stored directly. `crashed` is true when a
@@ -77,9 +79,10 @@ One COBOL TESTCASE can accumulate multiple failure reasons (e.g. multiple
 failed EXPECT/VERIFY statements in the same case); all are recorded and
 shown, not just the first.
 
-`all_passed` also requires `tests_run > 0` — a suite with zero cases
-executed (e.g. parse produced no SUMMARY line, or the binary crashed
-before finishing) is not reported as passing. This means a crash-mid-suite
+`all_passed` also requires `tests_run > 0` and an empty
+`orphan_failures` — a suite with zero cases executed (e.g. parse produced
+no SUMMARY line, or the binary crashed before finishing), or with FAIL
+lines it could not attribute to any case, is not reported as passing. This means a crash-mid-suite
 scenario already produces a non-zero CLI exit code even without the
 per-case `crashed` tracking above; `crashed` fixes the *human-facing*
 report (console/JUnit), which otherwise showed the crashed case as `[PASS]`
@@ -89,8 +92,20 @@ purely from absence of a FAIL marker.
 
 | Function | Output | Notes |
 |---|---|---|
-| `format_console(suite)` | Plain text | `TESTSUITE: <name>` header, one `[PASS]`/`[FAIL]`/`[CRASH]` line per case (indented, failure reasons indented further below), trailing `<run> run, <failures> failed[, <n> crashed]` summary line (`<failures>` is the raw SUMMARY check-count as-is; `<run>` falls back to `len(suite.results)` when `suite.tests_run` is 0 -- see Gotchas; the `, <n> crashed` segment only appears when `<n> > 0`) |
-| `format_junit_xml(suite)` | Pretty-printed JUnit XML via `xml.etree` + `minidom` | `<testsuite name tests failures errors>` with one `<testcase>` per result; failing cases get a `<failure message>` child per failure reason, crashed cases get a single `<error message>` child instead (JUnit's own failure-vs-error distinction); `tests` uses the same `len(suite.results)` fallback as the console `<run>` count |
+| `format_console(suite, crash_detail=None)` | Plain text | `TESTSUITE: <name>` header, one `[PASS]`/`[FAIL]`/`[CRASH]` line per case (indented, failure reasons indented further below), trailing `<run> run, <failures> failed[, <n> crashed]` summary line (`<failures>` is the raw SUMMARY check-count as-is; `<run>` falls back to `len(suite.results)` when `suite.tests_run` is 0 -- see Gotchas; the `, <n> crashed` segment only appears when `<n> > 0`) |
+| `format_junit_xml(suite, crash_detail=None)` | Pretty-printed JUnit XML via `xml.etree` + `minidom` | `<testsuite name tests failures errors>` with one `<testcase>` per result; failing cases get a `<failure message>` child per failure reason, crashed cases get a single `<error message>` child instead (JUnit's own failure-vs-error distinction); orphan failures each get their own `<testcase name="orphan-<id>">` with an `<error>` child and are counted into `errors=` and `tests=`; `tests` uses the same `len(suite.results)` fallback as the console `<run>` count. All names/reasons/messages pass through `_xml_safe` first (see Gotchas) |
+
+Both formatters take an optional `crash_detail: str | None`. The CLI passes
+the *real* crash evidence when it has any -- `"binary timed out (exit 124);
+see stderr below"` for a container-side timeout, `"binary exited with code
+<n>"` for a runtime abort -- and the formatters render it under each
+`[CRASH]` line (console) / inside the `<error>` message (JUnit). Only when
+`crash_detail` is `None` (the binary exited 0, which is exactly what a
+reached `STOP RUN` does) do they fall back to the
+`_DEFAULT_CRASH_HYPOTHESIS` text `"PERFORM target reached STOP RUN?"`.
+Do not re-hardcode that hypothesis into the message: it was previously
+shown even for timeouts and aborts whose stderr evidence had been
+discarded (audit 2026-07-07, findings 4.2/5.1).
 
 # Gotchas
 
@@ -146,14 +161,30 @@ real clean-run count of 0 with a reconstructed one. Do not touch
 staying false after an unrecovered crash to produce the correct non-zero
 CLI exit code; only the formatters' *displayed* numbers should fall back.
 
-**Unknown case id in a FAIL line is silently dropped:** `by_id.get(m.group("id"))`
-returns `None` for an id never seen in a START line, and the `if target is
-not None` guard just skips it — no error is raised. A malformed or
-truncated stdout stream (e.g. binary crash mid-case) can silently lose
-failure reasons rather than surfacing a parse error. (The crash itself is
-now caught via `crashed`/`ended` above, but reasons recorded *before* an
-unexpected crash could in principle still be lost the same way if the id
-were ever wrong -- this is a distinct, still-open gap.)
+**Unknown case id in a FAIL line is an orphan, not a silent drop (fixed):**
+`parse_stdout` records a FAIL line whose id never appeared in a START
+marker as `(id, reason)` in `suite.orphan_failures` (`results.py`). Orphans
+gate `all_passed` (any orphan means the run cannot pass) and render in both
+formatters: the console prints an `ORPHANED FAILURES (unknown case id):`
+block, and the JUnit output emits one `<testcase name="orphan-<id>">` per
+orphan with an `<error>` child, folded into the `errors=` and `tests=`
+attributes. An `END` for an unknown id is still silently ignored — that
+asymmetry is deliberate (an unattributable END carries no failure
+evidence to lose).
+
+**Control characters cannot crash the JUnit formatter (fixed 2026-07-07):**
+suite/case names come from the .cut file and reasons from the binary's
+stdout, either of which can carry control characters; `format_junit_xml`
+used to hand them to ElementTree verbatim and `minidom.parseString` then
+died with an `ExpatError` (verified with `\x01`). Every name/reason/message
+now passes through `_xml_safe`, which replaces XML-1.0-illegal characters
+(controls other than tab/LF/CR, lone surrogates) with a visible `\xNN`
+escape so the document stays well-formed without hiding the evidence.
+The console formatter deliberately does not sanitize.
+
+**No `time` attributes:** neither `<testsuite>` nor `<testcase>` carries
+timing — the driver protocol has no timestamps to derive it from (audit
+5.3, still open).
 
 # See Also
 
