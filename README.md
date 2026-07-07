@@ -145,13 +145,16 @@ On Windows, ensure Docker Desktop is running before invoking `mockymock setup` o
 ### Sandboxing
 
 The program under test — and any `MOCK` body, which is spliced in verbatim —
-runs as untrusted code inside the GnuCOBOL container. The container is launched
-locked down: no network (`--network none`), bounded processes and memory
-(`--pids-limit`, `--memory`), all Linux capabilities dropped except the one
-root needs to read/write the bind mount (`--cap-drop ALL --cap-add
-DAC_OVERRIDE`), and no privilege escalation (`--security-opt
-no-new-privileges`). This
-contains the blast radius of a hostile `.cbl` or mock body (e.g. a
+runs as untrusted code inside the GnuCOBOL container, which is launched locked
+down:
+
+- `--network none` — no outbound network.
+- `--pids-limit`, `--memory` / `--memory-swap` — bounded processes and memory.
+- `--cap-drop ALL --cap-add DAC_OVERRIDE` — every Linux capability dropped
+  except the one root needs to read/write the bind mount.
+- `--security-opt no-new-privileges` — no privilege escalation.
+
+This contains the blast radius of a hostile `.cbl` or mock body (e.g. a
 `CALL "SYSTEM"`), though it is not a substitute for reviewing what you run. See
 `.okf/runtime.md` (Threat model) for the full rationale and residual risk.
 

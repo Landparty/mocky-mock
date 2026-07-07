@@ -143,8 +143,9 @@ def test_ensure_toolchain_creates_container_when_absent(tmp_path):
 
 def test_created_container_is_hardened(tmp_path):
     """The container runs untrusted COBOL (audit finding 4.3), so `docker run`
-    must isolate it: no network, bounded pids/memory, no capabilities, no
-    privilege escalation."""
+    must isolate it: no network, bounded pids/memory, every capability dropped
+    except the DAC_OVERRIDE root needs for the bind mount, and no privilege
+    escalation."""
     from mockymock.runtime.docker_toolchain import (
         MEMORY_LIMIT,
         PIDS_LIMIT,
