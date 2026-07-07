@@ -142,6 +142,17 @@ the container up on its own, so `mockymock setup` is optional.
 On Windows, ensure Docker Desktop is running before invoking `mockymock setup` or
 `mockymock run`. COBOL compilation and execution happen entirely inside the container.
 
+### Sandboxing
+
+The program under test — and any `MOCK` body, which is spliced in verbatim —
+runs as untrusted code inside the GnuCOBOL container. The container is launched
+locked down: no network (`--network none`), bounded processes and memory
+(`--pids-limit`, `--memory`), all Linux capabilities dropped (`--cap-drop
+ALL`), and no privilege escalation (`--security-opt no-new-privileges`). This
+contains the blast radius of a hostile `.cbl` or mock body (e.g. a
+`CALL "SYSTEM"`), though it is not a substitute for reviewing what you run. See
+`.okf/runtime.md` (Threat model) for the full rationale and residual risk.
+
 ## License
 
 mockymock is licensed under the MIT License. See [LICENSE](LICENSE) for details.

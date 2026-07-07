@@ -41,6 +41,46 @@ IMAGE = f"mockymock-gnucobol:{_image_tag()}"
 CONTAINER = "mockymock-cobc"
 WORK_ROOT = Path.home() / ".mockymock" / "work"
 
+# Container hardening (2026-07-07 audit finding 4.3). The container compiles
+# and *runs untrusted COBOL*: a hostile `.cbl` -- or a MOCK body, which the
+# splicer injects verbatim -- can `CALL "SYSTEM"` and run arbitrary shell
+# inside the container. There is no host escape, but an unhardened container
+# lets that shell exfiltrate over the network, fork-bomb, or exhaust memory,
+# and tamper with other concurrent runs' sandboxes under the shared /work
+# mount. These `docker run` flags defang it with controls that are portable
+# across the Linux and Windows Docker Desktop hosts mockymock targets:
+#
+#   --network none                    no outbound network -> no exfiltration
+#   --pids-limit <n>                  fork-bomb ceiling
+#   --memory / --memory-swap <limit>  memory ceiling; swap pinned to the same
+#                                     value so the limit actually bites
+#   --cap-drop ALL                    compile + run need no Linux capabilities
+#   --security-opt no-new-privileges  setuid binaries cannot escalate
+#
+# The container still runs as root: the bind-mounted work root is owned by the
+# host user, whose uid is not portable across machines and is absent on
+# Windows, so a fixed non-root uid would break cobc's write of the compiled
+# binary into /work. Root is *neutralized* by the controls above (no caps, no
+# new privileges, no network, bounded pids/memory) rather than dropped. See
+# `.okf/runtime.md` (Threat model) for the full rationale and residual risk.
+PIDS_LIMIT = 512
+MEMORY_LIMIT = "1g"
+
+_HARDENING_FLAGS: tuple[str, ...] = (
+    "--network",
+    "none",
+    "--pids-limit",
+    str(PIDS_LIMIT),
+    "--memory",
+    MEMORY_LIMIT,
+    "--memory-swap",
+    MEMORY_LIMIT,
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+)
+
 
 class DockerNotAvailableError(RuntimeError):
     """Raised when the Docker daemon (or CLI) cannot be reached or the
@@ -114,6 +154,7 @@ def _create_container() -> None:
         "-d",
         "--name",
         CONTAINER,
+        *_HARDENING_FLAGS,
         "-v",
         f"{WORK_ROOT.as_posix()}:/work",
         IMAGE,

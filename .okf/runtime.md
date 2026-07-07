@@ -69,7 +69,12 @@ automatically; `setup` is therefore optional).
 |------|-------|---------------------------------|
 | 1. Daemon | `docker info` (30s timeout) | non-zero exit -> `DockerNotAvailableError` with `_DAEMON_HINT` |
 | 2. Image | `docker image inspect <IMAGE>` | build via `docker build -t <IMAGE> <repo>/docker/` |
-| 3. Container | one `docker inspect -f "{{.State.Running}} {{.Config.Image}}" mockymock-cobc` yields both running state and creating image | absent -> `_create_container()` (`docker run -d --name mockymock-cobc -v <WORK_ROOT>:/work <IMAGE> sleep infinity`); **created from a different image tag** -> `docker rm -f` then `_create_container()` (a stale container would otherwise defeat the content-hash tag forever); present-but-stopped -> `docker start mockymock-cobc` |
+| 3. Container | one `docker inspect -f "{{.State.Running}} {{.Config.Image}}" mockymock-cobc` yields both running state and creating image | absent -> `_create_container()` (`docker run -d --name mockymock-cobc <hardening flags> -v <WORK_ROOT>:/work <IMAGE> sleep infinity`); **created from a different image tag** -> `docker rm -f` then `_create_container()` (a stale container would otherwise defeat the content-hash tag forever); present-but-stopped -> `docker start mockymock-cobc` |
+
+`<hardening flags>` is `_HARDENING_FLAGS` — see the **Threat model** section
+below; a pre-hardening container is picked up by the same tag-drift path (the
+Dockerfile comment bump changed `IMAGE`, so step 3 sees the old container's
+image `!= IMAGE` and rm+recreates it with the flags).
 
 `_create_container()` also absorbs the concurrent-first-run race: if
 `docker run --name` fails with *"name already in use"* (another invocation
@@ -101,6 +106,49 @@ message ("Start Docker Desktop ... and re-run").
 --no-install-recommends gnucobol` (GnuCOBOL 3.2, same major version as the
 former local toolchain), `WORKDIR /work`. No entrypoint — the container is
 started with `sleep infinity` and driven entirely via `docker exec`.
+
+# Threat model
+
+mockymock compiles and **runs untrusted COBOL**. A hostile `.cbl` — or a
+`MOCK` body, which the splicer injects into the program *verbatim* — can reach
+`CALL "SYSTEM"` (GnuCOBOL supports it) and execute arbitrary shell inside the
+container. Docker gives no host escape here, but an unhardened container still
+lets that shell exfiltrate data over the network, fork-bomb, exhaust host
+memory, or tamper with other concurrent runs' sandboxes under the shared
+`/work` mount.
+
+`_create_container()` therefore launches with `_HARDENING_FLAGS`
+(`mockymock/runtime/docker_toolchain.py`):
+
+| Flag | Purpose |
+|------|---------|
+| `--network none` | no outbound network — blocks exfiltration and callbacks |
+| `--pids-limit <PIDS_LIMIT>` (512) | fork-bomb ceiling |
+| `--memory <MEMORY_LIMIT>` / `--memory-swap <MEMORY_LIMIT>` (1g / 1g) | memory ceiling; swap pinned to the same value so the limit actually bites |
+| `--cap-drop ALL` | compile + run need no Linux capabilities |
+| `--security-opt no-new-privileges` | setuid binaries cannot escalate |
+
+Image **build** still has network (it's a separate `docker build`, not the
+container run); only the long-lived container is network-isolated, which is
+fine because `cobc` and the compiled binaries never need the network.
+
+**Why still root, not a non-root `USER`.** The bind-mounted work root is owned
+by the host user, whose uid is not portable across machines and is absent on
+the Windows Docker Desktop host mockymock explicitly targets. A fixed non-root
+uid in the image would fail to write the compiled binary into `/work` on hosts
+where the uids don't line up. Root is instead *neutralized* by the flags above
+(no capabilities, no privilege escalation, no network, bounded pids/memory).
+
+**Residual risk.** Within a single run the workload can still consume up to the
+pids/memory ceilings and read/write any sandbox under `/work` (all runs share
+one mount). Per-run mount isolation and a non-root uid strategy that survives
+the Windows bind mount are the remaining hardening steps, not yet done.
+
+Tuning: `PIDS_LIMIT` and `MEMORY_LIMIT` are module-level constants. Changing
+`_HARDENING_FLAGS` does **not** change `IMAGE` (they live on `docker run`, not
+in the Dockerfile), so to force existing containers to be recreated, bump the
+`docker/Dockerfile` content (a comment edit is enough) — that changes the
+content-hash tag and step 3 rm+recreates.
 
 # Host <-> container filesystem boundary
 
