@@ -141,6 +141,53 @@ def test_ensure_toolchain_creates_container_when_absent(tmp_path):
     assert (tmp_path / "work").is_dir()  # created before mounting
 
 
+def test_created_container_is_hardened(tmp_path):
+    """The container runs untrusted COBOL (audit finding 4.3), so `docker run`
+    must isolate it: no network, bounded pids/memory, every capability dropped
+    except the DAC_OVERRIDE root needs for the bind mount, and no privilege
+    escalation."""
+    from mockymock.runtime.docker_toolchain import (
+        MEMORY_LIMIT,
+        PIDS_LIMIT,
+    )
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["docker", "inspect"]:
+            return _completed(argv, returncode=1)  # no such container
+        return _completed(argv, stdout="")
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+    ):
+        ensure_toolchain()
+
+    (run_call,) = [c for c in calls if c[:2] == ["docker", "run"]]
+
+    def flag_value(flag):
+        return run_call[run_call.index(flag) + 1]
+
+    assert flag_value("--network") == "none"
+    assert flag_value("--pids-limit") == str(PIDS_LIMIT)
+    assert flag_value("--memory") == MEMORY_LIMIT
+    # swap pinned to the memory limit so the ceiling actually bites
+    assert flag_value("--memory-swap") == MEMORY_LIMIT
+    assert flag_value("--cap-drop") == "ALL"
+    # DAC_OVERRIDE is the one cap kept back: container-root needs it to read
+    # and write the host-uid-owned sandbox through the bind mount, or cobc
+    # fails "Permission denied". The escape-relevant caps stay dropped.
+    assert flag_value("--cap-add") == "DAC_OVERRIDE"
+    assert flag_value("--security-opt") == "no-new-privileges"
+    # hardening must not disturb the mount or the entrypoint
+    assert " ".join(run_call).endswith("sleep infinity")
+    assert f"{(tmp_path / 'work').as_posix()}:/work" in run_call
+
+
 def test_ensure_toolchain_starts_container_when_stopped():
     calls = []
 
