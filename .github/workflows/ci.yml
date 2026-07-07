@@ -70,9 +70,15 @@ jobs:
           # remediation); an unpinned checkout lets a sibling regression
           # silently weaken this repo's guarantees with no signal here.
           # Bump deliberately, with a test run, when adopting new
-          # cobol-parser work. (Landparty/cobol-parser main as of
-          # 2026-07-07.)
-          ref: 77c6e07ba2c995d0adcf5853e9463ee5741c4d34
+          # cobol-parser work. Bumped to pick up the SUBTRACT-GIVING /
+          # DISPLAY-subscript / WRITE-FROM-literal content-drop fixes found
+          # by re-running scripts/corpus_sweep.py against legacy-application
+          # (see docs/corpus-sweep-report.md) -- full cobolparser suite run
+          # green before this bump. This SHA is
+          # Landparty/cobol-parser#claude/mockymock-cobol-outputs-sz6zt1,
+          # currently open as cobol-parser PR #80; re-pin to that PR's
+          # merge commit on main once it lands.
+          ref: 58e01a3af5f19d2a5843ba34d714f10c04dbdd3b
 
       - uses: actions/setup-python@v5
         with:
