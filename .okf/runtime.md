@@ -125,8 +125,17 @@ memory, or tamper with other concurrent runs' sandboxes under the shared
 | `--network none` | no outbound network — blocks exfiltration and callbacks |
 | `--pids-limit <PIDS_LIMIT>` (512) | fork-bomb ceiling |
 | `--memory <MEMORY_LIMIT>` / `--memory-swap <MEMORY_LIMIT>` (1g / 1g) | memory ceiling; swap pinned to the same value so the limit actually bites |
-| `--cap-drop ALL` | compile + run need no Linux capabilities |
+| `--cap-drop ALL` + `--cap-add DAC_OVERRIDE` | drop every Linux capability except the one root needs to read/write the bind mount (see below) |
 | `--security-opt no-new-privileges` | setuid binaries cannot escalate |
+
+`DAC_OVERRIDE` is added back deliberately: sandboxes are created host-side by
+`tempfile.mkdtemp` (mode `0700`, owned by the host uid) and bind-mounted in, so
+container-root reads the `.cbl` and writes the compiled binary through the mount
+purely via `CAP_DAC_OVERRIDE` (root's bypass of file-permission bits).
+`--cap-drop ALL` alone strips it and `cobc` fails with `Permission denied` on
+the host-owned source. `DAC_OVERRIDE` only bypasses DAC checks on the
+already-isolated `/work` mount; the caps that matter for container escape
+(`SYS_ADMIN`, `NET_RAW`, `SETUID`/`SETGID`, `MKNOD`, …) stay dropped.
 
 Image **build** still has network (it's a separate `docker build`, not the
 container run); only the long-lived container is network-isolated, which is

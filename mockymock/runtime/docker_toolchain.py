@@ -54,15 +54,25 @@ WORK_ROOT = Path.home() / ".mockymock" / "work"
 #   --pids-limit <n>                  fork-bomb ceiling
 #   --memory / --memory-swap <limit>  memory ceiling; swap pinned to the same
 #                                     value so the limit actually bites
-#   --cap-drop ALL                    compile + run need no Linux capabilities
+#   --cap-drop ALL + --cap-add DAC_OVERRIDE  drop every Linux capability except
+#                                     the one root needs for the bind mount
 #   --security-opt no-new-privileges  setuid binaries cannot escalate
 #
 # The container still runs as root: the bind-mounted work root is owned by the
 # host user, whose uid is not portable across machines and is absent on
 # Windows, so a fixed non-root uid would break cobc's write of the compiled
-# binary into /work. Root is *neutralized* by the controls above (no caps, no
-# new privileges, no network, bounded pids/memory) rather than dropped. See
+# binary into /work. Root is *neutralized* by the controls above (network,
+# pids, memory, capabilities, privilege escalation) rather than dropped. See
 # `.okf/runtime.md` (Threat model) for the full rationale and residual risk.
+#
+# Why DAC_OVERRIDE is added back: sandboxes are created host-side by
+# `tempfile.mkdtemp` (mode 0700, owned by the host uid) and bind-mounted in.
+# Container-root reads the .cbl and writes the compiled binary through that
+# mount purely via CAP_DAC_OVERRIDE -- the capability that lets root bypass
+# file permission bits -- so `--cap-drop ALL` alone makes cobc fail with
+# "Permission denied" on host-owned files. DAC_OVERRIDE only bypasses DAC
+# checks on the already-isolated /work mount; the caps that matter for
+# container escape (SYS_ADMIN, NET_RAW, SETUID/SETGID, MKNOD, ...) stay dropped.
 PIDS_LIMIT = 512
 MEMORY_LIMIT = "1g"
 
@@ -77,6 +87,8 @@ _HARDENING_FLAGS: tuple[str, ...] = (
     MEMORY_LIMIT,
     "--cap-drop",
     "ALL",
+    "--cap-add",
+    "DAC_OVERRIDE",
     "--security-opt",
     "no-new-privileges",
 )

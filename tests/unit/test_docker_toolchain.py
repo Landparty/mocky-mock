@@ -177,6 +177,10 @@ def test_created_container_is_hardened(tmp_path):
     # swap pinned to the memory limit so the ceiling actually bites
     assert flag_value("--memory-swap") == MEMORY_LIMIT
     assert flag_value("--cap-drop") == "ALL"
+    # DAC_OVERRIDE is the one cap kept back: container-root needs it to read
+    # and write the host-uid-owned sandbox through the bind mount, or cobc
+    # fails "Permission denied". The escape-relevant caps stay dropped.
+    assert flag_value("--cap-add") == "DAC_OVERRIDE"
     assert flag_value("--security-opt") == "no-new-privileges"
     # hardening must not disturb the mount or the entrypoint
     assert " ".join(run_call).endswith("sleep infinity")
