@@ -73,3 +73,26 @@ def test_testcase_before_testsuite_raises():
 def test_unrecognized_line_raises():
     with pytest.raises(CutParseError):
         parse_cut('TESTSUITE "X"\n\nTESTCASE "Y"\nNOT-A-REAL-DIRECTIVE\n')
+
+
+def test_unterminated_mock_body_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL "X"\n'
+        '        MOVE 0 TO RETURN-CODE\n'
+        '    PERFORM MAIN\n'  # no END-MOCK: silently swallowed today
+    )
+    with pytest.raises(CutParseError, match="unterminated MOCK"):
+        parse_cut(text)
+
+
+def test_duplicate_perform_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    PERFORM ONE\n'
+        '    PERFORM TWO\n'
+    )
+    with pytest.raises(CutParseError, match="already has a PERFORM"):
+        parse_cut(text)

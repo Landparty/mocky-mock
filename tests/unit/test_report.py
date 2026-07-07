@@ -1,3 +1,5 @@
+from xml.etree import ElementTree
+
 from mockymock.report.formatters import format_console, format_junit_xml
 from mockymock.report.results import parse_stdout
 
@@ -174,6 +176,71 @@ def test_format_console_failed_count_reflects_recorded_reasons_when_summary_line
     output = format_console(suite)
     summary_line = output.splitlines()[-1]
     assert summary_line == "2 run, 1 failed, 1 crashed"
+
+
+def test_fail_line_with_unknown_case_id_is_surfaced():
+    out = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphaned reason\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(out)
+    assert ("999", "orphaned reason") in suite.orphan_failures
+    assert suite.all_passed is False
+
+
+def test_format_console_reports_orphaned_failures():
+    out = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphaned reason\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(out)
+    output = format_console(suite)
+    assert "ORPHANED FAILURES (unknown case id):" in output
+    assert "999" in output
+    assert "orphaned reason" in output
+
+
+def test_format_junit_xml_reports_orphaned_failures_as_error_testcase():
+    out = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphaned reason\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(out)
+    xml_text = format_junit_xml(suite)
+    assert '<testcase name="orphan-999"' in xml_text
+    assert 'message="orphaned reason"' in xml_text
+    # No crashed cases here -- the single orphan is the only contributor to
+    # errors=, proving orphans are counted into the same errors= total used
+    # for crashed cases rather than a separate untracked attribute.
+    assert 'errors="1"' in xml_text
+
+
+def test_format_junit_xml_tests_attribute_counts_orphan_testcases():
+    """The root tests="..." attribute must equal the actual number of
+    <testcase> children. format_junit_xml emits one <testcase> per orphan
+    failure in addition to the ones from suite.results, so tests= has to
+    add len(suite.orphan_failures) or it undercounts against a suite that
+    has orphans."""
+    out = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphaned reason\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(out)
+    xml_text = format_junit_xml(suite)
+    root = ElementTree.fromstring(xml_text)
+    assert int(root.get("tests")) == len(root.findall("testcase"))
 
 
 def test_format_junit_xml_failures_attribute_with_multiple_failed_cases():

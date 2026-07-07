@@ -39,10 +39,15 @@ class TestSuiteResult:
     results: list[TestResult] = field(default_factory=list)
     tests_run: int = 0
     failures: int = 0
+    orphan_failures: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def all_passed(self) -> bool:
-        return self.failures == 0 and self.tests_run > 0
+        return (
+            self.failures == 0
+            and self.tests_run > 0
+            and not self.orphan_failures
+        )
 
 
 def parse_stdout(stdout: str) -> TestSuiteResult:
@@ -61,6 +66,8 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
             target = by_id.get(m.group("id"))
             if target is not None:
                 target.failure_reasons.append(m.group("reason"))
+            else:
+                suite.orphan_failures.append((m.group("id"), m.group("reason")))
         elif (m := _SUMMARY_RE.match(line)) is not None:
             suite.tests_run = int(m.group("run"))
             suite.failures = int(m.group("failures"))

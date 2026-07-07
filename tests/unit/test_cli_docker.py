@@ -44,3 +44,13 @@ def test_run_fails_loudly_before_parsing_when_docker_unavailable(tmp_path, capsy
         )
     assert exit_code == 1
     assert "Docker is required" in capsys.readouterr().out
+
+
+def test_run_parser_accepts_keep_sandbox_and_verbose():
+    from mockymock.cli.main import build_parser
+
+    args = build_parser().parse_args(
+        ["run", "P.cbl", "--cut", "P.cut", "--keep-sandbox", "--verbose"]
+    )
+    assert args.keep_sandbox is True
+    assert args.verbose is True

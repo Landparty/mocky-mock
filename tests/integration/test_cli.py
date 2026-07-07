@@ -130,6 +130,122 @@ def test_run_fails_when_expectation_is_wrong(tmp_path: Path):
     assert exit_code == 1
 
 
+@requires_docker
+def test_run_keep_sandbox_leaves_instrumented_source_on_disk(tmp_path: Path, capsys):
+    """--keep-sandbox must survive a normal (successful) run: the sandbox
+    directory and its instrumented .cbl stay on disk after `run` returns,
+    and the kept path is printed so the user can find it."""
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(ORDRPROC_CBL)
+    cut_file = tmp_path / "ORDRPROC.cut"
+    cut_file.write_text(ORDRPROC_CUT)
+
+    exit_code = main(
+        ["run", str(program), "--cut", str(cut_file), "--keep-sandbox"]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "mockymock run: keeping sandbox " in out
+
+    kept_line = next(
+        line for line in out.splitlines() if "keeping sandbox " in line
+    )
+    kept_dir = Path(kept_line.split("keeping sandbox ", 1)[1].strip())
+
+    assert kept_dir.is_dir()
+    instrumented_files = list(kept_dir.glob("*.cbl"))
+    assert len(instrumented_files) == 1
+    assert "ORDRPROC" in instrumented_files[0].read_text()
+
+
+# Parses fine under cobolparser (no semantic name resolution) but cobc
+# rejects it: WS-A is undefined -- a deliberate compile failure so the
+# --verbose / --keep-sandbox "print the instrumented source path on
+# failure" behavior has something real to trigger against.
+BADCOMPILE_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BADCOMPILE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-KNOWN            PIC 9(5).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE WS-UNDEFINED-FIELD TO WS-KNOWN.
+"""
+
+BADCOMPILE_CUT = """\
+TESTSUITE "BADCOMPILE never compiles"
+
+TESTCASE "runs MAIN-PARA"
+    PERFORM MAIN-PARA
+    EXPECT WS-KNOWN TO BE 0
+"""
+
+
+@requires_docker
+def test_run_verbose_prints_instrumented_source_path_on_compile_failure(
+    tmp_path: Path, capsys
+):
+    """--verbose alone (no --keep-sandbox) must still leave the printed
+    instrumented-source path actionable: the sandbox has to be retained on
+    compile failure whenever --verbose is set, or the path printed here
+    points at an already-deleted file."""
+    program = tmp_path / "BADCOMPILE.cbl"
+    program.write_text(BADCOMPILE_CBL)
+    cut_file = tmp_path / "BADCOMPILE.cut"
+    cut_file.write_text(BADCOMPILE_CUT)
+
+    exit_code = main(
+        ["run", str(program), "--cut", str(cut_file), "--verbose"]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "mockymock run: compile failed:" in out
+    assert "mockymock run: instrumented source at " in out
+
+    source_line = next(
+        line for line in out.splitlines() if "instrumented source at " in line
+    )
+    instrumented_path = Path(
+        source_line.split("instrumented source at ", 1)[1].strip()
+    )
+
+    assert instrumented_path.is_file()
+    assert "BADCOMPILE" in instrumented_path.read_text()
+
+
+@requires_docker
+def test_run_verbose_only_does_not_leave_sandbox_after_successful_run(
+    tmp_path: Path,
+):
+    """--verbose must not leave sandbox cruft behind when compile+run
+    succeed -- it's only retained long enough to make a compile-failure
+    path printout actionable, not kept around unconditionally like
+    --keep-sandbox."""
+    from mockymock.runtime import docker_toolchain
+
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(ORDRPROC_CBL)
+    cut_file = tmp_path / "ORDRPROC.cut"
+    cut_file.write_text(ORDRPROC_CUT)
+
+    docker_toolchain.WORK_ROOT.mkdir(parents=True, exist_ok=True)
+    before = set(docker_toolchain.WORK_ROOT.glob("mockymock-*"))
+
+    exit_code = main(
+        ["run", str(program), "--cut", str(cut_file), "--verbose"]
+    )
+
+    after = set(docker_toolchain.WORK_ROOT.glob("mockymock-*"))
+
+    assert exit_code == 0
+    assert after - before == set()
+
+
 def test_run_refuses_program_with_parse_errors(tmp_path: Path, capsys):
     program = tmp_path / "BAD.cbl"
     program.write_text("NOT EVEN VALID COBOL { } [ ]")

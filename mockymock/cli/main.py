@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -108,7 +109,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.report.formatters import format_console, format_junit_xml
     from mockymock.report.results import parse_stdout
     from mockymock.runtime import docker_toolchain
-    from mockymock.runtime.sandbox import sandbox_dir
+    from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.splicer.driver import build_driver
     from mockymock.splicer.naming import TallyRegistry
     from mockymock.splicer.orchestrator import splice_program
@@ -187,7 +188,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     instrumented = _insert_driver(lines, artifact)
 
-    with sandbox_dir(root=docker_toolchain.WORK_ROOT) as tmp:
+    # --verbose needs the sandbox retained too: the instrumented-source path
+    # it prints on compile failure must still exist by the time the user
+    # reads it, but plain --verbose (no --keep-sandbox) shouldn't leave
+    # cruft behind after a run that actually succeeds -- see the explicit
+    # cleanup below.
+    with sandbox_dir_maybe_kept(
+        root=docker_toolchain.WORK_ROOT, keep=args.keep_sandbox or args.verbose
+    ) as tmp:
+        if args.keep_sandbox:
+            print(f"mockymock run: keeping sandbox {tmp}")
+
         instrumented_path = tmp / source_path.with_suffix(".cbl").name
         instrumented_path.write_text(
             "\n".join(instrumented) + "\n", newline="\n"
@@ -197,9 +208,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if not compiled.success:
             print("mockymock run: compile failed:")
             print(compiled.stderr)
+            if args.verbose or args.keep_sandbox:
+                print(f"mockymock run: instrumented source at {instrumented_path}")
             return 1
 
         executed = docker_toolchain.run_binary(compiled.binary_path)
+
+    if args.verbose and not args.keep_sandbox:
+        shutil.rmtree(tmp, ignore_errors=True)
 
     suite_result = parse_stdout(executed.stdout)
     print(format_console(suite_result))
@@ -261,6 +277,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    run_parser.add_argument(
+        "--keep-sandbox",
+        action="store_true",
+        help="Do not delete the sandbox; print its path for inspection",
+    )
+    run_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="On compile failure, print the path to the instrumented source",
     )
     run_parser.set_defaults(func=_cmd_run)
 
