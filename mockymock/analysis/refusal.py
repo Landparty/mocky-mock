@@ -150,11 +150,13 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
     `ParseResult.warnings`. Since cobolparser's 2026-07-07 silent-drop fixes,
     a warning is the only signal that content was dropped from a "clean"
     parse (`success=True, errors=0`): unsupported verbs (INVOKE, EXHIBIT,
-    ...), unparsed clause leftovers, multi-program compilation units (only
-    the first program's divisions are where mockymock looks), and lossy
-    copybook-expansion decoding all surface here. Any of them means the AST
-    the splicer would work from is incomplete, so each warning refuses
-    fail-closed."""
+    ...), unparsed clause leftovers, and multi-program compilation units
+    (only the first program's divisions are where mockymock looks) all
+    surface here. Any of them means the AST the splicer would work from is
+    incomplete, so each warning refuses fail-closed. (Lossy copybook-decode
+    diagnostics travel a different channel on mockymock's CLI path —
+    `CopybookExpansion.statistics.warnings` — and are gated by
+    `check_expansion_warnings` instead.)"""
     reasons: list[RefusalReason] = []
     if not parse_result.success:
         reasons.append(

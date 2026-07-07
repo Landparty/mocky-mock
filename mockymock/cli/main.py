@@ -162,6 +162,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     whole_program_reasons = check_whole_program(result)
     for reason in whole_program_reasons:
         print(f"mockymock run: refused ({reason.code}): {reason.message}")
+    # The PARSE_ERROR reason only carries a count; print the individual
+    # errors too (matching `generate`) so a non-parsing program is
+    # diagnosable from the CLI output alone.
+    if not result.success:
+        for error in result.errors:
+            print(f"  {error}")
     if whole_program_reasons:
         return 1
 
