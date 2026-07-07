@@ -31,7 +31,7 @@
   fixes above (no mockymock source was touched by this pass) — flagging
   for a future task rather than fixing here.
 
-## 2026-07-07
+## 2026-07-07 (PARSE_WARNING refusal gate + misleading [PASS] fix)
 * **Refuse on cobolparser's new dropped-content warnings**
   ([analysis](analysis.md), [cli](cli.md), [integration](integration.md)):
   cobolparser's 2026-07-07 silent-drop remediation (upstream PR #77) made
