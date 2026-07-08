@@ -1,0 +1,19 @@
+*> IC101A -- "basic CALL statement" test from the NIST COBOL-85 suite.
+*> The whole program is the CCVS85 test harness: it OPENs a PRINT-FILE,
+*> runs five CALL "IC102A" USING DN1 tests, and WRITEs a pass/fail report.
+*>
+*> We drive one CALL test in isolation with `PERFORM ... THRU`, which bounds
+*> reachability to that paragraph range so the harness's later CLOSE of the
+*> (never-opened) PRINT-FILE is not reached. The subprogram IC102A is mocked
+*> to return DN1 = 1 (its documented contract), which makes the test pass.
+TESTSUITE "IC101A basic CALL statement tests"
+
+TESTCASE "CALL-TEST-1 passes when IC102A returns DN1 = 1"
+    MOCK CALL "IC102A"
+        MOVE 1 TO DN1
+    END-MOCK
+    MOCK WRITE DUMMY-RECORD
+    END-MOCK
+    PERFORM CALL-TEST-1 THRU CALL-WRITE-1
+    VERIFY CALL "IC102A" WAS CALLED ONCE
+    VERIFY WRITE DUMMY-RECORD WAS PERFORMED AT LEAST ONCE

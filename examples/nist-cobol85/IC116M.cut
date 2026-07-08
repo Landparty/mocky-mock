@@ -1,0 +1,15 @@
+*> IC116M -- "CALL without the optional USING phrase" from the NIST
+*> COBOL-85 suite. IC116M is the driving main program; it CALLs the
+*> subprogram IC117M (which in turn CALLs IC118M).
+*>
+*> USNG-TEST-01 is the paragraph that issues `CALL "IC117M"`. Driving it
+*> on its own keeps the run away from the CCVS print-file machinery, so the
+*> single mocked CALL is the only boundary that needs standing in.
+TESTSUITE "IC116M CALL without USING phrase"
+
+TESTCASE "USNG-TEST-01 calls subprogram IC117M (mocked)"
+    MOCK CALL "IC117M"
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    PERFORM USNG-TEST-01
+    VERIFY CALL "IC117M" WAS CALLED ONCE

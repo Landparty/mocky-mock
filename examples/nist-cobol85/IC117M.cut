@@ -1,0 +1,14 @@
+*> IC117M -- middle module of the NIST COBOL-85 "CALL without USING phrase"
+*> chain (IC116M -> IC117M -> IC118M). Here IC117M is compiled as the
+*> program under test and its own `CALL "IC118M"` is the mocked boundary.
+*>
+*> USNG-TEST-03 is the paragraph that issues `CALL "IC118M"`; driving it in
+*> isolation keeps the run clear of the CCVS print-file paragraphs.
+TESTSUITE "IC117M CALL without USING phrase"
+
+TESTCASE "USNG-TEST-03 calls subprogram IC118M (mocked)"
+    MOCK CALL "IC118M"
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    PERFORM USNG-TEST-03
+    VERIFY CALL "IC118M" WAS CALLED ONCE
