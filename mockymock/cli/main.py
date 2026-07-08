@@ -96,7 +96,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
     linkage = linkage_plan(result.ast)
     if linkage is not None:
-        _print_linkage_neutralization("generate", linkage)
+        _print_linkage_neutralization("generate", linkage, applied=False)
 
     surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
@@ -110,20 +110,34 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_linkage_neutralization(command: str, plan) -> None:
+def _print_linkage_neutralization(command: str, plan, applied: bool) -> None:
     """Transparency for the ENTRY/LINKAGE neutralization transform: it never
     refuses (that's `check_linkage_layout`'s job) and edits source a `.cut`
     author didn't write, so say so rather than silently changing behavior.
-    See docs/2026-07-08-ims-linkage-support-design.md."""
+    `applied` distinguishes `run` (the transform actually ran on this
+    invocation) from `generate` (which never touches instrumented source --
+    it only scaffolds a `.cut` from the AST -- so this only describes what
+    a later `run` against this program will do). See
+    docs/2026-07-08-ims-linkage-support-design.md."""
     entry_names = ", ".join(
         repr(e.entry_name) for e in plan.entry_statements if e.entry_name
     )
     item_names = ", ".join(item.name for item in plan.linkage_items)
+    if applied:
+        action = (
+            f"neutralized ENTRY statement(s) ({entry_names}) and folded "
+            f"LINKAGE SECTION into WORKING-STORAGE ({item_names})"
+        )
+    else:
+        action = (
+            f"a later `run` will neutralize ENTRY statement(s) "
+            f"({entry_names}) and fold LINKAGE SECTION into WORKING-STORAGE "
+            f"({item_names})"
+        )
     print(
-        f"mockymock {command}: neutralized ENTRY statement(s) ({entry_names}) "
-        f"and folded LINKAGE SECTION into WORKING-STORAGE ({item_names}) -- "
-        f"the driver never binds LINKAGE SECTION storage, so this program's "
-        f"default entry now gets real, addressable storage instead"
+        f"mockymock {command}: {action} -- the driver never binds LINKAGE "
+        f"SECTION storage, so this program's default entry gets real, "
+        f"addressable storage instead"
     )
 
 
@@ -252,7 +266,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # ordinary CALL-only program.
     linkage = linkage_plan(result.ast)
     if linkage is not None:
-        _print_linkage_neutralization("run", linkage)
+        _print_linkage_neutralization("run", linkage, applied=True)
         lines = neutralize(lines, result.ast, linkage)
 
     # Nested-site spliceability must be annotated before any refusal check

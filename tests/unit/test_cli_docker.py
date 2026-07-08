@@ -72,6 +72,36 @@ def test_generate_reports_missing_program_cleanly(tmp_path, capsys):
     assert f"mockymock generate: no such file: {tmp_path / 'NOPE.cbl'}" in out
 
 
+def test_generate_describes_future_neutralization_not_past_tense(tmp_path, capsys):
+    """`generate` never applies `splicer.linkage.neutralize` -- it only
+    scaffolds a `.cut` from the AST -- so its message must describe what a
+    later `run` will do, not claim an edit that didn't happen on this path."""
+    program = tmp_path / "LKGSAMP.cbl"
+    program.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. LKGSAMP.\n"
+        "\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  WS-DONE PIC X VALUE 'N'.\n"
+        "\n"
+        "       LINKAGE SECTION.\n"
+        "       01  CUST-PCB-LNK.\n"
+        "           05  CUST-STATUS       PIC X(02).\n"
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       ENTRY 'DLITCBL' USING CUST-PCB-LNK.\n"
+        "       0000-MAIN.\n"
+        "           CALL 'CBLTDLI' USING CUST-PCB-LNK\n"
+        "           STOP RUN.\n"
+    )
+    exit_code = main(["generate", str(program), "-o", str(tmp_path / "out.cut")])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "will neutralize ENTRY statement(s) ('DLITCBL')" in out
+    assert "neutralized ENTRY statement(s)" not in out
+
+
 def test_run_parser_accepts_keep_sandbox_and_verbose():
     from mockymock.cli.main import build_parser
 

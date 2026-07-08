@@ -19,9 +19,14 @@ TESTCASE "1000-INITIALIZE primes the first segment when CBLTDLI succeeds"
     END-MOCK
     MOCK WRITE RPT-RECORD
     END-MOCK
+    *> Mocking the whole READ removes its NOT AT END clause body too (the
+    *> MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE it held is spliced out along
+    *> with it -- see docs/2026-07-05-nested-mock-targets-design.md), so
+    *> the mock body must set the WORKING-STORAGE targets directly, not the
+    *> file-record fields the removed code would have copied them from.
     MOCK READ PURGEIN
-        MOVE "20260101" TO PURG-CUTOFF-DATE
-        MOVE "CL" TO PURG-ACCT-STATUS
+        MOVE "20260101" TO WS-CUTOFF-DATE
+        MOVE "CL" TO WS-TARGET-STATUS
     END-MOCK
     MOCK CALL "CBLTDLI"
         MOVE SPACES TO CUST-STATUS
