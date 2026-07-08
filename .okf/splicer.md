@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-07-07T00:00:00Z
+timestamp: 2026-07-08T00:00:00Z
 ---
 
 # Overview
@@ -329,6 +329,61 @@ These reset lines feed `driver.build_driver`, which wraps them into the
 `VALUE 5`, `VALUE IS <n>`, and `VALUE -5` parsed as `value_clause=None`,
 which made `reset.py` silently reset to the type default instead of the
 declared value.
+
+`reset_lines_for_items(items)` (2026-07-08) factors the item-loop out of
+`reset_move_lines` so any WORKING-STORAGE-*shaped* item list gets the
+identical treatment without duplicating the rules table above —
+`splicer.linkage` is the other caller, for LINKAGE items it has neutralized
+into WORKING-STORAGE (see next section).
+
+# ENTRY/LINKAGE Neutralization (linkage.py)
+
+Fixes a real crash class, not a hypothetical: a program with a named
+`ENTRY '<name>' USING <linkage-group>` alongside a bare, no-`USING` default
+entry (the IMS DL/I `ENTRY 'DLITCBL'` idiom — `ACCTPRG`, `DEPTBMP`,
+`DEPTIMSM`, `FNDTXFR`, `LNRECOV` in the real-world corpus). mockymock's
+driver only ever `PERFORM`s the default entry directly, in the same
+compilation unit; it never `CALL`s the program through the named `ENTRY`.
+The LINKAGE SECTION storage that entry's `USING` would bind is therefore
+never allocated, and any reference to it from code reachable off the
+default entry dereferences unbound memory — verified against the real
+GnuCOBOL toolchain: SIGSEGV, exit 139. See
+[docs/2026-07-08-ims-linkage-support-design.md](../docs/2026-07-08-ims-linkage-support-design.md).
+
+`analysis.linkage.linkage_plan(program)` detects the shape (`None` for an
+ordinary CALL-only program: no `ENTRY` statement, or an absent/empty
+LINKAGE SECTION). `refusal.check_linkage_layout(program, lines)` gates it
+with three guardrails, refusing `UNSUPPORTED_LINKAGE_LAYOUT` rather than
+guessing when any fails: the default entry must have no `USING` of its own
+(the general CALL-driving case, Milestone B, is untested and out of scope
+here); LINKAGE SECTION must be the last DATA DIVISION section (nothing
+after it that would wrongly get absorbed too); and the computed header line
+must textually verify as `LINKAGE SECTION` before ever being commented.
+
+`neutralize(lines, program, plan)` — verified empirically to compile and
+run clean — comments out every `ENTRY` statement's span (`statement_span`,
+same helper other top-level splices use, unioned with each entry's own line
+into the boundary set so multiple ENTRY statements can't swallow each
+other) and the single `LINKAGE SECTION.` header line, via the same
+`stub_writer.comment_and_replace` primitive everything else in this module
+uses. No data is physically relocated: with no section header separating
+them from WORKING-STORAGE, GnuCOBOL folds the LINKAGE items into it.
+Because every call passes an empty `replacement`, no line is ever inserted
+or removed — this transform cannot shift any other line-number-dependent
+step in the pipeline, so it runs early, right after
+`normalize_fixed_format`, unconditionally safe regardless of order.
+
+The promoted items still belong to the LINKAGE section in `result.ast` —
+the transform edits text, not the AST — so `reset.reset_move_lines`'s
+WORKING-STORAGE walk never sees them. `extra_reset_lines(plan)` generates
+their reset lines separately (via `reset.reset_lines_for_items`, reusing
+the identical VALUE-restoring rules) and the CLI appends them to
+`reset_move_lines`'s output before building the driver. Consequence: no new
+mocking primitive was needed for these programs at all — their only IMS
+access pattern, `CALL 'CBLTDLI' USING ...`, was already an ordinary
+`MockCategory.CALL` boundary; a `.cut` author can `MOCK CALL "CBLTDLI"` and
+`MOVE` a status value into what is now real, addressable WORKING-STORAGE
+(e.g. `CUST-STATUS`) to simulate a DL/I outcome.
 
 # Generated SQLCA (sqlca.py)
 

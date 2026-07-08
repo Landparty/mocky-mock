@@ -88,6 +88,23 @@ mockymock too.
   `refusal.py` re-lexes the raw source to detect unresolved COPY statements
   (they leave zero trace in the AST).
 - `cobolparser.analysis.DynamicCallAnalyzer().analyze(ast)`
+- `cobolparser.models.program.CobolProgram.get_entry_statements() -> list[EntryStatement]`
+  — every `ENTRY` statement in the program; each has `.entry_name: str | None`
+  and `.location.line`. Used by `analysis.linkage.linkage_plan` to detect the
+  ENTRY/LINKAGE-SECTION shape `splicer.linkage` neutralizes (see
+  docs/2026-07-08-ims-linkage-support-design.md).
+- `cobolparser.models.program.CobolDivision._sections: dict[str, CobolSection]`
+  for the **DATA** division too, not just PROCEDURE (already pinned above):
+  keys observed are `"FILE"`, `"WORKING-STORAGE"`, `"LINKAGE"`; each
+  `CobolSection.data_items: list[CobolDataItem]` holds that section's
+  top-level (01/77) items directly (not mixed with clause nodes the way
+  `.children` is). **`CobolSection.location.line` for a DATA DIVISION
+  section is NOT reliable** — verified empirically it reports the enclosing
+  DATA DIVISION's own line for every section, not each section's own header
+  line; `analysis.linkage.linkage_plan` derives the LINKAGE SECTION header
+  line as `(first LINKAGE item).location.line - 1` instead, and
+  `refusal.check_linkage_layout` verifies that line textually before ever
+  commenting it out.
 
 ## v2 (mock-all-boundaries) additions
 

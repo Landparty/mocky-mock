@@ -1,5 +1,35 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-08 (IMS DL/I ENTRY/LINKAGE support: neutralize instead of crash or refuse)
+* **Closed the corpus sweep's flagged unknown**: "the 5 CBLTDLI-calling
+  programs (`ACCTPRG`, `DEPTBMP`, `DEPTIMSM`, `FNDTXFR`, `LNRECOV`) parse
+  and `generate` clean" (per the corpus-sweep report) turned out to mask a
+  runtime-only crash the sweep explicitly said it didn't test: each has a
+  named `ENTRY 'DLITCBL' USING <linkage-group>` alongside a bare default
+  entry, and mockymock's PERFORM-only driver never binds the LINKAGE
+  storage that ENTRY's `USING` would — verified live against the real
+  GnuCOBOL toolchain, this is a SIGSEGV (exit 139), not a hypothetical.
+* **Fix, also verified live**: `mockymock/analysis/linkage.py` +
+  `mockymock/splicer/linkage.py` comment out the ENTRY statement(s) and the
+  `LINKAGE SECTION.` header line (no data relocation — GnuCOBOL folds the
+  items into the preceding WORKING-STORAGE SECTION once the header's gone).
+  Gated by `refusal.check_linkage_layout` (`UNSUPPORTED_LINKAGE_LAYOUT`)
+  behind three guardrails (default entry has no `USING` of its own; LINKAGE
+  is the last DATA DIVISION section; the header line textually verifies)
+  before ever being applied. No new mocking primitive needed: `CALL
+  'CBLTDLI'` was already an ordinary `MockCategory.CALL` boundary, so a
+  `.cut` author can `MOCK CALL "CBLTDLI"` and `MOVE` a value into what is
+  now real WORKING-STORAGE (e.g. `CUST-STATUS`) to simulate a DL/I outcome.
+* Added `examples/real-world/ACCTPRG/` (mirrors the DEPTMQP/DEPTMQC
+  convention) with 5 test cases targeting sub-paragraphs (avoiding
+  `0000-MAIN-PROCESS`'s `GOBACK`, the existing Finding-3 terminator
+  limitation) — proves the fix end-to-end, not just non-crashing.
+* Design: [docs/2026-07-08-ims-linkage-support-design.md](../docs/2026-07-08-ims-linkage-support-design.md).
+  This narrows Milestone B's scope in the real-world-readiness plan: the
+  IMS named-ENTRY subset is solved here; general CALL-based subprogram
+  driving (`PROCEDURE DIVISION USING` on a program's own default entry, no
+  named ENTRY — zero corpus evidence today) remains future work.
+
 ## 2026-07-07 (cobol-parser pin re-bumped to merged commit)
 * **Follow-up to the corpus-sweep refresh below:** cobol-parser PR #80
   (the SUBTRACT-GIVING / DISPLAY-subscript / WRITE-FROM-literal fixes, plus

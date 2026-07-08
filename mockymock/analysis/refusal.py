@@ -117,6 +117,7 @@ in a comment or string literal.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from cobolparser.lexer import CobolLexer, TokenType
@@ -125,6 +126,7 @@ from cobolparser.models.statements.control import GoStatement, PerformStatement
 from cobolparser.models.statements.misc import AlterStatement
 from cobolparser.preprocess import normalize_fixed_format
 
+from mockymock.analysis.linkage import linkage_plan
 from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
@@ -400,6 +402,78 @@ def check_unresolved_copybooks(raw_source: str) -> list[RefusalReason]:
         )
         for line in lines
     ]
+
+
+def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:
+    """UNSUPPORTED_LINKAGE_LAYOUT: gates `mockymock.splicer.linkage`'s
+    ENTRY/LINKAGE-SECTION neutralization transform (see
+    docs/2026-07-08-ims-linkage-support-design.md). `[]` when
+    `linkage.linkage_plan` finds nothing to do (no ENTRY statement, or an
+    absent/empty LINKAGE SECTION -- an ordinary CALL-only program) or when
+    the shape is safe to neutralize; otherwise one reason per guardrail that
+    failed, fail-closed rather than risk commenting out the wrong line or
+    silently breaking a shape this transform was never verified against.
+
+    `lines` must be the same NORMALIZED free-form text
+    (`normalize_fixed_format` output) the splicer edits -- `SourceLocation`
+    lines are indexed into it, not the original file.
+    """
+    plan = linkage_plan(program)
+    if plan is None:
+        return []
+    reasons: list[RefusalReason] = []
+
+    data = program.get_division("DATA")
+    section_names = list(data._sections.keys())
+    if section_names and section_names[-1] != "LINKAGE":
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_LINKAGE_LAYOUT",
+                message=(
+                    "LINKAGE SECTION is not the last DATA DIVISION section "
+                    f"(order found: {', '.join(section_names)}) -- "
+                    "commenting out its header would silently absorb "
+                    "whatever section follows it into WORKING-STORAGE too, "
+                    "so this program's ENTRY/LINKAGE shape is not "
+                    "neutralized"
+                ),
+            )
+        )
+
+    procedure = program.get_division("PROCEDURE")
+    proc_idx = procedure.location.line - 1 if procedure is not None else -1
+    proc_line = lines[proc_idx] if 0 <= proc_idx < len(lines) else ""
+    if re.search(r"\bUSING\b", proc_line, re.IGNORECASE):
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_LINKAGE_LAYOUT",
+                message=(
+                    "the program's default entry declares its own USING "
+                    f"clause ({proc_line.strip()!r}) -- this feature only "
+                    "neutralizes a LINKAGE SECTION bound solely through a "
+                    "separate named ENTRY statement; a default entry that "
+                    "itself needs bound parameters is the general "
+                    "CALL-driving case (Milestone B), not yet supported"
+                ),
+            )
+        )
+
+    header_idx = plan.header_line - 1
+    header_text = lines[header_idx] if 0 <= header_idx < len(lines) else ""
+    if not re.match(r"^\s*LINKAGE\s+SECTION\b", header_text, re.IGNORECASE):
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_LINKAGE_LAYOUT",
+                message=(
+                    "could not locate the LINKAGE SECTION header line by "
+                    f"position (expected line {plan.header_line}, found "
+                    f"{header_text!r}) -- refusing rather than commenting "
+                    "out the wrong line"
+                ),
+            )
+        )
+
+    return reasons
 
 
 def check_test_case(

@@ -1,5 +1,32 @@
 # Corpus Sweep Report
 
+## 2026-07-08 addendum — the "no new mockymock engine feature" line below was incomplete
+
+This report's clean `generate` result for `ACCTPRG`/`DEPTBMP`/`DEPTIMSM`/
+`FNDTXFR`/`LNRECOV` measures parse + static whole-program/boundary analysis
+only (see the caveat already in this report) — it never actually ran a
+`.cut` against them. Doing so surfaced a real runtime crash: each has a
+named `ENTRY 'DLITCBL' USING <linkage-group>` alongside a bare default
+entry, and mockymock's PERFORM-only driver never binds the LINKAGE storage
+that `USING` clause would — verified live against the real GnuCOBOL
+toolchain, SIGSEGV (exit 139), not a hypothetical.
+
+**Fixed, not just refused**: `mockymock/analysis/linkage.py` +
+`mockymock/splicer/linkage.py` neutralize this shape (comment out the ENTRY
+statement(s) and the `LINKAGE SECTION.` header line — GnuCOBOL folds the
+data items into WORKING-STORAGE once the header's gone; no relocation
+needed), gated by `refusal.check_linkage_layout`
+(`UNSUPPORTED_LINKAGE_LAYOUT`) for the structurally-unsafe shapes this
+transform hasn't been verified against. `CALL 'CBLTDLI'` needed no new
+mocking primitive — already an ordinary `MockCategory.CALL` boundary. See
+[docs/2026-07-08-ims-linkage-support-design.md](2026-07-08-ims-linkage-support-design.md)
+and `examples/real-world/ACCTPRG/` for a full worked, passing example.
+
+All five programs still `generate` clean today (`check_linkage_layout`'s
+guardrails hold for all of them) — the difference is what happens when a
+`.cut` is actually run against them, which is exactly the gap this
+addendum closes.
+
 ## Findings (refreshed 2026-07-07, second pass)
 
 **This is a re-sweep, not the original run.** The original sweep (see "Original findings" below) found 21/26 programs parsing and one blocking cobolparser bug (`EVALUATE`/`WHEN` selector parsing) gating the other 5. Both that bug and, on this re-sweep, three further cobolparser content-drop bugs it surfaced have since been fixed. **Result: 26/26 programs now parse and `generate` cleanly, with zero refusal codes and zero unmockable-boundary categories anywhere in the corpus.**

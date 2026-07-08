@@ -57,8 +57,17 @@ def reset_move_lines(program) -> list[str]:
     if section is None:
         return []
 
+    return reset_lines_for_items(_top_level_items(section))
+
+
+def reset_lines_for_items(items) -> list[str]:
+    """The reset-line generation loop `reset_move_lines` runs over
+    WORKING-STORAGE's top-level items, factored out so other WORKING-STORAGE-
+    shaped item lists (e.g. a LINKAGE SECTION neutralized into WORKING-STORAGE
+    by `mockymock.splicer.linkage`) get the identical VALUE-restoring
+    treatment without duplicating this logic."""
     lines: list[str] = []
-    for item in _top_level_items(section):
+    for item in items:
         if _is_filler(item):
             continue  # a top-level FILLER cannot be a valid MOVE/INITIALIZE target
         if _is_group(item) and not item.value_clause:

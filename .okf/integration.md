@@ -3,7 +3,7 @@ type: Contract
 title: cobolparser Interface Contract
 description: The exact cobolparser AST surface (ParseResult, statement node fields, node_type quirks) that mockymock depends on.
 tags: [integration, cobolparser, contract]
-timestamp: 2026-07-06T00:00:00Z
+timestamp: 2026-07-08T00:00:00Z
 ---
 
 # Overview
@@ -63,6 +63,8 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 | (v2) `IOOpenStatement.file_names` / `IOCloseStatement.file_names` | multi-file OPEN/CLOSE mock key matching |
 | (v2) `IOReadStatement.file_name`, `IODeleteStatement.file_name`, `IOStartStatement.file_name`, `IOUnlockStatement.file_name` | file-keyed mock matching |
 | (v2) `IOWriteStatement.record_name`, `IORewriteStatement.record_name` | record-keyed mock matching (mirrors COBOL's own WRITE/REWRITE syntax) |
+| `CobolProgram.get_entry_statements() -> list[EntryStatement]` | `analysis.linkage.linkage_plan` detects the ENTRY/LINKAGE-SECTION shape `splicer.linkage` neutralizes; each has `.entry_name`, `.location.line` |
+| `CobolDivision._sections["LINKAGE"].data_items` (DATA division) | non-empty LINKAGE SECTION detection; same `._sections` access `reset.py` already uses for WORKING-STORAGE, generalized to DATA-division sections other than WORKING-STORAGE |
 
 # Gotchas
 
@@ -83,6 +85,8 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 **Upstream numeric-VALUE-clause bug (now fixed, version-gated).** Before cobolparser's numeric-VALUE-clause fix (pinned by upstream `tests/regression/test_numeric_value_clause.py`), `VALUE 5`, `VALUE IS <n>`, and `VALUE -5` all parsed with `value_clause=None`. This silently made `reset.py` fall back to the type default instead of the declared VALUE — mockymock requires a cobolparser build at or after that fix.
 
 **v2 OPEN/CLOSE multi-file capture bug (fixed upstream, version-gated).** Before cobol-parser PR #68 (`fix/open-multi-mode-file-capture`, merged to `main` 2026-07-05), `OPEN INPUT A OUTPUT B` silently dropped every file listed after the second mode keyword, so `MOCK OPEN B` could never match. `IOOpenStatement.file_names`/`IOCloseStatement.file_names` matching requires a cobolparser build at or after that merge.
+
+**`CobolSection.location.line` is unreliable for a DATA DIVISION section.** Verified empirically: every section under one DATA DIVISION (`FILE`/`WORKING-STORAGE`/`LINKAGE`) reports that DIVISION's own line, not its own header line — unlike PROCEDURE DIVISION's `_sections`, which do report correct per-section header lines (`source_map.collect_boundaries` depends on that). `analysis.linkage.linkage_plan` works around this by deriving the LINKAGE SECTION header line as `(first LINKAGE item).location.line - 1`, and `refusal.check_linkage_layout` verifies that line's text before ever commenting it out.
 
 **`ParseResult.warnings` is a dropped-content signal, not advice (cobolparser ≥ the 2026-07-07 silent-drop remediation, PR #77).** A "clean" parse (`success=True, errors=0`) can still be missing statements: unsupported verbs (INVOKE, EXHIBIT, ...), unparsed clause leftovers, and multi-program compilation units (everything after the first `END PROGRAM` lands in `ast.contained_programs`, which the splicer and reachability BFS never look at) are reported ONLY through `.warnings`. `check_whole_program` therefore refuses per warning (PARSE_WARNING). Known upstream residual: an unknown verb directly following a period-less statement (e.g. `MOVE 1 TO X` newline `INVOKE ...`) can still be swallowed by the preceding statement's parser with no warning — period-terminated statements (the normal layout) are covered.
 

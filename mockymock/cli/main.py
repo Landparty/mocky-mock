@@ -41,9 +41,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
 
+    from mockymock.analysis.linkage import linkage_plan
     from mockymock.analysis.mock_surface import analyze
     from mockymock.analysis.refusal import (
         check_expansion_warnings,
+        check_linkage_layout,
         check_unresolved_copybooks,
         check_whole_program,
     )
@@ -85,8 +87,18 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if copybook_reasons:
         return 1
 
-    surface = analyze(result.ast)
     lines = normalize_fixed_format(raw_source.splitlines()).splitlines()
+
+    linkage_reasons = check_linkage_layout(result.ast, lines)
+    for reason in linkage_reasons:
+        print(f"mockymock generate: refused ({reason.code}): {reason.message}")
+    if linkage_reasons:
+        return 1
+    linkage = linkage_plan(result.ast)
+    if linkage is not None:
+        _print_linkage_neutralization("generate", linkage)
+
+    surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
     cut_text = scaffold_cut(result.ast.program_name, surface)
 
@@ -96,6 +108,23 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
     _report_unsupported_boundaries(surface)
     return 0
+
+
+def _print_linkage_neutralization(command: str, plan) -> None:
+    """Transparency for the ENTRY/LINKAGE neutralization transform: it never
+    refuses (that's `check_linkage_layout`'s job) and edits source a `.cut`
+    author didn't write, so say so rather than silently changing behavior.
+    See docs/2026-07-08-ims-linkage-support-design.md."""
+    entry_names = ", ".join(
+        repr(e.entry_name) for e in plan.entry_statements if e.entry_name
+    )
+    item_names = ", ".join(item.name for item in plan.linkage_items)
+    print(
+        f"mockymock {command}: neutralized ENTRY statement(s) ({entry_names}) "
+        f"and folded LINKAGE SECTION into WORKING-STORAGE ({item_names}) -- "
+        f"the driver never binds LINKAGE SECTION storage, so this program's "
+        f"default entry now gets real, addressable storage instead"
+    )
 
 
 def _report_unsupported_boundaries(surface) -> None:
@@ -130,9 +159,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
 
+    from mockymock.analysis.linkage import linkage_plan
     from mockymock.analysis.mock_surface import analyze
     from mockymock.analysis.refusal import (
         check_expansion_warnings,
+        check_linkage_layout,
         check_nested_exec,
         check_test_case,
         check_unresolved_copybooks,
@@ -145,6 +176,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.splicer.driver import build_driver
+    from mockymock.splicer.linkage import extra_reset_lines, neutralize
     from mockymock.splicer.naming import TallyRegistry
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
@@ -208,6 +240,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
     normalized = normalize_fixed_format(raw_source.splitlines())
     lines = normalized.splitlines()
 
+    linkage_reasons = check_linkage_layout(result.ast, lines)
+    for reason in linkage_reasons:
+        print(f"mockymock run: refused ({reason.code}): {reason.message}")
+    if linkage_reasons:
+        return 1
+
+    # Comment-only, so it never shifts any line number the rest of this
+    # pipeline derives from `result.ast`'s locations -- safe to apply here,
+    # before every other line-based step. `plan` is None (no-op) for an
+    # ordinary CALL-only program.
+    linkage = linkage_plan(result.ast)
+    if linkage is not None:
+        _print_linkage_neutralization("run", linkage)
+        lines = neutralize(lines, result.ast, linkage)
+
     # Nested-site spliceability must be annotated before any refusal check
     # or splice looks at nested sites (unannotated nested sites refuse).
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
@@ -241,6 +288,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     lines, _ = transform_data_division_exec(lines)
 
     reset_lines = reset_move_lines(result.ast)
+    if linkage is not None:
+        # LINKAGE items `neutralize` folded into WORKING-STORAGE live under
+        # the LINKAGE section in `result.ast` still (the transform edited
+        # text, not the AST), so `reset_move_lines`'s WORKING-STORAGE walk
+        # never sees them -- add their reset lines explicitly.
+        reset_lines = reset_lines + extra_reset_lines(linkage)
     artifact = build_driver(suite, reset_lines, registry)
 
     instrumented = _insert_driver(lines, artifact)

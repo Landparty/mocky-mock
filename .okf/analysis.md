@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-07-07T00:00:00Z
+timestamp: 2026-07-08T00:00:00Z
 ---
 
 # Overview
@@ -31,6 +31,7 @@ refusal.check_whole_program()      -> PARSE_ERROR / PARSE_WARNING /
 refusal.check_expansion_warnings() -> EXPANSION_WARNING      (lossy copybook decode only)
 refusal.check_unresolved_copybooks() -> UNRESOLVED_COPYBOOK  (textual, re-lexes raw source)
 refusal.check_nested_exec()        -> NESTED_EXEC / UNSPLICEABLE_EXEC (program-wide, ignores reachability)
+refusal.check_linkage_layout()     -> UNSUPPORTED_LINKAGE_LAYOUT (guards splicer.linkage.neutralize)
    |
    v
 per MockTestCase:
@@ -112,6 +113,7 @@ Paragraph attribution is depth-independent: nested statements stay attributed to
 | `check_unresolved_copybooks` | `UNRESOLVED_COPYBOOK` | raw source, re-lexed with `CobolLexer(free_form=True)`, still contains a `TokenType.COPY` token |
 | `check_nested_exec` | `NESTED_EXEC` | any EXEC (SQL/CICS/DLI) site with `nested=True` and `span is None` — **regardless of reachability** |
 | `check_nested_exec` | `UNSPLICEABLE_EXEC` | any EXEC site with `nested=False` and a non-`None` `unspliceable_reason` — a top-level EXEC that does not own its source line(s); every EXEC must be stubbed program-wide (unmocked ones get `build_exec_trap`) so this is whole-program too, not per-case (audit finding 2.1) |
+| `check_linkage_layout` | `UNSUPPORTED_LINKAGE_LAYOUT` | `linkage.linkage_plan` finds a named `ENTRY` + non-empty LINKAGE SECTION (the IMS `ENTRY 'DLITCBL'` shape), but one of three guardrails fails: the default entry itself declares `USING`; LINKAGE SECTION isn't the last DATA DIVISION section; or the computed header line doesn't textually verify. `[]` (no refusal) when there's nothing to do (`linkage_plan` is `None`) or the shape is safe — in the safe case, `splicer.linkage.neutralize` runs instead of any refusal. See [splicer](splicer.md#entrylinkage-neutralization-linkagepy) and [docs/2026-07-08-ims-linkage-support-design.md](../docs/2026-07-08-ims-linkage-support-design.md) |
 
 **Why `UNRESOLVED_COPYBOOK` is textual, not AST-based:** cobolparser's `parse_cobol` does *not* raise a parse error for an unresolved `COPY` statement — verified empirically: raw source containing `COPY ORDREC.` yields `result.success is True` and an empty `data_items` list. Worse, the AST node class `CopyStatement` is never instantiated by any parser path, so an unresolved COPY leaves **zero trace in the AST**. The only reliable signal is textual: re-lex `raw_source` (with `free_form=True` — fixed-format column rules would garble already-normalized text) and look for a `TokenType.COPY` token, rather than a substring search that could false-positive on the word "COPY" inside a comment or string literal.
 

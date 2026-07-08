@@ -1,0 +1,89 @@
+TESTSUITE "ACCTPRG account purge (IMS DL/I batch)"
+
+*> 0000-MAIN-PROCESS ends in GOBACK (a program terminator that would kill
+*> the whole test binary), so every case here targets a sub-paragraph
+*> directly -- same workaround DEPTMQP/DEPTMQC already use (see
+*> docs/2026-07-06-real-world-readiness-audit.md Finding 3).
+*>
+*> CUST-STATUS lives in CUST-PCB-LNK, originally LINKAGE SECTION storage
+*> bound only through the separate ENTRY 'DLITCBL' -- mockymock's driver
+*> never binds it (see docs/2026-07-08-ims-linkage-support-design.md).
+*> The engine neutralizes it into real WORKING-STORAGE automatically; a
+*> MOCK CALL "CBLTDLI" body can set CUST-STATUS exactly like any other
+*> mocked CALL's output.
+
+TESTCASE "1000-INITIALIZE primes the first segment when CBLTDLI succeeds"
+    MOCK OPEN PURGEIN
+    END-MOCK
+    MOCK OPEN PURGRPT
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ PURGEIN
+        MOVE "20260101" TO PURG-CUTOFF-DATE
+        MOVE "CL" TO PURG-ACCT-STATUS
+    END-MOCK
+    MOCK CALL "CBLTDLI"
+        MOVE SPACES TO CUST-STATUS
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    EXPECT WS-CUTOFF-DATE TO BE "20260101"
+    EXPECT WS-TARGET-STATUS TO BE "CL"
+    EXPECT WS-EOF-FLAG TO BE "N"
+    VERIFY CALL "CBLTDLI" WAS CALLED ONCE
+
+TESTCASE "1000-INITIALIZE flags EOF when CBLTDLI reports an empty database"
+    MOCK OPEN PURGEIN
+    END-MOCK
+    MOCK OPEN PURGRPT
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ PURGEIN
+    END-MOCK
+    MOCK CALL "CBLTDLI"
+        MOVE "GB" TO CUST-STATUS
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    EXPECT WS-EOF-FLAG TO BE "Y"
+
+TESTCASE "2000-SCAN-AND-PURGE purges a qualifying, past-cutoff segment"
+    MOVE "20260101" TO WS-CUTOFF-DATE
+    MOVE "CL" TO WS-TARGET-STATUS
+    MOVE "CL" TO CUST-IO-STATUS
+    MOVE "20250101" TO CUST-IO-LAST-ACT
+    MOCK CALL "CBLTDLI"
+        MOVE SPACES TO CUST-STATUS
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    PERFORM 2000-SCAN-AND-PURGE
+    EXPECT WS-SEGS-PURGED TO BE 1
+    EXPECT WS-SEGS-SKIPPED TO BE 0
+    EXPECT WS-DET-ACTION TO BE "PURGED"
+    VERIFY CALL "CBLTDLI" WAS CALLED 2 TIMES
+    VERIFY WRITE RPT-RECORD WAS CALLED ONCE
+
+TESTCASE "2000-SCAN-AND-PURGE skips a segment whose status does not match"
+    MOVE "20260101" TO WS-CUTOFF-DATE
+    MOVE "CL" TO WS-TARGET-STATUS
+    MOVE "AC" TO CUST-IO-STATUS
+    MOVE "20250101" TO CUST-IO-LAST-ACT
+    MOCK CALL "CBLTDLI"
+        MOVE SPACES TO CUST-STATUS
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    PERFORM 2000-SCAN-AND-PURGE
+    EXPECT WS-SEGS-SKIPPED TO BE 1
+    EXPECT WS-SEGS-PURGED TO BE 0
+    EXPECT WS-DET-ACTION TO BE "SKIPPED"
+    VERIFY CALL "CBLTDLI" WAS CALLED ONCE
+
+TESTCASE "3000-FINALIZE reports a clean return code when no purge errors occurred"
+    MOCK CLOSE PURGEIN
+    END-MOCK
+    MOCK CLOSE PURGRPT
+    END-MOCK
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 0

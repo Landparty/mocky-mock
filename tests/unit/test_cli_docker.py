@@ -233,3 +233,80 @@ def test_run_reports_cut_parse_error_cleanly(tmp_path, capsys):
     out = capsys.readouterr().out
     assert f"mockymock run: invalid .cut file {cut}" in out
     assert "line 2" in out
+
+
+# --- ENTRY/LINKAGE neutralization plumbing (Docker toolchain mocked) --------
+#
+# docs/2026-07-08-ims-linkage-support-design.md. These pin the CLI wiring
+# (transparency message, no crash/exception through the pipeline) with the
+# real GnuCOBOL toolchain faked; the real-compile proof lives in
+# tests/integration/test_realworld_acctprg_example.py (@requires_docker).
+
+LINKAGE_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LKGSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE PIC X VALUE 'N'.
+
+       LINKAGE SECTION.
+       01  CUST-PCB-LNK.
+           05  CUST-DBD-NAME     PIC X(08).
+           05  CUST-STATUS       PIC X(02).
+
+       PROCEDURE DIVISION.
+       ENTRY 'DLITCBL' USING CUST-PCB-LNK.
+       0000-MAIN.
+           CALL 'CBLTDLI' USING CUST-PCB-LNK
+           DISPLAY CUST-STATUS
+           STOP RUN.
+"""
+
+LINKAGE_CUT = """\
+TESTSUITE "LKGSAMP"
+
+TESTCASE "0000-MAIN reads CUST-STATUS after CBLTDLI"
+    MOCK CALL "CBLTDLI"
+        MOVE SPACES TO CUST-STATUS
+    END-MOCK
+    PERFORM 0000-MAIN
+    VERIFY CALL "CBLTDLI" WAS CALLED ONCE
+"""
+
+LINKAGE_CLEAN_STDOUT = (
+    "__MOCKYMOCK__ TESTSUITE: LKGSAMP\n"
+    "__MOCKYMOCK__ CASE 001 START: 0000-MAIN reads CUST-STATUS after CBLTDLI\n"
+    "__MOCKYMOCK__ CASE 001 END\n"
+    "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+)
+
+
+def test_run_neutralizes_entry_linkage_and_reports_it(tmp_path, capsys):
+    program = tmp_path / "LKGSAMP.cbl"
+    program.write_text(LINKAGE_PROGRAM)
+    cut = tmp_path / "LKGSAMP.cut"
+    cut.write_text(LINKAGE_CUT)
+
+    def fake_compile(source_path: Path) -> CompileResult:
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    executed = ExecutionResult(exit_code=0, stdout=LINKAGE_CLEAN_STDOUT, stderr="")
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=fake_compile,
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
+        ),
+    ):
+        exit_code = main(["run", str(program), "--cut", str(cut)])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "neutralized ENTRY statement(s) ('DLITCBL')" in out
+    assert "folded LINKAGE SECTION into WORKING-STORAGE (CUST-PCB-LNK)" in out

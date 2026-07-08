@@ -545,7 +545,19 @@ Each milestone's design spike must answer, at minimum: the exact cobolparser AST
 Splice `STOP RUN`/`GOBACK` reached from a test case's PERFORM target into a controlled return (e.g. `GOBACK` → paragraph exit, or a generated flag + `GO TO` the driver's case-end), so whole-program entry points and multi-record read loops become testable and a crash stops being the only outcome. Highest-leverage: it unblocks the read-loop depth both real-world examples had to give up. Note `GOBACK` currently has zero handling anywhere in the codebase.
 
 ### Milestone B: CALL-style driving with `LINKAGE SECTION`
-Let the driver `CALL` the program (allocating `LINKAGE` storage / COMMAREA / PCB masks) instead of only `PERFORM`-ing paragraphs. Unblocks the entire subprogram class and is a prerequisite for IMS DL/I (`ENTRY 'DLITCBL' USING ...`) and CICS COMMAREA programs. Verify GnuCOBOL's storage semantics for a standalone program's `LINKAGE SECTION` under `CALL` first — the real-world design flagged this as unverified.
+Let the driver `CALL` the program (allocating `LINKAGE` storage / COMMAREA / PCB masks) instead of only `PERFORM`-ing paragraphs. Unblocks the entire subprogram class and is a prerequisite for CICS COMMAREA programs. Verify GnuCOBOL's storage semantics for a standalone program's `LINKAGE SECTION` under `CALL` first — the real-world design flagged this as unverified.
+
+**Scope narrowed 2026-07-08**: the IMS DL/I named-ENTRY subset
+(`ENTRY 'DLITCBL' USING ...` alongside a bare default entry — `ACCTPRG`,
+`DEPTBMP`, `DEPTIMSM`, `FNDTXFR`, `LNRECOV`) is solved WITHOUT this
+milestone, by neutralizing the ENTRY/LINKAGE shape instead of driving it via
+CALL — see
+[docs/2026-07-08-ims-linkage-support-design.md](../../2026-07-08-ims-linkage-support-design.md).
+This milestone still stands for the general case: a program whose *default*
+entry itself declares `PROCEDURE DIVISION USING ...` (no separate named
+ENTRY) — zero corpus evidence of that pattern today, untested, and the
+neutralization trick doesn't apply to it (the default entry genuinely needs
+bound parameters, which only real CALL-based driving can provide).
 
 ### Milestone C: DB2 cursor support
 Recognize `DECLARE <cursor> CURSOR FOR SELECT` in WORKING-STORAGE (`sqlca.py`) — the one-line-ish fix already spiked as `task_d610057b`. **Blocked behind Task 11** (the dropped-EXEC-SQL cobolparser bug) — has no example to exercise it until then. Land the `sqlca.py` change with a unit test now if cheap, but its integration example waits on Task 11.
