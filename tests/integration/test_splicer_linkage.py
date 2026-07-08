@@ -57,6 +57,12 @@ def _compile_and_run(source: str, name: str):
 
 @requires_docker
 def test_unneutralized_shape_crashes():
+    """Dereferencing unbound LINKAGE SECTION storage is undefined behavior,
+    not a guaranteed crash by the COBOL standard -- it segfaulted reliably
+    against the pinned GnuCOBOL 3.2 build during the design spike, but if
+    this ever flakes green on a different build, that's why: it isn't a
+    hard invariant, just the observed, repeatable behavior of this
+    toolchain."""
     executed = _compile_and_run(SOURCE, "lkgcrash")
     assert executed.exit_code != 0
 
