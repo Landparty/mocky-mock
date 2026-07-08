@@ -1,0 +1,19 @@
+*> OBIC1A -- obsolete-language CALL test from the NIST COBOL-85 suite. It
+*> CALLs two subprograms: OBIC2A (USING SORT-LINK) and OBIC3A (USING the
+*> print-line values). Both are mocked here, one per test case, so neither
+*> subprogram module has to be present or compiled.
+TESTSUITE "OBIC1A CALL statement tests"
+
+TESTCASE "CALL-IC219 calls subprogram OBIC2A (mocked)"
+    MOCK CALL "OBIC2A"
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    PERFORM CALL-IC219
+    VERIFY CALL "OBIC2A" WAS CALLED ONCE
+
+TESTCASE "CALL-FAIL calls subprogram OBIC3A (mocked)"
+    MOCK CALL "OBIC3A"
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    PERFORM CALL-FAIL
+    VERIFY CALL "OBIC3A" WAS CALLED AT LEAST ONCE
