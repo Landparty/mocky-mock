@@ -412,3 +412,58 @@ def test_detects_cancel_as_unmockable_site_with_program_names():
     assert len(sites) == 1
     assert sites[0].category is None
     assert sites[0].keys == ("SUBPGM",)
+
+
+from mockymock.analysis.mock_surface import _TERMINATOR_LABELS
+
+TERMINATOR_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMSAMP.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM SUB-PARA
+           STOP RUN.
+
+       SUB-PARA.
+           GOBACK.
+
+       MESSAGE-PARA.
+           STOP "OPERATOR MESSAGE".
+"""
+
+
+def _terminator_surface():
+    result = parse_cobol(TERMINATOR_SOURCE, filename="termsamp.cbl")
+    assert result.success, result.errors
+    return analyze(result.ast)
+
+
+def test_stop_run_is_detected_as_unmockable_terminator_site():
+    surface = _terminator_surface()
+    sites = [s for s in surface.boundary_sites if s.label == "STOP RUN"]
+    assert len(sites) == 1
+    assert sites[0].category is None
+    assert sites[0].paragraph_name == "MAIN-PARA"
+
+
+def test_goback_is_detected_as_unmockable_terminator_site():
+    surface = _terminator_surface()
+    sites = [s for s in surface.boundary_sites if s.label == "GOBACK"]
+    assert len(sites) == 1
+    assert sites[0].category is None
+    assert sites[0].paragraph_name == "SUB-PARA"
+
+
+def test_stop_literal_is_not_a_terminator_site():
+    """STOP "message" (stop_type == "literal") displays and continues --
+    it is not STOP RUN and must not be classified as a terminator."""
+    surface = _terminator_surface()
+    assert not any(
+        s.paragraph_name == "MESSAGE-PARA" and s.label in ("STOP RUN", "GOBACK")
+        for s in surface.boundary_sites
+    )
+
+
+def test_terminator_labels_constant_matches_classified_labels():
+    assert _TERMINATOR_LABELS == frozenset({"STOP RUN", "GOBACK"})

@@ -22,7 +22,11 @@ from enum import Enum
 from cobolparser.models.program import CobolDivision, CobolParagraph, CobolProgram
 from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.models.statements.call import CallStatement
-from cobolparser.models.statements.control import EvaluateStatement, SearchStatement
+from cobolparser.models.statements.control import (
+    EvaluateStatement,
+    SearchStatement,
+    StopStatement,
+)
 from cobolparser.models.statements.io import (
     IOAcceptStatement,
     IOCloseStatement,
@@ -36,6 +40,7 @@ from cobolparser.models.statements.io import (
 )
 from cobolparser.models.statements.misc import (
     CancelStatement,
+    GobackStatement,
     MergeStatement,
     ReleaseStatement,
     ReturnStatement,
@@ -166,6 +171,14 @@ _FILE_OP_SPECS: tuple[tuple[type, MockCategory], ...] = (
 # contract, not a boundary statement, so all four stay unmockable and gate
 # a refusal.
 _SORT_MERGE_TYPES = (SortStatement, MergeStatement, ReleaseStatement, ReturnStatement)
+
+# STOP RUN/GOBACK are detected (category None, like CANCEL/SORT-MERGE) but
+# never spliced by directive-matching -- a .cut author never writes a MOCK
+# for these; the terminator-support feature neutralizes them automatically
+# when found safe (see docs/2026-07-08-goback-stop-run-support-design.md).
+# Exported so refusal.py can recognize these labels without duplicating
+# the literal set.
+_TERMINATOR_LABELS = frozenset({"STOP RUN", "GOBACK"})
 
 # Statement types whose nested clause bodies (AT END, INVALID KEY, ON
 # EXCEPTION, ...) belong to a *boundary* statement: sites found inside them
@@ -360,6 +373,17 @@ def _classify_statement(
         # covered. The gate checks `keys` against the case's CALL/DYNCALL
         # directives; a CANCEL naming anything else refuses (UNMOCKED_CANCEL).
         add_site(None, "CANCEL", keys=tuple(statement.program_names))
+        return
+
+    if isinstance(statement, StopStatement):
+        # STOP "literal" (stop_type == "literal") displays the literal and
+        # continues -- only STOP RUN terminates the run unit.
+        if statement.stop_type == "RUN":
+            add_site(None, "STOP RUN")
+        return
+
+    if isinstance(statement, GobackStatement):
+        add_site(None, "GOBACK")
         return
 
     if isinstance(statement, ExecSQLStatement):
