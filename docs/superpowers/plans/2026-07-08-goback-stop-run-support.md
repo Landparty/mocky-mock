@@ -204,16 +204,144 @@ In `_classify_statement`, add this block immediately after the existing
 Run: `python -m pytest tests/unit/test_mock_surface.py -v`
 Expected: PASS (all tests in the file).
 
-- [ ] **Step 5: Commit**
+**Step 5 is not optional — do not skip it even though `test_mock_surface.py`
+is fully green.** `refusal.py`'s existing `check_test_case` has a catch-all:
+any `category=None` `BoundarySite` reachable from a test case that isn't
+labeled `"CANCEL"` or `"dynamic CALL"` is unconditionally reported as
+`UNSUPPORTED_SORT_MERGE` (`mockymock/analysis/refusal.py`, the `else:`
+branch inside `if site.category is None:`, around line 565). Steps 1-4
+above just made `"STOP RUN"`/`"GOBACK"` two *new* `category=None` labels —
+without this step, every test case whose target reaches one immediately
+gets misreported as `UNSUPPORTED_SORT_MERGE` instead of leaving the site
+alone for `check_terminator_layout` (Task 3) to evaluate on its own,
+merits. Confirmed empirically: skipping this step breaks
+`tests/unit/test_cli_docker.py::test_run_neutralizes_entry_linkage_and_reports_it`,
+`tests/unit/test_refusal.py::test_per_case_check_expands_perform_thru_range`,
+`tests/unit/test_refusal.py::test_per_case_check_follows_perform_of_a_section`,
+and `tests/unit/test_refusal_v2.py::test_spliceable_nested_sites_pass_the_gate`
+— all four have a reachable `STOP RUN`/`GOBACK` in their fixture and all
+four regress without this fix.
+
+- [ ] **Step 5: Write the failing test for the `check_test_case` exclusion**
+
+Add to `tests/unit/test_terminators.py`... but that file doesn't exist
+yet (Task 3 creates it) — add this test to `tests/unit/test_mock_surface.py`
+instead, since it's a regression guard for *this* task's own consequence,
+not terminator-specific detection logic:
+
+```python
+from mockymock.analysis.refusal import check_test_case
+from mockymock.dsl.model import MockTestCase
+
+
+def test_reachable_terminator_is_not_misreported_as_sort_merge():
+    """check_test_case's category=None catch-all must not fire on the new
+    STOP RUN/GOBACK labels -- they are handled separately by
+    check_terminator_layout (Task 3), not here."""
+    result = parse_cobol(TERMINATOR_SOURCE, filename="termsamp.cbl")
+    surface = analyze(result.ast)
+    case = MockTestCase(name="c", perform_target="MAIN-PARA")
+    reasons = check_test_case(surface, result.ast, case)
+    assert not any(r.code == "UNSUPPORTED_SORT_MERGE" for r in reasons)
+```
+
+(`TERMINATOR_SOURCE` and `parse_cobol`/`analyze` are already defined/imported
+earlier in this file from Step 1 — reuse them, do not redefine.)
+
+- [ ] **Step 6: Run the test to verify it fails**
+
+Run: `python -m pytest tests/unit/test_mock_surface.py -v -k sort_merge`
+Expected: FAIL — `AssertionError` (an `UNSUPPORTED_SORT_MERGE` reason is
+present).
+
+- [ ] **Step 7: Implement the `check_test_case` exclusion**
+
+In `mockymock/analysis/refusal.py`, extend the existing `mock_surface`
+import (currently `BoundarySite, MockSurface, _all_paragraphs,
+_find_statements_of_type, normalize_exec_text` — exact names depend on
+what's already there, add to whichever import statement already pulls
+from `mockymock.analysis.mock_surface`):
+
+```python
+from mockymock.analysis.mock_surface import (
+    BoundarySite,
+    MockSurface,
+    _all_paragraphs,
+    _find_statements_of_type,
+    _TERMINATOR_LABELS,
+    normalize_exec_text,
+)
+```
+
+Locate `check_test_case`'s `category is None` handling (the `if
+site.label == "CANCEL": ... elif site.label == "dynamic CALL": ... else:
+... UNSUPPORTED_SORT_MERGE ...` chain) and add a new `elif` branch
+immediately before the final `else:`:
+
+```python
+            elif site.label in _TERMINATOR_LABELS:
+                # Handled entirely separately by check_terminator_layout
+                # (Task 3, docs/2026-07-08-goback-stop-run-support-design.md)
+                # -- not refused here, and deliberately not folded into
+                # this function, so a safely-neutralizable terminator
+                # doesn't need every OTHER test case in the suite to also
+                # satisfy check_test_case's unrelated matching rules.
+                pass
+            else:
+                reasons.append(
+                    RefusalReason(
+                        code="UNSUPPORTED_SORT_MERGE",
+                        message=(
+                            f"paragraph '{site.paragraph_name}' (line {site.line}) "
+                            f"contains a SORT/MERGE-family statement "
+                            f"(SORT/MERGE/RELEASE/RETURN), which mocks an "
+                            f"algorithm plus its INPUT/OUTPUT PROCEDURE "
+                            f"contract rather than a boundary -- not supported"
+                        ),
+                    )
+                )
+```
+
+(Only the new `elif` block is new — the surrounding `if`/`elif "dynamic
+CALL"`/`else` structure and the `UNSUPPORTED_SORT_MERGE` body are
+unchanged, shown here only so the insertion point is unambiguous.)
+
+- [ ] **Step 8: Run tests to verify they pass**
+
+Run: `python -m pytest tests/unit/test_mock_surface.py -v`
+Expected: PASS (all tests in the file, including the new one).
+
+- [ ] **Step 9: Run the full unit suite to confirm the regression is gone**
+
+Run: `python -m pytest tests/unit -q`
+Expected: PASS except the one already-known, unrelated pre-existing
+failure (`tests/unit/test_source_map.py::test_multiline_call_span_covers_all_three_lines`
+— a cobol-parser version-drift issue, confirmed present on `main` before
+this plan started; not caused by this task). Specifically, confirm these
+four are GREEN again (they must NOT appear in the failures list):
+`tests/unit/test_cli_docker.py::test_run_neutralizes_entry_linkage_and_reports_it`,
+`tests/unit/test_refusal.py::test_per_case_check_expands_perform_thru_range`,
+`tests/unit/test_refusal.py::test_per_case_check_follows_perform_of_a_section`,
+`tests/unit/test_refusal_v2.py::test_spliceable_nested_sites_pass_the_gate`.
+
+- [ ] **Step 10: Commit**
 
 ```bash
-git add mockymock/analysis/mock_surface.py tests/unit/test_mock_surface.py
+git add mockymock/analysis/mock_surface.py mockymock/analysis/refusal.py tests/unit/test_mock_surface.py
 git commit -m "feat(analysis): classify STOP RUN/GOBACK as detected terminator sites
 
 Part of GOBACK/STOP RUN support, Approach B
 (docs/2026-07-08-goback-stop-run-support-design.md). Category=None,
 matching the existing CANCEL/SORT-MERGE detected-but-unmockable pattern.
-STOP <literal> (a console message, not a terminator) is excluded."
+STOP <literal> (a console message, not a terminator) is excluded.
+
+Also excludes the two new labels from check_test_case's existing
+category=None catch-all (previously only CANCEL/dynamic-CALL were
+excluded; anything else was reported as UNSUPPORTED_SORT_MERGE) --
+without this, every test case reaching a terminator would be misreported
+as SORT/MERGE-family instead of being left for check_terminator_layout
+(Task 3) to evaluate. Confirmed via 4 previously-passing tests that
+regressed without this fix and are green again with it."
 ```
 
 ---
