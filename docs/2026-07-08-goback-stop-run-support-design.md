@@ -1,259 +1,238 @@
 # GOBACK / STOP RUN Support — Design
 
-Date: 2026-07-08
-Status: design approved (brainstorming session); verification spike required before implementation begins
+Date: 2026-07-08 (revised)
+Status: design approved (second brainstorming session, Approach B); ready for implementation planning
+
+## Revision note
+
+The originally approved design (Approach A: redirect via `GO TO`, dispatched
+on `UT-CURRENT-CASE`) was **disproven by its own verification spike** and
+never implemented. See "Approach A — rejected, kept for history" below for
+the concrete evidence. This document now describes Approach B (propagate an
+early-exit flag via `EXIT PARAGRAPH`/`EXIT SECTION`), validated by six
+separate compile-and-run spikes against the real GnuCOBOL 3.2 toolchain
+before being written up here. No implementation code exists yet for either
+approach — a plan (`docs/superpowers/plans/2026-07-08-goback-stop-run-support.md`)
+was written for Approach A and must be discarded/rewritten for Approach B.
 
 ## Problem
 
-A `.cut` test case's `PERFORM` target running into `STOP RUN` or `GOBACK` —
-directly, or transitively through any paragraph it performs or jumps to via
-`GO TO` — terminates the whole compiled test binary immediately. That
-happens before the case's own `EXPECT`/`VERIFY` checks run, and before any
-later test case in the same suite gets a chance to run at all.
-`mockymock run` reports this honestly as `[CRASH]` rather than a misleading
-`[PASS]` (`report/results.py` `crashed`/`ended`), but the underlying
-limitation is unchanged: **you cannot test any paragraph that reaches a
-program terminator.**
+Unchanged from the original design — restated briefly. A `.cut` test case's
+`PERFORM` target running into `STOP RUN` or `GOBACK` — directly, or
+transitively through any paragraph it performs — terminates the whole
+compiled test binary immediately, before that case's own checks run and
+before any later test case in the suite gets a chance to run. This blocks
+testing a program's real main paragraph, which almost always ends this way;
+every real-world example in this repo (`DEPTMQP`/`DEPTMQC`/`ACCTPRG`) routes
+around it by targeting sub-paragraphs instead. See the original design's
+"Problem" section (git history, or the superseded content this revision
+replaces) for the full worked `TERMDEMO` crash transcript.
 
-This is not a rare edge case. Real batch programs' main entry points almost
-always end this way, and it shows up as the dominant hidden constraint on
-"does mockymock work on a given program": every real-world example that
-exists today routes around it rather than solving it —
-`examples/real-world/DEPTMQP`/`DEPTMQC` explicitly "trade loop-iteration
-depth for harness safety" by targeting single sub-paragraphs
-(`docs/2026-07-06-realworld-cobol-examples-design.md`, "Driving strategy"),
-and the new `examples/real-world/ACCTPRG` targets sub-paragraphs
-specifically to avoid `0000-MAIN-PROCESS`'s `GOBACK`
-(`docs/2026-07-08-ims-linkage-support-design.md`, "Worked example"). No
-example in this repo tests a program's actual top-level driver loop.
+## Scope decision (unchanged from the original brainstorming session)
 
-Confirmed concretely in this design session: a minimal program
-(`0000-MAIN-PROCESS. PERFORM 1000-DO-WORK STOP RUN.`) with a `.cut` case
-`PERFORM`ing `0000-MAIN-PROCESS` produces **zero refusals** from today's
-`check_whole_program`/`check_test_case` — it compiles clean and crashes at
-`STOP RUN` before its own `EXPECT WS-RESULT TO BE 42` ever runs. See the
-worked example below for the real, generated spliced output.
+Real support was chosen over a cheaper fail-fast-only refusal, fail-closed
+on unverified/ambiguous shapes, no `STOP RUN GIVING`/`GOBACK RETURNING`
+return-code capture, `EXIT PROGRAM` confirmed out of scope as a transform
+target (verified: no-op when `PERFORM`ed, see below).
 
-`analysis/refusal.py:24`'s existing comment ("covered by the documented
-STOP RUN limitation") and `README.md`'s "Known limitation" section
-currently only name `STOP RUN` — `GOBACK` is not mentioned anywhere in
-user-facing docs, though it is caught by the same crash-detection mechanism
-(missing `CASE NNN END` marker) since that check is terminator-agnostic.
+## Approach A — rejected, kept for history
 
-## Scope decision (from this session's brainstorming)
+**The idea:** split each `UT-TESTCASE-NNN` into a setup half and a
+`UT-TESTCASE-NNN-CHECK` half, performed as `PERFORM UT-TESTCASE-NNN THRU
+UT-TESTCASE-NNN-CHECK`; replace a reachable terminator with `EVALUATE
+UT-CURRENT-CASE / WHEN "NNN" GO TO UT-TESTCASE-NNN-CHECK`.
 
-Real support was chosen over a cheaper fail-fast-only refusal: a test
-case's target should be able to reach `STOP RUN`/`GOBACK` and still get its
-`EXPECT`/`VERIFY` checked, with later test cases in the suite still
-running normally afterward. Also decided:
+**Why it failed, verified concretely:** a spike mirroring the *exact*
+driver skeleton (`SUITE-PARA` performs `SETUP-PARA THRU CHECK-PARA`;
+`SETUP-PARA` performs `TARGET-PARA`; `TARGET-PARA` does `GO TO CHECK-PARA`
+in place of the terminator; `CHECK-PARA` sits immediately after
+`SETUP-PARA`) compiled clean but **never returned to `SUITE-PARA`** — it
+looped between `CHECK-PARA` and `TARGET-PARA` printing `CHECK-RAN`
+until the 30s harness timeout killed it (exit 124). An earlier, more
+deeply nested variant of the same shape segfaulted instead (exit 139,
+"attempt to reference invalid memory address").
 
-- Fail-closed: unverified/ambiguous terminator shapes refuse rather than
-  attempt a possibly-wrong transform, matching this codebase's consistent
-  discipline (`check_linkage_layout`, the nested-mock-target rules).
-- `STOP RUN GIVING`/`GOBACK RETURNING` return codes are **not** captured or
-  exposed to `.cut` assertions in this pass — out of scope, to keep this
-  change scoped to the actual pain point rather than growing the DSL at
-  the same time.
-- `EXIT PROGRAM` is out of scope as a *transform target* — per the COBOL
-  standard it is a no-op when the enclosing program is the primary run
-  unit (never `CALL`ed), which is exactly mockymock's `PERFORM`-driven
-  model. This needs an empirical verification spike (below) to confirm and
-  document, not a code change.
+**Root cause:** GnuCOBOL's `PERFORM` return mechanism is tied to the actual
+out-of-line `PERFORM` call chain, not to "whichever `THRU` range is
+lexically active." `GO TO` bypasses that bookkeeping entirely. The
+driver's own `PERFORM {target}` call (`UT-TESTCASE-NNN` performing the
+program's target paragraph) is *itself* exactly this kind of pending,
+not-yet-returned nested call — so the failure is structural, present for
+*every* test case, not just deeply nested ones. No positional fix exists:
+`PERFORM {target} THRU {check}` (putting target and check in one range,
+avoiding the nested-call problem entirely) doesn't work because check
+paragraphs are necessarily generated near the top of the file while the
+target is the user's own code, physically elsewhere — an unavoidably
+backwards range for arbitrary target paragraphs.
 
-## Verification spike required before implementation
+## Approach B — chosen
 
-Two claims this whole design depends on, neither yet confirmed against the
-real GnuCOBOL 3.2 toolchain — must be proven with a crafted minimal program
-compiled and run in the `mockymock-cobc` container before any splicer code
-is written, the same way the IMS/LINKAGE fix opened with a crash-repro
-spike:
+Instead of jumping anywhere, propagate an "early exit" flag back up through
+the *real* `PERFORM` call chain, using `EXIT PARAGRAPH`/`EXIT SECTION` at
+every level instead of `GO TO`. `EXIT PARAGRAPH`/`EXIT SECTION` never jump
+to an unrelated location — they end the *current* paragraph/section early
+and return through the same well-formed "return to whoever actually
+performed me" mechanism that ordinary, uninstrumented COBOL already relies
+on everywhere. Nothing is ever abandoned, so there is no pending-frame
+confusion.
 
-1. **The THRU-range return invariant.** `PERFORM X THRU Y` must return
-   control to its caller when execution reaches the *end of the named
-   range* — regardless of whether that end was reached by ordinary
-   fall-through (no terminator hit) or by a `GO TO` jump into the range
-   from arbitrarily deep inside a nested `PERFORM` chain. The codebase
-   already assumes a closely related fact for the ordinary
-   `... GO TO MAIN-EXIT ... MAIN-EXIT. EXIT.` idiom (PERFORM THRU
-   reachability, `.okf/analysis.md`), but this design needs the
-   GO-TO-from-nested-PERFORM-depth case specifically, which has not been
-   tested. If this does not hold, Approach A (below) is unsound and the
-   design needs rework.
-2. **`EXIT PROGRAM` is a no-op when the program is `PERFORM`ed, not
-   `CALL`ed.** Compile and run a minimal program where a `PERFORM`ed
-   paragraph executes `EXIT PROGRAM` mid-flow, and confirm execution
-   continues to the next statement rather than terminating. If this is
-   *not* a no-op under GnuCOBOL 3.2, `EXIT PROGRAM` needs to be folded into
-   this design as a third terminator alongside `STOP RUN`/`GOBACK`.
+**Consequence: no `driver.py` restructuring at all.** No paragraph split,
+no `THRU` range. `UT-TESTCASE-NNN`'s existing `EXPECT`/`VERIFY` checks stay
+exactly where they are today, right after `PERFORM {target}` — because once
+the flag has propagated all the way back up through every intermediate
+`PERFORM`, that's precisely where control lands next, via the ordinary
+return path.
 
-## Approaches considered
+### Verified facts (six spikes against the pinned GnuCOBOL 3.2 toolchain)
 
-**A. Redirect via `GO TO`, dispatched on `UT-CURRENT-CASE` (chosen).** Split
-each `UT-TESTCASE-NNN` paragraph into `UT-TESTCASE-NNN` (setup + `PERFORM`
-target) and `UT-TESTCASE-NNN-CHECK` (the existing `EXPECT`/`VERIFY` logic).
-The suite driver performs `PERFORM UT-TESTCASE-NNN THRU UT-TESTCASE-NNN-CHECK`
-instead of a single-paragraph `PERFORM`. Every `STOP RUN`/`GOBACK` reachable
-from at least one test case is replaced with an `EVALUATE UT-CURRENT-CASE`
-block whose branches `GO TO` that case's own `-CHECK` paragraph. This reuses
-two mechanisms the codebase already has: the `GO TO MAIN-EXIT ... MAIN-EXIT.
-EXIT.` idiom already assumed sound by the reachability BFS, and the
-per-site `EVALUATE UT-CURRENT-CASE` dispatch pattern
-(`injector.build_site_dispatch`) already used for every other mocked
-boundary. Handles a terminator at any `PERFORM` nesting depth from the
-test's target — not just one level.
+| # | Shape | Result |
+|---|---|---|
+| 1 | Terminator directly in the paragraph a test's `PERFORM` reaches, replaced with nothing (bare removal, no `EXIT` even needed since it's the paragraph's last statement) | **Works.** Two sequential cases both PERFORM a shared paragraph whose `STOP RUN` is simply deleted; both cases' checks ran correctly, suite completed normally. |
+| 2 | Terminator nested inside an `IF`, with a `DISPLAY` after the `IF` in the same paragraph, replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH` | **Bare removal is unsafe here** (confirmed separately: the trailing `DISPLAY` ran, which a real terminator would have prevented) — **but the flag + `EXIT PARAGRAPH` replacement correctly suppresses it.** |
+| 3 | Terminator behind one intermediate `PERFORM` (`MIDDLE-PARA` performs `INNER-TERMINATOR-PARA`), with a `DISPLAY` in `MIDDLE-PARA` after that `PERFORM` | **Bare removal is unsafe here too** (confirmed: the trailing `DISPLAY` ran) — **`IF UT-EARLY-EXIT = "Y" EXIT PARAGRAPH END-IF` inserted right after `MIDDLE-PARA`'s `PERFORM` correctly suppresses it**, and control correctly returns further up the chain. |
+| 4 | Terminator's paragraph entered via `GO TO` (not `PERFORM`) from the paragraph the test's `PERFORM` actually reaches | **Broken.** `EXIT PARAGRAPH` does not correctly resolve the return point when the paragraph it's issued from was entered via `GO TO` — execution silently stops after the terminator's own code; the caller's checks never run (exit 0, but incomplete output, no crash — a *silent* failure, worse than a loud one). |
+| 5 | Terminator is the first paragraph of a `PERFORM`ed `SECTION` (with a second paragraph in that section that must not run), replaced with `EXIT SECTION` | **Works.** The second paragraph correctly did not run; control correctly returned to the real caller. |
+| 6 | Terminator behind three levels of intermediate `PERFORM` (each with its own flag-check-and-`EXIT PARAGRAPH` after its `PERFORM`) | **Works**, both intermediate siblings correctly suppressed, all the way back to the suite level. |
 
-**B. Substitute `EXIT PARAGRAPH`/`EXIT SECTION` in place.** Rejected as
-insufficient alone. Simpler splice (a text swap, no paragraph
-restructuring), but semantically only unwinds *one* `PERFORM` frame. If the
-terminator sits behind more than one level of nested `PERFORM` from the
-test's target — the common shape, e.g. a main loop performs an
-error-handling paragraph that does `STOP RUN` — this returns control to the
-wrong place and silently continues executing code that should have
-terminated: a false-green risk, the exact failure class this codebase works
-hardest to avoid (`docs/2026-07-06-real-world-readiness-audit.md` Finding
-4). Would need its own depth-zero guardrail to be safe, at which point it
-is about as much implementation work as Approach A for a strictly narrower
-result.
+### Design consequence of #4 (the one broken case)
 
-**C. Isolate each test case in its own process.** Rejected. Would stop one
-case's crash from taking down the rest of the suite, but does not solve the
-actual problem: the crashing case's own `EXPECT`/`VERIFY` still never runs,
-because that code lives after the `PERFORM` in the same compiled unit
-regardless of process boundaries. Also inverts the documented "one binary
-serves the whole suite" architectural invariant (`.okf/splicer.md`,
-"Global Constraint") for no corresponding benefit.
+**A terminator is only safely neutralizable when its enclosing paragraph,
+and every paragraph in the `PERFORM` chain between it and the test's own
+target, is reached *exclusively* via plain out-of-line `PERFORM` — never
+via `GO TO`, anywhere in the program.** This can't be narrowed to "on the
+path this test happens to take" because that's a runtime fact, not a
+static one; the only sound rule is "never a `GO TO` target at all."
 
-## Design (Approach A)
+### Design consequence of #5 (deferred despite working)
 
-### Detection (analysis layer)
+`SECTION` support is scoped **out of v1**, even though the mechanism works,
+because safely distinguishing "the section's own first paragraph, reached
+via `PERFORM <section-name>`" from "a later paragraph in that section,
+reached only by fall-through" is real additional analysis complexity, and
+it's not the shape that motivated this feature — real corpus
+`0000-MAIN-PROCESS`-style paragraphs aren't wrapped in `SECTION`s. Documented
+as future work, reusing the same detection machinery once there's demand.
 
-`mock_surface.py` gains `StopStatement`/`GobackStatement` as a new
-detected-but-special category, the same shape as the existing `CancelStatement`
-treatment (`category=None`, a label, and location data) — both modules see
-these through the one existing statement walk, no separate traversal.
+## Design (Approach B) — detailed
 
-`refusal.py` reuses the existing `_reachable_paragraphs` BFS unchanged: for
-each test case, find every terminator site reachable from
-`perform_target`/`perform_thru`. Because the BFS already models `PERFORM`,
-`PERFORM <section>`, and `GO TO` edges (the 2026-07-07 reachability-hole
-remediation), a terminator behind any of those constructs — including the
-program's own `GO TO MAIN-EXIT`-style idiom — is found for free, no new edge
-modeling needed. Sites not reachable from any test case are left untouched
-entirely, matching the existing "unmocked non-EXEC sites are left alone"
-principle — this keeps the transform's blast radius to exactly what a
-`.cut` suite actually exercises.
+### Detection: the "safe chain" check
 
-### Guardrails
+Reuses the existing reachability BFS unchanged to find candidate terminator
+sites per test case (same as Approach A's detection layer — `mock_surface.py`
+still gains `StopStatement`(RUN-form)/`GobackStatement` as detected,
+category-`None` sites, same shape as the existing `CancelStatement`
+handling).
 
-Every reachable terminator site is validated through the same span-checking
-machinery every other boundary site already goes through — no new span
-logic:
+New analysis on top: for each reachable terminator, walk backward from its
+enclosing paragraph through the chain of paragraphs that `PERFORM` it (and
+whoever performs those, up to the test's own `perform_target`). This chain
+is about *how the terminator's paragraph is reached*, not about where the
+terminator sits *within* that paragraph — spike #2 above already confirms
+the terminator itself can be nested inside a conditional in its own
+paragraph. Every link in the chain — i.e. every `PERFORM` statement that
+performs the next paragraph on the way to the terminator's paragraph — must
+be:
 
-- Top-level sites: the existing "owns its line" guard
-  (`source_map`'s top-level own-line check).
-- Nested sites (inside `IF`/`EVALUATE`/inline `PERFORM`): the existing
-  `collect_scope_map`/`annotate_nested_sites` validation.
+- a plain `PERFORM <paragraph-name>` statement (no `THRU`, no section
+  target),
+- unconditional and top-level in its own paragraph (not nested inside an
+  `IF`/`EVALUATE` — deferred, see below),
+- and the paragraph it targets must **never** appear as a `GO TO` target
+  anywhere in the whole program (whole-program check, not just within the
+  reachable set — a `GO TO` edge that exists anywhere is a standing risk
+  regardless of whether this particular test's execution happens to take
+  it).
 
-A site that fails either check refuses with a new code,
-`UNSUPPORTED_TERMINATOR_LAYOUT`, rather than transforming — same fail-closed
-discipline as `UNSUPPORTED_MOCK_TARGET_LAYOUT`/`UNSUPPORTED_NESTED_MOCK_TARGET`/
-`UNSUPPORTED_LINKAGE_LAYOUT`. No guardrail is needed for interaction with
-the target program's own control-flow idioms (THRU ranges, GO-TO-to-exit
-patterns) — those compose for free through the reused BFS and reused span
-validation, per the "Detection" section above.
+Any failure refuses with a new code (`UNSUPPORTED_TERMINATOR_LAYOUT`,
+reusing the naming precedent from `UNSUPPORTED_MOCK_TARGET_LAYOUT`/
+`UNSUPPORTED_LINKAGE_LAYOUT`) rather than attempting a possibly-wrong
+transform.
 
-### Transform
+**Deferred to future work, refused in v1:** the terminator's own paragraph
+being a `SECTION`'s member; any *intermediate chain-link* `PERFORM`
+(not the terminator itself — see the note above) nested inside a
+conditional body, which needs the same nested-scope span validation
+(`collect_scope_map`/`annotate_nested_sites`) boundary sites already use,
+to know where inside the conditional block to insert the check — not
+needed for v1's plain-chain-only scope.
 
-`driver.py`:
-- `_build_testcase_paragraph` splits into `UT-TESTCASE-NNN` (reset → move
-  case ID → zero tallies → start marker → `setup_moves` → `PERFORM
-  {target}`) and a new `UT-TESTCASE-NNN-CHECK` (today's `EXPECT`/`VERIFY`
-  checks → end marker).
-- The suite paragraph's `PERFORM UT-TESTCASE-{index:03d}` becomes
-  `PERFORM UT-TESTCASE-{index:03d} THRU UT-TESTCASE-{index:03d}-CHECK`.
-- This must hold even for test cases with **no** reachable terminator —
-  the THRU form is used uniformly so that normal (non-crashing) cases keep
-  their exact current behavior (fall through from `NNN` into `NNN-CHECK`
-  unchanged), verified by the existing test suite passing unmodified.
+### Splice mechanics
 
-`injector.py` gains a new dispatch-block builder alongside
-`build_site_dispatch`, one per validated terminator site: an `EVALUATE
-UT-CURRENT-CASE` with one `WHEN "NNN"` branch per test case that can reach
-this site (each doing `GO TO UT-TESTCASE-NNN-CHECK`), and a `WHEN OTHER`
-matching existing precedent exactly — loud `DISPLAY "__MOCKYMOCK__ ERROR:
-..."` + `ADD 1 TO UT-FAIL-COUNT`, falling through rather than hard-stopping
-— since the refusal gate is expected to make this branch unreachable in
-practice, same as every other `WHEN OTHER` in the codebase.
+Two operations, both new, neither restructuring `driver.py`:
 
-The `UT-TESTCASE-NNN-CHECK` paragraph name is derived inline in `driver.py`
-(deterministic, reusing the existing `{index:03d}` zero-padding convention
-already used for `UT-TESTCASE-NNN` itself) — `naming.py` is unaffected; it
-owns only `TallyRegistry`'s `(category, key)` tally-field naming, which this
-design does not touch.
+**At the terminator:** replace `STOP RUN`/`GOBACK` with `MOVE "Y" TO
+UT-EARLY-EXIT` followed by `EXIT PARAGRAPH`. Unlike Approach A, this
+replacement is **identical regardless of which test case is running** — no
+`EVALUATE UT-CURRENT-CASE` dispatch needed here at all, since it doesn't
+need to know *where* to jump. Uses the existing `stub_writer.comment_and_replace`
+primitive exactly as every other terminator/boundary replacement does.
 
-The original `STOP RUN`/`GOBACK` line(s) are commented out via the existing
-`stub_writer.comment_and_replace` — no new low-level splice primitive.
+**After every intermediate `PERFORM` in the chain:** insert (not replace)
+`IF UT-EARLY-EXIT = "Y" EXIT PARAGRAPH END-IF` immediately following the
+existing statement, leaving the original `PERFORM` untouched. This needs a
+**new low-level splice primitive** — every existing splice in this codebase
+(`comment_and_replace`) replaces a statement's span; this one needs to
+*keep* the original text and add lines after it. New function,
+`insert_lines_after(lines, line_number, new_lines)`, alongside
+`comment_and_replace` in `stub_writer.py`.
 
-### Worked example
+**Guardrail for the insertion itself:** the intermediate `PERFORM`
+statement must own its own source line (reusing the existing top-level
+own-line check, `source_map`'s `_top_level_site_problem`, applied to
+`PerformStatement` nodes) — if it shares a line with other code (e.g.
+`PERFORM 1000-DO-WORK MOVE 5 TO WS-X.` as one sentence), inserting the
+check after that whole line would let the sibling statement run
+unconditionally before the check ever fires. Refuses
+`UNSUPPORTED_TERMINATOR_LAYOUT` (same code) if violated.
 
-See the full before/after transcript produced in this design session
-(program `TERMDEMO`, a `.cut` targeting `0000-MAIN-PROCESS` which performs a
-mocked-`CALL` sub-paragraph then hits `STOP RUN`). Confirmed today's real
-generated output crashes with zero refusals fired; the proposed output
-differs in exactly three places: the suite's `PERFORM ... THRU ...`, the
-`UT-TESTCASE-001`/`UT-TESTCASE-001-CHECK` split, and the `STOP RUN` →
-`EVALUATE UT-CURRENT-CASE` / `GO TO UT-TESTCASE-001-CHECK` replacement.
-This transcript should be preserved as the first fixture for the unit tests
-below rather than re-derived.
+### `driver.py` — the only change
+
+- `UT-EARLY-EXIT PIC X VALUE "N"` declared once in `build_driver`'s
+  `working_storage` list.
+- Reset to `"N"` in the existing per-case setup, alongside where tally
+  fields already get zeroed (`_build_testcase_paragraph`, one new line).
+- Nothing else changes. No paragraph split, no new `THRU` usage, no
+  dispatch-block generation keyed on case IDs for this feature.
 
 ### Testing
 
-- Unit (Docker-free): detection/refusal tests mirroring `test_refusal.py`'s
-  `check_linkage_layout` coverage (qualifying shape; nested/shared-line
-  shapes that must refuse `UNSUPPORTED_TERMINATOR_LAYOUT`; a terminator
-  behind a `GO TO`/`PERFORM <section>` edge, proving BFS reuse works
-  end-to-end); driver/injector splice tests (`test_driver.py`/
-  `test_injector.py`-style) built directly from the `TERMDEMO` transcript
-  above; a regression test asserting every existing non-terminator `.cut`
-  fixture still generates byte-identical `EXPECT`/`VERIFY` logic (just
-  relocated into a `-CHECK` paragraph).
-- Integration (`@requires_docker`): one test per verification-spike claim
-  (THRU-range-return-via-GO-TO, `EXIT PROGRAM` no-op) as its own minimal
-  compiled-and-run fixture, `test_splicer_linkage.py`-style; an end-to-end
-  `TERMDEMO`-based integration test proving the case now reports `[PASS]`
-  (not `[CRASH]`) and a later test case in the same suite still runs.
-- A worked `examples/real-world/` addition once proven: re-target one of
-  the existing sub-paragraph-only examples (`ACCTPRG`'s `0000-MAIN-PROCESS`,
-  which ends in `GOBACK`, is the natural candidate — it exists specifically
-  to demonstrate this workaround today) at its real entry point, replacing
-  the sub-paragraph workaround.
+- Unit (Docker-free): safe-chain detection tests (qualifying multi-level
+  `PERFORM`-only chain; each of the four deferred/broken shapes —
+  `GO TO`-reached, `SECTION`-scoped, conditional-nested intermediate
+  `PERFORM`, line-sharing `PERFORM` — each asserting
+  `UNSUPPORTED_TERMINATOR_LAYOUT`); `insert_lines_after` unit tests
+  (`stub_writer`-style, verifying original lines are preserved verbatim);
+  driver.py tests for the `UT-EARLY-EXIT` declaration/reset.
+- Integration (`@requires_docker`): the six spike shapes above as permanent
+  regression fixtures (`test_splicer_linkage.py`-style — this is exactly
+  the kind of empirically-load-bearing fact that deserves a permanent
+  compile-and-run test, not just a design-session throwaway script); an
+  end-to-end `TERMDEMO`-based test proving `[PASS]` (not `[CRASH]`) and a
+  later test case in the same suite still running.
+- A worked `examples/real-world/` addition once proven: re-target
+  `ACCTPRG`'s `0000-MAIN-PROCESS` (currently avoided specifically because
+  of this limitation) at its real entry point.
 
 ### Docs sync
 
-- `README.md`: replace the "Known limitation: STOP RUN" section — either
-  remove it (if this ships) or expand it to also name `GOBACK` (if only
-  the fail-fast alternative ships first).
-- `.okf/analysis.md`, `.okf/splicer.md`: new concept rows for
-  `UNSUPPORTED_TERMINATOR_LAYOUT`, the terminator detection/reuse-of-BFS
-  behavior, and the `UT-TESTCASE-NNN`/`-CHECK` paragraph split.
-- `docs/2026-07-06-real-world-readiness-audit.md`: Finding 3 should be
-  marked resolved (or partially resolved, if scope narrows during
-  implementation) once this ships.
-- `docs/2026-07-08-ims-linkage-support-design.md`'s "Worked example"
-  section, which currently justifies avoiding `0000-MAIN-PROCESS` by
-  citing this exact limitation, should be updated once `ACCTPRG` is
-  re-targeted per the testing section above.
+Same set as Approach A's plan named: `README.md`'s known-limitation
+section, `.okf/analysis.md`/`.okf/splicer.md` concept rows (now describing
+the flag-propagation mechanism and `insert_lines_after`, not the dispatch/
+`THRU`-split mechanism), `docs/2026-07-06-real-world-readiness-audit.md`
+Finding 3 marked resolved, `docs/2026-07-08-ims-linkage-support-design.md`'s
+worked-example note updated once `ACCTPRG` is re-targeted.
 
 ## Out of scope
 
-- `STOP RUN GIVING`/`GOBACK RETURNING` return-code capture or new `.cut`
-  assertion syntax.
-- `EXIT PROGRAM` as a transform target (expected no-op; verify and
-  document only — see spike above).
-- Driving a program's multi-record read loop with different mock data per
-  iteration ("drive the real loop, not just survive its terminator") — a
-  separate, larger ambition. This design's scope is narrower and more
-  mechanical: a terminator reachable from a test's target must no longer
-  kill the suite. That said, it is exactly the thing blocking the
-  larger ambition today, since a real main-loop paragraph almost always
-  ends in one.
+- Everything Approach A's design already scoped out: `STOP RUN GIVING`/
+  `GOBACK RETURNING` return-code capture, `EXIT PROGRAM` as a transform
+  target (confirmed no-op, see the original scope-decision verification),
+  driving a program's multi-record read loop with different mock data per
+  iteration.
+- `SECTION`-scoped terminators (mechanism verified safe, deferred for
+  analysis-complexity reasons — see above).
+- Intermediate `PERFORM` statements nested inside a conditional body
+  (needs the nested-scope span machinery; deferred, not attempted).
+- Terminators reachable via `GO TO` anywhere in the chain (confirmed
+  unsafe with this mechanism — refused, not a "future work" item unless a
+  different mechanism is found for this specific shape).
