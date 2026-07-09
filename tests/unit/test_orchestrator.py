@@ -457,7 +457,11 @@ def test_chain_check_survives_a_mocked_call_spliced_earlier_in_the_file():
         test_cases=[
             MockTestCase(
                 name="main",
-                mocks=[MockDirective(MockCategory.CALL, "CALCPGM", ["MOVE 42 TO WS-RESULT"])],
+                mocks=[
+                    MockDirective(
+                        MockCategory.CALL, "CALCPGM", ["MOVE 42 TO WS-RESULT"]
+                    )
+                ],
                 perform_target="0000-MAIN-PROCESS",
             )
         ],
@@ -481,7 +485,9 @@ def test_chain_check_survives_a_mocked_call_spliced_earlier_in_the_file():
     # have no runtime effect) -- not inside the CALL mock's EVALUATE dispatch
     # block, which is what a naive two-pass splice would corrupt
     assert chain_check_idx - perform_idx <= 2
-    assert all(spliced[i].strip() == "" for i in range(perform_idx + 1, chain_check_idx))
+    assert all(
+        spliced[i].strip() == "" for i in range(perform_idx + 1, chain_check_idx)
+    )
     # and the EVALUATE dispatch block for the mocked CALL must stay intact
     # and complete BEFORE the PERFORM, not straddling it
     joined = "\n".join(spliced)

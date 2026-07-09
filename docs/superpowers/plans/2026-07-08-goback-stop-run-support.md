@@ -1977,6 +1977,8 @@ arguments but 6 were given` (for tests passing `terminator_plans`).
 In `mockymock/splicer/orchestrator.py`, extend the existing imports:
 
 ```python
+from collections.abc import Sequence
+
 from mockymock.analysis.mock_surface import MockSurface
 from mockymock.analysis.refusal import TerminatorPlan, directive_matches_site
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
@@ -1991,6 +1993,12 @@ from mockymock.splicer.source_map import statement_span
 from mockymock.splicer.stub_writer import comment_and_replace, insert_lines_after
 ```
 
+`terminator_plans` is typed `Sequence[TerminatorPlan]`, not `list[TerminatorPlan]`
+— it's only ever iterated, never mutated, and `list[TerminatorPlan] = ()` fails
+mypy (the default `()` is a `tuple[()]`, not a `list`). Needs the `Sequence`
+import from `collections.abc` (PEP 585 style, matching this file's existing
+`list[str]`/`set[int]` annotations rather than `typing.List`/`typing.Set`).
+
 Replace `splice_program`'s signature and body:
 
 ```python
@@ -2000,7 +2008,7 @@ def splice_program(
     surface: MockSurface,
     suite: MockTestSuite,
     registry: TallyRegistry,
-    terminator_plans: list[TerminatorPlan] = (),
+    terminator_plans: Sequence[TerminatorPlan] = (),
 ) -> list[str]:
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
@@ -2020,8 +2028,16 @@ def splice_program(
         if mocked:
             replacement = build_site_dispatch(site, suite, registry)
         elif site.category in EXEC_CATEGORIES:
+            # Unmocked EXEC still has to go: cobc cannot compile it. The
+            # refusal gate refuses any test case that can reach it (PERFORM
+            # and GO TO edges, section PERFORMs, and SEARCH/EVALUATE bodies
+            # are all modeled; DECLARATIVES and ALTER refuse the whole
+            # program), so the trap only fires if reachability analysis and
+            # reality disagree -- and then it fails loudly.
             replacement = build_exec_trap(site.label, site.line)
         else:
+            # Unmocked non-EXEC sites are plain COBOL: leave them alone.
+            # (If one were reachable, the refusal gate already fired.)
             continue
 
         seen_statement_ids.add(id(site.statement))
@@ -2045,6 +2061,11 @@ def splice_program(
                     f"sibling code sharing its line"
                 )
             start, end = statement_span(site.statement, boundaries, last_line)
+        # If the replaced statement carried its sentence's terminating
+        # period (i.e. it was the last statement of the sentence /
+        # paragraph), the replacement block must terminate the sentence too
+        # -- otherwise the unterminated sentence runs into the next
+        # paragraph header and cobc rejects it.
         last_span_line = next(
             (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
             "",
@@ -2111,7 +2132,9 @@ def splice_program(
         (line_number, "insert", line_number, line_number, new_lines)
         for line_number, new_lines in insertions
     ]
-    for _, kind, start, end, replacement in sorted(ops, key=lambda o: o[0], reverse=True):
+    for _, kind, start, end, replacement in sorted(
+        ops, key=lambda o: o[0], reverse=True
+    ):
         if kind == "replace":
             lines = comment_and_replace(lines, start, end, replacement)
         else:

@@ -34,6 +34,8 @@ but one statement must get exactly one splice.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from mockymock.analysis.mock_surface import MockSurface
 from mockymock.analysis.refusal import TerminatorPlan, directive_matches_site
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
@@ -54,7 +56,7 @@ def splice_program(
     surface: MockSurface,
     suite: MockTestSuite,
     registry: TallyRegistry,
-    terminator_plans: list[TerminatorPlan] = (),
+    terminator_plans: Sequence[TerminatorPlan] = (),
 ) -> list[str]:
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
@@ -178,7 +180,9 @@ def splice_program(
         (line_number, "insert", line_number, line_number, new_lines)
         for line_number, new_lines in insertions
     ]
-    for _, kind, start, end, replacement in sorted(ops, key=lambda o: o[0], reverse=True):
+    for _, kind, start, end, replacement in sorted(
+        ops, key=lambda o: o[0], reverse=True
+    ):
         if kind == "replace":
             lines = comment_and_replace(lines, start, end, replacement)
         else:
