@@ -1854,8 +1854,8 @@ def test_intermediate_performs_get_chain_check_inserted_after():
     # both PERFORM 1000-WRAPPER and PERFORM 2000-INNER are on the chain --
     # each must be followed by the flag check, and neither PERFORM's own
     # line is touched (still live, not commented out)
-    assert "           PERFORM 1000-WRAPPER" in joined
-    assert "           PERFORM 2000-INNER." in joined
+    assert "    PERFORM 1000-WRAPPER" in joined
+    assert "    PERFORM 2000-INNER." in joined
     assert joined.count('IF UT-EARLY-EXIT = "Y"') == 2
     # the two DISPLAY lines that must not run past a real terminator stay
     # in the source (this test only checks the splice shape, not runtime
@@ -1886,6 +1886,84 @@ def test_no_terminator_plans_argument_leaves_existing_behavior_unchanged():
     assert "STOP RUN." in joined
     assert "      *>     STOP RUN." not in joined
     assert "UT-EARLY-EXIT" not in joined
+
+
+EARLY_MOCK_CHAIN_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMCHAINEARLY.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           CALL "CALCPGM" USING WS-RESULT
+           PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           STOP RUN.
+"""
+
+
+def test_chain_check_survives_a_mocked_call_spliced_earlier_in_the_file():
+    """Regression guard: a boundary-mock splice EARLIER in the file than
+    an intermediate chain-link PERFORM must not corrupt where the
+    chain-check lands. A naive two-pass design (all comment_and_replace
+    spans applied first, then a separate pass of insert_lines_after using
+    line numbers computed before any splicing happened) inserts the
+    chain-check at the wrong, already-shifted position -- inside the
+    earlier span's own replacement block -- because every span applied
+    before it in the file shifts every line number after it. Confirmed
+    empirically against this exact fixture before writing this test: the
+    naive two-pass version corrupts the CALL mock's EVALUATE dispatch
+    block, inserting `IF UT-EARLY-EXIT = "Y" ... END-IF` between `WHEN
+    "001"` and its own `ADD 1 TO UT-CALCPGM-TALLY` line. The fix is a
+    single, position-sorted, bottom-up pass over spans and insertions
+    together (see Step 3 and the note below it)."""
+    result = parse_cobol(EARLY_MOCK_CHAIN_SOURCE, filename="earlychain.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(EARLY_MOCK_CHAIN_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    boundaries = collect_boundaries(result.ast)
+    suite = MockTestSuite(
+        name="T",
+        test_cases=[
+            MockTestCase(
+                name="main",
+                mocks=[MockDirective(MockCategory.CALL, "CALCPGM", ["MOVE 42 TO WS-RESULT"])],
+                perform_target="0000-MAIN-PROCESS",
+            )
+        ],
+    )
+    plans, reasons = find_terminator_plans(surface, result.ast, suite, scope_map, lines)
+    assert reasons == []
+    spliced = splice_program(
+        lines, boundaries, surface, suite, TallyRegistry(suite), plans
+    )
+    perform_idx = next(
+        i for i, line in enumerate(spliced) if "PERFORM 1000-WRAPPER" in line
+    )
+    chain_check_idx = next(
+        i
+        for i in range(perform_idx + 1, len(spliced))
+        if 'IF UT-EARLY-EXIT = "Y"' in spliced[i]
+    )
+    # the chain-check must land shortly after PERFORM 1000-WRAPPER -- only a
+    # blank line may separate them (statement_span swallows a trailing blank
+    # line into the PERFORM's own span, which is harmless: COBOL blank lines
+    # have no runtime effect) -- not inside the CALL mock's EVALUATE dispatch
+    # block, which is what a naive two-pass splice would corrupt
+    assert chain_check_idx - perform_idx <= 2
+    assert all(spliced[i].strip() == "" for i in range(perform_idx + 1, chain_check_idx))
+    # and the EVALUATE dispatch block for the mocked CALL must stay intact
+    # and complete BEFORE the PERFORM, not straddling it
+    joined = "\n".join(spliced)
+    assert "END-EVALUATE" in joined
+    evaluate_idx = next(i for i, line in enumerate(spliced) if "END-EVALUATE" in line)
+    assert evaluate_idx < perform_idx
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -2014,7 +2092,9 @@ def splice_program(
     # Chain-check insertion: every intermediate PERFORM statement across
     # every plan, deduped by identity (several plans can share the same
     # PERFORM edge -- e.g. two terminators reached through one common
-    # wrapper paragraph).
+    # wrapper paragraph). Represented as insert-only operations and merged
+    # with `spans` into ONE combined, position-sorted bottom-up pass below
+    # -- see the note on ordering for why a separate second pass is unsafe.
     seen_perform_ids: set[int] = set()
     insertions: list[tuple[int, list[str]]] = []
     for plan in terminator_plans:
@@ -2025,35 +2105,63 @@ def splice_program(
             _, end = statement_span(perform, boundaries, last_line)
             insertions.append((end, build_chain_check()))
 
-    for start, end, replacement in sorted(spans, key=lambda s: s[0], reverse=True):
-        lines = comment_and_replace(lines, start, end, replacement)
-    for line_number, new_lines in sorted(insertions, key=lambda i: i[0], reverse=True):
-        lines = insert_lines_after(lines, line_number, new_lines)
+    ops: list[tuple[int, str, int, int, list[str]]] = [
+        (start, "replace", start, end, replacement) for start, end, replacement in spans
+    ] + [
+        (line_number, "insert", line_number, line_number, new_lines)
+        for line_number, new_lines in insertions
+    ]
+    for _, kind, start, end, replacement in sorted(ops, key=lambda o: o[0], reverse=True):
+        if kind == "replace":
+            lines = comment_and_replace(lines, start, end, replacement)
+        else:
+            lines = insert_lines_after(lines, start, replacement)
     return lines
 ```
 
-**Note on ordering:** insertions are applied in a *second* bottom-up pass,
-after every `comment_and_replace` span has already been applied. This is
-safe (not a repeat of the original top-down-vs-bottom-up line-shift bug)
-because `insert_lines_after` inserts entirely new lines rather than
-replacing existing ones — as long as `line_number` values are recomputed
-against `lines` as it stood at that point, which they are here since every
-`insertions` value comes from `boundaries`/`last_line` computed once
-up-front against the *original* `lines`, and insertions are applied
-bottom-up too. If an intermediate `PERFORM`'s span was already shifted by
-an earlier-applied (higher-line-number) `comment_and_replace`, this would
-break — but `comment_and_replace` only changes lines *within* the spans it
-replaces, and `insert_lines_after` inserts strictly *after* a `PERFORM`'s
-own end line, which — because both `spans` and `insertions` were computed
-from the same pre-splice `boundaries`/`last_line` — never overlaps a
-comment-and-replace span (a `PERFORM` statement is never itself a boundary
-site). Run the tests below to confirm this holds in practice.
+**Note on ordering:** `spans` (every `comment_and_replace` replacement --
+boundary mocks, EXEC traps, and terminator neutralization alike) and
+`insertions` (chain-checks) MUST be applied in a single, combined,
+position-sorted bottom-up pass, not two separate passes. An earlier draft
+of this task applied all `spans` first and then a second pass of
+`insertions` using line numbers computed once up-front against the
+original `lines` — this is broken whenever any span sits *earlier in the
+file* than an intermediate chain-link `PERFORM`: applying that earlier
+span first shifts every line number after it (each `comment_and_replace`
+call grows the line count from its own insertion point onward), so by the
+time the second pass runs, the `PERFORM`'s "original" end-line number no
+longer points at the `PERFORM` — it points partway into whatever the
+earlier span already inserted. Confirmed empirically (not just reasoned
+through) with a synthetic program where a mocked `CALL` precedes an
+intermediate chain-link `PERFORM`: the naive two-pass version spliced the
+chain-check into the *middle of the CALL's own `EVALUATE` dispatch
+block*, between `WHEN "001"` and its `ADD 1 TO ...-TALLY` line — silently
+wrong output, no crash. `test_chain_check_survives_a_mocked_call_spliced_
+earlier_in_the_file` above is the regression test for exactly this shape.
+
+The fix: treat every `insertions` entry as an "insert-only" operation with
+the same `(position, ...)` shape as a `spans` entry (`start == end ==
+line_number`, using `insert_lines_after` instead of `comment_and_replace`
+to apply it), merge both lists into one `ops` list, and sort *that* by
+position descending before applying anything. Because every operation is
+now applied in strict file-position order from the bottom up, no operation
+can ever shift the position of one that hasn't been applied yet —
+regardless of whether it's a replacement or a pure insertion, and
+regardless of whether it came from `spans` or `insertions`. This is the
+same standard bottom-up-diff-application argument the codebase already
+relies on for `spans` alone, just applied uniformly across both kinds of
+edit instead of doing it once and then re-doing it with stale positions.
+No overlap between a `spans` entry and an `insertions` entry occurs in
+valid input, because a `PERFORM` on a safe chain is guaranteed (by
+`find_terminator_plans`/`statement_top_level_problem`, Task 2/3) to own
+its line exclusively — it can never itself be a boundary/terminator site
+sharing a span with something else.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_orchestrator.py -v`
 Expected: PASS — every pre-existing test in the file (including the two
-that check exact `ValueError` message substrings) plus the five new
+that check exact `ValueError` message substrings) plus the six new
 terminator tests.
 
 - [ ] **Step 5: Run the full unit suite to confirm no regression**
@@ -2069,12 +2177,15 @@ git commit -m "feat(splicer): splice terminator neutralization + chain-check ins
 
 Part of GOBACK/STOP RUN support, Approach B
 (docs/2026-07-08-goback-stop-run-support-design.md). terminator_plans
-defaults to () so every existing 5-argument caller is unaffected. Two
-splice passes: comment-and-replace for the terminator itself (same
-bottom-up-ordered spans list as every other boundary splice), then a
-second bottom-up pass inserting the flag-check after each deduped
-intermediate PERFORM -- safe because insertions never overlap a
-comment-and-replace span (a PERFORM is never itself a boundary site)."
+defaults to () so every existing 5-argument caller is unaffected.
+Terminator neutralization joins the existing spans list (same
+comment-and-replace mechanism as every other boundary splice); chain-check
+insertions are merged into that SAME list as insert-only operations and
+applied in one combined, position-sorted bottom-up pass -- a separate
+second pass using pre-splice line numbers is unsafe whenever a span sits
+earlier in the file than an intermediate PERFORM, since applying that
+span first shifts every later line number out from under the stale
+insertion point (confirmed empirically, see the regression test)."
 ```
 
 ---

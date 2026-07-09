@@ -313,3 +313,178 @@ def test_mocked_top_level_site_with_layout_problem_raises():
     boundaries = collect_boundaries(result.ast)
     with pytest.raises(ValueError, match="does not start its own line"):
         splice_program(lines, boundaries, surface, suite, TallyRegistry(suite))
+
+
+from mockymock.analysis.refusal import find_terminator_plans
+
+TERMINATOR_CHAIN_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMCHAIN.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-WRAPPER
+           DISPLAY "AFTER-WRAPPER".
+
+       1000-WRAPPER.
+           PERFORM 2000-INNER.
+           DISPLAY "AFTER-INNER".
+
+       2000-INNER.
+           CALL "CALCPGM" USING WS-RESULT
+           STOP RUN.
+"""
+
+
+def _terminator_chain_suite():
+    case = MockTestCase(
+        name="main",
+        mocks=[MockDirective(MockCategory.CALL, "CALCPGM", ["MOVE 42 TO WS-RESULT"])],
+        perform_target="0000-MAIN-PROCESS",
+    )
+    return MockTestSuite(name="T", test_cases=[case])
+
+
+def _splice_terminator_chain(suite):
+    result = parse_cobol(TERMINATOR_CHAIN_SOURCE, filename="termchain.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(TERMINATOR_CHAIN_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    boundaries = collect_boundaries(result.ast)
+    plans, reasons = find_terminator_plans(surface, result.ast, suite, scope_map, lines)
+    assert reasons == []
+    return splice_program(
+        lines, boundaries, surface, suite, TallyRegistry(suite), plans
+    )
+
+
+def test_terminator_is_replaced_with_flag_and_exit_paragraph():
+    lines = _splice_terminator_chain(_terminator_chain_suite())
+    joined = "\n".join(lines)
+    assert "      *>     STOP RUN." in joined
+    assert 'MOVE "Y" TO UT-EARLY-EXIT' in joined
+    assert "EXIT PARAGRAPH" in joined
+
+
+def test_intermediate_performs_get_chain_check_inserted_after():
+    lines = _splice_terminator_chain(_terminator_chain_suite())
+    joined = "\n".join(lines)
+    # both PERFORM 1000-WRAPPER and PERFORM 2000-INNER are on the chain --
+    # each must be followed by the flag check, and neither PERFORM's own
+    # line is touched (still live, not commented out)
+    assert "    PERFORM 1000-WRAPPER" in joined
+    assert "    PERFORM 2000-INNER." in joined
+    assert joined.count('IF UT-EARLY-EXIT = "Y"') == 2
+    # the two DISPLAY lines that must not run past a real terminator stay
+    # in the source (this test only checks the splice shape, not runtime
+    # behavior -- that's the Task 7 integration test)
+    assert 'DISPLAY "AFTER-WRAPPER"' in joined
+    assert 'DISPLAY "AFTER-INNER"' in joined
+
+
+def test_terminator_splice_coexists_with_mocked_call_splice():
+    lines = _splice_terminator_chain(_terminator_chain_suite())
+    joined = "\n".join(lines)
+    assert "ADD 1 TO UT-CALCPGM-TALLY" in joined
+    assert "MOVE 42 TO WS-RESULT" in joined
+    assert '      *>     CALL "CALCPGM"' in joined
+
+
+def test_no_terminator_plans_argument_leaves_existing_behavior_unchanged():
+    """The old 5-positional-argument call (no terminator_plans) must still
+    work exactly as before -- the regression guard for every existing
+    caller of splice_program."""
+    result = parse_cobol(TERMINATOR_CHAIN_SOURCE, filename="termchain.cbl")
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(TERMINATOR_CHAIN_SOURCE.splitlines()).splitlines()
+    boundaries = collect_boundaries(result.ast)
+    suite = _terminator_chain_suite()
+    spliced = splice_program(lines, boundaries, surface, suite, TallyRegistry(suite))
+    joined = "\n".join(spliced)
+    assert "STOP RUN." in joined
+    assert "      *>     STOP RUN." not in joined
+    assert "UT-EARLY-EXIT" not in joined
+
+
+EARLY_MOCK_CHAIN_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMCHAINEARLY.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           CALL "CALCPGM" USING WS-RESULT
+           PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           STOP RUN.
+"""
+
+
+def test_chain_check_survives_a_mocked_call_spliced_earlier_in_the_file():
+    """Regression guard: a boundary-mock splice EARLIER in the file than
+    an intermediate chain-link PERFORM must not corrupt where the
+    chain-check lands. A naive two-pass design (all comment_and_replace
+    spans applied first, then a separate pass of insert_lines_after using
+    line numbers computed before any splicing happened) inserts the
+    chain-check at the wrong, already-shifted position -- inside the
+    earlier span's own replacement block -- because every span applied
+    before it in the file shifts every line number after it. Confirmed
+    empirically against this exact fixture before writing this test: the
+    naive two-pass version corrupts the CALL mock's EVALUATE dispatch
+    block, inserting `IF UT-EARLY-EXIT = "Y" ... END-IF` between `WHEN
+    "001"` and its own `ADD 1 TO UT-CALCPGM-TALLY` line. The fix is a
+    single, position-sorted, bottom-up pass over spans and insertions
+    together (see Step 3 and the note below it)."""
+    result = parse_cobol(EARLY_MOCK_CHAIN_SOURCE, filename="earlychain.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(EARLY_MOCK_CHAIN_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    boundaries = collect_boundaries(result.ast)
+    suite = MockTestSuite(
+        name="T",
+        test_cases=[
+            MockTestCase(
+                name="main",
+                mocks=[MockDirective(MockCategory.CALL, "CALCPGM", ["MOVE 42 TO WS-RESULT"])],
+                perform_target="0000-MAIN-PROCESS",
+            )
+        ],
+    )
+    plans, reasons = find_terminator_plans(surface, result.ast, suite, scope_map, lines)
+    assert reasons == []
+    spliced = splice_program(
+        lines, boundaries, surface, suite, TallyRegistry(suite), plans
+    )
+    perform_idx = next(
+        i for i, line in enumerate(spliced) if "PERFORM 1000-WRAPPER" in line
+    )
+    chain_check_idx = next(
+        i
+        for i in range(perform_idx + 1, len(spliced))
+        if 'IF UT-EARLY-EXIT = "Y"' in spliced[i]
+    )
+    # the chain-check must land shortly after PERFORM 1000-WRAPPER -- only a
+    # blank line may separate them (statement_span swallows a trailing blank
+    # line into the PERFORM's own span, which is harmless: COBOL blank lines
+    # have no runtime effect) -- not inside the CALL mock's EVALUATE dispatch
+    # block, which is what a naive two-pass splice would corrupt
+    assert chain_check_idx - perform_idx <= 2
+    assert all(spliced[i].strip() == "" for i in range(perform_idx + 1, chain_check_idx))
+    # and the EVALUATE dispatch block for the mocked CALL must stay intact
+    # and complete BEFORE the PERFORM, not straddling it
+    joined = "\n".join(spliced)
+    assert "END-EVALUATE" in joined
+    evaluate_idx = next(i for i, line in enumerate(spliced) if "END-EVALUATE" in line)
+    assert evaluate_idx < perform_idx
