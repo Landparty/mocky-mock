@@ -1,5 +1,44 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-09 (uv-installable CLI: pinned cobolparser git dependency)
+* **Made `mockymock` installable via `uv tool install` from any directory**,
+  not just inside the LegacyLens monorepo. Root cause: `pyproject.toml` had
+  `dependencies = []` — cobolparser was only ever wired in via
+  `requirements-dev.txt`'s `-e ../cobol-parser` sibling-checkout install, so
+  a `uv tool install` from outside the workspace produced a `mockymock`
+  binary that `ImportError`ed on `cobolparser` the moment any real command
+  ran.
+* **Fix**: added `cobolparser @ git+https://github.com/Landparty/cobol-parser.git@8c3c881dbc1368cf764f28df21eb33ae1470fcf4`
+  to `dependencies` — the same commit `.github/workflows/ci.yml` pins, kept
+  in sync deliberately (see that workflow's own pin-bump comments). Verified
+  live: `uv tool install --from . mockymock`, then ran `mockymock --help` /
+  `mockymock generate --help` from `/c/tmp` (no sibling `cobol-parser`
+  checkout on that path) — resolved, built, and ran correctly, pulling
+  cobolparser straight from the private GitHub repo via the caller's
+  existing git credentials.
+* **Found and fixed a real fallout, not assumed away**: the initial version
+  of this fix (an unqualified `-e .[dev]` line in `requirements-dev.txt`)
+  broke the contributor workflow — verified by actually running `pip
+  install -r requirements-dev.txt` in a scratch venv, which failed with
+  `ResolutionImpossible` because pip cannot reconcile a local-path
+  requirement (`-e ../cobol-parser`) against a URL-pinned requirement for
+  the *same* package name pulled in transitively by `-e .[dev]`'s new
+  `dependencies` entry. Fixed by dropping `-e .[dev]` from
+  `requirements-dev.txt` in favor of listing the `[dev]` extra's packages
+  explicitly (pytest/pytest-cov/ruff/black/mypy — kept in sync with
+  `pyproject.toml`'s `[project.optional-dependencies].dev`) and installing
+  mockymock itself in a second step, `pip install --no-deps -e .`, which
+  skips dependency resolution entirely for that one requirement so the git
+  pin never enters the graph. Re-verified in a fresh scratch venv: both
+  `cobolparser` and `mockymock` resolve to their editable sibling-checkout
+  paths, and pytest/pytest-cov/ruff/black/mypy all install with their own
+  transitive deps intact.
+* README gained an "Install" section (`uv tool install`) ahead of the
+  renamed "Setup (contributing)" section, which now documents the two-step
+  `pip install -r requirements-dev.txt` + `pip install --no-deps -e .`
+  sequence; [integration](integration.md)'s claim of "no dependency pin"
+  corrected.
+
 ## 2026-07-09 (Final branch review: GOBACK/STOP RUN terminator support)
 * **Independent Opus-model review of the whole `feature/goback-stop-run-support`
   branch** (all 10 tasks + the looping-PERFORM fix below), specifically asked

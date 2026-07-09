@@ -89,7 +89,16 @@ jobs:
 
       - name: Install dependencies
         working-directory: mocky-mock
-        run: pip install -r requirements-dev.txt
+        # requirements-dev.txt no longer installs mockymock itself (it only
+        # covers the editable cobol-parser sibling checkout + dev tooling --
+        # see that file's comments): pyproject.toml's `dependencies` now
+        # carries a git-pinned cobolparser (for `uv tool install`), which
+        # conflicts with the editable sibling checkout if resolved together.
+        # mockymock installs separately with --no-deps to skip that
+        # resolution, matching README "Setup (contributing)".
+        run: |
+          pip install -r requirements-dev.txt
+          pip install --no-deps -e .
 
       - name: Run tests
         working-directory: mocky-mock

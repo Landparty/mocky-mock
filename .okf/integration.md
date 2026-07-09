@@ -3,19 +3,24 @@ type: Contract
 title: cobolparser Interface Contract
 description: The exact cobolparser AST surface (ParseResult, statement node fields, node_type quirks) that mockymock depends on.
 tags: [integration, cobolparser, contract]
-timestamp: 2026-07-08T00:00:00Z
+timestamp: 2026-07-09T00:00:00Z
 ---
 
 # Overview
 
 mockymock is a one-way consumer of `cobolparser`: mockymock depends on cobolparser,
-cobolparser has zero knowledge of mockymock. There is no dependency pin in
-`pyproject.toml` (`dependencies = []` — cobolparser is installed separately,
-editable, from the sibling `cobol-parser` repo per workspace convention). That
-makes the interface contract the *only* thing standing between a cobolparser
-refactor and a silent mockymock breakage — any change to a symbol below is a
-breaking change for this repo even though no version constraint will ever
-flag it.
+cobolparser has zero knowledge of mockymock. Day-to-day contributor setup still
+installs cobolparser separately, editable, from the sibling `cobol-parser`
+repo (`requirements-dev.txt`: `-e ../cobol-parser`) per workspace convention —
+that checkout, whatever commit it's on, always wins in a dev environment.
+`pyproject.toml`'s `dependencies` now also carries a pinned git reference
+(`cobolparser @ git+https://github.com/Landparty/cobol-parser.git@<sha>`, kept
+in sync with `.github/workflows/ci.yml`'s `ref:`), added so `uv tool install`
+can resolve a working install with no sibling checkout present (see README
+"Install"). That pin is a floor for non-dev installs, not a substitute for
+the interface contract below — any change to a symbol below is still a
+breaking change for this repo even though the pin only catches it once
+re-bumped.
 
 ```
 cobolparser.parse_cobol(source, filename) -> ParseResult

@@ -129,7 +129,27 @@ only ends the current loop iteration, not the loop itself, so a
 terminator inside a loop body cannot be safely neutralized). Restructure
 to a plain, unconditional, single-shot `PERFORM` chain to avoid this.
 
-## Setup
+## Install
+
+mockymock isn't on PyPI, but its `pyproject.toml` declares a full
+dependency set (including a pinned `cobolparser` git dependency — see
+[`.okf/integration.md`](.okf/integration.md)), so [uv](https://docs.astral.sh/uv/)
+can install it straight from the repo as a standalone CLI tool, available
+on `PATH` from any directory:
+
+```bash
+uv tool install git+https://github.com/samdion1994/mocky-mock.git
+# or, from a local checkout:
+uv tool install --from . mockymock
+```
+
+Both repos are private, so `git`/`uv` need working GitHub credentials
+(`gh auth setup-git`, or an SSH key) to fetch them. Upgrade with
+`uv tool upgrade mockymock`; remove with `uv tool uninstall mockymock`.
+`mockymock setup`/`mockymock run` still need a running Docker daemon (see
+below) — the CLI itself has no other host dependency.
+
+## Setup (contributing)
 
 Requires a running Docker daemon (Docker Desktop on Windows/macOS). COBOL
 is compiled and executed inside a GnuCOBOL container — nothing runs on the
@@ -139,6 +159,10 @@ host, and no local GnuCOBOL install is needed.
 python -m venv .venv
 .venv/Scripts/activate   # or source .venv/bin/activate on macOS/Linux
 pip install -r requirements-dev.txt
+pip install --no-deps -e .   # mockymock itself; --no-deps skips its pinned-git
+                              # cobolparser dep (see "Install" above), which
+                              # would otherwise conflict with the editable
+                              # sibling checkout requirements-dev.txt just installed
 mockymock setup           # builds the GnuCOBOL image, starts mockymock-cobc
 python -m pytest tests/unit -v
 ```
