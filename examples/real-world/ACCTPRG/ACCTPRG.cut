@@ -1,9 +1,13 @@
 TESTSUITE "ACCTPRG account purge (IMS DL/I batch)"
 
-*> 0000-MAIN-PROCESS ends in GOBACK (a program terminator that would kill
-*> the whole test binary), so every case here targets a sub-paragraph
-*> directly -- same workaround DEPTMQP/DEPTMQC already use (see
-*> docs/2026-07-06-real-world-readiness-audit.md Finding 3).
+*> 0000-MAIN-PROCESS ends in GOBACK, a program terminator -- most cases
+*> here still target a sub-paragraph directly for finer-grained control
+*> (same workaround DEPTMQP/DEPTMQC already use, see
+*> docs/2026-07-06-real-world-readiness-audit.md Finding 3), but GOBACK
+*> reached through a plain PERFORM chain is now neutralized rather than
+*> killing the test binary (see
+*> docs/2026-07-08-goback-stop-run-support-design.md), so one case below
+*> exercises 0000-MAIN-PROCESS directly, its real entry point.
 *>
 *> CUST-STATUS lives in CUST-PCB-LNK, originally LINKAGE SECTION storage
 *> bound only through the separate ENTRY 'DLITCBL' -- mockymock's driver
@@ -92,3 +96,36 @@ TESTCASE "3000-FINALIZE reports a clean return code when no purge errors occurre
     END-MOCK
     PERFORM 3000-FINALIZE
     EXPECT RETURN-CODE TO BE 0
+
+TESTCASE "0000-MAIN-PROCESS runs end-to-end via its real entry point when CBLTDLI reports an empty database"
+    *> GOBACK is reached via a plain PERFORM chain (1000-INITIALIZE,
+    *> 2000-SCAN-AND-PURGE, 3000-FINALIZE), now neutralized instead of
+    *> killing the suite -- see docs/2026-07-08-goback-stop-run-support-design.md.
+    *> An empty-database CBLTDLI response makes WS-EOF true before the
+    *> PERFORM ... UNTIL loop's first check, so its body never runs --
+    *> driving multiple loop iterations with per-call mock sequencing is
+    *> a separate, out-of-scope capability (see that design doc's "Out of
+    *> scope" section).
+    MOCK OPEN PURGEIN
+    END-MOCK
+    MOCK OPEN PURGRPT
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ PURGEIN
+        MOVE "20260101" TO WS-CUTOFF-DATE
+        MOVE "CL" TO WS-TARGET-STATUS
+    END-MOCK
+    MOCK CALL "CBLTDLI"
+        MOVE "GB" TO CUST-STATUS
+    END-MOCK
+    MOCK CLOSE PURGEIN
+    END-MOCK
+    MOCK CLOSE PURGRPT
+    END-MOCK
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-EOF-FLAG TO BE "Y"
+    EXPECT WS-SEGS-SCANNED TO BE 0
+    EXPECT WS-SEGS-PURGED TO BE 0
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY CALL "CBLTDLI" WAS CALLED ONCE
