@@ -597,6 +597,9 @@ CHAIN_SOURCE = """\
            IF 1 = 1
                PERFORM LEVEL2-PARA
            END-IF.
+
+       LOOP-CALLER.
+           PERFORM LEVEL2-PARA UNTIL 1 = 1.
 """
 
 
@@ -632,6 +635,18 @@ def test_plain_perform_edges_from_ignores_thru_and_conditional_and_goto():
 
     seen, edges = _plain_perform_edges_from(_program(), "UNRELATED-PARA")
     assert seen == {"UNRELATED-PARA"}
+    assert edges == []
+
+
+def test_plain_perform_edges_from_ignores_looping_perform():
+    """A PERFORM ... UNTIL is not a plain, single-shot PERFORM: EXIT
+    PARAGRAPH from its target only ends the current iteration, not the
+    loop, so its target must not be treated as safely reachable --
+    discovered 2026-07-09 while qualifying ACCTPRG for Task 10, fixed by
+    excluding perform_type != "SIMPLE" edges (see "Out of scope", below,
+    and .okf/log.md)."""
+    seen, edges = _plain_perform_edges_from(_program(), "LOOP-CALLER")
+    assert seen == {"LOOP-CALLER"}
     assert edges == []
 ```
 
@@ -672,9 +687,25 @@ def _go_to_targets(program) -> set[str]:
 
 def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
     """BFS from `start` following ONLY plain (non-THRU), unconditional,
-    top-level PERFORM statements -- i.e. PerformStatement nodes that are
-    direct members of a paragraph's own `.statements` list (not nested
-    inside IF/EVALUATE), with `thru_paragraph is None`.
+    single-shot, top-level PERFORM statements -- i.e. PerformStatement
+    nodes that are direct members of a paragraph's own `.statements` list
+    (not nested inside IF/EVALUATE), with `thru_paragraph is None` and
+    `perform_type == "SIMPLE"`.
+
+    A PERFORM ... UNTIL/VARYING/TIMES (perform_type != "SIMPLE") is
+    deliberately NOT followed and NOT added to the edge set, even though
+    it also carries a `target_paragraph` with `thru_paragraph is None`:
+    the early-exit mechanism sets a flag and does `EXIT PARAGRAPH`, which
+    only ends the CURRENT iteration of the looped paragraph -- control
+    returns to the loop construct, which re-checks its own unrelated
+    UNTIL/VARYING/TIMES condition and may iterate again. A terminator
+    reached from inside a loop's target would silently run extra
+    unwanted iterations instead of stopping, which was proven empirically
+    (a synthetic STOP RUN placed inside a looped paragraph kept iterating
+    past it). Excluding the edge means such a terminator's paragraph never
+    enters `seen`, so `find_terminator_plans` naturally refuses it via the
+    existing "reachable but not via a plain chain" check -- no new
+    refusal branch needed.
 
     SECTION members are excluded entirely: this only looks up names in
     `procedure.paragraphs` (top-level paragraphs), never
@@ -706,6 +737,7 @@ def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
                 isinstance(statement, PerformStatement)
                 and statement.thru_paragraph is None
                 and statement.target_paragraph
+                and statement.perform_type == "SIMPLE"
             ):
                 edges.append(statement)
                 target = statement.target_paragraph
@@ -1166,6 +1198,39 @@ SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE = """\
            STOP RUN.
 """
 
+LOOP_SAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOOPSAFE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE             PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-LOOP-BODY UNTIL WS-DONE = "Y"
+           STOP RUN.
+
+       1000-LOOP-BODY.
+           MOVE "Y" TO WS-DONE.
+"""
+
+LOOP_TERMINATOR_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOOPUNSAFE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE             PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-LOOP-BODY UNTIL WS-DONE = "Y".
+
+       1000-LOOP-BODY.
+           STOP RUN.
+"""
+
 
 def _analyze(source, name="X.cbl"):
     """Returns (program, surface, scope_map, lines) -- find_terminator_plans
@@ -1232,6 +1297,37 @@ def test_find_terminator_plans_includes_intermediate_perform_in_chain():
         "1000-WRAPPER",
         "2000-INNER",
     }
+
+
+def test_looping_perform_is_excluded_from_the_safe_chain():
+    """A PERFORM ... UNTIL used as an intermediate chain link is NOT a
+    "plain, unconditional" PERFORM: EXIT PARAGRAPH from inside its target
+    only ends the current iteration, not the loop, so its target must not
+    be treated as safely reachable. Here the terminator sits directly in
+    the perform_target paragraph (always in safe_names), so it's still
+    accepted -- but the loop's own PERFORM must NOT appear in
+    chain_performs, since instrumenting it would insert a chain-check that
+    fires on every iteration rather than once after the whole loop."""
+    program, surface, scope_map, lines = _analyze(LOOP_SAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].chain_performs == []
+
+
+def test_terminator_reached_only_through_a_loop_body_refuses():
+    """The terminator (STOP RUN) lives inside 1000-LOOP-BODY, which is
+    reachable ONLY as the target of a PERFORM ... UNTIL -- not a plain,
+    unconditional PERFORM. Confirmed empirically (a synthetic spliced
+    program with this shape kept iterating past a real STOP RUN instead
+    of stopping) that treating this as safe is a genuine correctness bug;
+    this must refuse instead."""
+    program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "not via a chain of plain, unconditional" in reasons[0].message
 
 
 def test_go_to_reachable_terminator_refuses():
@@ -2413,6 +2509,56 @@ def test_go_to_reachable_terminator_refuses_before_compiling(tmp_path: Path, cap
         'TESTSUITE "gototerm"\n'
         "\n"
         'TESTCASE "reaches terminator via GO TO"\n'
+        "    PERFORM 0000-MAIN-PROCESS\n"
+    )
+
+    exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
+    out = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "UNSUPPORTED_TERMINATOR_LAYOUT" in out
+
+
+@requires_docker
+def test_terminator_inside_a_loop_body_refuses_before_compiling(tmp_path: Path, capsys):
+    """Permanent regression fixture for the looping-PERFORM safety gap
+    fixed 2026-07-09 (see .okf/log.md): a STOP RUN reachable only through
+    the target of a PERFORM ... UNTIL must refuse, not be silently
+    neutralized. Before the fix, a synthetic spike with this exact shape
+    was accepted as safe and the compiled/spliced binary ran 3 extra
+    unwanted loop iterations past the point the real STOP RUN would have
+    stopped it (iterations 3-5, when the real program would have stopped
+    at iteration 2) -- a silent correctness bug, not a crash, so this test
+    checks for the refusal itself rather than trying to observe the
+    absence of extra output."""
+    cbl_path = tmp_path / "LOOPTERM.cbl"
+    cbl_path.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. LOOPTERM.\n"
+        "\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  WS-COUNT            PIC 9(2) VALUE 0.\n"
+        '       01  WS-DONE             PIC X VALUE "N".\n'
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       0000-MAIN-PROCESS.\n"
+        '           PERFORM 1000-LOOP-BODY UNTIL WS-DONE = "Y".\n'
+        "\n"
+        "       1000-LOOP-BODY.\n"
+        "           ADD 1 TO WS-COUNT\n"
+        "           IF WS-COUNT = 2\n"
+        "               STOP RUN\n"
+        "           END-IF\n"
+        "           IF WS-COUNT >= 5\n"
+        '               MOVE "Y" TO WS-DONE\n'
+        "           END-IF.\n"
+    )
+    cut_path = tmp_path / "LOOPTERM.cut"
+    cut_path.write_text(
+        'TESTSUITE "loopterm"\n'
+        "\n"
+        'TESTCASE "reaches terminator only via a looping PERFORM"\n'
         "    PERFORM 0000-MAIN-PROCESS\n"
     )
 

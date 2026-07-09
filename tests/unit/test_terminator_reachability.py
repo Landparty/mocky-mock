@@ -33,6 +33,9 @@ CHAIN_SOURCE = """\
            IF 1 = 1
                PERFORM LEVEL2-PARA
            END-IF.
+
+       LOOP-CALLER.
+           PERFORM LEVEL2-PARA UNTIL 1 = 1.
 """
 
 
@@ -68,4 +71,16 @@ def test_plain_perform_edges_from_ignores_thru_and_conditional_and_goto():
 
     seen, edges = _plain_perform_edges_from(_program(), "UNRELATED-PARA")
     assert seen == {"UNRELATED-PARA"}
+    assert edges == []
+
+
+def test_plain_perform_edges_from_ignores_looping_perform():
+    """A PERFORM ... UNTIL is not a plain, single-shot PERFORM: EXIT
+    PARAGRAPH from its target only ends the current iteration, not the
+    loop, so its target must not be treated as safely reachable --
+    discovered 2026-07-09 while qualifying ACCTPRG for Task 10, fixed by
+    excluding perform_type != "SIMPLE" edges (see "Out of scope", below,
+    and .okf/log.md)."""
+    seen, edges = _plain_perform_edges_from(_program(), "LOOP-CALLER")
+    assert seen == {"LOOP-CALLER"}
     assert edges == []

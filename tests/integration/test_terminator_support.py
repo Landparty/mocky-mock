@@ -115,3 +115,53 @@ def test_go_to_reachable_terminator_refuses_before_compiling(tmp_path: Path, cap
 
     assert exit_code == 1
     assert "UNSUPPORTED_TERMINATOR_LAYOUT" in out
+
+
+@requires_docker
+def test_terminator_inside_a_loop_body_refuses_before_compiling(tmp_path: Path, capsys):
+    """Permanent regression fixture for the looping-PERFORM safety gap
+    fixed 2026-07-09 (see .okf/log.md): a STOP RUN reachable only through
+    the target of a PERFORM ... UNTIL must refuse, not be silently
+    neutralized. Before the fix, a synthetic spike with this exact shape
+    was accepted as safe and the compiled/spliced binary ran 3 extra
+    unwanted loop iterations past the point the real STOP RUN would have
+    stopped it (iterations 3-5, when the real program would have stopped
+    at iteration 2) -- a silent correctness bug, not a crash, so this test
+    checks for the refusal itself rather than trying to observe the
+    absence of extra output."""
+    cbl_path = tmp_path / "LOOPTERM.cbl"
+    cbl_path.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. LOOPTERM.\n"
+        "\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  WS-COUNT            PIC 9(2) VALUE 0.\n"
+        '       01  WS-DONE             PIC X VALUE "N".\n'
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       0000-MAIN-PROCESS.\n"
+        '           PERFORM 1000-LOOP-BODY UNTIL WS-DONE = "Y".\n'
+        "\n"
+        "       1000-LOOP-BODY.\n"
+        "           ADD 1 TO WS-COUNT\n"
+        "           IF WS-COUNT = 2\n"
+        "               STOP RUN\n"
+        "           END-IF\n"
+        "           IF WS-COUNT >= 5\n"
+        '               MOVE "Y" TO WS-DONE\n'
+        "           END-IF.\n"
+    )
+    cut_path = tmp_path / "LOOPTERM.cut"
+    cut_path.write_text(
+        'TESTSUITE "loopterm"\n'
+        "\n"
+        'TESTCASE "reaches terminator only via a looping PERFORM"\n'
+        "    PERFORM 0000-MAIN-PROCESS\n"
+    )
+
+    exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
+    out = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "UNSUPPORTED_TERMINATOR_LAYOUT" in out

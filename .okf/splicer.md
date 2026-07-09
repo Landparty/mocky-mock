@@ -391,7 +391,11 @@ access pattern, `CALL 'CBLTDLI' USING ...`, was already an ordinary
 `GobackStatement` reachable from at least one test case whose enclosing
 paragraph -- and every intermediate paragraph between it and the test's
 `perform_target` -- is reached exclusively via plain, unconditional,
-top-level `PERFORM` statements (`refusal._plain_perform_edges_from`),
+single-shot, top-level `PERFORM` statements (`refusal._plain_perform_edges_from`,
+which excludes `PERFORM ... UNTIL`/`VARYING`/`TIMES` edges --
+`perform_type != "SIMPLE"` -- since `EXIT PARAGRAPH` only ends the
+current loop iteration, not the loop itself, so a terminator reachable
+only through a loop's target paragraph is not safely neutralizable),
 never a `GO TO` target anywhere in the program
 (`refusal._go_to_targets`), never a `SECTION` member. Safe terminators
 are replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH`

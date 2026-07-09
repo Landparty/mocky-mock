@@ -116,6 +116,39 @@ SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE = """\
            STOP RUN.
 """
 
+LOOP_SAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOOPSAFE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE             PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-LOOP-BODY UNTIL WS-DONE = "Y"
+           STOP RUN.
+
+       1000-LOOP-BODY.
+           MOVE "Y" TO WS-DONE.
+"""
+
+LOOP_TERMINATOR_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOOPUNSAFE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE             PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-LOOP-BODY UNTIL WS-DONE = "Y".
+
+       1000-LOOP-BODY.
+           STOP RUN.
+"""
+
 
 def _analyze(source, name="X.cbl"):
     """Returns (program, surface, scope_map, lines) -- find_terminator_plans
@@ -182,6 +215,37 @@ def test_find_terminator_plans_includes_intermediate_perform_in_chain():
         "1000-WRAPPER",
         "2000-INNER",
     }
+
+
+def test_looping_perform_is_excluded_from_the_safe_chain():
+    """A PERFORM ... UNTIL used as an intermediate chain link is NOT a
+    "plain, unconditional" PERFORM: EXIT PARAGRAPH from inside its target
+    only ends the current iteration, not the loop, so its target must not
+    be treated as safely reachable. Here the terminator sits directly in
+    the perform_target paragraph (always in safe_names), so it's still
+    accepted -- but the loop's own PERFORM must NOT appear in
+    chain_performs, since instrumenting it would insert a chain-check that
+    fires on every iteration rather than once after the whole loop."""
+    program, surface, scope_map, lines = _analyze(LOOP_SAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].chain_performs == []
+
+
+def test_terminator_reached_only_through_a_loop_body_refuses():
+    """The terminator (STOP RUN) lives inside 1000-LOOP-BODY, which is
+    reachable ONLY as the target of a PERFORM ... UNTIL -- not a plain,
+    unconditional PERFORM. Confirmed empirically (a synthetic spliced
+    program with this shape kept iterating past a real STOP RUN instead
+    of stopping) that treating this as safe is a genuine correctness bug;
+    this must refuse instead."""
+    program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "not via a chain of plain, unconditional" in reasons[0].message
 
 
 def test_go_to_reachable_terminator_refuses():

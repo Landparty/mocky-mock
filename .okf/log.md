@@ -1,5 +1,30 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-09 (Fix: looping PERFORM safety gap in terminator neutralization)
+* **Fixed a silent correctness bug** in the GOBACK/STOP RUN terminator
+  support shipped 2026-07-08 (below): `refusal._plain_perform_edges_from`
+  treated `PERFORM ... UNTIL`/`VARYING`/`TIMES` (a looping, out-of-line
+  PERFORM) identically to a plain single-shot `PERFORM`, so a terminator
+  reachable only through such a loop's target paragraph was wrongly
+  accepted as safe by `find_terminator_plans`. `EXIT PARAGRAPH` only ends
+  the current loop iteration, not the loop construct itself -- the loop
+  re-checks its own unrelated condition and may iterate again, so the
+  neutralized program silently ran extra unwanted iterations instead of
+  stopping where the real terminator would have. Confirmed empirically:
+  a synthetic program with `STOP RUN` inside a looped paragraph (natural
+  exit at iteration 5, terminator at iteration 2) ran all 5 iterations
+  under the un-fixed neutralization instead of stopping at 2. Fixed by
+  excluding `perform_type != "SIMPLE"` edges from the BFS/edge set in
+  `_plain_perform_edges_from`; such a terminator's paragraph now never
+  enters the safe-reachable set, so it refuses via the existing "reachable
+  but not via a plain chain" `UNSUPPORTED_TERMINATOR_LAYOUT` check -- no
+  new refusal branch needed. Discovered while qualifying the real-world
+  `ACCTPRG` example for a re-target at its `0000-MAIN-PROCESS` entry
+  point (which itself uses `PERFORM ... UNTIL` as an intermediate chain
+  link, with its `GOBACK` sitting outside the loop -- confirmed still
+  safe and unaffected by this fix). See
+  [splicer.md#terminator-neutralization-gobackstop-run-approach-b](splicer.md#terminator-neutralization-gobackstop-run-approach-b).
+
 ## 2026-07-08 (GOBACK/STOP RUN terminator support, Approach B)
 * **Closed Finding 3 of `docs/2026-07-06-real-world-readiness-audit.md`**
   for the plain-PERFORM-chain shape: a `.cut` test case's `PERFORM`

@@ -122,9 +122,12 @@ sub-paragraphs.
 Some layouts are not yet supported and refuse
 (`UNSUPPORTED_TERMINATOR_LAYOUT`) rather than risk corrupting the
 program: a terminator reachable via `GO TO` anywhere in the program, one
-inside a `SECTION`, or one reached through an intermediate `PERFORM`
-that's nested inside a conditional body. Restructure to a plain,
-unconditional `PERFORM` chain to avoid this.
+inside a `SECTION`, one reached through an intermediate `PERFORM` that's
+nested inside a conditional body, or one reached only through the target
+of a looping `PERFORM ... UNTIL`/`VARYING`/`TIMES` (the early-exit flag
+only ends the current loop iteration, not the loop itself, so a
+terminator inside a loop body cannot be safely neutralized). Restructure
+to a plain, unconditional, single-shot `PERFORM` chain to avoid this.
 
 ## Setup
 

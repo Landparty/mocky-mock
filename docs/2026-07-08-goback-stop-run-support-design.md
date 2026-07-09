@@ -236,3 +236,15 @@ worked-example note updated once `ACCTPRG` is re-targeted.
 - Terminators reachable via `GO TO` anywhere in the chain (confirmed
   unsafe with this mechanism — refused, not a "future work" item unless a
   different mechanism is found for this specific shape).
+- Terminators reachable only through the target paragraph of a looping
+  `PERFORM ... UNTIL`/`VARYING`/`TIMES` (confirmed unsafe with this
+  mechanism, 2026-07-09: `EXIT PARAGRAPH` only ends the current loop
+  iteration, not the loop construct, so the flag never stops the loop
+  early — a synthetic spike proved the neutralized program ran extra
+  unwanted iterations past where the real terminator would have stopped
+  it. `_plain_perform_edges_from` now excludes these edges
+  (`perform_type != "SIMPLE"`), so such a terminator refuses via the
+  existing "not via a plain chain" check. Not originally considered by
+  this design — surfaced while qualifying `ACCTPRG` for Task 10's
+  re-target, whose own loop is safe because its terminator sits outside
+  the loop entirely.).

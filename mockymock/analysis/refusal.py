@@ -919,9 +919,25 @@ def _go_to_targets(program) -> set[str]:
 
 def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
     """BFS from `start` following ONLY plain (non-THRU), unconditional,
-    top-level PERFORM statements -- i.e. PerformStatement nodes that are
-    direct members of a paragraph's own `.statements` list (not nested
-    inside IF/EVALUATE), with `thru_paragraph is None`.
+    single-shot, top-level PERFORM statements -- i.e. PerformStatement
+    nodes that are direct members of a paragraph's own `.statements` list
+    (not nested inside IF/EVALUATE), with `thru_paragraph is None` and
+    `perform_type == "SIMPLE"`.
+
+    A PERFORM ... UNTIL/VARYING/TIMES (perform_type != "SIMPLE") is
+    deliberately NOT followed and NOT added to the edge set, even though
+    it also carries a `target_paragraph` with `thru_paragraph is None`:
+    the early-exit mechanism sets a flag and does `EXIT PARAGRAPH`, which
+    only ends the CURRENT iteration of the looped paragraph -- control
+    returns to the loop construct, which re-checks its own unrelated
+    UNTIL/VARYING/TIMES condition and may iterate again. A terminator
+    reached from inside a loop's target would silently run extra
+    unwanted iterations instead of stopping, which was proven empirically
+    (a synthetic STOP RUN placed inside a looped paragraph kept iterating
+    past it). Excluding the edge means such a terminator's paragraph never
+    enters `seen`, so `find_terminator_plans` naturally refuses it via the
+    existing "reachable but not via a plain chain" check -- no new
+    refusal branch needed.
 
     SECTION members are excluded entirely: this only looks up names in
     `procedure.paragraphs` (top-level paragraphs), never
@@ -953,6 +969,7 @@ def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
                 isinstance(statement, PerformStatement)
                 and statement.thru_paragraph is None
                 and statement.target_paragraph
+                and statement.perform_type == "SIMPLE"
             ):
                 edges.append(statement)
                 target = statement.target_paragraph
