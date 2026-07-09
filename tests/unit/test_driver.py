@@ -227,3 +227,13 @@ def test_suite_name_quotes_are_escaped_in_testsuite_display():
     )
     joined = "\n".join(_build(suite).procedure_lines)
     assert 'DISPLAY "__MOCKYMOCK__ TESTSUITE: say ""hi"" suite"' in joined
+
+
+def test_working_storage_declares_early_exit_flag():
+    joined = "\n".join(_build().working_storage_lines)
+    assert 'UT-EARLY-EXIT          PIC X VALUE "N".' in joined
+
+
+def test_testcase_resets_early_exit_flag():
+    joined = "\n".join(_build().procedure_lines)
+    assert 'MOVE "N" TO UT-EARLY-EXIT' in joined
