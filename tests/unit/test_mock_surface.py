@@ -415,6 +415,8 @@ def test_detects_cancel_as_unmockable_site_with_program_names():
 
 
 from mockymock.analysis.mock_surface import _TERMINATOR_LABELS
+from mockymock.analysis.refusal import check_test_case
+from mockymock.dsl.model import MockTestCase
 
 TERMINATOR_SOURCE = """\
        IDENTIFICATION DIVISION.
@@ -467,3 +469,14 @@ def test_stop_literal_is_not_a_terminator_site():
 
 def test_terminator_labels_constant_matches_classified_labels():
     assert _TERMINATOR_LABELS == frozenset({"STOP RUN", "GOBACK"})
+
+
+def test_reachable_terminator_is_not_misreported_as_sort_merge():
+    """check_test_case's category=None catch-all must not fire on the new
+    STOP RUN/GOBACK labels -- they are handled separately by
+    check_terminator_layout (Task 3), not here."""
+    result = parse_cobol(TERMINATOR_SOURCE, filename="termsamp.cbl")
+    surface = analyze(result.ast)
+    case = MockTestCase(name="c", perform_target="MAIN-PARA")
+    reasons = check_test_case(surface, result.ast, case)
+    assert not any(r.code == "UNSUPPORTED_SORT_MERGE" for r in reasons)

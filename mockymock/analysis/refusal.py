@@ -132,6 +132,7 @@ from mockymock.analysis.mock_surface import (
     MockSurface,
     _all_paragraphs,
     _nested_statement_lists,
+    _TERMINATOR_LABELS,
     normalize_exec_text,
 )
 from mockymock.dsl.model import (
@@ -562,6 +563,14 @@ def check_test_case(
                         ),
                     )
                 )
+            elif site.label in _TERMINATOR_LABELS:
+                # Handled entirely separately by check_terminator_layout
+                # (Task 3, docs/2026-07-08-goback-stop-run-support-design.md)
+                # -- not refused here, and deliberately not folded into
+                # this function, so a safely-neutralizable terminator
+                # doesn't need every OTHER test case in the suite to also
+                # satisfy check_test_case's unrelated matching rules.
+                pass
             else:
                 reasons.append(
                     RefusalReason(
