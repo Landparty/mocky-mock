@@ -874,3 +874,72 @@ def _reachable_paragraphs(
                         reasons.append(problem)
                     stack.extend(members)
     return seen, reasons
+
+
+def _go_to_targets(program) -> set[str]:
+    """Every paragraph/section name that is EVER a GO TO target anywhere
+    in the whole program, regardless of reachability from any one test
+    case -- a categorical, whole-program exclusion list.
+
+    A paragraph that could ever be entered via GO TO cannot safely use
+    EXIT PARAGRAPH/EXIT SECTION for early-exit propagation: verified
+    empirically (docs/2026-07-08-goback-stop-run-support-design.md, spike
+    #4) that EXIT PARAGRAPH silently fails to return to the correct
+    caller when the paragraph it's issued from was entered via GO TO
+    rather than PERFORM -- execution just stops, no crash, no return,
+    the caller's checks never run."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return set()
+    targets: set[str] = set()
+    for paragraph in _all_paragraphs(procedure):
+        for statement in _find_statements_of_type(paragraph.statements, GoStatement):
+            targets.update(statement.target_paragraphs)
+            if statement.target_paragraph:
+                targets.add(statement.target_paragraph)
+    return targets
+
+
+def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
+    """BFS from `start` following ONLY plain (non-THRU), unconditional,
+    top-level PERFORM statements -- i.e. PerformStatement nodes that are
+    direct members of a paragraph's own `.statements` list (not nested
+    inside IF/EVALUATE), with `thru_paragraph is None`.
+
+    SECTION members are excluded entirely: this only looks up names in
+    `procedure.paragraphs` (top-level paragraphs), never
+    `procedure._sections[...].paragraphs` -- a paragraph that only exists
+    as a section member is an unreachable dead end here, naturally
+    refusing any chain that would need to pass through one (SECTION
+    support is deferred -- see the design doc).
+
+    Returns (reachable paragraph names via this restricted edge set, the
+    PerformStatement objects that ARE those edges) -- every one of those
+    statements is a candidate for the early-exit flag-check
+    instrumentation. Deliberately NOT the same as `_reachable_paragraphs`:
+    that function also follows GO TO and section/THRU fall-through edges,
+    exactly the unsafe shapes this restricted variant must exclude."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return set(), []
+    by_name = {p.paragraph_name: p for p in procedure.paragraphs}
+    seen = {start}
+    stack = [start]
+    edges: list = []
+    while stack:
+        name = stack.pop()
+        paragraph = by_name.get(name)
+        if paragraph is None:
+            continue
+        for statement in paragraph.statements:
+            if (
+                isinstance(statement, PerformStatement)
+                and statement.thru_paragraph is None
+                and statement.target_paragraph
+            ):
+                edges.append(statement)
+                target = statement.target_paragraph
+                if target not in seen:
+                    seen.add(target)
+                    stack.append(target)
+    return seen, edges

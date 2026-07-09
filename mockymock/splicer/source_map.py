@@ -43,6 +43,7 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
 )
 
 from mockymock.analysis.mock_surface import (
+    _TERMINATOR_LABELS,
     BoundarySite,
     MockSurface,
     _nested_statement_lists,
@@ -269,9 +270,13 @@ def annotate_nested_sites(
     (statement does not own its source line -- see
     `_top_level_site_problem`; `span` stays None for top-level sites, the
     splicer keeps deriving it from `statement_span`). Idempotent; must run
-    before the refusal gate and the splicer look at any site."""
+    before the refusal gate and the splicer look at any site. Also
+    validates STOP RUN/GOBACK terminator sites (category None, but not
+    skipped like other detected-but-unmockable categories) through the
+    identical rules -- see
+    docs/2026-07-08-goback-stop-run-support-design.md."""
     for site in surface.boundary_sites:
-        if site.category is None:
+        if site.category is None and site.label not in _TERMINATOR_LABELS:
             continue
         if site.nested:
             span, reason = _nested_site_span(site, scope_map, lines)
@@ -303,7 +308,23 @@ def _top_level_site_problem(
     ON EXCEPTION handler) share its span legitimately and are not checked
     here -- they are part of the statement being replaced.
     """
-    statement = cast(ASTNode, site.statement)
+    return statement_top_level_problem(cast(ASTNode, site.statement), scope_map, lines)
+
+
+def statement_top_level_problem(
+    statement, scope_map: ScopeMap, lines: list[str]
+) -> str | None:
+    """The reason a top-level STATEMENT's whole-line splice/insertion
+    would corrupt sibling code, or None when it owns its line -- the same
+    check `_top_level_site_problem` applies to BoundarySites, factored out
+    so it can also be applied directly to a PerformStatement (which is
+    never wrapped in a BoundarySite; used by
+    refusal.find_terminator_plans to validate each intermediate PERFORM
+    on a safe chain before it's cleared for the
+    stub_writer.insert_lines_after early-exit-check instrumentation). See
+    _top_level_site_problem's docstring for the exact rules; this is that
+    function's body, unchanged, operating on `statement` directly instead
+    of `site.statement`."""
     start = statement.location.line
     column = statement.location.column
     if lines[start - 1][: column - 1].strip():
