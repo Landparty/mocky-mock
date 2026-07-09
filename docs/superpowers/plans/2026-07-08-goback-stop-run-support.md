@@ -324,10 +324,180 @@ four are GREEN again (they must NOT appear in the failures list):
 `tests/unit/test_refusal.py::test_per_case_check_follows_perform_of_a_section`,
 `tests/unit/test_refusal_v2.py::test_spliceable_nested_sites_pass_the_gate`.
 
-- [ ] **Step 10: Commit**
+**Steps 11-14 were added after Task 1's task-review**, which found two more
+consequences of the same root cause (introducing two new `category=None`
+labels breaks *other* pre-existing code that assumed only `CANCEL`/
+`"dynamic CALL"` could be `category=None` besides SORT/MERGE) — do not skip
+them either.
+
+- [ ] **Step 11: Fix the lint failure**
+
+Run: `python -m ruff check .` (the exact command CI's required `lint` job
+runs). Expected at this point: `I001 Import block is un-sorted or
+un-formatted` on `mockymock/analysis/refusal.py` — Step 7's import addition
+(`_TERMINATOR_LABELS` inserted into the existing `mockymock.analysis.mock_surface`
+import block) isn't in isort's expected order. Fix with `python -m ruff
+check --fix mockymock/analysis/refusal.py`, then re-run `python -m ruff
+check .` to confirm clean.
+
+- [ ] **Step 12: Fix `generate`'s misleading boundary-report for terminators**
+
+`mockymock/cli/main.py`'s `_report_unsupported_boundaries` (called by
+`_cmd_generate`, untouched by Steps 1-10) treats every `category=None`
+`BoundarySite` uniformly, printing `"N boundary point(s) detected that are
+not mockable (test cases reaching them will be refused)"`. After Step 7's
+fix, `STOP RUN`/`GOBACK` sites are `category=None` but are *not*
+unconditionally refused anymore — whether a test reaching one is refused
+depends on `check_terminator_layout` (Task 3), which `generate` never
+calls (it has no specific test case's `perform_target` to evaluate
+reachability against — it's scaffolding a `.cut`, not running one). Since
+nearly every real COBOL program ends in `STOP RUN`, this would make
+`generate` claim "will be refused" for something that frequently won't be,
+once Tasks 2-8 land.
+
+Locate `mockymock/cli/main.py`'s `_report_unsupported_boundaries`:
+
+```python
+def _report_unsupported_boundaries(surface) -> None:
+    """Name every detected boundary point that stays unmockable (the
+    SORT/MERGE family, identifier-less dynamic CALLs, unspliceable nested
+    sites), so the scaffold is never mistaken for complete coverage of the
+    program's outputs. Test cases whose PERFORM target reaches one of
+    these are refused by `run`."""
+    findings: list[str] = []
+    for site in surface.boundary_sites:
+        if site.category is None:
+            findings.append(
+                f"{site.label} in paragraph '{site.paragraph_name}' "
+                f"(line {site.line})"
+            )
+        elif site.nested and site.span is None:
+            findings.append(
+                f"nested {site.label} in paragraph '{site.paragraph_name}' "
+                f"(line {site.line}) -- {site.unspliceable_reason}"
+            )
+    if not findings:
+        return
+    print(
+        f"mockymock generate: {len(findings)} boundary point(s) detected that "
+        f"are not mockable (test cases reaching them will be refused):"
+    )
+    for finding in findings:
+        print(f"  - {finding}")
+```
+
+Replace it with (splits terminator sites into their own, honestly-worded
+report rather than folding them into the unconditional "will be refused"
+list):
+
+```python
+def _report_unsupported_boundaries(surface) -> None:
+    """Name every detected boundary point that stays unmockable (the
+    SORT/MERGE family, identifier-less dynamic CALLs, unspliceable nested
+    sites), so the scaffold is never mistaken for complete coverage of the
+    program's outputs. Test cases whose PERFORM target reaches one of
+    these are refused by `run`.
+
+    STOP RUN/GOBACK sites are reported separately and more cautiously:
+    unlike the other category=None labels, `run` does not always refuse a
+    test case reaching one -- check_terminator_layout (see
+    docs/2026-07-08-goback-stop-run-support-design.md) may find it safe.
+    `generate` has no specific test case's PERFORM target to evaluate
+    reachability against, so it cannot know which outcome a future `.cut`
+    will get -- claiming "will be refused" here would be wrong as often as
+    it's right.
+    """
+    findings: list[str] = []
+    terminator_findings: list[str] = []
+    for site in surface.boundary_sites:
+        if site.category is None:
+            if site.label in _TERMINATOR_LABELS:
+                terminator_findings.append(
+                    f"{site.label} in paragraph '{site.paragraph_name}' "
+                    f"(line {site.line})"
+                )
+            else:
+                findings.append(
+                    f"{site.label} in paragraph '{site.paragraph_name}' "
+                    f"(line {site.line})"
+                )
+        elif site.nested and site.span is None:
+            findings.append(
+                f"nested {site.label} in paragraph '{site.paragraph_name}' "
+                f"(line {site.line}) -- {site.unspliceable_reason}"
+            )
+    if findings:
+        print(
+            f"mockymock generate: {len(findings)} boundary point(s) detected "
+            f"that are not mockable (test cases reaching them will be "
+            f"refused):"
+        )
+        for finding in findings:
+            print(f"  - {finding}")
+    if terminator_findings:
+        print(
+            f"mockymock generate: {len(terminator_findings)} STOP RUN/GOBACK "
+            f"site(s) detected -- whether a test case reaching one is "
+            f"refused depends on how it's reached; see "
+            f"docs/2026-07-08-goback-stop-run-support-design.md:"
+        )
+        for finding in terminator_findings:
+            print(f"  - {finding}")
+```
+
+Add this import to `mockymock/cli/main.py`'s existing `mockymock.analysis.mock_surface`
+import (check the exact current import statement first — it's a
+function-local import inside `_cmd_generate`/`_cmd_run`, not a top-level
+one, per this file's existing style; add `_TERMINATOR_LABELS` to whichever
+one already imports from `mockymock.analysis.mock_surface`, or add a new
+function-local import line next to it if none currently does):
+
+```python
+    from mockymock.analysis.mock_surface import _TERMINATOR_LABELS
+```
+
+- [ ] **Step 13: Write a regression test and run it**
+
+Add to `tests/unit/test_cli.py` (check the file's existing imports/helpers
+first and reuse them — this codebase's CLI tests typically invoke `main()`
+directly and capture stdout via `capsys`, matching the pattern already
+used elsewhere in that file):
+
+```python
+def test_generate_reports_terminators_separately_from_unmockable(tmp_path, capsys):
+    cbl = tmp_path / "TERMDEMO.cbl"
+    cbl.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. TERMDEMO.\n"
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       0000-MAIN-PROCESS.\n"
+        "           STOP RUN.\n"
+    )
+    exit_code = main(["generate", str(cbl)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "STOP RUN/GOBACK site(s) detected" in out
+    assert "will be refused" not in out
+```
+
+Run: `python -m pytest tests/unit/test_cli.py -v -k terminator` — expect
+FAIL before Step 12's implementation (old message says "will be refused"
+unconditionally), PASS after.
+
+- [ ] **Step 14: Run tests and lint to verify everything passes**
+
+Run: `python -m pytest tests/unit -q` — expect the same result as Step 9
+(only the one known pre-existing failure) plus the new test from Step 13
+passing.
+Run: `python -m ruff check .` — expect clean (confirms Step 11's fix
+holds after Step 12's edit).
+
+- [ ] **Step 15: Commit**
 
 ```bash
-git add mockymock/analysis/mock_surface.py mockymock/analysis/refusal.py tests/unit/test_mock_surface.py
+git add mockymock/analysis/mock_surface.py mockymock/analysis/refusal.py \
+    mockymock/cli/main.py tests/unit/test_mock_surface.py tests/unit/test_cli.py
 git commit -m "feat(analysis): classify STOP RUN/GOBACK as detected terminator sites
 
 Part of GOBACK/STOP RUN support, Approach B
@@ -341,7 +511,15 @@ excluded; anything else was reported as UNSUPPORTED_SORT_MERGE) --
 without this, every test case reaching a terminator would be misreported
 as SORT/MERGE-family instead of being left for check_terminator_layout
 (Task 3) to evaluate. Confirmed via 4 previously-passing tests that
-regressed without this fix and are green again with it."
+regressed without this fix and are green again with it.
+
+Also fixes generate's boundary-point report, which had the identical
+problem one layer up: it unconditionally called every category=None site
+"not mockable ... will be refused," which is no longer true for
+terminators. Terminator sites now get their own, honestly-worded report.
+
+Also fixes a ruff import-order lint failure introduced by the
+check_test_case fix's import addition."
 ```
 
 ---
