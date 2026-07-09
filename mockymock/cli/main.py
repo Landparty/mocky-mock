@@ -146,27 +146,55 @@ def _report_unsupported_boundaries(surface) -> None:
     SORT/MERGE family, identifier-less dynamic CALLs, unspliceable nested
     sites), so the scaffold is never mistaken for complete coverage of the
     program's outputs. Test cases whose PERFORM target reaches one of
-    these are refused by `run`."""
+    these are refused by `run`.
+
+    STOP RUN/GOBACK sites are reported separately and more cautiously:
+    unlike the other category=None labels, `run` does not always refuse a
+    test case reaching one -- check_terminator_layout (see
+    docs/2026-07-08-goback-stop-run-support-design.md) may find it safe.
+    `generate` has no specific test case's PERFORM target to evaluate
+    reachability against, so it cannot know which outcome a future `.cut`
+    will get -- claiming "will be refused" here would be wrong as often as
+    it's right.
+    """
+    from mockymock.analysis.mock_surface import _TERMINATOR_LABELS
+
     findings: list[str] = []
+    terminator_findings: list[str] = []
     for site in surface.boundary_sites:
         if site.category is None:
-            findings.append(
-                f"{site.label} in paragraph '{site.paragraph_name}' "
-                f"(line {site.line})"
-            )
+            if site.label in _TERMINATOR_LABELS:
+                terminator_findings.append(
+                    f"{site.label} in paragraph '{site.paragraph_name}' "
+                    f"(line {site.line})"
+                )
+            else:
+                findings.append(
+                    f"{site.label} in paragraph '{site.paragraph_name}' "
+                    f"(line {site.line})"
+                )
         elif site.nested and site.span is None:
             findings.append(
                 f"nested {site.label} in paragraph '{site.paragraph_name}' "
                 f"(line {site.line}) -- {site.unspliceable_reason}"
             )
-    if not findings:
-        return
-    print(
-        f"mockymock generate: {len(findings)} boundary point(s) detected that "
-        f"are not mockable (test cases reaching them will be refused):"
-    )
-    for finding in findings:
-        print(f"  - {finding}")
+    if findings:
+        print(
+            f"mockymock generate: {len(findings)} boundary point(s) detected "
+            f"that are not mockable (test cases reaching them will be "
+            f"refused):"
+        )
+        for finding in findings:
+            print(f"  - {finding}")
+    if terminator_findings:
+        print(
+            f"mockymock generate: {len(terminator_findings)} STOP RUN/GOBACK "
+            f"site(s) detected -- whether a test case reaching one is "
+            f"refused depends on how it's reached; see "
+            f"docs/2026-07-08-goback-stop-run-support-design.md:"
+        )
+        for finding in terminator_findings:
+            print(f"  - {finding}")
 
 
 def _cmd_run(args: argparse.Namespace) -> int:

@@ -128,11 +128,11 @@ from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.linkage import linkage_plan
 from mockymock.analysis.mock_surface import (
+    _TERMINATOR_LABELS,
     BoundarySite,
     MockSurface,
     _all_paragraphs,
     _nested_statement_lists,
-    _TERMINATOR_LABELS,
     normalize_exec_text,
 )
 from mockymock.dsl.model import (
