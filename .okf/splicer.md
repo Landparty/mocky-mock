@@ -395,7 +395,18 @@ single-shot, top-level `PERFORM` statements (`refusal._plain_perform_edges_from`
 which excludes `PERFORM ... UNTIL`/`VARYING`/`TIMES` edges --
 `perform_type != "SIMPLE"` -- since `EXIT PARAGRAPH` only ends the
 current loop iteration, not the loop itself, so a terminator reachable
-only through a loop's target paragraph is not safely neutralizable),
+only through a loop's target paragraph is not safely neutralizable.
+Caveat found by the 2026-07-09 final branch review: the *out-of-line*
+form of `PERFORM para VARYING ...` isn't parsed by cobolparser at all
+-- the clause is silently dropped, leaving `perform_type` mistagged as
+`"SIMPLE"`. What actually keeps this shape from reaching the terminator
+logic today is the unrelated `PARSE_WARNING` gate in `check_whole_program`,
+triggered by cobolparser's own dropped-clause warning -- pinned by
+regression tests in `test_refusal.py`/`test_terminator_support.py` so a
+future cobolparser fix that silences the warning without also fixing
+`perform_type` tagging fails loudly instead of reopening this silently.
+See `docs/2026-07-08-goback-stop-run-support-design.md`'s "Out of scope"
+section for the full writeup),
 never a `GO TO` target anywhere in the program
 (`refusal._go_to_targets`), never a `SECTION` member. Safe terminators
 are replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH`

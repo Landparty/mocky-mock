@@ -248,3 +248,30 @@ worked-example note updated once `ACCTPRG` is re-targeted.
   this design — surfaced while qualifying `ACCTPRG` for Task 10's
   re-target, whose own loop is safe because its terminator sits outside
   the loop entirely.).
+  **Correction (final review, 2026-07-09):** this `perform_type` guard
+  only actually discriminates the out-of-line `UNTIL`/`TIMES` forms and
+  the inline `VARYING`/`UNTIL`/`TIMES` forms (all correctly tagged by
+  `cobolparser`). The **out-of-line** form —
+  `PERFORM paragraph-name VARYING var FROM x BY y UNTIL cond` — is NOT
+  parsed by `cobolparser`'s out-of-line PERFORM path at all: the trailing
+  `VARYING ...` clause is silently dropped, leaving `perform_type`
+  mistagged as `"SIMPLE"` (verified directly: `parse_cobol` on this shape
+  returns a `PerformStatement` with `perform_type='SIMPLE'`,
+  `target_paragraph` set, `thru_paragraph=None` -- indistinguishable from
+  a genuine plain PERFORM to `_plain_perform_edges_from`). What actually
+  prevents this from reaching the terminator logic today is a completely
+  unrelated mechanism: cobolparser also emits a
+  `"Unparsed tokens starting at 'VARYING' ... content dropped from the
+  AST"` warning for this shape, and `check_whole_program` refuses any
+  program with a parse warning (`PARSE_WARNING`) before
+  `find_terminator_plans` ever runs (confirmed via `mockymock run`
+  end-to-end: exit 1, `refused (PARSE_WARNING): ... Unparsed tokens
+  starting at 'VARYING'`). This is a real but *accidental* safety net --
+  if cobolparser is ever fixed to parse out-of-line `VARYING` without
+  also correctly tagging `perform_type='VARYING'`, this hole reopens
+  silently. See the pinning regression test in
+  `tests/unit/test_terminator_reachability.py` and
+  `tests/integration/test_terminator_support.py` that asserts the
+  refusal happens via `PARSE_WARNING` specifically, so a future
+  cobolparser change that removes the warning without fixing the tagging
+  turns this into a loud test failure instead of a silent regression.

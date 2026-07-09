@@ -1488,7 +1488,16 @@ def find_terminator_plans(
     the whole chain rather than just the terminator's own paragraph: any
     terminator sharing this case's chain_performs would be instrumented
     with the same hazardous paragraph regardless of whether it sits on
-    that specific terminator's own ancestor path). Once ANY test case
+    that specific terminator's own ancestor path -- noted by the
+    2026-07-09 final branch review: this over-inclusiveness is fail-SAFE
+    (it can only ever cause an extra, unnecessary refusal of a terminator
+    that would actually have been fine, never miss an unsafe one), but it
+    is a real usability cliff on large paragraphs -- a GO-TO target or
+    SECTION member anywhere in the case's reachable set refuses every
+    terminator that case finds, even ones with no path through the
+    hazardous paragraph at all. If this bites in practice, narrowing to
+    the terminator's actual ancestor path is the fix, not loosening the
+    check). Once ANY test case
     finds a given terminator unsafe, it is
     refused permanently -- fail-closed, regardless of what other test
     cases' paths say. `scope_map`/`lines` must be the same

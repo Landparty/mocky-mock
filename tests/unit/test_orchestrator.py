@@ -494,3 +494,112 @@ def test_chain_check_survives_a_mocked_call_spliced_earlier_in_the_file():
     assert "END-EVALUATE" in joined
     evaluate_idx = next(i for i, line in enumerate(spliced) if "END-EVALUATE" in line)
     assert evaluate_idx < perform_idx
+
+
+# The 2026-07-09 final branch review manually spiked these two shapes and
+# found the splice correct but unguarded by any test -- given splice
+# line-arithmetic is exactly what produced the ordering bug fixed above,
+# these are cheap, high-value regression fixtures.
+
+TWO_TERMINATORS_ONE_PARAGRAPH_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TWOTERM.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           DISPLAY "BEFORE"
+           STOP RUN
+           STOP RUN.
+"""
+
+
+def test_two_terminators_in_one_paragraph_are_each_neutralized_and_chain_check_deduped():
+    """Both STOP RUN statements in 1000-WRAPPER get their own
+    TerminatorPlan, and both share the SAME chain_performs edge (the one
+    PERFORM 1000-WRAPPER statement in 0000-MAIN-PROCESS) -- the chain-check
+    must be inserted only ONCE after that PERFORM, not once per plan."""
+    result = parse_cobol(TWO_TERMINATORS_ONE_PARAGRAPH_SOURCE, filename="twoterm.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(
+        TWO_TERMINATORS_ONE_PARAGRAPH_SOURCE.splitlines()
+    ).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    boundaries = collect_boundaries(result.ast)
+    suite = MockTestSuite(
+        name="T",
+        test_cases=[MockTestCase(name="main", perform_target="0000-MAIN-PROCESS")],
+    )
+    plans, reasons = find_terminator_plans(surface, result.ast, suite, scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 2
+    spliced = splice_program(
+        lines, boundaries, surface, suite, TallyRegistry(suite), plans
+    )
+    joined = "\n".join(spliced)
+    # deduped to exactly one chain-check, despite two plans sharing the edge
+    assert joined.count('IF UT-EARLY-EXIT = "Y"') == 1
+    # both terminators replaced independently -- 1 chain-check EXIT PARAGRAPH
+    # + 2 terminator-replacement EXIT PARAGRAPHs
+    assert joined.count("EXIT PARAGRAPH") == 3
+    assert joined.count("*>     STOP RUN") == 2
+    assert 'DISPLAY "BEFORE"' in joined
+
+
+ADJACENT_PERFORM_AND_TERMINATOR_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ADJACENT.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-WRAPPER
+           STOP RUN.
+
+       1000-WRAPPER.
+           DISPLAY "INNER".
+"""
+
+
+def test_perform_immediately_followed_by_terminator_interleaves_correctly():
+    """PERFORM 1000-WRAPPER and STOP RUN share one sentence (one period,
+    on STOP RUN's line) -- the chain-check insertion (after the PERFORM)
+    and the terminator replacement (on the very next statement) must not
+    collide, and the original trailing period must end up on the LAST
+    line of the terminator's replacement, not stranded on the PERFORM."""
+    result = parse_cobol(
+        ADJACENT_PERFORM_AND_TERMINATOR_SOURCE, filename="adjacent.cbl"
+    )
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(
+        ADJACENT_PERFORM_AND_TERMINATOR_SOURCE.splitlines()
+    ).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    boundaries = collect_boundaries(result.ast)
+    suite = MockTestSuite(
+        name="T",
+        test_cases=[MockTestCase(name="main", perform_target="0000-MAIN-PROCESS")],
+    )
+    plans, reasons = find_terminator_plans(surface, result.ast, suite, scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    spliced = splice_program(
+        lines, boundaries, surface, suite, TallyRegistry(suite), plans
+    )
+    joined = "\n".join(spliced)
+    assert joined.count('IF UT-EARLY-EXIT = "Y"') == 1
+    assert "*>     STOP RUN." in joined
+    perform_idx = next(
+        i for i, line in enumerate(spliced) if "PERFORM 1000-WRAPPER" in line
+    )
+    # the PERFORM's own line must NOT carry the original trailing period --
+    # it belonged to STOP RUN, on the following line
+    assert not spliced[perform_idx].rstrip().endswith(".")
+    # the terminator replacement's last line must carry that period instead
+    last_exit_idx = max(i for i, line in enumerate(spliced) if "EXIT PARAGRAPH" in line)
+    assert spliced[last_exit_idx].rstrip().endswith(".")

@@ -21,7 +21,15 @@ Flow-edge model (fail closed):
   be paragraphs or sections. (A GO TO that escapes its PERFORM range and
   relies on falling through *past* its target paragraph is not modeled --
   such control flow runs off the end of the program at test runtime and is
-  covered by the documented STOP RUN limitation.)
+  covered by the documented STOP RUN limitation. Noted by the 2026-07-09
+  final branch review: pre-neutralization this is a clean, loud crash --
+  the real terminator exits the binary. Once ANY case has neutralized that
+  terminator (via its own safe plain chain), a DIFFERENT case reaching the
+  same, now-neutralized terminator through this unmodeled GO-TO-escape
+  path would hit `EXIT PARAGRAPH` from a paragraph entered via `GO TO`,
+  which per the design doc's spike #4 "just stops, no crash, no return" --
+  a subtler failure than the pre-branch behavior. Exotic, not hardened
+  against; documented here rather than silently assumed harmless.)
 - Any PERFORM/GO TO target that resolves to neither a paragraph nor a
   section refuses with UNRESOLVED_FLOW_TARGET instead of being skipped: a
   target the model cannot resolve means the reachable set is not trusted.
@@ -1017,7 +1025,16 @@ def find_terminator_plans(
     the whole chain rather than just the terminator's own paragraph: any
     terminator sharing this case's chain_performs would be instrumented
     with the same hazardous paragraph regardless of whether it sits on
-    that specific terminator's own ancestor path). Once ANY test case
+    that specific terminator's own ancestor path -- noted by the
+    2026-07-09 final branch review: this over-inclusiveness is fail-SAFE
+    (it can only ever cause an extra, unnecessary refusal of a terminator
+    that would actually have been fine, never miss an unsafe one), but it
+    is a real usability cliff on large paragraphs -- a GO-TO target or
+    SECTION member anywhere in the case's reachable set refuses every
+    terminator that case finds, even ones with no path through the
+    hazardous paragraph at all. If this bites in practice, narrowing to
+    the terminator's actual ancestor path is the fix, not loosening the
+    check). Once ANY test case
     finds a given terminator unsafe, it is
     refused permanently -- fail-closed, regardless of what other test
     cases' paths say. `scope_map`/`lines` must be the same
