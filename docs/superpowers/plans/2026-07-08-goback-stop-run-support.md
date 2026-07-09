@@ -218,21 +218,38 @@ STOP <literal> (a console message, not a terminator) is excluded."
 
 ---
 
-## Task 2: Whole-program GO TO targets + plain-PERFORM-only reachability — `refusal.py`
+## Task 2: Whole-program GO TO targets + plain-PERFORM-only reachability + terminator span validation
 
 **Files:**
 - Modify: `mockymock/analysis/refusal.py`
+- Modify: `mockymock/splicer/source_map.py`
 - Test: Create `tests/unit/test_terminator_reachability.py`
+- Test: `tests/unit/test_source_map.py`
 
 **Interfaces:**
 - Consumes: `cobolparser.models.statements.control.PerformStatement`
   (`.target_paragraph`, `.thru_paragraph`, `.location.line`),
   `cobolparser.models.statements.control.GoStatement` (`.target_paragraphs`,
   `.target_paragraph`) — both already imported in `refusal.py`.
+  `mockymock.analysis.mock_surface._TERMINATOR_LABELS` (Task 1).
 - Produces: `mockymock.analysis.refusal._go_to_targets(program) -> set[str]`
   and `mockymock.analysis.refusal._plain_perform_edges_from(program, start:
-  str) -> tuple[set[str], list]` (the list is `list[PerformStatement]`).
-  Task 3 imports and calls both.
+  str) -> tuple[set[str], list]` (the list is `list[PerformStatement]`) —
+  Task 3 imports and calls both. Also: `annotate_nested_sites` (existing,
+  in `source_map.py`) now ALSO validates terminator-labeled `BoundarySite`s
+  (previously skipped entirely, like every other `category=None` site) —
+  Task 3's `find_terminator_plans` reads the resulting `site.span`/
+  `site.unspliceable_reason` fields directly, the same way
+  `check_test_case`/`check_nested_exec` already do for mocked boundaries.
+
+**Why this task also touches `annotate_nested_sites`:** Approach B's
+terminator replacement is a `comment_and_replace` span splice, exactly
+like every other boundary replacement — which means it needs the exact
+same "does this statement own its line(s)" validation every other
+boundary site already gets, or a terminator sharing its line with sibling
+code (or nested somewhere `annotate_nested_sites` can't safely compute a
+span for) would corrupt that sibling code when spliced. This is the same
+fix Approach A's design needed for the same reason — restoring it here.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -401,22 +418,298 @@ GoStatement, PerformStatement`.)
 Run: `python -m pytest tests/unit/test_terminator_reachability.py -v`
 Expected: PASS (all 4 tests).
 
-- [ ] **Step 5: Run the full unit suite to confirm no regression**
+- [ ] **Step 5: Write the failing test for the `annotate_nested_sites` broadening**
+
+Add to `tests/unit/test_source_map.py` (append; reuse the file's existing
+`parse_cobol`, `normalize_fixed_format`, `analyze`, `annotate_nested_sites`,
+`collect_scope_map` imports):
+
+```python
+TERMINATOR_OWN_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMOWNLINE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK
+           STOP RUN.
+
+       1000-DO-WORK.
+           CALL "CALCPGM" USING WS-RESULT.
+"""
+
+TERMINATOR_SHARED_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMSHARELINE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           MOVE 1 TO WS-RESULT STOP RUN.
+"""
+
+CANCEL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CANCELSAMP.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUBPGM".
+           CANCEL "SUBPGM".
+"""
+
+
+def _analyze_and_annotate(source, name="X.cbl"):
+    result = parse_cobol(source, filename=name)
+    assert result.success, result.errors
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    surface = analyze(result.ast)
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    return surface
+
+
+def test_terminator_on_its_own_line_gets_no_unspliceable_reason():
+    surface = _analyze_and_annotate(TERMINATOR_OWN_LINE_SOURCE)
+    site = next(s for s in surface.boundary_sites if s.label == "STOP RUN")
+    assert site.unspliceable_reason is None
+
+
+def test_terminator_sharing_its_line_is_flagged_unspliceable():
+    surface = _analyze_and_annotate(TERMINATOR_SHARED_LINE_SOURCE)
+    site = next(s for s in surface.boundary_sites if s.label == "STOP RUN")
+    assert site.unspliceable_reason == "does not start its own line"
+
+
+def test_cancel_site_is_still_unannotated_after_terminator_change():
+    """Regression guard: broadening the category-None skip must not start
+    annotating CANCEL (or any other category=None label) -- only STOP
+    RUN/GOBACK."""
+    surface = _analyze_and_annotate(CANCEL_SOURCE)
+    site = next(s for s in surface.boundary_sites if s.label == "CANCEL")
+    assert site.span is None
+    assert site.unspliceable_reason is None
+```
+
+- [ ] **Step 6: Run the test to verify it fails**
+
+Run: `python -m pytest tests/unit/test_source_map.py -v -k terminator`
+Expected: FAIL — `annotate_nested_sites` currently skips every
+`category is None` site unconditionally, so `site.unspliceable_reason`
+stays `None` even for the shared-line fixture.
+
+- [ ] **Step 7: Implement the `annotate_nested_sites` broadening**
+
+In `mockymock/splicer/source_map.py`, extend the existing `mock_surface`
+import:
+
+```python
+from mockymock.analysis.mock_surface import (
+    BoundarySite,
+    MockSurface,
+    _nested_statement_lists,
+    _TERMINATOR_LABELS,
+)
+```
+
+Change `annotate_nested_sites`'s loop condition (currently `if site.category
+is None: continue`):
+
+```python
+def annotate_nested_sites(
+    surface: MockSurface, scope_map: ScopeMap, lines: list[str]
+) -> None:
+    """... (existing docstring, add one sentence:) Also validates STOP
+    RUN/GOBACK terminator sites (category None, but not skipped like other
+    detected-but-unmockable categories) through the identical rules -- see
+    docs/2026-07-08-goback-stop-run-support-design.md."""
+    for site in surface.boundary_sites:
+        if site.category is None and site.label not in _TERMINATOR_LABELS:
+            continue
+        if site.nested:
+            span, reason = _nested_site_span(site, scope_map, lines)
+            site.span = span
+            site.unspliceable_reason = reason
+        else:
+            site.unspliceable_reason = _top_level_site_problem(site, scope_map, lines)
+```
+
+- [ ] **Step 8: Write the failing test for `statement_top_level_problem`**
+
+Add to `tests/unit/test_source_map.py` (append):
+
+```python
+PERFORM_OWN_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PERFORMOWNLINE.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM SUB-PARA.
+           DISPLAY "AFTER".
+
+       SUB-PARA.
+           DISPLAY "SUB".
+"""
+
+PERFORM_SHARED_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PERFORMSHARE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A                PIC 9.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 1 TO WS-A PERFORM SUB-PARA.
+
+       SUB-PARA.
+           DISPLAY "SUB".
+"""
+
+
+def _find_perform(program, paragraph_name):
+    procedure = program.get_division("PROCEDURE")
+    paragraph = next(
+        p for p in procedure.paragraphs if p.paragraph_name == paragraph_name
+    )
+    return paragraph.statements[0]
+
+
+def test_statement_top_level_problem_none_when_perform_owns_its_line():
+    result = parse_cobol(PERFORM_OWN_LINE_SOURCE, filename="x.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(PERFORM_OWN_LINE_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    perform = _find_perform(result.ast, "MAIN-PARA")
+    assert statement_top_level_problem(perform, scope_map, lines) is None
+
+
+def test_statement_top_level_problem_set_when_perform_shares_its_line():
+    result = parse_cobol(PERFORM_SHARED_LINE_SOURCE, filename="x.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(PERFORM_SHARED_LINE_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    perform = _find_perform(result.ast, "MAIN-PARA")
+    assert (
+        statement_top_level_problem(perform, scope_map, lines)
+        == "does not start its own line"
+    )
+```
+
+Add this import at the top of `tests/unit/test_source_map.py` if not already
+present (check first — the file may already import some of these from the
+earlier steps in this task): `from mockymock.splicer.source_map import
+collect_scope_map, statement_top_level_problem`.
+
+- [ ] **Step 9: Run the test to verify it fails**
+
+Run: `python -m pytest tests/unit/test_source_map.py -v -k top_level_problem`
+Expected: FAIL — `ImportError: cannot import name 'statement_top_level_problem'`.
+
+- [ ] **Step 10: Implement `statement_top_level_problem`**
+
+In `mockymock/splicer/source_map.py`, locate `_top_level_site_problem`
+(the existing function, whose body extracts `statement = cast(ASTNode,
+site.statement)` then operates on `statement`/`start`/`column`):
+
+```python
+def _top_level_site_problem(
+    site: BoundarySite, scope_map: ScopeMap, lines: list[str]
+) -> str | None:
+    """..."""  # existing docstring, unchanged
+    statement = cast(ASTNode, site.statement)
+    start = statement.location.line
+    column = statement.location.column
+    if lines[start - 1][: column - 1].strip():
+        return "does not start its own line"
+    if any(
+        b.top_level and b.line == start and b.column != column
+        for b in scope_map.boundaries
+    ):
+        return "shares its line with another statement or paragraph header"
+    return None
+```
+
+Replace it with a one-line wrapper plus the factored-out, statement-level
+function:
+
+```python
+def _top_level_site_problem(
+    site: BoundarySite, scope_map: ScopeMap, lines: list[str]
+) -> str | None:
+    """..."""  # existing docstring, unchanged
+    return statement_top_level_problem(cast(ASTNode, site.statement), scope_map, lines)
+
+
+def statement_top_level_problem(
+    statement, scope_map: ScopeMap, lines: list[str]
+) -> str | None:
+    """The reason a top-level STATEMENT's whole-line splice/insertion
+    would corrupt sibling code, or None when it owns its line -- the same
+    check `_top_level_site_problem` applies to BoundarySites, factored out
+    so it can also be applied directly to a PerformStatement (which is
+    never wrapped in a BoundarySite; used by
+    refusal.find_terminator_plans to validate each intermediate PERFORM
+    on a safe chain before it's cleared for the
+    stub_writer.insert_lines_after early-exit-check instrumentation). See
+    _top_level_site_problem's docstring for the exact rules; this is that
+    function's body, unchanged, operating on `statement` directly instead
+    of `site.statement`."""
+    start = statement.location.line
+    column = statement.location.column
+    if lines[start - 1][: column - 1].strip():
+        return "does not start its own line"
+    if any(
+        b.top_level and b.line == start and b.column != column
+        for b in scope_map.boundaries
+    ):
+        return "shares its line with another statement or paragraph header"
+    return None
+```
+
+- [ ] **Step 11: Run tests to verify they pass**
+
+Run: `python -m pytest tests/unit/test_source_map.py tests/unit/test_terminator_reachability.py -v`
+Expected: PASS (every test in both files).
+
+- [ ] **Step 12: Run the full unit suite to confirm no regression**
 
 Run: `python -m pytest tests/unit -q`
-Expected: PASS.
+Expected: PASS, same count as baseline plus the new tests from this task
+(CANCEL/SORT-MERGE/unresolved-dynamic-CALL sites are unaffected — their
+`label` is never in `_TERMINATOR_LABELS`; the `_top_level_site_problem`
+refactor must be behavior-preserving — every existing test that exercises
+it, e.g. `test_orchestrator.py`'s shared-line tests, must still pass
+unchanged).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
-git add mockymock/analysis/refusal.py tests/unit/test_terminator_reachability.py
-git commit -m "feat(analysis): add GO TO target and plain-PERFORM-chain reachability
+git add mockymock/analysis/refusal.py mockymock/splicer/source_map.py \
+    tests/unit/test_terminator_reachability.py tests/unit/test_source_map.py
+git commit -m "feat: add terminator reachability primitives + span/line validation
 
 Part of GOBACK/STOP RUN support, Approach B
-(docs/2026-07-08-goback-stop-run-support-design.md). Two primitives the
-safe-chain terminator check builds on: _go_to_targets (whole-program,
-categorical) and _plain_perform_edges_from (restricted BFS -- only
-plain, unconditional, top-level, non-THRU PERFORM edges)."
+(docs/2026-07-08-goback-stop-run-support-design.md). Two new refusal.py
+primitives the safe-chain terminator check builds on: _go_to_targets
+(whole-program, categorical) and _plain_perform_edges_from (restricted
+BFS -- only plain, unconditional, top-level, non-THRU PERFORM edges).
+annotate_nested_sites now also validates terminator-labeled sites through
+the same top-level own-line guard / nested-span machinery every other
+boundary site already goes through. statement_top_level_problem factors
+that same guard into a form reusable for a bare PerformStatement, needed
+to validate intermediate PERFORM statements before instrumenting them.
+Both are pure refactors of existing logic plus additive changes -- no
+existing behavior changes for any other category=None site or any
+existing BoundarySite check."
 ```
 
 ---
@@ -428,16 +721,21 @@ plain, unconditional, top-level, non-THRU PERFORM edges)."
 - Test: Create `tests/unit/test_terminators.py`
 
 **Interfaces:**
-- Consumes: `_go_to_targets`, `_plain_perform_edges_from` (Task 2),
-  `_reachable_paragraphs` (existing), `MockSurface.sites_in` (existing),
-  `_TERMINATOR_LABELS` (Task 1).
+- Consumes: `_go_to_targets`, `_plain_perform_edges_from`, the broadened
+  `annotate_nested_sites` (Task 2 — MUST have already run on `surface`
+  before calling `find_terminator_plans`/`check_terminator_layout`, same
+  precondition as `check_test_case`/`check_nested_exec`, so `site.span`/
+  `site.unspliceable_reason` are populated), `_reachable_paragraphs`
+  (existing), `MockSurface.sites_in` (existing), `_TERMINATOR_LABELS`
+  (Task 1).
 - Produces: `mockymock.analysis.refusal.TerminatorPlan` (dataclass:
   `site: BoundarySite`, `chain_performs: list` — deduped
   `list[PerformStatement]` needing the flag-check instrumentation),
   `find_terminator_plans(surface, program, suite) -> tuple[list[TerminatorPlan],
   list[RefusalReason]]`, `check_terminator_layout(surface, program, suite)
   -> list[RefusalReason]` (thin wrapper: `find_terminator_plans(...)[1]`).
-  Tasks 5 and 6 import all three names from `mockymock.analysis.refusal`.
+  Task 6 imports `TerminatorPlan`/`find_terminator_plans`; Task 8 (CLI)
+  imports `check_terminator_layout`/`find_terminator_plans`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -451,6 +749,7 @@ refusal wrapper are tested together since they're always used together.
 """
 
 from cobolparser import parse_cobol
+from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.analysis.refusal import (
@@ -458,6 +757,36 @@ from mockymock.analysis.refusal import (
     find_terminator_plans,
 )
 from mockymock.dsl.model import MockTestCase, MockTestSuite
+from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
+
+SHARED_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMSHARE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           MOVE 1 TO WS-RESULT STOP RUN.
+"""
+
+CHAIN_SHARED_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CHAINSHARE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A                PIC 9.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           MOVE 1 TO WS-A PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           STOP RUN.
+"""
 
 SAFE_CHAIN_SOURCE = """\
        IDENTIFICATION DIVISION.
@@ -508,9 +837,17 @@ SECTION_UNSAFE_SOURCE = """\
 
 
 def _analyze(source, name="X.cbl"):
+    """Returns (program, surface, scope_map, lines) -- find_terminator_plans
+    needs all four: program/surface for the reachability walk,
+    scope_map/lines to validate each intermediate PERFORM's line ownership
+    via statement_top_level_problem."""
     result = parse_cobol(source, filename=name)
     assert result.success, result.errors
-    return result.ast, analyze(result.ast)
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    surface = analyze(result.ast)
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    return result.ast, surface, scope_map, lines
 
 
 def _suite(perform_target="0000-MAIN-PROCESS"):
@@ -519,8 +856,8 @@ def _suite(perform_target="0000-MAIN-PROCESS"):
 
 
 def test_find_terminator_plans_accepts_a_safe_plain_perform_chain():
-    program, surface = _analyze(SAFE_CHAIN_SOURCE)
-    plans, reasons = find_terminator_plans(surface, program, _suite())
+    program, surface, scope_map, lines = _analyze(SAFE_CHAIN_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert reasons == []
     assert len(plans) == 1
     assert plans[0].site.label == "STOP RUN"
@@ -529,9 +866,9 @@ def test_find_terminator_plans_accepts_a_safe_plain_perform_chain():
 
 
 def test_find_terminator_plans_empty_when_unreachable():
-    program, surface = _analyze(SAFE_CHAIN_SOURCE)
+    program, surface, scope_map, lines = _analyze(SAFE_CHAIN_SOURCE)
     suite = _suite(perform_target="1000-DO-WORK")
-    plans, reasons = find_terminator_plans(surface, program, suite)
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
     assert plans == []
     assert reasons == []
 
@@ -551,8 +888,8 @@ def test_find_terminator_plans_includes_intermediate_perform_in_chain():
        2000-INNER.
            STOP RUN.
 """
-    program, surface = _analyze(source)
-    plans, reasons = find_terminator_plans(surface, program, _suite())
+    program, surface, scope_map, lines = _analyze(source)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert reasons == []
     assert len(plans) == 1
     # both PERFORM 1000-WRAPPER and PERFORM 2000-INNER are on the chain
@@ -563,10 +900,10 @@ def test_find_terminator_plans_includes_intermediate_perform_in_chain():
 
 
 def test_go_to_reachable_terminator_refuses():
-    program, surface = _analyze(GO_TO_UNSAFE_SOURCE)
+    program, surface, scope_map, lines = _analyze(GO_TO_UNSAFE_SOURCE)
     suite = _suite()
     suite.test_cases[0].perform_target = "1000-DO-WORK-ALIAS"
-    plans, reasons = find_terminator_plans(surface, program, suite)
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
@@ -578,32 +915,58 @@ def test_go_to_target_refuses_even_when_a_different_case_uses_it_safely():
     ALSO a GO TO target somewhere in the program (via 1000-DO-WORK-ALIAS) --
     per the design doc this refuses unconditionally, not just for the case
     that actually takes the GO TO path."""
-    program, surface = _analyze(GO_TO_UNSAFE_SOURCE)
+    program, surface, scope_map, lines = _analyze(GO_TO_UNSAFE_SOURCE)
     suite = MockTestSuite(
         name="S",
         test_cases=[MockTestCase(name="safe", perform_target="0000-MAIN-PROCESS")],
     )
-    plans, reasons = find_terminator_plans(surface, program, suite)
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
 
 
 def test_section_scoped_terminator_refuses():
-    program, surface = _analyze(SECTION_UNSAFE_SOURCE)
-    plans, reasons = find_terminator_plans(surface, program, _suite())
+    program, surface, scope_map, lines = _analyze(SECTION_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
     assert "SECTION" in reasons[0].message
 
 
-def test_check_terminator_layout_is_reasons_only():
-    program, surface = _analyze(SAFE_CHAIN_SOURCE)
-    assert check_terminator_layout(surface, program, _suite()) == []
+def test_terminator_sharing_its_line_refuses():
+    """Complements Task 2's direct source_map.py test: here the same
+    shared-line shape is checked through the full find_terminator_plans
+    path, proving the span-validation wiring actually runs."""
+    program, surface, scope_map, lines = _analyze(SHARED_LINE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "does not start its own line" in reasons[0].message
 
-    program, surface = _analyze(SECTION_UNSAFE_SOURCE)
-    reasons = check_terminator_layout(surface, program, _suite())
+
+def test_intermediate_perform_sharing_its_line_refuses():
+    """The terminator itself (STOP RUN in 1000-WRAPPER) is perfectly safe
+    on its own -- the problem is the intermediate PERFORM 1000-WRAPPER in
+    0000-MAIN-PROCESS sharing its line with a MOVE. Proves
+    statement_top_level_problem is actually being called against
+    chain_performs, not just built and left unused."""
+    program, surface, scope_map, lines = _analyze(CHAIN_SHARED_LINE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "does not start its own line" in reasons[0].message
+
+
+def test_check_terminator_layout_is_reasons_only():
+    program, surface, scope_map, lines = _analyze(SAFE_CHAIN_SOURCE)
+    assert check_terminator_layout(surface, program, _suite(), scope_map, lines) == []
+
+    program, surface, scope_map, lines = _analyze(SECTION_UNSAFE_SOURCE)
+    reasons = check_terminator_layout(surface, program, _suite(), scope_map, lines)
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
 ```
@@ -641,7 +1004,11 @@ Add these two functions after `_plain_perform_edges_from` (end of file):
 
 ```python
 def find_terminator_plans(
-    surface: MockSurface, program, suite: MockTestSuite
+    surface: MockSurface,
+    program,
+    suite: MockTestSuite,
+    scope_map,
+    lines: list[str],
 ) -> tuple[list[TerminatorPlan], list[RefusalReason]]:
     """For every STOP RUN(RUN-form)/GOBACK reachable from at least one test
     case, decide whether it is safely neutralizable and return either a
@@ -652,11 +1019,22 @@ def find_terminator_plans(
 
     Safe means: the terminator's enclosing paragraph is a top-level
     paragraph (not a SECTION member), is never a GO TO target anywhere in
-    the whole program, and is reachable from the test's own
-    perform_target via `_plain_perform_edges_from` (a chain of nothing
-    but plain, unconditional, top-level PERFORM statements). Once ANY
-    test case finds a given terminator unsafe, it is refused permanently
-    -- fail-closed, regardless of what other test cases' paths say."""
+    the whole program, is reachable from the test's own perform_target via
+    `_plain_perform_edges_from` (a chain of nothing but plain,
+    unconditional, top-level PERFORM statements), the terminator's own
+    statement owns its line/has a validated span (`site.span`/
+    `site.unspliceable_reason`, populated by a broadened
+    `annotate_nested_sites` call the caller must have already made), and
+    every intermediate PERFORM on the case's restricted-reachable chain
+    also owns its own line (`statement_top_level_problem`, checked once
+    per case since the same chain_performs set is a candidate for every
+    terminator that case reaches -- see the design doc's "over-inclusive
+    instrumentation is fine" rationale). Once ANY test case finds a given
+    terminator unsafe, it is refused permanently -- fail-closed,
+    regardless of what other test cases' paths say. `scope_map`/`lines`
+    must be the same `collect_scope_map(program, lines)` result and
+    normalized lines the caller already computed for
+    `annotate_nested_sites`."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return [], []
@@ -680,6 +1058,19 @@ def find_terminator_plans(
         safe_names, chain_performs = _plain_perform_edges_from(
             program, case.perform_target
         )
+
+        chain_problem: str | None = None
+        for perform in chain_performs:
+            line_problem = statement_top_level_problem(perform, scope_map, lines)
+            if line_problem is not None:
+                chain_problem = (
+                    f"an intermediate PERFORM {perform.target_paragraph} at "
+                    f"line {perform.location.line} {line_problem} -- "
+                    f"inserting the early-exit check after it would corrupt "
+                    f"sibling code sharing its line"
+                )
+                break
+
         qualified_keys: list[int] = []
 
         for site in surface.sites_in(reachable):
@@ -708,6 +1099,19 @@ def find_terminator_plans(
                     f"statements -- this is the only shape this feature can "
                     f"safely neutralize today"
                 )
+            elif site.nested and site.span is None:
+                problem = (
+                    f"is nested inside a conditional/loop body and cannot "
+                    f"be safely spliced: "
+                    f"{site.unspliceable_reason or _UNANNOTATED}"
+                )
+            elif not site.nested and site.unspliceable_reason:
+                problem = (
+                    f"{site.unspliceable_reason} -- splicing it would "
+                    f"corrupt sibling code sharing its line(s)"
+                )
+            elif chain_problem is not None:
+                problem = chain_problem
 
             if problem is not None:
                 reasons.append(
@@ -739,7 +1143,11 @@ def find_terminator_plans(
 
 
 def check_terminator_layout(
-    surface: MockSurface, program, suite: MockTestSuite
+    surface: MockSurface,
+    program,
+    suite: MockTestSuite,
+    scope_map,
+    lines: list[str],
 ) -> list[RefusalReason]:
     """Thin wrapper over find_terminator_plans for the CLI's refusal-gate
     loop, which only needs the refusal reasons, not the plans themselves
@@ -747,13 +1155,28 @@ def check_terminator_layout(
     wiring task -- matching this codebase's existing pattern of computing
     a cheap, pure "plan" twice rather than threading it through every
     caller, e.g. analysis.linkage.linkage_plan)."""
-    return find_terminator_plans(surface, program, suite)[1]
+    return find_terminator_plans(surface, program, suite, scope_map, lines)[1]
 ```
+
+Also add this import at the top of `mockymock/analysis/refusal.py`, alongside
+the existing `mockymock.analysis.mock_surface` import block:
+
+```python
+from mockymock.splicer.source_map import statement_top_level_problem
+```
+
+This is a deliberate cross-layer import (`analysis` importing from
+`splicer`) — the reverse of this codebase's usual direction. It's safe (no
+circular import: `source_map.py` only imports from `mock_surface.py` and
+`dsl.model`, never from `refusal.py`) and avoids duplicating
+`statement_top_level_problem`'s logic rather than crossing the layering
+boundary; the alternative (reimplementing the same check in `refusal.py`)
+would create two copies of the same rule to keep in sync.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_terminators.py -v`
-Expected: PASS (all 7 tests).
+Expected: PASS (all 9 tests).
 
 - [ ] **Step 5: Run the full unit suite to confirm no regression**
 
@@ -858,21 +1281,17 @@ statement without touching the PERFORM itself."
 
 ---
 
-## Task 5: Dispatch-block builders + line-ownership guardrail — `injector.py`, `source_map.py`
+## Task 5: Dispatch-block builders — `injector.py`
 
 **Files:**
 - Modify: `mockymock/splicer/injector.py`
-- Modify: `mockymock/splicer/source_map.py`
-- Test: `tests/unit/test_injector.py`, `tests/unit/test_source_map.py`
+- Test: `tests/unit/test_injector.py`
 
 **Interfaces:**
-- Consumes: nothing new from earlier tasks (pure codegen + a refactor of
-  existing, already-tested logic).
+- Consumes: nothing new from earlier tasks (pure codegen).
 - Produces: `injector.build_terminator_neutralization() -> list[str]`,
   `injector.build_chain_check() -> list[str]` (both parameterless — see
-  below for why). `source_map.statement_top_level_problem(statement,
-  scope_map, lines) -> str | None` (new, statement-level variant of the
-  existing site-level check). Task 6 imports all three.
+  below for why). Task 6 imports both.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -899,77 +1318,9 @@ def test_chain_check_exits_paragraph_when_flag_set():
     ]
 ```
 
-Add to `tests/unit/test_source_map.py` (append; reuse the file's existing
-`parse_cobol`/`normalize_fixed_format` imports):
-
-```python
-from mockymock.splicer.source_map import collect_scope_map, statement_top_level_problem
-
-PERFORM_OWN_LINE_SOURCE = """\
-       IDENTIFICATION DIVISION.
-       PROGRAM-ID. PERFORMOWNLINE.
-
-       PROCEDURE DIVISION.
-       MAIN-PARA.
-           PERFORM SUB-PARA.
-           DISPLAY "AFTER".
-
-       SUB-PARA.
-           DISPLAY "SUB".
-"""
-
-PERFORM_SHARED_LINE_SOURCE = """\
-       IDENTIFICATION DIVISION.
-       PROGRAM-ID. PERFORMSHARE.
-
-       PROCEDURE DIVISION.
-       MAIN-PARA.
-           MOVE 1 TO WS-A PERFORM SUB-PARA.
-
-       SUB-PARA.
-           DISPLAY "SUB".
-"""
-
-
-def _find_perform(program, paragraph_name):
-    procedure = program.get_division("PROCEDURE")
-    paragraph = next(
-        p for p in procedure.paragraphs if p.paragraph_name == paragraph_name
-    )
-    return paragraph.statements[0]
-
-
-def test_statement_top_level_problem_none_when_perform_owns_its_line():
-    result = parse_cobol(PERFORM_OWN_LINE_SOURCE, filename="x.cbl")
-    assert result.success, result.errors
-    lines = normalize_fixed_format(PERFORM_OWN_LINE_SOURCE.splitlines()).splitlines()
-    scope_map = collect_scope_map(result.ast, lines)
-    perform = _find_perform(result.ast, "MAIN-PARA")
-    assert statement_top_level_problem(perform, scope_map, lines) is None
-
-
-def test_statement_top_level_problem_set_when_perform_shares_its_line():
-    result = parse_cobol(PERFORM_SHARED_LINE_SOURCE, filename="x.cbl")
-    assert result.success, result.errors
-    lines = normalize_fixed_format(PERFORM_SHARED_LINE_SOURCE.splitlines()).splitlines()
-    scope_map = collect_scope_map(result.ast, lines)
-    perform = _find_perform(result.ast, "MAIN-PARA")
-    assert (
-        statement_top_level_problem(perform, scope_map, lines)
-        == "does not start its own line"
-    )
-```
-
-(Add `01 WS-A PIC 9.` to `PERFORM_SHARED_LINE_SOURCE`'s `WORKING-STORAGE
-SECTION` if `parse_cobol` requires it for `MOVE 1 TO WS-A` to parse
-cleanly — check by running Step 2 first; the codebase's other
-`SHARED_LINE_SOURCE` fixtures in `test_orchestrator.py` include a
-`WORKING-STORAGE SECTION` with the moved-to field declared, follow that
-exact pattern if the bare version above fails to parse.)
-
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m pytest tests/unit/test_injector.py tests/unit/test_source_map.py -v -k "terminator_neutralization or chain_check or top_level_problem"`
+Run: `python -m pytest tests/unit/test_injector.py -v -k "terminator_neutralization or chain_check"`
 Expected: FAIL — `ImportError`s for the not-yet-defined names.
 
 - [ ] **Step 3: Implement**
@@ -1004,89 +1355,21 @@ def build_chain_check() -> list[str]:
     ]
 ```
 
-In `mockymock/splicer/source_map.py`, refactor `_top_level_site_problem`:
-replace its current body (which extracts `statement = cast(ASTNode,
-site.statement)` then operates on `statement`/`start`/`column`) so the
-logic lives in a new, statement-level function, and `_top_level_site_problem`
-becomes a one-line wrapper. Locate the existing function:
-
-```python
-def _top_level_site_problem(
-    site: BoundarySite, scope_map: ScopeMap, lines: list[str]
-) -> str | None:
-    """..."""  # existing docstring, unchanged
-    statement = cast(ASTNode, site.statement)
-    start = statement.location.line
-    column = statement.location.column
-    if lines[start - 1][: column - 1].strip():
-        return "does not start its own line"
-    if any(
-        b.top_level and b.line == start and b.column != column
-        for b in scope_map.boundaries
-    ):
-        return "shares its line with another statement or paragraph header"
-    return None
-```
-
-Replace it with:
-
-```python
-def _top_level_site_problem(
-    site: BoundarySite, scope_map: ScopeMap, lines: list[str]
-) -> str | None:
-    """..."""  # existing docstring, unchanged
-    return statement_top_level_problem(cast(ASTNode, site.statement), scope_map, lines)
-
-
-def statement_top_level_problem(
-    statement, scope_map: ScopeMap, lines: list[str]
-) -> str | None:
-    """The reason a top-level STATEMENT's whole-line splice/insertion
-    would corrupt sibling code, or None when it owns its line -- the same
-    check `_top_level_site_problem` applies to BoundarySites, factored out
-    so it can also be applied directly to a PerformStatement (which is
-    never wrapped in a BoundarySite). See _top_level_site_problem's
-    docstring for the exact rules; this is that function's body,
-    unchanged, operating on `statement` directly instead of `site.statement`."""
-    start = statement.location.line
-    column = statement.location.column
-    if lines[start - 1][: column - 1].strip():
-        return "does not start its own line"
-    if any(
-        b.top_level and b.line == start and b.column != column
-        for b in scope_map.boundaries
-    ):
-        return "shares its line with another statement or paragraph header"
-    return None
-```
-
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/unit/test_injector.py tests/unit/test_source_map.py -v`
-Expected: PASS (every test in both files).
+Run: `python -m pytest tests/unit/test_injector.py -v`
+Expected: PASS (every test in the file).
 
-- [ ] **Step 5: Run the full unit suite to confirm the refactor changed nothing**
-
-Run: `python -m pytest tests/unit -q`
-Expected: PASS, same count as before this task (the `_top_level_site_problem`
-refactor must be behavior-preserving — every existing test that exercises
-it, e.g. `test_orchestrator.py`'s shared-line tests, must still pass
-unchanged).
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add mockymock/splicer/injector.py mockymock/splicer/source_map.py \
-    tests/unit/test_injector.py tests/unit/test_source_map.py
-git commit -m "feat(splicer): terminator/chain-check codegen + statement-level line guard
+git add mockymock/splicer/injector.py tests/unit/test_injector.py
+git commit -m "feat(splicer): terminator neutralization + chain-check codegen
 
 Part of GOBACK/STOP RUN support, Approach B
 (docs/2026-07-08-goback-stop-run-support-design.md).
 build_terminator_neutralization/build_chain_check are the two new
-replacement/insertion blocks. statement_top_level_problem factors the
-existing BoundarySite own-line check into a form reusable for a bare
-PerformStatement -- pure refactor, _top_level_site_problem's behavior is
-unchanged."
+replacement/insertion blocks the orchestrator wires up in the next task."
 ```
 
 ---
@@ -1098,9 +1381,11 @@ unchanged."
 - Test: `tests/unit/test_orchestrator.py`
 
 **Interfaces:**
-- Consumes: `TerminatorPlan`, `find_terminator_plans` (Task 3),
-  `insert_lines_after` (Task 4), `build_terminator_neutralization`,
-  `build_chain_check`, `statement_top_level_problem` (Task 5).
+- Consumes: `TerminatorPlan` (Task 3), `insert_lines_after` (Task 4),
+  `build_terminator_neutralization`/`build_chain_check` (Task 5). Note:
+  `orchestrator.py` never calls `statement_top_level_problem` itself —
+  every `chain_performs` entry it receives has already been validated by
+  `find_terminator_plans` (Task 2/3) before `splice_program` ever sees it.
 - Produces: `splice_program(lines, boundaries, surface, suite, registry,
   terminator_plans=())` — new optional last parameter, default `()`, so
   every existing call site (8 of them) keeps working unmodified.
@@ -1159,9 +1444,10 @@ def _splice_terminator_chain(suite):
     assert result.success, result.errors
     surface = analyze(result.ast)
     lines = normalize_fixed_format(TERMINATOR_CHAIN_SOURCE.splitlines()).splitlines()
-    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
     boundaries = collect_boundaries(result.ast)
-    plans, reasons = find_terminator_plans(surface, result.ast, suite)
+    plans, reasons = find_terminator_plans(surface, result.ast, suite, scope_map, lines)
     assert reasons == []
     return splice_program(
         lines, boundaries, surface, suite, TallyRegistry(suite), plans
@@ -1313,8 +1599,23 @@ def splice_program(
         seen_terminator_ids.add(id(site.statement))
         replacement = build_terminator_neutralization()
         if site.nested:
-            start, end = site.span  # type: ignore[misc]  # guaranteed non-None: check_terminator_layout refuses SECTION/nested/GO-TO shapes before this point
+            if site.span is None:
+                raise ValueError(
+                    f"nested {site.label} site at line {site.line} reached "
+                    f"the splicer without a validated span -- "
+                    f"check_terminator_layout (UNSUPPORTED_TERMINATOR_LAYOUT) "
+                    f"should have refused it"
+                )
+            start, end = site.span
         else:
+            if site.unspliceable_reason:
+                raise ValueError(
+                    f"top-level {site.label} site at line {site.line} "
+                    f"reached the splicer although it "
+                    f"{site.unspliceable_reason} -- "
+                    f"check_terminator_layout (UNSUPPORTED_TERMINATOR_LAYOUT) "
+                    f"should have refused it"
+                )
             start, end = statement_span(site.statement, boundaries, last_line)
         last_span_line = next(
             (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
@@ -1627,10 +1928,26 @@ check_whole_program`):
     )
 ```
 
-Replace this block (the per-case refusal loop through the splice call,
-currently reading `refused = False` ... `lines = splice_program(lines,
-boundaries, surface, suite, registry)` ... `lines, _ =
-transform_data_division_exec(lines)`):
+First, locate the CLI's existing nested-site annotation line (it runs
+earlier in `_cmd_run`, before `check_nested_exec`):
+
+```python
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+```
+
+`check_terminator_layout`/`find_terminator_plans` need that same
+`scope_map` object (Task 3's `statement_top_level_problem` check), so
+change this line to keep it in a variable instead of discarding it inline:
+
+```python
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+```
+
+Then replace this block (the per-case refusal loop through the splice
+call, currently reading `refused = False` ... `lines =
+splice_program(lines, boundaries, surface, suite, registry)` ... `lines,
+_ = transform_data_division_exec(lines)`):
 
 ```python
     refused = False
@@ -1638,7 +1955,7 @@ transform_data_division_exec(lines)`):
         for reason in check_test_case(surface, result.ast, case):
             print(f"mockymock run: refused ({reason.code}): {reason.message}")
             refused = True
-    for reason in check_terminator_layout(surface, result.ast, suite):
+    for reason in check_terminator_layout(surface, result.ast, suite, scope_map, lines):
         print(f"mockymock run: refused ({reason.code}): {reason.message}")
         refused = True
     if refused:
@@ -1646,7 +1963,9 @@ transform_data_division_exec(lines)`):
 
     boundaries = collect_boundaries(result.ast)
     registry = TallyRegistry(suite)
-    terminator_plans, _ = find_terminator_plans(surface, result.ast, suite)
+    terminator_plans, _ = find_terminator_plans(
+        surface, result.ast, suite, scope_map, lines
+    )
     lines = splice_program(
         lines, boundaries, surface, suite, registry, terminator_plans
     )
