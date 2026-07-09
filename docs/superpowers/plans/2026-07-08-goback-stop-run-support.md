@@ -1127,6 +1127,21 @@ GO_TO_UNSAFE_SOURCE = """\
            GO TO 1000-DO-WORK.
 """
 
+GO_TO_OWN_PARAGRAPH_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOOWNPARA.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK.
+
+       1000-DO-WORK.
+           STOP RUN.
+
+       1000-DO-WORK-ALIAS.
+           GO TO 1000-DO-WORK.
+"""
+
 SECTION_UNSAFE_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. SECTUNSAFE.
@@ -1168,7 +1183,11 @@ def test_find_terminator_plans_accepts_a_safe_plain_perform_chain():
     assert len(plans) == 1
     assert plans[0].site.label == "STOP RUN"
     assert plans[0].site.paragraph_name == "0000-MAIN-PROCESS"
-    assert plans[0].chain_performs == []  # terminator is directly in the target paragraph
+    # PERFORM 1000-DO-WORK isn't on the path to the terminator (it's
+    # directly in the target paragraph) but chain_performs is the whole
+    # case's over-inclusive reachable set, not a precise per-terminator
+    # path -- see find_terminator_plans' docstring.
+    assert {p.target_paragraph for p in plans[0].chain_performs} == {"1000-DO-WORK"}
 
 
 def test_find_terminator_plans_empty_when_unreachable():
@@ -1206,10 +1225,10 @@ def test_find_terminator_plans_includes_intermediate_perform_in_chain():
 
 
 def test_go_to_reachable_terminator_refuses():
-    program, surface, scope_map, lines = _analyze(GO_TO_UNSAFE_SOURCE)
-    suite = _suite()
-    suite.test_cases[0].perform_target = "1000-DO-WORK-ALIAS"
-    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    """The terminator's OWN paragraph (1000-DO-WORK) is a GO TO target,
+    reached from perform_target via a plain, otherwise-safe PERFORM."""
+    program, surface, scope_map, lines = _analyze(GO_TO_OWN_PARAGRAPH_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
@@ -1324,23 +1343,30 @@ def find_terminator_plans(
     unmocked boundary).
 
     Safe means: the terminator's enclosing paragraph is a top-level
-    paragraph (not a SECTION member), is never a GO TO target anywhere in
-    the whole program, is reachable from the test's own perform_target via
-    `_plain_perform_edges_from` (a chain of nothing but plain,
-    unconditional, top-level PERFORM statements), the terminator's own
-    statement owns its line/has a validated span (`site.span`/
-    `site.unspliceable_reason`, populated by a broadened
-    `annotate_nested_sites` call the caller must have already made), and
-    every intermediate PERFORM on the case's restricted-reachable chain
-    also owns its own line (`statement_top_level_problem`, checked once
-    per case since the same chain_performs set is a candidate for every
-    terminator that case reaches -- see the design doc's "over-inclusive
-    instrumentation is fine" rationale). Once ANY test case finds a given
-    terminator unsafe, it is refused permanently -- fail-closed,
-    regardless of what other test cases' paths say. `scope_map`/`lines`
-    must be the same `collect_scope_map(program, lines)` result and
-    normalized lines the caller already computed for
-    `annotate_nested_sites`."""
+    paragraph (not a SECTION member), is reachable from the test's own
+    perform_target via `_plain_perform_edges_from` (a chain of nothing but
+    plain, unconditional, top-level PERFORM statements), and no paragraph
+    anywhere on that whole restricted-reachable chain -- not just the
+    terminator's own paragraph, but every paragraph the case's
+    over-inclusive chain_performs instrumentation would touch, including
+    the perform_target itself -- is ever a GO TO target anywhere in the
+    program, or is missing from `top_level_names` (a dead-end BFS target
+    that turned out to be a SECTION name rather than a real paragraph, e.g.
+    `PERFORM some-section`). The terminator's own statement must also own
+    its line/have a validated span (`site.span`/`site.unspliceable_reason`,
+    populated by a broadened `annotate_nested_sites` call the caller must
+    have already made), and every intermediate PERFORM on the case's
+    restricted-reachable chain must also own its own line
+    (`statement_top_level_problem`, checked once per case since the same
+    chain_performs set is a candidate for every terminator that case
+    reaches -- see the design doc's "over-inclusive instrumentation is
+    fine" rationale, which is why the GO-TO/SECTION checks below are also
+    computed over the whole chain rather than just the terminator's own
+    paragraph). Once ANY test case finds a given terminator unsafe, it is
+    refused permanently -- fail-closed, regardless of what other test
+    cases' paths say. `scope_map`/`lines` must be the same
+    `collect_scope_map(program, lines)` result and normalized lines the
+    caller already computed for `annotate_nested_sites`."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return [], []
@@ -1364,6 +1390,8 @@ def find_terminator_plans(
         safe_names, chain_performs = _plain_perform_edges_from(
             program, case.perform_target
         )
+        chain_section_names = safe_names - top_level_names
+        chain_go_to_names = safe_names & go_to_targets
 
         chain_problem: str | None = None
         for perform in chain_performs:
@@ -1404,6 +1432,24 @@ def find_terminator_plans(
                     f"a chain of plain, unconditional, top-level PERFORM "
                     f"statements -- this is the only shape this feature can "
                     f"safely neutralize today"
+                )
+            elif chain_section_names:
+                bad_name = sorted(chain_section_names)[0]
+                problem = (
+                    f"is only reachable through this test's own early-exit "
+                    f"propagation chain by way of '{bad_name}', which is "
+                    f"not a top-level paragraph (it belongs to a SECTION) "
+                    f"-- SECTION-scoped chains are not yet supported"
+                )
+            elif chain_go_to_names - {paragraph_name}:
+                bad_name = sorted(chain_go_to_names - {paragraph_name})[0]
+                problem = (
+                    f"is only reachable through this test's own early-exit "
+                    f"propagation chain by way of '{bad_name}', which is "
+                    f"reachable via GO TO somewhere in this program -- the "
+                    f"early-exit propagation mechanism (EXIT PARAGRAPH) "
+                    f"only works correctly when a paragraph is entered "
+                    f"exclusively via PERFORM"
                 )
             elif site.nested and site.span is None:
                 problem = (

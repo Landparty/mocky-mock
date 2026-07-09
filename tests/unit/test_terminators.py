@@ -1,0 +1,246 @@
+"""Unit tests for Approach B's safe-chain terminator detection
+(docs/2026-07-08-goback-stop-run-support-design.md). Mirrors
+tests/unit/test_linkage.py's structure: the analysis functions and the
+refusal wrapper are tested together since they're always used together.
+"""
+
+from cobolparser import parse_cobol
+from cobolparser.preprocess import normalize_fixed_format
+
+from mockymock.analysis.mock_surface import analyze
+from mockymock.analysis.refusal import (
+    check_terminator_layout,
+    find_terminator_plans,
+)
+from mockymock.dsl.model import MockTestCase, MockTestSuite
+from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
+
+SHARED_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMSHARE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           MOVE 1 TO WS-RESULT STOP RUN.
+"""
+
+CHAIN_SHARED_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CHAINSHARE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A                PIC 9.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           MOVE 1 TO WS-A PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           STOP RUN.
+"""
+
+SAFE_CHAIN_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SAFECHAIN.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK
+           STOP RUN.
+
+       1000-DO-WORK.
+           CALL "CALCPGM" USING WS-RESULT.
+"""
+
+GO_TO_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOUNSAFE.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK
+           STOP RUN.
+
+       1000-DO-WORK.
+           DISPLAY "WORK".
+
+       1000-DO-WORK-ALIAS.
+           GO TO 1000-DO-WORK.
+"""
+
+GO_TO_OWN_PARAGRAPH_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOOWNPARA.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK.
+
+       1000-DO-WORK.
+           STOP RUN.
+
+       1000-DO-WORK-ALIAS.
+           GO TO 1000-DO-WORK.
+"""
+
+SECTION_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTUNSAFE.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-SECTION
+           STOP RUN.
+
+       1000-SECTION SECTION.
+       1000-DO-WORK.
+           DISPLAY "WORK".
+"""
+
+
+def _analyze(source, name="X.cbl"):
+    """Returns (program, surface, scope_map, lines) -- find_terminator_plans
+    needs all four: program/surface for the reachability walk,
+    scope_map/lines to validate each intermediate PERFORM's line ownership
+    via statement_top_level_problem."""
+    result = parse_cobol(source, filename=name)
+    assert result.success, result.errors
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    surface = analyze(result.ast)
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    return result.ast, surface, scope_map, lines
+
+
+def _suite(perform_target="0000-MAIN-PROCESS"):
+    case = MockTestCase(name="c", perform_target=perform_target)
+    return MockTestSuite(name="S", test_cases=[case])
+
+
+def test_find_terminator_plans_accepts_a_safe_plain_perform_chain():
+    program, surface, scope_map, lines = _analyze(SAFE_CHAIN_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].site.label == "STOP RUN"
+    assert plans[0].site.paragraph_name == "0000-MAIN-PROCESS"
+    # PERFORM 1000-DO-WORK isn't on the path to the terminator (it's
+    # directly in the target paragraph) but chain_performs is the whole
+    # case's over-inclusive reachable set, not a precise per-terminator
+    # path -- see find_terminator_plans' docstring.
+    assert {p.target_paragraph for p in plans[0].chain_performs} == {"1000-DO-WORK"}
+
+
+def test_find_terminator_plans_empty_when_unreachable():
+    program, surface, scope_map, lines = _analyze(SAFE_CHAIN_SOURCE)
+    suite = _suite(perform_target="1000-DO-WORK")
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert plans == []
+    assert reasons == []
+
+
+def test_find_terminator_plans_includes_intermediate_perform_in_chain():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TWOLEVEL.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           PERFORM 2000-INNER.
+
+       2000-INNER.
+           STOP RUN.
+"""
+    program, surface, scope_map, lines = _analyze(source)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    # both PERFORM 1000-WRAPPER and PERFORM 2000-INNER are on the chain
+    assert {p.target_paragraph for p in plans[0].chain_performs} == {
+        "1000-WRAPPER",
+        "2000-INNER",
+    }
+
+
+def test_go_to_reachable_terminator_refuses():
+    """The terminator's OWN paragraph (1000-DO-WORK) is a GO TO target,
+    reached from perform_target via a plain, otherwise-safe PERFORM."""
+    program, surface, scope_map, lines = _analyze(GO_TO_OWN_PARAGRAPH_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "GO TO" in reasons[0].message
+
+
+def test_go_to_target_refuses_even_when_a_different_case_uses_it_safely():
+    """1000-DO-WORK is safely PERFORM-reachable from case "safe", but it is
+    ALSO a GO TO target somewhere in the program (via 1000-DO-WORK-ALIAS) --
+    per the design doc this refuses unconditionally, not just for the case
+    that actually takes the GO TO path."""
+    program, surface, scope_map, lines = _analyze(GO_TO_UNSAFE_SOURCE)
+    suite = MockTestSuite(
+        name="S",
+        test_cases=[MockTestCase(name="safe", perform_target="0000-MAIN-PROCESS")],
+    )
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+
+
+def test_section_scoped_terminator_refuses():
+    program, surface, scope_map, lines = _analyze(SECTION_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "SECTION" in reasons[0].message
+
+
+def test_terminator_sharing_its_line_refuses():
+    """Complements Task 2's direct source_map.py test: here the same
+    shared-line shape is checked through the full find_terminator_plans
+    path, proving the span-validation wiring actually runs."""
+    program, surface, scope_map, lines = _analyze(SHARED_LINE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "does not start its own line" in reasons[0].message
+
+
+def test_intermediate_perform_sharing_its_line_refuses():
+    """The terminator itself (STOP RUN in 1000-WRAPPER) is perfectly safe
+    on its own -- the problem is the intermediate PERFORM 1000-WRAPPER in
+    0000-MAIN-PROCESS sharing its line with a MOVE. Proves
+    statement_top_level_problem is actually being called against
+    chain_performs, not just built and left unused."""
+    program, surface, scope_map, lines = _analyze(CHAIN_SHARED_LINE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "does not start its own line" in reasons[0].message
+
+
+def test_check_terminator_layout_is_reasons_only():
+    program, surface, scope_map, lines = _analyze(SAFE_CHAIN_SOURCE)
+    assert check_terminator_layout(surface, program, _suite(), scope_map, lines) == []
+
+    program, surface, scope_map, lines = _analyze(SECTION_UNSAFE_SOURCE)
+    reasons = check_terminator_layout(surface, program, _suite(), scope_map, lines)
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
