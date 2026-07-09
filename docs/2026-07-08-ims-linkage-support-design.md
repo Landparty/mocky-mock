@@ -175,6 +175,9 @@ copied from `../legacy-application/copybook`. Test cases target
 `0000-MAIN-PROCESS` — the latter ends in `GOBACK`, an existing, separate,
 documented program-terminator limitation (`docs/2026-07-06-real-world-readiness-audit.md`
 Finding 3) that would kill the whole test binary regardless of this fix.
+(Partially resolved by `docs/2026-07-08-goback-stop-run-support-design.md`
+— see Task 10 of its implementation plan for re-targeting this example at
+`0000-MAIN-PROCESS`, if its GOBACK is reached via a plain PERFORM chain.)
 This is the same workaround `DEPTMQP`/`DEPTMQC` already use.
 
 ### Testing

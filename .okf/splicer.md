@@ -385,6 +385,30 @@ access pattern, `CALL 'CBLTDLI' USING ...`, was already an ordinary
 `MOVE` a status value into what is now real, addressable WORKING-STORAGE
 (e.g. `CUST-STATUS`) to simulate a DL/I outcome.
 
+# Terminator Neutralization (GOBACK/STOP RUN, Approach B)
+
+`refusal.find_terminator_plans` finds every `StopStatement`(RUN-form)/
+`GobackStatement` reachable from at least one test case whose enclosing
+paragraph -- and every intermediate paragraph between it and the test's
+`perform_target` -- is reached exclusively via plain, unconditional,
+top-level `PERFORM` statements (`refusal._plain_perform_edges_from`),
+never a `GO TO` target anywhere in the program
+(`refusal._go_to_targets`), never a `SECTION` member. Safe terminators
+are replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH`
+(`injector.build_terminator_neutralization`); every intermediate
+`PERFORM` statement on the chain gets `IF UT-EARLY-EXIT = "Y" EXIT
+PARAGRAPH END-IF` inserted immediately after it
+(`injector.build_chain_check`, via `stub_writer.insert_lines_after` --
+the only splice primitive in this codebase that preserves the original
+statement rather than replacing it). `driver.py` needs only one addition:
+`UT-EARLY-EXIT` declared once, reset to `"N"` per test case. No paragraph
+restructuring -- `UT-TESTCASE-NNN`'s existing checks run automatically
+once the flag has propagated back via ordinary, unmodified `PERFORM`
+returns. An earlier design (`GO TO` redirect into a `PERFORM ... THRU
+...` range) was proven unsound by a verification spike and replaced
+before any of it shipped -- see
+[docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md).
+
 # Generated SQLCA (sqlca.py)
 
 GnuCOBOL cannot process any EXEC SQL block at all, including declarative

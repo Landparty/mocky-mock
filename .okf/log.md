@@ -1,5 +1,31 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-08 (GOBACK/STOP RUN terminator support, Approach B)
+* **Closed Finding 3 of `docs/2026-07-06-real-world-readiness-audit.md`**
+  for the plain-PERFORM-chain shape: a `.cut` test case's `PERFORM`
+  target reaching `STOP RUN`/`GOBACK` through a chain of plain,
+  unconditional `PERFORM` calls no longer kills the whole compiled
+  suite. An earlier design (redirect via `GO TO` into a `PERFORM ...
+  THRU ...` range) was disproven by its own verification spike and
+  never shipped -- see
+  [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md)
+  for the concrete crash evidence and the chosen replacement.
+  `mock_surface.py` detects `StopStatement`(RUN-form)/`GobackStatement`
+  (category `None`, like `CANCEL`/SORT-MERGE); `refusal.py`'s
+  `find_terminator_plans` walks backward from each reachable terminator
+  through the chain of paragraphs that plainly `PERFORM` it, refusing
+  (`UNSUPPORTED_TERMINATOR_LAYOUT`) if any link is a `SECTION` member,
+  a `GO TO` target anywhere in the program, or not reached via a plain
+  top-level `PERFORM`. Safe terminators get `MOVE "Y" TO UT-EARLY-EXIT`
+  + `EXIT PARAGRAPH` in place of the real statement
+  (`injector.build_terminator_neutralization`); every intermediate
+  `PERFORM` on the chain gets `IF UT-EARLY-EXIT = "Y" EXIT PARAGRAPH
+  END-IF` inserted after it (`injector.build_chain_check`, via the new
+  `stub_writer.insert_lines_after` primitive). No `driver.py`
+  restructuring needed -- `UT-TESTCASE-NNN`'s existing checks, right
+  after `PERFORM {target}`, run once the flag has propagated back via
+  ordinary `PERFORM` returns.
+
 ## 2026-07-08 (IMS DL/I ENTRY/LINKAGE support: neutralize instead of crash or refuse)
 * **Closed the corpus sweep's flagged unknown**: "the 5 CBLTDLI-calling
   programs (`ACCTPRG`, `DEPTBMP`, `DEPTIMSM`, `FNDTXFR`, `LNRECOV`) parse

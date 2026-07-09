@@ -135,6 +135,13 @@ before claiming real-world DB2 coverage. Until 2a is fixed, DB2-heavy and
 
 ## Finding 3 — Program terminators (`STOP RUN` / `GOBACK`) reached from a test kill the run — and `GOBACK` isn't even acknowledged `[both]` · Severity: **high**
 
+**Partially resolved 2026-07-08** — see
+[docs/2026-07-08-goback-stop-run-support-design.md](2026-07-08-goback-stop-run-support-design.md).
+A terminator reachable through a chain of plain, unconditional `PERFORM`
+calls is now neutralized and the test case completes normally; `GO
+TO`-reachable and `SECTION`-scoped terminators still refuse rather than
+crash. The remainder of this finding is kept below for history.
+
 A `.cut` test case `PERFORM`s a target paragraph inside the program's *own*
 compilation unit. If that target reaches a program terminator — directly or
 transitively — the whole compiled test binary exits immediately, before the
