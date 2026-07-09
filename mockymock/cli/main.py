@@ -207,9 +207,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         check_expansion_warnings,
         check_linkage_layout,
         check_nested_exec,
+        check_terminator_layout,
         check_test_case,
         check_unresolved_copybooks,
         check_whole_program,
+        find_terminator_plans,
     )
     from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.report.formatters import format_console, format_junit_xml
@@ -299,7 +301,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     # Nested-site spliceability must be annotated before any refusal check
     # or splice looks at nested sites (unannotated nested sites refuse).
-    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
 
     nested_exec_reasons = check_nested_exec(surface)
     for reason in nested_exec_reasons:
@@ -321,12 +324,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
         for reason in check_test_case(surface, result.ast, case):
             print(f"mockymock run: refused ({reason.code}): {reason.message}")
             refused = True
+    for reason in check_terminator_layout(surface, result.ast, suite, scope_map, lines):
+        print(f"mockymock run: refused ({reason.code}): {reason.message}")
+        refused = True
     if refused:
         return 1
 
     boundaries = collect_boundaries(result.ast)
     registry = TallyRegistry(suite)
-    lines = splice_program(lines, boundaries, surface, suite, registry)
+    terminator_plans, _ = find_terminator_plans(
+        surface, result.ast, suite, scope_map, lines
+    )
+    lines = splice_program(
+        lines, boundaries, surface, suite, registry, terminator_plans
+    )
     lines, _ = transform_data_division_exec(lines)
 
     reset_lines = reset_move_lines(result.ast)

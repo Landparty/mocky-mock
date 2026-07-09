@@ -2353,7 +2353,9 @@ TESTCASE "second case still runs after the first hits STOP RUN"
 
 
 @requires_docker
-def test_case_reaching_stop_run_passes_and_later_case_still_runs(tmp_path: Path, capsys):
+def test_case_reaching_stop_run_passes_and_later_case_still_runs(
+    tmp_path: Path, capsys
+):
     cbl_path = tmp_path / "TERMDEMO.cbl"
     cbl_path.write_text(CBL)
     cut_path = tmp_path / "TERMDEMO.cut"
@@ -2363,8 +2365,8 @@ def test_case_reaching_stop_run_passes_and_later_case_still_runs(tmp_path: Path,
     out = capsys.readouterr().out
 
     assert exit_code == 0, out
-    assert "CASE 001 END" in out
-    assert "CASE 002 END" in out
+    assert "[PASS] main process computes result" in out
+    assert "[PASS] second case still runs after the first hits STOP RUN" in out
     assert "CRASH" not in out
     assert "FAIL" not in out
 
@@ -2385,7 +2387,8 @@ def test_expectation_mismatch_after_terminator_still_fails_loudly(
     out = capsys.readouterr().out
 
     assert exit_code == 1
-    assert "CASE 001 FAIL" in out
+    assert "[FAIL] main process computes result" in out
+    assert "expected WS-RESULT = 99" in out
 
 
 @requires_docker
@@ -2423,8 +2426,8 @@ def test_go_to_reachable_terminator_refuses_before_compiling(tmp_path: Path, cap
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/integration/test_terminator_support.py -v`
-Expected: FAIL — `mockymock run` crashes (no `CASE 001 END`/`CASE 002 END`
-in stdout) since the CLI does not yet call
+Expected: FAIL — `mockymock run` crashes (`[CRASH]` in stdout, not the
+expected `[PASS]` lines) since the CLI does not yet call
 `check_terminator_layout`/`find_terminator_plans` or pass `terminator_plans`
 into `splice_program`.
 
