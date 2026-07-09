@@ -1,5 +1,30 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-09 (release-please automation added)
+* **Added `googleapis/release-please-action@v4`** (`.github/workflows/release-please.yml`,
+  `release-please-config.json`, `.release-please-manifest.json`), mirroring
+  the sibling `cobol-parser` repo's setup: `release-type: "python"`,
+  `package-name: "mockymock"`, `include-component-in-tag: false`. On every
+  push to `main`, release-please maintains a "chore(main): release X.Y.Z" PR
+  driven by Conventional Commits since the last release; merging it bumps
+  `__version__` in `pyproject.toml` and `mockymock/__init__.py`, updates
+  `CHANGELOG.md`, and tags/creates a GitHub Release.
+* **Scaled down from cobol-parser's version, deliberately**: cobol-parser's
+  workflow also builds sdist + cibuildwheel binary wheels and attaches them
+  to the GitHub Release, because it ships compiled Cython extensions and is
+  consumed as a pinned git dependency by wheel-preferring installers.
+  mockymock has no compiled extensions and its documented install path
+  ([README "Install"](../README.md)) is `uv tool install git+https://...`
+  straight from the repo — there is no wheel/sdist artifact for anything to
+  consume, so the build/publish jobs were omitted rather than carried over
+  unused.
+* **Bootstrap**: manifest starts at `.`: `"0.0.0"` with
+  `release-as: "0.1.0"` in the config (matching the version already in
+  `pyproject.toml`/`__init__.py`) so the first release-please PR proposes
+  `0.1.0` instead of inventing a version. Drop `release-as` once that first
+  release lands, same as cobol-parser did (`chore: drop release-as now that
+  v1.0.0 is released`).
+
 ## 2026-07-09 (uv-installable CLI: pinned cobolparser git dependency)
 * **Made `mockymock` installable via `uv tool install` from any directory**,
   not just inside the LegacyLens monorepo. Root cause: `pyproject.toml` had
