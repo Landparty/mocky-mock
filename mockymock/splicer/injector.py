@@ -69,3 +69,30 @@ def build_exec_trap(kind: str, line: int) -> list[str]:
         f'reached (line {line})"',
         "           ADD 1 TO UT-FAIL-COUNT",
     ]
+
+
+def build_terminator_neutralization() -> list[str]:
+    """Replacement for a STOP RUN/GOBACK statement found safe to
+    neutralize (see docs/2026-07-08-goback-stop-run-support-design.md):
+    set the early-exit flag and return via EXIT PARAGRAPH -- never GO TO,
+    since EXIT PARAGRAPH is the only mechanism verified to correctly
+    resume the real PERFORM caller. Identical regardless of which test
+    case is running -- unlike build_site_dispatch, no per-case EVALUATE
+    UT-CURRENT-CASE dispatch is needed here."""
+    return [
+        '           MOVE "Y" TO UT-EARLY-EXIT',
+        "           EXIT PARAGRAPH",
+    ]
+
+
+def build_chain_check() -> list[str]:
+    """Inserted immediately after an intermediate PERFORM statement lying
+    on a safe chain toward a neutralized terminator: if the flag is set,
+    stop this paragraph too instead of running whatever sibling code
+    follows -- propagating the early exit one more level toward the test
+    driver. Identical every time it's used; no parameters needed."""
+    return [
+        '           IF UT-EARLY-EXIT = "Y"',
+        "               EXIT PARAGRAPH",
+        "           END-IF",
+    ]

@@ -9,7 +9,12 @@ from mockymock.dsl.model import (
     MockTestCase,
     MockTestSuite,
 )
-from mockymock.splicer.injector import build_exec_trap, build_site_dispatch
+from mockymock.splicer.injector import (
+    build_chain_check,
+    build_exec_trap,
+    build_site_dispatch,
+    build_terminator_neutralization,
+)
 from mockymock.splicer.naming import TallyRegistry
 
 
@@ -129,3 +134,20 @@ def test_exec_trap_displays_and_fails():
     joined = "\n".join(lines)
     assert "unmocked EXEC SQL reached (line 42)" in joined
     assert "ADD 1 TO UT-FAIL-COUNT" in joined
+
+
+def test_terminator_neutralization_sets_flag_and_exits_paragraph():
+    lines = build_terminator_neutralization()
+    assert lines == [
+        '           MOVE "Y" TO UT-EARLY-EXIT',
+        "           EXIT PARAGRAPH",
+    ]
+
+
+def test_chain_check_exits_paragraph_when_flag_set():
+    lines = build_chain_check()
+    assert lines == [
+        '           IF UT-EARLY-EXIT = "Y"',
+        "               EXIT PARAGRAPH",
+        "           END-IF",
+    ]
