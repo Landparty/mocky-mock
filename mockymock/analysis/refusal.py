@@ -993,10 +993,15 @@ def find_terminator_plans(
     restricted-reachable chain must also own its own line
     (`statement_top_level_problem`, checked once per case since the same
     chain_performs set is a candidate for every terminator that case
-    reaches -- see the design doc's "over-inclusive instrumentation is
-    fine" rationale, which is why the GO-TO/SECTION checks below are also
-    computed over the whole chain rather than just the terminator's own
-    paragraph). Once ANY test case finds a given terminator unsafe, it is
+    reaches -- the design doc describes a per-terminator backward walk,
+    but this implementation computes one forward, whole-case reachable
+    set instead and reuses it for every terminator that case finds,
+    which is why the GO-TO/SECTION checks below are also computed over
+    the whole chain rather than just the terminator's own paragraph: any
+    terminator sharing this case's chain_performs would be instrumented
+    with the same hazardous paragraph regardless of whether it sits on
+    that specific terminator's own ancestor path). Once ANY test case
+    finds a given terminator unsafe, it is
     refused permanently -- fail-closed, regardless of what other test
     cases' paths say. `scope_map`/`lines` must be the same
     `collect_scope_map(program, lines)` result and normalized lines the
@@ -1075,8 +1080,11 @@ def find_terminator_plans(
                     f"not a top-level paragraph (it belongs to a SECTION) "
                     f"-- SECTION-scoped chains are not yet supported"
                 )
-            elif chain_go_to_names - {paragraph_name}:
-                bad_name = sorted(chain_go_to_names - {paragraph_name})[0]
+            elif chain_go_to_names:
+                # paragraph_name can't be a member here: the preceding elif
+                # already excluded it from go_to_targets, and chain_go_to_names
+                # is a subset of go_to_targets.
+                bad_name = sorted(chain_go_to_names)[0]
                 problem = (
                     f"is only reachable through this test's own early-exit "
                     f"propagation chain by way of '{bad_name}', which is "

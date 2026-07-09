@@ -1156,6 +1156,16 @@ SECTION_UNSAFE_SOURCE = """\
            DISPLAY "WORK".
 """
 
+SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTOWNPARA.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-SECTION SECTION.
+       0000-MAIN-PROCESS.
+           STOP RUN.
+"""
+
 
 def _analyze(source, name="X.cbl"):
     """Returns (program, surface, scope_map, lines) -- find_terminator_plans
@@ -1252,7 +1262,23 @@ def test_go_to_target_refuses_even_when_a_different_case_uses_it_safely():
 
 
 def test_section_scoped_terminator_refuses():
+    """The terminator itself sits directly in 0000-MAIN-PROCESS, a
+    top-level paragraph -- what's unsafe here is the *chain*: reaching it
+    requires PERFORMing 1000-SECTION, which isn't a top-level paragraph."""
     program, surface, scope_map, lines = _analyze(SECTION_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "SECTION" in reasons[0].message
+
+
+def test_section_own_paragraph_terminator_refuses():
+    """The terminator's OWN paragraph (0000-MAIN-PROCESS) is a SECTION
+    member, reached directly as the case's perform_target -- distinct from
+    test_section_scoped_terminator_refuses, which tests the chain-level
+    check instead."""
+    program, surface, scope_map, lines = _analyze(SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
@@ -1359,10 +1385,15 @@ def find_terminator_plans(
     restricted-reachable chain must also own its own line
     (`statement_top_level_problem`, checked once per case since the same
     chain_performs set is a candidate for every terminator that case
-    reaches -- see the design doc's "over-inclusive instrumentation is
-    fine" rationale, which is why the GO-TO/SECTION checks below are also
-    computed over the whole chain rather than just the terminator's own
-    paragraph). Once ANY test case finds a given terminator unsafe, it is
+    reaches -- the design doc describes a per-terminator backward walk,
+    but this implementation computes one forward, whole-case reachable
+    set instead and reuses it for every terminator that case finds,
+    which is why the GO-TO/SECTION checks below are also computed over
+    the whole chain rather than just the terminator's own paragraph: any
+    terminator sharing this case's chain_performs would be instrumented
+    with the same hazardous paragraph regardless of whether it sits on
+    that specific terminator's own ancestor path). Once ANY test case
+    finds a given terminator unsafe, it is
     refused permanently -- fail-closed, regardless of what other test
     cases' paths say. `scope_map`/`lines` must be the same
     `collect_scope_map(program, lines)` result and normalized lines the
@@ -1441,8 +1472,11 @@ def find_terminator_plans(
                     f"not a top-level paragraph (it belongs to a SECTION) "
                     f"-- SECTION-scoped chains are not yet supported"
                 )
-            elif chain_go_to_names - {paragraph_name}:
-                bad_name = sorted(chain_go_to_names - {paragraph_name})[0]
+            elif chain_go_to_names:
+                # paragraph_name can't be a member here: the preceding elif
+                # already excluded it from go_to_targets, and chain_go_to_names
+                # is a subset of go_to_targets.
+                bad_name = sorted(chain_go_to_names)[0]
                 problem = (
                     f"is only reachable through this test's own early-exit "
                     f"propagation chain by way of '{bad_name}', which is "
@@ -1528,7 +1562,7 @@ would create two copies of the same rule to keep in sync.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_terminators.py -v`
-Expected: PASS (all 9 tests).
+Expected: PASS (all 10 tests).
 
 - [ ] **Step 5: Run the full unit suite to confirm no regression**
 

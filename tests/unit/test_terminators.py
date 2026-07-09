@@ -106,6 +106,16 @@ SECTION_UNSAFE_SOURCE = """\
            DISPLAY "WORK".
 """
 
+SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTOWNPARA.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-SECTION SECTION.
+       0000-MAIN-PROCESS.
+           STOP RUN.
+"""
+
 
 def _analyze(source, name="X.cbl"):
     """Returns (program, surface, scope_map, lines) -- find_terminator_plans
@@ -202,7 +212,23 @@ def test_go_to_target_refuses_even_when_a_different_case_uses_it_safely():
 
 
 def test_section_scoped_terminator_refuses():
+    """The terminator itself sits directly in 0000-MAIN-PROCESS, a
+    top-level paragraph -- what's unsafe here is the *chain*: reaching it
+    requires PERFORMing 1000-SECTION, which isn't a top-level paragraph."""
     program, surface, scope_map, lines = _analyze(SECTION_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "SECTION" in reasons[0].message
+
+
+def test_section_own_paragraph_terminator_refuses():
+    """The terminator's OWN paragraph (0000-MAIN-PROCESS) is a SECTION
+    member, reached directly as the case's perform_target -- distinct from
+    test_section_scoped_terminator_refuses, which tests the chain-level
+    check instead."""
+    program, surface, scope_map, lines = _analyze(SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
