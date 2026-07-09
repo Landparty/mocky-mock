@@ -170,12 +170,15 @@ addressable WORKING-STORAGE) to simulate GHN success, end-of-database
 
 `examples/real-world/ACCTPRG/` (mirrors the `DEPTMQP`/`DEPTMQC`
 convention): `ACCTPRG.cbl` plus `copybooks/{WSCOMMON,ERRORCD,IMSPCB}.cpy`
-copied from `../legacy-application/copybook`. Test cases target
-**sub-paragraphs** (`1000-INITIALIZE`, `2000-SCAN-AND-PURGE`), not
-`0000-MAIN-PROCESS` — the latter ends in `GOBACK`, an existing, separate,
-documented program-terminator limitation (`docs/2026-07-06-real-world-readiness-audit.md`
-Finding 3) that would kill the whole test binary regardless of this fix.
-This is the same workaround `DEPTMQP`/`DEPTMQC` already use.
+copied from `../legacy-application/copybook`. Most test cases target
+**sub-paragraphs** (`1000-INITIALIZE`, `2000-SCAN-AND-PURGE`,
+`3000-FINALIZE`) for finer-grained control, an existing, separate,
+documented program-terminator workaround (`docs/2026-07-06-real-world-readiness-audit.md`
+Finding 3, same one `DEPTMQP`/`DEPTMQC` already use). `0000-MAIN-PROCESS`
+itself ends in `GOBACK`, reached via a plain PERFORM chain -- resolved by
+`docs/2026-07-08-goback-stop-run-support-design.md`; Task 10 of its
+implementation plan re-targeted this example at `0000-MAIN-PROCESS`
+directly, and one test case now exercises the real entry point end-to-end.
 
 ### Testing
 

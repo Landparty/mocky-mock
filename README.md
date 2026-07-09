@@ -107,17 +107,27 @@ Likewise a copybook whose bytes can't be decoded losslessly refuses with
 `EXPANSION_WARNING`. `DISPLAY` passes through unmocked. See the worked
 example in `examples/invupdt/`.
 
-### Known limitation: `STOP RUN` inside a test case's PERFORM target
+### `STOP RUN` / `GOBACK` inside a test case's PERFORM target
 
-A `.cut` test case's `PERFORM` target running into a `STOP RUN` (directly,
-or transitively through a paragraph it performs) exits the whole compiled
-test binary immediately — before that case's own `EXPECT`/`VERIFY` checks
-run and before any later test case in the same suite gets a chance to run
-at all. `mockymock run` reports this case as `[CRASH]` (console) / `<error>`
-(JUnit XML) rather than `[PASS]`, and the overall exit code is non-zero, but
-any test cases *after* the crashed one in the same suite never execute.
-Don't `PERFORM` a paragraph that reaches `STOP RUN` from a `.cut` test case
-today; split it out or mock around it instead.
+A `.cut` test case's `PERFORM` target may reach `STOP RUN` or `GOBACK`
+through a chain of plain, unconditional `PERFORM` calls, and the test
+still completes correctly: the terminator is neutralized (an early-exit
+flag propagates back up the real call chain via `EXIT PARAGRAPH`) and
+this case's own `EXPECT`/`VERIFY` checks run normally, with later test
+cases in the same suite unaffected. This is what makes it possible to
+`PERFORM` a program's real top-level driver paragraph (the one that
+naturally ends in `STOP RUN`/`GOBACK`) as a test target, not only its
+sub-paragraphs.
+
+Some layouts are not yet supported and refuse
+(`UNSUPPORTED_TERMINATOR_LAYOUT`) rather than risk corrupting the
+program: a terminator reachable via `GO TO` anywhere in the program, one
+inside a `SECTION`, one reached through an intermediate `PERFORM` that's
+nested inside a conditional body, or one reached only through the target
+of a looping `PERFORM ... UNTIL`/`VARYING`/`TIMES` (the early-exit flag
+only ends the current loop iteration, not the loop itself, so a
+terminator inside a loop body cannot be safely neutralized). Restructure
+to a plain, unconditional, single-shot `PERFORM` chain to avoid this.
 
 ## Setup
 

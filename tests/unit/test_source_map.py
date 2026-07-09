@@ -410,3 +410,147 @@ def test_top_level_call_with_own_clause_body_is_not_over_refused():
     surface = _annotated_top_level(source, "handlertop.cbl")
     site = _site(surface, "HANDLED")
     assert site.unspliceable_reason is None
+
+
+# --- terminator (STOP RUN/GOBACK) site validation (Task 2) -------------------
+
+TERMINATOR_OWN_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMOWNLINE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK
+           STOP RUN.
+
+       1000-DO-WORK.
+           CALL "CALCPGM" USING WS-RESULT.
+"""
+
+TERMINATOR_SHARED_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TERMSHARELINE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           MOVE 1 TO WS-RESULT STOP RUN.
+"""
+
+CANCEL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CANCELSAMP.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUBPGM".
+           CANCEL "SUBPGM".
+"""
+
+
+def _analyze_and_annotate(source, name="X.cbl"):
+    result = parse_cobol(source, filename=name)
+    assert result.success, result.errors
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    surface = analyze(result.ast)
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    return surface
+
+
+def test_terminator_on_its_own_line_gets_no_unspliceable_reason():
+    surface = _analyze_and_annotate(TERMINATOR_OWN_LINE_SOURCE)
+    site = next(s for s in surface.boundary_sites if s.label == "STOP RUN")
+    assert site.unspliceable_reason is None
+
+
+def test_terminator_sharing_its_line_is_flagged_unspliceable():
+    surface = _analyze_and_annotate(TERMINATOR_SHARED_LINE_SOURCE)
+    site = next(s for s in surface.boundary_sites if s.label == "STOP RUN")
+    assert site.unspliceable_reason == "does not start its own line"
+
+
+def test_cancel_site_is_still_unannotated_after_terminator_change():
+    """Regression guard: broadening the category-None skip must not start
+    annotating CANCEL (or any other category=None label) -- only STOP
+    RUN/GOBACK."""
+    surface = _analyze_and_annotate(CANCEL_SOURCE)
+    site = next(s for s in surface.boundary_sites if s.label == "CANCEL")
+    assert site.span is None
+    assert site.unspliceable_reason is None
+
+
+# --- statement_top_level_problem (Task 2 factoring) ---------------------------
+
+from cobolparser.models.statements.control import PerformStatement
+
+from mockymock.splicer.source_map import statement_top_level_problem
+
+PERFORM_OWN_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PERFORMOWNLINE.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM SUB-PARA.
+           DISPLAY "AFTER".
+
+       SUB-PARA.
+           DISPLAY "SUB".
+"""
+
+PERFORM_SHARED_LINE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PERFORMSHARE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A                PIC 9.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 1 TO WS-A PERFORM SUB-PARA.
+
+       SUB-PARA.
+           DISPLAY "SUB".
+"""
+
+
+def _find_perform(program, paragraph_name):
+    procedure = program.get_division("PROCEDURE")
+    paragraph = next(
+        p for p in procedure.paragraphs if p.paragraph_name == paragraph_name
+    )
+    # Not `.statements[0]`: PERFORM_SHARED_LINE_SOURCE's MAIN-PARA holds a
+    # MoveStatement *then* the PerformStatement on the same line, so index 0
+    # would silently test the wrong statement (verified empirically against
+    # cobolparser's parse: statements[0] is the MOVE, statements[1] the
+    # PERFORM).
+    return next(s for s in paragraph.statements if isinstance(s, PerformStatement))
+
+
+def test_statement_top_level_problem_none_when_perform_owns_its_line():
+    result = parse_cobol(PERFORM_OWN_LINE_SOURCE, filename="x.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(PERFORM_OWN_LINE_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    perform = _find_perform(result.ast, "MAIN-PARA")
+    assert statement_top_level_problem(perform, scope_map, lines) is None
+
+
+def test_statement_top_level_problem_set_when_perform_shares_its_line():
+    result = parse_cobol(PERFORM_SHARED_LINE_SOURCE, filename="x.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(PERFORM_SHARED_LINE_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    perform = _find_perform(result.ast, "MAIN-PARA")
+    assert (
+        statement_top_level_problem(perform, scope_map, lines)
+        == "does not start its own line"
+    )

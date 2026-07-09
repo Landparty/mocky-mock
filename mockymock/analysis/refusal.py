@@ -21,7 +21,15 @@ Flow-edge model (fail closed):
   be paragraphs or sections. (A GO TO that escapes its PERFORM range and
   relies on falling through *past* its target paragraph is not modeled --
   such control flow runs off the end of the program at test runtime and is
-  covered by the documented STOP RUN limitation.)
+  covered by the documented STOP RUN limitation. Noted by the 2026-07-09
+  final branch review: pre-neutralization this is a clean, loud crash --
+  the real terminator exits the binary. Once ANY case has neutralized that
+  terminator (via its own safe plain chain), a DIFFERENT case reaching the
+  same, now-neutralized terminator through this unmodeled GO-TO-escape
+  path would hit `EXIT PARAGRAPH` from a paragraph entered via `GO TO`,
+  which per the design doc's spike #4 "just stops, no crash, no return" --
+  a subtler failure than the pre-branch behavior. Exotic, not hardened
+  against; documented here rather than silently assumed harmless.)
 - Any PERFORM/GO TO target that resolves to neither a paragraph nor a
   section refuses with UNRESOLVED_FLOW_TARGET instead of being skipped: a
   target the model cannot resolve means the reachable set is not trusted.
@@ -118,7 +126,7 @@ in a comment or string literal.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from cobolparser.lexer import CobolLexer, TokenType
 from cobolparser.models.program import CobolParagraph
@@ -128,6 +136,7 @@ from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.linkage import linkage_plan
 from mockymock.analysis.mock_surface import (
+    _TERMINATOR_LABELS,
     BoundarySite,
     MockSurface,
     _all_paragraphs,
@@ -139,7 +148,9 @@ from mockymock.dsl.model import (
     MockCategory,
     MockDirective,
     MockTestCase,
+    MockTestSuite,
 )
+from mockymock.splicer.source_map import statement_top_level_problem
 
 _UNMOCKED_CODES = {
     MockCategory.CALL: "UNMOCKED_CALL",
@@ -157,6 +168,21 @@ _UNMOCKED_FILE_OP_CODE = "UNMOCKED_FILE_OP"
 class RefusalReason:
     code: str
     message: str
+
+
+@dataclass
+class TerminatorPlan:
+    """One physical STOP RUN(RUN-form)/GOBACK statement found safe to
+    neutralize, plus every intermediate PERFORM statement (deduped across
+    the whole suite by identity) that needs the early-exit flag-check
+    inserted after it for this terminator's propagation to correctly
+    reach the test driver. Empty `chain_performs` means the terminator
+    sits directly in a test's own PERFORM target -- no intermediate
+    instrumentation needed. See
+    docs/2026-07-08-goback-stop-run-support-design.md."""
+
+    site: BoundarySite
+    chain_performs: list = field(default_factory=list)
 
 
 # Shown when a nested site reaches a check before annotate_nested_sites ran
@@ -562,6 +588,14 @@ def check_test_case(
                         ),
                     )
                 )
+            elif site.label in _TERMINATOR_LABELS:
+                # Handled entirely separately by check_terminator_layout
+                # (Task 3, docs/2026-07-08-goback-stop-run-support-design.md)
+                # -- not refused here, and deliberately not folded into
+                # this function, so a safely-neutralizable terminator
+                # doesn't need every OTHER test case in the suite to also
+                # satisfy check_test_case's unrelated matching rules.
+                pass
             else:
                 reasons.append(
                     RefusalReason(
@@ -865,3 +899,288 @@ def _reachable_paragraphs(
                         reasons.append(problem)
                     stack.extend(members)
     return seen, reasons
+
+
+def _go_to_targets(program) -> set[str]:
+    """Every paragraph/section name that is EVER a GO TO target anywhere
+    in the whole program, regardless of reachability from any one test
+    case -- a categorical, whole-program exclusion list.
+
+    A paragraph that could ever be entered via GO TO cannot safely use
+    EXIT PARAGRAPH/EXIT SECTION for early-exit propagation: verified
+    empirically (docs/2026-07-08-goback-stop-run-support-design.md, spike
+    #4) that EXIT PARAGRAPH silently fails to return to the correct
+    caller when the paragraph it's issued from was entered via GO TO
+    rather than PERFORM -- execution just stops, no crash, no return,
+    the caller's checks never run."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return set()
+    targets: set[str] = set()
+    for paragraph in _all_paragraphs(procedure):
+        for statement in _find_statements_of_type(paragraph.statements, GoStatement):
+            targets.update(statement.target_paragraphs)
+            if statement.target_paragraph:
+                targets.add(statement.target_paragraph)
+    return targets
+
+
+def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
+    """BFS from `start` following ONLY plain (non-THRU), unconditional,
+    single-shot, top-level PERFORM statements -- i.e. PerformStatement
+    nodes that are direct members of a paragraph's own `.statements` list
+    (not nested inside IF/EVALUATE), with `thru_paragraph is None` and
+    `perform_type == "SIMPLE"`.
+
+    A PERFORM ... UNTIL/VARYING/TIMES (perform_type != "SIMPLE") is
+    deliberately NOT followed and NOT added to the edge set, even though
+    it also carries a `target_paragraph` with `thru_paragraph is None`:
+    the early-exit mechanism sets a flag and does `EXIT PARAGRAPH`, which
+    only ends the CURRENT iteration of the looped paragraph -- control
+    returns to the loop construct, which re-checks its own unrelated
+    UNTIL/VARYING/TIMES condition and may iterate again. A terminator
+    reached from inside a loop's target would silently run extra
+    unwanted iterations instead of stopping, which was proven empirically
+    (a synthetic STOP RUN placed inside a looped paragraph kept iterating
+    past it). Excluding the edge means such a terminator's paragraph never
+    enters `seen`, so `find_terminator_plans` naturally refuses it via the
+    existing "reachable but not via a plain chain" check -- no new
+    refusal branch needed.
+
+    SECTION members are excluded entirely: this only looks up names in
+    `procedure.paragraphs` (top-level paragraphs), never
+    `procedure._sections[...].paragraphs` -- a paragraph that only exists
+    as a section member is an unreachable dead end here, naturally
+    refusing any chain that would need to pass through one (SECTION
+    support is deferred -- see the design doc).
+
+    Returns (reachable paragraph names via this restricted edge set, the
+    PerformStatement objects that ARE those edges) -- every one of those
+    statements is a candidate for the early-exit flag-check
+    instrumentation. Deliberately NOT the same as `_reachable_paragraphs`:
+    that function also follows GO TO and section/THRU fall-through edges,
+    exactly the unsafe shapes this restricted variant must exclude."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return set(), []
+    by_name = {p.paragraph_name: p for p in procedure.paragraphs}
+    seen = {start}
+    stack = [start]
+    edges: list = []
+    while stack:
+        name = stack.pop()
+        paragraph = by_name.get(name)
+        if paragraph is None:
+            continue
+        for statement in paragraph.statements:
+            if (
+                isinstance(statement, PerformStatement)
+                and statement.thru_paragraph is None
+                and statement.target_paragraph
+                and statement.perform_type == "SIMPLE"
+            ):
+                edges.append(statement)
+                target = statement.target_paragraph
+                if target not in seen:
+                    seen.add(target)
+                    stack.append(target)
+    return seen, edges
+
+
+def find_terminator_plans(
+    surface: MockSurface,
+    program,
+    suite: MockTestSuite,
+    scope_map,
+    lines: list[str],
+) -> tuple[list[TerminatorPlan], list[RefusalReason]]:
+    """For every STOP RUN(RUN-form)/GOBACK reachable from at least one test
+    case, decide whether it is safely neutralizable and return either a
+    TerminatorPlan or an UNSUPPORTED_TERMINATOR_LAYOUT RefusalReason --
+    never both for the same physical statement. Sites unreachable from
+    every test case are omitted entirely (left untouched, like any other
+    unmocked boundary).
+
+    Safe means: the terminator's enclosing paragraph is a top-level
+    paragraph (not a SECTION member), is reachable from the test's own
+    perform_target via `_plain_perform_edges_from` (a chain of nothing but
+    plain, unconditional, top-level PERFORM statements), and no paragraph
+    anywhere on that whole restricted-reachable chain -- not just the
+    terminator's own paragraph, but every paragraph the case's
+    over-inclusive chain_performs instrumentation would touch, including
+    the perform_target itself -- is ever a GO TO target anywhere in the
+    program, or is missing from `top_level_names` (a dead-end BFS target
+    that turned out to be a SECTION name rather than a real paragraph, e.g.
+    `PERFORM some-section`). The terminator's own statement must also own
+    its line/have a validated span (`site.span`/`site.unspliceable_reason`,
+    populated by a broadened `annotate_nested_sites` call the caller must
+    have already made), and every intermediate PERFORM on the case's
+    restricted-reachable chain must also own its own line
+    (`statement_top_level_problem`, checked once per case since the same
+    chain_performs set is a candidate for every terminator that case
+    reaches -- the design doc describes a per-terminator backward walk,
+    but this implementation computes one forward, whole-case reachable
+    set instead and reuses it for every terminator that case finds,
+    which is why the GO-TO/SECTION checks below are also computed over
+    the whole chain rather than just the terminator's own paragraph: any
+    terminator sharing this case's chain_performs would be instrumented
+    with the same hazardous paragraph regardless of whether it sits on
+    that specific terminator's own ancestor path -- noted by the
+    2026-07-09 final branch review: this over-inclusiveness is fail-SAFE
+    (it can only ever cause an extra, unnecessary refusal of a terminator
+    that would actually have been fine, never miss an unsafe one), but it
+    is a real usability cliff on large paragraphs -- a GO-TO target or
+    SECTION member anywhere in the case's reachable set refuses every
+    terminator that case finds, even ones with no path through the
+    hazardous paragraph at all. If this bites in practice, narrowing to
+    the terminator's actual ancestor path is the fix, not loosening the
+    check). Once ANY test case
+    finds a given terminator unsafe, it is
+    refused permanently -- fail-closed, regardless of what other test
+    cases' paths say. `scope_map`/`lines` must be the same
+    `collect_scope_map(program, lines)` result and normalized lines the
+    caller already computed for `annotate_nested_sites`."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return [], []
+
+    top_level_names = {p.paragraph_name for p in procedure.paragraphs}
+    go_to_targets = _go_to_targets(program)
+    terminator_sites = {
+        id(s.statement): s
+        for s in surface.boundary_sites
+        if s.category is None and s.label in _TERMINATOR_LABELS
+    }
+
+    plans_by_statement: dict[int, TerminatorPlan] = {}
+    reasons: list[RefusalReason] = []
+    refused_statement_ids: set[int] = set()
+
+    for case in suite.test_cases:
+        reachable, _ = _reachable_paragraphs(
+            program, case.perform_target, case.perform_thru
+        )
+        safe_names, chain_performs = _plain_perform_edges_from(
+            program, case.perform_target
+        )
+        chain_section_names = safe_names - top_level_names
+        chain_go_to_names = safe_names & go_to_targets
+
+        chain_problem: str | None = None
+        for perform in chain_performs:
+            line_problem = statement_top_level_problem(perform, scope_map, lines)
+            if line_problem is not None:
+                chain_problem = (
+                    f"an intermediate PERFORM {perform.target_paragraph} at "
+                    f"line {perform.location.line} {line_problem} -- "
+                    f"inserting the early-exit check after it would corrupt "
+                    f"sibling code sharing its line"
+                )
+                break
+
+        qualified_keys: list[int] = []
+
+        for site in surface.sites_in(reachable):
+            key = id(site.statement)
+            if key not in terminator_sites or key in refused_statement_ids:
+                continue
+
+            paragraph_name = site.paragraph_name
+            problem = None
+            if paragraph_name not in top_level_names:
+                problem = (
+                    "is inside a paragraph that belongs to a SECTION -- "
+                    "SECTION-scoped terminators are not yet supported"
+                )
+            elif paragraph_name in go_to_targets:
+                problem = (
+                    "is reachable via GO TO somewhere in this program -- "
+                    "the early-exit propagation mechanism (EXIT PARAGRAPH) "
+                    "only works correctly when a paragraph is entered "
+                    "exclusively via PERFORM"
+                )
+            elif paragraph_name not in safe_names:
+                problem = (
+                    f"is reachable from '{case.perform_target}' but not via "
+                    f"a chain of plain, unconditional, top-level PERFORM "
+                    f"statements -- this is the only shape this feature can "
+                    f"safely neutralize today"
+                )
+            elif chain_section_names:
+                bad_name = sorted(chain_section_names)[0]
+                problem = (
+                    f"is only reachable through this test's own early-exit "
+                    f"propagation chain by way of '{bad_name}', which is "
+                    f"not a top-level paragraph (it belongs to a SECTION) "
+                    f"-- SECTION-scoped chains are not yet supported"
+                )
+            elif chain_go_to_names:
+                # paragraph_name can't be a member here: the preceding elif
+                # already excluded it from go_to_targets, and chain_go_to_names
+                # is a subset of go_to_targets.
+                bad_name = sorted(chain_go_to_names)[0]
+                problem = (
+                    f"is only reachable through this test's own early-exit "
+                    f"propagation chain by way of '{bad_name}', which is "
+                    f"reachable via GO TO somewhere in this program -- the "
+                    f"early-exit propagation mechanism (EXIT PARAGRAPH) "
+                    f"only works correctly when a paragraph is entered "
+                    f"exclusively via PERFORM"
+                )
+            elif site.nested and site.span is None:
+                problem = (
+                    f"is nested inside a conditional/loop body and cannot "
+                    f"be safely spliced: "
+                    f"{site.unspliceable_reason or _UNANNOTATED}"
+                )
+            elif not site.nested and site.unspliceable_reason:
+                problem = (
+                    f"{site.unspliceable_reason} -- splicing it would "
+                    f"corrupt sibling code sharing its line(s)"
+                )
+            elif chain_problem is not None:
+                problem = chain_problem
+
+            if problem is not None:
+                reasons.append(
+                    RefusalReason(
+                        code="UNSUPPORTED_TERMINATOR_LAYOUT",
+                        message=(
+                            f"{site.label} at line {site.line} (paragraph "
+                            f"'{paragraph_name}') {problem}"
+                        ),
+                    )
+                )
+                refused_statement_ids.add(key)
+                plans_by_statement.pop(key, None)
+                continue
+
+            if key not in plans_by_statement:
+                plans_by_statement[key] = TerminatorPlan(site=terminator_sites[key])
+            qualified_keys.append(key)
+
+        for key in qualified_keys:
+            plan = plans_by_statement[key]
+            existing_ids = {id(p) for p in plan.chain_performs}
+            for perform in chain_performs:
+                if id(perform) not in existing_ids:
+                    plan.chain_performs.append(perform)
+                    existing_ids.add(id(perform))
+
+    return list(plans_by_statement.values()), reasons
+
+
+def check_terminator_layout(
+    surface: MockSurface,
+    program,
+    suite: MockTestSuite,
+    scope_map,
+    lines: list[str],
+) -> list[RefusalReason]:
+    """Thin wrapper over find_terminator_plans for the CLI's refusal-gate
+    loop, which only needs the refusal reasons, not the plans themselves
+    (the plans are recomputed again right before splicing -- see the CLI
+    wiring task -- matching this codebase's existing pattern of computing
+    a cheap, pure "plan" twice rather than threading it through every
+    caller, e.g. analysis.linkage.linkage_plan)."""
+    return find_terminator_plans(surface, program, suite, scope_map, lines)[1]

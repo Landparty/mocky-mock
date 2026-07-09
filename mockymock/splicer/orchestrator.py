@@ -34,13 +34,20 @@ but one statement must get exactly one splice.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from mockymock.analysis.mock_surface import MockSurface
-from mockymock.analysis.refusal import directive_matches_site
+from mockymock.analysis.refusal import TerminatorPlan, directive_matches_site
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
-from mockymock.splicer.injector import build_exec_trap, build_site_dispatch
+from mockymock.splicer.injector import (
+    build_chain_check,
+    build_exec_trap,
+    build_site_dispatch,
+    build_terminator_neutralization,
+)
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.source_map import statement_span
-from mockymock.splicer.stub_writer import comment_and_replace
+from mockymock.splicer.stub_writer import comment_and_replace, insert_lines_after
 
 
 def splice_program(
@@ -49,6 +56,7 @@ def splice_program(
     surface: MockSurface,
     suite: MockTestSuite,
     registry: TallyRegistry,
+    terminator_plans: Sequence[TerminatorPlan] = (),
 ) -> list[str]:
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
@@ -114,6 +122,69 @@ def splice_program(
             replacement = replacement[:-1] + [replacement[-1] + "."]
         spans.append((start, end, replacement))
 
-    for start, end, replacement in sorted(spans, key=lambda s: s[0], reverse=True):
-        lines = comment_and_replace(lines, start, end, replacement)
+    # Terminator neutralization: replace the STOP RUN/GOBACK statement's
+    # own span, exactly like any other boundary replacement above.
+    seen_terminator_ids: set[int] = set()
+    for plan in terminator_plans:
+        site = plan.site
+        if id(site.statement) in seen_terminator_ids:
+            continue
+        seen_terminator_ids.add(id(site.statement))
+        replacement = build_terminator_neutralization()
+        if site.nested:
+            if site.span is None:
+                raise ValueError(
+                    f"nested {site.label} site at line {site.line} reached "
+                    f"the splicer without a validated span -- "
+                    f"check_terminator_layout (UNSUPPORTED_TERMINATOR_LAYOUT) "
+                    f"should have refused it"
+                )
+            start, end = site.span
+        else:
+            if site.unspliceable_reason:
+                raise ValueError(
+                    f"top-level {site.label} site at line {site.line} "
+                    f"reached the splicer although it "
+                    f"{site.unspliceable_reason} -- "
+                    f"check_terminator_layout (UNSUPPORTED_TERMINATOR_LAYOUT) "
+                    f"should have refused it"
+                )
+            start, end = statement_span(site.statement, boundaries, last_line)
+        last_span_line = next(
+            (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
+            "",
+        )
+        if last_span_line.rstrip().endswith("."):
+            replacement = replacement[:-1] + [replacement[-1] + "."]
+        spans.append((start, end, replacement))
+
+    # Chain-check insertion: every intermediate PERFORM statement across
+    # every plan, deduped by identity (several plans can share the same
+    # PERFORM edge -- e.g. two terminators reached through one common
+    # wrapper paragraph). Represented as insert-only operations and merged
+    # with `spans` into ONE combined, position-sorted bottom-up pass below
+    # -- see the note on ordering for why a separate second pass is unsafe.
+    seen_perform_ids: set[int] = set()
+    insertions: list[tuple[int, list[str]]] = []
+    for plan in terminator_plans:
+        for perform in plan.chain_performs:
+            if id(perform) in seen_perform_ids:
+                continue
+            seen_perform_ids.add(id(perform))
+            _, end = statement_span(perform, boundaries, last_line)
+            insertions.append((end, build_chain_check()))
+
+    ops: list[tuple[int, str, int, int, list[str]]] = [
+        (start, "replace", start, end, replacement) for start, end, replacement in spans
+    ] + [
+        (line_number, "insert", line_number, line_number, new_lines)
+        for line_number, new_lines in insertions
+    ]
+    for _, kind, start, end, replacement in sorted(
+        ops, key=lambda o: o[0], reverse=True
+    ):
+        if kind == "replace":
+            lines = comment_and_replace(lines, start, end, replacement)
+        else:
+            lines = insert_lines_after(lines, start, replacement)
     return lines

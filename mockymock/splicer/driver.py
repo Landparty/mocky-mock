@@ -53,6 +53,7 @@ def build_driver(
     working_storage = [
         "01  UT-CURRENT-CASE        PIC X(9).",
         "01  UT-FAIL-COUNT          PIC 9(9) VALUE 0.",
+        '01  UT-EARLY-EXIT          PIC X VALUE "N".',
     ]
     for _, tally in registry.items():
         working_storage.append(f"01  {tally}      PIC 9(9) VALUE 0.")
@@ -99,6 +100,7 @@ def _build_testcase_paragraph(
     if has_reset:
         lines.append("           PERFORM UT-RESET-WORKING-STORAGE")
     lines.append(f'           MOVE "{case_id}" TO UT-CURRENT-CASE')
+    lines.append('           MOVE "N" TO UT-EARLY-EXIT')
     for category, key in dict.fromkeys((m.category, m.key) for m in case.mocks):
         lines.append(f"           MOVE 0 TO {registry.name(category, key)}")
     lines.append(

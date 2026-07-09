@@ -1,4 +1,4 @@
-from mockymock.splicer.stub_writer import comment_and_replace
+from mockymock.splicer.stub_writer import comment_and_replace, insert_lines_after
 
 SOURCE_LINES = [
     "       FIRST-PARAGRAPH.",
@@ -48,3 +48,21 @@ def test_does_not_mutate_input_list():
     original = list(SOURCE_LINES)
     comment_and_replace(SOURCE_LINES, start_line=2, end_line=4, replacement=[])
     assert SOURCE_LINES == original
+
+
+def test_insert_lines_after_leaves_original_lines_untouched():
+    lines = ["AAA", "BBB", "CCC"]
+    result = insert_lines_after(lines, 2, ["NEW1", "NEW2"])
+    assert result == ["AAA", "BBB", "NEW1", "NEW2", "CCC"]
+    assert lines == ["AAA", "BBB", "CCC"]  # original list not mutated
+
+
+def test_insert_lines_after_at_end_of_file():
+    lines = ["AAA", "BBB"]
+    result = insert_lines_after(lines, 2, ["NEW"])
+    assert result == ["AAA", "BBB", "NEW"]
+
+
+def test_insert_lines_after_no_new_lines_is_a_no_op():
+    lines = ["AAA", "BBB"]
+    assert insert_lines_after(lines, 1, []) == ["AAA", "BBB"]

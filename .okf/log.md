@@ -1,5 +1,103 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-09 (Final branch review: GOBACK/STOP RUN terminator support)
+* **Independent Opus-model review of the whole `feature/goback-stop-run-support`
+  branch** (all 10 tasks + the looping-PERFORM fix below), specifically asked
+  to hunt for siblings of that fix's bug class. Found one Important,
+  currently-dormant gap and three Minor items; verified the Important one
+  directly (not just trusted the report) before acting on it.
+* **Important (verified, addressed):** the out-of-line form of
+  `PERFORM para VARYING ...` isn't parsed by `cobolparser` at all -- the
+  clause is silently dropped, leaving `PerformStatement.perform_type`
+  mistagged as `"SIMPLE"` (confirmed directly: `parse_cobol` on this shape
+  returns `target_paragraph` set, `thru_paragraph=None`,
+  `perform_type='SIMPLE'` -- indistinguishable from a genuine plain PERFORM
+  to `_plain_perform_edges_from`). What actually keeps this out of
+  `find_terminator_plans` today is unrelated: cobolparser also emits an
+  "Unparsed tokens starting at 'VARYING' ... dropped from the AST" warning,
+  and `check_whole_program`'s `PARSE_WARNING` gate refuses the whole program
+  before the terminator logic ever runs (confirmed end-to-end via
+  `mockymock run`: exit 1, refused on `PARSE_WARNING`). This is a real but
+  *accidental* safety net -- if cobolparser is ever fixed to parse this
+  shape without also correctly tagging `perform_type`, the hole reopens
+  silently. Corrected the design doc's inaccurate claim that `perform_type`
+  itself covers this shape, and added pinning regression tests (unit:
+  `test_refusal.py`; integration: `test_terminator_support.py`) that assert
+  the refusal happens via `PARSE_WARNING` specifically, so a future
+  cobolparser change turns this into a loud test failure instead of a
+  silent regression.
+* **Minor, addressed:** two new orchestrator regression fixtures (two
+  terminators sharing one paragraph, deduped chain-check; a `PERFORM`
+  immediately followed by a terminator) -- both manually spiked by the
+  reviewer and found correct but previously unguarded by any test, added to
+  `test_orchestrator.py` given splice line-arithmetic is exactly what
+  produced the two-pass ordering bug documented below.
+* **Minor, documented (no code change):** (1) a terminator reachable only
+  via a `GO TO` that escapes its `PERFORM` range and falls through is
+  unmodeled and, once a DIFFERENT case has neutralized that same
+  terminator, could produce a subtler failure than the pre-branch clean
+  crash (documented in `refusal.py`'s module docstring); (2) the
+  whole-chain GO-TO/SECTION checks are over-inclusive and fail-*safe* but
+  can over-refuse a genuinely-safe terminator on large paragraphs
+  (documented in `find_terminator_plans`'s docstring).
+* Full unit+integration suite after remediation: 462 passed, 3 known
+  pre-existing failures unrelated to this branch (confirmed via git
+  stash/prior investigation), ruff/black/mypy clean on all touched files.
+  See `docs/2026-07-08-goback-stop-run-support-design.md`'s "Out of scope"
+  section and [splicer.md](splicer.md#terminator-neutralization-gobackstop-run-approach-b)
+  for the full technical writeup.
+
+## 2026-07-09 (Fix: looping PERFORM safety gap in terminator neutralization)
+* **Fixed a silent correctness bug** in the GOBACK/STOP RUN terminator
+  support shipped 2026-07-08 (below): `refusal._plain_perform_edges_from`
+  treated `PERFORM ... UNTIL`/`VARYING`/`TIMES` (a looping, out-of-line
+  PERFORM) identically to a plain single-shot `PERFORM`, so a terminator
+  reachable only through such a loop's target paragraph was wrongly
+  accepted as safe by `find_terminator_plans`. `EXIT PARAGRAPH` only ends
+  the current loop iteration, not the loop construct itself -- the loop
+  re-checks its own unrelated condition and may iterate again, so the
+  neutralized program silently ran extra unwanted iterations instead of
+  stopping where the real terminator would have. Confirmed empirically:
+  a synthetic program with `STOP RUN` inside a looped paragraph (natural
+  exit at iteration 5, terminator at iteration 2) ran all 5 iterations
+  under the un-fixed neutralization instead of stopping at 2. Fixed by
+  excluding `perform_type != "SIMPLE"` edges from the BFS/edge set in
+  `_plain_perform_edges_from`; such a terminator's paragraph now never
+  enters the safe-reachable set, so it refuses via the existing "reachable
+  but not via a plain chain" `UNSUPPORTED_TERMINATOR_LAYOUT` check -- no
+  new refusal branch needed. Discovered while qualifying the real-world
+  `ACCTPRG` example for a re-target at its `0000-MAIN-PROCESS` entry
+  point (which itself uses `PERFORM ... UNTIL` as an intermediate chain
+  link, with its `GOBACK` sitting outside the loop -- confirmed still
+  safe and unaffected by this fix). See
+  [splicer.md#terminator-neutralization-gobackstop-run-approach-b](splicer.md#terminator-neutralization-gobackstop-run-approach-b).
+
+## 2026-07-08 (GOBACK/STOP RUN terminator support, Approach B)
+* **Closed Finding 3 of `docs/2026-07-06-real-world-readiness-audit.md`**
+  for the plain-PERFORM-chain shape: a `.cut` test case's `PERFORM`
+  target reaching `STOP RUN`/`GOBACK` through a chain of plain,
+  unconditional `PERFORM` calls no longer kills the whole compiled
+  suite. An earlier design (redirect via `GO TO` into a `PERFORM ...
+  THRU ...` range) was disproven by its own verification spike and
+  never shipped -- see
+  [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md)
+  for the concrete crash evidence and the chosen replacement.
+  `mock_surface.py` detects `StopStatement`(RUN-form)/`GobackStatement`
+  (category `None`, like `CANCEL`/SORT-MERGE); `refusal.py`'s
+  `find_terminator_plans` walks backward from each reachable terminator
+  through the chain of paragraphs that plainly `PERFORM` it, refusing
+  (`UNSUPPORTED_TERMINATOR_LAYOUT`) if any link is a `SECTION` member,
+  a `GO TO` target anywhere in the program, or not reached via a plain
+  top-level `PERFORM`. Safe terminators get `MOVE "Y" TO UT-EARLY-EXIT`
+  + `EXIT PARAGRAPH` in place of the real statement
+  (`injector.build_terminator_neutralization`); every intermediate
+  `PERFORM` on the chain gets `IF UT-EARLY-EXIT = "Y" EXIT PARAGRAPH
+  END-IF` inserted after it (`injector.build_chain_check`, via the new
+  `stub_writer.insert_lines_after` primitive). No `driver.py`
+  restructuring needed -- `UT-TESTCASE-NNN`'s existing checks, right
+  after `PERFORM {target}`, run once the flag has propagated back via
+  ordinary `PERFORM` returns.
+
 ## 2026-07-08 (IMS DL/I ENTRY/LINKAGE support: neutralize instead of crash or refuse)
 * **Closed the corpus sweep's flagged unknown**: "the 5 CBLTDLI-calling
   programs (`ACCTPRG`, `DEPTBMP`, `DEPTIMSM`, `FNDTXFR`, `LNRECOV`) parse
