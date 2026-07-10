@@ -1,5 +1,30 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-09 (Feature: EXEC SQL INCLUDE host-var copybooks + cursor ROWS sugar)
+* **What shipped**: `EXEC SQL INCLUDE <member> END-EXEC` (non-SQLCA) now
+  resolves via `--copybook-path` — a synthetic `COPY <member>.` snippet
+  expanded through cobolparser's public `expand_copybooks`, spliced in and
+  re-scanned in place so an embedded DCLGEN `DECLARE ... TABLE` stanza gets
+  commented out automatically. Closes the "copybook-style SQL includes
+  block the file" row of Finding 5 in the real-world-readiness audit. Also
+  added `MOCK SQL "<prefix>" ROWS ( ... ) ( ... ) END-MOCK` DSL sugar,
+  codegenning a tally-driven `EVALUATE`/`WHEN` block for cursor FETCH
+  loops instead of requiring a hand-written tally/SQLCODE mock body.
+* **Deliberate non-goal, verified during design**: `find_copybook_file` /
+  `CopybookSearchPath` (`cobolparser.preprocess.path_resolver` /
+  `.models`) are **not** in `cobolparser.preprocess`'s `__all__` — reaching
+  into them would have added dependency surface `interface-contract.md`
+  shouldn't pin. Resolution instead routes through the already-public
+  `expand_copybooks` on a synthetic one-line `COPY <member>.` snippet,
+  spiked directly (not just reasoned about) to confirm it resolves,
+  inlines embedded `EXEC SQL DECLARE TABLE` content verbatim, and raises
+  the public `CopybookNotFoundError` on a miss.
+* **Scope deliberately deferred**: nested `EXEC SQL INCLUDE` (a resolved
+  member containing another live INCLUDE) refuses rather than resolving;
+  `ROWS`' exhaustion `SQLCODE` is fixed at 100, not overridable; `ROWS` is
+  SQL-only, not generalized to other categories.
+* See [docs/2026-07-09-sql-v1-include-cursor-rows-design.md](../docs/2026-07-09-sql-v1-include-cursor-rows-design.md).
+
 ## 2026-07-09 (Fix: `mockymock setup` FileNotFoundError under `uv tool install`)
 * **Root cause**: `de6ad0d` (uv-installable CLI) made `uv tool install`
   a real, non-editable package install, but `docker_toolchain.py`'s

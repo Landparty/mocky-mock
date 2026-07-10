@@ -230,10 +230,18 @@ below the silent risks above.
 | Dynamic `CALL` with unresolvable identifier | refused `DYNAMIC_CALL` | resolvable dynamic calls *are* supported (`DYNCALL`) |
 | CICS | classified but **never proven** — no example, absent from corpus | online/CICS programs unvalidated end-to-end |
 | IMS DL/I | classified but **never attempted** — `LINKAGE`/`ENTRY 'DLITCBL'` vs the `PERFORM`-only driver is unverified | IMS programs unsupported in practice |
-| `EXEC SQL INCLUDE <member>` (non-SQLCA) | refused `UNSUPPORTED_DATA_DIVISION_EXEC` | copybook-style SQL includes block the file |
+| `EXEC SQL INCLUDE <member>` (non-SQLCA) | **resolved 2026-07-09** via `--copybook-path` — see [docs/2026-07-09-sql-v1-include-cursor-rows-design.md](2026-07-09-sql-v1-include-cursor-rows-design.md) | closed |
 | `EXEC SQL DECLARE CURSOR` in WORKING-STORAGE | refused unless the spiked `sqlca.py` fix lands (`task_d610057b`) | cursor-based DB2 programs blocked today |
 | Unresolved `COPY` | refused `UNRESOLVED_COPYBOOK` | requires every copybook supplied via `--copybook-path` |
 | Boundary statements sharing a line, or nested inside another boundary's clause body (`READ ... AT END CALL ...`) | refused | forces the common one-statement-per-line layout |
+
+**Partially resolved 2026-07-09** — the non-SQLCA `EXEC SQL INCLUDE
+<member>` row above is closed (host-variable copybooks now resolve the
+same way `COPY` does); the `EXEC SQL DECLARE CURSOR` row was already
+closed by an earlier `sqlca.py` change (DECLARE CURSOR is commented out
+declaratively; OPEN/FETCH/CLOSE were always handled by the generic
+boundary-mocking machinery). The remaining rows in this table are
+unaffected.
 
 **What closing it takes:** each is its own project (SORT/MERGE modeling; a
 CICS translation/stub layer; the IMS `ENTRY DLITCBL` driving model; cursor
