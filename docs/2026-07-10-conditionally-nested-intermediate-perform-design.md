@@ -97,45 +97,73 @@ works, and is documented as such (see Out of scope).
 
 ### 3. Wiring
 
-`TerminatorPlan.chain_performs` changes from `list[PerformStatement]` to
-`list[tuple[PerformStatement, bool]]` (statement, `nested`) — every existing
-consumer that only cared about the statement itself is updated to unpack the
-tuple.
+`orchestrator.py`'s `splice_program` never receives `scope_map` today (only
+`find_terminator_plans` does) — its chain-check insertion loop derives the
+insertion line purely from `collect_boundaries`'s coarse, top-level-only
+list, which is exactly the tool that's unsafe for a nested edge. Rather than
+thread `scope_map` into `splice_program` (a public function with a
+backward-compat-pinned positional signature — see
+`test_no_terminator_plans_argument_leaves_existing_behavior_unchanged`),
+the nested case's insertion line is **computed and validated once, in
+`find_terminator_plans`, where `scope_map` already lives** — mirroring
+exactly how `BoundarySite.span` is precomputed by `annotate_nested_sites`
+and merely consumed later by the splicer, never recomputed there.
 
-**Dedup trap to watch for:** both existing dedup sites — `find_terminator_plans`'s
-per-plan merge (`existing_ids = {id(p) for p in plan.chain_performs}`) and
-`orchestrator.py`'s insertion loop (`seen_perform_ids`) — key off `id(perform)`
-directly today. Once `chain_performs` holds tuples, `id(perform)` would key
-off the *tuple's* identity, not the statement's, so two tuples wrapping the
-same statement (the same shared wrapper paragraph feeding two different
-terminators, exactly the scenario `orchestrator.py`'s existing comment about
-"several plans can share the same PERFORM edge" already describes) would
-never dedupe against each other, causing the flag-check to be inserted
-twice after the same line. Both sites must dedupe on `id(perform_statement)`
-(the first tuple element), not `id(perform)` the tuple itself.
+`TerminatorPlan.chain_performs` changes from `list[PerformStatement]` to
+`list[ChainPerform]`, a new small dataclass in `refusal.py`:
+
+```python
+@dataclass
+class ChainPerform:
+    statement: PerformStatement
+    insertion_line: int | None = None  # set only for nested edges
+```
+
+`insertion_line is None` means "top-level edge, use the existing
+`statement_span(perform.statement, boundaries, last_line)` computation in
+`orchestrator.py`, completely unchanged" — the top-level code path's actual
+computation is untouched, not just behaviorally equivalent. `insertion_line`
+is set (to the validated `end` from `nested_chain_perform_problem`) only for
+a nested edge, where `find_terminator_plans` already confirmed a safe
+insertion point exists — `orchestrator.py` then uses that value directly, no
+recomputation, no `scope_map` needed there at all.
+
+**Dedup:** both existing dedup sites — `find_terminator_plans`'s per-plan
+merge (`existing_ids = {id(p) for p in plan.chain_performs}`) and
+`orchestrator.py`'s insertion loop (`seen_perform_ids`) — must key off
+`id(chain_perform.statement)`, not `id(chain_perform)`, so two `ChainPerform`
+wrappers built for the same shared PERFORM (the scenario `orchestrator.py`'s
+existing comment about "several plans can share the same PERFORM edge"
+already describes) still dedupe correctly.
 
 `find_terminator_plans`'s per-chain-perform validation loop (today: a single
 call to `statement_top_level_problem` per `perform` in `chain_performs`)
-branches on the tag:
+branches on whether `_plain_perform_edges_from` tagged the edge nested:
 
-- `nested=False`: calls `statement_top_level_problem` exactly as today — byte
-  for byte unchanged, zero behavior change for the already-shipped,
-  spike-verified top-level path.
-- `nested=True`: calls `nested_chain_perform_problem`; a non-`None` reason
-  refuses `UNSUPPORTED_TERMINATOR_LAYOUT` with a nesting-specific message
-  (e.g. "an intermediate PERFORM {target} at line {line}, nested inside a
-  conditional body, {reason} -- inserting the early-exit check there would
-  {corrupt sibling code / land outside the conditional}").
+- Top-level: calls `statement_top_level_problem` exactly as today — byte for
+  byte unchanged, zero behavior change for the already-shipped,
+  spike-verified path. Wrapped as `ChainPerform(statement, insertion_line=None)`.
+- Nested: calls `nested_chain_perform_problem`; a non-`None` reason refuses
+  `UNSUPPORTED_TERMINATOR_LAYOUT` with a nesting-specific message (e.g. "an
+  intermediate PERFORM {target} at line {line}, nested inside a conditional
+  body, {reason} -- inserting the early-exit check there would corrupt
+  sibling code or land outside the conditional"). On success, wrapped as
+  `ChainPerform(statement, insertion_line=end)`.
 
-`orchestrator.py`'s chain-check insertion loop branches the same way to
-compute the insertion line: `nested=False` keeps using
-`statement_span(perform, boundaries, last_line)` (the existing
-`collect_boundaries`-derived coarse path); `nested=True` uses
-`nested_chain_perform_problem`'s validated `(start, end)` span instead
-(already guaranteed non-`None` here, since `find_terminator_plans` refused
-anything where it wasn't). The actual `insert_lines_after` call and the
+`orchestrator.py`'s chain-check insertion loop: `end = chain_perform.insertion_line
+if chain_perform.insertion_line is not None else statement_span(chain_perform.statement,
+boundaries, last_line)[1]`. The actual `insert_lines_after` call and the
 overall bottom-up, position-sorted merge with boundary-mock splice
 operations are unchanged either way.
+
+**Known test churn:** `tests/unit/test_terminators.py`'s two assertions that
+read `chain_performs` elements directly (`{p.target_paragraph for p in
+plans[0].chain_performs}`) become `{p.statement.target_paragraph for p in
+plans[0].chain_performs}`. `tests/unit/test_terminator_reachability.py`'s
+`test_plain_perform_edges_from_ignores_thru_and_conditional_and_goto` must
+drop its `CONDITIONAL-CALLER` assertion (that shape becomes a *valid* nested
+edge under this design, no longer an excluded one) and gains a replacement
+test for the shape that must still be excluded (an `in_boundary=True` edge).
 
 ## Verification plan (spikes)
 
