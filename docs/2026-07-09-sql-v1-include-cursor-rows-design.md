@@ -1,7 +1,7 @@
 # SQL v1: `EXEC SQL INCLUDE` host-variable copybooks + cursor `ROWS` sugar
 
 Date: 2026-07-09
-Status: proposed
+Status: implemented
 
 ## Motivation
 
@@ -14,13 +14,13 @@ generic boundary-mocking machinery (`MOCK SQL "<prefix>"` matches become mock
 bodies; unmatched sites become a hard-fail trap).
 
 The one concrete, confirmed gap (real-world-readiness audit, Finding 5;
-`tests/unit/test_sqlca.py`) is `EXEC SQL INCLUDE <member> END-EXEC` for
+`tests/unit/test_sqlca.py`) was `EXEC SQL INCLUDE <member> END-EXEC` for
 anything **other than SQLCA** — a DCLGEN-style host-variable copybook, e.g.
-`EXEC SQL INCLUDE CUSTREC END-EXEC` — which today refuses the whole program
-(`UNSUPPORTED_DATA_DIVISION_EXEC`). Without it, a program's SQL host
+`EXEC SQL INCLUDE CUSTREC END-EXEC` — which previously refused the whole
+program (`UNSUPPORTED_DATA_DIVISION_EXEC`). Without it, a program's SQL host
 variables never exist as real data items, so no mock body can `MOVE` a value
 into them — cursor-based DB2 programs are blocked before mocking is even a
-question.
+question. This gap is now closed by this PR.
 
 Once host variables exist, cursor FETCH loops are already mockable today via
 a hand-written `MOCK SQL "FETCH ..."` body that manually inspects the

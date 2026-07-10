@@ -231,7 +231,7 @@ below the silent risks above.
 | CICS | classified but **never proven** — no example, absent from corpus | online/CICS programs unvalidated end-to-end |
 | IMS DL/I | classified but **never attempted** — `LINKAGE`/`ENTRY 'DLITCBL'` vs the `PERFORM`-only driver is unverified | IMS programs unsupported in practice |
 | `EXEC SQL INCLUDE <member>` (non-SQLCA) | **resolved 2026-07-09** via `--copybook-path` — see [docs/2026-07-09-sql-v1-include-cursor-rows-design.md](2026-07-09-sql-v1-include-cursor-rows-design.md) | closed |
-| `EXEC SQL DECLARE CURSOR` in WORKING-STORAGE | refused unless the spiked `sqlca.py` fix lands (`task_d610057b`) | cursor-based DB2 programs blocked today |
+| `EXEC SQL DECLARE CURSOR` in WORKING-STORAGE | **resolved** — DECLARE CURSOR is commented out declaratively; OPEN/FETCH/CLOSE handled by generic boundary-mocking machinery | closed |
 | Unresolved `COPY` | refused `UNRESOLVED_COPYBOOK` | requires every copybook supplied via `--copybook-path` |
 | Boundary statements sharing a line, or nested inside another boundary's clause body (`READ ... AT END CALL ...`) | refused | forces the common one-statement-per-line layout |
 
