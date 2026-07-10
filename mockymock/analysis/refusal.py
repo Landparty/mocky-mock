@@ -973,7 +973,9 @@ def _safe_section_entry_points(program) -> dict[str, str]:
     return safe_entries
 
 
-def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
+def _plain_perform_edges_from(
+    program, start: str, safe_section_entries: dict[str, str] | None = None
+) -> tuple[set[str], list]:
     """BFS from `start` following ONLY plain (non-THRU), unconditional,
     single-shot, top-level PERFORM statements -- i.e. PerformStatement
     nodes that are direct members of a paragraph's own `.statements` list
@@ -995,29 +997,57 @@ def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
     existing "reachable but not via a plain chain" check -- no new
     refusal branch needed.
 
-    SECTION members are excluded entirely: this only looks up names in
-    `procedure.paragraphs` (top-level paragraphs), never
-    `procedure._sections[...].paragraphs` -- a paragraph that only exists
-    as a section member is an unreachable dead end here, naturally
-    refusing any chain that would need to pass through one (SECTION
-    support is deferred -- see the design doc).
+    `safe_section_entries` (from `_safe_section_entry_points`, or omitted
+    for callers that don't care about SECTIONs -- e.g. this module's own
+    dead-end regression test) resolves a PERFORM target that names one of
+    its KEYS (a SECTION whose first paragraph is provably safely
+    enterable only that way) to that first paragraph's name, continuing
+    the BFS from that paragraph's own statements exactly like any other
+    paragraph -- see
+    docs/2026-07-10-section-scoped-terminator-support-design.md. This is
+    the ONLY SECTION shape this restricted BFS ever resolves: a target
+    name that is a SECTION but not a safe entry (or any other
+    unresolvable name) still dead-ends exactly as before, its raw,
+    unresolved name landing in `seen`.
 
-    Returns (reachable paragraph names via this restricted edge set, the
-    PerformStatement objects that ARE those edges) -- every one of those
-    statements is a candidate for the early-exit flag-check
-    instrumentation. Deliberately NOT the same as `_reachable_paragraphs`:
-    that function also follows GO TO and section/THRU fall-through edges,
-    exactly the unsafe shapes this restricted variant must exclude."""
+    SECTION members that aren't a safe entry's first paragraph are still
+    excluded entirely, same as before: this only looks up names in
+    `procedure.paragraphs` (top-level paragraphs) and, when
+    `safe_section_entries` resolves one, the specific first-paragraph
+    names it names -- never any other section member -- so a chain that
+    would need to pass through one of those (fall-through, or a direct
+    PERFORM of a non-first section member) still naturally refuses via
+    the existing "reachable but not via a plain chain" check."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
+    safe_section_entries = safe_section_entries or {}
     by_name = {p.paragraph_name: p for p in procedure.paragraphs}
-    seen = {start}
-    stack = [start]
+    section_member_by_name = {
+        paragraph.paragraph_name: paragraph
+        for section in procedure._sections.values()
+        for paragraph in section.paragraphs
+    }
+
+    def resolve(name):
+        if name in by_name:
+            return name, by_name[name]
+        first_name = safe_section_entries.get(name)
+        if first_name is not None:
+            return first_name, section_member_by_name.get(first_name)
+        return name, None
+
+    start_name, start_paragraph = resolve(start)
+    seen = {start_name}
+    resolved = {}
+    stack = []
+    if start_paragraph is not None:
+        resolved[start_name] = start_paragraph
+        stack.append(start_name)
     edges: list = []
     while stack:
         name = stack.pop()
-        paragraph = by_name.get(name)
+        paragraph = resolved.get(name)
         if paragraph is None:
             continue
         for statement in paragraph.statements:
@@ -1028,10 +1058,12 @@ def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
                 and statement.perform_type == "SIMPLE"
             ):
                 edges.append(statement)
-                target = statement.target_paragraph
-                if target not in seen:
-                    seen.add(target)
-                    stack.append(target)
+                target_name, target_paragraph = resolve(statement.target_paragraph)
+                if target_name not in seen:
+                    seen.add(target_name)
+                    if target_paragraph is not None:
+                        resolved[target_name] = target_paragraph
+                        stack.append(target_name)
     return seen, edges
 
 

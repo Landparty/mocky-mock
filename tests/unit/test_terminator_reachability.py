@@ -89,6 +89,22 @@ SECTION_DIRECT_PERFORM_UNSAFE_SOURCE = """\
            DISPLAY "FIRST".
 """
 
+SECTION_CONTINUES_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTCONTINUES.
+
+       PROCEDURE DIVISION.
+       TARGET-PARA.
+           PERFORM SAFE-SECTION.
+
+       LEVEL2-PARA.
+           DISPLAY "REACHED FROM SECTION".
+
+       SAFE-SECTION SECTION.
+       SAFE-FIRST.
+           PERFORM LEVEL2-PARA.
+"""
+
 
 def _program():
     result = parse_cobol(CHAIN_SOURCE, filename="chaintest.cbl")
@@ -158,3 +174,32 @@ def test_safe_section_entry_points_excludes_a_directly_performed_first_paragraph
 
 def test_safe_section_entry_points_empty_when_program_has_no_sections():
     assert _safe_section_entry_points(_program()) == {}
+
+
+def test_plain_perform_edges_from_resolves_safe_section_entry_to_first_paragraph():
+    program = parse_cobol(SAFE_SECTION_SOURCE, filename="sectsafe2.cbl").ast
+    safe_entries = _safe_section_entry_points(program)
+    seen, edges = _plain_perform_edges_from(program, "0000-MAIN-PROCESS", safe_entries)
+    assert seen == {"0000-MAIN-PROCESS", "1000-INIT-FIRST"}
+    assert len(edges) == 1
+    assert edges[0].target_paragraph == "1000-INIT-SECTION"
+
+
+def test_plain_perform_edges_from_continues_bfs_from_section_first_paragraph():
+    program = parse_cobol(SECTION_CONTINUES_SOURCE, filename="sectcontinues.cbl").ast
+    safe_entries = _safe_section_entry_points(program)
+    seen, edges = _plain_perform_edges_from(program, "TARGET-PARA", safe_entries)
+    assert seen == {"TARGET-PARA", "SAFE-FIRST", "LEVEL2-PARA"}
+    assert {e.target_paragraph for e in edges} == {"SAFE-SECTION", "LEVEL2-PARA"}
+
+
+def test_plain_perform_edges_from_still_dead_ends_on_section_without_safe_entries():
+    """Regression guard: callers that don't pass safe_section_entries (the
+    default, e.g. every pre-existing call site) get exactly today's
+    behavior -- a SECTION name is an unresolved dead end, its raw name
+    landing in `seen` but never traversed further."""
+    program = parse_cobol(SAFE_SECTION_SOURCE, filename="sectsafe3.cbl").ast
+    seen, edges = _plain_perform_edges_from(program, "0000-MAIN-PROCESS")
+    assert seen == {"0000-MAIN-PROCESS", "1000-INIT-SECTION"}
+    assert len(edges) == 1
+    assert edges[0].target_paragraph == "1000-INIT-SECTION"
