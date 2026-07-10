@@ -218,3 +218,71 @@ def test_terminator_via_out_of_line_perform_varying_refuses_via_parse_warning(
     assert exit_code == 1
     assert "PARSE_WARNING" in out
     assert "UNSUPPORTED_TERMINATOR_LAYOUT" not in out
+
+
+SECTION_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTTERM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-TERM-SECTION
+           DISPLAY "__MOCKYMOCK__ SHOULD-NOT-DISPLAY: AFTER-SECTION".
+
+       1000-TERM-SECTION SECTION.
+       1000-TERM-FIRST.
+           MOVE 1 TO WS-RESULT
+           STOP RUN.
+       1000-TERM-SECOND.
+           DISPLAY "__MOCKYMOCK__ SHOULD-NOT-RUN: SECOND-PARAGRAPH".
+"""
+
+SECTION_CUT = """\
+TESTSUITE "SECTTERM smoke"
+
+TESTCASE "terminator in section's first paragraph is neutralized"
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-RESULT TO BE 1
+
+TESTCASE "second case still runs after the first hits the section terminator"
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-RESULT TO BE 1
+"""
+
+
+@requires_docker
+def test_section_scoped_terminator_neutralized_and_second_paragraph_does_not_run(
+    tmp_path: Path, capsys
+):
+    """Permanent regression fixture for spike #5 of
+    docs/2026-07-08-goback-stop-run-support-design.md, finally committed
+    now that docs/2026-07-10-section-scoped-terminator-support-design.md
+    implements it: STOP RUN in a SECTION's first paragraph, entered only
+    via PERFORM <section-name>, is replaced with EXIT SECTION. Proves two
+    things a unit test cannot: 1000-TERM-SECOND's DISPLAY never runs
+    (real GnuCOBOL EXIT SECTION semantics, not just the splice shape),
+    and control correctly returns to the test driver (the case's own
+    EXPECT runs, and a second test case in the suite still runs
+    afterward)."""
+    cbl_path = tmp_path / "SECTTERM.cbl"
+    cbl_path.write_text(SECTION_CBL)
+    cut_path = tmp_path / "SECTTERM.cut"
+    cut_path.write_text(SECTION_CUT)
+
+    exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0, out
+    assert "[PASS] terminator in section's first paragraph is neutralized" in out
+    assert (
+        "[PASS] second case still runs after the first hits the section terminator"
+        in out
+    )
+    assert "SHOULD-NOT-RUN" not in out
+    assert "SHOULD-NOT-DISPLAY" not in out
+    assert "CRASH" not in out
+    assert "FAIL" not in out
