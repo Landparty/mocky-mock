@@ -1,8 +1,10 @@
 """Unit tests for the two new reachability primitives Approach B's
 safe-chain check depends on: which paragraphs are EVER a GO TO target
 anywhere in the program, and which paragraphs are reachable from a given
-start paragraph via ONLY plain, unconditional, top-level PERFORM
-statements. See docs/2026-07-08-goback-stop-run-support-design.md.
+start paragraph via ONLY plain, unconditional, single-shot PERFORM
+statements -- now including ones nested inside IF/EVALUATE/inline-PERFORM
+bodies. See docs/2026-07-08-goback-stop-run-support-design.md and
+docs/2026-07-10-conditionally-nested-intermediate-perform-design.md.
 """
 
 from cobolparser import parse_cobol
@@ -54,19 +56,18 @@ def test_plain_perform_edges_from_walks_the_chain():
     seen, edges = _plain_perform_edges_from(_program(), "TARGET-PARA")
     assert seen == {"TARGET-PARA", "LEVEL1-PARA", "LEVEL2-PARA"}
     assert len(edges) == 2
-    assert {e.target_paragraph for e in edges} == {"LEVEL1-PARA", "LEVEL2-PARA"}
+    assert {stmt.target_paragraph for stmt, _nested in edges} == {
+        "LEVEL1-PARA",
+        "LEVEL2-PARA",
+    }
+    assert all(nested is False for _stmt, nested in edges)
 
 
-def test_plain_perform_edges_from_ignores_thru_and_conditional_and_goto():
-    """THRU-CALLER's PERFORM...THRU, CONDITIONAL-CALLER's nested PERFORM,
-    and UNRELATED-PARA's GO TO must never contribute edges -- none of them
-    are plain, unconditional, top-level PERFORM statements."""
+def test_plain_perform_edges_from_ignores_thru_and_goto():
+    """THRU-CALLER's PERFORM...THRU and UNRELATED-PARA's GO TO must never
+    contribute edges -- neither is a plain, single-shot PERFORM."""
     seen, edges = _plain_perform_edges_from(_program(), "THRU-CALLER")
     assert seen == {"THRU-CALLER"}
-    assert edges == []
-
-    seen, edges = _plain_perform_edges_from(_program(), "CONDITIONAL-CALLER")
-    assert seen == {"CONDITIONAL-CALLER"}
     assert edges == []
 
     seen, edges = _plain_perform_edges_from(_program(), "UNRELATED-PARA")
@@ -83,4 +84,89 @@ def test_plain_perform_edges_from_ignores_looping_perform():
     and .okf/log.md)."""
     seen, edges = _plain_perform_edges_from(_program(), "LOOP-CALLER")
     assert seen == {"LOOP-CALLER"}
+    assert edges == []
+
+
+def test_plain_perform_edges_from_now_follows_a_conditionally_nested_perform():
+    """2026-07-10: a PERFORM nested inside an IF is no longer excluded --
+    it's a valid edge, tagged nested=True."""
+    seen, edges = _plain_perform_edges_from(_program(), "CONDITIONAL-CALLER")
+    assert seen == {"CONDITIONAL-CALLER", "LEVEL2-PARA"}
+    assert len(edges) == 1
+    stmt, nested = edges[0]
+    assert stmt.target_paragraph == "LEVEL2-PARA"
+    assert nested is True
+
+
+NESTED_SHAPES_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NESTCHAIN.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG            PIC X.
+
+       PROCEDURE DIVISION.
+       EVALUATE-CALLER.
+           EVALUATE WS-FLAG
+               WHEN "A"
+                   PERFORM EVAL-TARGET
+               WHEN OTHER
+                   DISPLAY "OTHER"
+           END-EVALUATE.
+
+       EVAL-TARGET.
+           DISPLAY "EVAL-TARGET".
+
+       LOOP-BODY-CALLER.
+           PERFORM UNTIL WS-FLAG = "N"
+               PERFORM LOOP-TARGET
+           END-PERFORM.
+
+       LOOP-TARGET.
+           DISPLAY "LOOP-TARGET".
+
+       HANDLER-CALLER.
+           CALL "SOMEPGM"
+               ON EXCEPTION
+                   PERFORM HANDLER-TARGET
+           END-CALL.
+
+       HANDLER-TARGET.
+           DISPLAY "HANDLER-TARGET".
+"""
+
+
+def _nested_shapes_program():
+    result = parse_cobol(NESTED_SHAPES_SOURCE, filename="nestchain.cbl")
+    assert result.success, result.errors
+    return result.ast
+
+
+def test_plain_perform_edges_from_follows_an_evaluate_nested_perform():
+    seen, edges = _plain_perform_edges_from(_nested_shapes_program(), "EVALUATE-CALLER")
+    assert seen == {"EVALUATE-CALLER", "EVAL-TARGET"}
+    assert len(edges) == 1
+    stmt, nested = edges[0]
+    assert stmt.target_paragraph == "EVAL-TARGET"
+    assert nested is True
+
+
+def test_plain_perform_edges_from_follows_an_inline_loop_body_perform():
+    seen, edges = _plain_perform_edges_from(_nested_shapes_program(), "LOOP-BODY-CALLER")
+    assert seen == {"LOOP-BODY-CALLER", "LOOP-TARGET"}
+    assert len(edges) == 1
+    stmt, nested = edges[0]
+    assert stmt.target_paragraph == "LOOP-TARGET"
+    assert nested is True
+
+
+def test_plain_perform_edges_from_excludes_a_perform_inside_a_boundary_handler():
+    """A PERFORM nested inside another boundary statement's clause body
+    (here, CALL ... ON EXCEPTION) is never a valid edge, regardless of
+    layout: splicing the enclosing CALL when it's mocked would delete the
+    PERFORM and any inserted check along with it -- structural, not a v1
+    scope choice. HANDLER-TARGET must never enter the reachable set."""
+    seen, edges = _plain_perform_edges_from(_nested_shapes_program(), "HANDLER-CALLER")
+    assert seen == {"HANDLER-CALLER"}
     assert edges == []
