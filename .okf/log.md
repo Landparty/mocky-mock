@@ -1,5 +1,36 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-09 (Fix: `mockymock setup` FileNotFoundError under `uv tool install`)
+* **Root cause**: `de6ad0d` (uv-installable CLI) made `uv tool install`
+  a real, non-editable package install, but `docker_toolchain.py`'s
+  `_DOCKER_CONTEXT` still resolved the Docker build context as
+  `Path(__file__).resolve().parents[2] / "docker"` — repo-root `docker/`,
+  outside the `mockymock` package tree. `pyproject.toml`'s
+  `[tool.setuptools.packages.find]` only ships `mockymock*`, so that
+  directory was never in the wheel; `_image_tag()` crashed with
+  `FileNotFoundError` reading `docker/Dockerfile` the moment any installed
+  (non-sibling-checkout) `mockymock` ran `setup` or `run`. The stale
+  docstring on `_DOCKER_CONTEXT` said as much: "the only supported install
+  mode" was editable — an assumption `de6ad0d` had already invalidated
+  without updating this file.
+* **Fix**: moved the Dockerfile into the package itself,
+  `mockymock/runtime/docker/Dockerfile` (was repo-root `docker/Dockerfile`),
+  changed `_DOCKER_CONTEXT` to `Path(__file__).resolve().parent / "docker"`,
+  and added `"mockymock.runtime" = ["docker/Dockerfile"]` to
+  `[tool.setuptools.package-data]` so it's actually bundled in the wheel.
+  Added `test_docker_context_dockerfile_is_bundled_under_the_package`
+  ([runtime](runtime.md)) asserting the file exists on disk under
+  `_DOCKER_CONTEXT`, so this exact regression fails a unit test next time.
+* **Verified live**, not just unit-tested: `uv tool uninstall mockymock` +
+  `uv tool install --from . mockymock --force`, confirmed the built wheel's
+  installed `site-packages/mockymock/runtime/docker/Dockerfile` exists, then
+  ran `mockymock setup` from `/c/tmp` and from the filesystem root `/c` (no
+  mocky-mock repo checkout anywhere on either path) — both printed
+  `container mockymock-cobc ready (cobc (GnuCOBOL) 3.2.0)` instead of
+  crashing. Full unit suite re-run clean aside from 3 pre-existing failures
+  in `test_refusal.py`/`test_source_map.py` unrelated to this change
+  (confirmed identical on a `git stash` of this fix).
+
 ## 2026-07-09 (release-please automation added)
 * **Added `googleapis/release-please-action@v4`** (`.github/workflows/release-please.yml`,
   `release-please-config.json`, `.release-please-manifest.json`), mirroring

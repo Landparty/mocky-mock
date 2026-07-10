@@ -3,7 +3,7 @@ type: Module
 title: Docker Runtime
 description: mockymock-cobc container lifecycle, docker exec-based compile/run, and the Docker-only sandbox model that replaced the local cobc toolchain.
 tags: [runtime, docker, gnucobol]
-timestamp: 2026-07-07T00:00:00Z
+timestamp: 2026-07-09T00:00:00Z
 ---
 
 # Overview
@@ -20,7 +20,7 @@ mockymock setup / mockymock run
    │
    ├─ ensure_toolchain()                 docker_toolchain.py
    │     docker daemon unreachable ───▶ DockerNotAvailableError (exit 1)
-   │     image "mockymock-gnucobol:<hash>" missing ───▶ docker build -t ... docker/
+   │     image "mockymock-gnucobol:<hash>" missing ───▶ docker build -t ... runtime/docker/
    │     container "mockymock-cobc" missing ───▶ docker run -d --name mockymock-cobc
    │                                              -v ~/.mockymock/work:/work ... sleep infinity
    │     container built from a stale image tag ───▶ docker rm -f + recreate
@@ -68,7 +68,7 @@ automatically; `setup` is therefore optional).
 | Step | Check | Action if missing/stopped/stale |
 |------|-------|---------------------------------|
 | 1. Daemon | `docker info` (30s timeout) | non-zero exit -> `DockerNotAvailableError` with `_DAEMON_HINT` |
-| 2. Image | `docker image inspect <IMAGE>` | build via `docker build -t <IMAGE> <repo>/docker/` |
+| 2. Image | `docker image inspect <IMAGE>` | build via `docker build -t <IMAGE> <package>/runtime/docker/` |
 | 3. Container | one `docker inspect -f "{{.State.Running}} {{.Config.Image}}" mockymock-cobc` yields both running state and creating image | absent -> `_create_container()` (`docker run -d --name mockymock-cobc <hardening flags> -v <WORK_ROOT>:/work <IMAGE> sleep infinity`); **created from a different image tag** -> `docker rm -f` then `_create_container()` (a stale container would otherwise defeat the content-hash tag forever); present-but-stopped -> `docker start mockymock-cobc` |
 
 `<hardening flags>` is `_HARDENING_FLAGS` — see the **Threat model** section
@@ -91,9 +91,15 @@ Constants (asserted by unit tests, must not drift in shape):
 | `CONTAINER` | `mockymock-cobc` |
 | `WORK_ROOT` | `Path.home() / ".mockymock" / "work"` |
 
-The `docker build` context is resolved as `Path(__file__).resolve().parents[2] / "docker"`
-(repo-root `docker/`) so the build context is found under editable installs —
-the only supported install mode.
+The `docker build` context is resolved as `Path(__file__).resolve().parent /
+"docker"` (`mockymock/runtime/docker/`, bundled *inside* the package, not
+repo-root `docker/`) so the build context ships in the wheel and is found
+under any install mode — editable sibling checkout or a real `uv tool
+install` with no repo checkout present at all. Prior to 2026-07-09 the
+Dockerfile lived at repo-root `docker/` and was resolved via
+`parents[2]`, which broke `uv tool install` (FileNotFoundError on
+`mockymock setup`) because setuptools never packaged anything outside
+`mockymock/`.
 
 `_docker(*args, timeout=600)` is the sole subprocess wrapper: any `OSError` or
 `subprocess.TimeoutExpired` from the docker CLI itself (not the workload inside
@@ -102,7 +108,7 @@ message ("Start Docker Desktop ... and re-run").
 
 # Image
 
-`docker/Dockerfile`: `FROM debian:trixie-slim`, `apt-get install -y
+`mockymock/runtime/docker/Dockerfile`: `FROM debian:trixie-slim`, `apt-get install -y
 --no-install-recommends gnucobol` (GnuCOBOL 3.2, same major version as the
 former local toolchain), `WORKDIR /work`. No entrypoint — the container is
 started with `sleep infinity` and driven entirely via `docker exec`.

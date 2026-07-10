@@ -51,6 +51,10 @@ include = ["mockymock*"]
 # PEP 561: the code is fully annotated; py.typed makes the annotations
 # visible to downstream mypy.
 mockymock = ["py.typed"]
+# Docker build context lives under the package (not repo-root docker/) so it
+# ships in the wheel -- `mockymock setup` needs it under any install mode,
+# including a bare `uv tool install` with no sibling checkout present.
+"mockymock.runtime" = ["docker/Dockerfile"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

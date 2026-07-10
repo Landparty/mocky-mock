@@ -36,6 +36,17 @@ def test_image_tag_changes_with_dockerfile():
     assert dt.IMAGE.startswith("mockymock-gnucobol:")
 
 
+def test_docker_context_dockerfile_is_bundled_under_the_package():
+    """Regression test for a real bug: the Dockerfile must live under
+    mockymock/runtime/docker/, not repo-root docker/, so it ships inside the
+    wheel and `mockymock setup` doesn't FileNotFoundError under a real `uv
+    tool install` (no sibling checkout, no editable install)."""
+    from mockymock.runtime import docker_toolchain as dt
+
+    assert (dt._DOCKER_CONTEXT / "Dockerfile").is_file()
+    assert dt._DOCKER_CONTEXT == Path(dt.__file__).resolve().parent / "docker"
+
+
 def test_to_container_path_maps_work_root_child_to_slash_work(tmp_path: Path):
     host = tmp_path / "mockymock-abc" / "PROG.cbl"
     assert to_container_path(host, work_root=tmp_path) == "/work/mockymock-abc/PROG.cbl"

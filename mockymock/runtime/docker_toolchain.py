@@ -22,9 +22,10 @@ from mockymock.runtime.executor import (
     _coerce_output,
 )
 
-# Repo-root docker/ directory, resolved relative to this file so the build
-# context is found under editable installs (the only supported install mode).
-_DOCKER_CONTEXT = Path(__file__).resolve().parents[2] / "docker"
+# Bundled under the package itself (not the repo-root docker/) so it ships
+# inside the wheel and is found under any install mode -- editable sibling
+# checkout or a real `uv tool install` with no repo present at all.
+_DOCKER_CONTEXT = Path(__file__).resolve().parent / "docker"
 
 
 def _image_tag(dockerfile_text: str | None = None) -> str:
