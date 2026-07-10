@@ -316,9 +316,7 @@ def test_include_member_with_embedded_declare_table_is_commented_out(tmp_path):
 def test_nested_include_inside_resolved_member_refuses(tmp_path):
     copybook_dir = tmp_path / "copybooks"
     copybook_dir.mkdir()
-    (copybook_dir / "OUTER.CPY").write_text(
-        "       EXEC SQL INCLUDE INNER END-EXEC.\n"
-    )
+    (copybook_dir / "OUTER.CPY").write_text("       EXEC SQL INCLUDE INNER END-EXEC.\n")
     (copybook_dir / "INNER.CPY").write_text("       01  INNER-FIELD PIC X(5).\n")
     src = BASE[:5] + ["    EXEC SQL INCLUDE OUTER END-EXEC."] + BASE[5:]
     lines, reasons = transform_data_division_exec(
