@@ -144,6 +144,14 @@ def test_terminator_neutralization_sets_flag_and_exits_paragraph():
     ]
 
 
+def test_terminator_neutralization_with_section_exit_kind_exits_section():
+    lines = build_terminator_neutralization("SECTION")
+    assert lines == [
+        '           MOVE "Y" TO UT-EARLY-EXIT',
+        "           EXIT SECTION",
+    ]
+
+
 def test_chain_check_exits_paragraph_when_flag_set():
     lines = build_chain_check()
     assert lines == [

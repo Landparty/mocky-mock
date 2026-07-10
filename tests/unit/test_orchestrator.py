@@ -603,3 +603,55 @@ def test_perform_immediately_followed_by_terminator_interleaves_correctly():
     # the terminator replacement's last line must carry that period instead
     last_exit_idx = max(i for i, line in enumerate(spliced) if "EXIT PARAGRAPH" in line)
     assert spliced[last_exit_idx].rstrip().endswith(".")
+
+
+SECTION_TERMINATOR_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTTERM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-TERM-SECTION
+           DISPLAY "AFTER-SECTION".
+
+       1000-TERM-SECTION SECTION.
+       1000-TERM-FIRST.
+           MOVE 1 TO WS-RESULT
+           STOP RUN.
+       1000-TERM-SECOND.
+           MOVE 999 TO WS-RESULT.
+"""
+
+
+def test_section_scoped_terminator_is_replaced_with_exit_section():
+    result = parse_cobol(SECTION_TERMINATOR_SOURCE, filename="sectterm.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(SECTION_TERMINATOR_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    boundaries = collect_boundaries(result.ast)
+    suite = MockTestSuite(
+        name="T",
+        test_cases=[MockTestCase(name="main", perform_target="0000-MAIN-PROCESS")],
+    )
+    plans, reasons = find_terminator_plans(surface, result.ast, suite, scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].exit_kind == "SECTION"
+
+    spliced = splice_program(
+        lines, boundaries, surface, suite, TallyRegistry(suite), plans
+    )
+    joined = "\n".join(spliced)
+    assert "      *>     STOP RUN." in joined
+    assert 'MOVE "Y" TO UT-EARLY-EXIT' in joined
+    assert "EXIT SECTION" in joined
+    # the intermediate PERFORM's own post-check is still EXIT PARAGRAPH --
+    # only the terminator's own replacement uses EXIT SECTION
+    assert 'IF UT-EARLY-EXIT = "Y"' in joined
+    assert "EXIT PARAGRAPH" in joined

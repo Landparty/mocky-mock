@@ -71,17 +71,21 @@ def build_exec_trap(kind: str, line: int) -> list[str]:
     ]
 
 
-def build_terminator_neutralization() -> list[str]:
+def build_terminator_neutralization(exit_kind: str = "PARAGRAPH") -> list[str]:
     """Replacement for a STOP RUN/GOBACK statement found safe to
     neutralize (see docs/2026-07-08-goback-stop-run-support-design.md):
-    set the early-exit flag and return via EXIT PARAGRAPH -- never GO TO,
-    since EXIT PARAGRAPH is the only mechanism verified to correctly
-    resume the real PERFORM caller. Identical regardless of which test
-    case is running -- unlike build_site_dispatch, no per-case EVALUATE
-    UT-CURRENT-CASE dispatch is needed here."""
+    set the early-exit flag and return via EXIT PARAGRAPH/EXIT SECTION --
+    never GO TO, since these are the only mechanisms verified to
+    correctly resume the real PERFORM caller. `exit_kind` is
+    `TerminatorPlan.exit_kind` -- "PARAGRAPH" (the default) for the
+    ordinary case, or "SECTION" for the one SECTION-scoped shape
+    docs/2026-07-10-section-scoped-terminator-support-design.md
+    supports. Identical regardless of which test case is running --
+    unlike build_site_dispatch, no per-case EVALUATE UT-CURRENT-CASE
+    dispatch is needed here."""
     return [
         '           MOVE "Y" TO UT-EARLY-EXIT',
-        "           EXIT PARAGRAPH",
+        f"           EXIT {exit_kind}",
     ]
 
 
