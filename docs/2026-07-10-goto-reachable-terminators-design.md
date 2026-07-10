@@ -42,6 +42,12 @@ both failed with the identical symptom. See "## Outcome" below.
   get an actual confirmed root cause before spending effort on more
   candidate fixes.
 
+(The `.superpowers/sdd/task-*-report.md` files cited above are
+investigation-local artifacts — gitignored scratch from the worktree that
+ran this investigation, not part of this repo's committed history. The
+exact stdout/exit-code evidence they contain is already quoted inline
+above, so this doc stands on its own without them.)
+
 ## Problem
 
 `docs/2026-07-08-goback-stop-run-support-design.md`'s Approach B (propagate
@@ -72,7 +78,7 @@ verified the same way before it's trusted.
 **What is confirmed:** both candidate fix mechanisms this investigation
 scoped (dead-PERFORM coercion, SECTION-scoped `EXIT SECTION`) empirically
 fail to restore caller-return semantics for a GO-TO-reachable terminator
-paragraph (shape (a) — see "## Outcome" below for the evidence).
+paragraph (shape (a) — see "## Outcome" above for the evidence).
 
 **What is not confirmed:** the exact `cobc`-internals explanation for
 *why*. Phase 1's diagnostic step (compare `cobc -C` generated C for a
@@ -129,6 +135,11 @@ reason), or surfaces a different root cause entirely. Whatever the result,
 it settles what Phase 2 is worth attempting.
 
 ### Phase 2 — candidate fixes (only if Phase 1 finds a tractable root cause)
+
+*(Gate bypassed in practice — see "## Outcome" above. Phase 1's diagnostic
+was never run; Tasks 1 and 3 dispatched both candidates directly against the
+runtime behavior instead, treating the compile-and-run result as the
+authoritative signal rather than waiting on generated-C inspection.)*
 
 - **Candidate 1 — dead-PERFORM coercion.** If Phase 1 confirms the
   hypothesis: inject an unreachable `PERFORM <chain-paragraph>` — gated
