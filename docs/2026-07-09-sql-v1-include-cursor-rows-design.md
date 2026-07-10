@@ -54,19 +54,31 @@ Out of scope for this round (deferred, not designed further here):
 list[str] | None = None)`. Both CLI call sites pass `args.copybook_path`
 (the same flag already used for plain `COPY` expansion — no new flag).
 
-**Resolution:** on `EXEC SQL INCLUDE <member> END-EXEC` where `member !=
-SQLCA`, resolve `<member>` using cobolparser's own copybook path-resolution
-(`find_copybook_file` / `CopybookSearchPath`) — the same extension list and
-case-insensitive search rules plain `COPY` already gets, not a
-reimplementation. On success, read the file, run it through the same
-`normalize_fixed_format` step already applied to the main program before
-`transform_data_division_exec` sees it (this function operates on
-already-normalized `lines`, so a copybook read straight off disk — which may
-carry sequence-number/indicator-area columns in fixed format — must be
-normalized first or the rest of the module's column assumptions break), and
-splice the normalized lines in place of the `EXEC SQL INCLUDE ... END-EXEC`
-block, preceded by a `*>` marker comment (mirroring the existing
-SQLCA-replacement marker in the same module).
+**Resolution (revised after a spike — see below):** `find_copybook_file` /
+`CopybookSearchPath` turned out to live in `cobolparser/preprocess/path_resolver.py`
+/ `models.py`, which are **not** in `cobolparser/preprocess/__init__.py`'s
+`__all__` — not the declared public surface, and not something
+`interface-contract.md` should pin. Instead, resolution goes through the
+same public `expand_copybooks` plain `COPY` already uses: build a synthetic
+one-line snippet `"       COPY <member>."` and call
+`expand_copybooks(snippet, copybook_paths=...)`. Spiked directly (not just
+reasoned about): this resolves the member and inlines its content
+(including a DCLGEN-style embedded `EXEC SQL DECLARE ... TABLE ... END-EXEC`
+stanza, verbatim) into `.expanded_source`; an unresolvable member raises
+`cobolparser.preprocess.CopybookNotFoundError` (which *is* in `__all__`) —
+caught and turned into the same `UNRESOLVED_COPYBOOK` refusal. This gets
+path-traversal protection, nested-`COPY` handling, and size/encoding checks
+for free, and guarantees INCLUDE resolves exactly the way COPY does (same
+extensions, same case rules) since it's the literal same code path — not a
+reimplementation that could quietly diverge.
+
+On success, `.expanded_source` is *not yet* normalized (`expand_copybooks`
+runs pre-normalize in the existing pipeline; `transform_data_division_exec`
+runs post-normalize), so it's run through `normalize_fixed_format` in
+isolation before splicing — spiked and confirmed this produces clean
+free-form lines from the resolved content. The normalized lines replace the
+`EXEC SQL INCLUDE ... END-EXEC` block, preceded by a `*>` marker comment
+(mirroring the existing SQLCA-replacement marker in the same module).
 
 **Re-scan for embedded declaratives:** after splicing, the scan index is
 *not* advanced past the newly-inserted lines — `transform_data_division_exec`'s
