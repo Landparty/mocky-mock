@@ -458,7 +458,13 @@ parsing** and is therefore not part of the parsed AST at all. This means
 `reset.py`'s WORKING-STORAGE reset never touches it — SQLCODE/SQLSTATE
 are expected to survive across test cases unless a mock body explicitly
 sets them, which is why the scaffold generator's placeholder EXEC SQL mock
-bodies always set SQLCODE explicitly in every case.
+bodies always set SQLCODE explicitly in every case. A resolved `EXEC SQL
+INCLUDE <member>` (non-SQLCA) shares this exact property for the same
+reason: `expand_copybooks` runs on a synthetic `COPY <member>.` snippet at
+splice time, not on `raw_source` before `parse_cobol`, so these fields are
+equally invisible to `reset.py` and equally expected to be set fresh by a
+mock body on every run — the `ROWS` sugar (below) does this automatically
+via its per-row `MOVE`s.
 
 **Literal-text and shared-line hardening (2026-07-07 fix, audit finding
 2.6):** the block scanner previously keyed off the literal substring
