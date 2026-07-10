@@ -220,6 +220,63 @@ def test_terminator_via_out_of_line_perform_varying_refuses_via_parse_warning(
     assert "UNSUPPORTED_TERMINATOR_LAYOUT" not in out
 
 
+CHAIN_PERFORM_SOLE_STATEMENT_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SOLESTMT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           PERFORM 2000-INNER.
+
+       2000-INNER.
+           MOVE 1 TO WS-RESULT
+           STOP RUN.
+"""
+
+CHAIN_PERFORM_SOLE_STATEMENT_CUT = """\
+TESTSUITE "SOLESTMT smoke"
+
+TESTCASE "chain PERFORM as sole statement of its paragraph compiles and runs"
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-RESULT TO BE 1
+"""
+
+
+@requires_docker
+def test_chain_check_after_sole_period_terminated_perform_compiles(
+    tmp_path: Path, capsys
+):
+    """Permanent regression fixture for a real, pre-existing splicer bug
+    (not SECTION-specific -- discovered while building SECTION-scoped
+    terminator support, but affects the already-shipped GOBACK/STOP RUN
+    feature too): when an intermediate PERFORM in a safe chain is the
+    sole, period-terminated statement of its own paragraph, the inserted
+    chain-check block previously had no closing period, so the following
+    paragraph header ran into an unterminated sentence and cobc rejected
+    the compile. See the fix in mockymock/splicer/orchestrator.py's
+    chain-check insertion loop."""
+    cbl_path = tmp_path / "SOLESTMT.cbl"
+    cbl_path.write_text(CHAIN_PERFORM_SOLE_STATEMENT_CBL)
+    cut_path = tmp_path / "SOLESTMT.cut"
+    cut_path.write_text(CHAIN_PERFORM_SOLE_STATEMENT_CUT)
+
+    exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0, out
+    assert (
+        "[PASS] chain PERFORM as sole statement of its paragraph compiles and runs"
+        in out
+    )
+
+
 SECTION_CBL = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. SECTTERM.
