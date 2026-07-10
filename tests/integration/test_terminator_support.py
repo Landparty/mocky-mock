@@ -287,15 +287,14 @@ SECTION_CBL = """\
 
        PROCEDURE DIVISION.
        0000-MAIN-PROCESS.
-           PERFORM 1000-TERM-SECTION
-           DISPLAY "__MOCKYMOCK__ SHOULD-NOT-DISPLAY: AFTER-SECTION".
+           PERFORM 1000-TERM-SECTION.
 
        1000-TERM-SECTION SECTION.
        1000-TERM-FIRST.
            MOVE 1 TO WS-RESULT
            STOP RUN.
        1000-TERM-SECOND.
-           DISPLAY "__MOCKYMOCK__ SHOULD-NOT-RUN: SECOND-PARAGRAPH".
+           MOVE 999 TO WS-RESULT.
 """
 
 SECTION_CUT = """\
@@ -320,11 +319,20 @@ def test_section_scoped_terminator_neutralized_and_second_paragraph_does_not_run
     now that docs/2026-07-10-section-scoped-terminator-support-design.md
     implements it: STOP RUN in a SECTION's first paragraph, entered only
     via PERFORM <section-name>, is replaced with EXIT SECTION. Proves two
-    things a unit test cannot: 1000-TERM-SECOND's DISPLAY never runs
-    (real GnuCOBOL EXIT SECTION semantics, not just the splice shape),
-    and control correctly returns to the test driver (the case's own
-    EXPECT runs, and a second test case in the suite still runs
-    afterward)."""
+    things a unit test cannot: 1000-TERM-SECOND never runs (real GnuCOBOL
+    EXIT SECTION semantics, not just the splice shape), and control
+    correctly returns to the test driver (the case's own EXPECT runs, and
+    a second test case in the suite still runs afterward).
+
+    Verification mechanism: if 1000-TERM-SECOND incorrectly ran (EXIT
+    SECTION failing to stop before it -- the exact failure mode this test
+    exists to catch), it would overwrite WS-RESULT to 999, and
+    `EXPECT WS-RESULT TO BE 1` would fail loudly with a [FAIL] line and a
+    non-zero exit code -- a real, CLI-visible signal, unlike a DISPLAY
+    statement's output, which mockymock's CLI never surfaces (it only
+    prints structured __MOCKYMOCK__ TESTSUITE/CASE/SUMMARY lines parsed
+    from the binary's stdout, per report/results.py's parse_stdout --
+    verified by reading that function directly)."""
     cbl_path = tmp_path / "SECTTERM.cbl"
     cbl_path.write_text(SECTION_CBL)
     cut_path = tmp_path / "SECTTERM.cut"
@@ -339,7 +347,5 @@ def test_section_scoped_terminator_neutralized_and_second_paragraph_does_not_run
         "[PASS] second case still runs after the first hits the section terminator"
         in out
     )
-    assert "SHOULD-NOT-RUN" not in out
-    assert "SHOULD-NOT-DISPLAY" not in out
-    assert "CRASH" not in out
     assert "FAIL" not in out
+    assert "CRASH" not in out
