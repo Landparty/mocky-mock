@@ -925,6 +925,54 @@ def _go_to_targets(program) -> set[str]:
     return targets
 
 
+def _safe_section_entry_points(program) -> dict[str, str]:
+    """Maps each SECTION name whose first paragraph is safely enterable
+    ONLY via `PERFORM <section-name>` to that first paragraph's name --
+    the one shape docs/2026-07-08-goback-stop-run-support-design.md's
+    spike #5 proved `EXIT SECTION` correctly neutralizes (see
+    docs/2026-07-10-section-scoped-terminator-support-design.md).
+
+    Safe means: the section has at least one paragraph; neither the
+    section's own name nor its first paragraph's name is ever a GO TO
+    target anywhere in the program (`_go_to_targets`); and the first
+    paragraph's name is never itself named as a PERFORM target -- plain
+    or THRU, conditional or not, top-level or nested -- anywhere in the
+    whole program. That last check is deliberately maximally inclusive:
+    any second way to enter that paragraph is a standing risk regardless
+    of whether any one test's execution happens to take it, the same
+    reasoning already applied to the GO TO exclusion above.
+
+    A section failing any of these is simply absent from the returned
+    map -- callers must treat that identically to any other unresolvable
+    PERFORM target (the existing dead-end/refusal behavior)."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return {}
+
+    go_to_targets = _go_to_targets(program)
+    performed_names: set[str] = set()
+    for paragraph in _all_paragraphs(procedure):
+        for statement in _find_statements_of_type(
+            paragraph.statements, PerformStatement
+        ):
+            if statement.target_paragraph:
+                performed_names.add(statement.target_paragraph)
+            if statement.thru_paragraph:
+                performed_names.add(statement.thru_paragraph)
+
+    safe_entries: dict[str, str] = {}
+    for section_name, section in procedure._sections.items():
+        if not section.paragraphs:
+            continue
+        first_name = section.paragraphs[0].paragraph_name
+        if section_name in go_to_targets or first_name in go_to_targets:
+            continue
+        if first_name in performed_names:
+            continue
+        safe_entries[section_name] = first_name
+    return safe_entries
+
+
 def _plain_perform_edges_from(program, start: str) -> tuple[set[str], list]:
     """BFS from `start` following ONLY plain (non-THRU), unconditional,
     single-shot, top-level PERFORM statements -- i.e. PerformStatement

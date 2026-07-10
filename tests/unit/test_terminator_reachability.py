@@ -7,7 +7,11 @@ statements. See docs/2026-07-08-goback-stop-run-support-design.md.
 
 from cobolparser import parse_cobol
 
-from mockymock.analysis.refusal import _go_to_targets, _plain_perform_edges_from
+from mockymock.analysis.refusal import (
+    _go_to_targets,
+    _plain_perform_edges_from,
+    _safe_section_entry_points,
+)
 
 CHAIN_SOURCE = """\
        IDENTIFICATION DIVISION.
@@ -36,6 +40,53 @@ CHAIN_SOURCE = """\
 
        LOOP-CALLER.
            PERFORM LEVEL2-PARA UNTIL 1 = 1.
+"""
+
+SAFE_SECTION_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTSAFE.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-INIT-SECTION.
+
+       1000-INIT-SECTION SECTION.
+       1000-INIT-FIRST.
+           DISPLAY "FIRST".
+       1000-INIT-SECOND.
+           DISPLAY "SECOND".
+"""
+
+SECTION_GO_TO_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTGOTOUNSAFE.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-INIT-SECTION.
+
+       9000-ALIAS.
+           GO TO 1000-INIT-FIRST.
+
+       1000-INIT-SECTION SECTION.
+       1000-INIT-FIRST.
+           DISPLAY "FIRST".
+"""
+
+SECTION_DIRECT_PERFORM_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTDIRECTUNSAFE.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-INIT-SECTION.
+
+       9000-ALSO-CALLS-DIRECTLY.
+           PERFORM 1000-INIT-FIRST.
+
+       1000-INIT-SECTION SECTION.
+       1000-INIT-FIRST.
+           DISPLAY "FIRST".
 """
 
 
@@ -84,3 +135,26 @@ def test_plain_perform_edges_from_ignores_looping_perform():
     seen, edges = _plain_perform_edges_from(_program(), "LOOP-CALLER")
     assert seen == {"LOOP-CALLER"}
     assert edges == []
+
+
+def test_safe_section_entry_points_finds_a_safely_entered_section():
+    program = parse_cobol(SAFE_SECTION_SOURCE, filename="sectsafe.cbl").ast
+    assert _safe_section_entry_points(program) == {
+        "1000-INIT-SECTION": "1000-INIT-FIRST"
+    }
+
+
+def test_safe_section_entry_points_excludes_a_go_to_reachable_first_paragraph():
+    program = parse_cobol(SECTION_GO_TO_UNSAFE_SOURCE, filename="sectgoto.cbl").ast
+    assert _safe_section_entry_points(program) == {}
+
+
+def test_safe_section_entry_points_excludes_a_directly_performed_first_paragraph():
+    program = parse_cobol(
+        SECTION_DIRECT_PERFORM_UNSAFE_SOURCE, filename="sectdirect.cbl"
+    ).ast
+    assert _safe_section_entry_points(program) == {}
+
+
+def test_safe_section_entry_points_empty_when_program_has_no_sections():
+    assert _safe_section_entry_points(_program()) == {}
