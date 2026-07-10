@@ -82,7 +82,10 @@ TESTCASE "totals two records then updates and notifies"
   into; without a matching `--copybook-path`, or if the member can't be
   found, it refuses `UNRESOLVED_COPYBOOK`. Only one level of `EXEC SQL
   INCLUDE` resolves — a member that itself contains another live `EXEC SQL
-  INCLUDE` refuses.
+  INCLUDE` refuses. Like the generated SQLCA, these fields are spliced in
+  after parsing and are never reset between test cases — a mock body is
+  expected to set them on every run (the `ROWS` sugar above does this
+  automatically).
 - Lines starting with `*>` are comments.
 
 `mockymock generate <program.cbl>` scaffolds a starter `.cut` covering

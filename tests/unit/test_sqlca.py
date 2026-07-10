@@ -128,11 +128,11 @@ def test_declare_cursor_for_update_is_commented_out():
     assert live == []
 
 
-def test_include_other_member_refuses():
+def test_include_other_member_without_copybook_path_refuses_unresolved():
     src = BASE[:5] + ["    EXEC SQL INCLUDE ORDHOST END-EXEC."] + BASE[5:]
     lines, reasons = transform_data_division_exec(src)
     assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_DATA_DIVISION_EXEC"
+    assert reasons[0].code == "UNRESOLVED_COPYBOOK"
     assert "ORDHOST" in reasons[0].message
 
 
@@ -257,5 +257,97 @@ def test_commented_out_end_exec_does_not_terminate_a_real_block():
         + BASE[5:]
     )
     lines, reasons = transform_data_division_exec(src)
+    assert reasons == []
+    assert "01  SQLCA." in "\n".join(lines)
+
+
+# --- EXEC SQL INCLUDE <member> resolution via --copybook-path -----------------
+
+
+def test_include_other_member_resolves_with_copybook_path(tmp_path):
+    copybook_dir = tmp_path / "copybooks"
+    copybook_dir.mkdir()
+    (copybook_dir / "ORDHOST.CPY").write_text(
+        "       01  ORD-HOST.\n           05  ORD-AMOUNT PIC 9(5)V99.\n"
+    )
+    src = BASE[:5] + ["    EXEC SQL INCLUDE ORDHOST END-EXEC."] + BASE[5:]
+    lines, reasons = transform_data_division_exec(
+        src, copybook_paths=[str(copybook_dir)]
+    )
+    assert reasons == []
+    joined = "\n".join(lines)
+    assert "ORD-AMOUNT PIC 9(5)V99" in joined
+    assert "EXEC SQL INCLUDE ORDHOST END-EXEC." not in joined
+
+
+def test_include_member_with_embedded_declare_table_is_commented_out(tmp_path):
+    """A DCLGEN-style copybook embeds its own EXEC SQL DECLARE ... TABLE
+    stanza right before the host-variable record -- the re-scan after
+    splicing must catch and comment it out via the same DECLARE-TABLE
+    branch that already handles a directly-authored one, with no new
+    recursion code."""
+    copybook_dir = tmp_path / "copybooks"
+    copybook_dir.mkdir()
+    (copybook_dir / "CUSTREC.CPY").write_text(
+        "           EXEC SQL DECLARE CUSTREC TABLE\n"
+        "           ( CUST_ID     INTEGER NOT NULL,\n"
+        "             CUST_NAME   CHAR(30) )\n"
+        "           END-EXEC.\n"
+        "       01  CUSTREC.\n"
+        "           05  CUST-ID         PIC S9(9) COMP-5.\n"
+        "           05  CUST-NAME       PIC X(30).\n"
+    )
+    src = BASE[:5] + ["    EXEC SQL INCLUDE CUSTREC END-EXEC."] + BASE[5:]
+    lines, reasons = transform_data_division_exec(
+        src, copybook_paths=[str(copybook_dir)]
+    )
+    assert reasons == []
+    joined = "\n".join(lines)
+    assert "01  CUSTREC." in joined
+    assert "05  CUST-ID" in joined
+    live_declare = [
+        ln
+        for ln in lines
+        if "DECLARE CUSTREC TABLE" in ln and not ln.strip().startswith("*>")
+    ]
+    assert live_declare == []
+
+
+def test_nested_include_inside_resolved_member_refuses(tmp_path):
+    copybook_dir = tmp_path / "copybooks"
+    copybook_dir.mkdir()
+    (copybook_dir / "OUTER.CPY").write_text("       EXEC SQL INCLUDE INNER END-EXEC.\n")
+    (copybook_dir / "INNER.CPY").write_text("       01  INNER-FIELD PIC X(5).\n")
+    src = BASE[:5] + ["    EXEC SQL INCLUDE OUTER END-EXEC."] + BASE[5:]
+    lines, reasons = transform_data_division_exec(
+        src, copybook_paths=[str(copybook_dir)]
+    )
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_DATA_DIVISION_EXEC"
+    assert "nested" in reasons[0].message
+    assert "INNER" in reasons[0].message
+
+
+def test_include_missing_member_with_copybook_path_refuses_unresolved(tmp_path):
+    copybook_dir = tmp_path / "copybooks"
+    copybook_dir.mkdir()
+    src = BASE[:5] + ["    EXEC SQL INCLUDE NOPE END-EXEC."] + BASE[5:]
+    lines, reasons = transform_data_division_exec(
+        src, copybook_paths=[str(copybook_dir)]
+    )
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNRESOLVED_COPYBOOK"
+    assert "NOPE" in reasons[0].message
+
+
+def test_sqlca_include_still_uses_generated_fields_not_resolution(tmp_path):
+    """INCLUDE SQLCA must keep using the hardcoded SQLCA_FIELDS path even
+    when a --copybook-path happens to be given -- it must never go through
+    member resolution (there is no SQLCA.CPY file to find)."""
+    copybook_dir = tmp_path / "copybooks"
+    copybook_dir.mkdir()
+    lines, reasons = transform_data_division_exec(
+        BASE, copybook_paths=[str(copybook_dir)]
+    )
     assert reasons == []
     assert "01  SQLCA." in "\n".join(lines)
