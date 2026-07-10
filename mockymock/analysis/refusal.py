@@ -178,11 +178,17 @@ class TerminatorPlan:
     inserted after it for this terminator's propagation to correctly
     reach the test driver. Empty `chain_performs` means the terminator
     sits directly in a test's own PERFORM target -- no intermediate
-    instrumentation needed. See
-    docs/2026-07-08-goback-stop-run-support-design.md."""
+    instrumentation needed. `exit_kind` is "PARAGRAPH" (the default) or
+    "SECTION" for the one SECTION-scoped shape
+    docs/2026-07-10-section-scoped-terminator-support-design.md supports
+    -- a terminator in a SECTION's first paragraph, entered exclusively
+    via PERFORM <section-name>. See
+    docs/2026-07-08-goback-stop-run-support-design.md and
+    docs/2026-07-10-section-scoped-terminator-support-design.md."""
 
     site: BoundarySite
     chain_performs: list = field(default_factory=list)
+    exit_kind: str = "PARAGRAPH"
 
 
 # Shown when a nested site reaches a check before annotate_nested_sites ran
@@ -1082,7 +1088,11 @@ def find_terminator_plans(
     unmocked boundary).
 
     Safe means: the terminator's enclosing paragraph is a top-level
-    paragraph (not a SECTION member), is reachable from the test's own
+    paragraph (not a SECTION member) -- or is the first paragraph of a
+    SECTION whose only entry point, whole-program, is `PERFORM
+    <section-name>` (`_safe_section_entry_points`; see
+    docs/2026-07-10-section-scoped-terminator-support-design.md) -- is
+    reachable from the test's own
     perform_target via `_plain_perform_edges_from` (a chain of nothing but
     plain, unconditional, top-level PERFORM statements), and no paragraph
     anywhere on that whole restricted-reachable chain -- not just the
@@ -1126,6 +1136,8 @@ def find_terminator_plans(
 
     top_level_names = {p.paragraph_name for p in procedure.paragraphs}
     go_to_targets = _go_to_targets(program)
+    safe_section_entries = _safe_section_entry_points(program)
+    safe_section_first_names = set(safe_section_entries.values())
     terminator_sites = {
         id(s.statement): s
         for s in surface.boundary_sites
@@ -1141,9 +1153,9 @@ def find_terminator_plans(
             program, case.perform_target, case.perform_thru
         )
         safe_names, chain_performs = _plain_perform_edges_from(
-            program, case.perform_target
+            program, case.perform_target, safe_section_entries
         )
-        chain_section_names = safe_names - top_level_names
+        chain_section_names = safe_names - (top_level_names | safe_section_first_names)
         chain_go_to_names = safe_names & go_to_targets
 
         chain_problem: str | None = None
@@ -1167,7 +1179,19 @@ def find_terminator_plans(
 
             paragraph_name = site.paragraph_name
             problem = None
-            if paragraph_name not in top_level_names:
+            if paragraph_name not in top_level_names and (
+                paragraph_name not in safe_section_first_names
+                # A safe_section_first_names entry is only genuinely safe
+                # when reached via PERFORM <section-name> (an intermediate
+                # chain edge, or perform_target naming the section itself).
+                # _safe_section_entry_points already excludes any paragraph
+                # that is a PERFORM target anywhere -- so the only other way
+                # to land here is the test's own perform_target naming this
+                # paragraph directly, bypassing the section name entirely.
+                # That's shape 3 (docs/2026-07-10-section-scoped-terminator-
+                # support-design.md), still out of scope and unverified.
+                or paragraph_name == case.perform_target
+            ):
                 problem = (
                     "is inside a paragraph that belongs to a SECTION -- "
                     "SECTION-scoped terminators are not yet supported"
@@ -1236,7 +1260,14 @@ def find_terminator_plans(
                 continue
 
             if key not in plans_by_statement:
-                plans_by_statement[key] = TerminatorPlan(site=terminator_sites[key])
+                exit_kind = (
+                    "SECTION"
+                    if paragraph_name in safe_section_first_names
+                    else "PARAGRAPH"
+                )
+                plans_by_statement[key] = TerminatorPlan(
+                    site=terminator_sites[key], exit_kind=exit_kind
+                )
             qualified_keys.append(key)
 
         for key in qualified_keys:
