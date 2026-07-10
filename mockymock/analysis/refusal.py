@@ -1091,8 +1091,11 @@ def find_terminator_plans(
     paragraph (not a SECTION member) -- or is the first paragraph of a
     SECTION whose only entry point, whole-program, is `PERFORM
     <section-name>` (`_safe_section_entry_points`; see
-    docs/2026-07-10-section-scoped-terminator-support-design.md) -- is
-    reachable from the test's own
+    docs/2026-07-10-section-scoped-terminator-support-design.md; notably,
+    for a SECTION-scoped terminator, the test's own perform_target must name
+    the SECTION itself, not the paragraph directly, as direct paragraph
+    naming (shape 3 of the design doc) bypasses the section entry point and
+    remains unverified) -- is reachable from the test's own
     perform_target via `_plain_perform_edges_from` (a chain of nothing but
     plain, unconditional, top-level PERFORM statements), and no paragraph
     anywhere on that whole restricted-reachable chain -- not just the
