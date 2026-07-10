@@ -32,7 +32,9 @@ _BARE_CATS = "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
 _TESTCASE_RE = re.compile(r'^TESTCASE\s+"(?P<name>[^"]*)"$')
-_MOCK_QUOTED_RE = re.compile(rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"$')
+_MOCK_QUOTED_RE = re.compile(
+    rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"(?:\s+(?P<rows>ROWS))?$'
+)
 _MOCK_BARE_RE = re.compile(
     rf"^MOCK\s+(?P<cat>{_BARE_CATS})\s+(?P<key>[A-Za-z0-9][A-Za-z0-9-]*)$"
 )
@@ -58,6 +60,8 @@ _VERIFY_BARE_RE = re.compile(
     rf"\s+WAS\s+(?:CALLED|PERFORMED)\s+(?P<expectation>.+)$"
 )
 _COMMENT_RE = re.compile(r"^\*>")
+_ROW_RE = re.compile(r"^\((?P<pairs>.+)\)$")
+_ROW_PAIR_RE = re.compile(r"^(?P<field>[A-Za-z][A-Za-z0-9-]*)\s*=\s*(?P<value>.+)$")
 
 
 class CutParseError(ValueError):
@@ -90,6 +94,32 @@ def _validate_expectation(expectation: str, line_no: int) -> None:
     )
 
 
+def _split_top_level(text: str, sep: str) -> list[str]:
+    """Split `text` on `sep`, ignoring any occurrence inside a '...' or
+    "..." span -- so a ROWS row value like EMP-NAME = "SMITH, JR." isn't
+    cut at the comma inside the quoted literal."""
+    parts: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    for char in text:
+        if quote is not None:
+            current.append(char)
+            if char == quote:
+                quote = None
+            continue
+        if char in "'\"":
+            quote = char
+            current.append(char)
+            continue
+        if char == sep:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    parts.append("".join(current))
+    return parts
+
+
 def parse_cut(text: str) -> MockTestSuite:
     suite: MockTestSuite | None = None
     case: MockTestCase | None = None
@@ -120,7 +150,33 @@ def parse_cut(text: str) -> MockTestSuite:
 
         if in_mock is not None:
             if _END_MOCK_RE.match(line):
+                if in_mock.rows is not None and not in_mock.rows:
+                    raise CutParseError(
+                        f"line {line_no}: MOCK {in_mock.describe()} ROWS "
+                        f"block has no rows -- give at least one row or "
+                        f"drop ROWS entirely"
+                    )
                 in_mock = None
+            elif in_mock.rows is not None:
+                row_match = _ROW_RE.match(line)
+                if row_match is None:
+                    raise CutParseError(
+                        f"line {line_no}: malformed ROWS row {line!r} -- "
+                        f"expected ( FIELD = value, FIELD = value, ... )"
+                    )
+                row: list[tuple[str, str]] = []
+                for raw_pair in _split_top_level(row_match.group("pairs"), ","):
+                    pair_match = _ROW_PAIR_RE.match(raw_pair.strip())
+                    if pair_match is None:
+                        raise CutParseError(
+                            f"line {line_no}: malformed ROWS field "
+                            f"assignment {raw_pair.strip()!r} -- expected "
+                            f"FIELD = value"
+                        )
+                    row.append(
+                        (pair_match.group("field"), pair_match.group("value").strip())
+                    )
+                in_mock.rows.append(row)
             else:
                 in_mock.body_lines.append(line)
             continue
@@ -151,10 +207,17 @@ def parse_cut(text: str) -> MockTestSuite:
                     f'line {line_no}: empty MOCK {m.group("cat")} key -- '
                     f"the quoted key must name what to mock"
                 )
+            category = _resolve_category(m.group("cat"))
+            if m.group("rows") and category is not MockCategory.SQL:
+                raise CutParseError(
+                    f"line {line_no}: ROWS is only supported for MOCK SQL, "
+                    f'not MOCK {m.group("cat")}'
+                )
             in_mock = _open_mock(
                 MockDirective(
-                    category=_resolve_category(m.group("cat")),
+                    category=category,
                     key=m.group("key"),
+                    rows=[] if m.group("rows") else None,
                 ),
                 line_no,
             )

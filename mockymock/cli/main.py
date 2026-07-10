@@ -313,7 +313,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Pre-check the DATA DIVISION EXEC SQL blocks before doing any work; the
     # actual transform runs after splicing (it inserts/removes lines, which
     # would shift the AST-derived statement spans the splicer relies on).
-    _, data_exec_reasons = transform_data_division_exec(lines)
+    _, data_exec_reasons = transform_data_division_exec(
+        lines, copybook_paths=args.copybook_path
+    )
     for reason in data_exec_reasons:
         print(f"mockymock run: refused ({reason.code}): {reason.message}")
     if data_exec_reasons:
@@ -338,7 +340,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     lines = splice_program(
         lines, boundaries, surface, suite, registry, terminator_plans
     )
-    lines, _ = transform_data_division_exec(lines)
+    lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
     reset_lines = reset_move_lines(result.ast)
     if linkage is not None:
