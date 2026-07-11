@@ -108,7 +108,7 @@ def splice_program(
                     f"should have refused it; splicing would delete the "
                     f"sibling code sharing its line"
                 )
-            start, end = statement_span(site.statement, boundaries, last_line)
+            start, end = statement_span(site.statement, boundaries, last_line, lines)
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /
         # paragraph), the replacement block must terminate the sentence too
@@ -149,7 +149,7 @@ def splice_program(
                     f"check_terminator_layout (UNSUPPORTED_TERMINATOR_LAYOUT) "
                     f"should have refused it"
                 )
-            start, end = statement_span(site.statement, boundaries, last_line)
+            start, end = statement_span(site.statement, boundaries, last_line, lines)
         last_span_line = next(
             (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
             "",
@@ -171,6 +171,10 @@ def splice_program(
             if id(perform) in seen_perform_ids:
                 continue
             seen_perform_ids.add(id(perform))
+<<<<<<< HEAD
+            _, end = statement_span(perform, boundaries, last_line, lines)
+            insertions.append((end, build_chain_check()))
+=======
             start, end = statement_span(perform, boundaries, last_line)
             chain_check = build_chain_check()
             # If the PERFORM this follows ended its own sentence with a
@@ -193,6 +197,7 @@ def splice_program(
             if last_span_line.rstrip().endswith("."):
                 chain_check = chain_check[:-1] + [chain_check[-1] + "."]
             insertions.append((end, chain_check))
+>>>>>>> origin/main
 
     ops: list[tuple[int, str, int, int, list[str]]] = [
         (start, "replace", start, end, replacement) for start, end, replacement in spans

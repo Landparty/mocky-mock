@@ -1,5 +1,66 @@
 # mocky-mock OKF Bundle — Update Log
 
+<<<<<<< HEAD
+## 2026-07-10 (Fix: cobolparser pin bump closes ACCTPRG/looping-PERFORM silent-drop; statement_span blank-line trim)
+* **Root cause, confirmed empirically, not guessed**: at the previously-pinned
+  cobolparser commit (`8c3c881d`), a period-less out-of-line
+  `PERFORM x UNTIL cond` immediately followed by another statement (legal
+  COBOL -- no period required between statements sharing a sentence) silently
+  dropped **every statement after it** from the enclosing paragraph, with
+  zero `PARSE_WARNING`. Reproduced directly against the parsed AST (the
+  trailing statements were simply absent from `paragraph.statements`), not
+  inferred from symptoms. This broke two things sharing the one root cause:
+  `examples/real-world/ACCTPRG`'s "runs end-to-end via its real entry point"
+  test case (lost `PERFORM 3000-FINALIZE` + `GOBACK`, so its `CLOSE
+  PURGEIN`/`CLOSE PURGRPT` mocks became `UNMATCHED_MOCK`) and
+  `tests/unit/test_terminators.py::test_looping_perform_is_excluded_from_the_safe_chain`.
+* **Fix**: bumped the pin (`pyproject.toml` dependency +
+  `.github/workflows/ci.yml`'s `ref:`) from `8c3c881d` to cobolparser
+  `origin/main`'s tip `c9a94999` (released as cobolparser 1.2.0), which
+  includes upstream commit `7405700` ("H9: missing period absorbs following
+  paragraph header") — the actual fix. Verified by bisecting each
+  intermediate commit against the real, reinstalled package (not a
+  `sys.path` source shim) before adopting: `acc0842` (an earlier point that
+  already included the `b54348e` silent-drop fix from the same PR) still
+  failed both tests; `7405700` fixed both with no new regressions at that
+  point. Chose `origin/main`'s tip over the local `cobol-parser` checkout's
+  further-ahead `HEAD`, which had 14 additional unpushed/uncommitted-local
+  commits from concurrent work in that sibling repo -- origin/main is the
+  shared, released, reproducible-by-CI state.
+* **Mockymock-side fix, surfaced by the same bump**: cobolparser's
+  `normalize_fixed_format` blanks out (rather than deletes) blank/comment/
+  directive lines as of commit `b419281`, so later line numbers stay
+  accurate -- but `mockymock/splicer/source_map.py`'s `statement_span` and
+  `_nested_site_span` computed a span's end line as "one line before the
+  next boundary," which can now land on one of those blank placeholders
+  instead of the statement's true last content line. Fixed by trimming
+  `end` back to the last non-blank line (`_trim_trailing_blank_lines`),
+  restoring `tests/unit/test_source_map.py`'s original assertions with no
+  test changes needed.
+* **Surfaced, not introduced, by the bump**: `examples/nist-cobol85/IC101A`
+  and `IC116M` now correctly `PARSE_WARNING`-refuse instead of silently
+  proceeding. Root cause: cobolparser's VALUE clause parser has never
+  handled a literal that begins on the physical line after the `VALUE`
+  keyword without a fixed-format `-` continuation indicator (ordinary
+  multi-line clause continuation, legal COBOL) -- confirmed by inspecting
+  the parsed AST directly at the *old* pin too: the affected FILLER's
+  `value_clause` was already `None` there, just without a warning. The
+  content lost either way is a decorative CCVS85 boilerplate banner field
+  ("FEATURE ... PARAGRAPH-NAME ... REMARKS"), not load-bearing conformance-
+  test logic. Not fixed here -- deliberately out of scope for this pin-bump
+  task (an upstream cobolparser parser change, and that sibling repo has
+  unrelated concurrent work in flight) -- flagged for follow-up.
+* **Also newly visible via `scripts/corpus_sweep.py`, no functional impact**:
+  `tests/integration/fixtures/walking_skeleton.cbl` now reports one
+  `PARSE_WARNING` (a `DISPLAY` literal's closing quote lands in the
+  traditional fixed-format columns-73-80 sequence area and is truncated --
+  a pre-existing, cosmetic quirk of that fixture, not new). Harmless:
+  `test_walking_skeleton_compiles_and_runs` compiles the raw fixture
+  directly through GnuCOBOL and never goes through mockymock's
+  parse-warning gate at all. `legacy-application/cobol/ACCTMNT.cbl` and
+  `EODPROC.cbl` (sibling-repo corpus, not curated mocky-mock examples) also
+  show new warnings -- not investigated, lower priority.
+=======
 ## 2026-07-10 (SECTION-scoped terminator support, narrow shape)
 * **Added**: `refusal._safe_section_entry_points` (whole-program check: a
   `SECTION`'s first paragraph is safe to neutralize with `EXIT SECTION`
@@ -102,6 +163,7 @@
   on `main`, unrelated to and unfixed by this change. Fixing this is
   upstream `cobol-parser` work, out of scope here; flagged to the user
   rather than silently worked around.
+>>>>>>> origin/main
 
 ## 2026-07-09 (Feature: EXEC SQL INCLUDE host-var copybooks + cursor ROWS sugar)
 * **What shipped**: `EXEC SQL INCLUDE <member> END-EXEC` (non-SQLCA) now

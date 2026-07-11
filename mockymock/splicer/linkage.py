@@ -41,7 +41,7 @@ def neutralize(lines: list[str], program, plan: LinkagePlan) -> list[str]:
     boundaries = sorted(set(collect_boundaries(program)) | entry_lines)
 
     for entry in plan.entry_statements:
-        start, end = statement_span(entry, boundaries, last_line)
+        start, end = statement_span(entry, boundaries, last_line, lines)
         lines = comment_and_replace(lines, start, end, [])
 
     lines = comment_and_replace(lines, plan.header_line, plan.header_line, [])

@@ -55,7 +55,7 @@ def test_multiline_call_span_covers_all_three_lines():
     call_stmt = _find_call_statement(ast)
     boundaries = collect_boundaries(ast)
 
-    start, end = statement_span(call_stmt, boundaries, last_line=len(lines))
+    start, end = statement_span(call_stmt, boundaries, last_line=len(lines), lines=lines)
 
     assert start == call_stmt.location.line
     assert end == start + 2
@@ -68,7 +68,7 @@ def test_span_ends_before_next_paragraph_header():
     call_stmt = _find_call_statement(ast)
     boundaries = collect_boundaries(ast)
 
-    _, end = statement_span(call_stmt, boundaries, last_line=len(lines))
+    _, end = statement_span(call_stmt, boundaries, last_line=len(lines), lines=lines)
 
     second_paragraph_line = next(
         i + 1 for i, line in enumerate(lines) if "SECOND-PARAGRAPH" in line
@@ -306,7 +306,7 @@ def test_span_of_sections_last_statement_ends_before_section_header():
         i + 1 for i, line in enumerate(lines) if "NEXT-SEC SECTION" in line
     )
     assert section_header_line in boundaries
-    _, end = statement_span(call_stmt, boundaries, last_line=len(lines))
+    _, end = statement_span(call_stmt, boundaries, last_line=len(lines), lines=lines)
     assert end < section_header_line
 
 

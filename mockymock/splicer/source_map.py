@@ -86,12 +86,29 @@ def collect_boundaries(program) -> list[int]:
     return sorted(lines)
 
 
-def statement_span(statement, boundaries: list[int], last_line: int) -> tuple[int, int]:
-    """Return (start_line, end_line), both 1-indexed and inclusive."""
+def statement_span(
+    statement, boundaries: list[int], last_line: int, lines: list[str]
+) -> tuple[int, int]:
+    """Return (start_line, end_line), both 1-indexed and inclusive.
+
+    cobolparser's normalize_fixed_format blanks out (rather than deletes)
+    comment/blank/directive lines so later line numbers stay accurate --
+    which means "one line before the next boundary" can land on one of
+    those blank placeholders instead of the statement's true last content
+    line. Trimmed back to the last non-blank line so the span's actual
+    text always ends on real code.
+    """
     start = statement.location.line
     later = [b for b in boundaries if b > start]
     end = (later[0] - 1) if later else last_line
-    return start, end
+    return start, _trim_trailing_blank_lines(start, end, lines)
+
+
+def _trim_trailing_blank_lines(start: int, end: int, lines: list[str]) -> int:
+    """Walk `end` back to the last non-blank line, never past `start`."""
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return end
 
 
 def _all_paragraphs(procedure_division: CobolDivision) -> list[CobolParagraph]:
@@ -381,7 +398,7 @@ def _nested_site_span(
             f"start its own line"
         )
 
-    end = nxt.line - 1
+    end = _trim_trailing_blank_lines(start, nxt.line - 1, lines)
     if site.category in EXEC_CATEGORIES:
         if not any(
             "END-EXEC" in lines[line_no - 1].upper()
