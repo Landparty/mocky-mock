@@ -1,9 +1,9 @@
 ---
 type: Test Suite
 title: Testing
-description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the two full worked GnuCOBOL examples (INVUPDT, ORDRPROC).
+description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-07-06T00:00:00Z
+timestamp: 2026-07-10T00:00:00Z
 ---
 # Overview
 
@@ -84,10 +84,14 @@ just that the happy path returns 0.
 
 # Worked examples (examples/)
 
-Two full, documented, runnable programs under `examples/` -- these are
-polished end-to-end demos (with READMEs), distinct from the terser
+Documented, runnable programs under `examples/` -- these are polished
+end-to-end demos (with READMEs), distinct from the terser
 `tests/integration/fixtures/` corpus, and are also driven by their own
-integration tests (`test_invupdt_example.py`, `test_ordrproc_example.py`):
+integration tests. Beyond the four hand-written ones below (INVUPDT,
+ORDRPROC, CUSTINQ, RATERTE), `examples/real-world/` (ACCTPRG, DEPTMQC,
+DEPTMQP) and `examples/nist-cobol85/` (IC101A, IC116M, IC117M, OBIC1A) hold
+additional examples driven from real corpora -- see their own READMEs for
+provenance and what each demonstrates.
 
 ## INVUPDT (`examples/invupdt/`)
 
@@ -138,6 +142,56 @@ The README frames it as the smallest possible teaching example: flip
 a bare `.cbl` with no `.cut` at all.
 
 Run: `mockymock run ORDRPROC.cbl --cut ORDRPROC.cut`
+
+## CUSTINQ (`examples/custinq/`)
+
+The first `EXEC CICS` worked example -- closes the real-world-readiness
+audit's Finding 5 row that CICS was "classified but never proven, no
+example, absent from corpus" (see `docs/2026-07-06-real-world-readiness-audit.md`).
+A CICS customer-inquiry transaction: `EXEC CICS READ` looks up a customer,
+a plain-COBOL paragraph flags a low balance, `EXEC CICS RETURN` ends the
+transaction.
+
+| Boundary | COBOL statement | Mock directive |
+|----------|-----------------|-----------------|
+| CICS file read | `EXEC CICS READ DATASET("CUSTFILE") ... END-EXEC` | `MOCK CICS "READ"` |
+| CICS transaction return | `EXEC CICS RETURN END-EXEC` | `MOCK CICS "RETURN"` |
+
+Notable design points the README calls out explicitly:
+
+- **No CICS translator or runtime needed.** `EXEC CICS` blocks are spliced
+  out entirely before compilation -- mocked ones become the test case's
+  mock body, unmocked-but-reachable ones become a trap stub (same
+  mechanism as `EXEC SQL`/`EXEC DLI`, see [splicer](splicer.md)). GnuCOBOL
+  never sees a raw `EXEC CICS` block, so this compiles and runs in the
+  plain `mockymock-cobc` container.
+- The last test case drives `0000-MAIN`, the program's real entry point,
+  through its full `PERFORM` chain to `GOBACK` -- the terminator-
+  neutralization feature (`docs/2026-07-08-goback-stop-run-support-design.md`)
+  applied to a CICS program.
+
+Run: `mockymock run examples/custinq/CUSTINQ.cbl --cut examples/custinq/CUSTINQ.cut`
+
+## RATERTE (`examples/raterte/`)
+
+A business-flavored counterpart to the bare `tests/integration/fixtures/dynamic_call.cbl`
+regression fixture: an account-tier code drives which of three interest-rate
+subprograms (`STDRATE`/`PRMRATE`/`VIPRATE`) gets called *dynamically*
+(through an identifier, not a literal program name) -- the classic COBOL
+dispatch-table pattern.
+
+| Boundary | COBOL statement | Mock directive |
+|----------|-----------------|-----------------|
+| Dynamic subprogram call | `CALL WS-PGM-NAME USING WS-BALANCE WS-RATE` | `MOCK CALL WS-PGM-NAME` |
+
+One bare-identifier `MOCK CALL WS-PGM-NAME` directive covers all three
+routing targets; the mock body branches on `WS-PGM-NAME`'s own runtime
+value to return a different rate per target, and the whole `CALL`
+statement is spliced out so `STDRATE`/`PRMRATE`/`VIPRATE` never need to
+exist as real subprograms. A fourth test case exercises the `EVALUATE`'s
+`WHEN OTHER` fallback.
+
+Run: `mockymock run examples/raterte/RATERTE.cbl --cut examples/raterte/RATERTE.cut`
 
 # CI (.github/workflows/ci.yml)
 

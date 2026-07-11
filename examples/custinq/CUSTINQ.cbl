@@ -1,0 +1,41 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CUSTINQ.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CUST-ID           PIC X(6).
+       01  WS-CUST-NAME         PIC X(20).
+       01  WS-CUST-BALANCE      PIC 9(7)V99 VALUE 0.
+       01  WS-RESP              PIC S9(8) COMP VALUE 0.
+       01  WS-INQUIRY-STATUS    PIC X(8) VALUE SPACES.
+       01  WS-LOW-BALANCE-FLAG  PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           PERFORM 1000-LOOKUP-CUSTOMER
+           PERFORM 2000-CHECK-BALANCE
+           PERFORM 9000-END-TRANSACTION
+           GOBACK.
+
+       1000-LOOKUP-CUSTOMER.
+           MOVE "ABC123" TO WS-CUST-ID
+           EXEC CICS READ
+               DATASET("CUSTFILE")
+               INTO(WS-CUST-NAME)
+               RIDFLD(WS-CUST-ID)
+               RESP(WS-RESP)
+           END-EXEC
+           IF WS-RESP = 0
+               MOVE "FOUND" TO WS-INQUIRY-STATUS
+           ELSE
+               MOVE "NOTFOUND" TO WS-INQUIRY-STATUS
+           END-IF.
+
+       2000-CHECK-BALANCE.
+           IF WS-INQUIRY-STATUS = "FOUND" AND WS-CUST-BALANCE < 100.00
+               MOVE "Y" TO WS-LOW-BALANCE-FLAG
+           END-IF.
+
+       9000-END-TRANSACTION.
+           EXEC CICS RETURN
+           END-EXEC.

@@ -1,0 +1,59 @@
+TESTSUITE "RATERTE dynamic rate-program routing"
+
+*> One bare-key MOCK CALL WS-PGM-NAME directive dispatches the whole
+*> program on the runtime identifier value set by 1000-SELECT-RATE-
+*> PROGRAM -- the CALL statement itself is spliced out entirely, so
+*> STDRATE/PRMRATE/VIPRATE never need to exist as real subprograms.
+
+TESTCASE "standard tier routes to STDRATE and applies its rate"
+    MOVE "STD" TO WS-ACCT-TIER
+    MOVE 10000.00 TO WS-BALANCE
+    MOCK CALL WS-PGM-NAME
+        IF WS-PGM-NAME = "STDRATE"
+            MOVE 0.0300 TO WS-RATE
+        ELSE
+            MOVE 0 TO WS-RATE
+        END-IF
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-PGM-NAME TO BE "STDRATE"
+    EXPECT WS-INTEREST TO BE 300.00
+    VERIFY CALL WS-PGM-NAME WAS CALLED ONCE
+
+TESTCASE "premium tier routes to PRMRATE and applies its rate"
+    MOVE "PRM" TO WS-ACCT-TIER
+    MOVE 10000.00 TO WS-BALANCE
+    MOCK CALL WS-PGM-NAME
+        IF WS-PGM-NAME = "PRMRATE"
+            MOVE 0.0450 TO WS-RATE
+        ELSE
+            MOVE 0 TO WS-RATE
+        END-IF
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-PGM-NAME TO BE "PRMRATE"
+    EXPECT WS-INTEREST TO BE 450.00
+
+TESTCASE "vip tier routes to VIPRATE and applies its rate"
+    MOVE "VIP" TO WS-ACCT-TIER
+    MOVE 10000.00 TO WS-BALANCE
+    MOCK CALL WS-PGM-NAME
+        IF WS-PGM-NAME = "VIPRATE"
+            MOVE 0.0600 TO WS-RATE
+        ELSE
+            MOVE 0 TO WS-RATE
+        END-IF
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-PGM-NAME TO BE "VIPRATE"
+    EXPECT WS-INTEREST TO BE 600.00
+
+TESTCASE "unknown tier falls back to STDRATE"
+    MOVE "XXX" TO WS-ACCT-TIER
+    MOVE 10000.00 TO WS-BALANCE
+    MOCK CALL WS-PGM-NAME
+        MOVE 0.0300 TO WS-RATE
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-PGM-NAME TO BE "STDRATE"
+    EXPECT WS-INTEREST TO BE 300.00

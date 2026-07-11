@@ -1,0 +1,53 @@
+TESTSUITE "CUSTINQ CICS customer inquiry"
+
+*> EXEC CICS READ/RETURN are boundary statements mockymock splices out
+*> entirely before compilation -- GnuCOBOL never sees a raw EXEC CICS
+*> block, so no CICS translator or runtime is needed to compile and run
+*> this program. MOCK CICS "<prefix>" prefix-matches the statement's
+*> normalized text, same as MOCK SQL/DLI.
+
+TESTCASE "1000-LOOKUP-CUSTOMER finds a customer"
+    MOCK CICS "READ"
+        MOVE "JANE SMITH" TO WS-CUST-NAME
+        MOVE 0 TO WS-RESP
+    END-MOCK
+    PERFORM 1000-LOOKUP-CUSTOMER
+    EXPECT WS-CUST-NAME TO BE "JANE SMITH"
+    EXPECT WS-INQUIRY-STATUS TO BE "FOUND"
+    VERIFY CICS "READ" WAS CALLED ONCE
+
+TESTCASE "1000-LOOKUP-CUSTOMER marks NOTFOUND on a nonzero RESP"
+    MOCK CICS "READ"
+        MOVE 13 TO WS-RESP
+    END-MOCK
+    PERFORM 1000-LOOKUP-CUSTOMER
+    EXPECT WS-INQUIRY-STATUS TO BE "NOTFOUND"
+
+TESTCASE "2000-CHECK-BALANCE flags a found customer under the low-balance threshold"
+    MOVE "FOUND" TO WS-INQUIRY-STATUS
+    MOVE 50.00 TO WS-CUST-BALANCE
+    PERFORM 2000-CHECK-BALANCE
+    EXPECT WS-LOW-BALANCE-FLAG TO BE "Y"
+
+TESTCASE "2000-CHECK-BALANCE leaves a not-found customer unflagged"
+    MOVE "NOTFOUND" TO WS-INQUIRY-STATUS
+    MOVE 50.00 TO WS-CUST-BALANCE
+    PERFORM 2000-CHECK-BALANCE
+    EXPECT WS-LOW-BALANCE-FLAG TO BE "N"
+
+TESTCASE "0000-MAIN runs end-to-end via its real entry point"
+    *> GOBACK is reached via a plain PERFORM chain (1000/2000/9000),
+    *> neutralized instead of killing the suite -- see
+    *> docs/2026-07-08-goback-stop-run-support-design.md.
+    MOCK CICS "READ"
+        MOVE "JANE SMITH" TO WS-CUST-NAME
+        MOVE 0 TO WS-RESP
+        MOVE 200.00 TO WS-CUST-BALANCE
+    END-MOCK
+    MOCK CICS "RETURN"
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-INQUIRY-STATUS TO BE "FOUND"
+    EXPECT WS-LOW-BALANCE-FLAG TO BE "N"
+    VERIFY CICS "READ" WAS CALLED ONCE
+    VERIFY CICS "RETURN" WAS CALLED ONCE
