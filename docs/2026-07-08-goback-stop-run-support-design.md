@@ -113,6 +113,14 @@ it's not the shape that motivated this feature — real corpus
 `0000-MAIN-PROCESS`-style paragraphs aren't wrapped in `SECTION`s. Documented
 as future work, reusing the same detection machinery once there's demand.
 
+**Update (2026-07-10):** the first half of this distinction — "the
+section's own first paragraph, reached via `PERFORM <section-name>`" — is
+now implemented; see
+[docs/2026-07-10-section-scoped-terminator-support-design.md](2026-07-10-section-scoped-terminator-support-design.md).
+"A later paragraph in that section, reached only by fall-through" and "a
+section member entered by directly `PERFORM`ing its own paragraph name"
+both remain future work.
+
 ## Design (Approach B) — detailed
 
 ### Detection: the "safe chain" check

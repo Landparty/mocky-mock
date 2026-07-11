@@ -412,6 +412,74 @@ def test_no_terminator_plans_argument_leaves_existing_behavior_unchanged():
     assert "UT-EARLY-EXIT" not in joined
 
 
+CHAIN_PERFORM_SOLE_STATEMENT_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SOLESTMT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           PERFORM 2000-INNER.
+
+       2000-INNER.
+           MOVE 1 TO WS-RESULT
+           STOP RUN.
+"""
+
+
+def test_chain_check_after_a_sole_period_terminated_perform_gets_its_own_period():
+    """Regression test for a real (pre-existing, not SECTION-specific)
+    splicer bug: when the intermediate PERFORM in a safe chain is the
+    SOLE, period-terminated statement of its own paragraph, the inserted
+    chain-check block must end its own sentence with a period, or the
+    following paragraph header runs into an unterminated sentence and
+    cobc rejects the compile (confirmed via a real GnuCOBOL compile,
+    see tests/integration/test_terminator_support.py's Docker-level
+    counterpart)."""
+    result = parse_cobol(
+        CHAIN_PERFORM_SOLE_STATEMENT_SOURCE, filename="solestmt.cbl"
+    )
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(
+        CHAIN_PERFORM_SOLE_STATEMENT_SOURCE.splitlines()
+    ).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    boundaries = collect_boundaries(result.ast)
+    suite = MockTestSuite(
+        name="T",
+        test_cases=[MockTestCase(name="main", perform_target="0000-MAIN-PROCESS")],
+    )
+    plans, reasons = find_terminator_plans(surface, result.ast, suite, scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+
+    spliced = splice_program(
+        lines, boundaries, surface, suite, TallyRegistry(suite), plans
+    )
+    joined = "\n".join(spliced)
+
+    # Both chain-check blocks (one after PERFORM 1000-WRAPPER, one after
+    # PERFORM 2000-INNER) must each end their own sentence with a period,
+    # since each of those PERFORMs is the sole statement of its paragraph.
+    perform_wrapper_idx = next(
+        i for i, line in enumerate(spliced) if "PERFORM 1000-WRAPPER" in line
+    )
+    end_if_idx = next(
+        i
+        for i in range(perform_wrapper_idx + 1, len(spliced))
+        if "END-IF" in spliced[i]
+    )
+    assert spliced[end_if_idx].rstrip().endswith(".")
+
+
 EARLY_MOCK_CHAIN_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. TERMCHAINEARLY.
@@ -603,3 +671,55 @@ def test_perform_immediately_followed_by_terminator_interleaves_correctly():
     # the terminator replacement's last line must carry that period instead
     last_exit_idx = max(i for i, line in enumerate(spliced) if "EXIT PARAGRAPH" in line)
     assert spliced[last_exit_idx].rstrip().endswith(".")
+
+
+SECTION_TERMINATOR_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTTERM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-TERM-SECTION
+           DISPLAY "AFTER-SECTION".
+
+       1000-TERM-SECTION SECTION.
+       1000-TERM-FIRST.
+           MOVE 1 TO WS-RESULT
+           STOP RUN.
+       1000-TERM-SECOND.
+           MOVE 999 TO WS-RESULT.
+"""
+
+
+def test_section_scoped_terminator_is_replaced_with_exit_section():
+    result = parse_cobol(SECTION_TERMINATOR_SOURCE, filename="sectterm.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(SECTION_TERMINATOR_SOURCE.splitlines()).splitlines()
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    boundaries = collect_boundaries(result.ast)
+    suite = MockTestSuite(
+        name="T",
+        test_cases=[MockTestCase(name="main", perform_target="0000-MAIN-PROCESS")],
+    )
+    plans, reasons = find_terminator_plans(surface, result.ast, suite, scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].exit_kind == "SECTION"
+
+    spliced = splice_program(
+        lines, boundaries, surface, suite, TallyRegistry(suite), plans
+    )
+    joined = "\n".join(spliced)
+    assert "      *>     STOP RUN." in joined
+    assert 'MOVE "Y" TO UT-EARLY-EXIT' in joined
+    assert "EXIT SECTION" in joined
+    # the intermediate PERFORM's own post-check is still EXIT PARAGRAPH --
+    # only the terminator's own replacement uses EXIT SECTION
+    assert 'IF UT-EARLY-EXIT = "Y"' in joined
+    assert "EXIT PARAGRAPH" in joined

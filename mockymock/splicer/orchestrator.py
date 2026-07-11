@@ -130,7 +130,7 @@ def splice_program(
         if id(site.statement) in seen_terminator_ids:
             continue
         seen_terminator_ids.add(id(site.statement))
-        replacement = build_terminator_neutralization()
+        replacement = build_terminator_neutralization(plan.exit_kind)
         if site.nested:
             if site.span is None:
                 raise ValueError(
@@ -171,8 +171,33 @@ def splice_program(
             if id(perform) in seen_perform_ids:
                 continue
             seen_perform_ids.add(id(perform))
+<<<<<<< HEAD
             _, end = statement_span(perform, boundaries, last_line, lines)
             insertions.append((end, build_chain_check()))
+=======
+            start, end = statement_span(perform, boundaries, last_line)
+            chain_check = build_chain_check()
+            # If the PERFORM this follows ended its own sentence with a
+            # period, the inserted IF/END-IF block is itself a brand-new,
+            # unterminated sentence -- give it its own closing period, or
+            # an unterminated END-IF runs straight into the next paragraph/
+            # SECTION header and cobc rejects it. Unlike the `spans`
+            # (replace) path above, `insert_lines_after` never touches the
+            # original PERFORM line, so there's no period to "move" here --
+            # the PERFORM's own sentence is already correctly terminated;
+            # only the newly-inserted block needs one of its own.
+            last_span_line = next(
+                (
+                    lines[i - 1]
+                    for i in range(end, start - 1, -1)
+                    if lines[i - 1].strip()
+                ),
+                "",
+            )
+            if last_span_line.rstrip().endswith("."):
+                chain_check = chain_check[:-1] + [chain_check[-1] + "."]
+            insertions.append((end, chain_check))
+>>>>>>> origin/main
 
     ops: list[tuple[int, str, int, int, list[str]]] = [
         (start, "replace", start, end, replacement) for start, end, replacement in spans

@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-07-08T00:00:00Z
+timestamp: 2026-07-10T00:00:00Z
 ---
 
 # Overview
@@ -137,7 +137,7 @@ For every `BoundarySite` in the reachable set:
 | `category is None`, label `"dynamic CALL"` | `DYNAMIC_CALL` | identifier cobolparser failed to capture — no static match key exists at all |
 | `category is None`, label `"SORT/MERGE"` | `UNSUPPORTED_SORT_MERGE` | mocks an algorithm + its INPUT/OUTPUT PROCEDURE contract, not a boundary statement |
 | `category is None`, label `"CANCEL"` | `UNMOCKED_CANCEL` (unless covered) | see the CANCEL subsection below |
-| terminator site (`StopStatement`(RUN-form)/`GobackStatement`) found unsafe by `find_terminator_plans` | `UNSUPPORTED_TERMINATOR_LAYOUT` | evaluated by `check_terminator_layout`, run alongside `check_test_case` in the CLI's refusal loop, not as one of `check_test_case`'s own per-site conditions above -- see [splicer](splicer.md#terminator-neutralization-gobackstop-run-approach-b) |
+| terminator site (`StopStatement`(RUN-form)/`GobackStatement`) found unsafe by `find_terminator_plans` | `UNSUPPORTED_TERMINATOR_LAYOUT` | evaluated by `check_terminator_layout`, run alongside `check_test_case` in the CLI's refusal loop, not as one of `check_test_case`'s own per-site conditions above -- see [splicer](splicer.md#terminator-neutralization-gobackstop-run-approach-b). One narrow SECTION-scoped shape is safe (a `SECTION`'s first paragraph, entered exclusively via `PERFORM <section-name>`) and produces a plan instead of a refusal — see `_safe_section_entry_points` and `docs/2026-07-10-section-scoped-terminator-support-design.md` |
 | zero directives match | `UNMOCKED_CALL`/`UNMOCKED_FILE_OP`/`UNMOCKED_SQL`/`UNMOCKED_CICS`/`UNMOCKED_DLI`/`UNMOCKED_CONSOLE_ACCEPT` | unmocked CALL has nowhere to link; unmocked file I/O hits a nonexistent sandbox file; unmocked EXEC can't compile; unmocked console ACCEPT reads whatever stdin is attached |
 | 2+ directives match | `AMBIGUOUS_MOCK` | fail closed rather than pick one |
 | exactly 1 match, `site.nested and site.span is None` | `UNSUPPORTED_NESTED_MOCK_TARGET` | no validated replacement span — splicing could swallow a block terminator and corrupt control flow (an earlier attempt without the scope map did exactly that) |
@@ -198,7 +198,9 @@ A THRU range covering a paragraph with an unspliceable nested site just makes th
 
 **`DECLARATIVES` detection relies on cobolparser emitting it as a paragraph name.** Verified empirically: a `DECLARATIVES ... END DECLARATIVES` block parses warning-free into a paragraph literally named `"DECLARATIVES"` (a reserved word no valid user paragraph can be named), which `_check_unsupported_control_flow` scans for directly — no cobolparser-side "is this a declaratives section" flag exists.
 
-**A `GO TO` that falls through past its target is not modeled.** The BFS treats every `GoStatement` target as terminal (it pushes the target paragraph; it does not also assume execution continues into whatever follows it in source order) — this matches real COBOL control flow (`GO TO` unconditionally transfers), so no over- or under-approximation results from it, but it's worth stating since PERFORM's THRU-range fall-through logic could be mistaken for a similar mechanism on GO TO.
+**A `GO TO` that falls through past its target is not modeled by the general reachability BFS.** `_reachable_paragraphs` treats every `GoStatement` target as terminal (it pushes the target paragraph; it does not also assume execution continues into whatever follows it in source order) — this matches real COBOL control flow (`GO TO` unconditionally transfers), so no over- or under-approximation results from it for ordinary reachability, but it's worth stating since PERFORM's THRU-range fall-through logic could be mistaken for a similar mechanism on GO TO.
+
+**...but the terminator-safety layer has a separate, narrower hazard this creates, and it IS guarded.** A GO TO target paragraph whose own body has no unconditional exit (see `_falls_through`) really does fall through — via ordinary sequential execution, not a flow edge — into the next paragraph in source order at runtime. A paragraph reached that way was never PERFORMed either, so it shares the exact EXIT PARAGRAPH hazard spike #4 found for a direct GO TO target (docs/2026-07-08-goback-stop-run-support-design.md): silently halting instead of returning, once some other test case has neutralized the terminator it falls into. `find_terminator_plans` computes `_go_to_fallthrough_targets` (walking source order forward from every GO TO target until `_falls_through` says stop) and refuses `UNSUPPORTED_TERMINATOR_LAYOUT` for any terminator or chain paragraph inside that hazard zone — closed 2026-07-10, see [docs/2026-07-10-goto-fallthrough-terminator-hazard-design.md](../docs/2026-07-10-goto-fallthrough-terminator-hazard-design.md).
 
 # See Also
 

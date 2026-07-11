@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-07-08T00:00:00Z
+timestamp: 2026-07-10T00:00:00Z
 ---
 
 # Overview
@@ -408,7 +408,13 @@ future cobolparser fix that silences the warning without also fixing
 See `docs/2026-07-08-goback-stop-run-support-design.md`'s "Out of scope"
 section for the full writeup),
 never a `GO TO` target anywhere in the program
-(`refusal._go_to_targets`), never a `SECTION` member. Safe terminators
+(`refusal._go_to_targets`), never a `SECTION` member — except the one
+narrow, whole-program-verified shape: a `SECTION`'s own first paragraph,
+entered exclusively via `PERFORM <section-name>`
+(`refusal._safe_section_entry_points`), replaced with `EXIT SECTION`
+instead of `EXIT PARAGRAPH` (`TerminatorPlan.exit_kind`) — see
+`docs/2026-07-10-section-scoped-terminator-support-design.md`. Safe
+terminators
 are replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH`
 (`injector.build_terminator_neutralization`); every intermediate
 `PERFORM` statement on the chain gets `IF UT-EARLY-EXIT = "Y" EXIT

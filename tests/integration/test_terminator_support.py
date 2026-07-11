@@ -218,3 +218,134 @@ def test_terminator_via_out_of_line_perform_varying_refuses_via_parse_warning(
     assert exit_code == 1
     assert "PARSE_WARNING" in out
     assert "UNSUPPORTED_TERMINATOR_LAYOUT" not in out
+
+
+CHAIN_PERFORM_SOLE_STATEMENT_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SOLESTMT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           PERFORM 2000-INNER.
+
+       2000-INNER.
+           MOVE 1 TO WS-RESULT
+           STOP RUN.
+"""
+
+CHAIN_PERFORM_SOLE_STATEMENT_CUT = """\
+TESTSUITE "SOLESTMT smoke"
+
+TESTCASE "chain PERFORM as sole statement of its paragraph compiles and runs"
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-RESULT TO BE 1
+"""
+
+
+@requires_docker
+def test_chain_check_after_sole_period_terminated_perform_compiles(
+    tmp_path: Path, capsys
+):
+    """Permanent regression fixture for a real, pre-existing splicer bug
+    (not SECTION-specific -- discovered while building SECTION-scoped
+    terminator support, but affects the already-shipped GOBACK/STOP RUN
+    feature too): when an intermediate PERFORM in a safe chain is the
+    sole, period-terminated statement of its own paragraph, the inserted
+    chain-check block previously had no closing period, so the following
+    paragraph header ran into an unterminated sentence and cobc rejected
+    the compile. See the fix in mockymock/splicer/orchestrator.py's
+    chain-check insertion loop."""
+    cbl_path = tmp_path / "SOLESTMT.cbl"
+    cbl_path.write_text(CHAIN_PERFORM_SOLE_STATEMENT_CBL)
+    cut_path = tmp_path / "SOLESTMT.cut"
+    cut_path.write_text(CHAIN_PERFORM_SOLE_STATEMENT_CUT)
+
+    exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0, out
+    assert (
+        "[PASS] chain PERFORM as sole statement of its paragraph compiles and runs"
+        in out
+    )
+
+
+SECTION_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTTERM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-TERM-SECTION.
+
+       1000-TERM-SECTION SECTION.
+       1000-TERM-FIRST.
+           MOVE 1 TO WS-RESULT
+           STOP RUN.
+       1000-TERM-SECOND.
+           MOVE 999 TO WS-RESULT.
+"""
+
+SECTION_CUT = """\
+TESTSUITE "SECTTERM smoke"
+
+TESTCASE "terminator in section's first paragraph is neutralized"
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-RESULT TO BE 1
+
+TESTCASE "second case still runs after the first hits the section terminator"
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-RESULT TO BE 1
+"""
+
+
+@requires_docker
+def test_section_scoped_terminator_neutralized_and_second_paragraph_does_not_run(
+    tmp_path: Path, capsys
+):
+    """Permanent regression fixture for spike #5 of
+    docs/2026-07-08-goback-stop-run-support-design.md, finally committed
+    now that docs/2026-07-10-section-scoped-terminator-support-design.md
+    implements it: STOP RUN in a SECTION's first paragraph, entered only
+    via PERFORM <section-name>, is replaced with EXIT SECTION. Proves two
+    things a unit test cannot: 1000-TERM-SECOND never runs (real GnuCOBOL
+    EXIT SECTION semantics, not just the splice shape), and control
+    correctly returns to the test driver (the case's own EXPECT runs, and
+    a second test case in the suite still runs afterward).
+
+    Verification mechanism: if 1000-TERM-SECOND incorrectly ran (EXIT
+    SECTION failing to stop before it -- the exact failure mode this test
+    exists to catch), it would overwrite WS-RESULT to 999, and
+    `EXPECT WS-RESULT TO BE 1` would fail loudly with a [FAIL] line and a
+    non-zero exit code -- a real, CLI-visible signal, unlike a DISPLAY
+    statement's output, which mockymock's CLI never surfaces (it only
+    prints structured __MOCKYMOCK__ TESTSUITE/CASE/SUMMARY lines parsed
+    from the binary's stdout, per report/results.py's parse_stdout --
+    verified by reading that function directly)."""
+    cbl_path = tmp_path / "SECTTERM.cbl"
+    cbl_path.write_text(SECTION_CBL)
+    cut_path = tmp_path / "SECTTERM.cut"
+    cut_path.write_text(SECTION_CUT)
+
+    exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0, out
+    assert "[PASS] terminator in section's first paragraph is neutralized" in out
+    assert (
+        "[PASS] second case still runs after the first hits the section terminator"
+        in out
+    )
+    assert "FAIL" not in out
+    assert "CRASH" not in out

@@ -9,6 +9,8 @@ from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.analysis.refusal import (
+    _falls_through,
+    _go_to_fallthrough_targets,
     check_terminator_layout,
     find_terminator_plans,
 )
@@ -116,6 +118,59 @@ SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE = """\
            STOP RUN.
 """
 
+CHAIN_SECTION_STILL_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CHAINSECTUNSAFE.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-SECTION
+           STOP RUN.
+
+       9000-ALSO-CALLS-DIRECTLY.
+           PERFORM 1000-DO-WORK.
+
+       1000-SECTION SECTION.
+       1000-DO-WORK.
+           DISPLAY "WORK".
+"""
+
+SECTION_FIRST_PARAGRAPH_SAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTFIRSTSAFE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-TERM-SECTION
+           DISPLAY "AFTER-SECTION".
+
+       1000-TERM-SECTION SECTION.
+       1000-TERM-FIRST.
+           MOVE 1 TO WS-RESULT
+           STOP RUN.
+       1000-TERM-SECOND.
+           MOVE 999 TO WS-RESULT.
+"""
+
+SECTION_LATER_PARAGRAPH_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTLATERUNSAFE.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-TERM-SECTION.
+
+       1000-TERM-SECTION SECTION.
+       1000-TERM-FIRST.
+           DISPLAY "FIRST".
+       1000-TERM-SECOND.
+           STOP RUN.
+"""
+
 LOOP_SAFE_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. LOOPSAFE.
@@ -167,6 +222,19 @@ def _analyze(source, name="X.cbl"):
 def _suite(perform_target="0000-MAIN-PROCESS"):
     case = MockTestCase(name="c", perform_target=perform_target)
     return MockTestSuite(name="S", test_cases=[case])
+
+
+def _paragraph(source, name):
+    program, _, _, _ = _analyze(source)
+    procedure = program.get_division("PROCEDURE")
+    for p in procedure.paragraphs:
+        if p.paragraph_name == name:
+            return p
+    for section in getattr(procedure, "_sections", {}).values():
+        for p in section.paragraphs:
+            if p.paragraph_name == name:
+                return p
+    raise AssertionError(f"paragraph {name!r} not found")
 
 
 def test_find_terminator_plans_accepts_a_safe_plain_perform_chain():
@@ -248,6 +316,251 @@ def test_terminator_reached_only_through_a_loop_body_refuses():
     assert "not via a chain of plain, unconditional" in reasons[0].message
 
 
+def test_falls_through_true_for_empty_paragraph():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EMPTYPARA.
+
+       PROCEDURE DIVISION.
+       P1.
+       P2.
+           STOP RUN.
+"""
+    assert _falls_through(_paragraph(source, "P1")) is True
+
+
+def test_falls_through_false_for_goback():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOBACKEND.
+
+       PROCEDURE DIVISION.
+       P1.
+           DISPLAY "X"
+           GOBACK.
+"""
+    assert _falls_through(_paragraph(source, "P1")) is False
+
+
+def test_falls_through_false_for_stop_run():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. STOPRUNEND.
+
+       PROCEDURE DIVISION.
+       P1.
+           DISPLAY "X"
+           STOP RUN.
+"""
+    assert _falls_through(_paragraph(source, "P1")) is False
+
+
+def test_falls_through_true_for_stop_literal():
+    """STOP "MSG" only pauses for operator input and resumes -- it does
+    not terminate control flow, unlike STOP RUN."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. STOPLITEND.
+
+       PROCEDURE DIVISION.
+       P1.
+           DISPLAY "X"
+           STOP "MSG".
+       P2.
+           DISPLAY "Y".
+"""
+    assert _falls_through(_paragraph(source, "P1")) is True
+
+
+def test_falls_through_false_for_plain_go_to():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PLAINGOTOEND.
+
+       PROCEDURE DIVISION.
+       P1.
+           GO TO P2.
+       P2.
+           STOP RUN.
+"""
+    assert _falls_through(_paragraph(source, "P1")) is False
+
+
+def test_falls_through_true_for_computed_go_to():
+    """GO TO ... DEPENDING ON falls through to the next statement when the
+    subscript is out of range -- it is NOT a guaranteed unconditional
+    transfer, unlike a plain single-target GO TO."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COMPUTEDGOTOEND.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N                PIC 9 VALUE 9.
+
+       PROCEDURE DIVISION.
+       P1.
+           GO TO P2 P3 DEPENDING ON WS-N.
+       P2.
+           STOP RUN.
+       P3.
+           STOP RUN.
+"""
+    assert _falls_through(_paragraph(source, "P1")) is True
+
+
+def test_falls_through_false_for_exit_paragraph():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EXITPARAEND.
+
+       PROCEDURE DIVISION.
+       P1.
+           DISPLAY "X"
+           EXIT PARAGRAPH.
+       P2.
+           STOP RUN.
+"""
+    assert _falls_through(_paragraph(source, "P1")) is False
+
+
+def test_falls_through_true_for_trailing_if():
+    """Conservative: no attempt to prove every branch of a trailing IF
+    terminates."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TRAILINGIF.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FLAG             PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       P1.
+           IF WS-FLAG = "Y"
+               STOP RUN
+           END-IF.
+       P2.
+           DISPLAY "Y".
+"""
+    assert _falls_through(_paragraph(source, "P1")) is True
+
+
+def test_go_to_fallthrough_targets_finds_paragraph_after_falling_through():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FALLTHRU.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK.
+
+       1000-DO-WORK-ALIAS.
+           GO TO 1000-DO-WORK.
+
+       1000-DO-WORK.
+           DISPLAY "WORK".
+
+       1000-AFTER.
+           STOP RUN.
+"""
+    program, _, _, _ = _analyze(source)
+    go_to_targets = {"1000-DO-WORK"}
+    hazard = _go_to_fallthrough_targets(program, go_to_targets)
+    assert hazard == {"1000-AFTER": "1000-DO-WORK"}
+
+
+def test_go_to_fallthrough_targets_stops_at_a_terminating_paragraph():
+    """1000-DO-WORK's own STOP RUN means it never falls through --
+    1000-AFTER must not be hazarded."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NOFALLTHRU.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK.
+
+       1000-DO-WORK-ALIAS.
+           GO TO 1000-DO-WORK.
+
+       1000-DO-WORK.
+           DISPLAY "WORK"
+           STOP RUN.
+
+       1000-AFTER.
+           STOP RUN.
+"""
+    program, _, _, _ = _analyze(source)
+    go_to_targets = {"1000-DO-WORK"}
+    hazard = _go_to_fallthrough_targets(program, go_to_targets)
+    assert hazard == {}
+
+
+def test_go_to_fallthrough_targets_propagates_through_computed_go_to():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COMPUTEDCHAIN.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N                PIC 9 VALUE 9.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK.
+
+       1000-DO-WORK-ALIAS.
+           GO TO 1000-DO-WORK.
+
+       1000-DO-WORK.
+           GO TO 1000-A 1000-B DEPENDING ON WS-N.
+
+       1000-A.
+           DISPLAY "A".
+
+       1000-B.
+           STOP RUN.
+"""
+    program, _, _, _ = _analyze(source)
+    go_to_targets = {"1000-DO-WORK"}
+    hazard = _go_to_fallthrough_targets(program, go_to_targets)
+    # 1000-DO-WORK's own computed GO TO does not stop fall-through, so
+    # BOTH 1000-A (falls through) and 1000-B (terminates, chain stops
+    # there) are hazarded.
+    assert hazard == {"1000-A": "1000-DO-WORK", "1000-B": "1000-DO-WORK"}
+
+
+def test_go_to_fallthrough_targets_seeds_from_section_first_paragraph():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTIONFALLTHRU.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-SECTION.
+
+       1000-SECTION-ALIAS.
+           GO TO 1000-SECTION.
+
+       1000-SECTION SECTION.
+       1000-FIRST.
+           DISPLAY "FIRST".
+       1000-SECOND.
+           DISPLAY "SECOND".
+
+       1000-AFTER.
+           STOP RUN.
+"""
+    program, _, _, _ = _analyze(source)
+    go_to_targets = {"1000-SECTION"}
+    hazard = _go_to_fallthrough_targets(program, go_to_targets)
+    assert hazard == {
+        "1000-SECOND": "1000-SECTION",
+        "1000-AFTER": "1000-SECTION",
+    }
+
+
 def test_go_to_reachable_terminator_refuses():
     """The terminator's OWN paragraph (1000-DO-WORK) is a GO TO target,
     reached from perform_target via a plain, otherwise-safe PERFORM."""
@@ -275,11 +588,211 @@ def test_go_to_target_refuses_even_when_a_different_case_uses_it_safely():
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
 
 
-def test_section_scoped_terminator_refuses():
-    """The terminator itself sits directly in 0000-MAIN-PROCESS, a
-    top-level paragraph -- what's unsafe here is the *chain*: reaching it
-    requires PERFORMing 1000-SECTION, which isn't a top-level paragraph."""
+GO_TO_FALLTHROUGH_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOFALLUNSAFE.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK.
+
+       1000-DO-WORK-ALIAS.
+           GO TO 1000-DO-WORK.
+
+       1000-DO-WORK.
+           DISPLAY "WORK".
+
+       1000-AFTER.
+           STOP RUN.
+"""
+
+GO_TO_FALLTHROUGH_TERMINATES_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTONOFALL.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK.
+
+       1000-DO-WORK-ALIAS.
+           GO TO 1000-DO-WORK.
+
+       1000-DO-WORK.
+           DISPLAY "WORK"
+           STOP RUN.
+
+       1000-AFTER.
+           STOP RUN.
+"""
+
+GO_TO_FALLTHROUGH_CHAIN_UNSAFE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOFALLCHAIN.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-WRAPPER.
+
+       1000-WRAPPER.
+           PERFORM 1000-MIDDLE
+           STOP RUN.
+
+       1000-GOTO-SOURCE.
+           GO TO 1000-EARLY.
+
+       1000-EARLY.
+           DISPLAY "EARLY".
+
+       1000-MIDDLE.
+           DISPLAY "MIDDLE".
+"""
+
+
+def test_go_to_fallthrough_terminator_refuses():
+    """1000-AFTER's STOP RUN is never itself a GO TO target -- it's only
+    reachable because 1000-DO-WORK (a GO TO target) falls through into
+    it. Case "main" reaches the program the ordinary way; case "after"
+    targets 1000-AFTER directly, mirroring the real danger this guards
+    against: a *different* test case's own, otherwise-legitimate
+    perform_target sharing a physical terminator that another part of the
+    program can reach only through this unmodeled GO-TO-fallthrough path.
+    Without this guard, case "after" would see 1000-AFTER as trivially
+    safe (it's directly its own perform_target) and neutralize it."""
+    program, surface, scope_map, lines = _analyze(GO_TO_FALLTHROUGH_UNSAFE_SOURCE)
+    suite = MockTestSuite(
+        name="S",
+        test_cases=[
+            MockTestCase(name="main", perform_target="0000-MAIN-PROCESS"),
+            MockTestCase(name="after", perform_target="1000-AFTER"),
+        ],
+    )
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "1000-DO-WORK" in reasons[0].message
+    assert "falling through" in reasons[0].message
+
+
+def test_go_to_fallthrough_does_not_refuse_when_target_terminates():
+    """Negative control: 1000-DO-WORK's own STOP RUN means it never falls
+    through, so 1000-AFTER's separate terminator is unaffected by the new
+    fallthrough check and is still accepted as safe -- no false-positive
+    refusal from over-eager hazard propagation. 1000-DO-WORK's own
+    terminator still refuses, but via the pre-existing direct-GO-TO-target
+    check, not the new fallthrough one."""
+    program, surface, scope_map, lines = _analyze(GO_TO_FALLTHROUGH_TERMINATES_SOURCE)
+    suite = MockTestSuite(
+        name="S",
+        test_cases=[
+            MockTestCase(name="main", perform_target="0000-MAIN-PROCESS"),
+            MockTestCase(name="after", perform_target="1000-AFTER"),
+        ],
+    )
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert len(plans) == 1
+    assert plans[0].site.paragraph_name == "1000-AFTER"
+    assert len(reasons) == 1
+    assert "GO TO" in reasons[0].message
+    assert "falling through" not in reasons[0].message
+
+
+def test_go_to_fallthrough_chain_paragraph_refuses():
+    """The terminator itself (STOP RUN in 1000-WRAPPER) has no problem on
+    its own -- the hazard is that 1000-MIDDLE, a legitimate chain_performs
+    member (PERFORMed by 1000-WRAPPER), is ALSO reached by falling through
+    past 1000-EARLY (a GO TO target). Mirrors
+    test_go_to_target_refuses_even_when_a_different_case_uses_it_safely's
+    chain-level shape but for the fallthrough hazard instead of a direct
+    GO TO target."""
+    program, surface, scope_map, lines = _analyze(GO_TO_FALLTHROUGH_CHAIN_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "1000-MIDDLE" in reasons[0].message
+    assert "falling through" in reasons[0].message
+
+
+def test_section_touched_only_via_safe_entry_no_longer_refuses():
+    """SECTION_UNSAFE_SOURCE's terminator sits directly in
+    0000-MAIN-PROCESS, a top-level paragraph -- the chain merely PERFORMs
+    1000-SECTION on the way, and 1000-SECTION's only paragraph
+    (1000-DO-WORK) is never GO TO'd or directly PERFORMed anywhere else,
+    so it's a safe section entry
+    (docs/2026-07-10-section-scoped-terminator-support-design.md). This
+    used to refuse under the old blanket "any SECTION anywhere in the
+    chain is unsafe" check; now it's correctly recognized as safe. The
+    terminator's own paragraph is still top-level, so exit_kind stays
+    PARAGRAPH -- this test is about the chain-level check, not the
+    terminator's own paragraph classification (see
+    test_terminator_in_safe_section_first_paragraph_is_accepted for
+    that)."""
     program, surface, scope_map, lines = _analyze(SECTION_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].exit_kind == "PARAGRAPH"
+
+
+def test_chain_touching_a_genuinely_unsafe_section_still_refuses():
+    """Unlike SECTION_UNSAFE_SOURCE, 1000-DO-WORK here is ALSO directly
+    PERFORMed by 9000-ALSO-CALLS-DIRECTLY -- a second entry path -- so
+    1000-SECTION is NOT a safe entry, and the terminator (still in the
+    top-level 0000-MAIN-PROCESS) must still refuse via
+    chain_section_names."""
+    program, surface, scope_map, lines = _analyze(CHAIN_SECTION_STILL_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "SECTION" in reasons[0].message
+
+
+def test_terminator_in_safe_section_first_paragraph_is_accepted():
+    """The core shape-1 feature: STOP RUN sits in 1000-TERM-FIRST, the
+    first paragraph of 1000-TERM-SECTION, entered only via PERFORM
+    1000-TERM-SECTION. Whether 1000-TERM-SECOND actually fails to run at
+    real GnuCOBOL runtime is the integration test's job
+    (tests/integration/test_terminator_support.py) -- here we confirm the
+    plan itself: SECTION exit kind, and the section-name PERFORM captured
+    as a chain_performs edge (0000-MAIN-PROCESS has a DISPLAY after it,
+    so it needs the standard post-PERFORM flag check)."""
+    program, surface, scope_map, lines = _analyze(SECTION_FIRST_PARAGRAPH_SAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].site.paragraph_name == "1000-TERM-FIRST"
+    assert plans[0].exit_kind == "SECTION"
+    assert {p.target_paragraph for p in plans[0].chain_performs} == {
+        "1000-TERM-SECTION"
+    }
+
+
+def test_terminator_in_safe_section_reached_directly_by_test_target():
+    """When the test's own PERFORM_TARGET names the section directly,
+    there's no intermediate chain at all -- mirrors how a top-level
+    terminator directly in perform_target needs no chain_performs
+    (test_find_terminator_plans_accepts_a_safe_plain_perform_chain)."""
+    program, surface, scope_map, lines = _analyze(SECTION_FIRST_PARAGRAPH_SAFE_SOURCE)
+    suite = _suite(perform_target="1000-TERM-SECTION")
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].exit_kind == "SECTION"
+    assert plans[0].chain_performs == []
+
+
+def test_terminator_in_a_later_section_paragraph_still_refuses():
+    """Even though 1000-TERM-SECTION is a safe entry (its first paragraph
+    is never GO TO'd or directly PERFORMed elsewhere), the terminator
+    here sits in 1000-TERM-SECOND -- reached only by fall-through after
+    1000-TERM-FIRST, never PERFORMed by name anywhere this codebase's BFS
+    would follow. Shape 2 from
+    docs/2026-07-10-section-scoped-terminator-support-design.md,
+    deliberately still out of scope: pins the boundary as documented
+    intent, not an accident of the safe_section_first_names check."""
+    program, surface, scope_map, lines = _analyze(SECTION_LATER_PARAGRAPH_UNSAFE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
@@ -330,7 +843,7 @@ def test_check_terminator_layout_is_reasons_only():
     program, surface, scope_map, lines = _analyze(SAFE_CHAIN_SOURCE)
     assert check_terminator_layout(surface, program, _suite(), scope_map, lines) == []
 
-    program, surface, scope_map, lines = _analyze(SECTION_UNSAFE_SOURCE)
+    program, surface, scope_map, lines = _analyze(CHAIN_SECTION_STILL_UNSAFE_SOURCE)
     reasons = check_terminator_layout(surface, program, _suite(), scope_map, lines)
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
