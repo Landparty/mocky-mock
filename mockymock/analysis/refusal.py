@@ -19,17 +19,21 @@ Flow-edge model (fail closed):
 - GO TO pushes every target -- a computed `GO TO A B C DEPENDING ON X`
   carries all of its targets in GoStatement.target_paragraphs. Targets may
   be paragraphs or sections. (A GO TO that escapes its PERFORM range and
-  relies on falling through *past* its target paragraph is not modeled --
-  such control flow runs off the end of the program at test runtime and is
-  covered by the documented STOP RUN limitation. Noted by the 2026-07-09
-  final branch review: pre-neutralization this is a clean, loud crash --
-  the real terminator exits the binary. Once ANY case has neutralized that
-  terminator (via its own safe plain chain), a DIFFERENT case reaching the
-  same, now-neutralized terminator through this unmodeled GO-TO-escape
-  path would hit `EXIT PARAGRAPH` from a paragraph entered via `GO TO`,
-  which per the design doc's spike #4 "just stops, no crash, no return" --
-  a subtler failure than the pre-branch behavior. Exotic, not hardened
-  against; documented here rather than silently assumed harmless.)
+  relies on falling through *past* its target paragraph is NOT a flow edge
+  the reachability BFS itself follows -- but the hazard it creates for
+  `find_terminator_plans` IS separately guarded: `_go_to_fallthrough_targets`
+  walks source order forward from every GO TO target, via `_falls_through`,
+  to find every paragraph reachable only by falling off the end of one --
+  the same EXIT PARAGRAPH hazard spike #4 found for a direct GO TO target,
+  since a paragraph reached this way was never PERFORMed either. Noted by
+  the 2026-07-09 final branch review as an unmodeled, undefended gap
+  (pre-neutralization it was a clean, loud crash; once a DIFFERENT case had
+  neutralized the shared physical terminator via its own safe plain chain,
+  a case reaching it through this path would instead hit `EXIT PARAGRAPH`
+  from a paragraph entered via `GO TO`, which spike #4 found "just stops,
+  no crash, no return" -- a subtler failure than the pre-branch behavior).
+  Now refused (`UNSUPPORTED_TERMINATOR_LAYOUT`) instead of silently risked
+  -- see docs/2026-07-10-goto-fallthrough-terminator-hazard-design.md.)
 - Any PERFORM/GO TO target that resolves to neither a paragraph nor a
   section refuses with UNRESOLVED_FLOW_TARGET instead of being skipped: a
   target the model cannot resolve means the reachable set is not trusted.
@@ -130,8 +134,16 @@ from dataclasses import dataclass, field
 
 from cobolparser.lexer import CobolLexer, TokenType
 from cobolparser.models.program import CobolParagraph
-from cobolparser.models.statements.control import GoStatement, PerformStatement
-from cobolparser.models.statements.misc import AlterStatement
+from cobolparser.models.statements.control import (
+    GoStatement,
+    PerformStatement,
+    StopStatement,
+)
+from cobolparser.models.statements.misc import (
+    AlterStatement,
+    ExitStatement,
+    GobackStatement,
+)
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.linkage import linkage_plan
@@ -926,6 +938,103 @@ def _go_to_targets(program) -> set[str]:
     return targets
 
 
+def _falls_through(paragraph) -> bool:
+    """True unless `paragraph`'s last top-level statement provably diverts
+    control away -- GOBACK, STOP RUN (not STOP <literal>, which only
+    pauses for operator input and resumes), a single-target GO TO (a
+    computed GO TO ... DEPENDING ON is NOT included: GnuCOBOL falls
+    through to the next statement when the subscript is out of range, so
+    it is not a guaranteed unconditional transfer), or EXIT PARAGRAPH/
+    SECTION/PROGRAM (a bare EXIT./EXIT PERFORM does not qualify -- the
+    former is a no-op placeholder, the latter exits an in-line loop body,
+    not the paragraph). Everything else -- no statements at all, or
+    ending in MOVE/DISPLAY/PERFORM/IF/EVALUATE/... -- is conservatively
+    assumed to fall through, matching this module's fail-closed posture
+    elsewhere: no attempt is made to prove that every branch of a
+    trailing IF/EVALUATE terminates. See
+    docs/2026-07-10-goto-fallthrough-terminator-hazard-design.md."""
+    statements = paragraph.statements
+    if not statements:
+        return True
+    last = statements[-1]
+    if isinstance(last, GobackStatement):
+        return False
+    if isinstance(last, StopStatement) and last.stop_type == "RUN":
+        return False
+    if isinstance(last, GoStatement) and last.depending_on_variable is None:
+        return False
+    if isinstance(last, ExitStatement) and last.exit_type in (
+        "PARAGRAPH",
+        "SECTION",
+        "PROGRAM",
+    ):
+        return False
+    return True
+
+
+def _go_to_fallthrough_targets(
+    program, go_to_targets: set[str]
+) -> dict[str, str]:
+    """Every paragraph reachable ONLY by falling through past a GO TO
+    target's own end -- an unmodeled shape the reachability BFS does not
+    represent as a flow edge (see the module docstring). Maps each such
+    paragraph name to the GO-TO-target paragraph/section name whose
+    fall-through chain reaches it, for diagnosable refusal messages.
+
+    A paragraph entered this way carries the exact same EXIT PARAGRAPH
+    hazard as a paragraph directly named by a GO TO (spike #4, docs/
+    2026-07-08-goback-stop-run-support-design.md): the runtime frame-stack
+    context at the point its code executes never went through a genuine
+    PERFORM call, whether that paragraph is itself the GO TO target or was
+    merely fallen into afterward.
+
+    Conservative and fail-closed like the rest of this module: propagates
+    through every paragraph after a GO TO target in source order until one
+    is found whose own last top-level statement provably cannot fall
+    through further (see _falls_through). A GO TO targeting a SECTION name
+    is seeded from that section's first paragraph -- fall-through is
+    transparent to SECTION boundaries, a header doesn't stop it; the
+    section's own member paragraphs are covered by the walk since
+    _source_ordered_paragraphs includes every paragraph regardless of
+    section membership.
+
+    Returns {} when _source_ordered_paragraphs can't establish a strict
+    source order -- the same pre-existing blind spot that already limits
+    other checks in this module (e.g. _expand_thru_range) to refusing only
+    the specific reachability question they were asked, not every
+    reachability question in the file."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return {}
+    ordered = _source_ordered_paragraphs(procedure)
+    if ordered is None:
+        return {}
+    index_by_name = {p.paragraph_name: i for i, p in enumerate(ordered)}
+    section_members: dict[str, list[str]] = {}
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        if not section_name:
+            continue
+        section_members.setdefault(
+            section_name, [p.paragraph_name for p in section.paragraphs]
+        )
+
+    hazard: dict[str, str] = {}
+    for name in go_to_targets:
+        start = index_by_name.get(name)
+        if start is None:
+            members = section_members.get(name)
+            if not members:
+                continue
+            start = index_by_name.get(members[0])
+            if start is None:
+                continue
+        cursor = start
+        while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
+            cursor += 1
+            hazard.setdefault(ordered[cursor].paragraph_name, name)
+    return hazard
+
+
 def _plain_perform_statements(
     statements: list, nested: bool = False, in_boundary: bool = False
 ) -> list[tuple[PerformStatement, bool, bool]]:
@@ -1108,6 +1217,7 @@ def find_terminator_plans(
 
     top_level_names = {p.paragraph_name for p in procedure.paragraphs}
     go_to_targets = _go_to_targets(program)
+    go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
     terminator_sites = {
         id(s.statement): s
         for s in surface.boundary_sites
@@ -1127,6 +1237,7 @@ def find_terminator_plans(
         )
         chain_section_names = safe_names - top_level_names
         chain_go_to_names = safe_names & go_to_targets
+        chain_fallthrough_names = safe_names & go_to_fallthrough.keys()
 
         chain_problem: str | None = None
         for perform, _nested in chain_performs:
@@ -1161,6 +1272,16 @@ def find_terminator_plans(
                     "only works correctly when a paragraph is entered "
                     "exclusively via PERFORM"
                 )
+            elif paragraph_name in go_to_fallthrough:
+                problem = (
+                    f"is reached by falling through past the end of "
+                    f"paragraph '{go_to_fallthrough[paragraph_name]}', which "
+                    f"is itself reachable via GO TO somewhere in this "
+                    f"program -- a paragraph entered this way was never "
+                    f"PERFORMed either, so it shares the same EXIT PARAGRAPH "
+                    f"hazard as a direct GO TO target even though it is "
+                    f"never named by a GO TO itself"
+                )
             elif paragraph_name not in safe_names:
                 problem = (
                     f"is reachable from '{case.perform_target}' but not via "
@@ -1188,6 +1309,18 @@ def find_terminator_plans(
                     f"early-exit propagation mechanism (EXIT PARAGRAPH) "
                     f"only works correctly when a paragraph is entered "
                     f"exclusively via PERFORM"
+                )
+            elif chain_fallthrough_names:
+                bad_name = sorted(chain_fallthrough_names)[0]
+                problem = (
+                    f"is only reachable through this test's own early-exit "
+                    f"propagation chain by way of '{bad_name}', which is "
+                    f"reached by falling through past the end of paragraph "
+                    f"'{go_to_fallthrough[bad_name]}' rather than via "
+                    f"PERFORM -- the early-exit propagation mechanism "
+                    f"(EXIT PARAGRAPH) only works correctly when every "
+                    f"paragraph on the chain is entered exclusively via "
+                    f"PERFORM"
                 )
             elif site.nested and site.span is None:
                 problem = (
