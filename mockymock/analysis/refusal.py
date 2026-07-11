@@ -191,11 +191,17 @@ class TerminatorPlan:
     inserted after it for this terminator's propagation to correctly
     reach the test driver. Empty `chain_performs` means the terminator
     sits directly in a test's own PERFORM target -- no intermediate
-    instrumentation needed. See
-    docs/2026-07-08-goback-stop-run-support-design.md."""
+    instrumentation needed. `exit_kind` is "PARAGRAPH" (the default) or
+    "SECTION" for the one SECTION-scoped shape
+    docs/2026-07-10-section-scoped-terminator-support-design.md supports
+    -- a terminator in a SECTION's first paragraph, entered exclusively
+    via PERFORM <section-name>. See
+    docs/2026-07-08-goback-stop-run-support-design.md and
+    docs/2026-07-10-section-scoped-terminator-support-design.md."""
 
     site: BoundarySite
     chain_performs: list = field(default_factory=list)
+    exit_kind: str = "PARAGRAPH"
 
 
 # Shown when a nested site reaches a check before annotate_nested_sites ran
@@ -938,6 +944,54 @@ def _go_to_targets(program) -> set[str]:
     return targets
 
 
+def _safe_section_entry_points(program) -> dict[str, str]:
+    """Maps each SECTION name whose first paragraph is safely enterable
+    ONLY via `PERFORM <section-name>` to that first paragraph's name --
+    the one shape docs/2026-07-08-goback-stop-run-support-design.md's
+    spike #5 proved `EXIT SECTION` correctly neutralizes (see
+    docs/2026-07-10-section-scoped-terminator-support-design.md).
+
+    Safe means: the section has at least one paragraph; neither the
+    section's own name nor its first paragraph's name is ever a GO TO
+    target anywhere in the program (`_go_to_targets`); and the first
+    paragraph's name is never itself named as a PERFORM target -- plain
+    or THRU, conditional or not, top-level or nested -- anywhere in the
+    whole program. That last check is deliberately maximally inclusive:
+    any second way to enter that paragraph is a standing risk regardless
+    of whether any one test's execution happens to take it, the same
+    reasoning already applied to the GO TO exclusion above.
+
+    A section failing any of these is simply absent from the returned
+    map -- callers must treat that identically to any other unresolvable
+    PERFORM target (the existing dead-end/refusal behavior)."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return {}
+
+    go_to_targets = _go_to_targets(program)
+    performed_names: set[str] = set()
+    for paragraph in _all_paragraphs(procedure):
+        for statement in _find_statements_of_type(
+            paragraph.statements, PerformStatement
+        ):
+            if statement.target_paragraph:
+                performed_names.add(statement.target_paragraph)
+            if statement.thru_paragraph:
+                performed_names.add(statement.thru_paragraph)
+
+    safe_entries: dict[str, str] = {}
+    for section_name, section in procedure._sections.items():
+        if not section.paragraphs:
+            continue
+        first_name = section.paragraphs[0].paragraph_name
+        if section_name in go_to_targets or first_name in go_to_targets:
+            continue
+        if first_name in performed_names:
+            continue
+        safe_entries[section_name] = first_name
+    return safe_entries
+
+
 def _falls_through(paragraph) -> bool:
     """True unless `paragraph`'s last top-level statement provably diverts
     control away -- GOBACK, STOP RUN (not STOP <literal>, which only
@@ -1086,7 +1140,7 @@ def _plain_perform_statements(
 
 
 def _plain_perform_edges_from(
-    program, start: str
+    program, start: str, safe_section_entries: dict[str, str] | None = None
 ) -> tuple[set[str], list[tuple[PerformStatement, bool]]]:
     """BFS from `start` following plain (non-THRU), unconditional,
     single-shot PERFORM statements -- PerformStatement nodes with
@@ -1118,12 +1172,26 @@ def _plain_perform_edges_from(
     excluded case here is an OUT-OF-LINE PERFORM that IS itself a loop
     over a different paragraph.)
 
-    SECTION members are excluded entirely: this only looks up names in
-    `procedure.paragraphs` (top-level paragraphs), never
-    `procedure._sections[...].paragraphs` -- a paragraph that only exists
-    as a section member is an unreachable dead end here, naturally
-    refusing any chain that would need to pass through one (SECTION
-    support is deferred -- see the design doc).
+    `safe_section_entries` (from `_safe_section_entry_points`, or omitted
+    for callers that don't care about SECTIONs -- e.g. this module's own
+    dead-end regression test) resolves a PERFORM target that names one of
+    its KEYS (a SECTION whose first paragraph is provably safely
+    enterable only that way) to that first paragraph's name, continuing
+    the BFS from that paragraph's own statements exactly like any other
+    paragraph -- see
+    docs/2026-07-10-section-scoped-terminator-support-design.md. This is
+    the ONLY SECTION shape this restricted BFS ever resolves: a target
+    name that is a SECTION but not a safe entry (or any other
+    unresolvable name) still dead-ends exactly as before, its raw,
+    unresolved name landing in `seen`. SECTION members that aren't a safe
+    entry's first paragraph are still excluded entirely, same as before:
+    this only looks up names in `procedure.paragraphs` (top-level
+    paragraphs) and, when `safe_section_entries` resolves one, the
+    specific first-paragraph names it names -- never any other section
+    member -- so a chain that would need to pass through one of those
+    (fall-through, or a direct PERFORM of a non-first section member)
+    still naturally refuses via the existing "reachable but not via a
+    plain chain" check.
 
     Returns (reachable paragraph names via this restricted edge set, the
     (PerformStatement, nested) pairs that ARE those edges) -- every one of
@@ -1136,13 +1204,33 @@ def _plain_perform_edges_from(
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
+    safe_section_entries = safe_section_entries or {}
     by_name = {p.paragraph_name: p for p in procedure.paragraphs}
-    seen = {start}
-    stack = [start]
+    section_member_by_name = {
+        paragraph.paragraph_name: paragraph
+        for section in procedure._sections.values()
+        for paragraph in section.paragraphs
+    }
+
+    def resolve(name):
+        if name in by_name:
+            return name, by_name[name]
+        first_name = safe_section_entries.get(name)
+        if first_name is not None:
+            return first_name, section_member_by_name.get(first_name)
+        return name, None
+
+    start_name, start_paragraph = resolve(start)
+    seen = {start_name}
+    resolved = {}
+    stack = []
+    if start_paragraph is not None:
+        resolved[start_name] = start_paragraph
+        stack.append(start_name)
     edges: list[tuple[PerformStatement, bool]] = []
     while stack:
         name = stack.pop()
-        paragraph = by_name.get(name)
+        paragraph = resolved.get(name)
         if paragraph is None:
             continue
         for statement, nested, in_boundary in _plain_perform_statements(
@@ -1151,10 +1239,12 @@ def _plain_perform_edges_from(
             if in_boundary:
                 continue
             edges.append((statement, nested))
-            target = statement.target_paragraph
-            if target not in seen:
-                seen.add(target)
-                stack.append(target)
+            target_name, target_paragraph = resolve(statement.target_paragraph)
+            if target_name not in seen:
+                seen.add(target_name)
+                if target_paragraph is not None:
+                    resolved[target_name] = target_paragraph
+                    stack.append(target_name)
     return seen, edges
 
 
@@ -1173,7 +1263,14 @@ def find_terminator_plans(
     unmocked boundary).
 
     Safe means: the terminator's enclosing paragraph is a top-level
-    paragraph (not a SECTION member), is reachable from the test's own
+    paragraph (not a SECTION member) -- or is the first paragraph of a
+    SECTION whose only entry point, whole-program, is `PERFORM
+    <section-name>` (`_safe_section_entry_points`; see
+    docs/2026-07-10-section-scoped-terminator-support-design.md; notably,
+    for a SECTION-scoped terminator, the test's own perform_target must name
+    the SECTION itself, not the paragraph directly, as direct paragraph
+    naming (shape 3 of the design doc) bypasses the section entry point and
+    remains unverified) -- is reachable from the test's own
     perform_target via `_plain_perform_edges_from` (a chain of nothing but
     plain, unconditional, top-level PERFORM statements), and no paragraph
     anywhere on that whole restricted-reachable chain -- not just the
@@ -1217,6 +1314,8 @@ def find_terminator_plans(
 
     top_level_names = {p.paragraph_name for p in procedure.paragraphs}
     go_to_targets = _go_to_targets(program)
+    safe_section_entries = _safe_section_entry_points(program)
+    safe_section_first_names = set(safe_section_entries.values())
     go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
     terminator_sites = {
         id(s.statement): s
@@ -1233,9 +1332,9 @@ def find_terminator_plans(
             program, case.perform_target, case.perform_thru
         )
         safe_names, chain_performs = _plain_perform_edges_from(
-            program, case.perform_target
+            program, case.perform_target, safe_section_entries
         )
-        chain_section_names = safe_names - top_level_names
+        chain_section_names = safe_names - (top_level_names | safe_section_first_names)
         chain_go_to_names = safe_names & go_to_targets
         chain_fallthrough_names = safe_names & go_to_fallthrough.keys()
 
@@ -1260,7 +1359,19 @@ def find_terminator_plans(
 
             paragraph_name = site.paragraph_name
             problem = None
-            if paragraph_name not in top_level_names:
+            if paragraph_name not in top_level_names and (
+                paragraph_name not in safe_section_first_names
+                # A safe_section_first_names entry is only genuinely safe
+                # when reached via PERFORM <section-name> (an intermediate
+                # chain edge, or perform_target naming the section itself).
+                # _safe_section_entry_points already excludes any paragraph
+                # that is a PERFORM target anywhere -- so the only other way
+                # to land here is the test's own perform_target naming this
+                # paragraph directly, bypassing the section name entirely.
+                # That's shape 3 (docs/2026-07-10-section-scoped-terminator-
+                # support-design.md), still out of scope and unverified.
+                or paragraph_name == case.perform_target
+            ):
                 problem = (
                     "is inside a paragraph that belongs to a SECTION -- "
                     "SECTION-scoped terminators are not yet supported"
@@ -1351,7 +1462,14 @@ def find_terminator_plans(
                 continue
 
             if key not in plans_by_statement:
-                plans_by_statement[key] = TerminatorPlan(site=terminator_sites[key])
+                exit_kind = (
+                    "SECTION"
+                    if paragraph_name in safe_section_first_names
+                    else "PARAGRAPH"
+                )
+                plans_by_statement[key] = TerminatorPlan(
+                    site=terminator_sites[key], exit_kind=exit_kind
+                )
             qualified_keys.append(key)
 
         for key in qualified_keys:
