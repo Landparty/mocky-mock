@@ -1,6 +1,5 @@
 # mocky-mock OKF Bundle — Update Log
 
-<<<<<<< HEAD
 ## 2026-07-10 (Fix: cobolparser pin bump closes ACCTPRG/looping-PERFORM silent-drop; statement_span blank-line trim)
 * **Root cause, confirmed empirically, not guessed**: at the previously-pinned
   cobolparser commit (`8c3c881d`), a period-less out-of-line
@@ -60,7 +59,7 @@
   parse-warning gate at all. `legacy-application/cobol/ACCTMNT.cbl` and
   `EODPROC.cbl` (sibling-repo corpus, not curated mocky-mock examples) also
   show new warnings -- not investigated, lower priority.
-=======
+
 ## 2026-07-10 (SECTION-scoped terminator support, narrow shape)
 * **Added**: `refusal._safe_section_entry_points` (whole-program check: a
   `SECTION`'s first paragraph is safe to neutralize with `EXIT SECTION`
@@ -163,7 +162,6 @@
   on `main`, unrelated to and unfixed by this change. Fixing this is
   upstream `cobol-parser` work, out of scope here; flagged to the user
   rather than silently worked around.
->>>>>>> origin/main
 
 ## 2026-07-09 (Feature: EXEC SQL INCLUDE host-var copybooks + cursor ROWS sugar)
 * **What shipped**: `EXEC SQL INCLUDE <member> END-EXEC` (non-SQLCA) now

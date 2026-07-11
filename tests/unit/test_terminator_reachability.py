@@ -279,7 +279,9 @@ def test_plain_perform_edges_from_follows_an_evaluate_nested_perform():
 
 
 def test_plain_perform_edges_from_follows_an_inline_loop_body_perform():
-    seen, edges = _plain_perform_edges_from(_nested_shapes_program(), "LOOP-BODY-CALLER")
+    seen, edges = _plain_perform_edges_from(
+        _nested_shapes_program(), "LOOP-BODY-CALLER"
+    )
     assert seen == {"LOOP-BODY-CALLER", "LOOP-TARGET"}
     assert len(edges) == 1
     stmt, nested = edges[0]

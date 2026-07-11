@@ -71,18 +71,21 @@ jobs:
           # silently weaken this repo's guarantees with no signal here.
           # Bump deliberately, with a test run, when adopting new
           # cobol-parser work. Bumped to cobol-parser's origin/main tip
-          # (released as cobolparser 1.2.0) to pull in commit 7405700 (H9:
-          # "missing period absorbs following paragraph header"), which
-          # fixes a silent AST-truncation bug: a period-less out-of-line
-          # `PERFORM x UNTIL cond` immediately followed by another
-          # statement (legal COBOL, no period required between them) was
-          # silently dropping every statement after it from the paragraph
-          # with zero PARSE_WARNING. Found via examples/real-world/ACCTPRG's
-          # 0000-MAIN-PROCESS test case (PERFORM 3000-FINALIZE + GOBACK
-          # were being dropped) and tests/unit/test_terminators.py's
-          # looping-PERFORM regression -- both were the same root cause.
-          # Full mockymock suite run green at this commit before this bump.
-          ref: c9a94999e5e3785af9772a91a54ae333bc5964e2
+          # (still released as cobolparser 1.2.0) to pull in commit
+          # 662b347/d9f700e (cobol-parser PR #85, "VALUE/PICTURE clause
+          # operand may start on the next physical line"): the previous
+          # pin's VALUE/PICTURE clause parser didn't handle a clause
+          # operand starting on the physical line after the VALUE/PIC
+          # keyword (ordinary multi-line continuation, legal COBOL),
+          # silently dropping the operand -- with no warning at all before
+          # commit 7405700 (already in the previous pin), and a
+          # PARSE_WARNING refusal after it. This is exactly the shape the
+          # NIST CCVS85 corpus's shared boilerplate header uses, so
+          # examples/nist-cobol85/IC101A.CBL and IC116M.CBL refused via
+          # `mockymock run` at the previous pin. Full mockymock suite run
+          # green at this commit before this bump (522 passed, 0 failed,
+          # including all 24 examples/ integration tests).
+          ref: d2bc7c2093f71e13789da29f0a39b92d203f90c6
 
       - uses: actions/setup-python@v5
         with:
