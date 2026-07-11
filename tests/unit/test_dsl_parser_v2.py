@@ -177,3 +177,97 @@ def test_perform_thru_with_trailing_junk_rejected():
 def test_perform_thru_missing_endpoint_rejected():
     with pytest.raises(CutParseError):
         parse_cut(THRU_CUT.replace(" PROCESS-EXIT", ""))
+
+
+ROWS_CUT = """\
+TESTSUITE "cursor rows"
+
+TESTCASE "fetches two rows then exhausts"
+    MOCK SQL "FETCH EMP-CURSOR" ROWS
+        ( EMP-NAME = "SMITH", EMP-ID = 100 )
+        ( EMP-NAME = "JONES", EMP-ID = 101 )
+    END-MOCK
+    PERFORM MAIN-PARA
+    EXPECT WS-ROW-COUNT TO BE 2
+"""
+
+
+def test_rows_mock_parses_each_row_as_field_value_pairs():
+    case = parse_cut(ROWS_CUT).test_cases[0]
+    fetch_mock = case.mocks[0]
+    assert fetch_mock.category is MockCategory.SQL
+    assert fetch_mock.key == "FETCH EMP-CURSOR"
+    assert fetch_mock.rows == [
+        [("EMP-NAME", '"SMITH"'), ("EMP-ID", "100")],
+        [("EMP-NAME", '"JONES"'), ("EMP-ID", "101")],
+    ]
+    assert fetch_mock.body_lines == []
+
+
+def test_rows_mock_value_may_contain_a_comma_inside_quotes():
+    cut = """\
+TESTSUITE "quoted comma"
+
+TESTCASE "one row"
+    MOCK SQL "FETCH EMP-CURSOR" ROWS
+        ( EMP-NAME = "SMITH, JR." )
+    END-MOCK
+    PERFORM MAIN-PARA
+"""
+    case = parse_cut(cut).test_cases[0]
+    assert case.mocks[0].rows == [[("EMP-NAME", '"SMITH, JR."')]]
+
+
+def test_rows_on_non_sql_category_is_rejected():
+    cut = """\
+TESTSUITE "bad rows"
+
+TESTCASE "call rows"
+    MOCK CALL "PGMA" ROWS
+        ( X = 1 )
+    END-MOCK
+    PERFORM MAIN-PARA
+"""
+    with pytest.raises(CutParseError, match="ROWS is only supported for MOCK SQL"):
+        parse_cut(cut)
+
+
+def test_empty_rows_block_is_rejected():
+    cut = """\
+TESTSUITE "empty rows"
+
+TESTCASE "no rows"
+    MOCK SQL "FETCH EMP-CURSOR" ROWS
+    END-MOCK
+    PERFORM MAIN-PARA
+"""
+    with pytest.raises(CutParseError, match="no rows"):
+        parse_cut(cut)
+
+
+def test_malformed_row_syntax_is_rejected():
+    cut = """\
+TESTSUITE "bad row"
+
+TESTCASE "bad"
+    MOCK SQL "FETCH EMP-CURSOR" ROWS
+        EMP-NAME = "SMITH"
+    END-MOCK
+    PERFORM MAIN-PARA
+"""
+    with pytest.raises(CutParseError, match="malformed ROWS row"):
+        parse_cut(cut)
+
+
+def test_malformed_row_field_assignment_is_rejected():
+    cut = """\
+TESTSUITE "bad field"
+
+TESTCASE "bad"
+    MOCK SQL "FETCH EMP-CURSOR" ROWS
+        ( EMP-NAME "SMITH" )
+    END-MOCK
+    PERFORM MAIN-PARA
+"""
+    with pytest.raises(CutParseError, match="malformed ROWS field assignment"):
+        parse_cut(cut)

@@ -12,6 +12,7 @@ from mockymock.dsl.model import (
 from mockymock.splicer.injector import (
     build_chain_check,
     build_exec_trap,
+    build_rows_block,
     build_site_dispatch,
     build_terminator_neutralization,
 )
@@ -159,3 +160,49 @@ def test_chain_check_exits_paragraph_when_flag_set():
         "               EXIT PARAGRAPH",
         "           END-IF",
     ]
+
+
+def test_rows_block_codegens_indexed_when_branches_and_exhaustion():
+    lines = build_rows_block(
+        "UT-SQL-FETCH-EMP-CURSOR-TALLY",
+        [
+            [("EMP-NAME", '"SMITH"'), ("EMP-ID", "100")],
+            [("EMP-NAME", '"JONES"'), ("EMP-ID", "101")],
+        ],
+    )
+    assert lines == [
+        "EVALUATE TRUE",
+        "    WHEN UT-SQL-FETCH-EMP-CURSOR-TALLY = 1",
+        '        MOVE "SMITH" TO EMP-NAME',
+        "        MOVE 100 TO EMP-ID",
+        "        MOVE 0 TO SQLCODE",
+        "    WHEN UT-SQL-FETCH-EMP-CURSOR-TALLY = 2",
+        '        MOVE "JONES" TO EMP-NAME',
+        "        MOVE 101 TO EMP-ID",
+        "        MOVE 0 TO SQLCODE",
+        "    WHEN OTHER",
+        "        MOVE 100 TO SQLCODE",
+        "END-EVALUATE",
+    ]
+
+
+def test_dispatch_splices_rows_block_using_resolved_tally_name():
+    site = _site(MockCategory.SQL, "SQL", keys=(), match_text="FETCH EMP-CURSOR")
+    case = MockTestCase(
+        name="cursor",
+        mocks=[
+            MockDirective(
+                MockCategory.SQL,
+                "FETCH EMP-CURSOR",
+                rows=[[("EMP-NAME", '"SMITH"')]],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    joined = "\n".join(_dispatch(suite, site))
+    assert "ADD 1 TO UT-SQL-FETCH-EMP-CURSOR-TALLY" in joined
+    assert "EVALUATE TRUE" in joined
+    assert "WHEN UT-SQL-FETCH-EMP-CURSOR-TALLY = 1" in joined
+    assert 'MOVE "SMITH" TO EMP-NAME' in joined
+    assert "WHEN OTHER" in joined
+    assert "MOVE 100 TO SQLCODE" in joined

@@ -23,6 +23,24 @@ from mockymock.dsl.model import MockTestSuite
 from mockymock.splicer.naming import TallyRegistry
 
 
+def build_rows_block(tally_name: str, rows: list[list[tuple[str, str]]]) -> list[str]:
+    """EVALUATE block for a MOCK SQL ... ROWS directive: row N's MOVEs fire
+    once `tally_name` (already incremented by the caller before this runs,
+    so the first call sees tally == 1) reaches N, followed by MOVE 0 TO
+    SQLCODE; once rows are exhausted, MOVE 100 TO SQLCODE (DB2's real "not
+    found" code) fires instead."""
+    lines = ["EVALUATE TRUE"]
+    for index, row in enumerate(rows, start=1):
+        lines.append(f"    WHEN {tally_name} = {index}")
+        for field, value in row:
+            lines.append(f"        MOVE {value} TO {field}")
+        lines.append("        MOVE 0 TO SQLCODE")
+    lines.append("    WHEN OTHER")
+    lines.append("        MOVE 100 TO SQLCODE")
+    lines.append("END-EVALUATE")
+    return lines
+
+
 def build_site_dispatch(
     site: BoundarySite,
     suite: MockTestSuite,
@@ -42,12 +60,16 @@ def build_site_dispatch(
         if not matches:
             continue
         directive = matches[0]
+        tally_name = registry.name(directive.category, directive.key)
         lines.append(f'               WHEN "{index:03d}"')
-        lines.append(
-            f"                   ADD 1 TO "
-            f"{registry.name(directive.category, directive.key)}"
-        )
-        lines.extend(f"                   {body}" for body in directive.body_lines)
+        lines.append(f"                   ADD 1 TO {tally_name}")
+        if directive.rows is not None:
+            lines.extend(
+                f"                   {body}"
+                for body in build_rows_block(tally_name, directive.rows)
+            )
+        else:
+            lines.extend(f"                   {body}" for body in directive.body_lines)
 
     lines.append("               WHEN OTHER")
     lines.append(

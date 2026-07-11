@@ -140,6 +140,7 @@ from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
     _all_paragraphs,
+    _BOUNDARY_STATEMENT_TYPES,
     _nested_statement_lists,
     normalize_exec_text,
 )
@@ -979,14 +980,68 @@ def _safe_section_entry_points(program) -> dict[str, str]:
     return safe_entries
 
 
+def _plain_perform_statements(
+    statements: list, nested: bool = False, in_boundary: bool = False
+) -> list[tuple[PerformStatement, bool, bool]]:
+    """Recursively collect every plain, unconditional, single-shot,
+    out-of-line PerformStatement in `statements` -- thru_paragraph is
+    None, target_paragraph set, perform_type == "SIMPLE" -- at ANY
+    nesting depth, tagged with:
+
+    - `nested`: False only for a direct member of the paragraph's own
+      top-level `.statements` list (today's only supported shape); True
+      at any depth >= 1 -- an IF/ELSE branch, an EVALUATE
+      WHEN/WHEN OTHER branch, or an inline PERFORM ... END-PERFORM loop
+      body (via _nested_statement_lists' then_statements/else_statements/
+      when_clauses/inline_statements).
+    - `in_boundary`: sticky -- True once recursion has entered another
+      boundary statement's clause body (CALL's ON EXCEPTION, a file
+      statement's AT END, ...). Mirrors mock_surface._walk_statements'
+      identical child_in_boundary propagation: a PERFORM found there is
+      never a valid chain edge, because splicing the enclosing boundary
+      statement (when it's mocked) removes the PERFORM and any inserted
+      check along with it -- the same structural reason a nested
+      BoundarySite there is unsplicable.
+
+    Every recursive call passes nested=True literally (not the parent's
+    nested value), matching mock_surface._walk_statements' own pattern,
+    so a PERFORM is marked nested at every depth >= 1 while a genuinely
+    top-level one (the initial call, nested defaults to False) stays
+    unmarked. See docs/2026-07-10-conditionally-nested-intermediate-perform-design.md.
+    """
+    found: list[tuple[PerformStatement, bool, bool]] = []
+    for statement in statements:
+        if (
+            isinstance(statement, PerformStatement)
+            and statement.thru_paragraph is None
+            and statement.target_paragraph
+            and statement.perform_type == "SIMPLE"
+        ):
+            found.append((statement, nested, in_boundary))
+        child_in_boundary = in_boundary or isinstance(
+            statement, _BOUNDARY_STATEMENT_TYPES
+        )
+        for nested_list in _nested_statement_lists(statement):
+            found.extend(
+                _plain_perform_statements(
+                    nested_list, nested=True, in_boundary=child_in_boundary
+                )
+            )
+    return found
+
+
 def _plain_perform_edges_from(
     program, start: str, safe_section_entries: dict[str, str] | None = None
-) -> tuple[set[str], list]:
-    """BFS from `start` following ONLY plain (non-THRU), unconditional,
-    single-shot, top-level PERFORM statements -- i.e. PerformStatement
-    nodes that are direct members of a paragraph's own `.statements` list
-    (not nested inside IF/EVALUATE), with `thru_paragraph is None` and
-    `perform_type == "SIMPLE"`.
+) -> tuple[set[str], list[tuple[PerformStatement, bool]]]:
+    """BFS from `start` following plain (non-THRU), unconditional,
+    single-shot PERFORM statements -- PerformStatement nodes with
+    thru_paragraph is None and perform_type == "SIMPLE" -- at ANY nesting
+    depth within a paragraph (top-level, or nested inside an IF/ELSE
+    branch, an EVALUATE WHEN/WHEN OTHER branch, or an inline
+    PERFORM ... END-PERFORM loop body). A PERFORM nested inside another
+    boundary statement's clause body (CALL's ON EXCEPTION, a file
+    statement's AT END, ...) is never followed -- see
+    _plain_perform_statements.
 
     A PERFORM ... UNTIL/VARYING/TIMES (perform_type != "SIMPLE") is
     deliberately NOT followed and NOT added to the edge set, even though
@@ -1001,7 +1056,12 @@ def _plain_perform_edges_from(
     past it). Excluding the edge means such a terminator's paragraph never
     enters `seen`, so `find_terminator_plans` naturally refuses it via the
     existing "reachable but not via a plain chain" check -- no new
-    refusal branch needed.
+    refusal branch needed. (This is distinct from a PERFORM nested INSIDE
+    an inline `PERFORM ... END-PERFORM` loop BODY, which IS followed --
+    EXIT PARAGRAPH from inside an inline loop body correctly exits the
+    whole enclosing paragraph, verified empirically 2026-07-10; the
+    excluded case here is an OUT-OF-LINE PERFORM that IS itself a loop
+    over a different paragraph.)
 
     `safe_section_entries` (from `_safe_section_entry_points`, or omitted
     for callers that don't care about SECTIONs -- e.g. this module's own
@@ -1014,16 +1074,24 @@ def _plain_perform_edges_from(
     the ONLY SECTION shape this restricted BFS ever resolves: a target
     name that is a SECTION but not a safe entry (or any other
     unresolvable name) still dead-ends exactly as before, its raw,
-    unresolved name landing in `seen`.
+    unresolved name landing in `seen`. SECTION members that aren't a safe
+    entry's first paragraph are still excluded entirely, same as before:
+    this only looks up names in `procedure.paragraphs` (top-level
+    paragraphs) and, when `safe_section_entries` resolves one, the
+    specific first-paragraph names it names -- never any other section
+    member -- so a chain that would need to pass through one of those
+    (fall-through, or a direct PERFORM of a non-first section member)
+    still naturally refuses via the existing "reachable but not via a
+    plain chain" check.
 
-    SECTION members that aren't a safe entry's first paragraph are still
-    excluded entirely, same as before: this only looks up names in
-    `procedure.paragraphs` (top-level paragraphs) and, when
-    `safe_section_entries` resolves one, the specific first-paragraph
-    names it names -- never any other section member -- so a chain that
-    would need to pass through one of those (fall-through, or a direct
-    PERFORM of a non-first section member) still naturally refuses via
-    the existing "reachable but not via a plain chain" check."""
+    Returns (reachable paragraph names via this restricted edge set, the
+    (PerformStatement, nested) pairs that ARE those edges) -- every one of
+    those statements is a candidate for the early-exit flag-check
+    instrumentation, `nested` telling the caller which validator/
+    insertion-point computation applies. Deliberately NOT the same as
+    `_reachable_paragraphs`: that function also follows GO TO and
+    section/THRU fall-through edges, exactly the unsafe shapes this
+    restricted variant must exclude."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
@@ -1050,26 +1118,24 @@ def _plain_perform_edges_from(
     if start_paragraph is not None:
         resolved[start_name] = start_paragraph
         stack.append(start_name)
-    edges: list = []
+    edges: list[tuple[PerformStatement, bool]] = []
     while stack:
         name = stack.pop()
         paragraph = resolved.get(name)
         if paragraph is None:
             continue
-        for statement in paragraph.statements:
-            if (
-                isinstance(statement, PerformStatement)
-                and statement.thru_paragraph is None
-                and statement.target_paragraph
-                and statement.perform_type == "SIMPLE"
-            ):
-                edges.append(statement)
-                target_name, target_paragraph = resolve(statement.target_paragraph)
-                if target_name not in seen:
-                    seen.add(target_name)
-                    if target_paragraph is not None:
-                        resolved[target_name] = target_paragraph
-                        stack.append(target_name)
+        for statement, nested, in_boundary in _plain_perform_statements(
+            paragraph.statements
+        ):
+            if in_boundary:
+                continue
+            edges.append((statement, nested))
+            target_name, target_paragraph = resolve(statement.target_paragraph)
+            if target_name not in seen:
+                seen.add(target_name)
+                if target_paragraph is not None:
+                    resolved[target_name] = target_paragraph
+                    stack.append(target_name)
     return seen, edges
 
 
@@ -1162,7 +1228,7 @@ def find_terminator_plans(
         chain_go_to_names = safe_names & go_to_targets
 
         chain_problem: str | None = None
-        for perform in chain_performs:
+        for perform, _nested in chain_performs:
             line_problem = statement_top_level_problem(perform, scope_map, lines)
             if line_problem is not None:
                 chain_problem = (
@@ -1276,7 +1342,7 @@ def find_terminator_plans(
         for key in qualified_keys:
             plan = plans_by_statement[key]
             existing_ids = {id(p) for p in plan.chain_performs}
-            for perform in chain_performs:
+            for perform, _nested in chain_performs:
                 if id(perform) not in existing_ids:
                     plan.chain_performs.append(perform)
                     existing_ids.add(id(perform))

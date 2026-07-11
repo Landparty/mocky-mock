@@ -112,7 +112,7 @@ rationale.
 | Class | Fields | Notes |
 |---|---|---|
 | `MockCategory` (Enum) | `CALL, DYNCALL, OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START, UNLOCK, SQL, CICS, DLI, ACCEPT` | `.keyword` property maps `DYNCALL → "CALL"`, everything else to its own name |
-| `MockDirective` | `category, key, body_lines: list[str]` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages |
+| `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS` directive and is mutually exclusive with `body_lines` |
 | `ExpectDirective` | `data_name, expected_value` | one `EXPECT` line |
 | `VerifyDirective` | `category, key, expectation` | `.program_name` same v1-compat alias as `MockDirective` |
 | `MockTestCase` | `name, mocks, setup_moves: list[(value,target)], perform_target, perform_thru: str\|None, expectations, verifications` | `perform_thru` is `None` unless `PERFORM X THRU Y` was used |
@@ -226,6 +226,27 @@ Rules:
   become single quotes): the .cut grammar has no escape syntax for a `"`
   inside a quoted name, so interpolating one raw would make the scaffold
   unparseable.
+
+### `ROWS` cursor sugar
+
+`MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
+END-MOCK` is SQL-only grammar (any other category raises `CutParseError`)
+that stores structured rows on `MockDirective.rows` instead of free-form
+`body_lines` — the two are mutually exclusive by construction (the parser
+routes lines to one or the other based on whether `ROWS` appeared on the
+opening line). Row values are unparsed free text (matching `EXPECT ... TO
+BE <value>`'s convention) split on top-level commas — `_split_top_level` in
+`parser.py` is quote-aware, so a value like `EMP-NAME = "SMITH, JR."`
+isn't cut at the comma inside the literal. An empty `ROWS` block (`ROWS`
+immediately followed by `END-MOCK`) is a `CutParseError`, not a silent
+no-op.
+
+Codegen happens at splice time (`injector.build_rows_block`), not parse
+time, because the tally field name isn't resolved until
+`naming.TallyRegistry` runs post-parse over the whole suite. Each row
+generates a `WHEN <tally> = N` branch that MOVEs its fields and sets
+`SQLCODE` to 0; `WHEN OTHER` (rows exhausted) sets `SQLCODE` to 100 (DB2's
+"not found" code), fixed in v1.
 
 # Gotchas
 

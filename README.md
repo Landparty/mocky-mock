@@ -68,8 +68,24 @@ TESTCASE "totals two records then updates and notifies"
 - Every mock gets a tally field (`UT-...-TALLY`, visible to mock bodies —
   handy for driving EOF off the read count) that `VERIFY ... WAS
   CALLED|PERFORMED ONCE | AT LEAST ONCE | NEVER | <n> TIMES` asserts on.
+- `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
+  END-MOCK` is sugar for a cursor FETCH loop: each row's fields are MOVEd
+  and `SQLCODE` is set to 0 on the Nth call (matching the mock's own tally
+  field reaching N); once rows run out, `SQLCODE` is set to 100 (DB2's
+  "not found" code). SQL-only; mutually exclusive with a hand-written mock
+  body.
 - `EXEC SQL INCLUDE SQLCA END-EXEC` is replaced with a generated SQLCA, so
-  mock bodies can set `SQLCODE`.
+  mock bodies can set `SQLCODE`. `EXEC SQL INCLUDE <member> END-EXEC` for
+  any other member (e.g. a DCLGEN host-variable copybook) is resolved via
+  `--copybook-path` the same way a plain `COPY <member>.` is, exposing its
+  host variables as real WORKING-STORAGE fields a mock body can `MOVE`
+  into; without a matching `--copybook-path`, or if the member can't be
+  found, it refuses `UNRESOLVED_COPYBOOK`. Only one level of `EXEC SQL
+  INCLUDE` resolves — a member that itself contains another live `EXEC SQL
+  INCLUDE` refuses. Like the generated SQLCA, these fields are spliced in
+  after parsing and are never reset between test cases — a mock body is
+  expected to set them on every run (the `ROWS` sugar above does this
+  automatically).
 - Lines starting with `*>` are comments.
 
 `mockymock generate <program.cbl>` scaffolds a starter `.cut` covering

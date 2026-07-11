@@ -12,10 +12,19 @@ that live in the DATA DIVISION, so before compiling:
   runtime effect -- the cursor's OPEN/FETCH/CLOSE statements later in the
   PROCEDURE DIVISION are separate EXEC SQL statements handled by the
   boundary-mocking machinery, not by this module).
-- Any other DATA DIVISION EXEC SQL (INCLUDE <member>, WHENEVER, ...) is a
-  whole-program refusal (UNSUPPORTED_DATA_DIVISION_EXEC): an INCLUDE pulls
-  in host-variable declarations this tool cannot resolve (same spirit as
-  UNRESOLVED_COPYBOOK), and anything unrecognized fails closed.
+- `EXEC SQL INCLUDE <member> END-EXEC` (member != SQLCA) is resolved the
+  same way plain `COPY` is: a synthetic `COPY <member>.` snippet is
+  expanded through cobolparser's public `expand_copybooks` against
+  `copybook_paths`, and the (normalized) result is spliced in and
+  re-scanned in place -- so a DCLGEN-style member's own embedded
+  `EXEC SQL DECLARE ... TABLE ... END-EXEC` stanza gets commented out by
+  this module's existing DECLARE-TABLE branch automatically. No
+  `--copybook-path`, or the member can't be found, refuses
+  UNRESOLVED_COPYBOOK (the same code plain unresolved COPY uses). A second,
+  live `EXEC SQL INCLUDE` found while re-scanning already-spliced content
+  refuses UNSUPPORTED_DATA_DIVISION_EXEC (only one level of resolution is
+  supported). Any other unrecognized DATA DIVISION EXEC SQL (WHENEVER,
+  ...) still fails closed the same way.
 
 The generated SQLCA is intentionally *not* part of the parsed AST (it is
 spliced in after parsing), so `reset.py`'s working-storage reset never
@@ -27,7 +36,7 @@ from __future__ import annotations
 
 import re
 
-from mockymock.analysis.refusal import RefusalReason
+from mockymock.analysis.refusal import RefusalReason, check_expansion_warnings
 
 SQLCA_FIELDS = [
     "01  SQLCA.",
@@ -114,8 +123,65 @@ def _search_outside_literals(pattern: re.Pattern, line: str):
     return None
 
 
+def _resolve_include_member(
+    member: str, copybook_paths: list[str] | None
+) -> tuple[list[str] | None, list[RefusalReason]]:
+    """Resolve `member` the same way plain COPY is resolved: build a
+    synthetic `COPY <member>.` snippet and expand it through cobolparser's
+    public `expand_copybooks` -- not a reimplementation of copybook path
+    resolution, so INCLUDE resolves exactly the way COPY does (same
+    extensions, same case rules, same path-traversal protection; see
+    cobolparser.preprocess.path_resolver, which this module deliberately
+    does not import -- it isn't in cobolparser.preprocess's __all__).
+    Returns (normalized lines, []) on success, or (None, [<refusal>]) on
+    failure -- never both a result and a reason."""
+    if not copybook_paths:
+        return None, [
+            RefusalReason(
+                code="UNRESOLVED_COPYBOOK",
+                message=(
+                    f"EXEC SQL INCLUDE {member} could not be resolved -- "
+                    f"pass --copybook-path pointing at the copybook's "
+                    f"directory"
+                ),
+            )
+        ]
+
+    from cobolparser.preprocess import (
+        CopybookNotFoundError,
+        expand_copybooks,
+        normalize_fixed_format,
+    )
+
+    try:
+        expansion = expand_copybooks(
+            f"       COPY {member}.", copybook_paths=copybook_paths
+        )
+    except CopybookNotFoundError:
+        return None, [
+            RefusalReason(
+                code="UNRESOLVED_COPYBOOK",
+                message=(
+                    f"EXEC SQL INCLUDE {member} could not be resolved in "
+                    f"{copybook_paths} -- pass --copybook-path pointing at "
+                    f"the copybook's directory"
+                ),
+            )
+        ]
+
+    expansion_reasons = check_expansion_warnings(expansion)
+    if expansion_reasons:
+        return None, expansion_reasons
+
+    normalized = normalize_fixed_format(
+        expansion.expanded_source.splitlines()
+    ).splitlines()
+    return normalized, []
+
+
 def transform_data_division_exec(
     lines: list[str],
+    copybook_paths: list[str] | None = None,
 ) -> tuple[list[str], list[RefusalReason]]:
     """Return (new lines, refusal reasons) for the DATA DIVISION EXEC SQL
     blocks in already-normalized free-form `lines`.
@@ -125,13 +191,27 @@ def transform_data_division_exec(
     `EXEC SQL`, or trailing content after the `END-EXEC.` -- refuses
     (UNSUPPORTED_DATA_DIVISION_EXEC) instead of silently deleting the
     sibling content. `EXEC SQL` / `END-EXEC` appearing inside VALUE-clause
-    string literals is ignored entirely (see `_search_outside_literals`)."""
+    string literals is ignored entirely (see `_search_outside_literals`).
+
+    `copybook_paths` is threaded through to a resolved EXEC SQL INCLUDE
+    member's content -- see `_resolve_include_member`. When an INCLUDE is
+    resolved, the scan does NOT advance past the newly-spliced lines
+    (`include_splice_end` tracks the boundary instead): this lets the
+    DECLARE-TABLE/DECLARE-CURSOR/BEGIN-END-DECLARE-SECTION branches below
+    catch content the resolved member itself embeds (a DCLGEN copybook
+    always carries its own `EXEC SQL DECLARE ... TABLE ... END-EXEC`) with
+    no separate recursion path, while a second live INCLUDE found inside
+    that re-scanned region refuses instead of resolving (only one level of
+    INCLUDE resolution is supported)."""
     result = list(lines)
     reasons: list[RefusalReason] = []
 
     in_data_division = False
+    include_splice_end: int | None = None
     index = 0
     while index < len(result):
+        if include_splice_end is not None and index >= include_splice_end:
+            include_splice_end = None
         line = result[index]
         exec_match = None
         if _DATA_DIVISION_RE.match(line):
@@ -169,7 +249,12 @@ def transform_data_division_exec(
             block = " ".join(
                 " ".join(result[i].upper().split()) for i in range(index, end + 1)
             )
-            index = _handle_block(result, index, end, block, reasons)
+            nested_include = include_splice_end is not None
+            index, splice_end = _handle_block(
+                result, index, end, block, reasons, copybook_paths, nested_include
+            )
+            if splice_end is not None:
+                include_splice_end = splice_end
             continue
         index += 1
 
@@ -214,17 +299,28 @@ def _shared_line_problem(
 
 
 def _handle_block(
-    result: list[str], start: int, end: int, block: str, reasons: list[RefusalReason]
-) -> int:
+    result: list[str],
+    start: int,
+    end: int,
+    block: str,
+    reasons: list[RefusalReason],
+    copybook_paths: list[str] | None,
+    nested_include: bool,
+) -> tuple[int, int | None]:
     """Apply the transform for one EXEC SQL block spanning result[start:end+1]
-    (already uppercased/whitespace-collapsed into `block`). Returns the index
-    scanning should continue from."""
+    (already uppercased/whitespace-collapsed into `block`). Returns (next
+    scan index, splice-end index or None) -- the second element is set only
+    when this call spliced in a resolved EXEC SQL INCLUDE member's content,
+    so the caller can track "inside spliced INCLUDE content" for the
+    nested-INCLUDE refusal. The first element is `start` (not past the
+    splice) exactly when that happens, so the caller re-scans the newly
+    inserted lines instead of skipping them."""
     if re.search(r"\bINCLUDE\s+SQLCA\b", block):
         replacement = [
             "      *> EXEC SQL INCLUDE SQLCA replaced by mockymock-generated SQLCA:"
         ] + [f"       {field}" for field in SQLCA_FIELDS]
         result[start : end + 1] = replacement
-        return start + len(replacement)
+        return start + len(replacement), None
 
     if re.search(r"\b(BEGIN|END)\s+DECLARE\s+SECTION\b", block) or re.search(
         r"\bDECLARE\b.*\b(TABLE|CURSOR)\b", block
@@ -232,23 +328,37 @@ def _handle_block(
         for i in range(start, end + 1):
             if result[i].strip():
                 result[i] = "      *> " + result[i]
-        return end + 1
+        return end + 1, None
 
     include_match = re.search(r"\bINCLUDE\s+(\S+)", block)
     if include_match:
         member = include_match.group(1).rstrip(".")
-        reasons.append(
-            RefusalReason(
-                code="UNSUPPORTED_DATA_DIVISION_EXEC",
-                message=(
-                    f"EXEC SQL INCLUDE {member} at line {start + 1} pulls "
-                    f"host-variable declarations from a precompiler member "
-                    f"this tool cannot resolve -- inline the member's "
-                    f"content (same spirit as UNRESOLVED_COPYBOOK)"
-                ),
+        if nested_include:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_DATA_DIVISION_EXEC",
+                    message=(
+                        f"EXEC SQL INCLUDE {member} at line {start + 1} is "
+                        f"nested inside another resolved EXEC SQL INCLUDE -- "
+                        f"only one level of EXEC SQL INCLUDE resolution is "
+                        f"supported; inline {member}'s content directly"
+                    ),
+                )
             )
+            return end + 1, None
+        resolved_lines, resolve_reasons = _resolve_include_member(
+            member, copybook_paths
         )
-        return end + 1
+        if resolved_lines is None:
+            reasons.extend(resolve_reasons)
+            return end + 1, None
+        replacement = [
+            f"      *> EXEC SQL INCLUDE {member} replaced by resolved "
+            f"copybook content:"
+        ] + resolved_lines
+        result[start : end + 1] = replacement
+        new_index = start + len(replacement)
+        return start, new_index
 
     reasons.append(
         RefusalReason(
@@ -259,4 +369,4 @@ def _handle_block(
             ),
         )
     )
-    return end + 1
+    return end + 1, None

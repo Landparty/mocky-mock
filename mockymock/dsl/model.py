@@ -64,6 +64,11 @@ class MockDirective:
     category: MockCategory
     key: str
     body_lines: list[str] = field(default_factory=list)
+    rows: list[list[tuple[str, str]]] | None = None
+    """Structured rows for `MOCK SQL "..." ROWS (...) (...) END-MOCK`.
+    `None` for an ordinary mock (its body lives in `body_lines` instead);
+    populated only for SQL-category ROWS mocks, mutually exclusive with
+    `body_lines`."""
 
     @property
     def program_name(self) -> str:

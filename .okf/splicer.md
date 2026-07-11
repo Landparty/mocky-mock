@@ -444,15 +444,33 @@ Overview — this file previously and incorrectly said "before"):
 | `EXEC SQL BEGIN/END DECLARE SECTION END-EXEC` | commented out; host variables between the markers are plain COBOL and stay |
 | `EXEC SQL DECLARE ... TABLE ... END-EXEC` | commented out (declarative only, no runtime effect) |
 | `EXEC SQL DECLARE <cursor> CURSOR FOR SELECT ... END-EXEC` | commented out (declarative only; the standard `PERFORM ... UNTIL SQLCODE = 100` fetch-loop idiom's OPEN/FETCH/CLOSE are separate PROCEDURE DIVISION EXEC SQL statements the boundary-mocking machinery already handles) |
-| `EXEC SQL INCLUDE <member>` (anything else) | whole-program refusal `UNSUPPORTED_DATA_DIVISION_EXEC` — an INCLUDE pulls in host-variable declarations this tool cannot resolve, same spirit as `UNRESOLVED_COPYBOOK` |
+| `EXEC SQL INCLUDE <member>` (anything else) | resolved via `--copybook-path` — a synthetic `COPY <member>.` snippet is expanded through cobolparser's public `expand_copybooks` (not `path_resolver` internals, which aren't in `cobolparser.preprocess`'s `__all__`) and the normalized result is spliced in and re-scanned in place, so an embedded `DECLARE ... TABLE` stanza (DCLGEN-style) gets commented out by the branch above with no new recursion. No `--copybook-path`, or member not found → `UNRESOLVED_COPYBOOK` (same code plain unresolved `COPY` uses). A second live `EXEC SQL INCLUDE` found while re-scanning already-spliced content → `UNSUPPORTED_DATA_DIVISION_EXEC` (only one level of resolution supported) |
 | anything unrecognized | `UNSUPPORTED_DATA_DIVISION_EXEC`, fail closed |
+
+**EXEC SQL INCLUDE member resolution**: unlike SQLCA (a hardcoded field
+list), a non-SQLCA `INCLUDE <member>` has no fixed content -- it must be
+read from disk. Resolution deliberately goes through the *public*
+`cobolparser.preprocess.expand_copybooks` on a synthetic one-line
+`COPY <member>.` snippet, not `cobolparser.preprocess.path_resolver`'s
+`find_copybook_file`/`CopybookSearchPath` -- those live outside
+`cobolparser.preprocess`'s `__all__` and are not pinned by
+`interface-contract.md`. This also means INCLUDE resolves exactly the way
+plain COPY does (same extensions, same case rules, same path-traversal
+protection) for free, rather than risking a second resolution
+implementation that quietly diverges from the first.
 
 **Important invariant**: the generated SQLCA is spliced in **after
 parsing** and is therefore not part of the parsed AST at all. This means
 `reset.py`'s WORKING-STORAGE reset never touches it — SQLCODE/SQLSTATE
 are expected to survive across test cases unless a mock body explicitly
 sets them, which is why the scaffold generator's placeholder EXEC SQL mock
-bodies always set SQLCODE explicitly in every case.
+bodies always set SQLCODE explicitly in every case. A resolved `EXEC SQL
+INCLUDE <member>` (non-SQLCA) shares this exact property for the same
+reason: `expand_copybooks` runs on a synthetic `COPY <member>.` snippet at
+splice time, not on `raw_source` before `parse_cobol`, so these fields are
+equally invisible to `reset.py` and equally expected to be set fresh by a
+mock body on every run — the `ROWS` sugar (below) does this automatically
+via its per-row `MOVE`s.
 
 **Literal-text and shared-line hardening (2026-07-07 fix, audit finding
 2.6):** the block scanner previously keyed off the literal substring
