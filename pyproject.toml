@@ -29,7 +29,7 @@ dependencies = [
     # same commit .github/workflows/ci.yml checks out, so `uv tool install`
     # resolves a working install without a sibling checkout. Bump both
     # together, deliberately, per that workflow's comment.
-    "cobolparser @ git+https://github.com/Landparty/cobol-parser.git@c9a94999e5e3785af9772a91a54ae333bc5964e2",
+    "cobolparser @ git+https://github.com/Landparty/cobol-parser.git@d2bc7c2093f71e13789da29f0a39b92d203f90c6",
 ]
 
 [project.optional-dependencies]
