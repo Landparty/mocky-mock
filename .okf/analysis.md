@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-07-08T00:00:00Z
+timestamp: 2026-07-10T00:00:00Z
 ---
 
 # Overview
