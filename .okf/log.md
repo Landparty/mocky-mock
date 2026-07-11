@@ -60,6 +60,49 @@
   2026-07-10 regression noted in prior session memory, deliberately not
   investigated as part of this work.
 
+## 2026-07-10 (Examples: CUSTINQ (CICS) + RATERTE (dynamic CALL routing))
+* **What shipped**: two new hand-written worked examples under `examples/`,
+  each with a README and its own `tests/integration/` suite, proven
+  end-to-end against real GnuCOBOL in the `mockymock-cobc` container.
+  - `examples/custinq/` — the first `EXEC CICS` worked example. Closes the
+    real-world-readiness audit's Finding 5 row that CICS was "classified
+    but never proven — no example, absent from corpus." No engine change
+    was needed: `EXEC CICS` already splices out the same way `EXEC
+    SQL`/`EXEC DLI` do, so this only needed a program that exercises it.
+    The audit doc's "what closing it takes" note that CICS needed "a CICS
+    translation/stub layer" was corrected as wrong — see
+    `docs/2026-07-06-real-world-readiness-audit.md` Finding 5.
+  - `examples/raterte/` — a business-flavored dynamic-`CALL` routing
+    example (account tier → one of three rate subprograms), complementing
+    the bare `tests/integration/fixtures/dynamic_call.cbl` regression
+    fixture with a polished, documented worked example.
+* **Investigated and deliberately not pursued: expanding the corpus-driven
+  example sets.** Before hand-writing new examples, `mockymock generate`
+  was run against all 14 not-yet-exampled `legacy-application/cobol`
+  real-world programs and 6 sampled NIST CCVS85 programs beyond the 4
+  already in `examples/nist-cobol85/` — **all 20 refuse with
+  `PARSE_WARNING`** against the currently pinned cobolparser commit
+  (`8c3c881d`), on two distinct bugs: a multi-operand `STRING ... DELIMITED
+  BY SIZE ...` continuation-line bug (real-world corpus) and a `FILLER PIC
+  IS X(...) VALUE IS ...` clause-ordering bug in the shared CCVS85
+  boilerplate (NIST corpus beyond the 4 already used). Neither is a
+  mockymock gap — both are upstream cobolparser parsing bugs. This also
+  reproduces on already-*committed* examples: `test_realworld_deptmqc_example.py`,
+  `test_realworld_deptmqp_example.py`, and two of the four
+  `test_nist_cobol85_examples.py` cases (`IC101A`, `IC116M`) now fail
+  against this same pin, confirmed via `direct_url.json` to be installed
+  from the exact pinned commit, not a stale/drifted local environment. This
+  is broader than the previously-known single regression
+  (`test_looping_perform_is_excluded_from_the_safe_chain`, see
+  [[project-mockymock-terminator-support]]) — full failing set as of this
+  writing: `test_copybook_expansion.py` (2), `test_nist_cobol85_examples.py`
+  (`IC101A`, `IC116M`), `test_realworld_deptmqc_example.py`,
+  `test_realworld_deptmqp_example.py`, `test_terminator_support.py` (1),
+  `test_refusal.py` (2), `test_source_map.py` (1) — 10 failing tests total
+  on `main`, unrelated to and unfixed by this change. Fixing this is
+  upstream `cobol-parser` work, out of scope here; flagged to the user
+  rather than silently worked around.
+
 ## 2026-07-09 (Feature: EXEC SQL INCLUDE host-var copybooks + cursor ROWS sugar)
 * **What shipped**: `EXEC SQL INCLUDE <member> END-EXEC` (non-SQLCA) now
   resolves via `--copybook-path` — a synthetic `COPY <member>.` snippet

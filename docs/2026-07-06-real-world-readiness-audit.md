@@ -234,7 +234,7 @@ below the silent risks above.
 |---|---|---|
 | `SORT` / `MERGE` / `RELEASE` / `RETURN` | refused `UNSUPPORTED_SORT_MERGE` | common in batch; whole test refused if reachable |
 | Dynamic `CALL` with unresolvable identifier | refused `DYNAMIC_CALL` | resolvable dynamic calls *are* supported (`DYNCALL`) |
-| CICS | classified but **never proven** — no example, absent from corpus | online/CICS programs unvalidated end-to-end |
+| CICS | **resolved 2026-07-10** — proven end-to-end (`EXEC CICS READ`/`RETURN`, splice-and-replace, no CICS translator needed) via `examples/custinq/`, `test_custinq_example.py` | closed |
 | IMS DL/I | classified but **never attempted** — `LINKAGE`/`ENTRY 'DLITCBL'` vs the `PERFORM`-only driver is unverified | IMS programs unsupported in practice |
 | `EXEC SQL INCLUDE <member>` (non-SQLCA) | **resolved 2026-07-09** via `--copybook-path` — see [docs/2026-07-09-sql-v1-include-cursor-rows-design.md](2026-07-09-sql-v1-include-cursor-rows-design.md) | closed |
 | `EXEC SQL DECLARE CURSOR` in WORKING-STORAGE | **resolved** — DECLARE CURSOR is commented out declaratively; OPEN/FETCH/CLOSE handled by generic boundary-mocking machinery | closed |
@@ -249,12 +249,21 @@ declaratively; OPEN/FETCH/CLOSE were always handled by the generic
 boundary-mocking machinery). The remaining rows in this table are
 unaffected.
 
-**What closing it takes:** each is its own project (SORT/MERGE modeling; a
-CICS translation/stub layer; the IMS `ENTRY DLITCBL` driving model; cursor
-support via `task_d610057b`). The right near-term move is a **user-facing
-"Supported COBOL subset" document** so adopters know the boundaries before
-they hit a refusal — today those boundaries live in design docs and OKF
-concepts, not where an end user looks.
+**What closing it takes:** each is its own project (SORT/MERGE modeling; the
+IMS `ENTRY DLITCBL` driving model; cursor support via `task_d610057b`). The
+right near-term move is a **user-facing "Supported COBOL subset" document**
+so adopters know the boundaries before they hit a refusal — today those
+boundaries live in design docs and OKF concepts, not where an end user
+looks.
+
+**Correction, 2026-07-10:** this paragraph originally listed "a CICS
+translation/stub layer" as needed engine work for the CICS row above. That
+assumption was never actually tested and turned out to be wrong: `EXEC
+CICS` is spliced out entirely before compilation via the same
+splice-and-replace mechanism already used for `EXEC SQL`/`EXEC DLI` (see
+`.okf/splicer.md`) — GnuCOBOL never sees a raw `EXEC CICS` block, so no
+translator or stub layer was ever required. Closing the row only needed a
+worked example proving the existing mechanism, not new engine work.
 
 ---
 
