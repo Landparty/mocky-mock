@@ -54,7 +54,7 @@ def test_neutralize_comments_out_entry_and_linkage_header_only():
     assert result[entry_line - 1] == "      *> " + original[entry_line - 1]
     # Everything else, including the LINKAGE data items themselves and the
     # PROCEDURE DIVISION/paragraph lines, is untouched.
-    for idx, (before, after) in enumerate(zip(original, result)):
+    for idx, (before, after) in enumerate(zip(original, result, strict=True)):
         if idx in (header_idx, entry_line - 1):
             continue
         assert before == after, f"line {idx + 1} changed unexpectedly"

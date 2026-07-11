@@ -29,7 +29,9 @@ def test_raterte_fails_when_expectation_is_wrong(tmp_path: Path):
     cut = (EXAMPLE_DIR / "RATERTE.cut").read_text()
     broken = tmp_path / "RATERTE.cut"
     broken.write_text(
-        cut.replace("EXPECT WS-INTEREST TO BE 300.00", "EXPECT WS-INTEREST TO BE 301.00", 1)
+        cut.replace(
+            "EXPECT WS-INTEREST TO BE 300.00", "EXPECT WS-INTEREST TO BE 301.00", 1
+        )
     )
     exit_code = main(["run", str(EXAMPLE_DIR / "RATERTE.cbl"), "--cut", str(broken)])
     assert exit_code == 1

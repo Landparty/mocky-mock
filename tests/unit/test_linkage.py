@@ -183,7 +183,8 @@ def test_check_linkage_layout_refuses_when_linkage_is_not_last_section():
     )
     reasons = check_linkage_layout(program, lines)
     assert any(
-        r.code == "UNSUPPORTED_LINKAGE_LAYOUT" and "last DATA DIVISION section" in r.message
+        r.code == "UNSUPPORTED_LINKAGE_LAYOUT"
+        and "last DATA DIVISION section" in r.message
         for r in reasons
     )
 

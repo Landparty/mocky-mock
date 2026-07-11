@@ -55,7 +55,9 @@ def test_multiline_call_span_covers_all_three_lines():
     call_stmt = _find_call_statement(ast)
     boundaries = collect_boundaries(ast)
 
-    start, end = statement_span(call_stmt, boundaries, last_line=len(lines), lines=lines)
+    start, end = statement_span(
+        call_stmt, boundaries, last_line=len(lines), lines=lines
+    )
 
     assert start == call_stmt.location.line
     assert end == start + 2

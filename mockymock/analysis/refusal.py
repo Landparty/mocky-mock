@@ -148,11 +148,11 @@ from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.linkage import linkage_plan
 from mockymock.analysis.mock_surface import (
+    _BOUNDARY_STATEMENT_TYPES,
     _TERMINATOR_LABELS,
     BoundarySite,
     MockSurface,
     _all_paragraphs,
-    _BOUNDARY_STATEMENT_TYPES,
     _nested_statement_lists,
     normalize_exec_text,
 )
@@ -1026,9 +1026,7 @@ def _falls_through(paragraph) -> bool:
     return True
 
 
-def _go_to_fallthrough_targets(
-    program, go_to_targets: set[str]
-) -> dict[str, str]:
+def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, str]:
     """Every paragraph reachable ONLY by falling through past a GO TO
     target's own end -- an unmodeled shape the reachability BFS does not
     represent as a flow edge (see the module docstring). Maps each such

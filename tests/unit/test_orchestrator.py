@@ -442,9 +442,7 @@ def test_chain_check_after_a_sole_period_terminated_perform_gets_its_own_period(
     cobc rejects the compile (confirmed via a real GnuCOBOL compile,
     see tests/integration/test_terminator_support.py's Docker-level
     counterpart)."""
-    result = parse_cobol(
-        CHAIN_PERFORM_SOLE_STATEMENT_SOURCE, filename="solestmt.cbl"
-    )
+    result = parse_cobol(CHAIN_PERFORM_SOLE_STATEMENT_SOURCE, filename="solestmt.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
     lines = normalize_fixed_format(
@@ -464,7 +462,6 @@ def test_chain_check_after_a_sole_period_terminated_perform_gets_its_own_period(
     spliced = splice_program(
         lines, boundaries, surface, suite, TallyRegistry(suite), plans
     )
-    joined = "\n".join(spliced)
 
     # Both chain-check blocks (one after PERFORM 1000-WRAPPER, one after
     # PERFORM 2000-INNER) must each end their own sentence with a period,
