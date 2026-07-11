@@ -1,5 +1,42 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-10 (Fix: GO TO fall-through terminator hazard now refused, not just documented)
+* **What changed**: `refusal.py`'s module docstring (added by the
+  2026-07-09 final review of `docs/2026-07-08-goback-stop-run-support-design.md`)
+  documented, but did not guard against, a gap in the reachability BFS: a
+  `GO TO` target paragraph that falls through past its own end (no
+  `PERFORM`/`GO TO`/`GOBACK`/`STOP RUN` of its own) into the next paragraph
+  in source order is invisible to `_go_to_targets`, even though a paragraph
+  reached that way shares the exact same `EXIT PARAGRAPH` hazard spike #4
+  found for a direct `GO TO` target — silent halt instead of return, once a
+  *different* test case has neutralized the terminator it falls into via
+  its own safe plain chain.
+* **Fix**: two new functions in `refusal.py` — `_falls_through(paragraph)`
+  (true unless the paragraph's last top-level statement is `GOBACK`,
+  `STOP RUN` (not `STOP <literal>`, which only pauses), a plain
+  single-target `GO TO` (a computed `GO TO ... DEPENDING ON` does NOT
+  count — GnuCOBOL falls through on an out-of-range subscript), or
+  `EXIT PARAGRAPH`/`SECTION`/`PROGRAM`) and `_go_to_fallthrough_targets`
+  (walks source order forward from every GO TO target, seeding from a
+  section's first paragraph when the target is a section name, until
+  `_falls_through` says stop). Wired into `find_terminator_plans`'s two
+  existing GO TO checks (per-terminator and chain-level) as new `elif`
+  branches, refusing `UNSUPPORTED_TERMINATOR_LAYOUT` with a message naming
+  the fall-through path. No Docker spike needed — this only ever *adds* a
+  refusal, so it can't produce a wrong transform; spike #4 already proved
+  the runtime hazard, this just widens which paragraphs are recognized as
+  sharing it. See [docs/2026-07-10-goto-fallthrough-terminator-hazard-design.md](../docs/2026-07-10-goto-fallthrough-terminator-hazard-design.md).
+* **Known residual gap, not fixed here**: returns no hazard when
+  `_source_ordered_paragraphs` can't establish strict source order — the
+  same pre-existing blind spot that already limits `_expand_thru_range` to
+  refusing only the specific THRU range it was asked about, not extended
+  by this change.
+* **Unrelated, pre-existing, still open**: `tests/unit/test_terminators.py::test_looping_perform_is_excluded_from_the_safe_chain`
+  still fails on this branch exactly as it does on `main` (confirmed via a
+  temporary stash-and-rerun before this fix touched anything) — the
+  2026-07-10 regression noted in prior session memory, deliberately not
+  investigated as part of this work.
+
 ## 2026-07-10 (Examples: CUSTINQ (CICS) + RATERTE (dynamic CALL routing))
 * **What shipped**: two new hand-written worked examples under `examples/`,
   each with a README and its own `tests/integration/` suite, proven
