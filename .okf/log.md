@@ -1,5 +1,27 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-10 (SECTION-scoped terminator support, narrow shape)
+* **Added**: `refusal._safe_section_entry_points` (whole-program check: a
+  `SECTION`'s first paragraph is safe to neutralize with `EXIT SECTION`
+  only when neither it nor its `SECTION` is ever a `GO TO` target, and
+  the paragraph is never itself a direct `PERFORM` target anywhere in
+  the program) and wired it into `_plain_perform_edges_from` and
+  `find_terminator_plans` (`TerminatorPlan.exit_kind`,
+  `injector.build_terminator_neutralization(exit_kind)`). Closes the
+  narrow half of spike #5's deferred scope from
+  `docs/2026-07-08-goback-stop-run-support-design.md` — see
+  `docs/2026-07-10-section-scoped-terminator-support-design.md`.
+  Fall-through and direct-paragraph-`PERFORM` section shapes remain
+  refused.
+* **Side effect**: `test_section_scoped_terminator_refuses` (renamed
+  `test_section_touched_only_via_safe_entry_no_longer_refuses`) now
+  asserts a plan is produced instead of a refusal, since its `SECTION`'s
+  only paragraph is a genuinely safe entry — the old blanket "any
+  `SECTION` anywhere in the chain is unsafe" check was strictly more
+  conservative than necessary for that shape. A new fixture
+  (`CHAIN_SECTION_STILL_UNSAFE_SOURCE`) keeps the true-unsafe chain-level
+  case covered.
+
 ## 2026-07-09 (Fix: `mockymock setup` FileNotFoundError under `uv tool install`)
 * **Root cause**: `de6ad0d` (uv-installable CLI) made `uv tool install`
   a real, non-editable package install, but `docker_toolchain.py`'s
