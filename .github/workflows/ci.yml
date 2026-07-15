@@ -70,22 +70,25 @@ jobs:
           # remediation); an unpinned checkout lets a sibling regression
           # silently weaken this repo's guarantees with no signal here.
           # Bump deliberately, with a test run, when adopting new
-          # cobol-parser work. Bumped to cobol-parser's origin/main tip
-          # (still released as cobolparser 1.2.0) to pull in commit
-          # 662b347/d9f700e (cobol-parser PR #85, "VALUE/PICTURE clause
-          # operand may start on the next physical line"): the previous
-          # pin's VALUE/PICTURE clause parser didn't handle a clause
-          # operand starting on the physical line after the VALUE/PIC
-          # keyword (ordinary multi-line continuation, legal COBOL),
-          # silently dropping the operand -- with no warning at all before
-          # commit 7405700 (already in the previous pin), and a
-          # PARSE_WARNING refusal after it. This is exactly the shape the
-          # NIST CCVS85 corpus's shared boilerplate header uses, so
-          # examples/nist-cobol85/IC101A.CBL and IC116M.CBL refused via
-          # `mockymock run` at the previous pin. Full mockymock suite run
-          # green at this commit before this bump (522 passed, 0 failed,
-          # including all 24 examples/ integration tests).
-          ref: d2bc7c2093f71e13789da29f0a39b92d203f90c6
+          # cobol-parser work. Bumped to cobol-parser's
+          # claude/mockymock-cobol-parser-readiness-bcn267 tip (on top of
+          # the previous d2bc7c2 pin) to pull in the legacy/NIST readiness
+          # work: clause-continuation keyword + SQL special register
+          # exclusions in looks_like_paragraph_boundary (fixes the
+          # DELIMITED-BY-SIZE-on-continuation-line and bare-SQLCODE
+          # truncations the legacy-application corpus sweep surfaced), the
+          # REPLACE compiler-directing statement and un-expanded
+          # COPY-with-REPLACING-pseudo-text stripping (all 459 NIST CCVS85
+          # programs now parse error-free), and comment-entry-aware
+          # division boundaries (NIST OBNC1M). Un-expanded COPY now
+          # surfaces as a structured "COPY <member> not expanded" warning
+          # instead of a silent empty data-item list;
+          # mockymock/analysis/refusal.py maps it to UNRESOLVED_COPYBOOK
+          # (check_whole_program skips it so the actionable code wins).
+          # Local mockymock suite at this pin: 471 passed, 48 skipped
+          # (Docker-gated tests skip locally; the 3 `mockymock run` tests
+          # that need a live daemon run in CI).
+          ref: b130ec8887acd8ebf33b4821c8aa3b13046b38c9
 
       - uses: actions/setup-python@v5
         with:

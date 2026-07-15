@@ -1,5 +1,35 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-14 (cobolparser pin bump: legacy-corpus boundary fixes, REPLACE/COPY pseudo-text, all-459 NIST; UNRESOLVED_COPYBOOK adapter)
+
+* **Pin bumped** `d2bc7c2` → `b130ec8` (cobol-parser branch
+  `claude/mockymock-cobol-parser-readiness-bcn267`, on top of the previous
+  pin) in `pyproject.toml` and the CI sibling checkout `ref:`. Brings in:
+  clause-continuation keyword (`DELIMITED`, `TALLYING`, ...) + SQL special
+  register (`SQLCODE`/`SQLSTATE`) exclusions in
+  `looks_like_paragraph_boundary` — the two false-boundary shapes the
+  legacy-application corpus sweep surfaced; the `REPLACE`
+  compiler-directing statement + un-expanded `COPY ... REPLACING`
+  pseudo-text stripping; and comment-entry-aware division boundaries. All
+  459 NIST CCVS85 programs parse error-free at this pin (upstream
+  `KNOWN_ISSUES` is empty).
+* **Behavior change adapted in `analysis/refusal.py`**: cobolparser now
+  blanks un-expanded COPY statements before lexing and reports each as a
+  structured `COPY <member> not expanded` warning (previously: silent
+  empty data-item list). `check_whole_program` skips exactly that warning
+  so the dedicated, textual `check_unresolved_copybooks` (run on the same
+  raw source by every CLI path) surfaces the actionable
+  `UNRESOLVED_COPYBOOK` code instead of a generic `PARSE_WARNING`
+  burying it. Fail-closed is preserved — the same condition still refuses.
+* This pin bump also caught (and upstream reverted) a cobolparser
+  boundary-lookahead change that truncated `COMPUTE X =` /
+  continuation-line operand shapes when the operand's name lives in an
+  un-expanded copybook — `tests/integration/test_copybook_expansion.py`
+  was the detecting suite.
+* Local suite at this pin: 471 passed, 48 skipped (Docker-gated skips);
+  the 3 `mockymock run` CLI tests that need a live Docker daemon run in
+  CI.
+
 ## 2026-07-10 (Fix: cobolparser pin bump closes ACCTPRG/looping-PERFORM silent-drop; statement_span blank-line trim)
 * **Root cause, confirmed empirically, not guessed**: at the previously-pinned
   cobolparser commit (`8c3c881d`), a period-less out-of-line

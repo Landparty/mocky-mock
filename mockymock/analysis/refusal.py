@@ -256,6 +256,16 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
             )
         )
     for warning in getattr(parse_result, "warnings", None) or []:
+        # cobolparser >= af08deb blanks un-expanded COPY statements before
+        # lexing and reports each as a "COPY <member> not expanded" warning
+        # (previously it silently produced empty data-item lists). That
+        # exact condition is already refused -- with an actionable message
+        # naming the fix (--copybook-path) -- by check_unresolved_copybooks,
+        # which every CLI path runs on the same raw source; re-refusing it
+        # here as a generic PARSE_WARNING would only bury the specific code.
+        text = str(warning)
+        if text.startswith("COPY ") and "not expanded" in text:
+            continue
         reasons.append(
             RefusalReason(
                 code="PARSE_WARNING",
