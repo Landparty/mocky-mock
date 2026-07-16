@@ -88,7 +88,7 @@ jobs:
           # Local mockymock suite at this pin: 471 passed, 48 skipped
           # (Docker-gated tests skip locally; the 3 `mockymock run` tests
           # that need a live daemon run in CI).
-          ref: b130ec8887acd8ebf33b4821c8aa3b13046b38c9
+          ref: b3e81ede60c76d8d5dfec8e28c6954793670aa0e
 
       - uses: actions/setup-python@v5
         with:
