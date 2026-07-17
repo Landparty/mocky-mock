@@ -61,6 +61,49 @@ suite**, not per-test-case — exactly the JaCoCo/JUnit-suite-level notion of
 coverage this feature is meant to approximate. No merging of multiple
 runs is needed.
 
+## Addendum: a second, structural source of "uncovered" lines (found while
+## verifying the DEPTIMSM suite for this doc, before writing the plan)
+
+Hand-authoring and actually running a 20-test-case suite for `DEPTIMSM`
+(all cases passing) surfaced a second, distinct reason the instrumented
+source will show `#####` lines beyond dead-refused constructs: **the
+splicer emits one shared `EVALUATE UT-CURRENT-CASE` dispatch per physical
+boundary site, with a `WHEN "<case-id>"` branch for *every* test case in
+the suite that mocks the same key — not only the cases whose `PERFORM`
+target actually reaches that site.** Confirmed directly in the `.gcov`
+output: the `CALL 'CBLTDLI'` site inside `2100-GET-MSG` compiles to an
+`EVALUATE UT-CURRENT-CASE` with a `WHEN "010"` through `WHEN "016"` branch
+for test cases that target `2300-GET-CUSTOMER`/`2400-INSERT-TRNSEG`
+instead — those branches are structurally dead *at this site* (that
+`PERFORM` target never reaches this line), even though the same case's own
+mock body is fully covered at *its own* call site elsewhere in the file.
+
+This is not a suite-authoring gap and cannot be fixed by writing a
+"better" `.cut` — it is inherent to compiling every test case's mock
+bodies into one binary via a shared per-site dispatch. It means reported
+percentages under this feature's instrumented-source model will
+systematically read lower than the suite's real paragraph/branch coverage,
+by an amount that grows with the number of test cases sharing a mock key
+across different call sites. Concretely, `DEPTIMSM`'s 20-case suite above
+— which exercises every EVALUATE/IF branch in every paragraph including
+the full `0000-MAIN-PROCESS` entry point — still reports **76.30% of 907
+lines**, with the rest being (a) this per-site dead-branch cross product,
+(b) the driver harness's own `FAIL`/`ADD 1 TO UT-FAIL-COUNT` lines (dead
+whenever every check passes), and (c) two `IF UT-EARLY-EXIT = "Y" EXIT
+PARAGRAPH END-IF` guards the terminator-neutralization transform inserts
+defensively after every intermediate `PERFORM` in the chain to `GOBACK` —
+dead here because neither `1000-INITIALIZE` nor `3000-FINALIZE` contains a
+nested terminator of its own.
+
+**This reinforces, rather than changes, the "report actual % + documented
+exclusions" decision below** — it just means the documentation (README,
+CLI output framing, and the coverage report itself) must name this
+explicitly so a `--coverage` run showing e.g. 76% on a suite that in fact
+exercises every real branch isn't mistaken for a weak suite. No code
+change is implied by this addendum; it is scoping information for the
+report's wording and the plan's test expectations (the DEPTIMSM
+integration test pins 76.30%/907 lines as its expected, verified value).
+
 ## What "100%" means here (per user decision)
 
 Some code is structurally unreachable through mockymock by design —
