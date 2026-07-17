@@ -1,5 +1,42 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-17 (corpus re-sweep back to fully clean: cobolparser VALUE ALL fix pin, corpus col-72 fixes, walking_skeleton fixture fix, .CBL sweep coverage)
+
+* **Pin bumped** `b3e81ed` → `392f8ce` (cobol-parser branch
+  `claude/cobol-parser-mocking-cq2wse`, on top of the previous pin) in
+  `pyproject.toml` and the CI sibling checkout `ref:`. Brings in
+  `VALUE ALL <literal>` data-item clause support: `ALL` lexes as a
+  figurative constant, so the old `parse_value_clause` consumed it as a
+  complete value and dropped the repeated literal as an "Unparsed token"
+  content-drop warning — which our PARSE_WARNING gate correctly refused
+  on `legacy-application/cobol/EODPROC.cbl`'s
+  `05 FILLER PIC X(133) VALUE ALL '='.` separator. New shape:
+  `value_clause='ALL "="'`, which `splicer/reset.py` splices as legal
+  COBOL (`MOVE ALL "=" TO <item>`). Upstream regression suite:
+  `tests/regression/test_value_all_clause.py`.
+* **Corpus fixes (sibling legacy-application repo, same branch)**:
+  removed the invalid `INDICATOR IS` data clause from `ACCTMNT.cbl` and
+  fixed ten column-72 truncation sites across `ACCTMNT.cbl`,
+  `CTRRPT.cbl`, `EODPROC.cbl`, and `copybook/MQMSG.cpy` — several were
+  fully silent (no warning): EODPROC's SQL `SUM(CASE ...)` tails,
+  ACCTMNT's `DISPLAY` operand truncated to an undeclared name, and two
+  sentence periods at column 73.
+* **Fixture fix**: `tests/integration/fixtures/walking_skeleton.cbl`
+  line 7 was 80 chars, clipping the CASE-marker string's closing quote
+  at column 72 (the 2026-07-14 log flagged this as cosmetic; it became a
+  PARSE_WARNING refusal in `generate` once the lexer started warning on
+  unterminated literals). Display text shortened;
+  `test_walking_skeleton.py` only asserts on the marker prefix.
+* **Sweep coverage fix**: `scripts/corpus_sweep.py` now also globs
+  `examples/**/*.CBL` — `rglob` is case-sensitive on Linux, so the four
+  NIST CCVS85 examples were silently missing from Linux sweeps. This
+  also confirms the 2026-07-14 follow-up flag on `IC101A`/`IC116M`
+  (VALUE-literal-on-next-line parsed as `None`) is resolved at the new
+  pin: all four NIST examples generate clean.
+* **Re-sweep result** (`docs/corpus-sweep-report.md`, new top section):
+  34/34 programs parse OK and generate exit 0, zero refusal codes, zero
+  unmockable-boundary categories.
+
 ## 2026-07-14 (cobolparser pin bump: legacy-corpus boundary fixes, REPLACE/COPY pseudo-text, all-459 NIST; UNRESOLVED_COPYBOOK adapter)
 
 * **Pin bumped** `d2bc7c2` → `b130ec8` (cobol-parser branch

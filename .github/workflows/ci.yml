@@ -71,24 +71,18 @@ jobs:
           # silently weaken this repo's guarantees with no signal here.
           # Bump deliberately, with a test run, when adopting new
           # cobol-parser work. Bumped to cobol-parser's
-          # claude/mockymock-cobol-parser-readiness-bcn267 tip (on top of
-          # the previous d2bc7c2 pin) to pull in the legacy/NIST readiness
-          # work: clause-continuation keyword + SQL special register
-          # exclusions in looks_like_paragraph_boundary (fixes the
-          # DELIMITED-BY-SIZE-on-continuation-line and bare-SQLCODE
-          # truncations the legacy-application corpus sweep surfaced), the
-          # REPLACE compiler-directing statement and un-expanded
-          # COPY-with-REPLACING-pseudo-text stripping (all 459 NIST CCVS85
-          # programs now parse error-free), and comment-entry-aware
-          # division boundaries (NIST OBNC1M). Un-expanded COPY now
-          # surfaces as a structured "COPY <member> not expanded" warning
-          # instead of a silent empty data-item list;
-          # mockymock/analysis/refusal.py maps it to UNRESOLVED_COPYBOOK
-          # (check_whole_program skips it so the actionable code wins).
-          # Local mockymock suite at this pin: 471 passed, 48 skipped
-          # (Docker-gated tests skip locally; the 3 `mockymock run` tests
+          # claude/cobol-parser-mocking-cq2wse tip (on top of the previous
+          # b3e81ed pin) to pull in VALUE ALL <literal> data-item clause
+          # support: previously `VALUE ALL '='` dropped the literal with an
+          # "Unparsed token" content-drop warning, which our PARSE_WARNING
+          # gate correctly refused on legacy-application's EODPROC.cbl
+          # report-separator idiom (see docs/corpus-sweep-report.md,
+          # 2026-07-17 re-sweep: 34/34 clean at this pin). Upstream
+          # regression suite: tests/regression/test_value_all_clause.py.
+          # Local mockymock suite at this pin: tests/unit 461 passed
+          # (Docker-gated tests skip locally; the `mockymock run` tests
           # that need a live daemon run in CI).
-          ref: b3e81ede60c76d8d5dfec8e28c6954793670aa0e
+          ref: 392f8ce82b183243b4faba2b0b7a523526e6abf3
 
       - uses: actions/setup-python@v5
         with:

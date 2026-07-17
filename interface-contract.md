@@ -84,6 +84,12 @@ mockymock too.
   `tests/regression/test_numeric_value_clause.py`): before it, `VALUE 5`,
   `VALUE IS <n>`, and `VALUE -5` parsed as `value_clause=None`, which made
   `reset.py` silently reset to the type default instead of the declared value.
+- Requires cobolparser >= the VALUE-ALL fix (upstream
+  `tests/regression/test_value_all_clause.py`): before it, `VALUE ALL '='`
+  parsed as `value_clause="ALL"` and dropped the literal with a content-drop
+  warning, so any program using the report-separator idiom refused
+  PARSE_WARNING. Now `value_clause='ALL "="'`, which `reset.py` splices as
+  legal COBOL (`MOVE ALL "=" TO <item>`).
 - `cobolparser.lexer.CobolLexer(text, free_form=True)` + `TokenType.COPY` —
   `refusal.py` re-lexes the raw source to detect unresolved COPY statements
   (they leave zero trace in the AST).
