@@ -158,15 +158,18 @@ mockymock run <program.cbl> --cut <suite.cut> --coverage [--coverage-out PATH]
   in the spike: `-fgen-c-line-directives` is auto-enabled by `--coverage`,
   so no `-g` needed alongside it).
 - New `run_gcov(source_path: Path) -> GcovRunResult` — runs
-  `docker exec <container> sh -c "cd <dir> && gcov <name>.gcda"` (the `sh -c
-  cd` form, not `docker exec -w`, since `-w` requires an absolute
-  *container* path and the existing helpers build sandbox dirs relative to
-  the bind mount — confirmed during the spike that `-w` alone errored with
-  "Cwd must be an absolute path" on this Windows/Docker Desktop setup),
-  then reads back `<name>.cbl.gcov`'s text content before the sandbox is
-  cleaned up. Returns raw gcov stdout + the `.gcov` file text, or an
-  explicit "no coverage data" result if the `.gcda` file doesn't exist
-  (see Error handling below).
+  `docker exec -w <container_dir> <container> gcov <name>.gcda`, the same
+  `-w <container_dir>` pattern `run_binary` already uses, then reads back
+  `<name>.cbl.gcov`'s text content before the sandbox is cleaned up.
+  (An ad hoc `docker exec -w /work/...` typed directly at a Git Bash
+  prompt during the spike failed with "Cwd must be an absolute path" —
+  that turned out to be Git Bash's own MSYS path-mangling of a bare `-w`
+  argument, not a real Docker/OCI limitation: confirmed by calling
+  `subprocess.run(["docker", "exec", "-w", "/work/...", ...])` directly
+  from Python, which succeeded, matching `run_binary`'s existing working
+  use of the same flag.) Returns raw gcov stdout + the `.gcov` file text,
+  or an explicit "no coverage data" result if the `.gcda` file doesn't
+  exist (see Error handling below).
 
 ### New `mockymock/report/coverage.py`
 
