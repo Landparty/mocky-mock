@@ -1,5 +1,107 @@
 # Corpus Sweep Report
 
+## 2026-07-17 re-sweep — 34/34 clean again after three PARSE_WARNING regressions
+
+Re-swept against current cobolparser `main`. Since the 2026-07-14 pin
+(`b3e81ed`), upstream's silent-drop remediation grew two new warning
+sources (the lexer's unterminated-string-at-end-of-line warning and the
+data-item clause parser's unparsed-token warning), and they exposed **3
+programs whose content was being silently corrupted** — previously
+invisible because the drops produced no signal at all. mockymock's
+fail-closed PARSE_WARNING gate caught all three (5 warnings total):
+
+1. **`cobol/EODPROC.cbl`** — two distinct problems:
+   - `05 FILLER PIC X(133) VALUE ALL '='.` (the report-separator idiom):
+     cobolparser consumed `ALL` as a complete figurative-constant value
+     and dropped the `'='` literal as an unparsed token. **Fixed
+     upstream** in cobolparser (`parse_value_clause` now returns
+     `ALL "="`, round-trippable into `MOVE ... TO ...`; regression suite
+     `tests/regression/test_value_all_clause.py`, pinned below).
+   - The report-header `VALUE 'FIRST NATIONAL BANK - END OF DAY
+     PROCESSING REPORT'.` line ended at column 74 — the closing quote and
+     sentence period sat in the ignored identification area, so
+     fixed-format normalization truncated the literal (a real mainframe
+     compiler would reject this line too). **Fixed in the corpus**
+     (legacy-application) by re-indenting the continuation line.
+2. **`cobol/ACCTMNT.cbl`** — `05 HV-RATE-IND PIC X(01) INDICATOR IS
+   HV-RATE-IND-IND.`: `INDICATOR` is not a data-description clause in IBM
+   Enterprise COBOL (or GnuCOBOL) — the tokens were dropped. **Fixed in
+   the corpus** by removing the invalid clause (the separate
+   `HV-RATE-IND-IND` half-word item already models the SQL indicator
+   convention).
+3. **`tests/integration/fixtures/walking_skeleton.cbl`** — line 7 was 80
+   characters, so column-72 clipping cut the closing quote off the CASE
+   marker string. **Fixed in this repo** by shortening the display text
+   (the integration test only asserts on the `__MOCKYMOCK__ CASE 001
+   START:` prefix).
+
+The truncation hunt also surfaced **silent** column-72 clips that emitted
+no warning at all and produced corrupted content (all fixed in
+legacy-application): the `END),` tails of eight `SUM(CASE ...)` lines in
+EODPROC's daily-totals `SELECT` were missing from the captured SQL text;
+ACCTMNT's dormancy `DISPLAY` truncated the operand `WS-PARM-DORM-DAYS` to
+the (undeclared) name `WS-PARM-DORM-D`; and CTRRPT.cbl / copybook
+MQMSG.cpy each lost a sentence-terminating period at column 73. A
+whole-corpus scan for code lines extending past column 72 now comes back
+empty (the NIST `.CBL` examples carry classic sequence numbers in columns
+73–80, which is legitimate fixed format, not truncation).
+
+Two more closures in the same pass:
+
+- `scripts/corpus_sweep.py` now also sweeps `examples/**/*.CBL` — `rglob`
+  is case-sensitive on Linux, so the four NIST CCVS85 examples were
+  silently absent from every prior Linux sweep.
+- The 2026-07-14 log's follow-up flag on `IC101A`/`IC116M` (VALUE literal
+  on the line after the `VALUE` keyword parsed as `value_clause=None`) is
+  resolved at current cobolparser main — both now generate clean, as the
+  table shows.
+
+Result at cobolparser main + these corpus/fixture fixes:
+
+Swept 34 COBOL program(s) with `mockymock generate` (parse-and-analyze only, no Docker/compile).
+
+| Program | Parsed OK? | Generate Exit | Refusal Codes | Unmockable Boundaries (by category) |
+|---|---|---|---|---|
+| cobol/ACCTMNT.cbl | yes | 0 | - | - |
+| cobol/ACCTPRG.cbl | yes | 0 | - | - |
+| cobol/ACHPROC.cbl | yes | 0 | - | - |
+| cobol/CHKCLR.cbl | yes | 0 | - | - |
+| cobol/CTRRPT.cbl | yes | 0 | - | - |
+| cobol/DEPTBMP.cbl | yes | 0 | - | - |
+| cobol/DEPTIMSM.cbl | yes | 0 | - | - |
+| cobol/DEPTMQC.cbl | yes | 0 | - | - |
+| cobol/DEPTMQP.cbl | yes | 0 | - | - |
+| cobol/DORMACCT.cbl | yes | 0 | - | - |
+| cobol/EODPROC.cbl | yes | 0 | - | - |
+| cobol/FNDTXFR.cbl | yes | 0 | - | - |
+| cobol/GLRECON.cbl | yes | 0 | - | - |
+| cobol/INTCALC.cbl | yes | 0 | - | - |
+| cobol/LNRECOV.cbl | yes | 0 | - | - |
+| cobol/LOANPMT.cbl | yes | 0 | - | - |
+| cobol/STMTGEN.cbl | yes | 0 | - | - |
+| tests/integration/fixtures/copybook_example/MAINPGM.cbl | yes | 0 | - | - |
+| tests/integration/fixtures/dynamic_call.cbl | yes | 0 | - | - |
+| tests/integration/fixtures/nested_boundaries.cbl | yes | 0 | - | - |
+| tests/integration/fixtures/sql_cursor_example/CUSTPROG.cbl | yes | 0 | - | - |
+| tests/integration/fixtures/thru_boundaries.cbl | yes | 0 | - | - |
+| tests/integration/fixtures/walking_skeleton.cbl | yes | 0 | - | - |
+| examples/custinq/CUSTINQ.cbl | yes | 0 | - | - |
+| examples/invupdt/INVUPDT.cbl | yes | 0 | - | - |
+| examples/nist-cobol85/IC101A.CBL | yes | 0 | - | - |
+| examples/nist-cobol85/IC116M.CBL | yes | 0 | - | - |
+| examples/nist-cobol85/IC117M.CBL | yes | 0 | - | - |
+| examples/nist-cobol85/OBIC1A.CBL | yes | 0 | - | - |
+| examples/ordrproc/ORDRPROC.cbl | yes | 0 | - | - |
+| examples/raterte/RATERTE.cbl | yes | 0 | - | - |
+| examples/real-world/ACCTPRG/ACCTPRG.cbl | yes | 0 | - | - |
+| examples/real-world/DEPTMQC/DEPTMQC.cbl | yes | 0 | - | - |
+| examples/real-world/DEPTMQP/DEPTMQP.cbl | yes | 0 | - | - |
+
+Totals: 34 swept, 34 parsed OK, 34 generate exit 0, 0 exceptions, zero
+refusal codes, zero unmockable-boundary categories. The 2026-07-07
+caveat still applies unchanged: this measures `generate` only, not the
+runtime per-`TESTCASE` refusal taxonomy.
+
 ## 2026-07-08 addendum — the "no new mockymock engine feature" line below was incomplete
 
 This report's clean `generate` result for `ACCTPRG`/`DEPTBMP`/`DEPTIMSM`/

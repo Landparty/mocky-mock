@@ -17,8 +17,10 @@ Corpus swept:
     when it exists.
   - tests/integration/fixtures/*.cbl and its subdirectories (each
     subdirectory's own copybooks/ dir, if present, is used).
-  - examples/**/*.cbl (each program directory's own copybooks/ or
-    copybook/ dir, if present, is used).
+  - examples/**/*.cbl and examples/**/*.CBL (each program directory's own
+    copybooks/ or copybook/ dir, if present, is used; the uppercase
+    extension covers the NIST CCVS85 examples on case-sensitive
+    filesystems).
 
 Usage:
     python scripts/corpus_sweep.py > docs/corpus-sweep-report.md
@@ -117,10 +119,13 @@ def discover_corpus() -> list[tuple[Path, Path | None]]:
         for cbl in sorted(fixtures_dir.rglob("*.cbl")):
             add(cbl)
 
+    # NIST CCVS85 examples use the uppercase .CBL extension; rglob is
+    # case-sensitive on Linux, so both spellings are swept explicitly.
     examples_dir = REPO_ROOT / "examples"
     if examples_dir.is_dir():
-        for cbl in sorted(examples_dir.rglob("*.cbl")):
-            add(cbl)
+        for pattern in ("*.cbl", "*.CBL"):
+            for cbl in sorted(examples_dir.rglob(pattern)):
+                add(cbl)
 
     return entries
 
