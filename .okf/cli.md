@@ -188,3 +188,4 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
 - [runtime](runtime.md)
 - [report](report.md)
 - [dsl](dsl.md)
+- [coverage](coverage.md)

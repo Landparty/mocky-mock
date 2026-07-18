@@ -190,3 +190,5 @@ timing — the driver protocol has no timestamps to derive it from (audit
 
 - [cli](cli.md)
 - [dsl](dsl.md)
+- [coverage](coverage.md) — a separate, Docker-free parsing/formatting module
+  following this one's design (gcov text in, a report model, a console formatter).

@@ -300,3 +300,5 @@ code alone when debugging a timeout report.
   written into the Docker sandbox and compiled.
 - [cli](cli.md) — `setup`/`run` command wiring that drives `ensure_toolchain`,
   `compile_source`, and `run_binary`.
+- [coverage](coverage.md) — `compile_source(..., coverage=True)` and `run_gcov`
+  build on this module's existing Docker toolchain.

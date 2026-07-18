@@ -1,5 +1,37 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-17 (coverage reporting: --coverage/--coverage-out, DEPTIMSM example)
+
+* **New feature**: `mockymock run --coverage` compiles with GnuCOBOL's
+  native `--coverage` flag (builds on gcc's gcov, since `cobc` transpiles
+  COBOL to C) and reports per-line coverage of the instrumented source
+  after the run; `--coverage-out PATH` writes the full report to a file.
+  New `runtime/docker_toolchain.py` `run_gcov` + `GcovResult`; new
+  `report/coverage.py` (`parse_gcov`/`format_coverage_console`); no new
+  Dockerfile/dependency changes (`gcc`/`gcov` already present in the
+  `mockymock-cobc` image). See `docs/2026-07-17-coverage-reporting-design.md`
+  and the new [coverage](coverage.md) OKF concept.
+* **New example**: `examples/real-world/DEPTIMSM/` (IMS MPP deposit
+  transaction, IMS DL/I via `CALL 'CBLTDLI'`) — 20 test cases including
+  one driving the real `0000-MAIN-PROCESS` entry point to `GOBACK`
+  end-to-end, proven against real GnuCOBOL in Docker. First real-world
+  proof this repo's 17-program `legacy-application/cobol/` corpus can go
+  beyond `mockymock generate`'s parse-only sweep to an actual
+  compile-and-run — 3 of 17 corpus programs (`ACCTPRG`, `DEPTMQP`,
+  `DEPTMQC`, now `DEPTIMSM`) are proven end-to-end; the remaining 13 are
+  explicit, named follow-up work, not attempted here.
+* **Coverage numbers are lower than "every branch exercised" would
+  suggest, and that's expected**: `DEPTIMSM`'s 20-case suite hits every
+  real branch (verified by hand while writing it) yet reports 76.30%
+  (692/907) — see the design doc's addendum and the new `coverage.md`
+  concept for why (driver dead-fail branches, terminator-neutralization
+  guard branches, and — the largest source — the splicer's per-boundary-
+  site mock dispatch emitting one `WHEN` branch per test case sharing a
+  mock key, most structurally unreachable from any single case's own
+  `PERFORM` target). `ACCTPRG`'s existing, unmodified suite reports
+  81.82% (459/561) under the same feature, proving it composes with a
+  suite written years before coverage reporting existed.
+
 ## 2026-07-17 (corpus re-sweep back to fully clean: cobolparser VALUE ALL fix pin, corpus col-72 fixes, walking_skeleton fixture fix, .CBL sweep coverage)
 
 * **Pin bumped** `b3e81ed` → `392f8ce` (cobol-parser branch

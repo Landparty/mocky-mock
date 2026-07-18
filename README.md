@@ -145,6 +145,39 @@ only ends the current loop iteration, not the loop itself, so a
 terminator inside a loop body cannot be safely neutralized). Restructure
 to a plain, unconditional, single-shot `PERFORM` chain to avoid this.
 
+## Coverage reporting
+
+`mockymock run --coverage` compiles with GnuCOBOL's own `--coverage`
+flag (GnuCOBOL transpiles COBOL to C, so this builds on gcc's gcov) and,
+after the run, reports the percentage of lines executed plus the exact
+uncovered lines:
+
+```
+mockymock run: coverage: 76.30% lines executed (692/907) in DEPTIMSM.cbl
+mockymock run: coverage: uncovered lines:
+  751:               EXIT PARAGRAPH
+  ...
+```
+
+`--coverage-out PATH` additionally writes the full report to a file.
+Coverage is purely additive: it never changes the pass/fail exit code.
+
+Two things to know before reading a number:
+
+- **Line numbers are against the *instrumented* source** (after mock-body
+  splicing and the generated test-driver code), not the original `.cbl` —
+  the same file `--verbose`/`--keep-sandbox` already expose. Remapping to
+  original line numbers is a known, not-yet-built follow-up.
+- **A suite that exercises every real branch still won't read near
+  100%.** Two structural sources of "uncovered" lines are expected, not a
+  sign of a weak suite: the driver's own `FAIL`/tally-increment lines
+  (dead whenever every check passes), and — the larger one — the splicer
+  emitting one shared dispatch per boundary site with a `WHEN` branch for
+  *every* test case that mocks that key, not only cases whose `PERFORM`
+  target reaches that exact site. See
+  `docs/2026-07-17-coverage-reporting-design.md` for the full writeup and
+  a worked example.
+
 ## Install
 
 mockymock isn't on PyPI, but its `pyproject.toml` declares a full
