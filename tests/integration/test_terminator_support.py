@@ -168,25 +168,29 @@ def test_terminator_inside_a_loop_body_refuses_before_compiling(tmp_path: Path, 
 
 
 @requires_docker
-def test_terminator_via_out_of_line_perform_varying_refuses_via_parse_warning(
+def test_terminator_via_out_of_line_perform_varying_refuses_via_terminator_layout(
     tmp_path: Path, capsys
 ):
-    """Pinning regression for a gap the 2026-07-09 final branch review
-    surfaced: cobolparser's out-of-line PERFORM path does not parse a
-    trailing VARYING clause at all (`PERFORM paragraph-name VARYING var
-    FROM x BY y UNTIL cond`, as opposed to the inline `PERFORM VARYING ...
-    END-PERFORM` block form) -- it is silently dropped, leaving
-    `perform_type` mistagged as "SIMPLE", indistinguishable from a genuine
-    plain PERFORM to `_plain_perform_edges_from`. What actually keeps this
-    shape out of find_terminator_plans today is a wholly unrelated
-    mechanism: cobolparser also emits a parse warning for the dropped
-    clause, and check_whole_program refuses on PARSE_WARNING before the
-    terminator logic ever runs. This test (see also
-    tests/unit/test_refusal.py's unit-level pin) asserts the refusal
-    happens via PARSE_WARNING specifically -- if cobolparser is ever fixed
-    to parse this shape without also fixing perform_type tagging, this
-    becomes a loud test failure instead of a silent terminator-safety
-    regression."""
+    """Regression pin for a gap the 2026-07-09 final branch review
+    surfaced, now resolved upstream: cobolparser's out-of-line PERFORM path
+    (`PERFORM paragraph-name VARYING var FROM x BY y UNTIL cond`, as
+    opposed to the inline `PERFORM VARYING ... END-PERFORM` block form)
+    used to silently drop the trailing VARYING clause, mistagging
+    `perform_type` as "SIMPLE" -- indistinguishable from a genuine plain
+    PERFORM to `_plain_perform_edges_from`. What protected this shape at
+    the time was a wholly unrelated mechanism: cobolparser also emitted a
+    parse warning for the dropped clause, and check_whole_program refused
+    on PARSE_WARNING before the terminator logic ever ran -- not the
+    perform_type guard the mistagging should have defeated. cobolparser
+    now parses this clause correctly (confirmed in
+    tests/unit/test_refusal.py::test_out_of_line_perform_varying_parses_correctly),
+    so this end-to-end test now proves the *intended* mechanism -- the
+    perform_type guard in `_plain_perform_edges_from`, pinned at the unit
+    level in
+    tests/unit/test_terminators.py::test_terminator_reached_only_through_a_varying_loop_body_refuses
+    -- independently refuses this shape via `UNSUPPORTED_TERMINATOR_LAYOUT`
+    against the real GnuCOBOL/Docker toolchain, rather than relying on the
+    old parser bug's accidental PARSE_WARNING safety net."""
     cbl_path = tmp_path / "VARYOUT.cbl"
     cbl_path.write_text(
         "       IDENTIFICATION DIVISION.\n"
@@ -216,8 +220,8 @@ def test_terminator_via_out_of_line_perform_varying_refuses_via_parse_warning(
     out = capsys.readouterr().out
 
     assert exit_code == 1
-    assert "PARSE_WARNING" in out
-    assert "UNSUPPORTED_TERMINATOR_LAYOUT" not in out
+    assert "UNSUPPORTED_TERMINATOR_LAYOUT" in out
+    assert "PARSE_WARNING" not in out
 
 
 CHAIN_PERFORM_SOLE_STATEMENT_CBL = """\
