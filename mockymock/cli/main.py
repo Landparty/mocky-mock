@@ -214,6 +214,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         find_terminator_plans,
     )
     from mockymock.dsl.parser import CutParseError, parse_cut
+    from mockymock.report.coverage import format_coverage_console, parse_gcov
     from mockymock.report.formatters import format_console, format_junit_xml
     from mockymock.report.results import parse_stdout
     from mockymock.runtime import docker_toolchain
@@ -367,7 +368,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         instrumented_path = tmp / source_path.with_suffix(".cbl").name
         instrumented_path.write_text("\n".join(instrumented) + "\n", newline="\n")
 
-        compiled = docker_toolchain.compile_source(instrumented_path)
+        compiled = docker_toolchain.compile_source(
+            instrumented_path, coverage=args.coverage
+        )
         if not compiled.success:
             print("mockymock run: compile failed:")
             print(compiled.stderr)
@@ -377,6 +380,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
         assert compiled.binary_path is not None  # implied by compiled.success
         executed = docker_toolchain.run_binary(compiled.binary_path)
+
+        coverage_text = None
+        if args.coverage:
+            gcov_result = docker_toolchain.run_gcov(instrumented_path)
+            if gcov_result.success:
+                coverage_text = format_coverage_console(
+                    parse_gcov(gcov_result.gcov_text), instrumented_path.name
+                )
+            else:
+                coverage_text = (
+                    f"mockymock run: coverage: {gcov_result.stderr.rstrip()}"
+                )
 
     if args.verbose and not args.keep_sandbox:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -403,6 +418,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         Path(args.junit_xml).write_text(
             format_junit_xml(suite_result, crash_detail=crash_detail)
         )
+
+    if coverage_text is not None:
+        print(coverage_text)
+        if args.coverage_out:
+            Path(args.coverage_out).write_text(coverage_text + "\n")
 
     # A nonzero binary exit is a failed run even when every case that got
     # to print its markers passed (e.g. libcob aborted after the SUMMARY
@@ -474,6 +494,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose",
         action="store_true",
         help="On compile failure, print the path to the instrumented source",
+    )
+    run_parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help=(
+            "Compile with GnuCOBOL's --coverage flag and report per-line "
+            "coverage after the run (gcov-based; reported against the "
+            "instrumented source, not the original .cbl -- see "
+            "docs/2026-07-17-coverage-reporting-design.md)"
+        ),
+    )
+    run_parser.add_argument(
+        "--coverage-out",
+        help="Write the full coverage report (percentage + uncovered lines) to this file",
     )
     run_parser.set_defaults(func=_cmd_run)
 
