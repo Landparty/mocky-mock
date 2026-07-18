@@ -391,26 +391,24 @@ def test_whole_program_check_flags_parse_warnings():
     assert any("INVOKE" in r.message for r in reasons)
 
 
-# Pinning regression for a gap the 2026-07-09 final branch review surfaced:
-# cobolparser's out-of-line PERFORM path (`PERFORM paragraph-name VARYING
-# ...`, as opposed to the inline `PERFORM VARYING ... END-PERFORM` block
-# form) does not parse the trailing VARYING clause at all -- it is silently
-# dropped, leaving `PerformStatement.perform_type` mistagged as "SIMPLE"
-# (verified directly: target_paragraph set, thru_paragraph=None,
-# perform_type=='SIMPLE', indistinguishable from a genuine plain PERFORM to
-# refusal._plain_perform_edges_from). That mistagging is exactly the class
-# of bug _plain_perform_edges_from's perform_type guard (see
-# docs/2026-07-08-goback-stop-run-support-design.md's "Out of scope"
-# section) exists to catch for the out-of-line UNTIL/TIMES forms, which
-# cobolparser DOES tag correctly. What actually protects this specific
-# shape today is a wholly unrelated mechanism: cobolparser also emits an
-# "Unparsed tokens starting at 'VARYING' ... dropped from the AST" warning,
-# which check_whole_program refuses via PARSE_WARNING before
-# find_terminator_plans ever runs. This test pins that the PARSE_WARNING
-# path is what fires -- if a future cobolparser change parses out-of-line
-# VARYING without also fixing perform_type tagging, this becomes a loud
-# test failure (wrong refusal code, or no refusal) instead of a silent
-# terminator-safety regression.
+# Regression pin for a gap the 2026-07-09 final branch review surfaced,
+# now resolved upstream: cobolparser's out-of-line PERFORM path (`PERFORM
+# paragraph-name VARYING ...`, as opposed to the inline `PERFORM VARYING
+# ... END-PERFORM` block form) used to silently drop the trailing VARYING
+# clause, leaving `PerformStatement.perform_type` mistagged as "SIMPLE"
+# (indistinguishable from a genuine plain PERFORM to
+# refusal._plain_perform_edges_from). What actually protected this shape
+# at the time was a wholly unrelated mechanism -- cobolparser also emitted
+# an "Unparsed tokens starting at 'VARYING' ... dropped from the AST"
+# warning, which check_whole_program refused via PARSE_WARNING before
+# find_terminator_plans ever ran -- not the perform_type guard the
+# mistagging should have defeated. cobolparser now parses this clause
+# correctly (perform_type == "VARYING", no warnings), confirmed directly
+# below. The terminator-safety regression test for this shape now lives in
+# tests/unit/test_terminators.py::test_terminator_reached_only_through_a_varying_loop_body_refuses,
+# proving the *intended* perform_type guard excludes it on its own now
+# that the accidental PARSE_WARNING safety net this test used to pin no
+# longer fires for this shape.
 OUT_OF_LINE_PERFORM_VARYING_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. VARYOUT.
@@ -429,10 +427,14 @@ OUT_OF_LINE_PERFORM_VARYING_SOURCE = """\
 """
 
 
-def test_out_of_line_perform_varying_drops_the_clause_and_mistags_perform_type():
-    """Documents the AST-level fact the pinning test below depends on."""
+def test_out_of_line_perform_varying_parses_correctly():
+    """Documents the AST-level fact test_terminators.py's sibling
+    regression test depends on: this shape now parses clean, with
+    perform_type correctly tagged "VARYING" rather than mistagged
+    "SIMPLE"."""
     result = parse_cobol(OUT_OF_LINE_PERFORM_VARYING_SOURCE, filename="varyout.cbl")
     assert result.success, result.errors
+    assert result.warnings == []  # the VARYING clause is no longer dropped
     procedure = result.ast.get_division("PROCEDURE")
     main_para = next(
         p for p in procedure.paragraphs if p.paragraph_name == "0000-MAIN-PROCESS"
@@ -440,19 +442,7 @@ def test_out_of_line_perform_varying_drops_the_clause_and_mistags_perform_type()
     perform = main_para.statements[0]
     assert perform.target_paragraph == "1000-LOOP-BODY"
     assert perform.thru_paragraph is None
-    assert perform.perform_type == "SIMPLE"  # mistagged -- see comment above
-
-
-def test_whole_program_check_flags_out_of_line_perform_varying_via_parse_warning():
-    """The pinning regression itself: this shape must refuse via
-    PARSE_WARNING, since that -- not perform_type -- is what currently
-    keeps it out of find_terminator_plans."""
-    result = parse_cobol(OUT_OF_LINE_PERFORM_VARYING_SOURCE, filename="varyout.cbl")
-    assert result.success, result.errors
-    assert result.warnings  # precondition: the VARYING clause is dropped
-    reasons = check_whole_program(result)
-    assert any(r.code == "PARSE_WARNING" for r in reasons)
-    assert any("VARYING" in r.message for r in reasons)
+    assert perform.perform_type == "VARYING"  # correctly tagged now
 
 
 # Multi-program compilation units parse into ast.contained_programs with a

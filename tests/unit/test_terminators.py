@@ -316,6 +316,46 @@ def test_terminator_reached_only_through_a_loop_body_refuses():
     assert "not via a chain of plain, unconditional" in reasons[0].message
 
 
+LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOOPUNSAFEVARY.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-I                PIC 9(2) VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-LOOP-BODY
+               VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 5.
+
+       1000-LOOP-BODY.
+           STOP RUN.
+"""
+
+
+def test_terminator_reached_only_through_a_varying_loop_body_refuses():
+    """Same hazard as test_terminator_reached_only_through_a_loop_body_refuses
+    above, but for the out-of-line PERFORM ... VARYING form specifically --
+    a distinct cobolparser codepath from UNTIL/TIMES. This shape's VARYING
+    clause used to be silently dropped, mistagging perform_type "SIMPLE"
+    (indistinguishable from a safe plain PERFORM to
+    _plain_perform_edges_from); what protected it then was an unrelated
+    PARSE_WARNING refusal for the dropped clause -- see
+    tests/unit/test_refusal.py's OUT_OF_LINE_PERFORM_VARYING_SOURCE comment.
+    cobolparser now parses this correctly (perform_type == "VARYING", no
+    warnings -- test_refusal.py::test_out_of_line_perform_varying_parses_correctly),
+    so this pins that the *intended* mechanism -- the perform_type guard in
+    _plain_perform_edges_from -- independently still excludes it, rather
+    than relying on the parser bug's accidental safety net."""
+    program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert "not via a chain of plain, unconditional" in reasons[0].message
+
+
 def test_falls_through_true_for_empty_paragraph():
     source = """\
        IDENTIFICATION DIVISION.
