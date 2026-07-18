@@ -1,0 +1,38 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CLAIMSEG.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CLAIM-ID          PIC X(10).
+       01  WS-CLAIM-STATUS      PIC XX VALUE SPACES.
+       01  WS-CLAIM-AMOUNT      PIC 9(7)V99 VALUE 0.
+       01  WS-CLAIM-FOUND       PIC X VALUE "N".
+       01  WS-INSERT-STATUS     PIC XX VALUE SPACES.
+       01  WS-PAYMENT-POSTED    PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           PERFORM 1000-RETRIEVE-CLAIM
+           PERFORM 2000-POST-PAYMENT
+           GOBACK.
+
+       1000-RETRIEVE-CLAIM.
+           MOVE "CLM0000001" TO WS-CLAIM-ID
+           EXEC DLI
+               GU SEGMENT(CLAIM-SEG) INTO(WS-CLAIM-AMOUNT)
+           END-EXEC
+           IF WS-CLAIM-STATUS = SPACES
+               MOVE "Y" TO WS-CLAIM-FOUND
+           ELSE
+               MOVE "N" TO WS-CLAIM-FOUND
+           END-IF.
+
+       2000-POST-PAYMENT.
+           IF WS-CLAIM-FOUND = "Y"
+               EXEC DLI
+                   ISRT SEGMENT(PAYMENT-SEG) FROM(WS-CLAIM-AMOUNT)
+               END-EXEC
+               IF WS-INSERT-STATUS = SPACES
+                   MOVE "Y" TO WS-PAYMENT-POSTED
+               END-IF
+           END-IF.

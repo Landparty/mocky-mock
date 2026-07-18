@@ -1,9 +1,9 @@
 ---
 type: Test Suite
 title: Testing
-description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
+description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-07-10T00:00:00Z
+timestamp: 2026-07-18T00:00:00Z
 ---
 # Overview
 
@@ -87,11 +87,12 @@ just that the happy path returns 0.
 Documented, runnable programs under `examples/` -- these are polished
 end-to-end demos (with READMEs), distinct from the terser
 `tests/integration/fixtures/` corpus, and are also driven by their own
-integration tests. Beyond the four hand-written ones below (INVUPDT,
-ORDRPROC, CUSTINQ, RATERTE), `examples/real-world/` (ACCTPRG, DEPTMQC,
-DEPTMQP) and `examples/nist-cobol85/` (IC101A, IC116M, IC117M, OBIC1A) hold
-additional examples driven from real corpora -- see their own READMEs for
-provenance and what each demonstrates.
+integration tests. Beyond the six hand-written ones below (INVUPDT,
+ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG), `examples/real-world/`
+(ACCTPRG, DEPTIMSM, DEPTMQC, DEPTMQP -- now with its own README) and
+`examples/nist-cobol85/` (IC101A, IC116M, IC117M, OBIC1A) hold additional
+examples driven from real corpora -- see their own READMEs for provenance
+and what each demonstrates.
 
 ## INVUPDT (`examples/invupdt/`)
 
@@ -192,6 +193,32 @@ exist as real subprograms. A fourth test case exercises the `EVALUATE`'s
 `WHEN OTHER` fallback.
 
 Run: `mockymock run examples/raterte/RATERTE.cbl --cut examples/raterte/RATERTE.cut`
+
+## CUSTPROG (`examples/custprog/`)
+
+Elevates `tests/integration/fixtures/sql_cursor_example/` (unchanged
+COBOL/`.cut`, plus a README) into a documented example -- the two DSL
+features it proves had no polished example before this: `MOCK SQL "..."
+ROWS (...)` cursor-fetch sugar (a `FETCH`-loop's rows expressed as data,
+with `SQLCODE` auto-set to 0 per row and 100 once exhausted) and a
+DCLGEN-style `EXEC SQL INCLUDE <member>` (non-`SQLCA`) resolved via
+`--copybook-path` into real WORKING-STORAGE host variables.
+
+Run: `mockymock run examples/custprog/CUSTPROG.cbl --cut examples/custprog/CUSTPROG.cut --copybook-path examples/custprog/copybooks`
+
+## CLAIMSEG (`examples/claimseg/`)
+
+The `MOCK DLI` counterpart to `examples/custinq`'s CICS proof: a raw
+`EXEC DLI GU`/`EXEC DLI ISRT` claim-retrieval-and-payment-insert program
+(as opposed to `examples/real-world/ACCTPRG`'s/`DEPTIMSM`'s `CALL
+'CBLTDLI'` IMS idiom). `MockCategory.DLI` was classified since the v2
+all-boundaries design but, before this example, proven only by unit tests
+-- the same "classified but never proven" gap CICS had before CUSTINQ
+closed it. Also repeats INVUPDT's static-reachability-driven-refusal
+lesson: a test case that skips the `ISRT` branch at runtime still must
+mock it, because it's statically reachable from the `PERFORM` target.
+
+Run: `mockymock run examples/claimseg/CLAIMSEG.cbl --cut examples/claimseg/CLAIMSEG.cut`
 
 # CI (.github/workflows/ci.yml)
 

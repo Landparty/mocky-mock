@@ -1,0 +1,63 @@
+TESTSUITE "CLAIMSEG IMS DL/I claim retrieval and payment insert"
+
+*> EXEC DLI GU/ISRT are boundary statements mockymock splices out
+*> entirely before compilation -- GnuCOBOL never sees a raw EXEC DLI
+*> block, so no IMS DL/I runtime is needed to compile and run this
+*> program. MOCK DLI "<prefix>" prefix-matches the statement's
+*> normalized text, same as MOCK SQL/CICS.
+
+TESTCASE "1000-RETRIEVE-CLAIM finds a claim and captures its amount"
+    MOCK DLI "GU"
+        MOVE 250.00 TO WS-CLAIM-AMOUNT
+        MOVE SPACES TO WS-CLAIM-STATUS
+    END-MOCK
+    PERFORM 1000-RETRIEVE-CLAIM
+    EXPECT WS-CLAIM-FOUND TO BE "Y"
+    EXPECT WS-CLAIM-AMOUNT TO BE 250.00
+    VERIFY DLI "GU" WAS CALLED ONCE
+
+TESTCASE "1000-RETRIEVE-CLAIM flags not-found on a non-space status"
+    MOCK DLI "GU"
+        MOVE "GE" TO WS-CLAIM-STATUS
+    END-MOCK
+    PERFORM 1000-RETRIEVE-CLAIM
+    EXPECT WS-CLAIM-FOUND TO BE "N"
+
+TESTCASE "2000-POST-PAYMENT inserts a payment segment for a found claim"
+    MOVE "Y" TO WS-CLAIM-FOUND
+    MOCK DLI "ISRT"
+        MOVE SPACES TO WS-INSERT-STATUS
+    END-MOCK
+    PERFORM 2000-POST-PAYMENT
+    EXPECT WS-PAYMENT-POSTED TO BE "Y"
+    VERIFY DLI "ISRT" WAS CALLED ONCE
+
+TESTCASE "2000-POST-PAYMENT skips the insert when no claim was found"
+    *> ISRT sits inside an IF, but it is still statically reachable from
+    *> 2000-POST-PAYMENT regardless of which branch runs, so it still
+    *> needs a mock here -- the same static-reachability lesson INVUPDT's
+    *> unreached WRITE demonstrates for file I/O.
+    MOVE "N" TO WS-CLAIM-FOUND
+    MOCK DLI "ISRT"
+        MOVE SPACES TO WS-INSERT-STATUS
+    END-MOCK
+    PERFORM 2000-POST-PAYMENT
+    EXPECT WS-PAYMENT-POSTED TO BE "N"
+    VERIFY DLI "ISRT" WAS PERFORMED NEVER
+
+TESTCASE "0000-MAIN runs end-to-end via its real entry point"
+    *> GOBACK is reached via a plain PERFORM chain (1000/2000),
+    *> neutralized instead of killing the suite -- see
+    *> docs/2026-07-08-goback-stop-run-support-design.md.
+    MOCK DLI "GU"
+        MOVE 400.00 TO WS-CLAIM-AMOUNT
+        MOVE SPACES TO WS-CLAIM-STATUS
+    END-MOCK
+    MOCK DLI "ISRT"
+        MOVE SPACES TO WS-INSERT-STATUS
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-CLAIM-FOUND TO BE "Y"
+    EXPECT WS-PAYMENT-POSTED TO BE "Y"
+    VERIFY DLI "GU" WAS CALLED ONCE
+    VERIFY DLI "ISRT" WAS CALLED ONCE

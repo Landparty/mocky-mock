@@ -1,5 +1,42 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-18 (examples discoverability + two new worked examples: CUSTPROG, CLAIMSEG)
+
+* **Documentation gap closed**: the top-level `README.md` had no `##
+  Examples` section at all -- it showed one inline `.cut` snippet and
+  never linked to any `examples/` subdirectory, so a newcomer reading only
+  the README couldn't discover `invupdt`/`ordrproc`/`custinq`/`raterte`/
+  `real-world`/`nist-cobol85` existed. Added an Examples table. Separately,
+  `examples/real-world/` (ACCTPRG, DEPTIMSM, DEPTMQC, DEPTMQP) had zero
+  READMEs despite [testing](testing.md) and [cli](cli.md) both pointing to
+  "their own READMEs" -- added `examples/real-world/README.md` covering
+  all four, the required `--copybook-path` flag, and a runnable
+  `--coverage` demo against DEPTIMSM (confirmed still reports 76.30%
+  lines executed, 692/907).
+* **New example**: `examples/custprog/` elevates
+  `tests/integration/fixtures/sql_cursor_example/` (COBOL/`.cut` copied
+  unchanged, proven identical output) into a documented example. Closes
+  the gap that `MOCK SQL "..." ROWS (...)` cursor-fetch sugar and
+  DCLGEN-style `EXEC SQL INCLUDE <member>` (non-`SQLCA`, via
+  `--copybook-path`) were each proven only by that one regression fixture,
+  never by a polished `examples/` program.
+* **New example**: `examples/claimseg/` -- a new hand-written program
+  (`CLAIMSEG`, raw `EXEC DLI GU`/`ISRT` claim-retrieval-and-payment-insert)
+  proving `MOCK DLI` end-to-end for the first time. `MockCategory.DLI` has
+  been classified since the v2 all-boundaries design but was previously
+  exercised only by unit tests -- the same "classified but never proven"
+  gap `EXEC CICS` had before `examples/custinq` closed it. 5 test cases,
+  including a static-reachability-driven-refusal case mirroring INVUPDT's
+  unreached-`WRITE` lesson, and a `GOBACK`-neutralization case via the
+  real `0000-MAIN` entry point. Both new examples compiled and ran green
+  against real GnuCOBOL in Docker via the local dev checkout (note: the
+  globally `uv tool install`-ed `mockymock` on `PATH` is a stale build
+  that predates the `ROWS` feature -- don't use it to validate against
+  current source; invoke `mockymock.cli.main.main()` from the checkout,
+  or reinstall, instead).
+* Updated [testing](testing.md)'s worked-examples section and frontmatter
+  description to list CUSTPROG and CLAIMSEG alongside the original four.
+
 ## 2026-07-17 (coverage reporting: --coverage/--coverage-out, DEPTIMSM example)
 
 * **New feature**: `mockymock run --coverage` compiles with GnuCOBOL's

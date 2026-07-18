@@ -145,6 +145,24 @@ only ends the current loop iteration, not the loop itself, so a
 terminator inside a loop body cannot be safely neutralized). Restructure
 to a plain, unconditional, single-shot `PERFORM` chain to avoid this.
 
+## Examples
+
+Worked, runnable programs under `examples/` — each pairs a `.cbl` with a
+`.cut` and its own `README.md` explaining what it demonstrates. Start with
+INVUPDT or ORDRPROC if you're new to the DSL; the rest each add one
+distinctive feature.
+
+| Example | Demonstrates |
+|---------|--------------|
+| [`examples/ordrproc/`](examples/ordrproc/) | The smallest possible teaching example: one static `CALL` |
+| [`examples/invupdt/`](examples/invupdt/) | Every boundary category in one program (file I/O, `EXEC SQL`, MQ via `CALL`, `ACCEPT`), tally-driven EOF, static-reachability-driven refusal |
+| [`examples/custinq/`](examples/custinq/) | `EXEC CICS` (`READ`/`RETURN`), `GOBACK` neutralization |
+| [`examples/claimseg/`](examples/claimseg/) | Raw `EXEC DLI` (`GU`/`ISRT`) |
+| [`examples/raterte/`](examples/raterte/) | Dynamic `CALL` through an identifier (`MOCK CALL WS-PGM-NAME`), one mock covering multiple runtime targets |
+| [`examples/custprog/`](examples/custprog/) | `MOCK SQL ... ROWS` cursor-fetch sugar, DCLGEN-style `EXEC SQL INCLUDE <member>` via `--copybook-path` |
+| [`examples/real-world/`](examples/real-world/) | Four business-flavored programs — IMS DL/I batch, IMS MPP, MQ consumer, MQ producer — plus the `--coverage` worked example |
+| [`examples/nist-cobol85/`](examples/nist-cobol85/) | Static `CALL` against real, unmodified NIST COBOL-85 validation-suite programs |
+
 ## Coverage reporting
 
 `mockymock run --coverage` compiles with GnuCOBOL's own `--coverage`
