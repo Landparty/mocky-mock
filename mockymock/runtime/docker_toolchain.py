@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from mockymock.runtime.compiler import CompileResult
@@ -351,3 +352,58 @@ def run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult:
     return ExecutionResult(
         exit_code=result.returncode, stdout=result.stdout, stderr=stderr
     )
+
+
+@dataclass
+class GcovResult:
+    success: bool
+    gcov_text: str
+    stderr: str
+
+
+def run_gcov(source_path: Path) -> GcovResult:
+    """Run gcov against the .gcda file a --coverage-compiled binary
+    (compile_source(..., coverage=True)) writes once it has executed,
+    returning the resulting <name>.cbl.gcov text -- a per-COBOL-line
+    report `report/coverage.py`'s `parse_gcov` can turn into a
+    CoverageReport.
+
+    The .gcda file is only written by the C runtime's coverage-dump
+    handler on normal process exit; a binary killed by run_binary's
+    timeout SIGKILL never reaches it, so that case is detected up front
+    and reported as a clean, explanatory failure rather than a confusing
+    gcov error about a missing file."""
+    gcda_path = source_path.with_suffix(".gcda")
+    if not gcda_path.exists():
+        return GcovResult(
+            success=False,
+            gcov_text="",
+            stderr=(
+                "mockymock: no coverage data produced (the binary did not "
+                "exit normally, so its coverage-dump handler never ran)\n"
+            ),
+        )
+    container_source = to_container_path(source_path, WORK_ROOT)
+    container_dir = container_source.rsplit("/", 1)[0]
+    try:
+        result = subprocess.run(
+            ["docker", "exec", "-w", container_dir, CONTAINER, "gcov", gcda_path.name],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return GcovResult(
+            success=False, gcov_text="", stderr=f"mockymock: gcov failed: {exc}\n"
+        )
+    if result.returncode != 0:
+        return GcovResult(success=False, gcov_text="", stderr=result.stderr)
+    gcov_path = source_path.parent / (source_path.name + ".gcov")
+    if not gcov_path.exists():
+        return GcovResult(
+            success=False,
+            gcov_text="",
+            stderr=f"mockymock: gcov did not produce {gcov_path.name}\n",
+        )
+    return GcovResult(success=True, gcov_text=gcov_path.read_text(), stderr="")

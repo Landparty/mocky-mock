@@ -612,3 +612,110 @@ def test_run_binary_docker_oserror_maps_to_not_found(tmp_path):
         result = run_binary(binary)
     assert result.exit_code == NOT_FOUND_EXIT_CODE
     assert "docker went away" in result.stderr
+
+
+from mockymock.runtime.docker_toolchain import GcovResult, run_gcov
+
+
+def _work_with_gcda(tmp_path, write_gcda: bool = True):
+    work = tmp_path / "work"
+    sandbox = work / "mockymock-x"
+    sandbox.mkdir(parents=True)
+    source = sandbox / "PROG.cbl"
+    source.write_text("dummy\n")
+    if write_gcda:
+        (sandbox / "PROG.gcda").write_text("")
+    return work, source
+
+
+def test_run_gcov_execs_gcov_with_container_dir_and_gcda_name(tmp_path):
+    work, source = _work_with_gcda(tmp_path)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        (source.parent / "PROG.cbl.gcov").write_text(
+            "        -:    0:Source:PROG.cbl\n"
+            "       1*:    1:DISPLAY 'X'.\n"
+        )
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = run_gcov(source)
+
+    assert calls == [
+        [
+            "docker",
+            "exec",
+            "-w",
+            "/work/mockymock-x",
+            CONTAINER,
+            "gcov",
+            "PROG.gcda",
+        ]
+    ]
+    assert result.success
+    assert "DISPLAY 'X'." in result.gcov_text
+
+
+def test_run_gcov_reports_missing_coverage_data_cleanly(tmp_path):
+    """No .gcda means the binary never exited normally (e.g. a timeout's
+    SIGKILL preempted the gcov atexit dump handler) -- this must be a
+    clean, explanatory failure, not a gcov error about a missing file, and
+    must never call docker exec at all."""
+    work, source = _work_with_gcda(tmp_path, write_gcda=False)
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.subprocess.run") as run_mock,
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = run_gcov(source)
+    run_mock.assert_not_called()
+    assert not result.success
+    assert "did not exit normally" in result.stderr
+
+
+def test_run_gcov_surfaces_gcov_command_failure(tmp_path):
+    work, source = _work_with_gcda(tmp_path)
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run",
+            return_value=_completed([], returncode=1, stderr="gcov: boom"),
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = run_gcov(source)
+    assert not result.success
+    assert "gcov: boom" in result.stderr
+
+
+def test_run_gcov_reports_cleanly_when_gcov_produces_no_output_file(tmp_path):
+    work, source = _work_with_gcda(tmp_path)
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run",
+            return_value=_completed([], returncode=0),  # exits 0 but writes nothing
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = run_gcov(source)
+    assert not result.success
+    assert "PROG.cbl.gcov" in result.stderr
+
+
+def test_run_gcov_wraps_docker_oserror_cleanly(tmp_path):
+    work, source = _work_with_gcda(tmp_path)
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run",
+            side_effect=OSError("docker went away"),
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = run_gcov(source)
+    assert not result.success
+    assert "docker went away" in result.stderr
