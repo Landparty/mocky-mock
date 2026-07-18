@@ -55,3 +55,27 @@ def test_acctprg_fails_when_expectation_is_wrong(tmp_path: Path):
         ]
     )
     assert exit_code == 1
+
+
+@requires_docker
+def test_committed_acctprg_example_reports_coverage(capsys):
+    """--coverage composing with a suite nobody wrote with coverage in
+    mind (ACCTPRG's suite predates this feature entirely) -- not a suite
+    change, a sanity check that the tool works against pre-existing
+    suites, not only purpose-built ones. Verified empirically while
+    writing this test: gcov reports exactly 459/561 executable lines
+    covered (81.82%), unchanged by anything in this task."""
+    exit_code = main(
+        [
+            "run",
+            str(EXAMPLE_DIR / "ACCTPRG.cbl"),
+            "--cut",
+            str(EXAMPLE_DIR / "ACCTPRG.cut"),
+            "--copybook-path",
+            str(EXAMPLE_DIR / "copybooks"),
+            "--coverage",
+        ]
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "coverage: 81.82% lines executed (459/561)" in out
