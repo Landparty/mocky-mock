@@ -393,6 +393,8 @@ def test_compile_source_execs_cobc_with_container_paths(tmp_path):
         [
             "docker",
             "exec",
+            "-w",
+            "/work/mockymock-x",
             CONTAINER,
             "cobc",
             "-free",
@@ -489,6 +491,8 @@ def test_compile_source_with_coverage_passes_flag_to_cobc(tmp_path):
         [
             "docker",
             "exec",
+            "-w",
+            "/work/mockymock-x",
             CONTAINER,
             "cobc",
             "-free",

@@ -254,11 +254,25 @@ def compile_source(source_path: Path, coverage: bool = False) -> CompileResult:
     gcc's gcov machinery (cobc transpiles COBOL to C): the resulting
     binary, once executed, writes a `.gcda` file next to itself that
     `run_gcov` (below) turns into a per-COBOL-line report. See
-    docs/2026-07-17-coverage-reporting-design.md."""
+    docs/2026-07-17-coverage-reporting-design.md.
+
+    `-w container_dir` pins the compiler process's working directory to
+    the source's own per-run sandbox, mirroring `run_binary` below. This
+    matters specifically for `coverage=True`: gcov's machinery bakes the
+    `.gcno` path into the compiled binary based on the *compiler's* CWD
+    at compile time, not the absolute `-x`/`-o` paths passed on the
+    command line. Without `-w`, cobc compiles with the container's
+    default `WORKDIR /work` (see mockymock/runtime/docker/Dockerfile) as
+    its CWD, so the `.gcno`/`.gcda` pair silently lands at the shared
+    `/work` root instead of next to the sandboxed source -- `run_gcov`
+    then never finds it there and always reports "no coverage data
+    produced", even though the binary ran and exited normally.
+    """
     container_source = to_container_path(source_path, WORK_ROOT)
     binary_path = source_path.with_suffix("")
     container_binary = to_container_path(binary_path, WORK_ROOT)
-    cmd = ["docker", "exec", CONTAINER, "cobc", "-free"]
+    container_dir = container_source.rsplit("/", 1)[0]
+    cmd = ["docker", "exec", "-w", container_dir, CONTAINER, "cobc", "-free"]
     if coverage:
         cmd.append("--coverage")
     cmd += ["-x", container_source, "-o", container_binary]
