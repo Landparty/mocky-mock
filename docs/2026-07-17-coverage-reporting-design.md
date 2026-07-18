@@ -1,7 +1,14 @@
 # mockymock — Coverage Reporting Design
 
 Date: 2026-07-17
-Status: approved, not yet implemented
+Status: implemented (docs/superpowers/plans/2026-07-17-coverage-reporting.md).
+Superseded in two small, deliberate ways by that plan and the shipped
+code — both authoritative over this doc: `format_coverage_console` takes
+a `source_name` parameter (not sketched here) and returns its uncovered
+lines as `UncoveredLine` dataclass instances (not the tuple shape
+sketched below); and Testing item 3 (the timeout/no-`.gcda` path)
+shipped as unit-level coverage only, not a Docker-gated integration
+test.
 
 ## Motivation
 
