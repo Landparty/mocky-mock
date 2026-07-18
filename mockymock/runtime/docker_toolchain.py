@@ -243,27 +243,27 @@ def cobc_version() -> str:
     return result.stdout.splitlines()[0] if result.stdout else "unknown"
 
 
-def compile_source(source_path: Path) -> CompileResult:
+def compile_source(source_path: Path, coverage: bool = False) -> CompileResult:
     """Compile a free-form COBOL source file (which must live under
     WORK_ROOT) inside the container. The binary is written next to the
     source with no suffix -- it is a Linux ELF that only ever executes
-    inside the container."""
+    inside the container.
+
+    `coverage=True` adds GnuCOBOL's own `--coverage` flag, which builds on
+    gcc's gcov machinery (cobc transpiles COBOL to C): the resulting
+    binary, once executed, writes a `.gcda` file next to itself that
+    `run_gcov` (below) turns into a per-COBOL-line report. See
+    docs/2026-07-17-coverage-reporting-design.md."""
     container_source = to_container_path(source_path, WORK_ROOT)
     binary_path = source_path.with_suffix("")
     container_binary = to_container_path(binary_path, WORK_ROOT)
+    cmd = ["docker", "exec", CONTAINER, "cobc", "-free"]
+    if coverage:
+        cmd.append("--coverage")
+    cmd += ["-x", container_source, "-o", container_binary]
     try:
         result = subprocess.run(
-            [
-                "docker",
-                "exec",
-                CONTAINER,
-                "cobc",
-                "-free",
-                "-x",
-                container_source,
-                "-o",
-                container_binary,
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=600,

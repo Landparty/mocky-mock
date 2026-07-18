@@ -468,6 +468,65 @@ def test_compile_source_times_out_cleanly_when_docker_exec_hangs(tmp_path):
     assert "timed out" in result.stderr
 
 
+def test_compile_source_with_coverage_passes_flag_to_cobc(tmp_path):
+    work, source = _work(tmp_path)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        (source.parent / "PROG").write_text("")
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = compile_source(source, coverage=True)
+
+    assert calls == [
+        [
+            "docker",
+            "exec",
+            CONTAINER,
+            "cobc",
+            "-free",
+            "--coverage",
+            "-x",
+            "/work/mockymock-x/PROG.cbl",
+            "-o",
+            "/work/mockymock-x/PROG",
+        ]
+    ]
+    assert result.success
+
+
+def test_compile_source_without_coverage_omits_the_flag(tmp_path):
+    """Default behavior (coverage=False, or the parameter omitted entirely)
+    must produce the exact same argv as before this feature existed --
+    this pins that the existing test_compile_source_execs_cobc_with_container_paths
+    behavior is unchanged."""
+    work, source = _work(tmp_path)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        (source.parent / "PROG").write_text("")
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = compile_source(source)
+
+    assert "--coverage" not in calls[0]
+    assert result.success
+
+
 from mockymock.runtime.docker_toolchain import run_binary
 from mockymock.runtime.executor import NOT_FOUND_EXIT_CODE, TIMEOUT_EXIT_CODE
 
