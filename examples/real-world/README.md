@@ -50,7 +50,7 @@ mockymock run examples/real-world/DEPTIMSM/DEPTIMSM.cbl \
     --coverage
 ```
 
-reports `76.30% lines executed (692/907)` even though every real branch —
+reports `75.90% lines executed (693/913)` even though every real branch —
 including the full `0000-MAIN-PROCESS` entry point — is exercised. That
 gap is structural, not a weak suite: it's the driver's own dead
 `FAIL`/tally lines plus the splicer's one-dispatch-per-boundary-site
