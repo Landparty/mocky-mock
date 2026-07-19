@@ -32,7 +32,9 @@ def test_committed_custprog_example_passes():
 def test_custprog_fails_when_expectation_is_wrong(tmp_path: Path):
     cut = (EXAMPLE_DIR / "CUSTPROG.cut").read_text()
     broken = tmp_path / "CUSTPROG.cut"
-    broken.write_text(cut.replace("EXPECT WS-ROW-COUNT TO BE 2", "EXPECT WS-ROW-COUNT TO BE 3"))
+    broken.write_text(
+        cut.replace("EXPECT WS-ROW-COUNT TO BE 2", "EXPECT WS-ROW-COUNT TO BE 3")
+    )
     exit_code = main(
         [
             "run",
