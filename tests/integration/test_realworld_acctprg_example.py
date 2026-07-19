@@ -8,6 +8,7 @@ and the program is genuinely testable end-to-end, compiled and executed
 with GnuCOBOL in the mockymock-cobc container -- not merely non-crashing.
 """
 
+import re
 from pathlib import Path
 
 from mockymock.cli.main import main
@@ -63,8 +64,11 @@ def test_committed_acctprg_example_reports_coverage(capsys):
     mind (ACCTPRG's suite predates this feature entirely) -- not a suite
     change, a sanity check that the tool works against pre-existing
     suites, not only purpose-built ones. Verified empirically while
-    writing this test: gcov reports exactly 459/561 executable lines
-    covered (81.82%), unchanged by anything in this task."""
+    writing this test: gcov originally reported exactly 459/561
+    executable lines covered (81.82%); re-pinned to 460/567 when the
+    driver's FAIL lines gained actual values (5 uncovered
+    MOVE-to-UT-TALLY-EDITED lines, one per VERIFY, plus the field's
+    covered initialization)."""
     exit_code = main(
         [
             "run",
@@ -78,4 +82,9 @@ def test_committed_acctprg_example_reports_coverage(capsys):
     )
     assert exit_code == 0
     out = capsys.readouterr().out
-    assert "coverage: 81.82% lines executed (459/561)" in out
+    # Extract-then-compare (rather than a bare substring check) so a
+    # mismatch's failure message shows the actual coverage line instead
+    # of a page of unrelated captured stdout.
+    match = re.search(r"coverage: \d+\.\d+% lines executed \(\d+/\d+\)", out)
+    assert match is not None, "no coverage line in output"
+    assert match.group(0) == "coverage: 81.13% lines executed (460/567)"

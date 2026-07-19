@@ -19,6 +19,15 @@
   existing substring assertions in tests still match since the new text
   is appended. Verified end-to-end with a local `cobc -free` compile+run
   of a deliberately failing ORDRPROC suite.
+* **Coverage pins re-baselined** ([coverage](coverage.md)): the committed
+  real-world coverage numbers shift because each VERIFY now contributes
+  one (uncovered, fail-path-only) `MOVE <tally> TO UT-TALLY-EDITED` line
+  and the `UT-TALLY-EDITED` declaration's initialization counts as one
+  covered line: ACCTPRG `81.82% (459/561)` → `81.13% (460/567)`
+  (CI-observed), DEPTIMSM `76.30% (692/907)` → `75.90% (693/913)`. The
+  two coverage tests now regex-extract the actual coverage line before
+  comparing, so a future mismatch's failure message shows the actual
+  value instead of a page of captured stdout.
 
 ## 2026-07-18 (examples discoverability + two new worked examples: CUSTPROG, CLAIMSEG)
 
