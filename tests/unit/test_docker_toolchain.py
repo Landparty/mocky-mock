@@ -618,7 +618,7 @@ def test_run_binary_docker_oserror_maps_to_not_found(tmp_path):
     assert "docker went away" in result.stderr
 
 
-from mockymock.runtime.docker_toolchain import GcovResult, run_gcov
+from mockymock.runtime.docker_toolchain import run_gcov
 
 
 def _work_with_gcda(tmp_path, write_gcda: bool = True):
@@ -639,8 +639,7 @@ def test_run_gcov_execs_gcov_with_container_dir_and_gcda_name(tmp_path):
     def fake_run(argv, **kwargs):
         calls.append(argv)
         (source.parent / "PROG.cbl.gcov").write_text(
-            "        -:    0:Source:PROG.cbl\n"
-            "       1*:    1:DISPLAY 'X'.\n"
+            "        -:    0:Source:PROG.cbl\n" "       1*:    1:DISPLAY 'X'.\n"
         )
         return _completed(argv)
 

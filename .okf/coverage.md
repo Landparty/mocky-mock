@@ -66,7 +66,7 @@ branch for *every* test case in the suite that mocks the same key — not
 only cases whose `PERFORM` target reaches that exact site. Those other
 cases' branches are structurally dead there. Confirmed on `DEPTIMSM`'s
 20-case suite (every real branch, including the full `0000-MAIN-PROCESS`
-entry point, exercised): still 76.30% (692/907), the rest being this
+entry point, exercised): still 75.90% (693/913), the rest being this
 cross product, the driver's own dead `FAIL` branches, and the terminator-
 neutralization transform's defensive `IF UT-EARLY-EXIT = "Y" EXIT
 PARAGRAPH END-IF` guards (dead whenever the guarded paragraph has no

@@ -55,6 +55,11 @@ def build_driver(
         "01  UT-FAIL-COUNT          PIC 9(9) VALUE 0.",
         '01  UT-EARLY-EXIT          PIC X VALUE "N".',
     ]
+    # Scratch field for VERIFY failure messages: tallies are PIC 9(9), so
+    # displaying one directly prints "000000003"; moving it through this
+    # Z-edited field and TRIMming yields a plain "3" in the FAIL line.
+    if any(case.verifications for case in suite.test_cases):
+        working_storage.append("01  UT-TALLY-EDITED        PIC Z(8)9.")
     for _, tally in registry.items():
         working_storage.append(f"01  {tally}      PIC 9(9) VALUE 0.")
 
@@ -124,7 +129,8 @@ def _build_testcase_paragraph(
         )
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: expected '
-            f'{expectation.data_name} = {_display_text(expectation.expected_value)}"'
+            f"{expectation.data_name} = {_display_text(expectation.expected_value)}, "
+            f'got " {expectation.data_name}'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")
@@ -139,10 +145,11 @@ def _build_testcase_paragraph(
         tally = registry.name(verification.category, verification.key)
         condition = _verify_condition(verification.expectation, tally)
         lines.append(f"           IF {condition}")
+        lines.append(f"               MOVE {tally} TO UT-TALLY-EDITED")
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY '
             f"{verification.category.keyword} {_display_text(verification.key)} WAS CALLED "
-            f'{verification.expectation}"'
+            f'{verification.expectation}, got " FUNCTION TRIM(UT-TALLY-EDITED)'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")

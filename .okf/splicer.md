@@ -533,6 +533,15 @@ conditions from `_verify_condition`: `ONCE` → `NOT = 1`, `NEVER` → `NOT =
 0`, `AT LEAST ONCE` → `< 1`, `N TIMES` → `NOT = N`), incrementing
 `UT-FAIL-COUNT` and displaying a `CASE NNN FAIL` line on any mismatch.
 
+FAIL lines include the actual value alongside the expectation, mirroring
+the format the MVP plan and `report` tests always assumed: an EXPECT
+mismatch displays `expected <name> = <value>, got ` followed by the data
+item itself (shown in the field's own PIC formatting, e.g. `00090.00`),
+and a VERIFY mismatch appends `, got <n>` where `<n>` is the tally moved
+through the shared `UT-TALLY-EDITED` scratch field (`PIC Z(8)9`, declared
+only when the suite has verifications) and trimmed via `FUNCTION TRIM` so
+the count prints as `3` rather than `000000003`.
+
 `_display_text` doubles embedded `"` characters before embedding a value
 in a generated `DISPLAY "..."` literal — without it, an EXPECT/VERIFY
 value containing a quote (e.g. an expected string `OK"`) would split the
