@@ -70,19 +70,22 @@ jobs:
           # remediation); an unpinned checkout lets a sibling regression
           # silently weaken this repo's guarantees with no signal here.
           # Bump deliberately, with a test run, when adopting new
-          # cobol-parser work. Bumped to cobol-parser's
-          # claude/cobol-parser-mocking-cq2wse tip (on top of the previous
-          # b3e81ed pin) to pull in VALUE ALL <literal> data-item clause
-          # support: previously `VALUE ALL '='` dropped the literal with an
-          # "Unparsed token" content-drop warning, which our PARSE_WARNING
-          # gate correctly refused on legacy-application's EODPROC.cbl
-          # report-separator idiom (see docs/corpus-sweep-report.md,
-          # 2026-07-17 re-sweep: 34/34 clean at this pin). Upstream
-          # regression suite: tests/regression/test_value_all_clause.py.
-          # Local mockymock suite at this pin: tests/unit 461 passed
+          # cobol-parser work. Bumped to cobol-parser main (on top of the
+          # previous 392f8ce pin, which pulled in VALUE ALL <literal>
+          # support -- see tests/regression/test_value_all_clause.py
+          # upstream) to pull in out-of-line PERFORM ... VARYING parsing
+          # (upstream commit 59a016c): at the old pin the VARYING clause
+          # was dropped with an "Unparsed token" content-drop warning and
+          # the PERFORM mistagged SIMPLE, failing
+          # tests/unit/test_refusal.py's
+          # test_out_of_line_perform_varying_parses_correctly, its
+          # test_terminators.py sibling, and test_terminator_support.py's
+          # Docker-gated integration case -- all three were written
+          # against the fixed parser but the pin was never bumped.
+          # Local mockymock suite at this pin: tests/unit 484 passed
           # (Docker-gated tests skip locally; the `mockymock run` tests
           # that need a live daemon run in CI).
-          ref: 392f8ce82b183243b4faba2b0b7a523526e6abf3
+          ref: d70b8a7796ec320da10f9531ea90b79b3e5b4f02
 
       - uses: actions/setup-python@v5
         with:
