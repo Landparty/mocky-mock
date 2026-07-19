@@ -1,5 +1,25 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-19 (FAIL lines now show actual values)
+
+* **Assert-message gap closed** ([splicer](splicer.md), driver): generated
+  `CASE NNN FAIL` lines only restated the expectation (`expected
+  WS-NET-AMOUNT = 85.00`, `VERIFY CALL DISCRATE WAS CALLED 2 TIMES`) with
+  no hint of what actually happened -- even though the MVP plan and
+  `tests/unit/test_report.py` sample outputs always modeled the
+  `..., got <actual>` format. `build_driver` now appends `, got ` plus the
+  data item to EXPECT failures and `, got <n>` to VERIFY failures, where
+  `<n>` is the tally routed through a new shared `UT-TALLY-EDITED`
+  scratch field (`PIC Z(8)9`, declared only when the suite has any
+  VERIFY) and `FUNCTION TRIM`med so counts print as `1`, not
+  `000000001`. EXPECT actuals display in the field's own PIC formatting
+  (e.g. `got 00090.00` for a PIC 9(5)V99) -- the driver cannot know the
+  field's picture, so no reformatting is attempted. Report parsing is
+  unaffected (`_CASE_FAIL_RE` captures the reason as free text) and
+  existing substring assertions in tests still match since the new text
+  is appended. Verified end-to-end with a local `cobc -free` compile+run
+  of a deliberately failing ORDRPROC suite.
+
 ## 2026-07-18 (examples discoverability + two new worked examples: CUSTPROG, CLAIMSEG)
 
 * **Documentation gap closed**: the top-level `README.md` had no `##

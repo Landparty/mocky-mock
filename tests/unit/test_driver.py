@@ -90,9 +90,28 @@ def test_testcase_emits_expect_check():
     assert "ADD 1 TO UT-FAIL-COUNT" in joined
 
 
+def test_expect_failure_message_includes_actual_value():
+    joined = "\n".join(_build().procedure_lines)
+    assert 'expected WS-NET-AMOUNT = 90.00, got " WS-NET-AMOUNT' in joined
+
+
 def test_testcase_emits_verify_check():
     joined = "\n".join(_build().procedure_lines)
     assert "IF UT-DISCRATE-TALLY NOT = 1" in joined
+
+
+def test_verify_failure_message_includes_actual_tally():
+    joined = "\n".join(_build().procedure_lines)
+    assert "MOVE UT-DISCRATE-TALLY TO UT-TALLY-EDITED" in joined
+    assert 'WAS CALLED ONCE, got " FUNCTION TRIM(UT-TALLY-EDITED)' in joined
+
+
+def test_tally_edited_field_declared_only_when_verifications_exist():
+    assert "UT-TALLY-EDITED" in "\n".join(_build().working_storage_lines)
+    suite = _suite()
+    suite.test_cases[0].verifications = []
+    joined = "\n".join(_build(suite).working_storage_lines)
+    assert "UT-TALLY-EDITED" not in joined
 
 
 def test_verify_on_file_op_uses_category_tally():
