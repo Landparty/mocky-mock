@@ -1,0 +1,11 @@
+{
+  "mockymock.copybookPaths": [
+    "examples/custprog/copybooks",
+    "examples/real-world/ACCTPRG/copybooks",
+    "examples/real-world/DEPTIMSM/copybooks",
+    "examples/real-world/DEPTMQC/copybooks",
+    "examples/real-world/DEPTMQP/copybooks",
+    "tests/integration/fixtures/copybook_example/copybooks",
+    "tests/integration/fixtures/sql_cursor_example/copybooks"
+  ]
+}

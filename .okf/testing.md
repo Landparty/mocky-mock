@@ -3,7 +3,7 @@ type: Test Suite
 title: Testing
 description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-07-18T00:00:00Z
+timestamp: 2026-07-18T18:00:00Z
 ---
 # Overview
 
@@ -219,6 +219,25 @@ lesson: a test case that skips the `ISRT` branch at runtime still must
 mock it, because it's statically reachable from the `PERFORM` target.
 
 Run: `mockymock run examples/claimseg/CLAIMSEG.cbl --cut examples/claimseg/CLAIMSEG.cut`
+
+# Gotchas
+
+**A globally `uv tool install`-ed `mockymock` on `PATH` goes stale silently.**
+It is a separate, non-editable install (its own isolated venv) that does
+**not** track local checkout changes -- unlike `python -c "import
+mockymock"`, which resolves the editable sibling checkout. A worked example
+that fails against the `PATH` binary but passes when invoked in-process from
+the checkout (`from mockymock.cli.main import main; main([...])`) is a stale
+global install, not a regression in the example or a bug to chase in the
+engine. Reinstall with `uv tool install --from . mockymock --force` (run
+from the `mocky-mock` repo root) before trusting a "some examples fail"
+result from that binary. This bit both a fresh `examples/custprog/` addition
+(missing the `ROWS` grammar) and, less obviously, `ACCTPRG`/`DEPTIMSM`
+(missing unrelated later fixes) in the same sitting -- see
+[log.md](log.md)'s 2026-07-18 entries. The `../mocky-mock-vscode-extension/`
+extension resolves `mockymock` from `PATH` by default
+(`mockymock.executablePath` empty), so this same staleness silently breaks
+its Test Explorer results too.
 
 # CI (.github/workflows/ci.yml)
 

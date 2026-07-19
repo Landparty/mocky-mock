@@ -36,6 +36,31 @@
   or reinstall, instead).
 * Updated [testing](testing.md)'s worked-examples section and frontmatter
   description to list CUSTPROG and CLAIMSEG alongside the original four.
+* **Stale-global-CLI caveat above, resolved**: verifying the new
+  `mockymock-vscode` extension (`../mocky-mock-vscode-extension/`, built
+  today) drove all 14 `examples/**/*.cut` suites through the exact
+  invocation the extension's Test Controller uses (`mockymock run <cbl>
+  --cut <cut> --junit-xml <path> --copybook-path <dir>...`). Against the
+  globally `uv tool install`-ed `mockymock` on `PATH`, 3 of 14 failed:
+  `CUSTPROG` (the `ROWS` grammar noted above wasn't recognized -- confirms
+  the caveat), plus two more the caveat didn't call out —
+  `ACCTPRG` (spurious `refused (UNMATCHED_MOCK)` on `CLOSE
+  PURGEIN`/`PURGRPT`) and `DEPTIMSM` (1 of 20 cases crashed on the
+  real-entry-point `GOBACK` case). All three passed when invoked in-process
+  from the checkout, confirming the global binary — not the examples or the
+  extension — was stale. Fixed by `uv tool install --from . mockymock
+  --force` (also picked up a `cobolparser` bump, 1.1.0 -> 1.2.0); re-ran
+  all 14 suites against the refreshed `PATH` binary and all pass (58 cases,
+  0 failures, 0 errors). Anyone re-validating the worked examples against a
+  pre-existing `uv tool install` should reinstall first rather than
+  trusting a stale global shim.
+* `mockymock-vscode`'s already-`.vsix`-packaged/installed build (commit
+  `b2432fc`) predated a same-day Windows-specific fix round (`870c9b0`:
+  Docker-not-installed detection under `shell:true`+cmd.exe, argument
+  quoting for paths with spaces, re-verifying the CLI after a `uv tool
+  install`). Rebuilt (`npm run package`) and reinstalled
+  (`code --install-extension --force`) from current HEAD (`93ccec0`) so the
+  installed extension actually has those fixes.
 
 ## 2026-07-17 (coverage reporting: --coverage/--coverage-out, DEPTIMSM example)
 
