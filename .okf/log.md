@@ -1,5 +1,25 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-19 (cobol-parser pin bump: out-of-line PERFORM VARYING)
+
+* **CI pin bumped** (`.github/workflows/ci.yml` + the matching
+  `pyproject.toml` git pin): `392f8ce` → cobol-parser main `d70b8a7`, to
+  pull in out-of-line `PERFORM ... VARYING` parsing (upstream `59a016c`).
+  At the old pin the VARYING clause was dropped with an "Unparsed token"
+  content-drop warning and the PERFORM mistagged `SIMPLE`, failing the
+  three VARYING tests (`test_refusal.py`, `test_terminators.py`, and
+  `test_terminator_support.py`'s Docker-gated case) — they were written
+  against the fixed parser but the pin was never bumped, which is why
+  main's CI went red between runs 74 and 75. Verified at the new pin:
+  tests/unit 484 passed locally against an editable checkout of
+  `d70b8a7`. Debugging note for the next agent: a plain
+  `pip install -e .` (without `--no-deps`) installs the *pyproject-pinned*
+  cobolparser into site-packages, and its package directory shadows the
+  editable sibling checkout even after `pip uninstall cobolparser` — the
+  stale `site-packages/cobolparser/` directory must be deleted by hand.
+  That shadowing initially masqueraded as an upstream parser regression
+  on cobol-parser main; there is none.
+
 ## 2026-07-19 (FAIL lines now show actual values)
 
 * **Assert-message gap closed** ([splicer](splicer.md), driver): generated
