@@ -84,7 +84,7 @@ Two key syntaxes, split by category:
 | Syntax | Categories | Key regex | Example |
 |---|---|---|---|
 | Quoted | `CALL`, `MQ` (sugar), `SQL`, `CICS`, `DLI` | `"[^"]*"` | `MOCK CALL "DISCRATE"`, `MOCK SQL "UPDATE INVENTORY"` |
-| Bare COBOL word | `CALL` (dynamic form), `OPEN`, `CLOSE`, `READ`, `WRITE`, `REWRITE`, `DELETE`, `START`, `UNLOCK`, `ACCEPT` | `[A-Za-z0-9][A-Za-z0-9-]*` | `MOCK OPEN INV-FILE`, `MOCK CALL WS-PGM-NAME` |
+| Bare COBOL word | `CALL` (dynamic form), `OPEN`, `CLOSE`, `READ`, `WRITE`, `REWRITE`, `DELETE`, `START`, `UNLOCK`, `ACCEPT`, `PARAGRAPH`, `SECTION` | `[A-Za-z0-9][A-Za-z0-9-]*` | `MOCK OPEN INV-FILE`, `MOCK CALL WS-PGM-NAME`, `MOCK PARAGRAPH CALC-TOTALS` |
 
 Bare keys are upper-cased by the parser (`m.group("key").upper()`); quoted
 keys are kept exactly as written.
@@ -100,6 +100,7 @@ time (`_resolve_category` in `parser.py`):
 | `SQL`, `CICS`, `DLI` | `SQL`, `CICS`, `DLI` | quoted key, prefix-matches normalized EXEC text |
 | `OPEN`,`CLOSE`,`READ`,`WRITE`,`REWRITE`,`DELETE`,`START`,`UNLOCK` | same | bare key = file/record name |
 | `ACCEPT` | `ACCEPT` | bare key = data-name being accepted into |
+| `PARAGRAPH`, `SECTION` | same | bare key = a PROCEDURE DIVISION paragraph/section name — flow-target mocks, not boundaries; grouped as `FLOW_CATEGORIES` in `model.py` (see [analysis](analysis.md)'s `flow_mocks.py` and [splicer](splicer.md)'s header dispatch) |
 | `CALL` (again) | `MQ` | `MOCK MQ "X"` — pure sugar, becomes a `CALL` directive; MQ is invoked through static `CALL`s, so there is no `MockCategory.MQ` |
 
 `VERIFY` mirrors the same two-syntax split (`_VERIFY_QUOTED_RE` /
@@ -119,7 +120,7 @@ rationale.
 
 | Class | Fields | Notes |
 |---|---|---|
-| `MockCategory` (Enum) | `CALL, DYNCALL, OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START, UNLOCK, SQL, CICS, DLI, ACCEPT` | `.keyword` property maps `DYNCALL → "CALL"`, everything else to its own name |
+| `MockCategory` (Enum) | `CALL, DYNCALL, OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START, UNLOCK, SQL, CICS, DLI, ACCEPT, PARAGRAPH, SECTION` | `.keyword` property maps `DYNCALL → "CALL"`, everything else to its own name |
 | `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS` directive and is mutually exclusive with `body_lines` |
 | `ExpectDirective` | `data_name, expected_value` | one `EXPECT` line |
 | `VerifyDirective` | `category, key, expectation` | `.program_name` same v1-compat alias as `MockDirective` |
@@ -271,8 +272,12 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields and sets
   distinguishes it from static `CALL` purely by whether the key was quoted
   (`bare_key=True` passed into `_resolve_category`). A future editor adding
   a new bare-key category must extend `_BARE_CATS` in `parser.py` **and**
-  add the category to `FILE_OP_CATEGORIES`/handle it explicitly in
-  `_resolve_category`, or it will silently fall through.
+  add the category to `FILE_OP_CATEGORIES`/`FLOW_CATEGORIES`/handle it
+  explicitly in `_resolve_category` and `MockDirective.describe()`, or it
+  will silently fall through (PARAGRAPH/SECTION, added 2026-07-20, ride
+  `MockCategory(cat)` in `_resolve_category` because their enum values
+  equal their keywords, and render bare in `describe()` via
+  `FLOW_CATEGORIES`).
 - **A missing `END-MOCK` still swallows lines until EOF before erroring.**
   The unterminated-body check fires only at end of file (with the opening
   MOCK's line number); everything between the `MOCK` line and EOF —

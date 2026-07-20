@@ -82,6 +82,43 @@ def build_site_dispatch(
     return lines
 
 
+def build_flow_dispatch(
+    plan, suite: MockTestSuite, registry: TallyRegistry
+) -> list[str]:
+    """Replacement for a flow-mocked paragraph/section HEADER line (MOCK
+    PARAGRAPH/SECTION): re-emit the header, dispatch on UT-CURRENT-CASE --
+    each mocking case gets its tally increment plus its mock body; every
+    other case runs the real, relocated body via WHEN OTHER -- then open
+    the relocated real paragraph/section (`plan.real_name`). Only the
+    header line is replaced; the original body lines stay exactly where
+    they were, now belonging to `plan.real_name`, so every other
+    line-number-derived splice inside the body stays valid. Unlike
+    build_site_dispatch, WHEN OTHER is NOT an error trap: an unmocked
+    paragraph/section is ordinary code that must keep running for cases
+    that don't mock it."""
+    suffix = " SECTION" if plan.is_section else ""
+    lines = [
+        f"       {plan.key}{suffix}.",
+        "           EVALUATE UT-CURRENT-CASE",
+    ]
+    for index, case in enumerate(suite.test_cases, start=1):
+        matches = [
+            d for d in case.mocks if d.category is plan.category and d.key == plan.key
+        ]
+        if not matches:
+            continue
+        directive = matches[0]
+        tally_name = registry.name(directive.category, directive.key)
+        lines.append(f'               WHEN "{index:03d}"')
+        lines.append(f"                   ADD 1 TO {tally_name}")
+        lines.extend(f"                   {body}" for body in directive.body_lines)
+    lines.append("               WHEN OTHER")
+    lines.append(f"                   PERFORM {plan.real_name}")
+    lines.append("           END-EVALUATE.")
+    lines.append(f"       {plan.real_name}{suffix}.")
+    return lines
+
+
 def build_exec_trap(kind: str, line: int) -> list[str]:
     """Replacement for an EXEC site no test case mocks. It still has to be
     commented out for the program to compile at all; this trap makes an

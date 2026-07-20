@@ -9,14 +9,18 @@ from enum import Enum
 
 
 class MockCategory(Enum):
-    """Every mockable boundary category. `MOCK MQ` is parsed as CALL (MQ is
-    invoked through static CALL statements), so MQ is not a category here.
-    DYNCALL is never written in .cut files either: `MOCK CALL <bare-word>`
-    parses to it (a dynamic CALL keyed by the identifier it calls through),
-    while `MOCK CALL "<literal>"` stays CALL. Distinct categories keep the
-    two from colliding in every (category, key)-keyed structure (tally
-    registry, declared-VERIFY set) and make cross-matching impossible:
-    a quoted directive can never match a dynamic site or vice versa."""
+    """Every mockable category. Most are external *boundaries*; PARAGRAPH
+    and SECTION are internal *flow targets* -- they mock a whole
+    paragraph's/section's body so a test can isolate its entry point from
+    collaborator paragraphs (and from any boundary statements inside them).
+    `MOCK MQ` is parsed as CALL (MQ is invoked through static CALL
+    statements), so MQ is not a category here. DYNCALL is never written in
+    .cut files either: `MOCK CALL <bare-word>` parses to it (a dynamic CALL
+    keyed by the identifier it calls through), while `MOCK CALL "<literal>"`
+    stays CALL. Distinct categories keep the two from colliding in every
+    (category, key)-keyed structure (tally registry, declared-VERIFY set)
+    and make cross-matching impossible: a quoted directive can never match
+    a dynamic site or vice versa."""
 
     CALL = "CALL"
     DYNCALL = "DYNCALL"
@@ -32,6 +36,8 @@ class MockCategory(Enum):
     CICS = "CICS"
     DLI = "DLI"
     ACCEPT = "ACCEPT"
+    PARAGRAPH = "PARAGRAPH"
+    SECTION = "SECTION"
 
     @property
     def keyword(self) -> str:
@@ -58,6 +64,12 @@ FILE_OP_CATEGORIES = frozenset(
 
 EXEC_CATEGORIES = frozenset({MockCategory.SQL, MockCategory.CICS, MockCategory.DLI})
 
+# Flow-target categories mock a PROCEDURE DIVISION paragraph/section (a
+# bare COBOL name), not a boundary statement -- they never appear as
+# BoundarySite categories; the splicer handles them via header dispatch
+# (see splicer/flow_mocks in docs/2026-07-20-paragraph-section-mocks-design.md).
+FLOW_CATEGORIES = frozenset({MockCategory.PARAGRAPH, MockCategory.SECTION})
+
 
 @dataclass
 class MockDirective:
@@ -79,9 +91,14 @@ class MockDirective:
         """Human-readable form used in refusal messages and codegen traps,
         mirroring the .cut syntax: `CALL "X"`, `CALL WS-PGM` (dynamic),
         `READ INFILE`, `SQL "SELECT"`."""
-        if self.category in FILE_OP_CATEGORIES or self.category in (
-            MockCategory.ACCEPT,
-            MockCategory.DYNCALL,
+        if (
+            self.category in FILE_OP_CATEGORIES
+            or self.category in FLOW_CATEGORIES
+            or self.category
+            in (
+                MockCategory.ACCEPT,
+                MockCategory.DYNCALL,
+            )
         ):
             return f"{self.category.keyword} {self.key}"
         return f'{self.category.keyword} "{self.key}"'

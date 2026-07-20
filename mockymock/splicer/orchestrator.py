@@ -36,12 +36,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from mockymock.analysis.flow_mocks import FlowMockPlan
 from mockymock.analysis.mock_surface import MockSurface
 from mockymock.analysis.refusal import TerminatorPlan, directive_matches_site
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
 from mockymock.splicer.injector import (
     build_chain_check,
     build_exec_trap,
+    build_flow_dispatch,
     build_site_dispatch,
     build_terminator_neutralization,
 )
@@ -57,6 +59,7 @@ def splice_program(
     suite: MockTestSuite,
     registry: TallyRegistry,
     terminator_plans: Sequence[TerminatorPlan] = (),
+    flow_plans: Sequence[FlowMockPlan] = (),
 ) -> list[str]:
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
@@ -157,6 +160,25 @@ def splice_program(
         if last_span_line.rstrip().endswith("."):
             replacement = replacement[:-1] + [replacement[-1] + "."]
         spans.append((start, end, replacement))
+
+    # Flow-mock header splices (MOCK PARAGRAPH/SECTION): replace ONLY the
+    # header line with header + EVALUATE dispatch + relocated real header.
+    # The original body lines never move, so every span computed above (a
+    # boundary dispatch or terminator inside that body) stays valid --
+    # bottom-up application shifts already-applied replacements down as one
+    # block when this lower-line splice grows the file. Deliberately
+    # OUTSIDE the trailing-period propagation the other replacements get:
+    # the header line always ends with "." and the replacement is already
+    # sentence-complete (its own EVALUATE period plus the new header's) --
+    # propagating would emit a doubled period after the real header.
+    for flow_plan in flow_plans:
+        spans.append(
+            (
+                flow_plan.header_line,
+                flow_plan.header_line,
+                build_flow_dispatch(flow_plan, suite, registry),
+            )
+        )
 
     # Chain-check insertion: every intermediate PERFORM statement across
     # every plan, deduped by identity (several plans can share the same

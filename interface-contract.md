@@ -28,7 +28,10 @@ mockymock too.
   Constraints in the implementation plan for why.
 - `cobolparser.CobolProgram.get_division(name: str) -> CobolDivision | None`
 - `cobolparser.models.program.CobolDivision.paragraphs: list[CobolParagraph]`
-  and `._sections: dict[str, CobolSection]` (each section has `.paragraphs`)
+  and `._sections: dict[str, CobolSection]` (each section has `.paragraphs`,
+  `.section_name`, and `.location.line` — the header line the flow-mock
+  splice (`MOCK SECTION`) replaces and `collect_boundaries` treats as a span
+  boundary; like paragraph locations it indexes the NORMALIZED text)
 - `cobolparser.models.program.CobolParagraph.paragraph_name: str`,
   `.statements: list[CobolStatement]`, `.location: SourceLocation`
 - `cobolparser.models.ast_base.SourceLocation.line: int` — refers to lines

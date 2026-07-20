@@ -6,9 +6,12 @@ verbs and ACCEPT). `MOCK MQ "X"` is sugar for `MOCK CALL "X"`. CALL alone
 takes both forms: `MOCK CALL "X"` mocks a static CALL with literal 'X',
 while `MOCK CALL WS-PGM` (bare word) mocks a *dynamic* CALL through the
 identifier WS-PGM (parsed as MockCategory.DYNCALL; MQ stays quoted-only —
-the MQI is invoked through static CALLs by definition). VERIFY mirrors the
-same key syntax; a bare `VERIFY "X"` stays CALL for v1 back-compat, and
-CALLED/PERFORMED are interchangeable. Lines starting with `*>` outside
+the MQI is invoked through static CALLs by definition). `MOCK PARAGRAPH
+<name>` / `MOCK SECTION <name>` (bare COBOL names) mock an internal flow
+target: the named paragraph's/section's body is replaced by the mock body
+whenever it is entered through its own header while this test case runs.
+VERIFY mirrors the same key syntax; a bare `VERIFY "X"` stays CALL for v1
+back-compat, and CALLED/PERFORMED are interchangeable. Lines starting with `*>` outside
 MOCK bodies are comments; inside a body they pass through (they're valid
 free-form COBOL).
 """
@@ -28,7 +31,11 @@ from mockymock.dsl.model import (
 
 _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
 # CALL also appears here: the bare-key form is the dynamic-CALL mock.
-_BARE_CATS = "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
+# PARAGRAPH/SECTION mock an internal flow target (a PROCEDURE DIVISION
+# paragraph or section) rather than an external boundary.
+_BARE_CATS = (
+    "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT" "|PARAGRAPH|SECTION"
+)
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
 _TESTCASE_RE = re.compile(

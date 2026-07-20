@@ -8,12 +8,13 @@ timestamp: 2026-07-10T00:00:00Z
 
 # Overview
 
-Two cooperating modules under `mockymock/analysis/`:
+Cooperating modules under `mockymock/analysis/`:
 
 | Module | Job |
 |--------|-----|
 | `mock_surface.py` | Walk `PROCEDURE DIVISION`, classify every statement that touches an external resource into a `BoundarySite`/`CallSite`. Whole-program, category-generic, no knowledge of any test case. |
 | `refusal.py` | Whole-program checks (parse errors, unresolved COPY, nested EXEC) + per-`MockTestCase` checks (reachability via BFS, directive-to-site matching, fail-closed refusals). |
+| `flow_mocks.py` | Flow-target mocks (`MOCK PARAGRAPH`/`MOCK SECTION`): resolves keys to paragraphs/sections, refuses every entry path the header-dispatch splice can't handle soundly (UNRESOLVED_FLOW_MOCK_TARGET / UNSUPPORTED_FLOW_MOCK_TARGET), and emits `FlowMockPlan`s the splicer consumes — the plan-or-refusal shape `find_terminator_plans` established. `resolved_flow_targets` feeds `check_test_case`/`find_terminator_plans` the per-case `skip_traversal` sets. See docs/2026-07-20-paragraph-section-mocks-design.md. |
 
 ```
 CobolProgram
@@ -36,11 +37,22 @@ refusal.check_linkage_layout()     -> UNSUPPORTED_LINKAGE_LAYOUT (guards splicer
    v
 per MockTestCase:
 refusal.check_test_case(surface, program, case)
-   1. _reachable_paragraphs(program, case.perform_target, case.perform_thru)
-      (BFS over PERFORM + GO TO edges, THRU expansion, section fall-through)
-   2. surface.sites_in(reachable) -> match against case.mocks via directive_matches_site
+   1. _reachable_paragraphs(program, case.perform_target, case.perform_thru,
+      skip_traversal=<this case's resolved MOCK PARAGRAPH/SECTION names>)
+      (BFS over PERFORM + GO TO edges, THRU expansion, section fall-through;
+      a flow-mocked name is recorded as reached but never traversed into --
+      its body is replaced by the mock dispatch for this case, so the
+      boundaries/terminators inside it need no mocks on this case's account)
+   2. surface.sites_in(reachable - mocked_flow_names) -> match against
+      case.mocks via directive_matches_site; a flow directive matches when
+      the BFS reached its key, refuses UNSUPPORTED_FLOW_MOCK_TARGET when it
+      names the case's own PERFORM entry point
    3. emit UNMOCKED_*/AMBIGUOUS_MOCK/UNSUPPORTED_NESTED_MOCK_TARGET/
       UNSUPPORTED_MOCK_TARGET_LAYOUT/UNMATCHED_MOCK/VERIFY_WITHOUT_MOCK/UNMOCKED_CANCEL
+whole-suite (plan-or-refusal, like find_terminator_plans):
+flow_mocks.find_flow_mock_plans(program, suite, lines)
+   -> FlowMockPlan per safe MOCK PARAGRAPH/SECTION key, or
+      UNRESOLVED_FLOW_MOCK_TARGET / UNSUPPORTED_FLOW_MOCK_TARGET
 ```
 
 **2026-07-07 reachability-hole remediation (audit findings 1.1-1.7, 2.1-2.2):**

@@ -164,6 +164,33 @@ its line too, and (EXEC only) the span's text actually contains
 `END-EXEC`. This must run **before** the refusal gate and the splicer look
 at nested sites — it is idempotent.
 
+# Flow-Mock Header Dispatch (2026-07-20, MOCK PARAGRAPH/SECTION)
+
+`injector.build_flow_dispatch(plan, suite, registry)` handles the flow-
+target categories: `orchestrator.splice_program`'s `flow_plans` parameter
+(a `FlowMockPlan` list from `analysis.flow_mocks.find_flow_mock_plans`)
+replaces ONLY the paragraph/section **header line** with: the re-emitted
+header, an `EVALUATE UT-CURRENT-CASE` whose `WHEN` branches are the
+mocking cases (tally increment + mock body) and whose `WHEN OTHER`
+performs the relocated real body, then a `UT-REAL-<n>[-<KEY>]`
+(`SECTION`) header that the original, physically-unmoved body lines now
+belong to. Two invariants worth knowing:
+
+- **Body lines never move**, so every other span-based splice inside the
+  body (boundary dispatch, terminator neutralization, chain checks) stays
+  valid; the bottom-up application order already guarantees the header
+  splice (lower line number) is applied after any body-internal spans.
+- **Flow spans bypass the trailing-period propagation** the other
+  replacement spans get: a header line always ends with `.`, and the
+  replacement is already sentence-complete -- propagation would emit a
+  doubled period after the relocated header.
+
+Unlike `build_site_dispatch`, `WHEN OTHER` is NOT an error trap here: a
+case that doesn't mock the target must run the real code. Soundness
+(target entered exclusively via PERFORM through its own header) is the
+refusal gate's job -- see [analysis](analysis.md) and
+docs/2026-07-20-paragraph-section-mocks-design.md.
+
 # Dispatch and Trap Generation (injector.py)
 
 `build_site_dispatch(site, suite, registry)` builds one `EVALUATE
