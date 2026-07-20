@@ -101,9 +101,17 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
         failures=str(failed_cases),
         errors=str(error_count),
     )
+    # classname carries the suite name on every <testcase>: consumers that
+    # flatten multiple report files into one table (or two suites that share
+    # a case name) need a suite-qualified identity per case, and classname
+    # is the attribute JUnit tooling already treats as that qualifier.
+    suite_classname = _xml_safe(suite.suite_name)
     for result in suite.results:
         testcase_el = SubElement(
-            testsuite_el, "testcase", name=_xml_safe(result.case_name)
+            testsuite_el,
+            "testcase",
+            name=_xml_safe(result.case_name),
+            classname=suite_classname,
         )
         if result.crashed:
             # A crashed case is reported as a single <error>, never also as
@@ -134,7 +142,10 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
                 failure_el.text = safe_reason
     for case_id, reason in suite.orphan_failures:
         orphan_el = SubElement(
-            testsuite_el, "testcase", name=_xml_safe(f"orphan-{case_id}")
+            testsuite_el,
+            "testcase",
+            name=_xml_safe(f"orphan-{case_id}"),
+            classname=suite_classname,
         )
         safe_reason = _xml_safe(reason)
         error_el = SubElement(orphan_el, "error", message=safe_reason)

@@ -163,6 +163,31 @@ distinctive feature.
 | [`examples/real-world/`](examples/real-world/) | Four business-flavored programs — IMS DL/I batch, IMS MPP, MQ consumer, MQ producer — plus the `--coverage` worked example |
 | [`examples/nist-cobol85/`](examples/nist-cobol85/) | Static `CALL` against real, unmodified NIST COBOL-85 validation-suite programs |
 
+## Linting, discovery, and selective runs
+
+Three fast paths that never touch Docker or the toolchain:
+
+```bash
+# Every static refusal check (parse, copybooks, linkage, terminators, per
+# test case), no daemon needed -- editor/pre-commit/CI friendly:
+mockymock lint ORDRPROC.cbl --cut ORDRPROC.cut
+
+# List a .cut file's suite/cases with line numbers and tags:
+mockymock collect --cut ORDRPROC.cut [--json]
+```
+
+And selective execution (`run` still compiles once and runs one binary,
+just with only the selected cases spliced in):
+
+```bash
+mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --case "10% discount reduces net amount correctly"
+mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --tag fast
+```
+
+Tag cases in the DSL with `TESTCASE "name" TAGS "fast" "io"`. For editor
+integrations, `run --json-report PATH` writes a machine-readable report with
+per-case status, `.cut` line numbers, and expected/actual per failure.
+
 ## Coverage reporting
 
 `mockymock run --coverage` compiles with GnuCOBOL's own `--coverage`
@@ -178,14 +203,19 @@ mockymock run: coverage: uncovered lines:
 ```
 
 `--coverage-out PATH` additionally writes the full report to a file.
+`--coverage-json PATH` (implies `--coverage`) writes machine-readable
+coverage **remapped onto the original `.cbl`'s line numbers** — splicer-
+inserted lines are excluded, so it answers "which of my lines ran"; editor
+integrations (the VS Code extension's coverage view) consume this file.
 Coverage is purely additive: it never changes the pass/fail exit code.
 
 Two things to know before reading a number:
 
-- **Line numbers are against the *instrumented* source** (after mock-body
-  splicing and the generated test-driver code), not the original `.cbl` —
-  the same file `--verbose`/`--keep-sandbox` already expose. Remapping to
-  original line numbers is a known, not-yet-built follow-up.
+- **Console line numbers are against the *instrumented* source** (after
+  mock-body splicing and the generated test-driver code), not the original
+  `.cbl` — the same file `--verbose`/`--keep-sandbox` already expose. The
+  `--coverage-json` output is the exception: it carries the remapped
+  original-line view.
 - **A suite that exercises every real branch still won't read near
   100%.** Two structural sources of "uncovered" lines are expected, not a
   sign of a weak suite: the driver's own `FAIL`/tally-increment lines

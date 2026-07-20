@@ -346,3 +346,22 @@ def test_format_console_without_crash_detail_is_unchanged():
     suite = parse_stdout(CRASH_STDOUT)
     output = format_console(suite)
     assert "binary exited" not in output
+
+
+def test_format_junit_xml_carries_suite_name_as_classname_on_every_testcase():
+    """Suite-qualified case identity: consumers that merge multiple report
+    files (or meet two suites sharing a case name) key on classname."""
+    from xml.etree.ElementTree import fromstring
+
+    suite = parse_stdout(
+        "__MOCKYMOCK__ TESTSUITE: my suite\n"
+        "__MOCKYMOCK__ CASE 001 START: a case\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ CASE 007 FAIL: orphaned\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=1\n"
+    )
+    root = fromstring(format_junit_xml(suite))
+    testcases = root.findall("testcase")
+    assert len(testcases) == 2  # the real case + the orphan
+    for testcase in testcases:
+        assert testcase.get("classname") == "my suite"

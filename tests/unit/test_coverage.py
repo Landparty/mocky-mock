@@ -90,3 +90,109 @@ def test_format_coverage_console_omits_uncovered_section_when_fully_covered():
     report = CoverageReport(total_executable=4, total_covered=4, uncovered_lines=[])
     text = format_coverage_console(report, "PROG.cbl")
     assert "uncovered lines" not in text
+
+
+def test_parse_gcov_records_covered_line_numbers():
+    report = parse_gcov(SAMPLE_GCOV)
+    assert report.covered_lines == [4, 6, 7]
+
+
+ORIGINAL_CBL = [
+    "000100 IDENTIFICATION DIVISION.",
+    "000200 PROGRAM-ID. PROG.",
+    "000300* a comment line the normalizer drops",
+    "000400 PROCEDURE DIVISION.",
+    "000500 MAIN-PARA.",
+    '000600     DISPLAY "HELLO"',
+    "000700     PERFORM SUB-PARA",
+    "000800 SUB-PARA.",
+    '000900     DISPLAY "NEVER"',
+]
+
+# What normalize_fixed_format extracts: columns 8-72, comments dropped.
+NORMALIZED = [
+    "IDENTIFICATION DIVISION.",
+    "PROGRAM-ID. PROG.",
+    "PROCEDURE DIVISION.",
+    "MAIN-PARA.",
+    '    DISPLAY "HELLO"',
+    "    PERFORM SUB-PARA",
+    "SUB-PARA.",
+    '    DISPLAY "NEVER"',
+]
+
+# The instrumented source: splicer insertions around otherwise verbatim
+# normalized lines (a working-storage addition and driver paragraphs).
+INSTRUMENTED = [
+    "IDENTIFICATION DIVISION.",
+    "PROGRAM-ID. PROG.",
+    "01  UT-FAIL-COUNT          PIC 9(9) VALUE 0.",
+    "PROCEDURE DIVISION.",
+    "UT-DRIVER-MAIN.",
+    "    PERFORM UT-TESTCASE-001",
+    "    STOP RUN.",
+    "MAIN-PARA.",
+    '    DISPLAY "HELLO"',
+    "    PERFORM SUB-PARA",
+    "SUB-PARA.",
+    '    DISPLAY "NEVER"',
+]
+
+
+def test_map_coverage_to_original_maps_user_lines_only():
+    from mockymock.report.coverage import map_coverage_to_original
+
+    report = CoverageReport(
+        total_executable=5,
+        total_covered=4,
+        # Instrumented lines: 6 (driver PERFORM), 9 (DISPLAY "HELLO"),
+        # 10 (PERFORM SUB-PARA) covered; 12 (DISPLAY "NEVER") uncovered.
+        covered_lines=[6, 9, 10],
+        uncovered_lines=[UncoveredLine(line_number=12, text='DISPLAY "NEVER"')],
+    )
+    mapped = map_coverage_to_original(report, INSTRUMENTED, NORMALIZED, ORIGINAL_CBL)
+    as_dict = {entry.line: entry.covered for entry in mapped}
+    # Original lines 6 and 7 (1-based in ORIGINAL_CBL) ran; line 9 did not.
+    # The driver's own PERFORM (instrumented line 6) maps nowhere.
+    assert as_dict == {6: True, 7: True, 9: False}
+
+
+def test_map_coverage_excludes_unmappable_instrumentation():
+    from mockymock.report.coverage import map_coverage_to_original
+
+    report = CoverageReport(
+        total_executable=1,
+        total_covered=1,
+        covered_lines=[7],  # driver STOP RUN -- instrumentation only
+        uncovered_lines=[],
+    )
+    mapped = map_coverage_to_original(report, INSTRUMENTED, NORMALIZED, ORIGINAL_CBL)
+    assert mapped == []
+
+
+def test_format_coverage_json_shape():
+    import json
+
+    from mockymock.report.coverage import (
+        MappedLineCoverage,
+        format_coverage_json,
+    )
+
+    report = CoverageReport(total_executable=4, total_covered=3)
+    mapped = [
+        MappedLineCoverage(line=6, covered=True),
+        MappedLineCoverage(line=9, covered=False),
+    ]
+    payload = json.loads(
+        format_coverage_json(report, mapped, "PROG.cbl", "PROG-instr.cbl")
+    )
+    assert payload["version"] == 1
+    assert payload["programFile"] == "PROG.cbl"
+    assert payload["instrumented"]["percentage"] == 75.0
+    assert payload["instrumented"]["totalExecutable"] == 4
+    assert payload["original"]["totalExecutable"] == 2
+    assert payload["original"]["totalCovered"] == 1
+    assert payload["original"]["lines"] == [
+        {"line": 6, "covered": True},
+        {"line": 9, "covered": False},
+    ]

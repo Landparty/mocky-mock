@@ -29,7 +29,7 @@ the shared vocabulary between the parser (produces it), the generator
 ```
 TESTSUITE "<name>"
 
-TESTCASE "<name>"
+TESTCASE "<name>" [ TAGS "<tag>" ... ]
     [ MOCK <category> <key>
           <COBOL statement lines, passed through verbatim>
       END-MOCK ]*
@@ -58,6 +58,14 @@ TESTCASE "<name>"
   body they pass straight through as valid free-form COBOL (a mock body can
   legitimately contain a COBOL comment).
 - Blank lines are always skipped.
+- `TAGS "<tag>" ["<tag>" ...]` after the TESTCASE name attaches selection
+  tags (`run --tag`, `collect --json`, the JSON run report). Tags have no
+  runtime semantics; an empty (`""`/blank) tag raises `CutParseError`.
+- The parser records 1-based `.cut` line numbers on the model: `MockTestSuite
+  .line`, `MockTestCase.line`, `ExpectDirective.line`, `VerifyDirective.line`
+  (all default 0 for hand-built models). Editor integrations rely on these
+  for navigation and failure locations — keep them accurate when touching
+  the parse loop.
 
 ## Case rules
 

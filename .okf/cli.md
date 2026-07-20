@@ -1,7 +1,7 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, run) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, generate, run, lint, collect) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
 timestamp: 2026-07-07T00:00:00Z
 ---
@@ -9,8 +9,8 @@ timestamp: 2026-07-07T00:00:00Z
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines three subcommands —
-`setup`, `generate`, `run` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines five subcommands —
+`setup`, `generate`, `run`, `lint`, `collect` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`) are
 deferred into each `_cmd_*` function body rather than imported at module top —
@@ -20,7 +20,9 @@ parser install to resolve.
 ```
 mockymock setup     -> runtime.docker_toolchain only (build image, start container)
 mockymock generate  -> parse -> analysis.mock_surface -> dsl.generator  (no Docker)
-mockymock run       -> parse -> analysis -> dsl.parser -> splicer -> runtime -> report
+mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
+mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
+mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -82,16 +84,39 @@ test cases `run` will later refuse if a case's PERFORM reaches one of these
 sites. Comment in the source explicitly frames this as "so the scaffold is
 never mistaken for complete coverage of the program's outputs."
 
-## `mockymock run <program> --cut PATH [--junit-xml PATH] [--copybook-path DIR ...] [--keep-sandbox] [--verbose]`
+## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH]`
 
 The full pipeline: parse, analyze, refuse-or-splice, compile in Docker, run,
 report. This is the only subcommand requiring the GnuCOBOL container.
+
+Since the lint extraction (docs/2026-07-18-cut-lint-command-design.md), every
+pre-toolchain check (steps 2-10 below) lives in
+`mockymock/cli/checks.py::run_static_checks` and runs **before**
+`ensure_toolchain()` — a bad `.cut`/`.cbl` fails fast with the real problem
+even when Docker is down. `run` and `lint` share this function so they can
+never disagree about what refuses.
 
 Flags beyond the pipeline inputs:
 
 - `--junit-xml PATH` — write `format_junit_xml(...)` there after a run that
   reaches execution (refusals/compile failures exit earlier and write no
-  XML).
+  XML). Each `<testcase>` carries `classname="<suite name>"`.
+- `--json-report PATH` — write `report.json_report`'s machine-readable run
+  report: per-case status (`passed`/`failed`/`crashed`/`not_run`), `.cut`
+  line numbers for cases and failing EXPECT/VERIFY directives,
+  expected/actual split into fields, tags. Built for editor integrations
+  (the VS Code extension).
+- `--case NAME` (repeatable) / `--tag TAG` (repeatable) — run only the named
+  or tagged TESTCASEs (union when both given). Selection happens in
+  `run_static_checks` before any per-case refusal check, so a refused
+  sibling case no longer blocks running a clean one. An unknown name/tag is
+  a static problem listing what is available. The suite still runs as ONE
+  compile + binary — just with only the selected cases spliced in.
+- `--coverage-json PATH` (implies `--coverage`) — write machine-readable
+  coverage remapped onto the ORIGINAL `.cbl`'s line numbers via
+  `report.coverage.map_coverage_to_original` (difflib alignment
+  instrumented -> normalized -> original; splicer-inserted lines are
+  excluded, so it answers "which of MY lines ran").
 - `--keep-sandbox` — never delete the sandbox directory; its path is
   printed at the start of the run for inspection.
 - `--verbose` — on compile failure, print the path to the instrumented
@@ -172,6 +197,26 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
 18. Exit 0 only if `suite_result.all_passed` **and** `executed.exit_code
     == 0` — a nonzero binary exit after the SUMMARY line still fails the
     run.
+
+## `mockymock lint <program> --cut PATH [--copybook-path DIR ...]`
+
+Runs `run_static_checks` and nothing else: every refusal `run` would print,
+with zero Docker dependency. `_cmd_lint` never imports
+`mockymock.runtime.docker_toolchain` (structural guarantee, tested by
+`tests/unit/test_checks.py`). Output: one `mockymock lint: <problem>` line
+per problem plus a `N problem(s) found.` summary, exit 1; or
+`mockymock lint: no problems found.`, exit 0. Built for editors (the VS Code
+extension publishes these as diagnostics), pre-commit hooks, and CI lanes
+without a daemon.
+
+## `mockymock collect --cut PATH [--json]`
+
+Parses the `.cut` file only (no `.cbl`, no Docker) and lists the suite and
+test cases with 1-based line numbers and tags. `--json` emits the
+machine-readable form (`{"version": 1, "cutFile", "suite": {name, line},
+"cases": [{name, line, tags}]}`) the VS Code extension uses for
+authoritative test discovery; a `CutParseError` yields `{"version": 1,
+"error": "..."}` and exit 1.
 
 # Gotchas
 

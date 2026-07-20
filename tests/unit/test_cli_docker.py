@@ -1,6 +1,7 @@
 """CLI behavior around the Docker toolchain, with the toolchain mocked --
 these tests must pass without Docker installed."""
 
+from pathlib import Path
 from unittest import mock
 
 from mockymock.cli.main import main
@@ -33,14 +34,32 @@ def test_setup_fails_loudly_when_docker_unavailable(capsys):
     assert "Docker is required" in capsys.readouterr().out
 
 
-def test_run_fails_loudly_before_parsing_when_docker_unavailable(tmp_path, capsys):
-    """ensure_toolchain runs before any parse work or sandbox creation:
-    just the actionable message. Only the cheap input-existence check
-    precedes it, so the input files must exist here."""
+def test_run_reports_static_problems_without_needing_docker(tmp_path, capsys):
+    """Static checks run BEFORE ensure_toolchain (see the lint design doc):
+    a program with parse errors surfaces its real problem even when Docker
+    is down, instead of a misleading Docker message."""
     program = tmp_path / "PROG.cbl"
     program.write_text("dummy\n")
     cut = tmp_path / "PROG.cut"
     cut.write_text('TESTSUITE "x"\n')
+    with mock.patch(
+        "mockymock.runtime.docker_toolchain.ensure_toolchain",
+        side_effect=DockerNotAvailableError("Docker is required: start Docker Desktop"),
+    ) as ensure:
+        exit_code = main(["run", str(program), "--cut", str(cut)])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "Docker is required" not in out
+    assert "refused" in out
+    ensure.assert_not_called()
+
+
+def test_run_fails_loudly_when_docker_unavailable_and_inputs_clean(capsys):
+    """Once the static checks pass, a Docker-unavailable environment still
+    surfaces the actionable toolchain message before any sandbox work."""
+    example = Path(__file__).resolve().parents[2] / "examples" / "ordrproc"
+    program = example / "ORDRPROC.cbl"
+    cut = example / "ORDRPROC.cut"
     with mock.patch(
         "mockymock.runtime.docker_toolchain.ensure_toolchain",
         side_effect=DockerNotAvailableError("Docker is required: start Docker Desktop"),
@@ -120,7 +139,6 @@ def test_run_parser_accepts_keep_sandbox_and_verbose():
 # the exit-124 timeout hint, and nonzero binary exit codes must all reach the
 # user instead of being silently discarded.
 
-from pathlib import Path
 
 from mockymock.runtime.compiler import CompileResult
 from mockymock.runtime.executor import TIMEOUT_EXIT_CODE, ExecutionResult
@@ -480,3 +498,98 @@ def test_run_coverage_reports_missing_data_without_failing_the_run(tmp_path, cap
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "coverage: mockymock: no coverage data produced" in out
+
+
+# --- --json-report and --case/--tag selection (Docker toolchain mocked) ------
+
+TWO_CASE_CUT = """\
+TESTSUITE "ORDRPROC"
+
+TESTCASE "calls discrate" TAGS "fast"
+    MOCK CALL "DISCRATE"
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    PERFORM PROCESS-ORDER
+    VERIFY "DISCRATE" WAS CALLED ONCE
+
+TESTCASE "second case"
+    MOCK CALL "DISCRATE"
+    END-MOCK
+    PERFORM PROCESS-ORDER
+    VERIFY "DISCRATE" WAS CALLED ONCE
+"""
+
+
+def _run_cli_with_cut(tmp_path, cut_text, executed: ExecutionResult, extra_args=()):
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(cut_text)
+
+    def fake_compile(source_path: Path, coverage: bool = False) -> CompileResult:
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=fake_compile,
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
+        ),
+    ):
+        return main(["run", str(program), "--cut", str(cut), *extra_args])
+
+
+def test_run_writes_json_report_with_lines_and_tags(tmp_path):
+    import json
+
+    report_path = tmp_path / "report.json"
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    exit_code = _run_cli_with_cut(
+        tmp_path,
+        TWO_CASE_CUT,
+        executed,
+        ["--case", "calls discrate", "--json-report", str(report_path)],
+    )
+    assert exit_code == 0
+    payload = json.loads(report_path.read_text())
+    assert payload["suite"]["name"] == "ORDRPROC"
+    assert [case["name"] for case in payload["cases"]] == ["calls discrate"]
+    assert payload["cases"][0]["status"] == "passed"
+    assert payload["cases"][0]["line"] == 3
+    assert payload["cases"][0]["tags"] == ["fast"]
+
+
+def test_run_case_selection_unknown_name_fails_before_docker(tmp_path, capsys):
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(TWO_CASE_CUT)
+    with mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain") as ensure:
+        exit_code = main(["run", str(program), "--cut", str(cut), "--case", "nope"])
+    assert exit_code == 1
+    ensure.assert_not_called()
+    out = capsys.readouterr().out
+    assert "no TESTCASE named 'nope'" in out
+    assert "available:" in out
+
+
+def test_run_tag_selection_runs_only_tagged_cases(tmp_path):
+    import json
+
+    report_path = tmp_path / "report.json"
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    exit_code = _run_cli_with_cut(
+        tmp_path,
+        TWO_CASE_CUT,
+        executed,
+        ["--tag", "fast", "--json-report", str(report_path)],
+    )
+    assert exit_code == 0
+    payload = json.loads(report_path.read_text())
+    assert [case["name"] for case in payload["cases"]] == ["calls discrate"]
