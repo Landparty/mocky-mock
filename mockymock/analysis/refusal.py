@@ -158,6 +158,7 @@ from mockymock.analysis.mock_surface import (
 )
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
+    FLOW_CATEGORIES,
     MockCategory,
     MockDirective,
     MockTestCase,
@@ -536,9 +537,16 @@ def check_test_case(
     program,
     case: MockTestCase,
 ) -> list[RefusalReason]:
+    from mockymock.analysis.flow_mocks import resolved_flow_targets
+
     reasons: list[RefusalReason] = []
+    mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
+    mocked_flow_names = mocked_paragraphs | mocked_sections
     reachable, thru_reasons = _reachable_paragraphs(
-        program, case.perform_target, case.perform_thru
+        program,
+        case.perform_target,
+        case.perform_thru,
+        skip_traversal=mocked_flow_names,
     )
 
     if case.perform_target not in reachable:
@@ -556,7 +564,35 @@ def check_test_case(
     reasons.extend(thru_reasons)
 
     matched_directives: set[int] = set()
-    for site in surface.sites_in(reachable):
+
+    # Flow-target directives (MOCK PARAGRAPH/SECTION) don't match boundary
+    # sites -- they match the paragraph/section itself. Matched when the
+    # reachability BFS hit the name through a PERFORM/GO TO edge (or the
+    # driver's own PERFORM); a directive naming this case's own entry point
+    # refuses -- the dispatch would replace the very code under test.
+    for directive in case.mocks:
+        if directive.category not in FLOW_CATEGORIES:
+            continue
+        if directive.key in (case.perform_target, case.perform_thru):
+            matched_directives.add(id(directive))
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_FLOW_MOCK_TARGET",
+                    message=(
+                        f"MOCK {directive.describe()} names this test "
+                        f"case's own PERFORM entry point -- mocking the "
+                        f"entry point would replace the very code the test "
+                        f"performs; PERFORM a caller of it instead"
+                    ),
+                )
+            )
+        elif directive.key in reachable:
+            matched_directives.add(id(directive))
+
+    # Boundary sites inside a flow-mocked paragraph/section are unreachable
+    # for this case (the dispatch replaces the body), so they need no mocks
+    # of their own -- that is the point of a flow mock.
+    for site in surface.sites_in(reachable - mocked_flow_names):
         if site.category is None:
             if site.label == "CANCEL":
                 # Covered when this case mocks CALL (static: exact key;
@@ -710,16 +746,34 @@ def check_test_case(
             )
 
     for directive in case.mocks:
-        if id(directive) not in matched_directives:
+        if id(directive) in matched_directives:
+            continue
+        if directive.category in FLOW_CATEGORIES:
+            if directive.key not in mocked_flow_names:
+                # Unresolvable name: check_flow_mocks refuses it with the
+                # precise UNRESOLVED_FLOW_MOCK_TARGET reason -- don't bury
+                # that under a generic UNMATCHED_MOCK here.
+                continue
             reasons.append(
                 RefusalReason(
                     code="UNMATCHED_MOCK",
                     message=(
-                        f"MOCK {directive.describe()} does not match any "
-                        f"boundary site reachable from '{case.perform_target}'"
+                        f"MOCK {directive.describe()} is not reachable "
+                        f"from '{case.perform_target}' -- no PERFORM/GO TO "
+                        f"edge on this test case's flow ever enters it"
                     ),
                 )
             )
+            continue
+        reasons.append(
+            RefusalReason(
+                code="UNMATCHED_MOCK",
+                message=(
+                    f"MOCK {directive.describe()} does not match any "
+                    f"boundary site reachable from '{case.perform_target}'"
+                ),
+            )
+        )
 
     declared = {(m.category, m.key) for m in case.mocks}
     for verification in case.verifications:
@@ -817,10 +871,23 @@ def _expand_thru_range(
 
 
 def _reachable_paragraphs(
-    program, start: str, thru: str | None = None
+    program,
+    start: str,
+    thru: str | None = None,
+    skip_traversal: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[set[str], list[RefusalReason]]:
     """Return (reachable paragraph/section names, flow refusals), computed
     in a single BFS pass over PerformStatement and GoStatement edges.
+
+    `skip_traversal` holds paragraph/section names mocked as flow targets
+    (MOCK PARAGRAPH/SECTION) by the test case under analysis: a name in it
+    is still recorded as reached (so the directive counts as matched and
+    UNKNOWN_PARAGRAPH still works), but its body is never traversed -- no
+    statements walked, no section members expanded -- because the mock
+    dispatch replaces that body for this case, making everything inside it
+    (boundary statements, terminators, further PERFORM/GO TO edges)
+    unreachable. Callers that feed the result to `MockSurface.sites_in`
+    must subtract these names first.
 
     A PERFORM ... THRU pushes every paragraph of its source-order range
     (fall-through executes them all); `thru` seeds the BFS with the test
@@ -883,6 +950,11 @@ def _reachable_paragraphs(
     while stack:
         name = stack.pop()
         if name in seen:
+            continue
+        if name in skip_traversal:
+            # Flow-mocked for this case: reached, but its body is replaced
+            # by the mock dispatch -- never walk into it.
+            seen.add(name)
             continue
         if name not in by_name:
             if name in section_members:
@@ -1335,10 +1407,22 @@ def find_terminator_plans(
     reasons: list[RefusalReason] = []
     refused_statement_ids: set[int] = set()
 
+    from mockymock.analysis.flow_mocks import resolved_flow_targets
+
     for case in suite.test_cases:
+        # A terminator inside a paragraph/section this case flow-mocks
+        # (MOCK PARAGRAPH/SECTION) is unreachable for this case -- the mock
+        # dispatch replaces the body -- so it must not demand a plan or a
+        # refusal on this case's account. Other cases still evaluate it.
+        mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
+        mocked_flow_names = mocked_paragraphs | mocked_sections
         reachable, _ = _reachable_paragraphs(
-            program, case.perform_target, case.perform_thru
+            program,
+            case.perform_target,
+            case.perform_thru,
+            skip_traversal=mocked_flow_names,
         )
+        reachable -= mocked_flow_names
         safe_names, chain_performs = _plain_perform_edges_from(
             program, case.perform_target, safe_section_entries
         )

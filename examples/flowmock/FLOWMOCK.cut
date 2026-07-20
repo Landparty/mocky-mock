@@ -1,0 +1,36 @@
+TESTSUITE "flow-target mocks"
+
+*> Mocking a paragraph/section replaces its whole body for this case --
+*> including the CALL inside CALC-TOTALS, which therefore needs no
+*> MOCK CALL of its own here.
+TESTCASE "mocked paragraph and section replace their bodies"
+    MOCK PARAGRAPH CALC-TOTALS
+        MOVE 42 TO WS-TOTAL
+    END-MOCK
+    MOCK SECTION RPT-BLOCK
+        ADD 7 TO WS-TOTAL
+    END-MOCK
+    PERFORM MAIN-PROCESS
+    EXPECT WS-TOTAL TO BE 50
+    VERIFY PARAGRAPH CALC-TOTALS WAS PERFORMED ONCE
+    VERIFY SECTION RPT-BLOCK WAS PERFORMED ONCE
+
+*> With no flow mocks, the real bodies run -- so the CALL boundary must
+*> be mocked, exactly as before this feature existed.
+TESTCASE "real bodies run when not mocked"
+    MOCK CALL "RATECALC"
+        MOVE 0 TO WS-RC
+    END-MOCK
+    PERFORM MAIN-PROCESS
+    EXPECT WS-TOTAL TO BE 306
+
+TESTCASE "mocked section only, real paragraph"
+    MOCK CALL "RATECALC"
+    END-MOCK
+    MOCK SECTION RPT-BLOCK
+        ADD 7 TO WS-TOTAL
+    END-MOCK
+    PERFORM MAIN-PROCESS
+    EXPECT WS-TOTAL TO BE 13
+    VERIFY SECTION RPT-BLOCK WAS CALLED ONCE
+    VERIFY CALL "RATECALC" WAS CALLED ONCE

@@ -98,6 +98,7 @@ def run_static_checks(
     from cobolparser import parse_cobol
     from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
 
+    from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.linkage import linkage_plan
     from mockymock.analysis.mock_surface import analyze
     from mockymock.analysis.refusal import (
@@ -204,13 +205,18 @@ def run_static_checks(
         )
         return out
 
-    # 8. Per-test-case checks, then terminator layout -- accumulated across
-    # all cases rather than short-circuiting, matching `run`'s behavior.
+    # 8. Per-test-case checks, then flow-mock (MOCK PARAGRAPH/SECTION) and
+    # terminator layout -- accumulated across all cases rather than
+    # short-circuiting, matching `run`'s behavior.
     for case in suite.test_cases:
         out.problems.extend(
             f"refused ({r.code}): {r.message}"
             for r in check_test_case(surface, parse_result.ast, case)
         )
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}"
+        for r in check_flow_mocks(parse_result.ast, suite, lines)
+    )
     out.problems.extend(
         f"refused ({r.code}): {r.message}"
         for r in check_terminator_layout(

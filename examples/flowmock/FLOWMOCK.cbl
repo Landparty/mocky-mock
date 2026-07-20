@@ -1,0 +1,19 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FLOWMOCK.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-TOTAL       PIC 9(4) VALUE 0.
+       01  WS-RC          PIC 9(4) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           PERFORM CALC-TOTALS
+           PERFORM RPT-BLOCK
+           ADD 1 TO WS-TOTAL.
+       CALC-TOTALS.
+           CALL "RATECALC" USING WS-RC
+           ADD 5 TO WS-TOTAL.
+       RPT-BLOCK SECTION.
+       RPT-HEADER.
+           ADD 100 TO WS-TOTAL.
+       RPT-BODY.
+           ADD 200 TO WS-TOTAL.

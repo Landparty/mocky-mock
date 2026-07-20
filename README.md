@@ -65,6 +65,24 @@ TESTCASE "totals two records then updates and notifies"
   `MOCK WRITE|REWRITE <record>` take a bare COBOL name (WRITE/REWRITE name
   the record, matching COBOL's own syntax); `MOCK ACCEPT <data-name>` mocks
   console input.
+- `MOCK PARAGRAPH <name>` / `MOCK SECTION <name>` (bare COBOL names) mock
+  an **internal flow target** rather than a boundary: for this test case,
+  entering the named paragraph/section through its own header runs the
+  mock body instead of the real one (other cases still run the real body
+  — the splicer relocates it behind a dispatch, one binary per suite).
+  Everything inside the mocked body — CALLs, file I/O, EXEC blocks,
+  further PERFORMs — becomes unreachable for that case and needs no mocks
+  of its own. `VERIFY PARAGRAPH|SECTION <name> WAS PERFORMED ...` asserts
+  on the tally (`UT-PARAGRAPH-<NAME>-TALLY` / `UT-SECTION-<NAME>-TALLY`),
+  counting one per entry through the header (a looping
+  `PERFORM <name> N TIMES` counts N). Fail-closed refusals
+  (`UNRESOLVED_FLOW_MOCK_TARGET` / `UNSUPPORTED_FLOW_MOCK_TARGET`) reject
+  any target the header-dispatch rewrite cannot handle soundly: a GO TO
+  target anywhere in the program, a paragraph inside a `PERFORM ... THRU`
+  range or inside a SECTION that is itself performed, a target reached by
+  GO-TO fall-through, a header sharing its line with code, or a test
+  case's own PERFORM entry point. See the worked example in
+  `examples/flowmock/`.
 - Every mock gets a tally field (`UT-...-TALLY`, visible to mock bodies —
   handy for driving EOF off the read count) that `VERIFY ... WAS
   CALLED|PERFORMED ONCE | AT LEAST ONCE | NEVER | <n> TIMES` asserts on.
@@ -159,6 +177,7 @@ distinctive feature.
 | [`examples/custinq/`](examples/custinq/) | `EXEC CICS` (`READ`/`RETURN`), `GOBACK` neutralization |
 | [`examples/claimseg/`](examples/claimseg/) | Raw `EXEC DLI` (`GU`/`ISRT`) |
 | [`examples/raterte/`](examples/raterte/) | Dynamic `CALL` through an identifier (`MOCK CALL WS-PGM-NAME`), one mock covering multiple runtime targets |
+| [`examples/flowmock/`](examples/flowmock/) | Internal flow-target mocks (`MOCK PARAGRAPH` / `MOCK SECTION`), boundaries inside a mocked body needing no mocks of their own |
 | [`examples/custprog/`](examples/custprog/) | `MOCK SQL ... ROWS` cursor-fetch sugar, DCLGEN-style `EXEC SQL INCLUDE <member>` via `--copybook-path` |
 | [`examples/real-world/`](examples/real-world/) | Four business-flavored programs — IMS DL/I batch, IMS MPP, MQ consumer, MQ producer — plus the `--coverage` worked example |
 | [`examples/nist-cobol85/`](examples/nist-cobol85/) | Static `CALL` against real, unmodified NIST COBOL-85 validation-suite programs |

@@ -747,3 +747,29 @@
   `ACCTMNT`-based example: a separate cobol-parser bug (task_c5e3b268) drops
   some of `ACCTMNT.cbl`'s own EXEC SQL UPDATE/INSERT statements from the
   AST, causing a different, harder compile failure upstream of this fix.
+
+## 2026-07-20 — Flow-target mocks: `MOCK PARAGRAPH` / `MOCK SECTION`
+
+- **New mock categories PARAGRAPH/SECTION** ([dsl](dsl.md), [analysis](analysis.md),
+  [splicer](splicer.md)): the first non-boundary mocks — they replace an
+  internal paragraph's/section's whole body for the mocking case while
+  every other case still runs the real code. Implemented as a
+  header-line-only splice (`analysis/flow_mocks.py` plans it,
+  `injector.build_flow_dispatch` + `orchestrator.splice_program`'s new
+  `flow_plans` parameter emit it): the header becomes an
+  `EVALUATE UT-CURRENT-CASE` dispatch whose `WHEN OTHER` performs the
+  relocated real body (`UT-REAL-<n>[-<KEY>]`), which keeps every body
+  line at its original line number so all other span-based splices
+  (boundary dispatch, terminator neutralization, chain checks) stay
+  valid. Reachability now takes a `skip_traversal` set so boundaries/
+  terminators inside a mocked body need no mocks for that case. New
+  refusals: UNRESOLVED_FLOW_MOCK_TARGET, UNSUPPORTED_FLOW_MOCK_TARGET
+  (GO TO target, THRU-range membership, GO-TO fall-through, paragraph
+  inside a performed SECTION, shared-line header, own entry point) —
+  fail-closed against every entry path that isn't PERFORM-through-the-
+  header. Verified end-to-end in the container (including
+  `VERIFY PARAGRAPH ... WAS PERFORMED 3 TIMES` under
+  `PERFORM ... 3 TIMES`); see
+  docs/2026-07-20-paragraph-section-mocks-design.md,
+  `examples/flowmock/`, `tests/unit/test_flow_mocks.py`,
+  `tests/integration/test_flow_mock_example.py`.

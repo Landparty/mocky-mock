@@ -198,6 +198,7 @@ def _report_unsupported_boundaries(surface) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_terminator_plans
     from mockymock.cli.checks import run_static_checks
     from mockymock.report.coverage import (
@@ -280,8 +281,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     terminator_plans, _ = find_terminator_plans(
         surface, result.ast, suite, scope_map, lines
     )
+    flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
     lines = splice_program(
-        lines, boundaries, surface, suite, registry, terminator_plans
+        lines, boundaries, surface, suite, registry, terminator_plans, flow_plans
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
