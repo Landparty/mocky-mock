@@ -198,46 +198,58 @@ def _report_unsupported_boundaries(surface) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    from cobolparser import parse_cobol
-    from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
-
-    from mockymock.analysis.linkage import linkage_plan
-    from mockymock.analysis.mock_surface import analyze
-    from mockymock.analysis.refusal import (
-        check_expansion_warnings,
-        check_linkage_layout,
-        check_nested_exec,
-        check_terminator_layout,
-        check_test_case,
-        check_unresolved_copybooks,
-        check_whole_program,
-        find_terminator_plans,
+    from mockymock.analysis.refusal import find_terminator_plans
+    from mockymock.cli.checks import run_static_checks
+    from mockymock.report.coverage import (
+        format_coverage_console,
+        format_coverage_json,
+        map_coverage_to_original,
+        parse_gcov,
     )
-    from mockymock.dsl.parser import CutParseError, parse_cut
-    from mockymock.report.coverage import format_coverage_console, parse_gcov
     from mockymock.report.formatters import format_console, format_junit_xml
+    from mockymock.report.json_report import build_json_report, format_json_report
     from mockymock.report.results import parse_stdout
     from mockymock.runtime import docker_toolchain
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.splicer.driver import build_driver
-    from mockymock.splicer.linkage import extra_reset_lines, neutralize
+    from mockymock.splicer.linkage import extra_reset_lines
     from mockymock.splicer.naming import TallyRegistry
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
-    from mockymock.splicer.source_map import (
-        annotate_nested_sites,
-        collect_boundaries,
-        collect_scope_map,
-    )
+    from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import transform_data_division_exec
 
-    # Input existence is the one check that runs even before the toolchain
-    # comes up: ensure_toolchain can spend minutes building the image, and
-    # a typo'd path must not pay that cost (or traceback afterwards).
+    # Input existence is the one check that runs even before anything else:
+    # a typo'd path must fail in milliseconds with no traceback.
     source_path = Path(args.program)
     cut_path = Path(args.cut)
     if not _check_input_files("mockymock run", source_path, cut_path):
+        return 1
+
+    # Asking for the coverage JSON is asking for coverage.
+    if args.coverage_json:
+        args.coverage = True
+
+    # Static checks run BEFORE the toolchain comes up (see the lint design
+    # doc): a bad .cut/.cbl fails fast with the real problem regardless of
+    # Docker state, instead of paying a multi-minute image build (or a
+    # misleading "Docker not available" error) first.
+    checked = run_static_checks(
+        source_path,
+        cut_path,
+        args.copybook_path,
+        case_names=args.case,
+        tag_names=args.tag,
+    )
+    if checked.linkage is not None:
+        _print_linkage_neutralization("run", checked.linkage, applied=True)
+    if checked.problems:
+        for problem in checked.problems:
+            if problem.startswith("  "):
+                print(problem)  # indented parse-error detail lines
+            else:
+                print(f"mockymock run: {problem}")
         return 1
 
     try:
@@ -246,92 +258,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"mockymock run: {exc}")
         return 1
 
-    raw_source = source_path.read_text()
-    if args.copybook_path:
-        expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
-        expansion_reasons = check_expansion_warnings(expansion)
-        for reason in expansion_reasons:
-            print(f"mockymock run: refused ({reason.code}): {reason.message}")
-        if expansion_reasons:
-            return 1
-        raw_source = expansion.expanded_source
-    result = parse_cobol(raw_source, filename=source_path.name)
-
-    whole_program_reasons = check_whole_program(result)
-    for reason in whole_program_reasons:
-        print(f"mockymock run: refused ({reason.code}): {reason.message}")
-    # The PARSE_ERROR reason only carries a count; print the individual
-    # errors too (matching `generate`) so a non-parsing program is
-    # diagnosable from the CLI output alone.
-    if not result.success:
-        for error in result.errors:
-            print(f"  {error}")
-    if whole_program_reasons:
-        return 1
-
-    copybook_reasons = check_unresolved_copybooks(raw_source)
-    for reason in copybook_reasons:
-        print(f"mockymock run: refused ({reason.code}): {reason.message}")
-    if copybook_reasons:
-        return 1
-
-    try:
-        suite = parse_cut(cut_path.read_text())
-    except CutParseError as exc:
-        print(f"mockymock run: invalid .cut file {cut_path}: {exc}")
-        return 1
-    surface = analyze(result.ast)
-
-    normalized = normalize_fixed_format(raw_source.splitlines())
-    lines = normalized.splitlines()
-
-    linkage_reasons = check_linkage_layout(result.ast, lines)
-    for reason in linkage_reasons:
-        print(f"mockymock run: refused ({reason.code}): {reason.message}")
-    if linkage_reasons:
-        return 1
-
-    # Comment-only, so it never shifts any line number the rest of this
-    # pipeline derives from `result.ast`'s locations -- safe to apply here,
-    # before every other line-based step. `plan` is None (no-op) for an
-    # ordinary CALL-only program.
-    linkage = linkage_plan(result.ast)
-    if linkage is not None:
-        _print_linkage_neutralization("run", linkage, applied=True)
-        lines = neutralize(lines, result.ast, linkage)
-
-    # Nested-site spliceability must be annotated before any refusal check
-    # or splice looks at nested sites (unannotated nested sites refuse).
-    scope_map = collect_scope_map(result.ast, lines)
-    annotate_nested_sites(surface, scope_map, lines)
-
-    nested_exec_reasons = check_nested_exec(surface)
-    for reason in nested_exec_reasons:
-        print(f"mockymock run: refused ({reason.code}): {reason.message}")
-    if nested_exec_reasons:
-        return 1
-
-    # Pre-check the DATA DIVISION EXEC SQL blocks before doing any work; the
-    # actual transform runs after splicing (it inserts/removes lines, which
-    # would shift the AST-derived statement spans the splicer relies on).
-    _, data_exec_reasons = transform_data_division_exec(
-        lines, copybook_paths=args.copybook_path
-    )
-    for reason in data_exec_reasons:
-        print(f"mockymock run: refused ({reason.code}): {reason.message}")
-    if data_exec_reasons:
-        return 1
-
-    refused = False
-    for case in suite.test_cases:
-        for reason in check_test_case(surface, result.ast, case):
-            print(f"mockymock run: refused ({reason.code}): {reason.message}")
-            refused = True
-    for reason in check_terminator_layout(surface, result.ast, suite, scope_map, lines):
-        print(f"mockymock run: refused ({reason.code}): {reason.message}")
-        refused = True
-    if refused:
-        return 1
+    result = checked.parse_result
+    suite = checked.suite
+    surface = checked.surface
+    lines = checked.lines
+    scope_map = checked.scope_map
+    linkage = checked.linkage
+    assert (
+        result is not None
+        and suite is not None
+        and surface is not None
+        and lines is not None
+        and scope_map is not None
+    )  # implied by checked.problems being empty
+    # The original-coverage remap needs the pre-splice normalized lines;
+    # splice_program mutates nothing, but keep our own copy to be explicit.
+    normalized_lines = list(lines)
 
     boundaries = collect_boundaries(result.ast)
     registry = TallyRegistry(suite)
@@ -382,11 +324,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         executed = docker_toolchain.run_binary(compiled.binary_path)
 
         coverage_text = None
+        coverage_report = None
         if args.coverage:
             gcov_result = docker_toolchain.run_gcov(instrumented_path)
             if gcov_result.success:
+                coverage_report = parse_gcov(gcov_result.gcov_text)
                 coverage_text = format_coverage_console(
-                    parse_gcov(gcov_result.gcov_text), instrumented_path.name
+                    coverage_report, instrumented_path.name
                 )
             else:
                 coverage_text = (
@@ -419,6 +363,41 @@ def _cmd_run(args: argparse.Namespace) -> int:
             format_junit_xml(suite_result, crash_detail=crash_detail)
         )
 
+    if args.json_report:
+        Path(args.json_report).write_text(
+            format_json_report(
+                build_json_report(
+                    suite_result,
+                    cut_suite=suite,
+                    crash_detail=crash_detail,
+                    cut_file=str(cut_path),
+                    program_file=str(source_path),
+                )
+            )
+        )
+
+    if args.coverage_json:
+        if coverage_report is None:
+            print(
+                "mockymock run: coverage JSON not written -- the gcov pass "
+                "failed (see the coverage error above)"
+            )
+        else:
+            mapped = map_coverage_to_original(
+                coverage_report,
+                instrumented,
+                normalized_lines,
+                source_path.read_text().splitlines(),
+            )
+            Path(args.coverage_json).write_text(
+                format_coverage_json(
+                    coverage_report,
+                    mapped,
+                    program_file=str(source_path),
+                    instrumented_name=instrumented_path.name,
+                )
+            )
+
     if coverage_text is not None:
         print(coverage_text)
         if args.coverage_out:
@@ -428,6 +407,72 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # to print its markers passed (e.g. libcob aborted after the SUMMARY
     # line, or the timeout killed a straggler).
     return 0 if suite_result.all_passed and executed.exit_code == 0 else 1
+
+
+def _cmd_lint(args: argparse.Namespace) -> int:
+    """Run every static refusal check with zero Docker dependency. This
+    function must never import mockymock.runtime.docker_toolchain -- that
+    structural guarantee (not just documentation) is what makes `lint`
+    usable in editors, pre-commit hooks, and CI lanes with no daemon."""
+    from mockymock.cli.checks import run_static_checks
+
+    source_path = Path(args.program)
+    cut_path = Path(args.cut)
+    if not _check_input_files("mockymock lint", source_path, cut_path):
+        return 1
+    result = run_static_checks(source_path, cut_path, args.copybook_path)
+    for problem in result.problems:
+        if problem.startswith("  "):
+            print(problem)
+        else:
+            print(f"mockymock lint: {problem}")
+    if result.problems:
+        problem_count = sum(1 for p in result.problems if not p.startswith("  "))
+        print(f"mockymock lint: {problem_count} problem(s) found.")
+        return 1
+    print("mockymock lint: no problems found.")
+    return 0
+
+
+def _cmd_collect(args: argparse.Namespace) -> int:
+    """Authoritative test discovery for editor integrations: parse a .cut
+    file (no .cbl, no Docker, no toolchain) and report its suite/cases with
+    line numbers and tags. --json emits the machine-readable form the VS
+    Code extension consumes; the default is a human-readable listing."""
+    import json
+
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    cut_path = Path(args.cut)
+    if not _check_input_files("mockymock collect", cut_path):
+        return 1
+    try:
+        suite = parse_cut(cut_path.read_text())
+    except CutParseError as exc:
+        if args.json:
+            print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
+        else:
+            print(f"mockymock collect: invalid .cut file {cut_path}: {exc}")
+        return 1
+
+    if args.json:
+        payload = {
+            "version": 1,
+            "cutFile": str(cut_path),
+            "suite": {"name": suite.name, "line": suite.line},
+            "cases": [
+                {"name": case.name, "line": case.line, "tags": list(case.tags)}
+                for case in suite.test_cases
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"TESTSUITE {suite.name!r} (line {suite.line})")
+        for case in suite.test_cases:
+            tag_note = f"  [tags: {', '.join(case.tags)}]" if case.tags else ""
+            print(f"  TESTCASE {case.name!r} (line {case.line}){tag_note}")
+        print(f"{len(suite.test_cases)} test case(s)")
+    return 0
 
 
 def _insert_driver(lines: list[str], artifact) -> list[str]:
@@ -481,6 +526,30 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--cut", required=True)
     run_parser.add_argument("--junit-xml")
     run_parser.add_argument(
+        "--json-report",
+        help=(
+            "Write a machine-readable run report (per-case status, .cut "
+            "line numbers, expected/actual per failure, tags) to this file"
+        ),
+    )
+    run_parser.add_argument(
+        "--case",
+        action="append",
+        help=(
+            "Run only the TESTCASE with this exact name (repeatable; "
+            "combines with --tag as a union). The suite still runs as one "
+            "compile + binary, just with only the selected cases spliced in"
+        ),
+    )
+    run_parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Run only TESTCASEs carrying this tag (repeatable; combines "
+            "with --case as a union)"
+        ),
+    )
+    run_parser.add_argument(
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
@@ -509,7 +578,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--coverage-out",
         help="Write the full coverage report (percentage + uncovered lines) to this file",
     )
+    run_parser.add_argument(
+        "--coverage-json",
+        help=(
+            "Write machine-readable coverage to this file, remapped onto "
+            "the ORIGINAL .cbl's line numbers (splicer-inserted lines "
+            "excluded). Implies --coverage"
+        ),
+    )
     run_parser.set_defaults(func=_cmd_run)
+
+    lint_parser = subparsers.add_parser(
+        "lint",
+        help=(
+            "Run every static refusal check on a program + .cut pair "
+            "without Docker (fast, editor/CI friendly)"
+        ),
+    )
+    lint_parser.add_argument("program")
+    lint_parser.add_argument("--cut", required=True)
+    lint_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    lint_parser.set_defaults(func=_cmd_lint)
+
+    collect_parser = subparsers.add_parser(
+        "collect",
+        help=(
+            "List a .cut file's suite and test cases (names, line numbers, "
+            "tags) without running anything"
+        ),
+    )
+    collect_parser.add_argument("--cut", required=True)
+    collect_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human listing",
+    )
+    collect_parser.set_defaults(func=_cmd_collect)
 
     return parser
 

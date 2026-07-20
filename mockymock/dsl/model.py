@@ -91,6 +91,9 @@ class MockDirective:
 class ExpectDirective:
     data_name: str
     expected_value: str
+    line: int = 0
+    """1-based .cut line of the EXPECT statement (0 when built outside the
+    parser, e.g. hand-assembled in tests)."""
 
 
 @dataclass
@@ -98,6 +101,9 @@ class VerifyDirective:
     category: MockCategory
     key: str
     expectation: str  # "ONCE", "AT LEAST ONCE", "NEVER", or "<n> TIMES"
+    line: int = 0
+    """1-based .cut line of the VERIFY statement (0 when built outside the
+    parser)."""
 
     @property
     def program_name(self) -> str:
@@ -114,12 +120,21 @@ class MockTestCase:
     perform_thru: str | None = None  # PERFORM <target> THRU <perform_thru>
     expectations: list[ExpectDirective] = field(default_factory=list)
     verifications: list[VerifyDirective] = field(default_factory=list)
+    line: int = 0
+    """1-based .cut line of the TESTCASE header (0 when built outside the
+    parser)."""
+    tags: list[str] = field(default_factory=list)
+    """Tags from `TESTCASE "..." TAGS "a" "b"`, in declaration order.
+    Selection (`run --tag`) and reporting only -- no runtime semantics."""
 
 
 @dataclass
 class MockTestSuite:
     name: str
     test_cases: list[MockTestCase] = field(default_factory=list)
+    line: int = 0
+    """1-based .cut line of the TESTSUITE header (0 when built outside the
+    parser)."""
 
     def all_mock_keys(self) -> list[tuple[MockCategory, str]]:
         """Every distinct (category, key) mocked anywhere in the suite, in

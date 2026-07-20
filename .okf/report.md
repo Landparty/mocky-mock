@@ -107,6 +107,20 @@ Do not re-hardcode that hypothesis into the message: it was previously
 shown even for timeouts and aborts whose stderr evidence had been
 discarded (audit 2026-07-07, findings 4.2/5.1).
 
+## JSON run report (`report/json_report.py`)
+
+`build_json_report(suite_result, cut_suite=None, crash_detail=None,
+cut_file=None, program_file=None)` -> dict; `format_json_report(dict)` ->
+str. Written by `run --json-report`. Adds what the XML cannot carry: per-case
+`.cut` line numbers and tags (from the parsed `MockTestSuite`), per-failure
+attribution (`kind` expect/verify/unknown, the failing directive's `.cut`
+line, `expected`/`actual` split into fields — recovered by re-matching the
+driver's failure-reason strings against the model, splitting on the LAST
+`", got "`), and a synthesized `"not_run"` entry for every selected case the
+binary never printed a START marker for. `format_junit_xml` additionally
+stamps `classname="<suite name>"` on every `<testcase>` (suite-qualified
+identity for consumers that merge reports or meet duplicate case names).
+
 # Gotchas
 
 **`failures` count mismatch between console and JUnit output (formatters.py):**

@@ -47,6 +47,21 @@ class CoverageReport:
     def percentage(self) -> float: ...  # 100.0 when total_executable == 0
 ```
 
+## Original-source remapping (`map_coverage_to_original`)
+
+`CoverageReport.covered_lines` (instrumented line numbers with nonzero hits)
+plus `map_coverage_to_original(report, instrumented_lines, normalized_lines,
+original_lines)` -> `list[MappedLineCoverage(line, covered)]` remap coverage
+onto the ORIGINAL `.cbl`. Two difflib.SequenceMatcher alignments compose:
+instrumented -> normalized (splicer keeps untouched lines verbatim and in
+order) and normalized -> original (via a fixed-format column-8-72/comment-
+drop extraction mirroring `normalize_fixed_format`). Unmappable lines
+(driver/dispatch insertions, boundary-line replacements, continuation
+merges) are excluded — deliberately: the view answers "which of MY lines
+ran". `format_coverage_json` serializes both the instrumented totals and
+this mapped view; `run --coverage-json PATH` (implies `--coverage`) writes
+it.
+
 # Gotchas
 
 **Coverage is against the instrumented source, not the original `.cbl`

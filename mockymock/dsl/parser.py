@@ -31,7 +31,10 @@ _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
 _BARE_CATS = "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
-_TESTCASE_RE = re.compile(r'^TESTCASE\s+"(?P<name>[^"]*)"$')
+_TESTCASE_RE = re.compile(
+    r'^TESTCASE\s+"(?P<name>[^"]*)"(?:\s+TAGS\s+(?P<tags>"[^"]*"(?:\s+"[^"]*")*))?$'
+)
+_TAG_RE = re.compile(r'"([^"]*)"')
 _MOCK_QUOTED_RE = re.compile(
     rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"(?:\s+(?P<rows>ROWS))?$'
 )
@@ -192,11 +195,18 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"exactly one TESTSUITE -- concatenated files would "
                     f"silently run only the last suite"
                 )
-            suite = MockTestSuite(name=m.group("name"))
+            suite = MockTestSuite(name=m.group("name"), line=line_no)
         elif (m := _TESTCASE_RE.match(line)) is not None:
             if suite is None:
                 raise CutParseError(f"line {line_no}: TESTCASE before TESTSUITE")
-            case = MockTestCase(name=m.group("name"))
+            tags = _TAG_RE.findall(m.group("tags") or "")
+            for tag in tags:
+                if not tag.strip():
+                    raise CutParseError(
+                        f"line {line_no}: empty tag in TAGS list -- every "
+                        f"tag must be a non-blank quoted word"
+                    )
+            case = MockTestCase(name=m.group("name"), line=line_no, tags=tags)
             suite.test_cases.append(case)
             mock_lines = {}
         elif (m := _MOCK_QUOTED_RE.match(line)) is not None:
@@ -261,7 +271,9 @@ def parse_cut(text: str) -> MockTestSuite:
                 raise CutParseError(f"line {line_no}: EXPECT outside TESTCASE")
             case.expectations.append(
                 ExpectDirective(
-                    data_name=m.group("name"), expected_value=m.group("value")
+                    data_name=m.group("name"),
+                    expected_value=m.group("value"),
+                    line=line_no,
                 )
             )
         elif (m := _VERIFY_QUOTED_RE.match(line)) is not None:
@@ -273,6 +285,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     category=_resolve_category(m.group("cat")),
                     key=m.group("key"),
                     expectation=m.group("expectation"),
+                    line=line_no,
                 )
             )
         elif (m := _VERIFY_BARE_RE.match(line)) is not None:
@@ -284,6 +297,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     category=_resolve_category(m.group("cat"), bare_key=True),
                     key=m.group("key").upper(),
                     expectation=m.group("expectation"),
+                    line=line_no,
                 )
             )
         else:

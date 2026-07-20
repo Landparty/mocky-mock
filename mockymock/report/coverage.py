@@ -25,6 +25,8 @@ case's own PERFORM target)."""
 
 from __future__ import annotations
 
+import difflib
+import json
 from dataclasses import dataclass, field
 
 
@@ -39,6 +41,11 @@ class CoverageReport:
     total_executable: int
     total_covered: int
     uncovered_lines: list[UncoveredLine] = field(default_factory=list)
+    covered_lines: list[int] = field(default_factory=list)
+    """Instrumented-source line numbers with a nonzero hit count, in file
+    order -- the complement of `uncovered_lines` within the executable set.
+    Needed by the original-source remapping and the JSON formatter; the
+    console formatter only ever reports the uncovered side."""
 
     @property
     def percentage(self) -> float:
@@ -51,6 +58,7 @@ def parse_gcov(gcov_text: str) -> CoverageReport:
     total_executable = 0
     total_covered = 0
     uncovered: list[UncoveredLine] = []
+    covered: list[int] = []
     for raw_line in gcov_text.splitlines():
         parts = raw_line.split(":", 2)
         if len(parts) != 3:
@@ -77,13 +85,143 @@ def parse_gcov(gcov_text: str) -> CoverageReport:
         total_executable += 1
         if count > 0:
             total_covered += 1
+            covered.append(line_number)
         else:
             uncovered.append(UncoveredLine(line_number=line_number, text=text))
     return CoverageReport(
         total_executable=total_executable,
         total_covered=total_covered,
         uncovered_lines=uncovered,
+        covered_lines=covered,
     )
+
+
+@dataclass
+class MappedLineCoverage:
+    """Coverage for one line of the ORIGINAL .cbl file (1-based)."""
+
+    line: int
+    covered: bool
+
+
+def _matching_index_map(a: list[str], b: list[str]) -> dict[int, int]:
+    """0-based index map b -> a over the lines the two sequences share, via
+    difflib's matching blocks. Unlike a greedy forward scan, this never lets
+    an inserted line (driver code, mock dispatch) that happens to equal a
+    LATER source line (an `END-IF`, say) steal the match and orphan
+    everything in between -- SequenceMatcher optimizes for the longest
+    contiguous runs, and instrumentation insertions sit between long
+    verbatim runs of the source they were spliced into."""
+    matcher = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+    mapping: dict[int, int] = {}
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            mapping[block.b + offset] = block.a + offset
+    return mapping
+
+
+def _extract_fixed_format(original_lines: list[str]) -> list[tuple[int, str]]:
+    """(1-based original line number, columns 8-72 content) for every
+    non-comment line, mirroring what `normalize_fixed_format` extracts so
+    the two sides align on equal strings. Comment lines (`*`/`/` in column
+    7) are dropped exactly as the normalizer drops them; continuation
+    merges are NOT replicated -- a merged line simply won't find an equal
+    partner and stays unmapped, which fails safe (that line just carries no
+    coverage) rather than mismapping."""
+    extracted: list[tuple[int, str]] = []
+    for line_no, raw in enumerate(original_lines, start=1):
+        indicator = raw[6] if len(raw) > 6 else " "
+        if indicator in ("*", "/"):
+            continue
+        extracted.append((line_no, raw[7:72].rstrip()))
+    return extracted
+
+
+def map_coverage_to_original(
+    report: CoverageReport,
+    instrumented_lines: list[str],
+    normalized_lines: list[str],
+    original_lines: list[str],
+) -> list[MappedLineCoverage]:
+    """Remap instrumented-source coverage onto original .cbl line numbers.
+
+    Two alignments compose: instrumented -> normalized (the splicer inserts
+    dispatch/driver lines but keeps untouched source lines verbatim and in
+    order), then normalized -> original (fixed-format extraction drops
+    comments/sequence columns but keeps content). Lines with no mapping --
+    the splicer's own instrumentation, mock-dispatch replacements of
+    original boundary lines, continuation merges -- are excluded, so the
+    result covers exactly the user's own executable lines. That exclusion
+    is the point: v1 deliberately reported against the instrumented source
+    (see module docstring); this view answers "which of MY lines ran"."""
+    normalized_stripped = [line.rstrip() for line in normalized_lines]
+    instrumented_stripped = [line.rstrip() for line in instrumented_lines]
+    inst_to_norm = _matching_index_map(normalized_stripped, instrumented_stripped)
+
+    extracted = _extract_fixed_format(original_lines)
+    norm_to_orig = _matching_index_map(
+        [content for _, content in extracted], normalized_stripped
+    )
+
+    def to_original(instrumented_line: int) -> int | None:
+        norm_index = inst_to_norm.get(instrumented_line - 1)
+        if norm_index is None:
+            return None
+        extracted_index = norm_to_orig.get(norm_index)
+        if extracted_index is None:
+            return None
+        return extracted[extracted_index][0]
+
+    mapped: dict[int, bool] = {}
+    for line_number in report.covered_lines:
+        original = to_original(line_number)
+        if original is not None:
+            mapped[original] = True
+    for uncovered in report.uncovered_lines:
+        original = to_original(uncovered.line_number)
+        if original is not None:
+            # A covered verdict wins if both ever map to one original line
+            # (can only happen via a continuation merge that slipped both
+            # halves through): claiming "uncovered" for executed code is
+            # the misleading direction.
+            mapped.setdefault(original, False)
+    return [
+        MappedLineCoverage(line=line, covered=covered)
+        for line, covered in sorted(mapped.items())
+    ]
+
+
+COVERAGE_JSON_VERSION = 1
+
+
+def format_coverage_json(
+    report: CoverageReport,
+    mapped: list[MappedLineCoverage],
+    program_file: str,
+    instrumented_name: str,
+) -> str:
+    """Machine-readable coverage for editor integrations: the instrumented
+    totals (same numbers the console formatter prints) plus the per-line
+    original-file view produced by `map_coverage_to_original`."""
+    mapped_covered = sum(1 for entry in mapped if entry.covered)
+    payload = {
+        "version": COVERAGE_JSON_VERSION,
+        "programFile": program_file,
+        "instrumented": {
+            "sourceName": instrumented_name,
+            "percentage": round(report.percentage, 2),
+            "totalExecutable": report.total_executable,
+            "totalCovered": report.total_covered,
+        },
+        "original": {
+            "totalExecutable": len(mapped),
+            "totalCovered": mapped_covered,
+            "lines": [
+                {"line": entry.line, "covered": entry.covered} for entry in mapped
+            ],
+        },
+    }
+    return json.dumps(payload, indent=2) + "\n"
 
 
 def format_coverage_console(report: CoverageReport, source_name: str) -> str:
