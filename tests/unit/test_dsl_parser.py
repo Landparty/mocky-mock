@@ -347,6 +347,54 @@ def test_provider_row_values_preserve_commas_inside_quotes():
     assert len(suite.test_cases) == 1
 
 
+def test_provider_row_trailing_comma_missing_value_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER StateNames\n"
+        "    HEADER Abbreviation, Name\n"
+        '    ROW "AZ",\n'
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r"line 4: ROW value for column 'Name' in PROVIDER 'StateNames' "
+        r"is blank",
+    ):
+        parse_cut(text)
+
+
+def test_provider_row_bare_blank_value_between_commas_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER Triple\n"
+        "    HEADER A, B, C\n"
+        '    ROW "x", , "z"\n'
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r"line 4: ROW value for column 'B' in PROVIDER 'Triple' is blank",
+    ):
+        parse_cut(text)
+
+
+def test_provider_row_quoted_empty_string_value_is_accepted():
+    # A quoted "" is a deliberate empty COBOL literal. It is distinguishable
+    # from a missing/blank entry because the quote characters survive
+    # .strip() -- only the missing/blank form (nothing at all between the
+    # commas) is fail-closed rejected; a quoted "" is accepted and
+    # substitutes as the literal two-character string.
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER StateNames\n"
+        "    HEADER Abbreviation, Name\n"
+        '    ROW "AZ", ""\n'
+        'TESTCASE "c" USING PROVIDER StateNames\n'
+        "    MOVE {Name} TO WS-NAME\n"
+        "    PERFORM MAIN\n"
+    )
+    suite = parse_cut(text)
+    assert suite.test_cases[0].setup_moves == [('""', "WS-NAME")]
+
+
 # --- PROVIDER parameterized test cases: binding & expansion ------------------
 
 PROVIDER_CUT = """\
