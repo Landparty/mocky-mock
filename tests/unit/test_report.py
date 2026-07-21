@@ -365,3 +365,59 @@ def test_format_junit_xml_carries_suite_name_as_classname_on_every_testcase():
     assert len(testcases) == 2  # the real case + the orphan
     for testcase in testcases:
         assert testcase.get("classname") == "my suite"
+
+
+# --- execution trace (docs/2026-07-21-debug-trace-design.md) ---------------
+
+
+def test_parse_stdout_records_mock_hits_in_firing_order():
+    stdout = "\n".join(
+        [
+            "__MOCKYMOCK__ TESTSUITE: S",
+            "__MOCKYMOCK__ CASE 001 START: posts a credit",
+            "__MOCKYMOCK__ MOCK: CALL 'CUSTLOOK'",
+            "__MOCKYMOCK__ MOCK: READ ACCT-FILE",
+            "__MOCKYMOCK__ CASE 001 END",
+            "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0",
+        ]
+    )
+
+    suite = parse_stdout(stdout)
+
+    assert suite.results[0].mock_hits == ["CALL 'CUSTLOOK'", "READ ACCT-FILE"]
+
+
+def test_parse_stdout_attributes_mock_hits_to_their_own_case():
+    """Markers land between the driver's CASE START/END lines, which is what
+    makes per-case attribution free."""
+    stdout = "\n".join(
+        [
+            "__MOCKYMOCK__ TESTSUITE: S",
+            "__MOCKYMOCK__ CASE 001 START: first",
+            "__MOCKYMOCK__ MOCK: CALL 'A'",
+            "__MOCKYMOCK__ CASE 001 END",
+            "__MOCKYMOCK__ CASE 002 START: second",
+            "__MOCKYMOCK__ MOCK: CALL 'B'",
+            "__MOCKYMOCK__ CASE 002 END",
+            "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=0",
+        ]
+    )
+
+    suite = parse_stdout(stdout)
+
+    assert suite.results[0].mock_hits == ["CALL 'A'"]
+    assert suite.results[1].mock_hits == ["CALL 'B'"]
+
+
+def test_parse_stdout_has_empty_mock_hits_for_a_normal_run():
+    suite = parse_stdout(
+        "\n".join(
+            [
+                "__MOCKYMOCK__ TESTSUITE: S",
+                "__MOCKYMOCK__ CASE 001 START: only",
+                "__MOCKYMOCK__ CASE 001 END",
+                "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0",
+            ]
+        )
+    )
+    assert suite.results[0].mock_hits == []

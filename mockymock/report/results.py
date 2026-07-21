@@ -9,6 +9,10 @@ _TESTSUITE_RE = re.compile(r"^__MOCKYMOCK__ TESTSUITE: (?P<name>.+)$")
 _CASE_START_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) START: (?P<name>.+)$")
 _CASE_FAIL_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) FAIL: (?P<reason>.+)$")
 _CASE_END_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) END$")
+# Emitted only in trace mode, by the splicer's mock dispatch blocks. Carries
+# no case id: it is attributed to the case whose START most recently
+# printed, which is exactly where the driver places it.
+_MOCK_RE = re.compile(r"^__MOCKYMOCK__ MOCK: (?P<label>.+)$")
 _SUMMARY_RE = re.compile(
     r"^__MOCKYMOCK__ SUMMARY: RUN=(?P<run>\d+) FAILURES=(?P<failures>\d+)$"
 )
@@ -20,6 +24,8 @@ class TestResult:
     case_name: str
     failure_reasons: list[str] = field(default_factory=list)
     ended: bool = False
+    #: Mock labels in firing order. Only populated by a --trace run.
+    mock_hits: list[str] = field(default_factory=list)
 
     @property
     def crashed(self) -> bool:
@@ -64,6 +70,9 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
                 target.failure_reasons.append(m.group("reason"))
             else:
                 suite.orphan_failures.append((m.group("id"), m.group("reason")))
+        elif (m := _MOCK_RE.match(line)) is not None:
+            if suite.results:
+                suite.results[-1].mock_hits.append(m.group("label"))
         elif (m := _SUMMARY_RE.match(line)) is not None:
             suite.tests_run = int(m.group("run"))
             suite.failures = int(m.group("failures"))
