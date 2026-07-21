@@ -206,3 +206,59 @@ def test_dispatch_splices_rows_block_using_resolved_tally_name():
     assert 'MOVE "SMITH" TO EMP-NAME' in joined
     assert "WHEN OTHER" in joined
     assert "MOVE 100 TO SQLCODE" in joined
+
+
+def test_default_success_status_injected_when_file_declares_a_status_field():
+    case = MockTestCase(name="c")
+    case.mocks.append(MockDirective(MockCategory.OPEN, "INFILE"))
+    suite = MockTestSuite(name="S", test_cases=[case])
+    site = _site(category=MockCategory.OPEN, label="OPEN", keys=("INFILE",))
+    lines = build_site_dispatch(
+        site, suite, TallyRegistry(suite), {"INFILE": "WS-INFILE-STATUS"}
+    )
+    assert 'MOVE "00" TO WS-INFILE-STATUS' in "\n".join(lines)
+
+
+def test_explicit_file_status_follows_the_default():
+    case = MockTestCase(name="c")
+    directive = MockDirective(MockCategory.OPEN, "INFILE")
+    directive.file_status = "35"
+    case.mocks.append(directive)
+    suite = MockTestSuite(name="S", test_cases=[case])
+    site = _site(category=MockCategory.OPEN, label="OPEN", keys=("INFILE",))
+    lines = build_site_dispatch(
+        site, suite, TallyRegistry(suite), {"INFILE": "WS-INFILE-STATUS"}
+    )
+    default_idx = next(
+        i for i, l in enumerate(lines) if 'MOVE "00" TO WS-INFILE-STATUS' in l
+    )
+    override_idx = next(
+        i for i, l in enumerate(lines) if 'MOVE "35" TO WS-INFILE-STATUS' in l
+    )
+    assert override_idx == default_idx + 1
+
+
+def test_no_status_move_when_file_has_no_declared_field():
+    case = MockTestCase(name="c")
+    case.mocks.append(MockDirective(MockCategory.OPEN, "INFILE"))
+    suite = MockTestSuite(name="S", test_cases=[case])
+    site = _site(category=MockCategory.OPEN, label="OPEN", keys=("INFILE",))
+    lines = build_site_dispatch(site, suite, TallyRegistry(suite), {})
+    assert "STATUS" not in "\n".join(lines)
+
+
+def test_no_status_move_for_a_category_outside_file_status_categories():
+    case = MockTestCase(name="c")
+    case.mocks.append(MockDirective(MockCategory.WRITE, "OUTREC"))
+    suite = MockTestSuite(name="S", test_cases=[case])
+    site = _site(category=MockCategory.WRITE, label="WRITE", keys=("OUTREC",))
+    lines = build_site_dispatch(
+        site, suite, TallyRegistry(suite), {"OUTREC": "WS-OUTREC-STATUS"}
+    )
+    assert "STATUS" not in "\n".join(lines)
+
+
+def test_omitting_file_status_fields_keeps_todays_exact_output():
+    lines_with_none = _dispatch(_suite())
+    lines_with_empty = build_site_dispatch(_site(), _suite(), TallyRegistry(_suite()), {})
+    assert lines_with_none == lines_with_empty

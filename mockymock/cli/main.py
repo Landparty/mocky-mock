@@ -283,7 +283,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
     lines = splice_program(
-        lines, boundaries, surface, suite, registry, terminator_plans, flow_plans
+        lines,
+        boundaries,
+        surface,
+        suite,
+        registry,
+        terminator_plans,
+        flow_plans,
+        checked.file_status_fields,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
