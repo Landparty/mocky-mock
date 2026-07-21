@@ -1,5 +1,27 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-21 — PROVIDER blocks fail closed on stray statements
+
+- **Bug fix** ([dsl](dsl.md)): `dsl/parser.py` never reset the current
+  `TESTCASE`/`BEFORE-*` state when a `PROVIDER` block opened, and only
+  `TESTCASE`/`PROVIDER`/EOF closed it. A statement placed between/after
+  `ROW` lines while a `PROVIDER` was open silently attached to whichever
+  `TESTCASE`/`BEFORE-*` block was open *before* the `PROVIDER`, with any
+  `{Placeholder}` left unsubstituted -- and a `BEFORE-EACH`/`BEFORE-ALL`
+  appearing after an intervening `END-BEFORE` would still leak `ROW` lines
+  into the earlier `PROVIDER`. Fixed fail-closed: opening `PROVIDER` now
+  clears `case`/`mock_target`, and while a `PROVIDER` is open only
+  `HEADER`/`ROW`/blank/`*>` lines are accepted -- everything else
+  (`MOVE`/`PERFORM`/`EXPECT`/`VERIFY`/`MOCK`/`BEFORE-ALL`/`BEFORE-EACH`)
+  raises `CutParseError` naming the offending line.
+- New tests in `tests/unit/test_dsl_parser.py`:
+  `test_stray_move_inside_open_provider_raises`,
+  `test_stray_mock_inside_open_provider_raises`,
+  `test_row_after_intervening_before_each_block_raises`,
+  `test_statelkup_example_still_parses` (regression pin for
+  `examples/statelkup/STATELKUP.cut`, the canonical real-world
+  `PROVIDER`/`HEADER`/`ROW` usage).
+
 ## 2026-07-21 — malformed FILE-STATUS lines now fail closed at parse time
 
 - **Bug fix** ([dsl](dsl.md)): `dsl/parser.py`'s `_FILE_STATUS_RE` only

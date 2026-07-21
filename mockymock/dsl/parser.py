@@ -449,6 +449,27 @@ def parse_cut(text: str) -> MockTestSuite:
         if _COMMENT_RE.match(line):
             continue
 
+        # A PROVIDER block may hold only HEADER/ROW lines and is closed
+        # only by the next TESTCASE or PROVIDER (handled by _close_provider
+        # in those two branches below). Anything else -- MOVE, PERFORM,
+        # MOCK, BEFORE-ALL/EACH, etc. -- must fail closed here: previously
+        # none of the current-testcase/mock-collection state was reset when
+        # a PROVIDER opened, so a stray statement silently attached to
+        # whatever TESTCASE/BEFORE block was open before the PROVIDER, with
+        # any {Placeholder} left unsubstituted.
+        if current_provider is not None and not (
+            _HEADER_RE.match(line)
+            or _PROVIDER_ROW_RE.match(line)
+            or _PROVIDER_RE.match(line)
+            or _TESTCASE_RE.match(line)
+        ):
+            raise CutParseError(
+                f"line {line_no}: {line!r} not allowed inside PROVIDER "
+                f"{current_provider.name!r} -- a PROVIDER block may "
+                f"contain only HEADER and ROW lines, and is closed by the "
+                f"next TESTCASE or PROVIDER"
+            )
+
         if (m := _TESTSUITE_RE.match(line)) is not None:
             if suite is not None:
                 raise CutParseError(
@@ -470,6 +491,15 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             current_provider = DataProvider(name=name, line=line_no)
             providers[name] = current_provider
+            # Clear the current-testcase / current-mock-collection state:
+            # a PROVIDER block is not part of any TESTCASE/BEFORE block, so
+            # nothing should still be able to attach to whichever one was
+            # open before this PROVIDER line. (The gate above already
+            # blocks every statement type that could observe this, but
+            # clearing it here keeps the state honest regardless.)
+            case = None
+            mock_target = None
+            mock_lines = {}
         elif (m := _HEADER_RE.match(line)) is not None:
             if current_provider is None:
                 raise CutParseError(f"line {line_no}: HEADER outside PROVIDER")
