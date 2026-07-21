@@ -1,0 +1,14 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DIVROUND.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-NUM              PIC 9(4).
+       01  WS-DEN              PIC 9(4).
+       01  WS-RESULT           PIC 9(4).
+       01  WS-LOG-STATUS       PIC X(2).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DIVIDE WS-NUM BY WS-DEN GIVING WS-RESULT ROUNDED.
+           CALL "LOGRESULT" USING WS-RESULT WS-LOG-STATUS.

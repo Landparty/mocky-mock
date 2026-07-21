@@ -85,7 +85,20 @@ jobs:
           # Local mockymock suite at this pin: tests/unit 484 passed
           # (Docker-gated tests skip locally; the `mockymock run` tests
           # that need a live daemon run in CI).
-          ref: d70b8a7796ec320da10f9531ea90b79b3e5b4f02
+          #
+          # Bumped again to pull in the DIVIDE/MULTIPLY GIVING ... ROUNDED
+          # fix (cobol-parser commit 4db8394): ROUNDED after GIVING was left
+          # unconsumed by parse_size_error_clauses() and misread as a
+          # phantom paragraph named "ROUNDED", silently reparenting every
+          # statement after it in the real paragraph -- see
+          # tests/integration/test_divide_rounded.py, which reproduces the
+          # failure via a MOCK'd CALL placed right after the ROUNDED DIVIDE
+          # in the same paragraph (UNMATCHED_MOCK at the old pin). Full
+          # mockymock suite at this pin: 748 passed locally.
+          # NOT YET PUSHED to github.com/Landparty/cobol-parser as of this
+          # bump -- this ref will not resolve in CI until that commit is
+          # pushed to the cobol-parser remote.
+          ref: 4db83941dccefbf3d185d02a518378c37c392d46
 
       - uses: actions/setup-python@v5
         with:

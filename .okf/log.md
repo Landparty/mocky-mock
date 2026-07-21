@@ -1,5 +1,34 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-21 — DIVIDE/MULTIPLY `GIVING ... ROUNDED` fixed upstream in cobolparser
+
+`ROUNDED` after `GIVING` on `DIVIDE`/`MULTIPLY` was silently dropped by
+cobolparser's `_parse_binary_arithmetic` (only `ON`/`NOT ON SIZE ERROR`
+were recognized after `GIVING`) and the leftover `ROUNDED` token was
+misread as a phantom paragraph literally named `ROUNDED`, silently
+reparenting every statement after it in the real paragraph. Confirmed
+this has real end-to-end impact, not just cosmetic AST noise: a `MOCK
+CALL` placed right after a `ROUNDED` `DIVIDE` in the same paragraph was
+refused (`UNMATCHED_MOCK`, "does not match any boundary site reachable
+from '<paragraph>'") because mockymock's reachability BFS no longer saw
+the CALL as belonging to that paragraph.
+
+Fixed in cobol-parser (commit `4db8394`, local — not yet pushed to
+`Landparty/cobol-parser`): `_parse_binary_arithmetic` now consumes
+`ROUNDED` (with or without a preceding `GIVING`) and records it on a new
+`ArithmeticStatement.rounded` field. `pyproject.toml` and
+`.github/workflows/ci.yml` are both bumped to the new commit **but it
+is not yet pushed** — `uv tool install` and CI will fail to resolve this
+ref until the cobol-parser commit is pushed to its remote.
+
+Proven end-to-end against real GnuCOBOL in
+`tests/integration/test_divide_rounded.py`: `5 / 2 GIVING ... ROUNDED`
+must produce `3` (rounds half up), not `2` (truncated) — a second test
+asserts the wrong (truncated) expectation actually fails, so the
+assertion is load-bearing rather than trivially green. ADD/SUBTRACT have
+the same class of bug in their own (separate) GIVING branches; left
+open, not fixed here — see cobol-parser's `arithmetic_parsers.py`.
+
 ## 2026-07-21 — `run --trace`: execution trace for debugging one case
 
 Adds `mockymock run --trace` / `--trace-json PATH`, backing a "Debug Test"
