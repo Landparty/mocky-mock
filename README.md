@@ -112,6 +112,25 @@ TESTCASE "totals two records then updates and notifies"
   `{ColumnName}` in a `MOVE`/`EXPECT` value is substituted with that
   row's value. Generated cases are named `"<name> [row <n>: <first
   column value>]"`. See the worked example in `examples/statelkup/`.
+- `BEFORE-EACH` / `BEFORE-ALL` ... `END-BEFORE` (suite-level, after the
+  `TESTSUITE` header and before the first `TESTCASE`; at most one of
+  each; bodies hold `MOCK` directives only) are desugared at parse time
+  into every `TESTCASE`'s own mock list. On a `(category, key)` collision
+  the more specific block wins: `TESTCASE` overrides `BEFORE-EACH`
+  overrides `BEFORE-ALL`, silently. The xUnit-style names suggest a
+  timing difference, but there isn't one -- `BEFORE-ALL` and
+  `BEFORE-EACH` differ **only** in override precedence; both desugar into
+  every test case identically, with no separate execution phase.
+- `FILE-STATUS IS <mnemonic-or-code>` is usable once inside a `MOCK
+  OPEN|CLOSE|READ|DELETE|START|UNLOCK` body (not `WRITE`/`REWRITE`).
+  `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`, `DUPLICATE-KEY`,
+  `RECORD-NOT-FOUND`, `FILE-NOT-FOUND`, `ALREADY-OPEN`, `NOT-OPEN`,
+  `NO-CURRENT-RECORD`; a quoted two-character literal (e.g. `"92"`)
+  always works too. Every eligible category also gets an implicit
+  `MOVE "00"` (default success) before the mock's own body whenever the
+  target file declares a `FILE STATUS` field, whether or not
+  `FILE-STATUS IS` is used. See the worked example in
+  `examples/taxfile/`.
 
 `mockymock generate <program.cbl>` scaffolds a starter `.cut` covering
 every mockable boundary it finds.

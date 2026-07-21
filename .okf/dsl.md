@@ -77,7 +77,12 @@ At most one of each per `TESTSUITE`, appearing after the `TESTSUITE`
 header and before the first `TESTCASE`. Bodies hold `MOCK` directives
 only. Desugared at parse time into every `TESTCASE`'s own `mocks` list;
 precedence on a `(category, key)` collision is `TESTCASE` >
-`BEFORE-EACH` > `BEFORE-ALL`, silently. See
+`BEFORE-EACH` > `BEFORE-ALL`, silently. The xUnit-style names suggest an
+execution-timing difference; there isn't one -- `BEFORE-ALL` and
+`BEFORE-EACH` differ **only** in override precedence. Both desugar into
+every test case identically at parse time; no code path ever runs a
+`BEFORE-ALL`/`BEFORE-EACH` body separately from, or before, the test
+case's own spliced mocks. See
 `docs/2026-07-20-before-blocks-and-file-status-design.md`.
 
 ### `FILE-STATUS IS <mnemonic-or-code>`

@@ -1,5 +1,41 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-21 — Doc sync: README + OKF concepts for BEFORE/FILE-STATUS/PROVIDER wave
+
+A code review found the README and three OKF concepts had fallen behind
+the merge below (`6f6786e`), which shipped `BEFORE-EACH`/`BEFORE-ALL`,
+`FILE-STATUS IS`, and (from an earlier merge) `PROVIDER`. This entry is
+docs-only -- no production code changed.
+
+- **README.md** DSL bullet list: added `BEFORE-EACH`/`BEFORE-ALL` (block
+  placement, `END-BEFORE`, precedence) and `FILE-STATUS IS` (eligible
+  categories, mnemonic table, implicit default-success `MOVE "00"`)
+  bullets ported from [dsl](dsl.md), matching the list's existing tone.
+  Both README and [dsl](dsl.md) now state explicitly that `BEFORE-ALL`/
+  `BEFORE-EACH` differ **only** in override precedence, not execution
+  timing, despite the xUnit-style names.
+- **[analysis](analysis.md)**: `check_test_case`'s documented signature
+  refreshed to its actual 4th parameter, `file_status_fields` (from
+  `mock_surface.analyze_file_status_fields`); added the
+  `UNRESOLVED_FILE_STATUS_TARGET` refusal (a `MOCK ... FILE-STATUS IS`
+  must target a file whose `SELECT` declares `FILE STATUS IS <field>`,
+  else it refuses fail-closed) to both the module table and the
+  per-test-case checks section.
+- **[cli](cli.md)**: refreshed the `_cmd_run` flow's `check_test_case`
+  and `splice_program` call shapes to their current arities
+  (`file_status_fields` threaded through both, plus `splice_program`'s
+  `terminator_plans`/`flow_plans` params), matching
+  `mockymock/cli/checks.py` and `mockymock/cli/main.py`.
+- **[splicer](splicer.md)**: documented `build_site_dispatch`'s
+  FILE-STATUS default-success/override injection -- an implicit
+  `MOVE "00" TO <field>` before a mocked file-op's body whenever the file
+  declares a `FILE STATUS` field, followed by an explicit
+  `MOVE "<code>"` when the directive used `FILE-STATUS IS` sugar (which
+  wins by ordering, not by branching).
+- Timestamps bumped on `analysis.md`, `cli.md`, `splicer.md` (already
+  current on `dsl.md`, itself only gaining the one clarifying sentence
+  above).
+
 ## 2026-07-21 — BEFORE-EACH/BEFORE-ALL mock scoping and FILE-STATUS IS sugar
 
 - **New `.cut` grammar** ([dsl](dsl.md)): `BEFORE-EACH`/`BEFORE-ALL` blocks
