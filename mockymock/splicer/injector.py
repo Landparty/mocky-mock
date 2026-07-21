@@ -46,6 +46,7 @@ def build_site_dispatch(
     suite: MockTestSuite,
     registry: TallyRegistry,
     file_status_fields: dict[str, str] | None = None,
+    trace: bool = False,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
 
@@ -73,6 +74,17 @@ def build_site_dispatch(
         tally_name = registry.name(directive.category, directive.key)
         lines.append(f'               WHEN "{index:03d}"')
         lines.append(f"                   ADD 1 TO {tally_name}")
+        if trace:
+            # Mock firing ORDER cannot be recovered from the GnuCOBOL trace
+            # file: this dispatch block is splicer-inserted, and the trace's
+            # instrumented->original line remap drops inserted lines by
+            # design (that exclusion is what makes it mean "which of MY
+            # lines ran"). Emitting on the __MOCKYMOCK__ stdout channel
+            # instead places each firing between the driver's CASE
+            # START/END markers, so per-case attribution comes for free.
+            lines.append(
+                f'                   DISPLAY "__MOCKYMOCK__ MOCK: {site.label}"'
+            )
         if directive.category in FILE_STATUS_CATEGORIES:
             status_field = file_status_fields.get(directive.key.upper())
             if status_field:
@@ -102,7 +114,7 @@ def build_site_dispatch(
 
 
 def build_flow_dispatch(
-    plan, suite: MockTestSuite, registry: TallyRegistry
+    plan, suite: MockTestSuite, registry: TallyRegistry, trace: bool = False
 ) -> list[str]:
     """Replacement for a flow-mocked paragraph/section HEADER line (MOCK
     PARAGRAPH/SECTION): re-emit the header, dispatch on UT-CURRENT-CASE --
@@ -130,6 +142,14 @@ def build_flow_dispatch(
         tally_name = registry.name(directive.category, directive.key)
         lines.append(f'               WHEN "{index:03d}"')
         lines.append(f"                   ADD 1 TO {tally_name}")
+        if trace:
+            # A MOCK PARAGRAPH/SECTION is a mock the author declared, so it
+            # belongs in the firing timeline alongside boundary mocks --
+            # omitting it would make the timeline quietly incomplete.
+            lines.append(
+                f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
+                f'{"SECTION" if plan.is_section else "PARAGRAPH"} {plan.key}"'
+            )
         lines.extend(f"                   {body}" for body in directive.body_lines)
     lines.append("               WHEN OTHER")
     lines.append(f"                   PERFORM {plan.real_name}")

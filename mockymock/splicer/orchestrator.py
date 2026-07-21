@@ -61,6 +61,7 @@ def splice_program(
     terminator_plans: Sequence[TerminatorPlan] = (),
     flow_plans: Sequence[FlowMockPlan] = (),
     file_status_fields: dict[str, str] | None = None,
+    trace: bool = False,
 ) -> list[str]:
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
@@ -78,7 +79,9 @@ def splice_program(
             for directive in case.mocks
         )
         if mocked:
-            replacement = build_site_dispatch(site, suite, registry, file_status_fields)
+            replacement = build_site_dispatch(
+                site, suite, registry, file_status_fields, trace=trace
+            )
         elif site.category in EXEC_CATEGORIES:
             # Unmocked EXEC still has to go: cobc cannot compile it. The
             # refusal gate refuses any test case that can reach it (PERFORM
@@ -177,7 +180,7 @@ def splice_program(
             (
                 flow_plan.header_line,
                 flow_plan.header_line,
-                build_flow_dispatch(flow_plan, suite, registry),
+                build_flow_dispatch(flow_plan, suite, registry, trace=trace),
             )
         )
 
