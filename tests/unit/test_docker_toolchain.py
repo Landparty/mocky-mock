@@ -722,3 +722,91 @@ def test_run_gcov_wraps_docker_oserror_cleanly(tmp_path):
         result = run_gcov(source)
     assert not result.success
     assert "docker went away" in result.stderr
+
+
+# --- execution trace (docs/2026-07-21-debug-trace-design.md) ---------------
+
+from mockymock.runtime.docker_toolchain import run_binary
+
+
+def test_compile_source_traceall_appears_in_argv(tmp_path):
+    """-ftraceall generates the trace hooks; without it the runtime env
+    switches below produce nothing at all."""
+    work, source = _work(tmp_path)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        (source.parent / "PROG").write_text("")
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        compile_source(source, trace=True)
+
+    assert "-ftraceall" in calls[0]
+
+
+def test_compile_source_omits_traceall_by_default(tmp_path):
+    work, source = _work(tmp_path)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        (source.parent / "PROG").write_text("")
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        compile_source(source)
+
+    assert "-ftraceall" not in calls[0]
+
+
+def test_run_binary_sets_trace_env_pointing_into_the_sandbox(tmp_path):
+    """COB_TRACE_FILE must resolve inside the bind mount, or the host can
+    never read the trace back after the run."""
+    work, source = _work(tmp_path)
+    binary = source.parent / "PROG"
+    binary.write_text("")
+    calls = []
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run",
+            side_effect=lambda argv, **kw: (calls.append(argv), _completed(argv))[1],
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        run_binary(binary, trace_path=source.parent / "PROG.trace")
+
+    argv = calls[0]
+    assert "COB_SET_TRACE=yes" in argv
+    assert "COB_TRACE_FILE=/work/mockymock-x/PROG.trace" in argv
+    assert "COB_TRACE_FORMAT=%P|%S|%L" in argv
+
+
+def test_run_binary_sets_no_trace_env_by_default(tmp_path):
+    work, source = _work(tmp_path)
+    binary = source.parent / "PROG"
+    binary.write_text("")
+    calls = []
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run",
+            side_effect=lambda argv, **kw: (calls.append(argv), _completed(argv))[1],
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        run_binary(binary)
+
+    assert not any("COB_SET_TRACE" in str(a) for a in calls[0])

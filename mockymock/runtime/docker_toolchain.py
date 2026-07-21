@@ -244,7 +244,9 @@ def cobc_version() -> str:
     return result.stdout.splitlines()[0] if result.stdout else "unknown"
 
 
-def compile_source(source_path: Path, coverage: bool = False) -> CompileResult:
+def compile_source(
+    source_path: Path, coverage: bool = False, trace: bool = False
+) -> CompileResult:
     """Compile a free-form COBOL source file (which must live under
     WORK_ROOT) inside the container. The binary is written next to the
     source with no suffix -- it is a Linux ELF that only ever executes
@@ -275,6 +277,11 @@ def compile_source(source_path: Path, coverage: bool = False) -> CompileResult:
     cmd = ["docker", "exec", "-w", container_dir, CONTAINER, "cobc", "-free"]
     if coverage:
         cmd.append("--coverage")
+    if trace:
+        # -ftraceall only *generates* the trace hooks. It emits nothing on
+        # its own -- COB_SET_TRACE at run time is what actually turns
+        # tracing on (see run_binary's trace_path).
+        cmd.append("-ftraceall")
     cmd += ["-x", container_source, "-o", container_binary]
     try:
         result = subprocess.run(
@@ -310,7 +317,11 @@ def compile_source(source_path: Path, coverage: bool = False) -> CompileResult:
     )
 
 
-def run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult:
+def run_binary(
+    binary_path: Path,
+    timeout_seconds: int = 30,
+    trace_path: Path | None = None,
+) -> ExecutionResult:
     """Run a compiled binary inside the container, from its own sandbox
     directory. coreutils `timeout` enforces the limit container-side and
     exits 124 on expiry, matching TIMEOUT_EXIT_CODE; `-k 5` escalates to
@@ -320,6 +331,21 @@ def run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult:
     itself hanging."""
     container_binary = to_container_path(binary_path, WORK_ROOT)
     container_dir = container_binary.rsplit("/", 1)[0]
+    trace_env: list[str] = []
+    if trace_path is not None:
+        # COB_TRACE_FILE must point inside the bind-mounted sandbox or the
+        # host can never read the trace back. It is also always set
+        # explicitly: left unset, GnuCOBOL can spill trace onto stderr and
+        # pollute the run's diagnostics. Trace never reaches stdout, so the
+        # __MOCKYMOCK__ protocol stays parseable either way.
+        trace_env = [
+            "-e",
+            "COB_SET_TRACE=yes",
+            "-e",
+            f"COB_TRACE_FILE={to_container_path(trace_path, WORK_ROOT)}",
+            "-e",
+            "COB_TRACE_FORMAT=%P|%S|%L",
+        ]
     try:
         result = subprocess.run(
             [
@@ -327,6 +353,7 @@ def run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult:
                 "exec",
                 "-w",
                 container_dir,
+                *trace_env,
                 CONTAINER,
                 "timeout",
                 "-k",
