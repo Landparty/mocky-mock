@@ -134,3 +134,56 @@ TESTCASE "c"
     PERFORM MAIN-PROCESS
 """
     assert _mock(cut).file_status is None
+
+
+def test_unquoted_numeric_code_is_a_parse_error():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK READ FILE1
+        FILE-STATUS IS 92
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="malformed FILE-STATUS"):
+        parse_cut(cut)
+
+
+def test_mnemonic_with_digits_is_a_parse_error():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK READ FILE1
+        FILE-STATUS IS EOF10
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="malformed FILE-STATUS"):
+        parse_cut(cut)
+
+
+def test_missing_value_is_a_parse_error():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK READ FILE1
+        FILE-STATUS IS
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="malformed FILE-STATUS"):
+        parse_cut(cut)
+
+
+def test_malformed_file_status_error_names_accepted_forms():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK READ FILE1
+        FILE-STATUS IS 92
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match='SUCCESS') as exc_info:
+        parse_cut(cut)
+    assert '"xx"' in str(exc_info.value) or "two-character" in str(exc_info.value)

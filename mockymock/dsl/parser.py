@@ -134,6 +134,12 @@ _FILE_STATUS_MNEMONICS = {
 _FILE_STATUS_RE = re.compile(
     r'^FILE-STATUS\s+IS\s+(?:(?P<mnemonic>[A-Za-z][A-Za-z-]*)|"(?P<literal>[^"]*)")$'
 )
+# Any line that starts with the FILE-STATUS keyword but doesn't fully match
+# _FILE_STATUS_RE above (unquoted numeric codes, mnemonics with digits, a
+# missing value, ...) must not silently fall through to body_lines and get
+# spliced verbatim into the generated COBOL -- that produces a cobc compile
+# error pointing at generated code instead of a clear .cut-level refusal.
+_FILE_STATUS_PREFIX_RE = re.compile(r"^FILE-STATUS\b")
 
 
 class CutParseError(ValueError):
@@ -429,6 +435,13 @@ def parse_cut(text: str) -> MockTestSuite:
                         )
                     code = _FILE_STATUS_MNEMONICS[mnemonic]
                 in_mock.file_status = code
+            elif _FILE_STATUS_PREFIX_RE.match(line) is not None:
+                valid = ", ".join(sorted(_FILE_STATUS_MNEMONICS))
+                raise CutParseError(
+                    f"line {line_no}: malformed FILE-STATUS IS {line!r} -- "
+                    f"expected FILE-STATUS IS <mnemonic> (one of {valid}) "
+                    f'or FILE-STATUS IS "xx" (a quoted two-character code)'
+                )
             else:
                 in_mock.body_lines.append(line)
             continue

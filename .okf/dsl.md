@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-07-21T00:00:00Z
+timestamp: 2026-07-21T01:00:00Z
 ---
 
 # Overview
@@ -91,6 +91,14 @@ Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK` body
 target file declares a `FILE STATUS` field, whether or not
 `FILE-STATUS IS` is used. See
 `docs/2026-07-20-before-blocks-and-file-status-design.md`.
+
+Fail-closed on malformed input: any mock-body line that starts with the
+`FILE-STATUS` keyword but doesn't fully match the mnemonic-or-quoted-literal
+grammar above (an unquoted code like `FILE-STATUS IS 92`, a mnemonic with
+digits like `FILE-STATUS IS EOF10`, a missing value) raises `CutParseError`
+at that line instead of silently falling through to `body_lines` and being
+spliced verbatim into generated COBOL, where it would surface as a
+confusing `cobc` compile error instead of a `.cut`-level refusal.
 
 ## Case rules
 
