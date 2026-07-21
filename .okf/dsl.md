@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-07-21T00:00:00Z
+timestamp: 2026-07-21T01:00:00Z
 ---
 
 # Overview
@@ -110,6 +110,20 @@ declared before any `TESTCASE` that references it) holding a `HEADER`
 (comma-separated, quote-aware-split free-form COBOL value text, same
 convention as `MOVE`/`EXPECT` values). `TESTCASE "..." USING PROVIDER
 <name>` binds a test-case template to it.
+
+A `PROVIDER` block admits only `HEADER`/`ROW` lines (plus blanks/`*>`
+comments) and is closed only by the next `TESTCASE` or `PROVIDER` line;
+any other statement while it's open -- `MOVE`, `PERFORM`, `EXPECT`,
+`VERIFY`, `MOCK`, `BEFORE-ALL`/`BEFORE-EACH` -- raises `CutParseError`
+fail-closed. This is deliberate: opening a `PROVIDER` also clears the
+current `TESTCASE`/`BEFORE-*` state (`case = None`, `mock_target =
+None`), so before this rule existed a stray statement between/after
+`ROW` lines silently attached to whichever `TESTCASE`/`BEFORE-*` block
+was open *before* the `PROVIDER`, with any `{Placeholder}` left
+unsubstituted (see `tests/unit/test_dsl_parser.py::
+test_stray_move_inside_open_provider_raises` and the two neighboring
+tests, including one that pins a `BEFORE-EACH` appearing while a
+`PROVIDER` is open as an error too).
 
 `parser.py`'s `_expand_providers` runs as the last step of `parse_cut()`:
 it replaces a provider-bound `TESTCASE` with one ordinary `MockTestCase`

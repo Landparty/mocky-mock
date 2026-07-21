@@ -347,6 +347,98 @@ def test_provider_row_values_preserve_commas_inside_quotes():
     assert len(suite.test_cases) == 1
 
 
+def test_stray_move_inside_open_provider_raises():
+    # Regression: a PROVIDER block never used to reset the current-testcase
+    # state, so a MOVE placed between/after ROW lines silently attached to
+    # the PREVIOUS TESTCASE (with its {Placeholder} left unsubstituted)
+    # instead of being rejected. Must fail closed instead.
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "prev"\n'
+        '    MOVE "1" TO WS-A\n'
+        "    PERFORM MAIN\n"
+        "PROVIDER P\n"
+        "    HEADER N\n"
+        '    ROW "5"\n'
+        "    MOVE {N} TO WS-X\n"
+        'TESTCASE "uses" USING PROVIDER P\n'
+        "    MOVE {N} TO WS-B\n"
+        "    PERFORM MAIN\n"
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r"line 8: .*not allowed inside PROVIDER 'P'.*HEADER and ROW",
+    ):
+        parse_cut(text)
+
+
+def test_stray_mock_inside_open_provider_raises():
+    # A preceding TESTCASE is essential to this regression: without one,
+    # mock_target is already None and the buggy code rejects the MOCK on
+    # its own merits ("MOCK outside TESTCASE/BEFORE-EACH/BEFORE-ALL"),
+    # which doesn't exercise the bug at all. With a preceding TESTCASE,
+    # mock_target still points at "prev".mocks while the PROVIDER is open,
+    # so the buggy code would silently attach this MOCK to "prev" instead
+    # of raising.
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "prev"\n'
+        "    PERFORM MAIN\n"
+        "PROVIDER P\n"
+        "    HEADER N\n"
+        '    ROW "5"\n'
+        '    MOCK CALL "SUB"\n'
+        "    END-MOCK\n"
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r"line 7: .*not allowed inside PROVIDER 'P'.*HEADER and ROW",
+    ):
+        parse_cut(text)
+
+
+def test_row_after_intervening_before_each_block_raises():
+    # Related leniency: BEFORE-ALL/BEFORE-EACH didn't close an open
+    # PROVIDER, so a ROW line appearing after an intervening END-BEFORE
+    # would still append to the provider opened earlier. The simplest
+    # consistent rule: BEFORE-EACH/BEFORE-ALL appearing while a PROVIDER is
+    # open is itself an error (a PROVIDER block may hold only HEADER/ROW,
+    # and is closed only by the next TESTCASE or PROVIDER).
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER P\n"
+        "    HEADER N\n"
+        '    ROW "1"\n'
+        "BEFORE-EACH\n"
+        '    MOCK CALL "SUB"\n'
+        "    END-MOCK\n"
+        "END-BEFORE\n"
+        '    ROW "2"\n'
+        'TESTCASE "c" USING PROVIDER P\n'
+        "    PERFORM MAIN\n"
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r"line 5: .*not allowed inside PROVIDER 'P'.*HEADER and ROW",
+    ):
+        parse_cut(text)
+
+
+def test_statelkup_example_still_parses():
+    # examples/statelkup/STATELKUP.cut is the canonical real-world usage of
+    # PROVIDER/HEADER/ROW; must keep parsing after the fail-closed fix.
+    import pathlib
+
+    cut_path = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "examples"
+        / "statelkup"
+        / "STATELKUP.cut"
+    )
+    suite = parse_cut(cut_path.read_text())
+    assert len(suite.test_cases) == 3
+
+
 # --- PROVIDER parameterized test cases: binding & expansion ------------------
 
 PROVIDER_CUT = """\
