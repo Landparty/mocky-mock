@@ -3,6 +3,7 @@
 cases -- see
 docs/2026-07-20-provider-parameterized-test-cases-design.md."""
 
+import json
 from pathlib import Path
 
 from mockymock.cli.main import main
@@ -41,9 +42,15 @@ def test_statelkup_fails_when_one_rows_expectation_is_wrong(tmp_path: Path):
     assert exit_code == 1
 
 
-def test_statelkup_collect_lists_three_expanded_cases():
+def test_statelkup_collect_lists_three_expanded_cases(capsys):
     """No Docker needed -- collect is pure parse (mockymock/cli/main.py)."""
     exit_code = main(
         ["collect", "--cut", str(EXAMPLE_DIR / "STATELKUP.cut"), "--json"]
     )
     assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [c["name"] for c in payload["cases"]] == [
+        "1000-LOOKUP-STATE resolves a state name [row 1: AZ]",
+        "1000-LOOKUP-STATE resolves a state name [row 2: KY]",
+        "1000-LOOKUP-STATE resolves a state name [row 3: XX]",
+    ]

@@ -16,9 +16,11 @@ mockymock run STATELKUP.cbl --cut STATELKUP.cut
 `TESTCASE` line:
 
 ```
-TESTCASE '1000-LOOKUP-STATE resolves a state name [row 1: AZ]' (line 5)
-TESTCASE '1000-LOOKUP-STATE resolves a state name [row 2: KY]' (line 6)
-TESTCASE '1000-LOOKUP-STATE resolves a state name [row 3: XX]' (line 7)
+TESTSUITE 'STATELKUP state name lookup' (line 1)
+  TESTCASE '1000-LOOKUP-STATE resolves a state name [row 1: AZ]' (line 8)
+  TESTCASE '1000-LOOKUP-STATE resolves a state name [row 2: KY]' (line 9)
+  TESTCASE '1000-LOOKUP-STATE resolves a state name [row 3: XX]' (line 10)
+3 test case(s)
 ```
 
 The third row (`XX` -> `*Undefined*`) exercises `EVALUATE`'s `WHEN OTHER`
