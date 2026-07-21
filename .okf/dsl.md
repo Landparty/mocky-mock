@@ -67,6 +67,27 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ]
   for navigation and failure locations — keep them accurate when touching
   the parse loop.
 
+### `BEFORE-EACH` / `BEFORE-ALL`
+
+At most one of each per `TESTSUITE`, appearing after the `TESTSUITE`
+header and before the first `TESTCASE`. Bodies hold `MOCK` directives
+only. Desugared at parse time into every `TESTCASE`'s own `mocks` list;
+precedence on a `(category, key)` collision is `TESTCASE` >
+`BEFORE-EACH` > `BEFORE-ALL`, silently. See
+`docs/2026-07-20-before-blocks-and-file-status-design.md`.
+
+### `FILE-STATUS IS <mnemonic-or-code>`
+
+Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK` body
+(not `WRITE`/`REWRITE`). `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`,
+`DUPLICATE-KEY`, `RECORD-NOT-FOUND`, `FILE-NOT-FOUND`, `ALREADY-OPEN`,
+`NOT-OPEN`, `NO-CURRENT-RECORD`; a quoted two-character literal (e.g.
+`"92"`) always works too. Every eligible category also gets an implicit
+`MOVE "00"` (default success) before the mock's own body whenever the
+target file declares a `FILE STATUS` field, whether or not
+`FILE-STATUS IS` is used. See
+`docs/2026-07-20-before-blocks-and-file-status-design.md`.
+
 ## Case rules
 
 Every DSL keyword is case-sensitive uppercase (`testsuite "x"` is an

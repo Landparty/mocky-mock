@@ -1,0 +1,42 @@
+TESTSUITE "TAXFILE file-status handling"
+
+*> Adapted from the cobol-check wiki's own taxpayer-update-file example.
+*> Every case needs the file opened, read, and closed -- sharing those
+*> defaults here means no case has to repeat them.
+BEFORE-EACH
+    MOCK OPEN TAXPAYER-FILE
+    END-MOCK
+    MOCK READ TAXPAYER-FILE
+        MOVE "000000001" TO TP-TAXPAYER-ID
+        MOVE "90210" TO TP-POSTCODE
+    END-MOCK
+    MOCK CLOSE TAXPAYER-FILE
+    END-MOCK
+END-BEFORE
+
+*> Relies entirely on the shared BEFORE-EACH mocks: MOCK OPEN's empty
+*> body gets the implicit default-success FILE STATUS "00" MOVE, so the
+*> program's own status check never trips.
+TESTCASE "open and read succeed, no errors"
+    PERFORM MAIN-PROCESS
+    EXPECT WS-ERROR-CODE TO BE SPACES
+    VERIFY OPEN TAXPAYER-FILE WAS PERFORMED ONCE
+    VERIFY CLOSE TAXPAYER-FILE WAS PERFORMED ONCE
+
+*> Overrides the shared OPEN mock for this case only -- BEFORE-EACH's
+*> READ/CLOSE mocks still apply underneath it.
+TESTCASE "open reports file-not-found"
+    MOCK OPEN TAXPAYER-FILE
+        FILE-STATUS IS FILE-NOT-FOUND
+    END-MOCK
+    PERFORM MAIN-PROCESS
+    EXPECT WS-ERROR-CODE TO BE "TUFNOTFND"
+
+*> Overrides the shared READ mock for this case only.
+TESTCASE "missing postal code is caught"
+    MOCK READ TAXPAYER-FILE
+        MOVE "000000002" TO TP-TAXPAYER-ID
+        MOVE SPACES TO TP-POSTCODE
+    END-MOCK
+    PERFORM MAIN-PROCESS
+    EXPECT WS-ERROR-CODE TO BE "TUFNOPOST"
