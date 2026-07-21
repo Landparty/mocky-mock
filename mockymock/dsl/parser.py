@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 
 from mockymock.dsl.model import (
+    DataProvider,
     ExpectDirective,
     MockCategory,
     MockDirective,
@@ -72,6 +73,11 @@ _VERIFY_BARE_RE = re.compile(
 _COMMENT_RE = re.compile(r"^\*>")
 _ROW_RE = re.compile(r"^\((?P<pairs>.+)\)$")
 _ROW_PAIR_RE = re.compile(r"^(?P<field>[A-Za-z][A-Za-z0-9-]*)\s*=\s*(?P<value>.+)$")
+_PROVIDER_RE = re.compile(r"^PROVIDER\s+(?P<name>[A-Za-z0-9][A-Za-z0-9-]*)$")
+_HEADER_RE = re.compile(
+    r"^HEADER\s+(?P<fields>[A-Za-z][A-Za-z0-9-]*(?:\s*,\s*[A-Za-z][A-Za-z0-9-]*)*)$"
+)
+_PROVIDER_ROW_RE = re.compile(r"^ROW\s+(?P<values>.+)$")
 
 
 class CutParseError(ValueError):
@@ -139,6 +145,18 @@ def parse_cut(text: str) -> MockTestSuite:
     # MOCK would otherwise parse fine and surface much later as an
     # AMBIGUOUS_MOCK refusal with no line numbers and misleading advice.
     mock_lines: dict[tuple[MockCategory, str], int] = {}
+    providers: dict[str, DataProvider] = {}
+    current_provider: DataProvider | None = None
+
+    def _close_provider() -> None:
+        nonlocal current_provider
+        if current_provider is not None and not current_provider.rows:
+            raise CutParseError(
+                f"line {current_provider.line}: PROVIDER "
+                f"{current_provider.name!r} has no ROWs -- give at least "
+                f"one row or drop the PROVIDER entirely"
+            )
+        current_provider = None
 
     def _open_mock(directive: MockDirective, line_no: int) -> MockDirective:
         assert case is not None
@@ -203,9 +221,52 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"silently run only the last suite"
                 )
             suite = MockTestSuite(name=m.group("name"), line=line_no)
+        elif (m := _PROVIDER_RE.match(line)) is not None:
+            if suite is None:
+                raise CutParseError(f"line {line_no}: PROVIDER before TESTSUITE")
+            _close_provider()
+            name = m.group("name")
+            if name in providers:
+                raise CutParseError(
+                    f"line {line_no}: duplicate PROVIDER {name!r} (first "
+                    f"declared at line {providers[name].line})"
+                )
+            current_provider = DataProvider(name=name, line=line_no)
+            providers[name] = current_provider
+        elif (m := _HEADER_RE.match(line)) is not None:
+            if current_provider is None:
+                raise CutParseError(f"line {line_no}: HEADER outside PROVIDER")
+            if current_provider.header:
+                raise CutParseError(
+                    f"line {line_no}: duplicate HEADER in PROVIDER "
+                    f"{current_provider.name!r}"
+                )
+            current_provider.header = [
+                field.strip() for field in m.group("fields").split(",")
+            ]
+        elif (m := _PROVIDER_ROW_RE.match(line)) is not None:
+            if current_provider is None:
+                raise CutParseError(f"line {line_no}: ROW outside PROVIDER")
+            if not current_provider.header:
+                raise CutParseError(
+                    f"line {line_no}: ROW before HEADER in PROVIDER "
+                    f"{current_provider.name!r}"
+                )
+            values = [
+                v.strip() for v in _split_top_level(m.group("values"), ",")
+            ]
+            if len(values) != len(current_provider.header):
+                raise CutParseError(
+                    f"line {line_no}: ROW has {len(values)} value(s) but "
+                    f"PROVIDER {current_provider.name!r} HEADER has "
+                    f"{len(current_provider.header)} column(s)"
+                )
+            current_provider.rows.append(values)
+            current_provider.row_lines.append(line_no)
         elif (m := _TESTCASE_RE.match(line)) is not None:
             if suite is None:
                 raise CutParseError(f"line {line_no}: TESTCASE before TESTSUITE")
+            _close_provider()
             tags = _TAG_RE.findall(m.group("tags") or "")
             for tag in tags:
                 if not tag.strip():
@@ -309,6 +370,8 @@ def parse_cut(text: str) -> MockTestSuite:
             )
         else:
             raise CutParseError(f"line {line_no}: unrecognized statement: {line!r}")
+
+    _close_provider()
 
     if in_mock is not None:
         raise CutParseError(

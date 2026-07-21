@@ -129,6 +129,24 @@ class VerifyDirective:
 
 
 @dataclass
+class DataProvider:
+    """A named, columnar test-data table declared with `PROVIDER <name>` /
+    `HEADER <col>, ...` / `ROW <value>, ...`. Resolved and consumed
+    entirely within parser.py's `_expand_providers` -- never stored on
+    MockTestSuite/MockTestCase, so every downstream consumer (analysis,
+    splicer, runtime, report, cli) sees only ordinary, already-expanded
+    MockTestCase objects and never learns PROVIDER exists."""
+
+    name: str
+    line: int = 0
+    """1-based .cut line of the PROVIDER header."""
+    header: list[str] = field(default_factory=list)
+    rows: list[list[str]] = field(default_factory=list)
+    row_lines: list[int] = field(default_factory=list)
+    """1-based .cut line of each row in `rows`, same index alignment."""
+
+
+@dataclass
 class MockTestCase:
     name: str
     mocks: list[MockDirective] = field(default_factory=list)

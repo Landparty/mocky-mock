@@ -230,3 +230,118 @@ def test_empty_quoted_mock_key_rejected_at_parse_time():
     )
     with pytest.raises(CutParseError, match="line 3: empty MOCK CALL key"):
         parse_cut(text)
+
+
+# --- PROVIDER parameterized test cases: grammar ------------------------------
+
+
+def test_provider_block_parses_without_affecting_unrelated_cases():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER StateNames\n"
+        "    HEADER Abbreviation, Name\n"
+        '    ROW "AZ", "Arizona"\n'
+        '    ROW "KY", "Kentucky"\n'
+        'TESTCASE "unrelated"\n'
+        "    PERFORM MAIN\n"
+    )
+    suite = parse_cut(text)
+    assert len(suite.test_cases) == 1
+    assert suite.test_cases[0].name == "unrelated"
+
+
+def test_provider_row_before_header_raises():
+    text = 'TESTSUITE "s"\n' "PROVIDER StateNames\n" '    ROW "AZ", "Arizona"\n'
+    with pytest.raises(CutParseError, match="line 3: ROW before HEADER"):
+        parse_cut(text)
+
+
+def test_provider_row_arity_mismatch_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER StateNames\n"
+        "    HEADER Abbreviation, Name\n"
+        '    ROW "AZ"\n'
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r"line 4: ROW has 1 value\(s\) but PROVIDER 'StateNames'.*2 column\(s\)",
+    ):
+        parse_cut(text)
+
+
+def test_provider_with_zero_rows_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER StateNames\n"
+        "    HEADER Abbreviation, Name\n"
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+    )
+    with pytest.raises(
+        CutParseError, match="line 2: PROVIDER 'StateNames' has no ROWs"
+    ):
+        parse_cut(text)
+
+
+def test_duplicate_provider_name_raises_with_both_lines():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER StateNames\n"
+        "    HEADER Abbreviation, Name\n"
+        '    ROW "AZ", "Arizona"\n'
+        "PROVIDER StateNames\n"
+        "    HEADER Abbreviation, Name\n"
+        '    ROW "KY", "Kentucky"\n'
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r"line 5: duplicate PROVIDER 'StateNames' \(first declared at line 2\)",
+    ):
+        parse_cut(text)
+
+
+def test_provider_before_testsuite_raises():
+    with pytest.raises(CutParseError, match="line 1: PROVIDER before TESTSUITE"):
+        parse_cut("PROVIDER StateNames\n    HEADER A, B\n    ROW 1, 2\n")
+
+
+def test_header_outside_provider_raises():
+    text = 'TESTSUITE "s"\n' "HEADER A, B\n"
+    with pytest.raises(CutParseError, match="line 2: HEADER outside PROVIDER"):
+        parse_cut(text)
+
+
+def test_row_outside_provider_raises():
+    text = 'TESTSUITE "s"\n' '    ROW "x"\n'
+    with pytest.raises(CutParseError, match="line 2: ROW outside PROVIDER"):
+        parse_cut(text)
+
+
+def test_duplicate_header_in_provider_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER StateNames\n"
+        "    HEADER Abbreviation, Name\n"
+        "    HEADER A, B\n"
+    )
+    with pytest.raises(
+        CutParseError, match="line 4: duplicate HEADER in PROVIDER 'StateNames'"
+    ):
+        parse_cut(text)
+
+
+def test_provider_row_values_preserve_commas_inside_quotes():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER Names\n"
+        "    HEADER Full-Name\n"
+        '    ROW "SMITH, JR."\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+    )
+    # If the comma inside the quoted value had split the row into two
+    # fields, this would raise a ROW-arity CutParseError against the
+    # 1-column HEADER instead of parsing cleanly.
+    suite = parse_cut(text)
+    assert len(suite.test_cases) == 1
