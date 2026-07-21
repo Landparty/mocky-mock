@@ -228,6 +228,24 @@ TESTCASE "one"
     assert verification.key == "FILE1"
 
 
+def test_file_status_is_inside_before_each_survives_desugaring():
+    cut = """\
+TESTSUITE "shared file-status"
+
+BEFORE-EACH
+    MOCK OPEN FILE1
+        FILE-STATUS IS FILE-NOT-FOUND
+    END-MOCK
+END-BEFORE
+
+TESTCASE "one"
+    PERFORM MAIN-PROCESS
+"""
+    suite = parse_cut(cut)
+    mock = next(m for m in suite.test_cases[0].mocks if m.key == "FILE1")
+    assert mock.file_status == "35"
+
+
 def test_file_with_no_before_blocks_parses_exactly_as_before():
     cut = """\
 TESTSUITE "plain"

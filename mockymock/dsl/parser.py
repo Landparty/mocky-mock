@@ -279,7 +279,9 @@ def parse_cut(text: str) -> MockTestSuite:
                 in_mock.rows.append(row)
             elif (m := _FILE_STATUS_RE.match(line)) is not None:
                 if in_mock.category not in FILE_STATUS_CATEGORIES:
-                    eligible = "/".join(c.keyword for c in FILE_STATUS_CATEGORIES)
+                    eligible = "/".join(
+                        sorted(c.keyword for c in FILE_STATUS_CATEGORIES)
+                    )
                     raise CutParseError(
                         f"line {line_no}: FILE-STATUS IS is only valid "
                         f"inside MOCK {eligible} bodies, not MOCK "
