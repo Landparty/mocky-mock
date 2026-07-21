@@ -251,6 +251,12 @@ def _instantiate_row(
     ]
     return MockTestCase(
         name=f"{case.name} [row {row_index}: {_display_value(row[0])}]",
+        # `list(case.mocks)` copies the list, but not its elements: every
+        # expanded row's MockTestCase ends up holding the *same*
+        # MockDirective objects (is-identical) as every other row expanded
+        # from this case. Safe only because downstream code treats
+        # directives as read-only -- never mutate a MockDirective in place
+        # per-case; copy it first if you need a per-case change.
         mocks=list(case.mocks),
         setup_moves=setup_moves,
         perform_target=case.perform_target,
@@ -292,7 +298,14 @@ def _apply_before_blocks(
     """Desugar BEFORE-ALL/BEFORE-EACH into every TESTCASE's own mocks list.
     Precedence when a (category, key) appears in more than one place:
     TESTCASE > BEFORE-EACH > BEFORE-ALL, silently -- see
-    docs/2026-07-20-before-blocks-and-file-status-design.md."""
+    docs/2026-07-20-before-blocks-and-file-status-design.md.
+
+    Note: the same MockDirective object from `before_each`/`before_all` is
+    appended (is-identical, not copied) into every TESTCASE's mocks list
+    that inherits it -- so one directive ends up aliased across many
+    cases. This is safe only because every downstream consumer treats
+    directives as read-only; never mutate a MockDirective in place, copy
+    it first if a per-case change is ever needed."""
     if not before_all and not before_each:
         return
     for case in suite.test_cases:
@@ -528,6 +541,23 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"PROVIDER {current_provider.name!r} HEADER has "
                     f"{len(current_provider.header)} column(s)"
                 )
+            # A missing/blank entry (nothing at all between the commas, or
+            # a trailing comma with nothing after it) strips down to "" and
+            # would substitute into spliced COBOL as nothing -- e.g.
+            # `MOVE  TO F` or `EXPECT ... TO BE ` -- which fails to compile
+            # with no .cut line attribution. Fail closed here instead. A
+            # quoted empty string ("") is a deliberate empty literal and is
+            # distinguishable: its quote characters survive .strip(), so it
+            # is not caught by this check.
+            for column, value in zip(current_provider.header, values):
+                if not value:
+                    raise CutParseError(
+                        f"line {line_no}: ROW value for column {column!r} "
+                        f"in PROVIDER {current_provider.name!r} is blank -- "
+                        f'missing/blank row values are not allowed (use a '
+                        f'quoted empty string "" if you intend an empty '
+                        f"value)"
+                    )
             current_provider.rows.append(values)
             current_provider.row_lines.append(line_no)
         elif (m := _TESTCASE_RE.match(line)) is not None:
