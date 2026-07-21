@@ -107,3 +107,45 @@ def test_checks_module_never_imports_docker_toolchain():
     finally:
         if saved is not None:
             sys.modules["mockymock.runtime.docker_toolchain"] = saved
+
+
+def test_file_status_fields_populated_on_clean_run():
+    result = run_static_checks(ORDRPROC_CBL, ORDRPROC_CUT, None)
+    assert result.ok
+    assert result.file_status_fields is not None
+
+
+def test_unresolved_file_status_target_surfaces_as_a_problem(tmp_path):
+    cbl = tmp_path / "NOSTAT.cbl"
+    cbl.write_text(
+        """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NOSTAT.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT NO-STATUS ASSIGN TO "A.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  NO-STATUS.
+       01  NO-STATUS-REC      PIC X(10).
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           OPEN INPUT NO-STATUS.
+"""
+    )
+    cut = tmp_path / "NOSTAT.cut"
+    cut.write_text(
+        """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK OPEN NO-STATUS
+        FILE-STATUS IS SUCCESS
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    )
+    result = run_static_checks(cbl, cut, None)
+    assert not result.ok
+    assert any("UNRESOLVED_FILE_STATUS_TARGET" in p for p in result.problems)
