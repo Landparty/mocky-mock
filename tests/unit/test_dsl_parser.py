@@ -487,3 +487,35 @@ def test_placeholder_substitution_works_inside_a_larger_literal():
     )
     suite = parse_cut(text)
     assert suite.test_cases[0].expectations[0].expected_value == '"value: 1"'
+
+
+def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
+    """Verify placeholder tokens are substituted ONLY in MOVE values and
+    EXPECT expected_values, never in MOVE targets, MOCK bodies, or EXPECT
+    data_names. This pins the invariant from a final code review."""
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER TestData\n"
+        "    HEADER N, Field\n"
+        "    ROW 42, WS-RESULT\n"
+        'TESTCASE "verify substitution scope" USING PROVIDER TestData\n'
+        "    MOCK CALL \"HELPER\"\n"
+        "        MOVE {N} TO WS-HELPER-VAL\n"
+        "    END-MOCK\n"
+        "    MOVE {N} TO WS-TARGET\n"
+        "    PERFORM DO-SOMETHING\n"
+        "    EXPECT {Field} TO BE {N}\n"
+    )
+    suite = parse_cut(text)
+    assert len(suite.test_cases) == 1
+    case = suite.test_cases[0]
+
+    # Verify MOVE value is substituted, target is NOT
+    assert case.setup_moves == [("42", "WS-TARGET")]
+
+    # Verify MOCK body is NOT substituted (literal {N} remains)
+    assert case.mocks[0].body_lines == ["MOVE {N} TO WS-HELPER-VAL"]
+
+    # Verify EXPECT data_name is NOT substituted, expected_value IS
+    assert case.expectations[0].data_name == "{Field}"
+    assert case.expectations[0].expected_value == "42"
