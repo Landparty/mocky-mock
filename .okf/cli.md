@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, run, lint, collect) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-07-07T00:00:00Z
+timestamp: 2026-07-21T00:00:00Z
 ---
 
 # Overview
@@ -162,13 +162,20 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
    otherwise shift the AST-derived statement spans the splicer depends on.
    This double-call-with-discard is the key non-obvious sequencing trap in
    this file.
-10. `check_test_case(surface, result.ast, case)` for every case in the suite —
-    any refusal sets `refused = True`; all cases are checked before exiting
-    (so a user sees every problem in one run), then exit 1 if any fired.
+10. `analyze_file_status_fields(result.ast)` -> `file_status_fields` (an
+    ENVIRONMENT DIVISION FILE-CONTROL walk, separate from `analyze()`),
+    then `check_test_case(surface, result.ast, case, file_status_fields)`
+    for every case in the suite — any refusal sets `refused = True`; all
+    cases are checked before exiting (so a user sees every problem in one
+    run), then exit 1 if any fired. See [analysis](analysis.md).
 11. `collect_boundaries(result.ast)`, `TallyRegistry(suite)`,
-    `splice_program(lines, boundaries, surface, suite, registry)` — the actual
-    source rewrite. Then `transform_data_division_exec(lines)` runs for real
-    (its output is kept this time).
+    `find_terminator_plans(...)`, `find_flow_mock_plans(...)`,
+    `splice_program(lines, boundaries, surface, suite, registry,
+    terminator_plans, flow_plans, file_status_fields)` — the actual source
+    rewrite (`file_status_fields` flows through to
+    `injector.build_site_dispatch`'s default-success/override status MOVE,
+    see [splicer](splicer.md)). Then `transform_data_division_exec(lines)`
+    runs for real (its output is kept this time).
 12. `reset_move_lines(result.ast)` + `build_driver(suite, reset_lines,
     registry)` build the test-driver artifact (WORKING-STORAGE fields +
     PROCEDURE DIVISION statements for the harness).

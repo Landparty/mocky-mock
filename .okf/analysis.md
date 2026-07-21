@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-07-10T00:00:00Z
+timestamp: 2026-07-21T00:00:00Z
 ---
 
 # Overview
@@ -12,7 +12,7 @@ Cooperating modules under `mockymock/analysis/`:
 
 | Module | Job |
 |--------|-----|
-| `mock_surface.py` | Walk `PROCEDURE DIVISION`, classify every statement that touches an external resource into a `BoundarySite`/`CallSite`. Whole-program, category-generic, no knowledge of any test case. |
+| `mock_surface.py` | Walk `PROCEDURE DIVISION`, classify every statement that touches an external resource into a `BoundarySite`/`CallSite`. Whole-program, category-generic, no knowledge of any test case. Also `analyze_file_status_fields(program)`: a separate ENVIRONMENT DIVISION walk (FILE-CONTROL SELECT entries) that maps each uppercased file name to its declared `FILE STATUS IS <field>`, feeding both `refusal.check_test_case`'s `UNRESOLVED_FILE_STATUS_TARGET` check and `splicer.injector.build_site_dispatch`'s default-success MOVE (see [dsl](dsl.md)'s `FILE-STATUS IS` section and [splicer](splicer.md)). |
 | `refusal.py` | Whole-program checks (parse errors, unresolved COPY, nested EXEC) + per-`MockTestCase` checks (reachability via BFS, directive-to-site matching, fail-closed refusals). |
 | `flow_mocks.py` | Flow-target mocks (`MOCK PARAGRAPH`/`MOCK SECTION`): resolves keys to paragraphs/sections, refuses every entry path the header-dispatch splice can't handle soundly (UNRESOLVED_FLOW_MOCK_TARGET / UNSUPPORTED_FLOW_MOCK_TARGET), and emits `FlowMockPlan`s the splicer consumes — the plan-or-refusal shape `find_terminator_plans` established. `resolved_flow_targets` feeds `check_test_case`/`find_terminator_plans` the per-case `skip_traversal` sets. See docs/2026-07-20-paragraph-section-mocks-design.md. |
 
@@ -36,7 +36,12 @@ refusal.check_linkage_layout()     -> UNSUPPORTED_LINKAGE_LAYOUT (guards splicer
    |
    v
 per MockTestCase:
-refusal.check_test_case(surface, program, case)
+refusal.check_test_case(surface, program, case, file_status_fields)
+   (file_status_fields comes from mock_surface.analyze_file_status_fields
+    (program) -- computed once per program by the caller, not per case --
+    and maps each uppercased file name to its declared FILE STATUS IS
+    <field>, read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT
+    entries; a file with no FILE STATUS clause has no entry)
    1. _reachable_paragraphs(program, case.perform_target, case.perform_thru,
       skip_traversal=<this case's resolved MOCK PARAGRAPH/SECTION names>)
       (BFS over PERFORM + GO TO edges, THRU expansion, section fall-through;
@@ -49,6 +54,11 @@ refusal.check_test_case(surface, program, case)
       names the case's own PERFORM entry point
    3. emit UNMOCKED_*/AMBIGUOUS_MOCK/UNSUPPORTED_NESTED_MOCK_TARGET/
       UNSUPPORTED_MOCK_TARGET_LAYOUT/UNMATCHED_MOCK/VERIFY_WITHOUT_MOCK/UNMOCKED_CANCEL
+   4. final pass over case.mocks: any directive with FILE-STATUS IS sugar
+      (`directive.file_status is not None`) whose key is absent from
+      file_status_fields -> UNRESOLVED_FILE_STATUS_TARGET (no
+      WORKING-STORAGE field exists to move the status into -- fail closed
+      rather than silently drop the directive's status)
 whole-suite (plan-or-refusal, like find_terminator_plans):
 flow_mocks.find_flow_mock_plans(program, suite, lines)
    -> FlowMockPlan per safe MOCK PARAGRAPH/SECTION key, or
@@ -155,7 +165,7 @@ For every `BoundarySite` in the reachable set:
 | exactly 1 match, `site.nested and site.span is None` | `UNSUPPORTED_NESTED_MOCK_TARGET` | no validated replacement span — splicing could swallow a block terminator and corrupt control flow (an earlier attempt without the scope map did exactly that) |
 | exactly 1 match, `not site.nested and site.unspliceable_reason` | `UNSUPPORTED_MOCK_TARGET_LAYOUT` (2026-07-07, audit finding 2.1) | a top-level statement that does not own its source line(s) — sibling code before it, a one-line paragraph header, or another statement sharing the line — would have its whole-line splice delete that sibling code |
 
-After the site loop: any directive in `case.mocks` never matched → `UNMATCHED_MOCK`. Any `VERIFY` whose `(category, key)` isn't in `{(m.category, m.key) for m in case.mocks}` → `VERIFY_WITHOUT_MOCK` (its tally counter would be undeclared/stale).
+After the site loop: any directive in `case.mocks` never matched → `UNMATCHED_MOCK`. Any `VERIFY` whose `(category, key)` isn't in `{(m.category, m.key) for m in case.mocks}` → `VERIFY_WITHOUT_MOCK` (its tally counter would be undeclared/stale). Then a final pass over `case.mocks` checks `FILE-STATUS IS` sugar: any directive with `.file_status is not None` whose (uppercased) key is missing from `file_status_fields` → `UNRESOLVED_FILE_STATUS_TARGET` (the file's `SELECT` entry has no `FILE STATUS IS <field>` clause, so there is nowhere to move the status).
 
 **CANCEL as a covered-not-mocked site (audit finding 1.6):** `CancelStatement` is detected by `mock_surface.py` with `category=None`, `label="CANCEL"`, and `keys` set to every name on the statement (`.program_names`) — but unlike SORT/MERGE it is never *unconditionally* unmockable. `check_test_case` treats it as covered when, for **every** name in `site.keys`, the test case has a matching `MOCK CALL` (static, exact key) or dynamic-CALL directive (uppercased identifier match) — a mocked CALL never loads a real module, so cancelling it is a guaranteed GnuCOBOL no-op, and the covering directives are added to `matched_directives` (so the CALL mock is not spuriously flagged `UNMATCHED_MOCK` if its only reachable use is covering the CANCEL). Any uncovered name refuses `UNMOCKED_CANCEL`. `CANCEL` is never spliced regardless (`category is None` keeps it out of `splice_program`'s loop) — it is always left in place as plain COBOL.
 

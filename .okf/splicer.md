@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-07-10T00:00:00Z
+timestamp: 2026-07-21T00:00:00Z
 ---
 
 # Overview
@@ -193,17 +193,39 @@ docs/2026-07-20-paragraph-section-mocks-design.md.
 
 # Dispatch and Trap Generation (injector.py)
 
-`build_site_dispatch(site, suite, registry)` builds one `EVALUATE
-UT-CURRENT-CASE` block per **site** (not per mock key): different test
-cases can match the same physical statement through different keys (e.g.
-case 1 mocks `OPEN IN-FILE`, case 2 mocks `OPEN OUT-FILE`, both matching
-one `OPEN INPUT IN-FILE OUTPUT OUT-FILE` statement). Each matching case
-gets a `WHEN "NNN"` branch that increments that case's own tally
-(crediting the directive that matched) then splices in `directive.body_lines`
-verbatim. A `WHEN OTHER` branch is always appended: if control reaches a
-mocked site under a test case that doesn't mock it, that's a hard,
-loud failure (`__MOCKYMOCK__ ERROR: ... reached from unmocked test case`),
-never a silent fall-through.
+`build_site_dispatch(site, suite, registry, file_status_fields=None)` builds
+one `EVALUATE UT-CURRENT-CASE` block per **site** (not per mock key):
+different test cases can match the same physical statement through
+different keys (e.g. case 1 mocks `OPEN IN-FILE`, case 2 mocks `OPEN
+OUT-FILE`, both matching one `OPEN INPUT IN-FILE OUTPUT OUT-FILE`
+statement). Each matching case gets a `WHEN "NNN"` branch that increments
+that case's own tally (crediting the directive that matched) then splices
+in `directive.body_lines` verbatim. A `WHEN OTHER` branch is always
+appended: if control reaches a mocked site under a test case that doesn't
+mock it, that's a hard, loud failure (`__MOCKYMOCK__ ERROR: ... reached
+from unmocked test case`), never a silent fall-through.
+
+**FILE-STATUS default-success/override injection.** For a directive whose
+category is in `FILE_STATUS_CATEGORIES` (the 6 eligible file ops --
+`OPEN`/`CLOSE`/`READ`/`DELETE`/`START`/`UNLOCK`; `WRITE`/`REWRITE` are not
+eligible), `build_site_dispatch` looks up `directive.key.upper()` in the
+`file_status_fields` map (`mock_surface.analyze_file_status_fields`'s
+uppercased-file-name -> declared `FILE STATUS IS <field>` result, computed
+once per program and threaded down from `run_static_checks`/`_cmd_run`
+through `splice_program`). If the file declares a status field, the `WHEN`
+branch always starts with an implicit `MOVE "00" TO <field>` (default
+success) *before* the directive's own `body_lines` -- whether or not the
+`.cut` author used `FILE-STATUS IS` sugar. When the directive's body used
+`FILE-STATUS IS` (`directive.file_status` holding the resolved two-digit
+code, from the mnemonic table or a quoted literal — see [dsl](dsl.md)), a
+second `MOVE "<code>" TO <field>` is emitted right after the default,
+which therefore wins since it comes later in the same `WHEN` branch —
+same as any hand-written `MOVE` to that field a mock author adds after it.
+A file with no declared `FILE STATUS` field gets neither MOVE: there is no
+WORKING-STORAGE target to write into (`refusal.check_test_case`'s
+`UNRESOLVED_FILE_STATUS_TARGET` refuses fail-closed before splicing is
+ever reached if the `.cut` file used `FILE-STATUS IS` sugar against such a
+file). See `docs/2026-07-20-before-blocks-and-file-status-design.md`.
 
 `build_exec_trap(kind, line)` is the replacement for an **unmocked** EXEC
 SQL/CICS/DLI site: GnuCOBOL cannot compile a raw EXEC block regardless of
