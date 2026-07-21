@@ -129,6 +129,59 @@ TESTCASE "one"
         parse_cut(cut)
 
 
+def test_testcase_while_before_each_still_open_is_a_parse_error():
+    cut = """\
+TESTSUITE "unterminated-before"
+
+BEFORE-EACH
+    MOCK OPEN FILE1
+    END-MOCK
+
+TESTCASE "one"
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="missing END-BEFORE"):
+        parse_cut(cut)
+
+
+def test_before_each_while_before_all_still_open_is_a_parse_error():
+    cut = """\
+TESTSUITE "nested-before"
+
+BEFORE-ALL
+    MOCK OPEN FILE1
+    END-MOCK
+BEFORE-EACH
+    MOCK OPEN FILE2
+    END-MOCK
+END-BEFORE
+
+TESTCASE "one"
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="missing END-BEFORE"):
+        parse_cut(cut)
+
+
+def test_before_all_while_before_each_still_open_is_a_parse_error():
+    cut = """\
+TESTSUITE "nested-before-reverse"
+
+BEFORE-EACH
+    MOCK OPEN FILE1
+    END-MOCK
+BEFORE-ALL
+    MOCK OPEN FILE2
+    END-MOCK
+END-BEFORE
+
+TESTCASE "one"
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="missing END-BEFORE"):
+        parse_cut(cut)
+
+
 def test_move_inside_before_each_is_rejected():
     cut = """\
 TESTSUITE "no-move"

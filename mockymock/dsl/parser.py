@@ -289,6 +289,11 @@ def parse_cut(text: str) -> MockTestSuite:
         elif (m := _BEFORE_ALL_RE.match(line)) is not None:
             if suite is None:
                 raise CutParseError(f"line {line_no}: BEFORE-ALL before TESTSUITE")
+            if in_before is not None:
+                raise CutParseError(
+                    f"line {line_no}: BEFORE-ALL inside {in_before} -- "
+                    f"missing END-BEFORE"
+                )
             if seen_testcase:
                 raise CutParseError(
                     f"line {line_no}: BEFORE-ALL must appear before the "
@@ -307,6 +312,11 @@ def parse_cut(text: str) -> MockTestSuite:
         elif (m := _BEFORE_EACH_RE.match(line)) is not None:
             if suite is None:
                 raise CutParseError(f"line {line_no}: BEFORE-EACH before TESTSUITE")
+            if in_before is not None:
+                raise CutParseError(
+                    f"line {line_no}: BEFORE-EACH inside {in_before} -- "
+                    f"missing END-BEFORE"
+                )
             if seen_testcase:
                 raise CutParseError(
                     f"line {line_no}: BEFORE-EACH must appear before the "
