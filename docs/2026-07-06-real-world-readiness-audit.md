@@ -283,6 +283,10 @@ developer wouldn't have without training:
 - Silent footguns in the DSL: an unterminated `MOCK` body doesn't error (it
   swallows the rest of the file); a second `PERFORM` in a case silently
   wins over the first (`dsl.md`, Gotchas).
+- (Closed 2026-07-20) N nearly-identical `TESTCASE`s that only vary a
+  couple of `MOVE`/`EXPECT` values for tabular data -- see `PROVIDER`/
+  `HEADER`/`ROW` parameterized test cases,
+  `docs/2026-07-20-provider-parameterized-test-cases-design.md`.
 
 **What closing it takes:** richer assertions (comparison operators, argument
 capture/spies on mocked CALLs); a `.cut` linter that flags unterminated

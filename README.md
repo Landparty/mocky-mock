@@ -105,6 +105,13 @@ TESTCASE "totals two records then updates and notifies"
   expected to set them on every run (the `ROWS` sugar above does this
   automatically).
 - Lines starting with `*>` are comments.
+- `PROVIDER <name>` (suite-level, before any `TESTCASE` that uses it)
+  declares a data table: `HEADER <col>, ...` names the columns, `ROW
+  <value>, ...` adds one row each. `TESTCASE "..." USING PROVIDER <name>`
+  expands, at parse time, into one ordinary test case per row --
+  `{ColumnName}` in a `MOVE`/`EXPECT` value is substituted with that
+  row's value. Generated cases are named `"<name> [row <n>: <first
+  column value>]"`. See the worked example in `examples/statelkup/`.
 
 `mockymock generate <program.cbl>` scaffolds a starter `.cut` covering
 every mockable boundary it finds.
@@ -179,6 +186,7 @@ distinctive feature.
 | [`examples/raterte/`](examples/raterte/) | Dynamic `CALL` through an identifier (`MOCK CALL WS-PGM-NAME`), one mock covering multiple runtime targets |
 | [`examples/flowmock/`](examples/flowmock/) | Internal flow-target mocks (`MOCK PARAGRAPH` / `MOCK SECTION`), boundaries inside a mocked body needing no mocks of their own |
 | [`examples/custprog/`](examples/custprog/) | `MOCK SQL ... ROWS` cursor-fetch sugar, DCLGEN-style `EXEC SQL INCLUDE <member>` via `--copybook-path` |
+| [`examples/statelkup/`](examples/statelkup/) | `PROVIDER`/`HEADER`/`ROW` parameterized test cases -- one `TESTCASE` expands into N rows |
 | [`examples/real-world/`](examples/real-world/) | Four business-flavored programs — IMS DL/I batch, IMS MPP, MQ consumer, MQ producer — plus the `--coverage` worked example |
 | [`examples/nist-cobol85/`](examples/nist-cobol85/) | Static `CALL` against real, unmodified NIST COBOL-85 validation-suite programs |
 

@@ -27,9 +27,13 @@ the shared vocabulary between the parser (produces it), the generator
 # Grammar
 
 ```
+[ PROVIDER <name>
+      HEADER <col>, ... [, <col>]*
+      ROW <value>, ... [, <value>]* [ ROW ... ]* ]*
+
 TESTSUITE "<name>"
 
-TESTCASE "<name>" [ TAGS "<tag>" ... ]
+TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
     [ MOCK <category> <key>
           <COBOL statement lines, passed through verbatim>
       END-MOCK ]*
@@ -77,6 +81,37 @@ exists because a missed END-MOCK doesn't fail at its own line; it silently
 swallows the rest of the file into the mock body. Bare keys are upper-cased
 by the parser; quoted keys are preserved exactly (see below).
 
+## `PROVIDER` parameterized test cases
+
+`PROVIDER <name>` is a suite-level block (sibling of `TESTCASE`, must be
+declared before any `TESTCASE` that references it) holding a `HEADER`
+(bare, comma-separated column names) and one or more `ROW`s
+(comma-separated, quote-aware-split free-form COBOL value text, same
+convention as `MOVE`/`EXPECT` values). `TESTCASE "..." USING PROVIDER
+<name>` binds a test-case template to it.
+
+`parser.py`'s `_expand_providers` runs as the last step of `parse_cut()`:
+it replaces a provider-bound `TESTCASE` with one ordinary `MockTestCase`
+per row, substituting `{ColumnName}` tokens (`_PLACEHOLDER_RE`) into that
+case's `MOVE` and `EXPECT` values only -- `MOCK` bodies, `MOVE` targets,
+`EXPECT` data-names, `PERFORM` target/thru, and `VERIFY` stay untouched
+and identical across every row. An unknown `{Foo}` token is a
+`CutParseError` naming the provider's real columns; an undeclared/
+mistyped `USING PROVIDER` reference errors at the `TESTCASE` line.
+
+Generated cases are named `"<name> [row <n>: <first column value>]"` and
+their `.line` points at that row's own `ROW` line (not the shared
+`TESTCASE` header) -- `MockTestSuite.test_cases` after `parse_cut()`
+returns holds only these expanded, ordinary cases: analysis, splicer,
+runtime, report, and every CLI flag never learn `PROVIDER` existed. A
+`TESTCASE` with no `USING PROVIDER` is never scanned for `{...}` tokens
+at all -- strict backward compatibility.
+
+See `docs/2026-07-20-provider-parameterized-test-cases-design.md` for
+the full design and rejected alternatives (a single compiled
+`OCCURS`-table loop, `ROW ( FIELD = value, ... )` pairs, `MOCK`-body
+templating).
+
 ## `MOCK <kind> <key>` forms
 
 Two key syntaxes, split by category:
@@ -122,6 +157,7 @@ rationale.
 |---|---|---|
 | `MockCategory` (Enum) | `CALL, DYNCALL, OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START, UNLOCK, SQL, CICS, DLI, ACCEPT, PARAGRAPH, SECTION` | `.keyword` property maps `DYNCALL → "CALL"`, everything else to its own name |
 | `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS` directive and is mutually exclusive with `body_lines` |
+| `DataProvider` | `name, line, header: list[str], rows: list[list[str]], row_lines: list[int]` | Parser-internal only -- never stored on `MockTestSuite`/`MockTestCase`; consumed and discarded by `_expand_providers` before `parse_cut()` returns |
 | `ExpectDirective` | `data_name, expected_value` | one `EXPECT` line |
 | `VerifyDirective` | `category, key, expectation` | `.program_name` same v1-compat alias as `MockDirective` |
 | `MockTestCase` | `name, mocks, setup_moves: list[(value,target)], perform_target, perform_thru: str\|None, expectations, verifications` | `perform_thru` is `None` unless `PERFORM X THRU Y` was used |
