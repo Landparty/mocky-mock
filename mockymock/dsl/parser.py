@@ -27,6 +27,15 @@ BEFORE-EACH overrides BEFORE-ALL, silently. No other module ever learns
 these blocks existed; by the time parse_cut returns, every case's
 `mocks` list looks exactly as if the author had typed everything by
 hand.
+
+FILE-STATUS IS <mnemonic-or-code> (see
+docs/2026-07-20-before-blocks-and-file-status-design.md): usable once
+inside a MOCK OPEN/CLOSE/READ/DELETE/START/UNLOCK body, resolved here to
+a two-character status code and stored on MockDirective.file_status --
+the WORKING-STORAGE field it targets isn't knowable until the target
+.cbl's FILE-CONTROL has been analyzed, which happens later in the
+pipeline (mock_surface.analyze_file_status_fields), not during .cut
+parsing.
 """
 
 from __future__ import annotations
@@ -34,6 +43,7 @@ from __future__ import annotations
 import re
 
 from mockymock.dsl.model import (
+    FILE_STATUS_CATEGORIES,
     ExpectDirective,
     MockCategory,
     MockDirective,
@@ -90,6 +100,23 @@ _VERIFY_BARE_RE = re.compile(
 _COMMENT_RE = re.compile(r"^\*>")
 _ROW_RE = re.compile(r"^\((?P<pairs>.+)\)$")
 _ROW_PAIR_RE = re.compile(r"^(?P<field>[A-Za-z][A-Za-z0-9-]*)\s*=\s*(?P<value>.+)$")
+
+# FILE-STATUS IS <mnemonic> -> two-character GnuCOBOL file status code.
+# A quoted two-character literal (FILE-STATUS IS "92") always works too,
+# as the escape hatch for a code not listed here.
+_FILE_STATUS_MNEMONICS = {
+    "SUCCESS": "00",
+    "END-OF-FILE": "10",
+    "DUPLICATE-KEY": "22",
+    "RECORD-NOT-FOUND": "23",
+    "FILE-NOT-FOUND": "35",
+    "ALREADY-OPEN": "41",
+    "NOT-OPEN": "42",
+    "NO-CURRENT-RECORD": "43",
+}
+_FILE_STATUS_RE = re.compile(
+    r'^FILE-STATUS\s+IS\s+(?:(?P<mnemonic>[A-Za-z][A-Za-z-]*)|"(?P<literal>[^"]*)")$'
+)
 
 
 class CutParseError(ValueError):
@@ -250,6 +277,39 @@ def parse_cut(text: str) -> MockTestSuite:
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.rows.append(row)
+            elif (m := _FILE_STATUS_RE.match(line)) is not None:
+                if in_mock.category not in FILE_STATUS_CATEGORIES:
+                    eligible = "/".join(c.keyword for c in FILE_STATUS_CATEGORIES)
+                    raise CutParseError(
+                        f"line {line_no}: FILE-STATUS IS is only valid "
+                        f"inside MOCK {eligible} bodies, not MOCK "
+                        f"{in_mock.category.keyword}"
+                    )
+                if in_mock.file_status is not None:
+                    raise CutParseError(
+                        f"line {line_no}: a second FILE-STATUS IS in one "
+                        f"MOCK body -- only one is allowed"
+                    )
+                if m.group("literal") is not None:
+                    code = m.group("literal")
+                    if len(code) != 2:
+                        raise CutParseError(
+                            f"line {line_no}: FILE-STATUS IS {code!r} must "
+                            f"be exactly two characters (a raw file status "
+                            f"code)"
+                        )
+                else:
+                    mnemonic = m.group("mnemonic").upper()
+                    if mnemonic not in _FILE_STATUS_MNEMONICS:
+                        valid = ", ".join(sorted(_FILE_STATUS_MNEMONICS))
+                        raise CutParseError(
+                            f"line {line_no}: unrecognized FILE-STATUS "
+                            f"mnemonic {m.group('mnemonic')!r} (expected "
+                            f'one of {valid}, or a quoted two-character '
+                            f'code like "92")'
+                        )
+                    code = _FILE_STATUS_MNEMONICS[mnemonic]
+                in_mock.file_status = code
             else:
                 in_mock.body_lines.append(line)
             continue
