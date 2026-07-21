@@ -1,5 +1,28 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-21 — Docker verification of the BEFORE/FILE-STATUS/PROVIDER wave; ACCTPRG coverage pin refreshed
+
+- The full integration suite ran against real GnuCOBOL in Docker for the
+  first time since the `feature/before-blocks-and-file-status` merge
+  (`6f6786e`) — the merge had been unit-test-only because Docker was
+  unreachable that session. Result: everything green, including
+  `test_taxfile_example.py` (BEFORE-EACH + FILE-STATUS IS) and
+  `test_statelkup_example.py` (PROVIDER rows), closing the disclosed
+  verification gap.
+- The one anticipated casualty,
+  `test_realworld_acctprg_example.py::test_committed_acctprg_example_reports_coverage`,
+  failed exactly as its breadcrumb comment predicted: the implicit
+  default-success `MOVE "00" TO WS-PURGEIN-STATUS` injection added 8
+  executable (and executed) lines to ACCTPRG's spliced output. Re-pinned
+  `81.13% (460/567)` → `81.39% (468/575)`; not a regression.
+- Gotcha re-confirmed (see [testing](testing.md) Gotchas): the global
+  `uv tool install`-ed `mockymock` CLI had gone stale again — its parser
+  predated BEFORE-EACH/PROVIDER entirely. Refreshed via
+  `uv tool install --from . mockymock --force`. The sibling
+  `mocky-mock-vscode-extension`'s `.cut` TextMate grammar still has no
+  highlighting for `BEFORE-EACH`/`BEFORE-ALL`/`FILE-STATUS IS`/
+  `PROVIDER`/`HEADER`/`ROW` (open follow-up in that repo).
+
 ## 2026-07-21 — BEFORE-EACH/BEFORE-ALL mock scoping and FILE-STATUS IS sugar
 
 - **New `.cut` grammar** ([dsl](dsl.md)): `BEFORE-EACH`/`BEFORE-ALL` blocks
