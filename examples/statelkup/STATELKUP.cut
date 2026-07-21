@@ -1,0 +1,15 @@
+TESTSUITE "STATELKUP state name lookup"
+
+*> PROVIDER/HEADER/ROW declare a reusable data table; USING PROVIDER
+*> expands this one TESTCASE into 3 independently compiled/reported
+*> cases -- see docs/2026-07-20-provider-parameterized-test-cases-design.md.
+PROVIDER StateNames
+    HEADER Abbreviation, Name
+    ROW "AZ", "Arizona"
+    ROW "KY", "Kentucky"
+    ROW "XX", "*Undefined*"
+
+TESTCASE "1000-LOOKUP-STATE resolves a state name" USING PROVIDER StateNames
+    MOVE {Abbreviation} TO WS-STATE-CODE
+    PERFORM 1000-LOOKUP-STATE
+    EXPECT WS-STATE-NAME TO BE {Name}
