@@ -137,6 +137,41 @@ def _extract_fixed_format(original_lines: list[str]) -> list[tuple[int, str]]:
     return extracted
 
 
+def build_original_line_map(
+    instrumented_lines: list[str],
+    normalized_lines: list[str],
+    original_lines: list[str],
+) -> dict[int, int]:
+    """1-based instrumented line -> 1-based ORIGINAL .cbl line.
+
+    Composes the same two alignments `map_coverage_to_original` uses:
+    instrumented -> normalized (the splicer inserts lines but keeps
+    untouched source verbatim and in order), then normalized -> original
+    (fixed-format extraction drops comments/sequence columns). Instrumented
+    lines with no original counterpart -- the splicer's own dispatch and
+    driver code -- are simply absent from the result.
+
+    Shared with the execution-trace report, whose trace-file line numbers
+    are instrumented lines needing exactly this remap; see
+    docs/2026-07-21-debug-trace-design.md.
+    """
+    normalized_stripped = [line.rstrip() for line in normalized_lines]
+    instrumented_stripped = [line.rstrip() for line in instrumented_lines]
+    inst_to_norm = _matching_index_map(normalized_stripped, instrumented_stripped)
+
+    extracted = _extract_fixed_format(original_lines)
+    norm_to_orig = _matching_index_map(
+        [content for _, content in extracted], normalized_stripped
+    )
+
+    mapping: dict[int, int] = {}
+    for inst_index, norm_index in inst_to_norm.items():
+        extracted_index = norm_to_orig.get(norm_index)
+        if extracted_index is not None:
+            mapping[inst_index + 1] = extracted[extracted_index][0]
+    return mapping
+
+
 def map_coverage_to_original(
     report: CoverageReport,
     instrumented_lines: list[str],
@@ -154,23 +189,12 @@ def map_coverage_to_original(
     result covers exactly the user's own executable lines. That exclusion
     is the point: v1 deliberately reported against the instrumented source
     (see module docstring); this view answers "which of MY lines ran"."""
-    normalized_stripped = [line.rstrip() for line in normalized_lines]
-    instrumented_stripped = [line.rstrip() for line in instrumented_lines]
-    inst_to_norm = _matching_index_map(normalized_stripped, instrumented_stripped)
-
-    extracted = _extract_fixed_format(original_lines)
-    norm_to_orig = _matching_index_map(
-        [content for _, content in extracted], normalized_stripped
+    line_map = build_original_line_map(
+        instrumented_lines, normalized_lines, original_lines
     )
 
     def to_original(instrumented_line: int) -> int | None:
-        norm_index = inst_to_norm.get(instrumented_line - 1)
-        if norm_index is None:
-            return None
-        extracted_index = norm_to_orig.get(norm_index)
-        if extracted_index is None:
-            return None
-        return extracted[extracted_index][0]
+        return line_map.get(instrumented_line)
 
     mapped: dict[int, bool] = {}
     for line_number in report.covered_lines:

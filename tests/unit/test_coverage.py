@@ -7,9 +7,28 @@ import pytest
 from mockymock.report.coverage import (
     CoverageReport,
     UncoveredLine,
+    build_original_line_map,
     format_coverage_console,
     parse_gcov,
 )
+
+
+def test_build_original_line_map_skips_inserted_lines():
+    """The splicer's own lines must map nowhere: the trace report and the
+    coverage report both mean "which of MY lines ran"."""
+    original = [
+        "      *comment",
+        "       MOVE 1 TO WS-A",
+        "       ADD 1 TO WS-A",
+    ]
+    normalized = ["MOVE 1 TO WS-A", "ADD 1 TO WS-A"]
+    instrumented = ["MOVE 1 TO WS-A", "ADD 1 TO UT-TALLY-1", "ADD 1 TO WS-A"]
+
+    mapping = build_original_line_map(instrumented, normalized, original)
+
+    assert mapping[1] == 2
+    assert mapping[3] == 3
+    assert 2 not in mapping
 
 SAMPLE_GCOV = (
     "        -:    0:Source:PROG.cbl\n"
