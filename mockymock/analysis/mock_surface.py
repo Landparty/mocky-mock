@@ -19,7 +19,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from cobolparser.models.program import CobolDivision, CobolParagraph, CobolProgram
+from cobolparser.models.program import (
+    CobolDivision,
+    CobolParagraph,
+    CobolProgram,
+    CobolSection,
+)
 from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.models.statements.call import CallStatement
 from cobolparser.models.statements.control import (
@@ -44,6 +49,7 @@ from cobolparser.models.statements.misc import (
     MergeStatement,
     ReleaseStatement,
     ReturnStatement,
+    SelectStatement,
     SortStatement,
 )
 from cobolparser.parsers.statements.ibm_exec_statements import (
@@ -475,6 +481,30 @@ def analyze(program: CobolProgram) -> MockSurface:
         _walk_statements(paragraph.statements, paragraph.paragraph_name, surface)
 
     return surface
+
+
+def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
+    """Uppercased file name -> its declared `FILE STATUS IS <field>` name,
+    read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT statements. A
+    file whose SELECT entry has no FILE STATUS clause has no entry -- there
+    is no WORKING-STORAGE field to default or target with FILE-STATUS IS
+    sugar (see docs/2026-07-20-before-blocks-and-file-status-design.md)."""
+    fields: dict[str, str] = {}
+    environment = program.get_division("ENVIRONMENT")
+    if environment is None:
+        return fields
+    io_section = environment.get_section_by_name("INPUT-OUTPUT")
+    if not isinstance(io_section, CobolSection):
+        return fields
+    file_control = io_section.get_paragraph_by_name("FILE-CONTROL")
+    if file_control is None:
+        return fields
+    for statement in file_control.statements:
+        if not isinstance(statement, SelectStatement):
+            continue
+        if statement.file_name and statement.file_status:
+            fields[statement.file_name.upper()] = statement.file_status
+    return fields
 
 
 def _all_paragraphs(procedure_division: CobolDivision) -> list[CobolParagraph]:

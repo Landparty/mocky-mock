@@ -296,6 +296,12 @@ quirk before a run; and surfacing the sharp edges in a user tutorial. The
 (auto-mocking transitively-reached boundaries, not just a paragraph's own)
 would help more.
 
+**Closed 2026-07-20**: `BEFORE-EACH`/`BEFORE-ALL` shared mocks (no more
+re-declaring the same `MOCK` in every `TESTCASE`) and `FILE-STATUS IS`
+sugar with an implicit default-success status landed — see
+`docs/2026-07-20-before-blocks-and-file-status-design.md` and
+`examples/taxfile/`.
+
 ---
 
 ## Finding 7 — Distribution, CI, and operational readiness `[both]` · Severity: **medium–high**

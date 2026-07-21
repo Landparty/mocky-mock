@@ -185,6 +185,7 @@ distinctive feature.
 | [`examples/claimseg/`](examples/claimseg/) | Raw `EXEC DLI` (`GU`/`ISRT`) |
 | [`examples/raterte/`](examples/raterte/) | Dynamic `CALL` through an identifier (`MOCK CALL WS-PGM-NAME`), one mock covering multiple runtime targets |
 | [`examples/flowmock/`](examples/flowmock/) | Internal flow-target mocks (`MOCK PARAGRAPH` / `MOCK SECTION`), boundaries inside a mocked body needing no mocks of their own |
+| [`examples/taxfile/`](examples/taxfile/) | `BEFORE-EACH` shared mocks with per-case overrides, `FILE-STATUS IS` sugar, implicit default-success file status |
 | [`examples/custprog/`](examples/custprog/) | `MOCK SQL ... ROWS` cursor-fetch sugar, DCLGEN-style `EXEC SQL INCLUDE <member>` via `--copybook-path` |
 | [`examples/statelkup/`](examples/statelkup/) | `PROVIDER`/`HEADER`/`ROW` parameterized test cases -- one `TESTCASE` expands into N rows |
 | [`examples/real-world/`](examples/real-world/) | Four business-flavored programs — IMS DL/I batch, IMS MPP, MQ consumer, MQ producer — plus the `--coverage` worked example |

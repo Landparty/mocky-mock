@@ -37,6 +37,7 @@ class StaticCheckResult:
     lines: list[str] | None = None  # normalized + linkage-neutralized
     scope_map: ScopeMap | None = None
     linkage: LinkagePlan | None = None
+    file_status_fields: dict[str, str] | None = None
 
     @property
     def ok(self) -> bool:
@@ -100,7 +101,7 @@ def run_static_checks(
 
     from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.linkage import linkage_plan
-    from mockymock.analysis.mock_surface import analyze
+    from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
     from mockymock.analysis.refusal import (
         check_expansion_warnings,
         check_linkage_layout,
@@ -167,6 +168,7 @@ def run_static_checks(
     # 5. Surface analysis, normalization, linkage layout + neutralization.
     surface = analyze(parse_result.ast)
     out.surface = surface
+    out.file_status_fields = analyze_file_status_fields(parse_result.ast)
     lines = normalize_fixed_format(raw_source.splitlines()).splitlines()
 
     linkage_reasons = check_linkage_layout(parse_result.ast, lines)
@@ -211,7 +213,9 @@ def run_static_checks(
     for case in suite.test_cases:
         out.problems.extend(
             f"refused ({r.code}): {r.message}"
-            for r in check_test_case(surface, parse_result.ast, case)
+            for r in check_test_case(
+                surface, parse_result.ast, case, out.file_status_fields
+            )
         )
     out.problems.extend(
         f"refused ({r.code}): {r.message}"

@@ -87,4 +87,13 @@ def test_committed_acctprg_example_reports_coverage(capsys):
     # of a page of unrelated captured stdout.
     match = re.search(r"coverage: \d+\.\d+% lines executed \(\d+/\d+\)", out)
     assert match is not None, "no coverage line in output"
+    # This pin predates the BEFORE-EACH/BEFORE-ALL + FILE-STATUS IS branch
+    # (docs/2026-07-20-before-blocks-and-file-status-design.md). That branch's
+    # build_site_dispatch (mockymock/splicer/injector.py) now injects an
+    # implicit `MOVE "00" TO WS-PURGEIN-STATUS` into every OPEN/READ/CLOSE
+    # dispatch branch for PURGEIN, whose FILE STATUS IS WS-PURGEIN-STATUS is
+    # mocked via plain MOCK OPEN/READ/CLOSE PURGEIN (no override) in
+    # ACCTPRG.cut -- new executable lines in the spliced output. Re-verify
+    # this number (and re-pin if it changed) next time this test runs
+    # against real Docker/GnuCOBOL.
     assert match.group(0) == "coverage: 81.13% lines executed (460/567)"

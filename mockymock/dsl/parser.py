@@ -14,6 +14,37 @@ VERIFY mirrors the same key syntax; a bare `VERIFY "X"` stays CALL for v1
 back-compat, and CALLED/PERFORMED are interchangeable. Lines starting with `*>` outside
 MOCK bodies are comments; inside a body they pass through (they're valid
 free-form COBOL).
+
+BEFORE-ALL/BEFORE-EACH (see
+docs/2026-07-20-before-blocks-and-file-status-design.md): at most one of
+each per TESTSUITE, appearing after the TESTSUITE header and before the
+first TESTCASE, holding MOCK directives only. Resolved by desugaring,
+purely inside this module: after the file is fully parsed, each
+TESTCASE's own mocks list is extended with every BEFORE-EACH mock whose
+(category, key) it didn't already declare, then every BEFORE-ALL mock
+neither it nor BEFORE-EACH already declared -- so TESTCASE overrides
+BEFORE-EACH overrides BEFORE-ALL, silently. No other module ever learns
+these blocks existed; by the time parse_cut returns, every case's
+`mocks` list looks exactly as if the author had typed everything by
+hand.
+
+FILE-STATUS IS <mnemonic-or-code> (see
+docs/2026-07-20-before-blocks-and-file-status-design.md): usable once
+inside a MOCK OPEN/CLOSE/READ/DELETE/START/UNLOCK body, resolved here to
+a two-character status code and stored on MockDirective.file_status --
+the WORKING-STORAGE field it targets isn't knowable until the target
+.cbl's FILE-CONTROL has been analyzed, which happens later in the
+pipeline (mock_surface.analyze_file_status_fields), not during .cut
+parsing.
+
+PROVIDER/HEADER/ROW (see
+docs/2026-07-20-provider-parameterized-test-cases-design.md): a
+`TESTCASE ... USING PROVIDER <name>` is expanded into one ordinary
+MockTestCase per PROVIDER row (`_expand_providers`, applied after
+BEFORE-ALL/BEFORE-EACH desugaring so each expanded row inherits the
+template case's fully-resolved mocks) -- never stored on
+MockTestSuite/MockTestCase, so every downstream consumer only ever sees
+already-expanded MockTestCase objects and never learns PROVIDER exists.
 """
 
 from __future__ import annotations
@@ -21,6 +52,7 @@ from __future__ import annotations
 import re
 
 from mockymock.dsl.model import (
+    FILE_STATUS_CATEGORIES,
     DataProvider,
     ExpectDirective,
     MockCategory,
@@ -44,6 +76,11 @@ _TESTCASE_RE = re.compile(
     r"(?:\s+USING\s+PROVIDER\s+(?P<provider>[A-Za-z0-9][A-Za-z0-9-]*))?$"
 )
 _TAG_RE = re.compile(r'"([^"]*)"')
+_BEFORE_ALL_RE = re.compile(r"^BEFORE-ALL$")
+_BEFORE_EACH_RE = re.compile(r"^BEFORE-EACH$")
+# END-BEFORE is deliberately lenient, same rationale as END-MOCK below: a
+# missed terminator must not silently swallow the rest of the file.
+_END_BEFORE_RE = re.compile(r"^END-BEFORE\.?$", re.IGNORECASE)
 _MOCK_QUOTED_RE = re.compile(
     rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"(?:\s+(?P<rows>ROWS))?$'
 )
@@ -80,6 +117,23 @@ _HEADER_RE = re.compile(
 )
 _PROVIDER_ROW_RE = re.compile(r"^ROW\s+(?P<values>.+)$")
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z][A-Za-z0-9-]*)\}")
+
+# FILE-STATUS IS <mnemonic> -> two-character GnuCOBOL file status code.
+# A quoted two-character literal (FILE-STATUS IS "92") always works too,
+# as the escape hatch for a code not listed here.
+_FILE_STATUS_MNEMONICS = {
+    "SUCCESS": "00",
+    "END-OF-FILE": "10",
+    "DUPLICATE-KEY": "22",
+    "RECORD-NOT-FOUND": "23",
+    "FILE-NOT-FOUND": "35",
+    "ALREADY-OPEN": "41",
+    "NOT-OPEN": "42",
+    "NO-CURRENT-RECORD": "43",
+}
+_FILE_STATUS_RE = re.compile(
+    r'^FILE-STATUS\s+IS\s+(?:(?P<mnemonic>[A-Za-z][A-Za-z-]*)|"(?P<literal>[^"]*)")$'
+)
 
 
 class CutParseError(ValueError):
@@ -224,14 +278,42 @@ def _expand_providers(
     return expanded
 
 
+def _apply_before_blocks(
+    suite: MockTestSuite,
+    before_all: list[MockDirective],
+    before_each: list[MockDirective],
+) -> None:
+    """Desugar BEFORE-ALL/BEFORE-EACH into every TESTCASE's own mocks list.
+    Precedence when a (category, key) appears in more than one place:
+    TESTCASE > BEFORE-EACH > BEFORE-ALL, silently -- see
+    docs/2026-07-20-before-blocks-and-file-status-design.md."""
+    if not before_all and not before_each:
+        return
+    for case in suite.test_cases:
+        declared = {(m.category, m.key) for m in case.mocks}
+        for directive in before_each:
+            key = (directive.category, directive.key)
+            if key in declared:
+                continue
+            declared.add(key)
+            case.mocks.append(directive)
+        for directive in before_all:
+            key = (directive.category, directive.key)
+            if key in declared:
+                continue
+            declared.add(key)
+            case.mocks.append(directive)
+
+
 def parse_cut(text: str) -> MockTestSuite:
     suite: MockTestSuite | None = None
     case: MockTestCase | None = None
     in_mock: MockDirective | None = None
     in_mock_line = 0
-    # (category, key) -> declaring line, reset per TESTCASE: a duplicate
-    # MOCK would otherwise parse fine and surface much later as an
-    # AMBIGUOUS_MOCK refusal with no line numbers and misleading advice.
+    # (category, key) -> declaring line, reset per TESTCASE/BEFORE-EACH/
+    # BEFORE-ALL: a duplicate MOCK would otherwise parse fine and surface
+    # much later as an AMBIGUOUS_MOCK refusal with no line numbers and
+    # misleading advice.
     mock_lines: dict[tuple[MockCategory, str], int] = {}
     providers: dict[str, DataProvider] = {}
     current_provider: DataProvider | None = None
@@ -247,17 +329,35 @@ def parse_cut(text: str) -> MockTestSuite:
             )
         current_provider = None
 
+    # The list new MOCK directives are appended to: case.mocks inside a
+    # TESTCASE, before_each/before_all inside those blocks, None
+    # otherwise (MOCK outside any of them is a parse error).
+    mock_target: list[MockDirective] | None = None
+    before_all: list[MockDirective] = []
+    before_each: list[MockDirective] = []
+    before_all_seen = False
+    before_each_seen = False
+    seen_testcase = False
+    in_before: str | None = None  # None, "BEFORE-ALL", or "BEFORE-EACH"
+    before_open_line = 0
+
+    def _current_scope_label() -> str:
+        if case is not None:
+            return f"TESTCASE {case.name!r}"
+        assert in_before is not None
+        return in_before
+
     def _open_mock(directive: MockDirective, line_no: int) -> MockDirective:
-        assert case is not None
+        assert mock_target is not None
         mock_id = (directive.category, directive.key)
         if mock_id in mock_lines:
             raise CutParseError(
                 f"line {line_no}: duplicate MOCK {directive.describe()} in "
-                f"TESTCASE {case.name!r} (first declared at line "
+                f"{_current_scope_label()} (first declared at line "
                 f"{mock_lines[mock_id]})"
             )
         mock_lines[mock_id] = line_no
-        case.mocks.append(directive)
+        mock_target.append(directive)
         return directive
 
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
@@ -294,6 +394,41 @@ def parse_cut(text: str) -> MockTestSuite:
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.rows.append(row)
+            elif (m := _FILE_STATUS_RE.match(line)) is not None:
+                if in_mock.category not in FILE_STATUS_CATEGORIES:
+                    eligible = "/".join(
+                        sorted(c.keyword for c in FILE_STATUS_CATEGORIES)
+                    )
+                    raise CutParseError(
+                        f"line {line_no}: FILE-STATUS IS is only valid "
+                        f"inside MOCK {eligible} bodies, not MOCK "
+                        f"{in_mock.category.keyword}"
+                    )
+                if in_mock.file_status is not None:
+                    raise CutParseError(
+                        f"line {line_no}: a second FILE-STATUS IS in one "
+                        f"MOCK body -- only one is allowed"
+                    )
+                if m.group("literal") is not None:
+                    code = m.group("literal")
+                    if len(code) != 2:
+                        raise CutParseError(
+                            f"line {line_no}: FILE-STATUS IS {code!r} must "
+                            f"be exactly two characters (a raw file status "
+                            f"code)"
+                        )
+                else:
+                    mnemonic = m.group("mnemonic").upper()
+                    if mnemonic not in _FILE_STATUS_MNEMONICS:
+                        valid = ", ".join(sorted(_FILE_STATUS_MNEMONICS))
+                        raise CutParseError(
+                            f"line {line_no}: unrecognized FILE-STATUS "
+                            f"mnemonic {m.group('mnemonic')!r} (expected "
+                            f'one of {valid}, or a quoted two-character '
+                            f'code like "92")'
+                        )
+                    code = _FILE_STATUS_MNEMONICS[mnemonic]
+                in_mock.file_status = code
             else:
                 in_mock.body_lines.append(line)
             continue
@@ -356,6 +491,11 @@ def parse_cut(text: str) -> MockTestSuite:
             if suite is None:
                 raise CutParseError(f"line {line_no}: TESTCASE before TESTSUITE")
             _close_provider()
+            if in_before is not None:
+                raise CutParseError(
+                    f"line {line_no}: TESTCASE inside {in_before} -- "
+                    f"missing END-BEFORE"
+                )
             tags = _TAG_RE.findall(m.group("tags") or "")
             for tag in tags:
                 if not tag.strip():
@@ -375,10 +515,70 @@ def parse_cut(text: str) -> MockTestSuite:
             suite.test_cases.append(case)
             if provider_name is not None:
                 pending_expansions.append((case, providers[provider_name]))
+            seen_testcase = True
+            mock_target = case.mocks
+            mock_lines = {}
+        elif (m := _BEFORE_ALL_RE.match(line)) is not None:
+            if suite is None:
+                raise CutParseError(f"line {line_no}: BEFORE-ALL before TESTSUITE")
+            if in_before is not None:
+                raise CutParseError(
+                    f"line {line_no}: BEFORE-ALL inside {in_before} -- "
+                    f"missing END-BEFORE"
+                )
+            if seen_testcase:
+                raise CutParseError(
+                    f"line {line_no}: BEFORE-ALL must appear before the "
+                    f"first TESTCASE"
+                )
+            if before_all_seen:
+                raise CutParseError(
+                    f"line {line_no}: a second BEFORE-ALL block -- a "
+                    f"TESTSUITE holds at most one"
+                )
+            before_all_seen = True
+            in_before = "BEFORE-ALL"
+            before_open_line = line_no
+            mock_target = before_all
+            mock_lines = {}
+        elif (m := _BEFORE_EACH_RE.match(line)) is not None:
+            if suite is None:
+                raise CutParseError(f"line {line_no}: BEFORE-EACH before TESTSUITE")
+            if in_before is not None:
+                raise CutParseError(
+                    f"line {line_no}: BEFORE-EACH inside {in_before} -- "
+                    f"missing END-BEFORE"
+                )
+            if seen_testcase:
+                raise CutParseError(
+                    f"line {line_no}: BEFORE-EACH must appear before the "
+                    f"first TESTCASE"
+                )
+            if before_each_seen:
+                raise CutParseError(
+                    f"line {line_no}: a second BEFORE-EACH block -- a "
+                    f"TESTSUITE holds at most one"
+                )
+            before_each_seen = True
+            in_before = "BEFORE-EACH"
+            before_open_line = line_no
+            mock_target = before_each
+            mock_lines = {}
+        elif _END_BEFORE_RE.match(line):
+            if in_before is None:
+                raise CutParseError(
+                    f"line {line_no}: END-BEFORE without an open "
+                    f"BEFORE-EACH/BEFORE-ALL"
+                )
+            in_before = None
+            mock_target = None
             mock_lines = {}
         elif (m := _MOCK_QUOTED_RE.match(line)) is not None:
-            if case is None:
-                raise CutParseError(f"line {line_no}: MOCK outside TESTCASE")
+            if mock_target is None:
+                raise CutParseError(
+                    f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/"
+                    f"BEFORE-ALL"
+                )
             if not m.group("key"):
                 raise CutParseError(
                     f'line {line_no}: empty MOCK {m.group("cat")} key -- '
@@ -400,8 +600,11 @@ def parse_cut(text: str) -> MockTestSuite:
             )
             in_mock_line = line_no
         elif (m := _MOCK_BARE_RE.match(line)) is not None:
-            if case is None:
-                raise CutParseError(f"line {line_no}: MOCK outside TESTCASE")
+            if mock_target is None:
+                raise CutParseError(
+                    f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/"
+                    f"BEFORE-ALL"
+                )
             in_mock = _open_mock(
                 MockDirective(
                     category=_resolve_category(m.group("cat"), bare_key=True),
@@ -420,10 +623,20 @@ def parse_cut(text: str) -> MockTestSuite:
             )
         elif (m := _MOVE_RE.match(line)) is not None:
             if case is None:
+                if in_before is not None:
+                    raise CutParseError(
+                        f"line {line_no}: MOVE not allowed inside "
+                        f"{in_before} (only MOCK directives are)"
+                    )
                 raise CutParseError(f"line {line_no}: MOVE outside TESTCASE")
             case.setup_moves.append((m.group("value"), m.group("target")))
         elif (m := _PERFORM_RE.match(line)) is not None:
             if case is None:
+                if in_before is not None:
+                    raise CutParseError(
+                        f"line {line_no}: PERFORM not allowed inside "
+                        f"{in_before} (only MOCK directives are)"
+                    )
                 raise CutParseError(f"line {line_no}: PERFORM outside TESTCASE")
             if case.perform_target:
                 raise CutParseError(
@@ -435,6 +648,11 @@ def parse_cut(text: str) -> MockTestSuite:
             case.perform_thru = m.group("thru")
         elif (m := _EXPECT_RE.match(line)) is not None:
             if case is None:
+                if in_before is not None:
+                    raise CutParseError(
+                        f"line {line_no}: EXPECT not allowed inside "
+                        f"{in_before} (only MOCK directives are)"
+                    )
                 raise CutParseError(f"line {line_no}: EXPECT outside TESTCASE")
             case.expectations.append(
                 ExpectDirective(
@@ -445,6 +663,11 @@ def parse_cut(text: str) -> MockTestSuite:
             )
         elif (m := _VERIFY_QUOTED_RE.match(line)) is not None:
             if case is None:
+                if in_before is not None:
+                    raise CutParseError(
+                        f"line {line_no}: VERIFY not allowed inside "
+                        f"{in_before} (only MOCK directives are)"
+                    )
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             _validate_expectation(m.group("expectation"), line_no)
             case.verifications.append(
@@ -457,6 +680,11 @@ def parse_cut(text: str) -> MockTestSuite:
             )
         elif (m := _VERIFY_BARE_RE.match(line)) is not None:
             if case is None:
+                if in_before is not None:
+                    raise CutParseError(
+                        f"line {line_no}: VERIFY not allowed inside "
+                        f"{in_before} (only MOCK directives are)"
+                    )
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             _validate_expectation(m.group("expectation"), line_no)
             case.verifications.append(
@@ -478,8 +706,16 @@ def parse_cut(text: str) -> MockTestSuite:
             f"reached end of file with no END-MOCK"
         )
 
+    if in_before is not None:
+        raise CutParseError(
+            f"line {before_open_line}: unterminated {in_before}: reached "
+            f"end of file with no END-BEFORE"
+        )
+
     if suite is None:
         raise CutParseError("no TESTSUITE found")
+
+    _apply_before_blocks(suite, before_all, before_each)
 
     if pending_expansions:
         suite.test_cases = _expand_providers(suite.test_cases, pending_expansions)

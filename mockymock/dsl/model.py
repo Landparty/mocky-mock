@@ -70,6 +70,22 @@ EXEC_CATEGORIES = frozenset({MockCategory.SQL, MockCategory.CICS, MockCategory.D
 # (see splicer/flow_mocks in docs/2026-07-20-paragraph-section-mocks-design.md).
 FLOW_CATEGORIES = frozenset({MockCategory.PARAGRAPH, MockCategory.SECTION})
 
+# FILE-STATUS IS sugar and the implicit default-success MOVE apply only
+# to these six file-op categories -- WRITE/REWRITE key on the *record*
+# name, not the file name, and resolving record -> owning FD -> file
+# name is out of scope (see
+# docs/2026-07-20-before-blocks-and-file-status-design.md).
+FILE_STATUS_CATEGORIES = frozenset(
+    {
+        MockCategory.OPEN,
+        MockCategory.CLOSE,
+        MockCategory.READ,
+        MockCategory.DELETE,
+        MockCategory.START,
+        MockCategory.UNLOCK,
+    }
+)
+
 
 @dataclass
 class MockDirective:
@@ -81,6 +97,13 @@ class MockDirective:
     `None` for an ordinary mock (its body lives in `body_lines` instead);
     populated only for SQL-category ROWS mocks, mutually exclusive with
     `body_lines`."""
+    file_status: str | None = None
+    """Resolved two-character status code from `FILE-STATUS IS
+    <mnemonic-or-code>` inside this mock's body -- only ever set for
+    FILE_STATUS_CATEGORIES. `None` when the body didn't use the sugar
+    (the file may still get an implicit default-success MOVE at splice
+    time if it declares a FILE STATUS field -- see
+    injector.build_site_dispatch)."""
 
     @property
     def program_name(self) -> str:

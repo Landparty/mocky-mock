@@ -1,5 +1,65 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-21 — BEFORE-EACH/BEFORE-ALL mock scoping and FILE-STATUS IS sugar
+
+- **New `.cut` grammar** ([dsl](dsl.md)): `BEFORE-EACH`/`BEFORE-ALL` blocks
+  (at most one of each per `TESTSUITE`, appearing after the `TESTSUITE`
+  header and before the first `TESTCASE`, `MOCK`-only bodies) desugar
+  entirely inside `dsl/parser.py` at parse time into every `TESTCASE`'s own
+  `mocks` list — no other module ever learns the blocks existed. Precedence
+  on a `(category, key)` collision is `TESTCASE` > `BEFORE-EACH` >
+  `BEFORE-ALL`, silently. `FILE-STATUS IS <mnemonic-or-code>` is new sugar,
+  usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK` body (not
+  `WRITE`/`REWRITE`): a fixed mnemonic table (`SUCCESS`, `END-OF-FILE`,
+  `DUPLICATE-KEY`, `RECORD-NOT-FOUND`, `FILE-NOT-FOUND`, `ALREADY-OPEN`,
+  `NOT-OPEN`, `NO-CURRENT-RECORD`) or a quoted two-character literal
+  resolves to `MockDirective.file_status`. Every eligible category also
+  gets an implicit `MOVE "00"` (default success) before the mock's own
+  body whenever the target file declares a `FILE STATUS` field, whether or
+  not `FILE-STATUS IS` is used (codegen in `injector.build_site_dispatch`).
+- **New refusal** ([analysis](analysis.md)): `UNRESOLVED_FILE_STATUS_TARGET`
+  in `refusal.check_test_case` — a `MOCK` using `FILE-STATUS IS` must
+  target a file whose `SELECT` declares a `FILE STATUS IS <field>` clause
+  (resolved via a new `mock_surface.analyze_file_status_fields` analysis);
+  otherwise there is no WORKING-STORAGE field to move the status into, and
+  the program refuses fail-closed rather than silently dropping the
+  directive.
+- Both features compose by construction — a desugared `BEFORE-EACH`/
+  `BEFORE-ALL` directive with `file_status` set flows into a `TESTCASE`'s
+  `mocks` list exactly like any directive written directly on a
+  `TESTCASE`, and both the refusal and the codegen read
+  `directive.file_status` the same way regardless of origin — now proven
+  by a direct test
+  (`tests/unit/test_dsl_parser_before_blocks.py::test_file_status_is_inside_before_each_survives_desugaring`).
+- See docs/2026-07-20-before-blocks-and-file-status-design.md and
+  `examples/taxfile/`.
+
+## 2026-07-20 — Flow-target mocks: `MOCK PARAGRAPH` / `MOCK SECTION`
+
+- **New mock categories PARAGRAPH/SECTION** ([dsl](dsl.md), [analysis](analysis.md),
+  [splicer](splicer.md)): the first non-boundary mocks — they replace an
+  internal paragraph's/section's whole body for the mocking case while
+  every other case still runs the real code. Implemented as a
+  header-line-only splice (`analysis/flow_mocks.py` plans it,
+  `injector.build_flow_dispatch` + `orchestrator.splice_program`'s new
+  `flow_plans` parameter emit it): the header becomes an
+  `EVALUATE UT-CURRENT-CASE` dispatch whose `WHEN OTHER` performs the
+  relocated real body (`UT-REAL-<n>[-<KEY>]`), which keeps every body
+  line at its original line number so all other span-based splices
+  (boundary dispatch, terminator neutralization, chain checks) stay
+  valid. Reachability now takes a `skip_traversal` set so boundaries/
+  terminators inside a mocked body need no mocks for that case. New
+  refusals: UNRESOLVED_FLOW_MOCK_TARGET, UNSUPPORTED_FLOW_MOCK_TARGET
+  (GO TO target, THRU-range membership, GO-TO fall-through, paragraph
+  inside a performed SECTION, shared-line header, own entry point) —
+  fail-closed against every entry path that isn't PERFORM-through-the-
+  header. Verified end-to-end in the container (including
+  `VERIFY PARAGRAPH ... WAS PERFORMED 3 TIMES` under
+  `PERFORM ... 3 TIMES`); see
+  docs/2026-07-20-paragraph-section-mocks-design.md,
+  `examples/flowmock/`, `tests/unit/test_flow_mocks.py`,
+  `tests/integration/test_flow_mock_example.py`.
+
 ## 2026-07-19 (cobol-parser pin bump: out-of-line PERFORM VARYING)
 
 * **CI pin bumped** (`.github/workflows/ci.yml` + the matching
@@ -747,29 +807,3 @@
   `ACCTMNT`-based example: a separate cobol-parser bug (task_c5e3b268) drops
   some of `ACCTMNT.cbl`'s own EXEC SQL UPDATE/INSERT statements from the
   AST, causing a different, harder compile failure upstream of this fix.
-
-## 2026-07-20 — Flow-target mocks: `MOCK PARAGRAPH` / `MOCK SECTION`
-
-- **New mock categories PARAGRAPH/SECTION** ([dsl](dsl.md), [analysis](analysis.md),
-  [splicer](splicer.md)): the first non-boundary mocks — they replace an
-  internal paragraph's/section's whole body for the mocking case while
-  every other case still runs the real code. Implemented as a
-  header-line-only splice (`analysis/flow_mocks.py` plans it,
-  `injector.build_flow_dispatch` + `orchestrator.splice_program`'s new
-  `flow_plans` parameter emit it): the header becomes an
-  `EVALUATE UT-CURRENT-CASE` dispatch whose `WHEN OTHER` performs the
-  relocated real body (`UT-REAL-<n>[-<KEY>]`), which keeps every body
-  line at its original line number so all other span-based splices
-  (boundary dispatch, terminator neutralization, chain checks) stay
-  valid. Reachability now takes a `skip_traversal` set so boundaries/
-  terminators inside a mocked body need no mocks for that case. New
-  refusals: UNRESOLVED_FLOW_MOCK_TARGET, UNSUPPORTED_FLOW_MOCK_TARGET
-  (GO TO target, THRU-range membership, GO-TO fall-through, paragraph
-  inside a performed SECTION, shared-line header, own entry point) —
-  fail-closed against every entry path that isn't PERFORM-through-the-
-  header. Verified end-to-end in the container (including
-  `VERIFY PARAGRAPH ... WAS PERFORMED 3 TIMES` under
-  `PERFORM ... 3 TIMES`); see
-  docs/2026-07-20-paragraph-section-mocks-design.md,
-  `examples/flowmock/`, `tests/unit/test_flow_mocks.py`,
-  `tests/integration/test_flow_mock_example.py`.

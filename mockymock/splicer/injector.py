@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from mockymock.analysis.mock_surface import BoundarySite
 from mockymock.analysis.refusal import directive_matches_site
-from mockymock.dsl.model import MockTestSuite
+from mockymock.dsl.model import FILE_STATUS_CATEGORIES, MockTestSuite
 from mockymock.splicer.naming import TallyRegistry
 
 
@@ -45,8 +45,18 @@ def build_site_dispatch(
     site: BoundarySite,
     suite: MockTestSuite,
     registry: TallyRegistry,
+    file_status_fields: dict[str, str] | None = None,
 ) -> list[str]:
-    """EVALUATE block replacing one mocked boundary statement."""
+    """EVALUATE block replacing one mocked boundary statement.
+
+    For a file-op directive in FILE_STATUS_CATEGORIES whose file declares
+    a FILE STATUS field (`file_status_fields`), the branch always starts
+    with an implicit `MOVE "00"` (default success) before the directive's
+    own body; an explicit FILE-STATUS IS (`directive.file_status`) follows
+    it and therefore wins, same as any hand-written MOVE the author adds
+    after it -- see docs/2026-07-20-before-blocks-and-file-status-design.md.
+    """
+    file_status_fields = file_status_fields or {}
     lines = ["           EVALUATE UT-CURRENT-CASE"]
 
     for index, case in enumerate(suite.test_cases, start=1):
@@ -63,6 +73,15 @@ def build_site_dispatch(
         tally_name = registry.name(directive.category, directive.key)
         lines.append(f'               WHEN "{index:03d}"')
         lines.append(f"                   ADD 1 TO {tally_name}")
+        if directive.category in FILE_STATUS_CATEGORIES:
+            status_field = file_status_fields.get(directive.key.upper())
+            if status_field:
+                lines.append(f'                   MOVE "00" TO {status_field}')
+                if directive.file_status is not None:
+                    lines.append(
+                        f'                   MOVE "{directive.file_status}" '
+                        f"TO {status_field}"
+                    )
         if directive.rows is not None:
             lines.extend(
                 f"                   {body}"

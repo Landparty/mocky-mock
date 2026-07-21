@@ -536,8 +536,11 @@ def check_test_case(
     surface: MockSurface,
     program,
     case: MockTestCase,
+    file_status_fields: dict[str, str] | None = None,
 ) -> list[RefusalReason]:
     from mockymock.analysis.flow_mocks import resolved_flow_targets
+
+    file_status_fields = file_status_fields or {}
 
     reasons: list[RefusalReason] = []
     mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
@@ -786,6 +789,23 @@ def check_test_case(
                         f"{verification.key!r} has no matching MOCK directive "
                         f"in this test case -- its tally counter would be "
                         f"undeclared or stale"
+                    ),
+                )
+            )
+
+    for directive in case.mocks:
+        if directive.file_status is None:
+            continue
+        if directive.key.upper() not in file_status_fields:
+            reasons.append(
+                RefusalReason(
+                    code="UNRESOLVED_FILE_STATUS_TARGET",
+                    message=(
+                        f"MOCK {directive.describe()} uses FILE-STATUS IS, "
+                        f"but '{directive.key}' has no FILE STATUS IS "
+                        f"<field> clause declared in its SELECT entry -- "
+                        f"there is no WORKING-STORAGE field to move the "
+                        f"status into"
                     ),
                 )
             )
