@@ -57,7 +57,7 @@ test frameworks (pytest's `@pytest.mark.parametrize`, JUnit5's
 TESTSUITE "..."
 
 PROVIDER StateNames
-    HEADER "Abbreviation", "Name"
+    HEADER Abbreviation, Name
     ROW "AZ", "Arizona"
     ROW "KY", "Kentucky"
     ROW "XX", "*Undefined*"
@@ -71,11 +71,26 @@ TESTCASE "lookup state" USING PROVIDER StateNames
 - `PROVIDER <name>` — bare identifier, same charset as a paragraph name
   (`[A-Za-z0-9][A-Za-z0-9-]*`), consistent with how `PARAGRAPH`/`SECTION`
   mock keys are already bare COBOL names in this grammar.
-- `HEADER`/`ROW` take quoted, comma-separated fields, reusing the
-  existing quote-aware comma-splitter (`_split_top_level`) already used
-  by `MOCK SQL "..." ROWS`. Every `ROW` must have exactly as many values
-  as `HEADER` has columns — checked at parse time; a mismatch is a
-  `CutParseError` naming the line and both counts.
+- `HEADER` takes **bare**, comma-separated column names (identifiers,
+  same charset as `PROVIDER`'s own name) — not quoted, matching how
+  `MOVE`'s `<target>` and `PERFORM`'s `<paragraph>` are also bare
+  identifiers elsewhere in this grammar. Column names are never COBOL
+  data values, so there's nothing a quote would need to protect.
+- `ROW` takes comma-separated **free-form COBOL value text** — exactly
+  the same convention `MOVE <value> TO ...` and `EXPECT ... TO BE
+  <value>` already use (a quoted string literal, a bare numeric literal,
+  or a figurative constant), split on top-level commas via the existing
+  quote-aware `_split_top_level` helper (already used by `MOCK SQL
+  "..." ROWS`) so a value like `"SMITH, JR."` isn't cut at the comma
+  inside the literal. Each field's captured text — quotes included, if
+  it has any — is exactly what gets substituted at a `{ColumnName}`
+  placeholder site: no unquoting/requoting step, so `ROW "AZ", ...`
+  substitutes into `MOVE {Abbreviation} TO WS-STATE-CODE` as `MOVE "AZ"
+  TO WS-STATE-CODE`, while a numeric column's `ROW 100.00, ...` would
+  substitute as bare `100.00`, same as writing either by hand today.
+- Every `ROW` must have exactly as many values as `HEADER` has columns —
+  checked at parse time; a mismatch is a `CutParseError` naming the line
+  and both counts.
 - A `PROVIDER` block needs a `HEADER` before any `ROW`; a `ROW` before
   `HEADER` is a parse error.
 - A `PROVIDER` with zero `ROW` lines is a parse error (mirrors the
@@ -145,11 +160,15 @@ Each generated case is named:
 "<original name> [row <n>: <first column's value>]"
 ```
 
-e.g. `"lookup state [row 1: AZ]"`, `"lookup state [row 3: XX]"`. The row
-index guarantees uniqueness even when two rows share the same first
-value; this naming is applied unconditionally whenever `USING PROVIDER`
-is used, even for a single-row provider (no special-casing "1 row means
-don't rename").
+e.g. `"lookup state [row 1: AZ]"`, `"lookup state [row 3: XX]"`. Since
+`ROW` values are raw COBOL text and may carry quotes (`"AZ"`), the
+*display* label strips one layer of matching leading/trailing quote
+characters if present (`"AZ"` → `AZ` in the name) — cosmetic only, for
+readability; the unstripped raw text is still what's substituted into
+`{ColumnName}` placeholders. The row index guarantees uniqueness even
+when two rows share the same first value; this naming is applied
+unconditionally whenever `USING PROVIDER` is used, even for a
+single-row provider (no special-casing "1 row means don't rename").
 
 Its `.line` is set to that row's own `ROW` line (from
 `DataProvider.row_lines`), not the shared `TESTCASE` header — better for
