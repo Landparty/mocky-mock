@@ -273,6 +273,51 @@ Two things to know before reading a number:
   `docs/2026-07-17-coverage-reporting-design.md` for the full writeup and
   a worked example.
 
+## Execution trace (debugging a case)
+
+When a case fails and you need to know *what actually happened*,
+`mockymock run --trace` replays a single test case's execution: the path
+it took through your program, and the mocks that fired, in order.
+
+```
+mockymock run ACCTPRG.cbl --cut ACCTPRG.cut --case "1000-INITIALIZE primes ..." --trace
+```
+
+```
+Execution trace for case: 1000-INITIALIZE primes the first segment when CBLTDLI succeeds
+  mocks fired, in order:
+    1. OPEN PURGEIN
+    2. OPEN PURGRPT
+    3. WRITE RPT-RECORD
+    4. READ PURGEIN
+    5. CALL CBLTDLI
+  statements executed: 9
+    line    120  paragraph  1000-INITIALIZE
+    line    121             DISPLAY
+    line    122             MOVE
+    ...
+```
+
+`--trace-json PATH` (implies `--trace`) writes the same information as a
+versioned JSON document, which the VS Code extension consumes for its
+"Debug Test" view.
+
+Three things to know:
+
+- **`--trace` requires exactly one `--case`** (and no `--tag`). The suite
+  compiles and runs as a single binary, and the trace stream carries no
+  case markers, so an unscoped trace could not be attributed to one case.
+- **Line numbers are the original `.cbl`'s**, same remap the
+  `--coverage-json` view uses — splicer-inserted lines are excluded, so the
+  path answers "which of *my* lines ran."
+- **Mocked statements do not appear in the path.** A mocked boundary is
+  replaced by splicer-generated code, which that same remap excludes — so
+  the path shows gaps exactly where mocks fired, and the mock timeline
+  above it tells you what happened in those gaps. The two lists are meant
+  to be read together.
+
+See `docs/2026-07-21-debug-trace-design.md` for the design.
+
 ## Install
 
 mockymock isn't on PyPI, but its `pyproject.toml` declares a full

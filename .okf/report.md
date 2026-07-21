@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs.
 tags: [report, results, cli-output]
-timestamp: 2026-07-07T00:00:00Z
+timestamp: 2026-07-21T12:00:00Z
 ---
 # Overview
 
@@ -24,7 +24,7 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 
 # stdout Protocol
 
-`parse_stdout` matches five line shapes via regex, one case per marker kind:
+`parse_stdout` matches six line shapes via regex, one case per marker kind:
 
 | Marker | Regex group(s) | Effect |
 |---|---|---|
@@ -33,6 +33,20 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 | `__MOCKYMOCK__ CASE <id> FAIL: <reason>` | `id`, `reason` | appends `reason` to the matching `TestResult.failure_reasons` (looked up by id); an unknown id is recorded in `suite.orphan_failures` as `(id, reason)` rather than dropped |
 | `__MOCKYMOCK__ CASE <id> END` | `id` | sets the matching `TestResult.ended = True` |
 | `__MOCKYMOCK__ SUMMARY: RUN=<n> FAILURES=<n>` | `run`, `failures` | sets `suite.tests_run` / `suite.failures` |
+| `__MOCKYMOCK__ MOCK: <label>` | `label` | appends to the most recently started case's `TestResult.mock_hits`. **Trace mode only** — emitted by the splicer's mock dispatch blocks when `run --trace` is used |
+
+The `MOCK` marker is the one shape carrying no case id: it is attributed
+positionally, to the case whose `START` most recently printed. That is
+sound because the driver emits it from inside the case's own dispatch,
+between that case's `START` and `END`. It exists because mock firing
+order cannot be recovered from the execution-trace file — the dispatch
+blocks are splicer-inserted, and the trace's line remap drops inserted
+lines by design. See [cli](cli.md)'s `--trace` and
+docs/2026-07-21-debug-trace-design.md.
+
+The injector's `__MOCKYMOCK__ ERROR:` line (unmocked boundary reached) is
+deliberately NOT in this table: nothing parses it. It reaches the user as
+raw stdout text plus its `ADD 1 TO UT-FAIL-COUNT` contribution to SUMMARY.
 
 Matching a FAIL line to its case is done purely by `id`, not by stream
 position — so interleaved/out-of-order FAIL lines for different cases
@@ -120,6 +134,32 @@ driver's failure-reason strings against the model, splitting on the LAST
 binary never printed a START marker for. `format_junit_xml` additionally
 stamps `classname="<suite name>"` on every `<testcase>` (suite-qualified
 identity for consumers that merge reports or meet duplicate case names).
+
+## Execution trace (`report/trace.py`)
+
+Backs `mockymock run --trace` / `--trace-json` (see [cli](cli.md)). Two
+independent channels compose into one report, and the split is load-bearing:
+
+1. **Executed path** — GnuCOBOL writes a runtime trace to `COB_TRACE_FILE`
+   (never stdout, so the protocol above stays clean). `parse_trace` reads it
+   with `COB_TRACE_FORMAT='%P|%S|%L'`; fields stay space-padded even with an
+   explicit format, and two preamble lines carry no delimiters. Its line
+   numbers are **instrumented**-source lines, remapped by
+   `coverage.build_original_line_map` — which drops splicer-inserted lines,
+   so the path answers "which of MY lines ran".
+2. **Mock timeline** — the `__MOCKYMOCK__ MOCK:` markers above. This channel
+   exists *because* channel 1's remap drops inserted lines: the mock dispatch
+   blocks are exactly those lines, so the trace file structurally cannot
+   report which mocks fired.
+
+A consequence worth knowing when reading a report: mocked statements never
+appear in the path, so it shows gaps precisely where mocks fired. The two
+lists are meant to be read together.
+
+`format_trace_json` emits the versioned contract (`TRACE_JSON_VERSION = 1`)
+the VS Code extension consumes; `format_trace_console` renders the same
+payload for a plain `--trace`. `TRACE_ENTRY_CAP` (50,000) bounds a runaway
+`PERFORM UNTIL`, setting `truncated: true` rather than streaming or sampling.
 
 # Gotchas
 

@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, run, lint, collect) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-07-21T00:00:00Z
+timestamp: 2026-07-21T12:00:00Z
 ---
 
 # Overview
@@ -84,7 +84,7 @@ test cases `run` will later refuse if a case's PERFORM reaches one of these
 sites. Comment in the source explicitly frames this as "so the scaffold is
 never mistaken for complete coverage of the program's outputs."
 
-## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH]`
+## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--trace] [--trace-json PATH]`
 
 The full pipeline: parse, analyze, refuse-or-splice, compile in Docker, run,
 report. This is the only subcommand requiring the GnuCOBOL container.
@@ -117,6 +117,17 @@ Flags beyond the pipeline inputs:
   `report.coverage.map_coverage_to_original` (difflib alignment
   instrumented -> normalized -> original; splicer-inserted lines are
   excluded, so it answers "which of MY lines ran").
+- `--trace` / `--trace-json PATH` — replay ONE test case's execution: the
+  path it took through the original `.cbl` plus the mocks that fired in
+  order. `--trace-json` implies `--trace` (the same relationship
+  `--coverage-json` has to `--coverage`). **Refuses unless exactly one
+  `--case` is selected and no `--tag`** — the suite runs as a single
+  binary and the trace file is a separate stream from stdout carrying no
+  case markers, so an unscoped trace cannot be attributed to one case.
+  That refusal fires before `run_static_checks` and before
+  `ensure_toolchain()`. Composes two channels: the executed path from
+  GnuCOBOL's trace file, and the mock timeline from stdout — see
+  [report](report.md) and docs/2026-07-21-debug-trace-design.md.
 - `--keep-sandbox` — never delete the sandbox directory; its path is
   printed at the start of the run for inspection.
 - `--verbose` — on compile failure, print the path to the instrumented

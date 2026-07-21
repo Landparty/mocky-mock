@@ -1,5 +1,45 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-21 — `run --trace`: execution trace for debugging one case
+
+Adds `mockymock run --trace` / `--trace-json PATH`, backing a "Debug Test"
+action in the VS Code extension (extension side not yet built; this is the
+CLI half, and the JSON contract is the seam between them). Design:
+`docs/2026-07-21-debug-trace-design.md`; plan:
+`docs/superpowers/plans/2026-07-21-debug-trace-cli.md`.
+
+Verified in-container before designing, not assumed: `cobc -ftraceall`
+alone emits **nothing** — GnuCOBOL 3.x gates tracing at run time on
+`COB_SET_TRACE=yes`. `COB_TRACE_FILE` sends it to its own file, which is
+what keeps the `__MOCKYMOCK__` stdout protocol clean, and
+`COB_TRACE_FORMAT='%P|%S|%L'` makes it parseable.
+
+- **Two channels, because one mapper destroys the other.** The executed
+  path reuses [report](report.md)'s coverage remap, which deliberately
+  drops splicer-inserted lines ("which of MY lines ran"). But the mock
+  dispatch blocks *are* splicer-inserted, so mock firing order can never
+  come from the trace file. It comes instead from a new trace-mode-only
+  `__MOCKYMOCK__ MOCK: <label> <key>` DISPLAY in
+  [splicer](splicer.md)'s `build_site_dispatch` and `build_flow_dispatch`,
+  landing between the driver's CASE START/END markers so per-case
+  attribution is free.
+- **`--trace` refuses unless exactly one `--case` and no `--tag`.** The
+  suite runs as a single binary and the trace stream carries no case
+  markers, so an unscoped trace cannot be attributed. Refusal fires before
+  static checks and before Docker.
+- **New `report/trace.py`**; `coverage.py` grew
+  `build_original_line_map`, extracted from `map_coverage_to_original` so
+  both consumers share one alignment instead of duplicating difflib logic.
+- Flow (`MOCK PARAGRAPH`/`SECTION`) mocks emit markers too — a timeline
+  omitting declared flow mocks would be quietly incomplete.
+- Each marker names the directive key, not just the site verb: `OPEN
+  PURGEIN` vs `OPEN PURGRPT`. Caught by reading real output, where the
+  first version rendered two indistinguishable `OPEN`s.
+- Proven end-to-end against real GnuCOBOL in
+  `tests/integration/test_trace.py` (ACCTPRG), including that every
+  reported line is a non-blank, non-comment line of the ORIGINAL `.cbl`
+  and that the traced run's verdict matches an untraced one.
+
 ## 2026-07-21 — Doc sync: README + OKF concepts for BEFORE/FILE-STATUS/PROVIDER wave
 
 A code review found the README and three OKF concepts had fallen behind
