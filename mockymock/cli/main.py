@@ -198,11 +198,11 @@ def _report_unsupported_boundaries(surface) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    import json
+
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_terminator_plans
     from mockymock.cli.checks import run_static_checks
-    import json
-
     from mockymock.report.coverage import (
         build_original_line_map,
         format_coverage_console,
@@ -210,14 +210,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         map_coverage_to_original,
         parse_gcov,
     )
+    from mockymock.report.formatters import format_console, format_junit_xml
+    from mockymock.report.json_report import build_json_report, format_json_report
+    from mockymock.report.results import parse_stdout
     from mockymock.report.trace import (
         format_trace_console,
         format_trace_json,
         parse_trace,
     )
-    from mockymock.report.formatters import format_console, format_junit_xml
-    from mockymock.report.json_report import build_json_report, format_json_report
-    from mockymock.report.results import parse_stdout
     from mockymock.runtime import docker_toolchain
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
@@ -460,9 +460,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             case_result = next(
                 (r for r in suite_result.results if r.case_name == selected), None
             )
-            model_case = next(
-                (c for c in suite.test_cases if c.name == selected), None
-            )
+            model_case = next((c for c in suite.test_cases if c.name == selected), None)
             trace_json = format_trace_json(
                 parse_trace(trace_text),
                 build_original_line_map(

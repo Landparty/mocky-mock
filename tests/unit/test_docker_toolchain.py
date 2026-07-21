@@ -726,8 +726,6 @@ def test_run_gcov_wraps_docker_oserror_cleanly(tmp_path):
 
 # --- execution trace (docs/2026-07-21-debug-trace-design.md) ---------------
 
-from mockymock.runtime.docker_toolchain import run_binary
-
 
 def test_compile_source_traceall_appears_in_argv(tmp_path):
     """-ftraceall generates the trace hooks; without it the runtime env

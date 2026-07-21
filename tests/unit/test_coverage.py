@@ -30,6 +30,7 @@ def test_build_original_line_map_skips_inserted_lines():
     assert mapping[3] == 3
     assert 2 not in mapping
 
+
 SAMPLE_GCOV = (
     "        -:    0:Source:PROG.cbl\n"
     "        -:    0:Graph:PROG.gcno\n"

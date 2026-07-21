@@ -260,7 +260,9 @@ def test_no_status_move_for_a_category_outside_file_status_categories():
 
 def test_omitting_file_status_fields_keeps_todays_exact_output():
     lines_with_none = _dispatch(_suite())
-    lines_with_empty = build_site_dispatch(_site(), _suite(), TallyRegistry(_suite()), {})
+    lines_with_empty = build_site_dispatch(
+        _site(), _suite(), TallyRegistry(_suite()), {}
+    )
     assert lines_with_none == lines_with_empty
 
 
@@ -312,9 +314,7 @@ def test_flow_dispatch_emits_mock_marker_in_trace_mode():
     )
 
     lines = build_flow_dispatch(plan, suite, TallyRegistry(suite), trace=True)
-    assert any(
-        '__MOCKYMOCK__ MOCK: PARAGRAPH WRITE-AUDIT"' in line for line in lines
-    )
+    assert any('__MOCKYMOCK__ MOCK: PARAGRAPH WRITE-AUDIT"' in line for line in lines)
 
     plain = build_flow_dispatch(plan, suite, TallyRegistry(suite))
     assert not any("__MOCKYMOCK__ MOCK:" in line for line in plain)

@@ -126,7 +126,11 @@ def format_trace_console(payload: dict) -> str:
         lines.append(f"  (path truncated at {TRACE_ENTRY_CAP} entries)")
     for entry in payload["path"]:
         if "paragraph" in entry:
-            lines.append(f"    line {entry['line']:>6}  paragraph  {entry['paragraph']}")
+            lines.append(
+                f"    line {entry['line']:>6}  paragraph  {entry['paragraph']}"
+            )
         else:
-            lines.append(f"    line {entry['line']:>6}             {entry['statement']}")
+            lines.append(
+                f"    line {entry['line']:>6}             {entry['statement']}"
+            )
     return "\n".join(lines)

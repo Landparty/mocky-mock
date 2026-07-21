@@ -183,8 +183,15 @@ def test_trace_with_a_tag_selection_is_refused(tmp_path, capsys):
     cbl, cut = _trace_files(tmp_path)
     exit_code = main(
         [
-            "run", str(cbl), "--cut", str(cut), "--trace",
-            "--case", "a", "--tag", "smoke",
+            "run",
+            str(cbl),
+            "--cut",
+            str(cut),
+            "--trace",
+            "--case",
+            "a",
+            "--tag",
+            "smoke",
         ]
     )
     out = capsys.readouterr().out
