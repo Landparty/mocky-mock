@@ -1,5 +1,7 @@
 """CLI behavior tests (non-Docker-specific)."""
 
+import json
+
 from mockymock.cli.main import main
 
 
@@ -77,8 +79,6 @@ def test_lint_missing_inputs_fail_cleanly(tmp_path, capsys):
 
 
 def test_collect_json_lists_cases_with_lines_and_tags(tmp_path, capsys):
-    import json
-
     cut = tmp_path / "PROG.cut"
     cut.write_text(
         'TESTSUITE "demo suite"\n'
@@ -112,11 +112,30 @@ def test_collect_human_listing(tmp_path, capsys):
 
 
 def test_collect_invalid_cut_reports_error_in_json(tmp_path, capsys):
-    import json
-
     cut = tmp_path / "PROG.cut"
     cut.write_text("junk\n")
     exit_code = main(["collect", "--cut", str(cut), "--json"])
     assert exit_code == 1
     payload = json.loads(capsys.readouterr().out)
     assert "error" in payload
+
+
+def test_collect_lists_expanded_provider_cases(tmp_path, capsys):
+    cut = tmp_path / "PROG.cut"
+    cut.write_text(
+        'TESTSUITE "s"\n'
+        "PROVIDER Nums\n"
+        "    HEADER N\n"
+        "    ROW 1\n"
+        "    ROW 2\n"
+        'TESTCASE "c" USING PROVIDER Nums\n'
+        "    MOVE {N} TO WS-N\n"
+        "    PERFORM MAIN\n"
+    )
+    exit_code = main(["collect", "--cut", str(cut), "--json"])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [c["name"] for c in payload["cases"]] == [
+        "c [row 1: 1]",
+        "c [row 2: 2]",
+    ]

@@ -345,3 +345,145 @@ def test_provider_row_values_preserve_commas_inside_quotes():
     # 1-column HEADER instead of parsing cleanly.
     suite = parse_cut(text)
     assert len(suite.test_cases) == 1
+
+
+# --- PROVIDER parameterized test cases: binding & expansion ------------------
+
+PROVIDER_CUT = """\
+TESTSUITE "state lookup"
+
+PROVIDER StateNames
+    HEADER Abbreviation, Name
+    ROW "AZ", "Arizona"
+    ROW "KY", "Kentucky"
+    ROW "XX", "*Undefined*"
+
+TESTCASE "lookup state" USING PROVIDER StateNames
+    MOVE {Abbreviation} TO WS-STATE-CODE
+    PERFORM LOOKUP-STATE
+    EXPECT WS-STATE-NAME TO BE {Name}
+"""
+
+
+def test_using_provider_expands_into_one_case_per_row():
+    suite = parse_cut(PROVIDER_CUT)
+    assert len(suite.test_cases) == 3
+
+
+def test_expanded_case_names_and_substituted_values():
+    suite = parse_cut(PROVIDER_CUT)
+    names = [case.name for case in suite.test_cases]
+    assert names == [
+        "lookup state [row 1: AZ]",
+        "lookup state [row 2: KY]",
+        "lookup state [row 3: XX]",
+    ]
+    first = suite.test_cases[0]
+    assert first.setup_moves == [('"AZ"', "WS-STATE-CODE")]
+    assert first.expectations[0].expected_value == '"Arizona"'
+    third = suite.test_cases[2]
+    assert third.expectations[0].expected_value == '"*Undefined*"'
+
+
+def test_expanded_case_line_points_at_its_own_row():
+    suite = parse_cut(PROVIDER_CUT)
+    # ROW "AZ" is line 5, ROW "KY" is line 6, ROW "XX" is line 7.
+    assert [case.line for case in suite.test_cases] == [5, 6, 7]
+
+
+PROVIDER_WITH_MOCK_AND_TAGS_CUT = """\
+TESTSUITE "s"
+
+PROVIDER Nums
+    HEADER N
+    ROW 1
+    ROW 2
+
+TESTCASE "c" TAGS "fast" USING PROVIDER Nums
+    MOCK CALL "X"
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    MOVE {N} TO WS-N
+    PERFORM MAIN
+    VERIFY "X" WAS CALLED ONCE
+"""
+
+
+def test_mocks_tags_verify_inherited_unchanged_across_rows():
+    suite = parse_cut(PROVIDER_WITH_MOCK_AND_TAGS_CUT)
+    assert len(suite.test_cases) == 2
+    for case in suite.test_cases:
+        assert case.tags == ["fast"]
+        assert len(case.mocks) == 1
+        assert case.mocks[0].program_name == "X"
+        assert case.verifications[0].expectation == "ONCE"
+    assert suite.test_cases[0].setup_moves == [("1", "WS-N")]
+    assert suite.test_cases[1].setup_moves == [("2", "WS-N")]
+
+
+def test_value_with_no_placeholder_repeated_identically():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER Nums\n"
+        "    HEADER N\n"
+        "    ROW 1\n"
+        "    ROW 2\n"
+        'TESTCASE "c" USING PROVIDER Nums\n'
+        "    MOVE 999 TO WS-FIXED\n"
+        "    MOVE {N} TO WS-N\n"
+        "    PERFORM MAIN\n"
+    )
+    suite = parse_cut(text)
+    assert suite.test_cases[0].setup_moves == [("999", "WS-FIXED"), ("1", "WS-N")]
+    assert suite.test_cases[1].setup_moves == [("999", "WS-FIXED"), ("2", "WS-N")]
+
+
+def test_undeclared_provider_reference_raises():
+    text = 'TESTSUITE "s"\n' 'TESTCASE "c" USING PROVIDER Ghost\n' "    PERFORM MAIN\n"
+    with pytest.raises(
+        CutParseError,
+        match="line 2: TESTCASE 'c' uses PROVIDER 'Ghost', which was never declared",
+    ):
+        parse_cut(text)
+
+
+def test_unknown_placeholder_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER Nums\n"
+        "    HEADER N\n"
+        "    ROW 1\n"
+        'TESTCASE "c" USING PROVIDER Nums\n'
+        "    MOVE {Bogus} TO WS-N\n"
+        "    PERFORM MAIN\n"
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r"unknown placeholder \{Bogus\} in TESTCASE 'c'.*columns are N",
+    ):
+        parse_cut(text)
+
+
+def test_non_provider_testcase_with_literal_braces_is_untouched():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOVE "{NotAPlaceholder}" TO WS-FIELD\n'
+        "    PERFORM MAIN\n"
+    )
+    suite = parse_cut(text)
+    assert suite.test_cases[0].setup_moves == [('"{NotAPlaceholder}"', "WS-FIELD")]
+
+
+def test_placeholder_substitution_works_inside_a_larger_literal():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER Nums\n"
+        "    HEADER N\n"
+        "    ROW 1\n"
+        'TESTCASE "c" USING PROVIDER Nums\n'
+        "    PERFORM MAIN\n"
+        '    EXPECT WS-MSG TO BE "value: {N}"\n'
+    )
+    suite = parse_cut(text)
+    assert suite.test_cases[0].expectations[0].expected_value == '"value: 1"'

@@ -40,7 +40,8 @@ _BARE_CATS = (
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
 _TESTCASE_RE = re.compile(
-    r'^TESTCASE\s+"(?P<name>[^"]*)"(?:\s+TAGS\s+(?P<tags>"[^"]*"(?:\s+"[^"]*")*))?$'
+    r'^TESTCASE\s+"(?P<name>[^"]*)"(?:\s+TAGS\s+(?P<tags>"[^"]*"(?:\s+"[^"]*")*))?'
+    r"(?:\s+USING\s+PROVIDER\s+(?P<provider>[A-Za-z0-9][A-Za-z0-9-]*))?$"
 )
 _TAG_RE = re.compile(r'"([^"]*)"')
 _MOCK_QUOTED_RE = re.compile(
@@ -78,6 +79,7 @@ _HEADER_RE = re.compile(
     r"^HEADER\s+(?P<fields>[A-Za-z][A-Za-z0-9-]*(?:\s*,\s*[A-Za-z][A-Za-z0-9-]*)*)$"
 )
 _PROVIDER_ROW_RE = re.compile(r"^ROW\s+(?P<values>.+)$")
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z][A-Za-z0-9-]*)\}")
 
 
 class CutParseError(ValueError):
@@ -136,6 +138,92 @@ def _split_top_level(text: str, sep: str) -> list[str]:
     return parts
 
 
+def _substitute(
+    text: str, provider: DataProvider, row: list[str], case_name: str, line_no: int
+) -> str:
+    """Replace every `{ColumnName}` token in `text` with that column's raw
+    row value. An unknown column is a CutParseError, not a silent no-op --
+    same fail-closed convention as the rest of this parser."""
+
+    def repl(match: re.Match[str]) -> str:
+        column = match.group(1)
+        if column not in provider.header:
+            raise CutParseError(
+                f"line {line_no}: unknown placeholder {{{column}}} in "
+                f"TESTCASE {case_name!r} -- PROVIDER {provider.name!r} "
+                f"columns are {', '.join(provider.header)}"
+            )
+        return row[provider.header.index(column)]
+
+    return _PLACEHOLDER_RE.sub(repl, text)
+
+
+def _display_value(raw: str) -> str:
+    """Strip one layer of matching quote characters for a human-readable
+    generated case name -- cosmetic only; `_substitute` always uses the
+    raw, unstripped row text."""
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        return raw[1:-1]
+    return raw
+
+
+def _instantiate_row(
+    case: MockTestCase, provider: DataProvider, row: list[str], row_index: int
+) -> MockTestCase:
+    row_line = provider.row_lines[row_index - 1]
+    setup_moves = [
+        (_substitute(value, provider, row, case.name, case.line), target)
+        for value, target in case.setup_moves
+    ]
+    expectations = [
+        ExpectDirective(
+            data_name=expectation.data_name,
+            expected_value=_substitute(
+                expectation.expected_value,
+                provider,
+                row,
+                case.name,
+                expectation.line,
+            ),
+            line=expectation.line,
+        )
+        for expectation in case.expectations
+    ]
+    return MockTestCase(
+        name=f"{case.name} [row {row_index}: {_display_value(row[0])}]",
+        mocks=list(case.mocks),
+        setup_moves=setup_moves,
+        perform_target=case.perform_target,
+        perform_thru=case.perform_thru,
+        expectations=expectations,
+        verifications=list(case.verifications),
+        line=row_line,
+        tags=list(case.tags),
+    )
+
+
+def _expand_providers(
+    test_cases: list[MockTestCase],
+    pending: list[tuple[MockTestCase, DataProvider]],
+) -> list[MockTestCase]:
+    """Replace every provider-bound TESTCASE with one ordinary
+    MockTestCase per PROVIDER row (see
+    docs/2026-07-20-provider-parameterized-test-cases-design.md). Every
+    other consumer of the parsed suite -- analysis, splicer, runtime,
+    report, cli -- only ever sees what this returns; PROVIDER never leaks
+    past this function."""
+    bound = {id(case): provider for case, provider in pending}
+    expanded: list[MockTestCase] = []
+    for case in test_cases:
+        provider = bound.get(id(case))
+        if provider is None:
+            expanded.append(case)
+            continue
+        for row_index, row in enumerate(provider.rows, start=1):
+            expanded.append(_instantiate_row(case, provider, row, row_index))
+    return expanded
+
+
 def parse_cut(text: str) -> MockTestSuite:
     suite: MockTestSuite | None = None
     case: MockTestCase | None = None
@@ -147,6 +235,7 @@ def parse_cut(text: str) -> MockTestSuite:
     mock_lines: dict[tuple[MockCategory, str], int] = {}
     providers: dict[str, DataProvider] = {}
     current_provider: DataProvider | None = None
+    pending_expansions: list[tuple[MockTestCase, DataProvider]] = []
 
     def _close_provider() -> None:
         nonlocal current_provider
@@ -274,8 +363,18 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"line {line_no}: empty tag in TAGS list -- every "
                         f"tag must be a non-blank quoted word"
                     )
+            provider_name = m.group("provider")
+            if provider_name is not None and provider_name not in providers:
+                raise CutParseError(
+                    f"line {line_no}: TESTCASE {m.group('name')!r} uses "
+                    f"PROVIDER {provider_name!r}, which was never declared "
+                    f"-- declare a PROVIDER block before the TESTCASE that "
+                    f"uses it"
+                )
             case = MockTestCase(name=m.group("name"), line=line_no, tags=tags)
             suite.test_cases.append(case)
+            if provider_name is not None:
+                pending_expansions.append((case, providers[provider_name]))
             mock_lines = {}
         elif (m := _MOCK_QUOTED_RE.match(line)) is not None:
             if case is None:
@@ -381,4 +480,8 @@ def parse_cut(text: str) -> MockTestSuite:
 
     if suite is None:
         raise CutParseError("no TESTSUITE found")
+
+    if pending_expansions:
+        suite.test_cases = _expand_providers(suite.test_cases, pending_expansions)
+
     return suite
