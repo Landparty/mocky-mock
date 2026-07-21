@@ -181,7 +181,9 @@ def _run_cli(tmp_path, executed: ExecutionResult, extra_args=()):
     cut = tmp_path / "ORDRPROC.cut"
     cut.write_text(RUN_CUT)
 
-    def fake_compile(source_path: Path, coverage: bool = False) -> CompileResult:
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
         binary = source_path.with_suffix("")
         binary.write_text("")
         return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
@@ -336,7 +338,9 @@ def test_run_neutralizes_entry_linkage_and_reports_it(tmp_path, capsys):
     cut = tmp_path / "LKGSAMP.cut"
     cut.write_text(LINKAGE_CUT)
 
-    def fake_compile(source_path: Path, coverage: bool = False) -> CompileResult:
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
         binary = source_path.with_suffix("")
         binary.write_text("")
         return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
@@ -380,7 +384,9 @@ def _run_cli_with_coverage(
     cut = tmp_path / "ORDRPROC.cut"
     cut.write_text(RUN_CUT)
 
-    def fake_compile(source_path: Path, coverage: bool = False) -> CompileResult:
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
         binary = source_path.with_suffix("")
         binary.write_text("")
         return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
@@ -421,7 +427,9 @@ def test_run_coverage_without_flag_never_calls_gcov(tmp_path, capsys):
     cut = tmp_path / "ORDRPROC.cut"
     cut.write_text(RUN_CUT)
 
-    def fake_compile(source_path: Path, coverage: bool = False) -> CompileResult:
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
         binary = source_path.with_suffix("")
         binary.write_text("")
         return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
@@ -453,7 +461,9 @@ def test_run_coverage_writes_coverage_out_file(tmp_path, capsys):
     cut.write_text(RUN_CUT)
     out_path = tmp_path / "coverage.txt"
 
-    def fake_compile(source_path: Path, coverage: bool = False) -> CompileResult:
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
         binary = source_path.with_suffix("")
         binary.write_text("")
         return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
@@ -526,7 +536,9 @@ def _run_cli_with_cut(tmp_path, cut_text, executed: ExecutionResult, extra_args=
     cut = tmp_path / "ORDRPROC.cut"
     cut.write_text(cut_text)
 
-    def fake_compile(source_path: Path, coverage: bool = False) -> CompileResult:
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
         binary = source_path.with_suffix("")
         binary.write_text("")
         return CompileResult(success=True, binary_path=binary, stdout="", stderr="")

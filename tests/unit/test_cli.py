@@ -139,3 +139,66 @@ def test_collect_lists_expanded_provider_cases(tmp_path, capsys):
         "c [row 1: 1]",
         "c [row 2: 2]",
     ]
+
+
+# --- mockymock run --trace ------------------------------------------------
+# The refusal below must fire before Docker is touched, so these tests need
+# no daemon and no valid .cbl/.cut -- reaching the toolchain at all would
+# itself be the failure.
+
+
+def _trace_files(tmp_path):
+    cbl = tmp_path / "P.cbl"
+    cbl.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. P.\n"
+        "       PROCEDURE DIVISION.\n"
+        "       0000-MAIN.\n"
+        "           DISPLAY 'HI'.\n"
+    )
+    cut = tmp_path / "P.cut"
+    cut.write_text('TESTSUITE "P"\n\nTESTCASE "a"\n    PERFORM 0000-MAIN\nEND\n')
+    return cbl, cut
+
+
+def test_trace_without_any_case_is_refused(tmp_path, capsys):
+    cbl, cut = _trace_files(tmp_path)
+    exit_code = main(["run", str(cbl), "--cut", str(cut), "--trace"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "--trace requires exactly one --case" in out
+
+
+def test_trace_with_two_cases_is_refused(tmp_path, capsys):
+    cbl, cut = _trace_files(tmp_path)
+    exit_code = main(
+        ["run", str(cbl), "--cut", str(cut), "--trace", "--case", "a", "--case", "b"]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "--trace requires exactly one --case" in out
+
+
+def test_trace_with_a_tag_selection_is_refused(tmp_path, capsys):
+    cbl, cut = _trace_files(tmp_path)
+    exit_code = main(
+        [
+            "run", str(cbl), "--cut", str(cut), "--trace",
+            "--case", "a", "--tag", "smoke",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "--trace requires exactly one --case" in out
+
+
+def test_trace_json_implies_trace_and_inherits_the_same_refusal(tmp_path, capsys):
+    """--trace-json alone (no --case) must hit the trace refusal, which only
+    happens if it turned --trace on first."""
+    cbl, cut = _trace_files(tmp_path)
+    exit_code = main(
+        ["run", str(cbl), "--cut", str(cut), "--trace-json", str(tmp_path / "t.json")]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "--trace requires exactly one --case" in out

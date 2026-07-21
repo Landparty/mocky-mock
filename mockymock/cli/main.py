@@ -201,11 +201,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_terminator_plans
     from mockymock.cli.checks import run_static_checks
+    import json
+
     from mockymock.report.coverage import (
+        build_original_line_map,
         format_coverage_console,
         format_coverage_json,
         map_coverage_to_original,
         parse_gcov,
+    )
+    from mockymock.report.trace import (
+        format_trace_console,
+        format_trace_json,
+        parse_trace,
     )
     from mockymock.report.formatters import format_console, format_junit_xml
     from mockymock.report.json_report import build_json_report, format_json_report
@@ -231,6 +239,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Asking for the coverage JSON is asking for coverage.
     if args.coverage_json:
         args.coverage = True
+
+    # Asking for the trace JSON is asking for the trace.
+    if args.trace_json:
+        args.trace = True
+    if args.trace and (len(args.case or []) != 1 or args.tag):
+        # The suite compiles and runs as ONE binary, and the trace file is a
+        # separate stream from stdout with no shared timestamps -- so an
+        # unscoped trace interleaves every case with nothing to segment it
+        # by. Requiring a single case makes attribution true by
+        # construction. See docs/2026-07-21-debug-trace-design.md.
+        print(
+            "mockymock run: --trace requires exactly one --case (and no "
+            "--tag): the suite runs as a single binary, so an unscoped "
+            "trace cannot be attributed to one case"
+        )
+        return 1
 
     # Static checks run BEFORE the toolchain comes up (see the lint design
     # doc): a bad .cut/.cbl fails fast with the real problem regardless of
@@ -291,6 +315,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         terminator_plans,
         flow_plans,
         checked.file_status_fields,
+        trace=args.trace,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
@@ -320,7 +345,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         instrumented_path.write_text("\n".join(instrumented) + "\n", newline="\n")
 
         compiled = docker_toolchain.compile_source(
-            instrumented_path, coverage=args.coverage
+            instrumented_path, coverage=args.coverage, trace=args.trace
         )
         if not compiled.success:
             print("mockymock run: compile failed:")
@@ -330,7 +355,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
             return 1
 
         assert compiled.binary_path is not None  # implied by compiled.success
-        executed = docker_toolchain.run_binary(compiled.binary_path)
+        trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
+        executed = docker_toolchain.run_binary(
+            compiled.binary_path, trace_path=trace_path
+        )
+
+        # Must be read while the sandbox still exists -- the context manager
+        # removes it on exit unless --keep-sandbox was given.
+        trace_text = ""
+        if trace_path is not None and trace_path.exists():
+            trace_text = trace_path.read_text(errors="replace")
 
         coverage_text = None
         coverage_report = None
@@ -411,6 +445,40 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(coverage_text)
         if args.coverage_out:
             Path(args.coverage_out).write_text(coverage_text + "\n")
+
+    if args.trace:
+        if not trace_text:
+            print(
+                "mockymock run: no execution trace produced -- the binary "
+                "wrote no trace file (it may have died before executing a "
+                "single statement)"
+            )
+        else:
+            # Exactly one case is selected (enforced above), so the whole
+            # trace belongs to it -- no segmentation needed.
+            selected = args.case[0]
+            case_result = next(
+                (r for r in suite_result.results if r.case_name == selected), None
+            )
+            model_case = next(
+                (c for c in suite.test_cases if c.name == selected), None
+            )
+            trace_json = format_trace_json(
+                parse_trace(trace_text),
+                build_original_line_map(
+                    instrumented,
+                    normalized_lines,
+                    source_path.read_text().splitlines(),
+                ),
+                case_result.mock_hits if case_result is not None else [],
+                selected,
+                model_case.line if model_case is not None else None,
+                str(cut_path),
+                str(source_path),
+            )
+            if args.trace_json:
+                Path(args.trace_json).write_text(trace_json)
+            print(format_trace_console(json.loads(trace_json)))
 
     # A nonzero binary exit is a failed run even when every case that got
     # to print its markers passed (e.g. libcob aborted after the SUMMARY
@@ -593,6 +661,23 @@ def build_parser() -> argparse.ArgumentParser:
             "Write machine-readable coverage to this file, remapped onto "
             "the ORIGINAL .cbl's line numbers (splicer-inserted lines "
             "excluded). Implies --coverage"
+        ),
+    )
+    run_parser.add_argument(
+        "--trace",
+        action="store_true",
+        help=(
+            "Trace the executed path through the program for a single test "
+            "case and print it after the run, together with the mocks that "
+            "fired in order. Requires exactly one --case"
+        ),
+    )
+    run_parser.add_argument(
+        "--trace-json",
+        help=(
+            "Write the machine-readable execution trace (executed path "
+            "remapped onto the ORIGINAL .cbl's line numbers, plus the "
+            "ordered mock timeline) to this file. Implies --trace"
         ),
     )
     run_parser.set_defaults(func=_cmd_run)
