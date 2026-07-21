@@ -1,5 +1,20 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-21 — malformed FILE-STATUS lines now fail closed at parse time
+
+- **Bug fix** ([dsl](dsl.md)): `dsl/parser.py`'s `_FILE_STATUS_RE` only
+  matches well-formed `FILE-STATUS IS <mnemonic>` / `FILE-STATUS IS "xx"`
+  lines. Previously, any mock-body line that started with the
+  `FILE-STATUS` keyword but didn't fully match (an unquoted numeric code
+  like `FILE-STATUS IS 92`, a digit-bearing mnemonic like `FILE-STATUS IS
+  EOF10`, or a missing value) silently fell through to `body_lines` and was
+  spliced verbatim into the generated COBOL, surfacing as a confusing
+  `cobc` compile error pointing at generated code instead of the offending
+  `.cut` line. Fixed with a new `_FILE_STATUS_PREFIX_RE` word-boundary
+  check: any such line now raises `CutParseError` at parse time naming the
+  accepted forms (the mnemonic table or a quoted two-character literal).
+  Tests added in `tests/unit/test_dsl_parser_file_status.py`.
+
 ## 2026-07-21 — BEFORE-EACH/BEFORE-ALL mock scoping and FILE-STATUS IS sugar
 
 - **New `.cut` grammar** ([dsl](dsl.md)): `BEFORE-EACH`/`BEFORE-ALL` blocks
