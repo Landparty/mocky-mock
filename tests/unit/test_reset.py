@@ -293,3 +293,39 @@ def test_occurs_child_with_value_is_skipped_not_given_unsubscripted_move():
     assert "INITIALIZE WS-GRP" in lines
     assert not any("WS-CELL" in ln for ln in lines)
     assert any('MOVE "ABC" TO WS-NAMED' in ln for ln in lines)
+
+
+# --- REDEFINES children (two REDEFINES of the same nested item) ---------------
+
+REDEFINES_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SAMPLE8.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RECORD.
+           05  VARIABLE           PIC X(08).
+           05  VARIABLE-NAME REDEFINES VARIABLE PIC 9(08).
+           05  BARIABLE REDEFINES VARIABLE.
+               10  BARIABLE-B1  PIC X(04).
+               10  BARIABLE-B2  PIC X(04).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def _ast_redefines():
+    result = parse_cobol(REDEFINES_SOURCE, filename="sample8.cbl")
+    assert result.success, result.errors
+    return result.ast
+
+
+def test_group_with_redefines_children_resets_via_single_initialize():
+    """WS-RECORD has no VALUE clause, so the whole group -- including
+    VARIABLE and both of its REDEFINES siblings, which alias the same
+    storage -- resets via one INITIALIZE. Neither REDEFINES child declares
+    its own VALUE, so no extra per-child MOVE should be emitted for them."""
+    lines = reset_move_lines(_ast_redefines())
+    assert lines == ["INITIALIZE WS-RECORD"]

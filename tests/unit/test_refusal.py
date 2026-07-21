@@ -1180,6 +1180,46 @@ def test_whole_program_check_does_not_flag_clean_programs_for_control_flow():
     assert check_whole_program(_result()) == []
 
 
+# --- REDEFINES data items -----------------------------------------------------
+
+# Two REDEFINES of the same nested (level 05) item, back-to-back: one
+# elementary with an explicit PICTURE, one a PICTURE-less group (its shape
+# comes from its own children). Column widths are kept well inside the
+# fixed-format code area (columns 8-72) -- REDEFINES itself parses cleanly;
+# see cobol-parser's test_data_division_branches.py for the AST-level checks.
+REDEFINES_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. REDEFSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RECORD.
+           05  VARIABLE           PIC X(08).
+           05  VARIABLE-NAME REDEFINES VARIABLE PIC 9(08).
+           05  BARIABLE REDEFINES VARIABLE.
+               10  BARIABLE-B1  PIC X(04).
+               10  BARIABLE-B2  PIC X(04).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_redefines_data_items_parse_clean_with_no_warnings():
+    """Precondition for the no-refusal check below: a program declaring both
+    REDEFINES shapes must parse warning-free, or PARSE_WARNING would refuse
+    it regardless of what this test is actually checking."""
+    result = parse_cobol(REDEFINES_SOURCE, filename="redefsamp.cbl")
+    assert result.success, result.errors
+    assert result.warnings == []
+
+
+def test_whole_program_check_does_not_flag_redefines_data_items():
+    result = parse_cobol(REDEFINES_SOURCE, filename="redefsamp.cbl")
+    assert check_whole_program(result) == []
+
+
 # --- CANCEL coverage (audit 1.6) ----------------------------------------------
 
 CANCEL_SOURCE = """\
