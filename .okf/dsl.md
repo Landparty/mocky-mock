@@ -27,11 +27,11 @@ the shared vocabulary between the parser (produces it), the generator
 # Grammar
 
 ```
+TESTSUITE "<name>"
+
 [ PROVIDER <name>
       HEADER <col>, ... [, <col>]*
       ROW <value>, ... [, <value>]* [ ROW ... ]* ]*
-
-TESTSUITE "<name>"
 
 TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
     [ MOCK <category> <key>
