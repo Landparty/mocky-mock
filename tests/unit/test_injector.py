@@ -277,7 +277,19 @@ def test_dispatch_emits_mock_marker_in_trace_mode():
     lines = build_site_dispatch(site, _suite(), TallyRegistry(_suite()), trace=True)
     when_001 = lines.index('               WHEN "001"')
     assert lines[when_001 + 1].strip() == "ADD 1 TO UT-DISCRATE-TALLY"
-    assert lines[when_001 + 2].strip() == f'DISPLAY "__MOCKYMOCK__ MOCK: {site.label}"'
+    assert (
+        lines[when_001 + 2].strip()
+        == f'DISPLAY "__MOCKYMOCK__ MOCK: {site.label} DISCRATE"'
+    )
+
+
+def test_mock_marker_names_the_directive_key_not_just_the_verb():
+    """site.label alone is a coarse verb, so two OPENs of different files
+    would be indistinguishable in the firing timeline."""
+    site = _site()
+    lines = build_site_dispatch(site, _suite(), TallyRegistry(_suite()), trace=True)
+    marker = next(line for line in lines if "__MOCKYMOCK__ MOCK:" in line)
+    assert "DISCRATE" in marker
 
 
 def test_dispatch_emits_one_marker_per_mocking_case():

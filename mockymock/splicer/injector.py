@@ -82,8 +82,15 @@ def build_site_dispatch(
             # lines ran"). Emitting on the __MOCKYMOCK__ stdout channel
             # instead places each firing between the driver's CASE
             # START/END markers, so per-case attribution comes for free.
+            #
+            # site.label alone is only a coarse verb ("OPEN", "CALL"), which
+            # renders two OPENs of different files indistinguishable in the
+            # timeline. directive.key is what the author actually wrote in
+            # the .cut, so the pair names the firing unambiguously and
+            # points straight back at the directive that caused it.
             lines.append(
-                f'                   DISPLAY "__MOCKYMOCK__ MOCK: {site.label}"'
+                f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
+                f'{site.label} {directive.key}"'
             )
         if directive.category in FILE_STATUS_CATEGORIES:
             status_field = file_status_fields.get(directive.key.upper())
