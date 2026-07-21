@@ -65,6 +65,88 @@ def test_second_case_has_no_verify():
     assert suite.test_cases[1].verifications == []
 
 
+# --- EXPECT data-name subscripts ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "subscript",
+    ["(1, 1)", "(1 1)", "(1,1)", "(WS-IDX-1, WS-IDX-2)", "(1: 5)"],
+)
+def test_expect_subscripted_table_name_parses(subscript):
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        f"    EXPECT WS-TABLE{subscript} TO BE 100\n"
+    )
+    case = parse_cut(text).test_cases[0]
+    assert case.expectations[0].data_name == f"WS-TABLE{subscript}"
+    assert case.expectations[0].expected_value == "100"
+
+
+def test_expect_unsubscripted_name_still_parses():
+    text = 'TESTSUITE "s"\n' 'TESTCASE "c"\n' "    PERFORM MAIN\n" "    EXPECT WS-RESULT TO BE 100\n"
+    case = parse_cut(text).test_cases[0]
+    assert case.expectations[0].data_name == "WS-RESULT"
+
+
+def test_expect_unbalanced_paren_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-A ( TO BE 5\n"
+    )
+    with pytest.raises(CutParseError, match="unrecognized statement"):
+        parse_cut(text)
+
+
+# --- MOVE target subscripts --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "subscript",
+    ["(1, 1)", "(1 1)", "(1,1)", "(WS-IDX-1, WS-IDX-2)", "(1: 5)"],
+)
+def test_move_subscripted_table_target_parses(subscript):
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        f"    MOVE 100 TO WS-TABLE{subscript}\n"
+        "    PERFORM MAIN\n"
+    )
+    case = parse_cut(text).test_cases[0]
+    assert case.setup_moves == [("100", f"WS-TABLE{subscript}")]
+
+
+def test_move_subscripted_value_and_target_both_parse():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    MOVE WS-A(1, 1) TO WS-B(2, 2)\n"
+        "    PERFORM MAIN\n"
+    )
+    case = parse_cut(text).test_cases[0]
+    assert case.setup_moves == [("WS-A(1, 1)", "WS-B(2, 2)")]
+
+
+def test_move_unsubscripted_target_still_parses():
+    text = 'TESTSUITE "s"\n' 'TESTCASE "c"\n' "    MOVE 100 TO WS-RESULT\n" "    PERFORM MAIN\n"
+    case = parse_cut(text).test_cases[0]
+    assert case.setup_moves == [("100", "WS-RESULT")]
+
+
+def test_move_unbalanced_paren_target_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    MOVE 100 TO WS-A (\n"
+        "    PERFORM MAIN\n"
+    )
+    with pytest.raises(CutParseError, match="unrecognized statement"):
+        parse_cut(text)
+
+
 def test_testcase_before_testsuite_raises():
     with pytest.raises(CutParseError):
         parse_cut('TESTCASE "orphan"\nPERFORM X\n')

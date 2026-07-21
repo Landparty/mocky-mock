@@ -1,5 +1,39 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-21 — `EXPECT` and `MOVE` support subscripted table data-names
+
+`_EXPECT_RE` and `_MOVE_RE` in `mockymock/dsl/parser.py` captured their
+data-name/target as plain `\S+`, so `EXPECT WS-TABLE(1, 1) TO BE 100`
+(idiomatic COBOL, space after the comma), `WS-TABLE(1 1)` (space-separated
+subscripts), and `MOVE 100 TO WS-TABLE(1, 1)` all failed to parse — only
+the no-space `WS-TABLE(1,1)` form matched, and the line fell through to
+`CutParseError: unrecognized statement` otherwise. Confirmed empirically
+with a standalone regex test before touching code.
+
+Fixed by extracting a shared `_SUBSCRIPTED_NAME` fragment that accepts one
+non-nested `(...)` group after an identifier, falling back to the original
+`\S+` for non-identifier tokens — the fallback specifically preserves
+parsing of a literal `{Placeholder}` data-name/target in a
+`PROVIDER`-templated `TESTCASE` (data-names and MOVE targets are
+deliberately never substituted; see `dsl.md`'s `PROVIDER` section), which
+the first regex draft (EXPECT-only) broke
+(`test_placeholder_substitution_scoped_to_move_and_expect_values_only`).
+Nested parens (`TABLE(FUNCTION MOD(I 3))`) and qualification (`A OF B`)
+remain unsupported and still fail closed rather than mis-parsing.
+`PERFORM`'s target stays plain `\S+` — a paragraph/section name is never
+subscripted, so it wasn't touched.
+
+Added regression tests in `tests/unit/test_dsl_parser.py` (comma+space,
+space-separated, no-space, plain name, unbalanced-paren-still-raises, for
+both EXPECT and MOVE, plus a case with subscripts on both sides of a
+single MOVE) and `tests/unit/test_json_report.py` (a subscripted
+data-name failure round-trips through the driver's DISPLAY text back to
+its own `.cut` line via `_attribute_failure`). Full existing suite still
+green except 6 pre-existing failures unrelated to this change (confirmed
+via `git stash` against `main`).
+
+See [dsl.md](dsl.md).
+
 ## 2026-07-21 — DIVIDE/MULTIPLY `GIVING ... ROUNDED` fixed upstream in cobolparser
 
 `ROUNDED` after `GIVING` on `DIVIDE`/`MULTIPLY` was silently dropped by

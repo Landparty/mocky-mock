@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-07-21T01:00:00Z
+timestamp: 2026-07-21T18:00:00Z
 ---
 
 # Overview
@@ -70,6 +70,17 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   (all default 0 for hand-built models). Editor integrations rely on these
   for navigation and failure locations — keep them accurate when touching
   the parse loop.
+- `EXPECT <data-name> TO BE <value>`'s `<data-name>` and `MOVE <value> TO
+  <target>`'s `<target>` both accept one non-nested `(...)` group appended
+  to an identifier — a table subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`,
+  `WS-TABLE(1,1)` all parse) or reference modification (`FIELD(1:5)`).
+  Nested parens and `A OF B` qualification are unsupported and fail closed
+  (`unrecognized statement`) rather than being mis-parsed. Both regexes
+  share the `_SUBSCRIPTED_NAME` fragment in `parser.py`, which falls back to
+  plain `\S+` for non-identifier tokens — that's what lets a literal
+  `{Placeholder}` name (see `PROVIDER` below — data-names/MOVE-targets are
+  deliberately never substituted) keep parsing verbatim. `PERFORM`'s target
+  stays plain `\S+`: a paragraph/section name is never subscripted.
 
 ### `BEFORE-EACH` / `BEFORE-ALL`
 

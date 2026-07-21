@@ -96,6 +96,38 @@ def test_expect_failure_attributes_line_expected_actual():
     assert expect_failure["line"] == 15
 
 
+def test_expect_failure_with_subscripted_data_name_attributes_correctly():
+    """A `EXPECT WS-TABLE(1, 1) TO BE ...` failure must round-trip through
+    the driver's DISPLAY text back to its own .cut line -- the subscript's
+    internal comma+space must not confuse the `data_name == data_name`
+    match in `_attribute_failure` (json_report.py)."""
+    cut_text = (
+        'TESTSUITE "s"\n\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-TABLE(1, 1) TO BE 100\n"
+    )
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 001 FAIL: expected WS-TABLE(1, 1) = 100, got 000\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=1\n"
+    )
+    report = build_json_report(
+        parse_stdout(stdout),
+        cut_suite=parse_cut(cut_text),
+        crash_detail=None,
+        cut_file="PROG.cut",
+        program_file="PROG.cbl",
+    )
+    failure = report["cases"][0]["failures"][0]
+    assert failure["kind"] == "expect"
+    assert failure["expected"] == "100"
+    assert failure["actual"] == "000"
+    assert failure["line"] == 5
+
+
 def test_verify_failure_attributes_line_expected_actual():
     report = _report(STDOUT_ALL_RUN)
     verify_failure = report["cases"][1]["failures"][1]

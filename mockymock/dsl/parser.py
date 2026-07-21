@@ -95,11 +95,28 @@ _MOCK_BARE_RE = re.compile(
 # stays case-sensitive uppercase (see the "Case rules" section in
 # .okf/dsl.md).
 _END_MOCK_RE = re.compile(r"^END-MOCK\.?$", re.IGNORECASE)
-_MOVE_RE = re.compile(r"^MOVE\s+(?P<value>.+?)\s+TO\s+(?P<target>\S+)$")
+# A data-name that may carry one non-nested `(...)` group -- a table
+# subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`) or reference modification
+# (`FIELD(1:5)`) -- so a plain `\S+` would stop at the space after a
+# comma/space-separated subscript. Nested parens (`TABLE(FUNCTION MOD(I 3))`)
+# and qualification (`A OF B`) are out of scope: they fail closed
+# (unrecognized statement) rather than being silently mis-parsed. The `\S+`
+# fallback alternative preserves the pre-subscript behavior for
+# non-identifier tokens -- notably a literal `{Placeholder}` name in a
+# PROVIDER-templated TESTCASE, which is deliberately never substituted (see
+# `_substitute`'s callers) and must still parse verbatim. Shared by MOVE's
+# target and EXPECT's name -- both reference a data-item that may be a
+# table element.
+_SUBSCRIPTED_NAME = r"[A-Za-z0-9][A-Za-z0-9-]*(?:\s*\([^)]*\))?|\S+"
+_MOVE_RE = re.compile(
+    rf"^MOVE\s+(?P<value>.+?)\s+TO\s+(?P<target>{_SUBSCRIPTED_NAME})$"
+)
 _PERFORM_RE = re.compile(
     r"^PERFORM\s+(?P<target>\S+)(?:\s+(?:THRU|THROUGH)\s+(?P<thru>\S+))?$"
 )
-_EXPECT_RE = re.compile(r"^EXPECT\s+(?P<name>\S+)\s+TO\s+BE\s+(?P<value>.+)$")
+_EXPECT_RE = re.compile(
+    rf"^EXPECT\s+(?P<name>{_SUBSCRIPTED_NAME})\s+TO\s+BE\s+(?P<value>.+)$"
+)
 _VERIFY_QUOTED_RE = re.compile(
     rf'^VERIFY\s+(?:(?P<cat>{_QUOTED_CATS})\s+)?"(?P<key>[^"]*)"'
     rf"\s+WAS\s+(?:CALLED|PERFORMED)\s+(?P<expectation>.+)$"
