@@ -92,6 +92,32 @@ def test_trace_records_the_mocks_that_fired_in_order(tmp_path):
 
 
 @requires_docker
+def test_plain_trace_prints_the_console_report(capsys):
+    """--trace with no --trace-json must still report: every other test here
+    drives the JSON path, which would leave the console renderer unproven."""
+    exit_code = main(
+        [
+            "run",
+            str(EXAMPLE_DIR / "ACCTPRG.cbl"),
+            "--cut",
+            str(EXAMPLE_DIR / "ACCTPRG.cut"),
+            "--copybook-path",
+            str(EXAMPLE_DIR / "copybooks"),
+            "--case",
+            CASE,
+            "--trace",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert f"Execution trace for case: {CASE}" in out
+    assert "mocks fired, in order:" in out
+    assert "1. OPEN PURGEIN" in out
+    assert "statements executed:" in out
+
+
+@requires_docker
 def test_trace_does_not_disturb_the_protocol_or_the_verdict(tmp_path):
     """The MOCK markers ride the same stdout channel the __MOCKYMOCK__
     protocol uses, so a malformed marker would corrupt parsing. The run must
