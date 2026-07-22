@@ -86,13 +86,22 @@ Open questions the spike must answer, each with the concrete way to check it:
    COBOL → C → native via gcc, so `-g` debug info is fundamentally *C* debug
    info. GnuCOBOL is known (from public docs, not verified here) to emit
    `#line` directives in the generated C mapping back to COBOL source lines,
-   which is what makes `gdb --cd` breakpoints on the `.cbl` file work at all
-   for line-level stepping. *Check:* compile a small fixture with `cobc -g
-   -free -x`, run under `gdb`, `list <file>.cbl:N`, `break <file>.cbl:N`,
-   confirm gdb accepts COBOL-file:line breakpoints directly (this would mean
-   the line-mapping problem is *partially* solved by gdb itself, changing
-   the scope of `debug/line_map.py` from "translate all line numbers" to
-   "translate only splicer-inserted-line edge cases").
+   which is what makes breakpoints on a `.cbl` file work at all for
+   line-level stepping. One thing is settled *without* the spike, though:
+   whatever file gdb knows about is the **spliced/instrumented** source,
+   because that is the file cobc compiles — any `#line` directives name the
+   instrumented file and instrumented line numbers, never the user's
+   original `.cbl`. So `debug/line_map.py`'s bidirectional
+   original ↔ instrumented mapping is needed in every outcome; the genuinely
+   open question is narrower: does gdb accept COBOL-file:line breakpoints at
+   all (against the instrumented file), or only generated-C locations?
+   *Check:* compile a small fixture with `cobc -g -free -x`, run under
+   `gdb`, `list <file>.cbl:N`, `break <file>.cbl:N`. While there, also
+   observe **step granularity**: one COBOL statement becomes several
+   generated-C lines, so a single `next` may stop more than once "inside"
+   one COBOL line — if so, the adapter must coalesce steps (keep stepping
+   until the mapped line changes), which shapes `gdb_session.py`'s
+   DAP-to-MI translation.
 3. **What do COBOL data items look like to gdb?** This is the actual open
    risk. GnuCOBOL's generated C represents working-storage as a byte buffer
    (`cob_field` structures) with generated field names — `gdb print
@@ -116,11 +125,36 @@ Open questions the spike must answer, each with the concrete way to check it:
    flags (`--network none`) in `_HARDENING_FLAGS` block any TCP-based
    approach (`gdbserver :PORT`) from being reachable from the host at all,
    which likely forces the MI-over-stdio approach regardless of preference.
+5. **Will the kernel let gdb trace anything in this container at all?**
+   Installing gdb (question 1) and reaching it (question 4) are not enough:
+   `ptrace` itself must be permitted. The container runs with `--cap-drop
+   ALL` and `no-new-privileges` under Docker's default seccomp profile.
+   gdb tracing its *own child* usually works without `CAP_SYS_PTRACE`, but
+   the outcome depends on the host's Yama `ptrace_scope` setting and the
+   Docker/kernel seccomp vintage — and if it fails, the fix (`--cap-add
+   SYS_PTRACE`) deliberately weakens a sandbox the toolchain comments
+   describe as load-bearing for running untrusted COBOL. That would be a
+   security trade-off decision (see Limitations), not a Dockerfile tweak.
+   *Check:* `docker exec -i mockymock-cobc gdb ./binary -ex run` and watch
+   for `ptrace: Operation not permitted`.
+6. **How does the debuggee's stdout interleave with GDB/MI records?** Over
+   `docker exec -i` with no TTY, the inferior's output — including every
+   `__MOCKYMOCK__` protocol DISPLAY — is written raw to gdb's stdout, *not*
+   reliably wrapped in MI `@`-records, and MI's usual escape hatch
+   (`-inferior-tty-set`) needs a tty the container doesn't have. The MI
+   parser in `gdb_session.py` must therefore tolerate arbitrary untagged
+   lines mid-stream, and the adapter needs a story for routing program
+   output as DAP `output` events (or redirecting the inferior's stdout to a
+   sandbox file and tailing it). *Check:* run a fixture that DISPLAYs while
+   stopped-and-continued under MI, and inspect exactly how the output lands
+   between records — this can corrupt MI parsing in ways that would later
+   look like flaky bugs.
 
 **This doc's recommendation: do not write the CLI implementation plan until
-questions 1-3 are answered against a real container.** Question 3 in
-particular could change the shape of `variable_map.py` enough to be worth
-gating the whole architecture below on the answer.
+questions 1-3 and 5 are answered against a real container.** Question 3
+could change the shape of `variable_map.py` enough to be worth gating the
+whole architecture below on the answer, and question 5 gates the feature's
+viability outright.
 
 ## Architecture (provisional, pending the spike above)
 
@@ -135,14 +169,14 @@ new flag on an existing function:
 
 ```
 mockymock/debug/
-  adapter.py        # DAP server: reads/writes DAP JSON over stdio
-  gdb_session.py     # owns the long-lived `docker exec -i ... gdb --interpreter=mi2`
-                      # subprocess; translates DAP requests <-> GDB/MI commands
-  line_map.py        # bidirectional original <-> instrumented line mapping,
-                      # built on splicer/source_map.py + report/coverage.py's
-                      # existing (one-directional) machinery
-  variable_map.py     # COBOL data item <-> gdb-visible symbol/offset,
-                      # shape TBD per empirical question 3 above
+  adapter.py       # DAP server: reads/writes DAP JSON over stdio
+  gdb_session.py   # owns the long-lived `docker exec -i ... gdb --interpreter=mi2`
+                   # subprocess; translates DAP requests <-> GDB/MI commands
+  line_map.py      # bidirectional original <-> instrumented line mapping,
+                   # built on splicer/source_map.py + report/coverage.py's
+                   # existing (one-directional) machinery
+  variable_map.py  # COBOL data item <-> gdb-visible symbol/offset,
+                   # shape TBD per empirical question 3 above
 ```
 
 `gdb_session.py` is the direct analogue of `docker_toolchain.run_binary`,
@@ -151,7 +185,17 @@ for the lifetime of the debug session, writes GDB/MI commands to its stdin,
 and reads/parses `^done`/`*stopped`/`~"..."` records from stdout — the same
 container, same `mockymock-cobc`, same `_HARDENING_FLAGS`, just a different
 interaction pattern than the "run and collect the final result" style every
-other function here uses.
+other function here uses. Two design constraints on it, both from the
+empirical questions above:
+
+- **The MI reader must tolerate untagged lines.** Per question 6, the
+  inferior's stdout arrives interleaved with MI records on the same pipe;
+  any line that is not a recognizable MI record is program output and gets
+  forwarded as a DAP `output` event, never treated as a parse error.
+- **Stepping is coalesced.** Per question 2, one COBOL statement may span
+  several generated-C lines, so a DAP "next" may need to issue multiple MI
+  `-exec-next` commands until the mapped original line changes, rather than
+  translating one DAP step to one MI step.
 
 ### Toolchain changes
 
@@ -169,10 +213,12 @@ lines," one-directional, for after-the-fact reports. A debug session needs
 the same mapping used **live** and in the **reverse direction**:
 
 - Setting a breakpoint: DAP gives an original `.cbl` line; must resolve to
-  the corresponding instrumented line before it can be given to gdb (or, if
-  empirical question 2 confirms gdb accepts COBOL-file:line breakpoints
-  directly against the *original* filename embedded in `#line` directives,
-  this step may not be needed at all — one of the biggest open unknowns).
+  the corresponding instrumented line before it can be given to gdb. This
+  step is needed in every spike outcome — gdb only ever knows about the
+  spliced file cobc actually compiled (see empirical question 2), so there
+  is no case where the editor's original-file line numbers can be handed to
+  gdb directly. This also means `line_map.py` can be planned and built now,
+  independent of the spike; only `variable_map.py` waits on it.
 - A breakpoint on a line the splicer touched (e.g. a mocked boundary's
   dispatch block) has no single sensible original-line answer; the existing
   span/boundary data in `splicer/source_map.py::statement_span` and
@@ -199,6 +245,13 @@ designs bracket the range:
   become its own implementation plan rather than a subsection of the CLI
   plan.
 
+**Prior art to check during the spike:** COBOLworx's cbl-gdb (gdb Python
+extensions for GnuCOBOL, the machinery behind their VS Code COBOL debugger).
+Its existence is itself weak evidence for the pessimistic case — symbol
+names alone were evidently not enough for them either — and inspecting how
+it recovers COBOL names may answer question 3 faster than probing from
+scratch. Not verified here; a spike task, not a dependency.
+
 ### CLI surface
 
 `mockymock debug --case NAME [--dap-stdio]` — a real subcommand this time
@@ -208,10 +261,13 @@ long-running mode that doesn't share `run`'s flag surface at all. `--case`
 is mandatory for the same single-case reason as `--trace`.
 
 `--dap-stdio` runs the adapter directly on stdio (the mode
-`DebugAdapterDescriptorFactory` on the extension side spawns); without it,
-`mockymock debug` could still print a human-readable "session started, DAP
-server listening on stdio" message for manual/non-VS Code use, mirroring how
-`--trace` (no `-json`) has a plain-text mode today.
+`DebugAdapterDescriptorFactory` on the extension side spawns). What a
+no-flag `mockymock debug` invocation should do is an open question for the
+CLI implementation plan: unlike `--trace`'s plain-text mode, there is no
+useful human-facing equivalent of a DAP session at a terminal, so the
+plausible answers are "DAP-on-stdio is simply the default (drop the flag)"
+or "refuse with a message pointing at the extension." It should not
+half-start a session a human cannot drive.
 
 ### Extension design (mocky-mock-vscode)
 
@@ -238,6 +294,7 @@ server listening on stdio" message for manual/non-VS Code use, mirroring how
 | Breakpoint on a splicer-owned/unspliceable-adjacent line | Reject with a specific reason, reusing `unspliceable_reason`-style messaging from `source_map.py`, not a silent no-op. |
 | gdb/gdbserver missing from the image | Clear "toolchain needs rebuilding" error from `ensure_toolchain`-equivalent logic, not a raw `docker exec` failure. |
 | Session dies mid-debug (container killed, gdb crashes) | DAP `terminated`/`exited` events sent to the client; no hang. |
+| *Client* dies mid-debug (VS Code killed, extension crash, stdin closes) | The adapter kills its `docker exec`/gdb subprocess on DAP `disconnect` **and** on its own stdin closing. The gdb process lives inside the shared long-lived `mockymock-cobc` container; a leaked one counts against `PIDS_LIMIT` (512) and can hold sandbox files open, degrading every subsequent normal `run`. |
 | CLI too old (extension) | Same clear-message pattern as trace's degradation path. |
 
 ### Testing
@@ -265,17 +322,32 @@ server listening on stdio" message for manual/non-VS Code use, mirroring how
   start than a plain `run` (compile with `-g`, launch gdb, wait for the
   first stop) — acceptable for an interactive debugging action the user
   chose to invoke, not something to optimize for in v1.
+- **Possible sandbox trade-off.** If empirical question 5 finds `ptrace`
+  blocked under the current hardening flags, enabling debugging means
+  `--cap-add SYS_PTRACE` on the shared container — a deliberate weakening
+  of the untrusted-COBOL sandbox that would apply to *all* runs, not just
+  debug sessions (the flags live on `docker run`, and the container is
+  long-lived). If it comes to that, the decision — and whether it warrants
+  a separate debug-only container — gets made explicitly in the CLI plan,
+  not absorbed silently as a Dockerfile-adjacent tweak.
+- **Shared memory cap.** gdb and the debuggee together live under the
+  container's existing 1 GB `MEMORY_LIMIT`. Likely fine, but a
+  memory-limit kill mid-session would surface as the "session dies"
+  error-handling row, which is exactly where it would otherwise be most
+  confusing to diagnose.
 
 ## Sequencing
 
 1. **This doc** (architecture, scoped, empirical questions enumerated).
 2. **Spike** — a throwaway session against the real `mockymock-cobc`
-   container answering empirical questions 1-4. Not shipped code; its
+   container answering empirical questions 1-6. Not shipped code; its
    findings get folded back into this doc (a revision, not a new doc) before
    step 3.
 3. **CLI implementation plan** (`docs/superpowers/plans/`), scoped by what
    the spike found — variable mapping in particular may split into its own
-   plan if the pessimistic case holds.
+   plan if the pessimistic case holds. `line_map.py` does not wait for the
+   spike (see Line mapping); it can be specified in full in this plan
+   regardless of outcome.
 4. **Extension implementation plan**, same split as the trace feature
    (CLI lands first, extension consumes the DAP contract — which here is
    just the DAP spec itself plus the `mockymock debug` launch shape, not a
