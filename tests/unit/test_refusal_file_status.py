@@ -84,8 +84,7 @@ def test_check_test_case_defaults_file_status_fields_to_empty():
     it must keep working exactly as before."""
     result = parse_cobol(SOURCE, filename="statchk.cbl")
     surface = analyze(result.ast)
-    suite = parse_cut(
-        """\
+    suite = parse_cut("""\
 TESTSUITE "s"
 TESTCASE "c"
     MOCK OPEN WITH-STATUS
@@ -93,7 +92,6 @@ TESTCASE "c"
     MOCK OPEN NO-STATUS
     END-MOCK
     PERFORM MAIN-PROCESS
-"""
-    )
+""")
     reasons = check_test_case(surface, result.ast, suite.test_cases[0])
     assert reasons == []

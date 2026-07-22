@@ -85,7 +85,12 @@ def test_expect_subscripted_table_name_parses(subscript):
 
 
 def test_expect_unsubscripted_name_still_parses():
-    text = 'TESTSUITE "s"\n' 'TESTCASE "c"\n' "    PERFORM MAIN\n" "    EXPECT WS-RESULT TO BE 100\n"
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-RESULT TO BE 100\n"
+    )
     case = parse_cut(text).test_cases[0]
     assert case.expectations[0].data_name == "WS-RESULT"
 
@@ -131,7 +136,12 @@ def test_move_subscripted_value_and_target_both_parse():
 
 
 def test_move_unsubscripted_target_still_parses():
-    text = 'TESTSUITE "s"\n' 'TESTCASE "c"\n' "    MOVE 100 TO WS-RESULT\n" "    PERFORM MAIN\n"
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    MOVE 100 TO WS-RESULT\n"
+        "    PERFORM MAIN\n"
+    )
     case = parse_cut(text).test_cases[0]
     assert case.setup_moves == [("100", "WS-RESULT")]
 
@@ -721,7 +731,7 @@ def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
         "    HEADER N, Field\n"
         "    ROW 42, WS-RESULT\n"
         'TESTCASE "verify substitution scope" USING PROVIDER TestData\n'
-        "    MOCK CALL \"HELPER\"\n"
+        '    MOCK CALL "HELPER"\n'
         "        MOVE {N} TO WS-HELPER-VAL\n"
         "    END-MOCK\n"
         "    MOVE {N} TO WS-TARGET\n"

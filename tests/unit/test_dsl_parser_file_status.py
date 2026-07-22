@@ -184,6 +184,6 @@ TESTCASE "c"
     END-MOCK
     PERFORM MAIN-PROCESS
 """
-    with pytest.raises(CutParseError, match='SUCCESS') as exc_info:
+    with pytest.raises(CutParseError, match="SUCCESS") as exc_info:
         parse_cut(cut)
     assert '"xx"' in str(exc_info.value) or "two-character" in str(exc_info.value)

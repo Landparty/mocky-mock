@@ -33,7 +33,9 @@ def test_divide_rounded_fails_when_expectation_is_truncated_not_rounded(
     -- so asserting 2 here must FAIL against the real rounded behavior."""
     cut = (FIXTURES / "divide_rounded.cut").read_text()
     broken = tmp_path / "divide_rounded.cut"
-    broken.write_text(cut.replace("EXPECT WS-RESULT TO BE 3", "EXPECT WS-RESULT TO BE 2"))
+    broken.write_text(
+        cut.replace("EXPECT WS-RESULT TO BE 3", "EXPECT WS-RESULT TO BE 2")
+    )
     exit_code = main(
         ["run", str(FIXTURES / "divide_rounded.cbl"), "--cut", str(broken)]
     )

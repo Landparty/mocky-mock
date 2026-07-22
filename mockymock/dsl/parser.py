@@ -460,7 +460,7 @@ def parse_cut(text: str) -> MockTestSuite:
                         raise CutParseError(
                             f"line {line_no}: unrecognized FILE-STATUS "
                             f"mnemonic {m.group('mnemonic')!r} (expected "
-                            f'one of {valid}, or a quoted two-character '
+                            f"one of {valid}, or a quoted two-character "
                             f'code like "92")'
                         )
                     code = _FILE_STATUS_MNEMONICS[mnemonic]
@@ -549,9 +549,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"line {line_no}: ROW before HEADER in PROVIDER "
                     f"{current_provider.name!r}"
                 )
-            values = [
-                v.strip() for v in _split_top_level(m.group("values"), ",")
-            ]
+            values = [v.strip() for v in _split_top_level(m.group("values"), ",")]
             if len(values) != len(current_provider.header):
                 raise CutParseError(
                     f"line {line_no}: ROW has {len(values)} value(s) but "
@@ -571,7 +569,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     raise CutParseError(
                         f"line {line_no}: ROW value for column {column!r} "
                         f"in PROVIDER {current_provider.name!r} is blank -- "
-                        f'missing/blank row values are not allowed (use a '
+                        f"missing/blank row values are not allowed (use a "
                         f'quoted empty string "" if you intend an empty '
                         f"value)"
                     )
@@ -666,8 +664,7 @@ def parse_cut(text: str) -> MockTestSuite:
         elif (m := _MOCK_QUOTED_RE.match(line)) is not None:
             if mock_target is None:
                 raise CutParseError(
-                    f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/"
-                    f"BEFORE-ALL"
+                    f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/" f"BEFORE-ALL"
                 )
             if not m.group("key"):
                 raise CutParseError(
@@ -692,8 +689,7 @@ def parse_cut(text: str) -> MockTestSuite:
         elif (m := _MOCK_BARE_RE.match(line)) is not None:
             if mock_target is None:
                 raise CutParseError(
-                    f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/"
-                    f"BEFORE-ALL"
+                    f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/" f"BEFORE-ALL"
                 )
             in_mock = _open_mock(
                 MockDirective(

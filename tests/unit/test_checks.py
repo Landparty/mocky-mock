@@ -117,8 +117,7 @@ def test_file_status_fields_populated_on_clean_run():
 
 def test_unresolved_file_status_target_surfaces_as_a_problem(tmp_path):
     cbl = tmp_path / "NOSTAT.cbl"
-    cbl.write_text(
-        """\
+    cbl.write_text("""\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. NOSTAT.
        ENVIRONMENT DIVISION.
@@ -133,19 +132,16 @@ def test_unresolved_file_status_target_surfaces_as_a_problem(tmp_path):
        PROCEDURE DIVISION.
        MAIN-PROCESS.
            OPEN INPUT NO-STATUS.
-"""
-    )
+""")
     cut = tmp_path / "NOSTAT.cut"
-    cut.write_text(
-        """\
+    cut.write_text("""\
 TESTSUITE "s"
 TESTCASE "c"
     MOCK OPEN NO-STATUS
         FILE-STATUS IS SUCCESS
     END-MOCK
     PERFORM MAIN-PROCESS
-"""
-    )
+""")
     result = run_static_checks(cbl, cut, None)
     assert not result.ok
     assert any("UNRESOLVED_FILE_STATUS_TARGET" in p for p in result.problems)
