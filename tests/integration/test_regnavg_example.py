@@ -36,7 +36,9 @@ def test_regnavg_fails_when_rounded_expectation_is_truncated(tmp_path: Path):
     cut = (EXAMPLE_DIR / "REGNAVG.cut").read_text()
     broken = tmp_path / "REGNAVG.cut"
     broken.write_text(
-        cut.replace("EXPECT WS-REGION-AVG(2) TO BE 50.37", "EXPECT WS-REGION-AVG(2) TO BE 50.36")
+        cut.replace(
+            "EXPECT WS-REGION-AVG(2) TO BE 50.37", "EXPECT WS-REGION-AVG(2) TO BE 50.36"
+        )
     )
     exit_code = main(["run", str(EXAMPLE_DIR / "REGNAVG.cbl"), "--cut", str(broken)])
     assert exit_code == 1

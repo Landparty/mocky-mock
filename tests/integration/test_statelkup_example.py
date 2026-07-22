@@ -31,22 +31,18 @@ def test_statelkup_fails_when_one_rows_expectation_is_wrong(tmp_path: Path):
     broken = tmp_path / "STATELKUP.cut"
     broken.write_text(
         cut.replace(
-            'EXPECT WS-STATE-NAME TO BE {Name}',
+            "EXPECT WS-STATE-NAME TO BE {Name}",
             'EXPECT WS-STATE-NAME TO BE "WRONG"',
             1,
         )
     )
-    exit_code = main(
-        ["run", str(EXAMPLE_DIR / "STATELKUP.cbl"), "--cut", str(broken)]
-    )
+    exit_code = main(["run", str(EXAMPLE_DIR / "STATELKUP.cbl"), "--cut", str(broken)])
     assert exit_code == 1
 
 
 def test_statelkup_collect_lists_three_expanded_cases(capsys):
     """No Docker needed -- collect is pure parse (mockymock/cli/main.py)."""
-    exit_code = main(
-        ["collect", "--cut", str(EXAMPLE_DIR / "STATELKUP.cut"), "--json"]
-    )
+    exit_code = main(["collect", "--cut", str(EXAMPLE_DIR / "STATELKUP.cut"), "--json"])
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert [c["name"] for c in payload["cases"]] == [
