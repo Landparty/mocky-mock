@@ -287,6 +287,30 @@ def test_step_raises_after_exceeding_coalesce_cap():
             session.step("fixture.cbl")
 
 
+def test_resolve_address_inserts_and_deletes_a_temporary_breakpoint():
+    process = _FakeProcess(
+        [
+            '^done,bkpt={number="2",type="breakpoint",disp="keep",enabled="y",'
+            'addr="0x000055ab3844b69b",func="SPIKE_",file="fixture.c",'
+            'fullname="/work/fixture.c",line="212",thread-groups=["i1"],'
+            'times="0",original-location="*0x55ab3844b69b"}\n',
+            "(gdb)\n",
+            "^done\n",
+            "(gdb)\n",
+        ]
+    )
+    session = GdbSession(process)
+
+    location = session.resolve_address(0x55AB3844B69B)
+
+    assert location["file"] == "fixture.c"
+    assert location["line"] == "212"
+    assert process.stdin.written == [
+        "-break-insert *0x55ab3844b69b\n",
+        "-break-delete 2\n",
+    ]
+
+
 def test_send_raises_when_process_closes_stdout():
     process = _FakeProcess([])  # immediate EOF
     session = GdbSession(process)

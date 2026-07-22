@@ -327,6 +327,19 @@ class GdbSession:
         records = self.send(f"-break-insert {file}:{line}")
         return _require_payload_key(records, "bkpt", f"-break-insert {file}:{line}")
 
+    def resolve_address(self, address: int) -> dict:
+        """Resolves a raw code address to its `{file, fullname, line,
+        func, ...}` location by inserting and immediately deleting a
+        temporary breakpoint there -- confirmed to work via `-break-insert
+        *ADDR` (see docs/2026-07-22-dap-debugger-design.md's Call stack
+        synthesis section). Used by call_stack.py to resolve
+        `frame_stack[i].return_address_ptr` entries, since gdb's own
+        backtrace never reflects COBOL PERFORM nesting."""
+        command = f"-break-insert *{address:#x}"
+        bkpt = _require_payload_key(self.send(command), "bkpt", command)
+        self.send(f"-break-delete {bkpt['number']}")
+        return bkpt
+
     def run(self) -> StopEvent:
         """`-exec-run`, reading through to the first `*stopped` (which
         also covers immediate program exit -- see module docstring)."""
