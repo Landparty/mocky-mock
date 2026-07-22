@@ -282,14 +282,34 @@ PERFORM nesting is.
 
 1. Read `frame_ptr` and walk backward through `frame_stack` via MI
    `-data-evaluate-expression` (the array is small and fixed-size — 255
-   entries — so this is a bounded, cheap read).
+   entries — so this is a bounded, cheap read). **Correction, found only
+   once this was actually implemented and driven against a real
+   container:** `frame_stack[0]` is a sentinel, not a real caller —
+   GnuCOBOL initializes it to `{perform_through: 0, return_address_ptr:
+   &&P_cgerror}` at function entry, before any PERFORM runs, and always
+   increments `frame_ptr` *before* writing a new PERFORM's real return
+   address. So `frame_ptr - frame_stack` (the depth) is correct, but the
+   real, populated caller frames are `frame_stack[1..depth]`, innermost
+   first — resolving `frame_stack[0]` lands on the internal error label,
+   not any real call site, and produces a nonsensical frame if not
+   excluded.
 2. Each populated entry's `return_address_ptr` is a code address inside
-   `SPIKE_`; resolve it to a source line the same way gdb resolves a
-   breakpoint address (an MI line-table lookup, e.g. via a temporary
-   `-break-insert *<address>` and reading its resolved `file`/`line`, or
-   `info line *<address>` if MI exposes an equivalent) to get the
-   **generated-C** line, then run it through `line_map.py` to the original
-   line, exactly like a normal breakpoint frame.
+   `SPIKE_`; resolve it via a temporary `-break-insert *<address>` /
+   `-break-delete` pair (confirmed to work) to get its `file`/`line`. **This
+   is *not* simply "the generated-C line, run through `line_map.py`"** as
+   originally sketched here: `line_map.py` only ever relates two
+   COBOL-shaped texts (original ↔ instrumented), never the generated `.c`
+   file, and a resolved return address typically lands on a bare
+   generated-C plumbing line (e.g. the line right after the internal
+   `goto` that entered the performed paragraph) with no `#line ...cbl`
+   marker of its own. The actual mechanism needed — and confirmed
+   empirically — is a *separate* lookup: scan the compiled `.c` file's own
+   `#line N "<file>.cbl"` directives into a sorted table, and take the
+   **nearest preceding** entry for the resolved generated-C line number.
+   That preceding entry is exactly the calling statement's own instrumented
+   line (e.g. the `PERFORM CALC-INTEREST` statement's line) — confirmed
+   against a real fixture — which is *then* run through `line_map.py` to
+   the original line, same as any other instrumented-line lookup.
 3. The resolved line falls inside a specific paragraph/section — reuse
    `splicer/source_map.py`'s existing span/boundary data (the same data
    "Line mapping" above already reuses) to name the enclosing
