@@ -35,7 +35,7 @@ def _image_tag(dockerfile_text: str | None = None) -> str:
     misses, and `ensure_toolchain` rebuilds instead of silently reusing a
     stale image."""
     if dockerfile_text is None:
-        dockerfile_text = (_DOCKER_CONTEXT / "Dockerfile").read_text()
+        dockerfile_text = (_DOCKER_CONTEXT / "Dockerfile").read_text(encoding="utf-8")
     return hashlib.sha256(dockerfile_text.encode()).hexdigest()[:8]
 
 
@@ -447,4 +447,6 @@ def run_gcov(source_path: Path) -> GcovResult:
             gcov_text="",
             stderr=f"mockymock: gcov did not produce {gcov_path.name}\n",
         )
-    return GcovResult(success=True, gcov_text=gcov_path.read_text(), stderr="")
+    return GcovResult(
+        success=True, gcov_text=gcov_path.read_text(encoding="utf-8"), stderr=""
+    )

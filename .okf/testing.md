@@ -1,9 +1,9 @@
 ---
 type: Test Suite
 title: Testing
-description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
+description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, FLOWMOCK, TAXFILE, STATELKUP, REGNAVG, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-07-18T18:00:00Z
+timestamp: 2026-07-21T22:00:00Z
 ---
 # Overview
 
@@ -87,12 +87,16 @@ just that the happy path returns 0.
 Documented, runnable programs under `examples/` -- these are polished
 end-to-end demos (with READMEs), distinct from the terser
 `tests/integration/fixtures/` corpus, and are also driven by their own
-integration tests. Beyond the six hand-written ones below (INVUPDT,
-ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG), `examples/real-world/`
+integration tests. Beyond the seven hand-written ones below (INVUPDT,
+ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, REGNAVG), `examples/real-world/`
 (ACCTPRG, DEPTIMSM, DEPTMQC, DEPTMQP -- now with its own README) and
 `examples/nist-cobol85/` (IC101A, IC116M, IC117M, OBIC1A) hold additional
 examples driven from real corpora -- see their own READMEs for provenance
-and what each demonstrates.
+and what each demonstrates. `examples/flowmock/`, `examples/taxfile/`, and
+`examples/statelkup/` (flow-target mocks, `BEFORE-EACH`/`FILE-STATUS IS`,
+`PROVIDER`) are documented by their own READMEs only -- this concept's
+per-example write-up section below was never extended to them; a
+pre-existing gap, not introduced here.
 
 ## INVUPDT (`examples/invupdt/`)
 
@@ -220,6 +224,41 @@ mock it, because it's statically reachable from the `PERFORM` target.
 
 Run: `mockymock run examples/claimseg/CLAIMSEG.cbl --cut examples/claimseg/CLAIMSEG.cut`
 
+## REGNAVG (`examples/regnavg/`)
+
+Proves four features that, before this example, were checked only by
+unit/integration tests, never by a worked `examples/` program: subscripted
+`.cut` `MOVE`/`EXPECT` targets (`WS-MONTH-AMT(1, 1)` on a 2-D `OCCURS`
+table, all three subscript forms `_SUBSCRIPTED_NAME` accepts), `REDEFINES`
+data items (`WS-REGION-AVG-DISPLAY`/`WS-REGION-AVG-NUMERIC`, two siblings
+aliasing one `PIC 9(5)V99` field -- the same shape as `test_reset.py`'s
+regression fixture), `DIVIDE ... GIVING ... ROUNDED` (a real rounding case,
+`151.10 / 3 = 50.3666...` must read back `50.37`, not the truncated
+`50.36`), and `run --trace` (its README embeds a real captured trace).
+Its three test cases double as a reset-correctness proof, deliberately
+made load-bearing: the program is split into two paragraphs (one per
+region) specifically so each case's own `PERFORM` target never touches
+the *other* region's `WS-REGION-AVG` slot -- so when a case reads that
+untouched slot back as zero, it's proof `WS-REGION-AVG-TABLE`'s single
+`INITIALIZE` (a group with no `VALUE` clause, containing an
+`OCCURS`-of-`REDEFINES-group`) actually reset it between cases, not an
+artifact of that run's own arithmetic recomputing it to zero anyway. An
+earlier single-paragraph draft (one loop over both regions) had exactly
+that flaw -- caught in review, not by a failing test, since the flawed
+version still passed -- and was restructured before committing. The
+`DIVIDE` targets an *unsubscripted* scratch field, then `MOVE`s it into
+the table cell, and `CALL "LOGALERT"` never takes the average as an
+argument -- both are workarounds for cobolparser gaps confirmed against
+the exact pinned commit (a subscripted `GIVING`/`CALL ... USING` operand
+outside a `PERFORM VARYING` body), not stylistic choices. See
+[log.md](log.md)'s 2026-07-21 entry for the full account, including a
+stale-`cobolparser`-install detour and a second, easy-to-miss gotcha it
+surfaced: the sibling checkout's `HEAD` had already raced two commits
+past the pin, so an initial "fixed the environment, now it's clean" was
+still verified against the wrong commit.
+
+Run: `mockymock run examples/regnavg/REGNAVG.cbl --cut examples/regnavg/REGNAVG.cut`
+
 # Gotchas
 
 **A globally `uv tool install`-ed `mockymock` on `PATH` goes stale silently.**
@@ -239,7 +278,51 @@ extension resolves `mockymock` from `PATH` by default
 (`mockymock.executablePath` empty), so this same staleness silently breaks
 its Test Explorer results too.
 
+**A non-editable `cobolparser` install can silently shadow the editable
+sibling checkout, even for `python -c "import cobolparser"` (not just the
+`PATH` binary above).** Recurred 2026-07-21 while building
+`examples/regnavg/`: `pip show cobolparser` reported version `1.2.0` but
+its `direct_url.json` pinned commit `c9a94999` (2026-07-10) rather than
+the same-day `4db8394` DIVIDE/MULTIPLY `ROUNDED` fix `pyproject.toml`
+already pins -- eleven days stale, and silent, because `import
+cobolparser` still resolved to *something*. Symptom: cobolparser emits a
+phantom paragraph literally named `ROUNDED` (see [log.md](log.md)'s
+"DIVIDE/MULTIPLY `GIVING ... ROUNDED`" entry), reparenting every statement
+after a `DIVIDE ... GIVING ... ROUNDED` into it -- which then surfaces as
+a spurious `UNMATCHED_MOCK` for any boundary mock placed after it in the
+same paragraph, not as a parse warning. Root cause matches the 2026-07-09
+log entry exactly: `pip install --no-deps -e ../cobol-parser` alone isn't
+enough after a prior non-editable install -- a stale
+`site-packages/cobolparser/` directory (confirmed here: a near-empty
+`analysis/` subfolder) survives uninstall and is treated as an implicit
+namespace package, shadowing the editable redirect. Fix: delete that
+directory by hand, then reinstall editable; confirm with
+`python -c "import cobolparser; print(cobolparser.__file__)"` -- it must
+print a path inside the sibling `cobol-parser` checkout, not
+`site-packages`.
+
+**Fixing the above isn't the same as verifying against the pin.** After
+the fix, `import cobolparser` resolves to the *editable sibling
+checkout's current `HEAD`* -- which is the normal, correct dev setup
+(`requirements-dev.txt`), but `HEAD` routinely races ahead of the commit
+`pyproject.toml`/`ci.yml` actually pin (2 commits ahead here, one of
+which -- `4917576`, "fix silent data loss in ... arithmetic clauses" --
+changed parsing behavior `4db8394`, the pin, doesn't have). A result
+that's clean against `HEAD` can still `PARSE_WARNING` for anyone
+resolving the pinned commit (CI, `uv tool install`, a fresh clone). To
+verify against the pin specifically without touching the shared sibling
+checkout (avoid `git checkout` there --
+[[feedback-cobolparser-worktree-isolation]]): build a throwaway venv and
+`pip install --no-deps "git+file:///<absolute path to
+../cobol-parser>@<pinned commit>"` -- pip clones into its own temp build
+dir, so the shared working tree is never touched. Confirm with the same
+`direct_url.json` check as above.
+
 # CI (.github/workflows/ci.yml)
+
+Three jobs: `lint`, `test`, `test-cross-platform`.
+
+## `test` (Linux, full pipeline)
 
 - Push/PR to `main`, `ubuntu-latest`, Python 3.11/3.12/3.13 matrix.
 - Checks out `mocky-mock` *and* a sibling `Landparty/cobol-parser` checkout
@@ -256,6 +339,40 @@ its Test Explorer results too.
 - Single run step: `python -m pytest tests/ -v` -- unit and integration tests
   run together; integration tests self-skip if `docker info` fails, but
   `ubuntu-latest` ships Docker so in practice CI exercises both tiers.
+
+## `test-cross-platform` (Windows + macOS, unit tier only)
+
+Added 2026-07-21 as part of a cross-OS install audit (see
+[log.md](log.md)'s entry of the same date) -- previously CI ran on
+`ubuntu-latest` only, despite the 2026-07-04 Docker-only rewrite's whole
+premise being to fix chronic *Windows* compile failures (see
+[runtime](runtime.md)). Nothing verified that fix held up outside one
+developer's machine.
+
+- Matrix of `windows-latest` / `macos-latest`, single Python version
+  (3.13) -- this job is about catching OS-specific bugs in the Python/DSL
+  layer (paths, encoding, newline handling), not Python-version bugs,
+  which the Linux `test` job's 3.11-3.13 matrix already covers.
+- Same sibling `cobol-parser` checkout + `--no-deps -e .` install as
+  `test`, since `mockymock/analysis/`, `mockymock/splicer/`, and
+  `mockymock/cli/` all import `cobolparser` at module level -- even the
+  no-Docker unit tier can't import `mockymock` without it.
+- Runs `pytest tests/unit -v` **only** -- deliberately does not attempt
+  the Docker/GnuCOBOL integration tier. `macos-latest` GitHub-hosted
+  runners have no reachable Docker daemon (the tier's own
+  `@requires_docker` gate skips cleanly there, so `pytest tests/` would
+  have been safe on macOS specifically), but `windows-latest` runners
+  ship a *Windows-container* Docker Engine -- `docker info` can report a
+  live daemon while still being structurally unable to build/run the
+  Linux `mockymock-gnucobol` image, which would fail the job loudly
+  instead of skipping. Restricting both platforms to `tests/unit`
+  sidesteps that asymmetry rather than relying on unverified runner
+  behavior. The Docker-backed compile/run path itself stays covered by
+  `test` (`ubuntu-latest`) only, until a self-hosted or
+  Linux-containers-on-Windows runner is worth the added CI complexity.
+- Verified locally before adding: `tests/unit` (681 tests) passed clean
+  against the editable `-e ../cobol-parser` setup on native Windows
+  Python 3.14.
 
 # See Also
 

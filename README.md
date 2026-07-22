@@ -207,6 +207,7 @@ distinctive feature.
 | [`examples/taxfile/`](examples/taxfile/) | `BEFORE-EACH` shared mocks with per-case overrides, `FILE-STATUS IS` sugar, implicit default-success file status |
 | [`examples/custprog/`](examples/custprog/) | `MOCK SQL ... ROWS` cursor-fetch sugar, DCLGEN-style `EXEC SQL INCLUDE <member>` via `--copybook-path` |
 | [`examples/statelkup/`](examples/statelkup/) | `PROVIDER`/`HEADER`/`ROW` parameterized test cases -- one `TESTCASE` expands into N rows |
+| [`examples/regnavg/`](examples/regnavg/) | Subscripted `.cut` `MOVE`/`EXPECT` targets on a 2-D `OCCURS` table, `REDEFINES` data items, `DIVIDE ... GIVING ... ROUNDED`, `run --trace` |
 | [`examples/real-world/`](examples/real-world/) | Four business-flavored programs — IMS DL/I batch, IMS MPP, MQ consumer, MQ producer — plus the `--coverage` worked example |
 | [`examples/nist-cobol85/`](examples/nist-cobol85/) | Static `CALL` against real, unmodified NIST COBOL-85 validation-suite programs |
 
@@ -324,7 +325,24 @@ mockymock isn't on PyPI, but its `pyproject.toml` declares a full
 dependency set (including a pinned `cobolparser` git dependency — see
 [`.okf/integration.md`](.okf/integration.md)), so [uv](https://docs.astral.sh/uv/)
 can install it straight from the repo as a standalone CLI tool, available
-on `PATH` from any directory:
+on `PATH` from any directory. Identical on Windows, macOS, and Linux —
+`uv` and the Docker-only runtime (see "Setup" below) mean there is no
+OS-specific install step.
+
+**Before you run the commands below**, two one-time prerequisites (do
+these once per machine, not per install):
+
+1. **Install `uv`** — see [the uv install docs](https://docs.astral.sh/uv/getting-started/installation/)
+   for the current Windows/macOS/Linux one-liners.
+2. **Authenticate `git`/`uv` to GitHub.** Both `samdion1994/mocky-mock`
+   *and* the `cobolparser` dependency it pulls in (`Landparty/cobol-parser`)
+   are **private repos** — the install commands below fail to resolve for
+   anyone without read access to both, regardless of OS. Run
+   `gh auth setup-git` (if you have the [GitHub CLI](https://cli.github.com/)),
+   or configure an SSH key/PAT with `repo` read access on your GitHub
+   account, *before* installing. This is the single most common install
+   failure and has nothing to do with your OS — if `uv tool install` fails
+   with a git/auth error, this step is what's missing.
 
 ```bash
 uv tool install git+https://github.com/samdion1994/mocky-mock.git
@@ -332,11 +350,10 @@ uv tool install git+https://github.com/samdion1994/mocky-mock.git
 uv tool install --from . mockymock
 ```
 
-Both repos are private, so `git`/`uv` need working GitHub credentials
-(`gh auth setup-git`, or an SSH key) to fetch them. Upgrade with
-`uv tool upgrade mockymock`; remove with `uv tool uninstall mockymock`.
-`mockymock setup`/`mockymock run` still need a running Docker daemon (see
-below) — the CLI itself has no other host dependency.
+Upgrade with `uv tool upgrade mockymock`; remove with
+`uv tool uninstall mockymock`. `mockymock setup`/`mockymock run` still
+need a running Docker daemon (see below) — the CLI itself has no other
+host dependency once the two prerequisites above are met.
 
 ## Setup (contributing)
 

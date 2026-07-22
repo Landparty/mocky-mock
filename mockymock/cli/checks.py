@@ -119,7 +119,7 @@ def run_static_checks(
     out = StaticCheckResult()
 
     # 1. Read source; expand copybooks and check expansion warnings.
-    raw_source = source_path.read_text()
+    raw_source = source_path.read_text(encoding="utf-8")
     if copybook_paths:
         expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
         expansion_reasons = check_expansion_warnings(expansion)
@@ -155,7 +155,7 @@ def run_static_checks(
     # 4. Parse the .cut file; apply any --case/--tag selection immediately so
     # every later per-case check sees only the cases that will actually run.
     try:
-        suite = parse_cut(cut_path.read_text())
+        suite = parse_cut(cut_path.read_text(encoding="utf-8"))
     except CutParseError as exc:
         out.problems.append(f"invalid .cut file {cut_path}: {exc}")
         return out

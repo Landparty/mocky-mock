@@ -32,9 +32,9 @@ dependencies = [
     # Bumped to pull in the DIVIDE/MULTIPLY GIVING ... ROUNDED fix: ROUNDED
     # was previously left unconsumed and misread as a phantom paragraph
     # named "ROUNDED" (see tests/integration/test_divide_rounded.py).
-    # NOT YET PUSHED to github.com/Landparty/cobol-parser as of this pin
-    # bump -- push the cobol-parser commit before pushing this one, or
-    # `uv tool install`/CI will fail to resolve this ref.
+    # Confirmed pushed and resolvable (2026-07-21): `uv tool install --from .`
+    # and `uv tool install git+https://github.com/samdion1994/mocky-mock.git`
+    # both succeed against this ref.
     "cobolparser @ git+https://github.com/Landparty/cobol-parser.git@4db83941dccefbf3d185d02a518378c37c392d46",
 ]
 

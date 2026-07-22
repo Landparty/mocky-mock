@@ -95,9 +95,9 @@ jobs:
           # failure via a MOCK'd CALL placed right after the ROUNDED DIVIDE
           # in the same paragraph (UNMATCHED_MOCK at the old pin). Full
           # mockymock suite at this pin: 748 passed locally.
-          # NOT YET PUSHED to github.com/Landparty/cobol-parser as of this
-          # bump -- this ref will not resolve in CI until that commit is
-          # pushed to the cobol-parser remote.
+          # Confirmed pushed and resolvable (2026-07-21) via `gh api
+          # repos/Landparty/cobol-parser/commits/<sha>` and a live
+          # `uv tool install`.
           ref: 4db83941dccefbf3d185d02a518378c37c392d46
 
       - uses: actions/setup-python@v5
@@ -125,3 +125,49 @@ jobs:
       - name: Run tests
         working-directory: mocky-mock
         run: python -m pytest tests/ -v
+
+  # Cross-platform signal for the Python/DSL layer (parser, splicer, CLI,
+  # path/newline handling) -- the layer most likely to regress silently on
+  # a non-Linux host. Deliberately does NOT attempt the Docker/GnuCOBOL
+  # integration tier here: GitHub-hosted macos-latest runners have no
+  # reachable Docker daemon (the tier's own @requires_docker gate skips
+  # cleanly), but windows-latest runners ship a *Windows-container* Docker
+  # Engine -- `docker info` can report a live daemon while still being
+  # unable to build/run mockymock-gnucobol's Linux image, which would fail
+  # loudly rather than skip. Restricting to tests/unit sidesteps that
+  # ambiguity entirely rather than relying on unverified runner behavior.
+  # The Docker-backed compile/run path itself stays covered by `test`
+  # above (ubuntu-latest) until a self-hosted or Linux-containers-on-
+  # Windows runner is worth the added CI complexity.
+  test-cross-platform:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out mockymock
+        uses: actions/checkout@v4
+        with:
+          path: mocky-mock
+
+      - name: Check out cobol-parser (sibling editable dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: Landparty/cobol-parser
+          path: cobol-parser
+          token: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
+          ref: 4db83941dccefbf3d185d02a518378c37c392d46
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        working-directory: mocky-mock
+        run: |
+          pip install -r requirements-dev.txt
+          pip install --no-deps -e .
+
+      - name: Run unit tests
+        working-directory: mocky-mock
+        run: python -m pytest tests/unit -v

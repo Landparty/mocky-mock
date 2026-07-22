@@ -55,7 +55,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     source_path = Path(args.program)
     if not _check_input_files("mockymock generate", source_path):
         return 1
-    raw_source = source_path.read_text()
+    raw_source = source_path.read_text(encoding="utf-8")
     if args.copybook_path:
         expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
         expansion_reasons = check_expansion_warnings(expansion)
@@ -103,7 +103,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     cut_text = scaffold_cut(result.ast.program_name, surface)
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
-    output_path.write_text(cut_text)
+    output_path.write_text(cut_text, encoding="utf-8")
     case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
     _report_unsupported_boundaries(surface)
@@ -342,7 +342,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             print(f"mockymock run: keeping sandbox {tmp}")
 
         instrumented_path = tmp / source_path.with_suffix(".cbl").name
-        instrumented_path.write_text("\n".join(instrumented) + "\n", newline="\n")
+        instrumented_path.write_text(
+            "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
+        )
 
         compiled = docker_toolchain.compile_source(
             instrumented_path, coverage=args.coverage, trace=args.trace
@@ -364,7 +366,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # removes it on exit unless --keep-sandbox was given.
         trace_text = ""
         if trace_path is not None and trace_path.exists():
-            trace_text = trace_path.read_text(errors="replace")
+            trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
 
         coverage_text = None
         coverage_report = None
@@ -403,7 +405,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     if args.junit_xml:
         Path(args.junit_xml).write_text(
-            format_junit_xml(suite_result, crash_detail=crash_detail)
+            format_junit_xml(suite_result, crash_detail=crash_detail),
+            encoding="utf-8",
         )
 
     if args.json_report:
@@ -416,7 +419,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     cut_file=str(cut_path),
                     program_file=str(source_path),
                 )
-            )
+            ),
+            encoding="utf-8",
         )
 
     if args.coverage_json:
@@ -430,7 +434,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 coverage_report,
                 instrumented,
                 normalized_lines,
-                source_path.read_text().splitlines(),
+                source_path.read_text(encoding="utf-8").splitlines(),
             )
             Path(args.coverage_json).write_text(
                 format_coverage_json(
@@ -438,13 +442,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     mapped,
                     program_file=str(source_path),
                     instrumented_name=instrumented_path.name,
-                )
+                ),
+                encoding="utf-8",
             )
 
     if coverage_text is not None:
         print(coverage_text)
         if args.coverage_out:
-            Path(args.coverage_out).write_text(coverage_text + "\n")
+            Path(args.coverage_out).write_text(coverage_text + "\n", encoding="utf-8")
 
     if args.trace:
         if not trace_text:
@@ -466,7 +471,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 build_original_line_map(
                     instrumented,
                     normalized_lines,
-                    source_path.read_text().splitlines(),
+                    source_path.read_text(encoding="utf-8").splitlines(),
                 ),
                 case_result.mock_hits if case_result is not None else [],
                 selected,
@@ -475,7 +480,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 str(source_path),
             )
             if args.trace_json:
-                Path(args.trace_json).write_text(trace_json)
+                Path(args.trace_json).write_text(trace_json, encoding="utf-8")
             print(format_trace_console(json.loads(trace_json)))
 
     # A nonzero binary exit is a failed run even when every case that got
@@ -522,7 +527,7 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     if not _check_input_files("mockymock collect", cut_path):
         return 1
     try:
-        suite = parse_cut(cut_path.read_text())
+        suite = parse_cut(cut_path.read_text(encoding="utf-8"))
     except CutParseError as exc:
         if args.json:
             print(json.dumps({"version": 1, "error": str(exc)}, indent=2))

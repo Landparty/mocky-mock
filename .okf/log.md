@@ -1,5 +1,206 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-21 — Cross-OS install audit: pin verified pushed, Windows/macOS unit CI added
+
+Requested audit: "make sure everything is super easy to install and get up
+running on any OS." Findings, verified empirically rather than by reading
+docs (per [[feedback-empirical-verification]]):
+
+- **The install path itself already works, on Windows, end to end.** Both
+  README-documented commands --
+  `uv tool install --from . mockymock` and
+  `uv tool install git+https://github.com/samdion1994/mocky-mock.git` --
+  succeeded on a clean `uv tool uninstall` + reinstall, followed by
+  `mockymock setup` (built the image, started the container) and
+  `mockymock run examples/ordrproc/ORDRPROC.cbl --cut
+  examples/ordrproc/ORDRPROC.cut` (both cases passed). The 2026-07-04
+  Docker-only rewrite's Windows fixes (see [runtime](runtime.md)) hold up
+  in practice, not just in the design doc -- at least on this one
+  authorized machine.
+- **`pyproject.toml`'s and `ci.yml`'s "NOT YET PUSHED" comments on the
+  `cobolparser@4db8394` pin were stale.** Verified via `gh api
+  repos/Landparty/cobol-parser/commits/4db8394...` (200, sha matches) and
+  the successful installs above -- the commit has been pushed since the
+  comments were written. Both comments corrected in place rather than
+  left to keep scaring off the next reader into thinking the pin is
+  broken.
+- **The actual ceiling on "easy to install on any OS" is distribution,
+  not engineering.** `gh repo view` confirms both `samdion1994/mocky-mock`
+  and `Landparty/cobol-parser` are still private, and mockymock's runtime
+  dependency is a git URL straight to the private cobol-parser repo (see
+  [integration](integration.md)). No amount of OS-specific polish changes
+  that a fresh installer needs GitHub credentials with read access to
+  *two* private repos before `uv tool install` resolves at all. This is a
+  product/distribution decision (keep private + document the auth step
+  clearly vs. make cobol-parser public vs. a private package index vs.
+  vendoring a snapshot), not a bug -- put to the user rather than decided
+  unilaterally.
+- **CI never verified any of this.** `.github/workflows/ci.yml` ran
+  `ubuntu-latest` only, despite the Docker-only rewrite's whole premise
+  being "fix chronic Windows failures." Added a `test-cross-platform` job
+  (`windows-latest`, `macos-latest`, Python 3.13, `tests/unit` only --
+  see [testing](testing.md#ci-githubworkflowsciyml)) as real, durable
+  evidence rather than a one-off manual check. Deliberately does not
+  attempt the Docker/GnuCOBOL integration tier on those runners:
+  macOS GitHub-hosted runners have no reachable Docker daemon (the
+  tier's own `@requires_docker` gate skips cleanly there), but
+  Windows runners ship a *Windows-container* Docker Engine -- `docker
+  info` can report a live daemon while still being unable to build/run
+  the Linux `mockymock-gnucobol` image, which would fail loudly instead
+  of skipping. Verified the new job would actually pass before adding it:
+  ran `tests/unit` locally against the same editable
+  `-e ../cobol-parser` setup CI uses, native Windows Python 3.14 --
+  681 passed.
+- **Fixed: every `.read_text()`/`.write_text()` call across
+  `mockymock/cli/main.py`, `mockymock/cli/checks.py`, and
+  `mockymock/runtime/docker_toolchain.py` now pins `encoding="utf-8"`.**
+  Without it, Python resolves the platform's locale-preferred encoding
+  (commonly a Windows code page, not UTF-8) for every read/write --
+  `.cbl`/`.cut` source, `--json-report`/`--junit-xml`/`--coverage-json`/
+  `--coverage-out`/`--trace-json` output, the Docker-container-produced
+  gcov/trace files, and even `docker_toolchain._image_tag()`'s read of
+  its own `Dockerfile` (whose content hash becomes the image tag --
+  a decode/re-encode round-trip through the wrong codec could silently
+  hash the identical file differently on Windows than on Linux/macOS,
+  though the current all-ASCII Dockerfile doesn't yet trigger it). A
+  program or `.cut` file with a non-ASCII byte (accented name in a
+  comment, curly quote pasted from a spec doc) would previously decode
+  identically on Linux/macOS (UTF-8 default) but differently -- or
+  outright crash -- on Windows. Verified with the full local suite
+  (`tests/unit`, 681 passed) plus a manual smoke test exercising every
+  touched write path end to end against live Docker: `run` with
+  `--json-report`, `--junit-xml`, `--coverage`/`--coverage-json`/
+  `--coverage-out`, and `--trace`/`--trace-json` all together, plus
+  `generate --output`.
+- **One low-priority polish item noted, not fixed** (cosmetic, no
+  product decision needed, just not worth the Dockerfile-content-hash
+  churn without being asked): every `mockymock run` prints a
+  `Warning: program compiled against libxml 212 using older 209` line
+  from the Docker image's GnuCOBOL build on every single run, including
+  passing ones -- harmless, but easy for a first-time user to mistake
+  for something broken.
+
+## 2026-07-21 — New worked example: REGNAVG (subscripted tables, REDEFINES, DIVIDE ROUNDED, --trace)
+
+`examples/regnavg/` closes the gap that four features shipped earlier today
+-- subscripted `.cut` `EXPECT`/`MOVE` targets, `REDEFINES` data items,
+`DIVIDE ... GIVING ... ROUNDED`, and `run --trace` -- were each proven only
+by unit/integration tests, never by a polished worked example (the
+convention every other feature in this repo follows). `BEFORE-EACH`,
+`MOCK PARAGRAPH`/`SECTION`, and `PROVIDER` were deliberately left out of
+scope: each already has its own dedicated example (`taxfile`, `flowmock`,
+`statelkup`), confirmed with the user rather than assumed, and the
+README's own "one distinctive feature per example" convention argues
+against a kitchen-sink program.
+
+- **Program, revised mid-build**: originally one paragraph looping over
+  both regions; changed to two paragraphs
+  (`1000-CALCULATE-REGION-1-AVERAGE` / `2000-CALCULATE-REGION-2-AVERAGE`,
+  one per region) after review caught that the single-loop version
+  unconditionally recomputed *both* regions' averages on every `PERFORM`,
+  so a "the untouched region reads back zero" check was passing because
+  that run's own `DIVIDE` had just overwritten it with `0/3`, not because
+  cross-case reset had run -- the check had zero power to catch a broken
+  reset. With two paragraphs, each test case `PERFORM`s only one region's
+  paragraph, so the *other* region's `WS-REGION-AVG` slot is genuinely
+  untouched by that run, and reading it back is real proof reset happened.
+  Verified the fix has teeth by deliberately asserting the previous case's
+  leftover value and watching it fail against the real, correctly-reset
+  `0000000` (see README). `CALL "LOGALERT"` is a real boundary that must
+  be mocked in every case despite living inside an `IF`, since
+  reachability is static, not data-flow (same lesson INVUPDT and CLAIMSEG
+  already teach).
+- **A stale local `cobolparser` install produced two false leads while
+  building this, both root-caused rather than worked around:**
+  1. A subscripted `DIVIDE ... GIVING` target and a subscripted `CALL ...
+     USING` argument both appeared to fail to parse at a paragraph's top
+     level. Root cause: `python -c "import cobolparser"` in this
+     environment resolved to a non-editable install pinned at commit
+     `c9a94999` (2026-07-10) -- eleven days stale, silently shadowing the
+     editable `-e ../cobol-parser` sibling checkout via a leftover
+     `site-packages/cobolparser/` directory that survived a prior
+     uninstall (same root cause as the 2026-07-09 log entry below, now
+     recurring). At that stale commit, `DIVIDE ... GIVING ...
+     ROUNDED` regresses to today's already-documented phantom-`ROUNDED`-
+     paragraph bug even on the *already-committed*
+     `tests/integration/fixtures/divide_rounded.cbl` fixture -- meaning
+     this bug was silently live in the local dev environment for
+     anything invoked via bare `python`, not just this new example.
+     Fixed by deleting the stale directory and reinstalling
+     `--no-deps -e ../cobol-parser`; confirmed via
+     `cobolparser.__file__` resolving into the sibling checkout, and via
+     re-parsing `divide_rounded.cbl` (phantom paragraph gone). The full
+     unit suite went from 679 passed / 2 failed to 681 passed / 0 failed
+     on the same code with no other changes -- the 2 "failures" from the
+     earlier `git stash` check (see [[project-mockymock-cobolparser-
+     regression]] for the general pattern) were also this staleness, not
+     a `main`-branch regression; the stash check couldn't catch it
+     because stashing example files doesn't touch installed packages.
+     That comparison was against the sibling checkout's `HEAD`, though,
+     not the pin -- re-run against the isolated pinned-commit venv
+     described below to be sure it wasn't yet another
+     ahead-of-the-pin mirage: **681 passed / 0 failed there too**, plus
+     `test_regnavg_example.py`, `test_divide_rounded.py`, and
+     `test_trace.py`'s 10 Docker-backed integration tests, all green
+     against the exact pin. Documented in [testing](testing.md)'s
+     Gotchas section (new entry, distinct from the existing `uv tool
+     install`-staleness one -- this one hits `import cobolparser`
+     directly, no `PATH` binary involved).
+  2. After fixing the environment, `DIVIDE ... GIVING <table>(n)
+     ROUNDED` (subscripted target) parsed clean and the whole example
+     went green -- tempting to call it the stale-parser artifact and move
+     on. It wasn't, fully: the "fixed" environment was the sibling
+     checkout's `HEAD` (`3eaf120`), **two commits ahead of the pin**
+     (`4db8394`) `pyproject.toml`/`ci.yml` actually resolve. Diffing the
+     two intervening commits directly (`git show`, not reasoned about)
+     found `4917576` ("fix silent data loss in ... arithmetic clauses")
+     is what actually adds subscripted-target support to `ADD`/
+     `SUBTRACT`/`MULTIPLY`/`DIVIDE`'s `GIVING`/`TO`/`FROM` clauses -- the
+     pinned `4db8394` only consumes `ROUNDED`, nothing about subscripts.
+     Confirmed empirically in an isolated venv installed straight from
+     the exact pinned commit
+     (`pip install --no-deps "git+file:///../cobol-parser@4db8394..."`,
+     avoiding any checkout of the shared sibling working tree): a
+     subscripted `GIVING` target genuinely still warns `PARSE_WARNING`
+     at the pin. Reverted the `.cbl` to target an unsubscripted scratch
+     field (`WS-REGION-AVG-SCRATCH`) and `MOVE` it into the table cell --
+     re-verified clean (`lint`, `run`, both broken-expectation checks,
+     and a re-captured `--trace`) against that same pinned-commit venv,
+     not the racier sibling `HEAD`. `CALL ... USING <table>(n)`
+     (subscripted argument) independently still doesn't parse outside a
+     `PERFORM VARYING` body at every commit tested, pin included -- a
+     real, separate, still-open gap; the `CALL` never takes the average
+     as an argument at all now. Neither gap is fixed here (that's
+     cobol-parser work, a sibling repo, out of scope for adding an
+     example) -- both are documented inline in `REGNAVG.cbl`'s header
+     comment and the README rather than silently avoided. Lesson for next
+     time: "the sibling checkout now agrees with my change" is not the
+     same claim as "the pinned dependency does" -- verify against the
+     exact pinned commit specifically before trusting a green result
+     that depends on cobolparser behavior, the same discipline
+     [[project-mockymock-cobolparser-regression]] already asks for.
+- **Rounding is proven, not assumed**: region 2's `50.00 + 50.00 + 51.10 =
+  151.10`, `/ 3 = 50.3666...` -- `ROUNDED` must read back `50.37`. A new
+  integration test
+  (`tests/integration/test_regnavg_example.py::test_regnavg_fails_when_rounded_expectation_is_truncated`)
+  asserts the truncated `50.36` expectation actually fails against real
+  GnuCOBOL, mirroring `test_divide_rounded.py`'s existing load-bearing
+  check. A second new test,
+  `test_regnavg_fails_when_a_stale_redefines_value_is_asserted`, is the
+  committed version of the two-paragraph reset proof above: asserting
+  case 2's leftover `50.37`/`"0005037"` in case 3 (instead of the
+  correctly-reset `0`/`"0000000"`) must fail -- and does.
+- All three cases verified end-to-end against real GnuCOBOL in Docker
+  (with the corrected `cobolparser` installed), including a captured
+  `run --trace` output pasted into the README (real CLI output, not
+  hand-written) and both deliberately-broken-expectation proofs above.
+- Also updated: `README.md`'s Examples table; `.okf/testing.md`'s
+  frontmatter description, worked-examples section (added a `##
+  REGNAVG` write-up matching the existing six; also surfaced, while
+  editing that section, that `flowmock`/`taxfile`/`statelkup` never got
+  their own write-up there -- a pre-existing gap, not fixed here beyond
+  noting it), and Gotchas section (the stale-`cobolparser` entry above).
+
 ## 2026-07-21 — `EXPECT` and `MOVE` support subscripted table data-names
 
 `_EXPECT_RE` and `_MOVE_RE` in `mockymock/dsl/parser.py` captured their
