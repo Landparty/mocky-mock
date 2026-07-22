@@ -97,7 +97,11 @@ def run_static_checks(
     pipeline if it finds problems, except the final per-test-case stage,
     which accumulates across every case before returning."""
     from cobolparser import parse_cobol
-    from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
+    from cobolparser.preprocess import (
+        expand_copybooks,
+        normalize_fixed_format,
+        strip_compiler_directives,
+    )
 
     from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.linkage import linkage_plan
@@ -169,7 +173,17 @@ def run_static_checks(
     surface = analyze(parse_result.ast)
     out.surface = surface
     out.file_status_fields = analyze_file_status_fields(parse_result.ast)
-    lines = normalize_fixed_format(raw_source.splitlines()).splitlines()
+    # PROCESS/CBL precompiler directives (IBM mainframe compiler-directing
+    # statements preceding IDENTIFICATION DIVISION) parse fine as far as
+    # cobolparser is concerned -- CobolParser.parse() blanks them out for its
+    # own AST -- but `lines` here is what the splicer edits and what
+    # eventually gets written as the instrumented source for GnuCOBOL to
+    # compile. Left in place, they survive into that file verbatim and cobc
+    # can reject options/syntax it doesn't recognize. Strip them the same way
+    # before normalizing so they never reach the toolchain.
+    lines = normalize_fixed_format(
+        strip_compiler_directives(raw_source).splitlines()
+    ).splitlines()
 
     linkage_reasons = check_linkage_layout(parse_result.ast, lines)
     if linkage_reasons:
