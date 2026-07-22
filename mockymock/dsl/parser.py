@@ -566,7 +566,7 @@ def parse_cut(text: str) -> MockTestSuite:
             # quoted empty string ("") is a deliberate empty literal and is
             # distinguishable: its quote characters survive .strip(), so it
             # is not caught by this check.
-            for column, value in zip(current_provider.header, values):
+            for column, value in zip(current_provider.header, values, strict=True):
                 if not value:
                     raise CutParseError(
                         f"line {line_no}: ROW value for column {column!r} "

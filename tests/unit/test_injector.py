@@ -230,10 +230,10 @@ def test_explicit_file_status_follows_the_default():
         site, suite, TallyRegistry(suite), {"INFILE": "WS-INFILE-STATUS"}
     )
     default_idx = next(
-        i for i, l in enumerate(lines) if 'MOVE "00" TO WS-INFILE-STATUS' in l
+        i for i, line in enumerate(lines) if 'MOVE "00" TO WS-INFILE-STATUS' in line
     )
     override_idx = next(
-        i for i, l in enumerate(lines) if 'MOVE "35" TO WS-INFILE-STATUS' in l
+        i for i, line in enumerate(lines) if 'MOVE "35" TO WS-INFILE-STATUS' in line
     )
     assert override_idx == default_idx + 1
 
