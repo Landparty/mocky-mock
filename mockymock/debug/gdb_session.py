@@ -271,6 +271,14 @@ class GdbSession:
         self._process = process
         self._on_output = on_output or (lambda text: None)
 
+    def set_output_handler(self, on_output: Callable[[str], None]) -> None:
+        """Rebinds the program-output callback -- used by adapter.py,
+        which is what actually knows how to turn output into a DAP
+        `output` event, but is not the code that constructs GdbSession
+        (that happens inside the CLI's launch_session pipeline, before
+        the adapter ever sees the session)."""
+        self._on_output = on_output
+
     def send(self, command: str) -> list[MIRecord]:
         """Issue a command and read until ITS OWN immediate result record
         (`^done`/`^error`/`^running`/`^exit`/`^connected`). For exec
