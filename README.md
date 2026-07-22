@@ -319,6 +319,37 @@ Three things to know:
 
 See `docs/2026-07-21-debug-trace-design.md` for the design.
 
+## Interactive debugger
+
+For the slower, heavier case trace can't answer — "why did line 88 do the
+wrong thing, let me stop and look" — `mockymock debug` starts a real
+[Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/)
+session: breakpoints on your original `.cbl` lines, stepping, a call stack
+in terms of COBOL paragraphs (not the generated C), and variable
+inspection by COBOL name with COBOL-shaped values (a `PIC 9(5)V99 COMP-3`
+item renders as a decimal, not raw bytes).
+
+```
+mockymock debug ACCTPRG.cbl --cut ACCTPRG.cut --case "1000-INITIALIZE primes ..." --dap-stdio
+```
+
+`--dap-stdio` speaks the DAP protocol directly on stdio — this is the mode
+the VS Code extension's `DebugAdapterDescriptorFactory` spawns; there is
+no useful human-facing terminal mode for a DAP session, so `debug` refuses
+without the flag. Like `--trace`, exactly one `--case` is required (one
+binary, one execution stream).
+
+Not built in v1: multi-program/dynamic-CALL stepping into a mocked
+boundary (a mocked `CALL` never reaches real callee code, so stepping
+"into" one skips straight past it, same as trace), conditional/data
+breakpoints, multi-case sessions, and editing variables while stopped
+(read-only inspection only).
+
+See `docs/2026-07-22-dap-debugger-design.md` for the design (including the
+empirical basis — verified against a real container, not just planned)
+and `docs/superpowers/plans/2026-07-22-dap-debugger-cli.md` for the
+implementation plan.
+
 ## Install
 
 mockymock isn't on PyPI, but its `pyproject.toml` declares a full

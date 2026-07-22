@@ -1,18 +1,19 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, run, lint, collect) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, generate, run, debug, lint, collect) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-07-21T12:00:00Z
+timestamp: 2026-07-22T22:00:00Z
 ---
 
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines five subcommands —
-`setup`, `generate`, `run`, `lint`, `collect` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines six subcommands —
+`setup`, `generate`, `run`, `debug`, `lint`, `collect` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
-`mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`) are
+`mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
+`mockymock.debug`) are
 deferred into each `_cmd_*` function body rather than imported at module top —
 so `mockymock --version` / `--help` stay fast and don't require Docker or a
 parser install to resolve.
@@ -21,6 +22,7 @@ parser install to resolve.
 mockymock setup     -> runtime.docker_toolchain only (build image, start container)
 mockymock generate  -> parse -> analysis.mock_surface -> dsl.generator  (no Docker)
 mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
+mockymock debug     -> cli.checks (static) -> splicer -> runtime (debug=True) -> debug.adapter (DAP over stdio)
 mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
 mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed)
 ```
@@ -215,6 +217,64 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
 18. Exit 0 only if `suite_result.all_passed` **and** `executed.exit_code
     == 0` — a nonzero binary exit after the SUMMARY line still fails the
     run.
+
+## `mockymock debug <program> --cut PATH --case NAME --dap-stdio [--copybook-path DIR ...]`
+
+Starts an interactive Debug Adapter Protocol (DAP) session for a single
+test case — breakpoints, stepping, a synthesized COBOL call stack, and
+read-only variable inspection. See
+docs/2026-07-22-dap-debugger-design.md and
+docs/superpowers/plans/2026-07-22-dap-debugger-cli.md for the full design
+and empirical basis (both were verified against a real container, not
+just planned).
+
+Unlike `run`'s trace/coverage flags, this is a real subcommand: a DAP
+server is a fundamentally different, long-running mode, not "the same
+pipeline plus an artifact." `--dap-stdio` is required — there is no
+useful human-facing terminal mode for a DAP session, so `_cmd_debug`
+refuses with a message pointing at the VS Code extension if it's absent.
+Exactly one `--case` is required (same structural reason as `--trace`:
+the suite compiles and runs as one binary, one execution stream).
+
+`_cmd_debug` runs the same static-checks → splice pipeline as `_cmd_run`
+(with `trace=False` always), then diverges: instead of `run_binary`, it
+compiles with `compile_source(debug=True)` (`-g`) inside a `launch_session`
+closure and hands that closure to a `DapAdapter`
+(`mockymock/debug/adapter.py`) that speaks DAP JSON over stdio until the
+client disconnects. The sandbox stays alive for the whole session (a
+long-lived conversation), torn down only once `adapter.run()` returns.
+
+`mockymock/debug/` modules, each independently unit-tested against real
+captured MI transcripts and end-to-end tested against a live container
+(`tests/integration/test_debug.py`):
+
+- `gdb_session.py` — owns the long-lived `docker exec -i gdb
+  --interpreter=mi2` subprocess; parses MI records (including treating any
+  untagged line as the debuggee's own stdout); breakpoints; run/continue/
+  step with the coalescing loop one COBOL statement's marker/body `#line`
+  pair requires; `resolve_address` (temporary breakpoint insert/delete) for
+  resolving a raw code address.
+- `line_map.py` — bidirectional original ↔ instrumented line mapping,
+  built on `report/coverage.py`'s existing (one-directional)
+  `build_original_line_map`.
+- `variable_map.py` — COBOL name ↔ gdb expression, from the compiler's own
+  `<name>.c.l.h` comment table (not gdb symbols, which don't exist for
+  COBOL names, and not a byte-offset decoder). Decodes packed-decimal
+  (COMP-3) and binary (COMP) values via GnuCOBOL's own `cob_field_attr`
+  type/digits/scale, read live via MI.
+- `call_stack.py` — synthesizes the COBOL paragraph/section call stack
+  from GnuCOBOL's internal `frame_stack`, since gdb's own backtrace is
+  always exactly one frame (`PERFORM` is a computed-goto, not a real C
+  call). `frame_stack[0]` is a sentinel, not a real caller — see the
+  design doc's Empirical basis for why.
+- `adapter.py` — the DAP server: `Content-Length`-framed JSON over
+  injectable streams, `initialize`/`launch`/`setBreakpoints`/
+  `configurationDone`/`threads`/`stackTrace`/`scopes`/`variables`/
+  `continue`/`next`/`stepIn`/`stepOut`/`disconnect`.
+
+Not yet verified (flagged in the design doc, not blocking v1): group
+items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
+`PERFORM`/`PERFORM THRU`/`GO TO` control flow in `call_stack.py`.
 
 ## `mockymock lint <program> --cut PATH [--copybook-path DIR ...]`
 
