@@ -808,3 +808,86 @@ def test_run_binary_sets_no_trace_env_by_default(tmp_path):
         run_binary(binary)
 
     assert not any("COB_SET_TRACE" in str(a) for a in calls[0])
+
+
+def test_compile_source_debug_appends_g_flag(tmp_path):
+    """-g is what makes gdb accept breakpoints against the compiled .cbl
+    and is what makes cobc emit the <name>.c.l.h header variable_map.py
+    depends on -- see docs/2026-07-22-dap-debugger-design.md."""
+    work, source = _work(tmp_path)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        (source.parent / "PROG").write_text("")
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = compile_source(source, debug=True)
+
+    assert "-g" in calls[0]
+    assert result.success
+
+
+def test_compile_source_omits_g_flag_by_default(tmp_path):
+    work, source = _work(tmp_path)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        (source.parent / "PROG").write_text("")
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = compile_source(source)
+
+    assert "-g" not in calls[0]
+    assert result.success
+
+
+def test_start_gdb_session_execs_mi_interpreter_against_container_binary(tmp_path):
+    from mockymock.runtime.docker_toolchain import start_gdb_session
+
+    work, source = _work(tmp_path)
+    binary = source.parent / "PROG"
+    binary.write_text("")
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.Popen", FakePopen
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        start_gdb_session(binary)
+
+    assert captured["argv"] == [
+        "docker",
+        "exec",
+        "-i",
+        "-w",
+        "/work/mockymock-x",
+        CONTAINER,
+        "gdb",
+        "-q",
+        "--interpreter=mi2",
+        "/work/mockymock-x/PROG",
+    ]
+    assert captured["kwargs"]["stdin"] == subprocess.PIPE
+    assert captured["kwargs"]["stdout"] == subprocess.PIPE
+    assert captured["kwargs"]["text"] is True
