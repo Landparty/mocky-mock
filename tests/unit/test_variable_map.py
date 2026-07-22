@@ -4,9 +4,7 @@ against the mockymock-cobc container (see
 docs/2026-07-22-dap-debugger-design.md's Empirical basis and the CLI
 implementation plan's Task 4) -- not hand-invented values."""
 
-import pytest
-
-from mockymock.debug.gdb_session import GdbCommandError, ResultRecord
+from mockymock.debug.gdb_session import ResultRecord
 from mockymock.debug.variable_map import parse_local_header, read_variable
 
 # Verbatim from a real `cobc -g` compile of the spike fixture.
@@ -131,7 +129,9 @@ def test_read_variable_falls_back_to_unquoted_buffer_for_plain_display_items():
         def send(self, command: str):
             self.sent.append(command)
             if command == "-data-evaluate-expression (int)(b_17).attr->type":
-                return [ResultRecord("error", {"msg": "There is no member named attr."})]
+                return [
+                    ResultRecord("error", {"msg": "There is no member named attr."})
+                ]
             if command == "-data-evaluate-expression b_17":
                 return [_done('"CUST00001 "')]
             raise AssertionError(f"unexpected MI command: {command!r}")

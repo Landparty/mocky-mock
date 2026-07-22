@@ -869,9 +869,7 @@ def test_start_gdb_session_execs_mi_interpreter_against_container_binary(tmp_pat
             captured["kwargs"] = kwargs
 
     with (
-        mock.patch(
-            "mockymock.runtime.docker_toolchain.subprocess.Popen", FakePopen
-        ),
+        mock.patch("mockymock.runtime.docker_toolchain.subprocess.Popen", FakePopen),
         mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
     ):
         start_gdb_session(binary)

@@ -114,7 +114,10 @@ class _FakeGdbSession:
         self.sent.append(command)
         if command == "-data-evaluate-expression frame_ptr-frame_stack":
             return [_done("1")]
-        if command == "-data-evaluate-expression (long)frame_stack[1].return_address_ptr":
+        if (
+            command
+            == "-data-evaluate-expression (long)frame_stack[1].return_address_ptr"
+        ):
             return [_done("94317603726646")]
         raise AssertionError(f"unexpected command: {command!r}")
 

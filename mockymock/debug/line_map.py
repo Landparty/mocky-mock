@@ -32,7 +32,7 @@ class LineMap:
         instrumented_lines: list[str],
         normalized_lines: list[str],
         original_lines: list[str],
-    ) -> "LineMap":
+    ) -> LineMap:
         to_original = build_original_line_map(
             instrumented_lines, normalized_lines, original_lines
         )

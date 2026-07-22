@@ -18,8 +18,9 @@ plumbing testable with a fake session, independent of Docker/gdb.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, IO
+from typing import IO
 
 from mockymock.debug.call_stack import CallFrame, ParagraphIndex, synthesize_stack
 from mockymock.debug.gdb_session import GdbSession, StopEvent
@@ -59,10 +60,10 @@ def read_dap_message(stream: IO[bytes]) -> dict | None:
     EOF (the client closed its side, e.g. VS Code exiting)."""
     headers: dict[str, str] = {}
     while True:
-        line = stream.readline()
-        if line == b"":
+        raw_line = stream.readline()
+        if raw_line == b"":
             return None
-        line = line.decode("ascii").rstrip("\r\n")
+        line = raw_line.decode("ascii").rstrip("\r\n")
         if line == "":
             break
         name, _, value = line.partition(":")
@@ -111,7 +112,9 @@ class DapAdapter:
         command = request["command"]
         handler = getattr(self, f"_handle_{command}", None)
         if handler is None:
-            self._send_response(request, success=False, message=f"unsupported request: {command}")
+            self._send_response(
+                request, success=False, message=f"unsupported request: {command}"
+            )
             return
         handler(request)
 
@@ -122,7 +125,11 @@ class DapAdapter:
         return self._seq
 
     def _send_response(
-        self, request: dict, success: bool, body: dict | None = None, message: str | None = None
+        self,
+        request: dict,
+        success: bool,
+        body: dict | None = None,
+        message: str | None = None,
     ) -> None:
         response = {
             "seq": self._next_seq(),
@@ -156,7 +163,9 @@ class DapAdapter:
         arguments = request.get("arguments", {})
         try:
             self._session = self._launch_session(arguments)
-        except Exception as exc:  # noqa: BLE001 -- surfaced to the client, not swallowed
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 -- surfaced to the client, not swallowed
             self._send_response(request, success=False, message=str(exc))
             return
         assert self._session is not None
@@ -174,11 +183,18 @@ class DapAdapter:
             original_line = source_bp["line"]
             reason = session.line_map.reject_reason(original_line)
             if reason is not None:
-                breakpoints.append({"verified": False, "line": original_line, "message": reason})
+                breakpoints.append(
+                    {"verified": False, "line": original_line, "message": reason}
+                )
                 continue
             instrumented_line = session.line_map.to_instrumented(original_line)
-            bkpt = session.gdb.set_breakpoint(session.instrumented_file, instrumented_line)
-            breakpoints.append({"verified": True, "line": original_line, "id": int(bkpt["number"])})
+            assert instrumented_line is not None  # implied by reject_reason being None
+            bkpt = session.gdb.set_breakpoint(
+                session.instrumented_file, instrumented_line
+            )
+            breakpoints.append(
+                {"verified": True, "line": original_line, "id": int(bkpt["number"])}
+            )
         self._breakpoint_original_file = source_path
         self._send_response(request, success=True, body={"breakpoints": breakpoints})
 
@@ -220,7 +236,15 @@ class DapAdapter:
         self._send_response(
             request,
             success=True,
-            body={"scopes": [{"name": "Working-Storage", "variablesReference": 1, "expensive": False}]},
+            body={
+                "scopes": [
+                    {
+                        "name": "Working-Storage",
+                        "variablesReference": 1,
+                        "expensive": False,
+                    }
+                ]
+            },
         )
 
     def _handle_variables(self, request: dict) -> None:
@@ -230,7 +254,9 @@ class DapAdapter:
         variables = []
         for name, expr in session.variable_table.items():
             value = read_variable(session.gdb, name, expr)
-            variables.append({"name": name, "value": _display_value(value), "variablesReference": 0})
+            variables.append(
+                {"name": name, "value": _display_value(value), "variablesReference": 0}
+            )
         self._send_response(request, success=True, body={"variables": variables})
 
     def _handle_continue(self, request: dict) -> None:
@@ -272,7 +298,9 @@ class DapAdapter:
 
     def _require_session(self, request: dict) -> DebugSession | None:
         if self._session is None:
-            self._send_response(request, success=False, message="no active debug session")
+            self._send_response(
+                request, success=False, message="no active debug session"
+            )
             return None
         return self._session
 
@@ -286,9 +314,12 @@ class DapAdapter:
             self._send_event("exited", {"exitCode": event.exit_code or 0})
             self._send_event("terminated")
             return
-        reason = {"breakpoint": "breakpoint", "step": "step", "crashed": "exception"}[event.reason]
+        reason = {"breakpoint": "breakpoint", "step": "step", "crashed": "exception"}[
+            event.reason
+        ]
         self._send_event(
-            "stopped", {"reason": reason, "threadId": _MAIN_THREAD_ID, "allThreadsStopped": True}
+            "stopped",
+            {"reason": reason, "threadId": _MAIN_THREAD_ID, "allThreadsStopped": True},
         )
 
     def _current_frames(self, session: DebugSession) -> list[CallFrame]:

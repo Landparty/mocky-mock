@@ -91,7 +91,7 @@ class ParagraphIndex:
         self._section_starts = sorted(section_starts)
 
     @classmethod
-    def build(cls, program) -> "ParagraphIndex":
+    def build(cls, program) -> ParagraphIndex:
         procedure = program.get_division("PROCEDURE")
         paragraph_starts: list[tuple[int, str]] = []
         section_starts: list[tuple[int, str]] = []
@@ -135,6 +135,7 @@ def _resolve_frame(
     """Resolves a (file, line) pair -- from either the current stopped
     frame or a walked return address -- to a CallFrame. `file` may be the
     `.cbl` (instrumented) source directly, or the generated `.c` file."""
+    instrumented_line: int | None
     if file.endswith(".cbl"):
         instrumented_line = generated_line
     else:

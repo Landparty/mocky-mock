@@ -31,8 +31,9 @@ written, not assumed from GDB/MI documentation:
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Literal
+from typing import Literal
 
 # Emitted by gdb under the container's --security-opt no-new-privileges:
 # personality() (ASLR disable) is blocked by seccomp. Cosmetic -- debugging
@@ -225,7 +226,9 @@ class StopEvent:
     frame: dict = field(default_factory=dict)
 
 
-def _classify_stop_reason(reason: str) -> Literal["breakpoint", "step", "exited", "crashed"]:
+def _classify_stop_reason(
+    reason: str,
+) -> Literal["breakpoint", "step", "exited", "crashed"]:
     if reason.startswith("exited"):
         return "exited"
     if reason == "signal-received":
@@ -432,6 +435,8 @@ def evaluate(session: GdbSession, expression: str) -> str:
     Shared by variable_map.py and call_stack.py; both only ever need the
     raw value string, decoding it themselves."""
     records = session.send(f"-data-evaluate-expression {expression}")
-    return _require_payload_key(
+    value = _require_payload_key(
         records, "value", f"-data-evaluate-expression {expression}"
     )
+    assert isinstance(value, str)  # MI's "value" field is always a string
+    return value

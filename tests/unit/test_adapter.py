@@ -10,10 +10,9 @@ from mockymock.debug.adapter import (
     DapAdapter,
     DebugSession,
     read_dap_message,
-    write_dap_message,
 )
 from mockymock.debug.call_stack import ParagraphIndex
-from mockymock.debug.gdb_session import GdbSession, ResultRecord, StopEvent
+from mockymock.debug.gdb_session import ResultRecord, StopEvent
 from mockymock.debug.line_map import LineMap
 
 
@@ -86,7 +85,9 @@ def _fake_launch_session(arguments: dict) -> DebugSession:
         line_map=_identity_line_map(),
         variable_table={"WS-CUSTOMER-ID": "b_17"},
         generated_c_lines=[],
-        paragraph_index=ParagraphIndex(paragraph_starts=[(9, "MAIN-PARA")], section_starts=[]),
+        paragraph_index=ParagraphIndex(
+            paragraph_starts=[(9, "MAIN-PARA")], section_starts=[]
+        ),
         instrumented_file="fixture.cbl",
     )
 
@@ -132,7 +133,9 @@ def test_launch_then_set_breakpoints_resolves_via_line_map():
     launch_response, set_bp_response = messages
     assert launch_response["success"] is True
     assert set_bp_response["success"] is True
-    assert set_bp_response["body"]["breakpoints"] == [{"verified": True, "line": 14, "id": 1}]
+    assert set_bp_response["body"]["breakpoints"] == [
+        {"verified": True, "line": 14, "id": 1}
+    ]
 
 
 def test_configuration_done_runs_and_emits_stopped_event():
@@ -147,7 +150,14 @@ def test_configuration_done_runs_and_emits_stopped_event():
     output_events = [e for e in events if e["event"] == "output"]
     stopped_events = [e for e in events if e["event"] == "stopped"]
 
-    assert output_events == [{"seq": output_events[0]["seq"], "type": "event", "event": "output", "body": {"category": "stdout", "output": "LOOP ITER +0001\n"}}]
+    assert output_events == [
+        {
+            "seq": output_events[0]["seq"],
+            "type": "event",
+            "event": "output",
+            "body": {"category": "stdout", "output": "LOOP ITER +0001\n"},
+        }
+    ]
     assert stopped_events[0]["body"]["reason"] == "breakpoint"
     assert stopped_events[0]["body"]["threadId"] == 1
 
@@ -198,14 +208,21 @@ def test_variables_reports_decoded_values():
 
 
 def test_requests_before_launch_fail_cleanly():
-    messages = _run_adapter([_request(1, "setBreakpoints", {"source": {"path": "x"}, "breakpoints": []})])
+    messages = _run_adapter(
+        [_request(1, "setBreakpoints", {"source": {"path": "x"}, "breakpoints": []})]
+    )
 
     assert messages[0]["success"] is False
     assert "no active debug session" in messages[0]["message"]
 
 
 def test_disconnect_closes_the_gdb_session():
-    input_stream = io.BytesIO(b"".join(_frame(r) for r in [_request(1, "launch", {}), _request(2, "disconnect", {})]))
+    input_stream = io.BytesIO(
+        b"".join(
+            _frame(r)
+            for r in [_request(1, "launch", {}), _request(2, "disconnect", {})]
+        )
+    )
     output_stream = io.BytesIO()
     sessions = []
 

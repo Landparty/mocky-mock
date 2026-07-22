@@ -21,7 +21,6 @@ from mockymock.debug.gdb_session import (
     parse_mi_line,
 )
 
-
 # -- parse_mi_line ---------------------------------------------------------
 
 
@@ -77,7 +76,9 @@ def test_parse_mi_line_parses_exited_normally():
 
 
 def test_parse_mi_line_parses_stream_record():
-    record = parse_mi_line('~"Breakpoint 1, SPIKE_ (entry=0) at /work/fixture.cbl:14\\n"\n')
+    record = parse_mi_line(
+        '~"Breakpoint 1, SPIKE_ (entry=0) at /work/fixture.cbl:14\\n"\n'
+    )
     assert isinstance(record, StreamRecord)
     assert record.kind == "~"
     assert "fixture.cbl:14" in record.text

@@ -32,7 +32,12 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from mockymock.debug.gdb_session import GdbCommandError, GdbSession, ResultRecord, evaluate
+from mockymock.debug.gdb_session import (
+    GdbCommandError,
+    GdbSession,
+    ResultRecord,
+    evaluate,
+)
 
 # GnuCOBOL's authoritative field-type constants
 # (/usr/include/libcob/common.h in the toolchain image), not guessed.
@@ -218,4 +223,6 @@ def _read_raw_memory(session: GdbSession, address: int, size: int) -> bytes:
             memory = record.payload.get("memory")
             if memory:
                 return bytes.fromhex(memory[0]["contents"])
-    raise GdbCommandError(f"-data-read-memory-bytes {address} {size} produced no memory")
+    raise GdbCommandError(
+        f"-data-read-memory-bytes {address} {size} produced no memory"
+    )
