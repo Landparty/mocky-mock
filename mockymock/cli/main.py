@@ -39,7 +39,11 @@ def _check_input_files(command: str, *paths: Path) -> bool:
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
-    from cobolparser.preprocess import expand_copybooks, normalize_fixed_format
+    from cobolparser.preprocess import (
+        expand_copybooks,
+        normalize_fixed_format,
+        strip_compiler_directives,
+    )
 
     from mockymock.analysis.linkage import linkage_plan
     from mockymock.analysis.mock_surface import analyze
@@ -87,7 +91,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if copybook_reasons:
         return 1
 
-    lines = normalize_fixed_format(raw_source.splitlines()).splitlines()
+    # See mockymock/cli/checks.py::run_static_checks for why PROCESS/CBL
+    # precompiler directives must be stripped before normalizing here too.
+    lines = normalize_fixed_format(
+        strip_compiler_directives(raw_source).splitlines()
+    ).splitlines()
 
     linkage_reasons = check_linkage_layout(result.ast, lines)
     for reason in linkage_reasons:

@@ -115,10 +115,39 @@ def test_file_status_fields_populated_on_clean_run():
     assert result.file_status_fields is not None
 
 
+def test_precompiler_directives_stripped_before_lines_reach_the_compiler(tmp_path):
+    """PROCESS/CBL compiler-directing statements (common on IBM mainframe
+    source, always preceding IDENTIFICATION DIVISION) parse fine as far as
+    cobolparser's AST is concerned -- CobolParser.parse() blanks them out
+    internally -- but `result.lines` is what the splicer edits and what
+    `mockymock run` eventually writes as the instrumented source for
+    GnuCOBOL to compile. Left un-stripped here, they would survive into that
+    file verbatim and cobc can reject options/syntax it doesn't recognize."""
+    cbl = tmp_path / "PRECHK.cbl"
+    cbl.write_text("""\
+       PROCESS APOST,TRUNC(OPT)
+       CBL ARITH(EXTEND)
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PRECHK.
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           DISPLAY "HELLO".
+""")
+    cut = tmp_path / "PRECHK.cut"
+    cut.write_text('TESTSUITE "s"\nTESTCASE "c"\n    PERFORM MAIN-PROCESS\n')
+    result = run_static_checks(cbl, cut, None)
+    assert result.ok
+    assert result.lines is not None
+    assert "PROCESS" not in result.lines[0]
+    assert "CBL" not in result.lines[1]
+    # Blanking, not deleting: line count (and every later line number the
+    # splicer relies on) must stay unchanged.
+    assert result.lines[2] == "IDENTIFICATION DIVISION."
+
+
 def test_unresolved_file_status_target_surfaces_as_a_problem(tmp_path):
     cbl = tmp_path / "NOSTAT.cbl"
-    cbl.write_text(
-        """\
+    cbl.write_text("""\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. NOSTAT.
        ENVIRONMENT DIVISION.
@@ -133,19 +162,16 @@ def test_unresolved_file_status_target_surfaces_as_a_problem(tmp_path):
        PROCEDURE DIVISION.
        MAIN-PROCESS.
            OPEN INPUT NO-STATUS.
-"""
-    )
+""")
     cut = tmp_path / "NOSTAT.cut"
-    cut.write_text(
-        """\
+    cut.write_text("""\
 TESTSUITE "s"
 TESTCASE "c"
     MOCK OPEN NO-STATUS
         FILE-STATUS IS SUCCESS
     END-MOCK
     PERFORM MAIN-PROCESS
-"""
-    )
+""")
     result = run_static_checks(cbl, cut, None)
     assert not result.ok
     assert any("UNRESOLVED_FILE_STATUS_TARGET" in p for p in result.problems)
