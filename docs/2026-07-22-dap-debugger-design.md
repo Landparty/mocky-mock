@@ -1,8 +1,9 @@
 # Interactive debugger (Debug Adapter Protocol) — design
 
-**Date:** 2026-07-22
-**Status:** proposed — core empirical question (variable mapping) not yet
-verified, see "Empirical basis"
+**Date:** 2026-07-22 (revised 2026-07-22 after the spike)
+**Status:** spiked — empirical questions 1-6 verified against a real
+container; one additional finding (call stack synthesis, not anticipated in
+the original doc) also verified. See "Empirical basis" for what changed.
 **Spans two repos:** `mocky-mock` (CLI/DAP server, implemented first) and
 `mocky-mock-vscode-extension` (consumer).
 
@@ -60,103 +61,125 @@ A **"Debug"** launch configuration in VS Code for a `.cut` case that gives:
   support (DAP `setVariable`) is a straightforward follow-on once read
   mapping works, not bundled into v1 scope.
 
-## Empirical basis — **NOT YET VERIFIED**
+## Empirical basis — **VERIFIED 2026-07-22**
 
 The trace design doc earned its confidence by running real commands against
-the live `mockymock-cobc` container before writing a line of the contract
-(`COB_SET_TRACE`, `COB_TRACE_FORMAT`, etc. were all confirmed empirically,
-not from documentation). This doc could not do the same: **the Docker daemon
-is unreachable in the environment this doc was drafted in** (`docker info`
-fails), so nothing below is verified against a running container. Treat
-every claim in this section as a hypothesis to confirm in the spike this doc
-recommends before any implementation plan is written.
+the live `mockymock-cobc` container before writing a line of the contract.
+This doc originally could not do the same because the Docker daemon was
+unreachable when it was drafted. The daemon is reachable now; every claim
+below was checked directly against a hardened container running the
+production `_HARDENING_FLAGS`, GnuCOBOL 3.2.0, gdb 16.3, against a small
+fixture (`SPIKE` program with a `PIC X(10)`, a `PIC 9(5)V99 COMP-3`, and a
+`PIC S9(4) COMP` item, a `PERFORM VARYING` loop, and a performed paragraph).
 
-Open questions the spike must answer, each with the concrete way to check it:
+1. **Does the image have a debugger in it? YES, once added.** Debian
+   `trixie-slim`'s `gnucobol` package does not pull in gdb. Adding `gdb
+   gdbserver` to the Dockerfile's `apt-get install` line installs both
+   cleanly (`which gdb gdbserver` resolves) with no dependency conflicts
+   against `gnucobol`. Done in this revision — see "Toolchain changes".
+   `gdbserver` was installed for completeness but nothing below ended up
+   needing it; the MI-over-stdio transport (question 4) works directly.
+2. **Does `cobc -g` map breakpoints back to `.cbl` lines? YES, but the
+   stepping model is more specific than "several C lines per statement."**
+   `gdb break fixture.cbl:N` and `list fixture.cbl:N` both work directly
+   against the file `cobc` compiled (the splicer's instrumented file, in
+   production — see "Line mapping"). Inspecting the generated `.c` confirms
+   why: each COBOL statement compiles to an alternating pair — a `#line N
+   "fixture.cbl"` directive attached to a `cob_nop()` marker call, followed
+   immediately by a `#line M "fixture.c"` directive covering the real work
+   (`memcpy`, `cob_move`, `cob_add`, …) for that same statement. A single MI
+   `-exec-next` from the marker steps forward exactly one line — landing on
+   the **generated-C body line for the same statement**, not the next
+   statement's marker. The next `-exec-next` from there lands on the *next*
+   statement's `.cbl` marker. So stepping one COBOL statement is a fixed
+   2-step sequence for a simple non-branching MOVE/ADD (`marker → body →
+   next marker`), confirmed by direct observation; statements with internal
+   control flow (loops, conditionals, PERFORM dispatch) are expected to
+   insert more generated-C lines between markers, not verified here.
+   **Conclusion for `gdb_session.py`:** coalesce by continuing to issue
+   `-exec-next`/`-exec-step` while the current frame's `file` is anything
+   other than the original `.cbl` (or the spliced-source path in
+   production), stopping on the first frame that reports a `.cbl` file
+   again — not by comparing line numbers, and not by counting a fixed
+   number of steps.
+3. **What do COBOL data items look like to gdb? Neither of the doc's two
+   predicted outcomes — a third, cheaper path exists.** `print
+   WS_CUSTOMER_ID` (and every other COBOL-name spelling tried) resolves to
+   "No symbol in current context": confirmed, gdb does not expose COBOL
+   names as symbols, matching the pessimistic case. But the *fully mangled,
+   byte-offset-decode* fallback the doc treated as the likely consequence is
+   not what's needed. `cobc -g` (with no extra flags) always emits a sibling
+   `<name>.c.l.h` header — already included via `#include` inside the
+   generated function body — that declares every working-storage/linkage
+   item as its own named C local, **with the original COBOL name as a
+   trailing comment**:
+   ```c
+   static cob_u8_t b_17[10] __attribute__((aligned));  /* WS-CUSTOMER-ID */
+   static cob_u8_t b_18[4]  __attribute__((aligned));  /* WS-BALANCE */
+   static cob_field f_18 = {4, b_18, &a_2};             /* WS-BALANCE */
+   ```
+   That comment is a free, mechanical symbol table: `variable_map.py` parses
+   `<compiled-name>.c.l.h` (a small regex over `b_NN`/`f_NN` declarations and
+   their trailing `/* NAME */` comment, not a general C parser) to build
+   `COBOL name -> gdb expression` once per compiled program, then reads each
+   item with MI `-data-evaluate-expression f_NN` or `b_NN`. Better still,
+   GnuCOBOL's own `cob_field_attr` struct (referenced from each `f_NN`, e.g.
+   `a_2`) carries the PICTURE metadata gdb can read directly —
+   `f_18.attr->type` / `->digits` / `->scale` evaluated to `18` (packed
+   decimal), `7`, `2` for the `PIC 9(5)V99 COMP-3` item, an exact match.
+   `variable_map.py` therefore does not need to reimplement
+   `cobol-parser`'s COMP-3/COMP byte-layout math from scratch to find *where*
+   a value lives — GnuCOBOL already hands back a correctly-scoped
+   `(bytes, type, digits, scale)` tuple per item via MI — it only needs a
+   decoder from that tuple to a display value, which can reuse or mirror the
+   existing `PictureClause` decode logic for the *type→string* half. This
+   still needs proving out for group items, `OCCURS` tables, and
+   `REDEFINES` (not covered by this fixture) before it's assumed universal,
+   but the flat-item case — the common one — is confirmed cheap.
+4. **Does MI work over `docker exec -i`? YES, cleanly.** `docker exec -i -w
+   <dir> mockymock-cobc gdb --interpreter=mi2 ./binary` accepts MI commands
+   on stdin and emits well-formed `^done`/`*stopped`/`~"..."` records on
+   stdout with no TTY required. `gdbserver` and a `target remote` transport
+   are unnecessary; this closes the question in favor of the simpler
+   stdio-MI design already sketched below.
+5. **Does ptrace work under the hardening flags? YES.** `gdb run` inside a
+   container started with the production `--cap-drop ALL --cap-add
+   DAC_OVERRIDE --security-opt no-new-privileges` flags hits the intended
+   breakpoint and steps normally — gdb tracing its own forked child does not
+   need `CAP_SYS_PTRACE`. The only symptom was a benign warning (`Error
+   disabling address space randomization: Operation not permitted`, from
+   `personality()` being blocked — cosmetic, does not affect debugging) that
+   the adapter should suppress from user-facing output rather than surface
+   as an error. **No `--cap-add SYS_PTRACE` weakening is needed**; the
+   sandbox trade-off flagged as a risk in the original doc's Limitations
+   does not materialize.
+6. **How does the debuggee's stdout interleave with MI records? Exactly as
+   predicted.** Program `DISPLAY` output (e.g. `LOOP ITER +0001`) appears as
+   bare untagged lines directly in the stream between MI records, not
+   wrapped in any MI record type. `gdb_session.py`'s MI reader must treat
+   any line not matching `^done`/`*stopped`/`~`/`=`/`&`/`^error`/`(gdb)` as
+   raw program output and forward it as a DAP `output` event.
 
-1. **Does the `mockymock-gnucobol` image even have a debugger in it?**
-   `runtime/docker/Dockerfile` currently installs only the `gnucobol` apt
-   package. Debian's `gnucobol` package does not pull in `gdb` as a
-   dependency. *Check:* `docker exec mockymock-cobc which gdb gdbserver` —
-   almost certainly both need adding to the Dockerfile (`apt-get install -y
-   gdb gdbserver`), which bumps the image content hash and forces
-   `ensure_toolchain` to rebuild (existing mechanism, no new code needed for
-   that part).
-2. **Does `cobc -g` (GnuCOBOL's debug flag) emit DWARF that maps back to
-   COBOL source lines, or only to the generated C?** GnuCOBOL transpiles
-   COBOL → C → native via gcc, so `-g` debug info is fundamentally *C* debug
-   info. GnuCOBOL is known (from public docs, not verified here) to emit
-   `#line` directives in the generated C mapping back to COBOL source lines,
-   which is what makes breakpoints on a `.cbl` file work at all for
-   line-level stepping. One thing is settled *without* the spike, though:
-   whatever file gdb knows about is the **spliced/instrumented** source,
-   because that is the file cobc compiles — any `#line` directives name the
-   instrumented file and instrumented line numbers, never the user's
-   original `.cbl`. So `debug/line_map.py`'s bidirectional
-   original ↔ instrumented mapping is needed in every outcome; the genuinely
-   open question is narrower: does gdb accept COBOL-file:line breakpoints at
-   all (against the instrumented file), or only generated-C locations?
-   *Check:* compile a small fixture with `cobc -g -free -x`, run under
-   `gdb`, `list <file>.cbl:N`, `break <file>.cbl:N`. While there, also
-   observe **step granularity**: one COBOL statement becomes several
-   generated-C lines, so a single `next` may stop more than once "inside"
-   one COBOL line — if so, the adapter must coalesce steps (keep stepping
-   until the mapped line changes), which shapes `gdb_session.py`'s
-   DAP-to-MI translation.
-3. **What do COBOL data items look like to gdb?** This is the actual open
-   risk. GnuCOBOL's generated C represents working-storage as a byte buffer
-   (`cob_field` structures) with generated field names — `gdb print
-   b_1.WS_CUSTOMER_ID` or similar, not guaranteed. *Check:* compile a
-   fixture with a few data items of different PICTURE clauses (`PIC
-   X(10)`, `PIC 9(5)V99 COMP-3`, `PIC S9(4) COMP`), stop at a breakpoint
-   after they're populated, `info locals` / `info variables`, and inspect
-   whether generated symbol names have any COBOL-name correspondence or are
-   fully mangled (`b_1`, `f_3`, positional only). If fully mangled, the
-   mapping has to come from GnuCOBOL's own `.lst`/listing output or a
-   `cob_field` layout table cobc can be asked to emit — not from symbol
-   names at all. This determines whether `debug/variable_map.py` is a
-   symbol-name lookup (cheap) or a byte-offset-into-buffer decoder using the
-   `PictureClause` info `cobol-parser`'s AST already carries for each
-   `CobolDataItem` (much more work, but buildable — the picture-to-byte-layout
-   math already exists for COMP-3/COMP encoding in DATA DIVISION handling).
-4. **Can gdb run non-interactively via MI (`--interpreter=mi2`) over `docker
-   exec -i`, or does the container's lack of a TTY / gdbserver's networking
-   model force a different transport (exposed port + `target remote`)?**
-   *Check:* both spellings against the running container; the hardening
-   flags (`--network none`) in `_HARDENING_FLAGS` block any TCP-based
-   approach (`gdbserver :PORT`) from being reachable from the host at all,
-   which likely forces the MI-over-stdio approach regardless of preference.
-5. **Will the kernel let gdb trace anything in this container at all?**
-   Installing gdb (question 1) and reaching it (question 4) are not enough:
-   `ptrace` itself must be permitted. The container runs with `--cap-drop
-   ALL` and `no-new-privileges` under Docker's default seccomp profile.
-   gdb tracing its *own child* usually works without `CAP_SYS_PTRACE`, but
-   the outcome depends on the host's Yama `ptrace_scope` setting and the
-   Docker/kernel seccomp vintage — and if it fails, the fix (`--cap-add
-   SYS_PTRACE`) deliberately weakens a sandbox the toolchain comments
-   describe as load-bearing for running untrusted COBOL. That would be a
-   security trade-off decision (see Limitations), not a Dockerfile tweak.
-   *Check:* `docker exec -i mockymock-cobc gdb ./binary -ex run` and watch
-   for `ptrace: Operation not permitted`.
-6. **How does the debuggee's stdout interleave with GDB/MI records?** Over
-   `docker exec -i` with no TTY, the inferior's output — including every
-   `__MOCKYMOCK__` protocol DISPLAY — is written raw to gdb's stdout, *not*
-   reliably wrapped in MI `@`-records, and MI's usual escape hatch
-   (`-inferior-tty-set`) needs a tty the container doesn't have. The MI
-   parser in `gdb_session.py` must therefore tolerate arbitrary untagged
-   lines mid-stream, and the adapter needs a story for routing program
-   output as DAP `output` events (or redirecting the inferior's stdout to a
-   sandbox file and tailing it). *Check:* run a fixture that DISPLAYs while
-   stopped-and-continued under MI, and inspect exactly how the output lands
-   between records — this can corrupt MI parsing in ways that would later
-   look like flaky bugs.
+**New finding, not anticipated by the original six questions — call stack
+synthesis:** goal #3 ("a call stack in terms of COBOL paragraphs/sections")
+cannot come from gdb's native `bt`/`-stack-list-frames` at all. GnuCOBOL
+compiles the entire PROCEDURE DIVISION into one C function (`SPIKE_`); a
+`PERFORM` of another paragraph is a computed-goto plus a push onto
+GnuCOBOL's own internal `frame_stack[255]` array of return addresses — never
+a real C call. Breaking inside a performed paragraph and running `bt` shows
+exactly one program frame (`SPIKE_`), regardless of PERFORM nesting depth;
+`frame_ptr`/`frame_stack` (visible via `info locals`, sized for 255 levels)
+are the *actual* COBOL call stack, address-only, address (`return_address_ptr`
+values are labels inside `SPIKE_`). **Consequence:** a DAP `stackTrace`
+response cannot be a thin translation of MI's frame list; the adapter must
+walk `frame_ptr` back through `frame_stack` itself, resolve each
+`return_address_ptr` to a source line via the same line-table gdb uses for
+breakpoints (MI `-symbol-info-line`-style lookup on the raw address), and
+present *that* as the synthesized COBOL call stack. This is new work not
+scoped anywhere in the original architecture sketch below and needs its own
+module — see "Call stack synthesis".
 
-**This doc's recommendation: do not write the CLI implementation plan until
-questions 1-3 and 5 are answered against a real container.** Question 3
-could change the shape of `variable_map.py` enough to be worth gating the
-whole architecture below on the answer, and question 5 gates the feature's
-viability outright.
-
-## Architecture (provisional, pending the spike above)
+## Architecture (scoped by the spike above; group items/OCCURS/REDEFINES still need a follow-up fixture pass)
 
 ### Session model — the shape change from trace
 
@@ -175,8 +198,13 @@ mockymock/debug/
   line_map.py      # bidirectional original <-> instrumented line mapping,
                    # built on splicer/source_map.py + report/coverage.py's
                    # existing (one-directional) machinery
-  variable_map.py  # COBOL data item <-> gdb-visible symbol/offset,
-                   # shape TBD per empirical question 3 above
+  variable_map.py  # COBOL data item <-> gdb-visible symbol, built by parsing
+                   # the compiler-generated `<name>.c.l.h` comment table
+                   # (confirmed by spike; see "Variable mapping")
+  call_stack.py    # synthesizes the COBOL paragraph/section call stack from
+                   # GnuCOBOL's internal frame_stack, since gdb's own bt is
+                   # always exactly one frame deep (confirmed by spike; see
+                   # "Call stack synthesis")
 ```
 
 `gdb_session.py` is the direct analogue of `docker_toolchain.run_binary`,
@@ -188,22 +216,31 @@ interaction pattern than the "run and collect the final result" style every
 other function here uses. Two design constraints on it, both from the
 empirical questions above:
 
-- **The MI reader must tolerate untagged lines.** Per question 6, the
-  inferior's stdout arrives interleaved with MI records on the same pipe;
-  any line that is not a recognizable MI record is program output and gets
-  forwarded as a DAP `output` event, never treated as a parse error.
-- **Stepping is coalesced.** Per question 2, one COBOL statement may span
-  several generated-C lines, so a DAP "next" may need to issue multiple MI
-  `-exec-next` commands until the mapped original line changes, rather than
-  translating one DAP step to one MI step.
+- **The MI reader must tolerate untagged lines.** Confirmed by spike question
+  6: the inferior's stdout arrives interleaved with MI records on the same
+  pipe; any line that is not a recognizable MI record (`^`/`*`/`~`/`=`/`&`
+  prefix or the `(gdb)` prompt) is program output and gets forwarded as a DAP
+  `output` event, never treated as a parse error.
+- **Stepping is coalesced by file, not by line.** Confirmed by spike question
+  2: a DAP "next" issues MI `-exec-next`/`-exec-step` repeatedly while the
+  current frame's `file` is the generated `.c` file, stopping on the first
+  frame whose file is the `.cbl` (spliced-source, in production) again. This
+  is a cleaner predicate than "until the line changes" — the marker/body
+  alternation means the line *always* changes every step; what has to
+  converge is landing back on a `.cbl`-file frame.
+- **The call stack is not gdb's backtrace.** Confirmed by the new
+  call-stack-synthesis finding: `-stack-list-frames` always reports one
+  program frame. `stackTrace` responses come from `call_stack.py` walking
+  GnuCOBOL's `frame_stack` (see "Call stack synthesis"), not from MI's frame
+  list.
 
 ### Toolchain changes
 
 | Location | Change |
 | --- | --- |
-| `runtime/docker/Dockerfile` | add `gdb` (and `gdbserver` if question 4 needs it) to the `apt-get install` line. Bumps the image content hash automatically (existing mechanism). |
-| `runtime/docker_toolchain.py::compile_source` | add `debug: bool = False` → appends `-g`, same pattern as `coverage`/`trace`. Orthogonal to `trace`; a debug session does not also need `-ftraceall`. |
-| `runtime/docker_toolchain.py` | new `start_gdb_session(binary_path) -> GdbSession` (or similar), returning a live handle instead of a completed result — the first function in this module that does not follow the "run to completion" pattern. |
+| `runtime/docker/Dockerfile` | add `gdb gdbserver` to the `apt-get install` line. **Done in this revision** — verified to install cleanly alongside `gnucobol`. Bumps the image content hash automatically (existing mechanism), so `ensure_toolchain` rebuilds on next run. `gdbserver` is installed but unused; MI-over-`docker exec -i` (question 4) is the transport, not `target remote`. |
+| `runtime/docker_toolchain.py::compile_source` | add `debug: bool = False` → appends `-g`, same pattern as `coverage`/`trace`. Orthogonal to `trace`; a debug session does not also need `-ftraceall`. Verified: `-g` alone (no `-t`/`-X` listing flags) is sufficient to produce the `<name>.c.l.h` file `variable_map.py` depends on. |
+| `runtime/docker_toolchain.py` | new `start_gdb_session(binary_path) -> GdbSession` (or similar), returning a live handle instead of a completed result — the first function in this module that does not follow the "run to completion" pattern. Verified viable: `docker exec -i -w <dir> mockymock-cobc gdb --interpreter=mi2 <binary>` runs cleanly under the production hardening flags with no TTY. |
 
 ### Line mapping
 
@@ -228,29 +265,88 @@ the same mapping used **live** and in the **reverse direction**:
 - Reporting a stack frame: instrumented line → original line, reusing
   `map_coverage_to_original` as-is (same function the trace feature reuses).
 
+### Call stack synthesis
+
+New section, added after the spike — not scoped in the original doc because
+the assumption going in was that MI's native frame list would do most of the
+work. It doesn't: confirmed by the spike, GnuCOBOL compiles the whole
+PROCEDURE DIVISION into one C function, and `PERFORM` is a computed-goto
+plus a push onto GnuCOBOL's own `frame_stack[255]` array (visible via `info
+locals` as `frame_ptr`/`frame_stack`/`frame_overflow`), never a real C call.
+`-stack-list-frames` therefore always reports exactly one program frame
+(plus the `SPIKE`/`main` wrapper frames) no matter how deep the COBOL
+PERFORM nesting is.
+
+`call_stack.py` must reconstruct the COBOL-level call stack itself for every
+`stackTrace` request:
+
+1. Read `frame_ptr` and walk backward through `frame_stack` via MI
+   `-data-evaluate-expression` (the array is small and fixed-size — 255
+   entries — so this is a bounded, cheap read).
+2. Each populated entry's `return_address_ptr` is a code address inside
+   `SPIKE_`; resolve it to a source line the same way gdb resolves a
+   breakpoint address (an MI line-table lookup, e.g. via a temporary
+   `-break-insert *<address>` and reading its resolved `file`/`line`, or
+   `info line *<address>` if MI exposes an equivalent) to get the
+   **generated-C** line, then run it through `line_map.py` to the original
+   line, exactly like a normal breakpoint frame.
+3. The resolved line falls inside a specific paragraph/section — reuse
+   `splicer/source_map.py`'s existing span/boundary data (the same data
+   "Line mapping" above already reuses) to name the enclosing
+   paragraph/section rather than inventing a second lookup.
+4. Present frames outermost-to-innermost as the DAP `stackTrace` response;
+   frame 0 is the current stopped location (from the ordinary line-mapped
+   breakpoint/step position, not from `frame_stack` — the *current* line
+   is not itself a `frame_stack` entry, only the return points above it
+   are).
+
+This needs its own fixture-driven verification pass (nested PERFORMs, a
+PERFORM THRU, a GO TO) before the CLI implementation plan finalizes its
+shape, but the mechanism — walk `frame_stack`, resolve addresses through the
+existing line-table and span data — is confirmed sound in principle.
+
 ### Variable mapping
 
-Deliberately left unspecified pending empirical question 3. Two candidate
-designs bracket the range:
+Resolved by the spike to a third path, cheaper than either candidate the
+original doc bracketed:
 
-- **If gdb exposes COBOL-ish symbol names directly** (optimistic case):
-  `variable_map.py` is a thin name-normalization lookup, comparable in
-  complexity to `line_map.py`.
-- **If gdb only exposes raw C buffers** (pessimistic case): `variable_map.py`
-  must decode each `CobolDataItem`'s `PictureClause` (already parsed by
-  cobol-parser and available on the AST) into a byte offset and
-  COMP/COMP-3/display decoding, and DAP `variables` responses are
-  synthesized from raw memory reads (`gdb -x memory` / MI `-data-read-memory`)
-  rather than symbol lookups. This is materially more work and would likely
-  become its own implementation plan rather than a subsection of the CLI
-  plan.
+- Not the optimistic case: gdb does not expose COBOL names as symbols
+  (`print WS-BALANCE`-style expressions fail).
+- Not the full pessimistic case either: no manual byte-offset-into-a-shared-buffer
+  decode is needed, because GnuCOBOL already scopes each item to its own
+  named C local and hands back its own `cob_field`.
 
-**Prior art to check during the spike:** COBOLworx's cbl-gdb (gdb Python
-extensions for GnuCOBOL, the machinery behind their VS Code COBOL debugger).
-Its existence is itself weak evidence for the pessimistic case — symbol
-names alone were evidently not enough for them either — and inspecting how
-it recovers COBOL names may answer question 3 faster than probing from
-scratch. Not verified here; a spike task, not a dependency.
+**The actual mechanism:** `cobc -g` always emits `<compiled-name>.c.l.h`
+(included into the generated function body) declaring every working-storage
+and linkage item as a named local — `b_NN` for a raw buffer, `f_NN` for a
+`cob_field` wrapping one — **with the original COBOL name as a trailing
+comment on the same line** (`static cob_u8_t b_18[4] ...; /* WS-BALANCE */`).
+`variable_map.py`:
+
+1. Parses `<compiled-name>.c.l.h` with a small regex over declaration lines
+   (not a general C parser) to build `COBOL name -> gdb expression` (prefer
+   the `f_NN` field wrapper over the raw `b_NN` buffer when both exist — the
+   field carries type metadata the buffer alone doesn't).
+2. Reads each item live via MI `-data-evaluate-expression <f_NN or b_NN>`.
+3. For `DISPLAY`/alphanumeric items, the value is already the display
+   string (`b_17` evaluates to `"CUST00001 "` directly — no decoding).
+4. For numeric `COMP`/`COMP-3` items, also evaluates `<f_NN>.attr->type`,
+   `->digits`, `->scale` — GnuCOBOL's own `cob_field_attr`, which for a `PIC
+   9(5)V99 COMP-3` item read back exactly `18` (packed-decimal),  `7`, `2`.
+   That `(raw bytes, type, digits, scale)` tuple is then decoded to a
+   display value the same way `cobol-parser`'s `PictureClause` decode logic
+   already does for COMP-3/COMP — reusing that decode step, not the
+   byte-layout/offset math the pessimistic case would have needed, since
+   GnuCOBOL has already found the right bytes for us.
+
+**Not yet verified — flagged for the CLI implementation plan, not blocking
+it:** group items, `OCCURS` tables, and `REDEFINES` were not in the spike
+fixture. A first guess is that a group item's `f_NN` field spans the whole
+group (alphanumeric, no per-elementary breakdown) and its subordinate items
+get their own `f_NN`s layered over the same bytes — consistent with how
+`REDEFINES` already works in cobc's model — but this needs a fixture with at
+least one `OCCURS` table and one `REDEFINES` before `variable_map.py`'s
+`variables` (children-of-a-scope) response shape is finalized.
 
 ### CLI surface
 
@@ -299,12 +395,13 @@ half-start a session a human cannot drive.
 
 ### Testing
 
-- **Spike first** (see Empirical basis) — not automated tests, a throwaway
-  script/session against the live container, whose findings get folded back
-  into this doc before an implementation plan is written.
+- **Spike done** (see Empirical basis) — a throwaway session against the
+  live container; findings folded back into this doc above. The one-off
+  fixture/scripts used for it were not kept as shipped code.
 - **Unit:** GDB/MI response parsing in `gdb_session.py`; line-map
-  bidirectional round-trip; variable-map decoding (shape depends on spike
-  outcome).
+  bidirectional round-trip; variable-map `.c.l.h` comment parsing and
+  COMP-3/COMP decoding; call-stack synthesis against a fixture with nested
+  PERFORMs.
 - **Integration (Docker-gated):** a fixture program, set a breakpoint, step
   through a few statements, assert stack/variable values match known state —
   the debugger equivalent of the trace feature's fixture-run assertion.
@@ -322,14 +419,11 @@ half-start a session a human cannot drive.
   start than a plain `run` (compile with `-g`, launch gdb, wait for the
   first stop) — acceptable for an interactive debugging action the user
   chose to invoke, not something to optimize for in v1.
-- **Possible sandbox trade-off.** If empirical question 5 finds `ptrace`
-  blocked under the current hardening flags, enabling debugging means
-  `--cap-add SYS_PTRACE` on the shared container — a deliberate weakening
-  of the untrusted-COBOL sandbox that would apply to *all* runs, not just
-  debug sessions (the flags live on `docker run`, and the container is
-  long-lived). If it comes to that, the decision — and whether it warrants
-  a separate debug-only container — gets made explicitly in the CLI plan,
-  not absorbed silently as a Dockerfile-adjacent tweak.
+- ~~Possible sandbox trade-off~~ **Resolved: no trade-off needed.** The
+  spike confirmed `ptrace` works under the existing `--cap-drop ALL
+  --cap-add DAC_OVERRIDE --security-opt no-new-privileges` flags with no
+  additional capability grant — gdb tracing its own forked child does not
+  require `CAP_SYS_PTRACE`. The sandbox is unchanged by adding debug support.
 - **Shared memory cap.** gdb and the debuggee together live under the
   container's existing 1 GB `MEMORY_LIMIT`. Likely fine, but a
   memory-limit kill mid-session would surface as the "session dies"
@@ -338,16 +432,17 @@ half-start a session a human cannot drive.
 
 ## Sequencing
 
-1. **This doc** (architecture, scoped, empirical questions enumerated).
-2. **Spike** — a throwaway session against the real `mockymock-cobc`
-   container answering empirical questions 1-6. Not shipped code; its
-   findings get folded back into this doc (a revision, not a new doc) before
-   step 3.
-3. **CLI implementation plan** (`docs/superpowers/plans/`), scoped by what
-   the spike found — variable mapping in particular may split into its own
-   plan if the pessimistic case holds. `line_map.py` does not wait for the
-   spike (see Line mapping); it can be specified in full in this plan
-   regardless of outcome.
+1. **This doc** (architecture, scoped, empirical questions enumerated). Done.
+2. **Spike** — done 2026-07-22; findings folded back into this doc above
+   (this revision). Call stack synthesis emerged as new, previously
+   unscoped work; group items/`OCCURS`/`REDEFINES` remain unverified for
+   variable mapping and are flagged, not blocking, for step 3.
+3. **CLI implementation plan** (`docs/superpowers/plans/`) — next step.
+   `line_map.py`, `variable_map.py`, and `call_stack.py` are all now
+   concretely scoped by the spike; the plan should still budget a follow-up
+   fixture pass (group items, `OCCURS`, `REDEFINES`, nested PERFORM/PERFORM
+   THRU/GO TO) as part of implementation rather than as a further blocking
+   spike.
 4. **Extension implementation plan**, same split as the trace feature
    (CLI lands first, extension consumes the DAP contract — which here is
    just the DAP spec itself plus the `mockymock debug` launch shape, not a
