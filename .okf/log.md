@@ -1,5 +1,37 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-22 — Interactive DAP debugger implemented (`mockymock debug`)
+
+Implemented the design in `docs/2026-07-22-dap-debugger-design.md` per
+`docs/superpowers/plans/2026-07-22-dap-debugger-cli.md`. The design doc's
+own empirical questions (originally unverified — the Docker daemon was
+unreachable when it was drafted) were all answered against a real
+hardened container before any implementation code was written, and the
+doc was revised in place with the findings. One finding changed the
+architecture from what the doc originally sketched: gdb's own backtrace
+is useless for a COBOL call stack (GnuCOBOL compiles PROCEDURE DIVISION
+into one C function), so a new `call_stack.py` module walks GnuCOBOL's own
+`frame_stack` instead — not scoped in the original six empirical
+questions, found only once call stack synthesis was actually driven
+against a real container (`frame_stack[0]` turned out to be a sentinel,
+not a real caller).
+
+New: `mockymock/debug/` (`gdb_session.py`, `line_map.py`,
+`variable_map.py`, `call_stack.py`, `adapter.py`), `mockymock debug`
+subcommand, `gdb`/`gdbserver` added to the toolchain Dockerfile,
+`compile_source(debug=True)` / `docker_toolchain.start_gdb_session`. See
+`.okf/cli.md`'s `mockymock debug` section for the full flow.
+
+Verified end-to-end against the real container
+(`tests/integration/test_debug.py`): breakpoint on an original `.cbl`
+line (through the real splicer line map), stop, correct COBOL call stack,
+correctly decoded COBOL-named variable values (`PIC X`, `COMP-3`, `COMP`),
+coalesced stepping past generated-C plumbing lines. Not yet verified:
+group items/`OCCURS`/`REDEFINES` in variable mapping, deeper
+`PERFORM`/`PERFORM THRU`/`GO TO` control flow in call stack synthesis —
+both flagged as a follow-up fixture pass in the CLI plan's Task 10, not
+blocking this implementation.
+
 ## 2026-07-21 — Cross-OS install audit: pin verified pushed, Windows/macOS unit CI added
 
 Requested audit: "make sure everything is super easy to install and get up

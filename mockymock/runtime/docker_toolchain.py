@@ -245,7 +245,10 @@ def cobc_version() -> str:
 
 
 def compile_source(
-    source_path: Path, coverage: bool = False, trace: bool = False
+    source_path: Path,
+    coverage: bool = False,
+    trace: bool = False,
+    debug: bool = False,
 ) -> CompileResult:
     """Compile a free-form COBOL source file (which must live under
     WORK_ROOT) inside the container. The binary is written next to the
@@ -257,6 +260,14 @@ def compile_source(
     binary, once executed, writes a `.gcda` file next to itself that
     `run_gcov` (below) turns into a per-COBOL-line report. See
     docs/2026-07-17-coverage-reporting-design.md.
+
+    `debug=True` adds `-g`, enabling gdb to set breakpoints directly
+    against the compiled `.cbl` (verified empirically -- see
+    docs/2026-07-22-dap-debugger-design.md's Empirical basis). This also
+    causes cobc to emit a sibling `<name>.c.l.h` header with a COBOL-name
+    comment on every generated local variable declaration, which
+    `mockymock/debug/variable_map.py` parses. Orthogonal to `coverage` and
+    `trace`; a debug session needs neither.
 
     `-w container_dir` pins the compiler process's working directory to
     the source's own per-run sandbox, mirroring `run_binary` below. This
@@ -282,6 +293,8 @@ def compile_source(
         # its own -- COB_SET_TRACE at run time is what actually turns
         # tracing on (see run_binary's trace_path).
         cmd.append("-ftraceall")
+    if debug:
+        cmd.append("-g")
     cmd += ["-x", container_source, "-o", container_binary]
     try:
         result = subprocess.run(
@@ -449,4 +462,42 @@ def run_gcov(source_path: Path) -> GcovResult:
         )
     return GcovResult(
         success=True, gcov_text=gcov_path.read_text(encoding="utf-8"), stderr=""
+    )
+
+
+def start_gdb_session(binary_path: Path) -> subprocess.Popen:
+    """Spawn a long-lived `gdb --interpreter=mi2` process attached to a
+    `debug=True`-compiled binary inside the container, returning a live
+    handle instead of a completed result -- the first function in this
+    module that does not follow the "run to completion" pattern every
+    other function here uses (compile_source/run_binary/run_gcov all
+    invoke `docker exec`, wait, and return).
+
+    Verified empirically (docs/2026-07-22-dap-debugger-design.md): MI over
+    `docker exec -i` works with no TTY and no `gdbserver`/`target remote`
+    transport needed, and ptrace works under the container's existing
+    hardening flags (gdb tracing its own forked child does not need
+    CAP_SYS_PTRACE). The caller (`mockymock/debug/gdb_session.py`) owns
+    reading/writing this process's stdio and closing it.
+    """
+    container_binary = to_container_path(binary_path, WORK_ROOT)
+    container_dir = container_binary.rsplit("/", 1)[0]
+    return subprocess.Popen(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "-w",
+            container_dir,
+            CONTAINER,
+            "gdb",
+            "-q",
+            "--interpreter=mi2",
+            container_binary,
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
     )

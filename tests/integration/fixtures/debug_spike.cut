@@ -1,0 +1,4 @@
+TESTSUITE "debug spike"
+
+TESTCASE "runs the loop"
+    PERFORM MAIN-PARA

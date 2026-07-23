@@ -1,0 +1,350 @@
+"""Tests for the DAP adapter's request/response/event plumbing. Drives a
+real DapAdapter over io.BytesIO streams with hand-framed DAP JSON, exactly
+as a real client would send it -- no Docker/gdb involved, via a fake
+DebugSession built from fake gdb responses."""
+
+import io
+import json
+
+from mockymock.debug.adapter import (
+    DapAdapter,
+    DebugSession,
+    read_dap_message,
+)
+from mockymock.debug.call_stack import ParagraphIndex
+from mockymock.debug.gdb_session import ResultRecord, StopEvent
+from mockymock.debug.line_map import LineMap
+
+
+def _frame(message: dict) -> bytes:
+    body = json.dumps(message).encode("utf-8")
+    return f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body
+
+
+def _request(seq: int, command: str, arguments: dict | None = None) -> dict:
+    message = {"seq": seq, "type": "request", "command": command}
+    if arguments is not None:
+        message["arguments"] = arguments
+    return message
+
+
+class _FakeGdb:
+    """A minimal stand-in for GdbSession, covering only what the adapter's
+    request handlers call directly. Breakpoints/run-control/variable
+    reads are exercised for real in test_gdb_session.py/test_variable_map.py
+    /test_call_stack.py -- this test is about the DAP plumbing around them."""
+
+    def __init__(self):
+        self.breakpoints: dict[int, tuple[str, int]] = {}
+        self.deleted: list[int] = []
+        self._next_number = 0
+        self.closed = False
+        self._output_handler = None
+
+    def set_output_handler(self, on_output):
+        self._output_handler = on_output
+
+    def set_breakpoint(self, file, line):
+        # Monotonic numbering (never reused), like real gdb -- so a replace
+        # deletes old numbers and hands out fresh ones.
+        self._next_number += 1
+        self.breakpoints[self._next_number] = (file, line)
+        return {"number": str(self._next_number)}
+
+    def delete_breakpoint(self, number):
+        self.deleted.append(number)
+        self.breakpoints.pop(number, None)
+
+    def run(self) -> StopEvent:
+        if self._output_handler:
+            self._output_handler("LOOP ITER +0001")
+        return StopEvent(reason="breakpoint", file="/work/x/fixture.cbl", line=20)
+
+    def continue_(self) -> StopEvent:
+        return StopEvent(reason="exited", exit_code=0)
+
+    def step(self, original_file_hint):
+        return StopEvent(reason="step", file="/work/x/fixture.cbl", line=21)
+
+    def close(self):
+        self.closed = True
+
+    # Used by call_stack.synthesize_stack and variable_map.read_variable,
+    # both via gdb_session.evaluate().
+    def send(self, command):
+        if command == "-data-evaluate-expression frame_ptr-frame_stack":
+            return [ResultRecord("done", {"value": "0"})]
+        if command == "-data-evaluate-expression (int)(b_17).attr->type":
+            # b_17 is a plain PIC X buffer with no cob_field wrapper --
+            # confirmed empirically (variable_map.py's module docstring).
+            return [ResultRecord("error", {"msg": "There is no member named attr."})]
+        if command == "-data-evaluate-expression b_17":
+            return [ResultRecord("done", {"value": '"CUST00001 "'})]
+        raise AssertionError(f"unexpected command: {command!r}")
+
+
+def _identity_line_map(max_line: int = 30) -> LineMap:
+    identity = {i: i for i in range(1, max_line + 1)}
+    return LineMap(_to_original=identity, _to_instrumented=identity)
+
+
+def _fake_launch_session(arguments: dict) -> DebugSession:
+    return DebugSession(
+        gdb=_FakeGdb(),
+        line_map=_identity_line_map(),
+        variable_table={"WS-CUSTOMER-ID": "b_17"},
+        generated_c_lines=[],
+        paragraph_index=ParagraphIndex(
+            paragraph_starts=[(9, "MAIN-PARA")], section_starts=[]
+        ),
+        instrumented_file="fixture.cbl",
+    )
+
+
+def _drain(output_stream: io.BytesIO) -> list[dict]:
+    output_stream.seek(0)
+    messages = []
+    while True:
+        message = read_dap_message(output_stream)
+        if message is None:
+            break
+        messages.append(message)
+    return messages
+
+
+def _run_adapter(requests: list[dict]) -> list[dict]:
+    input_stream = io.BytesIO(b"".join(_frame(r) for r in requests))
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+    adapter.run()
+    return _drain(output_stream)
+
+
+def _run_adapter_capturing_session(requests, launch=None):
+    """Like _run_adapter but returns (messages, session) so a test can
+    inspect the fake gdb's post-run state."""
+    input_stream = io.BytesIO(b"".join(_frame(r) for r in requests))
+    output_stream = io.BytesIO()
+    sessions = []
+
+    def _launch(arguments):
+        session = (launch or _fake_launch_session)(arguments)
+        sessions.append(session)
+        return session
+
+    adapter = DapAdapter(input_stream, output_stream, _launch)
+    adapter.run()
+    return _drain(output_stream), sessions[0]
+
+
+def test_initialize_responds_with_capabilities_and_initialized_event():
+    messages = _run_adapter([_request(1, "initialize", {})])
+
+    response = messages[0]
+    assert response["type"] == "response"
+    assert response["success"] is True
+    assert response["command"] == "initialize"
+    assert response["body"]["supportsConfigurationDoneRequest"] is True
+    assert messages[1] == {"seq": 2, "type": "event", "event": "initialized"}
+
+
+def test_launch_then_set_breakpoints_resolves_via_line_map():
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 14}]},
+            ),
+        ]
+    )
+
+    launch_response, set_bp_response = messages
+    assert launch_response["success"] is True
+    assert set_bp_response["success"] is True
+    assert set_bp_response["body"]["breakpoints"] == [
+        {"verified": True, "line": 14, "id": 1}
+    ]
+
+
+def test_configuration_done_runs_and_emits_stopped_event():
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(2, "configurationDone", {}),
+        ]
+    )
+
+    events = [m for m in messages if m["type"] == "event"]
+    output_events = [e for e in events if e["event"] == "output"]
+    stopped_events = [e for e in events if e["event"] == "stopped"]
+
+    assert output_events == [
+        {
+            "seq": output_events[0]["seq"],
+            "type": "event",
+            "event": "output",
+            "body": {"category": "stdout", "output": "LOOP ITER +0001\n"},
+        }
+    ]
+    assert stopped_events[0]["body"]["reason"] == "breakpoint"
+    assert stopped_events[0]["body"]["threadId"] == 1
+
+
+def test_continue_reports_exited_and_terminated():
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(2, "continue", {"threadId": 1}),
+        ]
+    )
+
+    events = [m["event"] for m in messages if m["type"] == "event"]
+    assert "exited" in events
+    assert "terminated" in events
+
+
+def test_stack_trace_after_a_stop_reports_the_current_frame():
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(2, "configurationDone", {}),
+            _request(3, "stackTrace", {"threadId": 1}),
+        ]
+    )
+
+    stack_response = messages[-1]
+    assert stack_response["command"] == "stackTrace"
+    assert stack_response["success"] is True
+    frames = stack_response["body"]["stackFrames"]
+    assert len(frames) == 1
+    assert frames[0]["line"] == 20
+    assert frames[0]["name"] == "MAIN-PARA"
+
+
+def test_variables_reports_decoded_values():
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(2, "variables", {"variablesReference": 1}),
+        ]
+    )
+
+    variables_response = messages[-1]
+    assert variables_response["body"]["variables"] == [
+        {"name": "WS-CUSTOMER-ID", "value": "CUST00001 ", "variablesReference": 0}
+    ]
+
+
+def test_requests_before_launch_fail_cleanly():
+    messages = _run_adapter(
+        [_request(1, "setBreakpoints", {"source": {"path": "x"}, "breakpoints": []})]
+    )
+
+    assert messages[0]["success"] is False
+    assert "no active debug session" in messages[0]["message"]
+
+
+def test_disconnect_closes_the_gdb_session():
+    _messages, session = _run_adapter_capturing_session(
+        [_request(1, "launch", {}), _request(2, "disconnect", {})]
+    )
+    assert session.gdb.closed is True
+
+
+def test_unsupported_command_gets_a_clean_failure_response():
+    messages = _run_adapter([_request(1, "notARealDapCommand", {})])
+    assert messages[0]["success"] is False
+    assert "unsupported request" in messages[0]["message"]
+
+
+def test_set_breakpoints_replaces_the_previous_set_for_that_source():
+    """DAP setBreakpoints replaces ALL breakpoints for a source. gdb has
+    no per-file clear, so the adapter must delete the numbers it inserted
+    before inserting the new set -- otherwise an un-checked breakpoint
+    stays live in gdb and the program keeps stopping at it."""
+    _messages, session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 14}]},
+            ),
+            # The user un-checks line 14 and checks line 20 instead.
+            _request(
+                3,
+                "setBreakpoints",
+                {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 20}]},
+            ),
+        ]
+    )
+
+    # The first breakpoint (gdb number 1) was deleted before the second set.
+    assert session.gdb.deleted == [1]
+    # Only the second breakpoint (a fresh number, line 20) is now live.
+    assert list(session.gdb.breakpoints.values()) == [("fixture.cbl", 20)]
+
+
+def test_set_breakpoints_with_empty_list_clears_the_source():
+    _messages, session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 14}]},
+            ),
+            _request(
+                3,
+                "setBreakpoints",
+                {"source": {"path": "fixture.cbl"}, "breakpoints": []},
+            ),
+        ]
+    )
+    assert session.gdb.deleted == [1]
+    assert session.gdb.breakpoints == {}
+
+
+def test_handler_exception_before_responding_becomes_a_failed_response():
+    """A malformed request (here, setBreakpoints with no source) must not
+    kill the adapter loop -- it becomes a failed DAP response, and the
+    adapter keeps serving subsequent requests."""
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(2, "setBreakpoints", {"breakpoints": []}),  # missing source
+            _request(3, "threads", {}),  # must still be served afterward
+        ]
+    )
+    by_command = {m.get("command"): m for m in messages if m["type"] == "response"}
+    assert by_command["setBreakpoints"]["success"] is False
+    # The adapter survived and answered the next request.
+    assert by_command["threads"]["success"] is True
+
+
+def test_resume_failure_after_responding_terminates_cleanly():
+    """The run-control handlers answer BEFORE resuming, so a broken gdb
+    session mid-resume can't become a second response for the same request
+    (a protocol violation) -- it terminates the session instead."""
+
+    class _DyingGdb(_FakeGdb):
+        def run(self):
+            raise RuntimeError("gdb died")
+
+    def launch(arguments):
+        session = _fake_launch_session(arguments)
+        session.gdb = _DyingGdb()
+        return session
+
+    messages, _session = _run_adapter_capturing_session(
+        [_request(1, "launch", {}), _request(2, "configurationDone", {})],
+        launch=launch,
+    )
+    # configurationDone got exactly one (successful) response...
+    config_responses = [m for m in messages if m.get("command") == "configurationDone"]
+    assert len(config_responses) == 1
+    assert config_responses[0]["success"] is True
+    # ...and the broken resume terminated the session rather than crashing.
+    assert any(m.get("event") == "terminated" for m in messages)

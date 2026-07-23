@@ -209,3 +209,64 @@ def test_trace_json_implies_trace_and_inherits_the_same_refusal(tmp_path, capsys
     out = capsys.readouterr().out
     assert exit_code == 1
     assert "--trace requires exactly one --case" in out
+
+
+# --- mockymock debug --------------------------------------------------------
+# Like the trace refusals above, these must fire before Docker is touched.
+
+
+def test_debug_without_dap_stdio_is_refused(tmp_path, capsys):
+    cbl, cut = _trace_files(tmp_path)
+    exit_code = main(["debug", str(cbl), "--cut", str(cut), "--case", "a"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "--dap-stdio" in out
+    assert "VS Code extension" in out
+
+
+def test_debug_without_any_case_is_refused(tmp_path, capsys):
+    cbl, cut = _trace_files(tmp_path)
+    exit_code = main(["debug", str(cbl), "--cut", str(cut), "--dap-stdio"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "requires exactly one --case" in out
+
+
+def test_debug_with_two_cases_is_refused(tmp_path, capsys):
+    cbl, cut = _trace_files(tmp_path)
+    exit_code = main(
+        [
+            "debug",
+            str(cbl),
+            "--cut",
+            str(cut),
+            "--dap-stdio",
+            "--case",
+            "a",
+            "--case",
+            "b",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "requires exactly one --case" in out
+
+
+def test_debug_refuses_before_touching_missing_files(tmp_path, capsys):
+    """The --dap-stdio/case-count refusals fire before file-existence
+    checks would even matter, but a missing file must still be refused
+    cleanly once those pass, not raise."""
+    exit_code = main(
+        [
+            "debug",
+            str(tmp_path / "missing.cbl"),
+            "--cut",
+            str(tmp_path / "missing.cut"),
+            "--dap-stdio",
+            "--case",
+            "a",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "no such file" in out
