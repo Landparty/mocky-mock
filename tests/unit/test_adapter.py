@@ -35,7 +35,9 @@ class _FakeGdb:
     /test_call_stack.py -- this test is about the DAP plumbing around them."""
 
     def __init__(self):
-        self.breakpoints: list[tuple[str, int]] = []
+        self.breakpoints: dict[int, tuple[str, int]] = {}
+        self.deleted: list[int] = []
+        self._next_number = 0
         self.closed = False
         self._output_handler = None
 
@@ -43,8 +45,15 @@ class _FakeGdb:
         self._output_handler = on_output
 
     def set_breakpoint(self, file, line):
-        self.breakpoints.append((file, line))
-        return {"number": str(len(self.breakpoints))}
+        # Monotonic numbering (never reused), like real gdb -- so a replace
+        # deletes old numbers and hands out fresh ones.
+        self._next_number += 1
+        self.breakpoints[self._next_number] = (file, line)
+        return {"number": str(self._next_number)}
+
+    def delete_breakpoint(self, number):
+        self.deleted.append(number)
+        self.breakpoints.pop(number, None)
 
     def run(self) -> StopEvent:
         if self._output_handler:
@@ -92,11 +101,7 @@ def _fake_launch_session(arguments: dict) -> DebugSession:
     )
 
 
-def _run_adapter(requests: list[dict]) -> list[dict]:
-    input_stream = io.BytesIO(b"".join(_frame(r) for r in requests))
-    output_stream = io.BytesIO()
-    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
-    adapter.run()
+def _drain(output_stream: io.BytesIO) -> list[dict]:
     output_stream.seek(0)
     messages = []
     while True:
@@ -105,6 +110,31 @@ def _run_adapter(requests: list[dict]) -> list[dict]:
             break
         messages.append(message)
     return messages
+
+
+def _run_adapter(requests: list[dict]) -> list[dict]:
+    input_stream = io.BytesIO(b"".join(_frame(r) for r in requests))
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+    adapter.run()
+    return _drain(output_stream)
+
+
+def _run_adapter_capturing_session(requests, launch=None):
+    """Like _run_adapter but returns (messages, session) so a test can
+    inspect the fake gdb's post-run state."""
+    input_stream = io.BytesIO(b"".join(_frame(r) for r in requests))
+    output_stream = io.BytesIO()
+    sessions = []
+
+    def _launch(arguments):
+        session = (launch or _fake_launch_session)(arguments)
+        sessions.append(session)
+        return session
+
+    adapter = DapAdapter(input_stream, output_stream, _launch)
+    adapter.run()
+    return _drain(output_stream), sessions[0]
 
 
 def test_initialize_responds_with_capabilities_and_initialized_event():
@@ -217,27 +247,104 @@ def test_requests_before_launch_fail_cleanly():
 
 
 def test_disconnect_closes_the_gdb_session():
-    input_stream = io.BytesIO(
-        b"".join(
-            _frame(r)
-            for r in [_request(1, "launch", {}), _request(2, "disconnect", {})]
-        )
+    _messages, session = _run_adapter_capturing_session(
+        [_request(1, "launch", {}), _request(2, "disconnect", {})]
     )
-    output_stream = io.BytesIO()
-    sessions = []
-
-    def launch(arguments):
-        session = _fake_launch_session(arguments)
-        sessions.append(session)
-        return session
-
-    adapter = DapAdapter(input_stream, output_stream, launch)
-    adapter.run()
-
-    assert sessions[0].gdb.closed is True
+    assert session.gdb.closed is True
 
 
 def test_unsupported_command_gets_a_clean_failure_response():
     messages = _run_adapter([_request(1, "notARealDapCommand", {})])
     assert messages[0]["success"] is False
     assert "unsupported request" in messages[0]["message"]
+
+
+def test_set_breakpoints_replaces_the_previous_set_for_that_source():
+    """DAP setBreakpoints replaces ALL breakpoints for a source. gdb has
+    no per-file clear, so the adapter must delete the numbers it inserted
+    before inserting the new set -- otherwise an un-checked breakpoint
+    stays live in gdb and the program keeps stopping at it."""
+    _messages, session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 14}]},
+            ),
+            # The user un-checks line 14 and checks line 20 instead.
+            _request(
+                3,
+                "setBreakpoints",
+                {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 20}]},
+            ),
+        ]
+    )
+
+    # The first breakpoint (gdb number 1) was deleted before the second set.
+    assert session.gdb.deleted == [1]
+    # Only the second breakpoint (a fresh number, line 20) is now live.
+    assert list(session.gdb.breakpoints.values()) == [("fixture.cbl", 20)]
+
+
+def test_set_breakpoints_with_empty_list_clears_the_source():
+    _messages, session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 14}]},
+            ),
+            _request(
+                3,
+                "setBreakpoints",
+                {"source": {"path": "fixture.cbl"}, "breakpoints": []},
+            ),
+        ]
+    )
+    assert session.gdb.deleted == [1]
+    assert session.gdb.breakpoints == {}
+
+
+def test_handler_exception_before_responding_becomes_a_failed_response():
+    """A malformed request (here, setBreakpoints with no source) must not
+    kill the adapter loop -- it becomes a failed DAP response, and the
+    adapter keeps serving subsequent requests."""
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(2, "setBreakpoints", {"breakpoints": []}),  # missing source
+            _request(3, "threads", {}),  # must still be served afterward
+        ]
+    )
+    by_command = {m.get("command"): m for m in messages if m["type"] == "response"}
+    assert by_command["setBreakpoints"]["success"] is False
+    # The adapter survived and answered the next request.
+    assert by_command["threads"]["success"] is True
+
+
+def test_resume_failure_after_responding_terminates_cleanly():
+    """The run-control handlers answer BEFORE resuming, so a broken gdb
+    session mid-resume can't become a second response for the same request
+    (a protocol violation) -- it terminates the session instead."""
+
+    class _DyingGdb(_FakeGdb):
+        def run(self):
+            raise RuntimeError("gdb died")
+
+    def launch(arguments):
+        session = _fake_launch_session(arguments)
+        session.gdb = _DyingGdb()
+        return session
+
+    messages, _session = _run_adapter_capturing_session(
+        [_request(1, "launch", {}), _request(2, "configurationDone", {})],
+        launch=launch,
+    )
+    # configurationDone got exactly one (successful) response...
+    config_responses = [m for m in messages if m.get("command") == "configurationDone"]
+    assert len(config_responses) == 1
+    assert config_responses[0]["success"] is True
+    # ...and the broken resume terminated the session rather than crashing.
+    assert any(m.get("event") == "terminated" for m in messages)

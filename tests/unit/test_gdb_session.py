@@ -99,6 +99,47 @@ def test_parse_mi_line_parses_error_result():
     assert record.payload["msg"] == "The program is not being run."
 
 
+# The debuggee's stdout shares gdb's pipe and can begin with ANY character,
+# including every MI marker (`^*=~@&`). A DISPLAY line that merely starts
+# like a record must be treated as program output, never crash the parser
+# (which kills the session) or be silently swallowed (which loses the
+# output). Every probe below was a real defect before the fix -- see the
+# module docstring's empirical-question-6 note.
+@pytest.mark.parametrize(
+    "display_line",
+    [
+        "*** ERROR: BAD INPUT ***",  # was swallowed as AsyncRecord('')
+        "=== TOTALS ===",  # was swallowed as AsyncRecord('')
+        "~AMOUNT OUT OF RANGE",  # was AssertionError (no quote after ~)
+        "&BALANCE LOW",  # was AssertionError (no quote after &)
+        "@RATE TABLE",  # was AssertionError (no quote after @)
+        "^CARET LINE",  # was mis-parsed as ResultRecord('CARET')
+        '~"unterminated',  # was IndexError (quote never closes)
+        "{not a record}",
+        "12345",
+    ],
+)
+def test_parse_mi_line_treats_marker_lookalike_program_output_as_output(display_line):
+    record = parse_mi_line(display_line + "\n")
+    assert isinstance(record, ProgramOutput)
+    assert record.text == display_line
+
+
+def test_parse_mi_line_still_parses_real_records_starting_with_markers():
+    """The lookalike fallback must not regress genuine records."""
+    done = parse_mi_line('^done,bkpt={number="1",line="14"}\n')
+    assert isinstance(done, ResultRecord)
+    assert done.payload["bkpt"]["line"] == "14"
+
+    stopped = parse_mi_line('*stopped,reason="breakpoint-hit"\n')
+    assert isinstance(stopped, AsyncRecord)
+    assert stopped.payload["reason"] == "breakpoint-hit"
+
+    stream = parse_mi_line('~"genuine console text\\n"\n')
+    assert isinstance(stream, StreamRecord)
+    assert stream.text == "genuine console text\n"
+
+
 # -- GdbSession -------------------------------------------------------------
 
 

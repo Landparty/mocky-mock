@@ -100,18 +100,30 @@ class GdbCommandError(RuntimeError):
     """An MI command returned `^error`."""
 
 
+def _require(condition: bool, message: str) -> None:
+    """Raise MalformedMIRecordError unless `condition` holds. Used instead
+    of `assert` so the parser's structural checks survive `python -O`
+    (which strips asserts) -- an unchecked parser would then crash the
+    whole session on the first line of program output that happens to look
+    like an MI record (see parse_mi_line's fallback)."""
+    if not condition:
+        raise MalformedMIRecordError(message)
+
+
 def _parse_c_string(text: str, i: int) -> tuple[str, int]:
-    assert text[i] == '"'
+    _require(i < len(text) and text[i] == '"', "expected opening quote")
     i += 1
     out: list[str] = []
-    while text[i] != '"':
+    while i < len(text) and text[i] != '"':
         if text[i] == "\\":
             i += 1
+            _require(i < len(text), "dangling escape in MI string")
             escape = text[i]
             out.append({"n": "\n", "t": "\t", "\\": "\\", '"': '"'}.get(escape, escape))
         else:
             out.append(text[i])
         i += 1
+    _require(i < len(text), "unterminated MI string")
     return "".join(out), i + 1
 
 
@@ -133,28 +145,31 @@ def _parse_mi_value(text: str, i: int) -> tuple[object, int]:
 
 
 def _parse_mi_tuple(text: str, i: int) -> tuple[dict, int]:
-    assert text[i] == "{"
+    _require(i < len(text) and text[i] == "{", "expected opening brace")
     i += 1
     result: dict = {}
+    _require(i < len(text), "unterminated MI tuple")
     if text[i] == "}":
         return result, i + 1
     while True:
         key, i = _parse_ident(text, i)
-        assert text[i] == "="
+        _require(i < len(text) and text[i] == "=", "expected '=' in MI tuple")
         i += 1
         value, i = _parse_mi_value(text, i)
         result[key] = value
+        _require(i < len(text), "unterminated MI tuple")
         if text[i] == ",":
             i += 1
             continue
-        assert text[i] == "}"
+        _require(text[i] == "}", "expected ',' or '}' in MI tuple")
         return result, i + 1
 
 
 def _parse_mi_list(text: str, i: int) -> tuple[list, int]:
-    assert text[i] == "["
+    _require(i < len(text) and text[i] == "[", "expected opening bracket")
     i += 1
     items: list = []
+    _require(i < len(text), "unterminated MI list")
     if text[i] == "]":
         return items, i + 1
     while True:
@@ -169,52 +184,89 @@ def _parse_mi_list(text: str, i: int) -> tuple[list, int]:
         else:
             value, i = _parse_mi_value(text, i)
             items.append(value)
+        _require(i < len(text), "unterminated MI list")
         if text[i] == ",":
             i += 1
             continue
-        assert text[i] == "]"
+        _require(text[i] == "]", "expected ',' or ']' in MI list")
         return items, i + 1
+
+
+# The complete, closed set of GDB/MI `^`-result classes. A `^`-prefixed
+# line whose class is NOT one of these is program output that merely starts
+# with a caret, not a result record -- treating it as one would prematurely
+# satisfy `send`'s read loop and desync every subsequent command from its
+# response.
+_RESULT_CLASSES = frozenset({"done", "running", "connected", "error", "exit"})
 
 
 def parse_mi_line(raw_line: str) -> MIRecord | None:
     """Parse one line of GDB/MI output. Returns None for the bare `(gdb)`
     prompt marker and for the benign ASLR warning (both are noise, not
-    program output or a record the caller needs)."""
+    program output or a record the caller needs).
+
+    The debuggee's own stdout shares this pipe and can begin with ANY
+    character, including the MI marker characters `^*=~@&` (a COBOL DISPLAY
+    of "*** ERROR ***", say). So a line that merely *starts* like a record
+    but does not *parse* as one -- or, for `^`, whose class is not a real
+    result class -- is treated as program output rather than crashing the
+    session or being silently swallowed. This is the load-bearing
+    robustness rule from the design doc's empirical question 6."""
     line = raw_line.rstrip("\n").rstrip("\r")
     if not line.strip() or line.strip() == "(gdb)":
         return None
 
     marker = line[0]
-    if marker in "^*=":
-        i = 1
-        class_name, i = _parse_ident(line, i)
-        payload: dict = {}
-        if i < len(line) and line[i] == ",":
-            i += 1
-            while True:
-                key, i = _parse_ident(line, i)
-                assert line[i] == "="
-                i += 1
-                value, i = _parse_mi_value(line, i)
-                payload[key] = value
-                if i < len(line) and line[i] == ",":
-                    i += 1
-                    continue
-                break
-        if marker == "^":
-            return ResultRecord(class_name, payload)
-        return AsyncRecord(class_name, payload)
-
-    if marker in "~@&":
-        text, _ = _parse_c_string(line, 1)
-        if marker == "&" and _BENIGN_WARNING_SUBSTRING in text:
-            return None
-        return StreamRecord(marker, text)
+    try:
+        if marker in "^*=":
+            record = _parse_result_or_async(marker, line)
+            if record is not None:
+                return record
+            # Fall through: looked like a record, wasn't one -> program output.
+        elif marker in "~@&":
+            text, _ = _parse_c_string(line, 1)
+            if marker == "&" and _BENIGN_WARNING_SUBSTRING in text:
+                return None
+            return StreamRecord(marker, text)
+    except MalformedMIRecordError:
+        pass  # not a real record after all -> program output, below
 
     # Anything else is the debuggee's own raw stdout, interleaved on the
     # same pipe with no wrapping record of its own (verified empirically --
     # see module docstring).
     return ProgramOutput(line)
+
+
+def _parse_result_or_async(marker: str, line: str) -> MIRecord | None:
+    """Parse a `^`/`*`/`=` record, or return None if `line` is program
+    output that only looks like one. Raises MalformedMIRecordError if it
+    starts as a record but the payload is malformed (caught by the caller
+    and likewise treated as program output)."""
+    i = 1
+    class_name, i = _parse_ident(line, i)
+    # A real record always has a non-empty class name; `*** ERROR ***` and
+    # `=== TOTALS ===` do not (the second char is not an identifier char).
+    if not class_name:
+        return None
+    if marker == "^" and class_name not in _RESULT_CLASSES:
+        return None
+
+    payload: dict = {}
+    if i < len(line) and line[i] == ",":
+        i += 1
+        while True:
+            key, i = _parse_ident(line, i)
+            _require(i < len(line) and line[i] == "=", "expected '=' in MI record")
+            i += 1
+            value, i = _parse_mi_value(line, i)
+            payload[key] = value
+            if i < len(line) and line[i] == ",":
+                i += 1
+                continue
+            break
+    if marker == "^":
+        return ResultRecord(class_name, payload)
+    return AsyncRecord(class_name, payload)
 
 
 @dataclass
@@ -337,6 +389,12 @@ class GdbSession:
         GdbCommandError if gdb refuses the location."""
         records = self.send(f"-break-insert {file}:{line}")
         return _require_payload_key(records, "bkpt", f"-break-insert {file}:{line}")
+
+    def delete_breakpoint(self, number: int) -> None:
+        """`-break-delete <number>`. Used to honor DAP `setBreakpoints`
+        replace semantics -- gdb has no per-file clear, so the adapter
+        tracks the numbers it inserted and deletes them by hand."""
+        self.send(f"-break-delete {number}")
 
     def resolve_address(self, address: int) -> dict:
         """Resolves a raw code address to its `{file, fullname, line,

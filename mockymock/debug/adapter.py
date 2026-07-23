@@ -95,6 +95,18 @@ class DapAdapter:
         self._breakpoint_original_file = ""
         self._done = False
         self._current_stop: StopEvent | None = None
+        # Set False at the top of each dispatch, True once a response is
+        # written -- lets the dispatch guard distinguish "handler failed
+        # before answering" (send a failed response) from "handler already
+        # answered, then the resume broke" (terminate cleanly).
+        self._responded = False
+        # DAP `setBreakpoints` replaces ALL breakpoints for a source. gdb
+        # has no per-file clear, so we track the gdb breakpoint numbers we
+        # inserted per source path and delete them before inserting the new
+        # set -- otherwise un-checking a breakpoint in the editor leaves it
+        # live in gdb and the program keeps stopping at a breakpoint the UI
+        # says is gone.
+        self._breakpoint_numbers: dict[str, list[int]] = {}
 
     def run(self) -> None:
         """The adapter's main loop: read requests until the client
@@ -116,7 +128,25 @@ class DapAdapter:
                 request, success=False, message=f"unsupported request: {command}"
             )
             return
-        handler(request)
+        self._responded = False
+        try:
+            handler(request)
+        except Exception as exc:  # noqa: BLE001
+            # A handler raising -- a malformed request (missing
+            # arguments.source.path), a GdbCommandError mid-request, a
+            # dead gdb session -- must not kill the adapter loop and leave
+            # the client staring at a closed stream. If the handler had not
+            # yet answered, turn the exception into a failed response the
+            # client can surface. If it had already answered (the
+            # run-control handlers respond BEFORE resuming, so a failure is
+            # in the resume, not the request), the session is broken:
+            # report it as program output and terminate cleanly.
+            if not self._responded:
+                self._send_response(request, success=False, message=str(exc))
+            else:
+                self._on_output(f"mockymock debug: session error: {exc}")
+                self._send_event("terminated")
+                self._done = True
 
     # -- Protocol plumbing ------------------------------------------------
 
@@ -143,6 +173,7 @@ class DapAdapter:
         if message is not None:
             response["message"] = message
         write_dap_message(self._output, response)
+        self._responded = True
 
     def _send_event(self, event: str, body: dict | None = None) -> None:
         message = {"seq": self._next_seq(), "type": "event", "event": event}
@@ -178,7 +209,13 @@ class DapAdapter:
             return
         arguments = request["arguments"]
         source_path = arguments["source"]["path"]
+
+        # Replace semantics: drop the previous set for this source first.
+        for number in self._breakpoint_numbers.pop(source_path, []):
+            session.gdb.delete_breakpoint(number)
+
         breakpoints = []
+        inserted_numbers: list[int] = []
         for source_bp in arguments.get("breakpoints", []):
             original_line = source_bp["line"]
             reason = session.line_map.reject_reason(original_line)
@@ -192,9 +229,11 @@ class DapAdapter:
             bkpt = session.gdb.set_breakpoint(
                 session.instrumented_file, instrumented_line
             )
-            breakpoints.append(
-                {"verified": True, "line": original_line, "id": int(bkpt["number"])}
-            )
+            number = int(bkpt["number"])
+            inserted_numbers.append(number)
+            breakpoints.append({"verified": True, "line": original_line, "id": number})
+        if inserted_numbers:
+            self._breakpoint_numbers[source_path] = inserted_numbers
         self._breakpoint_original_file = source_path
         self._send_response(request, success=True, body={"breakpoints": breakpoints})
 
