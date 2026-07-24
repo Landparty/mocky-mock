@@ -298,6 +298,29 @@ class DapAdapter:
             )
         self._send_response(request, success=True, body={"variables": variables})
 
+    def _handle_evaluate(self, request: dict) -> None:
+        # Backs the Watch panel, hover-inspect, and the Debug Console --
+        # DAP funnels all three through `evaluate`. v1 only resolves plain
+        # COBOL identifiers already in variable_table (the same lookup
+        # _handle_variables uses); arithmetic/member-access expressions are
+        # out of scope (see design doc Non-goals).
+        session = self._require_session(request)
+        if session is None:
+            return
+        expression = request["arguments"]["expression"]
+        expr = session.variable_table.get(expression)
+        if expr is None:
+            self._send_response(
+                request, success=False, message=f"unknown variable: {expression}"
+            )
+            return
+        value = read_variable(session.gdb, expression, expr)
+        self._send_response(
+            request,
+            success=True,
+            body={"result": _display_value(value), "variablesReference": 0},
+        )
+
     def _handle_continue(self, request: dict) -> None:
         session = self._require_session(request)
         if session is None:
@@ -321,7 +344,13 @@ class DapAdapter:
         if session is None:
             return
         self._send_response(request, success=True)
-        self._resume(lambda: session.gdb.step(session.instrumented_file))
+
+        def is_visible_line(line: int) -> bool:
+            return session.line_map.to_original(line) is not None
+
+        self._resume(
+            lambda: session.gdb.step(session.instrumented_file, is_visible_line)
+        )
 
     def _handle_disconnect(self, request: dict) -> None:
         self._shutdown()

@@ -1,5 +1,66 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-23 — Fix: Watch panel / hover / Debug Console showed "unsupported request: evaluate"
+
+User report, with a screenshot: adding `WS-CLAIM-ID` to VS Code's Watch
+panel while stopped at a breakpoint in `examples/claimseg/CLAIMSEG.cbl`
+showed `unsupported request: evaluate` instead of a value. Root cause,
+confirmed by reading `adapter.py`'s dispatch (`_dispatch` looks up
+`_handle_<command>` via `getattr` and falls through to a generic failure
+when missing): `DapAdapter` never implemented an `evaluate` handler.
+`evaluate` is the one DAP request VS Code funnels the Watch panel,
+hover-inspect, and the Debug Console through — none of them are a gdb
+watchpoint (a genuine v1 non-goal per the design doc); this was simply an
+unimplemented capability, not a scoped-out one.
+
+Fix: new `_handle_evaluate` in `adapter.py`, added TDD-first
+(`tests/unit/test_adapter.py::test_evaluate_reports_the_decoded_value_for_a_known_variable`
+failed against `unsupported request: evaluate` before the handler
+existed). Resolves `arguments.expression` against `session.variable_table`
+and decodes via the same `read_variable` call `_handle_variables` already
+uses — same read-only, identifier-only scope, no new gdb surface.
+Arithmetic/member-access expressions fail cleanly with `unknown variable:
+<expr>` rather than being silently misread. Full unit suite (752 tests)
+green after the change. See `.okf/cli.md`'s `adapter.py` bullet.
+
+## 2026-07-23 — Fix: Step Over appeared to loop on splicer-inserted statements
+
+User report: "when I did a step over looks like it was looping" while
+debugging `examples/claimseg/CLAIMSEG.cbl`. Root-caused empirically (not
+by reasoning about GnuCOBOL codegen in the abstract) by driving the debug
+session's internals directly against a real container and comparing raw
+`GdbSession.step()` output to the DAP `stackTrace` position it produced at
+each step.
+
+Finding: `step()`'s coalescing predicate only checked that the stopped
+frame was back in the instrumented `.cbl` file. But the splicer inserts
+mock/driver statements (MOCK DLI bodies, test-case dispatch, tally/VERIFY
+checks) into that same file, and those have no original-line counterpart.
+Landing on one satisfied the old predicate, so `step()` returned there —
+and `call_stack.py`'s `_resolve_frame` drops any frame it can't map back
+to an original line, so `stackTrace` fell back to a stale caller frame (or
+an empty frame list). Across several such statements in a row (confirmed:
+5 consecutive Step Over clicks all reported the same `PERFORM` line), the
+position VS Code displays never advances no matter how many times the
+user clicks Step Over — reads exactly as an infinite loop, even though the
+underlying program is progressing normally.
+
+Fix: `GdbSession.step()` now takes an optional `is_visible_line` callable;
+`adapter.py` always passes `line_map.to_original(line) is not None`, so
+coalescing continues past invisible splicer-inserted statements until it
+reaches one the user can actually see. Re-running the same empirical
+repro after the fix: 9 real stop positions (15→19→20→24→25→16→30→31→36,
+each with a valid original line and no repeats), down from 30 raw gdb
+steps with 3 stuck-line stretches and 2 empty-frame stretches before the
+fix. See `.okf/cli.md`'s `gdb_session.py` bullet.
+
+Known limitation surfaced but not fixed here (flagged to the user, not
+silently decided): "step over" still steps *into* a `PERFORM`'d paragraph
+one statement at a time rather than skipping it as a unit — GnuCOBOL
+compiles `PERFORM` as a computed-goto, not a real C call, so plain
+`-exec-next` can't skip it. True step-over would need a temp breakpoint at
+the return site plus continue; bigger change, not attempted in this fix.
+
 ## 2026-07-22 — Interactive DAP debugger implemented (`mockymock debug`)
 
 Implemented the design in `docs/2026-07-22-dap-debugger-design.md` per

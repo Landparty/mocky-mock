@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, run, debug, lint, collect) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-07-22T22:00:00Z
+timestamp: 2026-07-23T01:00:00Z
 ---
 
 # Overview
@@ -253,7 +253,17 @@ captured MI transcripts and end-to-end tested against a live container
   untagged line as the debuggee's own stdout); breakpoints; run/continue/
   step with the coalescing loop one COBOL statement's marker/body `#line`
   pair requires; `resolve_address` (temporary breakpoint insert/delete) for
-  resolving a raw code address.
+  resolving a raw code address. `step`'s coalescing predicate requires
+  being back in the instrumented `.cbl` file AND (when an
+  `is_visible_line` callable is given, as `adapter.py` always does) the
+  stopped line having an original-source counterpart — otherwise it keeps
+  coalescing through splicer-inserted mock/driver statements (MOCK DLI
+  bodies, test-case dispatch, tally/VERIFY checks), which live in the same
+  instrumented file but have no original-line mapping. Without this, `next`
+  could stop on one of those, and since the DAP layer can't show a line for
+  it, the position displayed in the client froze across repeated Step Over
+  clicks — indistinguishable from an infinite loop even though the program
+  was progressing normally (see `log.md`).
 - `line_map.py` — bidirectional original ↔ instrumented line mapping,
   built on `report/coverage.py`'s existing (one-directional)
   `build_original_line_map`.
@@ -270,7 +280,11 @@ captured MI transcripts and end-to-end tested against a live container
 - `adapter.py` — the DAP server: `Content-Length`-framed JSON over
   injectable streams, `initialize`/`launch`/`setBreakpoints`/
   `configurationDone`/`threads`/`stackTrace`/`scopes`/`variables`/
-  `continue`/`next`/`stepIn`/`stepOut`/`disconnect`.
+  `evaluate`/`continue`/`next`/`stepIn`/`stepOut`/`disconnect`. `evaluate`
+  backs the client's Watch panel, hover-inspect, and Debug Console — all
+  three send the same DAP request — but only resolves plain COBOL
+  identifiers already in `variable_table` (the same lookup `variables`
+  uses); arithmetic/member-access expressions fail cleanly, not silently.
 
 Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper

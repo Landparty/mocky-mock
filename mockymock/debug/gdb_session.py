@@ -44,7 +44,9 @@ _BENIGN_WARNING_SUBSTRING = "Error disabling address space randomization"
 # A single COBOL statement's marker/body pair was observed to coalesce in
 # exactly 2 steps for simple MOVE/ADD statements; this is a safety bound in
 # case a construct with heavier control flow (loops, IF/EVALUATE dispatch,
-# not covered by the spike fixture) never lands back on the original file.
+# not covered by the spike fixture) never lands back on the original file --
+# or a splicer-inserted run of mock/driver statements (same .cbl file, no
+# original-line counterpart) takes an unusually long time to coalesce past.
 _MAX_COALESCE_STEPS = 500
 
 
@@ -417,24 +419,53 @@ class GdbSession:
     def continue_(self) -> StopEvent:
         return self._exec_and_await_stop("-exec-continue")
 
-    def step(self, original_file_hint: str) -> StopEvent:
+    def step(
+        self,
+        original_file_hint: str,
+        is_visible_line: Callable[[int], bool] | None = None,
+    ) -> StopEvent:
         """Coalesced "step one COBOL line": issue `-exec-next` repeatedly
         while the stopped frame's file is not `original_file_hint`,
         stopping on the first frame that reports it again (or on program
         exit/crash/an intervening breakpoint hit -- all valid DAP
         step-stop reasons). See module docstring for why file, not line,
-        is the coalescing predicate."""
+        is the coalescing predicate.
+
+        Being back in `original_file_hint` is necessary but not
+        sufficient: the splicer inserts mock/driver statements (MOCK DLI
+        bodies, test-case dispatch, tally/VERIFY checks, ...) into that
+        same instrumented file, and those have no counterpart in the
+        original source the user is looking at. Landing on one of those
+        is a real, distinct COBOL statement as far as `-exec-next` is
+        concerned, so coalescing would otherwise stop there -- and the DAP
+        layer, unable to map it back to a source line, keeps reporting the
+        last real line it could show. Across several such statements in a
+        row, the position the client displays does not advance no matter
+        how many times the user clicks Step Over, which reads as an
+        infinite loop even though the underlying program is progressing
+        normally. `is_visible_line`, when given, is consulted (only for
+        `original_file_hint` frames -- `.c` body lines are always skipped
+        regardless) so `step` keeps coalescing until it reaches a
+        statement the user can actually see."""
         for _ in range(_MAX_COALESCE_STEPS):
             event = self._exec_and_await_stop("-exec-next")
             if event.reason != "step":
                 return event  # breakpoint hit, exited, or crashed mid-step
-            if event.file is not None and event.file.endswith(original_file_hint):
+            if (
+                event.file is not None
+                and event.file.endswith(original_file_hint)
+                and (
+                    is_visible_line is None
+                    or (event.line is not None and is_visible_line(event.line))
+                )
+            ):
                 return event
         raise RuntimeError(
-            f"step did not return to {original_file_hint} within "
-            f"{_MAX_COALESCE_STEPS} coalesced steps -- a construct with "
-            f"more internal control flow than the spike fixture covered "
-            f"(see Task 10 of the CLI implementation plan)"
+            f"step did not reach a visible statement in {original_file_hint} "
+            f"within {_MAX_COALESCE_STEPS} coalesced steps -- a construct "
+            f"with more internal control flow than the spike fixture "
+            f"covered, or an unusually long run of splicer-inserted "
+            f"statements (see Task 10 of the CLI implementation plan)"
         )
 
     # step_into/step_out: v1 does not step across a mocked CALL boundary

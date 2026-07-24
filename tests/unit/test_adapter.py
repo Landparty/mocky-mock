@@ -63,7 +63,7 @@ class _FakeGdb:
     def continue_(self) -> StopEvent:
         return StopEvent(reason="exited", exit_code=0)
 
-    def step(self, original_file_hint):
+    def step(self, original_file_hint, is_visible_line=None):
         return StopEvent(reason="step", file="/work/x/fixture.cbl", line=21)
 
     def close(self):
@@ -235,6 +235,45 @@ def test_variables_reports_decoded_values():
     assert variables_response["body"]["variables"] == [
         {"name": "WS-CUSTOMER-ID", "value": "CUST00001 ", "variablesReference": 0}
     ]
+
+
+def test_evaluate_reports_the_decoded_value_for_a_known_variable():
+    """VS Code sends `evaluate` for the Watch panel, hover-inspect, and the
+    Debug Console -- all three share this one handler in v1."""
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "evaluate",
+                {"expression": "WS-CUSTOMER-ID", "context": "watch"},
+            ),
+        ]
+    )
+
+    evaluate_response = messages[-1]
+    assert evaluate_response["success"] is True
+    assert evaluate_response["body"]["result"] == "CUST00001 "
+    assert evaluate_response["body"]["variablesReference"] == 0
+
+
+def test_evaluate_of_unknown_expression_fails_cleanly():
+    """v1 only resolves plain COBOL identifiers already in the variable
+    table -- no arithmetic/member-access expression evaluation (see
+    design doc Non-goals)."""
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "evaluate",
+                {"expression": "WS-CUSTOMER-ID + 1", "context": "watch"},
+            ),
+        ]
+    )
+
+    evaluate_response = messages[-1]
+    assert evaluate_response["success"] is False
 
 
 def test_requests_before_launch_fail_cleanly():

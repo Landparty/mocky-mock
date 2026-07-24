@@ -312,6 +312,77 @@ def test_step_stops_immediately_on_breakpoint_hit_mid_step():
     assert process.stdin.written == ["-exec-next\n"]
 
 
+def test_step_coalesces_past_lines_with_no_original_mapping():
+    """The splicer inserts mock/driver statements (MOCK DLI bodies,
+    test-case dispatch, tally/VERIFY checks, ...) into the same
+    instrumented .cbl file as the user's real statements. Landing on one
+    of those satisfies the old file-only coalescing predicate, so `step`
+    would return there -- and since it has no original-line counterpart,
+    the DAP layer can't advance the line it shows, freezing the displayed
+    position across repeated Step Over clicks (looks like an infinite
+    loop; see docs bug report). `is_visible_line` must keep coalescing
+    past such lines."""
+    process = _FakeProcess(
+        [
+            # First -exec-next: lands on a splicer-inserted statement --
+            # still in fixture.cbl, but not visible to the user.
+            "^running\n",
+            '*stopped,reason="end-stepping-range",frame={file="fixture.cbl",'
+            'fullname="/work/fixture.cbl",line="84"}\n',
+            "(gdb)\n",
+            # Second -exec-next: lands on a real user statement.
+            "^running\n",
+            '*stopped,reason="end-stepping-range",frame={file="fixture.cbl",'
+            'fullname="/work/fixture.cbl",line="11"}\n',
+            "(gdb)\n",
+        ]
+    )
+    session = GdbSession(process)
+
+    event = session.step("fixture.cbl", is_visible_line=lambda line: line == 11)
+
+    assert event.reason == "step"
+    assert event.line == 11
+    assert process.stdin.written == ["-exec-next\n", "-exec-next\n"]
+
+
+def test_step_stops_on_breakpoint_even_on_an_invisible_line():
+    """An intervening breakpoint hit is a valid stop regardless of
+    `is_visible_line` -- visibility only gates the "still stepping"
+    case."""
+    process = _FakeProcess(
+        [
+            "^running\n",
+            '*stopped,reason="breakpoint-hit",frame={file="fixture.cbl",'
+            'fullname="/work/fixture.cbl",line="84"}\n',
+            "(gdb)\n",
+        ]
+    )
+    session = GdbSession(process)
+
+    event = session.step("fixture.cbl", is_visible_line=lambda line: False)
+
+    assert event.reason == "breakpoint"
+    assert event.line == 84
+
+
+def test_step_raises_when_never_reaching_a_visible_line():
+    lines = []
+    for _ in range(3):
+        lines += [
+            "^running\n",
+            '*stopped,reason="end-stepping-range",frame={file="fixture.cbl",'
+            'fullname="/work/fixture.cbl",line="1"}\n',
+            "(gdb)\n",
+        ]
+    process = _FakeProcess(lines)
+    session = GdbSession(process)
+
+    with mock.patch("mockymock.debug.gdb_session._MAX_COALESCE_STEPS", 3):
+        with pytest.raises(RuntimeError, match="fixture.cbl"):
+            session.step("fixture.cbl", is_visible_line=lambda line: False)
+
+
 def test_step_raises_after_exceeding_coalesce_cap():
     lines = []
     for _ in range(3):
@@ -325,7 +396,7 @@ def test_step_raises_after_exceeding_coalesce_cap():
     session = GdbSession(process)
 
     with mock.patch("mockymock.debug.gdb_session._MAX_COALESCE_STEPS", 3):
-        with pytest.raises(RuntimeError, match="did not return to fixture.cbl"):
+        with pytest.raises(RuntimeError, match="did not reach a visible statement"):
             session.step("fixture.cbl")
 
 
