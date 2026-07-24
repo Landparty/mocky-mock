@@ -1,22 +1,67 @@
 # mockymock
 
-Mocks a COBOL program's external boundaries — subprogram `CALL`s (including
-the MQ API), file I/O (`OPEN`/`CLOSE`/`READ`/`WRITE`/`REWRITE`/`DELETE`/
-`START`/`UNLOCK`), `EXEC SQL`, `EXEC CICS`, `EXEC DLI`, and console
-`ACCEPT` — compiles the instrumented copy with GnuCOBOL, runs it, and
-reports pass/fail.
+**mockymock** is a unit-test framework for COBOL. Point it at a `.cbl`
+program and a `.cut` test file, and it mocks the program's external
+boundaries — subprogram `CALL`s (including MQ), file I/O
+(`OPEN`/`READ`/`WRITE`/...), `EXEC SQL`, `EXEC CICS`, `EXEC DLI`, and
+console `ACCEPT` — compiles the instrumented copy with real GnuCOBOL,
+runs it, and reports pass/fail. No mainframe, CICS region, or DB2
+instance required.
 
-See `docs/2026-06-30-mockymock-mvp-design.md` for the original CALL-only
-design, `docs/2026-07-05-mock-all-boundaries-design.md` for the v2
-all-boundaries design, and `docs/2026-07-06-dynamic-call-mocks-design.md`
-for identifier-keyed dynamic CALL mocks.
+It exists because static analysis alone can tell you what a COBOL
+program *might* do, but not whether it actually behaves correctly.
+mockymock closes that gap by compiling and running the real program,
+with only its external calls and I/O swapped out for something you
+control.
 
-For a deeper reference (DSL grammar, splicer internals, Docker/GnuCOBOL
-runtime, analysis/refusal rules, CLI, testing), see the
-[OKF knowledge bundle](.okf/index.md) in `.okf/` — start there before making
+For deep internals (DSL grammar, splicer, runtime, refusal rules), see
+the [OKF knowledge bundle](.okf/index.md) — start there before making
 non-trivial changes.
 
-## The `.cut` DSL at a glance
+## Installation
+
+### As a CLI tool
+
+Two one-time prerequisites, then a single install command.
+
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
+2. Authenticate git/uv to GitHub — both `samdion1994/mocky-mock` and its
+   `cobolparser` dependency are private repos. Run `gh auth setup-git`
+   (with the [GitHub CLI](https://cli.github.com/)), or set up an SSH
+   key/PAT with `repo` read access, first. This is the single most
+   common install failure, on every OS.
+
+```bash
+uv tool install git+https://github.com/samdion1994/mocky-mock.git
+```
+
+Upgrade with `uv tool upgrade mockymock`; remove with
+`uv tool uninstall mockymock`.
+
+`mockymock run`/`mockymock setup` also need a running Docker daemon
+(Docker Desktop on Windows/macOS) — COBOL is compiled and executed
+inside a GnuCOBOL container, so nothing else needs installing on the
+host.
+
+### Contributing (local dev setup)
+
+```bash
+python -m venv .venv
+.venv/Scripts/activate   # or source .venv/bin/activate on macOS/Linux
+pip install -r requirements-dev.txt
+pip install --no-deps -e .   # skips the pinned-git cobolparser dep,
+                              # which would conflict with the editable
+                              # sibling checkout requirements-dev.txt installed
+mockymock setup           # builds the GnuCOBOL image, starts mockymock-cobc
+python -m pytest tests/unit -v
+```
+
+`tests/integration/` additionally needs the Docker daemon reachable and
+is skipped automatically if it isn't.
+
+## Example & usage
+
+A `.cut` file mocks a program's boundaries and asserts on the result:
 
 ```
 TESTSUITE "INVUPDT all boundary categories"
@@ -31,404 +76,91 @@ TESTCASE "totals two records then updates and notifies"
             MOVE 5 TO INV-QTY
         END-IF
     END-MOCK
-    MOCK WRITE RPT-REC
-    END-MOCK
-    MOCK CLOSE INV-FILE
-    END-MOCK
     MOCK SQL "UPDATE INVENTORY"
         MOVE 0 TO SQLCODE
-    END-MOCK
-    MOCK MQ "MQPUT"
-        MOVE 0 TO MQ-COMPCODE
-    END-MOCK
-    MOCK ACCEPT WS-CONFIRM
-        MOVE "Y" TO WS-CONFIRM
     END-MOCK
     PERFORM MAIN-PROCESS
     EXPECT WS-TOTAL-QTY TO BE 10
     VERIFY READ INV-FILE WAS PERFORMED 3 TIMES
-    VERIFY SQL "UPDATE INVENTORY" WAS PERFORMED ONCE
-    VERIFY MQ "MQPUT" WAS CALLED ONCE
 ```
 
-- `MOCK CALL "X"` / `MOCK MQ "X"` (sugar — MQ is invoked through static
-  CALLs) / `MOCK SQL "<prefix>"` / `MOCK CICS "<prefix>"` /
-  `MOCK DLI "<prefix>"` take a quoted key; SQL/CICS/DLI keys prefix-match
-  the statement's normalized text.
-- `MOCK CALL WS-PGM-NAME` (bare COBOL word) mocks a **dynamic** CALL by
-  the identifier it calls through — the whole statement is replaced, so
-  the runtime target never needs resolving, and the mock body can branch
-  on the identifier's value (`IF WS-PGM-NAME = "PGMA" ...`) for
-  per-target behavior. `VERIFY CALL WS-PGM-NAME WAS CALLED ...` mirrors
-  it; the tally field is `UT-CALL-<IDENTIFIER>-TALLY`.
-- `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK <file>` and
-  `MOCK WRITE|REWRITE <record>` take a bare COBOL name (WRITE/REWRITE name
-  the record, matching COBOL's own syntax); `MOCK ACCEPT <data-name>` mocks
-  console input.
-- `MOCK PARAGRAPH <name>` / `MOCK SECTION <name>` (bare COBOL names) mock
-  an **internal flow target** rather than a boundary: for this test case,
-  entering the named paragraph/section through its own header runs the
-  mock body instead of the real one (other cases still run the real body
-  — the splicer relocates it behind a dispatch, one binary per suite).
-  Everything inside the mocked body — CALLs, file I/O, EXEC blocks,
-  further PERFORMs — becomes unreachable for that case and needs no mocks
-  of its own. `VERIFY PARAGRAPH|SECTION <name> WAS PERFORMED ...` asserts
-  on the tally (`UT-PARAGRAPH-<NAME>-TALLY` / `UT-SECTION-<NAME>-TALLY`),
-  counting one per entry through the header (a looping
-  `PERFORM <name> N TIMES` counts N). Fail-closed refusals
-  (`UNRESOLVED_FLOW_MOCK_TARGET` / `UNSUPPORTED_FLOW_MOCK_TARGET`) reject
-  any target the header-dispatch rewrite cannot handle soundly: a GO TO
-  target anywhere in the program, a paragraph inside a `PERFORM ... THRU`
-  range or inside a SECTION that is itself performed, a target reached by
-  GO-TO fall-through, a header sharing its line with code, or a test
-  case's own PERFORM entry point. See the worked example in
-  `examples/flowmock/`.
-- Every mock gets a tally field (`UT-...-TALLY`, visible to mock bodies —
-  handy for driving EOF off the read count) that `VERIFY ... WAS
-  CALLED|PERFORMED ONCE | AT LEAST ONCE | NEVER | <n> TIMES` asserts on.
-- `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
-  END-MOCK` is sugar for a cursor FETCH loop: each row's fields are MOVEd
-  and `SQLCODE` is set to 0 on the Nth call (matching the mock's own tally
-  field reaching N); once rows run out, `SQLCODE` is set to 100 (DB2's
-  "not found" code). SQL-only; mutually exclusive with a hand-written mock
-  body.
-- `EXEC SQL INCLUDE SQLCA END-EXEC` is replaced with a generated SQLCA, so
-  mock bodies can set `SQLCODE`. `EXEC SQL INCLUDE <member> END-EXEC` for
-  any other member (e.g. a DCLGEN host-variable copybook) is resolved via
-  `--copybook-path` the same way a plain `COPY <member>.` is, exposing its
-  host variables as real WORKING-STORAGE fields a mock body can `MOVE`
-  into; without a matching `--copybook-path`, or if the member can't be
-  found, it refuses `UNRESOLVED_COPYBOOK`. Only one level of `EXEC SQL
-  INCLUDE` resolves — a member that itself contains another live `EXEC SQL
-  INCLUDE` refuses. Like the generated SQLCA, these fields are spliced in
-  after parsing and are never reset between test cases — a mock body is
-  expected to set them on every run (the `ROWS` sugar above does this
-  automatically).
-- Lines starting with `*>` are comments.
-- `PROVIDER <name>` (suite-level, before any `TESTCASE` that uses it)
-  declares a data table: `HEADER <col>, ...` names the columns, `ROW
-  <value>, ...` adds one row each. `TESTCASE "..." USING PROVIDER <name>`
-  expands, at parse time, into one ordinary test case per row --
-  `{ColumnName}` in a `MOVE`/`EXPECT` value is substituted with that
-  row's value. Generated cases are named `"<name> [row <n>: <first
-  column value>]"`. See the worked example in `examples/statelkup/`.
-- `BEFORE-EACH` / `BEFORE-ALL` ... `END-BEFORE` (suite-level, after the
-  `TESTSUITE` header and before the first `TESTCASE`; at most one of
-  each; bodies hold `MOCK` directives only) are desugared at parse time
-  into every `TESTCASE`'s own mock list. On a `(category, key)` collision
-  the more specific block wins: `TESTCASE` overrides `BEFORE-EACH`
-  overrides `BEFORE-ALL`, silently. The xUnit-style names suggest a
-  timing difference, but there isn't one -- `BEFORE-ALL` and
-  `BEFORE-EACH` differ **only** in override precedence; both desugar into
-  every test case identically, with no separate execution phase.
-- `FILE-STATUS IS <mnemonic-or-code>` is usable once inside a `MOCK
-  OPEN|CLOSE|READ|DELETE|START|UNLOCK` body (not `WRITE`/`REWRITE`).
-  `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`, `DUPLICATE-KEY`,
-  `RECORD-NOT-FOUND`, `FILE-NOT-FOUND`, `ALREADY-OPEN`, `NOT-OPEN`,
-  `NO-CURRENT-RECORD`; a quoted two-character literal (e.g. `"92"`)
-  always works too. Every eligible category also gets an implicit
-  `MOVE "00"` (default success) before the mock's own body whenever the
-  target file declares a `FILE STATUS` field, whether or not
-  `FILE-STATUS IS` is used. See the worked example in
-  `examples/taxfile/`.
+Run it:
 
-`mockymock generate <program.cbl>` scaffolds a starter `.cut` covering
-every mockable boundary it finds.
+```bash
+mockymock generate ORDRPROC.cbl                   # scaffold a starter .cut
+mockymock run ORDRPROC.cbl --cut ORDRPROC.cut      # compile, run, report
+mockymock lint ORDRPROC.cbl --cut ORDRPROC.cut     # static checks only, no Docker
+```
 
-Boundary statements nested inside IF/EVALUATE/SEARCH/inline-PERFORM bodies
-(including nested EXEC blocks) are mockable when the statement sits on its
-own line(s) — the common layout. Reachability follows `PERFORM` **and**
-`GO TO` edges (including every target of `GO TO A B C DEPENDING ON X`),
-and both may name a paragraph or a SECTION (a performed section makes all
-of its paragraphs reachable). `PERFORM A THRU B` is supported both inside
-the program (the range is expanded in source order for reachability) and
-as a test case's entry point (`PERFORM A THRU B` in the .cut, `THROUGH`
-accepted); degenerate ranges — missing, duplicate, or backwards endpoints
-— are refused, and so is any `PERFORM`/`GO TO` whose target resolves to
-neither a paragraph nor a section (`UNRESOLVED_FLOW_TARGET` — never a
-silent skip). Refused outright, program-wide: `DECLARATIVES` (USE
-procedures run outside any PERFORM/GO TO edge) and `ALTER` (it rewrites
-GO TO targets at runtime). Also refused, fail-closed: dynamic CALLs whose
-target identifier the parser cannot determine,
-`SORT`/`MERGE`/`RELEASE`/`RETURN`, statements — nested *or top-level* —
-sharing a line with other code (`IF X CALL "F" END-IF` one-liners,
-`P1. CALL "F".` one-line paragraphs), statements inside another boundary
-statement's clause body (`READ ... AT END`, `CALL ... ON EXCEPTION`), and
-mocks with clause bodies of their own — each refusal names the exact
-layout problem. `CANCEL "X"` is left in place and counts as covered when
-the test case mocks `CALL "X"` (the mocked CALL never loads a real module,
-so the CANCEL is a guaranteed no-op); otherwise it refuses
-(`UNMOCKED_CANCEL`). Programs whose parse reports a warning are also
-refused (`PARSE_WARNING`): since cobolparser's silent-drop remediation, a
-warning on an otherwise clean parse means statements were dropped from the
-AST (unsupported verbs like `INVOKE`, multi-program source members), and
-splicing an incomplete AST would silently skip real program behavior.
-Likewise a copybook whose bytes can't be decoded losslessly refuses with
-`EXPANSION_WARNING`. `DISPLAY` passes through unmocked. See the worked
-example in `examples/invupdt/`.
+The full DSL — `MOCK CALL`/`PARAGRAPH`/`SECTION`, `VERIFY`, `PROVIDER`
+data tables, `BEFORE-EACH`, `FILE-STATUS IS`, the SQL `ROWS` cursor
+sugar — is documented in [`.okf/dsl.md`](.okf/dsl.md).
 
-### `STOP RUN` / `GOBACK` inside a test case's PERFORM target
+### Worked examples
 
-A `.cut` test case's `PERFORM` target may reach `STOP RUN` or `GOBACK`
-through a chain of plain, unconditional `PERFORM` calls, and the test
-still completes correctly: the terminator is neutralized (an early-exit
-flag propagates back up the real call chain via `EXIT PARAGRAPH`) and
-this case's own `EXPECT`/`VERIFY` checks run normally, with later test
-cases in the same suite unaffected. This is what makes it possible to
-`PERFORM` a program's real top-level driver paragraph (the one that
-naturally ends in `STOP RUN`/`GOBACK`) as a test target, not only its
-sub-paragraphs.
-
-Some layouts are not yet supported and refuse
-(`UNSUPPORTED_TERMINATOR_LAYOUT`) rather than risk corrupting the
-program: a terminator reachable via `GO TO` anywhere in the program, one
-inside a `SECTION`, one reached through an intermediate `PERFORM` that's
-nested inside a conditional body, or one reached only through the target
-of a looping `PERFORM ... UNTIL`/`VARYING`/`TIMES` (the early-exit flag
-only ends the current loop iteration, not the loop itself, so a
-terminator inside a loop body cannot be safely neutralized). Restructure
-to a plain, unconditional, single-shot `PERFORM` chain to avoid this.
-
-## Examples
-
-Worked, runnable programs under `examples/` — each pairs a `.cbl` with a
-`.cut` and its own `README.md` explaining what it demonstrates. Start with
-INVUPDT or ORDRPROC if you're new to the DSL; the rest each add one
-distinctive feature.
+Each pairs a `.cbl` with a `.cut` and its own README. Start with
+[`examples/ordrproc/`](examples/ordrproc/) (one static `CALL`) or
+[`examples/invupdt/`](examples/invupdt/) (every boundary category); the
+rest each add one distinctive feature.
 
 | Example | Demonstrates |
 |---------|--------------|
-| [`examples/ordrproc/`](examples/ordrproc/) | The smallest possible teaching example: one static `CALL` |
-| [`examples/invupdt/`](examples/invupdt/) | Every boundary category in one program (file I/O, `EXEC SQL`, MQ via `CALL`, `ACCEPT`), tally-driven EOF, static-reachability-driven refusal |
+| [`examples/ordrproc/`](examples/ordrproc/) | Smallest possible teaching example: one static `CALL` |
+| [`examples/invupdt/`](examples/invupdt/) | Every boundary category in one program (file I/O, `EXEC SQL`, MQ, `ACCEPT`), tally-driven EOF |
 | [`examples/custinq/`](examples/custinq/) | `EXEC CICS` (`READ`/`RETURN`), `GOBACK` neutralization |
 | [`examples/claimseg/`](examples/claimseg/) | Raw `EXEC DLI` (`GU`/`ISRT`) |
-| [`examples/raterte/`](examples/raterte/) | Dynamic `CALL` through an identifier (`MOCK CALL WS-PGM-NAME`), one mock covering multiple runtime targets |
-| [`examples/flowmock/`](examples/flowmock/) | Internal flow-target mocks (`MOCK PARAGRAPH` / `MOCK SECTION`), boundaries inside a mocked body needing no mocks of their own |
-| [`examples/taxfile/`](examples/taxfile/) | `BEFORE-EACH` shared mocks with per-case overrides, `FILE-STATUS IS` sugar, implicit default-success file status |
-| [`examples/custprog/`](examples/custprog/) | `MOCK SQL ... ROWS` cursor-fetch sugar, DCLGEN-style `EXEC SQL INCLUDE <member>` via `--copybook-path` |
-| [`examples/statelkup/`](examples/statelkup/) | `PROVIDER`/`HEADER`/`ROW` parameterized test cases -- one `TESTCASE` expands into N rows |
-| [`examples/regnavg/`](examples/regnavg/) | Subscripted `.cut` `MOVE`/`EXPECT` targets on a 2-D `OCCURS` table, `REDEFINES` data items, `DIVIDE ... GIVING ... ROUNDED`, `run --trace` |
-| [`examples/real-world/`](examples/real-world/) | Four business-flavored programs — IMS DL/I batch, IMS MPP, MQ consumer, MQ producer — plus the `--coverage` worked example |
+| [`examples/raterte/`](examples/raterte/) | Dynamic `CALL` through an identifier, one mock covering multiple runtime targets |
+| [`examples/flowmock/`](examples/flowmock/) | Internal flow-target mocks (`MOCK PARAGRAPH` / `MOCK SECTION`) |
+| [`examples/taxfile/`](examples/taxfile/) | `BEFORE-EACH` shared mocks with per-case overrides, `FILE-STATUS IS` |
+| [`examples/custprog/`](examples/custprog/) | `MOCK SQL ... ROWS` cursor-fetch sugar, DCLGEN-style copybook includes |
+| [`examples/statelkup/`](examples/statelkup/) | `PROVIDER`/`HEADER`/`ROW` parameterized test cases |
+| [`examples/regnavg/`](examples/regnavg/) | 2-D `OCCURS` tables, `REDEFINES`, `DIVIDE ... GIVING ... ROUNDED`, `run --trace` |
+| [`examples/real-world/`](examples/real-world/) | Four business-flavored programs (IMS DL/I, IMS MPP, MQ) plus `--coverage` |
 | [`examples/nist-cobol85/`](examples/nist-cobol85/) | Static `CALL` against real, unmodified NIST COBOL-85 validation-suite programs |
 
-## Linting, discovery, and selective runs
+### Beyond pass/fail
 
-Three fast paths that never touch Docker or the toolchain:
+- `mockymock run --coverage` — line coverage via GnuCOBOL/gcov ([design](docs/2026-07-17-coverage-reporting-design.md))
+- `mockymock run --trace` — replay one test case's execution path and mock timeline ([design](docs/2026-07-21-debug-trace-design.md))
+- `mockymock debug --dap-stdio` — a real [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) session: breakpoints, stepping, and variable inspection on your original `.cbl` ([design](docs/2026-07-22-dap-debugger-design.md))
+- `mockymock collect --cut ORDRPROC.cut [--json]` — list a suite's cases with line numbers and tags, no Docker needed
 
-```bash
-# Every static refusal check (parse, copybooks, linkage, terminators, per
-# test case), no daemon needed -- editor/pre-commit/CI friendly:
-mockymock lint ORDRPROC.cbl --cut ORDRPROC.cut
+## Design goals
 
-# List a .cut file's suite/cases with line numbers and tags:
-mockymock collect --cut ORDRPROC.cut [--json]
-```
+- **Run the real thing.** No reimplementation of COBOL semantics —
+  GnuCOBOL compiles and executes the actual program inside Docker, so
+  behavior matches a real COBOL runtime, not an approximation of one.
+- **Fail closed, never silently wrong.** Anything the splicer can't
+  soundly rewrite (a `GO TO` into a mock target, `ALTER`, a statement
+  sharing a line with other code, a parse that produced a warning) is
+  refused with a named error instead of being silently skipped or
+  mis-mocked.
+- **COBOL-shaped ergonomics.** Mocks, tallies, and file statuses are
+  addressed by COBOL names — paragraphs, sections, files, records,
+  `FILE-STATUS IS SUCCESS` — so the `.cut` DSL reads like the program
+  it's testing, not like generated plumbing.
+- **Minimal host footprint.** Only `uv` and Docker are required; COBOL
+  compilation and execution are fully containerized and sandboxed
+  (`--network none`, dropped capabilities, memory/PID limits), so it's
+  safe to run untrusted `.cbl` and mock bodies, identically on Windows,
+  macOS, and Linux.
 
-And selective execution (`run` still compiles once and runs one binary,
-just with only the selected cases spliced in):
+## Credits
 
-```bash
-mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --case "10% discount reduces net amount correctly"
-mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --tag fast
-```
+mockymock is written and maintained by [Samuel Dion](https://github.com/samdion1994).
 
-Tag cases in the DSL with `TESTCASE "name" TAGS "fast" "io"`. For editor
-integrations, `run --json-report PATH` writes a machine-readable report with
-per-case status, `.cut` line numbers, and expected/actual per failure.
+It's built on:
 
-## Coverage reporting
+- [GnuCOBOL](https://sourceforge.net/projects/gnucobol/) — the COBOL
+  compiler and runtime every test actually executes on.
+- [cobolparser](https://github.com/Landparty/cobol-parser) — the COBOL →
+  AST library that mockymock's analysis and splicer are built on.
+- [uv](https://docs.astral.sh/uv/) — packaging and installation.
+- The [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) —
+  the wire protocol behind the interactive debugger.
 
-`mockymock run --coverage` compiles with GnuCOBOL's own `--coverage`
-flag (GnuCOBOL transpiles COBOL to C, so this builds on gcc's gcov) and,
-after the run, reports the percentage of lines executed plus the exact
-uncovered lines:
-
-```
-mockymock run: coverage: 76.30% lines executed (692/907) in DEPTIMSM.cbl
-mockymock run: coverage: uncovered lines:
-  751:               EXIT PARAGRAPH
-  ...
-```
-
-`--coverage-out PATH` additionally writes the full report to a file.
-`--coverage-json PATH` (implies `--coverage`) writes machine-readable
-coverage **remapped onto the original `.cbl`'s line numbers** — splicer-
-inserted lines are excluded, so it answers "which of my lines ran"; editor
-integrations (the VS Code extension's coverage view) consume this file.
-Coverage is purely additive: it never changes the pass/fail exit code.
-
-Two things to know before reading a number:
-
-- **Console line numbers are against the *instrumented* source** (after
-  mock-body splicing and the generated test-driver code), not the original
-  `.cbl` — the same file `--verbose`/`--keep-sandbox` already expose. The
-  `--coverage-json` output is the exception: it carries the remapped
-  original-line view.
-- **A suite that exercises every real branch still won't read near
-  100%.** Two structural sources of "uncovered" lines are expected, not a
-  sign of a weak suite: the driver's own `FAIL`/tally-increment lines
-  (dead whenever every check passes), and — the larger one — the splicer
-  emitting one shared dispatch per boundary site with a `WHEN` branch for
-  *every* test case that mocks that key, not only cases whose `PERFORM`
-  target reaches that exact site. See
-  `docs/2026-07-17-coverage-reporting-design.md` for the full writeup and
-  a worked example.
-
-## Execution trace (debugging a case)
-
-When a case fails and you need to know *what actually happened*,
-`mockymock run --trace` replays a single test case's execution: the path
-it took through your program, and the mocks that fired, in order.
-
-```
-mockymock run ACCTPRG.cbl --cut ACCTPRG.cut --case "1000-INITIALIZE primes ..." --trace
-```
-
-```
-Execution trace for case: 1000-INITIALIZE primes the first segment when CBLTDLI succeeds
-  mocks fired, in order:
-    1. OPEN PURGEIN
-    2. OPEN PURGRPT
-    3. WRITE RPT-RECORD
-    4. READ PURGEIN
-    5. CALL CBLTDLI
-  statements executed: 9
-    line    120  paragraph  1000-INITIALIZE
-    line    121             DISPLAY
-    line    122             MOVE
-    ...
-```
-
-`--trace-json PATH` (implies `--trace`) writes the same information as a
-versioned JSON document, which the VS Code extension consumes for its
-"Debug Test" view.
-
-Three things to know:
-
-- **`--trace` requires exactly one `--case`** (and no `--tag`). The suite
-  compiles and runs as a single binary, and the trace stream carries no
-  case markers, so an unscoped trace could not be attributed to one case.
-- **Line numbers are the original `.cbl`'s**, same remap the
-  `--coverage-json` view uses — splicer-inserted lines are excluded, so the
-  path answers "which of *my* lines ran."
-- **Mocked statements do not appear in the path.** A mocked boundary is
-  replaced by splicer-generated code, which that same remap excludes — so
-  the path shows gaps exactly where mocks fired, and the mock timeline
-  above it tells you what happened in those gaps. The two lists are meant
-  to be read together.
-
-See `docs/2026-07-21-debug-trace-design.md` for the design.
-
-## Interactive debugger
-
-For the slower, heavier case trace can't answer — "why did line 88 do the
-wrong thing, let me stop and look" — `mockymock debug` starts a real
-[Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/)
-session: breakpoints on your original `.cbl` lines, stepping, a call stack
-in terms of COBOL paragraphs (not the generated C), and variable
-inspection by COBOL name with COBOL-shaped values (a `PIC 9(5)V99 COMP-3`
-item renders as a decimal, not raw bytes).
-
-```
-mockymock debug ACCTPRG.cbl --cut ACCTPRG.cut --case "1000-INITIALIZE primes ..." --dap-stdio
-```
-
-`--dap-stdio` speaks the DAP protocol directly on stdio — this is the mode
-the VS Code extension's `DebugAdapterDescriptorFactory` spawns; there is
-no useful human-facing terminal mode for a DAP session, so `debug` refuses
-without the flag. Like `--trace`, exactly one `--case` is required (one
-binary, one execution stream).
-
-Not built in v1: multi-program/dynamic-CALL stepping into a mocked
-boundary (a mocked `CALL` never reaches real callee code, so stepping
-"into" one skips straight past it, same as trace), conditional/data
-breakpoints, multi-case sessions, and editing variables while stopped
-(read-only inspection only).
-
-See `docs/2026-07-22-dap-debugger-design.md` for the design (including the
-empirical basis — verified against a real container, not just planned)
-and `docs/superpowers/plans/2026-07-22-dap-debugger-cli.md` for the
-implementation plan.
-
-## Install
-
-mockymock isn't on PyPI, but its `pyproject.toml` declares a full
-dependency set (including a pinned `cobolparser` git dependency — see
-[`.okf/integration.md`](.okf/integration.md)), so [uv](https://docs.astral.sh/uv/)
-can install it straight from the repo as a standalone CLI tool, available
-on `PATH` from any directory. Identical on Windows, macOS, and Linux —
-`uv` and the Docker-only runtime (see "Setup" below) mean there is no
-OS-specific install step.
-
-**Before you run the commands below**, two one-time prerequisites (do
-these once per machine, not per install):
-
-1. **Install `uv`** — see [the uv install docs](https://docs.astral.sh/uv/getting-started/installation/)
-   for the current Windows/macOS/Linux one-liners.
-2. **Authenticate `git`/`uv` to GitHub.** Both `samdion1994/mocky-mock`
-   *and* the `cobolparser` dependency it pulls in (`Landparty/cobol-parser`)
-   are **private repos** — the install commands below fail to resolve for
-   anyone without read access to both, regardless of OS. Run
-   `gh auth setup-git` (if you have the [GitHub CLI](https://cli.github.com/)),
-   or configure an SSH key/PAT with `repo` read access on your GitHub
-   account, *before* installing. This is the single most common install
-   failure and has nothing to do with your OS — if `uv tool install` fails
-   with a git/auth error, this step is what's missing.
-
-```bash
-uv tool install git+https://github.com/samdion1994/mocky-mock.git
-# or, from a local checkout:
-uv tool install --from . mockymock
-```
-
-Upgrade with `uv tool upgrade mockymock`; remove with
-`uv tool uninstall mockymock`. `mockymock setup`/`mockymock run` still
-need a running Docker daemon (see below) — the CLI itself has no other
-host dependency once the two prerequisites above are met.
-
-## Setup (contributing)
-
-Requires a running Docker daemon (Docker Desktop on Windows/macOS). COBOL
-is compiled and executed inside a GnuCOBOL container — nothing runs on the
-host, and no local GnuCOBOL install is needed.
-
-```bash
-python -m venv .venv
-.venv/Scripts/activate   # or source .venv/bin/activate on macOS/Linux
-pip install -r requirements-dev.txt
-pip install --no-deps -e .   # mockymock itself; --no-deps skips its pinned-git
-                              # cobolparser dep (see "Install" above), which
-                              # would otherwise conflict with the editable
-                              # sibling checkout requirements-dev.txt just installed
-mockymock setup           # builds the GnuCOBOL image, starts mockymock-cobc
-python -m pytest tests/unit -v
-```
-
-`tests/integration/` additionally requires the Docker daemon to be
-reachable and is skipped automatically if it isn't. `mockymock run` brings
-the container up on its own, so `mockymock setup` is optional.
-
-### Windows notes
-
-On Windows, ensure Docker Desktop is running before invoking `mockymock setup` or
-`mockymock run`. COBOL compilation and execution happen entirely inside the container.
-
-### Sandboxing
-
-The program under test — and any `MOCK` body, which is spliced in verbatim —
-runs as untrusted code inside the GnuCOBOL container, which is launched locked
-down:
-
-- `--network none` — no outbound network.
-- `--pids-limit`, `--memory` / `--memory-swap` — bounded processes and memory.
-- `--cap-drop ALL --cap-add DAC_OVERRIDE` — every Linux capability dropped
-  except the one root needs to read/write the bind mount.
-- `--security-opt no-new-privileges` — no privilege escalation.
-
-This contains the blast radius of a hostile `.cbl` or mock body (e.g. a
-`CALL "SYSTEM"`), though it is not a substitute for reviewing what you run. See
-`.okf/runtime.md` (Threat model) for the full rationale and residual risk.
-
-## License
-
-mockymock is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+mockymock is proprietary software: free to use for personal, educational,
+or internal business purposes and free to share as-is, but it may not be
+sold, sublicensed, or bundled into any product or service that is sold.
+See the [LICENSE](LICENSE) (an end-user license agreement, not an OSI
+open-source license) for the full terms.

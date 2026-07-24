@@ -9,13 +9,14 @@ description = "Mock COBOL CALL statements, compile with GnuCOBOL, run, and asser
 authors = [
     {name = "Samuel Dion"}
 ]
-license = "MIT"
+license = "LicenseRef-Proprietary"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "License :: Other/Proprietary License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
