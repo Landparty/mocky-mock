@@ -14,6 +14,15 @@ mockymock closes that gap by compiling and running the real program,
 with only its external calls and I/O swapped out for something you
 control.
 
+The original concept — mocking a COBOL program's boundaries to unit-test
+it in isolation — was taken from [cobol-check](https://github.com/openmainframeproject/cobol-check).
+mockymock is a total rebuild from scratch, not a fork or port: different
+language (Python, not Java), different architecture (source-to-source
+splicing plus a containerized GnuCOBOL toolchain, not cobol-check's own
+approach), and a different boundary model (file I/O, `EXEC SQL`/`CICS`/`DLI`,
+dynamic `CALL`, internal flow targets). Only the general idea carried
+over.
+
 For deep internals (DSL grammar, splicer, runtime, refusal rules), see
 the [OKF knowledge bundle](.okf/index.md) — start there before making
 non-trivial changes.
@@ -151,6 +160,10 @@ mockymock is written and maintained by [Samuel Dion](https://github.com/samdion1
 
 It's built on:
 
+- [cobol-check](https://github.com/openmainframeproject/cobol-check) —
+  origin of the general concept (unit-testing COBOL by mocking its
+  boundaries). mockymock shares no code or architecture with it; it was
+  rebuilt from scratch.
 - [GnuCOBOL](https://sourceforge.net/projects/gnucobol/) — the COBOL
   compiler and runtime every test actually executes on.
 - [cobolparser](https://github.com/Landparty/cobol-parser) — the COBOL →
