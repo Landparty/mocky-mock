@@ -15,6 +15,7 @@
                PERFORM CALC-INTEREST
            END-PERFORM.
            DISPLAY "FINAL BALANCE " WS-BALANCE.
+           MOVE 0 TO WS-COUNTER.
            STOP RUN.
        CALC-INTEREST.
            ADD 1 TO WS-BALANCE.
