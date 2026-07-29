@@ -1,0 +1,28 @@
+TESTSUITE "CPYPROC discount calculation (procedure-division copybook)"
+
+TESTCASE "direct: unit test the copybook's own paragraph in isolation"
+    MOCK CALL "DISCRATE"
+        MOVE 0.10 TO WS-DISCOUNT-PCT
+    END-MOCK
+    MOVE 100.00 TO ORD-AMOUNT
+    PERFORM CALC-DISCOUNT
+    EXPECT WS-NET-AMOUNT TO BE 90.00
+
+TESTCASE "collaborator: caller logic tested with the copybook paragraph stubbed"
+    MOCK PARAGRAPH CALC-DISCOUNT
+        MOVE 90.00 TO WS-NET-AMOUNT
+    END-MOCK
+    PERFORM MAIN-PROCESS
+    EXPECT WS-ORDER-COUNT TO BE 1
+    EXPECT WS-NET-AMOUNT TO BE 90.00
+    VERIFY PARAGRAPH CALC-DISCOUNT WAS PERFORMED ONCE
+
+TESTCASE "collaborator: real copybook body still runs when not stubbed"
+    MOCK CALL "DISCRATE"
+        MOVE 0.20 TO WS-DISCOUNT-PCT
+    END-MOCK
+    MOVE 100.00 TO ORD-AMOUNT
+    PERFORM MAIN-PROCESS
+    EXPECT WS-ORDER-COUNT TO BE 1
+    EXPECT WS-NET-AMOUNT TO BE 80.00
+    VERIFY CALL "DISCRATE" WAS CALLED ONCE

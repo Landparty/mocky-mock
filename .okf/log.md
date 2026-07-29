@@ -1,5 +1,56 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-07-29 — Added CPYPROC: PROCEDURE DIVISION copybook + PERFORM + paragraph mocks
+
+New worked example (`examples/cpyproc/`) closing a documentation gap: every
+existing copybook example resolves *data* (`tests/integration/fixtures/
+copybook_example`, `examples/custprog`) — none exercised a copybook that
+supplies *procedure logic*: a whole paragraph, `COPY`'d straight into
+PROCEDURE DIVISION and invoked with `PERFORM`, the idiomatic mainframe
+pattern for sharing business logic across programs. `copybooks/
+CALCPERF.CPY` supplies one paragraph, `CALC-DISCOUNT` (a `CALL "DISCRATE"`
+boundary plus a `COMPUTE`); `CPYPROC.cbl`'s `MAIN-PROCESS` performs it.
+Three test cases prove the two testing strategies this combination
+enables: (1) direct — `PERFORM CALC-DISCOUNT` as the case's own entry
+point, unit-testing the copybook's logic in isolation; (2) collaborator,
+stubbed — `PERFORM MAIN-PROCESS` with `MOCK PARAGRAPH CALC-DISCOUNT`
+replacing it, `VERIFY ... WAS PERFORMED ONCE` proving the caller's own
+logic (`WS-ORDER-COUNT`) without running the real copybook body; (3)
+collaborator, unmocked — same caller, real copybook body, needing (and
+getting) its own `MOCK CALL "DISCRATE"`, same lesson as `examples/
+flowmock`'s third case. See [testing](testing.md).
+
+No code changes to `mockymock` itself — the point of the example is that
+none were needed. `--copybook-path` expands `COPY` textually before
+`parse_cobol` ever runs (confirmed by reading `cli/main.py`/`cli/
+checks.py`), so a copybook-sourced paragraph is bit-for-bit
+indistinguishable from an inline one by the time `mock_surface.py`'s
+reachability walk or `flow_mocks.py`'s header-dispatch splice look at it —
+neither is copybook-aware, and neither has to be.
+
+Verified two ways, both short of a full `mockymock run` in this sitting:
+(1) `mockymock/dsl/parser.py::parse_cut` (no `cobolparser` dependency)
+against the committed `.cut` confirms all three cases parse to the exact
+expected model (`perform_target`, `mocks`, `expectations`,
+`verifications`). (2) The novel COBOL claim — a whole paragraph `COPY`'d
+into PROCEDURE DIVISION, `PERFORM`ed directly and `PERFORM`ed transitively
+through a caller — compiled and ran correctly against a real `cobc`
+(GnuCOBOL 3.1.2, installed via `apt` rather than the project's own Docker
+image) using two throwaway driver programs reproducing `CPYPROC.cbl`'s
+exact structure; output matched the `.cut`'s expected values exactly
+(`90.00` direct; `80.00` and order-count `1` through the caller). The
+`MOCK PARAGRAPH` splice itself (test case 2) was not independently
+re-verified against this specific fixture — that mechanism is already
+proven end-to-end by `examples/flowmock`/`test_flow_mock_example.py`, and
+splicing runs on the post-expansion source, so there is no
+copybook-specific code path left to prove. Installing this project's own
+`cobolparser` dependency (`git+https://github.com/Landparty/
+cobol-parser.git@...`) was not possible in that sitting's sandbox — its
+git access was scoped to `mocky-mock`/`mocky-mock-vscode` only. CI
+(`.github/workflows/ci.yml`, credentialed via `COBOL_PARSER_PAT`) runs the
+full suite, including the Docker/GnuCOBOL tier, against `tests/
+integration/test_cpyproc_example.py` on push.
+
 ## 2026-07-23 — Fix: Watch panel / hover / Debug Console showed "unsupported request: evaluate"
 
 User report, with a screenshot: adding `WS-CLAIM-ID` to VS Code's Watch
