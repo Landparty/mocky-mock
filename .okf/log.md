@@ -50,6 +50,26 @@ git access was scoped to `mocky-mock`/`mocky-mock-vscode` only. CI
 (`.github/workflows/ci.yml`, credentialed via `COBOL_PARSER_PAT`) runs the
 full suite, including the Docker/GnuCOBOL tier, against `tests/
 integration/test_cpyproc_example.py` on push.
+## 2026-07-29 — Feature: `mockymock mutate` (mutation testing v1)
+
+New `mockymock/mutation/` package (`operators.py`, `runner.py`,
+`report.py`) and `mutate` CLI subcommand — see
+docs/2026-07-29-mutation-testing-design.md for the full design, operator
+table, and deferred roadmap (coverage filtering, per-case targeting,
+mutant schemata). v1 is a serial kill loop: text-level mutant generation
+over the ORIGINAL source (conservative fail-toward-not-mutating rules;
+boundary statements and terminators are never touched), then per mutant
+the same static-check → splice → compile → run pipeline `run` uses, in
+its own sandbox. Baseline must be green or the run aborts. Pinned by
+`tests/unit/test_mutation_operators.py` (site discovery + the
+integration fixture's exact mutant population) and Docker-gated
+`tests/integration/test_mutation.py` (every mutant of
+`mutation_target.cbl` classified as predicted: 5 killed, 1 deliberate
+equivalent survivor — `stmt-delete` of `MOVE 0` masked by `VALUE 0` +
+driver reset — plus the red-baseline refusal). Demo: `debug_spike.cut`
+(no EXPECTs) scores 0% — 10/10 mutants survive — despite executing
+every line; `mutation_target.cut` scores 83.3%. `.okf/cli.md` has the
+subcommand entry.
 
 ## 2026-07-23 — Fix: Watch panel / hover / Debug Console showed "unsupported request: evaluate"
 
