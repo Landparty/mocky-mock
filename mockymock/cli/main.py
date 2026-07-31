@@ -650,6 +650,75 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mutate(args: argparse.Namespace) -> int:
+    """Mutation-test a program/.cut pair: generate mutants, run the suite
+    against each, and report which ones survived (see
+    docs/2026-07-29-mutation-testing-design.md)."""
+    import json
+
+    from mockymock.mutation.operators import generate_mutants
+    from mockymock.mutation.report import (
+        MutantResult,
+        format_console,
+        to_json_dict,
+    )
+    from mockymock.mutation.runner import run_mutation
+
+    source_path = Path(args.program)
+    cut_path = Path(args.cut)
+    if not _check_input_files("mockymock mutate", source_path, cut_path):
+        return 1
+
+    if args.list:
+        mutants = generate_mutants(source_path.read_text(encoding="utf-8").splitlines())
+        for mutant in mutants:
+            print(f"line {mutant.line} [{mutant.operator}] {mutant.description}")
+        print(f"{len(mutants)} mutant(s)")
+        return 0
+
+    def on_progress(result: MutantResult) -> None:
+        marker = {
+            "killed": "killed   ",
+            "survived": "SURVIVED ",
+            "stillborn": "stillborn",
+            "timeout": "timeout  ",
+        }[result.status]
+        print(
+            f"  {marker} line {result.mutant.line} "
+            f"[{result.mutant.operator}] {result.mutant.description}"
+        )
+
+    problems, outcome = run_mutation(
+        source_path,
+        cut_path,
+        args.copybook_path,
+        timeout_seconds=args.timeout,
+        on_progress=on_progress,
+    )
+    if problems or outcome is None:
+        for problem in problems:
+            print(f"mockymock mutate: {problem}")
+        return 1
+
+    print(format_console(outcome))
+    if args.json_report:
+        Path(args.json_report).write_text(
+            json.dumps(to_json_dict(outcome), indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"mockymock mutate: wrote JSON report -> {args.json_report}")
+
+    score = outcome.score
+    if args.fail_under is not None:
+        if score is None or score * 100 < args.fail_under:
+            shown = "n/a" if score is None else f"{score * 100:.1f}%"
+            print(
+                f"mockymock mutate: mutation score {shown} is below "
+                f"--fail-under {args.fail_under}"
+            )
+            return 1
+    return 0
+
+
 def _cmd_lint(args: argparse.Namespace) -> int:
     """Run every static refusal check with zero Docker dependency. This
     function must never import mockymock.runtime.docker_toolchain -- that
@@ -887,6 +956,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to search for copybooks (repeatable)",
     )
     lint_parser.set_defaults(func=_cmd_lint)
+
+    mutate_parser = subparsers.add_parser(
+        "mutate",
+        help=(
+            "Mutation-test a program against its .cut suite: mutate "
+            "statements one at a time and report which mutants the tests "
+            "fail to kill"
+        ),
+    )
+    mutate_parser.add_argument("program")
+    mutate_parser.add_argument("--cut", required=True)
+    mutate_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    mutate_parser.add_argument(
+        "--list",
+        action="store_true",
+        help="Only list the mutants that would be run (no Docker needed)",
+    )
+    mutate_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=15,
+        help=(
+            "Per-mutant run timeout in seconds (default 15); a mutant that "
+            "exceeds it counts as killed -- a hang would be noticed too"
+        ),
+    )
+    mutate_parser.add_argument(
+        "--json-report",
+        help="Write the full machine-readable mutation report to this file",
+    )
+    mutate_parser.add_argument(
+        "--fail-under",
+        type=float,
+        help="Exit 1 if the mutation score (percent) is below this value",
+    )
+    mutate_parser.set_defaults(func=_cmd_mutate)
 
     collect_parser = subparsers.add_parser(
         "collect",

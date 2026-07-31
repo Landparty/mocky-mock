@@ -1,16 +1,16 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, run, debug, lint, collect) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, generate, run, debug, mutate, lint, collect) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-07-23T01:00:00Z
+timestamp: 2026-07-29T22:00:00Z
 ---
 
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines six subcommands —
-`setup`, `generate`, `run`, `debug`, `lint`, `collect` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines seven subcommands —
+`setup`, `generate`, `run`, `debug`, `mutate`, `lint`, `collect` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`) are
@@ -23,6 +23,7 @@ mockymock setup     -> runtime.docker_toolchain only (build image, start contain
 mockymock generate  -> parse -> analysis.mock_surface -> dsl.generator  (no Docker)
 mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
 mockymock debug     -> cli.checks (static) -> splicer -> runtime (debug=True) -> debug.adapter (DAP over stdio)
+mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.runner (per-mutant: cli.checks -> splicer -> runtime) -> mutation.report
 mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
 mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed)
 ```
@@ -289,6 +290,24 @@ captured MI transcripts and end-to-end tested against a live container
 Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
 `PERFORM`/`PERFORM THRU`/`GO TO` control flow in `call_stack.py`.
+
+## `mockymock mutate <program> --cut PATH [--copybook-path DIR ...] [--list] [--timeout S] [--json-report PATH] [--fail-under PCT]`
+
+Mutation testing (see docs/2026-07-29-mutation-testing-design.md).
+`--list` prints the generated mutants and exits — pure
+`mutation.operators`, no Docker. A real run baseline-checks the suite
+(red/empty baseline aborts with exit 1: every verdict would be noise),
+then for each mutant patches one original line and re-runs the exact
+`run` pipeline (static checks → splice → compile → run) in its own
+sandbox, classifying `killed` / `survived` / `timeout` (counts as a
+kill; default 15 s) / `stillborn` (refusal or compile error — excluded
+from the score). Console output streams one line per mutant, then lists
+survivors with a `-`/`+` diff and the score
+(killed+timeouts over scored). `--json-report` writes the full
+machine-readable outcome; `--fail-under` exits 1 below the given
+percentage. Boundary statements (mocked) and terminators (rewritten by
+terminator plans) are never mutated — mutating them would test the
+harness, not the program.
 
 ## `mockymock lint <program> --cut PATH [--copybook-path DIR ...]`
 

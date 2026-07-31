@@ -1,0 +1,5 @@
+TESTSUITE "mutation target"
+
+TESTCASE "totals the loop"
+    PERFORM MAIN-PARA
+    EXPECT WS-TOTAL TO BE 8
