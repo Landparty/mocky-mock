@@ -153,6 +153,16 @@ def test_debug_session_breaks_steps_and_reports_variables():
         assert variables["WS-BALANCE"] == "00126.45"
         assert variables["WS-COUNTER"] == "4"
 
+        # Step over the DISPLAY. The fixture keeps one more ordinary
+        # statement (MOVE 0 TO WS-COUNTER, line 18) between this line and
+        # STOP RUN on purpose: the splicer replaces the STOP RUN
+        # terminator with driver bookkeeping that has no original-line
+        # counterpart, so a step-over from the *last* visible statement
+        # of the case has nothing visible left to land on -- GdbSession.step
+        # then (correctly) coalesces through the driver to program exit
+        # and reports `terminated` instead of a step stop. Line 18 gives
+        # the step a real, mapped landing line, which is exactly what
+        # this assertion exists to prove.
         client.send("next", {"threadId": 1})
         step_messages = client.read_until(
             lambda m: m.get("event") in ("stopped", "terminated")
