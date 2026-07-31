@@ -1,9 +1,9 @@
 ---
 type: Test Suite
 title: Testing
-description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, FLOWMOCK, TAXFILE, STATELKUP, REGNAVG, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
+description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, FLOWMOCK, TAXFILE, STATELKUP, REGNAVG, CPYPROC, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-07-21T22:00:00Z
+timestamp: 2026-07-29T22:00:00Z
 ---
 # Overview
 
@@ -92,11 +92,13 @@ ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, REGNAVG), `examples/real-world/`
 (ACCTPRG, DEPTIMSM, DEPTMQC, DEPTMQP -- now with its own README) and
 `examples/nist-cobol85/` (IC101A, IC116M, IC117M, OBIC1A) hold additional
 examples driven from real corpora -- see their own READMEs for provenance
-and what each demonstrates. `examples/flowmock/`, `examples/taxfile/`, and
+and what each demonstrates. `examples/flowmock/`, `examples/taxfile/`,
 `examples/statelkup/` (flow-target mocks, `BEFORE-EACH`/`FILE-STATUS IS`,
-`PROVIDER`) are documented by their own READMEs only -- this concept's
-per-example write-up section below was never extended to them; a
-pre-existing gap, not introduced here.
+`PROVIDER`), and `examples/cpyproc/` (a PROCEDURE DIVISION copybook -- a
+whole paragraph, not just data -- invoked via `PERFORM` and, in a second
+test case, stubbed via `MOCK PARAGRAPH`) are documented by their own
+READMEs only -- this concept's per-example write-up section below was
+never extended to them; a pre-existing gap, not introduced here.
 
 ## INVUPDT (`examples/invupdt/`)
 
