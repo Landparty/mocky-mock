@@ -512,6 +512,18 @@ def parse_cut(text: str) -> MockTestSuite:
         elif (m := _PROVIDER_RE.match(line)) is not None:
             if suite is None:
                 raise CutParseError(f"line {line_no}: PROVIDER before TESTSUITE")
+            if in_before is not None:
+                # Without this check, opening a PROVIDER while a BEFORE
+                # block is still open (author forgot END-BEFORE) parsed
+                # cleanly here -- in_before was never reset by this branch
+                # -- and only failed later, misattributed to whatever
+                # TESTCASE line eventually followed instead of naming the
+                # real culprit (audit follow-up, DSL parser/generator
+                # verification pass).
+                raise CutParseError(
+                    f"line {line_no}: PROVIDER inside {in_before} -- "
+                    f"missing END-BEFORE"
+                )
             _close_provider()
             name = m.group("name")
             if name in providers:

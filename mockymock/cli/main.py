@@ -37,6 +37,21 @@ def _check_input_files(command: str, *paths: Path) -> bool:
     return ok
 
 
+def _write_report_file(flag: str, target: str, content: str) -> bool:
+    """Write one of `run`'s optional --*-xml/--*-json/--*-out report files.
+    A bad parent directory (or any other OS-level write failure) used to
+    escape as a raw traceback after an otherwise-successful run -- report
+    it the same way `_check_input_files` reports a bad input path instead,
+    and let the run's own exit code stand on the actual test outcome
+    rather than on whether a report file happened to be writable."""
+    try:
+        Path(target).write_text(content, encoding="utf-8")
+    except OSError as exc:
+        print(f"mockymock run: could not write {flag} to {target}: {exc}")
+        return False
+    return True
+
+
 def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
@@ -412,13 +427,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(executed.stderr.rstrip("\n"))
 
     if args.junit_xml:
-        Path(args.junit_xml).write_text(
+        _write_report_file(
+            "--junit-xml",
+            args.junit_xml,
             format_junit_xml(suite_result, crash_detail=crash_detail),
-            encoding="utf-8",
         )
 
     if args.json_report:
-        Path(args.json_report).write_text(
+        _write_report_file(
+            "--json-report",
+            args.json_report,
             format_json_report(
                 build_json_report(
                     suite_result,
@@ -428,7 +446,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     program_file=str(source_path),
                 )
             ),
-            encoding="utf-8",
         )
 
     if args.coverage_json:
@@ -444,20 +461,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 normalized_lines,
                 source_path.read_text(encoding="utf-8").splitlines(),
             )
-            Path(args.coverage_json).write_text(
+            _write_report_file(
+                "--coverage-json",
+                args.coverage_json,
                 format_coverage_json(
                     coverage_report,
                     mapped,
                     program_file=str(source_path),
                     instrumented_name=instrumented_path.name,
                 ),
-                encoding="utf-8",
             )
 
     if coverage_text is not None:
         print(coverage_text)
         if args.coverage_out:
-            Path(args.coverage_out).write_text(coverage_text + "\n", encoding="utf-8")
+            _write_report_file("--coverage-out", args.coverage_out, coverage_text + "\n")
 
     if args.trace:
         if not trace_text:
@@ -488,7 +506,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 str(source_path),
             )
             if args.trace_json:
-                Path(args.trace_json).write_text(trace_json, encoding="utf-8")
+                _write_report_file("--trace-json", args.trace_json, trace_json)
             print(format_trace_console(json.loads(trace_json)))
 
     # A nonzero binary exit is a failed run even when every case that got

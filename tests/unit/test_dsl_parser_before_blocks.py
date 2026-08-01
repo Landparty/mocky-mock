@@ -182,6 +182,29 @@ TESTCASE "one"
         parse_cut(cut)
 
 
+def test_provider_while_before_each_still_open_is_a_parse_error():
+    """PROVIDER never reset in_before, so opening one while a BEFORE-EACH/
+    BEFORE-ALL block was still open (missing END-BEFORE) parsed cleanly at
+    the PROVIDER line and only raised later, misattributed to whichever
+    TESTCASE line eventually followed -- instead of naming the actual
+    culprit three lines earlier."""
+    cut = """\
+TESTSUITE "provider-inside-before"
+
+BEFORE-EACH
+    MOCK CALL "SUB"
+    END-MOCK
+PROVIDER P
+    HEADER N
+    ROW "1"
+
+TESTCASE "one" USING PROVIDER P
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="PROVIDER inside BEFORE-EACH"):
+        parse_cut(cut)
+
+
 def test_move_inside_before_each_is_rejected():
     cut = """\
 TESTSUITE "no-move"

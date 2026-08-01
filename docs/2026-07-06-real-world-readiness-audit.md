@@ -5,6 +5,15 @@ Author: audit prepared for Samuel Dion
 Status: assessment (no code changes proposed here; each finding pairs a
 severity with a one-line "what closing it takes")
 
+> **Status (2026-08-01):** see
+> [`docs/2026-08-01-silent-gaps-audit-followup.md`](2026-08-01-silent-gaps-audit-followup.md)
+> for a fresh, finding-by-finding re-verification of the companion
+> [2026-07-07 code-level audit](2026-07-07-audit-report.md), which this
+> document overlaps with at the strategic level (e.g. this doc's Finding 2
+> "unpinned dependency" is confirmed fixed there as 6.1). This document's
+> own inline resolution annotations below (through 2026-07-10) were not
+> independently re-checked in that pass.
+
 ---
 
 ## Scope assumption (read this first — it reorders everything)

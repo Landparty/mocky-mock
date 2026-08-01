@@ -171,6 +171,11 @@ def build_json_report(
             {"caseId": case_id, "message": reason}
             for case_id, reason in suite_result.orphan_failures
         ],
+        "duplicateCaseStarts": [
+            {"caseId": case_id, "firstCaseName": first_name, "duplicateCaseName": dup_name}
+            for case_id, first_name, dup_name in suite_result.duplicate_case_starts
+        ],
+        "orphanEnds": list(suite_result.orphan_ends),
         "summary": {
             "testsRun": suite_result.tests_run or len(suite_result.results),
             "casesFailed": sum(
