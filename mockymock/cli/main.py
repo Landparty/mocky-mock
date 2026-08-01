@@ -475,7 +475,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if coverage_text is not None:
         print(coverage_text)
         if args.coverage_out:
-            _write_report_file("--coverage-out", args.coverage_out, coverage_text + "\n")
+            _write_report_file(
+                "--coverage-out", args.coverage_out, coverage_text + "\n"
+            )
 
     if args.trace:
         if not trace_text:

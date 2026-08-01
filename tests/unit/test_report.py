@@ -385,7 +385,9 @@ def test_duplicate_case_start_id_is_recorded_not_silently_overwritten():
         "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=0\n"
     )
     suite = parse_stdout(stdout)
-    assert suite.duplicate_case_starts == [("001", "first case", "second case, same id")]
+    assert suite.duplicate_case_starts == [
+        ("001", "first case", "second case, same id")
+    ]
     # Nothing is deleted -- both results still exist -- but the earlier one
     # is now a documented anomaly rather than a bare, unexplained crash.
     assert len(suite.results) == 2
