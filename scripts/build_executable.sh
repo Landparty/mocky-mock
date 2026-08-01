@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Builds a single-file, source-free mockymock executable with Nuitka.
+#
+# Compiles mockymock AND its cobolparser dependency straight to machine
+# code in one pass (Nuitka follows the import graph), so the end user gets
+# one binary and never runs pip/uv against the private cobolparser repo
+# themselves. See PUBLISHING.md.
+#
+# Usage: scripts/build_executable.sh <output-filename>
+# Run from the repo root, with mockymock and nuitka already installed into
+# the active Python environment (see the release workflow for the exact
+# install steps, including patchelf on Linux and the cobolparser auth
+# needed to resolve the git-pinned dependency).
+set -euo pipefail
+
+OUTPUT_NAME="${1:?usage: build_executable.sh <output-filename>}"
+
+python -m nuitka \
+  --onefile \
+  --output-dir=build \
+  --output-filename="$OUTPUT_NAME" \
+  --assume-yes-for-downloads \
+  --lto=no \
+  --include-data-files=mockymock/runtime/docker/Dockerfile=mockymock/runtime/docker/Dockerfile \
+  packaging/nuitka_entry.py

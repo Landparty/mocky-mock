@@ -13,10 +13,115 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      # `releases_created` is the aggregate flag for manifest mode: true on the
+      # run where the "chore: release X" PR is merged and the release is cut.
+      releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
-          # GITHUB_TOKEN works out of the box.
+          # GITHUB_TOKEN works out of the box. Releases it creates do NOT
+          # trigger other workflows -- that's why the build/publish jobs
+          # below live in THIS same workflow (gated on the output) instead
+          # of a separate release-triggered workflow, which would never fire.
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Build a single-file, source-free mockymock executable with Nuitka. It
+  # compiles mockymock AND the private cobolparser dependency straight to
+  # machine code in one pass, so the end user never needs pip/uv/git access
+  # to either private repo -- just this one binary. See PUBLISHING.md.
+  build-nuitka-executables:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: mockymock-linux-x86_64
+          - os: macos-latest
+            artifact: mockymock-macos-arm64
+          - os: windows-latest
+            artifact: mockymock-windows-amd64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # cobolparser is a private repo; the pyproject.toml dependency line
+      # pins it via git+https, which pip/git can only resolve here if
+      # COBOL_PARSER_PAT (a PAT/deploy key with read access) is configured
+      # as a secret, or cobol-parser is public. Same documented gap/fallback
+      # as ci.yml's "Check out cobol-parser (sibling editable dependency)"
+      # step -- if neither holds, this fails loudly at the install step
+      # below rather than silently producing a broken build.
+      - name: Configure git credentials for the private cobolparser dependency
+        run: |
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          TOKEN: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install patchelf (required by Nuitka onefile mode on Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y patchelf
+      - name: Install mockymock (pulls in the pinned cobolparser dependency)
+        run: pip install .
+      - name: Install Nuitka
+        run: pip install nuitka
+      - name: Build onefile executable
+        shell: bash
+        run: scripts/build_executable.sh "${{ matrix.artifact }}"
+      - name: Smoke-test the executable
+        shell: bash
+        run: |
+          BIN="build/${{ matrix.artifact }}"
+          chmod +x "$BIN" || true
+          "$BIN" --help
+      - name: End-to-end smoke test against a real example (Docker required)
+        # GitHub-hosted ubuntu-latest runners have a working Docker daemon;
+        # macos-latest/windows-latest don't reliably, and mockymock is
+        # Docker-only by design (see docker_toolchain.py), so this step is
+        # Linux-only. `setup` also exercises the bundled Dockerfile data
+        # file (mockymock.runtime.docker_toolchain reads it at import time,
+        # before touching Docker at all -- see PUBLISHING.md), so a clean
+        # "Docker not available"-style failure here would still mean the
+        # bundling worked; an unhandled Python traceback would mean it didn't.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          BIN="build/${{ matrix.artifact }}"
+          "$BIN" setup
+          "$BIN" run examples/custinq/CUSTINQ.cbl --cut examples/custinq/CUSTINQ.cut
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-exe-${{ matrix.os }}
+          path: build/${{ matrix.artifact }}
+
+  # Attach every built executable to the GitHub Release.
+  publish:
+    needs: [release-please, build-nuitka-executables]
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-exe-*
+          path: dist/
+          merge-multiple: true
+      - name: Resolve the release tag from the manifest
+        id: tag
+        # The merge commit that triggered this run already bumped the
+        # manifest to the released version; tags use the v<version> format
+        # (include-component-in-tag: false), matching the sibling
+        # cobol-parser repo's release-please.yml.
+        run: echo "tag=v$(jq -r '.["."]' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
+      - name: Attach executables to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.tag.outputs.tag }}" dist/* --clobber
