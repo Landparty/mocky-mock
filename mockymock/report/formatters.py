@@ -66,6 +66,10 @@ def format_console(suite: TestSuiteResult, crash_detail: str | None = None) -> s
         lines.append("ORPHANED FAILURES (unknown case id):")
         for case_id, reason in suite.orphan_failures:
             lines.append(f"  [{case_id}] {reason}")
+    if suite.duplicate_case_starts:
+        lines.append("DUPLICATE CASE IDS (a later START overwrote an earlier one):")
+        for case_id, previous_name, new_name in suite.duplicate_case_starts:
+            lines.append(f"  [{case_id}] {previous_name!r} then {new_name!r}")
     return "\n".join(lines)
 
 
@@ -84,16 +88,26 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
     # they're folded into the same errors= total rather than a separate
     # attribute -- otherwise a CI consumer that only reads failures=/errors=
     # would still see a "clean" run despite orphaned output being present.
+    # Duplicate CASE START ids are the same class of anomaly: the earlier
+    # TestResult is silently orphaned from further FAIL/END attribution and
+    # reports as a bare, unexplained crash, so it gets folded in here too.
     failed_cases = sum(1 for r in suite.results if r.failure_reasons and not r.crashed)
     crashed_cases = sum(1 for r in suite.results if r.crashed)
-    error_count = crashed_cases + len(suite.orphan_failures)
+    error_count = (
+        crashed_cases + len(suite.orphan_failures) + len(suite.duplicate_case_starts)
+    )
     # Same fallback as format_console: suite.tests_run is 0 when a mid-suite
     # crash ate the SUMMARY line, but JUnit consumers expect tests="..." to
     # match the actual number of <testcase> children below. Orphan failures
-    # each get their own <testcase> (see the loop below) but aren't part of
-    # suite.results/suite.tests_run, so they must be added here too or
-    # tests= undercounts the real number of <testcase> children.
-    tests_seen = (suite.tests_run or len(suite.results)) + len(suite.orphan_failures)
+    # and duplicate-id markers each get their own <testcase> (see the loops
+    # below) but aren't part of suite.results/suite.tests_run, so they must
+    # be added here too or tests= undercounts the real number of <testcase>
+    # children.
+    tests_seen = (
+        (suite.tests_run or len(suite.results))
+        + len(suite.orphan_failures)
+        + len(suite.duplicate_case_starts)
+    )
     testsuite_el = Element(
         "testsuite",
         name=_xml_safe(suite.suite_name),
@@ -150,5 +164,25 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
         safe_reason = _xml_safe(reason)
         error_el = SubElement(orphan_el, "error", message=safe_reason)
         error_el.text = safe_reason
+    for case_id, previous_name, new_name in suite.duplicate_case_starts:
+        # "reused"/"from here on", not "twice"/"the second START": the same
+        # id can collide more than once, and previous_name is only the name
+        # this particular collision overwrote, not necessarily the very
+        # first START to use this id -- wording must stay accurate for any
+        # collision count, not just exactly two.
+        message = _xml_safe(
+            f"CASE START id {case_id!r} reused ({previous_name!r} then "
+            f"{new_name!r}) -- any FAIL/END lines up to this point were "
+            f"attributed to {previous_name!r}; every line from here on is "
+            f"attributed to {new_name!r} instead"
+        )
+        dup_el = SubElement(
+            testsuite_el,
+            "testcase",
+            name=_xml_safe(f"duplicate-{case_id}"),
+            classname=suite_classname,
+        )
+        error_el = SubElement(dup_el, "error", message=message)
+        error_el.text = message
     rough = tostring(testsuite_el, encoding="unicode")
     return minidom.parseString(rough).toprettyxml(indent="  ")

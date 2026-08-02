@@ -1,5 +1,13 @@
 # mockymock audit — 2026-07-07
 
+> **Status (2026-08-01): re-verified.** 39 of these 48 findings are now
+> fixed, 6 are partially fixed, and 3 remain open — see
+> [`docs/2026-08-01-silent-gaps-audit-followup.md`](2026-08-01-silent-gaps-audit-followup.md)
+> for the finding-by-finding status, the fixes made in that pass, and one
+> new suspected gap it found. The findings below are kept as originally
+> written for history; do not treat them as current without checking the
+> follow-up first.
+
 Full-repo audit covering the DSL (`mockymock/dsl/`), report layer
 (`mockymock/report/`), splicer (`mockymock/splicer/`), runtime + CLI
 (`mockymock/runtime/`, `mockymock/cli/`), analysis/refusal layer

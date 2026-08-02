@@ -168,6 +168,55 @@ def test_orphan_failures_are_reported():
     assert report["orphanFailures"] == [{"caseId": "007", "message": "mystery"}]
 
 
+# --- audit 5.4: duplicate CASE ids and orphan END markers reach the report -
+
+
+def test_duplicate_case_starts_are_reported():
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: first\n"
+        "__MOCKYMOCK__ CASE 001 START: second\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=0\n"
+    )
+    report = build_json_report(parse_stdout(stdout))
+    assert report["duplicateCaseStarts"] == [
+        {"caseId": "001", "previousCaseName": "first", "duplicateCaseName": "second"}
+    ]
+
+
+def test_duplicate_case_starts_previous_name_is_not_always_the_first_name():
+    """The same id can collide more than twice. previousCaseName must name
+    whatever this specific collision overwrote (the second case, on the
+    third START) -- not the very first START to ever use this id -- or the
+    field is misleading on any collision count past two."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: first\n"
+        "__MOCKYMOCK__ CASE 001 START: second\n"
+        "__MOCKYMOCK__ CASE 001 START: third\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=3 FAILURES=0\n"
+    )
+    report = build_json_report(parse_stdout(stdout))
+    assert report["duplicateCaseStarts"] == [
+        {"caseId": "001", "previousCaseName": "first", "duplicateCaseName": "second"},
+        {"caseId": "001", "previousCaseName": "second", "duplicateCaseName": "third"},
+    ]
+
+
+def test_orphan_ends_are_reported():
+    stdout = STDOUT_ALL_RUN + "__MOCKYMOCK__ CASE 042 END\n"
+    report = _report(stdout)
+    assert report["orphanEnds"] == ["042"]
+
+
+def test_no_anomalies_report_as_empty_lists():
+    report = _report(STDOUT_ALL_RUN)
+    assert report["duplicateCaseStarts"] == []
+    assert report["orphanEnds"] == []
+
+
 def test_summary_counts():
     report = _report(STDOUT_ALL_RUN)
     assert report["summary"] == {

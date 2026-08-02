@@ -34,6 +34,31 @@ def test_setup_fails_loudly_when_docker_unavailable(capsys):
     assert "Docker is required" in capsys.readouterr().out
 
 
+# --- audit 4.9: run's --*-xml/--*-json/--*-out writes report a bad target
+# instead of tracebacking after an otherwise-successful run -----------------
+
+
+def test_write_report_file_reports_oserror_instead_of_tracebacking(tmp_path, capsys):
+    from mockymock.cli.main import _write_report_file
+
+    bad_target = tmp_path / "does-not-exist" / "report.xml"
+    ok = _write_report_file("--junit-xml", str(bad_target), "<testsuite/>")
+    assert ok is False
+    assert not bad_target.exists()
+    out = capsys.readouterr().out
+    assert "could not write --junit-xml" in out
+    assert str(bad_target) in out
+
+
+def test_write_report_file_writes_content_on_success(tmp_path):
+    from mockymock.cli.main import _write_report_file
+
+    target = tmp_path / "report.xml"
+    ok = _write_report_file("--junit-xml", str(target), "<testsuite/>")
+    assert ok is True
+    assert target.read_text() == "<testsuite/>"
+
+
 def test_run_reports_static_problems_without_needing_docker(tmp_path, capsys):
     """Static checks run BEFORE ensure_toolchain (see the lint design doc):
     a program with parse errors surfaces its real problem even when Docker

@@ -46,10 +46,34 @@ class TestSuiteResult:
     tests_run: int = 0
     failures: int = 0
     orphan_failures: list[tuple[str, str]] = field(default_factory=list)
+    #: (case_id, previous_case_name, new_case_name) for every CASE START
+    #: whose id collides with one already seen. previous_case_name is
+    #: whichever name this specific collision overwrote -- not necessarily
+    #: the very first START to use this id, since the same id can collide
+    #: more than once. Defense in depth only -- the
+    #: driver's generated ids are sequential and this should never fire
+    #: against real generated output -- but a collision used to silently
+    #: repoint `by_id` in parse_stdout, permanently orphaning the earlier
+    #: TestResult from any later FAIL/END line for that id: it stayed
+    #: `crashed` forever with no failure reason and no indication why.
+    #: Recording it here turns that into a loud, attributable anomaly
+    #: instead of a misleading, unexplained CRASH (audit finding 5.4).
+    duplicate_case_starts: list[tuple[str, str, str]] = field(default_factory=list)
+    #: Case ids seen in a CASE END line with no matching START. Recorded for
+    #: diagnosability but does NOT gate all_passed: an unattributable END
+    #: carries no failure evidence to lose (see orphan_failures for the
+    #: FAIL-line equivalent, which does gate all_passed since a FAIL line
+    #: does carry evidence).
+    orphan_ends: list[str] = field(default_factory=list)
 
     @property
     def all_passed(self) -> bool:
-        return self.failures == 0 and self.tests_run > 0 and not self.orphan_failures
+        return (
+            self.failures == 0
+            and self.tests_run > 0
+            and not self.orphan_failures
+            and not self.duplicate_case_starts
+        )
 
 
 def parse_stdout(stdout: str) -> TestSuiteResult:
@@ -61,8 +85,15 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
         if (m := _TESTSUITE_RE.match(line)) is not None:
             suite.suite_name = m.group("name")
         elif (m := _CASE_START_RE.match(line)) is not None:
-            result = TestResult(case_id=m.group("id"), case_name=m.group("name"))
-            by_id[result.case_id] = result
+            case_id = m.group("id")
+            case_name = m.group("name")
+            existing = by_id.get(case_id)
+            if existing is not None:
+                suite.duplicate_case_starts.append(
+                    (case_id, existing.case_name, case_name)
+                )
+            result = TestResult(case_id=case_id, case_name=case_name)
+            by_id[case_id] = result
             suite.results.append(result)
         elif (m := _CASE_FAIL_RE.match(line)) is not None:
             target = by_id.get(m.group("id"))
@@ -77,8 +108,11 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
             suite.tests_run = int(m.group("run"))
             suite.failures = int(m.group("failures"))
         elif (m := _CASE_END_RE.match(line)) is not None:
-            target = by_id.get(m.group("id"))
+            case_id = m.group("id")
+            target = by_id.get(case_id)
             if target is not None:
                 target.ended = True
+            else:
+                suite.orphan_ends.append(case_id)
 
     return suite

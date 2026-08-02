@@ -367,6 +367,118 @@ def test_format_junit_xml_carries_suite_name_as_classname_on_every_testcase():
         assert testcase.get("classname") == "my suite"
 
 
+# --- audit 5.4: duplicate CASE ids and orphan END markers are surfaced -----
+
+
+def test_duplicate_case_start_id_is_recorded_not_silently_overwritten():
+    """Defense in depth: the driver's generated ids are sequential and this
+    should never fire against real generated output. But a collision used to
+    silently repoint `by_id`, permanently orphaning the earlier TestResult
+    from any later FAIL/END line for that id -- it stayed `crashed` forever
+    with no failure reason and no indication why. It must now be recorded as
+    an explicit, attributable anomaly instead."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: first case\n"
+        "__MOCKYMOCK__ CASE 001 START: second case, same id\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=0\n"
+    )
+    suite = parse_stdout(stdout)
+    assert suite.duplicate_case_starts == [
+        ("001", "first case", "second case, same id")
+    ]
+    # Nothing is deleted -- both results still exist -- but the earlier one
+    # is now a documented anomaly rather than a bare, unexplained crash.
+    assert len(suite.results) == 2
+    assert suite.results[0].case_name == "first case"
+    assert suite.results[0].crashed is True
+    assert suite.results[1].case_name == "second case, same id"
+    assert suite.results[1].crashed is False
+
+
+def test_duplicate_case_start_records_the_previous_name_not_the_first():
+    """The same id can collide more than twice. Each collision's recorded
+    "previous" name must be whatever START it actually overwrote (the
+    second case, on the third START) -- not the very first START to ever
+    use this id -- or the field is misleading past the second collision."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: first\n"
+        "__MOCKYMOCK__ CASE 001 START: second\n"
+        "__MOCKYMOCK__ CASE 001 START: third\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=3 FAILURES=0\n"
+    )
+    suite = parse_stdout(stdout)
+    assert suite.duplicate_case_starts == [
+        ("001", "first", "second"),
+        ("001", "second", "third"),
+    ]
+
+
+def test_all_passed_is_false_when_duplicate_case_start_ids_seen():
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: a\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ CASE 001 START: b\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=0\n"
+    )
+    suite = parse_stdout(stdout)
+    assert suite.all_passed is False
+
+
+def test_format_console_reports_duplicate_case_starts():
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: first case\n"
+        "__MOCKYMOCK__ CASE 001 START: second case\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=0\n"
+    )
+    suite = parse_stdout(stdout)
+    output = format_console(suite)
+    assert "DUPLICATE CASE IDS" in output
+    assert "first case" in output
+    assert "second case" in output
+
+
+def test_format_junit_xml_reports_duplicate_case_starts_as_error_testcase():
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: first case\n"
+        "__MOCKYMOCK__ CASE 001 START: second case\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=0\n"
+    )
+    suite = parse_stdout(stdout)
+    xml_text = format_junit_xml(suite)
+    assert '<testcase name="duplicate-001"' in xml_text
+    root = ElementTree.fromstring(xml_text)
+    # tests= must still equal the real number of <testcase> children once a
+    # duplicate-marker testcase is added on top of the two real results.
+    assert int(root.get("tests")) == len(root.findall("testcase"))
+
+
+def test_orphan_end_marker_is_recorded_not_silently_dropped():
+    """An END for a case id that never STARTed used to vanish with zero
+    trace anywhere. It still must not gate all_passed -- an unattributable
+    END carries no failure evidence to lose, unlike an orphaned FAIL line --
+    but it must be recorded somewhere, not silently discarded."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: only case\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ CASE 999 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(stdout)
+    assert suite.orphan_ends == ["999"]
+    assert suite.all_passed is True  # unchanged: no failure evidence lost
+
+
 # --- execution trace (docs/2026-07-21-debug-trace-design.md) ---------------
 
 
