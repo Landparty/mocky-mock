@@ -397,6 +397,26 @@ def test_duplicate_case_start_id_is_recorded_not_silently_overwritten():
     assert suite.results[1].crashed is False
 
 
+def test_duplicate_case_start_records_the_previous_name_not_the_first():
+    """The same id can collide more than twice. Each collision's recorded
+    "previous" name must be whatever START it actually overwrote (the
+    second case, on the third START) -- not the very first START to ever
+    use this id -- or the field is misleading past the second collision."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: first\n"
+        "__MOCKYMOCK__ CASE 001 START: second\n"
+        "__MOCKYMOCK__ CASE 001 START: third\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=3 FAILURES=0\n"
+    )
+    suite = parse_stdout(stdout)
+    assert suite.duplicate_case_starts == [
+        ("001", "first", "second"),
+        ("001", "second", "third"),
+    ]
+
+
 def test_all_passed_is_false_when_duplicate_case_start_ids_seen():
     stdout = (
         "__MOCKYMOCK__ TESTSUITE: X\n"

@@ -46,8 +46,11 @@ class TestSuiteResult:
     tests_run: int = 0
     failures: int = 0
     orphan_failures: list[tuple[str, str]] = field(default_factory=list)
-    #: (case_id, first_case_name, duplicate_case_name) for every CASE START
-    #: whose id collides with one already seen. Defense in depth only -- the
+    #: (case_id, previous_case_name, new_case_name) for every CASE START
+    #: whose id collides with one already seen. previous_case_name is
+    #: whichever name this specific collision overwrote -- not necessarily
+    #: the very first START to use this id, since the same id can collide
+    #: more than once. Defense in depth only -- the
     #: driver's generated ids are sequential and this should never fire
     #: against real generated output -- but a collision used to silently
     #: repoint `by_id` in parse_stdout, permanently orphaning the earlier

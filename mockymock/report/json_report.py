@@ -172,12 +172,15 @@ def build_json_report(
             for case_id, reason in suite_result.orphan_failures
         ],
         "duplicateCaseStarts": [
+            # previousCaseName is whatever name this specific collision
+            # overwrote -- not necessarily the *first* START to use this
+            # id, since the same id can collide more than once.
             {
                 "caseId": case_id,
-                "firstCaseName": first_name,
-                "duplicateCaseName": dup_name,
+                "previousCaseName": previous_name,
+                "duplicateCaseName": new_name,
             }
-            for case_id, first_name, dup_name in suite_result.duplicate_case_starts
+            for case_id, previous_name, new_name in suite_result.duplicate_case_starts
         ],
         "orphanEnds": list(suite_result.orphan_ends),
         "summary": {

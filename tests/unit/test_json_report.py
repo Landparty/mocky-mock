@@ -181,7 +181,27 @@ def test_duplicate_case_starts_are_reported():
     )
     report = build_json_report(parse_stdout(stdout))
     assert report["duplicateCaseStarts"] == [
-        {"caseId": "001", "firstCaseName": "first", "duplicateCaseName": "second"}
+        {"caseId": "001", "previousCaseName": "first", "duplicateCaseName": "second"}
+    ]
+
+
+def test_duplicate_case_starts_previous_name_is_not_always_the_first_name():
+    """The same id can collide more than twice. previousCaseName must name
+    whatever this specific collision overwrote (the second case, on the
+    third START) -- not the very first START to ever use this id -- or the
+    field is misleading on any collision count past two."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: first\n"
+        "__MOCKYMOCK__ CASE 001 START: second\n"
+        "__MOCKYMOCK__ CASE 001 START: third\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=3 FAILURES=0\n"
+    )
+    report = build_json_report(parse_stdout(stdout))
+    assert report["duplicateCaseStarts"] == [
+        {"caseId": "001", "previousCaseName": "first", "duplicateCaseName": "second"},
+        {"caseId": "001", "previousCaseName": "second", "duplicateCaseName": "third"},
     ]
 
 

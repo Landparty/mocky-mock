@@ -29,7 +29,7 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 | Marker | Regex group(s) | Effect |
 |---|---|---|
 | `__MOCKYMOCK__ TESTSUITE: <name>` | `name` | sets `suite.suite_name` |
-| `__MOCKYMOCK__ CASE <id> START: <name>` | `id`, `name` | creates a `TestResult`, appended to `suite.results` and indexed in `by_id`; an `id` that collides with one already indexed is recorded in `suite.duplicate_case_starts` as `(id, first_name, new_name)` before `by_id[id]` is repointed to the new result |
+| `__MOCKYMOCK__ CASE <id> START: <name>` | `id`, `name` | creates a `TestResult`, appended to `suite.results` and indexed in `by_id`; an `id` that collides with one already indexed is recorded in `suite.duplicate_case_starts` as `(id, previous_name, new_name)` before `by_id[id]` is repointed to the new result -- `previous_name` is whatever this specific collision overwrote, not necessarily the very first START to use this id |
 | `__MOCKYMOCK__ CASE <id> FAIL: <reason>` | `id`, `reason` | appends `reason` to the matching `TestResult.failure_reasons` (looked up by id); an unknown id is recorded in `suite.orphan_failures` as `(id, reason)` rather than dropped |
 | `__MOCKYMOCK__ CASE <id> END` | `id` | sets the matching `TestResult.ended = True`; an unknown id is recorded in `suite.orphan_ends` rather than dropped |
 | `__MOCKYMOCK__ SUMMARY: RUN=<n> FAILURES=<n>` | `run`, `failures` | sets `suite.tests_run` / `suite.failures` |
@@ -75,7 +75,7 @@ class TestSuiteResult:
     tests_run: int      # from SUMMARY RUN=
     failures: int        # from SUMMARY FAILURES= -- a *check* count, not a case count
     orphan_failures: list[tuple[str, str]]  # FAIL lines whose id never STARTed
-    duplicate_case_starts: list[tuple[str, str, str]]  # (id, first_name, new_name)
+    duplicate_case_starts: list[tuple[str, str, str]]  # (id, previous_name, new_name)
     orphan_ends: list[str]  # END lines whose id never STARTed -- recorded, doesn't gate
 
     @property
@@ -239,10 +239,14 @@ with no failure reason and nothing anywhere explaining why. Driver-
 generated ids are sequential, so this is defense-in-depth against a
 hand-built `TestSuiteResult` or a future driver-codegen bug, not something
 that fires against real generated output today. `parse_stdout` now records
-every collision as `(id, first_name, new_name)` in
+every collision as `(id, previous_name, new_name)` in
 `suite.duplicate_case_starts` *before* repointing `by_id` (the repoint
 itself is unchanged — the newest START still wins subsequent FAIL/END
 attribution, since the protocol has no better way to disambiguate).
+`previous_name` is whatever this specific collision overwrote, not
+necessarily the very first START to use this id — the same id can collide
+more than once, and each occurrence past the second is its own entry in
+`duplicate_case_starts` with the *previous* (not original) name.
 Duplicates gate `all_passed` and render in both formatters: the console
 prints a `DUPLICATE CASE IDS (a later START overwrote an earlier one):`
 block, and the JUnit output emits one `<testcase name="duplicate-<id>">`

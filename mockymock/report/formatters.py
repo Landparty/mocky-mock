@@ -68,8 +68,8 @@ def format_console(suite: TestSuiteResult, crash_detail: str | None = None) -> s
             lines.append(f"  [{case_id}] {reason}")
     if suite.duplicate_case_starts:
         lines.append("DUPLICATE CASE IDS (a later START overwrote an earlier one):")
-        for case_id, first_name, dup_name in suite.duplicate_case_starts:
-            lines.append(f"  [{case_id}] {first_name!r} then {dup_name!r}")
+        for case_id, previous_name, new_name in suite.duplicate_case_starts:
+            lines.append(f"  [{case_id}] {previous_name!r} then {new_name!r}")
     return "\n".join(lines)
 
 
@@ -164,12 +164,17 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
         safe_reason = _xml_safe(reason)
         error_el = SubElement(orphan_el, "error", message=safe_reason)
         error_el.text = safe_reason
-    for case_id, first_name, dup_name in suite.duplicate_case_starts:
+    for case_id, previous_name, new_name in suite.duplicate_case_starts:
+        # "reused"/"from here on", not "twice"/"the second START": the same
+        # id can collide more than once, and previous_name is only the name
+        # this particular collision overwrote, not necessarily the very
+        # first START to use this id -- wording must stay accurate for any
+        # collision count, not just exactly two.
         message = _xml_safe(
-            f"CASE START id {case_id!r} used twice ({first_name!r} then "
-            f"{dup_name!r}) -- any FAIL/END lines between the two START "
-            f"lines were attributed to {first_name!r}; every line after "
-            f"the second START is attributed to {dup_name!r} instead"
+            f"CASE START id {case_id!r} reused ({previous_name!r} then "
+            f"{new_name!r}) -- any FAIL/END lines up to this point were "
+            f"attributed to {previous_name!r}; every line from here on is "
+            f"attributed to {new_name!r} instead"
         )
         dup_el = SubElement(
             testsuite_el,
