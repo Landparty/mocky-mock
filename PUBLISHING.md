@@ -12,10 +12,11 @@ repos. There is no GitHub permission tier that grants "run mockymock" or
 
 ## What the release workflow builds
 
-`.github/workflows/release-please.yml` now has a `build-nuitka-executables`
-job (gated on `release-please` actually cutting a release) that compiles a
-single-file `mockymock` executable per OS with
-[Nuitka](https://nuitka.net/): `mockymock-linux-x86_64`,
+`.github/workflows/release-please.yml` has a `build-nuitka-executables`
+job (gated on `release-please` actually cutting a release) that calls the
+reusable `.github/workflows/build-executables.yml` workflow (via `uses:`,
+`secrets: inherit`) to compile a single-file `mockymock` executable per OS
+with [Nuitka](https://nuitka.net/): `mockymock-linux-x86_64`,
 `mockymock-macos-arm64`, `mockymock-windows-amd64.exe`, attached to the
 GitHub Release by the `publish` job.
 
@@ -38,8 +39,8 @@ so:
   `__file__` at runtime, and it's read at **import** time
   (`docker_toolchain.py`'s module-level `IMAGE = f"...{_image_tag()}"`), so
   a bundling mistake surfaces immediately as a Python traceback rather than
-  a confusing later Docker error. The release workflow's Linux smoke-test
-  step runs `mockymock setup` for exactly this reason.
+  a confusing later Docker error. `build-executables.yml`'s Linux-only
+  end-to-end smoke-test step runs `mockymock setup` for exactly this reason.
 
 Docker itself is unaffected by any of this: mockymock is Docker-only by
 design (see `docker_toolchain.py`), and the compiled executable still

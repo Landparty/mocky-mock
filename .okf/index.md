@@ -19,7 +19,7 @@ and reports pass/fail. Version 0.1.0. Author: Samuel Dion.
 
 ## Entry Point
 
-* [CLI](cli.md) — `mockymock setup` / `generate` / `run` / `mutate` and how each orchestrates the modules above
+* [CLI](cli.md) — `mockymock setup` / `generate` / `run` / `debug` / `mutate` / `lint` / `collect` and how each orchestrates the modules above
 
 ## Integration & Testing
 
