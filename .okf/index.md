@@ -27,6 +27,10 @@ and reports pass/fail. Version 0.1.0. Author: Samuel Dion.
 * [Testing](testing.md) — unit/integration split, Docker-availability skip gate, `tests/integration/fixtures/` corpus, and the two worked examples (INVUPDT, ORDRPROC)
 * [Coverage](coverage.md) — `mockymock run --coverage`: GnuCOBOL/gcov-based per-line coverage reporting
 
+## Publishing
+
+* [Publishing](publishing.md) — the shared `build-executables.yml` reusable workflow, the automatic `release-please.yml` path, and the manual `publish-public.yml` path to the public `cobol-mocky-mock` repo
+
 ## Change History
 
 * [log.md](log.md) — Dated update log

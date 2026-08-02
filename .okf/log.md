@@ -1,5 +1,32 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-02 — Manual publish pipeline to the public cobol-mocky-mock repo
+
+New concept: [publishing.md](publishing.md). The existing
+`build-nuitka-executables` job in `release-please.yml` (matrix Nuitka
+build, 3 OS executables bundling the pinned `cobolparser` dependency) was
+extracted into a reusable workflow, `build-executables.yml`
+(`workflow_call`), so a new manually-triggered workflow,
+`publish-public.yml` (`workflow_dispatch` only), can share the same build
+without duplicating it. `publish-public.yml` publishes only the 3 binaries
+plus `LICENSE` to a GitHub Release on the separate public repo
+`samdion1994/cobol-mocky-mock` (its own new `README.md` documents
+install/requirements for that audience) — closing the gap `PUBLISHING.md`
+had flagged as unsolved ("a separate public releases-only repo... someone
+with repo-admin context needs to decide that part"). `release-please.yml`'s
+existing automatic private-repo release is unchanged apart from calling the
+same reusable workflow.
+
+Confirmed during design, not just assumed: the compiled binary already
+exposes mockymock's full CLI surface (`setup`/`generate`/`run`/`debug`/
+`lint`/`mutate`/`collect`) with no external access needed —
+`cobolparser` is consumed as an internal library, fully compiled in by
+Nuitka, and the bundled Docker base image (`debian:trixie-slim`) is public.
+`cobolparser`'s own separate standalone CLI (`cobol-parser` console script:
+`parse`/`tokenize`/`program-flow`/etc.) is not part of this build and stays
+unavailable to a binary-only user — a known, accepted gap, not an
+oversight.
+
 ## 2026-07-29 — Added CPYPROC: PROCEDURE DIVISION copybook + PERFORM + paragraph mocks
 
 New worked example (`examples/cpyproc/`) closing a documentation gap: every
