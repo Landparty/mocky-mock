@@ -12,6 +12,7 @@
            GOBACK.
 
        1000-LOOKUP-STATE.
+           DISPLAY "WS-STATE-NAME: " WS-STATE-NAME
            EVALUATE WS-STATE-CODE
                WHEN "AZ"
                    MOVE "Arizona" TO WS-STATE-NAME
