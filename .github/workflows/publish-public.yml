@@ -1,0 +1,47 @@
+name: publish-public
+
+# Manually-triggered only. Rebuilds the 3 Nuitka executables via the
+# shared build-executables.yml and publishes only the binaries + LICENSE
+# to the separate public samdion1994/cobol-mocky-mock repo. Decoupled from
+# release-please.yml's automatic private-repo release on purpose -- see
+# docs/2026-08-02-cobol-mocky-mock-publish-pipeline-design.md.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-executables.yml
+    secrets: inherit
+
+  publish-public:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-exe-*
+          path: dist/
+          merge-multiple: true
+      - name: Resolve the release tag from the manifest
+        id: tag
+        run: echo "tag=v$(jq -r '.["."]' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
+      - name: Create the release on cobol-mocky-mock if it doesn't exist yet
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_REPO_PAT }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          gh release view "$TAG" --repo samdion1994/cobol-mocky-mock >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo samdion1994/cobol-mocky-mock \
+              --title "mockymock $TAG" \
+              --notes "mockymock $TAG. Download the binary for your platform below. Requires Docker at runtime. See README for usage."
+      - name: Upload binaries and license (clobber lets a re-dispatch replace a bad build)
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_REPO_PAT }}
+        run: |
+          gh release upload "${{ steps.tag.outputs.tag }}" dist/* LICENSE \
+            --repo samdion1994/cobol-mocky-mock --clobber
