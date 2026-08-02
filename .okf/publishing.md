@@ -43,11 +43,11 @@ Three workflows share this build via one reusable definition:
 
 # See Also
 
-- `cli.md` — the 7 subcommands (`setup`/`generate`/`run`/`debug`/`lint`/
+- [cli.md](cli.md) — the 7 subcommands (`setup`/`generate`/`run`/`debug`/`lint`/
   `mutate`/`collect`) the published binary fully exposes; `cobolparser`'s
   own separate standalone CLI (`parse`/`tokenize`/`program-flow`/etc.) is
   not part of this build and stays unavailable to a binary-only user.
-- `runtime.md` — the Docker toolchain the binary still depends on at
+- [runtime.md](runtime.md) — the Docker toolchain the binary still depends on at
   runtime.
-- `../PUBLISHING.md` — the full narrative (why Nuitka, what "source-free"
+- [../PUBLISHING.md](../PUBLISHING.md) — the full narrative (why Nuitka, what "source-free"
   means concretely, local build instructions).
