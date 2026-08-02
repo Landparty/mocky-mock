@@ -29,78 +29,15 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # Build a single-file, source-free mockymock executable with Nuitka. It
-  # compiles mockymock AND the private cobolparser dependency straight to
-  # machine code in one pass, so the end user never needs pip/uv/git access
-  # to either private repo -- just this one binary. See PUBLISHING.md.
+  # Builds the 3 Nuitka executables. Extracted into a reusable workflow
+  # (build-executables.yml) so this automatic path and publish-public.yml's
+  # manual-dispatch path share one build definition instead of two that can
+  # drift. See PUBLISHING.md.
   build-nuitka-executables:
     needs: release-please
     if: ${{ needs.release-please.outputs.releases_created == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact: mockymock-linux-x86_64
-          - os: macos-latest
-            artifact: mockymock-macos-arm64
-          - os: windows-latest
-            artifact: mockymock-windows-amd64.exe
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      # cobolparser is a private repo; the pyproject.toml dependency line
-      # pins it via git+https, which pip/git can only resolve here if
-      # COBOL_PARSER_PAT (a PAT/deploy key with read access) is configured
-      # as a secret, or cobol-parser is public. Same documented gap/fallback
-      # as ci.yml's "Check out cobol-parser (sibling editable dependency)"
-      # step -- if neither holds, this fails loudly at the install step
-      # below rather than silently producing a broken build.
-      - name: Configure git credentials for the private cobolparser dependency
-        run: |
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-        env:
-          TOKEN: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install patchelf (required by Nuitka onefile mode on Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y patchelf
-      - name: Install mockymock (pulls in the pinned cobolparser dependency)
-        run: pip install .
-      - name: Install Nuitka
-        run: pip install nuitka
-      - name: Build onefile executable
-        shell: bash
-        run: scripts/build_executable.sh "${{ matrix.artifact }}"
-      - name: Smoke-test the executable
-        shell: bash
-        run: |
-          BIN="build/${{ matrix.artifact }}"
-          chmod +x "$BIN" || true
-          "$BIN" --help
-      - name: End-to-end smoke test against a real example (Docker required)
-        # GitHub-hosted ubuntu-latest runners have a working Docker daemon;
-        # macos-latest/windows-latest don't reliably, and mockymock is
-        # Docker-only by design (see docker_toolchain.py), so this step is
-        # Linux-only. `setup` also exercises the bundled Dockerfile data
-        # file (mockymock.runtime.docker_toolchain reads it at import time,
-        # before touching Docker at all -- see PUBLISHING.md), so a clean
-        # "Docker not available"-style failure here would still mean the
-        # bundling worked; an unhandled Python traceback would mean it didn't.
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          BIN="build/${{ matrix.artifact }}"
-          "$BIN" setup
-          "$BIN" run examples/custinq/CUSTINQ.cbl --cut examples/custinq/CUSTINQ.cut
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist-exe-${{ matrix.os }}
-          path: build/${{ matrix.artifact }}
+    uses: ./.github/workflows/build-executables.yml
+    secrets: inherit
 
   # Attach every built executable to the GitHub Release.
   publish:
