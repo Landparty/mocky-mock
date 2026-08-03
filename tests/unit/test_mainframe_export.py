@@ -3,6 +3,7 @@ transforms that make the instrumented source z/OS-compilable. See
 docs/2026-08-03-mainframe-export-command-design.md for the empirical basis
 (spiked against a real cobolparser install and a real GnuCOBOL container
 before this code was written)."""
+
 from mockymock.cli.mainframe_export import (
     build_provenance_header,
     insert_provenance_header,
@@ -216,6 +217,29 @@ def test_unwrappable_line_is_reported_not_silently_kept_long():
     result, problems = wrap_long_display_lines([line])
     assert len(problems) == 1
     assert "line 1" in problems[0]
+    assert result == [line]
+
+
+def test_comment_line_overflow_is_not_reported_as_a_problem():
+    """A `*>`-prefixed full-line comment -- the shape
+    splicer/stub_writer.py's comment_and_replace produces when it preserves
+    an original boundary statement's text behind the dispatch it inserts --
+    that runs past column 72 is harmless: columns 73+ are the
+    identification field under fixed-format rules, always ignored by the
+    compiler regardless of content, so an overflowing comment can never be
+    truncated into something that changes meaning the way an overflowing
+    DISPLAY statement could. Refusing on it would be a false positive.
+    Found empirically via examples/claimseg (the repo's only EXEC DLI
+    example): its commented-out, deeply indented `ISRT SEGMENT(...)` line
+    is 75 columns wide after restore_fixed_format_columns's 7-space
+    prefix, and previously tripped the COLUMN_OVERFLOW refusal even though
+    nothing about it can miscompile."""
+    line = (
+        "      *>                    ISRT SEGMENT(PAYMENT-SEG) " "FROM(WS-CLAIM-AMOUNT)"
+    )
+    assert len(line) > 72
+    result, problems = wrap_long_display_lines([line])
+    assert problems == []
     assert result == [line]
 
 

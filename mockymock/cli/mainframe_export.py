@@ -189,11 +189,27 @@ def wrap_long_display_lines(
     not this shape, or a trailing expression alone too long to fit) is
     reported in the returned problems list instead of silently kept
     long -- the honest fail-closed backstop, expected to fire
-    approximately never given the shapes actually generated today."""
+    approximately never given the shapes actually generated today.
+
+    A full-line `*>` comment (the shape splicer/stub_writer.py's
+    comment_and_replace produces when it preserves an original boundary
+    statement's text verbatim behind the dispatch code it inserts) is
+    exempted from that backstop rather than counted as a problem: columns
+    73+ are the identification field under fixed-format column rules,
+    always ignored by the compiler regardless of content, so overflow
+    there can never be truncated into something that changes meaning the
+    way an overflowing DISPLAY statement could. Found empirically via
+    examples/claimseg (the repo's only EXEC DLI example): its
+    commented-out, deeply indented `ISRT SEGMENT(...)` line overflows
+    72 columns after restore_fixed_format_columns's 7-space prefix, and
+    without this exemption `export` could never write that file at all."""
     new_lines: list[str] = []
     problems: list[str] = []
     for line_no, line in enumerate(lines, start=1):
         if len(line) <= max_col:
+            new_lines.append(line)
+            continue
+        if line.lstrip().startswith("*>"):
             new_lines.append(line)
             continue
         match = _DISPLAY_RE.match(line)

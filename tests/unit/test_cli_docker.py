@@ -42,7 +42,7 @@ def test_write_report_file_reports_oserror_instead_of_tracebacking(tmp_path, cap
     from mockymock.cli.main import _write_report_file
 
     bad_target = tmp_path / "does-not-exist" / "report.xml"
-    ok = _write_report_file("--junit-xml", str(bad_target), "<testsuite/>")
+    ok = _write_report_file("run", "--junit-xml", str(bad_target), "<testsuite/>")
     assert ok is False
     assert not bad_target.exists()
     out = capsys.readouterr().out
@@ -54,7 +54,7 @@ def test_write_report_file_writes_content_on_success(tmp_path):
     from mockymock.cli.main import _write_report_file
 
     target = tmp_path / "report.xml"
-    ok = _write_report_file("--junit-xml", str(target), "<testsuite/>")
+    ok = _write_report_file("run", "--junit-xml", str(target), "<testsuite/>")
     assert ok is True
     assert target.read_text() == "<testsuite/>"
 
