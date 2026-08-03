@@ -6,6 +6,12 @@ def test_cobolparser_is_importable_and_parses():
 
 
 def test_mockymock_has_a_version():
+    import tomllib
+    from pathlib import Path
+
     import mockymock
 
-    assert mockymock.__version__ == "0.1.0"
+    pyproject = tomllib.loads(
+        (Path(__file__).parents[2] / "pyproject.toml").read_text()
+    )
+    assert mockymock.__version__ == pyproject["project"]["version"]
