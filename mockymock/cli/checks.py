@@ -91,6 +91,7 @@ def run_static_checks(
     copybook_paths: list[str] | None,
     case_names: list[str] | None = None,
     tag_names: list[str] | None = None,
+    preserve_compiler_directives: bool = False,
 ) -> StaticCheckResult:
     """Faithful transcription of `_cmd_run`'s pre-toolchain check sequence,
     including its short-circuit behavior: each numbered stage stops the
@@ -180,10 +181,15 @@ def run_static_checks(
     # eventually gets written as the instrumented source for GnuCOBOL to
     # compile. Left in place, they survive into that file verbatim and cobc
     # can reject options/syntax it doesn't recognize. Strip them the same way
-    # before normalizing so they never reach the toolchain.
-    lines = normalize_fixed_format(
-        strip_compiler_directives(raw_source).splitlines()
-    ).splitlines()
+    # before normalizing so they never reach the toolchain -- unless the
+    # caller (mockymock export) wants them preserved for a real IBM compile
+    # instead, which needs them exactly where GnuCOBOL can't tolerate them.
+    if preserve_compiler_directives:
+        lines = normalize_fixed_format(raw_source.splitlines()).splitlines()
+    else:
+        lines = normalize_fixed_format(
+            strip_compiler_directives(raw_source).splitlines()
+        ).splitlines()
 
     linkage_reasons = check_linkage_layout(parse_result.ast, lines)
     if linkage_reasons:
