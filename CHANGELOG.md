@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0](https://github.com/samdion1994/mocky-mock/compare/v0.1.0...v0.1.0) (2026-08-03)
+
+
+### Miscellaneous Chores
+
+* force a release to ship v0.1.0's CI-fixed binaries ([02a5246](https://github.com/samdion1994/mocky-mock/commit/02a524633f163bf6ab671ed25300e2e0e4422ee7))
+
 ## 0.1.0 (2026-08-03)
 
 
