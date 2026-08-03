@@ -32,6 +32,14 @@ jobs:
       # step -- if neither holds, this fails loudly at the install step
       # below rather than silently producing a broken build.
       - name: Configure git credentials for the private cobolparser dependency
+        # shell: bash is required here -- run: steps default to pwsh on
+        # windows-latest, and pwsh parses ${TOKEN} as an (unset) PowerShell
+        # variable rather than expanding the env var, silently embedding an
+        # empty token in the rewritten URL. That only breaks the Windows
+        # matrix leg (Linux/macOS default to bash already) and surfaces as
+        # git's generic "Invalid username or token" auth failure rather than
+        # a shell error, so pin bash explicitly on every OS.
+        shell: bash
         run: |
           git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
         env:
