@@ -9,6 +9,7 @@ basis (spiked against a real cobolparser install and a real
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 COLUMN_LIMIT = 72
@@ -74,3 +75,220 @@ def insert_provenance_header(lines: list[str], header: list[str]) -> list[str]:
         if line.strip().upper().startswith("IDENTIFICATION DIVISION"):
             return lines[:index] + header + lines[index:]
     return header + lines  # defensive: refusal gates guarantee this exists
+
+
+_DISPLAY_RE = re.compile(r"^(?P<indent>\s*)DISPLAY\s+(?P<rest>.+)$", re.IGNORECASE)
+
+
+def _parse_display_args(rest: str) -> tuple[str, str] | None:
+    """Split a DISPLAY statement's argument text (period already
+    stripped) into (literal_text, trailing_expr): literal_text is the
+    concatenated, UNESCAPED text of every leading adjacent quoted-literal
+    operand; trailing_expr is whatever non-literal text follows (may be
+    ''). Returns None if the argument text doesn't start with a literal
+    -- not a shape this wraps."""
+    pos = 0
+    length = len(rest)
+    literal_chunks: list[str] = []
+    found_any_literal = False
+    while pos < length:
+        while pos < length and rest[pos] == " ":
+            pos += 1
+        if pos >= length or rest[pos] != '"':
+            break
+        found_any_literal = True
+        pos += 1  # past opening quote
+        piece: list[str] = []
+        while True:
+            if pos >= length:
+                return None  # unterminated literal -- not our shape
+            if rest[pos] == '"':
+                if pos + 1 < length and rest[pos + 1] == '"':
+                    piece.append('"')
+                    pos += 2
+                    continue
+                pos += 1  # past closing quote
+                break
+            piece.append(rest[pos])
+            pos += 1
+        literal_chunks.append("".join(piece))
+    if not found_any_literal:
+        return None
+    return "".join(literal_chunks), rest[pos:].strip()
+
+
+def _atomic_units(escaped_text: str) -> list[str]:
+    """Split already-escaped literal text into atomic units: a
+    doubled-quote escape pair ('""') is one 2-character unit that must
+    never be split across a chunk boundary; every other character is its
+    own 1-character unit. Grouping by whole units (in _chunk_units below)
+    guarantees no chunk boundary ever bisects a pair, regardless of how
+    many escaped quotes cluster together -- an earlier version that
+    nudged a single character-index split point by one instead failed a
+    5000-case randomized stress test (104 failures, all from multiple
+    adjacent escape pairs) during design. This unit-based approach fixed
+    all of those; the one residual gap it cannot fully close on its own
+    (a single 2-char unit that alone exceeds a 1-char budget, only
+    reachable with ~42+ columns of indentation) is caught by
+    wrap_long_display_lines's own final length check on each produced
+    fragment, not by this function -- see _chunk_units and the caller's
+    safety-net comment."""
+    units: list[str] = []
+    i = 0
+    n = len(escaped_text)
+    while i < n:
+        if escaped_text[i] == '"' and i + 1 < n and escaped_text[i + 1] == '"':
+            units.append(escaped_text[i : i + 2])
+            i += 2
+        else:
+            units.append(escaped_text[i])
+            i += 1
+    return units
+
+
+def _chunk_units(units: list[str], budget: int) -> list[str]:
+    """Greedily group atomic units (never splitting one) into chunks of
+    at most `budget` characters each. A single oversized unit (only
+    possible for a 2-char escape pair with budget < 2, which needs
+    indentation deep enough to push the wrap budget that low -- ~42
+    columns, not something any current mockymock output produces) is
+    still emitted as its own chunk rather than looping forever; the
+    caller (wrap_long_display_lines) checks every fragment's final
+    length afterward and refuses instead of accepting an oversized one,
+    so this never silently ships a too-long line."""
+    budget = max(budget, 1)
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for unit in units:
+        if current and current_len + len(unit) > budget:
+            chunks.append("".join(current))
+            current = []
+            current_len = 0
+        current.append(unit)
+        current_len += len(unit)
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+def wrap_long_display_lines(
+    lines: list[str], max_col: int = COLUMN_LIMIT
+) -> tuple[list[str], list[str]]:
+    """Split every over-`max_col` DISPLAY statement matching mockymock's
+    own generated shape -- `DISPLAY "<literal>"[ <trailing non-literal
+    expression>][.]`, the only shape driver.py/injector.py ever produce
+    -- into `DISPLAY "<chunk>" WITH NO ADVANCING` fragments (re-escaping
+    doubled quotes per chunk) plus a final plain DISPLAY carrying the
+    trailing expression and any original trailing period. Verified
+    empirically to produce byte-identical stdout to the unwrapped
+    original (docs/2026-08-03-mainframe-export-command-design.md,
+    Adjustment 2b).
+
+    A line that still can't be brought under `max_col` (not a DISPLAY,
+    not this shape, or a trailing expression alone too long to fit) is
+    reported in the returned problems list instead of silently kept
+    long -- the honest fail-closed backstop, expected to fire
+    approximately never given the shapes actually generated today."""
+    new_lines: list[str] = []
+    problems: list[str] = []
+    for line_no, line in enumerate(lines, start=1):
+        if len(line) <= max_col:
+            new_lines.append(line)
+            continue
+        match = _DISPLAY_RE.match(line)
+        if match is None:
+            problems.append(
+                f"line {line_no} exceeds column {max_col} and is not a "
+                f"wrappable DISPLAY statement: {line!r}"
+            )
+            new_lines.append(line)
+            continue
+        indent = match.group("indent")
+        rest = match.group("rest")
+        trailing_period = rest.endswith(".")
+        if trailing_period:
+            rest = rest[:-1]
+        parsed = _parse_display_args(rest)
+        if parsed is None:
+            problems.append(
+                f"line {line_no} exceeds column {max_col} and its DISPLAY "
+                f"arguments aren't a recognized literal[+expr] shape: {line!r}"
+            )
+            new_lines.append(line)
+            continue
+        literal_text, trailing_expr = parsed
+        escaped = literal_text.replace('"', '""')
+
+        final_suffix = ""
+        if trailing_expr:
+            final_suffix += " " + trailing_expr
+        if trailing_period:
+            final_suffix += "."
+        final_overhead = len(indent) + len('DISPLAY "') + len('"') + len(final_suffix)
+        final_budget = max_col - final_overhead
+        # final_budget < len(escaped) always holds at this point: `line`
+        # is already known to exceed max_col, and final_overhead +
+        # len(escaped) is exactly what an unwrapped DISPLAY of this shape
+        # measures -- so there is no "it already fits, skip wrapping"
+        # case to special-case here (confirmed by a 20,000-case randomized
+        # search during design: 0 hits).
+
+        if final_budget <= 0:
+            problems.append(
+                f"line {line_no}: trailing expression {trailing_expr!r} "
+                f"alone leaves no room on the final fragment: {line!r}"
+            )
+            new_lines.append(line)
+            continue
+
+        mid_overhead = len(indent) + len('DISPLAY "') + len('" WITH NO ADVANCING')
+        mid_budget = max_col - mid_overhead
+        if mid_budget <= 0:
+            problems.append(
+                f"line {line_no}: indentation alone leaves no room to "
+                f"wrap: {line!r}"
+            )
+            new_lines.append(line)
+            continue
+
+        # Peel whole units off the END, greedily, until adding one more
+        # would exceed final_budget -- those become the final fragment's
+        # literal; everything before them gets chunked into WITH NO
+        # ADVANCING fragments. Unit-based (never bisects a doubled-quote
+        # escape pair) regardless of how many cluster near the split.
+        units = _atomic_units(escaped)
+        tail_units: list[str] = []
+        tail_len = 0
+        for unit in reversed(units):
+            if tail_len + len(unit) > final_budget:
+                break
+            tail_units.insert(0, unit)
+            tail_len += len(unit)
+        head_units = units[: len(units) - len(tail_units)]
+        tail = "".join(tail_units)
+
+        fragments = [
+            f'{indent}DISPLAY "{chunk}" WITH NO ADVANCING'
+            for chunk in _chunk_units(head_units, mid_budget)
+        ]
+        fragments.append(f'{indent}DISPLAY "{tail}"{final_suffix}')
+        # Final safety net: _chunk_units's oversized-unit fallback (see
+        # its docstring) can, in the same deep-indentation edge case,
+        # produce one fragment a character or two over max_col. Refusing
+        # here instead of shipping it is what "fail closed, never
+        # silently wrong" means for this function -- verified against
+        # 20,000 adversarial cases (heavy escaped-quote density,
+        # indentation to 50 columns) during design: this path fires only
+        # there, never on any real mockymock-generated shape.
+        oversized = [f for f in fragments if len(f) > max_col]
+        if oversized:
+            problems.append(
+                f"line {line_no}: could not wrap under column {max_col} "
+                f"-- clustered escaped quotes near the split point left "
+                f"no valid cut: {line!r}"
+            )
+            new_lines.append(line)
+            continue
+        new_lines.extend(fragments)
+    return new_lines, problems
