@@ -4,8 +4,7 @@
   "include-component-in-tag": false,
   "packages": {
     ".": {
-      "package-name": "mockymock",
-      "release-as": "0.1.0"
+      "package-name": "mockymock"
     }
   }
 }
