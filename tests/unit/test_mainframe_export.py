@@ -116,7 +116,7 @@ def test_wrap_preserves_leading_indentation_on_every_fragment():
     )
     result, problems = wrap_long_display_lines([line])
     assert problems == []
-    assert all(l.startswith("                   DISPLAY") for l in result)
+    assert all(frag.startswith("                   DISPLAY") for frag in result)
 
 
 def test_wrap_uses_with_no_advancing_on_every_fragment_but_the_last():
@@ -190,9 +190,9 @@ def test_wrap_handles_a_trailing_period():
     )
     result, problems = wrap_long_display_lines([line])
     assert problems == []
-    assert all(len(l) <= 72 for l in result)
+    assert all(len(frag) <= 72 for frag in result)
     assert result[-1].endswith(".")
-    assert not any(l.endswith(".") for l in result[:-1])
+    assert not any(frag.endswith(".") for frag in result[:-1])
 
 
 def test_wrap_never_splits_an_escaped_doubled_quote():
