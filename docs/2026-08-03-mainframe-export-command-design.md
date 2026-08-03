@@ -81,11 +81,11 @@ mockymock export <program> --cut PATH [-o/--output PATH]
    │     same refusal gates as run/lint: expansion warnings, parse errors,
    │     unresolved copybooks, nested-EXEC, data-division-EXEC precheck,
    │     per-case checks
+   ├─ NEW: restore_fixed_format_columns (7-space prefix restoration)
    ├─ collect_boundaries / TallyRegistry / terminator+flow plans / splice_program
    │     (identical to _cmd_run steps 11-13)
    ├─ transform_data_division_exec(lines)            (real pass, kept output)
    ├─ reset_move_lines + build_driver + _insert_driver
-   ├─ NEW: restore_fixed_format_columns (7-space prefix restoration)
    ├─ NEW: wrap_long_display_lines (split over-72 generated DISPLAYs;
    │        refuse (COLUMN_OVERFLOW) only on a residual that can't be wrapped
    ├─ NEW: prepend provenance/disclaimer header

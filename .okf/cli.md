@@ -358,6 +358,9 @@ wrapped into multiple lines. A provenance/disclaimer header is prepended, docume
 mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
 to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.
+If a line still exceeds column 72 after wrapping and column restoration -- most commonly, long `.cut`
+MOCK body text (e.g. a `MOVE` statement) that `injector.py` re-indents past the limit when splicing it
+in -- `export` refuses (`mockymock export: refused (COLUMN_OVERFLOW): ...`) and writes nothing.
 
 Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
 [docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).

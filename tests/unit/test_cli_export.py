@@ -159,6 +159,53 @@ def test_export_reports_refused_static_checks_and_writes_nothing(tmp_path, capsy
     assert not (tmp_path / "BAD.mainframe.cbl").exists()
 
 
+def test_export_refuses_on_column_overflow_from_cut_mock_body_text(tmp_path, capsys):
+    """The realistic, routinely-reachable COLUMN_OVERFLOW trigger: a `.cut`
+    file's own MOCK body text, not mockymock-generated DISPLAY boilerplate.
+    `injector.py`'s build_site_dispatch re-indents a MOCK body's lines by
+    19 columns when it splices them in, so an ordinary MOVE with a modest
+    literal and a modest field name routinely lands past column 72 once
+    restore_fixed_format_columns's own 7-space prefix is added on top.
+    `examples/claimseg` used to be the one example reaching this refusal
+    path, but Task 4's `*>` comment-line carve-out stopped it from doing
+    so, leaving this path completely untested before this fixture.
+    Manually confirmed before writing this test: `mockymock lint` on this
+    exact program/cut pair reports no problems (this is not a static-check
+    refusal) while `export` refuses with COLUMN_OVERFLOW and writes
+    nothing."""
+    cbl = tmp_path / "PROG.cbl"
+    cbl.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. PROG.\n"
+        "\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  WS-A-RATHER-LONG-FIELD-NAME-HERE   PIC X(40).\n"
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       MAIN-PROCESS.\n"
+        '           CALL "SUBPROG"\n'
+        '           DISPLAY "DONE".\n'
+    )
+    cut = tmp_path / "PROG.cut"
+    cut.write_text(
+        'TESTSUITE "s"\n'
+        "\n"
+        'TESTCASE "long mock body line"\n'
+        '    MOCK CALL "SUBPROG"\n'
+        '        MOVE "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" TO '
+        "WS-A-RATHER-LONG-FIELD-NAME-HERE\n"
+        "    END-MOCK\n"
+        "    PERFORM MAIN-PROCESS\n"
+    )
+
+    exit_code = main(["export", str(cbl), "--cut", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "COLUMN_OVERFLOW" in out
+    assert not (tmp_path / "PROG.mainframe.cbl").exists()
+
+
 def test_export_never_imports_docker_toolchain(tmp_path):
     import sys
 
@@ -166,7 +213,11 @@ def test_export_never_imports_docker_toolchain(tmp_path):
     try:
         cbl = _EXAMPLES / "ordrproc" / "ORDRPROC.cbl"
         cut = _EXAMPLES / "ordrproc" / "ORDRPROC.cut"
-        main(
+        # The exit code must be checked: an early refusal also wouldn't
+        # import docker_toolchain, but for the wrong reason -- without this
+        # assertion the test would pass vacuously if `export` regressed to
+        # refusing on this fixture instead of actually succeeding.
+        exit_code = main(
             [
                 "export",
                 str(cbl),
@@ -176,6 +227,7 @@ def test_export_never_imports_docker_toolchain(tmp_path):
                 str(tmp_path / "out.cbl"),
             ]
         )
+        assert exit_code == 0
         assert "mockymock.runtime.docker_toolchain" not in sys.modules
     finally:
         if saved is not None:

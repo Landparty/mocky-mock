@@ -144,7 +144,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     output_path.write_text(cut_text, encoding="utf-8")
     case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
-    _report_unsupported_boundaries(surface)
+    _report_unsupported_boundaries(surface, "generate")
     return 0
 
 
@@ -179,7 +179,7 @@ def _print_linkage_neutralization(command: str, plan, applied: bool) -> None:
     )
 
 
-def _report_unsupported_boundaries(surface) -> None:
+def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
     """Name every detected boundary point that stays unmockable (the
     SORT/MERGE family, identifier-less dynamic CALLs, unspliceable nested
     sites), so the scaffold is never mistaken for complete coverage of the
@@ -194,6 +194,11 @@ def _report_unsupported_boundaries(surface) -> None:
     reachability against, so it cannot know which outcome a future `.cut`
     will get -- claiming "will be refused" here would be wrong as often as
     it's right.
+
+    `command` names the caller in the printed output -- `generate` (the
+    default, and this function's original and still most common caller)
+    or `export`, which shares the same `surface` inspection but must not
+    print a `generate` prefix in its own console output.
     """
     from mockymock.analysis.mock_surface import _TERMINATOR_LABELS
 
@@ -218,7 +223,7 @@ def _report_unsupported_boundaries(surface) -> None:
             )
     if findings:
         print(
-            f"mockymock generate: {len(findings)} boundary point(s) detected "
+            f"mockymock {command}: {len(findings)} boundary point(s) detected "
             f"that are not mockable (test cases reaching them will be "
             f"refused):"
         )
@@ -226,7 +231,7 @@ def _report_unsupported_boundaries(surface) -> None:
             print(f"  - {finding}")
     if terminator_findings:
         print(
-            f"mockymock generate: {len(terminator_findings)} STOP RUN/GOBACK "
+            f"mockymock {command}: {len(terminator_findings)} STOP RUN/GOBACK "
             f"site(s) detected -- whether a test case reaching one is "
             f"refused depends on how it's reached; see "
             f"docs/2026-07-08-goback-stop-run-support-design.md:"
@@ -895,7 +900,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         f"mockymock export: wrote mainframe-compilable source "
         f"({len(suite.test_cases)} test case(s)) -> {output_path}"
     )
-    _report_unsupported_boundaries(surface)
+    _report_unsupported_boundaries(surface, "export")
     return 0
 
 
