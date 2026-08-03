@@ -159,25 +159,45 @@ own generated shape — `DISPLAY "<literal>"[ <trailing non-literal
 expression>][.]` (the only shape `driver.py`/`injector.py` ever produce,
 confirmed by reading every `DISPLAY` call site in both files) — and splits
 the literal text across multiple `DISPLAY "<chunk>" WITH NO ADVANCING`
-lines (re-escaping doubled quotes per chunk) plus a final plain `DISPLAY`
-carrying the trailing expression and any original trailing period, each
-line within 72 columns. **Verified empirically against the real
-`mockymock-cobc` container** (`compile_source`/`run_binary`, not a
-reimplemented subprocess call): a hand-split `DISPLAY "frag1" WITH NO
-ADVANCING` / `DISPLAY "frag2" WITH NO ADVANCING` / `DISPLAY FUNCTION
-TRIM(...)` sequence produces byte-identical stdout to the single long
-`DISPLAY` it replaces — the `__MOCKYMOCK__` stdout protocol survives the
-split exactly. (This proves the split preserves COBOL's `DISPLAY`
-semantics under a real COBOL runtime; it does not prove IBM Enterprise
-COBOL accepts the wrapped form specifically, since GnuCOBOL still compiles
-via `-free` here too — that residual belongs in the disclaimer header, not
-in another spike, as no IBM compiler is reachable from this environment.)
+lines plus a final plain `DISPLAY` carrying the trailing expression and any
+original trailing period, each line within 72 columns. **Verified
+empirically against the real `mockymock-cobc` container**
+(`compile_source`/`run_binary`, not a reimplemented subprocess call): a
+hand-split `DISPLAY "frag1" WITH NO ADVANCING` / `DISPLAY "frag2" WITH NO
+ADVANCING` / `DISPLAY FUNCTION TRIM(...)` sequence produces byte-identical
+stdout to the single long `DISPLAY` it replaces — the `__MOCKYMOCK__`
+stdout protocol survives the split exactly. (This proves the split
+preserves COBOL's `DISPLAY` semantics under a real COBOL runtime; it does
+not prove IBM Enterprise COBOL accepts the wrapped form specifically,
+since GnuCOBOL still compiles via `-free` here too — that residual belongs
+in the disclaimer header, not in another spike, as no IBM compiler is
+reachable from this environment.)
 
-A line that still can't be brought under 72 after wrapping (not a
-recognized `DISPLAY` shape, or a single trailing expression alone too
-long to fit) is the honest fail-closed backstop: refuse
-(`COLUMN_OVERFLOW`), naming the line. Expected to fire approximately
-never given the shapes actually generated today.
+Chunking is **unit-based, not character-based** — this took two rounds to
+get right. A first version split on raw character counts, nudging a split
+point by one whenever it landed inside a `""` escape pair; a 5000-case
+randomized stress test (varying indent, literal content including embedded
+quotes, trailing expression, trailing period) found **104 failures**, all
+from multiple escaped-quote pairs clustering near a split point, where a
+single-character nudge wasn't enough. The fix groups by atomic units
+instead (`_atomic_units`/`_chunk_units`: a `""` pair is one indivisible
+2-character unit, so a chunk boundary can never bisect one no matter how
+many pairs cluster together). A follow-up 20,000-case adversarial run
+(heavier quote density, indentation to 50 columns) against the redesign
+found zero round-trip or malformed-fragment failures.
+
+A line that still can't be brought under 72 after wrapping is the honest
+fail-closed backstop: refuse (`COLUMN_OVERFLOW`), naming the line. Three
+things trigger it: not a recognized `DISPLAY` shape, a trailing expression
+alone too long to fit, or — the one concrete trigger the 20,000-case run
+surfaced — indentation deep enough (~43+ columns) that a cluster of
+escaped quotes sits exactly at the split point, forcing even unit-based
+chunking to produce a fragment over the limit (a 2-character unit cannot
+be shrunk to fit a 1-character budget). That last case has a dedicated
+regression test
+(`test_wrap_refuses_cleanly_when_clustered_escapes_leave_no_valid_cut`);
+none of the three triggers is reachable by any shape
+`driver.py`/`injector.py` actually generate today.
 
 ### Adjustment 3 — provenance/disclaimer header
 
