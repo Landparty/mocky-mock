@@ -341,14 +341,26 @@ def wrap_long_display_lines(
         # there, never on any real mockymock-generated shape.
         #
         # `not tail` (a zero-length final literal) is a second, narrower
-        # net catching what a length-only check can't see: the
-        # tail-peeling loop above finding no unit small enough to keep.
-        # Provably unreachable today -- an empty `escaped` forces
-        # final_budget <= 0 (refused earlier, above) since final_overhead
-        # then equals the whole line's length, and a single oversized
-        # final unit would require final_budget and mid_budget to satisfy
-        # contradictory bounds for any max_col -- but cheap to guard
-        # regardless, since a length check can't detect it by construction.
+        # net catching what a length-only check can't see by construction:
+        # the tail-peeling loop above finding no unit small enough to keep,
+        # which the `oversized` length check above has no way to notice
+        # (an empty tail produces a fragment that is often well UNDER
+        # max_col, just semantically wrong -- all literal content silently
+        # relocated into WITH NO ADVANCING fragments instead).
+        #
+        # Provably unreachable TODAY, given the two gates above already in
+        # this function: an empty `escaped` forces final_budget <= 0
+        # (refused earlier, above that code) since final_overhead then
+        # equals the whole line's length; and a single oversized final
+        # unit needs final_budget == 1, which requires
+        # `indent == max_col - 11`, while the earlier `mid_budget > 0` gate
+        # requires `indent < max_col - 29` -- mutually exclusive for any
+        # max_col. This guard is kept anyway as cheap insurance against
+        # either gate being loosened later (e.g. making the unconditional
+        # `mid_budget <= 0` refusal above conditional on `head_units` being
+        # non-empty, a plausible future simplification that would reopen
+        # the second route) -- not dead code, a tripwire for a regression
+        # that hasn't happened yet.
         oversized = [f for f in fragments if len(f) > max_col]
         if oversized or not tail:
             problems.append(
