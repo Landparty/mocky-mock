@@ -134,6 +134,7 @@ rest each add one distinctive feature.
 - `mockymock debug --dap-stdio` — a real [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) session: breakpoints, stepping, and variable inspection on your original `.cbl` ([design](docs/2026-07-22-dap-debugger-design.md))
 - `mockymock collect --cut ORDRPROC.cut [--json]` — list a suite's cases with line numbers and tags, no Docker needed
 - `mockymock dashboard` — a local status page (loopback only) showing at a glance whether Docker and the GnuCOBOL toolchain are up; read-only, it never builds or starts anything ([details](.okf/dashboard.md))
+- `mockymock export` — write the instrumented source to a file, adjusted for a real fixed-format (z/OS) COBOL compile instead of GnuCOBOL-only; validates the computational core against a real IBM compiler, not real I/O ([details](docs/2026-08-03-mainframe-export-command-design.md))
 
 ## Design goals
 
