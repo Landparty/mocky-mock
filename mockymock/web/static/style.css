@@ -1,0 +1,275 @@
+/* Light/dark by system preference -- every colour is a variable so the
+   dark override below is a single block, not a parallel stylesheet. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #e2e5ea;
+  --text: #14181f;
+  --muted: #646c7a;
+  --accent: #4a5568;
+
+  --ok: #1a8a4a;
+  --ok-soft: #e6f5ec;
+  --warn: #b3761a;
+  --warn-soft: #fdf3e2;
+  --down: #c2382f;
+  --down-soft: #fdecea;
+  --unknown: #8a94a3;
+  --unknown-soft: #eef0f3;
+
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(20, 24, 31, .06), 0 1px 8px rgba(20, 24, 31, .04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c;
+    --surface: #1c2027;
+    --border: #2b313a;
+    --text: #e8eaee;
+    --muted: #96a0af;
+    --accent: #aab4c2;
+
+    --ok: #4ade80;
+    --ok-soft: #16281d;
+    --warn: #f0b455;
+    --warn-soft: #2a2114;
+    --down: #f87171;
+    --down-soft: #2c1917;
+    --unknown: #78828f;
+    --unknown-soft: #22262d;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 1px 8px rgba(0, 0, 0, .2);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 1.25rem 3rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main, .topbar, footer { max-width: 720px; margin: 0 auto; }
+
+/* --- top bar ------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 0;
+}
+
+.brand { display: flex; align-items: center; gap: .6rem; }
+
+.brand-mark {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 1rem;
+  color: var(--surface);
+  background: var(--accent);
+  border-radius: 6px;
+  padding: .15rem .4rem;
+}
+
+.brand-name { font-weight: 600; letter-spacing: -.01em; }
+
+.poll {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+.poll-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--unknown);
+}
+
+.poll-dot.live { background: var(--ok); animation: pulse 2s ease-in-out infinite; }
+.poll-dot.lost { background: var(--down); }
+
+@keyframes pulse { 50% { opacity: .3; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .poll-dot.live { animation: none; }
+}
+
+/* --- verdict banner ------------------------------------------------ */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.banner-light {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--unknown);
+  box-shadow: 0 0 0 5px var(--unknown-soft);
+}
+
+.banner--ok .banner-light { background: var(--ok); box-shadow: 0 0 0 5px var(--ok-soft); }
+.banner--warn .banner-light { background: var(--warn); box-shadow: 0 0 0 5px var(--warn-soft); }
+.banner--down .banner-light { background: var(--down); box-shadow: 0 0 0 5px var(--down-soft); }
+
+.banner-copy { flex: 1 1 auto; min-width: 0; }
+
+.banner h1 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+.banner p {
+  margin: .2rem 0 0;
+  color: var(--muted);
+  font-size: .875rem;
+}
+
+.refresh {
+  flex: none;
+  padding: .4rem .8rem;
+  font: inherit;
+  font-size: .82rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.refresh:hover { border-color: var(--muted); }
+.refresh:disabled { opacity: .5; cursor: default; }
+
+/* --- panels -------------------------------------------------------- */
+
+.panel {
+  margin-top: 1.25rem;
+  padding: 1.1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.panel h2 {
+  margin: 0 0 .8rem;
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.checks { list-style: none; margin: 0; padding: 0; }
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: .7rem;
+  padding: .7rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.check:first-child { border-top: 0; padding-top: 0; }
+
+.check-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: .42rem;
+  border-radius: 50%;
+  background: var(--unknown);
+}
+
+.check--ok .check-dot { background: var(--ok); }
+.check--warn .check-dot { background: var(--warn); }
+.check--down .check-dot { background: var(--down); }
+
+.check-copy { min-width: 0; }
+.check-label { display: block; font-weight: 500; }
+
+.check-detail {
+  display: block;
+  margin-top: .12rem;
+  color: var(--muted);
+  font-size: .82rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.check--down .check-detail { color: var(--down); }
+.check--warn .check-detail { color: var(--warn); }
+
+/* --- details ------------------------------------------------------- */
+
+.meta dl { margin: 0; }
+
+.meta dl > div {
+  display: flex;
+  gap: 1rem;
+  padding: .4rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.meta dl > div:first-child { border-top: 0; padding-top: 0; }
+
+.meta dt {
+  flex: none;
+  width: 8.5rem;
+  color: var(--muted);
+  font-size: .85rem;
+}
+
+.meta dd {
+  margin: 0;
+  min-width: 0;
+  font-size: .85rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+/* --- footer -------------------------------------------------------- */
+
+footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+  color: var(--muted);
+  font-size: .78rem;
+}
+
+footer code {
+  padding: .15rem .4rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: .78rem;
+}
+
+@media (max-width: 520px) {
+  .banner { flex-wrap: wrap; }
+  .refresh { width: 100%; }
+  .meta dl > div { flex-direction: column; gap: .1rem; }
+  .meta dt { width: auto; }
+}

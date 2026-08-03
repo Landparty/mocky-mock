@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mockymock — toolchain status</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">{ }</span>
+      <span class="brand-name">mockymock</span>
+    </div>
+    <div class="poll" id="poll">
+      <span class="poll-dot" id="poll-dot" aria-hidden="true"></span>
+      <span id="poll-text">connecting…</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Overall verdict: the one thing the page exists to answer. -->
+    <section class="banner" id="banner" aria-live="polite">
+      <div class="banner-light" id="banner-light" aria-hidden="true"></div>
+      <div class="banner-copy">
+        <h1 id="banner-title">Checking…</h1>
+        <p id="banner-subtitle">Asking Docker where things stand.</p>
+      </div>
+      <button type="button" class="refresh" id="refresh">Refresh</button>
+    </section>
+
+    <!-- One row per step of ensure_toolchain()'s lifecycle. -->
+    <section class="panel">
+      <h2>Toolchain checks</h2>
+      <ul class="checks" id="checks">
+        <li class="check check--unknown"><span class="check-dot"></span>
+          <div class="check-copy">
+            <span class="check-label">Loading…</span>
+          </div>
+        </li>
+      </ul>
+    </section>
+
+    <section class="panel meta">
+      <h2>Details</h2>
+      <dl>
+        <div><dt>Image</dt><dd id="meta-image">—</dd></div>
+        <div><dt>Container</dt><dd id="meta-container">—</dd></div>
+        <div><dt>Compiler</dt><dd id="meta-cobc">—</dd></div>
+        <div><dt>Last checked</dt><dd id="meta-checked">—</dd></div>
+      </dl>
+    </section>
+  </main>
+
+  <footer>
+    <span>Read-only view — this page never builds, starts, or removes anything.</span>
+    <code>mockymock setup</code>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

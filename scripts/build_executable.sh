@@ -6,6 +6,12 @@
 # one binary and never runs pip/uv against the private cobolparser repo
 # themselves. See PUBLISHING.md.
 #
+# Every non-.py file the package resolves via Path(__file__) needs its own
+# --include-data-* flag here: Nuitka does not read pyproject's
+# [tool.setuptools.package-data], so a file can ship correctly in the wheel
+# and still be missing from these binaries. Currently the GnuCOBOL
+# Dockerfile and the dashboard's static assets.
+#
 # Usage: scripts/build_executable.sh <output-filename>
 # Run from the repo root, with mockymock and nuitka already installed into
 # the active Python environment (see the release workflow for the exact
@@ -22,4 +28,5 @@ python -m nuitka \
   --assume-yes-for-downloads \
   --lto=no \
   --include-data-files=mockymock/runtime/docker/Dockerfile=mockymock/runtime/docker/Dockerfile \
+  --include-data-dir=mockymock/web/static=mockymock/web/static \
   packaging/nuitka_entry.py

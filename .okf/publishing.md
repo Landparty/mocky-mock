@@ -12,9 +12,12 @@ timestamp: 2026-08-03T00:00:00Z
 `LICENSE`, `PUBLISHING.md`). Nuitka compiles a single-file, source-free
 `mockymock` executable per OS, bundling the pinned `cobolparser` dependency
 straight into machine code in one pass — the binary embeds no `.py` source
-for either package. `mockymock/runtime/docker/Dockerfile` is bundled in via
-`--include-data-files`; Docker itself (a public `debian:trixie-slim` base
-image, no private registry) is still required at runtime, same as always.
+for either package. Non-`.py` data files are bundled in explicitly by
+`scripts/build_executable.sh` — `mockymock/runtime/docker/Dockerfile` via
+`--include-data-files`, the dashboard's `mockymock/web/static/` via
+`--include-data-dir` (see [dashboard](dashboard.md)). Docker itself (a
+public `debian:trixie-slim` base image, no private registry) is still
+required at runtime, same as always.
 
 Three workflows share this build via one reusable definition:
 
@@ -42,6 +45,16 @@ Three workflows share this build via one reusable definition:
 `publish-public.yml` has published — no source, no other files.
 
 # Gotchas
+
+- **Nuitka ignores `[tool.setuptools.package-data]`.** A non-`.py` file
+  resolved via `Path(__file__)` can be correctly listed there, appear in a
+  built wheel, pass every unit test, and still be missing from the three
+  released executables — the primary artifact for users with no repo
+  access. Each such file needs its own `--include-data-files` /
+  `--include-data-dir` flag in `scripts/build_executable.sh`. The
+  `Dockerfile` and `mockymock/web/static/` are the two current cases; both
+  have a CI step in `build-executables.yml` that exercises them *through
+  the built binary*, which is the only place this class of bug is visible.
 
 - `release-please-config.json`'s `packages["."].release-as` is a one-time
   version override, not a permanent pin. Left set after the bootstrap

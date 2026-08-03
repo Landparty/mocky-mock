@@ -79,6 +79,28 @@ jobs:
           BIN="build/${{ matrix.artifact }}"
           "$BIN" setup
           "$BIN" run examples/custinq/CUSTINQ.cbl --cut examples/custinq/CUSTINQ.cut
+      - name: Dashboard serves its bundled static assets
+        # Guards the same bug class as the Dockerfile above, for the one
+        # artifact where unit tests can't: Nuitka ignores pyproject's
+        # package-data, so mockymock/web/static/ only reaches the binary via
+        # build_executable.sh's --include-data-dir. Without it the page 404s
+        # here while every test passes. Port 0 would hide the port, so pin
+        # one; --no-browser keeps the runner headless.
+        shell: bash
+        run: |
+          BIN="build/${{ matrix.artifact }}"
+          "$BIN" dashboard --port 8765 --no-browser &
+          DASH=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8765/ >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8765/ | grep -q "toolchain status"
+          curl -fsS http://127.0.0.1:8765/style.css >/dev/null
+          curl -fsS http://127.0.0.1:8765/app.js >/dev/null
+          curl -fsS http://127.0.0.1:8765/api/status | grep -q '"checks"'
+          kill "$DASH" || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist-exe-${{ matrix.os }}
