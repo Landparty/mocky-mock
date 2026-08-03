@@ -1,19 +1,19 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, run, debug, mutate, lint, collect) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, generate, run, debug, mutate, lint, collect, dashboard) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-07-29T22:00:00Z
+timestamp: 2026-08-03T00:00:00Z
 ---
 
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines seven subcommands —
-`setup`, `generate`, `run`, `debug`, `mutate`, `lint`, `collect` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines eight subcommands —
+`setup`, `generate`, `run`, `debug`, `mutate`, `lint`, `collect`, `dashboard` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
-`mockymock.debug`) are
+`mockymock.debug`, `mockymock.web`) are
 deferred into each `_cmd_*` function body rather than imported at module top —
 so `mockymock --version` / `--help` stay fast and don't require Docker or a
 parser install to resolve.
@@ -26,6 +26,7 @@ mockymock debug     -> cli.checks (static) -> splicer -> runtime (debug=True) ->
 mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.runner (per-mutant: cli.checks -> splicer -> runtime) -> mutation.report
 mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
 mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed)
+mockymock dashboard -> web.server (loopback HTTP) -> runtime.status.probe()  (read-only Docker)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -329,7 +330,32 @@ machine-readable form (`{"version": 1, "cutFile", "suite": {name, line},
 authoritative test discovery; a `CutParseError` yields `{"version": 1,
 "error": "..."}` and exit 1.
 
+## `mockymock dashboard [--port N] [--no-browser]`
+
+Serves the static status page on `127.0.0.1` (host not configurable) until
+Ctrl-C, opening a browser unless `--no-browser`. Unlike `setup`, it is
+**read-only** — it calls `runtime.status.probe()`, never
+`ensure_toolchain()`, so a polling page can't trigger image builds. A taken
+port yields `mockymock dashboard: could not serve on ...` and exit 1. Full
+details in [dashboard](dashboard.md).
+
+`--port`'s default is stored as `None` and resolved to
+`web.server.DEFAULT_PORT` inside `_cmd_dashboard`, deliberately: reading
+the constant at parser-build time would import `web.server` ->
+`runtime.status` -> `runtime.docker_toolchain` (which reads the Dockerfile
+at import to compute `IMAGE`) on every `mockymock --help`. See the Gotchas
+below.
+
 # Gotchas
+
+**Nothing in `build_parser()` may import a `_cmd_*` body's dependencies.**
+The deferred-import rule above is about `main()`'s hot path, but
+`build_parser` runs on *every* invocation including `--help`/`--version`,
+so an import there is strictly worse than one at module top would be for a
+single command. `mockymock dashboard` regressed this once by importing
+`web.server` for a port default;
+`tests/unit/test_cli_dashboard.py::test_building_the_parser_does_not_import_the_docker_toolchain`
+now pins it in a subprocess.
 
 **`transform_data_division_exec` is called twice, and the first call's return value is intentionally thrown away** (`_cmd_run`, step 9 vs 11). The first pass exists purely to surface `EXEC SQL INCLUDE SQLCA` refusal reasons *before* any splicing happens; running the real transform that early would shift line numbers/spans that `splice_program` and the boundary/nested-site analysis depend on. Any future edit that tries to "simplify" this into one call will silently break splice-target alignment.
 
@@ -345,3 +371,4 @@ authoritative test discovery; a `CutParseError` yields `{"version": 1,
 - [report](report.md)
 - [dsl](dsl.md)
 - [coverage](coverage.md)
+- [dashboard](dashboard.md)

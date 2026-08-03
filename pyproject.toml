@@ -61,6 +61,10 @@ mockymock = ["py.typed"]
 # ships in the wheel -- `mockymock setup` needs it under any install mode,
 # including a bare `uv tool install` with no sibling checkout present.
 "mockymock.runtime" = ["docker/Dockerfile"]
+# Same reasoning for the dashboard's static assets: they live under the
+# package and are resolved via Path(__file__), so they must be packaged
+# explicitly or `mockymock dashboard` 404s under `uv tool install`.
+"mockymock.web" = ["static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

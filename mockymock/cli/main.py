@@ -25,6 +25,20 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_dashboard(args: argparse.Namespace) -> int:
+    from mockymock.web import server
+
+    port = server.DEFAULT_PORT if args.port is None else args.port
+    try:
+        server.serve(port=port, open_browser=not args.no_browser)
+    except OSError as exc:
+        # Almost always "address already in use" -- a second dashboard, or
+        # something else on the port. Actionable message, not a traceback.
+        print(f"mockymock dashboard: could not serve on {server.HOST}:{port}: {exc}")
+        return 1
+    return 0
+
+
 def _check_input_files(command: str, *paths: Path) -> bool:
     """Print a clean error for every input path that doesn't exist. Runs
     before any toolchain/parse work so a typo'd path fails in milliseconds
@@ -1031,6 +1045,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit machine-readable JSON instead of the human listing",
     )
     collect_parser.set_defaults(func=_cmd_collect)
+
+    dashboard_parser = subparsers.add_parser(
+        "dashboard",
+        help=(
+            "Serve a local web page showing whether Docker and the "
+            "GnuCOBOL toolchain are up (read-only; does not build or start "
+            "anything)"
+        ),
+    )
+    dashboard_parser.add_argument(
+        "--port",
+        type=int,
+        # Resolved in _cmd_dashboard rather than here: importing
+        # web.server for its DEFAULT_PORT would pull runtime.docker_toolchain
+        # (and its Dockerfile read) into every `mockymock --help`, breaking
+        # this module's deferred-import rule. test_cli_dashboard.py pins the
+        # literal below against web.server.DEFAULT_PORT.
+        default=None,
+        help="Port to serve on (default 8765; 0 picks a free one)",
+    )
+    dashboard_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Don't open a browser window automatically",
+    )
+    dashboard_parser.set_defaults(func=_cmd_dashboard)
 
     return parser
 

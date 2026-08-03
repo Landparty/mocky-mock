@@ -1,5 +1,37 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-03 — `mockymock dashboard`: a local status page for the toolchain
+
+New concept: [dashboard.md](dashboard.md). A static page (plain HTML/CSS/JS
+under `mockymock/web/static/`, no build step) served on `127.0.0.1` by a
+stdlib `ThreadingHTTPServer`, polling one read-only JSON endpoint every 5s
+to show whether Docker and the GnuCOBOL toolchain are up. First deliberately
+extensible surface — the page renders purely from the payload, so future
+panels are additive.
+
+Two decisions worth keeping: the probe (`mockymock/runtime/status.py`)
+mirrors `ensure_toolchain`'s lifecycle checks but **never calls it** —
+`ensure_toolchain` builds images and rm+recreates containers, so a polling
+page would trigger rebuilds from a browser refresh; and the bind address is
+fixed at loopback since the endpoint is unauthenticated.
+
+Adding the subcommand also surfaced a latent CLI rule that
+[cli.md](cli.md)'s Gotchas now states explicitly: `build_parser()` runs on
+every `--help`/`--version`, so an import *there* defeats the deferred-import
+discipline more thoroughly than a module-top import in a single `_cmd_*`
+would. The first draft read `web.server.DEFAULT_PORT` for an argparse
+default, which pulled `runtime.docker_toolchain` (and its import-time
+Dockerfile read) into every invocation. Now pinned by a subprocess test.
+
+Packaging needed three separate mechanisms, not one:
+`[tool.setuptools.package-data]` covers the wheel (verified against a built
+wheel), but **Nuitka ignores it entirely**, so the static assets also needed
+`--include-data-dir` in `scripts/build_executable.sh` or the released
+binaries — the primary artifact — would have 404'd while every test passed.
+`build-executables.yml` now curls the dashboard out of the freshly built
+binary on all three platforms. [publishing.md](publishing.md)'s Gotchas
+generalizes this for the next data file.
+
 ## 2026-08-03 — v0.1.0's binaries were missing; recovered as v0.1.1
 
 `v0.1.0` (released earlier the same day) had **no binary assets attached** —

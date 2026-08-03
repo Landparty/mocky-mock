@@ -133,6 +133,7 @@ rest each add one distinctive feature.
 - `mockymock run --trace` — replay one test case's execution path and mock timeline ([design](docs/2026-07-21-debug-trace-design.md))
 - `mockymock debug --dap-stdio` — a real [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) session: breakpoints, stepping, and variable inspection on your original `.cbl` ([design](docs/2026-07-22-dap-debugger-design.md))
 - `mockymock collect --cut ORDRPROC.cut [--json]` — list a suite's cases with line numbers and tags, no Docker needed
+- `mockymock dashboard` — a local status page (loopback only) showing at a glance whether Docker and the GnuCOBOL toolchain are up; read-only, it never builds or starts anything ([details](.okf/dashboard.md))
 
 ## Design goals
 
