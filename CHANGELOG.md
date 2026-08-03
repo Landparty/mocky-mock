@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/samdion1994/mocky-mock/compare/v0.1.1...v0.2.0) (2026-08-03)
+
+
+### Features
+
+* **cli:** add `mockymock dashboard`, a local toolchain status page ([ff151e5](https://github.com/samdion1994/mocky-mock/commit/ff151e578c79ccaa4dcb2afd01d85b75b5a49b84))
+* **cli:** add `mockymock dashboard`, a local toolchain status page ([557d0a8](https://github.com/samdion1994/mocky-mock/commit/557d0a8a6185a2b388b4f5b11d956412f124c9e4))
+
+
+### Documentation
+
+* **okf:** document the v0.1.0 asset-loss/v0.1.1 recovery and its two root causes ([d03f634](https://github.com/samdion1994/mocky-mock/commit/d03f634569adb35734a38ffff74a4e4d5162a36b))
+
 ## [0.1.1](https://github.com/samdion1994/mocky-mock/compare/v0.1.0...v0.1.1) (2026-08-03)
 
 
