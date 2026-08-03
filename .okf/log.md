@@ -1,5 +1,30 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-03 — v0.1.0's binaries were missing; recovered as v0.1.1
+
+`v0.1.0` (released earlier the same day) had **no binary assets attached** —
+the Windows leg of `build-executables.yml` failed to authenticate the
+private `cobolparser` git dependency (`pwsh` doesn't expand `${TOKEN}` the
+way `bash` does, so the rewritten clone URL silently embedded an empty
+token), which failed that matrix job and skipped `release-please.yml`'s
+`publish` job for all three platforms, not just Windows. Root cause fixed
+earlier the same day (`257dcbf`, `shell: bash` pinned on the credential
+step) but nothing re-triggered the pipeline, since `ci:` commits don't bump
+the version on their own.
+
+Forcing a release turned up a second, previously-latent bug:
+`release-please-config.json` still had `"release-as": "0.1.0"` pinned from
+the original bootstrap release. That silently overrode a `Release-As:
+0.1.1` commit trailer and made `release-please` propose a no-op release
+back against the already-existing `v0.1.0` tag (PR #37, closed unmerged).
+Removed the stale pin (`2c08bd2`) so `release-please` resumed computing
+versions normally; the corrected PR #38 (`chore(main): release 0.1.1`)
+merged cleanly and the now-fixed pipeline built and attached all three
+executables. `v0.1.0` stays published as-is (tagged, no assets) — an
+accurate record that the first attempt was broken, not amended after the
+fact. See [publishing.md](publishing.md)'s new Gotchas section for both
+root causes.
+
 ## 2026-08-02 — Manual publish pipeline to the public cobol-mocky-mock repo
 
 New concept: [publishing.md](publishing.md). The existing

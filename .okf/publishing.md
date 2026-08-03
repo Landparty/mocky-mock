@@ -3,7 +3,7 @@ type: Runbook
 title: Publishing
 description: How mockymock's compiled executables reach users with no repo access — the build-executables.yml reusable workflow, the automatic release-please.yml path, and the manual publish-public.yml path to the public cobol-mocky-mock repo.
 tags: [ci, release, publishing]
-timestamp: 2026-08-02T00:00:00Z
+timestamp: 2026-08-03T00:00:00Z
 ---
 
 # Overview
@@ -40,6 +40,26 @@ Three workflows share this build via one reusable definition:
 
 `cobol-mocky-mock` itself carries only a `README.md` plus whatever releases
 `publish-public.yml` has published — no source, no other files.
+
+# Gotchas
+
+- `release-please-config.json`'s `packages["."].release-as` is a one-time
+  version override, not a permanent pin. Left set after the bootstrap
+  release it was written for, every subsequent `release-please` run keeps
+  proposing that same fixed version forever — including re-proposing a
+  release against a tag that already exists, which is a no-op/broken PR,
+  not a new release. Remove the key once the version it names has shipped;
+  a genuine one-off override (e.g. to skip a version) belongs in a commit's
+  `Release-As: X.Y.Z` trailer instead, which `release-please` only applies
+  once, to that commit's own version proposal.
+- `build-executables.yml`'s `run:` steps default to `pwsh` on
+  `windows-latest`; only `bash`/`sh`-family shells expand `${TOKEN}`-style
+  env vars the way Linux/macOS's default `bash` does. Any step that builds
+  a shell string from a secret needs an explicit `shell: bash` on every OS,
+  not just the ones where it happens to already default to bash — pwsh
+  silently treats `${TOKEN}` as an unset variable rather than erroring,
+  so the failure surfaces downstream (git auth) instead of at the
+  substitution site.
 
 # See Also
 
