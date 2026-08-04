@@ -19,24 +19,37 @@ from __future__ import annotations
 
 from mockymock.analysis.mock_surface import BoundarySite
 from mockymock.analysis.refusal import directive_matches_site
-from mockymock.dsl.model import FILE_STATUS_CATEGORIES, MockTestSuite
+from mockymock.dsl.model import FILE_STATUS_CATEGORIES, MockCategory, MockTestSuite
 from mockymock.splicer.naming import TallyRegistry
 
 
-def build_rows_block(tally_name: str, rows: list[list[tuple[str, str]]]) -> list[str]:
-    """EVALUATE block for a MOCK SQL ... ROWS directive: row N's MOVEs fire
-    once `tally_name` (already incremented by the caller before this runs,
-    so the first call sees tally == 1) reaches N, followed by MOVE 0 TO
-    SQLCODE; once rows are exhausted, MOVE 100 TO SQLCODE (DB2's real "not
-    found" code) fires instead."""
+def build_rows_block(
+    tally_name: str,
+    rows: list[list[tuple[str, str]]],
+    *,
+    row_suffix_moves: list[str],
+    exhausted_moves: list[str],
+) -> list[str]:
+    """EVALUATE block for a MOCK SQL/READ ... ROWS directive: row N's MOVEs
+    fire once `tally_name` (already incremented by the caller before this
+    runs, so the first call sees tally == 1) reaches N, followed by
+    `row_suffix_moves` (already-formed MOVE lines appended after every
+    row -- `["MOVE 0 TO SQLCODE"]` for SQL rows; `[]` for READ rows, whose
+    implicit default-success MOVE already precedes the whole block, see
+    build_site_dispatch); once rows are exhausted, `exhausted_moves` fires
+    instead (SQL: `["MOVE 100 TO SQLCODE"]`, DB2's real "not found" code;
+    READ: the resolved end-of-data signal -- either the mock's own
+    TERMINAL group or a default `MOVE "10" TO <status field>`)."""
     lines = ["EVALUATE TRUE"]
     for index, row in enumerate(rows, start=1):
         lines.append(f"    WHEN {tally_name} = {index}")
         for field, value in row:
             lines.append(f"        MOVE {value} TO {field}")
-        lines.append("        MOVE 0 TO SQLCODE")
+        for move in row_suffix_moves:
+            lines.append(f"        {move}")
     lines.append("    WHEN OTHER")
-    lines.append("        MOVE 100 TO SQLCODE")
+    for move in exhausted_moves:
+        lines.append(f"        {move}")
     lines.append("END-EVALUATE")
     return lines
 
@@ -101,10 +114,36 @@ def build_site_dispatch(
                         f'                   MOVE "{directive.file_status}" '
                         f"TO {status_field}"
                     )
-        if directive.rows is not None:
+        if directive.rows is not None and directive.category is MockCategory.READ:
+            status_field = file_status_fields.get(directive.key.upper())
+            if directive.terminal_row is None and status_field is None:
+                raise ValueError(
+                    "refusal gate should have caught this "
+                    "(UNRESOLVED_FILE_STATUS_TARGET)"
+                )
+            exhausted_moves = (
+                [f"MOVE {value} TO {field}" for field, value in directive.terminal_row]
+                if directive.terminal_row is not None
+                else [f'MOVE "10" TO {status_field}']
+            )
             lines.extend(
                 f"                   {body}"
-                for body in build_rows_block(tally_name, directive.rows)
+                for body in build_rows_block(
+                    tally_name,
+                    directive.rows,
+                    row_suffix_moves=[],
+                    exhausted_moves=exhausted_moves,
+                )
+            )
+        elif directive.rows is not None:
+            lines.extend(
+                f"                   {body}"
+                for body in build_rows_block(
+                    tally_name,
+                    directive.rows,
+                    row_suffix_moves=["MOVE 0 TO SQLCODE"],
+                    exhausted_moves=["MOVE 100 TO SQLCODE"],
+                )
             )
         else:
             lines.extend(f"                   {body}" for body in directive.body_lines)

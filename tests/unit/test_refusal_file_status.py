@@ -79,6 +79,76 @@ TESTCASE "c"
     assert "NO-STATUS" in matches[0].message
 
 
+# READ ROWS source: no FILE STATUS clause on the SELECT (mirrors
+# test_refusal.py's proven-parseable FILE_IO_SOURCE shape), so a MOCK READ
+# ... ROWS block has no status field to fall back on for end-of-data --
+# only its own TERMINAL group can supply one.
+PROGRAM_NO_STATUS_FIELD = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RRSAMP.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT ORDER-FILE ASSIGN TO "ORDERS"
+               ORGANIZATION IS LINE SEQUENTIAL.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  ORDER-FILE.
+       01  ORDER-RECORD.
+           05  ORDER-QTY      PIC 9(5).
+
+       PROCEDURE DIVISION.
+       READ-AN-ORDER.
+           READ ORDER-FILE
+               AT END DISPLAY "EOF"
+           END-READ.
+"""
+
+CUT_READ_ROWS_NO_TERMINAL = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK READ ORDER-FILE ROWS
+        ( ORDER-QTY = 50 )
+    END-MOCK
+    PERFORM READ-AN-ORDER
+"""
+
+CUT_READ_ROWS_WITH_TERMINAL = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK READ ORDER-FILE ROWS
+        ( ORDER-QTY = 50 )
+        TERMINAL ( ORDER-QTY = 0 )
+    END-MOCK
+    PERFORM READ-AN-ORDER
+"""
+
+
+def _reasons_for(source: str, cut_text: str):
+    result = parse_cobol(source, filename="rrsamp.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    file_status_fields = analyze_file_status_fields(result.ast)
+    suite = parse_cut(cut_text)
+    case = suite.test_cases[0]
+    return check_test_case(surface, result.ast, case, file_status_fields)
+
+
+def test_read_rows_without_status_field_or_terminal_refuses():
+    # program whose SELECT has no FILE STATUS clause; .cut mocks its READ
+    # with ROWS and no TERMINAL group
+    reasons = _reasons_for(PROGRAM_NO_STATUS_FIELD, CUT_READ_ROWS_NO_TERMINAL)
+    assert any(r.code == "UNRESOLVED_FILE_STATUS_TARGET" for r in reasons)
+    assert any("TERMINAL" in r.message for r in reasons)
+
+
+def test_read_rows_with_terminal_but_no_status_field_is_accepted():
+    reasons = _reasons_for(PROGRAM_NO_STATUS_FIELD, CUT_READ_ROWS_WITH_TERMINAL)
+    assert not [r for r in reasons if r.code == "UNRESOLVED_FILE_STATUS_TARGET"]
+
+
 def test_check_test_case_defaults_file_status_fields_to_empty():
     """The new parameter is optional -- every existing caller that omits
     it must keep working exactly as before."""

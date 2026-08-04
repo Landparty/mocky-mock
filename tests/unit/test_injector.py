@@ -169,6 +169,8 @@ def test_rows_block_codegens_indexed_when_branches_and_exhaustion():
             [("EMP-NAME", '"SMITH"'), ("EMP-ID", "100")],
             [("EMP-NAME", '"JONES"'), ("EMP-ID", "101")],
         ],
+        row_suffix_moves=["MOVE 0 TO SQLCODE"],
+        exhausted_moves=["MOVE 100 TO SQLCODE"],
     )
     assert lines == [
         "EVALUATE TRUE",
@@ -184,6 +186,36 @@ def test_rows_block_codegens_indexed_when_branches_and_exhaustion():
         "        MOVE 100 TO SQLCODE",
         "END-EVALUATE",
     ]
+
+
+def test_read_rows_block_uses_status_field_terminal():
+    lines = build_rows_block(
+        "UT-TALLY-1",
+        [[("ORDER-QTY", "50")], [("ORDER-QTY", "75")]],
+        row_suffix_moves=[],
+        exhausted_moves=['MOVE "10" TO WS-ORDER-STATUS'],
+    )
+    assert lines == [
+        "EVALUATE TRUE",
+        "    WHEN UT-TALLY-1 = 1",
+        "        MOVE 50 TO ORDER-QTY",
+        "    WHEN UT-TALLY-1 = 2",
+        "        MOVE 75 TO ORDER-QTY",
+        "    WHEN OTHER",
+        '        MOVE "10" TO WS-ORDER-STATUS',
+        "END-EVALUATE",
+    ]
+
+
+def test_sql_rows_block_unchanged():
+    lines = build_rows_block(
+        "UT-TALLY-1",
+        [[("X", "1")]],
+        row_suffix_moves=["MOVE 0 TO SQLCODE"],
+        exhausted_moves=["MOVE 100 TO SQLCODE"],
+    )
+    assert "        MOVE 0 TO SQLCODE" in lines
+    assert lines[-2] == "        MOVE 100 TO SQLCODE"
 
 
 def test_dispatch_splices_rows_block_using_resolved_tally_name():
@@ -206,6 +238,71 @@ def test_dispatch_splices_rows_block_using_resolved_tally_name():
     assert 'MOVE "SMITH" TO EMP-NAME' in joined
     assert "WHEN OTHER" in joined
     assert "MOVE 100 TO SQLCODE" in joined
+
+
+def test_dispatch_splices_read_rows_block_using_default_status_terminal():
+    """No TERMINAL group, but the file declares a FILE STATUS field: the
+    exhaustion branch defaults to MOVE "10" TO <field> and never touches
+    SQLCODE."""
+    site = _site(MockCategory.READ, "READ", keys=("ORDER-FILE",))
+    case = MockTestCase(
+        name="rows",
+        mocks=[
+            MockDirective(
+                MockCategory.READ,
+                "ORDER-FILE",
+                rows=[[("ORDER-QTY", "50")]],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = build_site_dispatch(
+        site, suite, TallyRegistry(suite), {"ORDER-FILE": "WS-ORDER-STATUS"}
+    )
+    joined = "\n".join(lines)
+    assert "ADD 1 TO UT-READ-ORDER-FILE-TALLY" in joined
+    assert "MOVE 50 TO ORDER-QTY" in joined
+    assert 'MOVE "10" TO WS-ORDER-STATUS' in joined
+    assert "SQLCODE" not in joined
+
+
+def test_dispatch_splices_read_rows_block_using_explicit_terminal_row():
+    """A TERMINAL group wins over the status-field default, even when the
+    file declares no FILE STATUS field at all."""
+    site = _site(MockCategory.READ, "READ", keys=("ORDER-FILE",))
+    directive = MockDirective(
+        MockCategory.READ,
+        "ORDER-FILE",
+        rows=[[("ORDER-QTY", "50")]],
+    )
+    directive.terminal_row = [("WS-EOF-FLAG", '"Y"')]
+    case = MockTestCase(name="rows", mocks=[directive])
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = build_site_dispatch(site, suite, TallyRegistry(suite), {})
+    joined = "\n".join(lines)
+    assert 'MOVE "Y" TO WS-EOF-FLAG' in joined
+    assert "SQLCODE" not in joined
+
+
+def test_dispatch_raises_for_read_rows_without_terminal_or_status_field():
+    """Fail closed: this shape should have already been refused by
+    refusal.check_test_case (UNRESOLVED_FILE_STATUS_TARGET); reaching the
+    splicer means that gate was bypassed, so raise loudly rather than emit
+    a READ loop with no way to terminate."""
+    site = _site(MockCategory.READ, "READ", keys=("ORDER-FILE",))
+    case = MockTestCase(
+        name="rows",
+        mocks=[
+            MockDirective(
+                MockCategory.READ,
+                "ORDER-FILE",
+                rows=[[("ORDER-QTY", "50")]],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    with pytest.raises(ValueError, match="UNRESOLVED_FILE_STATUS_TARGET"):
+        build_site_dispatch(site, suite, TallyRegistry(suite), {})
 
 
 def test_default_success_status_injected_when_file_declares_a_status_field():
