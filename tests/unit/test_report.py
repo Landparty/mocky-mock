@@ -556,6 +556,27 @@ def test_parse_stdout_records_recorded_values_in_order():
     ]
 
 
+def test_parse_stdout_records_a_subscripted_name_containing_a_space():
+    """scan_stub_expectations explicitly supports a subscripted data-name
+    like "WS-TABLE(1, 1)" (a space after the comma -- see
+    test_stub_expectations.py::test_subscripted_stub_name_parses), and
+    build_driver emits it verbatim into the RECORD marker -- a bare \\S+
+    name group would stop at that space, never find the ": " it then
+    requires, and silently drop the whole recorded value instead of
+    raising anything."""
+    stdout = "\n".join(
+        [
+            "__MOCKYMOCK__ TESTSUITE: S",
+            "__MOCKYMOCK__ CASE 001 START: calc",
+            "__MOCKYMOCK__ RECORD 001 WS-TABLE(1, 1): 42",
+            "__MOCKYMOCK__ CASE 001 END",
+            "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0",
+        ]
+    )
+    suite = parse_stdout(stdout)
+    assert suite.results[0].recorded == [("WS-TABLE(1, 1)", "42")]
+
+
 def test_parse_stdout_attributes_recorded_values_by_case_id_not_position():
     """Unlike MOCK:, a RECORD marker carries a real case id -- attribution
     must use it, not "whichever case's START printed most recently"."""

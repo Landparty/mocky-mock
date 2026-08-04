@@ -45,6 +45,16 @@ blocks are splicer-inserted, and the trace's line remap drops inserted
 lines by design. See [cli](cli.md)'s `--trace` and
 docs/2026-07-21-debug-trace-design.md.
 
+**`_RECORD_RE`'s `name` group reuses `dsl.parser._SUBSCRIPTED_NAME`, not a
+bare `\S+`** (fixed 2026-08-04, found by GitHub Copilot's automated review
+of this PR and confirmed against the code before acting): a subscripted
+data-name like `WS-TABLE(1, 1)` contains a space after the comma —
+`scan_stub_expectations` explicitly supports this shape (see
+[analysis.md](analysis.md)'s stub-expectations section) and `build_driver`
+emits it into the `RECORD` line verbatim, so a plain `\S+` would stop at
+that space, never find the `": "` the pattern then requires, and silently
+drop the whole recorded value with no error at all.
+
 `RECORD`, unlike `MOCK:`, carries a real case id — `build_driver` already
 has `case_id` in scope at the exact point it emits this marker, so there's
 no structural reason to fall back to `MOCK:`'s weaker positional

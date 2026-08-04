@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from mockymock.dsl.parser import _SUBSCRIPTED_NAME
+
 _TESTSUITE_RE = re.compile(r"^__MOCKYMOCK__ TESTSUITE: (?P<name>.+)$")
 _CASE_START_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) START: (?P<name>.+)$")
 _CASE_FAIL_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) FAIL: (?P<reason>.+)$")
@@ -17,8 +19,14 @@ _MOCK_RE = re.compile(r"^__MOCKYMOCK__ MOCK: (?P<label>.+)$")
 # record_targets addition. Unlike MOCK:, this DOES carry a case id (the
 # driver already has it in scope at the splice site), so it is attributed
 # by id below, the same way FAIL/END are -- not positionally like MOCK:.
+# `name` reuses dsl.parser's own _SUBSCRIPTED_NAME (not a bare \S+): a
+# subscripted data-name like "WS-TABLE(1, 1)" contains a space after the
+# comma (scan_stub_expectations explicitly supports this shape, and
+# build_driver emits it into this exact line verbatim), which a plain
+# \S+ would truncate at, making the required ": " that follows never
+# match and silently dropping the whole recorded value.
 _RECORD_RE = re.compile(
-    r"^__MOCKYMOCK__ RECORD (?P<id>\S+) (?P<name>\S+): (?P<value>.*)$"
+    rf"^__MOCKYMOCK__ RECORD (?P<id>\S+) (?P<name>{_SUBSCRIPTED_NAME}): (?P<value>.*)$"
 )
 _SUMMARY_RE = re.compile(
     r"^__MOCKYMOCK__ SUMMARY: RUN=(?P<run>\d+) FAILURES=(?P<failures>\d+)$"

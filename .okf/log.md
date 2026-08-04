@@ -1,5 +1,36 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-04 — PR #44 Copilot review: `_RECORD_RE` couldn't match a subscripted name
+
+GitHub Copilot's automated review of PR #44 left one comment; verified
+against the actual code before acting (a stale local checkout initially
+made the flagged file look like it didn't even contain `_RECORD_RE` at
+all — fixed by `git fetch` + `git merge --ff-only` before investigating
+further, same fix as the sibling cobol-parser repo's own PR #108 hit the
+same session).
+
+`report/results.py`'s `_RECORD_RE` used a bare `(?P<name>\S+)` for the
+data-name in `__MOCKYMOCK__ RECORD <id> <name>: <value>`. A subscripted
+name like `WS-TABLE(1, 1)` contains a space after the comma —
+`analysis.stub_expectations.scan_stub_expectations` explicitly supports
+this shape (`dsl.parser._SUBSCRIPTED_NAME`, pinned by
+`test_stub_expectations.py::test_subscripted_stub_name_parses`), and
+`splicer.driver.build_driver` emits it into the `RECORD` line verbatim —
+confirmed by reading `build_driver`'s own f-string, which interpolates
+`name` both into the marker's literal-text portion and as the actual
+COBOL operand displayed. `\S+` stops at the first space, so for that
+input the regex would look for `": "` right after `WS-TABLE(1,` — never
+finds it there — and the whole line fails to match, silently dropping the
+recorded value with no error signal at all.
+
+Fixed: `_RECORD_RE`'s `name` group now reuses `dsl.parser._SUBSCRIPTED_NAME`
+directly (imported, not reimplemented) rather than a parallel pattern that
+could drift from the one `scan_stub_expectations` already established and
+tested. New test:
+`test_report.py::test_parse_stdout_records_a_subscripted_name_containing_a_space`.
+Updated: [report.md](report.md) (new gotcha entry cross-referencing the fix
+and its rationale).
+
 ## 2026-08-04 — Auto-generated READ mocks silently produced infinite loops
 
 Found by PR #44's own CI: `examples/fixtures/FIXTUREDEMO`'s Docker-gated
