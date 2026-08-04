@@ -69,6 +69,14 @@ def build_site_dispatch(
     own body; an explicit FILE-STATUS IS (`directive.file_status`) follows
     it and therefore wins, same as any hand-written MOVE the author adds
     after it -- see docs/2026-07-20-before-blocks-and-file-status-design.md.
+
+    A `MOCK READ ... ROWS` directive's exhaustion branch resolves to its
+    own `TERMINAL ( ... )` group when present, else a default
+    `MOVE "10" TO <status field>`; if neither is available this raises
+    ValueError rather than emit a READ loop with no way to terminate --
+    every production call site gates on `refusal.check_test_case`
+    (UNRESOLVED_FILE_STATUS_TARGET) first, using this same
+    `file_status_fields` dict, so that should be unreachable in practice.
     """
     file_status_fields = file_status_fields or {}
     lines = ["           EVALUATE UT-CURRENT-CASE"]
