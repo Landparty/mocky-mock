@@ -83,12 +83,48 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         check_unresolved_copybooks,
         check_whole_program,
     )
+    from mockymock.dsl.fixture_bundle import (
+        FixtureBundle,
+        UnsupportedBundleVersionError,
+        load_fixture_bundle,
+        load_fixture_bundle_file,
+    )
     from mockymock.dsl.generator import scaffold_cut
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
     source_path = Path(args.program)
     if not _check_input_files("mockymock generate", source_path):
         return 1
+
+    bundle: FixtureBundle | None = None
+    if args.fixtures:
+        fixtures_path = Path(args.fixtures)
+        if not fixtures_path.is_file():
+            print(f"mockymock generate: no such file: {fixtures_path}")
+            return 1
+        try:
+            bundle = load_fixture_bundle_file(fixtures_path)
+        except UnsupportedBundleVersionError as exc:
+            print(f"mockymock generate: {exc}")
+            return 1
+        except Exception as exc:  # malformed JSON, missing required keys, ...
+            print(f"mockymock generate: invalid fixture bundle {fixtures_path}: {exc}")
+            return 1
+    elif args.with_data:
+        from cobolparser.generators import ProgramFixtureGenerator
+
+        try:
+            cp_bundle = ProgramFixtureGenerator().generate_with_scenarios_from_file(
+                str(source_path),
+                mode=args.scenarios,
+                seed=args.seed,
+                copybook_paths=args.copybook_path,
+            )
+            bundle = load_fixture_bundle(cp_bundle.to_dict())
+        except Exception as exc:
+            print(f"mockymock generate: fixture bundle generation failed: {exc}")
+            return 1
+
     raw_source = source_path.read_text(encoding="utf-8")
     if args.copybook_path:
         expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
@@ -136,14 +172,34 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if linkage is not None:
         _print_linkage_neutralization("generate", linkage, applied=False)
 
+    if bundle is not None and not bundle.scenarios:
+        # Possible with --scenarios branches|all on a program with no
+        # branch arms and no fixed-family (empty-input/error-status/
+        # boundary-values) matches -- there is genuinely nothing to
+        # scaffold a TESTCASE from. --scenarios happy (the default)
+        # always produces exactly one scenario, so this cannot happen
+        # there.
+        print(
+            "mockymock generate: the fixture bundle has zero scenarios -- "
+            "nothing to scaffold. Try --scenarios happy (the default), or "
+            "check the program has any branch arms/fixed-family matches at "
+            "all for --scenarios branches|all to target"
+        )
+        return 1
+
     surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
-    cut_text = scaffold_cut(result.ast.program_name, surface)
+    cut_text = scaffold_cut(result.ast.program_name, surface, bundle)
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
     output_path.write_text(cut_text, encoding="utf-8")
     case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
+    if bundle is not None:
+        print(
+            f"mockymock generate: data-driven from a fixture bundle "
+            f"(seed={bundle.seed})"
+        )
     _report_unsupported_boundaries(surface, "generate")
     return 0
 
@@ -1030,6 +1086,49 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    generate_parser.add_argument(
+        "--with-data",
+        action="store_true",
+        help=(
+            "Data-driven mode (Phase 8 of the gen-fixtures initiative): one "
+            "TESTCASE per scenario from a cobol-parser fixture bundle, mock "
+            "bodies built from its own generated data, instead of the "
+            "placeholder scaffold. Calls cobol-parser's Python API directly "
+            "unless --fixtures is also given. See "
+            "docs/plans/2026-08-02-program-data-generation-implementation.md's "
+            "Phase 8"
+        ),
+    )
+    generate_parser.add_argument(
+        "--fixtures",
+        help=(
+            "Consume a pre-generated fixture bundle JSON file (e.g. from "
+            "cobol-parser's own 'gen-fixtures --format json') instead of "
+            "calling cobol-parser's Python API. Implies --with-data"
+        ),
+    )
+    generate_parser.add_argument(
+        "--seed",
+        type=int,
+        help=(
+            "Seed for the fixture bundle's random data generation "
+            "(--with-data only, ignored with --fixtures). Omit to draw one; "
+            "the bundle always reports which seed it used"
+        ),
+    )
+    generate_parser.add_argument(
+        "--scenarios",
+        choices=["happy", "branches", "all"],
+        default="happy",
+        help=(
+            "Scenario strategy for the fixture bundle (--with-data only, "
+            "ignored with --fixtures): happy (one unconstrained scenario, "
+            "default), branches (one scenario per reachable/satisfiable "
+            "branch arm), all (branches + fixed empty-input/error-status/"
+            "boundary-values families). Mirrors cobol-parser's own "
+            "gen-fixtures --scenarios flag"
+        ),
     )
     generate_parser.set_defaults(func=_cmd_generate)
 

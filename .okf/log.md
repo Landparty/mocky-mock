@@ -1,5 +1,120 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-04 — `mockymock generate --with-data`: bundle-driven scaffold (gen-fixtures Phase 8)
+
+`generate` now has a second scaffold mode: `--with-data` calls cobol-parser's
+`ProgramFixtureGenerator().generate_with_scenarios_from_file(...)` directly (no
+subprocess) and threads the resulting `FixtureBundle` through `scaffold_cut`,
+which builds one `TESTCASE` per scenario — real generated data in each `MOCK`
+body, `EXPECT`/`VERIFY`/`*> STUB EXPECT` lines from the bundle's own
+expectations — instead of one placeholder-bodied `TESTCASE` per paragraph.
+`--fixtures PATH` accepts a pre-generated bundle JSON instead (CI use, and it
+keeps the JSON schema honest as a real serialization boundary rather than a
+Python-object handoff mockymock and cobol-parser could silently drift apart
+on). Full design: `docs/plans/2026-08-02-program-data-generation-*.md`
+(cobol-parser repo). New: `dsl/fixture_bundle.py` (loader — parses the bundle
+JSON into mockymock-local dataclasses; never imports cobol-parser's own bundle
+*classes*, only the serialized shape). Rewritten: `dsl/generator.py` (the
+bundle branch of `scaffold_cut`). Extended: `cli/main.py`'s `_cmd_generate`.
+See [dsl.md](dsl.md)'s "Bundle-driven scaffold" section and
+[cli.md](cli.md)'s `generate` entry for the full mechanism.
+
+Three integration bugs found and fixed empirically (generate a real bundle,
+inspect it, find the discrepancy — not guessed from reading either side's
+code in isolation):
+
+* **Multi-file `OPEN`/`CLOSE` silently dropped the second file's key.**
+  `_mockymock_boundary_keys` (and the pre-existing `_directive_for`) only
+  ever looked at `site.keys[0]`; `OPEN INPUT INV-FILE OUTPUT RPT-FILE` lost
+  `RPT-FILE` entirely. Fixed by widening the loop to every entry of
+  `site.keys`. That alone then caused a *second* bug: emitting one `MOCK
+  OPEN` directive per key (`INV-FILE` **and** `RPT-FILE`) declares two
+  directives that both match the *same* physical `BoundarySite`, which the
+  refusal gate correctly refuses as `AMBIGUOUS_MOCK`. Fixed by
+  `_bundle_mock_directives` grouping fixtures by `id(site)` (physical
+  identity, not key) and emitting one directive per group with one chosen
+  representative key.
+* **`VERIFY_WITHOUT_MOCK` after fixing the ambiguous-mock bug.** Once only
+  one directive per physical site is declared, checking `_render_expectation`'s
+  `VERIFY` gate against the *full* `mockymock_keys` set (every key mockymock's
+  own walk knows about) is too permissive — `RPT-FILE` is in that set but was
+  never literally declared as this TESTCASE's primary key. Fixed by having
+  `_bundle_mock_directives` return `(lines, declared_keys)` and gating the
+  `VERIFY` line on `declared_keys` (only the literally-emitted primary keys),
+  not the broader mockymock-wide set.
+* **OUT-direction boundaries (WRITE, SQL UPDATE/INSERT/DELETE) read as
+  `UNMOCKED_*`.** `_bundle_boundary_keys` originally only walked
+  `call_count`-kind expectations; an OUT-direction boundary gets no fixture at
+  all (see cobol-parser's `docs/fixture-bundle-schema.md`) — only a
+  `kind="stub"` expectation is the *sole* place its `(category, key)` appears
+  in the whole bundle. Fixed by including `stub`-kind refs in the mismatch set,
+  and by widening `_bundle_mock_directives` to unconditionally cover *every*
+  `mockymock_keys` entry not yet emitted with a placeholder body (not just ones
+  a boundary-level stub flagged) — a simpler rule that, as a side effect, also
+  papers safely over the custprog gap below.
+
+One upstream (cobol-parser) bug found and fixed in that repo, not worked
+around here, per this initiative's own established precedent: a READ
+boundary with no declared `FILE STATUS` field was defaulting `terminal` to
+a literal `"FILE-STATUS"` placeholder string instead of `None` — see
+cobol-parser's own log for `program_fixtures.py`'s `_resolve_status_field`/
+`_status_dict` fix (commit `b3e2b32`).
+
+**Contract test** (`tests/unit/test_fixture_bundle_contract.py`): pins that
+`mock_surface.analyze()`'s `(category, key)` set exactly equals the bundle's,
+across an 11-program corpus under `examples/`. Two of the three failures hit
+while first writing this test were not product bugs at all: the test harness
+itself never called `annotate_nested_sites` before computing
+`_mockymock_boundary_keys`, so *every* nested boundary site (a CALL/EXEC
+inside an IF, PERFORM, etc.) was silently filtered out by that function's own
+"skip an unspliced nested site" guard — `claimseg/CLAIMSEG.cbl`'s `DLI ISRT`
+(nested in an IF) and `regnavg/REGNAVG.cbl`'s `CALL "LOGALERT"` (also nested
+in an IF) both disappeared from `mockymock_set` for this reason alone, not
+because of any real analysis gap. Fixed by mirroring `cli/main.py`'s own
+pipeline exactly (`normalize_fixed_format` + `strip_compiler_directives` +
+`collect_scope_map` + `annotate_nested_sites`) in the test's `_key_sets`
+helper. The third, `custprog/CUSTPROG.cbl`'s `(SQL, FETCH)`, is a real,
+accepted gap (see below) and is the test's one documented
+`xfail(strict=True)` case, with the full empirical trace in its own reason
+string — not silently accepted.
+
+**Known, accepted v1 gap: DCLGEN-style `EXEC SQL INCLUDE`.**
+cobol-parser's `expand_copybooks` only expands plain `COPY <member>`
+statements — `EXEC SQL INCLUDE CUSTREC END-EXEC` (custprog's DCLGEN-style
+host-variable copybook, `examples/custprog/copybooks/CUSTREC.CPY`) is left
+untouched, so `CUST-ID`/`CUST-NAME` never become real `CobolDataItem`s in
+cobol-parser's own AST and `ProgramFixtureGenerator` can't resolve the FETCH
+boundary's host variables (correctly reported via `bundle.unresolved`, not
+guessed at). mockymock's own splicer (`splicer/sqlca.py`) resolves this exact
+construct independently, via its own copybook-path search purely for
+compiling test runs — the two tools' preprocessing pipelines are not unified.
+Verified this degrades safely rather than refusing: `generate --with-data`
+emits a placeholder `MOCK SQL "FETCH"` body via the "cover every
+mockymock-known key" fallback above, and the result passes `mockymock lint`
+clean. Extending cobol-parser's copybook expansion to understand `EXEC SQL
+INCLUDE` is a real, separate preprocessing feature — out of scope for this
+initiative; tracked as a known limitation, not fixed here.
+
+**Lint gate** (`tests/integration/test_generate_with_data_lint_gate.py`,
+Docker-free): generates a `.cut` for every corpus program across all three
+`--scenarios` modes (happy/branches/all) and asserts `mockymock lint`
+(`cli.checks.run_static_checks`) finds zero problems in each — "a generator
+that emits a refusable `.cut` is worse than none," per the parent plan's own
+Phase 8 gate.
+
+**Dependency pin**: `pyproject.toml` and both `.github/workflows/ci.yml`
+`ref:` occurrences bumped to cobol-parser's
+`claude/data-generation-function-k2mbbj` branch (commit
+`b3e2b329f014c3a8e52f5fac5679e812acbb44b2`) — an interim branch pin, not
+`main`, since Phases 1-8's cobol-parser work (everything `--with-data`
+depends on) isn't merged there yet (cobol-parser PR #108). Re-bump to a
+`main` commit once that PR merges; see [integration.md](integration.md)'s new
+gotcha entry.
+
+Docs updated: [dsl.md](dsl.md) ("Bundle-driven scaffold" section),
+[cli.md](cli.md) (`generate` flow), [integration.md](integration.md) (two new
+gotchas: the interim branch pin, the `EXEC SQL INCLUDE` gap).
+
 ## 2026-08-04 — `mockymock run --record-expectations`: golden/characterization mode
 
 New `run` flag, not a new subcommand: reuses the exact same parse → static-checks →

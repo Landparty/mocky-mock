@@ -47,7 +47,7 @@ On `DockerNotAvailableError`, prints `mockymock setup: <exc>` and exits 1.
 Optional in normal workflows: `mockymock run` calls `ensure_toolchain()` itself,
 so `setup` exists mainly for a fast up-front check / CI warm-up.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all]`
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
@@ -55,28 +55,49 @@ Docker/GnuCOBOL — pure parse-and-analyze.
 Flow (`_cmd_generate`):
 
 1. Check `program` exists (`_check_input_files` -- clean `no such file`
-   message, exit 1, no traceback), then read it; if `--copybook-path`
-   given (repeatable), run
+   message, exit 1, no traceback).
+2. Resolve the fixture bundle (Phase 8 of the gen-fixtures initiative;
+   `bundle` stays `None` if neither flag is given, giving the original
+   bundle-less scaffold below): `--fixtures PATH` loads a pre-generated
+   bundle JSON via `load_fixture_bundle_file` (fails closed with a printed
+   message on an unsupported `bundle_version` or malformed JSON);
+   `--with-data` instead calls cobol-parser's
+   `ProgramFixtureGenerator().generate_with_scenarios_from_file(program,
+   mode=args.scenarios, seed=args.seed, copybook_paths=...)` directly (no
+   subprocess — mockymock calls the Python API) and loads its `.to_dict()`
+   output the same way. A bundle with zero scenarios (possible for
+   `--scenarios branches|all` on a program with no branch arms; `happy`
+   always produces exactly one) refuses with a printed message and exit 1
+   — nothing to scaffold a TESTCASE from.
+3. Read `program`; if `--copybook-path` given (repeatable), run
    `expand_copybooks` first and use the expanded source from then on.
    `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
    on a lossy copybook decode before the corrupted text is ever parsed.
-2. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
+4. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
    and exit 1 (never reaches analysis). On a successful parse,
    `check_whole_program(result)` still refuses (PARSE_WARNING, exit 1) if
    `ParseResult.warnings` reports dropped statements — a scaffold built from
    an incomplete AST would silently miss boundaries.
-3. `check_unresolved_copybooks(raw_source)` — a **refusal** check run even
+5. `check_unresolved_copybooks(raw_source)` — a **refusal** check run even
    though the program parsed; any reason printed as
    `mockymock generate: refused (<code>): <message>` and exit 1.
-4. `analyze(result.ast)` -> `mock_surface` (the boundary-site inventory).
-5. `normalize_fixed_format` the source, then `annotate_nested_sites` +
+6. `analyze(result.ast)` -> `mock_surface` (the boundary-site inventory).
+7. `normalize_fixed_format` the source, then `annotate_nested_sites` +
    `collect_scope_map` to mark which nested boundary statements are
    spliceable — this must run before `scaffold_cut` so the generated `.cut`
    only proposes cases that `run` will actually accept.
-6. `scaffold_cut(program_name, surface)` builds the `.cut` text; written to
+8. `scaffold_cut(program_name, surface, bundle)` builds the `.cut` text
+   (`bundle=None` scaffolds one `TESTCASE` per paragraph as before; a real
+   bundle scaffolds one `TESTCASE` per scenario with generated data and
+   `EXPECT`/`VERIFY`/stub-comment expectations instead of placeholder
+   bodies — see `dsl.md`'s "Bundle-driven scaffold" section); written to
    `--output` or `<program>.cut` (suffix-swapped) by default.
-7. Prints a `wrote N test case(s) -> path` summary, then
-   `_report_unsupported_boundaries(surface)`.
+9. Prints a `wrote N test case(s) -> path` summary (plus a `data-driven
+   from a fixture bundle (seed=N)` line when a bundle was used), then
+   `_report_unsupported_boundaries(surface)`. If the bundle's own
+   `(category, key)` set disagreed with `mock_surface`'s,
+   `_warn_on_key_mismatch` already printed a loud stderr warning during
+   step 8 — see `dsl.md`.
 
 `_report_unsupported_boundaries` is the only non-trivial logic in this module:
 it walks `surface.boundary_sites` and names every site that stays unmockable —

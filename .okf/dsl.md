@@ -382,6 +382,82 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields and sets
 `SQLCODE` to 0; `WHEN OTHER` (rows exhausted) sets `SQLCODE` to 100 (DB2's
 "not found" code), fixed in v1.
 
+### Bundle-driven scaffold (`generate --with-data`, Phase 8 of gen-fixtures)
+
+`scaffold_cut(suite_name, surface, bundle=None)` — `bundle=None` is the
+paragraph-grouped path described above, unchanged. A real
+`dsl.fixture_bundle.FixtureBundle` (parsed from cobol-parser's
+`ProgramFixtureGenerator` JSON, see `fixture_bundle.py` and cobol-parser's
+`docs/fixture-bundle-schema.md`) switches to `_scaffold_with_bundle`:
+
+- **One `TESTCASE` per `bundle.scenarios[]` entry**, not per paragraph,
+  named from `scenario.name`, body `PERFORM <scenario.entry>`.
+- **The join**: `_mockymock_boundary_keys(surface)` (this program's own
+  walk — note it iterates *every* entry of `site.keys`, not just
+  `keys[0]`, so a multi-file `OPEN A OUTPUT B` widens to both `(OPEN, A)`
+  and `(OPEN, B)` even though it is one physical `BoundarySite`) is
+  compared against `_bundle_boundary_keys(bundle)` (every fixture's
+  `(category, key)` plus every `call_count`/`stub`-kind expectation's
+  `ref`, since an OUT-direction boundary — a WRITE, a SQL
+  INSERT/UPDATE/DELETE — gets no fixture at all, only a stub expectation;
+  skipping stub refs here would misreport every OUT-direction boundary as
+  a mismatch). Disagreement is never silent: `_warn_on_key_mismatch`
+  prints both one-sided sets to stderr. This exact comparison is pinned by
+  `tests/unit/test_fixture_bundle_contract.py`, parametrized over the
+  `examples/*/` corpus — a mismatch there must be root-caused (nested-site
+  span annotation missing, a real cobol-parser gap, etc.), not silently
+  accepted; see that file's module docstring for the one currently
+  accepted exception (`custprog`'s DCLGEN `EXEC SQL INCLUDE`, a
+  cobol-parser preprocessing gap, not a Phase 1-8 regression).
+- **`_bundle_mock_directives`** groups a scenario's fixtures by *physical
+  site* (`id(site)`, not by key) before emitting anything — the same
+  multi-file OPEN/CLOSE shape that widens `.keys` in the join above means
+  naively emitting one directive per key would declare two `MOCK OPEN`
+  directives that both match the same physical site
+  (`AMBIGUOUS_MOCK`). One representative key per physical site is chosen
+  and its status data merged instead. It returns `(lines, declared_keys)`;
+  `declared_keys` is only the literally-emitted primary keys and gates
+  `_render_expectation`'s `VERIFY ... WAS CALLED n TIMES` line — a
+  narrower check than "is this key known to mockymock at all" is required
+  here, or a `VERIFY` would be emitted for a key this TESTCASE mocked only
+  as a non-primary alias of a shared site, which the run command's own
+  `VERIFY_WITHOUT_MOCK` gate would then refuse. After real-data
+  directives, every `mockymock_keys` entry not yet covered gets a
+  placeholder directive too (reusing bundle-less `_directive_for`) — this
+  unconditional "cover everything mockymock knows about" step is what
+  keeps a mockymock-only key (a real key-set gap, or a boundary the bundle
+  couldn't resolve, e.g. custprog's SQL FETCH above) from producing an
+  UNMOCKED_* refusal instead of a scaffold a human can improve on.
+- **Per-category body shape** (`_bundle_directive_for_group`, one real
+  fixture group): a status-only boundary (OPEN/CLOSE/START/UNLOCK/DELETE)
+  gets `_status_only_body` (a `FILE-STATUS IS` MOVE only when the status
+  is non-"00"/"0" — file-op categories default to success implicitly, see
+  `injector.build_site_dispatch`; SQL has no such default and always sets
+  SQLCODE explicitly); a single-row READ/ACCEPT/WRITE gets
+  `_single_row_body` (plain field MOVEs); a multi-row READ sequence gets
+  `_read_body`'s hand-rolled `EVALUATE TRUE` / `WHEN <tally> = N` chain
+  (mirroring the `ROWS` sugar's own generated shape, since `ROWS` is
+  SQL-only grammar — ordinary `dsl/parser.py` still hard-refuses it for
+  any other category); a multi-row SQL FETCH gets real `ROWS (...)` sugar
+  via `_sql_rows_directive` (`_sql_wants_rows` decides single vs. multi).
+  Values render through `_bundle_rendered_value`: numeric-family
+  `FieldSpec` categories render bare, everything else quoted and escaped.
+- **Expectations** render via `_render_expectation(expectation,
+  declared_keys)`: tier 1 (`call_count`) → `VERIFY <cat> <key> WAS CALLED
+  n TIMES`, gated on `declared_keys` as above; tier 2 (`field_equals`) →
+  `EXPECT <name> TO BE <value>`; tier 3 (`stub`) → `*> STUB EXPECT <name>`
+  comment when `ref` is a real data-name, or nothing when `ref` is a
+  `"CATEGORY:KEY"`-shaped boundary-level reference (`_is_boundary_level_ref`
+  detects this via the colon, since COBOL names never contain one) — see
+  `analysis.md`'s stub-expectation scanner for how a human later promotes
+  a stub comment to a real `EXPECT` via `mockymock run
+  --record-expectations`.
+- **Lint gate**: `tests/integration/test_generate_with_data_lint_gate.py`
+  generates a `.cut` for every corpus program across all three
+  `--scenarios` modes (happy/branches/all) and asserts `mockymock lint`
+  (via `cli.checks.run_static_checks`, Docker-free) finds zero problems —
+  "a generator that emits a refusable `.cut` is worse than none."
+
 # Gotchas
 
 - **`MOCK MQ` has no `MockCategory.MQ`.** It is pure `.cut`-syntax sugar for

@@ -97,6 +97,10 @@ Run it:
 
 ```bash
 mockymock generate ORDRPROC.cbl                   # scaffold a starter .cut
+mockymock generate ORDRPROC.cbl --with-data --seed 7 --scenarios all
+                                                   # scaffold with real generated
+                                                   # data + EXPECT/VERIFY per scenario,
+                                                   # via cobol-parser's ProgramFixtureGenerator
 mockymock run ORDRPROC.cbl --cut ORDRPROC.cut      # compile, run, report
 mockymock lint ORDRPROC.cbl --cut ORDRPROC.cut     # static checks only, no Docker
 ```
