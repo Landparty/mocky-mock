@@ -92,8 +92,9 @@ just that the happy path returns 0.
 Documented, runnable programs under `examples/` -- these are polished
 end-to-end demos (with READMEs), distinct from the terser
 `tests/integration/fixtures/` corpus, and are also driven by their own
-integration tests. Beyond the seven hand-written ones below (INVUPDT,
-ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, REGNAVG), `examples/real-world/`
+integration tests. Beyond the eight hand-written ones below (INVUPDT,
+ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, REGNAVG, FIXTUREDEMO),
+`examples/real-world/`
 (ACCTPRG, DEPTIMSM, DEPTMQC, DEPTMQP -- now with its own README) and
 `examples/nist-cobol85/` (IC101A, IC116M, IC117M, OBIC1A) hold additional
 examples driven from real corpora -- see their own READMEs for provenance
@@ -265,6 +266,38 @@ past the pin, so an initial "fixed the environment, now it's clean" was
 still verified against the wrong commit.
 
 Run: `mockymock run examples/regnavg/REGNAVG.cbl --cut examples/regnavg/REGNAVG.cut`
+
+## FIXTUREDEMO (`examples/fixtures/`)
+
+The odd one out among these eight: not hand-written, and not owned solely
+by this repo. `FIXTUREDEMO.cbl` and `FIXTUREDEMO.bundle.json` (a
+`FixtureBundle` JSON at a fixed seed, 42) are copied verbatim from the
+sibling `Landparty/cobol-parser` repo's own `examples/fixtures/` -- the
+`gen-fixtures` program-scoped test-data initiative's Phase 9 worked
+example, the cross-repo golden anchor proving the whole pipeline (program
+-> bundle -> `.cut` -> green run) end to end with one small program that
+touches all four boundary categories the initiative supports (`ACCEPT`,
+`OPEN`/`READ`/`CLOSE`, `SQL`, `CALL`) with zero unresolved gaps -- unlike
+`examples/custprog/` above, which deliberately keeps one.
+
+`FIXTUREDEMO.cut` is *generated* here, from that exact bundle
+(`mockymock generate ... --fixtures FIXTUREDEMO.bundle.json`, deliberately
+not `--with-data`, so this golden is pinned against a fixed JSON rather
+than whatever cobol-parser commit `pyproject.toml` happens to have pinned
+at the moment a contributor re-runs the regeneration command), then
+checked in as this repo's own golden. Three regression checks in
+[`tests/integration/test_fixturedemo_golden.py`](../tests/integration/test_fixturedemo_golden.py)
+run Docker-free on every CI lane: the generated `.cut` is byte-identical
+to the checked-in one, regeneration is deterministic (two independent
+calls agree), and the checked-in `.cut` still passes `mockymock lint`. A
+fourth, `@requires_docker`, proves the real run stays green.
+
+If cobol-parser's own copy of `FIXTUREDEMO.cbl`/`FIXTUREDEMO.bundle.json`
+changes, both files must be re-copied here and `FIXTUREDEMO.cut`
+regenerated in the same change -- see either repo's own
+`examples/fixtures/README.md`.
+
+Run: `mockymock run examples/fixtures/FIXTUREDEMO.cbl --cut examples/fixtures/FIXTUREDEMO.cut`
 
 # Gotchas
 

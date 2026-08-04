@@ -1,5 +1,46 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-04 — `examples/fixtures/FIXTUREDEMO`: the gen-fixtures worked example (Phase 9)
+
+Cross-repo worked example closing out the `gen-fixtures` program-scoped
+test-data initiative: `FIXTUREDEMO.cbl` (copied verbatim from
+`Landparty/cobol-parser`'s own `examples/fixtures/`) touches all four
+boundary categories the initiative supports -- `ACCEPT`,
+`OPEN`/`READ`/`CLOSE`, `SQL` (a plain host-variable `SELECT`, no cursor,
+so it stays clear of `examples/custprog/`'s documented DCLGEN gap), and a
+static `CALL` -- with every boundary resolving cleanly (zero entries in
+`bundle.unresolved`). `FIXTUREDEMO.bundle.json` (seed 42, `mode="happy"`)
+is also copied verbatim from cobol-parser's repo, where it is the
+checked-in golden for that repo's own `ProgramFixtureGenerator` output.
+
+`FIXTUREDEMO.cut` is generated *here*, from that exact bundle
+(`mockymock generate FIXTUREDEMO.cbl --fixtures FIXTUREDEMO.bundle.json`),
+and checked in as this repo's own golden -- deliberately via `--fixtures`
+rather than `--with-data`, so the golden is pinned against a fixed JSON
+rather than whatever cobol-parser commit `pyproject.toml` happens to have
+pinned when a contributor re-runs the regeneration command (see
+`--fixtures`'s own reason for existing: dsl/generator.py's own module
+docstring, "CI use, and it keeps the JSON schema honest"). Output covers
+every mock-body shape the bundle-driven scaffolder produces: a
+single-value body (`ACCEPT`, `SQL`, `CALL`), a status-only body
+(`OPEN`/`CLOSE`), and a tally-branching multi-row `EVALUATE` chain
+(`READ`, 10 rows then exhaustion) -- verified by inspection against the
+actual generated text, not assumed from the category list alone.
+
+New `tests/integration/test_fixturedemo_golden.py`: byte-identical
+regeneration (Docker-free), determinism (two independent calls agree,
+Docker-free), the checked-in `.cut` still passes `mockymock lint`
+(Docker-free), and a `@requires_docker` case proving the real run stays
+green -- the last one could not be exercised in this sandbox (no Docker
+daemon) but runs for real in CI, matching every other worked example's own
+`@requires_docker` pattern.
+
+New `examples/fixtures/README.md` (this repo) cross-references
+cobol-parser's own `examples/fixtures/README.md` (the program walkthrough
+and boundary/category table) rather than repeating it. Updated
+[testing.md](testing.md) (new FIXTUREDEMO write-up section, overview
+paragraph's example count 7 -> 8).
+
 ## 2026-08-04 — `mockymock generate --with-data`: bundle-driven scaffold (gen-fixtures Phase 8)
 
 `generate` now has a second scaffold mode: `--with-data` calls cobol-parser's
