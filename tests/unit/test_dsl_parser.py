@@ -1,5 +1,6 @@
 import pytest
 
+from mockymock.dsl.model import MockCategory
 from mockymock.dsl.parser import CutParseError, parse_cut
 
 ORDRPROC_CUT = """\
@@ -751,3 +752,69 @@ def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
     # Verify EXPECT data_name is NOT substituted, expected_value IS
     assert case.expectations[0].data_name == "{Field}"
     assert case.expectations[0].expected_value == "42"
+
+
+# -- ROWS on MOCK READ + TERMINAL group (with-data design 2026-08-04) --------
+
+CUT_READ_ROWS = """\
+TESTSUITE "read rows"
+TESTCASE "case"
+    MOCK READ ORDER-FILE ROWS
+        ( ORDER-QTY = 50, ORDER-ID = "A1" )
+        ( ORDER-QTY = 75, ORDER-ID = "A2" )
+        TERMINAL ( WS-EOF-FLAG = "Y" )
+    END-MOCK
+    PERFORM MAIN-PARA
+"""
+
+
+def test_read_rows_with_terminal_parses():
+    suite = parse_cut(CUT_READ_ROWS)
+    mock = suite.test_cases[0].mocks[0]
+    assert mock.category is MockCategory.READ
+    assert mock.key == "ORDER-FILE"
+    assert mock.rows == [
+        [("ORDER-QTY", "50"), ("ORDER-ID", '"A1"')],
+        [("ORDER-QTY", "75"), ("ORDER-ID", '"A2"')],
+    ]
+    assert mock.terminal_row == [("WS-EOF-FLAG", '"Y"')]
+    assert mock.body_lines == []
+
+
+def test_read_rows_without_terminal_parses():
+    suite = parse_cut(
+        CUT_READ_ROWS.replace('        TERMINAL ( WS-EOF-FLAG = "Y" )\n', "")
+    )
+    assert suite.test_cases[0].mocks[0].terminal_row is None
+
+
+def test_rows_on_open_is_rejected():
+    bad = CUT_READ_ROWS.replace(
+        "MOCK READ ORDER-FILE ROWS", "MOCK OPEN ORDER-FILE ROWS"
+    )
+    with pytest.raises(CutParseError, match="ROWS is only supported"):
+        parse_cut(bad)
+
+
+def test_terminal_inside_sql_rows_is_rejected():
+    bad = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK SQL "FETCH" ROWS
+        ( X = 1 )
+        TERMINAL ( Y = 2 )
+    END-MOCK
+    PERFORM P
+"""
+    with pytest.raises(CutParseError, match="TERMINAL"):
+        parse_cut(bad)
+
+
+def test_duplicate_terminal_is_rejected():
+    bad = CUT_READ_ROWS.replace(
+        '        TERMINAL ( WS-EOF-FLAG = "Y" )',
+        '        TERMINAL ( WS-EOF-FLAG = "Y" )\n'
+        '        TERMINAL ( WS-EOF-FLAG = "N" )',
+    )
+    with pytest.raises(CutParseError, match="duplicate TERMINAL"):
+        parse_cut(bad)

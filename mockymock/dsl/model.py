@@ -93,9 +93,10 @@ class MockDirective:
     key: str
     body_lines: list[str] = field(default_factory=list)
     rows: list[list[tuple[str, str]]] | None = None
-    """Structured rows for `MOCK SQL "..." ROWS (...) (...) END-MOCK`.
-    `None` for an ordinary mock (its body lives in `body_lines` instead);
-    populated only for SQL-category ROWS mocks, mutually exclusive with
+    """Structured rows for `MOCK SQL "..." ROWS (...) (...) END-MOCK` or
+    `MOCK READ <file> ROWS (...) (...) END-MOCK`. `None` for an ordinary
+    mock (its body lives in `body_lines` instead); populated only for
+    SQL- and READ-category ROWS mocks, mutually exclusive with
     `body_lines`."""
     file_status: str | None = None
     """Resolved two-character status code from `FILE-STATUS IS
@@ -104,6 +105,11 @@ class MockDirective:
     (the file may still get an implicit default-success MOVE at splice
     time if it declares a FILE STATUS field -- see
     injector.build_site_dispatch)."""
+    terminal_row: list[tuple[str, str]] | None = None
+    """Field assignments for the WHEN OTHER (rows-exhausted) branch of a
+    `MOCK READ ... ROWS` block, from its optional `TERMINAL ( F = v, ... )`
+    line. Always `None` for SQL rows (SQLCODE 100 is fixed) and for
+    non-ROWS mocks."""
 
     @property
     def program_name(self) -> str:
