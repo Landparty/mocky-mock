@@ -1,5 +1,19 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-03 — `mockymock export`: write instrumented source for z/OS compilation
+
+New subcommand, Docker-free, reusing the same parse → static-checks → splice → driver-insert
+pipeline that `run` uses (`_cmd_run` steps 2–13 per [cli.md](cli.md)), but stopping before
+Docker and writing to a file instead. Three z/OS-portability adjustments: preserved `PROCESS`/`CBL`
+directives (which `run`/`lint` strip for GnuCOBOL's consumption), restored fixed-format columns
+(7-space Area A prefix, column-72 wrapping for over-long generated `DISPLAY` statements), and a
+provenance/disclaimer header documenting that the build is mock-only and listing known GnuCOBOL-
+vs-IBM-COBOL gaps a clean compile here does not rule out. Output defaults to `<program>.mainframe.cbl`.
+
+Full design, including empirical validation of the wrapping algorithm and the three adjustments:
+[docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).
+Unit tests cover the refusals (column overflow, etc.) and the directive-preservation behavior.
+
 ## 2026-08-03 — `mockymock dashboard`: a local status page for the toolchain
 
 New concept: [dashboard.md](dashboard.md). A static page (plain HTML/CSS/JS

@@ -1,7 +1,7 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, run, debug, mutate, lint, collect, dashboard) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, generate, run, debug, mutate, lint, collect, dashboard, export) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
 timestamp: 2026-08-03T00:00:00Z
 ---
@@ -9,8 +9,8 @@ timestamp: 2026-08-03T00:00:00Z
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines eight subcommands —
-`setup`, `generate`, `run`, `debug`, `mutate`, `lint`, `collect`, `dashboard` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines nine subcommands —
+`setup`, `generate`, `run`, `debug`, `mutate`, `lint`, `collect`, `dashboard`, `export` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -27,6 +27,7 @@ mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.ru
 mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
 mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed)
 mockymock dashboard -> web.server (loopback HTTP) -> runtime.status.probe()  (read-only Docker)
+mockymock export    -> cli.checks (static) -> splicer -> cli.mainframe_export (no Docker)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -345,6 +346,24 @@ the constant at parser-build time would import `web.server` ->
 `runtime.status` -> `runtime.docker_toolchain` (which reads the Dockerfile
 at import to compute `IMAGE`) on every `mockymock --help`. See the Gotchas
 below.
+
+## `mockymock export <program> --cut PATH [-o/--output PATH] [--copybook-path DIR ...] [--case NAME ...] [--tag TAG ...]`
+
+Writes the instrumented source to a file after running the same parse → static-checks → splice
+pipeline as `run`, but without Docker or any GnuCOBOL step. The output is adjusted for compilation
+under a real fixed-format (z/OS) COBOL compiler instead of GnuCOBOL-only: `PROCESS`/`CBL` directives
+are preserved (where `run`/`lint` strip them), columns are restored to z/OS fixed-format discipline
+(7-space prefix for Area A), and very-long generated `DISPLAY` statements that overflow column 72 are
+wrapped into multiple lines. A provenance/disclaimer header is prepended, documenting that this is a
+mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
+known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
+to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.
+If a line still exceeds column 72 after wrapping and column restoration -- most commonly, long `.cut`
+MOCK body text (e.g. a `MOVE` statement) that `injector.py` re-indents past the limit when splicing it
+in -- `export` refuses (`mockymock export: refused (COLUMN_OVERFLOW): ...`) and writes nothing.
+
+Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
+[docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).
 
 # Gotchas
 

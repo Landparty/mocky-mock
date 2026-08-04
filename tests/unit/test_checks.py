@@ -175,3 +175,36 @@ TESTCASE "c"
     result = run_static_checks(cbl, cut, None)
     assert not result.ok
     assert any("UNRESOLVED_FILE_STATUS_TARGET" in p for p in result.problems)
+
+
+def test_preserve_compiler_directives_keeps_them_in_lines(tmp_path):
+    """export needs the real PROCESS/CBL directives kept intact (GnuCOBOL
+    can't compile them, but a real IBM compiler expects them) -- opt-in
+    via preserve_compiler_directives, default False leaves run/lint
+    unaffected (see test_precompiler_directives_stripped_before_lines_
+    reach_the_compiler above)."""
+    cbl = tmp_path / "PRECHK.cbl"
+    cbl.write_text("""\
+       PROCESS APOST,TRUNC(OPT)
+       CBL ARITH(EXTEND)
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PRECHK.
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           DISPLAY "HELLO".
+""")
+    cut = tmp_path / "PRECHK.cut"
+    cut.write_text('TESTSUITE "s"\nTESTCASE "c"\n    PERFORM MAIN-PROCESS\n')
+
+    stripped = run_static_checks(cbl, cut, None)
+    assert stripped.ok
+    assert "PROCESS" not in stripped.lines[0]
+
+    preserved = run_static_checks(cbl, cut, None, preserve_compiler_directives=True)
+    assert preserved.ok
+    assert preserved.lines[0] == "PROCESS APOST,TRUNC(OPT)"
+    assert preserved.lines[1] == "CBL ARITH(EXTEND)"
+    # Line count (and every later AST-derived line number) must match
+    # the stripped variant exactly -- same invariant, opposite content.
+    assert len(preserved.lines) == len(stripped.lines)
+    assert preserved.lines[2] == stripped.lines[2] == "IDENTIFICATION DIVISION."

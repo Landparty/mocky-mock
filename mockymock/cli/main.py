@@ -51,17 +51,18 @@ def _check_input_files(command: str, *paths: Path) -> bool:
     return ok
 
 
-def _write_report_file(flag: str, target: str, content: str) -> bool:
-    """Write one of `run`'s optional --*-xml/--*-json/--*-out report files.
-    A bad parent directory (or any other OS-level write failure) used to
-    escape as a raw traceback after an otherwise-successful run -- report
-    it the same way `_check_input_files` reports a bad input path instead,
-    and let the run's own exit code stand on the actual test outcome
-    rather than on whether a report file happened to be writable."""
+def _write_report_file(command: str, flag: str, target: str, content: str) -> bool:
+    """Write one of `run`'s optional --*-xml/--*-json/--*-out report files
+    (or `export`'s --output). A bad parent directory (or any other
+    OS-level write failure) used to escape as a raw traceback after an
+    otherwise-successful run -- report it the same way
+    `_check_input_files` reports a bad input path instead, and let the
+    caller's own exit code stand on the actual outcome rather than on
+    whether a report file happened to be writable."""
     try:
         Path(target).write_text(content, encoding="utf-8")
     except OSError as exc:
-        print(f"mockymock run: could not write {flag} to {target}: {exc}")
+        print(f"mockymock {command}: could not write {flag} to {target}: {exc}")
         return False
     return True
 
@@ -143,7 +144,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     output_path.write_text(cut_text, encoding="utf-8")
     case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
-    _report_unsupported_boundaries(surface)
+    _report_unsupported_boundaries(surface, "generate")
     return 0
 
 
@@ -178,7 +179,7 @@ def _print_linkage_neutralization(command: str, plan, applied: bool) -> None:
     )
 
 
-def _report_unsupported_boundaries(surface) -> None:
+def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
     """Name every detected boundary point that stays unmockable (the
     SORT/MERGE family, identifier-less dynamic CALLs, unspliceable nested
     sites), so the scaffold is never mistaken for complete coverage of the
@@ -193,6 +194,11 @@ def _report_unsupported_boundaries(surface) -> None:
     reachability against, so it cannot know which outcome a future `.cut`
     will get -- claiming "will be refused" here would be wrong as often as
     it's right.
+
+    `command` names the caller in the printed output -- `generate` (the
+    default, and this function's original and still most common caller)
+    or `export`, which shares the same `surface` inspection but must not
+    print a `generate` prefix in its own console output.
     """
     from mockymock.analysis.mock_surface import _TERMINATOR_LABELS
 
@@ -217,7 +223,7 @@ def _report_unsupported_boundaries(surface) -> None:
             )
     if findings:
         print(
-            f"mockymock generate: {len(findings)} boundary point(s) detected "
+            f"mockymock {command}: {len(findings)} boundary point(s) detected "
             f"that are not mockable (test cases reaching them will be "
             f"refused):"
         )
@@ -225,7 +231,7 @@ def _report_unsupported_boundaries(surface) -> None:
             print(f"  - {finding}")
     if terminator_findings:
         print(
-            f"mockymock generate: {len(terminator_findings)} STOP RUN/GOBACK "
+            f"mockymock {command}: {len(terminator_findings)} STOP RUN/GOBACK "
             f"site(s) detected -- whether a test case reaching one is "
             f"refused depends on how it's reached; see "
             f"docs/2026-07-08-goback-stop-run-support-design.md:"
@@ -442,6 +448,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     if args.junit_xml:
         _write_report_file(
+            "run",
             "--junit-xml",
             args.junit_xml,
             format_junit_xml(suite_result, crash_detail=crash_detail),
@@ -449,6 +456,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     if args.json_report:
         _write_report_file(
+            "run",
             "--json-report",
             args.json_report,
             format_json_report(
@@ -476,6 +484,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 source_path.read_text(encoding="utf-8").splitlines(),
             )
             _write_report_file(
+                "run",
                 "--coverage-json",
                 args.coverage_json,
                 format_coverage_json(
@@ -490,7 +499,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(coverage_text)
         if args.coverage_out:
             _write_report_file(
-                "--coverage-out", args.coverage_out, coverage_text + "\n"
+                "run", "--coverage-out", args.coverage_out, coverage_text + "\n"
             )
 
     if args.trace:
@@ -522,7 +531,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 str(source_path),
             )
             if args.trace_json:
-                _write_report_file("--trace-json", args.trace_json, trace_json)
+                _write_report_file("run", "--trace-json", args.trace_json, trace_json)
             print(format_trace_console(json.loads(trace_json)))
 
     # A nonzero binary exit is a failed run even when every case that got
@@ -775,6 +784,123 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         print(f"mockymock lint: {problem_count} problem(s) found.")
         return 1
     print("mockymock lint: no problems found.")
+    return 0
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    """Write the instrumented source to a file, adjusted for a real
+    fixed-format COBOL compile (e.g. z/OS) instead of GnuCOBOL-only. See
+    docs/2026-08-03-mainframe-export-command-design.md. Docker-free:
+    identical pre-splice pipeline to `run` (via run_static_checks),
+    stopping before compile_source/run_binary."""
+    from mockymock.analysis.flow_mocks import find_flow_mock_plans
+    from mockymock.analysis.refusal import find_terminator_plans
+    from mockymock.cli.checks import run_static_checks
+    from mockymock.cli.mainframe_export import (
+        build_provenance_header,
+        insert_provenance_header,
+        restore_fixed_format_columns,
+        wrap_long_display_lines,
+    )
+    from mockymock.splicer.driver import build_driver
+    from mockymock.splicer.linkage import extra_reset_lines
+    from mockymock.splicer.naming import TallyRegistry
+    from mockymock.splicer.orchestrator import splice_program
+    from mockymock.splicer.reset import reset_move_lines
+    from mockymock.splicer.source_map import collect_boundaries
+    from mockymock.splicer.sqlca import transform_data_division_exec
+
+    source_path = Path(args.program)
+    cut_path = Path(args.cut)
+    if not _check_input_files("mockymock export", source_path, cut_path):
+        return 1
+
+    checked = run_static_checks(
+        source_path,
+        cut_path,
+        args.copybook_path,
+        case_names=args.case,
+        tag_names=args.tag,
+        preserve_compiler_directives=True,
+    )
+    if checked.linkage is not None:
+        _print_linkage_neutralization("export", checked.linkage, applied=True)
+    if checked.problems:
+        for problem in checked.problems:
+            if problem.startswith("  "):
+                print(problem)
+            else:
+                print(f"mockymock export: {problem}")
+        return 1
+
+    result = checked.parse_result
+    suite = checked.suite
+    surface = checked.surface
+    lines = checked.lines
+    scope_map = checked.scope_map
+    linkage = checked.linkage
+    assert (
+        result is not None
+        and suite is not None
+        and surface is not None
+        and lines is not None
+        and scope_map is not None
+    )  # implied by checked.problems being empty
+
+    # Restore the 7 columns normalize_fixed_format stripped BEFORE
+    # splicing: collect_boundaries/splice_program are line-granular, never
+    # column-position-sensitive (verified empirically during design), so
+    # this uniform prefix is transparent to them and matches the column
+    # convention splicer-generated lines already assume.
+    lines = restore_fixed_format_columns(lines)
+
+    boundaries = collect_boundaries(result.ast)
+    registry = TallyRegistry(suite)
+    terminator_plans, _ = find_terminator_plans(
+        surface, result.ast, suite, scope_map, lines
+    )
+    flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
+    lines = splice_program(
+        lines,
+        boundaries,
+        surface,
+        suite,
+        registry,
+        terminator_plans,
+        flow_plans,
+        checked.file_status_fields,
+        trace=False,
+    )
+    lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
+
+    reset_lines = reset_move_lines(result.ast)
+    if linkage is not None:
+        reset_lines = reset_lines + extra_reset_lines(linkage)
+    artifact = build_driver(suite, reset_lines, registry)
+    instrumented = _insert_driver(lines, artifact)
+
+    instrumented, overflow_problems = wrap_long_display_lines(instrumented)
+    if overflow_problems:
+        for problem in overflow_problems:
+            print(f"mockymock export: refused (COLUMN_OVERFLOW): {problem}")
+        return 1
+
+    header = build_provenance_header(str(source_path), str(cut_path))
+    instrumented = insert_provenance_header(instrumented, header)
+
+    output_path = (
+        Path(args.output) if args.output else source_path.with_suffix(".mainframe.cbl")
+    )
+    if not _write_report_file(
+        "export", "--output", str(output_path), "\n".join(instrumented) + "\n"
+    ):
+        return 1
+
+    print(
+        f"mockymock export: wrote mainframe-compilable source "
+        f"({len(suite.test_cases)} test case(s)) -> {output_path}"
+    )
+    _report_unsupported_boundaries(surface, "export")
     return 0
 
 
@@ -1071,6 +1197,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Don't open a browser window automatically",
     )
     dashboard_parser.set_defaults(func=_cmd_dashboard)
+
+    export_parser = subparsers.add_parser(
+        "export",
+        help=(
+            "Write the instrumented COBOL source to a file, adjusted for "
+            "a real fixed-format COBOL compile (e.g. z/OS) instead of "
+            "GnuCOBOL-only"
+        ),
+    )
+    export_parser.add_argument("program")
+    export_parser.add_argument("--cut", required=True)
+    export_parser.add_argument("-o", "--output")
+    export_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    export_parser.add_argument(
+        "--case",
+        action="append",
+        help=(
+            "Include only the TESTCASE with this exact name (repeatable; "
+            "combines with --tag as a union)"
+        ),
+    )
+    export_parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Include only TESTCASEs carrying this tag (repeatable; "
+            "combines with --case as a union)"
+        ),
+    )
+    export_parser.set_defaults(func=_cmd_export)
 
     return parser
 
