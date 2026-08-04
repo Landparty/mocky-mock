@@ -1,5 +1,53 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-04 — Auto-generated READ mocks silently produced infinite loops
+
+Found by PR #44's own CI: `examples/fixtures/FIXTUREDEMO`'s Docker-gated
+`@requires_docker` run (the one check `mockymock lint`, Docker-free by
+design, cannot exercise) timed out after 30s with "a mocked CALL may have
+removed a loop's terminating condition, producing an infinite loop" --
+actually a mocked READ, same mechanism. Root cause: `dsl/generator.py`'s
+`_read_body` (the bundle-driven READ mock body, Phase 8) built its
+exhaustion (`WHEN OTHER`) branch purely from `fixture.terminal` (the FILE
+STATUS field), with zero awareness that the splicer deletes the *whole*
+READ statement (`splicer/orchestrator.py`'s own module docstring) --
+including its source `AT END MOVE "Y" TO WS-EOF` clause, the idiom that
+actually flips the program's own loop-guard flag. A generated mock that
+moves only the FILE STATUS field never flips that flag, so `PERFORM ...
+UNTIL WS-EOF = ...` never terminates. `examples/invupdt/INVUPDT.cbl`'s own
+`INV-FILE` (no `FILE STATUS` clause at all) turned out to have an even
+worse version of the same bug: `fixture.terminal` is correctly `None`
+there (cobol-parser's own `_resolve_status_field` fix), so the old code
+emitted an `EVALUATE` with **no `WHEN OTHER` branch at all** -- confirmed
+by manually re-generating INVUPDT's `--with-data` output (its own
+hand-written `.cut`, which explicitly does `MOVE "Y" TO WS-EOF`, was never
+affected; only the auto-generated path was).
+
+Fixed: new `_replicated_at_end_moves`/`_is_safe_literal_source` helpers
+walk the source READ statement's own `at_end_clause` (available via
+`BoundarySite.statement`, the raw AST node `mock_surface.py` already
+carries) and replicate any `MOVE` whose source is a quoted literal,
+numeric literal, or figurative constant -- deliberately never a bare
+identifier, whose value in the mock's own splice-time context isn't the
+real program's runtime state. Whether `WHEN OTHER` is emitted at all is
+now gated on the *source* clause existing, not on `fixture.terminal`
+being truthy, so INVUPDT's no-status-field case gets a `WHEN OTHER` too.
+When the clause exists but nothing in it is safely replicable (a bare
+identifier, an IF, ...), a `*> TODO` comment flags the gap in the
+generated `.cut` instead of silently doing nothing.
+
+Both `examples/fixtures/FIXTUREDEMO.cut` and (verified manually, not
+checked in there) `examples/invupdt/INVUPDT.cbl`'s own `--with-data`
+output now correctly emit `MOVE "Y" TO WS-EOF` in their `WHEN OTHER`
+branch. New unit tests in `test_dsl_generator_bundle.py`: no-status-field
+replication, replication alongside a real status field (order-checked:
+status MOVE before the replicated MOVE), and the identifier-source TODO
+fallback. This class of bug is invisible to `mockymock lint` (static,
+never compiles/runs) and to the corpus lint-gate test
+(`test_generate_with_data_lint_gate.py`) by the same token -- a real
+Docker run was the only thing that caught it; worth remembering next time
+a "lints clean" result feels like enough.
+
 ## 2026-08-04 — `examples/fixtures/FIXTUREDEMO`: the gen-fixtures worked example (Phase 9)
 
 Cross-repo worked example closing out the `gen-fixtures` program-scoped

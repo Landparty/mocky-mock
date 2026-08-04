@@ -50,6 +50,7 @@ TESTCASE "happy path"
                 MOVE 271 TO ORDER-QTY
             WHEN OTHER
                 MOVE "10" TO WS-ORDER-STATUS
+                MOVE "Y" TO WS-EOF
         END-EVALUATE
     END-MOCK
     PERFORM MAIN-PROCESS

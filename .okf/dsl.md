@@ -442,6 +442,29 @@ paragraph-grouped path described above, unchanged. A real
   via `_sql_rows_directive` (`_sql_wants_rows` decides single vs. multi).
   Values render through `_bundle_rendered_value`: numeric-family
   `FieldSpec` categories render bare, everything else quoted and escaped.
+- **`_read_body`'s `WHEN OTHER` branch also replicates the source `AT END`
+  clause's own literal MOVEs**, not just the FILE STATUS field
+  (`_replicated_at_end_moves`/`_is_safe_literal_source`): the splicer
+  replaces the *whole* READ statement (see `splicer/orchestrator.py`'s own
+  module docstring), which deletes the real `AT END MOVE "Y" TO WS-EOF`
+  idiom along with it — a mock that moves only the FILE STATUS field never
+  flips the program's own application-level EOF flag, so its `PERFORM ...
+  UNTIL WS-EOF = ...` loop never terminates (an infinite loop, found via a
+  real Docker CI run against `examples/fixtures/FIXTUREDEMO`, not by
+  `mockymock lint`, which is static and cannot see a splice-time no-op).
+  Whether the `WHEN OTHER` branch is emitted at all is gated on the
+  *source* `AT END` clause existing, deliberately not on
+  `fixture.terminal` alone: a file with no `FILE STATUS` clause (e.g.
+  `examples/invupdt/INVUPDT.cbl`'s `INV-FILE`) has `terminal is None`
+  correctly (cobol-parser's `_resolve_status_field`), but the program's
+  own `AT END` handler still fires every time the sequence exhausts and
+  still needs replicating. Only a `MOVE` whose source is a quoted
+  string/numeric literal or figurative constant is replicated — never a
+  bare identifier, whose value in the mock's own splice-time context
+  isn't the real program's runtime state; when the clause exists but
+  nothing in it was safely replicable, a `*> TODO` comment flags the gap
+  in the generated `.cut` rather than silently emitting an `EVALUATE` with
+  no `WHEN OTHER` effect at all.
 - **Expectations** render via `_render_expectation(expectation,
   declared_keys)`: tier 1 (`call_count`) → `VERIFY <cat> <key> WAS CALLED
   n TIMES`, gated on `declared_keys` as above; tier 2 (`field_equals`) →

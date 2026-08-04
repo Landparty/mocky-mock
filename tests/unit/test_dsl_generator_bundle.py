@@ -188,6 +188,121 @@ def test_read_terminal_moves_the_terminal_field_in_when_other():
         assert f'MOVE "10" TO {field_name}' in text
 
 
+def test_read_at_end_clause_replicated_when_no_status_field_exists():
+    """MULTI_FILE_SOURCE's INV-FILE has no FILE STATUS clause at all --
+    fixture.terminal is correctly None (see cobol-parser's
+    _resolve_status_field), but the program's own `AT END MOVE "Y" TO
+    WS-EOF` still needs replicating, or the READ mock's EVALUATE gets no
+    WHEN OTHER branch at all and the program's own PERFORM ... UNTIL
+    WS-EOF loop never terminates -- an infinite loop found empirically via
+    a real Docker run against examples/invupdt/'s own --with-data output,
+    not by lint (see the module docstring on _read_body)."""
+    surface, bundle = _surface_and_bundle(MULTI_FILE_SOURCE, "multifile.cbl")
+    read_fixture = next(
+        f
+        for f in bundle.scenarios[0].fixtures
+        if f.category == "READ" and f.key == "INV-FILE"
+    )
+    assert read_fixture.terminal is None  # ground the test's own premise
+    text = scaffold_cut("MULTIFILE", surface, bundle)
+    assert "WHEN OTHER" in text
+    assert 'MOVE "Y" TO WS-EOF' in text
+
+
+MULTI_FILE_SOURCE_WITH_STATUS = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MULTIFILESTATUS.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT INV-FILE ASSIGN TO "INV.DAT"
+               FILE STATUS IS WS-INV-STATUS.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  INV-FILE.
+       01  INV-REC.
+           05  INV-QTY        PIC 9(4).
+
+       WORKING-STORAGE SECTION.
+       01  WS-INV-STATUS       PIC XX.
+       01  WS-EOF              PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           OPEN INPUT INV-FILE.
+           READ INV-FILE
+               AT END MOVE "Y" TO WS-EOF
+           END-READ.
+           CLOSE INV-FILE.
+"""
+
+
+def test_read_at_end_clause_replicated_alongside_a_real_status_field():
+    """Unlike MULTI_FILE_SOURCE, this file DOES declare FILE STATUS --
+    both the status-field MOVE and the replicated AT END MOVE must
+    appear, in that order, in the same WHEN OTHER branch."""
+    surface, bundle = _surface_and_bundle(
+        MULTI_FILE_SOURCE_WITH_STATUS, "multifilestatus.cbl"
+    )
+    read_fixture = next(
+        f
+        for f in bundle.scenarios[0].fixtures
+        if f.category == "READ" and f.key == "INV-FILE"
+    )
+    assert read_fixture.terminal == {"WS-INV-STATUS": "10"}
+    text = scaffold_cut("MULTIFILESTATUS", surface, bundle)
+    when_other = text.split("WHEN OTHER", 1)[1]
+    status_index = when_other.index('MOVE "10" TO WS-INV-STATUS')
+    eof_index = when_other.index('MOVE "Y" TO WS-EOF')
+    assert status_index < eof_index
+
+
+IDENTIFIER_SOURCED_AT_END_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. IDENTSRC.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT INV-FILE ASSIGN TO "INV.DAT".
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  INV-FILE.
+       01  INV-REC.
+           05  INV-QTY        PIC 9(4).
+
+       WORKING-STORAGE SECTION.
+       01  WS-DONE-FLAG        PIC X VALUE "N".
+       01  WS-EOF              PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           OPEN INPUT INV-FILE.
+           READ INV-FILE
+               AT END MOVE WS-DONE-FLAG TO WS-EOF
+           END-READ.
+           CLOSE INV-FILE.
+"""
+
+
+def test_read_at_end_clause_with_identifier_source_gets_a_todo_comment():
+    """MOVE WS-DONE-FLAG TO WS-EOF -- an identifier source, not a literal
+    -- cannot be safely replicated (WS-DONE-FLAG's value in the mock's
+    own splice-time context is not the real program's runtime state), so
+    a TODO comment flags the gap instead of silently emitting an
+    EVALUATE with no WHEN OTHER effect at all."""
+    surface, bundle = _surface_and_bundle(
+        IDENTIFIER_SOURCED_AT_END_SOURCE, "identsrc.cbl"
+    )
+    text = scaffold_cut("IDENTSRC", surface, bundle)
+    assert "WHEN OTHER" in text
+    assert "TODO" in text
+    assert "WS-DONE-FLAG" not in text  # never blindly copied
+
+
 # --- hand-built bundles for isolated logic -----------------------------------
 
 

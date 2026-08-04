@@ -83,6 +83,73 @@ _NUMERIC_FIELD_CATEGORIES = frozenset({"numeric", "numeric-edited", "float"})
 #: (injector.build_site_dispatch) already covers it.
 _DEFAULT_SUCCESS_CODES = frozenset({"00", "0"})
 
+#: Mirrors cobolparser's own lexer.py CobolLexer.FIGURATIVE_CONSTANTS
+#: vocabulary (minus ALL, which always prefixes a literal rather than
+#: standing alone) -- a MOVE source in this set is exactly as safe to copy
+#: verbatim as a quoted/numeric literal, see _is_safe_literal_source.
+_FIGURATIVE_CONSTANTS = frozenset(
+    {
+        "ZERO",
+        "ZEROS",
+        "ZEROES",
+        "SPACE",
+        "SPACES",
+        "HIGH-VALUE",
+        "HIGH-VALUES",
+        "LOW-VALUE",
+        "LOW-VALUES",
+        "QUOTE",
+        "QUOTES",
+    }
+)
+
+
+def _is_safe_literal_source(source: str) -> bool:
+    """True for a MOVE source this generator can safely replicate verbatim
+    into a mock body: a quoted string literal, a numeric literal, or a
+    figurative constant -- never a bare identifier, whose value in the
+    mock's own splice-time context is not the real program's runtime
+    state at that point. See _replicated_at_end_moves."""
+    if not source:
+        return False
+    if len(source) >= 2 and source[0] in ('"', "'") and source[-1] == source[0]:
+        return True
+    if source.upper() in _FIGURATIVE_CONSTANTS:
+        return True
+    digits = source[1:] if source[0] in "+-" else source
+    return digits.replace(".", "", 1).isdigit()
+
+
+def _replicated_at_end_moves(statement: object) -> list[str]:
+    """Extra `MOVE` lines for a READ mock's exhaustion (`WHEN OTHER`)
+    branch: the splicer replaces the *whole* READ statement (see
+    splicer/orchestrator.py's own module docstring), which also deletes
+    its `AT END` clause's own statements. When that clause is the only
+    place the program sets its own application-level EOF flag -- the
+    "READ ... AT END MOVE 'Y' TO WS-EOF" idiom (see
+    examples/invupdt/INVUPDT.cut's own hand-written mock doing the exact
+    same thing by hand) -- a generated mock that moves only the FILE
+    STATUS field never flips that flag, so the program's own `PERFORM ...
+    UNTIL WS-EOF = ...` loop never terminates: an infinite loop, not a
+    wrong value, at runtime (found via examples/fixtures/FIXTUREDEMO's
+    own Docker-gated CI run timing out). Deliberately conservative: only
+    a `MOVE` whose source is a literal or figurative constant is
+    replicated (`_is_safe_literal_source`); anything else in the clause
+    (a bare-identifier source, IF, PERFORM, ...) is left unreplicated --
+    a known, narrower gap than the one this closes, not silently
+    guessed at."""
+    at_end = getattr(statement, "at_end_clause", None) or []
+    lines: list[str] = []
+    for clause_statement in at_end:
+        if type(clause_statement).__name__ != "MoveStatement":
+            continue
+        source = getattr(clause_statement, "source", None)
+        if not source or not _is_safe_literal_source(source):
+            continue
+        for target in getattr(clause_statement, "targets", []):
+            lines.append(f"MOVE {source} TO {target}")
+    return lines
+
 
 def _quote_safe(name: str) -> str:
     """The .cut grammar cannot represent a double quote inside a quoted
@@ -413,21 +480,49 @@ def _single_row_body(fixture: BoundaryFixture) -> list[str]:
 
 
 def _read_body(
-    fixture: BoundaryFixture, registry: TallyRegistry, category: MockCategory
+    fixture: BoundaryFixture,
+    registry: TallyRegistry,
+    category: MockCategory,
+    site: BoundarySite,
 ) -> list[str]:
     """READ's multi-row sequence: a tally-branching `EVALUATE TRUE` chain,
     one `WHEN <tally> = N` per generated row, `WHEN OTHER` moving
     `fixture.terminal`'s status code(s) once the sequence is exhausted (a
     file-status field is always alphanumeric, so its terminal code is
-    always quoted -- unlike SQL's SQLCODE). Mirrors `ROWS` sugar's own
-    internal `EVALUATE`/`WHEN tally = N` shape (see .okf/splicer.md) for
-    consistency, since READ has no `ROWS` grammar of its own to reach for
-    (v1 -- see docs/2026-07-31-csv-sourced-rows-design.md's still-proposed
+    always quoted -- unlike SQL's SQLCODE), plus whatever of the original
+    `AT END` clause's own statements `_replicated_at_end_moves` can safely
+    replicate -- the program's own EOF-flag idiom, not just its FILE
+    STATUS field, since the splicer deletes the real clause entirely.
+
+    Whether a `WHEN OTHER` branch is needed at all is gated on the source
+    `AT END` clause existing (`at_end` below), deliberately NOT on
+    `fixture.terminal` alone: a file with no `FILE STATUS` clause (e.g.
+    INVUPDT's `INV-FILE`) has `fixture.terminal is None` -- correctly, per
+    `_resolve_status_field`'s "exact by construction, or absent" rule on
+    the cobol-parser side -- even though the program's own `AT END`
+    handler still fires and still needs replicating; gating on
+    `fixture.terminal` alone silently produced an `EVALUATE` with no
+    `WHEN OTHER` at all for exactly that program (found via a real Docker
+    run, not by lint, which cannot see a splice-time no-op), leaving the
+    application's own loop-guard flag untouched forever -- an infinite
+    loop. When `at_end` is non-empty but nothing in it was safely
+    replicable (an identifier-sourced MOVE, an IF, ...), a comment flags
+    the gap rather than silently emitting nothing.
+
+    Mirrors `ROWS` sugar's own internal `EVALUATE`/`WHEN tally = N` shape
+    (see .okf/splicer.md) for consistency, since READ has no `ROWS`
+    grammar of its own to reach for (v1 -- see
+    docs/2026-07-31-csv-sourced-rows-design.md's still-proposed
     extension)."""
     sequence = fixture.sequence
     if not sequence:
         return []
-    if len(sequence) == 1 and not fixture.terminal:
+
+    at_end = getattr(site.statement, "at_end_clause", None) or []
+    replicated = _replicated_at_end_moves(site.statement)
+    needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
+
+    if len(sequence) == 1 and not needs_exhaustion_branch:
         return _row_move_lines(sequence[0], fixture)
 
     tally = registry.name(category, fixture.key)
@@ -435,10 +530,17 @@ def _read_body(
     for index, row in enumerate(sequence, start=1):
         body.append(f"    WHEN {tally} = {index}")
         body.extend(f"        {line}" for line in _row_move_lines(row, fixture))
-    if fixture.terminal:
+    if needs_exhaustion_branch:
         body.append("    WHEN OTHER")
-        for field_name, code in fixture.terminal.items():
+        for field_name, code in (fixture.terminal or {}).items():
             body.append(f'        MOVE "{code}" TO {field_name}')
+        for line in replicated:
+            body.append(f"        {line}")
+        if at_end and not replicated:
+            body.append(
+                "        *> TODO: this program's AT END clause could not be "
+                "auto-replicated -- add its loop-guard MOVE by hand"
+            )
     body.append("END-EVALUATE")
     return body
 
@@ -488,7 +590,7 @@ def _bundle_directive_for(
     if fixture.direction == "STATUS_ONLY":
         body = _status_only_body(fixture)
     elif category is MockCategory.READ:
-        body = _read_body(fixture, registry, category)
+        body = _read_body(fixture, registry, category, site)
     elif category is MockCategory.SQL and _sql_wants_rows(fixture):
         return _sql_rows_directive(category, fixture.key, fixture)
     else:
