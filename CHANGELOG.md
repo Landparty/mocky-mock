@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.0](https://github.com/samdion1994/mocky-mock/compare/v0.2.0...v0.3.0) (2026-08-04)
+
+
+### Features
+
+* **cli:** add column-restoration and provenance-header helpers for mainframe export ([050e418](https://github.com/samdion1994/mocky-mock/commit/050e41870d2621ef95b114e763d9e23a85f41e4d))
+* **cli:** add mockymock export for real fixed-format (z/OS) COBOL compiles ([60b19cf](https://github.com/samdion1994/mocky-mock/commit/60b19cf1c0a4ac15a183f25a134a735ef8aa52d7))
+* **cli:** add mockymock export subcommand ([9437fd4](https://github.com/samdion1994/mocky-mock/commit/9437fd436d884496399cc048058fe1d3176b0674))
+* **cli:** add preserve_compiler_directives option to run_static_checks ([3ccbc6b](https://github.com/samdion1994/mocky-mock/commit/3ccbc6be7ac6e83864f9a029895c8bd58cd59b64))
+* **cli:** wrap over-72-column generated DISPLAY statements for mainframe export ([44a52a5](https://github.com/samdion1994/mocky-mock/commit/44a52a504c65efc6240a6a347233cd4bf6407fe9))
+
+
+### Bug Fixes
+
+* **cli:** address final whole-branch review findings for export ([5b125d1](https://github.com/samdion1994/mocky-mock/commit/5b125d159ef81ad4cd89d42cc48de2c68404b436))
+* **cli:** clarify why the not-tail safety net isn't dead code ([b164e91](https://github.com/samdion1994/mocky-mock/commit/b164e910cb53428ee3decb01bda71fd5260b59fb))
+* **cli:** rename ambiguous loop variable to satisfy ruff E741 ([2e124d3](https://github.com/samdion1994/mocky-mock/commit/2e124d3b4ae7b0f0a437f079b11b740f2983e61d))
+* **tests:** stop hardcoding version in test_mockymock_has_a_version ([e50882a](https://github.com/samdion1994/mocky-mock/commit/e50882a83c30d92252e70023eb3f9d7cd46af013))
+
+
+### Documentation
+
+* add mainframe (z/OS) export command design ([a2dd00a](https://github.com/samdion1994/mocky-mock/commit/a2dd00a6c85c16c898c63847297a8476a3203b6d))
+* correct stale algorithm claims after chunking redesign ([d79accc](https://github.com/samdion1994/mocky-mock/commit/d79accc363c39c2738fe44f78d0aa8d39d465f74))
+* document mockymock export in the OKF bundle and README ([6bf9685](https://github.com/samdion1994/mocky-mock/commit/6bf9685e0a6ca8f33a8121c643a10740f38c4cdd))
+* revise export command design after empirical column spike ([bf2de7f](https://github.com/samdion1994/mocky-mock/commit/bf2de7f67f86f504e0dcc0aeb4bb68294082884d))
+
 ## [0.2.0](https://github.com/samdion1994/mocky-mock/compare/v0.1.1...v0.2.0) (2026-08-03)
 
 
