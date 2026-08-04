@@ -1,0 +1,164 @@
+"""Finds `*> STUB EXPECT <data-name> [-- <note>]` comments in raw `.cut`
+text and attributes each one to the ordinary (non-PROVIDER) TESTCASE it
+falls inside, by that case's runtime case id.
+
+This is a raw-text scanner, not a grammar addition: `mockymock collect`
+parses `.cut` files with no matching `.cbl` at all (see `.okf/cli.md`), and
+a stub comment only matters to `mockymock run --record-expectations` -- one
+caller, not the shared `parse_cut()` path every subcommand relies on. See
+docs/2026-08-04-record-expectations-design.md for the full design.
+
+Callers are expected to run this only against a `.cut` file that already
+passed `parse_cut()` (i.e. `run_static_checks` reported no problems) --
+every `MOCK`/`END-MOCK` pair is therefore already known to be balanced,
+which is what makes the lightweight `in_mock` tracking below safe: it does
+not need to be a real parser, only agree with one that already validated
+the file.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+from mockymock.dsl.model import MockTestSuite
+from mockymock.dsl.parser import _SUBSCRIPTED_NAME
+
+_TESTCASE_HEADER_RE = re.compile(r'^\s*TESTCASE\s+"')
+_MOCK_OPEN_RE = re.compile(r"^\s*MOCK\s+\S")
+_MOCK_CLOSE_RE = re.compile(r"^\s*END-MOCK\.?\s*$", re.IGNORECASE)
+_STUB_RE = re.compile(
+    rf"^\s*\*>\s*STUB EXPECT\s+(?P<name>{_SUBSCRIPTED_NAME})\s*"
+    rf"(?:--\s*(?P<note>.*?)\s*)?$"
+)
+
+
+@dataclass
+class StubExpectation:
+    """One `*> STUB EXPECT` comment found in the raw `.cut` text, attributed
+    to a real, recordable (non-PROVIDER) TESTCASE."""
+
+    line: int  # 1-based .cut line of the comment itself
+    data_name: str
+    note: str | None
+    #: 1-based position in MockTestSuite.test_cases -- the same index
+    #: driver.py's UT-TESTCASE-{index:03d} / case-id convention uses.
+    case_index: int
+
+
+@dataclass
+class SkippedStub:
+    """A `*> STUB EXPECT` comment found but not attributable to a
+    recordable case -- reported, never silently dropped."""
+
+    line: int
+    data_name: str
+    reason: str
+
+
+@dataclass
+class StubScanResult:
+    stubs: list[StubExpectation]
+    skipped: list[SkippedStub]
+
+
+def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResult:
+    """Scan `cut_text` (the raw `.cut` file contents `suite` was parsed
+    from) for `*> STUB EXPECT` comments and resolve each one to the
+    TESTCASE it belongs to.
+
+    A stub is attributed to the nearest preceding `TESTCASE "..."` header
+    line. That header's line number is then cross-referenced against
+    `suite.test_cases` (a non-PROVIDER case's `.line` is documented to be
+    its original header line verbatim -- see `.okf/dsl.md`) to recover the
+    case's real 1-based position, which is exactly the case id `driver.py`
+    will assign it at codegen time. A header carrying `USING PROVIDER`
+    expands into N independently-lined runtime cases from one physical
+    template block -- a shape this scanner does not attempt to resolve (see
+    the design doc's Scope) -- so a stub whose owning header is
+    provider-templated is reported skipped, not guessed at.
+
+    Pass the POST-`--case`/`--tag`-filter suite (`checks.filter_suite_cases`
+    already applied) -- the same object `build_driver` will iterate -- so a
+    stub's `case_index` always means the same thing `build_driver` means by
+    it. A TESTCASE header with no matching `suite.test_cases` entry at all
+    (most commonly: that case was excluded by `--case`/`--tag` this run) is
+    reported skipped rather than guessed at.
+    """
+    raw_lines = cut_text.splitlines()
+
+    headers: list[tuple[int, bool]] = []  # (line, is_provider_templated)
+    in_mock = False
+    for line_no, text in enumerate(raw_lines, start=1):
+        if in_mock:
+            if _MOCK_CLOSE_RE.match(text):
+                in_mock = False
+            continue
+        if _MOCK_OPEN_RE.match(text):
+            in_mock = True
+            continue
+        if _TESTCASE_HEADER_RE.match(text):
+            headers.append((line_no, "USING PROVIDER" in text))
+
+    case_index_by_line = {
+        case.line: index for index, case in enumerate(suite.test_cases, start=1)
+    }
+
+    stubs: list[StubExpectation] = []
+    skipped: list[SkippedStub] = []
+    in_mock = False
+    for line_no, text in enumerate(raw_lines, start=1):
+        if in_mock:
+            if _MOCK_CLOSE_RE.match(text):
+                in_mock = False
+            continue
+        if _MOCK_OPEN_RE.match(text):
+            in_mock = True
+            continue
+
+        m = _STUB_RE.match(text)
+        if m is None:
+            continue
+        name = m.group("name")
+        note = m.group("note") or None
+
+        owning_header: tuple[int, bool] | None = None
+        for header_line, is_provider in headers:
+            if header_line > line_no:
+                break
+            owning_header = (header_line, is_provider)
+
+        if owning_header is None:
+            skipped.append(SkippedStub(line_no, name, "not inside any TESTCASE"))
+            continue
+        header_line, is_provider = owning_header
+        if is_provider:
+            skipped.append(
+                SkippedStub(
+                    line_no,
+                    name,
+                    "inside a PROVIDER-templated TESTCASE, unsupported in v1",
+                )
+            )
+            continue
+        case_index = case_index_by_line.get(header_line)
+        if case_index is None:
+            # Most commonly: this TESTCASE was excluded by --case/--tag this
+            # run (filter_suite_cases removes it from suite.test_cases
+            # entirely, so it simply has no entry here). Could also mean a
+            # non-provider header this scan found didn't match any parsed
+            # MockTestCase.line for some other reason -- either way, fail
+            # closed (skip, don't guess a case id) rather than misattribute.
+            skipped.append(
+                SkippedStub(
+                    line_no,
+                    name,
+                    f"TESTCASE at line {header_line} was not run this time "
+                    f"(excluded by --case/--tag, or did not resolve to a "
+                    f"parsed test case)",
+                )
+            )
+            continue
+        stubs.append(StubExpectation(line_no, name, note, case_index))
+
+    return StubScanResult(stubs=stubs, skipped=skipped)

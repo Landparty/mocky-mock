@@ -5,6 +5,12 @@ These become the new PROCEDURE DIVISION entry point: prepended before the
 program's own paragraphs, so the original first paragraph never runs
 automatically (PROCEDURE DIVISION execution starts at the first paragraph
 after the header, and the driver paragraphs come first).
+
+`build_driver`'s optional `record_targets` param (case index -> data-names)
+backs `mockymock run --record-expectations`: see
+docs/2026-08-04-record-expectations-design.md and
+`mockymock.analysis.stub_expectations`. Omitted or empty, it changes
+nothing -- ordinary `run` output is unaffected.
 """
 
 from __future__ import annotations
@@ -33,7 +39,10 @@ class DriverArtifact:
 
 
 def build_driver(
-    suite: MockTestSuite, reset_lines: list[str], registry: TallyRegistry
+    suite: MockTestSuite,
+    reset_lines: list[str],
+    registry: TallyRegistry,
+    record_targets: dict[int, list[str]] | None = None,
 ) -> DriverArtifact:
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
@@ -86,7 +95,13 @@ def build_driver(
 
     for index, case in enumerate(suite.test_cases, start=1):
         procedure.extend(
-            _build_testcase_paragraph(index, case, registry, bool(reset_lines))
+            _build_testcase_paragraph(
+                index,
+                case,
+                registry,
+                bool(reset_lines),
+                (record_targets or {}).get(index, []),
+            )
         )
         procedure.append("")
 
@@ -96,7 +111,11 @@ def build_driver(
 
 
 def _build_testcase_paragraph(
-    index: int, case: MockTestCase, registry: TallyRegistry, has_reset: bool
+    index: int,
+    case: MockTestCase,
+    registry: TallyRegistry,
+    has_reset: bool,
+    record_names: list[str] | None = None,
 ) -> list[str]:
     case_id = f"{index:03d}"
     case_mocks = {(mock.category, mock.key) for mock in case.mocks}
@@ -153,6 +172,19 @@ def _build_testcase_paragraph(
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")
+
+    # --record-expectations only: one marker per still-open stub this case
+    # covers, emitted at the exact point a real EXPECT for that field would
+    # run. Mirrors the FAIL line's own proven-safe "literal DISPLAY text
+    # followed by a bare identifier" shape so GnuCOBOL renders the field in
+    # its native PICTURE formatting -- no new codegen primitive needed.
+    # Unlike the --trace MOCK: marker (which has no case id in scope at its
+    # splice site), record_names is built here with case_id already known,
+    # so this marker carries one and is attributed by id, not position.
+    for name in record_names or []:
+        lines.append(
+            f'           DISPLAY "__MOCKYMOCK__ RECORD {case_id} {name}: " {name}'
+        )
 
     lines.append(f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} END".')
     return lines

@@ -98,7 +98,20 @@ jobs:
           # Confirmed pushed and resolvable (2026-07-21) via `gh api
           # repos/Landparty/cobol-parser/commits/<sha>` and a live
           # `uv tool install`.
-          ref: 4db83941dccefbf3d185d02a518378c37c392d46
+          #
+          # INTERIM BUMP (2026-08-04): pinned to cobol-parser's
+          # claude/data-generation-function-k2mbbj branch, not main, to pull
+          # in the gen-fixtures initiative's Phases 1-8 end to end
+          # (ProgramLayoutIndex, BoundaryInventoryAnalyzer,
+          # ProgramFixtureGenerator, ConstraintExtractor, ScenarioPlanner,
+          # Expectations, and the terminal-status-field fix this repo's own
+          # Phase 8 contract testing found) -- `mockymock generate
+          # --with-data` depends on all of it and none of it is on
+          # cobol-parser main yet (see cobol-parser PR #108). Confirmed
+          # pushed and resolvable via `git ls-remote`. Re-bump to a
+          # main-branch commit once that PR merges; keep in sync with
+          # pyproject.toml's dependency line per this step's own comment.
+          ref: b3e2b329f014c3a8e52f5fac5679e812acbb44b2
 
       - uses: actions/setup-python@v5
         with:
@@ -156,7 +169,8 @@ jobs:
           repository: Landparty/cobol-parser
           path: cobol-parser
           token: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
-          ref: 4db83941dccefbf3d185d02a518378c37c392d46
+          # Keep in sync with the `test` job's identical step above.
+          ref: b3e2b329f014c3a8e52f5fac5679e812acbb44b2
 
       - uses: actions/setup-python@v5
         with:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from mockymock.dsl.parser import _SUBSCRIPTED_NAME
+
 _TESTSUITE_RE = re.compile(r"^__MOCKYMOCK__ TESTSUITE: (?P<name>.+)$")
 _CASE_START_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) START: (?P<name>.+)$")
 _CASE_FAIL_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) FAIL: (?P<reason>.+)$")
@@ -13,6 +15,19 @@ _CASE_END_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) END$")
 # no case id: it is attributed to the case whose START most recently
 # printed, which is exactly where the driver places it.
 _MOCK_RE = re.compile(r"^__MOCKYMOCK__ MOCK: (?P<label>.+)$")
+# Emitted only by --record-expectations, by build_driver's per-case
+# record_targets addition. Unlike MOCK:, this DOES carry a case id (the
+# driver already has it in scope at the splice site), so it is attributed
+# by id below, the same way FAIL/END are -- not positionally like MOCK:.
+# `name` reuses dsl.parser's own _SUBSCRIPTED_NAME (not a bare \S+): a
+# subscripted data-name like "WS-TABLE(1, 1)" contains a space after the
+# comma (scan_stub_expectations explicitly supports this shape, and
+# build_driver emits it into this exact line verbatim), which a plain
+# \S+ would truncate at, making the required ": " that follows never
+# match and silently dropping the whole recorded value.
+_RECORD_RE = re.compile(
+    rf"^__MOCKYMOCK__ RECORD (?P<id>\S+) (?P<name>{_SUBSCRIPTED_NAME}): (?P<value>.*)$"
+)
 _SUMMARY_RE = re.compile(
     r"^__MOCKYMOCK__ SUMMARY: RUN=(?P<run>\d+) FAILURES=(?P<failures>\d+)$"
 )
@@ -26,6 +41,9 @@ class TestResult:
     ended: bool = False
     #: Mock labels in firing order. Only populated by a --trace run.
     mock_hits: list[str] = field(default_factory=list)
+    #: (data-name, raw displayed value) pairs. Only populated by a
+    #: --record-expectations run.
+    recorded: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def crashed(self) -> bool:
@@ -65,6 +83,11 @@ class TestSuiteResult:
     #: FAIL-line equivalent, which does gate all_passed since a FAIL line
     #: does carry evidence).
     orphan_ends: list[str] = field(default_factory=list)
+    #: (id, name, value) for a RECORD marker whose id never STARTed. Same
+    #: non-gating treatment as orphan_ends -- a marker that carries no
+    #: pass/fail semantics has no failure evidence to lose by going
+    #: unattributed. Only ever populated by a --record-expectations run.
+    orphan_records: list[tuple[str, str, str]] = field(default_factory=list)
 
     @property
     def all_passed(self) -> bool:
@@ -104,6 +127,14 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
         elif (m := _MOCK_RE.match(line)) is not None:
             if suite.results:
                 suite.results[-1].mock_hits.append(m.group("label"))
+        elif (m := _RECORD_RE.match(line)) is not None:
+            target = by_id.get(m.group("id"))
+            if target is not None:
+                target.recorded.append((m.group("name"), m.group("value")))
+            else:
+                suite.orphan_records.append(
+                    (m.group("id"), m.group("name"), m.group("value"))
+                )
         elif (m := _SUMMARY_RE.match(line)) is not None:
             suite.tests_run = int(m.group("run"))
             suite.failures = int(m.group("failures"))

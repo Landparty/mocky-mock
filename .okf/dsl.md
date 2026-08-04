@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-07-21T18:00:00Z
+timestamp: 2026-08-04T00:00:00Z
 ---
 
 # Overview
@@ -210,6 +210,36 @@ a quoted static-CALL directive against a bare dynamic-CALL site, or vice
 versa — see the docstring on `MockCategory` in `model.py` for the full
 rationale.
 
+## `*> STUB EXPECT` comments (`mockymock run --record-expectations`)
+
+```
+*> STUB EXPECT <data-name> [-- <note>]
+```
+
+A convention, **not a grammar addition** — as far as `parse_cut()` is
+concerned this is an ordinary `*>` comment (parses today with zero parser
+changes) that does nothing at runtime until `mockymock run
+--record-expectations` fills it in, turning it into a real
+`EXPECT <data-name> TO BE <value>` line in place. `<data-name>` reuses the
+same `_SUBSCRIPTED_NAME` fragment `EXPECT`/`MOVE` targets already parse
+with, so a subscripted stub (`WS-TABLE(1, 1)`) is recognized identically.
+`-- <note>` is optional, free text, never parsed for meaning (mirrors
+cobol-parser's `Expectation.note` field it's meant to echo, e.g.
+`"computed in CALC-TOTALS"`).
+
+Meant to be written next to a would-be `EXPECT` — inside a `TESTCASE`, at
+the point a real assertion would go — for a field whose correct value the
+author (or an automated scaffolder, see cobol-parser's tier-3 stub
+`Expectation`s) doesn't yet know. `mockymock.analysis.stub_expectations`
+scans for these as raw text (deliberately not part of this grammar — see
+that module's docstring for why); `mockymock.report.record_rewrite`
+matches a scan against a recorded run and does the rewrite. Once
+recorded, the resulting `EXPECT` line is an ordinary one in every way —
+nothing distinguishes it from a hand-written `EXPECT`, and nothing about
+this feature can ever touch it again (there's no more `*> STUB EXPECT`
+text left to match). See
+docs/2026-08-04-record-expectations-design.md for the full design.
+
 # AST Model (`model.py`)
 
 | Class | Fields | Notes |
@@ -352,6 +382,105 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields and sets
 `SQLCODE` to 0; `WHEN OTHER` (rows exhausted) sets `SQLCODE` to 100 (DB2's
 "not found" code), fixed in v1.
 
+### Bundle-driven scaffold (`generate --with-data`, Phase 8 of gen-fixtures)
+
+`scaffold_cut(suite_name, surface, bundle=None)` — `bundle=None` is the
+paragraph-grouped path described above, unchanged. A real
+`dsl.fixture_bundle.FixtureBundle` (parsed from cobol-parser's
+`ProgramFixtureGenerator` JSON, see `fixture_bundle.py` and cobol-parser's
+`docs/fixture-bundle-schema.md`) switches to `_scaffold_with_bundle`:
+
+- **One `TESTCASE` per `bundle.scenarios[]` entry**, not per paragraph,
+  named from `scenario.name`, body `PERFORM <scenario.entry>`.
+- **The join**: `_mockymock_boundary_keys(surface)` (this program's own
+  walk — note it iterates *every* entry of `site.keys`, not just
+  `keys[0]`, so a multi-file `OPEN A OUTPUT B` widens to both `(OPEN, A)`
+  and `(OPEN, B)` even though it is one physical `BoundarySite`) is
+  compared against `_bundle_boundary_keys(bundle)` (every fixture's
+  `(category, key)` plus every `call_count`/`stub`-kind expectation's
+  `ref`, since an OUT-direction boundary — a WRITE, a SQL
+  INSERT/UPDATE/DELETE — gets no fixture at all, only a stub expectation;
+  skipping stub refs here would misreport every OUT-direction boundary as
+  a mismatch). Disagreement is never silent: `_warn_on_key_mismatch`
+  prints both one-sided sets to stderr. This exact comparison is pinned by
+  `tests/unit/test_fixture_bundle_contract.py`, parametrized over the
+  `examples/*/` corpus — a mismatch there must be root-caused (nested-site
+  span annotation missing, a real cobol-parser gap, etc.), not silently
+  accepted; see that file's module docstring for the one currently
+  accepted exception (`custprog`'s DCLGEN `EXEC SQL INCLUDE`, a
+  cobol-parser preprocessing gap, not a Phase 1-8 regression).
+- **`_bundle_mock_directives`** groups a scenario's fixtures by *physical
+  site* (`id(site)`, not by key) before emitting anything — the same
+  multi-file OPEN/CLOSE shape that widens `.keys` in the join above means
+  naively emitting one directive per key would declare two `MOCK OPEN`
+  directives that both match the same physical site
+  (`AMBIGUOUS_MOCK`). One representative key per physical site is chosen
+  and its status data merged instead. It returns `(lines, declared_keys)`;
+  `declared_keys` is only the literally-emitted primary keys and gates
+  `_render_expectation`'s `VERIFY ... WAS CALLED n TIMES` line — a
+  narrower check than "is this key known to mockymock at all" is required
+  here, or a `VERIFY` would be emitted for a key this TESTCASE mocked only
+  as a non-primary alias of a shared site, which the run command's own
+  `VERIFY_WITHOUT_MOCK` gate would then refuse. After real-data
+  directives, every `mockymock_keys` entry not yet covered gets a
+  placeholder directive too (reusing bundle-less `_directive_for`) — this
+  unconditional "cover everything mockymock knows about" step is what
+  keeps a mockymock-only key (a real key-set gap, or a boundary the bundle
+  couldn't resolve, e.g. custprog's SQL FETCH above) from producing an
+  UNMOCKED_* refusal instead of a scaffold a human can improve on.
+- **Per-category body shape** (`_bundle_directive_for_group`, one real
+  fixture group): a status-only boundary (OPEN/CLOSE/START/UNLOCK/DELETE)
+  gets `_status_only_body` (a `FILE-STATUS IS` MOVE only when the status
+  is non-"00"/"0" — file-op categories default to success implicitly, see
+  `injector.build_site_dispatch`; SQL has no such default and always sets
+  SQLCODE explicitly); a single-row READ/ACCEPT/WRITE gets
+  `_single_row_body` (plain field MOVEs); a multi-row READ sequence gets
+  `_read_body`'s hand-rolled `EVALUATE TRUE` / `WHEN <tally> = N` chain
+  (mirroring the `ROWS` sugar's own generated shape, since `ROWS` is
+  SQL-only grammar — ordinary `dsl/parser.py` still hard-refuses it for
+  any other category); a multi-row SQL FETCH gets real `ROWS (...)` sugar
+  via `_sql_rows_directive` (`_sql_wants_rows` decides single vs. multi).
+  Values render through `_bundle_rendered_value`: numeric-family
+  `FieldSpec` categories render bare, everything else quoted and escaped.
+- **`_read_body`'s `WHEN OTHER` branch also replicates the source `AT END`
+  clause's own literal MOVEs**, not just the FILE STATUS field
+  (`_replicated_at_end_moves`/`_is_safe_literal_source`): the splicer
+  replaces the *whole* READ statement (see `splicer/orchestrator.py`'s own
+  module docstring), which deletes the real `AT END MOVE "Y" TO WS-EOF`
+  idiom along with it — a mock that moves only the FILE STATUS field never
+  flips the program's own application-level EOF flag, so its `PERFORM ...
+  UNTIL WS-EOF = ...` loop never terminates (an infinite loop, found via a
+  real Docker CI run against `examples/fixtures/FIXTUREDEMO`, not by
+  `mockymock lint`, which is static and cannot see a splice-time no-op).
+  Whether the `WHEN OTHER` branch is emitted at all is gated on the
+  *source* `AT END` clause existing, deliberately not on
+  `fixture.terminal` alone: a file with no `FILE STATUS` clause (e.g.
+  `examples/invupdt/INVUPDT.cbl`'s `INV-FILE`) has `terminal is None`
+  correctly (cobol-parser's `_resolve_status_field`), but the program's
+  own `AT END` handler still fires every time the sequence exhausts and
+  still needs replicating. Only a `MOVE` whose source is a quoted
+  string/numeric literal or figurative constant is replicated — never a
+  bare identifier, whose value in the mock's own splice-time context
+  isn't the real program's runtime state; when the clause exists but
+  nothing in it was safely replicable, a `*> TODO` comment flags the gap
+  in the generated `.cut` rather than silently emitting an `EVALUATE` with
+  no `WHEN OTHER` effect at all.
+- **Expectations** render via `_render_expectation(expectation,
+  declared_keys)`: tier 1 (`call_count`) → `VERIFY <cat> <key> WAS CALLED
+  n TIMES`, gated on `declared_keys` as above; tier 2 (`field_equals`) →
+  `EXPECT <name> TO BE <value>`; tier 3 (`stub`) → `*> STUB EXPECT <name>`
+  comment when `ref` is a real data-name, or nothing when `ref` is a
+  `"CATEGORY:KEY"`-shaped boundary-level reference (`_is_boundary_level_ref`
+  detects this via the colon, since COBOL names never contain one) — see
+  `analysis.md`'s stub-expectation scanner for how a human later promotes
+  a stub comment to a real `EXPECT` via `mockymock run
+  --record-expectations`.
+- **Lint gate**: `tests/integration/test_generate_with_data_lint_gate.py`
+  generates a `.cut` for every corpus program across all three
+  `--scenarios` modes (happy/branches/all) and asserts `mockymock lint`
+  (via `cli.checks.run_static_checks`, Docker-free) finds zero problems —
+  "a generator that emits a refusable `.cut` is worse than none."
+
 # Gotchas
 
 - **`MOCK MQ` has no `MockCategory.MQ`.** It is pure `.cut`-syntax sugar for
@@ -395,3 +524,5 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields and sets
 
 - [splicer](splicer.md) — consumes `MockTestSuite` to instrument COBOL source
 - [cli](cli.md) — `mockymock generate` calls `scaffold_cut`; `mockymock run` calls `parse_cut`
+- [analysis](analysis.md) — `stub_expectations.py`'s raw-text scan for `*> STUB EXPECT` comments
+- [report](report.md) — `record_rewrite.py`, which rewrites a stub comment into a real `EXPECT` line

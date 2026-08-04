@@ -1,36 +1,154 @@
-"""Auto-scaffolds a starter .cut file from a MockSurface.
+"""Scaffolds a starter .cut file from a MockSurface -- with or without a
+cobol-parser fixture bundle.
 
-One TESTCASE per paragraph that has at least one mockable boundary site;
-the TESTCASE mocks ALL of that paragraph's mockable sites (deduped by
-key) -- a scaffold that mocked only some of them would walk users
-straight into the refusal gate's UNMOCKED_* checks (an unmocked CALL has
-nowhere to link, unmocked file I/O would hit a nonexistent sandbox file,
-unmocked EXEC cannot compile, unmocked console ACCEPT reads stdin).
+**Without a bundle** (`bundle=None`): one TESTCASE per paragraph that has
+at least one mockable boundary site; the TESTCASE mocks ALL of that
+paragraph's mockable sites (deduped by key) -- a scaffold that mocked only
+some of them would walk users straight into the refusal gate's UNMOCKED_*
+checks (an unmocked CALL has nowhere to link, unmocked file I/O would hit
+a nonexistent sandbox file, unmocked EXEC cannot compile, unmocked console
+ACCEPT reads stdin). Placeholder bodies are minimal-but-runnable (MOVE 0
+TO RETURN-CODE for calls, MOVE 0 TO SQLCODE for SQL, empty for file ops)
+and are expected to be replaced with real mock behavior. Nested sites
+count as mockable only when `annotate_nested_sites` gave them a validated
+splice span; unspliceable nested sites are skipped here and reported by
+the CLI's unsupported-boundaries listing instead. The scaffold only covers
+each paragraph's OWN sites: boundaries reached transitively through
+PERFORM still need their MOCK directives added by hand.
 
-Nested sites count as mockable only when `annotate_nested_sites` gave
-them a validated splice span; unspliceable nested sites are skipped here
-and reported by the CLI's unsupported-boundaries listing instead.
+**With a bundle** (`mockymock generate --with-data`, Phase 8 of the
+`gen-fixtures` program-scoped test-data initiative): one TESTCASE per
+*scenario* instead of per paragraph, `PERFORM <scenario.entry>`, mock
+bodies built from the scenario's own generated fixture data (a plain body
+for a single-invocation boundary, a tally-branching `EVALUATE` for a
+multi-row `READ` sequence, `ROWS (...)` sugar for a multi-row SQL cursor
+fetch), and per-scenario `EXPECT`/`VERIFY`/`*> STUB EXPECT` lines from the
+bundle's tier 1/2/3 expectations. See
+docs/plans/2026-08-02-program-data-generation-implementation.md's Phase 8
+and cobol-parser's docs/fixture-bundle-schema.md.
 
-Placeholder bodies are minimal-but-runnable (MOVE 0 TO RETURN-CODE for
-calls, MOVE 0 TO SQLCODE for SQL, empty for file ops) and are expected to
-be replaced with real mock behavior. MQ API calls are emitted with the
-`MOCK MQ` sugar so the .cut reads at the right level of intent.
+Every mockable site this program's own `mock_surface.analyze()` finds
+gets a MOCK directive in every generated TESTCASE, one way or another:
+real fixture data when the bundle supplied it, or a placeholder body
+(reusing the ordinary bundle-less `_directive_for` logic) otherwise -- an
+OUT-direction boundary the bundle only stubbed (a WRITE, a SQL
+INSERT/UPDATE/DELETE: the program produces that value, so there's nothing
+to mock with), or one the bundle doesn't mention at all (a genuine
+key-set gap between the two independent walks, reported by
+`_warn_on_key_mismatch` but not otherwise treated specially). Leaving a
+reachable site unmocked would make `run`/`lint` refuse the generated
+`.cut` outright with UNMOCKED_*, which is worse than a placeholder a
+human can improve on. See `_bundle_mock_directives`.
 
-The scaffold only covers each paragraph's OWN sites: boundaries reached
-transitively through PERFORM still need their MOCK directives added by
-hand (the run command's refusal gate names them precisely).
+Explicitly out of scope for v1 (see that plan's own Phase 8 section):
+collapsing scenarios that differ only in field values on the same
+mock/entry shape into one `TESTCASE ... USING PROVIDER` -- every scenario
+gets its own TESTCASE, even near-duplicates.
 """
 
 from __future__ import annotations
 
+import sys
+
 from mockymock.analysis.mock_surface import BoundarySite, MockSurface
-from mockymock.dsl.model import FILE_OP_CATEGORIES, MockCategory
+from mockymock.dsl.fixture_bundle import (
+    BoundaryFixture,
+    Expectation,
+    FixtureBundle,
+    Scenario,
+)
+from mockymock.dsl.model import (
+    EXEC_CATEGORIES,
+    FILE_OP_CATEGORIES,
+    MockCategory,
+    MockDirective,
+    MockTestCase,
+    MockTestSuite,
+)
+from mockymock.report.record_rewrite import render_expect_value
+from mockymock.splicer.naming import TallyRegistry
 
 _PLACEHOLDER_BODIES: dict[MockCategory, list[str]] = {
     MockCategory.CALL: ["MOVE 0 TO RETURN-CODE"],
     MockCategory.DYNCALL: ["MOVE 0 TO RETURN-CODE"],
     MockCategory.SQL: ["MOVE 0 TO SQLCODE"],
 }
+
+#: Numeric-family FieldSpec categories (see cobol-parser's
+#: docs/fixture-bundle-schema.md) render bare; everything else is quoted.
+_NUMERIC_FIELD_CATEGORIES = frozenset({"numeric", "numeric-edited", "float"})
+
+#: A status/terminal code equal to one of these means "success" -- nothing
+#: to override, since OPEN/CLOSE/READ/etc.'s implicit default-success MOVE
+#: (injector.build_site_dispatch) already covers it.
+_DEFAULT_SUCCESS_CODES = frozenset({"00", "0"})
+
+#: Mirrors cobolparser's own lexer.py CobolLexer.FIGURATIVE_CONSTANTS
+#: vocabulary (minus ALL, which always prefixes a literal rather than
+#: standing alone) -- a MOVE source in this set is exactly as safe to copy
+#: verbatim as a quoted/numeric literal, see _is_safe_literal_source.
+_FIGURATIVE_CONSTANTS = frozenset(
+    {
+        "ZERO",
+        "ZEROS",
+        "ZEROES",
+        "SPACE",
+        "SPACES",
+        "HIGH-VALUE",
+        "HIGH-VALUES",
+        "LOW-VALUE",
+        "LOW-VALUES",
+        "QUOTE",
+        "QUOTES",
+    }
+)
+
+
+def _is_safe_literal_source(source: str) -> bool:
+    """True for a MOVE source this generator can safely replicate verbatim
+    into a mock body: a quoted string literal, a numeric literal, or a
+    figurative constant -- never a bare identifier, whose value in the
+    mock's own splice-time context is not the real program's runtime
+    state at that point. See _replicated_at_end_moves."""
+    if not source:
+        return False
+    if len(source) >= 2 and source[0] in ('"', "'") and source[-1] == source[0]:
+        return True
+    if source.upper() in _FIGURATIVE_CONSTANTS:
+        return True
+    digits = source[1:] if source[0] in "+-" else source
+    return digits.replace(".", "", 1).isdigit()
+
+
+def _replicated_at_end_moves(statement: object) -> list[str]:
+    """Extra `MOVE` lines for a READ mock's exhaustion (`WHEN OTHER`)
+    branch: the splicer replaces the *whole* READ statement (see
+    splicer/orchestrator.py's own module docstring), which also deletes
+    its `AT END` clause's own statements. When that clause is the only
+    place the program sets its own application-level EOF flag -- the
+    "READ ... AT END MOVE 'Y' TO WS-EOF" idiom (see
+    examples/invupdt/INVUPDT.cut's own hand-written mock doing the exact
+    same thing by hand) -- a generated mock that moves only the FILE
+    STATUS field never flips that flag, so the program's own `PERFORM ...
+    UNTIL WS-EOF = ...` loop never terminates: an infinite loop, not a
+    wrong value, at runtime (found via examples/fixtures/FIXTUREDEMO's
+    own Docker-gated CI run timing out). Deliberately conservative: only
+    a `MOVE` whose source is a literal or figurative constant is
+    replicated (`_is_safe_literal_source`); anything else in the clause
+    (a bare-identifier source, IF, PERFORM, ...) is left unreplicated --
+    a known, narrower gap than the one this closes, not silently
+    guessed at."""
+    at_end = getattr(statement, "at_end_clause", None) or []
+    lines: list[str] = []
+    for clause_statement in at_end:
+        if type(clause_statement).__name__ != "MoveStatement":
+            continue
+        source = getattr(clause_statement, "source", None)
+        if not source or not _is_safe_literal_source(source):
+            continue
+        for target in getattr(clause_statement, "targets", []):
+            lines.append(f"MOVE {source} TO {target}")
+    return lines
 
 
 def _quote_safe(name: str) -> str:
@@ -40,8 +158,22 @@ def _quote_safe(name: str) -> str:
     return name.replace('"', "'")
 
 
-def scaffold_cut(suite_name: str, surface: MockSurface) -> str:
-    """Generate a starter .cut file from every mockable boundary site."""
+def scaffold_cut(
+    suite_name: str, surface: MockSurface, bundle: FixtureBundle | None = None
+) -> str:
+    """Generate a starter .cut file. Without a bundle: one TESTCASE per
+    paragraph with placeholder mock bodies (today's original behavior).
+    With a bundle: one TESTCASE per scenario, mock bodies built from the
+    bundle's own generated fixture data. See the module docstring."""
+    if bundle is None:
+        return _scaffold_placeholder(suite_name, surface)
+    return _scaffold_with_bundle(suite_name, surface, bundle)
+
+
+# --- placeholder scaffold (no bundle) ----------------------------------------
+
+
+def _scaffold_placeholder(suite_name: str, surface: MockSurface) -> str:
     sites_by_paragraph: dict[str, list[BoundarySite]] = {}
     for site in surface.boundary_sites:
         if site.category is None or (site.nested and site.span is None):
@@ -138,3 +270,546 @@ def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
         if not collisions:
             return prefix
     return " ".join(words)
+
+
+# --- bundle-driven scaffold (mockymock generate --with-data) -----------------
+
+
+def _directive_header(category: MockCategory, key: str, site: BoundarySite) -> str:
+    """The `MOCK ...` opening line for `(category, key)`, in the exact
+    syntax `site` (a matching mockymock BoundarySite) requires -- mirrors
+    `_directive_for`'s header logic exactly, factored out so the
+    bundle-driven path can reuse it without also inheriting the
+    placeholder-body choice."""
+    if category is MockCategory.CALL:
+        keyword = "MQ" if site.is_mq else "CALL"
+        return f'MOCK {keyword} "{key}"'
+    if category is MockCategory.DYNCALL:
+        return f"MOCK CALL {key}"
+    if category in FILE_OP_CATEGORIES:
+        return f"MOCK {category.value} {key}"
+    if category is MockCategory.ACCEPT:
+        return f"MOCK ACCEPT {key}"
+    return f'MOCK {category.value} "{key}"'  # SQL / CICS / DLI
+
+
+def _mockymock_boundary_keys(
+    surface: MockSurface,
+) -> dict[tuple[MockCategory, str], BoundarySite]:
+    """First-seen site per (category, key) among surface's mockable sites.
+
+    A multi-file `OPEN`/`CLOSE` (`OPEN INPUT A OUTPUT B`) is one physical
+    `BoundarySite` whose `.keys` tuple names *every* file on the
+    statement -- registers one dict entry per key, all pointing at the
+    same site, since cobol-parser's own `BoundaryInventoryAnalyzer`
+    independently reports one `Boundary` per file name for exactly this
+    shape (`_classify_file_op`), not one per statement. Every other
+    category's `.keys` is always a single entry, so this loop is a no-op
+    widening for them. SQL/CICS/DLI key on `_unique_prefix` instead, since
+    they have no `.keys` at all (only free-form `match_text`)."""
+    keys: dict[tuple[MockCategory, str], BoundarySite] = {}
+    for site in surface.boundary_sites:
+        if site.category is None or (site.nested and site.span is None):
+            continue
+        if site.category in EXEC_CATEGORIES:
+            pair = (site.category, _unique_prefix(site, surface))
+            if pair not in keys:
+                keys[pair] = site
+            continue
+        for key in site.keys:
+            pair = (site.category, key)
+            if pair not in keys:
+                keys[pair] = site
+    return keys
+
+
+def _bundle_boundary_keys(bundle: FixtureBundle) -> set[tuple[str, str]]:
+    """Every (category string, key) pair appearing in ANY scenario's
+    fixtures, or as a boundary-level (`"CATEGORY:KEY"`-shaped ref)
+    expectation, across the whole bundle -- the union mockymock's own key
+    set is compared against (see `_warn_on_key_mismatch`).
+
+    Boundary-level expectations matter here as much as fixtures do: an
+    OUT-direction boundary (a WRITE, a SQL INSERT/UPDATE/DELETE) gets NO
+    fixture at all (see fixture-bundle-schema.md), only a `kind="stub"`
+    expectation -- that `ref` is the *only* place such a boundary's
+    (category, key) appears in the bundle, so skipping stub refs here
+    would misreport every OUT-direction boundary as a mismatch.
+    """
+    keys: set[tuple[str, str]] = set()
+    for scenario in bundle.scenarios:
+        for fixture in scenario.fixtures:
+            keys.add((fixture.category, fixture.key))
+        for expectation in scenario.expectations:
+            if expectation.kind in ("call_count", "stub"):
+                category_str, sep, key = expectation.ref.partition(":")
+                if sep and _is_known_category(category_str):
+                    keys.add((category_str, key))
+    return keys
+
+
+def _warn_on_key_mismatch(
+    mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
+    bundle_keys: set[tuple[str, str]],
+) -> None:
+    """Loud, never-silent warning when the two independent boundary walks
+    (mockymock's own `mock_surface.analyze()` and cobol-parser's bundle)
+    disagree on the (category, key) set -- this mismatch is the
+    integration's primary failure mode (see the Phase 8 plan's "the join"
+    step). A mockymock-only key gets a placeholder mock body as usual (see
+    `_bundle_directive_for`); a bundle-only key has nothing to attach a
+    MOCK directive to at all and is simply not mocked -- its `EXPECT`/
+    `VERIFY` lines are dropped too (`_render_expectation`), since emitting
+    either without a matching MOCK directive would fail `mockymock lint`.
+    """
+    mockymock_set = {(category.value, key) for category, key in mockymock_keys}
+    only_in_mockymock = mockymock_set - bundle_keys
+    only_in_bundle = bundle_keys - mockymock_set
+    if not only_in_mockymock and not only_in_bundle:
+        return
+    print(
+        "mockymock generate --with-data: WARNING: boundary key mismatch "
+        "between this program's own boundary analysis and the fixture "
+        "bundle. This should not happen for a program the two independent "
+        "walks agree on (see this repo's own "
+        "tests/unit/test_fixture_bundle_contract.py) -- mismatched "
+        "keys are handled defensively, not silently: a mockymock-only key "
+        "falls back to a placeholder mock body; a bundle-only key is left "
+        "unmocked (its expectations are dropped rather than emitted "
+        "without a matching MOCK directive, which mockymock lint would "
+        "refuse).",
+        file=sys.stderr,
+    )
+    if only_in_mockymock:
+        print(
+            "  only in this program's own boundary analysis (no bundle "
+            "fixture/expectation) -- falls back to a placeholder body:",
+            file=sys.stderr,
+        )
+        for category, key in sorted(only_in_mockymock):
+            print(f"    {category} {key}", file=sys.stderr)
+    if only_in_bundle:
+        print(
+            "  only in the fixture bundle (no matching boundary site in "
+            "this program) -- left unmocked:",
+            file=sys.stderr,
+        )
+        for category, key in sorted(only_in_bundle):
+            print(f"    {category} {key}", file=sys.stderr)
+
+
+def _build_shadow_tally_registry(
+    bundle: FixtureBundle,
+    mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
+) -> TallyRegistry:
+    """A `TallyRegistry` built over every (category, key) that will
+    actually get a MOCK directive in the generated file, in the same
+    first-appearance order the real, fully-parsed suite will eventually
+    present them in -- so a hand-rolled tally-branching mock body (see
+    `_read_body`) can reference the *exact* `UT-...-TALLY` field name the
+    real splice pipeline will independently compute, without this
+    generator needing its own parsed `MockTestSuite` to run a real
+    registry over (the .cut text doesn't exist yet -- this IS how it gets
+    built)."""
+    case = MockTestCase(name="_shadow", perform_target="_SHADOW")
+    seen: set[tuple[MockCategory, str]] = set()
+    for scenario in bundle.scenarios:
+        if not scenario.entry:
+            continue
+        for fixture in scenario.fixtures:
+            try:
+                category = MockCategory(fixture.category)
+            except ValueError:
+                continue
+            pair = (category, fixture.key)
+            if pair in mockymock_keys and pair not in seen:
+                seen.add(pair)
+                case.mocks.append(MockDirective(category, fixture.key))
+    suite = MockTestSuite(name="_shadow", test_cases=[case])
+    return TallyRegistry(suite)
+
+
+def _bundle_rendered_value(raw_value: str, field_category: str) -> str:
+    """Bare for a numeric-family FieldSpec category (see cobol-parser's
+    fixture-bundle-schema.md), quoted (with embedded `"` doubled,
+    mirroring driver._display_text's escaping) otherwise. Unlike
+    `report.record_rewrite.render_expect_value`, this decides from the
+    FieldSpec's own resolved category -- exact, not a text-shape guess --
+    since a bundle row always carries one."""
+    if field_category in _NUMERIC_FIELD_CATEGORIES:
+        return raw_value
+    escaped = raw_value.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _row_move_lines(row: dict[str, str], fixture: BoundaryFixture) -> list[str]:
+    return [
+        f"MOVE {_bundle_rendered_value(row.get(spec.column, ''), spec.category)} "
+        f"TO {spec.column}"
+        for spec in fixture.layout
+    ]
+
+
+def _status_only_body(fixture: BoundaryFixture) -> list[str]:
+    """OPEN/CLOSE/DELETE/START/UNLOCK: nothing to generate, only a status
+    code. The implicit default-success MOVE (injector.build_site_dispatch)
+    already covers "00"/"0" -- only a non-default status needs the
+    `FILE-STATUS IS` sugar (always usable as a quoted 2-char literal, no
+    need to map to a mnemonic name)."""
+    for code in fixture.status.values():
+        if code not in _DEFAULT_SUCCESS_CODES:
+            return [f'FILE-STATUS IS "{code}"']
+    return []
+
+
+def _single_row_body(fixture: BoundaryFixture) -> list[str]:
+    """ACCEPT / CALL / DYNCALL / CICS / DLI (always single-invocation), and
+    SQL's own single-row/status-override fallback (see `_sql_wants_rows`).
+    MOVEs every field the fixture generated, then -- SQL only -- an
+    explicit status MOVE (SQL has no implicit default the way file-op
+    categories do: every existing hand-written SQL mock in this codebase
+    sets SQLCODE itself, always)."""
+    body: list[str] = []
+    if fixture.sequence:
+        body.extend(_row_move_lines(fixture.sequence[0], fixture))
+    is_sql = fixture.category == "SQL"
+    for field_name, code in fixture.status.items():
+        rendered = code if is_sql else f'"{code}"'
+        body.append(f"MOVE {rendered} TO {field_name}")
+    return body
+
+
+def _read_body(
+    fixture: BoundaryFixture,
+    registry: TallyRegistry,
+    category: MockCategory,
+    site: BoundarySite,
+) -> list[str]:
+    """READ's multi-row sequence: a tally-branching `EVALUATE TRUE` chain,
+    one `WHEN <tally> = N` per generated row, `WHEN OTHER` moving
+    `fixture.terminal`'s status code(s) once the sequence is exhausted (a
+    file-status field is always alphanumeric, so its terminal code is
+    always quoted -- unlike SQL's SQLCODE), plus whatever of the original
+    `AT END` clause's own statements `_replicated_at_end_moves` can safely
+    replicate -- the program's own EOF-flag idiom, not just its FILE
+    STATUS field, since the splicer deletes the real clause entirely.
+
+    Whether a `WHEN OTHER` branch is needed at all is gated on the source
+    `AT END` clause existing (`at_end` below), deliberately NOT on
+    `fixture.terminal` alone: a file with no `FILE STATUS` clause (e.g.
+    INVUPDT's `INV-FILE`) has `fixture.terminal is None` -- correctly, per
+    `_resolve_status_field`'s "exact by construction, or absent" rule on
+    the cobol-parser side -- even though the program's own `AT END`
+    handler still fires and still needs replicating; gating on
+    `fixture.terminal` alone silently produced an `EVALUATE` with no
+    `WHEN OTHER` at all for exactly that program (found via a real Docker
+    run, not by lint, which cannot see a splice-time no-op), leaving the
+    application's own loop-guard flag untouched forever -- an infinite
+    loop. When `at_end` is non-empty but nothing in it was safely
+    replicable (an identifier-sourced MOVE, an IF, ...), a comment flags
+    the gap rather than silently emitting nothing.
+
+    Mirrors `ROWS` sugar's own internal `EVALUATE`/`WHEN tally = N` shape
+    (see .okf/splicer.md) for consistency, since READ has no `ROWS`
+    grammar of its own to reach for (v1 -- see
+    docs/2026-07-31-csv-sourced-rows-design.md's still-proposed
+    extension)."""
+    sequence = fixture.sequence
+    if not sequence:
+        return []
+
+    at_end = getattr(site.statement, "at_end_clause", None) or []
+    replicated = _replicated_at_end_moves(site.statement)
+    needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
+
+    if len(sequence) == 1 and not needs_exhaustion_branch:
+        return _row_move_lines(sequence[0], fixture)
+
+    tally = registry.name(category, fixture.key)
+    body = ["EVALUATE TRUE"]
+    for index, row in enumerate(sequence, start=1):
+        body.append(f"    WHEN {tally} = {index}")
+        body.extend(f"        {line}" for line in _row_move_lines(row, fixture))
+    if needs_exhaustion_branch:
+        body.append("    WHEN OTHER")
+        for field_name, code in (fixture.terminal or {}).items():
+            body.append(f'        MOVE "{code}" TO {field_name}')
+        for line in replicated:
+            body.append(f"        {line}")
+        if at_end and not replicated:
+            body.append(
+                "        *> TODO: this program's AT END clause could not be "
+                "auto-replicated -- add its loop-guard MOVE by hand"
+            )
+    body.append("END-EVALUATE")
+    return body
+
+
+def _sql_wants_rows(fixture: BoundaryFixture) -> bool:
+    """`ROWS (...)` sugar hardcodes SQLCODE 0-on-match/100-on-exhaustion
+    (splicer/injector.build_rows_block) -- it cannot express an
+    error-status override, so a scenario pinning one (an "error status"
+    fixed-family scenario, or a branch witness on SQLCODE) must fall back
+    to a plain body with an explicit MOVE instead."""
+    return len(fixture.sequence) > 1 and all(
+        code in _DEFAULT_SUCCESS_CODES for code in fixture.status.values()
+    )
+
+
+def _sql_rows_directive(
+    category: MockCategory, key: str, fixture: BoundaryFixture
+) -> list[str]:
+    lines = [f'MOCK {category.value} "{key}" ROWS']
+    for row in fixture.sequence:
+        pairs = ", ".join(
+            f"{spec.column} = {_bundle_rendered_value(row.get(spec.column, ''), spec.category)}"
+            for spec in fixture.layout
+        )
+        lines.append(f"    ( {pairs} )")
+    lines.append("END-MOCK")
+    return lines
+
+
+def _bundle_directive_for(
+    fixture: BoundaryFixture,
+    mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
+    registry: TallyRegistry,
+) -> list[str] | None:
+    """The full `MOCK ... END-MOCK` (or `MOCK ... ROWS ... END-MOCK`) block
+    for one scenario's boundary fixture, or None if this (category, key)
+    has no matching mockymock boundary site (already reported by
+    `_warn_on_key_mismatch`)."""
+    try:
+        category = MockCategory(fixture.category)
+    except ValueError:
+        return None
+    site = mockymock_keys.get((category, fixture.key))
+    if site is None:
+        return None
+
+    if fixture.direction == "STATUS_ONLY":
+        body = _status_only_body(fixture)
+    elif category is MockCategory.READ:
+        body = _read_body(fixture, registry, category, site)
+    elif category is MockCategory.SQL and _sql_wants_rows(fixture):
+        return _sql_rows_directive(category, fixture.key, fixture)
+    else:
+        body = _single_row_body(fixture)
+
+    lines = [_directive_header(category, fixture.key, site)]
+    lines.extend(f"    {line}" for line in body)
+    lines.append("END-MOCK")
+    return lines
+
+
+def _merged_status_only_body(fixtures: list[BoundaryFixture]) -> list[str]:
+    """Merge STATUS_ONLY bodies across every fixture sharing one physical
+    site (see `_bundle_directive_for_group`): the first non-default status
+    code found across ANY of them, so an override on just one of a
+    multi-file OPEN/CLOSE's files (e.g. an "error status" scenario
+    targeting only the input file) is not silently lost just because it
+    wasn't the file whose key the single MOCK directive happened to use."""
+    for fixture in fixtures:
+        body = _status_only_body(fixture)
+        if body:
+            return body
+    return []
+
+
+def _bundle_directive_for_group(
+    fixtures: list[BoundaryFixture],
+    mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
+    registry: TallyRegistry,
+) -> list[str] | None:
+    """Like `_bundle_directive_for`, but for every fixture that resolves
+    to the SAME physical mockymock `BoundarySite` (only possible for
+    STATUS_ONLY -- a multi-file `OPEN`/`CLOSE` is one physical statement
+    even though cobol-parser's `BoundaryInventoryAnalyzer` reports one
+    `Boundary` per file, see `_mockymock_boundary_keys`). Declaring a
+    separate MOCK directive per file would double-match the one physical
+    site and refuse AMBIGUOUS_MOCK -- exactly one directive is emitted,
+    keyed on the first fixture's own key, with every group member's status
+    merged in (see `_merged_status_only_body`)."""
+    if len(fixtures) == 1:
+        return _bundle_directive_for(fixtures[0], mockymock_keys, registry)
+    primary = fixtures[0]
+    try:
+        category = MockCategory(primary.category)
+    except ValueError:
+        return None
+    site = mockymock_keys.get((category, primary.key))
+    if site is None:
+        return None
+    lines = [_directive_header(category, primary.key, site)]
+    lines.extend(f"    {line}" for line in _merged_status_only_body(fixtures))
+    lines.append("END-MOCK")
+    return lines
+
+
+def _bundle_mock_directives(
+    scenario: Scenario,
+    surface: MockSurface,
+    mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
+    registry: TallyRegistry,
+) -> tuple[list[str], set[tuple[MockCategory, str]]]:
+    """Every `MOCK ... END-MOCK` block this scenario's TESTCASE needs: real
+    fixture data grouped and deduplicated by physical site (see
+    `_bundle_directive_for_group`) for everything the bundle generated
+    data for, plus a placeholder body (reusing the ordinary,
+    already-tested `_directive_for`) for every OTHER mockymock-known site
+    -- an OUT-direction boundary the bundle only stubbed (no fixture at
+    all, per fixture-bundle-schema.md), or one the bundle doesn't mention
+    at all (a genuine key-set gap `_warn_on_key_mismatch` already
+    reported). Either way, a boundary this program's own analysis found is
+    always mocked with *something*: leaving it unmocked would make the
+    generated `.cut` fail `run`/`lint`'s UNMOCKED_* check outright, which
+    is worse than a placeholder body a human can improve on. This mirrors
+    the ordinary bundle-less scaffold's own "mock everything mockable,
+    unconditionally" philosophy (see the module docstring).
+
+    Also returns the exact (category, key) pairs this TESTCASE actually
+    declared a MOCK directive for -- when a physical site's OTHER keys
+    (a multi-file OPEN/CLOSE's non-primary file) were folded into that one
+    directive rather than getting their own, `VERIFY`/`EXPECT` rendering
+    (`_render_expectation`) must know to skip them: a `VERIFY OPEN
+    RPT-FILE` with no literal `MOCK OPEN RPT-FILE` in this same TESTCASE
+    is VERIFY_WITHOUT_MOCK even though "RPT-FILE" is a perfectly valid key
+    for the shared site in general.
+    """
+    fixtures_by_site: dict[int, list[BoundaryFixture]] = {}
+    site_order: list[int] = []
+    for fixture in scenario.fixtures:
+        try:
+            category = MockCategory(fixture.category)
+        except ValueError:
+            continue
+        site = mockymock_keys.get((category, fixture.key))
+        if site is None:
+            continue  # already reported by _warn_on_key_mismatch
+        site_id = id(site)
+        if site_id not in fixtures_by_site:
+            fixtures_by_site[site_id] = []
+            site_order.append(site_id)
+        fixtures_by_site[site_id].append(fixture)
+
+    lines: list[str] = []
+    declared_keys: set[tuple[MockCategory, str]] = set()
+    covered_site_ids: set[int] = set()
+    for site_id in site_order:
+        group = fixtures_by_site[site_id]
+        directive = _bundle_directive_for_group(group, mockymock_keys, registry)
+        if directive is not None:
+            lines.extend(directive)
+            try:
+                declared_keys.add((MockCategory(group[0].category), group[0].key))
+            except ValueError:
+                pass
+        covered_site_ids.add(site_id)
+
+    for (category, key), site in mockymock_keys.items():
+        if id(site) in covered_site_ids:
+            continue
+        covered_site_ids.add(id(site))
+        placeholder = _directive_for(site, surface)
+        if placeholder is None:
+            continue
+        directive_line, body = placeholder
+        lines.append(directive_line)
+        lines.extend(f"    {line}" for line in body)
+        lines.append("END-MOCK")
+        declared_keys.add((category, key))
+    return lines, declared_keys
+
+
+def _is_known_category(category_str: str) -> bool:
+    try:
+        MockCategory(category_str)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_boundary_level_ref(ref: str) -> bool:
+    """True when `ref` is a `"CATEGORY:KEY"` boundary reference rather
+    than a COBOL data-name -- COBOL names never contain a colon, so
+    checking for one of the known category strings before it is an
+    unambiguous, precise test."""
+    category_str, sep, _ = ref.partition(":")
+    return bool(sep) and _is_known_category(category_str)
+
+
+def _render_expectation(
+    expectation: Expectation,
+    declared_keys: set[tuple[MockCategory, str]],
+) -> list[str]:
+    """Tier 1 (`call_count`) -> `VERIFY ... WAS CALLED n TIMES`; tier 2
+    (`field_equals`) -> `EXPECT <name> TO BE <value>`; tier 3 (`stub`) ->
+    a `*> STUB EXPECT <name>` comment when `ref` is a real data-name, or
+    nothing at all when it's a boundary-level ref (already covered by
+    that same boundary's own call_count VERIFY, and there is no single
+    data-name a boundary-level stub could attach to anyway).
+
+    `declared_keys` (from `_bundle_mock_directives`) -- not the broader
+    `mockymock_keys` -- is what call_count is checked against: a key that
+    only exists because it shares a physical site with the key a MOCK
+    directive actually used (a multi-file OPEN/CLOSE's non-primary file)
+    has no *literal* MOCK of its own in this TESTCASE, and VERIFYing it
+    anyway is VERIFY_WITHOUT_MOCK.
+    """
+    if expectation.kind == "call_count":
+        category_str, _, key = expectation.ref.partition(":")
+        try:
+            category = MockCategory(category_str)
+        except ValueError:
+            return []
+        if (category, key) not in declared_keys:
+            return []  # no literal MOCK directive for this key in this TESTCASE
+        directive_text = MockDirective(category, key).describe()
+        return [f"VERIFY {directive_text} WAS CALLED {expectation.value} TIMES"]
+    if expectation.kind == "field_equals":
+        rendered = render_expect_value(str(expectation.value))
+        return [f"EXPECT {expectation.ref} TO BE {rendered}"]
+    # kind == "stub"
+    if _is_boundary_level_ref(expectation.ref):
+        return []
+    note = f" -- {expectation.note}" if expectation.note else ""
+    return [f"*> STUB EXPECT {expectation.ref}{note}"]
+
+
+def _scaffold_with_bundle(
+    suite_name: str, surface: MockSurface, bundle: FixtureBundle
+) -> str:
+    mockymock_keys = _mockymock_boundary_keys(surface)
+    _warn_on_key_mismatch(mockymock_keys, _bundle_boundary_keys(bundle))
+    registry = _build_shadow_tally_registry(bundle, mockymock_keys)
+
+    lines = [f'TESTSUITE "{_quote_safe(suite_name)}"', ""]
+    skipped_scenarios = 0
+    for scenario in bundle.scenarios:
+        if not scenario.entry:
+            # Nothing to PERFORM -- can't scaffold a TESTCASE for this
+            # scenario at all. Should not happen for a real program with a
+            # non-empty PROCEDURE DIVISION; reported below, not per-scenario.
+            skipped_scenarios += 1
+            continue
+        lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
+        directive_lines, declared_keys = _bundle_mock_directives(
+            scenario, surface, mockymock_keys, registry
+        )
+        lines.extend(f"    {line}" for line in directive_lines)
+        lines.append(f"    PERFORM {scenario.entry}")
+        for expectation in scenario.expectations:
+            lines.extend(
+                f"    {line}"
+                for line in _render_expectation(expectation, declared_keys)
+            )
+        lines.append("")
+
+    if skipped_scenarios:
+        print(
+            f"mockymock generate --with-data: WARNING: {skipped_scenarios} "
+            f"scenario(s) had no entry paragraph and could not be scaffolded "
+            f"as a TESTCASE",
+            file=sys.stderr,
+        )
+    return "\n".join(lines)

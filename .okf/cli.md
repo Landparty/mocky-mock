@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, run, debug, mutate, lint, collect, dashboard, export) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-08-03T00:00:00Z
+timestamp: 2026-08-04T00:00:00Z
 ---
 
 # Overview
@@ -47,7 +47,7 @@ On `DockerNotAvailableError`, prints `mockymock setup: <exc>` and exits 1.
 Optional in normal workflows: `mockymock run` calls `ensure_toolchain()` itself,
 so `setup` exists mainly for a fast up-front check / CI warm-up.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all]`
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
@@ -55,28 +55,49 @@ Docker/GnuCOBOL — pure parse-and-analyze.
 Flow (`_cmd_generate`):
 
 1. Check `program` exists (`_check_input_files` -- clean `no such file`
-   message, exit 1, no traceback), then read it; if `--copybook-path`
-   given (repeatable), run
+   message, exit 1, no traceback).
+2. Resolve the fixture bundle (Phase 8 of the gen-fixtures initiative;
+   `bundle` stays `None` if neither flag is given, giving the original
+   bundle-less scaffold below): `--fixtures PATH` loads a pre-generated
+   bundle JSON via `load_fixture_bundle_file` (fails closed with a printed
+   message on an unsupported `bundle_version` or malformed JSON);
+   `--with-data` instead calls cobol-parser's
+   `ProgramFixtureGenerator().generate_with_scenarios_from_file(program,
+   mode=args.scenarios, seed=args.seed, copybook_paths=...)` directly (no
+   subprocess — mockymock calls the Python API) and loads its `.to_dict()`
+   output the same way. A bundle with zero scenarios (possible for
+   `--scenarios branches|all` on a program with no branch arms; `happy`
+   always produces exactly one) refuses with a printed message and exit 1
+   — nothing to scaffold a TESTCASE from.
+3. Read `program`; if `--copybook-path` given (repeatable), run
    `expand_copybooks` first and use the expanded source from then on.
    `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
    on a lossy copybook decode before the corrupted text is ever parsed.
-2. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
+4. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
    and exit 1 (never reaches analysis). On a successful parse,
    `check_whole_program(result)` still refuses (PARSE_WARNING, exit 1) if
    `ParseResult.warnings` reports dropped statements — a scaffold built from
    an incomplete AST would silently miss boundaries.
-3. `check_unresolved_copybooks(raw_source)` — a **refusal** check run even
+5. `check_unresolved_copybooks(raw_source)` — a **refusal** check run even
    though the program parsed; any reason printed as
    `mockymock generate: refused (<code>): <message>` and exit 1.
-4. `analyze(result.ast)` -> `mock_surface` (the boundary-site inventory).
-5. `normalize_fixed_format` the source, then `annotate_nested_sites` +
+6. `analyze(result.ast)` -> `mock_surface` (the boundary-site inventory).
+7. `normalize_fixed_format` the source, then `annotate_nested_sites` +
    `collect_scope_map` to mark which nested boundary statements are
    spliceable — this must run before `scaffold_cut` so the generated `.cut`
    only proposes cases that `run` will actually accept.
-6. `scaffold_cut(program_name, surface)` builds the `.cut` text; written to
+8. `scaffold_cut(program_name, surface, bundle)` builds the `.cut` text
+   (`bundle=None` scaffolds one `TESTCASE` per paragraph as before; a real
+   bundle scaffolds one `TESTCASE` per scenario with generated data and
+   `EXPECT`/`VERIFY`/stub-comment expectations instead of placeholder
+   bodies — see `dsl.md`'s "Bundle-driven scaffold" section); written to
    `--output` or `<program>.cut` (suffix-swapped) by default.
-7. Prints a `wrote N test case(s) -> path` summary, then
-   `_report_unsupported_boundaries(surface)`.
+9. Prints a `wrote N test case(s) -> path` summary (plus a `data-driven
+   from a fixture bundle (seed=N)` line when a bundle was used), then
+   `_report_unsupported_boundaries(surface)`. If the bundle's own
+   `(category, key)` set disagreed with `mock_surface`'s,
+   `_warn_on_key_mismatch` already printed a loud stderr warning during
+   step 8 — see `dsl.md`.
 
 `_report_unsupported_boundaries` is the only non-trivial logic in this module:
 it walks `surface.boundary_sites` and names every site that stays unmockable —
@@ -89,7 +110,7 @@ test cases `run` will later refuse if a case's PERFORM reaches one of these
 sites. Comment in the source explicitly frames this as "so the scaffold is
 never mistaken for complete coverage of the program's outputs."
 
-## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--trace] [--trace-json PATH]`
+## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--trace] [--trace-json PATH] [--record-expectations]`
 
 The full pipeline: parse, analyze, refuse-or-splice, compile in Docker, run,
 report. This is the only subcommand requiring the GnuCOBOL container.
@@ -133,6 +154,19 @@ Flags beyond the pipeline inputs:
   `ensure_toolchain()`. Composes two channels: the executed path from
   GnuCOBOL's trace file, and the mock timeline from stdout — see
   [report](report.md) and docs/2026-07-21-debug-trace-design.md.
+- `--record-expectations` — golden/characterization mode: run the suite,
+  capture the real runtime value behind every `*> STUB EXPECT <name>`
+  comment in the `.cut` file (see [dsl](dsl.md)), and rewrite the file in
+  place with those stubs turned into real `EXPECT` lines. Best-effort and
+  cumulative (a `recorded N, skipped M` summary prints, with a reason per
+  skip); never touches a line that isn't a stub comment (a hand-written or
+  previously-recorded `EXPECT` is never overwritten -- structurally, not by
+  a tracked flag); never rewrites the file at all if nothing was recorded;
+  does not change the run's exit code. Composes freely with
+  `--case`/`--tag` (only stubs inside a selected case can record anything)
+  and with every other flag above. See [analysis](analysis.md),
+  [splicer](splicer.md), [report](report.md), and
+  docs/2026-08-04-record-expectations-design.md for the full design.
 - `--keep-sandbox` — never delete the sandbox directory; its path is
   printed at the start of the run for inspection.
 - `--verbose` — on compile failure, print the path to the instrumented
@@ -193,8 +227,16 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     see [splicer](splicer.md)). Then `transform_data_division_exec(lines)`
     runs for real (its output is kept this time).
 12. `reset_move_lines(result.ast)` + `build_driver(suite, reset_lines,
-    registry)` build the test-driver artifact (WORKING-STORAGE fields +
-    PROCEDURE DIVISION statements for the harness).
+    registry, record_targets)` build the test-driver artifact
+    (WORKING-STORAGE fields + PROCEDURE DIVISION statements for the
+    harness). `--record-expectations` only: immediately before this call,
+    `cut_path.read_text()` + `analysis.stub_expectations.scan_stub_expectations(cut_text,
+    suite)` scan for `*> STUB EXPECT` comments against the POST-filter
+    `suite` (`--case`/`--tag` already applied above), grouped into
+    `record_targets: dict[case_index, list[data_name]]` and passed through
+    here -- omitted (`{}`) entirely when the flag isn't set, so ordinary
+    `run` is unaffected. See [analysis](analysis.md), [splicer](splicer.md),
+    and docs/2026-08-04-record-expectations-design.md.
 13. `_insert_driver(lines, artifact)` splices the driver in: WORKING-STORAGE
     additions go immediately after the `WORKING-STORAGE SECTION` header line;
     procedure lines go immediately after `PROCEDURE DIVISION` (matched via
@@ -216,10 +258,17 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     `mockymock run: binary stderr:` header — this is how run_binary's
     exit-124 infinite-loop hint and libcob runtime aborts reach the user.
     `format_junit_xml(suite_result, crash_detail=...)` is written to
-    `--junit-xml` if given.
+    `--junit-xml` if given. `--record-expectations` only: right after the
+    stderr print, `record_rewrite.build_recording_report(stub_scan,
+    suite_result)` then `rewrite_cut_text(cut_text, recording)` -- if the
+    result isn't `None` (something was actually recorded), it's written
+    back to `cut_path` and a `recorded N, skipped M` summary (with a
+    reason per skip) is printed. See [report](report.md).
 18. Exit 0 only if `suite_result.all_passed` **and** `executed.exit_code
     == 0` — a nonzero binary exit after the SUMMARY line still fails the
-    run.
+    run. **Unaffected by `--record-expectations`** — recording outcomes
+    never change this; see the design doc's "Best-effort, cumulative
+    reporting" section for why.
 
 ## `mockymock debug <program> --cut PATH --case NAME --dap-stdio [--copybook-path DIR ...]`
 

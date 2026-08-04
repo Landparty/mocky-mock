@@ -3,7 +3,7 @@ type: Test Suite
 title: Testing
 description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, FLOWMOCK, TAXFILE, STATELKUP, REGNAVG, CPYPROC, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-07-29T22:00:00Z
+timestamp: 2026-08-04T00:00:00Z
 ---
 # Overview
 
@@ -14,12 +14,16 @@ Two-tier split under `tests/`:
 | Unit | `tests/unit/` | DSL parser/generator, splicer, orchestrator, naming, refusal rules, SQLCA, sandbox, source maps, reporting -- all in-process, no compiler | No |
 | Integration | `tests/integration/` | Full pipeline: parse -> splice -> compile with real GnuCOBOL (in Docker) -> run -> assert exit code | Yes (skipped otherwise) |
 
-Unit tests (`tests/unit/`, 20 files) include `test_dsl_parser.py` / `test_dsl_parser_v2.py`,
+Unit tests (`tests/unit/`, 49 files) include `test_dsl_parser.py` / `test_dsl_parser_v2.py`,
 `test_dsl_generator.py`, `test_injector.py`, `test_mock_surface.py` / `_v2.py`,
 `test_orchestrator.py`, `test_refusal.py` / `_v2.py`, `test_dynamic_call.py`,
 `test_sqlca.py`, `test_sandbox.py`, `test_source_map.py`, `test_stub_writer.py`,
 `test_naming.py`, `test_reset.py`, `test_report.py`, `test_driver.py`,
-`test_docker_toolchain.py`, `test_cli_docker.py`, `test_smoke.py`. The `_v2` files
+`test_docker_toolchain.py`, `test_cli_docker.py`, `test_smoke.py`,
+`test_stub_expectations.py` (2026-08-04: the `*> STUB EXPECT` raw-text
+scanner), `test_record_rewrite.py` (2026-08-04: matching a scan against a
+recorded run, value rendering, `.cut` rewriting -- see
+docs/2026-08-04-record-expectations-design.md). The `_v2` files
 track a second generation of the DSL/mock-surface grammar living alongside the
 original -- both are still exercised, implying the surface is mid-migration
 rather than the v1 files being dead weight.
@@ -69,6 +73,7 @@ narrower, purpose-built regression fixtures):
 | `thru_boundaries.cbl` / `.cut` | `PERFORM ... THRU` range expansion in reachability analysis | `test_thru_boundaries.py` |
 | `walking_skeleton.cbl` (no `.cut`) | Minimal smoke-test program for the CLI end to end | `test_walking_skeleton.py` |
 | `copybook_example/` (`MAINPGM.cbl`, `MAINPGM.cut`, `copybooks/`) | `COPY` expansion feeding the mock surface / splicer | `test_copybook_expansion.py` |
+| `record_expectations_example.cbl` / `.cut` | `run --record-expectations`: a `*> STUB EXPECT` comment becomes a real `EXPECT` after a real run, idempotent on a second pass (the golden re-run drift test), and a case excluded by `--case` is left untouched | `test_record_expectations.py` |
 
 `test_cli.py` covers CLI argument handling generically (not tied to one fixture).
 
@@ -87,8 +92,9 @@ just that the happy path returns 0.
 Documented, runnable programs under `examples/` -- these are polished
 end-to-end demos (with READMEs), distinct from the terser
 `tests/integration/fixtures/` corpus, and are also driven by their own
-integration tests. Beyond the seven hand-written ones below (INVUPDT,
-ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, REGNAVG), `examples/real-world/`
+integration tests. Beyond the eight hand-written ones below (INVUPDT,
+ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, REGNAVG, FIXTUREDEMO),
+`examples/real-world/`
 (ACCTPRG, DEPTIMSM, DEPTMQC, DEPTMQP -- now with its own README) and
 `examples/nist-cobol85/` (IC101A, IC116M, IC117M, OBIC1A) hold additional
 examples driven from real corpora -- see their own READMEs for provenance
@@ -260,6 +266,38 @@ past the pin, so an initial "fixed the environment, now it's clean" was
 still verified against the wrong commit.
 
 Run: `mockymock run examples/regnavg/REGNAVG.cbl --cut examples/regnavg/REGNAVG.cut`
+
+## FIXTUREDEMO (`examples/fixtures/`)
+
+The odd one out among these eight: not hand-written, and not owned solely
+by this repo. `FIXTUREDEMO.cbl` and `FIXTUREDEMO.bundle.json` (a
+`FixtureBundle` JSON at a fixed seed, 42) are copied verbatim from the
+sibling `Landparty/cobol-parser` repo's own `examples/fixtures/` -- the
+`gen-fixtures` program-scoped test-data initiative's Phase 9 worked
+example, the cross-repo golden anchor proving the whole pipeline (program
+-> bundle -> `.cut` -> green run) end to end with one small program that
+touches all four boundary categories the initiative supports (`ACCEPT`,
+`OPEN`/`READ`/`CLOSE`, `SQL`, `CALL`) with zero unresolved gaps -- unlike
+`examples/custprog/` above, which deliberately keeps one.
+
+`FIXTUREDEMO.cut` is *generated* here, from that exact bundle
+(`mockymock generate ... --fixtures FIXTUREDEMO.bundle.json`, deliberately
+not `--with-data`, so this golden is pinned against a fixed JSON rather
+than whatever cobol-parser commit `pyproject.toml` happens to have pinned
+at the moment a contributor re-runs the regeneration command), then
+checked in as this repo's own golden. Three regression checks in
+[`tests/integration/test_fixturedemo_golden.py`](../tests/integration/test_fixturedemo_golden.py)
+run Docker-free on every CI lane: the generated `.cut` is byte-identical
+to the checked-in one, regeneration is deterministic (two independent
+calls agree), and the checked-in `.cut` still passes `mockymock lint`. A
+fourth, `@requires_docker`, proves the real run stays green.
+
+If cobol-parser's own copy of `FIXTUREDEMO.cbl`/`FIXTUREDEMO.bundle.json`
+changes, both files must be re-copied here and `FIXTUREDEMO.cut`
+regenerated in the same change -- see either repo's own
+`examples/fixtures/README.md`.
+
+Run: `mockymock run examples/fixtures/FIXTUREDEMO.cbl --cut examples/fixtures/FIXTUREDEMO.cut`
 
 # Gotchas
 

@@ -1,0 +1,24 @@
+TESTSUITE "RECEXPL record-expectations proof"
+
+*> WS-NET-TOTAL is left open on purpose (simulating a cobol-parser
+*> gen-fixtures tier-3 stub: a COMPUTE-derived value the static generator
+*> would not have asserted a value for) so `run --record-expectations` has
+*> something real to fill in. See
+*> docs/2026-08-04-record-expectations-design.md.
+TESTCASE "doubles a quantity of 20"
+    MOCK CALL "DISCOUNT"
+        MOVE 5 TO WS-DISCOUNT-CODE
+    END-MOCK
+    MOVE 20 TO WS-QTY
+    PERFORM CALC-TOTALS
+    EXPECT WS-DISCOUNT-CODE TO BE 5
+    *> STUB EXPECT WS-NET-TOTAL -- case one
+
+TESTCASE "doubles a quantity of 7"
+    MOCK CALL "DISCOUNT"
+        MOVE 5 TO WS-DISCOUNT-CODE
+    END-MOCK
+    MOVE 7 TO WS-QTY
+    PERFORM CALC-TOTALS
+    EXPECT WS-DISCOUNT-CODE TO BE 5
+    *> STUB EXPECT WS-NET-TOTAL -- case two
