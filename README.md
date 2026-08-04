@@ -131,6 +131,7 @@ rest each add one distinctive feature.
 
 - `mockymock run --coverage` — line coverage via GnuCOBOL/gcov ([design](docs/2026-07-17-coverage-reporting-design.md))
 - `mockymock run --trace` — replay one test case's execution path and mock timeline ([design](docs/2026-07-21-debug-trace-design.md))
+- `mockymock run --record-expectations` — golden/characterization mode: run the suite and turn every `*> STUB EXPECT <name>` comment in the `.cut` file into a real `EXPECT` line, filled in with the value the program actually produced ([design](docs/2026-08-04-record-expectations-design.md))
 - `mockymock debug --dap-stdio` — a real [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) session: breakpoints, stepping, and variable inspection on your original `.cbl` ([design](docs/2026-07-22-dap-debugger-design.md))
 - `mockymock collect --cut ORDRPROC.cut [--json]` — list a suite's cases with line numbers and tags, no Docker needed
 - `mockymock dashboard` — a local status page (loopback only) showing at a glance whether Docker and the GnuCOBOL toolchain are up; read-only, it never builds or starts anything ([details](.okf/dashboard.md))

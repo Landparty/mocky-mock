@@ -1,5 +1,50 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-04 — `mockymock run --record-expectations`: golden/characterization mode
+
+New `run` flag, not a new subcommand: reuses the exact same parse → static-checks →
+splice → compile → run pipeline `run` already has, adding one splice-time input and
+one post-run step. Backs cobol-parser's `gen-fixtures` initiative's tier-3 stubs
+(`Expectation(kind="stub")`) — fields the constant-folder couldn't resolve a value
+for, meant to be filled in by actually running the program once, not guessed at
+statically. Design doc written first, per the parent plan's own gate:
+[docs/2026-08-04-record-expectations-design.md](../docs/2026-08-04-record-expectations-design.md).
+
+Mechanism, three new pieces:
+- A `*> STUB EXPECT <data-name> [-- <note>]` comment convention — an ordinary `*>`
+  comment as far as `parse_cut()` is concerned (zero grammar changes), scanned as
+  raw text by the new `analysis.stub_expectations` module and attributed to its
+  owning TESTCASE by runtime case id, deliberately *not* via the `.cut` grammar
+  (`mockymock collect` parses `.cut` files with no `.cbl` at all — see [dsl.md](dsl.md)).
+- `splicer.driver.build_driver` gains an optional `record_targets` param; when set,
+  it emits one `__MOCKYMOCK__ RECORD <id> <name>: <value>` DISPLAY line per
+  recorded field, right where a real `EXPECT` would run — reusing the FAIL line's
+  own proven-safe "literal text + bare identifier" DISPLAY shape rather than a new
+  primitive. `report.results.parse_stdout` gained a seventh marker regex for it,
+  attributed by id (unlike `--trace`'s positional `MOCK:` marker, since `RECORD`
+  carries a real case id already in scope at its splice site).
+- New `report.record_rewrite` module: matches a stub scan against the run's
+  recorded values, decides bare-vs-quoted rendering from the observed text's own
+  shape (not by resolving the field's PICTURE), and rewrites the `.cut` file in
+  place — never touching a line that isn't a stub comment, never writing the file
+  at all if nothing was recorded.
+
+The "never overwrite a hand-edited EXPECT" guarantee the parent plan asked for
+turned out to need no tracking at all: once a stub becomes a real `EXPECT` line
+(by this feature or by hand), it structurally can never match the stub-comment
+scan again. Pinned by an idempotency test at both the unit and integration
+(Docker) tiers — running `--record-expectations` twice in a row against an
+already-recorded file is byte-for-byte identical.
+
+New: `analysis/stub_expectations.py`, `report/record_rewrite.py`,
+`tests/unit/test_stub_expectations.py`, `tests/unit/test_record_rewrite.py`,
+`tests/integration/test_record_expectations.py` +
+`tests/integration/fixtures/record_expectations_example.{cbl,cut}`. Updated:
+`splicer/driver.py`, `report/results.py`, `cli/main.py`. Docs updated:
+[dsl.md](dsl.md), [analysis.md](analysis.md), [splicer.md](splicer.md),
+[report.md](report.md), [cli.md](cli.md), [testing.md](testing.md),
+`README.md`, `CHANGELOG.md`.
+
 ## 2026-08-03 — `mockymock export`: write instrumented source for z/OS compilation
 
 New subcommand, Docker-free, reusing the same parse → static-checks → splice → driver-insert

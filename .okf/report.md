@@ -1,9 +1,9 @@
 ---
 type: Module
 title: Test Result Reporting
-description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs.
+description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-07-21T12:00:00Z
+timestamp: 2026-08-04T00:00:00Z
 ---
 # Overview
 
@@ -24,7 +24,7 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 
 # stdout Protocol
 
-`parse_stdout` matches six line shapes via regex, one case per marker kind:
+`parse_stdout` matches seven line shapes via regex, one case per marker kind:
 
 | Marker | Regex group(s) | Effect |
 |---|---|---|
@@ -34,6 +34,7 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 | `__MOCKYMOCK__ CASE <id> END` | `id` | sets the matching `TestResult.ended = True`; an unknown id is recorded in `suite.orphan_ends` rather than dropped |
 | `__MOCKYMOCK__ SUMMARY: RUN=<n> FAILURES=<n>` | `run`, `failures` | sets `suite.tests_run` / `suite.failures` |
 | `__MOCKYMOCK__ MOCK: <label>` | `label` | appends to the most recently started case's `TestResult.mock_hits`. **Trace mode only** — emitted by the splicer's mock dispatch blocks when `run --trace` is used |
+| `__MOCKYMOCK__ RECORD <id> <name>: <value>` | `id`, `name`, `value` | appends `(name, value)` to the matching `TestResult.recorded` (looked up by id, same as FAIL/END — **not** positional like `MOCK:`); an unknown id is recorded in `suite.orphan_records` as `(id, name, value)` rather than dropped. **`--record-expectations` mode only** — emitted by `splicer.driver.build_driver`'s `record_targets` addition (2026-08-04) |
 
 The `MOCK` marker is the one shape carrying no case id: it is attributed
 positionally, to the case whose `START` most recently printed. That is
@@ -43,6 +44,18 @@ order cannot be recovered from the execution-trace file — the dispatch
 blocks are splicer-inserted, and the trace's line remap drops inserted
 lines by design. See [cli](cli.md)'s `--trace` and
 docs/2026-07-21-debug-trace-design.md.
+
+`RECORD`, unlike `MOCK:`, carries a real case id — `build_driver` already
+has `case_id` in scope at the exact point it emits this marker, so there's
+no structural reason to fall back to `MOCK:`'s weaker positional
+attribution. `value` is captured with `.*` (greedy, may be empty), not
+`.+`, since a blank alphanumeric field or a value containing a literal `:`
+(e.g. a time-of-day field) must parse whole rather than truncating at the
+first colon. See [splicer](splicer.md) for the codegen and
+[analysis](analysis.md)'s `stub_expectations.py` /
+`record_rewrite.py` (below) for what consumes `recorded`/`orphan_records`
+afterward, and docs/2026-08-04-record-expectations-design.md for the full
+design.
 
 The injector's `__MOCKYMOCK__ ERROR:` line (unmocked boundary reached) is
 deliberately NOT in this table: nothing parses it. It reaches the user as
@@ -61,6 +74,8 @@ class TestResult:
     case_name: str
     failure_reasons: list[str]   # empty list == no failures recorded
     ended: bool = False          # True once CASE <id> END is matched
+    mock_hits: list[str]         # --trace only
+    recorded: list[tuple[str, str]]  # (name, value) -- --record-expectations only
 
     @property
     def crashed(self) -> bool: ...  # not ended -- START seen, END never was
@@ -77,11 +92,12 @@ class TestSuiteResult:
     orphan_failures: list[tuple[str, str]]  # FAIL lines whose id never STARTed
     duplicate_case_starts: list[tuple[str, str, str]]  # (id, previous_name, new_name)
     orphan_ends: list[str]  # END lines whose id never STARTed -- recorded, doesn't gate
+    orphan_records: list[tuple[str, str, str]]  # (id, name, value) -- same non-gating treatment
 
     @property
     def all_passed(self) -> bool: ...
     # failures == 0 and tests_run > 0 and not orphan_failures
-    # and not duplicate_case_starts (orphan_ends does NOT gate -- see Gotchas)
+    # and not duplicate_case_starts (orphan_ends/orphan_records do NOT gate -- see Gotchas)
 ```
 
 Pass/fail/crash is derived, not stored directly. `crashed` is true when a
@@ -163,6 +179,50 @@ lists are meant to be read together.
 the VS Code extension consumes; `format_trace_console` renders the same
 payload for a plain `--trace`. `TRACE_ENTRY_CAP` (50,000) bounds a runaway
 `PERFORM UNTIL`, setting `truncated: true` rather than streaming or sampling.
+
+## Record-expectations rewrite (`report/record_rewrite.py`)
+
+Backs `mockymock run --record-expectations` (see [cli](cli.md) and
+docs/2026-08-04-record-expectations-design.md). The stage after
+`analysis.stub_expectations.scan_stub_expectations` (see
+[analysis](analysis.md)) and this module's own `parse_stdout`-produced
+`TestSuiteResult`:
+
+```
+StubScanResult (analysis.stub_expectations)  ─┐
+TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_report() ──► RecordingReport
+                                               ┘         │
+                                                          ▼
+                                              rewrite_cut_text() ──► rewritten .cut text, or None
+```
+
+- `render_expect_value(raw_value)` — bare for a plain numeric-looking
+  string (`^-?\d+(\.\d+)?$`), otherwise quoted with trailing spaces
+  trimmed and embedded `"` doubled (mirrors `driver._display_text`'s
+  escaping). Decides from the observed text's own shape, not by resolving
+  the field's `PICTURE` — deliberate, see the design doc's "Value
+  formatting" section, including the numeric-edited `PICTURE` caveat this
+  does not yet resolve.
+- `build_recording_report(scan, suite_result)` — matches every
+  `StubExpectation` the scanner found against `suite_result`'s recorded
+  values by `f"{case_index:03d}"` (the same case-id convention
+  `splicer.driver` uses) + data-name. A stub whose case has no matching
+  recorded value is reported skipped as "case crashed before reaching the
+  record point" — the only remaining explanation once `--case`/`--tag`
+  exclusion is already filtered out upstream by the scanner (see
+  [analysis](analysis.md)).
+- `rewrite_cut_text(cut_text, report)` — replaces each recorded stub's
+  comment line with a real `EXPECT` line (preserving its own leading
+  indentation), returning `None` when nothing was recorded so the CLI
+  never touches the file for a no-op run. No line is ever inserted or
+  removed, so there's no splice-ordering hazard to manage.
+
+This is also where the "never overwrite a hand-edited `EXPECT`" guarantee
+actually holds: `rewrite_cut_text` only ever replaces a line the scanner
+found by matching the `*> STUB EXPECT` pattern — once a stub becomes a
+real `EXPECT` line (by this feature or by hand), it structurally cannot
+match that pattern again, so a second `--record-expectations` run finds
+nothing left to touch there. No provenance tracking needed.
 
 # Gotchas
 
@@ -272,6 +332,8 @@ timing — the driver protocol has no timestamps to derive it from (audit
 # See Also
 
 - [cli](cli.md)
-- [dsl](dsl.md)
+- [dsl](dsl.md) — the `*> STUB EXPECT` comment convention `record_rewrite.py` fills in
+- [analysis](analysis.md) — `stub_expectations.py`'s scan that `record_rewrite.py` consumes
+- [splicer](splicer.md) — `build_driver`'s `record_targets` param and the `RECORD` marker codegen
 - [coverage](coverage.md) — a separate, Docker-free parsing/formatting module
   following this one's design (gcov text in, a report model, a console formatter).

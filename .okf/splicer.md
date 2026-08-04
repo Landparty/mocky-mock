@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-07-21T00:00:00Z
+timestamp: 2026-08-04T00:00:00Z
 ---
 
 # Overview
@@ -610,6 +610,38 @@ own declared mock set raises `ValueError` at codegen time — this is a
 defensive check; the refusal gate is expected to have already refused
 `VERIFY_WITHOUT_MOCK` before codegen is reached.
 
+## `record_targets` — `mockymock run --record-expectations` (2026-08-04)
+
+`build_driver` takes an optional fourth parameter,
+`record_targets: dict[int, list[str]] | None` (case index -> data-names),
+defaulting to `None`/`{}` so ordinary `run` (the flag not passed) is
+byte-for-byte unaffected — the same "opt-in, zero-cost when absent"
+property `--trace`'s `MOCK:` markers already have. `_build_testcase_paragraph`
+emits one additional line per name in that case's list, right after the
+`EXPECT`/`VERIFY` checks and before the `CASE ... END` marker (the exact
+point a real `EXPECT` for that field would run):
+
+```cobol
+DISPLAY "__MOCKYMOCK__ RECORD 001 WS-NET-TOTAL: " WS-NET-TOTAL
+```
+
+This deliberately reuses the FAIL line's own proven-safe shape — a string
+literal immediately followed by a bare identifier, letting GnuCOBOL's own
+`DISPLAY` render the field in its native `PICTURE` formatting — rather
+than inventing a new codegen primitive. Unlike the `--trace` `MOCK:`
+marker (which has no case id in scope at its splice site and is therefore
+attributed positionally, by `report.results.parse_stdout`, to "whichever
+case's START printed most recently"), the `RECORD` marker carries a real
+case id (`case_id` is already in scope inside `_build_testcase_paragraph`)
+and is attributed by id, the same way `CASE ... FAIL`/`CASE ... END` are.
+
+`mockymock.analysis.stub_expectations.scan_stub_expectations` is what
+builds the `record_targets` dict the CLI passes in — see
+[analysis](analysis.md) — and `mockymock.report.record_rewrite` is what
+turns the recorded `__MOCKYMOCK__ RECORD` lines back into a rewritten
+`.cut` file after the run — see [report](report.md). Full design:
+docs/2026-08-04-record-expectations-design.md.
+
 # See Also
 
 - [dsl](dsl.md) — `MockTestSuite`/`MockTestCase`/`MockDirective` model and
@@ -619,3 +651,5 @@ defensive check; the refusal gate is expected to have already refused
 - [runtime](runtime.md) — compiling and executing the spliced output
   through GnuCOBOL, and parsing the `__MOCKYMOCK__` DISPLAY markers back
   into results.
+- [report](report.md) — the `RECORD` marker in `parse_stdout`'s protocol
+  table, and `record_rewrite.py`'s post-run `.cut` rewrite.

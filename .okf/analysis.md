@@ -1,9 +1,9 @@
 ---
 type: Module
 title: Analysis
-description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed.
+description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-07-21T00:00:00Z
+timestamp: 2026-08-04T00:00:00Z
 ---
 
 # Overview
@@ -15,6 +15,7 @@ Cooperating modules under `mockymock/analysis/`:
 | `mock_surface.py` | Walk `PROCEDURE DIVISION`, classify every statement that touches an external resource into a `BoundarySite`/`CallSite`. Whole-program, category-generic, no knowledge of any test case. Also `analyze_file_status_fields(program)`: a separate ENVIRONMENT DIVISION walk (FILE-CONTROL SELECT entries) that maps each uppercased file name to its declared `FILE STATUS IS <field>`, feeding both `refusal.check_test_case`'s `UNRESOLVED_FILE_STATUS_TARGET` check and `splicer.injector.build_site_dispatch`'s default-success MOVE (see [dsl](dsl.md)'s `FILE-STATUS IS` section and [splicer](splicer.md)). |
 | `refusal.py` | Whole-program checks (parse errors, unresolved COPY, nested EXEC) + per-`MockTestCase` checks (reachability via BFS, directive-to-site matching, fail-closed refusals). |
 | `flow_mocks.py` | Flow-target mocks (`MOCK PARAGRAPH`/`MOCK SECTION`): resolves keys to paragraphs/sections, refuses every entry path the header-dispatch splice can't handle soundly (UNRESOLVED_FLOW_MOCK_TARGET / UNSUPPORTED_FLOW_MOCK_TARGET), and emits `FlowMockPlan`s the splicer consumes — the plan-or-refusal shape `find_terminator_plans` established. `resolved_flow_targets` feeds `check_test_case`/`find_terminator_plans` the per-case `skip_traversal` sets. See docs/2026-07-20-paragraph-section-mocks-design.md. |
+| `stub_expectations.py` | Backs `mockymock run --record-expectations` only — orthogonal to the refusal-gate pipeline above, not part of it. Raw-text-scans the `.cut` file (not the parsed AST/suite) for `*> STUB EXPECT <name> [-- <note>]` comments and attributes each to its owning TESTCASE's runtime case id. See below and [splicer](splicer.md)/[report](report.md) for the rest of the mechanism, and docs/2026-08-04-record-expectations-design.md for the full design. |
 
 ```
 CobolProgram
@@ -206,6 +207,54 @@ Matching is **per-identifier, not per-target-program**: two dynamic sites callin
 
 A THRU range covering a paragraph with an unspliceable nested site just makes that site reachable — `UNSUPPORTED_NESTED_MOCK_TARGET` fires through the ordinary per-site path, no special casing needed.
 
+# stub_expectations.py — `*> STUB EXPECT` Scanner
+
+`scan_stub_expectations(cut_text, suite) -> StubScanResult` finds every
+`*> STUB EXPECT <data-name> [-- <note>]` comment in the raw `.cut` text and
+attributes each one to the TESTCASE it's written inside, by that case's
+1-based position in `suite.test_cases` — the exact case id
+`splicer.driver.build_driver` will assign it (`UT-TESTCASE-{index:03d}`).
+
+This is a raw-text scanner, not a grammar addition to `dsl/parser.py`: a
+stub comment is an ordinary `*>` comment as far as `parse_cut()` is
+concerned (zero parser changes needed), and `mockymock collect` parses
+`.cut` files with no `.cbl` at all, so teaching the shared grammar/model
+about stubs would mean every other subcommand learns to ignore a field
+that matters to exactly one of them. See
+docs/2026-08-04-record-expectations-design.md's "Why a raw-text scanner,
+not a grammar addition" section for the full argument.
+
+Two things this scanner deliberately does NOT attempt, each producing a
+`SkippedStub` (reported, never silently dropped) instead of a guess:
+
+- **A stub inside a `PROVIDER`-templated `TESTCASE`.** One physical
+  template block expands into *N* independently-lined runtime cases
+  (`.line` points at each row's own line, not the shared header — see
+  [dsl](dsl.md)) — a shape this scanner's line-span model cannot represent
+  (a stub inside the template would need *N* different recorded values,
+  one per row).
+- **A stub whose owning `TESTCASE` was excluded by `--case`/`--tag` this
+  run.** Callers must pass the POST-filter `suite`
+  (`checks.filter_suite_cases` already applied) — the scanner
+  cross-references its own raw-text `TESTCASE` header positions against
+  `suite.test_cases` by exact line number, so an excluded case (removed
+  from `suite.test_cases` entirely) simply has no match and its stub is
+  reported skipped rather than misattributed to whichever case now
+  occupies its old index.
+
+A lightweight `MOCK`/`END-MOCK` open/close tracker (not a real parser)
+guards the scan against a stub-shaped comment written *inside* a mock
+body — inert free-form COBOL to the real parser, and must stay inert here
+too, since treating it as a real stub risks the rewrite step later
+injecting an `EXPECT` line into the middle of a `MOCK` body. Safe only
+because callers are expected to run this against a `.cut` file that
+already passed `parse_cut()` — every `MOCK`/`END-MOCK` pair is therefore
+already known to be balanced.
+
+`report.record_rewrite` (see [report](report.md)) is the next stage:
+matching each `StubExpectation` against a recorded test run and rewriting
+the `.cut` file.
+
 # Gotchas
 
 **Phantom `"."` paragraphs are inert but change reachability tracking, not classification.** cobolparser emits a paragraph literally named `"."` for the sentence-terminating period line after an `EXEC ... END-EXEC` block (or after any PERFORM/PERFORM THRU/DISPLAY sentence followed by another statement). They are empty artifacts — no boundary site is ever attributed to `"."` in any verified layout — but a THRU range slice includes them positionally by name. If a future cobolparser version ever attributed real statements to one, every `"."` site program-wide would become reachable at once — an over-approximation in the fail-closed direction (spurious `UNMOCKED_*`, never a silently-unmocked boundary). `source_map.collect_boundaries` separately filters `"."` paragraphs when computing splice spans, because a boundary there would cut an EXEC statement's span one line short of its `END-EXEC`.
@@ -226,6 +275,7 @@ A THRU range covering a paragraph with an unspliceable nested site just makes th
 
 # See Also
 
-- [splicer](splicer.md) — consumes `BoundarySite`/`CallSite` to compute and validate replacement spans (`annotate_nested_sites` fills in `span`/`unspliceable_reason`), then emits the EVALUATE dispatch blocks.
-- [dsl](dsl.md) — `MockCategory`, `MockDirective`, `MockTestCase` (including `perform_target`/`perform_thru`) that `refusal.py` matches sites against.
+- [splicer](splicer.md) — consumes `BoundarySite`/`CallSite` to compute and validate replacement spans (`annotate_nested_sites` fills in `span`/`unspliceable_reason`), then emits the EVALUATE dispatch blocks; `build_driver`'s `record_targets` param and the `RECORD` marker codegen `stub_expectations.py` feeds.
+- [dsl](dsl.md) — `MockCategory`, `MockDirective`, `MockTestCase` (including `perform_target`/`perform_thru`) that `refusal.py` matches sites against; the `*> STUB EXPECT` comment convention.
+- [report](report.md) — `record_rewrite.py`, the stage after `stub_expectations.py` that matches a scan against a recorded run and rewrites the `.cut` file.
 - [integration](integration.md) — the exact cobolparser AST fields both modules key on, and the empirically-verified facts (dynamic CALL identifier capture, OPEN/CLOSE fix requirement, numeric VALUE clause fix) this module's correctness depends on.

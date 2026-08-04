@@ -245,6 +245,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_terminator_plans
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
     from mockymock.cli.checks import run_static_checks
     from mockymock.report.coverage import (
         build_original_line_map,
@@ -255,6 +256,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     from mockymock.report.formatters import format_console, format_junit_xml
     from mockymock.report.json_report import build_json_report, format_json_report
+    from mockymock.report.record_rewrite import (
+        build_recording_report,
+        rewrite_cut_text,
+    )
     from mockymock.report.results import parse_stdout
     from mockymock.report.trace import (
         format_trace_console,
@@ -369,7 +374,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # text, not the AST), so `reset_move_lines`'s WORKING-STORAGE walk
         # never sees them -- add their reset lines explicitly.
         reset_lines = reset_lines + extra_reset_lines(linkage)
-    artifact = build_driver(suite, reset_lines, registry)
+
+    # --record-expectations: scan the raw .cut text (not the parsed suite --
+    # a "*> STUB EXPECT" line is an ordinary comment to parse_cut) against
+    # the POST-filter `suite` (--case/--tag already applied by
+    # run_static_checks) so a stub's case_index always means what
+    # build_driver means by it. See
+    # docs/2026-08-04-record-expectations-design.md.
+    cut_text = cut_path.read_text(encoding="utf-8")
+    stub_scan = (
+        scan_stub_expectations(cut_text, suite) if args.record_expectations else None
+    )
+    record_targets: dict[int, list[str]] = {}
+    if stub_scan is not None:
+        for stub in stub_scan.stubs:
+            record_targets.setdefault(stub.case_index, []).append(stub.data_name)
+
+    artifact = build_driver(suite, reset_lines, registry, record_targets=record_targets)
 
     instrumented = _insert_driver(lines, artifact)
 
@@ -445,6 +466,30 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if executed.stderr:
         print("mockymock run: binary stderr:")
         print(executed.stderr.rstrip("\n"))
+
+    if stub_scan is not None:
+        # Best-effort and cumulative, never gating the run's own exit code
+        # (see the design doc's "Best-effort, cumulative reporting" and
+        # "Never overwrite a hand-edited EXPECT" sections): every stub the
+        # scanner found ends up in exactly one of recorded/skipped, and the
+        # file is only ever touched when at least one stub was recorded.
+        recording = build_recording_report(stub_scan, suite_result)
+        rewritten = rewrite_cut_text(cut_text, recording)
+        if rewritten is not None:
+            cut_path.write_text(rewritten, encoding="utf-8", newline="\n")
+        print(
+            f"mockymock run: --record-expectations: recorded "
+            f"{len(recording.recorded)}, skipped {len(recording.skipped)}"
+        )
+        for item in recording.recorded:
+            print(
+                f"  recorded {item.stub.data_name} (line {item.stub.line}) "
+                f"= {item.value}"
+            )
+        for skip in recording.skipped:
+            print(f"  skipped {skip.data_name} (line {skip.line}): {skip.reason}")
+        if rewritten is not None:
+            print(f"mockymock run: rewrote {cut_path}")
 
     if args.junit_xml:
         _write_report_file(
@@ -1071,6 +1116,22 @@ def build_parser() -> argparse.ArgumentParser:
             "Write the machine-readable execution trace (executed path "
             "remapped onto the ORIGINAL .cbl's line numbers, plus the "
             "ordered mock timeline) to this file. Implies --trace"
+        ),
+    )
+    run_parser.add_argument(
+        "--record-expectations",
+        action="store_true",
+        help=(
+            "Golden/characterization mode: run the suite, capture the real "
+            "runtime value behind every '*> STUB EXPECT <name>' comment in "
+            "the .cut file, and rewrite the file in place with those stubs "
+            "turned into real EXPECT lines. Best-effort and cumulative -- "
+            "recorded/skipped counts are printed, with a reason for every "
+            "skip. Never touches a line that isn't a stub comment (so a "
+            "hand-written or previously-recorded EXPECT is never "
+            "overwritten), and never rewrites the file at all if nothing "
+            "was recorded. Does not change the run's exit code. See "
+            "docs/2026-08-04-record-expectations-design.md"
         ),
     )
     run_parser.set_defaults(func=_cmd_run)

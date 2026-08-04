@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-07-21T18:00:00Z
+timestamp: 2026-08-04T00:00:00Z
 ---
 
 # Overview
@@ -210,6 +210,36 @@ a quoted static-CALL directive against a bare dynamic-CALL site, or vice
 versa — see the docstring on `MockCategory` in `model.py` for the full
 rationale.
 
+## `*> STUB EXPECT` comments (`mockymock run --record-expectations`)
+
+```
+*> STUB EXPECT <data-name> [-- <note>]
+```
+
+A convention, **not a grammar addition** — as far as `parse_cut()` is
+concerned this is an ordinary `*>` comment (parses today with zero parser
+changes) that does nothing at runtime until `mockymock run
+--record-expectations` fills it in, turning it into a real
+`EXPECT <data-name> TO BE <value>` line in place. `<data-name>` reuses the
+same `_SUBSCRIPTED_NAME` fragment `EXPECT`/`MOVE` targets already parse
+with, so a subscripted stub (`WS-TABLE(1, 1)`) is recognized identically.
+`-- <note>` is optional, free text, never parsed for meaning (mirrors
+cobol-parser's `Expectation.note` field it's meant to echo, e.g.
+`"computed in CALC-TOTALS"`).
+
+Meant to be written next to a would-be `EXPECT` — inside a `TESTCASE`, at
+the point a real assertion would go — for a field whose correct value the
+author (or an automated scaffolder, see cobol-parser's tier-3 stub
+`Expectation`s) doesn't yet know. `mockymock.analysis.stub_expectations`
+scans for these as raw text (deliberately not part of this grammar — see
+that module's docstring for why); `mockymock.report.record_rewrite`
+matches a scan against a recorded run and does the rewrite. Once
+recorded, the resulting `EXPECT` line is an ordinary one in every way —
+nothing distinguishes it from a hand-written `EXPECT`, and nothing about
+this feature can ever touch it again (there's no more `*> STUB EXPECT`
+text left to match). See
+docs/2026-08-04-record-expectations-design.md for the full design.
+
 # AST Model (`model.py`)
 
 | Class | Fields | Notes |
@@ -395,3 +425,5 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields and sets
 
 - [splicer](splicer.md) — consumes `MockTestSuite` to instrument COBOL source
 - [cli](cli.md) — `mockymock generate` calls `scaffold_cut`; `mockymock run` calls `parse_cut`
+- [analysis](analysis.md) — `stub_expectations.py`'s raw-text scan for `*> STUB EXPECT` comments
+- [report](report.md) — `record_rewrite.py`, which rewrites a stub comment into a real `EXPECT` line

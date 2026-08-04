@@ -32,10 +32,13 @@ def _suite() -> MockTestSuite:
     return MockTestSuite(name="ORDRPROC discount calculation", test_cases=[case_one])
 
 
-def _build(suite=None, reset_lines=None):
+def _build(suite=None, reset_lines=None, record_targets=None):
     suite = suite or _suite()
     return build_driver(
-        suite, reset_lines=reset_lines or [], registry=TallyRegistry(suite)
+        suite,
+        reset_lines=reset_lines or [],
+        registry=TallyRegistry(suite),
+        record_targets=record_targets,
     )
 
 
@@ -256,3 +259,58 @@ def test_working_storage_declares_early_exit_flag():
 def test_testcase_resets_early_exit_flag():
     joined = "\n".join(_build().procedure_lines)
     assert 'MOVE "N" TO UT-EARLY-EXIT' in joined
+
+
+# --- --record-expectations (docs/2026-08-04-record-expectations-design.md) --
+
+
+def test_record_targets_omitted_leaves_output_unchanged():
+    """The whole feature is opt-in: ordinary run (no record_targets, or an
+    explicit None) must never emit a RECORD marker."""
+    joined = "\n".join(_build().procedure_lines)
+    assert "RECORD" not in joined
+
+
+def test_record_targets_empty_dict_leaves_output_unchanged():
+    joined = "\n".join(_build(record_targets={}).procedure_lines)
+    assert "RECORD" not in joined
+
+
+def test_record_target_emits_one_display_per_name():
+    joined = "\n".join(_build(record_targets={1: ["WS-NET-TOTAL"]}).procedure_lines)
+    assert 'DISPLAY "__MOCKYMOCK__ RECORD 001 WS-NET-TOTAL: " WS-NET-TOTAL' in joined
+
+
+def test_record_target_emits_one_line_per_name_in_order():
+    lines = _build(record_targets={1: ["WS-NET-TOTAL", "WS-TAX-TOTAL"]}).procedure_lines
+    joined = "\n".join(lines)
+    net_index = joined.index("RECORD 001 WS-NET-TOTAL")
+    tax_index = joined.index("RECORD 001 WS-TAX-TOTAL")
+    assert net_index < tax_index
+
+
+def test_record_marker_appears_after_expect_and_before_case_end():
+    joined = "\n".join(_build(record_targets={1: ["WS-NET-TOTAL"]}).procedure_lines)
+    expect_index = joined.index("IF WS-NET-AMOUNT NOT =")
+    record_index = joined.index("RECORD 001 WS-NET-TOTAL")
+    end_index = joined.index("__MOCKYMOCK__ CASE 001 END")
+    assert expect_index < record_index < end_index
+
+
+def test_record_target_for_a_different_case_index_is_not_emitted():
+    """A record_targets entry keyed by a case index this suite doesn't have
+    is silently a no-op for THIS suite -- it only ever fires for the case
+    index it's keyed to."""
+    joined = "\n".join(
+        _build(record_targets={2: ["WS-NOT-IN-THIS-SUITE"]}).procedure_lines
+    )
+    assert "RECORD" not in joined
+
+
+def test_record_targets_route_to_the_correct_case():
+    case_one = MockTestCase(name="first", perform_target="P1")
+    case_two = MockTestCase(name="second", perform_target="P2")
+    suite = MockTestSuite(name="two cases", test_cases=[case_one, case_two])
+    joined = "\n".join(_build(suite, record_targets={2: ["WS-B"]}).procedure_lines)
+    assert "RECORD 001" not in joined
+    assert 'DISPLAY "__MOCKYMOCK__ RECORD 002 WS-B: " WS-B' in joined

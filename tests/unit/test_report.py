@@ -533,3 +533,101 @@ def test_parse_stdout_has_empty_mock_hits_for_a_normal_run():
         )
     )
     assert suite.results[0].mock_hits == []
+
+
+# --- --record-expectations (docs/2026-08-04-record-expectations-design.md) --
+
+
+def test_parse_stdout_records_recorded_values_in_order():
+    stdout = "\n".join(
+        [
+            "__MOCKYMOCK__ TESTSUITE: S",
+            "__MOCKYMOCK__ CASE 001 START: calc",
+            "__MOCKYMOCK__ RECORD 001 WS-NET-TOTAL: 145.50",
+            "__MOCKYMOCK__ RECORD 001 WS-STATUS: OK",
+            "__MOCKYMOCK__ CASE 001 END",
+            "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0",
+        ]
+    )
+    suite = parse_stdout(stdout)
+    assert suite.results[0].recorded == [
+        ("WS-NET-TOTAL", "145.50"),
+        ("WS-STATUS", "OK"),
+    ]
+
+
+def test_parse_stdout_attributes_recorded_values_by_case_id_not_position():
+    """Unlike MOCK:, a RECORD marker carries a real case id -- attribution
+    must use it, not "whichever case's START printed most recently"."""
+    stdout = "\n".join(
+        [
+            "__MOCKYMOCK__ TESTSUITE: S",
+            "__MOCKYMOCK__ CASE 001 START: first",
+            "__MOCKYMOCK__ CASE 001 END",
+            "__MOCKYMOCK__ CASE 002 START: second",
+            "__MOCKYMOCK__ RECORD 002 WS-B: 7",
+            "__MOCKYMOCK__ CASE 002 END",
+            "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=0",
+        ]
+    )
+    suite = parse_stdout(stdout)
+    assert suite.results[0].recorded == []
+    assert suite.results[1].recorded == [("WS-B", "7")]
+
+
+def test_parse_stdout_has_empty_recorded_for_a_normal_run():
+    suite = parse_stdout(SAMPLE_STDOUT)
+    assert all(result.recorded == [] for result in suite.results)
+
+
+def test_record_marker_with_unknown_case_id_is_an_orphan_not_dropped():
+    stdout = "\n".join(
+        [
+            "__MOCKYMOCK__ TESTSUITE: S",
+            "__MOCKYMOCK__ CASE 001 START: only",
+            "__MOCKYMOCK__ RECORD 999 WS-GHOST: 1",
+            "__MOCKYMOCK__ CASE 001 END",
+            "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0",
+        ]
+    )
+    suite = parse_stdout(stdout)
+    assert suite.orphan_records == [("999", "WS-GHOST", "1")]
+    assert suite.results[0].recorded == []
+
+
+def test_orphan_record_does_not_gate_all_passed():
+    """A RECORD marker carries no pass/fail semantics -- unlike an orphaned
+    FAIL line, an orphaned RECORD has no failure evidence to lose."""
+    stdout = "\n".join(
+        [
+            "__MOCKYMOCK__ TESTSUITE: S",
+            "__MOCKYMOCK__ CASE 001 START: only",
+            "__MOCKYMOCK__ RECORD 999 WS-GHOST: 1",
+            "__MOCKYMOCK__ CASE 001 END",
+            "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0",
+        ]
+    )
+    suite = parse_stdout(stdout)
+    assert suite.all_passed is True
+
+
+def test_recorded_value_may_be_empty_or_contain_a_colon():
+    """The value capture group is `.*` (greedy, may be empty) so a blank
+    DISPLAY (an all-spaces alphanumeric field) or a value that happens to
+    contain a literal colon still parses whole, not truncated at the first
+    colon."""
+    stdout = "\n".join(
+        [
+            "__MOCKYMOCK__ TESTSUITE: S",
+            "__MOCKYMOCK__ CASE 001 START: only",
+            "__MOCKYMOCK__ RECORD 001 WS-BLANK: ",
+            "__MOCKYMOCK__ RECORD 001 WS-TIME: 12:30:00",
+            "__MOCKYMOCK__ CASE 001 END",
+            "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0",
+        ]
+    )
+    suite = parse_stdout(stdout)
+    assert suite.results[0].recorded == [
+        ("WS-BLANK", ""),
+        ("WS-TIME", "12:30:00"),
+    ]
