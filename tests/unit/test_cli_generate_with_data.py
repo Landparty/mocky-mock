@@ -129,11 +129,19 @@ def test_rows_0_is_honored_not_treated_as_falsy(tmp_path):
     assert rc == 0
     text = out.read_text(encoding="utf-8")
     assert _tally_count(text) == 0
-    # An empty sequence short-circuits _read_body to an empty MOCK READ
-    # body entirely (see its own `if not sequence: return []`) -- no
-    # EVALUATE/WHEN OTHER at all, pre-existing base behavior unrelated to
-    # this flag. Confirmed via VERIFY READ ORDER-FILE WAS CALLED 1 TIMES
-    # (just the exhaustion read) rather than an EVALUATE-branch count.
+    # An empty sequence short-circuits _read_body's own pre-existing
+    # `if not sequence: return []` to an empty MOCK READ body -- no
+    # EVALUATE/WHEN OTHER at all. That short-circuit predates this commit,
+    # but reaching it from `generate` is new (--rows didn't exist here
+    # before): on a program whose own EOF loop depends on the replicated
+    # AT END MOVE that WHEN OTHER would have carried (FIXTUREDEMO's
+    # PERFORM READ-ORDERS UNTIL WS-EOF = "Y" is exactly such a program),
+    # --rows 0's output would hang if actually run under Docker -- the
+    # same hazard as a --placeholder'd READ, see
+    # test_dsl_generator_bundle.py's own placeholder test docstring and
+    # this task's report. A user-requested degenerate mode, not a bug.
+    # Confirmed via VERIFY READ ORDER-FILE WAS CALLED 1 TIMES (just the
+    # exhaustion read) rather than an EVALUATE-branch count.
     assert "MOCK READ ORDER-FILE\n    END-MOCK" in text
     assert "VERIFY READ ORDER-FILE WAS CALLED 1 TIMES" in text
 
@@ -324,3 +332,36 @@ def test_unmatched_placeholder_warning_omitted_when_matched(tmp_path, capsys):
     )
     assert rc == 0
     assert "matched no fixture" not in capsys.readouterr().err
+
+
+def test_placeholder_without_any_bundle_warns_every_pair_and_still_succeeds(
+    tmp_path, capsys
+):
+    """Neither --with-data nor --fixtures given -- there is no bundle at
+    all, so every requested pair is, by construction, unmatched (the
+    `bundle.scenarios if bundle is not None else []` guard in
+    _cmd_generate makes this the same code path as an unmatched pair
+    against a real bundle). `generate` still succeeds via the ordinary
+    bundle-less scaffold; --placeholder is simply a no-op there (nothing
+    to downgrade -- see scaffold_cut's own docstring), reported rather
+    than silently swallowed."""
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--placeholder",
+            "READ:ORDER-FILE",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "READ:ORDER-FILE" in err
+    assert "matched no fixture" in err
+    text = out.read_text(encoding="utf-8")
+    assert "MOCK READ ORDER-FILE" in text
+    assert (
+        "ORD001" not in text
+    )  # the ordinary bundle-less scaffold has no seeded data anyway
