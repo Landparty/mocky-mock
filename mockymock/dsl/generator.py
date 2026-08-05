@@ -504,6 +504,39 @@ def _single_row_body(fixture: BoundaryFixture) -> list[str]:
     return body
 
 
+def _read_exhaustion_lines(
+    fixture: BoundaryFixture, replicated: list[str], at_end: list[object]
+) -> list[str]:
+    """The lines that fire once a READ mock's rows are exhausted:
+    `fixture.terminal`'s status code MOVE(s) plus whatever of the
+    program's own `AT END` clause `_replicated_at_end_moves` could safely
+    replicate (or a TODO comment when it couldn't, see `_read_body`'s own
+    docstring on that gating). Factored out of `_read_body` so this exact
+    termination behavior -- not an empty body -- is what fires both for
+    the `WHEN OTHER` branch of a multi-row EVALUATE AND for a
+    `sequence`-less fixture (fix round 1, unify-with-data Task 4: `--rows
+    0` on the self-generating path, or a bundle's own "empty input"
+    scenario family on `--fixtures`) AND for a `--placeholder`-downgraded
+    READ fixture (`_bundle_directive_for`). An empty/no-op body in any of
+    these three places would silently drop the program's own EOF-flag
+    idiom and hang its `PERFORM ... UNTIL <eof-flag>` loop forever --
+    exactly the class of bug commit 3ad3378 fixed for the ordinary
+    multi-row case; this closes the same gap for the zero-row and
+    downgraded cases too. `run --with-data`/`--placeholder`/`--rows 0`
+    correctness is judged against real execution (a real Docker run), not
+    `lint`, which cannot see a splice-time infinite loop."""
+    lines: list[str] = []
+    for field_name, code in (fixture.terminal or {}).items():
+        lines.append(f'MOVE "{code}" TO {field_name}')
+    lines.extend(replicated)
+    if at_end and not replicated:
+        lines.append(
+            "*> TODO: this program's AT END clause could not be "
+            "auto-replicated -- add its loop-guard MOVE by hand"
+        )
+    return lines
+
+
 def _read_body(
     fixture: BoundaryFixture,
     registry: TallyRegistry,
@@ -517,9 +550,10 @@ def _read_body(
     always quoted -- unlike SQL's SQLCODE), plus whatever of the original
     `AT END` clause's own statements `_replicated_at_end_moves` can safely
     replicate -- the program's own EOF-flag idiom, not just its FILE
-    STATUS field, since the splicer deletes the real clause entirely.
+    STATUS field, since the splicer deletes the real clause entirely. See
+    `_read_exhaustion_lines` for the exhaustion content itself.
 
-    Whether a `WHEN OTHER` branch is needed at all is gated on the source
+    Whether an exhaustion branch is needed at all is gated on the source
     `AT END` clause existing (`at_end` below), deliberately NOT on
     `fixture.terminal` alone: a file with no `FILE STATUS` clause (e.g.
     INVUPDT's `INV-FILE`) has `fixture.terminal is None` -- correctly, per
@@ -534,18 +568,29 @@ def _read_body(
     replicable (an identifier-sourced MOVE, an IF, ...), a comment flags
     the gap rather than silently emitting nothing.
 
+    An EMPTY `sequence` (fix round 1, unify-with-data Task 4: `--rows 0`
+    on the self-generating path, or a bundle's own "empty input" scenario
+    family on `--fixtures`) is handled first, unconditionally: every READ
+    call is immediately exhausted (there is no row-selecting branch to
+    choose between at all), so the exhaustion content fires directly with
+    no `EVALUATE`/tally lookup -- NOT the empty body a naive `if not
+    sequence: return []` would have produced, which would drop the
+    program's own EOF-flag idiom exactly like an unmocked `AT END` clause
+    would and hang its loop forever, the same failure mode `WHEN OTHER`
+    exists to prevent for the ordinary multi-row case.
+
     Mirrors `ROWS` sugar's own internal `EVALUATE`/`WHEN tally = N` shape
     (see .okf/splicer.md) for consistency, since READ has no `ROWS`
     grammar of its own to reach for (v1 -- see
     docs/2026-07-31-csv-sourced-rows-design.md's still-proposed
     extension)."""
     sequence = fixture.sequence
-    if not sequence:
-        return []
-
     at_end = getattr(site.statement, "at_end_clause", None) or []
     replicated = _replicated_at_end_moves(site.statement)
     needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
+
+    if not sequence:
+        return _read_exhaustion_lines(fixture, replicated, at_end)
 
     if len(sequence) == 1 and not needs_exhaustion_branch:
         return _row_move_lines(sequence[0], fixture)
@@ -557,15 +602,10 @@ def _read_body(
         body.extend(f"        {line}" for line in _row_move_lines(row, fixture))
     if needs_exhaustion_branch:
         body.append("    WHEN OTHER")
-        for field_name, code in (fixture.terminal or {}).items():
-            body.append(f'        MOVE "{code}" TO {field_name}')
-        for line in replicated:
-            body.append(f"        {line}")
-        if at_end and not replicated:
-            body.append(
-                "        *> TODO: this program's AT END clause could not be "
-                "auto-replicated -- add its loop-guard MOVE by hand"
-            )
+        body.extend(
+            f"        {line}"
+            for line in _read_exhaustion_lines(fixture, replicated, at_end)
+        )
     body.append("END-EVALUATE")
     return body
 
@@ -579,6 +619,21 @@ def _sql_wants_rows(fixture: BoundaryFixture) -> bool:
     return len(fixture.sequence) > 1 and all(
         code in _DEFAULT_SUCCESS_CODES for code in fixture.status.values()
     )
+
+
+#: The exhausted-branch SQLCODE `splicer/injector.py`'s own
+#: `build_rows_block` call site hardcodes for a `MOCK SQL ... ROWS` mock
+#: (DB2's real "not found" code, `exhausted_moves=["MOVE 100 TO
+#: SQLCODE"]`) -- mirrored here, not derived from any fixture data (there
+#: is none once a cursor is exhausted), so a `--placeholder` downgrade of
+#: a fixture that would have used ROWS sugar (`_sql_wants_rows`) replicates
+#: the SAME termination signal instead of silently reverting to permanent
+#: success (`_placeholder_body_for`'s ordinary `MOVE 0 TO SQLCODE`) --
+#: see `_bundle_directive_for`'s own downgrade branch. A cursor
+#: FETCH loop keyed on `PERFORM UNTIL SQLCODE = 100` would otherwise never
+#: terminate, the SQL analogue of the READ infinite-loop hazard
+#: `_read_exhaustion_lines` closes (fix round 1, unify-with-data Task 4).
+_SQL_ROWS_EXHAUSTED_BODY = ["MOVE 100 TO SQLCODE"]
 
 
 def _sql_rows_directive(
@@ -607,20 +662,36 @@ def _bundle_directive_for(
     `_warn_on_key_mismatch`).
 
     `placeholder_keys` (`mockymock generate --placeholder CATEGORY:KEY`,
-    repeatable) names fixtures whose body should be DOWNGRADED to the
-    ordinary, non-data placeholder body `_directive_for` would have
-    emitted for this same site -- checked against the fixture's own
-    `(category, key)` (bundle-side string category, matching how the CLI
-    parses `--placeholder`'s value), not `mockymock_keys`'s MockCategory
-    keying. The fixture stays MOCKED either way; only its body (and, for
-    SQL's ROWS-sugar directive line, the directive line itself) loses the
-    seeded data. Deliberately lossy for READ: `_read_body`'s replicated
-    AT END/status handling goes with it, so a downgraded READ mock can
-    reintroduce the infinite-loop failure mode commit 3ad3378 fixed if the
-    program's own EOF loop depended on it -- correct per the --placeholder
-    contract (a smaller body on request), not a bug; see
-    tests/unit/test_dsl_generator_bundle.py's own placeholder tests for
-    the empirical trace."""
+    repeatable) names fixtures whose body should be DOWNGRADED to strip
+    the seeded data while KEEPING any loop-termination machinery that
+    data drove -- checked against the fixture's own `(category, key)`
+    (bundle-side string category, matching how the CLI parses
+    `--placeholder`'s value), not `mockymock_keys`'s MockCategory keying.
+    The fixture stays MOCKED either way; only its body (and, for SQL's
+    ROWS-sugar directive line, the directive line itself) loses the row
+    data. Every generated `.cut` must be RUNNABLE by construction (fix
+    round 1, unify-with-data Task 4) -- so the two categories whose
+    non-downgraded body embeds loop-termination sugar get a DEDICATED
+    downgrade instead of the ordinary, category-generic
+    `_placeholder_body_for`, which would silently drop it:
+
+    - READ: `_read_exhaustion_lines` (the SAME helper `_read_body` uses
+      for its own `WHEN OTHER` branch and its own empty-sequence case) --
+      an "immediately at end" body, not an empty one, so a program's own
+      `PERFORM ... UNTIL <eof-flag>` loop still terminates.
+    - SQL, when this fixture would have used `ROWS` sugar
+      (`_sql_wants_rows`): `_SQL_ROWS_EXHAUSTED_BODY` (`MOVE 100 TO
+      SQLCODE`, mirroring `splicer/injector.py`'s own hardcoded
+      exhausted-branch value for `MOCK SQL ... ROWS`), not the ordinary
+      SQL placeholder's `MOVE 0 TO SQLCODE` (permanent "more rows
+      available"), which would hang a `PERFORM UNTIL SQLCODE = 100`
+      cursor-fetch loop the same way an empty READ body would.
+
+    Every other category's downgrade has no loop-termination sugar to
+    lose (OPEN/CLOSE/etc.'s STATUS_ONLY body is a single-shot per-call
+    status override; CALL/DYNCALL/ACCEPT/CICS/DLI/a single-row SQL
+    fixture never emit ROWS sugar at all), so `_placeholder_body_for`
+    stays correct for them."""
     try:
         category = MockCategory(fixture.category)
     except ValueError:
@@ -630,7 +701,14 @@ def _bundle_directive_for(
         return None
 
     if (fixture.category, fixture.key) in placeholder_keys:
-        body = _placeholder_body_for(category, fixture.key)
+        if category is MockCategory.READ:
+            at_end = getattr(site.statement, "at_end_clause", None) or []
+            replicated = _replicated_at_end_moves(site.statement)
+            body = _read_exhaustion_lines(fixture, replicated, at_end)
+        elif category is MockCategory.SQL and _sql_wants_rows(fixture):
+            body = list(_SQL_ROWS_EXHAUSTED_BODY)
+        else:
+            body = _placeholder_body_for(category, fixture.key)
     elif fixture.direction == "STATUS_ONLY":
         body = _status_only_body(fixture)
     elif category is MockCategory.READ:

@@ -510,20 +510,30 @@ def test_placeholder_keys_defaults_to_empty_and_changes_nothing():
     )
 
 
-def test_placeholder_downgrades_read_boundary_to_its_ordinary_empty_body():
-    """READ has no entry in _PLACEHOLDER_BODIES (see _directive_for), so
-    its ordinary non-data body is empty -- downgrading drops the whole
-    tally-branching EVALUATE, the generated row data, AND the replicated
-    AT END/status handling (_read_body). That is a real, deliberate loss:
-    on FIXTUREDEMO specifically, whose own PERFORM READ-ORDERS UNTIL
-    WS-EOF = "Y" loop depends on that WHEN OTHER branch to terminate (see
-    _read_body's own docstring and commit 3ad3378), a downgraded READ mock
-    would hang if actually run under Docker. --placeholder trades
-    runnability for a smaller body on request; the fixture stays MOCKED
-    (still a MOCK READ directive), just without generated data -- this is
-    exactly what the brief asks for, not a bug. Never wire a
+def test_placeholder_downgrades_read_boundary_to_an_immediately_at_end_body():
+    """Fix round 1 (unify-with-data Task 4): READ has no entry in
+    _PLACEHOLDER_BODIES (see _directive_for), so a NAIVE downgrade to the
+    ordinary category-generic placeholder body would be completely empty
+    -- dropping the whole tally-branching EVALUATE, the generated row
+    data, AND the replicated AT END/status handling (_read_body). On
+    FIXTUREDEMO specifically, whose own PERFORM READ-ORDERS UNTIL
+    WS-EOF = "Y" loop depends on that handling to terminate (see
+    _read_body's own docstring and commit 3ad3378), an empty downgraded
+    READ mock would hang if actually run under Docker -- the base
+    engine's "every generated .cut is runnable by construction" invariant
+    is a hard requirement, not something --placeholder is allowed to
+    trade away. The correct downgrade instead reuses
+    _read_exhaustion_lines (the SAME helper _read_body's own WHEN OTHER
+    branch and empty-sequence case use) to emit an "immediately at end"
+    body: the real terminal status MOVE and the real replicated AT END
+    MOVE, just with no row data and no EVALUATE wrapper -- the fixture
+    stays MOCKED (still a MOCK READ directive) and the program's loop
+    still terminates on its very first READ. Never wire a
     --placeholder'd FIXTUREDEMO.cut into the Docker-gated
-    test_committed_fixturedemo_example_passes or the lint-gate corpus."""
+    test_committed_fixturedemo_example_passes or the lint-gate corpus
+    (this program's own scenario is now built to terminate immediately,
+    which is a different program behavior than the golden's, not a bug
+    but also not something those tests are pinning)."""
     surface, bundle = _fixturedemo_surface_and_bundle()
     text = scaffold_cut(
         "FIXTUREDEMO",
@@ -532,9 +542,11 @@ def test_placeholder_downgrades_read_boundary_to_its_ordinary_empty_body():
         placeholder_keys=frozenset({("READ", "ORDER-FILE")}),
     )
     assert "MOCK READ ORDER-FILE" in text
-    assert "ORD001" not in text
-    assert "EVALUATE TRUE" not in text
-    assert "WHEN OTHER" not in text
+    assert "ORD001" not in text  # no seeded row data
+    assert "EVALUATE TRUE" not in text  # no tally-branching -- one shot
+    # the actual loop-termination MOVEs, not an empty body:
+    assert 'MOVE "10" TO WS-ORDER-STATUS' in text  # fixture.terminal
+    assert 'MOVE "Y" TO WS-EOF' in text  # replicated AT END clause
     # every other boundary stays data-driven -- only the named pair downgrades
     assert "CHARLES GARCIA" in text
 
@@ -566,15 +578,23 @@ def test_placeholder_downgraded_cut_still_round_trips_through_parse_cut():
     assert len(suite.test_cases) == 1
 
 
-def test_placeholder_downgrades_sql_rows_sugar_to_a_plain_placeholder_body():
-    """The ROWS-sugar path (_sql_wants_rows) is the one case where a
-    downgrade must also change the DIRECTIVE LINE itself, not just the
-    body: an un-downgraded multi-row SQL fixture with default status emits
-    `MOCK SQL "..." ROWS`, but the downgraded form is an ordinary
-    `MOCK SQL "..."` with the plain SQL placeholder body
-    (MOVE 0 TO SQLCODE) -- exercised directly against _bundle_directive_for
-    since FIXTUREDEMO's own SQL fixture is single-row and never reaches
-    this branch."""
+def test_placeholder_downgrades_sql_rows_sugar_to_an_exhausted_placeholder_body():
+    """Fix round 1 (unify-with-data Task 4): the ROWS-sugar path
+    (_sql_wants_rows) is the SECOND case (besides READ) where a downgrade
+    must preserve loop-termination machinery, not just change the
+    DIRECTIVE LINE. An un-downgraded multi-row SQL fixture with default
+    status emits `MOCK SQL "..." ROWS`, whose splice-time exhaustion
+    branch (splicer/injector.py's build_rows_block) hardcodes `MOVE 100
+    TO SQLCODE` once the cursor's rows run out. A NAIVE downgrade to the
+    ordinary category-generic SQL placeholder body (`MOVE 0 TO SQLCODE`,
+    permanent "more rows available") would hang a program's own `PERFORM
+    UNTIL SQLCODE = 100` cursor-fetch loop forever -- the SQL analogue of
+    an empty READ body. The correct downgrade drops the `ROWS` suffix
+    (there is no seeded row data left to enumerate) but keeps the SAME
+    `MOVE 100 TO SQLCODE` exhaustion signal the ROWS form's own splice-time
+    machinery would have produced (`_SQL_ROWS_EXHAUSTED_BODY`) --
+    exercised directly against _bundle_directive_for since FIXTUREDEMO's
+    own SQL fixture is single-row and never reaches this branch."""
     from mockymock.dsl.generator import _bundle_directive_for, _mockymock_boundary_keys
     from mockymock.dsl.model import MockTestSuite
     from mockymock.splicer.naming import TallyRegistry
@@ -626,7 +646,8 @@ def test_placeholder_downgrades_sql_rows_sugar_to_a_plain_placeholder_body():
     joined = "\n".join(with_placeholder)
     assert with_placeholder[0] == 'MOCK SQL "SELECT"'  # no ROWS suffix
     assert "ROWS" not in joined
-    assert "MOVE 0 TO SQLCODE" in joined
+    assert "MOVE 100 TO SQLCODE" in joined  # exhausted, not permanent success
+    assert "MOVE 0 TO SQLCODE" not in joined
     assert "MOVE 1 TO CUST-ID" not in joined  # generated row data is gone
 
 

@@ -129,20 +129,19 @@ def test_rows_0_is_honored_not_treated_as_falsy(tmp_path):
     assert rc == 0
     text = out.read_text(encoding="utf-8")
     assert _tally_count(text) == 0
-    # An empty sequence short-circuits _read_body's own pre-existing
-    # `if not sequence: return []` to an empty MOCK READ body -- no
-    # EVALUATE/WHEN OTHER at all. That short-circuit predates this commit,
-    # but reaching it from `generate` is new (--rows didn't exist here
-    # before): on a program whose own EOF loop depends on the replicated
-    # AT END MOVE that WHEN OTHER would have carried (FIXTUREDEMO's
-    # PERFORM READ-ORDERS UNTIL WS-EOF = "Y" is exactly such a program),
-    # --rows 0's output would hang if actually run under Docker -- the
-    # same hazard as a --placeholder'd READ, see
-    # test_dsl_generator_bundle.py's own placeholder test docstring and
-    # this task's report. A user-requested degenerate mode, not a bug.
-    # Confirmed via VERIFY READ ORDER-FILE WAS CALLED 1 TIMES (just the
-    # exhaustion read) rather than an EVALUATE-branch count.
-    assert "MOCK READ ORDER-FILE\n    END-MOCK" in text
+    # Fix round 1 (unify-with-data Task 4): an empty sequence used to
+    # short-circuit _read_body to a completely empty MOCK READ body -- no
+    # EVALUATE/WHEN OTHER, no terminal MOVE, no replicated AT END MOVE --
+    # which would hang FIXTUREDEMO's own PERFORM READ-ORDERS UNTIL
+    # WS-EOF = "Y" loop forever if actually run under Docker (--rows
+    # didn't exist on `generate` before this commit, so nothing could
+    # reach that short-circuit here previously). _read_body now emits the
+    # SAME "immediately at end" content its own WHEN OTHER branch would
+    # have used instead: the real terminal status MOVE and the real
+    # replicated AT END MOVE, with no EVALUATE wrapper since there is no
+    # row-selecting branch to choose between with zero rows.
+    assert 'MOVE "10" TO WS-ORDER-STATUS' in text
+    assert 'MOVE "Y" TO WS-EOF' in text
     assert "VERIFY READ ORDER-FILE WAS CALLED 1 TIMES" in text
 
 
@@ -166,6 +165,48 @@ def test_rows_0_output_round_trips_through_parse_cut(tmp_path):
     assert rc == 0
     suite = parse_cut(out.read_text(encoding="utf-8"))
     assert len(suite.test_cases) == 1
+
+
+def test_fixtures_path_empty_read_sequence_still_emits_the_exhaustion_branch(
+    tmp_path,
+):
+    """Hardens the `--fixtures` entry point too (fix round 1, unify-with-data
+    Task 4): a bundle can legitimately carry an empty READ sequence on its
+    own -- cobol-parser's own "empty input" fixed-family scenario
+    (`--scenarios all`) does exactly this, no `--rows` involved at all --
+    so the _read_body fix in dsl/generator.py (shared by both the
+    --with-data and --fixtures paths) must benefit a hand-authored/
+    externally-generated bundle JSON identically to the self-generating
+    path. Builds a real bundle via ProgramFixtureGenerator(rows=0),
+    writes it to a JSON file, and drives it through --fixtures (not
+    --with-data) to prove this isn't just the self-generating
+    construction path being fixed."""
+    import json
+
+    from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
+
+    bundle = ProgramFixtureGenerator(
+        DataGeneratorOptions(rows=0)
+    ).generate_with_scenarios_from_file(str(_FIXTUREDEMO_CBL), mode="happy", seed=42)
+    bundle_path = tmp_path / "empty_read.bundle.json"
+    bundle_path.write_text(json.dumps(bundle.to_dict()), encoding="utf-8")
+
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--fixtures",
+            str(bundle_path),
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    text = out.read_text(encoding="utf-8")
+    assert _tally_count(text) == 0
+    assert 'MOVE "10" TO WS-ORDER-STATUS' in text
+    assert 'MOVE "Y" TO WS-EOF' in text
 
 
 def test_rows_with_fixtures_file_is_rejected(tmp_path, capsys):
