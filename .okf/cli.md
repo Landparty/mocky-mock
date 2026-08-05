@@ -1,7 +1,7 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, fixtures, run, debug, mutate, lint, collect, dashboard, export) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
 timestamp: 2026-08-05T00:00:00Z
 ---

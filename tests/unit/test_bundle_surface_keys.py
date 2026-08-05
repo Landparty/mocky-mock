@@ -29,22 +29,25 @@ normalized-text *prefix* (`match_text`), not a stable key (see
 an EXEC fixture a `key` derived from the SQL/CICS/DLI verb itself (e.g.
 `"SELECT"`, `"DECLARE"`, `"OPEN"`) -- a naive join against `.keys` (empty)
 would therefore report every EXEC fixture as unmatched regardless of
-correctness. This test instead joins EXEC fixtures/sites on `(category,
-str(line))`, mirroring the actual join target: `dsl/generator.py`'s real
-`--with-data` path does NOT use a naive `.keys` join for EXEC either -- it
-keys `_mockymock_boundary_keys` on `_unique_prefix(site, surface)` (the
-shortest word-prefix of `match_text` unique among same-category sites in
-that program), which is what `test_fixture_bundle_contract.py` pins
-directly, program-by-program, as an equality. This test's line-based join
-is a deliberately different, more corpus-robust invariant: it holds
-regardless of how many same-verb EXEC statements a program has (an
-ambiguous `_unique_prefix` needs a longer, statement-specific prefix to
-disambiguate multiple same-verb sites, which a bare-verb line-based check
-sidesteps entirely) and runs across every qualifying example, not the
-curated program list `test_fixture_bundle_contract.py` hand-maintains --
-so it catches a class of bundle/surface disagreement (e.g. a genuinely new
-example program regressing) that test wouldn't see until someone remembers
-to add the new program to its list.
+correctness.
+
+This test does NOT reproduce the production `--with-data` join for EXEC:
+that path (`dsl/generator.py`'s `_mockymock_boundary_keys`) keys off
+`_unique_prefix(site, surface)` (the shortest word-prefix of `match_text`
+unique among same-category sites in that program) against the bundle's
+own verb-derived key, and THAT exact prefix-key agreement is pinned
+separately, program-by-program, as a strict equality by
+`test_fixture_bundle_contract.py`. This test instead joins EXEC
+fixtures/sites on `(category, str(line))` -- a deliberately different
+invariant that avoids the naive `.keys` join above and sidesteps prefix
+disambiguation entirely, at the cost of not exercising the production
+join at all. Its value is corpus breadth, not join fidelity: it holds
+regardless of how many same-verb EXEC statements a program has, and runs
+across every qualifying example, not the curated program list
+`test_fixture_bundle_contract.py` hand-maintains -- so it catches a class
+of bundle/surface disagreement (e.g. a genuinely new example program
+regressing) that test wouldn't see until someone remembers to add the new
+program to its list.
 """
 
 from pathlib import Path
@@ -62,6 +65,8 @@ from mockymock.analysis.mock_surface import analyze
 from mockymock.dsl.model import EXEC_CATEGORIES
 from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
+EXAMPLES_DIR = Path(__file__).parent.parent.parent / "examples"
+
 # String form of dsl.model.EXEC_CATEGORIES -- a bundle fixture's "category"
 # is a plain str (see cobol-parser's docs/fixture-bundle-schema.md), not a
 # MockCategory member.
@@ -76,10 +81,13 @@ _EXEC_CATEGORY_NAMES = frozenset(category.value for category in EXEC_CATEGORIES)
 # programs, `examples/nist-cobol85/IC117M.CBL` and `.../OBIC1A.CBL`, since
 # `*.cbl` never matches `*.CBL` there. Matching `[A-Z]*` for the name and
 # checking `.suffix.lower()` for the extension separately keeps both
-# platforms in agreement.
+# platforms in agreement. Anchored on EXAMPLES_DIR (this file's own
+# location), not a CWD-relative `Path("examples")`, matching
+# `test_fixture_bundle_contract.py`'s own established pattern -- collection
+# must not depend on the directory pytest happened to be invoked from.
 EXAMPLE_PROGRAMS = sorted(
     p
-    for p in Path("examples").glob("*/[A-Z]*")
+    for p in EXAMPLES_DIR.glob("*/[A-Z]*")
     if p.suffix.lower() == ".cbl"
     and ((p.parent / "copybooks").exists() or "COPY " not in p.read_text())
 )
