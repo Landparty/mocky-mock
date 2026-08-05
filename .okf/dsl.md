@@ -388,6 +388,15 @@ value is fixed at 100, not overridable), as is a second `TERMINAL` group
 on the same directive (`"duplicate TERMINAL group"`). Stored on
 `MockDirective.terminal_row`, `None` when omitted.
 
+A `PERFORM ... UNTIL <flag> = <value>` loop driven by the READ's own
+`AT END`-set flag (rather than the file's `FILE STATUS` field) needs that
+flag's own `MOVE` inside the `TERMINAL` group too: the splicer replaces the
+whole READ statement, `AT END` clause included, so without an explicit
+`MOVE <value> TO <flag>` in `TERMINAL` the loop-guard flag is never set and
+the loop never stops — the implicit default (`MOVE "10" TO <status field>`
+when omitted) only satisfies a FILE-STATUS-driven loop, not a flag-driven
+one.
+
 **This grammar is hand-authoring only.** It exists for a human (or an
 editor integration) writing a `.cut` file by hand against `mockymock
 fixtures`' JSON output; `dsl/generator.py`'s bundle-driven scaffold

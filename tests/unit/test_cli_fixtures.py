@@ -97,3 +97,53 @@ def test_fixtures_unresolved_copybook_exits_1_with_nothing_on_stdout(tmp_path, c
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.strip()
+
+
+def test_fixtures_copy_bearing_program_without_copybook_path_refuses(tmp_path, capsys):
+    """Without --copybook-path, the literal COPY statement is never
+    expanded and cobolparser tolerates it silently (parse succeeds, but
+    the DATA DIVISION section it belongs to comes back empty) --
+    `check_unresolved_copybooks` is the only thing standing between that
+    and an exit-0 bundle claiming full coverage over a program that is
+    actually missing fields. Must agree with `generate`'s own
+    UNRESOLVED_COPYBOOK refusal on the identical input."""
+    cbl = tmp_path / "BCOPY.cbl"
+    cbl.write_text(SOURCE_WITH_COPY, encoding="utf-8")
+    rc = main(["fixtures", str(cbl)])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "COPY" in captured.err
+    assert "UNRESOLVED_COPYBOOK" in captured.err
+
+
+# --- mockymock fixtures: PARSE_WARNING (dropped statements) ----------------
+
+UNSUPPORTED_VERB_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EXHIBPGM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FIELD PIC X(10).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           EXHIBIT NAMED WS-FIELD.
+           DISPLAY "done".
+"""
+
+
+def test_fixtures_parse_warning_refuses(tmp_path, capsys):
+    """EXHIBIT parses "clean" (success=True, no errors) but is dropped from
+    the AST with only a ParseResult.warnings entry -- a bundle built from
+    that incomplete AST would silently miss the boundary, so
+    `check_whole_program`'s PARSE_WARNING must refuse it the same way
+    `generate` does on the same input."""
+    cbl = tmp_path / "EXHIBPGM.cbl"
+    cbl.write_text(UNSUPPORTED_VERB_SOURCE, encoding="utf-8")
+    rc = main(["fixtures", str(cbl)])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "PARSE_WARNING" in captured.err

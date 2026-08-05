@@ -30,10 +30,27 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     (the VS Code tree view consumes this). Unlike every other subcommand,
     stdout must be EXACTLY the JSON document -- every diagnostic, including
     the plain "no such file" gate, goes to stderr instead of the
-    `_check_input_files` convention the rest of this module uses."""
+    `_check_input_files` convention the rest of this module uses.
+
+    Runs the same three fail-closed static gates as `_cmd_generate` (minus
+    the linkage-layout check, which only matters to the splicer that
+    `generate`/`run` feed -- `fixtures` never splices): a lossy copybook
+    decode (`check_expansion_warnings`), a clean-looking parse that still
+    dropped content (`check_whole_program`'s PARSE_WARNING), and any
+    unresolved COPY statement (`check_unresolved_copybooks`). Skipping
+    these would let e.g. a COPY-bearing program with no --copybook-path
+    silently exit 0 with an empty-fixtures bundle and a coverage summary
+    claiming everything resolved -- exactly the input `generate` refuses
+    with UNRESOLVED_COPYBOOK, so the two commands must agree."""
     from cobolparser import parse_cobol
     from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
     from cobolparser.preprocess import expand_copybooks
+
+    from mockymock.analysis.refusal import (
+        check_expansion_warnings,
+        check_unresolved_copybooks,
+        check_whole_program,
+    )
 
     source_path = Path(args.program)
     if not source_path.is_file():
@@ -55,6 +72,14 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             print(f"mockymock fixtures: {exc}", file=sys.stderr)
             return 1
+        expansion_reasons = check_expansion_warnings(expansion)
+        for reason in expansion_reasons:
+            print(
+                f"mockymock fixtures: refused ({reason.code}): {reason.message}",
+                file=sys.stderr,
+            )
+        if expansion_reasons:
+            return 1
         raw_source = expansion.expanded_source
 
     # ProgramFixtureGenerator only raises when the AST comes back None
@@ -72,6 +97,29 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
         )
         for error in result.errors:
             print(f"  {error}", file=sys.stderr)
+        return 1
+
+    # success=True is not enough: cobolparser reports dropped statements
+    # (unsupported verbs, multi-program units, unparsed clause leftovers)
+    # as warnings on an otherwise clean parse. A bundle built from an
+    # incomplete AST would silently miss boundaries, so refuse -- same
+    # check _cmd_generate runs on the same signal.
+    warning_reasons = check_whole_program(result)
+    for reason in warning_reasons:
+        print(
+            f"mockymock fixtures: refused ({reason.code}): {reason.message}",
+            file=sys.stderr,
+        )
+    if warning_reasons:
+        return 1
+
+    copybook_reasons = check_unresolved_copybooks(raw_source)
+    for reason in copybook_reasons:
+        print(
+            f"mockymock fixtures: refused ({reason.code}): {reason.message}",
+            file=sys.stderr,
+        )
+    if copybook_reasons:
         return 1
 
     generator = (
