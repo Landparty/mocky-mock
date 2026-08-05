@@ -1,0 +1,326 @@
+"""CLI behavior tests for `mockymock generate --with-data`'s `--rows` and
+`--placeholder` flags (Task 4 of the unify-with-data reconciliation plan,
+docs/2026-08-04-unify-with-data-plan.md). Companion to
+tests/unit/test_dsl_generator_bundle.py (which drives `scaffold_cut`
+directly) and tests/integration/test_fixturedemo_golden.py (which pins the
+no-new-flags `--fixtures` output byte-for-byte).
+
+FIXTUREDEMO.cbl/.bundle.json/.cut (examples/fixtures/) are reused
+throughout: the checked-in bundle already covers a multi-row READ boundary
+and a single-row EXEC SQL boundary in one program, and its .cut is the
+project's own canonical --with-data golden."""
+
+from pathlib import Path
+
+from mockymock.cli.main import main
+
+_EXAMPLE_DIR = Path(__file__).resolve().parents[2] / "examples" / "fixtures"
+_FIXTUREDEMO_CBL = _EXAMPLE_DIR / "FIXTUREDEMO.cbl"
+_FIXTUREDEMO_BUNDLE = _EXAMPLE_DIR / "FIXTUREDEMO.bundle.json"
+_FIXTUREDEMO_CUT_GOLDEN = _EXAMPLE_DIR / "FIXTUREDEMO.cut"
+
+
+def _tally_count(cut_text: str) -> int:
+    """Number of `WHEN <tally> = N` branches in the READ mock's
+    tally-branching EVALUATE -- tracks the generated READ sequence length
+    directly (see dsl.generator._read_body)."""
+    return cut_text.count("-TALLY = ")
+
+
+# --- --fixtures: no-new-flags output stays byte-identical -------------------
+
+
+def test_generate_with_fixtures_no_new_flags_matches_checked_in_golden(tmp_path):
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--fixtures",
+            str(_FIXTUREDEMO_BUNDLE),
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    assert out.read_text(encoding="utf-8") == _FIXTUREDEMO_CUT_GOLDEN.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_generate_with_data_no_new_flags_matches_checked_in_golden(tmp_path):
+    """Same golden, reached via the self-generating --with-data path
+    (--seed 42 reproduces the exact bundle FIXTUREDEMO.bundle.json was
+    itself generated with -- see that file's own header comment)."""
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--with-data",
+            "--seed",
+            "42",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    assert out.read_text(encoding="utf-8") == _FIXTUREDEMO_CUT_GOLDEN.read_text(
+        encoding="utf-8"
+    )
+
+
+# --- --rows -------------------------------------------------------------
+
+
+def test_rows_plumbed_into_self_generating_bundle_changes_read_sequence(tmp_path):
+    default_out = tmp_path / "default.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--with-data",
+            "--seed",
+            "42",
+            "-o",
+            str(default_out),
+        ]
+    )
+    assert rc == 0
+    default_count = _tally_count(default_out.read_text(encoding="utf-8"))
+    assert default_count == 10  # cobolparser's DataGeneratorOptions default
+
+    rows_out = tmp_path / "rows.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--with-data",
+            "--seed",
+            "42",
+            "--rows",
+            "3",
+            "-o",
+            str(rows_out),
+        ]
+    )
+    assert rc == 0
+    assert _tally_count(rows_out.read_text(encoding="utf-8")) == 3
+
+
+def test_rows_0_is_honored_not_treated_as_falsy(tmp_path):
+    """Mirrors test_cli_fixtures.py's own --rows 0 test: `if args.rows` (a
+    truthiness check) would silently drop a real `--rows 0`, since 0 is
+    falsy in Python -- `is not None` is required."""
+    out = tmp_path / "zero.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--with-data",
+            "--seed",
+            "42",
+            "--rows",
+            "0",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    text = out.read_text(encoding="utf-8")
+    assert _tally_count(text) == 0
+    # An empty sequence short-circuits _read_body to an empty MOCK READ
+    # body entirely (see its own `if not sequence: return []`) -- no
+    # EVALUATE/WHEN OTHER at all, pre-existing base behavior unrelated to
+    # this flag. Confirmed via VERIFY READ ORDER-FILE WAS CALLED 1 TIMES
+    # (just the exhaustion read) rather than an EVALUATE-branch count.
+    assert "MOCK READ ORDER-FILE\n    END-MOCK" in text
+    assert "VERIFY READ ORDER-FILE WAS CALLED 1 TIMES" in text
+
+
+def test_rows_0_output_round_trips_through_parse_cut(tmp_path):
+    from mockymock.dsl.parser import parse_cut
+
+    out = tmp_path / "zero.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--with-data",
+            "--seed",
+            "42",
+            "--rows",
+            "0",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    suite = parse_cut(out.read_text(encoding="utf-8"))
+    assert len(suite.test_cases) == 1
+
+
+def test_rows_with_fixtures_file_is_rejected(tmp_path, capsys):
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--fixtures",
+            str(_FIXTUREDEMO_BUNDLE),
+            "--rows",
+            "5",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 1
+    assert not out.exists()
+    err = capsys.readouterr().err
+    assert "--rows" in err
+    assert "--fixtures" in err
+
+
+# --- --placeholder --------------------------------------------------------
+
+
+def test_placeholder_downgrades_read_boundary_via_cli(tmp_path):
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--fixtures",
+            str(_FIXTUREDEMO_BUNDLE),
+            "--placeholder",
+            "READ:ORDER-FILE",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    text = out.read_text(encoding="utf-8")
+    assert "MOCK READ ORDER-FILE" in text  # still mocked
+    assert "ORD001" not in text  # just not with seeded data
+
+
+def test_placeholder_downgrades_exec_sql_boundary_via_cli(tmp_path):
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--fixtures",
+            str(_FIXTUREDEMO_BUNDLE),
+            "--placeholder",
+            "SQL:SELECT",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    text = out.read_text(encoding="utf-8")
+    assert 'MOCK SQL "SELECT"' in text  # still mocked
+    assert "CHARLES GARCIA" not in text
+    assert "MOVE 0 TO SQLCODE" in text
+
+
+def test_placeholder_category_match_is_case_insensitive_key_is_not(tmp_path):
+    """Spec: category compared uppercased; key matched exactly as the
+    bundle carries it. A lowercase category still matches; a
+    wrong-case key does not (falls through to the unmatched warning)."""
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--fixtures",
+            str(_FIXTUREDEMO_BUNDLE),
+            "--placeholder",
+            "read:ORDER-FILE",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    assert "ORD001" not in out.read_text(encoding="utf-8")
+
+
+def test_placeholder_works_with_with_data_self_generating_path(tmp_path):
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--with-data",
+            "--seed",
+            "42",
+            "--placeholder",
+            "READ:ORDER-FILE",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    text = out.read_text(encoding="utf-8")
+    assert "MOCK READ ORDER-FILE" in text
+    assert "ORD001" not in text
+
+
+def test_malformed_placeholder_exits_1(tmp_path, capsys):
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--fixtures",
+            str(_FIXTUREDEMO_BUNDLE),
+            "--placeholder",
+            "nope",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 1
+    assert not out.exists()
+    err = capsys.readouterr().err
+    assert "CATEGORY:KEY" in err
+
+
+def test_unmatched_placeholder_warns_on_stderr_but_still_succeeds(tmp_path, capsys):
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--fixtures",
+            str(_FIXTUREDEMO_BUNDLE),
+            "--placeholder",
+            "READ:NOT-A-REAL-KEY",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    assert out.exists()
+    err = capsys.readouterr().err
+    assert "READ:NOT-A-REAL-KEY" in err
+    assert "matched no fixture" in err
+
+
+def test_unmatched_placeholder_warning_omitted_when_matched(tmp_path, capsys):
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--fixtures",
+            str(_FIXTUREDEMO_BUNDLE),
+            "--placeholder",
+            "READ:ORDER-FILE",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    assert "matched no fixture" not in capsys.readouterr().err

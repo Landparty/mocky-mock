@@ -159,15 +159,24 @@ def _quote_safe(name: str) -> str:
 
 
 def scaffold_cut(
-    suite_name: str, surface: MockSurface, bundle: FixtureBundle | None = None
+    suite_name: str,
+    surface: MockSurface,
+    bundle: FixtureBundle | None = None,
+    placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
 ) -> str:
     """Generate a starter .cut file. Without a bundle: one TESTCASE per
     paragraph with placeholder mock bodies (today's original behavior).
     With a bundle: one TESTCASE per scenario, mock bodies built from the
-    bundle's own generated fixture data. See the module docstring."""
+    bundle's own generated fixture data. See the module docstring.
+
+    `placeholder_keys` (`mockymock generate --placeholder CATEGORY:KEY`,
+    bundle-side string category paired with the fixture's own key,
+    e.g. `("READ", "ORDER-FILE")`) only has an effect with a bundle --
+    without one, every site already gets a placeholder body, so there is
+    nothing left to downgrade. See `_bundle_directive_for`."""
     if bundle is None:
         return _scaffold_placeholder(suite_name, surface)
-    return _scaffold_with_bundle(suite_name, surface, bundle)
+    return _scaffold_with_bundle(suite_name, surface, bundle, placeholder_keys)
 
 
 # --- placeholder scaffold (no bundle) ----------------------------------------
@@ -213,6 +222,20 @@ def _directives_for(
     return directives
 
 
+def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
+    """The body `_directive_for` gives `(category, key)` outside a fixture
+    bundle: `_PLACEHOLDER_BODIES`'s entry (CALL/DYNCALL/SQL), or ACCEPT's
+    own `MOVE SPACES TO <key>`, or empty for everything else (the file-op
+    verbs, CICS, DLI). Factored out of `_directive_for` so the
+    bundle-driven scaffold's `--placeholder` downgrade (`_bundle_directive_for`)
+    can reuse the exact same body a bundle-less scaffold would have
+    emitted for this site, rather than a second, driftable copy of this
+    per-category logic."""
+    if category is MockCategory.ACCEPT:
+        return [f"MOVE SPACES TO {key}"]
+    return list(_PLACEHOLDER_BODIES.get(category, []))
+
+
 def _directive_for(
     site: BoundarySite, surface: MockSurface
 ) -> tuple[str, list[str]] | None:
@@ -220,7 +243,6 @@ def _directive_for(
     if category is None:
         # scaffold_cut filters these out already; guard for direct callers
         return None
-    body = list(_PLACEHOLDER_BODIES.get(category, []))
 
     if category is MockCategory.CALL:
         if not site.keys:
@@ -229,30 +251,33 @@ def _directive_for(
             # so skip it like the file-op/ACCEPT branches do; run's
             # refusal gate will name the unmocked site.
             return None
+        key = site.keys[0]
         keyword = "MQ" if site.is_mq else "CALL"
-        return f'MOCK {keyword} "{site.keys[0]}"', body
+        return f'MOCK {keyword} "{key}"', _placeholder_body_for(category, key)
 
     if category is MockCategory.DYNCALL:
         # bare key = dynamic CALL through this identifier; quoting it would
         # turn the directive into a static-literal mock that never matches
-        return f"MOCK CALL {site.keys[0]}", body
+        key = site.keys[0]
+        return f"MOCK CALL {key}", _placeholder_body_for(category, key)
 
     if category in FILE_OP_CATEGORIES:
         if not site.keys:
             return None  # no usable key parsed; run's refusal gate will name it
-        return f"MOCK {category.value} {site.keys[0]}", body
+        key = site.keys[0]
+        return f"MOCK {category.value} {key}", _placeholder_body_for(category, key)
 
     if category is MockCategory.ACCEPT:
         if not site.keys:
             return None
-        target = site.keys[0]
-        return f"MOCK ACCEPT {target}", [f"MOVE SPACES TO {target}"]
+        key = site.keys[0]
+        return f"MOCK ACCEPT {key}", _placeholder_body_for(category, key)
 
     # SQL / CICS / DLI: shortest word-prefix of this site's normalized text
     # that is unique among the program's sites of the same category, so the
     # scaffold never generates an AMBIGUOUS_MOCK pair.
     prefix = _unique_prefix(site, surface)
-    return f'MOCK {category.value} "{prefix}"', body
+    return f'MOCK {category.value} "{prefix}"', _placeholder_body_for(category, prefix)
 
 
 def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
@@ -574,11 +599,28 @@ def _bundle_directive_for(
     fixture: BoundaryFixture,
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
+    placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
 ) -> list[str] | None:
     """The full `MOCK ... END-MOCK` (or `MOCK ... ROWS ... END-MOCK`) block
     for one scenario's boundary fixture, or None if this (category, key)
     has no matching mockymock boundary site (already reported by
-    `_warn_on_key_mismatch`)."""
+    `_warn_on_key_mismatch`).
+
+    `placeholder_keys` (`mockymock generate --placeholder CATEGORY:KEY`,
+    repeatable) names fixtures whose body should be DOWNGRADED to the
+    ordinary, non-data placeholder body `_directive_for` would have
+    emitted for this same site -- checked against the fixture's own
+    `(category, key)` (bundle-side string category, matching how the CLI
+    parses `--placeholder`'s value), not `mockymock_keys`'s MockCategory
+    keying. The fixture stays MOCKED either way; only its body (and, for
+    SQL's ROWS-sugar directive line, the directive line itself) loses the
+    seeded data. Deliberately lossy for READ: `_read_body`'s replicated
+    AT END/status handling goes with it, so a downgraded READ mock can
+    reintroduce the infinite-loop failure mode commit 3ad3378 fixed if the
+    program's own EOF loop depended on it -- correct per the --placeholder
+    contract (a smaller body on request), not a bug; see
+    tests/unit/test_dsl_generator_bundle.py's own placeholder tests for
+    the empirical trace."""
     try:
         category = MockCategory(fixture.category)
     except ValueError:
@@ -587,7 +629,9 @@ def _bundle_directive_for(
     if site is None:
         return None
 
-    if fixture.direction == "STATUS_ONLY":
+    if (fixture.category, fixture.key) in placeholder_keys:
+        body = _placeholder_body_for(category, fixture.key)
+    elif fixture.direction == "STATUS_ONLY":
         body = _status_only_body(fixture)
     elif category is MockCategory.READ:
         body = _read_body(fixture, registry, category, site)
@@ -620,6 +664,7 @@ def _bundle_directive_for_group(
     fixtures: list[BoundaryFixture],
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
+    placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
 ) -> list[str] | None:
     """Like `_bundle_directive_for`, but for every fixture that resolves
     to the SAME physical mockymock `BoundarySite` (only possible for
@@ -629,9 +674,20 @@ def _bundle_directive_for_group(
     separate MOCK directive per file would double-match the one physical
     site and refuse AMBIGUOUS_MOCK -- exactly one directive is emitted,
     keyed on the first fixture's own key, with every group member's status
-    merged in (see `_merged_status_only_body`)."""
+    merged in (see `_merged_status_only_body`).
+
+    `placeholder_keys` is checked against EVERY group member's own
+    `(category, key)`, not just the primary's: the shared MOCK directive
+    is keyed on the primary fixture, but a user naming the group's
+    SECONDARY file (e.g. `--placeholder OPEN:RPT-FILE` when INV-FILE is
+    primary) must still trigger the downgrade -- that key genuinely has a
+    fixture, so silently no-op'ing on it would be exactly the
+    matched-nothing case the CLI's own unmatched-placeholder warning
+    exists to catch, made worse by staying silent instead."""
     if len(fixtures) == 1:
-        return _bundle_directive_for(fixtures[0], mockymock_keys, registry)
+        return _bundle_directive_for(
+            fixtures[0], mockymock_keys, registry, placeholder_keys
+        )
     primary = fixtures[0]
     try:
         category = MockCategory(primary.category)
@@ -640,8 +696,12 @@ def _bundle_directive_for_group(
     site = mockymock_keys.get((category, primary.key))
     if site is None:
         return None
+    if any((f.category, f.key) in placeholder_keys for f in fixtures):
+        body = _placeholder_body_for(category, primary.key)
+    else:
+        body = _merged_status_only_body(fixtures)
     lines = [_directive_header(category, primary.key, site)]
-    lines.extend(f"    {line}" for line in _merged_status_only_body(fixtures))
+    lines.extend(f"    {line}" for line in body)
     lines.append("END-MOCK")
     return lines
 
@@ -651,6 +711,7 @@ def _bundle_mock_directives(
     surface: MockSurface,
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
+    placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[list[str], set[tuple[MockCategory, str]]]:
     """Every `MOCK ... END-MOCK` block this scenario's TESTCASE needs: real
     fixture data grouped and deduplicated by physical site (see
@@ -697,7 +758,9 @@ def _bundle_mock_directives(
     covered_site_ids: set[int] = set()
     for site_id in site_order:
         group = fixtures_by_site[site_id]
-        directive = _bundle_directive_for_group(group, mockymock_keys, registry)
+        directive = _bundle_directive_for_group(
+            group, mockymock_keys, registry, placeholder_keys
+        )
         if directive is not None:
             lines.extend(directive)
             try:
@@ -777,7 +840,10 @@ def _render_expectation(
 
 
 def _scaffold_with_bundle(
-    suite_name: str, surface: MockSurface, bundle: FixtureBundle
+    suite_name: str,
+    surface: MockSurface,
+    bundle: FixtureBundle,
+    placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
 ) -> str:
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(mockymock_keys, _bundle_boundary_keys(bundle))
@@ -794,7 +860,7 @@ def _scaffold_with_bundle(
             continue
         lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
         directive_lines, declared_keys = _bundle_mock_directives(
-            scenario, surface, mockymock_keys, registry
+            scenario, surface, mockymock_keys, registry, placeholder_keys
         )
         lines.extend(f"    {line}" for line in directive_lines)
         lines.append(f"    PERFORM {scenario.entry}")

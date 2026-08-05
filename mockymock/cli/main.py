@@ -164,6 +164,33 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if not _check_input_files("mockymock generate", source_path):
         return 1
 
+    # Flag-only validation -- neither check needs the source file, so both
+    # run before any parse/bundle work, same "fail fast on a bad
+    # invocation" philosophy as _check_input_files above. Category is
+    # uppercased for comparison (a bundle fixture's own `category` string
+    # is always uppercase, e.g. "READ"/"SQL"); the key is left exactly as
+    # given -- the bundle carries it case-sensitively.
+    placeholder_pairs: list[tuple[str, str]] = []
+    for value in args.placeholder:
+        if ":" not in value:
+            print(
+                f"mockymock generate: --placeholder must be CATEGORY:KEY, "
+                f"got {value!r}",
+                file=sys.stderr,
+            )
+            return 1
+        category, _, key = value.partition(":")
+        placeholder_pairs.append((category.upper(), key))
+
+    if args.rows is not None and args.fixtures:
+        print(
+            "mockymock generate: --rows is not valid together with "
+            "--fixtures -- that bundle's row count is already baked in; "
+            "use --rows with --with-data's self-generating path instead",
+            file=sys.stderr,
+        )
+        return 1
+
     bundle: FixtureBundle | None = None
     if args.fixtures:
         fixtures_path = Path(args.fixtures)
@@ -179,10 +206,15 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             print(f"mockymock generate: invalid fixture bundle {fixtures_path}: {exc}")
             return 1
     elif args.with_data:
-        from cobolparser.generators import ProgramFixtureGenerator
+        from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
 
         try:
-            cp_bundle = ProgramFixtureGenerator().generate_with_scenarios_from_file(
+            generator = (
+                ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))
+                if args.rows is not None
+                else ProgramFixtureGenerator()
+            )
+            cp_bundle = generator.generate_with_scenarios_from_file(
                 str(source_path),
                 mode=args.scenarios,
                 seed=args.seed,
@@ -192,6 +224,24 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
             return 1
+
+    if placeholder_pairs:
+        # Fail-loud: a --placeholder pair that never matches a bundle
+        # fixture is reported rather than a silent no-op (deliberately
+        # improves on the parked feature/generate-with-data branch's own
+        # behavior -- see this repo's own unify-with-data plan, Task 4).
+        bundle_fixture_keys = {
+            (fixture.category, fixture.key)
+            for scenario in (bundle.scenarios if bundle is not None else [])
+            for fixture in scenario.fixtures
+        }
+        for category, key in placeholder_pairs:
+            if (category, key) not in bundle_fixture_keys:
+                print(
+                    f"mockymock generate: warning: --placeholder "
+                    f"{category}:{key} matched no fixture",
+                    file=sys.stderr,
+                )
 
     raw_source = source_path.read_text(encoding="utf-8")
     if args.copybook_path:
@@ -257,7 +307,9 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
-    cut_text = scaffold_cut(result.ast.program_name, surface, bundle)
+    cut_text = scaffold_cut(
+        result.ast.program_name, surface, bundle, frozenset(placeholder_pairs)
+    )
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
     output_path.write_text(cut_text, encoding="utf-8")
@@ -1196,6 +1248,29 @@ def build_parser() -> argparse.ArgumentParser:
             "branch arm), all (branches + fixed empty-input/error-status/"
             "boundary-values families). Mirrors cobol-parser's own "
             "gen-fixtures --scenarios flag"
+        ),
+    )
+    generate_parser.add_argument(
+        "--rows",
+        type=int,
+        help=(
+            "Rows to generate per data table on the --with-data "
+            "self-generating path (generator default; invalid together "
+            "with --fixtures, whose row count is already baked into the "
+            "bundle)"
+        ),
+    )
+    generate_parser.add_argument(
+        "--placeholder",
+        action="append",
+        default=[],
+        metavar="CATEGORY:KEY",
+        help=(
+            "Downgrade this boundary's mock body to its ordinary "
+            "placeholder instead of bundle-seeded data (repeatable; the "
+            "fixture stays mocked, just without generated data; valid "
+            "with --with-data or --fixtures; an unmatched pair warns on "
+            "stderr rather than silently doing nothing)"
         ),
     )
     generate_parser.set_defaults(func=_cmd_generate)

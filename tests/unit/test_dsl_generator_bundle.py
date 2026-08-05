@@ -3,6 +3,8 @@
 See docs/plans/2026-08-02-program-data-generation-implementation.md and
 cobol-parser's docs/fixture-bundle-schema.md."""
 
+from pathlib import Path
+
 from cobolparser import parse_cobol
 from cobolparser.generators import ProgramFixtureGenerator
 
@@ -18,6 +20,8 @@ from mockymock.dsl.fixture_bundle import (
 from mockymock.dsl.generator import scaffold_cut
 from mockymock.dsl.model import MockCategory
 from mockymock.dsl.parser import parse_cut
+
+FIXTURES_EXAMPLE_DIR = Path(__file__).parent.parent.parent / "examples" / "fixtures"
 
 # --- real, end-to-end bundles via cobol-parser's own API ---------------------
 
@@ -470,3 +474,211 @@ def test_field_equals_expectation_becomes_expect_line():
     )
     text = scaffold_cut("ORDRPROC", surface, bundle)
     assert "EXPECT WS-TOTAL TO BE 1244" in text
+
+
+# --- `--placeholder`: downgrade a matched fixture's body (Task 4 of the
+# unify-with-data reconciliation plan) -----------------------------------
+
+
+def _fixturedemo_surface_and_bundle():
+    """FIXTUREDEMO.cbl/.bundle.json (examples/fixtures/) are the checked-in
+    Phase 9 worked example -- reused here (not a hand-built bundle) because
+    it already has a real, generator-produced READ boundary (multi-row,
+    tally-branching EVALUATE) AND a real EXEC SQL boundary (single-row) in
+    one program, exactly the two categories the --placeholder tests below
+    need. See tests/integration/test_fixturedemo_golden.py, which loads
+    the same pair the same way."""
+    from mockymock.dsl.fixture_bundle import load_fixture_bundle_file
+
+    program_path = FIXTURES_EXAMPLE_DIR / "FIXTUREDEMO.cbl"
+    bundle = load_fixture_bundle_file(FIXTURES_EXAMPLE_DIR / "FIXTUREDEMO.bundle.json")
+    result = parse_cobol(
+        program_path.read_text(encoding="utf-8"), filename=program_path.name
+    )
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    return surface, bundle
+
+
+def test_placeholder_keys_defaults_to_empty_and_changes_nothing():
+    """The no-new-flags invocation of `generate --with-data` must stay
+    byte-identical -- an explicit empty `placeholder_keys` must produce the
+    exact same text as omitting the parameter entirely."""
+    surface, bundle = _fixturedemo_surface_and_bundle()
+    assert scaffold_cut("FIXTUREDEMO", surface, bundle) == scaffold_cut(
+        "FIXTUREDEMO", surface, bundle, placeholder_keys=frozenset()
+    )
+
+
+def test_placeholder_downgrades_read_boundary_to_its_ordinary_empty_body():
+    """READ has no entry in _PLACEHOLDER_BODIES (see _directive_for), so
+    its ordinary non-data body is empty -- downgrading drops the whole
+    tally-branching EVALUATE, the generated row data, AND the replicated
+    AT END/status handling (_read_body). That is a real, deliberate loss:
+    on FIXTUREDEMO specifically, whose own PERFORM READ-ORDERS UNTIL
+    WS-EOF = "Y" loop depends on that WHEN OTHER branch to terminate (see
+    _read_body's own docstring and commit 3ad3378), a downgraded READ mock
+    would hang if actually run under Docker. --placeholder trades
+    runnability for a smaller body on request; the fixture stays MOCKED
+    (still a MOCK READ directive), just without generated data -- this is
+    exactly what the brief asks for, not a bug. Never wire a
+    --placeholder'd FIXTUREDEMO.cut into the Docker-gated
+    test_committed_fixturedemo_example_passes or the lint-gate corpus."""
+    surface, bundle = _fixturedemo_surface_and_bundle()
+    text = scaffold_cut(
+        "FIXTUREDEMO",
+        surface,
+        bundle,
+        placeholder_keys=frozenset({("READ", "ORDER-FILE")}),
+    )
+    assert "MOCK READ ORDER-FILE" in text
+    assert "ORD001" not in text
+    assert "EVALUATE TRUE" not in text
+    assert "WHEN OTHER" not in text
+    # every other boundary stays data-driven -- only the named pair downgrades
+    assert "CHARLES GARCIA" in text
+
+
+def test_placeholder_downgrades_sql_single_row_boundary():
+    surface, bundle = _fixturedemo_surface_and_bundle()
+    text = scaffold_cut(
+        "FIXTUREDEMO",
+        surface,
+        bundle,
+        placeholder_keys=frozenset({("SQL", "SELECT")}),
+    )
+    assert 'MOCK SQL "SELECT"' in text
+    assert "CHARLES GARCIA" not in text
+    assert "MOVE 0 TO SQLCODE" in text  # SQL's own ordinary placeholder body
+    # the READ boundary stays data-driven -- only the named pair downgrades
+    assert "ORD001" in text
+
+
+def test_placeholder_downgraded_cut_still_round_trips_through_parse_cut():
+    surface, bundle = _fixturedemo_surface_and_bundle()
+    text = scaffold_cut(
+        "FIXTUREDEMO",
+        surface,
+        bundle,
+        placeholder_keys=frozenset({("READ", "ORDER-FILE"), ("SQL", "SELECT")}),
+    )
+    suite = parse_cut(text)
+    assert len(suite.test_cases) == 1
+
+
+def test_placeholder_downgrades_sql_rows_sugar_to_a_plain_placeholder_body():
+    """The ROWS-sugar path (_sql_wants_rows) is the one case where a
+    downgrade must also change the DIRECTIVE LINE itself, not just the
+    body: an un-downgraded multi-row SQL fixture with default status emits
+    `MOCK SQL "..." ROWS`, but the downgraded form is an ordinary
+    `MOCK SQL "..."` with the plain SQL placeholder body
+    (MOVE 0 TO SQLCODE) -- exercised directly against _bundle_directive_for
+    since FIXTUREDEMO's own SQL fixture is single-row and never reaches
+    this branch."""
+    from mockymock.dsl.generator import _bundle_directive_for, _mockymock_boundary_keys
+    from mockymock.dsl.model import MockTestSuite
+    from mockymock.splicer.naming import TallyRegistry
+
+    surface, _ = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    # ORDRPROC_SOURCE has no EXEC SQL of its own; borrow a real CALL site's
+    # surface machinery isn't enough here -- _bundle_directive_for only
+    # needs `mockymock_keys` to resolve a site for its header, and EXEC
+    # categories key on `_unique_prefix` text rather than a parsed name, so
+    # a hand-built surface with one EXEC SQL statement is the direct route.
+    sql_source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SQLROWS.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           EXEC SQL
+               SELECT CUST_ID FROM CUSTOMERS
+           END-EXEC.
+"""
+    result = parse_cobol(sql_source, filename="sqlrows.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    mockymock_keys = _mockymock_boundary_keys(surface)
+    registry = TallyRegistry(MockTestSuite(name="_shadow"))
+
+    fixture = BoundaryFixture(
+        category="SQL",
+        key="SELECT",
+        paragraph="MAIN-PARA",
+        line=1,
+        direction="IN",
+        layout=[_field("CUST-ID")],
+        sequence=[{"CUST-ID": "1"}, {"CUST-ID": "2"}],
+        status={"SQLCODE": "0"},
+    )
+
+    without_placeholder = _bundle_directive_for(fixture, mockymock_keys, registry)
+    assert without_placeholder is not None
+    assert 'MOCK SQL "SELECT" ROWS' in without_placeholder[0]
+
+    with_placeholder = _bundle_directive_for(
+        fixture,
+        mockymock_keys,
+        registry,
+        placeholder_keys=frozenset({("SQL", "SELECT")}),
+    )
+    assert with_placeholder is not None
+    joined = "\n".join(with_placeholder)
+    assert with_placeholder[0] == 'MOCK SQL "SELECT"'  # no ROWS suffix
+    assert "ROWS" not in joined
+    assert "MOVE 0 TO SQLCODE" in joined
+    assert "MOVE 1 TO CUST-ID" not in joined  # generated row data is gone
+
+
+def test_placeholder_on_secondary_grouped_key_still_downgrades():
+    """A multi-file OPEN's non-primary file (see _bundle_directive_for_group
+    -- one physical BoundarySite, one fixture per file from cobol-parser's
+    own BoundaryInventoryAnalyzer) must still trigger the downgrade when
+    the user names the SECONDARY file's key: the shared MOCK OPEN
+    directive is keyed on the primary fixture only, so a placeholder that
+    checked only the primary key would silently no-op for anyone naming
+    the other one -- exactly the "matched no fixture" case the CLI's own
+    unmatched-placeholder warning must never wrongly fire for, since a
+    fixture genuinely exists at that key."""
+    from mockymock.dsl.generator import (
+        _bundle_directive_for_group,
+        _mockymock_boundary_keys,
+    )
+    from mockymock.dsl.model import MockTestSuite
+    from mockymock.splicer.naming import TallyRegistry
+
+    surface, _ = _surface_and_bundle(MULTI_FILE_SOURCE, "multifile.cbl")
+    mockymock_keys = _mockymock_boundary_keys(surface)
+    registry = TallyRegistry(MockTestSuite(name="_shadow"))
+
+    inv_fixture = BoundaryFixture(
+        category="OPEN",
+        key="INV-FILE",
+        paragraph="MAIN-PROCESS",
+        line=1,
+        direction="STATUS_ONLY",
+        status={"WS-INV-STATUS": "00"},
+    )
+    rpt_fixture = BoundaryFixture(
+        category="OPEN",
+        key="RPT-FILE",
+        paragraph="MAIN-PROCESS",
+        line=1,
+        direction="STATUS_ONLY",
+        status={"WS-RPT-STATUS": "35"},
+    )
+
+    without_placeholder = _bundle_directive_for_group(
+        [inv_fixture, rpt_fixture], mockymock_keys, registry
+    )
+    assert without_placeholder is not None
+    assert 'FILE-STATUS IS "35"' in "\n".join(without_placeholder)
+
+    with_placeholder = _bundle_directive_for_group(
+        [inv_fixture, rpt_fixture],
+        mockymock_keys,
+        registry,
+        placeholder_keys=frozenset({("OPEN", "RPT-FILE")}),
+    )
+    assert with_placeholder is not None
+    assert 'FILE-STATUS IS "35"' not in "\n".join(with_placeholder)
