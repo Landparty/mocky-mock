@@ -25,6 +25,74 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fixtures(args: argparse.Namespace) -> int:
+    """Print a cobol-parser FixtureBundle as JSON for editor integrations
+    (the VS Code tree view consumes this). Unlike every other subcommand,
+    stdout must be EXACTLY the JSON document -- every diagnostic, including
+    the plain "no such file" gate, goes to stderr instead of the
+    `_check_input_files` convention the rest of this module uses."""
+    from cobolparser import parse_cobol
+    from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
+    from cobolparser.preprocess import expand_copybooks
+
+    source_path = Path(args.program)
+    if not source_path.is_file():
+        print(f"mockymock fixtures: no such file: {source_path}", file=sys.stderr)
+        return 1
+
+    # Mirrors _cmd_generate's order: expand copybooks (if any --copybook-path
+    # was given) before the parse gate below, so the gate sees the same
+    # source generate_with_scenarios_from_file will eventually parse itself
+    # -- gating on the raw, unexpanded source would let an unresolvable COPY
+    # slide past as a no-op (cobolparser tolerates unexpanded COPY under
+    # FAIL_FAST) instead of being refused here. generate_with_scenarios_from_file
+    # still re-expands and re-parses internally; that duplicate work is the
+    # price of a correctness gate rather than one that just happens to work.
+    raw_source = source_path.read_text(encoding="utf-8")
+    if args.copybook_path:
+        try:
+            expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
+            print(f"mockymock fixtures: {exc}", file=sys.stderr)
+            return 1
+        raw_source = expansion.expanded_source
+
+    # ProgramFixtureGenerator only raises when the AST comes back None
+    # (missing file, unresolved copybook under strict_copybooks). A source
+    # file that merely fails to parse (no recognizable COBOL division, bad
+    # syntax) still yields a placeholder AST -- generate_with_scenarios_from_file
+    # would happily return an empty bundle for it instead of failing, which
+    # would look like a real (if boring) program to the VS Code tree view.
+    # Parse the (possibly copybook-expanded) source once up front so that
+    # case is refused like every other command.
+    result = parse_cobol(raw_source, filename=source_path.name)
+    if not result.success:
+        print(
+            f"mockymock fixtures: {len(result.errors)} parse error(s):", file=sys.stderr
+        )
+        for error in result.errors:
+            print(f"  {error}", file=sys.stderr)
+        return 1
+
+    generator = (
+        ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))
+        if args.rows is not None
+        else ProgramFixtureGenerator()
+    )
+    try:
+        bundle = generator.generate_with_scenarios_from_file(
+            str(source_path),
+            copybook_paths=args.copybook_path,
+            mode=args.scenarios,
+            seed=args.seed,
+        )
+    except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
+        print(f"mockymock fixtures: {exc}", file=sys.stderr)
+        return 1
+    print(bundle.to_json())
+    return 0
+
+
 def _cmd_dashboard(args: argparse.Namespace) -> int:
     from mockymock.web import server
 
@@ -1131,6 +1199,31 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     generate_parser.set_defaults(func=_cmd_generate)
+
+    fixtures_parser = subparsers.add_parser(
+        "fixtures",
+        help=(
+            "Print a FixtureBundle (scenarios, mock data, expectations) as "
+            "JSON for editor integrations"
+        ),
+    )
+    fixtures_parser.add_argument("program")
+    fixtures_parser.add_argument(
+        "--scenarios",
+        choices=["happy", "branches", "all"],
+        default="happy",
+        help="Which scenario set to generate (default happy)",
+    )
+    fixtures_parser.add_argument("--seed", type=int, help="Deterministic RNG seed")
+    fixtures_parser.add_argument(
+        "--rows", type=int, help="Rows to generate per data table (generator default)"
+    )
+    fixtures_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    fixtures_parser.set_defaults(func=_cmd_fixtures)
 
     run_parser = subparsers.add_parser(
         "run",
