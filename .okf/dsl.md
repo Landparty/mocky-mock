@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-08-04T00:00:00Z
+timestamp: 2026-08-05T00:00:00Z
 ---
 
 # Overview
@@ -245,7 +245,7 @@ docs/2026-08-04-record-expectations-design.md for the full design.
 | Class | Fields | Notes |
 |---|---|---|
 | `MockCategory` (Enum) | `CALL, DYNCALL, OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START, UNLOCK, SQL, CICS, DLI, ACCEPT, PARAGRAPH, SECTION` | `.keyword` property maps `DYNCALL → "CALL"`, everything else to its own name |
-| `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS` directive and is mutually exclusive with `body_lines` |
+| `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None, terminal_row: list[tuple[str, str]] \| None` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS` or `MOCK READ <file> ROWS` directive and is mutually exclusive with `body_lines`; `terminal_row` holds a READ ROWS directive's optional `TERMINAL ( FIELD = value, ... )` group (its rows-exhausted `WHEN OTHER` field assignments) — always `None` for SQL rows (SQLCODE 100 is fixed) and for non-ROWS mocks |
 | `DataProvider` | `name, line, header: list[str], rows: list[list[str]], row_lines: list[int]` | Parser-internal only -- never stored on `MockTestSuite`/`MockTestCase`; consumed and discarded by `_expand_providers` before `parse_cut()` returns |
 | `ExpectDirective` | `data_name, expected_value` | one `EXPECT` line |
 | `VerifyDirective` | `category, key, expectation` | `.program_name` same v1-compat alias as `MockDirective` |
@@ -361,26 +361,71 @@ Rules:
   inside a quoted name, so interpolating one raw would make the scaffold
   unparseable.
 
-### `ROWS` cursor sugar
+### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`)
 
 `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
-END-MOCK` is SQL-only grammar (any other category raises `CutParseError`)
-that stores structured rows on `MockDirective.rows` instead of free-form
-`body_lines` — the two are mutually exclusive by construction (the parser
-routes lines to one or the other based on whether `ROWS` appeared on the
-opening line). Row values are unparsed free text (matching `EXPECT ... TO
-BE <value>`'s convention) split on top-level commas — `_split_top_level` in
-`parser.py` is quote-aware, so a value like `EMP-NAME = "SMITH, JR."`
-isn't cut at the comma inside the literal. An empty `ROWS` block (`ROWS`
-immediately followed by `END-MOCK`) is a `CutParseError`, not a silent
-no-op.
+END-MOCK` and `MOCK READ <file> ROWS ( FIELD = value, ... ) ( ... )
+[TERMINAL ( FIELD = value, ... )] END-MOCK` are the only two categories
+`ROWS` is valid on — any other category raises `CutParseError` at parse
+time (`"ROWS is only supported for MOCK SQL and MOCK READ, not MOCK
+<cat>"`). Both store structured rows on `MockDirective.rows` instead of
+free-form `body_lines` — the two are mutually exclusive by construction
+(the parser routes lines to one or the other based on whether `ROWS`
+appeared on the opening line). Row values are unparsed free text
+(matching `EXPECT ... TO BE <value>`'s convention) split on top-level
+commas — `_split_top_level` in `parser.py` is quote-aware, so a value like
+`EMP-NAME = "SMITH, JR."` isn't cut at the comma inside the literal. An
+empty `ROWS` block (`ROWS` immediately followed by `END-MOCK`/`TERMINAL`)
+is a `CutParseError`, not a silent no-op.
+
+**`TERMINAL ( FIELD = value, ... )`** is READ-only grammar (`_TERMINAL_RE`
+in `parser.py`): an optional line inside a `MOCK READ ... ROWS` body, at
+most one per directive, giving the rows-exhausted branch's own field
+assignments instead of the parser's implicit default. Parsed only while
+`in_mock.rows is not None` (i.e. only inside an open `ROWS` block); using
+it inside `MOCK SQL ... ROWS` is a `CutParseError` (SQLCODE's exhaustion
+value is fixed at 100, not overridable), as is a second `TERMINAL` group
+on the same directive (`"duplicate TERMINAL group"`). Stored on
+`MockDirective.terminal_row`, `None` when omitted.
+
+**This grammar is hand-authoring only.** It exists for a human (or an
+editor integration) writing a `.cut` file by hand against `mockymock
+fixtures`' JSON output; `dsl/generator.py`'s bundle-driven scaffold
+(`generate --with-data`/`--fixtures`, below) does **not** emit it — it
+still hand-rolls its own `EVALUATE`/`WHEN <tally> = N` block for a
+multi-row READ sequence (`_read_body`), mirroring this sugar's generated
+shape rather than reusing the sugar's syntax. See
+docs/2026-07-31-csv-sourced-rows-design.md, which proposed both this
+inline form (now shipped) and a still-unimplemented `ROWS FROM CSV
+"<path>"` row-source extension for `SQL` and `READ` alike.
 
 Codegen happens at splice time (`injector.build_rows_block`), not parse
 time, because the tally field name isn't resolved until
-`naming.TallyRegistry` runs post-parse over the whole suite. Each row
-generates a `WHEN <tally> = N` branch that MOVEs its fields and sets
-`SQLCODE` to 0; `WHEN OTHER` (rows exhausted) sets `SQLCODE` to 100 (DB2's
-"not found" code), fixed in v1.
+`naming.TallyRegistry` runs post-parse over the whole suite.
+`build_rows_block(tally_name, rows, *, row_suffix_moves, exhausted_moves)`
+is category-generic — it no longer hardcodes SQLCODE itself — each row
+generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
+`row_suffix_moves` verbatim; `WHEN OTHER` (rows exhausted) appends
+`exhausted_moves` verbatim. The two call sites in
+`splicer/injector.build_site_dispatch` supply category-specific values:
+
+- **SQL**: `row_suffix_moves=["MOVE 0 TO SQLCODE"]`,
+  `exhausted_moves=["MOVE 100 TO SQLCODE"]` (DB2's "not found" code) —
+  fixed in v1, matching the pre-generalization behavior exactly.
+- **READ**: `row_suffix_moves=[]` (a file-op category's implicit
+  default-success `MOVE "00"` already precedes the whole dispatch block
+  when the file declares a `FILE STATUS` field — see the `FILE-STATUS IS`
+  section above — so there is nothing left to append per row).
+  `exhausted_moves` resolves to the directive's own `TERMINAL` group when
+  present (`[f"MOVE {value} TO {field}" for field, value in
+  directive.terminal_row]`), else a default `MOVE "10" TO <status
+  field>` (COBOL's real end-of-file status code) when the file has a
+  resolved `FILE STATUS` field. See [analysis](analysis.md)'s
+  `UNRESOLVED_FILE_STATUS_TARGET` refusal for the case where **neither**
+  exists — `check_test_case` refuses fail-closed before splicing is ever
+  reached, so `build_site_dispatch` raising `ValueError` for that same
+  gap is a should-be-unreachable production invariant, not a normal
+  control path.
 
 ### Bundle-driven scaffold (`generate --with-data`, Phase 8 of gen-fixtures)
 
@@ -415,8 +460,10 @@ paragraph-grouped path described above, unchanged. A real
   naively emitting one directive per key would declare two `MOCK OPEN`
   directives that both match the same physical site
   (`AMBIGUOUS_MOCK`). One representative key per physical site is chosen
-  and its status data merged instead. It returns `(lines, declared_keys)`;
-  `declared_keys` is only the literally-emitted primary keys and gates
+  and its status data merged instead. It returns `(lines, declared_keys,
+  call_count_overrides)` — the third element covers `--placeholder`'s
+  effect on VERIFY counts, see below. `declared_keys` is only the
+  literally-emitted primary keys and gates
   `_render_expectation`'s `VERIFY ... WAS CALLED n TIMES` line — a
   narrower check than "is this key known to mockymock at all" is required
   here, or a `VERIFY` would be emitted for a key this TESTCASE mocked only
@@ -436,9 +483,11 @@ paragraph-grouped path described above, unchanged. A real
   SQLCODE explicitly); a single-row READ/ACCEPT/WRITE gets
   `_single_row_body` (plain field MOVEs); a multi-row READ sequence gets
   `_read_body`'s hand-rolled `EVALUATE TRUE` / `WHEN <tally> = N` chain
-  (mirroring the `ROWS` sugar's own generated shape, since `ROWS` is
-  SQL-only grammar — ordinary `dsl/parser.py` still hard-refuses it for
-  any other category); a multi-row SQL FETCH gets real `ROWS (...)` sugar
+  (mirroring `ROWS` sugar's own generated shape for consistency — `MOCK
+  READ ... ROWS` grammar exists in the parser as of the ROWS/TERMINAL
+  work above, but this bundle-driven scaffold deliberately still emits
+  its own hand-rolled block rather than that syntax; see this section's
+  own note above); a multi-row SQL FETCH gets real `ROWS (...)` sugar
   via `_sql_rows_directive` (`_sql_wants_rows` decides single vs. multi).
   Values render through `_bundle_rendered_value`: numeric-family
   `FieldSpec` categories render bare, everything else quoted and escaped.
@@ -466,10 +515,12 @@ paragraph-grouped path described above, unchanged. A real
   in the generated `.cut` rather than silently emitting an `EVALUATE` with
   no `WHEN OTHER` effect at all.
 - **Expectations** render via `_render_expectation(expectation,
-  declared_keys)`: tier 1 (`call_count`) → `VERIFY <cat> <key> WAS CALLED
-  n TIMES`, gated on `declared_keys` as above; tier 2 (`field_equals`) →
-  `EXPECT <name> TO BE <value>`; tier 3 (`stub`) → `*> STUB EXPECT <name>`
-  comment when `ref` is a real data-name, or nothing when `ref` is a
+  declared_keys, call_count_overrides=None)`: tier 1 (`call_count`) →
+  `VERIFY <cat> <key> WAS CALLED n TIMES`, gated on `declared_keys` as
+  above, `n` normally `expectation.value` but see `--placeholder`'s
+  `call_count_overrides` below; tier 2 (`field_equals`) → `EXPECT <name>
+  TO BE <value>`; tier 3 (`stub`) → `*> STUB EXPECT <name>` comment when
+  `ref` is a real data-name, or nothing when `ref` is a
   `"CATEGORY:KEY"`-shaped boundary-level reference (`_is_boundary_level_ref`
   detects this via the colon, since COBOL names never contain one) — see
   `analysis.md`'s stub-expectation scanner for how a human later promotes
@@ -480,6 +531,88 @@ paragraph-grouped path described above, unchanged. A real
   `--scenarios` modes (happy/branches/all) and asserts `mockymock lint`
   (via `cli.checks.run_static_checks`, Docker-free) finds zero problems —
   "a generator that emits a refusable `.cut` is worse than none."
+
+### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
+
+`scaffold_cut`'s fourth parameter, `placeholder_keys: frozenset[tuple[str,
+str]] = frozenset()` (bundle-side string category paired with the
+fixture's own key, e.g. `("READ", "ORDER-FILE")` — matching how the CLI
+uppercases `--placeholder CATEGORY:KEY`'s category but leaves the key
+case-sensitive), only has an effect with a bundle; without one every site
+already gets a placeholder body. `--rows N` doesn't touch `generator.py`
+at all — it maps to `DataGeneratorOptions(rows=N)` on the
+`ProgramFixtureGenerator` construction in `cli/main.py` (`_cmd_generate`'s
+`--with-data` branch, mirroring `_cmd_fixtures`), so by the time a bundle
+reaches `scaffold_cut` its row counts are already baked in exactly like
+`--fixtures FILE`'s are — hence `--rows` combined with `--fixtures` is a
+clean CLI-level rejection (source of truth: `mockymock/cli/main.py`, not
+this module).
+
+**The downgrade** (`_bundle_directive_for`/`_bundle_directive_for_group`):
+a fixture named by `placeholder_keys` gets its body stripped of seeded
+data but stays MOCKED — never dropped to nothing, since an unmocked
+reachable site is a refusal, not a scaffolding choice. For every category
+whose ordinary body carries no loop-termination machinery
+(OPEN/CLOSE/START/UNLOCK/DELETE's status-only body, CALL/DYNCALL/ACCEPT/
+CICS/DLI, a single-row SQL fixture), the downgrade reuses the ordinary
+bundle-less placeholder body (`_placeholder_body_for`, factored out so
+the bundle-driven and bundle-less paths can never drift). Two categories
+get a DEDICATED downgrade instead, because their non-downgraded body is
+what makes the program's own loop actually terminate, and the
+runnable-by-construction invariant covers every generated `.cut`, not
+just the no-`--placeholder` ones:
+
+- **READ**: downgrades to `_read_exhaustion_lines(...)` — the exact same
+  helper `_read_body` uses for its own `WHEN OTHER` branch AND for an
+  entirely empty `sequence` (a `--rows 0` bundle, or one of cobol-parser's
+  own "empty input" scenario family fixtures) — an "immediately at end"
+  body (`fixture.terminal`'s status MOVE(s) plus any safely-replicated
+  `AT END` MOVEs), never an empty one. An empty downgraded body would
+  silently drop the program's own EOF-flag idiom and hang its `PERFORM
+  ... UNTIL <eof-flag>` loop forever — the exact class of bug commit
+  `3ad3378` fixed for the ordinary multi-row case, closed here for the
+  zero-row and downgraded cases too.
+- **SQL**, only when this fixture would otherwise have used `ROWS` sugar
+  (`_sql_wants_rows`): downgrades to `_SQL_ROWS_EXHAUSTED_BODY` (`["MOVE
+  100 TO SQLCODE"]`, mirroring `splicer/injector.py`'s own hardcoded
+  `MOCK SQL ... ROWS` exhausted-branch value), not the ordinary SQL
+  placeholder's `MOVE 0 TO SQLCODE` (permanent "more rows available"),
+  which would hang a `PERFORM UNTIL SQLCODE = 100` cursor-fetch loop the
+  same way an empty READ body would.
+
+**VERIFY recompute** (`CallCountOverride`, fix round 2): a downgrade that
+changes what a mock body actually does at runtime can also change how
+many times the program actually reaches it — a downgraded READ signals
+EOF on its very first call, so a `PERFORM ... UNTIL <eof-flag>` loop
+calls it exactly once, not the bundle's original un-downgraded sequence
+length. Rendering the bundle's stale original count would pin a `VERIFY
+... WAS CALLED N TIMES` the generated file cannot itself satisfy — the
+runnable-by-construction invariant covers assertions too, not just mock
+bodies. `_bundle_directive_for`/`_bundle_directive_for_group` compute a
+`CallCountOverride(count=1)` for a downgraded READ that still carries a
+real termination signal (`fixture.terminal` or a replicated `AT END`
+MOVE) and for a downgraded SQL-ROWS fixture unconditionally (its body is
+always an unconditional literal MOVE, no replication gap possible); when
+a downgraded READ's exhaustion body carries NO termination signal at all
+(no `FILE STATUS` field and nothing `_replicated_at_end_moves` could
+safely replicate), `CallCountOverride(demote_reason=...)` instead — the
+real count is not knowable by construction. `_bundle_mock_directives`
+collects these per `(category, key)` into `call_count_overrides` (same
+seam that decided each body, so `_render_expectation` never re-derives
+the downgrade decision); `_render_expectation` renders `override.count`
+in place of `expectation.value` when present, or — for a `demote_reason`
+— a `*>` comment instead of a `VERIFY` line at all: `*> VERIFY <directive>
+WAS CALLED <count not exact by construction after --placeholder downgrade
+-- <reason>>`. Every other category's call count is program-flow-driven
+(how many times the PROCEDURE DIVISION reaches that statement),
+unaffected by which data the mock body carries — no override for them.
+
+Deliberately NOT covered by any of this: `--rows N` combined with
+`--scenarios all`'s fixed "empty input" family, which pins its own
+sequence length to 0 on the cobol-parser side regardless of `--rows` (see
+`cobolparser.generators.scenarios._empty_input_scenario`) — `--rows`
+changes the generator's *default* row count, not a scenario family that
+deliberately overrides it.
 
 # Gotchas
 

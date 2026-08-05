@@ -581,10 +581,16 @@ def _read_body(
     exists to prevent for the ordinary multi-row case.
 
     Mirrors `ROWS` sugar's own internal `EVALUATE`/`WHEN tally = N` shape
-    (see .okf/splicer.md) for consistency, since READ has no `ROWS`
-    grammar of its own to reach for (v1 -- see
-    docs/2026-07-31-csv-sourced-rows-design.md's still-proposed
-    extension)."""
+    (see .okf/splicer.md) for consistency. `MOCK READ ... ROWS
+    ( ... ) TERMINAL ( ... )` is real hand-authoring grammar as of the
+    unify-with-data Task 2 DSL/splicer work (`dsl/parser.py`,
+    `splicer/injector.build_rows_block`/`build_site_dispatch`) -- but this
+    bundle-driven scaffold still emits its own hand-rolled `EVALUATE`
+    here rather than that sugar; wiring the scaffold to emit `ROWS`
+    syntax for READ instead of duplicating its shape is future work (see
+    docs/2026-07-31-csv-sourced-rows-design.md, which also still proposes
+    the separate, unimplemented `ROWS FROM CSV` row-source extension for
+    both `READ` and `SQL`)."""
     sequence = fixture.sequence
     at_end = getattr(site.statement, "at_end_clause", None) or []
     replicated = _replicated_at_end_moves(site.statement)
@@ -612,9 +618,13 @@ def _read_body(
 
 
 def _sql_wants_rows(fixture: BoundaryFixture) -> bool:
-    """`ROWS (...)` sugar hardcodes SQLCODE 0-on-match/100-on-exhaustion
-    (splicer/injector.build_rows_block) -- it cannot express an
-    error-status override, so a scenario pinning one (an "error status"
+    """`ROWS (...)` sugar hardcodes SQLCODE 0-on-match/100-on-exhaustion --
+    not in `splicer/injector.build_rows_block` itself (generalized to a
+    `row_suffix_moves`/`exhausted_moves` parameter pair so it can also
+    drive `MOCK READ ... ROWS`), but at its SQL call site inside
+    `splicer/injector.build_site_dispatch`, which passes the literal
+    `["MOVE 0 TO SQLCODE"]`/`["MOVE 100 TO SQLCODE"]` -- it cannot express
+    an error-status override, so a scenario pinning one (an "error status"
     fixed-family scenario, or a branch witness on SQLCODE) must fall back
     to a plain body with an explicit MOVE instead."""
     return len(fixture.sequence) > 1 and all(

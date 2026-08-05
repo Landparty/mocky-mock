@@ -1257,7 +1257,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Rows to generate per data table on the --with-data "
             "self-generating path (generator default; invalid together "
             "with --fixtures, whose row count is already baked into the "
-            "bundle)"
+            "bundle). A scenario family that pins its own row count "
+            "(e.g. --scenarios all's fixed 'empty input' family) ignores "
+            "this and always generates zero rows for that scenario"
         ),
     )
     generate_parser.add_argument(
@@ -1291,7 +1293,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fixtures_parser.add_argument("--seed", type=int, help="Deterministic RNG seed")
     fixtures_parser.add_argument(
-        "--rows", type=int, help="Rows to generate per data table (generator default)"
+        "--rows",
+        type=int,
+        help=(
+            "Rows to generate per data table (generator default). A "
+            "scenario family that pins its own row count (e.g. "
+            "--scenarios all's fixed 'empty input' family) ignores this "
+            "and always generates zero rows for that scenario"
+        ),
     )
     fixtures_parser.add_argument(
         "--copybook-path",

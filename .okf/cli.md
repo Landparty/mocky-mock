@@ -1,16 +1,16 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, run, debug, mutate, lint, collect, dashboard, export) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, generate, fixtures, run, debug, mutate, lint, collect, dashboard, export) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-08-04T00:00:00Z
+timestamp: 2026-08-05T00:00:00Z
 ---
 
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines nine subcommands —
-`setup`, `generate`, `run`, `debug`, `mutate`, `lint`, `collect`, `dashboard`, `export` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines ten subcommands —
+`setup`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `dashboard`, `export` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -21,6 +21,7 @@ parser install to resolve.
 ```
 mockymock setup     -> runtime.docker_toolchain only (build image, start container)
 mockymock generate  -> parse -> analysis.mock_surface -> dsl.generator  (no Docker)
+mockymock fixtures  -> parse -> cobolparser.ProgramFixtureGenerator -> JSON on stdout  (no Docker, no mockymock analysis at all)
 mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
 mockymock debug     -> cli.checks (static) -> splicer -> runtime (debug=True) -> debug.adapter (DAP over stdio)
 mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.runner (per-mutant: cli.checks -> splicer -> runtime) -> mutation.report
@@ -47,7 +48,7 @@ On `DockerNotAvailableError`, prints `mockymock setup: <exc>` and exits 1.
 Optional in normal workflows: `mockymock run` calls `ensure_toolchain()` itself,
 so `setup` exists mainly for a fast up-front check / CI warm-up.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...]`
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
@@ -56,48 +57,72 @@ Flow (`_cmd_generate`):
 
 1. Check `program` exists (`_check_input_files` -- clean `no such file`
    message, exit 1, no traceback).
-2. Resolve the fixture bundle (Phase 8 of the gen-fixtures initiative;
+2. Flag-only validation, before any file is read (unify-with-data Task 4):
+   every `--placeholder` value must contain a `:` (`CATEGORY:KEY`) or exit
+   1 with `mockymock generate: --placeholder must be CATEGORY:KEY, got
+   <repr>` on stderr; the category half is uppercased, the key half kept
+   exactly as given (`category.upper(), key` — matches a bundle fixture's
+   own case-sensitive key, since the bundle's `category` string is always
+   uppercase already). `--rows N` combined with `--fixtures PATH` exits 1
+   with `mockymock generate: --rows is not valid together with
+   --fixtures -- that bundle's row count is already baked in; use --rows
+   with --with-data's self-generating path instead` on stderr — that
+   bundle's row counts are already fixed by whoever generated the JSON.
+3. Resolve the fixture bundle (Phase 8 of the gen-fixtures initiative;
    `bundle` stays `None` if neither flag is given, giving the original
    bundle-less scaffold below): `--fixtures PATH` loads a pre-generated
    bundle JSON via `load_fixture_bundle_file` (fails closed with a printed
    message on an unsupported `bundle_version` or malformed JSON);
    `--with-data` instead calls cobol-parser's
-   `ProgramFixtureGenerator().generate_with_scenarios_from_file(program,
-   mode=args.scenarios, seed=args.seed, copybook_paths=...)` directly (no
-   subprocess — mockymock calls the Python API) and loads its `.to_dict()`
-   output the same way. A bundle with zero scenarios (possible for
-   `--scenarios branches|all` on a program with no branch arms; `happy`
-   always produces exactly one) refuses with a printed message and exit 1
-   — nothing to scaffold a TESTCASE from.
-3. Read `program`; if `--copybook-path` given (repeatable), run
+   `ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))` when
+   `args.rows is not None` (else the plain, default-options
+   `ProgramFixtureGenerator()` — `is not None` deliberately, so `--rows 0`
+   is honored rather than treated as falsy), then
+   `.generate_with_scenarios_from_file(program, mode=args.scenarios,
+   seed=args.seed, copybook_paths=...)` on it directly (no subprocess —
+   mockymock calls the Python API) and loads its `.to_dict()` output the
+   same way. A bundle with zero
+   scenarios (possible for `--scenarios branches|all` on a program with no
+   branch arms; `happy` always produces exactly one) refuses with a
+   printed message and exit 1 — nothing to scaffold a TESTCASE from.
+4. If any `--placeholder` pairs were given, warn (not refuse) on stderr
+   for each one that matched no fixture anywhere in the resolved bundle's
+   scenarios: `mockymock generate: warning: --placeholder CATEGORY:KEY
+   matched no fixture` — command still exits 0 for this alone; a
+   deliberate improvement over the parked `feature/generate-with-data`
+   branch's own silent no-op on the same case.
+5. Read `program`; if `--copybook-path` given (repeatable), run
    `expand_copybooks` first and use the expanded source from then on.
    `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
    on a lossy copybook decode before the corrupted text is ever parsed.
-4. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
+6. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
    and exit 1 (never reaches analysis). On a successful parse,
    `check_whole_program(result)` still refuses (PARSE_WARNING, exit 1) if
    `ParseResult.warnings` reports dropped statements — a scaffold built from
    an incomplete AST would silently miss boundaries.
-5. `check_unresolved_copybooks(raw_source)` — a **refusal** check run even
+7. `check_unresolved_copybooks(raw_source)` — a **refusal** check run even
    though the program parsed; any reason printed as
    `mockymock generate: refused (<code>): <message>` and exit 1.
-6. `analyze(result.ast)` -> `mock_surface` (the boundary-site inventory).
-7. `normalize_fixed_format` the source, then `annotate_nested_sites` +
+8. `analyze(result.ast)` -> `mock_surface` (the boundary-site inventory).
+9. `normalize_fixed_format` the source, then `annotate_nested_sites` +
    `collect_scope_map` to mark which nested boundary statements are
    spliceable — this must run before `scaffold_cut` so the generated `.cut`
    only proposes cases that `run` will actually accept.
-8. `scaffold_cut(program_name, surface, bundle)` builds the `.cut` text
-   (`bundle=None` scaffolds one `TESTCASE` per paragraph as before; a real
-   bundle scaffolds one `TESTCASE` per scenario with generated data and
-   `EXPECT`/`VERIFY`/stub-comment expectations instead of placeholder
-   bodies — see `dsl.md`'s "Bundle-driven scaffold" section); written to
-   `--output` or `<program>.cut` (suffix-swapped) by default.
-9. Prints a `wrote N test case(s) -> path` summary (plus a `data-driven
-   from a fixture bundle (seed=N)` line when a bundle was used), then
-   `_report_unsupported_boundaries(surface)`. If the bundle's own
-   `(category, key)` set disagreed with `mock_surface`'s,
-   `_warn_on_key_mismatch` already printed a loud stderr warning during
-   step 8 — see `dsl.md`.
+10. `scaffold_cut(program_name, surface, bundle, frozenset(placeholder_pairs))`
+    builds the `.cut` text (`bundle=None` scaffolds one `TESTCASE` per
+    paragraph as before; a real bundle scaffolds one `TESTCASE` per
+    scenario with generated data and `EXPECT`/`VERIFY`/stub-comment
+    expectations instead of placeholder bodies, with any `--placeholder`-named
+    fixture's body downgraded and its tier-1 `call_count` VERIFY
+    recomputed where the downgrade changed it — see `dsl.md`'s
+    "Bundle-driven scaffold" and "`--rows`/`--placeholder`" sections);
+    written to `--output` or `<program>.cut` (suffix-swapped) by default.
+11. Prints a `wrote N test case(s) -> path` summary (plus a `data-driven
+    from a fixture bundle (seed=N)` line when a bundle was used), then
+    `_report_unsupported_boundaries(surface)`. If the bundle's own
+    `(category, key)` set disagreed with `mock_surface`'s,
+    `_warn_on_key_mismatch` already printed a loud stderr warning during
+    step 10 — see `dsl.md`.
 
 `_report_unsupported_boundaries` is the only non-trivial logic in this module:
 it walks `surface.boundary_sites` and names every site that stays unmockable —
@@ -109,6 +134,50 @@ time — the scaffold is emitted regardless — but it documents exactly which
 test cases `run` will later refuse if a case's PERFORM reaches one of these
 sites. Comment in the source explicitly frames this as "so the scaffold is
 never mistaken for complete coverage of the program's outputs."
+
+## `mockymock fixtures <program> [--scenarios happy|branches|all] [--seed N] [--rows N] [--copybook-path DIR ...]`
+
+Prints a cobol-parser `FixtureBundle` (scenarios, generated mock data,
+expectations) as JSON on stdout, for editor integrations (the VS Code
+tree view consumes this) rather than for scaffolding a `.cut` directly —
+that is `generate --with-data`'s job. Unlike every other subcommand,
+`_cmd_fixtures` does not follow the `_check_input_files` convention: it
+has its own `Path.is_file()` gate, and **stdout must be EXACTLY the JSON
+document** — every diagnostic, including the plain "no such file" message,
+goes to stderr instead, so a caller can always safely `json.loads(stdout)`
+on exit 0 without stripping any banner text.
+
+Flow (`_cmd_fixtures`):
+
+1. `program` must exist, or `mockymock fixtures: no such file: <path>` on
+   stderr, exit 1.
+2. If `--copybook-path` given (repeatable), `expand_copybooks` runs on the
+   raw source first (any exception printed verbatim to stderr, exit 1) —
+   deliberately mirrors `_cmd_generate`'s own ordering (expand before the
+   parse gate below), so this gate sees the same source
+   `generate_with_scenarios_from_file` will itself go on to parse
+   internally: gating on the raw, unexpanded source would let an
+   unresolvable `COPY` slide past as a no-op (cobolparser tolerates
+   unexpanded `COPY` under `FAIL_FAST`) instead of being refused here.
+   `generate_with_scenarios_from_file` still re-expands and re-parses
+   internally — that duplicate work is the price of a correctness gate
+   rather than one that merely happens to work.
+3. `parse_cobol` the (possibly expanded) source; on failure, print
+   `mockymock fixtures: N parse error(s):` plus each error to stderr, exit
+   1. Needed because `ProgramFixtureGenerator` itself only raises when the
+   AST comes back `None` entirely (missing file, an unresolved copybook
+   under strict mode) — a source that merely fails to parse (bad syntax,
+   no recognizable division) still yields a placeholder AST, and
+   `generate_with_scenarios_from_file` would happily return an empty
+   bundle for it instead of failing, which would look like a real (if
+   boring) program to a caller.
+4. `ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))` when
+   `args.rows is not None` (else the plain `ProgramFixtureGenerator()` —
+   `is not None` deliberately, so `--rows 0` is honored), then
+   `.generate_with_scenarios_from_file(program, copybook_paths=...,
+   mode=args.scenarios, seed=args.seed)` — any exception printed verbatim
+   to stderr as `mockymock fixtures: <exc>`, exit 1.
+5. `print(bundle.to_json())` to stdout, exit 0.
 
 ## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--trace] [--trace-json PATH] [--record-expectations]`
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `mockymock fixtures <program> [--scenarios happy|branches|all] [--seed N] [--rows N] [--copybook-path DIR]...` — new subcommand: prints a cobolparser `FixtureBundle` (scenarios, seeded mock data, expectations) as JSON on stdout, for editor integrations. No Docker dependency; stdout is JSON only, all diagnostics go to stderr.
+- `mockymock generate --with-data [--rows N] [--placeholder CATEGORY:KEY]...` (also valid with `--fixtures`) — `--rows N` seeds the self-generating fixture bundle's row count (invalid together with `--fixtures`, whose row count is already baked in; `--rows 0` is honored, not treated as falsy). `--placeholder` (repeatable) downgrades a matched fixture's mock body to its ordinary non-data placeholder while keeping it mocked; a malformed value (no `:`) exits 1, an unmatched pair warns on stderr. A downgraded loop-bearing boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) keeps real loop-termination semantics instead of silently hanging, and its tier-1 `VERIFY ... WAS CALLED n TIMES` is recomputed to match the downgraded body's actual call count (or demoted to a `*>` comment when that count isn't knowable by construction).
+- `.cut` DSL: `ROWS` now applies to `MOCK READ <file> ROWS` (previously `MOCK SQL "..." ROWS` only), with an optional READ-only `TERMINAL ( FIELD = value, ... )` group for the rows-exhausted branch. Hand-authoring grammar only — the bundle-driven `generate --with-data`/`--fixtures` scaffold does not emit it.
+
+### Changed
+
+- `refusal.check_test_case` gained a second `UNRESOLVED_FILE_STATUS_TARGET` trigger: a `MOCK READ ... ROWS` mock with neither its own `TERMINAL` group nor a declared `FILE STATUS` field on that file now refuses fail-closed instead of generating a read loop with no way to terminate.
+- `splicer/injector.build_rows_block` generalized from a SQL-only function that hardcoded SQLCODE 0/100 to `build_rows_block(tally_name, rows, *, row_suffix_moves, exhausted_moves)`, with the SQLCODE literals moved to their SQL call site in `build_site_dispatch` and a new READ call site alongside it.
+- Bumped the vendored `cobolparser` pin to `ff64b25` (includes upstream PR #110's gen-fixtures fixes and PR #112's EJECT support).
+
 ## [0.3.0](https://github.com/samdion1994/mocky-mock/compare/v0.2.0...v0.3.0) (2026-08-04)
 
 
