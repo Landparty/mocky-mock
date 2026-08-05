@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Work in `C:/Users/samdi/Documents/workspace/legacylens/mocky-mock/.worktrees/unify-with-data` only. The parked worktree `../generate-with-data` is read-only source material.
-- cobolparser pin target: `2a56db07` (cobol-parser origin/main, PR #110 merge) — newest; supersedes both main's `b3e2b32` and the branch's `565b764`.
+- cobolparser pin target: `ff64b25c377150da432c57f39c43a0357ffeba86` (cobol-parser origin/main at reconciliation time — includes PR #110's gen-fixtures fixes and PR #112's EJECT support) — supersedes main's `b3e2b32`, the branch's `565b764`, and this plan's earlier `2a56db0` note *(bumped 2026-08-05 during Task 1: origin moved again; the sibling checkout's local docs commit was rebased onto it as `7324aa8`)*.
 - Main's released behavior must not regress: `generate`, `generate --with-data`, `generate --fixtures`, `run --record-expectations`, `export`, `dashboard` all keep today's semantics; existing tests keep passing unmodified (adapting a test is a finding, not a default).
 - Every generated `.cut` round-trips through `parse_cut()`.
 - Full suite green (`python -m pytest tests/ -q`) with the coverage floor before any task is called done.
