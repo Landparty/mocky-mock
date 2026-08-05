@@ -3,6 +3,7 @@
 See docs/plans/2026-08-02-program-data-generation-implementation.md and
 cobol-parser's docs/fixture-bundle-schema.md."""
 
+import re
 from pathlib import Path
 
 from cobolparser import parse_cobol
@@ -595,7 +596,11 @@ def test_placeholder_downgrades_sql_rows_sugar_to_an_exhausted_placeholder_body(
     machinery would have produced (`_SQL_ROWS_EXHAUSTED_BODY`) --
     exercised directly against _bundle_directive_for since FIXTUREDEMO's
     own SQL fixture is single-row and never reaches this branch."""
-    from mockymock.dsl.generator import _bundle_directive_for, _mockymock_boundary_keys
+    from mockymock.dsl.generator import (
+        CallCountOverride,
+        _bundle_directive_for,
+        _mockymock_boundary_keys,
+    )
     from mockymock.dsl.model import MockTestSuite
     from mockymock.splicer.naming import TallyRegistry
 
@@ -632,23 +637,30 @@ def test_placeholder_downgrades_sql_rows_sugar_to_an_exhausted_placeholder_body(
         status={"SQLCODE": "0"},
     )
 
-    without_placeholder = _bundle_directive_for(fixture, mockymock_keys, registry)
-    assert without_placeholder is not None
+    result_without = _bundle_directive_for(fixture, mockymock_keys, registry)
+    assert result_without is not None
+    without_placeholder, override_without = result_without
     assert 'MOCK SQL "SELECT" ROWS' in without_placeholder[0]
+    assert override_without is None  # bundle's own call_count is still exact
 
-    with_placeholder = _bundle_directive_for(
+    result_with = _bundle_directive_for(
         fixture,
         mockymock_keys,
         registry,
         placeholder_keys=frozenset({("SQL", "SELECT")}),
     )
-    assert with_placeholder is not None
+    assert result_with is not None
+    with_placeholder, override_with = result_with
     joined = "\n".join(with_placeholder)
     assert with_placeholder[0] == 'MOCK SQL "SELECT"'  # no ROWS suffix
     assert "ROWS" not in joined
     assert "MOVE 100 TO SQLCODE" in joined  # exhausted, not permanent success
     assert "MOVE 0 TO SQLCODE" not in joined
     assert "MOVE 1 TO CUST-ID" not in joined  # generated row data is gone
+    # fix round 2: the downgraded body fires its exhaustion MOVE
+    # unconditionally on the very first call, so the real call count is
+    # exactly 1 -- not the un-downgraded bundle's original multi-row count
+    assert override_with == CallCountOverride(count=1)
 
 
 def test_placeholder_on_secondary_grouped_key_still_downgrades():
@@ -689,17 +701,155 @@ def test_placeholder_on_secondary_grouped_key_still_downgrades():
         status={"WS-RPT-STATUS": "35"},
     )
 
-    without_placeholder = _bundle_directive_for_group(
+    result_without = _bundle_directive_for_group(
         [inv_fixture, rpt_fixture], mockymock_keys, registry
     )
-    assert without_placeholder is not None
+    assert result_without is not None
+    without_placeholder, override_without = result_without
     assert 'FILE-STATUS IS "35"' in "\n".join(without_placeholder)
+    assert override_without is None
 
-    with_placeholder = _bundle_directive_for_group(
+    result_with = _bundle_directive_for_group(
         [inv_fixture, rpt_fixture],
         mockymock_keys,
         registry,
         placeholder_keys=frozenset({("OPEN", "RPT-FILE")}),
     )
-    assert with_placeholder is not None
+    assert result_with is not None
+    with_placeholder, override_with = result_with
     assert 'FILE-STATUS IS "35"' not in "\n".join(with_placeholder)
+    # STATUS_ONLY has no loop-termination concept -- no override needed
+    # even when downgraded, per fix round 2's category-scoped fix
+    assert override_with is None
+
+
+# --- fix round 2: recomputed VERIFY call_count for a downgraded boundary ----
+
+
+def test_placeholder_downgraded_read_gets_a_corrected_verify_count():
+    """Critical bug found in review, empirically reproduced: a downgraded
+    READ fires its exhaustion MOVEs unconditionally on the very first
+    call (no EVALUATE/tally branching left, see the previous test) --
+    FIXTUREDEMO's own PERFORM READ-ORDERS UNTIL WS-EOF = "Y" loop calls
+    READ exactly ONCE at runtime, not the bundle's original un-downgraded
+    11 (10 data rows + 1 exhaustion read). Rendering the bundle's stale
+    `VERIFY READ ORDER-FILE WAS CALLED 11 TIMES` unchanged pins an
+    assertion the generated .cut cannot itself satisfy -- a deterministic
+    self-inflicted test failure. The whole generated file must be
+    runnable by construction, assertions included, not just the mock
+    bodies."""
+    surface, bundle = _fixturedemo_surface_and_bundle()
+    text = scaffold_cut(
+        "FIXTUREDEMO",
+        surface,
+        bundle,
+        placeholder_keys=frozenset({("READ", "ORDER-FILE")}),
+    )
+    assert "VERIFY READ ORDER-FILE WAS CALLED 11 TIMES" not in text
+    assert "VERIFY READ ORDER-FILE WAS CALLED 1 TIMES" in text
+
+
+def test_placeholder_downgraded_sql_rows_gets_a_corrected_verify_count():
+    """Same class of bug as the READ case above, exercised through the
+    full scaffold_cut pipeline (not just _bundle_directive_for's return
+    value) for the SQL ROWS-sugar path: a downgraded multi-row SQL
+    fixture's real call count is 1 (exhaustion on the first FETCH), not
+    the bundle's original multi-row count."""
+    surface, _ = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    sql_source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SQLROWS.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           EXEC SQL
+               SELECT CUST_ID FROM CUSTOMERS
+           END-EXEC.
+"""
+    result = parse_cobol(sql_source, filename="sqlrows.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+
+    bundle = FixtureBundle(
+        bundle_version=1,
+        program_name="SQLROWS",
+        seed=1,
+        scenarios=[
+            Scenario(
+                name="happy path",
+                entry="MAIN-PARA",
+                fixtures=[
+                    BoundaryFixture(
+                        category="SQL",
+                        key="SELECT",
+                        paragraph="MAIN-PARA",
+                        line=1,
+                        direction="IN",
+                        layout=[_field("CUST-ID")],
+                        sequence=[{"CUST-ID": "1"}, {"CUST-ID": "2"}],
+                        status={"SQLCODE": "0"},
+                    )
+                ],
+                expectations=[
+                    Expectation(kind="call_count", ref="SQL:SELECT", value=3)
+                ],
+            )
+        ],
+    )
+    text = scaffold_cut(
+        "SQLROWS", surface, bundle, placeholder_keys=frozenset({("SQL", "SELECT")})
+    )
+    assert 'VERIFY SQL "SELECT" WAS CALLED 3 TIMES' not in text
+    assert 'VERIFY SQL "SELECT" WAS CALLED 1 TIMES' in text
+
+
+def test_placeholder_downgraded_non_loop_category_verify_is_unchanged():
+    """A downgraded CALL's VERIFY is program-flow-driven (how many times
+    the PROCEDURE DIVISION reaches that CALL statement), entirely
+    unaffected by which data the mock body happens to carry -- unlike
+    READ/SQL-ROWS, no recomputation is needed or correct here."""
+    surface, bundle = _fixturedemo_surface_and_bundle()
+    text = scaffold_cut(
+        "FIXTUREDEMO",
+        surface,
+        bundle,
+        placeholder_keys=frozenset({("CALL", "LOGALERT")}),
+    )
+    assert 'VERIFY CALL "LOGALERT" WAS CALLED 1 TIMES' in text
+    assert "MOVE 0 TO RETURN-CODE" in text  # CALL's own ordinary placeholder body
+
+
+def test_placeholder_downgraded_read_with_no_termination_signal_demotes_verify():
+    """When a downgraded READ's exhaustion body carries NO real MOVE at
+    all (no FILE STATUS field, and the source AT END clause's own MOVE
+    could not be safely replicated -- IDENTIFIER_SOURCED_AT_END_SOURCE's
+    `MOVE WS-DONE-FLAG TO WS-EOF` is exactly this shape), the real call
+    count is genuinely unknowable by construction: emitting a speculative
+    VERIFY number would be worse than the original bug, since it LOOKS
+    exact but isn't. The VERIFY is demoted to a `*>` comment naming why
+    instead. Also confirms the demoted output is not itself a NEW way to
+    produce a broken .cut: the MOCK READ body is a comment-only `*> TODO`
+    line (not truly empty text), which parse_cut accepts and lint does
+    not flag as UNMOCKED/VERIFY_WITHOUT_MOCK -- the demoted VERIFY comment
+    is not a real directive lint would try to match against a MOCK at all."""
+    from mockymock.analysis.refusal import check_test_case
+
+    surface, bundle = _surface_and_bundle(
+        IDENTIFIER_SOURCED_AT_END_SOURCE, "identsrc.cbl"
+    )
+    result = parse_cobol(IDENTIFIER_SOURCED_AT_END_SOURCE, filename="identsrc.cbl")
+    text = scaffold_cut(
+        "IDENTSRC",
+        surface,
+        bundle,
+        placeholder_keys=frozenset({("READ", "INV-FILE")}),
+    )
+    # no real (numeric, assertable) VERIFY line for READ -- only the
+    # demoted comment naming why one can't be emitted
+    assert not re.search(r"^\s*VERIFY READ INV-FILE WAS CALLED \d", text, re.MULTILINE)
+    assert "*> VERIFY READ INV-FILE WAS CALLED" in text
+    assert "not exact by construction" in text
+    # the demoted output round-trips and still lints clean
+    suite = parse_cut(text)
+    assert len(suite.test_cases) == 1
+    assert check_test_case(surface, result.ast, suite.test_cases[0]) == []

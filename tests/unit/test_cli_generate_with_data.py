@@ -234,6 +234,13 @@ def test_rows_with_fixtures_file_is_rejected(tmp_path, capsys):
 
 
 def test_placeholder_downgrades_read_boundary_via_cli(tmp_path):
+    """Fix round 2: also pins the empirically-reproduced critical bug --
+    `generate --fixtures FIXTUREDEMO.bundle.json --placeholder
+    READ:ORDER-FILE` used to keep the bundle's original `VERIFY READ
+    ORDER-FILE WAS CALLED 11 TIMES` even though the downgraded body's
+    real behavior (exhaustion on the very first call) only reaches READ
+    once -- a generated .cut that deterministically fails its own
+    assertion. Corrected to `1 TIMES`."""
     out = tmp_path / "o.cut"
     rc = main(
         [
@@ -251,6 +258,8 @@ def test_placeholder_downgrades_read_boundary_via_cli(tmp_path):
     text = out.read_text(encoding="utf-8")
     assert "MOCK READ ORDER-FILE" in text  # still mocked
     assert "ORD001" not in text  # just not with seeded data
+    assert "VERIFY READ ORDER-FILE WAS CALLED 11 TIMES" not in text
+    assert "VERIFY READ ORDER-FILE WAS CALLED 1 TIMES" in text
 
 
 def test_placeholder_downgrades_exec_sql_boundary_via_cli(tmp_path):

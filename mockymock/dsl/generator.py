@@ -49,6 +49,7 @@ gets its own TESTCASE, even near-duplicates.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 
 from mockymock.analysis.mock_surface import BoundarySite, MockSurface
 from mockymock.dsl.fixture_bundle import (
@@ -650,16 +651,47 @@ def _sql_rows_directive(
     return lines
 
 
+@dataclass
+class CallCountOverride:
+    """A `--placeholder`-downgraded fixture's corrected tier-1 `call_count`
+    expectation (fix round 2, unify-with-data Task 4): the runnable-by-
+    construction invariant covers the WHOLE generated `.cut`, assertions
+    included -- a downgrade that changes what a mock's body actually does
+    at runtime can also change how many times the program actually
+    reaches it (see `_bundle_directive_for`'s own downgrade branch: a
+    downgraded READ signals EOF on its very first call, so a
+    `PERFORM ... UNTIL <eof-flag>` loop calls it exactly once, not the
+    bundle's original un-downgraded sequence length). Rendering the
+    bundle's original count unchanged would pin a `VERIFY ... WAS CALLED
+    N TIMES` the generated file cannot itself satisfy.
+
+    `count`: the exact recomputed value, TRUE by construction of the
+    downgraded body actually emitted (not a guess about program
+    behavior). `demote_reason`: set instead of `count` when the
+    downgraded body carries no way to know the real count at all (e.g. a
+    READ whose source `AT END` clause has no FILE STATUS field and
+    nothing `_replicated_at_end_moves` could safely replicate -- an
+    entirely empty exhaustion body, not an "exact by construction" one)
+    -- `_render_expectation` renders a `*>` comment naming the reason
+    instead of a speculative number in that case."""
+
+    count: int | None = None
+    demote_reason: str | None = None
+
+
 def _bundle_directive_for(
     fixture: BoundaryFixture,
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
-) -> list[str] | None:
+) -> tuple[list[str], CallCountOverride | None] | None:
     """The full `MOCK ... END-MOCK` (or `MOCK ... ROWS ... END-MOCK`) block
     for one scenario's boundary fixture, or None if this (category, key)
     has no matching mockymock boundary site (already reported by
-    `_warn_on_key_mismatch`).
+    `_warn_on_key_mismatch`). Also returns a `CallCountOverride` when this
+    fixture's downgrade also changes its real call count (see that
+    class's own docstring) -- `None` when the bundle's original tier-1
+    `call_count` expectation still holds.
 
     `placeholder_keys` (`mockymock generate --placeholder CATEGORY:KEY`,
     repeatable) names fixtures whose body should be DOWNGRADED to strip
@@ -678,20 +710,29 @@ def _bundle_directive_for(
     - READ: `_read_exhaustion_lines` (the SAME helper `_read_body` uses
       for its own `WHEN OTHER` branch and its own empty-sequence case) --
       an "immediately at end" body, not an empty one, so a program's own
-      `PERFORM ... UNTIL <eof-flag>` loop still terminates.
+      `PERFORM ... UNTIL <eof-flag>` loop still terminates, after exactly
+      ONE call -- `CallCountOverride(count=1)` when the body actually
+      carries a real termination MOVE (`fixture.terminal` or a replicated
+      `AT END` MOVE), else `CallCountOverride(demote_reason=...)` since an
+      empty body's real call count cannot be known.
     - SQL, when this fixture would have used `ROWS` sugar
       (`_sql_wants_rows`): `_SQL_ROWS_EXHAUSTED_BODY` (`MOVE 100 TO
       SQLCODE`, mirroring `splicer/injector.py`'s own hardcoded
       exhausted-branch value for `MOCK SQL ... ROWS`), not the ordinary
       SQL placeholder's `MOVE 0 TO SQLCODE` (permanent "more rows
       available"), which would hang a `PERFORM UNTIL SQLCODE = 100`
-      cursor-fetch loop the same way an empty READ body would.
+      cursor-fetch loop the same way an empty READ body would --
+      `CallCountOverride(count=1)` unconditionally, since this body is
+      always an unconditional, real `MOVE` (no replication gap possible).
 
     Every other category's downgrade has no loop-termination sugar to
     lose (OPEN/CLOSE/etc.'s STATUS_ONLY body is a single-shot per-call
     status override; CALL/DYNCALL/ACCEPT/CICS/DLI/a single-row SQL
     fixture never emit ROWS sugar at all), so `_placeholder_body_for`
-    stays correct for them."""
+    stays correct for them, and their call count is program-flow-driven
+    (how many times the PROCEDURE DIVISION reaches that statement),
+    entirely unaffected by which data the mock body happens to carry --
+    no override needed."""
     try:
         category = MockCategory(fixture.category)
     except ValueError:
@@ -700,13 +741,27 @@ def _bundle_directive_for(
     if site is None:
         return None
 
+    call_count_override: CallCountOverride | None = None
     if (fixture.category, fixture.key) in placeholder_keys:
         if category is MockCategory.READ:
             at_end = getattr(site.statement, "at_end_clause", None) or []
             replicated = _replicated_at_end_moves(site.statement)
             body = _read_exhaustion_lines(fixture, replicated, at_end)
+            if fixture.terminal or replicated:
+                call_count_override = CallCountOverride(count=1)
+            else:
+                call_count_override = CallCountOverride(
+                    demote_reason=(
+                        "downgraded READ body carries no termination "
+                        "signal at all (no FILE STATUS field, and this "
+                        "program's AT END clause could not be "
+                        "auto-replicated) -- the real call count is not "
+                        "known by construction"
+                    )
+                )
         elif category is MockCategory.SQL and _sql_wants_rows(fixture):
             body = list(_SQL_ROWS_EXHAUSTED_BODY)
+            call_count_override = CallCountOverride(count=1)
         else:
             body = _placeholder_body_for(category, fixture.key)
     elif fixture.direction == "STATUS_ONLY":
@@ -714,14 +769,14 @@ def _bundle_directive_for(
     elif category is MockCategory.READ:
         body = _read_body(fixture, registry, category, site)
     elif category is MockCategory.SQL and _sql_wants_rows(fixture):
-        return _sql_rows_directive(category, fixture.key, fixture)
+        return _sql_rows_directive(category, fixture.key, fixture), None
     else:
         body = _single_row_body(fixture)
 
     lines = [_directive_header(category, fixture.key, site)]
     lines.extend(f"    {line}" for line in body)
     lines.append("END-MOCK")
-    return lines
+    return lines, call_count_override
 
 
 def _merged_status_only_body(fixtures: list[BoundaryFixture]) -> list[str]:
@@ -743,7 +798,7 @@ def _bundle_directive_for_group(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
-) -> list[str] | None:
+) -> tuple[list[str], CallCountOverride | None] | None:
     """Like `_bundle_directive_for`, but for every fixture that resolves
     to the SAME physical mockymock `BoundarySite` (only possible for
     STATUS_ONLY -- a multi-file `OPEN`/`CLOSE` is one physical statement
@@ -752,7 +807,10 @@ def _bundle_directive_for_group(
     separate MOCK directive per file would double-match the one physical
     site and refuse AMBIGUOUS_MOCK -- exactly one directive is emitted,
     keyed on the first fixture's own key, with every group member's status
-    merged in (see `_merged_status_only_body`).
+    merged in (see `_merged_status_only_body`). Never returns a
+    `CallCountOverride`: STATUS_ONLY (the only category that groups) has
+    no loop-termination concept for a downgrade to lose -- see
+    `_bundle_directive_for`'s own docstring.
 
     `placeholder_keys` is checked against EVERY group member's own
     `(category, key)`, not just the primary's: the shared MOCK directive
@@ -781,7 +839,7 @@ def _bundle_directive_for_group(
     lines = [_directive_header(category, primary.key, site)]
     lines.extend(f"    {line}" for line in body)
     lines.append("END-MOCK")
-    return lines
+    return lines, None
 
 
 def _bundle_mock_directives(
@@ -790,7 +848,11 @@ def _bundle_mock_directives(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
-) -> tuple[list[str], set[tuple[MockCategory, str]]]:
+) -> tuple[
+    list[str],
+    set[tuple[MockCategory, str]],
+    dict[tuple[MockCategory, str], CallCountOverride],
+]:
     """Every `MOCK ... END-MOCK` block this scenario's TESTCASE needs: real
     fixture data grouped and deduplicated by physical site (see
     `_bundle_directive_for_group`) for everything the bundle generated
@@ -814,6 +876,13 @@ def _bundle_mock_directives(
     RPT-FILE` with no literal `MOCK OPEN RPT-FILE` in this same TESTCASE
     is VERIFY_WITHOUT_MOCK even though "RPT-FILE" is a perfectly valid key
     for the shared site in general.
+
+    And (fix round 2) the `CallCountOverride` `_bundle_directive_for`/
+    `_bundle_directive_for_group` computed for each (category, key) whose
+    downgrade changed its real call count -- collected here rather than
+    recomputed at expectation-rendering time, so `_render_expectation`
+    reads the SAME downgrade decision the body rendering above it just
+    made instead of re-deriving it from `placeholder_keys` a second time.
     """
     fixtures_by_site: dict[int, list[BoundaryFixture]] = {}
     site_order: list[int] = []
@@ -833,16 +902,21 @@ def _bundle_mock_directives(
 
     lines: list[str] = []
     declared_keys: set[tuple[MockCategory, str]] = set()
+    call_count_overrides: dict[tuple[MockCategory, str], CallCountOverride] = {}
     covered_site_ids: set[int] = set()
     for site_id in site_order:
         group = fixtures_by_site[site_id]
-        directive = _bundle_directive_for_group(
+        result = _bundle_directive_for_group(
             group, mockymock_keys, registry, placeholder_keys
         )
-        if directive is not None:
+        if result is not None:
+            directive, override = result
             lines.extend(directive)
             try:
-                declared_keys.add((MockCategory(group[0].category), group[0].key))
+                key_pair = (MockCategory(group[0].category), group[0].key)
+                declared_keys.add(key_pair)
+                if override is not None:
+                    call_count_overrides[key_pair] = override
             except ValueError:
                 pass
         covered_site_ids.add(site_id)
@@ -859,7 +933,7 @@ def _bundle_mock_directives(
         lines.extend(f"    {line}" for line in body)
         lines.append("END-MOCK")
         declared_keys.add((category, key))
-    return lines, declared_keys
+    return lines, declared_keys, call_count_overrides
 
 
 def _is_known_category(category_str: str) -> bool:
@@ -882,6 +956,9 @@ def _is_boundary_level_ref(ref: str) -> bool:
 def _render_expectation(
     expectation: Expectation,
     declared_keys: set[tuple[MockCategory, str]],
+    call_count_overrides: (
+        dict[tuple[MockCategory, str], CallCountOverride] | None
+    ) = None,
 ) -> list[str]:
     """Tier 1 (`call_count`) -> `VERIFY ... WAS CALLED n TIMES`; tier 2
     (`field_equals`) -> `EXPECT <name> TO BE <value>`; tier 3 (`stub`) ->
@@ -896,6 +973,18 @@ def _render_expectation(
     directive actually used (a multi-file OPEN/CLOSE's non-primary file)
     has no *literal* MOCK of its own in this TESTCASE, and VERIFYing it
     anyway is VERIFY_WITHOUT_MOCK.
+
+    `call_count_overrides` (fix round 2, also from `_bundle_mock_directives`,
+    same seam that decided each fixture's body) supersedes the bundle's own
+    `expectation.value` for a `call_count` ref whose fixture was
+    `--placeholder`-downgraded in a way that changed its real call count
+    (see `CallCountOverride`'s own docstring) -- rendering the bundle's
+    original, now-stale count would pin an assertion the generated `.cut`
+    cannot itself satisfy, which is exactly the runnable-by-construction
+    violation this fix closes. A `demote_reason` renders as a `*>` comment
+    instead of a `VERIFY` line -- the real count is not known by
+    construction in that case, and a speculative number would be worse
+    than no assertion at all.
     """
     if expectation.kind == "call_count":
         category_str, _, key = expectation.ref.partition(":")
@@ -906,7 +995,19 @@ def _render_expectation(
         if (category, key) not in declared_keys:
             return []  # no literal MOCK directive for this key in this TESTCASE
         directive_text = MockDirective(category, key).describe()
-        return [f"VERIFY {directive_text} WAS CALLED {expectation.value} TIMES"]
+        override = (call_count_overrides or {}).get((category, key))
+        if override is not None and override.demote_reason is not None:
+            return [
+                f"*> VERIFY {directive_text} WAS CALLED <count not exact "
+                f"by construction after --placeholder downgrade -- "
+                f"{override.demote_reason}>"
+            ]
+        value = (
+            override.count
+            if override is not None and override.count is not None
+            else expectation.value
+        )
+        return [f"VERIFY {directive_text} WAS CALLED {value} TIMES"]
     if expectation.kind == "field_equals":
         rendered = render_expect_value(str(expectation.value))
         return [f"EXPECT {expectation.ref} TO BE {rendered}"]
@@ -937,7 +1038,7 @@ def _scaffold_with_bundle(
             skipped_scenarios += 1
             continue
         lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
-        directive_lines, declared_keys = _bundle_mock_directives(
+        directive_lines, declared_keys, call_count_overrides = _bundle_mock_directives(
             scenario, surface, mockymock_keys, registry, placeholder_keys
         )
         lines.extend(f"    {line}" for line in directive_lines)
@@ -945,7 +1046,9 @@ def _scaffold_with_bundle(
         for expectation in scenario.expectations:
             lines.extend(
                 f"    {line}"
-                for line in _render_expectation(expectation, declared_keys)
+                for line in _render_expectation(
+                    expectation, declared_keys, call_count_overrides
+                )
             )
         lines.append("")
 
