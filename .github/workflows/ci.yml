@@ -107,11 +107,27 @@ jobs:
           # Expectations, and the terminal-status-field fix this repo's own
           # Phase 8 contract testing found) -- `mockymock generate
           # --with-data` depends on all of it and none of it is on
-          # cobol-parser main yet (see cobol-parser PR #108). Confirmed
-          # pushed and resolvable via `git ls-remote`. Re-bump to a
-          # main-branch commit once that PR merges; keep in sync with
+          # cobol-parser main yet (see cobol-parser PR #108).
+          #
+          # Bumped off that interim branch pin onto cobol-parser main
+          # (2026-08-05, unify-with-data reconciliation Task 1): PR #108
+          # landed the gen-fixtures initiative on main, then PR #110 (dead
+          # `gen-fixtures --describe` flag removed, `write_csv_dir`
+          # MANIFEST.json `sequence` type fixed -- neither consumed here),
+          # PR #111 (NULL/NULLS recognized as figurative constants), and
+          # PR #112 (EJECT statement support) landed on top. Verified
+          # against tests/unit/test_bundle_surface.py (pins the exact bundle
+          # surface consumed here) and tests/unit/test_fixture_bundle_contract.py
+          # (bundle-key == mock_surface key agreement) -- both pass unchanged
+          # at this pin. Full local mockymock suite at this pin: 958 passed,
+          # 95 skipped, 1 xfailed (coverage 87.48%, unchanged from the
+          # pre-bump baseline of 957 passed -- the +1 is the newly-ported
+          # test_bundle_surface.py). Confirmed pushed and resolvable
+          # (2026-08-05): `git ls-remote
+          # https://github.com/Landparty/cobol-parser.git` lists this sha as
+          # both `HEAD` and `refs/heads/main`. Keep in sync with
           # pyproject.toml's dependency line per this step's own comment.
-          ref: b3e2b329f014c3a8e52f5fac5679e812acbb44b2
+          ref: ff64b25c377150da432c57f39c43a0357ffeba86
 
       - uses: actions/setup-python@v5
         with:
@@ -170,7 +186,7 @@ jobs:
           path: cobol-parser
           token: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
           # Keep in sync with the `test` job's identical step above.
-          ref: b3e2b329f014c3a8e52f5fac5679e812acbb44b2
+          ref: ff64b25c377150da432c57f39c43a0357ffeba86
 
       - uses: actions/setup-python@v5
         with:
