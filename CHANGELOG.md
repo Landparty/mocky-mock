@@ -15,6 +15,36 @@
 - `splicer/injector.build_rows_block` generalized from a SQL-only function that hardcoded SQLCODE 0/100 to `build_rows_block(tally_name, rows, *, row_suffix_moves, exhausted_moves)`, with the SQLCODE literals moved to their SQL call site in `build_site_dispatch` and a new READ call site alongside it.
 - Bumped the vendored `cobolparser` pin to `ff64b25` (includes upstream PR #110's gen-fixtures fixes and PR #112's EJECT support).
 
+## [0.4.0](https://github.com/samdion1994/mocky-mock/compare/v0.3.0...v0.4.0) (2026-08-06)
+
+
+### Features
+
+* **cli:** --rows and --placeholder on generate --with-data (Task 4) ([8799281](https://github.com/samdion1994/mocky-mock/commit/879928121d2afc8eea1df4d6a0fd03490c5bb336))
+* **cli:** add generate --with-data for bundle-driven .cut scaffolding ([19c2986](https://github.com/samdion1994/mocky-mock/commit/19c29866c9c2c72b458b85b66090caae9b7dfada))
+* **cli:** add run --record-expectations for golden/characterization testing ([acb1663](https://github.com/samdion1994/mocky-mock/commit/acb1663ad97071e82609853b3f9884307fe495fb))
+* **cli:** hand-port the `mockymock fixtures` subcommand ([c2ab4a8](https://github.com/samdion1994/mocky-mock/commit/c2ab4a86d6155dcd8c24e625dd87d568fa8e4c6f))
+* **cli:** record-expectations golden mode + generate --with-data (gen-fixtures Phases 7b/8) ([e87c027](https://github.com/samdion1994/mocky-mock/commit/e87c0273351bb59b78cd04c7e3068b95d92088b2))
+* **dsl:** ROWS on MOCK READ with optional TERMINAL group ([fce3f04](https://github.com/samdion1994/mocky-mock/commit/fce3f04246eb3b64c6c7093debd6a7a610c22bdc))
+* **splicer:** READ ROWS dispatch with terminal branch + fail-closed refusal ([40ecbad](https://github.com/samdion1994/mocky-mock/commit/40ecbad9c99e99e140df4b49fd0bc3b45f3490cb))
+
+
+### Bug Fixes
+
+* **cli:** fixtures runs the same fail-closed gates as generate ([d0006b6](https://github.com/samdion1994/mocky-mock/commit/d0006b6255abc20c551c6d6ff1ad43b392e4c80d))
+* **docs/tests:** fold in review round 1 findings for Task 5 ([07a8fbc](https://github.com/samdion1994/mocky-mock/commit/07a8fbc4db0128becd0eced97a38633f2dd433b0))
+* **dsl:** preserve READ/SQL-ROWS loop-termination through --placeholder/--rows 0 ([8ccb590](https://github.com/samdion1994/mocky-mock/commit/8ccb590bad9be7eb8bbb7dd59cd4d3eaf705ed84))
+* **dsl:** recompute VERIFY call_count for a downgraded loop-bearing boundary ([427474a](https://github.com/samdion1994/mocky-mock/commit/427474a2259d1e08ab0716635586749609494d77))
+* **dsl:** replicate READ's AT END clause to prevent infinite loops ([3ad3378](https://github.com/samdion1994/mocky-mock/commit/3ad3378c76a6a764e70a3afb7202254129dea94d))
+* **review:** PR [#46](https://github.com/samdion1994/mocky-mock/issues/46) post-review polish pass ([53669b4](https://github.com/samdion1994/mocky-mock/commit/53669b4b3f66f13fbbf0e3938b1184e72a693772))
+
+
+### Documentation
+
+* **plan:** record cobolparser pin amendment to ff64b25 (Task 1) ([957c4d9](https://github.com/samdion1994/mocky-mock/commit/957c4d9ed5ef7b943aa38b77efe424bb653e08b1))
+* reconciliation plan -- port branch deliverables onto main's engine ([bc84332](https://github.com/samdion1994/mocky-mock/commit/bc8433270f35f69b81e9bb413440efe6551a2b29))
+* **splicer:** note READ ROWS terminal resolution and the fail-closed guard's production invariant ([4463bf0](https://github.com/samdion1994/mocky-mock/commit/4463bf0a53dfbfae1c375e705e565566c7680351))
+
 ## [0.3.0](https://github.com/samdion1994/mocky-mock/compare/v0.2.0...v0.3.0) (2026-08-04)
 
 
