@@ -29,23 +29,26 @@ dependencies = [
     # same commit .github/workflows/ci.yml checks out, so `uv tool install`
     # resolves a working install without a sibling checkout. Bump both
     # together, deliberately, per that workflow's comment.
-    #
-    # INTERIM: pinned to cobol-parser's claude/data-generation-function-k2mbbj
-    # branch (commit b3e2b329f014c3a8e52f5fac5679e812acbb44b2), not main --
-    # this is the branch carrying the gen-fixtures initiative's Phases 1-8
-    # (ProgramLayoutIndex, BoundaryInventoryAnalyzer, ProgramFixtureGenerator,
-    # ConstraintExtractor, ScenarioPlanner, Expectations) that
-    # `generate --with-data` (this repo's Phase 8) depends on end to end;
-    # none of it is on cobol-parser main yet (see cobol-parser PR #108).
-    # Re-bump to a main-branch commit once that PR merges -- do not let this
-    # interim pin linger past that point.
     # Bumped to pull in the DIVIDE/MULTIPLY GIVING ... ROUNDED fix: ROUNDED
     # was previously left unconsumed and misread as a phantom paragraph
     # named "ROUNDED" (see tests/integration/test_divide_rounded.py).
     # Confirmed pushed and resolvable (2026-07-21): `uv tool install --from .`
     # and `uv tool install git+https://github.com/samdion1994/mocky-mock.git`
     # both succeed against this ref.
-    "cobolparser @ git+https://github.com/Landparty/cobol-parser.git@b3e2b329f014c3a8e52f5fac5679e812acbb44b2",
+    # Bumped off the interim claude/data-generation-function-k2mbbj branch
+    # pin onto cobol-parser main: the gen-fixtures initiative's Phases 1-8
+    # (ProgramLayoutIndex, BoundaryInventoryAnalyzer, ProgramFixtureGenerator,
+    # ConstraintExtractor, ScenarioPlanner, Expectations) landed on main via
+    # PR #108, then PR #110 (dead `gen-fixtures --describe` flag removed,
+    # `write_csv_dir` MANIFEST.json `sequence` type fixed -- neither consumed
+    # here), PR #111 (NULL/NULLS recognized as figurative constants), and
+    # PR #112 (EJECT statement support) landed on top -- see
+    # tests/unit/test_bundle_surface.py, which pins the exact bundle surface
+    # consumed here, and cobol-parser's docs/fixture-bundle-schema.md for the
+    # authoritative shape. Confirmed pushed and resolvable (2026-08-05):
+    # `git ls-remote https://github.com/Landparty/cobol-parser.git` lists
+    # this sha as both `HEAD` and `refs/heads/main`.
+    "cobolparser @ git+https://github.com/Landparty/cobol-parser.git@ff64b25c377150da432c57f39c43a0357ffeba86",
 ]
 
 [project.optional-dependencies]

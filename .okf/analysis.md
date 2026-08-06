@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-08-04T00:00:00Z
+timestamp: 2026-08-05T00:00:00Z
 ---
 
 # Overview
@@ -55,11 +55,18 @@ refusal.check_test_case(surface, program, case, file_status_fields)
       names the case's own PERFORM entry point
    3. emit UNMOCKED_*/AMBIGUOUS_MOCK/UNSUPPORTED_NESTED_MOCK_TARGET/
       UNSUPPORTED_MOCK_TARGET_LAYOUT/UNMATCHED_MOCK/VERIFY_WITHOUT_MOCK/UNMOCKED_CANCEL
-   4. final pass over case.mocks: any directive with FILE-STATUS IS sugar
-      (`directive.file_status is not None`) whose key is absent from
-      file_status_fields -> UNRESOLVED_FILE_STATUS_TARGET (no
-      WORKING-STORAGE field exists to move the status into -- fail closed
-      rather than silently drop the directive's status)
+   4. final pass over case.mocks, two independent UNRESOLVED_FILE_STATUS_
+      TARGET triggers under the one code: (a) any directive with
+      FILE-STATUS IS sugar (`directive.file_status is not None`) whose key
+      is absent from file_status_fields (no WORKING-STORAGE field exists
+      to move the status into -- fail closed rather than silently drop the
+      directive's status); (b) a `MOCK READ ... ROWS` directive
+      (`directive.rows is not None`) with no `TERMINAL` group
+      (`directive.terminal_row is None`) whose file is ALSO absent from
+      file_status_fields -- the rows-exhausted branch would have no way to
+      signal end-of-data at all, so the read loop this mocks can never
+      terminate; add a TERMINAL group or a FILE STATUS field before this
+      refuses
 whole-suite (plan-or-refusal, like find_terminator_plans):
 flow_mocks.find_flow_mock_plans(program, suite, lines)
    -> FlowMockPlan per safe MOCK PARAGRAPH/SECTION key, or
@@ -166,7 +173,7 @@ For every `BoundarySite` in the reachable set:
 | exactly 1 match, `site.nested and site.span is None` | `UNSUPPORTED_NESTED_MOCK_TARGET` | no validated replacement span — splicing could swallow a block terminator and corrupt control flow (an earlier attempt without the scope map did exactly that) |
 | exactly 1 match, `not site.nested and site.unspliceable_reason` | `UNSUPPORTED_MOCK_TARGET_LAYOUT` (2026-07-07, audit finding 2.1) | a top-level statement that does not own its source line(s) — sibling code before it, a one-line paragraph header, or another statement sharing the line — would have its whole-line splice delete that sibling code |
 
-After the site loop: any directive in `case.mocks` never matched → `UNMATCHED_MOCK`. Any `VERIFY` whose `(category, key)` isn't in `{(m.category, m.key) for m in case.mocks}` → `VERIFY_WITHOUT_MOCK` (its tally counter would be undeclared/stale). Then a final pass over `case.mocks` checks `FILE-STATUS IS` sugar: any directive with `.file_status is not None` whose (uppercased) key is missing from `file_status_fields` → `UNRESOLVED_FILE_STATUS_TARGET` (the file's `SELECT` entry has no `FILE STATUS IS <field>` clause, so there is nowhere to move the status).
+After the site loop: any directive in `case.mocks` never matched → `UNMATCHED_MOCK`. Any `VERIFY` whose `(category, key)` isn't in `{(m.category, m.key) for m in case.mocks}` → `VERIFY_WITHOUT_MOCK` (its tally counter would be undeclared/stale). Then a final pass over `case.mocks` checks two independent conditions, both refusing the same `UNRESOLVED_FILE_STATUS_TARGET` code: (a) `FILE-STATUS IS` sugar -- any directive with `.file_status is not None` whose (uppercased) key is missing from `file_status_fields` → refused (the file's `SELECT` entry has no `FILE STATUS IS <field>` clause, so there is nowhere to move the status); (b) `MOCK READ ... ROWS` with no `TERMINAL` group -- any directive with `.rows is not None and .terminal_row is None` whose (uppercased) key is ALSO missing from `file_status_fields` → refused (splicer's `build_rows_block`'s rows-exhausted branch would have no status field to default to AND no `TERMINAL` group to fall back on -- the generated READ loop could never signal end-of-data, see [dsl](dsl.md)'s `ROWS`/`TERMINAL` grammar and [splicer](splicer.md)'s `ROWS` dispatch).
 
 **CANCEL as a covered-not-mocked site (audit finding 1.6):** `CancelStatement` is detected by `mock_surface.py` with `category=None`, `label="CANCEL"`, and `keys` set to every name on the statement (`.program_names`) — but unlike SORT/MERGE it is never *unconditionally* unmockable. `check_test_case` treats it as covered when, for **every** name in `site.keys`, the test case has a matching `MOCK CALL` (static, exact key) or dynamic-CALL directive (uppercased identifier match) — a mocked CALL never loads a real module, so cancelling it is a guaranteed GnuCOBOL no-op, and the covering directives are added to `matched_directives` (so the CALL mock is not spuriously flagged `UNMATCHED_MOCK` if its only reachable use is covering the CANCEL). Any uncovered name refuses `UNMOCKED_CANCEL`. `CANCEL` is never spliced regardless (`category is None` keeps it out of `splice_program`'s loop) — it is always left in place as plain COBOL.
 

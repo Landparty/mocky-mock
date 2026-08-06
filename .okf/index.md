@@ -19,7 +19,7 @@ and reports pass/fail. Version 0.1.0. Author: Samuel Dion.
 
 ## Entry Point
 
-* [CLI](cli.md) — `mockymock setup` / `generate` / `run` / `debug` / `mutate` / `lint` / `collect` / `dashboard` / `export` and how each orchestrates the modules above
+* [CLI](cli.md) — `mockymock setup` / `generate` / `fixtures` / `run` / `debug` / `lint` / `mutate` / `collect` / `dashboard` / `export` and how each orchestrates the modules above
 * [Dashboard](dashboard.md) — `mockymock dashboard`: loopback static page + the read-only `runtime.status` Docker health probe behind it
 
 ## Integration & Testing

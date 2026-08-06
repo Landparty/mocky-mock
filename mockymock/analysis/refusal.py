@@ -794,9 +794,9 @@ def check_test_case(
             )
 
     for directive in case.mocks:
-        if directive.file_status is None:
-            continue
-        if directive.key.upper() not in file_status_fields:
+        if directive.file_status is not None and (
+            directive.key.upper() not in file_status_fields
+        ):
             reasons.append(
                 RefusalReason(
                     code="UNRESOLVED_FILE_STATUS_TARGET",
@@ -806,6 +806,24 @@ def check_test_case(
                         f"<field> clause declared in its SELECT entry -- "
                         f"there is no WORKING-STORAGE field to move the "
                         f"status into"
+                    ),
+                )
+            )
+        if (
+            directive.category is MockCategory.READ
+            and directive.rows is not None
+            and directive.terminal_row is None
+            and directive.key.upper() not in file_status_fields
+        ):
+            reasons.append(
+                RefusalReason(
+                    code="UNRESOLVED_FILE_STATUS_TARGET",
+                    message=(
+                        f"MOCK READ {directive.key} ROWS has no way to "
+                        f"signal end-of-data: the file declares no FILE "
+                        f"STATUS field and the mock has no "
+                        f"TERMINAL ( ... ) group -- add one or the read "
+                        f"loop cannot terminate"
                     ),
                 )
             )

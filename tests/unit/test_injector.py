@@ -169,6 +169,8 @@ def test_rows_block_codegens_indexed_when_branches_and_exhaustion():
             [("EMP-NAME", '"SMITH"'), ("EMP-ID", "100")],
             [("EMP-NAME", '"JONES"'), ("EMP-ID", "101")],
         ],
+        row_suffix_moves=["MOVE 0 TO SQLCODE"],
+        exhausted_moves=["MOVE 100 TO SQLCODE"],
     )
     assert lines == [
         "EVALUATE TRUE",
@@ -184,6 +186,36 @@ def test_rows_block_codegens_indexed_when_branches_and_exhaustion():
         "        MOVE 100 TO SQLCODE",
         "END-EVALUATE",
     ]
+
+
+def test_read_rows_block_uses_status_field_terminal():
+    lines = build_rows_block(
+        "UT-TALLY-1",
+        [[("ORDER-QTY", "50")], [("ORDER-QTY", "75")]],
+        row_suffix_moves=[],
+        exhausted_moves=['MOVE "10" TO WS-ORDER-STATUS'],
+    )
+    assert lines == [
+        "EVALUATE TRUE",
+        "    WHEN UT-TALLY-1 = 1",
+        "        MOVE 50 TO ORDER-QTY",
+        "    WHEN UT-TALLY-1 = 2",
+        "        MOVE 75 TO ORDER-QTY",
+        "    WHEN OTHER",
+        '        MOVE "10" TO WS-ORDER-STATUS',
+        "END-EVALUATE",
+    ]
+
+
+def test_sql_rows_block_unchanged():
+    lines = build_rows_block(
+        "UT-TALLY-1",
+        [[("X", "1")]],
+        row_suffix_moves=["MOVE 0 TO SQLCODE"],
+        exhausted_moves=["MOVE 100 TO SQLCODE"],
+    )
+    assert "        MOVE 0 TO SQLCODE" in lines
+    assert lines[-2] == "        MOVE 100 TO SQLCODE"
 
 
 def test_dispatch_splices_rows_block_using_resolved_tally_name():
@@ -206,6 +238,172 @@ def test_dispatch_splices_rows_block_using_resolved_tally_name():
     assert 'MOVE "SMITH" TO EMP-NAME' in joined
     assert "WHEN OTHER" in joined
     assert "MOVE 100 TO SQLCODE" in joined
+
+
+def test_dispatch_splices_read_rows_block_using_default_status_terminal():
+    """No TERMINAL group, but the file declares a FILE STATUS field: the
+    exhaustion branch defaults to MOVE "10" TO <field> and never touches
+    SQLCODE."""
+    site = _site(MockCategory.READ, "READ", keys=("ORDER-FILE",))
+    case = MockTestCase(
+        name="rows",
+        mocks=[
+            MockDirective(
+                MockCategory.READ,
+                "ORDER-FILE",
+                rows=[[("ORDER-QTY", "50")]],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = build_site_dispatch(
+        site, suite, TallyRegistry(suite), {"ORDER-FILE": "WS-ORDER-STATUS"}
+    )
+    joined = "\n".join(lines)
+    assert "ADD 1 TO UT-READ-ORDER-FILE-TALLY" in joined
+    assert "MOVE 50 TO ORDER-QTY" in joined
+    assert 'MOVE "10" TO WS-ORDER-STATUS' in joined
+    assert "SQLCODE" not in joined
+
+
+def test_dispatch_splices_read_rows_block_using_explicit_terminal_row():
+    """A TERMINAL group wins over the status-field default, even when the
+    file declares no FILE STATUS field at all."""
+    site = _site(MockCategory.READ, "READ", keys=("ORDER-FILE",))
+    directive = MockDirective(
+        MockCategory.READ,
+        "ORDER-FILE",
+        rows=[[("ORDER-QTY", "50")]],
+    )
+    directive.terminal_row = [("WS-EOF-FLAG", '"Y"')]
+    case = MockTestCase(name="rows", mocks=[directive])
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = build_site_dispatch(site, suite, TallyRegistry(suite), {})
+    joined = "\n".join(lines)
+    assert 'MOVE "Y" TO WS-EOF-FLAG' in joined
+    assert "SQLCODE" not in joined
+
+
+def test_dispatch_read_rows_exhausted_branch_prepends_default_status_before_terminal_moves():
+    """Fix (post-PR #46 review, Task 3): a TERMINAL group that sets an EOF
+    flag but never mentions the FILE STATUS field must not silently leave
+    that field at whatever the default-success MOVE "00" set on the call
+    that triggered WHEN OTHER. The exhausted branch must still carry the
+    implicit MOVE "10" TO <status field>, emitted BEFORE the TERMINAL
+    group's own MOVEs -- same "implicit default, explicit override"
+    ordering the plain FILE-STATUS default/override pair already uses."""
+    site = _site(MockCategory.READ, "READ", keys=("ORDER-FILE",))
+    directive = MockDirective(
+        MockCategory.READ,
+        "ORDER-FILE",
+        rows=[[("ORDER-QTY", "50")]],
+    )
+    directive.terminal_row = [("WS-EOF-FLAG", '"Y"')]
+    case = MockTestCase(name="rows", mocks=[directive])
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = build_site_dispatch(
+        site, suite, TallyRegistry(suite), {"ORDER-FILE": "WS-ORDER-STATUS"}
+    )
+
+    # Two "WHEN OTHER" branches exist: the nested one closing the rows
+    # EVALUATE (rows exhausted) and the outer catch-all closing the
+    # per-test-case UT-CURRENT-CASE EVALUATE (unmocked case). Isolate the
+    # nested one so assertions can't accidentally match the outer branch.
+    when_other_indices = [
+        i for i, line in enumerate(lines) if line.strip() == "WHEN OTHER"
+    ]
+    assert len(when_other_indices) == 2
+    exhausted = lines[when_other_indices[0] : when_other_indices[1]]
+    exhausted_text = "\n".join(exhausted)
+
+    assert 'MOVE "10" TO WS-ORDER-STATUS' in exhausted_text
+    assert 'MOVE "Y" TO WS-EOF-FLAG' in exhausted_text
+
+    default_idx = next(
+        i for i, line in enumerate(exhausted) if '"10" TO WS-ORDER-STATUS' in line
+    )
+    terminal_idx = next(i for i, line in enumerate(exhausted) if "WS-EOF-FLAG" in line)
+    assert default_idx < terminal_idx
+
+
+def test_dispatch_read_rows_terminal_move_to_status_field_survives_after_default():
+    """When TERMINAL DOES target the status field itself (a custom two-
+    digit code), both the implicit default and the author's own MOVE
+    appear in the exhausted branch, with the author's value LAST -- the
+    same "later MOVE wins" ordering as the plain FILE-STATUS
+    default/override pair a few lines above this dispatch block. Asserting
+    both lines are present, in this order, is the ordering evidence a
+    human (or a diff of the generated .cut) can check directly, since
+    GnuCOBOL executes MOVEs top-to-bottom within one WHEN branch."""
+    site = _site(MockCategory.READ, "READ", keys=("ORDER-FILE",))
+    directive = MockDirective(
+        MockCategory.READ,
+        "ORDER-FILE",
+        rows=[[("ORDER-QTY", "50")]],
+    )
+    directive.terminal_row = [("WS-ORDER-STATUS", '"92"')]
+    case = MockTestCase(name="rows", mocks=[directive])
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = build_site_dispatch(
+        site, suite, TallyRegistry(suite), {"ORDER-FILE": "WS-ORDER-STATUS"}
+    )
+
+    when_other_indices = [
+        i for i, line in enumerate(lines) if line.strip() == "WHEN OTHER"
+    ]
+    assert len(when_other_indices) == 2
+    exhausted = lines[when_other_indices[0] : when_other_indices[1]]
+
+    default_idx = next(
+        i for i, line in enumerate(exhausted) if '"10" TO WS-ORDER-STATUS' in line
+    )
+    custom_idx = next(
+        i for i, line in enumerate(exhausted) if '"92" TO WS-ORDER-STATUS' in line
+    )
+    assert default_idx < custom_idx
+
+
+def test_dispatch_sql_rows_exhausted_branch_unaffected_by_read_terminal_fix():
+    """SQL ROWS has no TERMINAL grammar at all -- its exhausted branch must
+    stay exactly the fixed SQLCODE 100 MOVE, unaffected by the READ-only
+    default-status-before-TERMINAL change above."""
+    site = _site(MockCategory.SQL, "SQL", keys=(), match_text="FETCH EMP-CURSOR")
+    case = MockTestCase(
+        name="cursor",
+        mocks=[
+            MockDirective(
+                MockCategory.SQL,
+                "FETCH EMP-CURSOR",
+                rows=[[("EMP-NAME", '"SMITH"')]],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = build_site_dispatch(site, suite, TallyRegistry(suite), {})
+    joined = "\n".join(lines)
+    assert "MOVE 100 TO SQLCODE" in joined
+    assert '"10"' not in joined
+
+
+def test_dispatch_raises_for_read_rows_without_terminal_or_status_field():
+    """Fail closed: this shape should have already been refused by
+    refusal.check_test_case (UNRESOLVED_FILE_STATUS_TARGET); reaching the
+    splicer means that gate was bypassed, so raise loudly rather than emit
+    a READ loop with no way to terminate."""
+    site = _site(MockCategory.READ, "READ", keys=("ORDER-FILE",))
+    case = MockTestCase(
+        name="rows",
+        mocks=[
+            MockDirective(
+                MockCategory.READ,
+                "ORDER-FILE",
+                rows=[[("ORDER-QTY", "50")]],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    with pytest.raises(ValueError, match="UNRESOLVED_FILE_STATUS_TARGET"):
+        build_site_dispatch(site, suite, TallyRegistry(suite), {})
 
 
 def test_default_success_status_injected_when_file_declares_a_status_field():

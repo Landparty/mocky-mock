@@ -1,7 +1,11 @@
 # mockymock — CSV-Sourced `ROWS` for `SQL` and `READ` Mocks
 
 Date: 2026-07-31
-Status: proposed
+Status: partially shipped — inline `MOCK READ ... ROWS ( ... )` with an
+optional `TERMINAL ( ... )` group landed in the unify-with-data branch
+(2026-08-05, see `.okf/dsl.md`'s "`ROWS` cursor sugar" section and
+`.okf/log.md`); the `ROWS FROM CSV "<path>"` row-source extension
+described below (for both `SQL` and `READ`) remains proposed/unimplemented.
 
 ## Motivation
 

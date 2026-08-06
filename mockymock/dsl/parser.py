@@ -85,7 +85,8 @@ _MOCK_QUOTED_RE = re.compile(
     rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"(?:\s+(?P<rows>ROWS))?$'
 )
 _MOCK_BARE_RE = re.compile(
-    rf"^MOCK\s+(?P<cat>{_BARE_CATS})\s+(?P<key>[A-Za-z0-9][A-Za-z0-9-]*)$"
+    rf"^MOCK\s+(?P<cat>{_BARE_CATS})\s+(?P<key>[A-Za-z0-9][A-Za-z0-9-]*)"
+    rf"(?:\s+(?P<rows>ROWS))?$"
 )
 # END-MOCK is deliberately more forgiving than the other keywords: an
 # optional trailing period (the natural COBOL habit) and any letter case
@@ -128,6 +129,10 @@ _VERIFY_BARE_RE = re.compile(
 _COMMENT_RE = re.compile(r"^\*>")
 _ROW_RE = re.compile(r"^\((?P<pairs>.+)\)$")
 _ROW_PAIR_RE = re.compile(r"^(?P<field>[A-Za-z][A-Za-z0-9-]*)\s*=\s*(?P<value>.+)$")
+# TERMINAL ( F = v, ... ) -- READ-only, optional field assignments for the
+# rows-exhausted (WHEN OTHER) branch of a MOCK READ ... ROWS block. See
+# MockDirective.terminal_row.
+_TERMINAL_RE = re.compile(r"^TERMINAL\s*\((?P<pairs>.*)\)$")
 _PROVIDER_RE = re.compile(r"^PROVIDER\s+(?P<name>[A-Za-z0-9][A-Za-z0-9-]*)$")
 _HEADER_RE = re.compile(
     r"^HEADER\s+(?P<fields>[A-Za-z][A-Za-z0-9-]*(?:\s*,\s*[A-Za-z][A-Za-z0-9-]*)*)$"
@@ -410,6 +415,30 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"drop ROWS entirely"
                     )
                 in_mock = None
+            elif (
+                in_mock.rows is not None
+                and (term_match := _TERMINAL_RE.match(line)) is not None
+            ):
+                if in_mock.category is not MockCategory.READ:
+                    raise CutParseError(
+                        f"line {line_no}: TERMINAL is only supported for "
+                        f"MOCK READ ... ROWS"
+                    )
+                if in_mock.terminal_row is not None:
+                    raise CutParseError(f"line {line_no}: duplicate TERMINAL group")
+                terminal: list[tuple[str, str]] = []
+                for raw_pair in _split_top_level(term_match.group("pairs"), ","):
+                    pair_match = _ROW_PAIR_RE.match(raw_pair.strip())
+                    if pair_match is None:
+                        raise CutParseError(
+                            f"line {line_no}: malformed TERMINAL field "
+                            f"assignment {raw_pair.strip()!r} -- expected "
+                            f"FIELD = value"
+                        )
+                    terminal.append(
+                        (pair_match.group("field"), pair_match.group("value").strip())
+                    )
+                in_mock.terminal_row = terminal
             elif in_mock.rows is not None:
                 row_match = _ROW_RE.match(line)
                 if row_match is None:
@@ -686,8 +715,8 @@ def parse_cut(text: str) -> MockTestSuite:
             category = _resolve_category(m.group("cat"))
             if m.group("rows") and category is not MockCategory.SQL:
                 raise CutParseError(
-                    f"line {line_no}: ROWS is only supported for MOCK SQL, "
-                    f'not MOCK {m.group("cat")}'
+                    f"line {line_no}: ROWS is only supported for MOCK SQL "
+                    f'and MOCK READ, not MOCK {m.group("cat")}'
                 )
             in_mock = _open_mock(
                 MockDirective(
@@ -703,10 +732,17 @@ def parse_cut(text: str) -> MockTestSuite:
                 raise CutParseError(
                     f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/" f"BEFORE-ALL"
                 )
+            category = _resolve_category(m.group("cat"), bare_key=True)
+            if m.group("rows") and category is not MockCategory.READ:
+                raise CutParseError(
+                    f"line {line_no}: ROWS is only supported for MOCK SQL "
+                    f'and MOCK READ, not MOCK {m.group("cat")}'
+                )
             in_mock = _open_mock(
                 MockDirective(
-                    category=_resolve_category(m.group("cat"), bare_key=True),
+                    category=category,
                     key=m.group("key").upper(),
+                    rows=[] if m.group("rows") else None,
                 ),
                 line_no,
             )

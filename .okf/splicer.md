@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-04T00:00:00Z
+timestamp: 2026-08-06T00:00:00Z
 ---
 
 # Overview
@@ -225,7 +225,51 @@ A file with no declared `FILE STATUS` field gets neither MOVE: there is no
 WORKING-STORAGE target to write into (`refusal.check_test_case`'s
 `UNRESOLVED_FILE_STATUS_TARGET` refuses fail-closed before splicing is
 ever reached if the `.cut` file used `FILE-STATUS IS` sugar against such a
-file). See `docs/2026-07-20-before-blocks-and-file-status-design.md`.
+file, or -- see below -- a `MOCK READ ... ROWS` directive with no
+`TERMINAL` group targets one). See
+`docs/2026-07-20-before-blocks-and-file-status-design.md`.
+
+**`ROWS` dispatch (`MOCK SQL ... ROWS` and `MOCK READ ... ROWS`, see
+[dsl](dsl.md)).** `build_rows_block(tally_name, rows, *, row_suffix_moves,
+exhausted_moves)` is category-generic: it builds an `EVALUATE TRUE` /
+`WHEN <tally> = N` chain where row N's field `MOVE`s are followed by
+`row_suffix_moves` verbatim, and `WHEN OTHER` (rows exhausted) fires
+`exhausted_moves` verbatim -- the caller decides what those two lists
+contain, `build_rows_block` itself has no category knowledge. Both call
+sites live in `build_site_dispatch`, one per `directive.rows is not None`
+category:
+
+- **SQL**: `row_suffix_moves=["MOVE 0 TO SQLCODE"]`,
+  `exhausted_moves=["MOVE 100 TO SQLCODE"]` -- fixed in v1, matching the
+  pre-generalization (single-purpose SQL-only) behavior exactly.
+- **READ**: `row_suffix_moves=[]` (the ordinary FILE-STATUS
+  default-success `MOVE "00"` above already covers every row when the
+  file declares a status field, so there is nothing left to append per
+  row). `exhausted_moves` is built additively, not as an either/or choice
+  (fixed post-PR #46 review, Task 3 -- see log.md): when the file has a
+  `file_status_fields` entry it ALWAYS starts with the implicit `MOVE
+  "10" TO <status field>` (COBOL's real end-of-file status code), and the
+  directive's own `TERMINAL ( FIELD = value, ... )` group's MOVEs (`[f"MOVE
+  {value} TO {field}" for field, value in directive.terminal_row]`) --
+  when present -- are appended right after, same "implicit default,
+  explicit override" ordering as the FILE-STATUS default/override pair
+  above: an author's own MOVE to that same field (if TERMINAL happens to
+  include one) naturally wins by coming later in the same WHEN branch,
+  and a TERMINAL group that never mentions the status field no longer
+  leaves it stuck at whatever "00" the default-success MOVE set on the
+  call that triggered this WHEN OTHER path -- it gets the correct "10"
+  instead. When the file has no status field, `exhausted_moves` is just
+  the TERMINAL group's own MOVEs (nothing to default). When **neither** a
+  status field nor a TERMINAL group exists, `build_site_dispatch` raises
+  `ValueError` rather than emit a READ loop with no way to terminate --
+  but every production call site gates on `refusal.check_test_case` first
+  (same `UNRESOLVED_FILE_STATUS_TARGET` code as the `FILE-STATUS IS` case
+  above, a second, structurally different trigger under that one code:
+  `directive.category is MockCategory.READ and directive.rows is not None
+  and directive.terminal_row is None and directive.key.upper() not in
+  file_status_fields`), so this `ValueError` should be unreachable in
+  practice -- a production invariant enforced by the refusal gate, not a
+  normal control path this module expects to hit.
 
 `build_exec_trap(kind, line)` is the replacement for an **unmocked** EXEC
 SQL/CICS/DLI site: GnuCOBOL cannot compile a raw EXEC block regardless of
@@ -518,8 +562,9 @@ INCLUDE <member>` (non-SQLCA) shares this exact property for the same
 reason: `expand_copybooks` runs on a synthetic `COPY <member>.` snippet at
 splice time, not on `raw_source` before `parse_cobol`, so these fields are
 equally invisible to `reset.py` and equally expected to be set fresh by a
-mock body on every run — the `ROWS` sugar (below) does this automatically
-via its per-row `MOVE`s.
+mock body on every run — the `ROWS` sugar (`build_rows_block`, "Dispatch
+and Trap Generation" above) does this automatically via its per-row
+`MOVE`s.
 
 **Literal-text and shared-line hardening (2026-07-07 fix, audit finding
 2.6):** the block scanner previously keyed off the literal substring

@@ -1,5 +1,173 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-06 — PR #46 post-review polish pass (unify-with-data)
+
+Five pre-merge, non-blocking fixes from PR #46's code review, applied after
+approval (see `.superpowers/sdd/2026-08-04-unify-with-data-plan/
+pr46-review-fixes-report.md` for the full writeup):
+
+* **Corrected an overclaim about VERIFY counts under `--placeholder`**
+  ([dsl](dsl.md), `generator.py`'s `_bundle_directive_for` docstring and
+  `CallCountOverride`'s own docstring): both previously said/implied other
+  categories' call counts are "unaffected by which data the mock body
+  carries." False — a `CallCountOverride` only recomputes the DOWNGRADED
+  boundary's own `call_count`; a different boundary reached a
+  program-flow-driven number of times *inside the same loop being
+  downgraded* (e.g. a `CALL` made once per row in a `PERFORM ... UNTIL
+  <eof-flag>` loop whose READ was downgraded to signal EOF on call 1) is
+  NOT recomputed and can go stale. Inherited heuristic behavior, not new;
+  `--placeholder` just makes it easier to reach. Doc-only, both
+  docstrings and `.okf/dsl.md`'s mirror of the same claim corrected;
+  `CallCountOverride`'s "not a guess" phrasing softened to the precise
+  guarantee (exact assuming the program stops reading/fetching that
+  boundary once the end-of-data signal fires — the same assumption the
+  rest of the engine already makes).
+* **Fixed a real bug**: [splicer](splicer.md)'s `injector.build_site_
+  dispatch`, READ ROWS exhaustion branch. When a directive has BOTH `rows`
+  and a `TERMINAL` group, and the file declares a `FILE STATUS` field, the
+  exhausted (`WHEN OTHER`) branch used to emit ONLY the TERMINAL group's
+  own MOVEs — if TERMINAL set an EOF flag but never mentioned the status
+  field, that field was silently left at whatever `"00"` the default-
+  success MOVE set on the call that triggered `WHEN OTHER`, an EOF-flag/
+  status-field inconsistency a program checking both would see. Fixed by
+  applying the SAME "implicit default, explicit override" ordering the
+  plain FILE-STATUS default/override pair a few lines above already uses:
+  the exhausted branch now always emits `MOVE "10" TO <status field>`
+  first (when the file has one), then the directive's own TERMINAL MOVEs
+  after — so an author's own MOVE to that field (if TERMINAL has one)
+  naturally overrides the default by coming later in the same WHEN
+  branch, and an absent one still gets the correct "10" instead of a
+  stale "00". SQL ROWS (no TERMINAL grammar) is untouched. Two new tests
+  in `tests/unit/test_injector.py` pin both shapes (TERMINAL without the
+  status field: both lines present, default before TERMINAL; TERMINAL
+  targeting the status field: both lines present, author's value last).
+* **`mockymock fixtures`/`generate --rows` now reject a negative value at
+  the CLI layer** ([cli](cli.md)): new shared `_check_rows_non_negative`
+  helper (mirrors `_check_input_files`'s "fail fast on a bad invocation"
+  placement), called right after the input-file check in both
+  subcommands, before any parsing or generator construction. Previously
+  `--rows -1` on `fixtures` crashed with a raw traceback
+  (`DataGeneratorOptions` construction sat outside any try/except there);
+  on `generate --with-data` it was caught but only after other work and
+  with the wrong message/stream. New tests in `test_cli_fixtures.py` and
+  `test_cli_generate_with_data.py`.
+* **`tests/unit/test_bundle_surface_keys.py` hygiene**: `EXAMPLE_PROGRAMS`
+  corpus discovery's `read_text()` now passes `encoding="utf-8"`
+  explicitly (was implicit-locale-dependent); the `assert len(...) >= 14`
+  corpus-shrink guard moved out of module level (where a failure is a
+  pytest collection ERROR, and vanishes entirely under `python -O`) into
+  its own `test_example_corpus_has_expected_minimum_size` test function.
+
+## 2026-08-05 — unify-with-data: hand-authored `ROWS`/`TERMINAL` on READ, `mockymock fixtures`, `--rows`/`--placeholder` on `generate --with-data`
+
+Reconciliation branch that ports the parked `feature/generate-with-data`
+branch's unique deliverables onto origin/main's already-released Phase 8
+bundle-driven `generate --with-data`/`--fixtures` engine (see the entry
+above), rather than the other way around — main's `dsl/fixture_bundle.py`
++ `dsl/generator.py` + AT-END replication (`3ad3378`) stayed the emission
+engine throughout; nothing here changes their behavior. Plan:
+`docs/2026-08-04-unify-with-data-plan.md`.
+
+* **cobolparser pin bumped** to `ff64b25` (origin/main at reconciliation
+  time — PR #110's gen-fixtures fixes, PR #112's EJECT support), superseding
+  main's `b3e2b32`. Ported `tests/unit/test_bundle_surface.py` (bundle-shape
+  smoke test) verbatim from the parked branch.
+* **New DSL grammar, hand-authoring only**: `MOCK READ <file> ROWS ( FIELD
+  = value, ... ) ( ... ) [TERMINAL ( FIELD = value, ... )] END-MOCK` —
+  `ROWS` was previously SQL-only; `TERMINAL` is new, giving the
+  rows-exhausted branch its own field assignments instead of a default. A
+  human (or an editor integration) writes this against `mockymock
+  fixtures`' JSON output; the bundle-driven scaffold below does **not**
+  emit it — it still hand-rolls its own `EVALUATE` for a multi-row READ.
+  `splicer/injector.build_rows_block` generalized from a SQL-only,
+  SQLCODE-hardcoded function to `build_rows_block(tally_name, rows, *,
+  row_suffix_moves, exhausted_moves)`; both call sites (SQL, READ) now
+  live in `build_site_dispatch`, which is also where the SQLCODE 0/100
+  literals actually live post-generalization (not in `build_rows_block`
+  itself — a docstring in `dsl/generator.py`'s `_sql_wants_rows` still
+  pointed at the old location and was corrected in the same pass as this
+  entry). A `MOCK READ ... ROWS` with no `TERMINAL` group **and** no
+  resolvable `FILE STATUS` field refuses `UNRESOLVED_FILE_STATUS_TARGET`
+  (`refusal.check_test_case`, a second trigger under the code the
+  `FILE-STATUS IS` sugar case already used) — fail-closed rather than
+  splice a READ loop with no way to signal end-of-data.
+  See [dsl.md](dsl.md)'s "`ROWS` cursor sugar" section, [splicer.md](splicer.md)'s
+  "Dispatch and Trap Generation" section, and [analysis.md](analysis.md)'s
+  `check_test_case` writeup.
+* **New `mockymock fixtures <program>` subcommand**: prints a cobol-parser
+  `FixtureBundle` as JSON on stdout (`--scenarios happy|branches|all`,
+  `--seed N`, `--rows N`, `--copybook-path DIR ...`), for editor
+  integrations rather than `.cut` scaffolding — stdout is JSON only, every
+  diagnostic (including "no such file") goes to stderr. Hand-ported (not
+  cherry-picked — `cli/main.py` had diverged too far from the parked
+  branch) with its copybook-expansion-before-parse-gate ordering matching
+  `_cmd_generate`'s own. See [cli.md](cli.md)'s `fixtures` entry.
+* **`--rows N` / `--placeholder CATEGORY:KEY` on `generate --with-data`**:
+  `--rows` maps to `DataGeneratorOptions(rows=N)` on the self-generating
+  `--with-data` path only (`--rows` + `--fixtures` is a clean stderr
+  rejection — that bundle's row count is already baked in); `--rows 0` is
+  honored (`is not None`, not truthiness). `--placeholder` (repeatable)
+  downgrades a matched fixture's mock body to its ordinary
+  non-data-seeded placeholder while keeping it MOCKED, valid with either
+  `--with-data` or `--fixtures`; a malformed value (no `:`) exits 1, an
+  unmatched pair warns on stderr instead of the parked branch's own silent
+  no-op.
+  Two loop-termination bugs found and fixed empirically (not by lint,
+  which is static and cannot see a splice-time infinite loop — by
+  reasoning through what the downgraded body actually does at runtime,
+  same discipline as the `3ad3378`/gen-fixtures-Phase-8 fixes above):
+  * A downgraded (or `--rows 0`, or bundle-"empty input"-family) READ
+    fell back to a completely empty `MOCK READ` body, dropping the
+    replicated `AT END` handling along with the seeded rows and hanging
+    the program's own `PERFORM ... UNTIL <eof-flag>` loop forever;
+    likewise a downgraded SQL-ROWS fixture fell back to the ordinary `MOVE
+    0 TO SQLCODE` placeholder (permanent "more rows available"), hanging a
+    `PERFORM UNTIL SQLCODE = 100` cursor loop the same way. Fixed via a
+    shared `_read_exhaustion_lines` helper (the same content `_read_body`
+    already used for its own `WHEN OTHER` branch, now also used for the
+    empty-sequence and `--placeholder`-downgraded cases) and a
+    `_SQL_ROWS_EXHAUSTED_BODY` constant mirroring the splicer's own
+    hardcoded value.
+  * That fix alone left a second bug: a downgraded READ's corrected body
+    signals EOF on the very first call, so the program calls it exactly
+    once at runtime — but the generated `.cut` still carried the bundle's
+    original, now-stale `VERIFY READ <file> WAS CALLED N TIMES` from the
+    un-downgraded sequence, an assertion the file could never itself
+    satisfy. Fixed via `CallCountOverride`, computed at the same seam that
+    decided the downgraded body: `count=1` when the downgraded body
+    carries a real termination signal, else `demote_reason=...` (rendered
+    as a `*>` comment instead of a speculative `VERIFY` number) when it
+    doesn't — the runnable-by-construction invariant covers the whole
+    generated file, assertions included, not just mock bodies.
+  See [dsl.md](dsl.md)'s "`--rows` / `--placeholder` on the bundle-driven
+  scaffold" section.
+* **Contract test**: ported `tests/unit/test_bundle_surface_keys.py` from
+  the parked branch, adapted (its `mockymock/generation/with_data.py`
+  references didn't exist in this codebase's architecture — corrected to
+  the real join in `dsl/generator.py`'s `_mockymock_boundary_keys`/
+  `_unique_prefix`; added the `annotate_nested_sites` step main's own
+  `test_fixture_bundle_contract.py` established as necessary). Kept
+  alongside (not instead of) that existing contract test: this one is a
+  weaker subset check (`bundle_keys <= surface_keys`, joining EXEC by
+  line) over a broader, glob-discovered corpus (14 programs incl.
+  `examples/fixtures/FIXTUREDEMO` and two NIST programs, vs. the other
+  test's curated 11); the existing one is a stricter equality check
+  (`bundle-key == _unique_prefix(site, surface)`, the exact join the real
+  `--with-data` emission path uses) over a hand-maintained list. Genuinely
+  complementary, not redundant — different join strategy, different
+  corpus.
+* Examples: `examples/fixtures/FIXTUREDEMO` (main's existing golden,
+  Phase 9) stays canonical; the parked branch's duplicate
+  `examples/fixturedemo/` was not ported. `--rows`/`--placeholder`
+  against that same example are already covered end-to-end by
+  `tests/unit/test_cli_generate_with_data.py` (includes a
+  no-new-flags-byte-identical assertion against the checked-in golden), so
+  `tests/integration/test_fixturedemo_golden.py` itself was left
+  unextended.
+* Updated: [dsl.md](dsl.md), [splicer.md](splicer.md), [analysis.md](analysis.md),
+  [cli.md](cli.md), [index.md](index.md) (this entry's sections above/below);
+  `CHANGELOG.md`'s Unreleased section.
+
 ## 2026-08-04 — PR #44 Copilot review: `_RECORD_RE` couldn't match a subscripted name
 
 GitHub Copilot's automated review of PR #44 left one comment; verified

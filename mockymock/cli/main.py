@@ -25,6 +25,125 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fixtures(args: argparse.Namespace) -> int:
+    """Print a cobol-parser FixtureBundle as JSON for editor integrations
+    (the VS Code tree view consumes this). Unlike every other subcommand,
+    stdout must be EXACTLY the JSON document -- every diagnostic, including
+    the plain "no such file" gate, goes to stderr instead of the
+    `_check_input_files` convention the rest of this module uses.
+
+    Runs the same three fail-closed static gates as `_cmd_generate` (minus
+    the linkage-layout check, which only matters to the splicer that
+    `generate`/`run` feed -- `fixtures` never splices): a lossy copybook
+    decode (`check_expansion_warnings`), a clean-looking parse that still
+    dropped content (`check_whole_program`'s PARSE_WARNING), and any
+    unresolved COPY statement (`check_unresolved_copybooks`). Skipping
+    these would let e.g. a COPY-bearing program with no --copybook-path
+    silently exit 0 with an empty-fixtures bundle and a coverage summary
+    claiming everything resolved -- exactly the input `generate` refuses
+    with UNRESOLVED_COPYBOOK, so the two commands must agree."""
+    from cobolparser import parse_cobol
+    from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
+    from cobolparser.preprocess import expand_copybooks
+
+    from mockymock.analysis.refusal import (
+        check_expansion_warnings,
+        check_unresolved_copybooks,
+        check_whole_program,
+    )
+
+    source_path = Path(args.program)
+    if not source_path.is_file():
+        print(f"mockymock fixtures: no such file: {source_path}", file=sys.stderr)
+        return 1
+
+    if not _check_rows_non_negative("fixtures", args.rows):
+        return 1
+
+    # Mirrors _cmd_generate's order: expand copybooks (if any --copybook-path
+    # was given) before the parse gate below, so the gate sees the same
+    # source generate_with_scenarios_from_file will eventually parse itself
+    # -- gating on the raw, unexpanded source would let an unresolvable COPY
+    # slide past as a no-op (cobolparser tolerates unexpanded COPY under
+    # FAIL_FAST) instead of being refused here. generate_with_scenarios_from_file
+    # still re-expands and re-parses internally; that duplicate work is the
+    # price of a correctness gate rather than one that just happens to work.
+    raw_source = source_path.read_text(encoding="utf-8")
+    if args.copybook_path:
+        try:
+            expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
+            print(f"mockymock fixtures: {exc}", file=sys.stderr)
+            return 1
+        expansion_reasons = check_expansion_warnings(expansion)
+        for reason in expansion_reasons:
+            print(
+                f"mockymock fixtures: refused ({reason.code}): {reason.message}",
+                file=sys.stderr,
+            )
+        if expansion_reasons:
+            return 1
+        raw_source = expansion.expanded_source
+
+    # ProgramFixtureGenerator only raises when the AST comes back None
+    # (missing file, unresolved copybook under strict_copybooks). A source
+    # file that merely fails to parse (no recognizable COBOL division, bad
+    # syntax) still yields a placeholder AST -- generate_with_scenarios_from_file
+    # would happily return an empty bundle for it instead of failing, which
+    # would look like a real (if boring) program to the VS Code tree view.
+    # Parse the (possibly copybook-expanded) source once up front so that
+    # case is refused like every other command.
+    result = parse_cobol(raw_source, filename=source_path.name)
+    if not result.success:
+        print(
+            f"mockymock fixtures: {len(result.errors)} parse error(s):", file=sys.stderr
+        )
+        for error in result.errors:
+            print(f"  {error}", file=sys.stderr)
+        return 1
+
+    # success=True is not enough: cobolparser reports dropped statements
+    # (unsupported verbs, multi-program units, unparsed clause leftovers)
+    # as warnings on an otherwise clean parse. A bundle built from an
+    # incomplete AST would silently miss boundaries, so refuse -- same
+    # check _cmd_generate runs on the same signal.
+    warning_reasons = check_whole_program(result)
+    for reason in warning_reasons:
+        print(
+            f"mockymock fixtures: refused ({reason.code}): {reason.message}",
+            file=sys.stderr,
+        )
+    if warning_reasons:
+        return 1
+
+    copybook_reasons = check_unresolved_copybooks(raw_source)
+    for reason in copybook_reasons:
+        print(
+            f"mockymock fixtures: refused ({reason.code}): {reason.message}",
+            file=sys.stderr,
+        )
+    if copybook_reasons:
+        return 1
+
+    generator = (
+        ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))
+        if args.rows is not None
+        else ProgramFixtureGenerator()
+    )
+    try:
+        bundle = generator.generate_with_scenarios_from_file(
+            str(source_path),
+            copybook_paths=args.copybook_path,
+            mode=args.scenarios,
+            seed=args.seed,
+        )
+    except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
+        print(f"mockymock fixtures: {exc}", file=sys.stderr)
+        return 1
+    print(bundle.to_json())
+    return 0
+
+
 def _cmd_dashboard(args: argparse.Namespace) -> int:
     from mockymock.web import server
 
@@ -49,6 +168,25 @@ def _check_input_files(command: str, *paths: Path) -> bool:
             print(f"{command}: no such file: {path}")
             ok = False
     return ok
+
+
+def _check_rows_non_negative(command: str, rows: int | None) -> bool:
+    """Flag-only validation for `--rows N`, shared by `fixtures` and
+    `generate` (built together in this PR). `DataGeneratorOptions.
+    __post_init__` (cobol-parser) already rejects a negative `rows` with
+    `ValueError("rows must be non-negative")`, but that isn't good enough
+    here on its own: `_cmd_fixtures` constructs `DataGeneratorOptions`
+    outside any try/except (a negative value would crash with a raw
+    traceback), and both commands would otherwise only discover the
+    problem after every other flag-only check plus a full copybook
+    expansion and parse of the source file. Checking here instead fails
+    fast on a bad invocation -- same philosophy as `_check_input_files`,
+    called at the same point (right after the input-file check, before
+    any file parsing or generator construction)."""
+    if rows is not None and rows < 0:
+        print(f"mockymock {command}: --rows must be >= 0, got {rows}", file=sys.stderr)
+        return False
+    return True
 
 
 def _write_report_file(command: str, flag: str, target: str, content: str) -> bool:
@@ -96,6 +234,36 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if not _check_input_files("mockymock generate", source_path):
         return 1
 
+    if not _check_rows_non_negative("generate", args.rows):
+        return 1
+
+    # Flag-only validation -- neither check needs the source file, so both
+    # run before any parse/bundle work, same "fail fast on a bad
+    # invocation" philosophy as _check_input_files above. Category is
+    # uppercased for comparison (a bundle fixture's own `category` string
+    # is always uppercase, e.g. "READ"/"SQL"); the key is left exactly as
+    # given -- the bundle carries it case-sensitively.
+    placeholder_pairs: list[tuple[str, str]] = []
+    for value in args.placeholder:
+        if ":" not in value:
+            print(
+                f"mockymock generate: --placeholder must be CATEGORY:KEY, "
+                f"got {value!r}",
+                file=sys.stderr,
+            )
+            return 1
+        category, _, key = value.partition(":")
+        placeholder_pairs.append((category.upper(), key))
+
+    if args.rows is not None and args.fixtures:
+        print(
+            "mockymock generate: --rows is not valid together with "
+            "--fixtures -- that bundle's row count is already baked in; "
+            "use --rows with --with-data's self-generating path instead",
+            file=sys.stderr,
+        )
+        return 1
+
     bundle: FixtureBundle | None = None
     if args.fixtures:
         fixtures_path = Path(args.fixtures)
@@ -111,10 +279,15 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             print(f"mockymock generate: invalid fixture bundle {fixtures_path}: {exc}")
             return 1
     elif args.with_data:
-        from cobolparser.generators import ProgramFixtureGenerator
+        from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
 
         try:
-            cp_bundle = ProgramFixtureGenerator().generate_with_scenarios_from_file(
+            generator = (
+                ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))
+                if args.rows is not None
+                else ProgramFixtureGenerator()
+            )
+            cp_bundle = generator.generate_with_scenarios_from_file(
                 str(source_path),
                 mode=args.scenarios,
                 seed=args.seed,
@@ -124,6 +297,24 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
             return 1
+
+    if placeholder_pairs:
+        # Fail-loud: a --placeholder pair that never matches a bundle
+        # fixture is reported rather than a silent no-op (deliberately
+        # improves on the parked feature/generate-with-data branch's own
+        # behavior -- see this repo's own unify-with-data plan, Task 4).
+        bundle_fixture_keys = {
+            (fixture.category, fixture.key)
+            for scenario in (bundle.scenarios if bundle is not None else [])
+            for fixture in scenario.fixtures
+        }
+        for category, key in placeholder_pairs:
+            if (category, key) not in bundle_fixture_keys:
+                print(
+                    f"mockymock generate: warning: --placeholder "
+                    f"{category}:{key} matched no fixture",
+                    file=sys.stderr,
+                )
 
     raw_source = source_path.read_text(encoding="utf-8")
     if args.copybook_path:
@@ -189,7 +380,9 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
-    cut_text = scaffold_cut(result.ast.program_name, surface, bundle)
+    cut_text = scaffold_cut(
+        result.ast.program_name, surface, bundle, frozenset(placeholder_pairs)
+    )
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
     output_path.write_text(cut_text, encoding="utf-8")
@@ -1130,7 +1323,64 @@ def build_parser() -> argparse.ArgumentParser:
             "gen-fixtures --scenarios flag"
         ),
     )
+    generate_parser.add_argument(
+        "--rows",
+        type=int,
+        help=(
+            "Rows to generate per data table on the --with-data "
+            "self-generating path (generator default; invalid together "
+            "with --fixtures, whose row count is already baked into the "
+            "bundle). A scenario family that pins its own row count "
+            "(e.g. --scenarios all's fixed 'empty input' family) ignores "
+            "this and always generates zero rows for that scenario"
+        ),
+    )
+    generate_parser.add_argument(
+        "--placeholder",
+        action="append",
+        default=[],
+        metavar="CATEGORY:KEY",
+        help=(
+            "Downgrade this boundary's mock body to its ordinary "
+            "placeholder instead of bundle-seeded data (repeatable; the "
+            "fixture stays mocked, just without generated data; valid "
+            "with --with-data or --fixtures; an unmatched pair warns on "
+            "stderr rather than silently doing nothing)"
+        ),
+    )
     generate_parser.set_defaults(func=_cmd_generate)
+
+    fixtures_parser = subparsers.add_parser(
+        "fixtures",
+        help=(
+            "Print a FixtureBundle (scenarios, mock data, expectations) as "
+            "JSON for editor integrations"
+        ),
+    )
+    fixtures_parser.add_argument("program")
+    fixtures_parser.add_argument(
+        "--scenarios",
+        choices=["happy", "branches", "all"],
+        default="happy",
+        help="Which scenario set to generate (default happy)",
+    )
+    fixtures_parser.add_argument("--seed", type=int, help="Deterministic RNG seed")
+    fixtures_parser.add_argument(
+        "--rows",
+        type=int,
+        help=(
+            "Rows to generate per data table (generator default). A "
+            "scenario family that pins its own row count (e.g. "
+            "--scenarios all's fixed 'empty input' family) ignores this "
+            "and always generates zero rows for that scenario"
+        ),
+    )
+    fixtures_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    fixtures_parser.set_defaults(func=_cmd_fixtures)
 
     run_parser = subparsers.add_parser(
         "run",
