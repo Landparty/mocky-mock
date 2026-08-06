@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-05T00:00:00Z
+timestamp: 2026-08-06T00:00:00Z
 ---
 
 # Overview
@@ -245,18 +245,28 @@ category:
 - **READ**: `row_suffix_moves=[]` (the ordinary FILE-STATUS
   default-success `MOVE "00"` above already covers every row when the
   file declares a status field, so there is nothing left to append per
-  row). `exhausted_moves` resolves in priority order: the directive's own
-  `TERMINAL ( FIELD = value, ... )` group when present (`[f"MOVE {value}
-  TO {field}" for field, value in directive.terminal_row]`), else a
-  default `MOVE "10" TO <status field>` (COBOL's real end-of-file status
-  code) when the file has a `file_status_fields` entry. When **neither**
-  exists, `build_site_dispatch` raises `ValueError` rather than emit a
-  READ loop with no way to terminate -- but every production call site
-  gates on `refusal.check_test_case` first (same `UNRESOLVED_FILE_STATUS_
-  TARGET` code as the `FILE-STATUS IS` case above, a second, structurally
-  different trigger under that one code: `directive.category is
-  MockCategory.READ and directive.rows is not None and
-  directive.terminal_row is None and directive.key.upper() not in
+  row). `exhausted_moves` is built additively, not as an either/or choice
+  (fixed post-PR #46 review, Task 3 -- see log.md): when the file has a
+  `file_status_fields` entry it ALWAYS starts with the implicit `MOVE
+  "10" TO <status field>` (COBOL's real end-of-file status code), and the
+  directive's own `TERMINAL ( FIELD = value, ... )` group's MOVEs (`[f"MOVE
+  {value} TO {field}" for field, value in directive.terminal_row]`) --
+  when present -- are appended right after, same "implicit default,
+  explicit override" ordering as the FILE-STATUS default/override pair
+  above: an author's own MOVE to that same field (if TERMINAL happens to
+  include one) naturally wins by coming later in the same WHEN branch,
+  and a TERMINAL group that never mentions the status field no longer
+  leaves it stuck at whatever "00" the default-success MOVE set on the
+  call that triggered this WHEN OTHER path -- it gets the correct "10"
+  instead. When the file has no status field, `exhausted_moves` is just
+  the TERMINAL group's own MOVEs (nothing to default). When **neither** a
+  status field nor a TERMINAL group exists, `build_site_dispatch` raises
+  `ValueError` rather than emit a READ loop with no way to terminate --
+  but every production call site gates on `refusal.check_test_case` first
+  (same `UNRESOLVED_FILE_STATUS_TARGET` code as the `FILE-STATUS IS` case
+  above, a second, structurally different trigger under that one code:
+  `directive.category is MockCategory.READ and directive.rows is not None
+  and directive.terminal_row is None and directive.key.upper() not in
   file_status_fields`), so this `ValueError` should be unreachable in
   practice -- a production invariant enforced by the refusal gate, not a
   normal control path this module expects to hit.

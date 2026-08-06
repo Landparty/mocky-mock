@@ -89,21 +89,34 @@ EXAMPLE_PROGRAMS = sorted(
     p
     for p in EXAMPLES_DIR.glob("*/[A-Z]*")
     if p.suffix.lower() == ".cbl"
-    and ((p.parent / "copybooks").exists() or "COPY " not in p.read_text())
+    and (
+        (p.parent / "copybooks").exists()
+        or "COPY " not in p.read_text(encoding="utf-8")
+    )
 )
 
-# Self-guard against a silent shrink of the above: 14 is the current count
-# with EXAMPLE_PROGRAMS's filters applied (verified on both Windows and, via
-# the reasoning above, POSIX). If this drops, either a real example went
-# missing or the platform-independence fix above regressed -- most likely
-# by losing IC117M.CBL/OBIC1A.CBL again to a case-sensitivity bug.
-assert len(EXAMPLE_PROGRAMS) >= 14, (
-    f"EXAMPLE_PROGRAMS shrank to {len(EXAMPLE_PROGRAMS)} -- expected at "
-    "least 14, including the uppercase-extension IC117M.CBL/OBIC1A.CBL "
-    "(a common regression: a case-sensitive .cbl suffix match drops them "
-    "on POSIX); got: "
-    f"{sorted(p.parent.name + '/' + p.name for p in EXAMPLE_PROGRAMS)}"
-)
+
+def test_example_corpus_has_expected_minimum_size():
+    """Self-guard against a silent shrink of EXAMPLE_PROGRAMS: 14 is the
+    current count with its filters applied (verified on both Windows and,
+    per the module docstring's reasoning above, POSIX). If this drops,
+    either a real example went missing or the platform-independence fix
+    above regressed -- most likely by losing IC117M.CBL/OBIC1A.CBL again
+    to a case-sensitivity bug.
+
+    This is a real test function, not a bare module-level `assert`
+    (fix, post-PR #46 review, Task 5): a module-level assert failing
+    during collection is a pytest ERROR, not a reported test failure, and
+    it silently vanishes entirely under `python -O` (asserts are
+    stripped) -- neither behavior is what a corpus-shrink guard should
+    have."""
+    assert len(EXAMPLE_PROGRAMS) >= 14, (
+        f"EXAMPLE_PROGRAMS shrank to {len(EXAMPLE_PROGRAMS)} -- expected at "
+        "least 14, including the uppercase-extension IC117M.CBL/OBIC1A.CBL "
+        "(a common regression: a case-sensitive .cbl suffix match drops them "
+        "on POSIX); got: "
+        f"{sorted(p.parent.name + '/' + p.name for p in EXAMPLE_PROGRAMS)}"
+    )
 
 
 @pytest.mark.parametrize("path", EXAMPLE_PROGRAMS, ids=lambda p: p.parent.name)

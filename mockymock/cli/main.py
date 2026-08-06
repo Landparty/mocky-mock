@@ -57,6 +57,9 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
         print(f"mockymock fixtures: no such file: {source_path}", file=sys.stderr)
         return 1
 
+    if not _check_rows_non_negative("fixtures", args.rows):
+        return 1
+
     # Mirrors _cmd_generate's order: expand copybooks (if any --copybook-path
     # was given) before the parse gate below, so the gate sees the same
     # source generate_with_scenarios_from_file will eventually parse itself
@@ -167,6 +170,25 @@ def _check_input_files(command: str, *paths: Path) -> bool:
     return ok
 
 
+def _check_rows_non_negative(command: str, rows: int | None) -> bool:
+    """Flag-only validation for `--rows N`, shared by `fixtures` and
+    `generate` (built together in this PR). `DataGeneratorOptions.
+    __post_init__` (cobol-parser) already rejects a negative `rows` with
+    `ValueError("rows must be non-negative")`, but that isn't good enough
+    here on its own: `_cmd_fixtures` constructs `DataGeneratorOptions`
+    outside any try/except (a negative value would crash with a raw
+    traceback), and both commands would otherwise only discover the
+    problem after every other flag-only check plus a full copybook
+    expansion and parse of the source file. Checking here instead fails
+    fast on a bad invocation -- same philosophy as `_check_input_files`,
+    called at the same point (right after the input-file check, before
+    any file parsing or generator construction)."""
+    if rows is not None and rows < 0:
+        print(f"mockymock {command}: --rows must be >= 0, got {rows}", file=sys.stderr)
+        return False
+    return True
+
+
 def _write_report_file(command: str, flag: str, target: str, content: str) -> bool:
     """Write one of `run`'s optional --*-xml/--*-json/--*-out report files
     (or `export`'s --output). A bad parent directory (or any other
@@ -210,6 +232,9 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     source_path = Path(args.program)
     if not _check_input_files("mockymock generate", source_path):
+        return 1
+
+    if not _check_rows_non_negative("generate", args.rows):
         return 1
 
     # Flag-only validation -- neither check needs the source file, so both

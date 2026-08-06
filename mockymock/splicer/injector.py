@@ -70,9 +70,20 @@ def build_site_dispatch(
     it and therefore wins, same as any hand-written MOVE the author adds
     after it -- see docs/2026-07-20-before-blocks-and-file-status-design.md.
 
-    A `MOCK READ ... ROWS` directive's exhaustion branch resolves to its
-    own `TERMINAL ( ... )` group when present, else a default
-    `MOVE "10" TO <status field>`; if neither is available this raises
+    A `MOCK READ ... ROWS` directive's exhaustion (`WHEN OTHER`) branch
+    follows the SAME implicit-default-then-explicit-override ordering as
+    the FILE-STATUS default-success MOVE above: when the file declares a
+    status field it always starts with the implicit `MOVE "10" TO <status
+    field>` (COBOL's real end-of-file code), and the directive's own
+    `TERMINAL ( ... )` group's MOVEs -- when present -- are appended right
+    after, so an author's own MOVE to that same field naturally wins by
+    coming later in the same WHEN branch, exactly like a hand-written MOVE
+    would. A TERMINAL group that never mentions the status field no
+    longer leaves it stuck at whatever the default-success `MOVE "00"`
+    set on the call that triggered this WHEN OTHER path -- it gets the
+    correct "10" instead. If the file has no status field, only the
+    TERMINAL group's own MOVEs fire (there is no field to default). If
+    NEITHER a status field nor a TERMINAL group is available this raises
     ValueError rather than emit a READ loop with no way to terminate --
     every production call site gates on `refusal.check_test_case`
     (UNRESOLVED_FILE_STATUS_TARGET) first, using this same
@@ -129,11 +140,22 @@ def build_site_dispatch(
                     "refusal gate should have caught this "
                     "(UNRESOLVED_FILE_STATUS_TARGET)"
                 )
-            exhausted_moves = (
-                [f"MOVE {value} TO {field}" for field, value in directive.terminal_row]
-                if directive.terminal_row is not None
-                else [f'MOVE "10" TO {status_field}']
-            )
+            # Implicit default first, explicit override after -- same
+            # ordering principle as the FILE-STATUS default-success MOVE
+            # above (lines ~118-124). Without the default here, a TERMINAL
+            # group that sets an EOF flag but never mentions the status
+            # field would leave that field at whatever "00" the
+            # default-success MOVE set on the call that triggered this
+            # WHEN OTHER path -- an EOF flag/status-field inconsistency a
+            # program checking both would see.
+            exhausted_moves: list[str] = []
+            if status_field is not None:
+                exhausted_moves.append(f'MOVE "10" TO {status_field}')
+            if directive.terminal_row is not None:
+                exhausted_moves.extend(
+                    f"MOVE {value} TO {field}"
+                    for field, value in directive.terminal_row
+                )
             lines.extend(
                 f"                   {body}"
                 for body in build_rows_block(

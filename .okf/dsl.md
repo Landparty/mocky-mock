@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-08-05T00:00:00Z
+timestamp: 2026-08-06T00:00:00Z
 ---
 
 # Overview
@@ -425,11 +425,19 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
   default-success `MOVE "00"` already precedes the whole dispatch block
   when the file declares a `FILE STATUS` field — see the `FILE-STATUS IS`
   section above — so there is nothing left to append per row).
-  `exhausted_moves` resolves to the directive's own `TERMINAL` group when
-  present (`[f"MOVE {value} TO {field}" for field, value in
-  directive.terminal_row]`), else a default `MOVE "10" TO <status
-  field>` (COBOL's real end-of-file status code) when the file has a
-  resolved `FILE STATUS` field. See [analysis](analysis.md)'s
+  `exhausted_moves` is additive, not either/or (fixed post-PR #46 review,
+  Task 3): when the file has a resolved `FILE STATUS` field it always
+  starts with a default `MOVE "10" TO <status field>` (COBOL's real
+  end-of-file status code), and the directive's own `TERMINAL` group's
+  MOVEs (`[f"MOVE {value} TO {field}" for field, value in
+  directive.terminal_row]`) — when present — are appended right after, so
+  an author's own MOVE to that same field (if TERMINAL includes one)
+  overrides the default by coming later in the same `WHEN OTHER` branch,
+  and a TERMINAL group that never mentions the status field no longer
+  leaves it stuck at whatever `"00"` the default-success MOVE set on the
+  call that triggered `WHEN OTHER` — it gets the correct `"10"` instead.
+  With no `FILE STATUS` field, `exhausted_moves` is just the TERMINAL
+  group's own MOVEs. See [analysis](analysis.md)'s
   `UNRESOLVED_FILE_STATUS_TARGET` refusal for the case where **neither**
   exists — `check_test_case` refuses fail-closed before splicing is ever
   reached, so `build_site_dispatch` raising `ValueError` for that same
@@ -612,9 +620,30 @@ the downgrade decision); `_render_expectation` renders `override.count`
 in place of `expectation.value` when present, or — for a `demote_reason`
 — a `*>` comment instead of a `VERIFY` line at all: `*> VERIFY <directive>
 WAS CALLED <count not exact by construction after --placeholder downgrade
--- <reason>>`. Every other category's call count is program-flow-driven
-(how many times the PROCEDURE DIVISION reaches that statement),
-unaffected by which data the mock body carries — no override for them.
+-- <reason>>`. `count=1` is exact ASSUMING the program stops reading/
+fetching this boundary once its end-of-data signal fires — the same
+assumption the rest of this engine already makes about every
+program-flow-driven call count; a program that reads the same file/
+cursor a fixed number of times unconditionally, ignoring that signal,
+would still see a stale count.
+
+**This recompute covers only the downgraded boundary's OWN call count —
+it is not a general re-derivation of every VERIFY in the TESTCASE.**
+Every other category's call count is program-flow-driven (how many
+times the PROCEDURE DIVISION reaches that statement) and is left exactly
+as the bundle computed it, even when that count itself depends on how
+many times the now-downgraded loop executes — e.g. a `CALL` made once
+per row inside the same `PERFORM ... UNTIL <eof-flag>` loop as a
+downgraded `READ`. A `--placeholder`-downgraded READ that now signals
+EOF on call 1 makes that loop body (and anything it calls) run far fewer
+times than the bundle's original, un-downgraded sequence length assumed
+— but nothing recomputes the `CALL`'s own `VERIFY ... WAS CALLED N
+TIMES` to match. This is inherited behavior, not new here: every in-loop
+call count was already heuristic (derived from the bundle's generated
+sequence length, not the downgraded body), `--placeholder` just makes it
+easier to reach in practice. Review the VERIFYs on any other boundary
+inside the same loop as a downgraded one before trusting the generated
+file.
 
 Deliberately NOT covered by any of this: `--rows N` combined with
 `--scenarios all`'s fixed "empty input" family, which pins its own

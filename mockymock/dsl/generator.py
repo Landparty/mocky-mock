@@ -675,14 +675,21 @@ class CallCountOverride:
     bundle's original count unchanged would pin a `VERIFY ... WAS CALLED
     N TIMES` the generated file cannot itself satisfy.
 
-    `count`: the exact recomputed value, TRUE by construction of the
-    downgraded body actually emitted (not a guess about program
-    behavior). `demote_reason`: set instead of `count` when the
-    downgraded body carries no way to know the real count at all (e.g. a
-    READ whose source `AT END` clause has no FILE STATUS field and
-    nothing `_replicated_at_end_moves` could safely replicate -- an
-    entirely empty exhaustion body, not an "exact by construction" one)
-    -- `_render_expectation` renders a `*>` comment naming the reason
+    `count`: the value implied by the downgraded body's OWN construction --
+    the body guarantees this boundary signals end-of-data on call 1, so
+    `count=1` is exact ASSUMING the program stops reading/fetching this
+    boundary once that end-of-data signal fires, which is the same
+    assumption the rest of this engine already makes about every
+    program-flow-driven call count (it isn't independently verified
+    against the PROCEDURE DIVISION's actual control flow). A program that
+    reads the same file/cursor a fixed number of times unconditionally,
+    ignoring the EOF/SQLCODE-100 signal, would still see a stale count
+    here. `demote_reason`: set instead of `count` when the downgraded
+    body carries no way to know the real count at all (e.g. a READ whose
+    source `AT END` clause has no FILE STATUS field and nothing
+    `_replicated_at_end_moves` could safely replicate -- an entirely
+    empty exhaustion body, not an "exact by construction" one) --
+    `_render_expectation` renders a `*>` comment naming the reason
     instead of a speculative number in that case."""
 
     count: int | None = None
@@ -739,10 +746,22 @@ def _bundle_directive_for(
     lose (OPEN/CLOSE/etc.'s STATUS_ONLY body is a single-shot per-call
     status override; CALL/DYNCALL/ACCEPT/CICS/DLI/a single-row SQL
     fixture never emit ROWS sugar at all), so `_placeholder_body_for`
-    stays correct for them, and their call count is program-flow-driven
-    (how many times the PROCEDURE DIVISION reaches that statement),
-    entirely unaffected by which data the mock body happens to carry --
-    no override needed."""
+    stays correct for them and no override of THEIR OWN call count is
+    needed. This is narrower than "unaffected by --placeholder": only the
+    downgraded boundary's own call_count is recomputed here. A DIFFERENT
+    boundary's call count -- one that is itself program-flow-driven by
+    how many times the now-downgraded loop executes, e.g. a CALL made
+    once per row inside the same READ loop being downgraded -- is NOT
+    adjusted and can go stale (the bundle's original count assumed the
+    loop's original, un-downgraded row count; --placeholder can make the
+    loop run fewer times, or zero, without touching that other
+    boundary's VERIFY at all). This is inherited behavior, not new here:
+    every in-loop call count was already heuristic (program-flow-derived
+    from the bundle's own generated sequence length, not independently
+    re-derived from the downgraded body), --placeholder just makes it
+    easier to reach in practice by changing how many times the loop
+    actually runs. Review the VERIFYs on any other boundary inside the
+    same loop as a downgraded one before trusting the generated file."""
     try:
         category = MockCategory(fixture.category)
     except ValueError:

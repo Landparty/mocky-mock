@@ -22,6 +22,20 @@ def test_fixtures_prints_bundle_json(tmp_path, capsys):
     assert bundle["seed"] == 7
 
 
+def test_fixtures_rejects_negative_rows(tmp_path, capsys):
+    """--rows must be validated before any file parsing/generator
+    construction -- a negative value used to reach DataGeneratorOptions
+    unguarded (outside any try/except in _cmd_fixtures) and crash with a
+    raw traceback instead of a clean CLI error."""
+    cbl = tmp_path / "BSMOKE.cbl"
+    cbl.write_text(SOURCE, encoding="utf-8")
+    rc = main(["fixtures", str(cbl), "--rows", "-1"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "mockymock fixtures: --rows must be >= 0, got -1" in captured.err
+
+
 def test_fixtures_parse_failure_exits_1(tmp_path, capsys):
     bad = tmp_path / "BAD.cbl"
     bad.write_text("not cobol at all", encoding="utf-8")

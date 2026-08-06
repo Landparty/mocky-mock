@@ -209,6 +209,30 @@ def test_fixtures_path_empty_read_sequence_still_emits_the_exhaustion_branch(
     assert 'MOVE "Y" TO WS-EOF' in text
 
 
+def test_rows_negative_is_rejected(tmp_path, capsys):
+    """--rows must be validated before any file parsing/generator
+    construction (fix, post-PR #46 review, Task 4): a negative value used
+    to fall through to DataGeneratorOptions and only get caught by the
+    broad try/except around bundle generation, well after cheaper
+    flag-only checks could have refused it immediately."""
+    out = tmp_path / "o.cut"
+    rc = main(
+        [
+            "generate",
+            str(_FIXTUREDEMO_CBL),
+            "--with-data",
+            "--rows",
+            "-1",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 1
+    assert not out.exists()
+    err = capsys.readouterr().err
+    assert "mockymock generate: --rows must be >= 0, got -1" in err
+
+
 def test_rows_with_fixtures_file_is_rejected(tmp_path, capsys):
     out = tmp_path / "o.cut"
     rc = main(

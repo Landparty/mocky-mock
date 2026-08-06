@@ -1,5 +1,63 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-06 — PR #46 post-review polish pass (unify-with-data)
+
+Five pre-merge, non-blocking fixes from PR #46's code review, applied after
+approval (see `.superpowers/sdd/2026-08-04-unify-with-data-plan/
+pr46-review-fixes-report.md` for the full writeup):
+
+* **Corrected an overclaim about VERIFY counts under `--placeholder`**
+  ([dsl](dsl.md), `generator.py`'s `_bundle_directive_for` docstring and
+  `CallCountOverride`'s own docstring): both previously said/implied other
+  categories' call counts are "unaffected by which data the mock body
+  carries." False — a `CallCountOverride` only recomputes the DOWNGRADED
+  boundary's own `call_count`; a different boundary reached a
+  program-flow-driven number of times *inside the same loop being
+  downgraded* (e.g. a `CALL` made once per row in a `PERFORM ... UNTIL
+  <eof-flag>` loop whose READ was downgraded to signal EOF on call 1) is
+  NOT recomputed and can go stale. Inherited heuristic behavior, not new;
+  `--placeholder` just makes it easier to reach. Doc-only, both
+  docstrings and `.okf/dsl.md`'s mirror of the same claim corrected;
+  `CallCountOverride`'s "not a guess" phrasing softened to the precise
+  guarantee (exact assuming the program stops reading/fetching that
+  boundary once the end-of-data signal fires — the same assumption the
+  rest of the engine already makes).
+* **Fixed a real bug**: [splicer](splicer.md)'s `injector.build_site_
+  dispatch`, READ ROWS exhaustion branch. When a directive has BOTH `rows`
+  and a `TERMINAL` group, and the file declares a `FILE STATUS` field, the
+  exhausted (`WHEN OTHER`) branch used to emit ONLY the TERMINAL group's
+  own MOVEs — if TERMINAL set an EOF flag but never mentioned the status
+  field, that field was silently left at whatever `"00"` the default-
+  success MOVE set on the call that triggered `WHEN OTHER`, an EOF-flag/
+  status-field inconsistency a program checking both would see. Fixed by
+  applying the SAME "implicit default, explicit override" ordering the
+  plain FILE-STATUS default/override pair a few lines above already uses:
+  the exhausted branch now always emits `MOVE "10" TO <status field>`
+  first (when the file has one), then the directive's own TERMINAL MOVEs
+  after — so an author's own MOVE to that field (if TERMINAL has one)
+  naturally overrides the default by coming later in the same WHEN
+  branch, and an absent one still gets the correct "10" instead of a
+  stale "00". SQL ROWS (no TERMINAL grammar) is untouched. Two new tests
+  in `tests/unit/test_injector.py` pin both shapes (TERMINAL without the
+  status field: both lines present, default before TERMINAL; TERMINAL
+  targeting the status field: both lines present, author's value last).
+* **`mockymock fixtures`/`generate --rows` now reject a negative value at
+  the CLI layer** ([cli](cli.md)): new shared `_check_rows_non_negative`
+  helper (mirrors `_check_input_files`'s "fail fast on a bad invocation"
+  placement), called right after the input-file check in both
+  subcommands, before any parsing or generator construction. Previously
+  `--rows -1` on `fixtures` crashed with a raw traceback
+  (`DataGeneratorOptions` construction sat outside any try/except there);
+  on `generate --with-data` it was caught but only after other work and
+  with the wrong message/stream. New tests in `test_cli_fixtures.py` and
+  `test_cli_generate_with_data.py`.
+* **`tests/unit/test_bundle_surface_keys.py` hygiene**: `EXAMPLE_PROGRAMS`
+  corpus discovery's `read_text()` now passes `encoding="utf-8"`
+  explicitly (was implicit-locale-dependent); the `assert len(...) >= 14`
+  corpus-shrink guard moved out of module level (where a failure is a
+  pytest collection ERROR, and vanishes entirely under `python -O`) into
+  its own `test_example_corpus_has_expected_minimum_size` test function.
+
 ## 2026-08-05 — unify-with-data: hand-authored `ROWS`/`TERMINAL` on READ, `mockymock fixtures`, `--rows`/`--placeholder` on `generate --with-data`
 
 Reconciliation branch that ports the parked `feature/generate-with-data`
