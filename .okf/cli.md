@@ -259,15 +259,26 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
 2. Read `program`, apply `--copybook-path` expansion same as `generate`.
    `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
    on a lossy copybook decode before the corrupted text is ever parsed.
-3. `parse_cobol` -> `check_whole_program(result)` refusals (PARSE_ERROR on
-   a failed parse, PARSE_WARNING per `ParseResult.warnings` entry — dropped
-   statements on an otherwise "clean" parse) are printed and any of them
-   exits 1.
-4. `check_unresolved_copybooks(raw_source)` — same refusal gate as `generate`.
+3. `parse_cobol` -> `check_whole_program_scoped(result)` refusals
+   (PARSE_ERROR on a failed parse, PARSE_WARNING per `ParseResult.warnings`
+   entry — dropped statements on an otherwise "clean" parse) are printed
+   and any of them exits 1. A warning provably confined to one paragraph's
+   own body is *held back* here and resolved in step 5b instead (see
+   [analysis](analysis.md)).
+4. `check_unresolved_copybooks_scoped(raw_source, ast)` — same refusal gate
+   as `generate`, except a paragraph-local COPY with a verified own-lines
+   span is held back for step 5b too.
 5. Parse the `.cut` file: `parse_cut(cut_path.read_text())` -> `suite`.
    `CutParseError` is caught and printed as
    `mockymock run: invalid .cut file <path>: <line-numbered message>`,
    exit 1 — never a raw traceback.
+5b. Held-back paragraph-scoped refusals resolve against
+   `union_executed_paragraphs(ast, suite)` — the union of every SELECTED
+   case's reachable set, GO TO fall-through closed; `None` (untrustable)
+   refuses everything held back. Refused -> printed, exit 1. Waived -> one
+   `StaticCheckResult.notes` transparency line each (printed with the
+   command prefix), and a waived COPY's span is commented out of `lines`
+   in step 6 so cobc never sees an unresolvable COPY.
 6. `analyze(result.ast)` -> `surface`; normalize source to `lines`.
 7. **`annotate_nested_sites` must run before any refusal check or splice looks
    at nested sites** (explicit comment in source) — unannotated nested sites
@@ -425,7 +436,13 @@ from the score). Console output streams one line per mutant, then lists
 survivors with a `-`/`+` diff and the score
 (killed+timeouts over scored). `--json-report` writes the full
 machine-readable outcome; `--fail-under` exits 1 below the given
-percentage. Boundary statements (mocked) and terminators (rewritten by
+percentage. Every baseline/mutant run's `StaticCheckResult.notes` (a
+paragraph-scoped `PARSE_WARNING`/`UNRESOLVED_COPYBOOK` waived rather than
+refused — [analysis](analysis.md)) is collected (union, first-seen order,
+deduped) and printed as `mockymock mutate: <note>` lines before the
+outcome — this path compiles doctored source (a waived COPY's line
+commented out) exactly like `run` does, so it keeps the same
+never-silent guarantee. Boundary statements (mocked) and terminators (rewritten by
 terminator plans) are never mutated — mutating them would test the
 harness, not the program.
 

@@ -21,13 +21,14 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 @requires_docker
 def test_mutation_kill_loop_classifies_every_mutant():
-    problems, outcome = run_mutation(
+    problems, outcome, notes = run_mutation(
         FIXTURE_DIR / "mutation_target.cbl",
         FIXTURE_DIR / "mutation_target.cut",
         copybook_paths=None,
     )
     assert problems == []
     assert outcome is not None
+    assert notes == []
 
     by_site = {(r.mutant.line, r.mutant.operator): r.status for r in outcome.results}
     assert by_site == {
@@ -58,7 +59,7 @@ def test_mutation_refuses_red_baseline():
         encoding="utf-8",
     )
     try:
-        problems, outcome = run_mutation(
+        problems, outcome, notes = run_mutation(
             FIXTURE_DIR / "mutation_target.cbl",
             wrong_cut,
             copybook_paths=None,
@@ -66,5 +67,6 @@ def test_mutation_refuses_red_baseline():
         assert outcome is None
         assert len(problems) == 1
         assert "baseline run is not green" in problems[0]
+        assert notes == []
     finally:
         wrong_cut.unlink()

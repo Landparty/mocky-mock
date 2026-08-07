@@ -1,5 +1,109 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-07 — Independent label-scan safety net for the PARSE_WARNING narrowing (PR #49 review)
+
+* **Closed a real gap in the paragraph-scoped `PARSE_WARNING` narrowing**
+  (below): a reviewer pointed out that `_paragraph_owning_line` trusted a
+  dropped-content warning's reported `line N` to bound the *entire*
+  extent of what cobolparser dropped, when the text only actually proves
+  where the drop *starts*. If cobolparser's error-recovery ever skips
+  past a real paragraph header while resynchronizing, that header
+  vanishes from the AST's own paragraph list entirely — silently merging
+  what should have been a separate paragraph into the one the warning
+  gets attributed to, which would make the whole narrowing unsound (a
+  warning waived as "confined to paragraph X" when the dropped content
+  actually also covered a different, reachable paragraph).
+* **mockymock cannot verify cobolparser's recovery-loop internals to rule
+  this out** — `cobolparser` is a private, cross-owner sibling repo this
+  session had no read path into (a dedicated research session against it
+  reported a positive finding, but with no way in this environment to
+  retrieve its full transcript/citations, that one-line summary wasn't
+  enough to stand on for a load-bearing correctness claim). Rather than
+  either trust an unverifiable external claim or leave the gap open,
+  added a check that stands on mockymock's own verifiable ground instead:
+  `_has_unaccounted_label` (new) re-lexes the same normalized source
+  independently and scans the candidate owner paragraph's ENTIRE body
+  (from `_paragraph_body_span`, a refactor of the old inline boundary
+  walk in `_paragraph_owning_line` that now also returns the next
+  boundary line) for anything shaped like an unrecognized paragraph-name
+  or `SECTION` header — a bare identifier, optionally `... SECTION`,
+  alone on its own line. Any match vetoes classification (the warning
+  reverts to whole-program, today's behavior) rather than trust that the
+  AST-recorded body boundary is really where cobolparser landed.
+* **Deliberately conservative, not exact**: a bare COBOL scope terminator
+  (`END-IF.`/`EXIT.`/`CONTINUE.`) or `END-EXEC.` alone on its own line is
+  syntactically indistinguishable from a paragraph name to this regex and
+  will false-positive — accepted, since a false positive only costs a
+  classification (the narrowing simply doesn't apply there), never
+  produces an unsound one. Both `check_whole_program_scoped` (now takes
+  `raw_source` so it can independently normalize and run the guard) and
+  `check_unresolved_copybooks_scoped` (already had `normalized_lines`
+  locally) route through the same guarded `_paragraph_owning_line`.
+* Tests: `tests/unit/test_scoped_refusals.py` adds direct coverage of
+  `_has_unaccounted_label` (bare-identifier and `SECTION` shapes detected;
+  ordinary multi-token statement lines ignored; the accepted
+  scope-terminator false positive pinned explicitly) and a synthetic
+  "swallowed header" reproduction that proves the veto fires even when
+  the base attribution alone would have classified cleanly.
+
+## 2026-08-07 — Narrow the last whole-program refusals (paragraph-scoped PARSE_WARNING / UNRESOLVED_COPYBOOK)
+
+* **`PARSE_WARNING` and `UNRESOLVED_COPYBOOK` are no longer unconditionally
+  whole-program on the `run`/`lint`/`export`/`debug` path** ([analysis](analysis.md),
+  [cli](cli.md)): `refusal.check_whole_program_scoped` /
+  `check_unresolved_copybooks_scoped` hold back the one provably-narrow
+  shape — evidence confined to a single PROCEDURE DIVISION paragraph's own
+  body — as a `ParagraphScopedRefusal`, and `cli.checks.run_static_checks`
+  (new step 4b) refuses it only when `union_executed_paragraphs` says some
+  SELECTED test case could execute that paragraph. The union is the same
+  `_reachable_paragraphs` BFS the per-case gates trust, per selected case,
+  deliberately without the flow-mock `skip_traversal` narrowing
+  (conservative), closed to a fixpoint over the GO TO fall-through hazard
+  (`_falls_through` walk from every reached GO TO target — the same
+  unmodeled entry shape `_go_to_fallthrough_targets` guards terminators
+  against), and `None` (= refuse everything held back) the moment any
+  case's BFS reports any flow refusal.
+* **Classification fails closed everywhere it can't prove confinement**:
+  a warning with no `line N` in its text (`_WARNING_LINE_RE`), a line on a
+  paragraph/section header line or before the first paragraph (DATA
+  DIVISION content is program-global), a phantom-`.`/section-header
+  nearest-boundary attribution, an unverifiable paragraph source order,
+  or any multi-program compilation unit (warning lines could index a
+  contained program) all stay whole-program refusals — worst case is
+  exactly yesterday's behavior.
+* **A waived unresolved COPY is also commented out of `lines`**
+  (`_copy_own_line_span` → `comment_and_replace`, count-preserving):
+  cobc cannot compile an unresolvable COPY even in an unexecuted
+  paragraph, so waiving the static refusal without the text edit would
+  just trade a clean refusal for a cryptic compile failure. Only the
+  single-line `COPY MEMBER.` layout owning its whole normalized line
+  qualifies, verified textually (starts with COPY, ends with its
+  terminating period, no other period) — the lexer exposes no PERIOD
+  token type, so a token-walk to the terminator isn't available; sibling
+  code on the line, a second statement after the terminator, and
+  multi-line COPY ... REPLACING all refuse whole-program instead.
+* **Why an unexecuted paragraph's incomplete AST is safe to waive**: the
+  dropped/missing text still compiles verbatim (mockymock splices raw
+  text, not the AST); no splice is derived from statements inside it;
+  hidden edges FROM it cannot fire at runtime because the paragraph never
+  runs; and edges TO parser-lost content are unresolvable names that
+  already refuse (`UNRESOLVED_FLOW_TARGET`/`UNKNOWN_PARAGRAPH`) wherever
+  a reachable paragraph carries one.
+* **Transparency**: waivers are never silent — `StaticCheckResult.notes`
+  carries one line per waived warning/COPY (and names the commented-out
+  span), printed by `run`/`debug`/`export`/`lint` with their own prefix.
+* `generate`/`fixtures` keep the plain unconditional entry points
+  (`check_whole_program`/`check_unresolved_copybooks`, now thin wrappers
+  over the scoped variants with classification off): with no test cases
+  there is no reachable set to scope against.
+* Tests: `tests/unit/test_scoped_refusals.py` — including a pin that
+  cobolparser's dropped-content warnings carry a locatable line number in
+  the same normalized-text space as `SourceLocation` (if that upstream
+  format ever changes, the feature degrades safely to whole-program
+  refusals and the pin fails loudly), GO TO fall-through closure both
+  ways, own-line span verification, DATA DIVISION COPYs staying
+  whole-program, and `generate`-path behavior unchanged.
+
 ## 2026-08-06 — PR #46 post-review polish pass (unify-with-data)
 
 Five pre-merge, non-blocking fixes from PR #46's code review, applied after

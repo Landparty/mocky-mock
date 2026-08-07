@@ -111,8 +111,50 @@ lossy-decode copybook-expansion warnings (U+FFFD already substituted into
 the source this run would compile); the advisory lint heuristics sharing
 that channel are deliberately NOT refused (see the marker constant).
 
-check_unresolved_copybooks (UNRESOLVED_COPYBOOK) is a whole-program check,
-not a per-TESTCASE one: an unresolved COPY affects the whole program
+Both PARSE_WARNING and UNRESOLVED_COPYBOOK were originally unconditional
+whole-program refusals. They are now the last two with a narrower, scoped
+variant (check_whole_program_scoped / check_unresolved_copybooks_scoped,
+used by cli.checks.run_static_checks): a warning or unresolved COPY whose
+evidence is provably confined to ONE PROCEDURE DIVISION paragraph's own
+body (_paragraph_owning_line -- strictly between that paragraph's header
+line and the next paragraph/section header, never on a header line, never
+in a multi-program unit, never attributable to a phantom "." paragraph,
+and never when _has_unaccounted_label finds a line shaped like an
+unrecognized paragraph/SECTION header inside that body -- a cross-check
+against mockymock's own re-lexing of the source, independent of trusting
+cobolparser's error-recovery internals to never have swallowed a real
+paragraph boundary while resynchronizing after the very content that
+triggered the warning: all of those stay whole-program, fail closed) is
+held back as a ParagraphScopedRefusal and refused only when some SELECTED
+test case can
+execute that paragraph. "Can execute" is union_executed_paragraphs: the
+union over every selected case of the same reachability BFS the per-case
+gates trust, closed over the GO TO fall-through hazard (a paragraph
+entered by falling off the end of a GO TO target executes without any
+PERFORM/GO TO edge naming it -- the same unmodeled shape
+_go_to_fallthrough_targets guards terminators against), and None --
+meaning "treat every paragraph as executable" -- whenever any case's BFS
+reports any flow refusal (an untrusted reachable set must not waive
+anything). Why an unexecuted paragraph's incomplete AST is harmless: the
+dropped/missing content still sits verbatim in the source GnuCOBOL
+compiles (mockymock splices raw text, not the AST), no splice is ever
+derived from statements inside it, edges FROM it cannot fire at runtime
+because the paragraph never runs, and edges TO content the parser lost
+are unresolvable names that refuse (UNRESOLVED_FLOW_TARGET /
+UNKNOWN_PARAGRAPH) the moment a reachable paragraph carries one. A waived
+unresolved COPY additionally has its statement commented out of the
+spliced lines (its verified own-line span rides on the
+ParagraphScopedRefusal) so cobc never sees a COPY it cannot resolve; only
+the single-line `COPY MEMBER.` layout owning its whole line qualifies
+(_copy_own_line_span), so sibling code on the line, a second statement
+after the terminator, and multi-line COPY ... REPLACING all stay
+whole-program. generate/fixtures have no test cases to scope
+by, so the plain check_whole_program/check_unresolved_copybooks entry
+points still refuse everything, unchanged.
+
+check_unresolved_copybooks (UNRESOLVED_COPYBOOK) is otherwise a
+whole-program check, not a per-TESTCASE one: an unresolved COPY outside
+the one provable paragraph-local shape above affects the whole program
 regardless of which TESTCASE runs. It exists because cobolparser's
 parse_cobol does NOT raise a parse error for an unresolved COPY statement --
 verified empirically: parsing raw (unexpanded) source containing
@@ -185,6 +227,26 @@ class RefusalReason:
 
 
 @dataclass
+class ParagraphScopedRefusal:
+    """A refusal whose evidence is provably confined to one PROCEDURE
+    DIVISION paragraph's own body (see the module docstring): held back by
+    the *_scoped check variants and resolved by resolve_scoped_refusals
+    against union_executed_paragraphs -- `reason` refuses when some
+    selected test case can execute `paragraph_name`; `waiver_note` is the
+    transparency line printed instead when none can. `blank_span` is only
+    set for an unresolved COPY statement: the 1-based inclusive
+    normalized-line span, verified to own its lines outright, that
+    cli.checks.run_static_checks comments out of the spliced source when
+    the refusal is waived (the raw COPY text would otherwise still reach
+    cobc, which cannot compile an unresolvable COPY)."""
+
+    paragraph_name: str
+    reason: RefusalReason
+    waiver_note: str
+    blank_span: tuple[int, int] | None = None
+
+
+@dataclass
 class TerminatorPlan:
     """One physical STOP RUN(RUN-form)/GOBACK statement found safe to
     neutralize, plus every intermediate PERFORM statement (deduped across
@@ -227,6 +289,138 @@ def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool
     return directive.key.upper() in site.keys
 
 
+# The line reference cobolparser embeds in dropped-content warning text.
+# Deliberately strict: a warning that carries no recognizable line number
+# cannot be located, so it stays a whole-program refusal (fail closed).
+# Lines named this way index the NORMALIZED free-form text, the same
+# space as every SourceLocation mockymock consumes.
+_WARNING_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
+
+
+# A line that LOOKS like a paragraph-name or SECTION header on its own --
+# used only as a NEGATIVE safety check, never a positive detector: cheap,
+# deliberately broad free-form-COBOL shape (a bare identifier, optionally
+# "... SECTION", terminated by a period, alone on its line). If a line
+# shaped like this turns up strictly INSIDE what the AST claims is one
+# paragraph's body -- between its header and the next AST-recorded
+# boundary -- that is suspicious: either it's an ordinary reserved-word
+# one-liner (EXIT./CONTINUE.) or EXEC-block noise (END-EXEC.), or it is
+# exactly the failure mode this guards against -- cobolparser's error-
+# recovery swallowed what should have been a separate paragraph header
+# while resynchronizing after dropped content, silently merging that
+# paragraph's body into this one and erasing it from the AST's own
+# paragraph list. mockymock has no visibility into cobolparser's recovery
+# internals to rule that out directly, so instead of trusting the
+# warning's line number on faith, this cross-checks it against source
+# text mockymock already controls. False positives (the common,
+# harmless EXIT./END-EXEC. case) only cost a classification -- the
+# warning falls back to whole-program, today's behavior -- never an
+# unsound one.
+_CANDIDATE_LABEL_RE = re.compile(
+    r"^\s*[A-Z0-9][A-Z0-9-]*(?:\s+SECTION)?\s*\.\s*$", re.IGNORECASE
+)
+
+
+def _has_unaccounted_label(normalized_lines: list[str], start: int, end: int) -> bool:
+    """True if any line in [start, end] (1-based, inclusive; a reversed or
+    out-of-range span is simply empty) of `normalized_lines` matches
+    `_CANDIDATE_LABEL_RE`. Only ever called with a span strictly between
+    two consecutive AST-recorded PROCEDURE DIVISION boundaries -- see
+    `_CANDIDATE_LABEL_RE`."""
+    for line_no in range(max(start, 1), min(end, len(normalized_lines)) + 1):
+        if _CANDIDATE_LABEL_RE.match(normalized_lines[line_no - 1]):
+            return True
+    return False
+
+
+def _paragraph_body_span(program, line: int) -> tuple[str, int, int | None] | None:
+    """(owner_name, owner_header_line, next_boundary_line) for the
+    PROCEDURE DIVISION paragraph whose own body strictly contains
+    normalized-text line `line`, or None when that cannot be proven --
+    fail closed. None covers: a multi-program compilation unit (warning
+    lines could index a contained program the AST doesn't model here), no
+    PROCEDURE DIVISION, unverifiable paragraph source order, any line at
+    or before the first paragraph header (DATA DIVISION content is
+    program-global), a line ON a paragraph/section header line, and any
+    line whose nearest preceding header is a SECTION header or a phantom
+    '.'/'' paragraph rather than a real paragraph (content there has no
+    single owning paragraph body). `next_boundary_line` is None when no
+    further boundary follows -- the owner is the program's last paragraph,
+    its body runs to end of file.
+
+    "Strictly contains" means: the last header line before `line`
+    (paragraph headers, named-section headers, and phantom-paragraph
+    anchor lines all count as headers) is a real paragraph's, and `line`
+    is strictly greater than it. Ties on a shared line resolve to the
+    non-owner, so a header-sharing layout never classifies."""
+    if getattr(program, "contained_programs", None):
+        return None
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return None
+    ordered = _source_ordered_paragraphs(procedure)
+    if not ordered:
+        return None
+    # (line, tie_rank, owner): owner None marks a boundary that owns no
+    # body (section header, phantom paragraph). tie_rank 1 > 0 so a
+    # non-owner sharing a line with a paragraph header wins the tie and
+    # the classification fails closed.
+    boundaries: list[tuple[int, int, str | None]] = []
+    for paragraph in ordered:
+        name = paragraph.paragraph_name
+        if name.strip("."):
+            boundaries.append((paragraph.location.line, 0, name))
+        else:
+            boundaries.append((paragraph.location.line, 1, None))
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        if (section_name or "").strip("."):
+            boundaries.append((section.location.line, 1, None))
+    boundaries.sort(key=lambda boundary: boundary[:2])
+    if any(start == line for start, _, _ in boundaries):
+        # ON a header line (a one-line `P. <content>` layout, a section
+        # header, a phantom anchor): never attributable to a body.
+        return None
+    owner_idx: int | None = None
+    for i, (start, _, _) in enumerate(boundaries):
+        if start < line:
+            owner_idx = i
+        else:
+            break
+    if owner_idx is None or boundaries[owner_idx][2] is None:
+        return None
+    owner_start = boundaries[owner_idx][0]
+    owner_name = boundaries[owner_idx][2]
+    assert owner_name is not None  # just checked above
+    next_start = (
+        boundaries[owner_idx + 1][0] if owner_idx + 1 < len(boundaries) else None
+    )
+    return owner_name, owner_start, next_start
+
+
+def _paragraph_owning_line(
+    program, line: int, normalized_lines: list[str] | None = None
+) -> str | None:
+    """`_paragraph_body_span`'s owner name, or None -- see that function's
+    docstring for the base attribution rules.
+
+    When `normalized_lines` is given, ownership additionally requires
+    `_has_unaccounted_label` to find nothing suspicious in the candidate
+    owner's own body (see `_CANDIDATE_LABEL_RE`'s docstring for why):
+    classification fails closed rather than trust a paragraph boundary
+    that might not be where it looks. Every *_scoped call site must pass
+    it; omitting it is only for callers that genuinely have no source
+    text yet."""
+    span = _paragraph_body_span(program, line)
+    if span is None:
+        return None
+    owner, start, next_start = span
+    if normalized_lines is not None:
+        end = next_start - 1 if next_start is not None else len(normalized_lines)
+        if _has_unaccounted_label(normalized_lines, start + 1, end):
+            return None
+    return owner
+
+
 def check_whole_program(parse_result) -> list[RefusalReason]:
     """PARSE_ERROR for a failed parse; PARSE_WARNING for each entry in
     `ParseResult.warnings`. Since cobolparser's 2026-07-07 silent-drop fixes,
@@ -244,8 +438,43 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
     empirically): UNSUPPORTED_DECLARATIVES for any program containing a
     DECLARATIVES block, and UNSUPPORTED_ALTER for any ALTER statement --
     see `_check_unsupported_control_flow` for why neither can ever be
-    modeled by the reachability BFS."""
+    modeled by the reachability BFS.
+
+    This entry point refuses every warning unconditionally -- it serves
+    the callers with no test cases to scope by (generate/fixtures).
+    run_static_checks uses check_whole_program_scoped instead, which holds
+    provably paragraph-local warnings back for the reachability-union gate
+    (see the module docstring)."""
+    reasons, scoped = _whole_program_reasons(
+        parse_result, classify=False, raw_source=None
+    )
+    assert not scoped  # classify=False never holds a warning back
+    return reasons
+
+
+def check_whole_program_scoped(
+    parse_result, raw_source: str
+) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
+    """check_whole_program, except each PARSE_WARNING whose text carries a
+    line number that `_paragraph_owning_line` proves to sit inside exactly
+    one PROCEDURE DIVISION paragraph's own body -- AND that survives
+    `_paragraph_owning_line`'s independent label-scan safety net over
+    `raw_source` (see `_CANDIDATE_LABEL_RE`) -- is returned as a held-back
+    ParagraphScopedRefusal instead of an immediate reason. Everything else
+    -- parse errors, warnings with no recognizable line, lines that cannot
+    be attributed to one paragraph, DECLARATIVES/ALTER -- stays in the
+    first (whole-program, refuse-now) list, fail closed. `raw_source` must
+    be the exact text `parse_cobol` was called with -- it is normalized
+    here independently, purely for the label-scan; nothing derived from it
+    is spliced or otherwise trusted as authoritative over the AST."""
+    return _whole_program_reasons(parse_result, classify=True, raw_source=raw_source)
+
+
+def _whole_program_reasons(
+    parse_result, classify: bool, raw_source: str | None
+) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
     reasons: list[RefusalReason] = []
+    scoped: list[ParagraphScopedRefusal] = []
     if not parse_result.success:
         reasons.append(
             RefusalReason(
@@ -256,6 +485,12 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
                 ),
             )
         )
+    program = getattr(parse_result, "ast", None)
+    normalized_lines = (
+        normalize_fixed_format(raw_source.splitlines()).splitlines()
+        if classify and raw_source is not None
+        else None
+    )
     for warning in getattr(parse_result, "warnings", None) or []:
         # cobolparser >= af08deb blanks un-expanded COPY statements before
         # lexing and reports each as a "COPY <member> not expanded" warning
@@ -267,20 +502,49 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
         text = str(warning)
         if text.startswith("COPY ") and "not expanded" in text:
             continue
-        reasons.append(
-            RefusalReason(
-                code="PARSE_WARNING",
-                message=(
-                    f"cobolparser reported a parse warning -- the AST is "
-                    f"missing content, so splicing would silently drop "
-                    f"program behavior: {warning}"
-                ),
+        owner: str | None = None
+        if classify and parse_result.success and program is not None:
+            match = _WARNING_LINE_RE.search(text)
+            if match:
+                owner = _paragraph_owning_line(
+                    program, int(match.group(1)), normalized_lines
+                )
+        if owner is None:
+            reasons.append(
+                RefusalReason(
+                    code="PARSE_WARNING",
+                    message=(
+                        f"cobolparser reported a parse warning -- the AST is "
+                        f"missing content, so splicing would silently drop "
+                        f"program behavior: {warning}"
+                    ),
+                )
             )
-        )
-    program = getattr(parse_result, "ast", None)
+        else:
+            scoped.append(
+                ParagraphScopedRefusal(
+                    paragraph_name=owner,
+                    reason=RefusalReason(
+                        code="PARSE_WARNING",
+                        message=(
+                            f"cobolparser reported a parse warning -- the "
+                            f"AST is missing content confined to paragraph "
+                            f"'{owner}', which a selected test case can "
+                            f"execute, so splicing would silently drop "
+                            f"program behavior: {warning}"
+                        ),
+                    ),
+                    waiver_note=(
+                        f"parse warning waived: its dropped content is "
+                        f"confined to paragraph '{owner}', which no selected "
+                        f"test case can execute -- that content is neither "
+                        f"analyzed nor run: {warning}"
+                    ),
+                )
+            )
     if program is not None:
         reasons.extend(_check_unsupported_control_flow(program))
-    return reasons
+    return reasons, scoped
 
 
 def _check_unsupported_control_flow(program) -> list[RefusalReason]:
@@ -435,15 +699,80 @@ def check_unresolved_copybooks(raw_source: str) -> list[RefusalReason]:
     skipped or didn't fully resolve, the literal `COPY ...` statement is
     still present and is detected here. See the module docstring for why a
     textual/lexer-based check is used instead of an AST-based one.
-    """
+
+    This entry point refuses every unresolved COPY unconditionally -- it
+    serves the callers with no test cases to scope by (generate/fixtures).
+    run_static_checks uses check_unresolved_copybooks_scoped instead."""
+    reasons, scoped = check_unresolved_copybooks_scoped(raw_source, None)
+    assert not scoped  # with no program to classify against, nothing is held
+    return reasons
+
+
+def check_unresolved_copybooks_scoped(
+    raw_source: str, program
+) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
+    """check_unresolved_copybooks, except a COPY statement that
+    `_paragraph_owning_line` proves to sit inside exactly one PROCEDURE
+    DIVISION paragraph's own body (a procedural copybook) AND whose
+    single-line span `_copy_own_line_span` verifies to own its
+    normalized-text line outright is returned as a held-back
+    ParagraphScopedRefusal carrying that span. When the refusal is later
+    waived (no selected test case can execute the paragraph), the caller
+    must comment the span out of the spliced lines -- the raw COPY text
+    would otherwise still reach cobc, which cannot compile an
+    unresolvable COPY. Every other COPY -- DATA DIVISION ones, ones
+    on/between headers, ones whose line cannot be verified -- stays in
+    the first (whole-program, refuse-now) list, fail closed. `program` is
+    the parsed AST of this same source (pass None to classify
+    nothing)."""
     normalized = normalize_fixed_format(raw_source.splitlines())
     lexer = CobolLexer(normalized, free_form=True)
     tokens = lexer.tokenize()
-    copy_tokens = [t for t in tokens if t.type == TokenType.COPY]
-    if not copy_tokens:
-        return []
-    lines = sorted({t.location.line for t in copy_tokens})
-    return [
+    copy_indices = [i for i, t in enumerate(tokens) if t.type == TokenType.COPY]
+    if not copy_indices:
+        return [], []
+    normalized_lines = normalized.splitlines()
+    whole_lines: set[int] = set()
+    scoped: list[ParagraphScopedRefusal] = []
+    for index in copy_indices:
+        line = tokens[index].location.line
+        owner = (
+            _paragraph_owning_line(program, line, normalized_lines)
+            if program is not None
+            else None
+        )
+        span = (
+            _copy_own_line_span(normalized_lines, line) if owner is not None else None
+        )
+        if owner is None or span is None:
+            whole_lines.add(line)
+            continue
+        scoped.append(
+            ParagraphScopedRefusal(
+                paragraph_name=owner,
+                reason=RefusalReason(
+                    code="UNRESOLVED_COPYBOOK",
+                    message=(
+                        f"unresolved COPY statement at line {line} (inside "
+                        f"paragraph '{owner}', which a selected test case "
+                        f"can execute) -- the copybook's statements are "
+                        f"missing from that paragraph's body, so splicing/"
+                        f"compiling would proceed without them -- pass "
+                        f"--copybook-path pointing at the copybook's "
+                        f"directory"
+                    ),
+                ),
+                waiver_note=(
+                    f"unresolved COPY statement at line {line} waived: it "
+                    f"is confined to paragraph '{owner}', which no selected "
+                    f"test case can execute -- commenting lines "
+                    f"{span[0]}-{span[1]} out of the instrumented source so "
+                    f"GnuCOBOL never sees the unresolvable COPY"
+                ),
+                blank_span=span,
+            )
+        )
+    reasons = [
         RefusalReason(
             code="UNRESOLVED_COPYBOOK",
             message=(
@@ -456,8 +785,130 @@ def check_unresolved_copybooks(raw_source: str) -> list[RefusalReason]:
                 f"pointing at the copybook's directory"
             ),
         )
-        for line in lines
+        for line in sorted(whole_lines)
     ]
+    return reasons, scoped
+
+
+def _copy_own_line_span(
+    normalized_lines: list[str], line: int
+) -> tuple[int, int] | None:
+    """The single-line span (line, line) of a COPY statement verified to
+    own its normalized-text line outright, or None -- fail closed, purely
+    textual (no reliance on the lexer's token inventory beyond the COPY
+    detection that located `line`). The line must start with the COPY
+    keyword (nothing before it), end with its terminating period, and
+    contain no other period, so a second statement after the terminator
+    (`COPY A. DISPLAY X.`), a quoted text-name containing '.', and a
+    multi-line `COPY ... REPLACING` (its first line has no period) never
+    qualify -- those stay whole-program refusals. Single-line
+    `COPY MEMBER.` is the one procedural-copybook layout this narrowing
+    supports: commenting out exactly that one line cannot touch sibling
+    code or a following paragraph header."""
+    if not 1 <= line <= len(normalized_lines):
+        return None
+    stripped = normalized_lines[line - 1].strip()
+    upper = stripped.upper()
+    if not upper.startswith("COPY") or upper[4:5].strip():
+        return None
+    if not stripped.endswith("."):
+        return None
+    if stripped.find(".") != len(stripped) - 1:
+        return None
+    return line, line
+
+
+def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
+    """Union over every selected test case of the paragraph/section names
+    the reachability model says that case could execute, or None when the
+    union cannot be established -- callers must treat None as "every
+    paragraph may execute" (fail closed on: no PROCEDURE DIVISION,
+    unverifiable paragraph source order, or ANY flow refusal from any
+    case's BFS, since a reachable set the model itself distrusts must not
+    waive anything -- the per-case gates will refuse those same flow
+    problems anyway).
+
+    Per case this is the same `_reachable_paragraphs` BFS check_test_case
+    trusts, deliberately WITHOUT the flow-mock skip_traversal narrowing: a
+    MOCK PARAGRAPH dispatch replaces a body per-case at runtime, but the
+    original text still compiles, so for warning-waiving purposes a
+    flow-mocked paragraph stays "executable" (conservative -- at worst an
+    extra refusal, which is exactly today's behavior).
+
+    On top of the per-case union, this closes over the GO TO fall-through
+    hazard the BFS deliberately does not model as a flow edge (see the
+    module docstring): a paragraph entered via GO TO that falls off its own
+    end continues into the next paragraph in source order, which therefore
+    executes without any PERFORM/GO TO edge naming it. Every GO TO target
+    the union reaches is walked forward through `_falls_through` (the same
+    conservative predicate `_go_to_fallthrough_targets` uses, section
+    boundaries transparent), and each newly executable paragraph's own
+    downstream BFS is folded in, to a fixpoint."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return None
+    ordered = _source_ordered_paragraphs(procedure)
+    if ordered is None:
+        return None
+    union: set[str] = set()
+    for case in suite.test_cases:
+        seen, flow_reasons = _reachable_paragraphs(
+            program, case.perform_target, case.perform_thru
+        )
+        if flow_reasons:
+            return None
+        union |= seen
+
+    go_to_targets = _go_to_targets(program)
+    index_by_name = {p.paragraph_name: i for i, p in enumerate(ordered)}
+    section_members: dict[str, list[str]] = {}
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        if section_name:
+            section_members.setdefault(
+                section_name, [p.paragraph_name for p in section.paragraphs]
+            )
+
+    def entry_index(name: str) -> int | None:
+        i = index_by_name.get(name)
+        if i is not None:
+            return i
+        members = section_members.get(name)
+        return index_by_name.get(members[0]) if members else None
+
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(union & go_to_targets):
+            cursor = entry_index(name)
+            if cursor is None:
+                # A reached GO TO target the fall-through walk can't anchor
+                # (e.g. an empty section): the closure is incomplete, so the
+                # union cannot be trusted to waive anything.
+                return None
+            while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
+                cursor += 1
+                fallen = ordered[cursor].paragraph_name
+                if fallen in union:
+                    continue
+                fallen_seen, fallen_reasons = _reachable_paragraphs(program, fallen)
+                if fallen_reasons:
+                    return None
+                union |= fallen_seen
+                changed = True
+    return union
+
+
+def resolve_scoped_refusals(
+    scoped: list[ParagraphScopedRefusal], executed: set[str] | None
+) -> list[RefusalReason]:
+    """The refusal reasons among `scoped` that must fire given `executed`
+    (union_executed_paragraphs' result): every held-back refusal whose
+    paragraph some selected test case can execute, or ALL of them when the
+    union could not be established (None -- fail closed). An empty return
+    means every scoped refusal is waived."""
+    if executed is None:
+        return [item.reason for item in scoped]
+    return [item.reason for item in scoped if item.paragraph_name in executed]
 
 
 def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:

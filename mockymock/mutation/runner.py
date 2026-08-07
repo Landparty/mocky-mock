@@ -25,11 +25,19 @@ def _run_suite_once(
     cut_path: Path,
     copybook_paths: list[str] | None,
     timeout_seconds: int,
-) -> tuple[str, str]:
+) -> tuple[str, str, list[str]]:
     """Run one full splice/compile/run pass over `source_text` and reduce
-    it to a (status, detail) pair with status in {"passed", "failed",
-    "stillborn", "timeout"}. `detail` carries the first refusal/compile/
-    failure line for diagnostics."""
+    it to a (status, detail, notes) triple with status in {"passed",
+    "failed", "stillborn", "timeout"}. `detail` carries the first refusal/
+    compile/failure line for diagnostics. `notes` is
+    `StaticCheckResult.notes` (e.g. a paragraph-scoped PARSE_WARNING/
+    UNRESOLVED_COPYBOOK waived and, for a waived COPY, commented out of
+    the source this pass goes on to compile) -- empty whenever
+    `checked.problems` was non-empty, since the pipeline never reaches
+    that gate in that case. The caller must not discard this: staying
+    silent about a waiver here would mean `mockymock mutate` compiles
+    doctored source with no visible sign of it, breaking the same
+    transparency guarantee `run`/`debug`/`export`/`lint` keep."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_terminator_plans
     from mockymock.cli.checks import run_static_checks
@@ -52,7 +60,8 @@ def _run_suite_once(
 
         checked = run_static_checks(source_path, cut_path, copybook_paths)
         if checked.problems:
-            return "stillborn", checked.problems[0]
+            return "stillborn", checked.problems[0], []
+        notes = checked.notes
 
         result = checked.parse_result
         suite = checked.suite
@@ -99,23 +108,27 @@ def _run_suite_once(
         compiled = docker_toolchain.compile_source(instrumented_path)
         if not compiled.success:
             first_error = (compiled.stderr or compiled.stdout).strip().splitlines()
-            return "stillborn", first_error[0] if first_error else "compile failed"
+            return (
+                "stillborn",
+                first_error[0] if first_error else "compile failed",
+                notes,
+            )
         assert compiled.binary_path is not None  # implied by compiled.success
 
         execution = docker_toolchain.run_binary(
             compiled.binary_path, timeout_seconds=timeout_seconds
         )
         if execution.exit_code == TIMEOUT_EXIT_CODE:
-            return "timeout", f"no exit within {timeout_seconds}s"
+            return "timeout", f"no exit within {timeout_seconds}s", notes
         suite_result = parse_stdout(execution.stdout)
         if execution.exit_code == 0 and suite_result.all_passed:
-            return "passed", ""
+            return "passed", "", notes
         for case in suite_result.results:
             if case.failure_reasons:
-                return "failed", case.failure_reasons[0]
+                return "failed", case.failure_reasons[0], notes
             if case.crashed:
-                return "failed", f"case {case.case_name!r} crashed"
-        return "failed", f"binary exited {execution.exit_code}"
+                return "failed", f"case {case.case_name!r} crashed", notes
+        return "failed", f"binary exited {execution.exit_code}", notes
 
 
 def run_mutation(
@@ -124,55 +137,78 @@ def run_mutation(
     copybook_paths: list[str] | None,
     timeout_seconds: int = 15,
     on_progress: Callable[[MutantResult], None] | None = None,
-) -> tuple[list[str], MutationOutcome | None]:
+) -> tuple[list[str], MutationOutcome | None, list[str]]:
     """Baseline-check the suite, then run every generated mutant.
 
-    Returns (problems, outcome): non-empty `problems` means the run never
-    got to scoring (Docker down, red/empty baseline, no mutants) and
+    Returns (problems, outcome, notes): non-empty `problems` means the run
+    never got to scoring (Docker down, red/empty baseline, no mutants) and
     `outcome` is None. `on_progress` is called once per classified mutant,
-    in order, for live console reporting."""
+    in order, for live console reporting. `notes` is the union, in first-
+    seen order, of every `StaticCheckResult.notes` produced along the way
+    (baseline and every mutant) -- a paragraph-scoped PARSE_WARNING/
+    UNRESOLVED_COPYBOOK waived somewhere in the run. The caller must
+    print these: `_run_suite_once`'s docstring explains why staying
+    silent here would break this repo's transparency guarantee for a
+    waiver, and a waived COPY is compiled with its line commented out, not
+    just skipped over."""
     from mockymock.runtime import docker_toolchain
 
     try:
         docker_toolchain.ensure_toolchain()
     except docker_toolchain.DockerNotAvailableError as exc:
-        return [str(exc)], None
+        return [str(exc)], None, []
+
+    all_notes: list[str] = []
+
+    def _merge_notes(notes: list[str]) -> None:
+        for note in notes:
+            if note not in all_notes:
+                all_notes.append(note)
 
     original_text = source_path.read_text(encoding="utf-8")
-    status, detail = _run_suite_once(
+    status, detail, baseline_notes = _run_suite_once(
         original_text, source_path.name, cut_path, copybook_paths, timeout_seconds
     )
+    _merge_notes(baseline_notes)
     if status != "passed":
-        return [
-            f"baseline run is not green ({status}"
-            + (f": {detail}" if detail else "")
-            + ") -- mutation scoring is only meaningful against a passing "
-            "suite; fix the suite first"
-        ], None
+        return (
+            [
+                f"baseline run is not green ({status}"
+                + (f": {detail}" if detail else "")
+                + ") -- mutation scoring is only meaningful against a passing "
+                "suite; fix the suite first"
+            ],
+            None,
+            all_notes,
+        )
 
     original_lines = original_text.splitlines()
     mutants = generate_mutants(original_lines)
     if not mutants:
-        return [
-            "no mutable statements found (every PROCEDURE DIVISION line is "
-            "a boundary/terminator statement or matched no operator)"
-        ], None
+        return (
+            [
+                "no mutable statements found (every PROCEDURE DIVISION line is "
+                "a boundary/terminator statement or matched no operator)"
+            ],
+            None,
+            all_notes,
+        )
 
     outcome = MutationOutcome(program=str(source_path), cut=str(cut_path))
     for mutant in mutants:
-        outcome.results.append(
-            _run_one_mutant(
-                mutant,
-                original_lines,
-                source_path.name,
-                cut_path,
-                copybook_paths,
-                timeout_seconds,
-            )
+        result, mutant_notes = _run_one_mutant(
+            mutant,
+            original_lines,
+            source_path.name,
+            cut_path,
+            copybook_paths,
+            timeout_seconds,
         )
+        outcome.results.append(result)
+        _merge_notes(mutant_notes)
         if on_progress is not None:
             on_progress(outcome.results[-1])
-    return [], outcome
+    return [], outcome, all_notes
 
 
 def _run_one_mutant(
@@ -182,10 +218,15 @@ def _run_one_mutant(
     cut_path: Path,
     copybook_paths: list[str] | None,
     timeout_seconds: int,
-) -> MutantResult:
+) -> tuple[MutantResult, list[str]]:
+    """Same (result, notes) shape as _run_suite_once, since a mutation can
+    in principle change which paragraphs are reachable (a stmt-delete
+    mutant can remove a statement other statements' reachability doesn't
+    otherwise depend on) -- notes are therefore collected per mutant, not
+    assumed stable from the baseline."""
     patched = list(original_lines)
     patched[mutant.line - 1] = mutant.mutated
-    status, detail = _run_suite_once(
+    status, detail, notes = _run_suite_once(
         "\n".join(patched) + "\n",
         source_name,
         cut_path,
@@ -193,9 +234,9 @@ def _run_one_mutant(
         timeout_seconds,
     )
     if status == "passed":
-        return MutantResult(mutant=mutant, status="survived")
+        return MutantResult(mutant=mutant, status="survived"), notes
     if status == "failed":
-        return MutantResult(mutant=mutant, status="killed", detail=detail)
+        return MutantResult(mutant=mutant, status="killed", detail=detail), notes
     if status == "timeout":
-        return MutantResult(mutant=mutant, status="timeout", detail=detail)
-    return MutantResult(mutant=mutant, status="stillborn", detail=detail)
+        return MutantResult(mutant=mutant, status="timeout", detail=detail), notes
+    return MutantResult(mutant=mutant, status="stillborn", detail=detail), notes
