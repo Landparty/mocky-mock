@@ -1239,6 +1239,27 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_analyze(args: argparse.Namespace) -> int:
+    # cobolparser.cli.parse.main() takes no argv parameter -- unlike this
+    # module's own main(), it reads sys.argv[1:] directly. Patching it here
+    # (restored in `finally`) is the standard idiom for delegating to an
+    # argparse CLI that doesn't accept argv; safe in this single-threaded,
+    # sequential-CLI context. The isinstance check (rather than `exc.code or
+    # 0`) is required for mypy: SystemExit.code is typed `int | str | None`,
+    # and this function's return type is `int`.
+    from cobolparser.cli.parse import main as cobolparser_main
+
+    saved_argv = sys.argv
+    sys.argv = ["cobol-parser", *args.cobolparser_args]
+    try:
+        cobolparser_main()
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 1
+    finally:
+        sys.argv = saved_argv
+    return 0
+
+
 def _insert_driver(lines: list[str], artifact) -> list[str]:
     """Insert WORKING-STORAGE additions after that section's header, and
     procedure_lines right after the PROCEDURE DIVISION header."""
@@ -1608,6 +1629,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dashboard_parser.set_defaults(func=_cmd_dashboard)
 
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help=(
+            "Run a cobol-parser analyzer subcommand (dead-code, "
+            "program-flow, io-sequence, move-type-check, linkage-check, "
+            "language-env, ims-dli, analyze) and print its JSON report"
+        ),
+    )
+    analyze_parser.add_argument(
+        "cobolparser_args",
+        nargs=argparse.REMAINDER,
+        metavar="COBOL_PARSER_ARGS",
+        help=(
+            "Arguments forwarded verbatim to cobol-parser's own CLI, e.g. "
+            "'dead-code PROGRAM.cbl --compact'"
+        ),
+    )
+    analyze_parser.set_defaults(func=_cmd_analyze)
+
     export_parser = subparsers.add_parser(
         "export",
         help=(
@@ -1647,7 +1687,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 1
     if not hasattr(args, "func"):
         parser.print_help()
         return 1
