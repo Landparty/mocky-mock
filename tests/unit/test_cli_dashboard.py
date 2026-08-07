@@ -4,8 +4,6 @@ import subprocess
 import sys
 from unittest import mock
 
-import pytest
-
 from mockymock.cli.main import build_parser, main
 from mockymock.web import server
 
