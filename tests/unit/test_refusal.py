@@ -371,13 +371,28 @@ def test_whole_program_check_flags_parse_errors():
 # (cobolparser 2026-07-07 silent-drop remediation). Splicing an AST that is
 # missing statements would silently drop program behavior, so each warning
 # must refuse fail-closed.
+#
+# Originally used INVOKE as the unsupported verb; cobolparser has since
+# registered a real parser for INVOKE (see procedure_recovery.py's
+# UNSUPPORTED_VERBS comment: "ALLOCATE, FREE, and INVOKE ... now dispatch
+# through the registry instead of reaching this warn-and-discard path"),
+# so INVOKE no longer reproduces the drop-with-warning behavior this test
+# exists to pin. Swapped to EXHIBIT -- the sibling example named in that
+# same cobolparser comment, and still listed in UNSUPPORTED_VERBS
+# (verified against the current cobol-parser checkout) -- to keep this
+# test's fail-closed-on-any-warning behavior under real coverage rather
+# than silently degrading to a no-op precondition failure.
 UNSUPPORTED_VERB_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. INVOKER.
 
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FIELD PIC X(5).
+
        PROCEDURE DIVISION.
        MAIN-PARA.
-           INVOKE SOME-OBJECT "someMethod".
+           EXHIBIT NAMED WS-FIELD.
            DISPLAY "done".
 """
 
@@ -385,10 +400,10 @@ UNSUPPORTED_VERB_SOURCE = """\
 def test_whole_program_check_flags_parse_warnings():
     result = parse_cobol(UNSUPPORTED_VERB_SOURCE, filename="invoker.cbl")
     assert result.success, result.errors
-    assert result.warnings  # precondition: the INVOKE drop is warned about
+    assert result.warnings  # precondition: the EXHIBIT drop is warned about
     reasons = check_whole_program(result)
     assert any(r.code == "PARSE_WARNING" for r in reasons)
-    assert any("INVOKE" in r.message for r in reasons)
+    assert any("EXHIBIT" in r.message for r in reasons)
 
 
 # Regression pin for a gap the 2026-07-09 final branch review surfaced,
