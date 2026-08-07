@@ -38,6 +38,13 @@ class StaticCheckResult:
     scope_map: ScopeMap | None = None
     linkage: LinkagePlan | None = None
     file_status_fields: dict[str, str] | None = None
+    # Transparency lines for checks that deliberately did NOT refuse: a
+    # paragraph-scoped parse warning / unresolved COPY waived because no
+    # selected test case can execute its paragraph (the COPY additionally
+    # commented out of `lines`). Callers should print these with their own
+    # command prefix -- silently proceeding past a warning, or silently
+    # editing source a .cut author didn't write, would both be surprises.
+    notes: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -113,13 +120,16 @@ def run_static_checks(
         check_nested_exec,
         check_terminator_layout,
         check_test_case,
-        check_unresolved_copybooks,
-        check_whole_program,
+        check_unresolved_copybooks_scoped,
+        check_whole_program_scoped,
+        resolve_scoped_refusals,
+        union_executed_paragraphs,
     )
     from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.splicer.linkage import neutralize
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
     from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.stub_writer import comment_and_replace
 
     out = StaticCheckResult()
 
@@ -138,9 +148,11 @@ def run_static_checks(
     # 2. Parse; whole-program refusals (hard errors + dropped-statement
     # warnings). The PARSE_ERROR reason only carries a count, so the
     # individual errors follow as indented lines, matching `run`'s output.
+    # Warnings provably confined to one paragraph's own body are held back
+    # (scoped_warnings) for the reachability-union gate in step 4b.
     parse_result = parse_cobol(raw_source, filename=source_path.name)
     out.parse_result = parse_result
-    whole_program_reasons = check_whole_program(parse_result)
+    whole_program_reasons, scoped_warnings = check_whole_program_scoped(parse_result)
     if whole_program_reasons:
         out.problems.extend(
             f"refused ({r.code}): {r.message}" for r in whole_program_reasons
@@ -149,8 +161,12 @@ def run_static_checks(
             out.problems.extend(f"  {error}" for error in parse_result.errors)
         return out
 
-    # 3. Unresolved copybooks.
-    copybook_reasons = check_unresolved_copybooks(raw_source)
+    # 3. Unresolved copybooks -- same split: a COPY provably confined to
+    # one paragraph's own body (with a verified own-lines span) is held
+    # back for step 4b; everything else refuses now.
+    copybook_reasons, scoped_copies = check_unresolved_copybooks_scoped(
+        raw_source, parse_result.ast
+    )
     if copybook_reasons:
         out.problems.extend(
             f"refused ({r.code}): {r.message}" for r in copybook_reasons
@@ -169,6 +185,23 @@ def run_static_checks(
         out.problems.extend(selection_problems)
         return out
     out.suite = suite
+
+    # 4b. Paragraph-scoped refusals held back by steps 2-3: refuse each one
+    # whose paragraph the union of every SELECTED case's reachable set (GO
+    # TO fall-through closed; None = "trust nothing", refuse all) says
+    # could execute; waive the rest with a transparency note each. A
+    # waived COPY's verified span is commented out of `lines` in step 5 --
+    # cobc cannot compile an unresolvable COPY, unreachable or not.
+    scoped = scoped_warnings + scoped_copies
+    if scoped:
+        executed = union_executed_paragraphs(parse_result.ast, suite)
+        scoped_reasons = resolve_scoped_refusals(scoped, executed)
+        if scoped_reasons:
+            out.problems.extend(
+                f"refused ({r.code}): {r.message}" for r in scoped_reasons
+            )
+            return out
+        out.notes.extend(item.waiver_note for item in scoped)
 
     # 5. Surface analysis, normalization, linkage layout + neutralization.
     surface = analyze(parse_result.ast)
@@ -190,6 +223,14 @@ def run_static_checks(
         lines = normalize_fixed_format(
             strip_compiler_directives(raw_source).splitlines()
         ).splitlines()
+
+    # Waived unresolved-COPY statements (step 4b) get commented out here:
+    # comment-only, so no line number shifts for anything downstream, same
+    # guarantee as the linkage neutralization below.
+    for item in scoped_copies:
+        if item.blank_span is not None:
+            start, end = item.blank_span
+            lines = comment_and_replace(lines, start, end, [])
 
     linkage_reasons = check_linkage_layout(parse_result.ast, lines)
     if linkage_reasons:

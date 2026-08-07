@@ -95,7 +95,18 @@ mockymock too.
   legal COBOL (`MOVE ALL "=" TO <item>`).
 - `cobolparser.lexer.CobolLexer(text, free_form=True)` + `TokenType.COPY` —
   `refusal.py` re-lexes the raw source to detect unresolved COPY statements
-  (they leave zero trace in the AST).
+  (they leave zero trace in the AST). The paragraph-scoped COPY narrowing
+  additionally uses `TokenType.PERIOD` to find a COPY statement's
+  terminating period (absent via `getattr` → the COPY stays a whole-program
+  refusal, fail closed).
+- **Soft dependency (degrades safely):** dropped-content entries in
+  `ParseResult.warnings` carry the affected line as `line <N>` in the
+  warning text, with `<N>` indexing the NORMALIZED free-form text (the same
+  space as `SourceLocation.line`). `refusal._WARNING_LINE_RE` parses this to
+  scope a warning to one paragraph's body; a warning with no recognizable
+  line reference simply stays a whole-program PARSE_WARNING refusal.
+  `tests/unit/test_scoped_refusals.py` pins the format so an upstream change
+  fails loudly instead of silently disabling the narrowing.
 - `cobolparser.analysis.DynamicCallAnalyzer().analyze(ast)`
 - `cobolparser.models.program.CobolProgram.get_entry_statements() -> list[EntryStatement]`
   — every `ENTRY` statement in the program; each has `.entry_name: str | None`

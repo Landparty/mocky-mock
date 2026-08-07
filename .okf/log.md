@@ -1,5 +1,61 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-07 — Narrow the last whole-program refusals (paragraph-scoped PARSE_WARNING / UNRESOLVED_COPYBOOK)
+
+* **`PARSE_WARNING` and `UNRESOLVED_COPYBOOK` are no longer unconditionally
+  whole-program on the `run`/`lint`/`export`/`debug` path** ([analysis](analysis.md),
+  [cli](cli.md)): `refusal.check_whole_program_scoped` /
+  `check_unresolved_copybooks_scoped` hold back the one provably-narrow
+  shape — evidence confined to a single PROCEDURE DIVISION paragraph's own
+  body — as a `ParagraphScopedRefusal`, and `cli.checks.run_static_checks`
+  (new step 4b) refuses it only when `union_executed_paragraphs` says some
+  SELECTED test case could execute that paragraph. The union is the same
+  `_reachable_paragraphs` BFS the per-case gates trust, per selected case,
+  deliberately without the flow-mock `skip_traversal` narrowing
+  (conservative), closed to a fixpoint over the GO TO fall-through hazard
+  (`_falls_through` walk from every reached GO TO target — the same
+  unmodeled entry shape `_go_to_fallthrough_targets` guards terminators
+  against), and `None` (= refuse everything held back) the moment any
+  case's BFS reports any flow refusal.
+* **Classification fails closed everywhere it can't prove confinement**:
+  a warning with no `line N` in its text (`_WARNING_LINE_RE`), a line on a
+  paragraph/section header line or before the first paragraph (DATA
+  DIVISION content is program-global), a phantom-`.`/section-header
+  nearest-boundary attribution, an unverifiable paragraph source order,
+  or any multi-program compilation unit (warning lines could index a
+  contained program) all stay whole-program refusals — worst case is
+  exactly yesterday's behavior.
+* **A waived unresolved COPY is also commented out of `lines`**
+  (`_copy_statement_span` → `comment_and_replace`, count-preserving):
+  cobc cannot compile an unresolvable COPY even in an unexecuted
+  paragraph, so waiving the static refusal without the text edit would
+  just trade a clean refusal for a cryptic compile failure. The span is
+  verified to own its lines outright (COPY token first on its first line,
+  terminating PERIOD last on its last line, no paragraph/section header
+  inside — a period-less COPY would otherwise swallow the next header);
+  anything unverifiable refuses whole-program instead.
+* **Why an unexecuted paragraph's incomplete AST is safe to waive**: the
+  dropped/missing text still compiles verbatim (mockymock splices raw
+  text, not the AST); no splice is derived from statements inside it;
+  hidden edges FROM it cannot fire at runtime because the paragraph never
+  runs; and edges TO parser-lost content are unresolvable names that
+  already refuse (`UNRESOLVED_FLOW_TARGET`/`UNKNOWN_PARAGRAPH`) wherever
+  a reachable paragraph carries one.
+* **Transparency**: waivers are never silent — `StaticCheckResult.notes`
+  carries one line per waived warning/COPY (and names the commented-out
+  span), printed by `run`/`debug`/`export`/`lint` with their own prefix.
+* `generate`/`fixtures` keep the plain unconditional entry points
+  (`check_whole_program`/`check_unresolved_copybooks`, now thin wrappers
+  over the scoped variants with classification off): with no test cases
+  there is no reachable set to scope against.
+* Tests: `tests/unit/test_scoped_refusals.py` — including a pin that
+  cobolparser's dropped-content warnings carry a locatable line number in
+  the same normalized-text space as `SourceLocation` (if that upstream
+  format ever changes, the feature degrades safely to whole-program
+  refusals and the pin fails loudly), GO TO fall-through closure both
+  ways, own-line span verification, DATA DIVISION COPYs staying
+  whole-program, and `generate`-path behavior unchanged.
+
 ## 2026-08-06 — PR #46 post-review polish pass (unify-with-data)
 
 Five pre-merge, non-blocking fixes from PR #46's code review, applied after

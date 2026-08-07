@@ -564,6 +564,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         case_names=args.case,
         tag_names=args.tag,
     )
+    for note in checked.notes:
+        print(f"mockymock run: {note}")
     if checked.linkage is not None:
         _print_linkage_neutralization("run", checked.linkage, applied=True)
     if checked.problems:
@@ -889,6 +891,8 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     checked = run_static_checks(
         source_path, cut_path, args.copybook_path, case_names=args.case
     )
+    for note in checked.notes:
+        print(f"mockymock debug: {note}")
     if checked.linkage is not None:
         _print_linkage_neutralization("debug", checked.linkage, applied=True)
     if checked.problems:
@@ -1068,6 +1072,8 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     if not _check_input_files("mockymock lint", source_path, cut_path):
         return 1
     result = run_static_checks(source_path, cut_path, args.copybook_path)
+    for note in result.notes:
+        print(f"mockymock lint: {note}")
     for problem in result.problems:
         if problem.startswith("  "):
             print(problem)
@@ -1117,6 +1123,8 @@ def _cmd_export(args: argparse.Namespace) -> int:
         tag_names=args.tag,
         preserve_compiler_directives=True,
     )
+    for note in checked.notes:
+        print(f"mockymock export: {note}")
     if checked.linkage is not None:
         _print_linkage_neutralization("export", checked.linkage, applied=True)
     if checked.problems:
