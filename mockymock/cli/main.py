@@ -1029,13 +1029,15 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
             f"[{result.mutant.operator}] {result.mutant.description}"
         )
 
-    problems, outcome = run_mutation(
+    problems, outcome, notes = run_mutation(
         source_path,
         cut_path,
         args.copybook_path,
         timeout_seconds=args.timeout,
         on_progress=on_progress,
     )
+    for note in notes:
+        print(f"mockymock mutate: {note}")
     if problems or outcome is None:
         for problem in problems:
             print(f"mockymock mutate: {problem}")

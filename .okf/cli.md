@@ -436,7 +436,13 @@ from the score). Console output streams one line per mutant, then lists
 survivors with a `-`/`+` diff and the score
 (killed+timeouts over scored). `--json-report` writes the full
 machine-readable outcome; `--fail-under` exits 1 below the given
-percentage. Boundary statements (mocked) and terminators (rewritten by
+percentage. Every baseline/mutant run's `StaticCheckResult.notes` (a
+paragraph-scoped `PARSE_WARNING`/`UNRESOLVED_COPYBOOK` waived rather than
+refused — [analysis](analysis.md)) is collected (union, first-seen order,
+deduped) and printed as `mockymock mutate: <note>` lines before the
+outcome — this path compiles doctored source (a waived COPY's line
+commented out) exactly like `run` does, so it keeps the same
+never-silent guarantee. Boundary statements (mocked) and terminators (rewritten by
 terminator plans) are never mutated — mutating them would test the
 harness, not the program.
 
