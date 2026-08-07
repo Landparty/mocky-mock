@@ -15,6 +15,23 @@
 - `splicer/injector.build_rows_block` generalized from a SQL-only function that hardcoded SQLCODE 0/100 to `build_rows_block(tally_name, rows, *, row_suffix_moves, exhausted_moves)`, with the SQLCODE literals moved to their SQL call site in `build_site_dispatch` and a new READ call site alongside it.
 - Bumped the vendored `cobolparser` pin to `ff64b25` (includes upstream PR #110's gen-fixtures fixes and PR #112's EJECT support).
 
+## [0.5.0](https://github.com/samdion1994/mocky-mock/compare/v0.4.0...v0.5.0) (2026-08-07)
+
+
+### Features
+
+* add mockymock analyze passthrough to cobol-parser's CLI ([f43dc11](https://github.com/samdion1994/mocky-mock/commit/f43dc117bbf132dc2e79b67552c295fe378ac92c))
+* **refusal:** narrow PARSE_WARNING/UNRESOLVED_COPYBOOK to paragraph scope ([ac17f9e](https://github.com/samdion1994/mocky-mock/commit/ac17f9e2f0b92273ca460cfaa0b768fb7bda5b95))
+
+
+### Bug Fixes
+
+* **mutation:** propagate scoped-refusal waiver notes through mutate ([cbcc6f9](https://github.com/samdion1994/mocky-mock/commit/cbcc6f929dc376ae282365171645ba61f501d9cc))
+* **refusal:** add independent safety net for PARSE_WARNING line trust ([0260ea5](https://github.com/samdion1994/mocky-mock/commit/0260ea5b6468fe97e6fbb2a345ee1c4528a38ccf))
+* **refusal:** verify a waivable COPY's span textually, not via PERIOD tokens ([7d3ce74](https://github.com/samdion1994/mocky-mock/commit/7d3ce74690abff17770f52c526d639707fcd5712))
+* update second stale INVOKE fixture, drop dangling unused import ([bf1cabd](https://github.com/samdion1994/mocky-mock/commit/bf1cabd818662d997549d346756bd6cd3cbebf8b))
+* update stale INVOKE unsupported-verb fixture to EXHIBIT ([6eabb5f](https://github.com/samdion1994/mocky-mock/commit/6eabb5fe42f88c1238e6c3fc63028380d0db13a3))
+
 ## [0.4.0](https://github.com/samdion1994/mocky-mock/compare/v0.3.0...v0.4.0) (2026-08-06)
 
 
