@@ -14,9 +14,11 @@ mockymock/analysis/refusal.py.
 from types import SimpleNamespace
 
 from cobolparser import parse_cobol
+from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.refusal import (
     _WARNING_LINE_RE,
+    _has_unaccounted_label,
     _paragraph_owning_line,
     check_unresolved_copybooks,
     check_unresolved_copybooks_scoped,
@@ -94,7 +96,7 @@ def test_plain_check_whole_program_still_refuses_every_warning():
 
 
 def test_scoped_variant_holds_back_a_paragraph_local_warning():
-    whole, scoped = check_whole_program_scoped(_invoke_result())
+    whole, scoped = check_whole_program_scoped(_invoke_result(), UNREACHED_INVOKE_CBL)
     assert whole == []
     assert scoped
     assert {item.paragraph_name for item in scoped} == {"DIRTY-PARA"}
@@ -112,7 +114,7 @@ def test_warning_without_a_line_number_stays_whole_program():
         warnings=["content was dropped somewhere unlocatable"],
         ast=real.ast,
     )
-    whole, scoped = check_whole_program_scoped(fake)
+    whole, scoped = check_whole_program_scoped(fake, UNREACHED_INVOKE_CBL)
     assert scoped == []
     assert any(r.code == "PARSE_WARNING" for r in whole)
 
@@ -134,7 +136,7 @@ def test_multi_program_unit_disables_classification():
         warnings=["Unparsed tokens starting at 'X' at line 10 dropped"],
         ast=_FakeMultiProgram(),
     )
-    whole, scoped = check_whole_program_scoped(fake)
+    whole, scoped = check_whole_program_scoped(fake, "IDENTIFICATION DIVISION.\n")
     assert scoped == []
     assert any(r.code == "PARSE_WARNING" for r in whole)
 
@@ -437,3 +439,94 @@ def test_paragraph_owning_line_in_sections():
     # preceding paragraph).
     assert _paragraph_owning_line(program, 12) is None
     assert _paragraph_owning_line(program, 9) is None
+
+
+# --- independent label-scan safety net (Copilot review, PR #49) -----------
+#
+# A warning's reported line proves only where cobolparser says the drop
+# STARTS -- it says nothing about whether recovery might have skipped past
+# a real paragraph header while resynchronizing, silently merging that
+# paragraph's content into the one the warning is attributed to and
+# erasing it from the AST's own paragraph list. mockymock has no way to
+# inspect cobolparser's recovery-loop internals to rule that out, so
+# instead of trusting the line number on faith, `_paragraph_owning_line`
+# cross-checks the candidate owner's body against mockymock's own re-lexed
+# source for anything shaped like an unrecognized header line
+# (`_has_unaccounted_label`). These tests construct that hazard directly
+# (an extra line, independent of anything cobolparser produced) to prove
+# the veto fires -- they do not depend on reproducing the actual upstream
+# recovery bug, only on this module's own defensive logic.
+
+
+def test_has_unaccounted_label_detects_bare_identifier_and_section_forms():
+    # `_has_unaccounted_label` is a raw range-scan primitive -- it has no
+    # notion of "known header," which is why callers only ever pass it a
+    # range strictly BETWEEN two already-known boundaries. Line 1 here
+    # (an ordinary header shape) is deliberately excluded from every
+    # range below for that reason, not because the regex treats it
+    # specially.
+    lines = [
+        "       SOME-PARA.",
+        "           MOVE 1 TO WS-X.",
+        "       HIDDEN-PARA.",
+        "           MOVE 2 TO WS-X.",
+        "       HIDDEN-SEC SECTION.",
+    ]
+    assert _has_unaccounted_label(lines, 2, 2) is False  # an ordinary statement
+    assert _has_unaccounted_label(lines, 3, 3) is True  # bare "IDENTIFIER."
+    assert _has_unaccounted_label(lines, 5, 5) is True  # "IDENTIFIER SECTION."
+
+
+def test_has_unaccounted_label_ignores_ordinary_multi_token_lines():
+    lines = [
+        "           MOVE 1 TO WS-X.",
+        '           DISPLAY "hello".',
+        "           IF WS-X > 0",
+        "               PERFORM CLEAN-PARA",
+        "",
+    ]
+    assert _has_unaccounted_label(lines, 1, len(lines)) is False
+
+
+def test_has_unaccounted_label_accepted_false_positive_on_scope_terminators():
+    """A bare COBOL scope terminator (END-IF./EXIT./CONTINUE.) alone on
+    its own line is syntactically indistinguishable from a paragraph name
+    to this deliberately conservative regex, and the module docstring
+    says so explicitly: an accepted false positive, not a bug -- it costs
+    a classification (falls back to whole-program, today's behavior)
+    rather than ever risking an unsound one."""
+    assert _has_unaccounted_label(["           END-IF."], 1, 1) is True
+    assert _has_unaccounted_label(["       EXIT."], 1, 1) is True
+
+
+def test_label_scan_vetoes_classification_when_body_hides_a_candidate_header():
+    """The core defensive check: even though line 14 maps cleanly to
+    DIRTY-PARA by header position alone (test_paragraph_owning_line_
+    classification, above), a body containing what looks like an
+    unrecognized paragraph header must veto classification instead of
+    trusting that DIRTY-PARA's apparent body boundary is really where
+    cobolparser's own recovery landed."""
+    result = parse_cobol(UNREACHED_INVOKE_CBL, filename="scopedw.cbl")
+    assert result.success, result.errors
+    program = result.ast
+    clean_lines = normalize_fixed_format(UNREACHED_INVOKE_CBL.splitlines()).splitlines()
+    assert _paragraph_owning_line(program, 14, clean_lines) == "DIRTY-PARA"
+
+    hazardous_lines = list(clean_lines)
+    # DIRTY-PARA's body is its last two lines (INVOKE at 13, DISPLAY at
+    # 14) with no further paragraph after it -- replace the final line
+    # with something that looks like a header cobolparser's AST doesn't
+    # know about, simulating a swallowed paragraph boundary.
+    hazardous_lines[-1] = "       SNEAKY-PARA."
+    assert _paragraph_owning_line(program, 14, hazardous_lines) is None
+
+
+def test_label_scan_is_the_only_difference_from_the_unguarded_call():
+    """Confirms the guard is opt-in via `normalized_lines`, not a change
+    to the base attribution rule: omitting it reproduces the pre-fix
+    behavior exactly (needed so callers with no source text yet, if any
+    ever exist, still get a defined answer)."""
+    result = parse_cobol(UNREACHED_INVOKE_CBL, filename="scopedw.cbl")
+    assert result.success, result.errors
+    program = result.ast
+    assert _paragraph_owning_line(program, 14) == "DIRTY-PARA"

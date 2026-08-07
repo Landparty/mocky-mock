@@ -118,9 +118,15 @@ used by cli.checks.run_static_checks): a warning or unresolved COPY whose
 evidence is provably confined to ONE PROCEDURE DIVISION paragraph's own
 body (_paragraph_owning_line -- strictly between that paragraph's header
 line and the next paragraph/section header, never on a header line, never
-in a multi-program unit, never attributable to a phantom "." paragraph:
-all of those stay whole-program, fail closed) is held back as a
-ParagraphScopedRefusal and refused only when some SELECTED test case can
+in a multi-program unit, never attributable to a phantom "." paragraph,
+and never when _has_unaccounted_label finds a line shaped like an
+unrecognized paragraph/SECTION header inside that body -- a cross-check
+against mockymock's own re-lexing of the source, independent of trusting
+cobolparser's error-recovery internals to never have swallowed a real
+paragraph boundary while resynchronizing after the very content that
+triggered the warning: all of those stay whole-program, fail closed) is
+held back as a ParagraphScopedRefusal and refused only when some SELECTED
+test case can
 execute that paragraph. "Can execute" is union_executed_paragraphs: the
 union over every selected case of the same reachability BFS the per-case
 gates trust, closed over the GO TO fall-through hazard (a paragraph
@@ -291,17 +297,56 @@ def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool
 _WARNING_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
 
 
-def _paragraph_owning_line(program, line: int) -> str | None:
-    """Name of the PROCEDURE DIVISION paragraph whose own body strictly
-    contains normalized-text line `line`, or None when that cannot be
-    proven -- fail closed. None covers: a multi-program compilation unit
-    (warning lines could index a contained program the AST doesn't model
-    here), no PROCEDURE DIVISION, unverifiable paragraph source order,
-    any line at or before the first paragraph header (DATA DIVISION
-    content is program-global), a line ON a paragraph/section header
-    line, and any line whose nearest preceding header is a SECTION header
-    or a phantom '.'/'' paragraph rather than a real paragraph (content
-    there has no single owning paragraph body).
+# A line that LOOKS like a paragraph-name or SECTION header on its own --
+# used only as a NEGATIVE safety check, never a positive detector: cheap,
+# deliberately broad free-form-COBOL shape (a bare identifier, optionally
+# "... SECTION", terminated by a period, alone on its line). If a line
+# shaped like this turns up strictly INSIDE what the AST claims is one
+# paragraph's body -- between its header and the next AST-recorded
+# boundary -- that is suspicious: either it's an ordinary reserved-word
+# one-liner (EXIT./CONTINUE.) or EXEC-block noise (END-EXEC.), or it is
+# exactly the failure mode this guards against -- cobolparser's error-
+# recovery swallowed what should have been a separate paragraph header
+# while resynchronizing after dropped content, silently merging that
+# paragraph's body into this one and erasing it from the AST's own
+# paragraph list. mockymock has no visibility into cobolparser's recovery
+# internals to rule that out directly, so instead of trusting the
+# warning's line number on faith, this cross-checks it against source
+# text mockymock already controls. False positives (the common,
+# harmless EXIT./END-EXEC. case) only cost a classification -- the
+# warning falls back to whole-program, today's behavior -- never an
+# unsound one.
+_CANDIDATE_LABEL_RE = re.compile(
+    r"^\s*[A-Z0-9][A-Z0-9-]*(?:\s+SECTION)?\s*\.\s*$", re.IGNORECASE
+)
+
+
+def _has_unaccounted_label(normalized_lines: list[str], start: int, end: int) -> bool:
+    """True if any line in [start, end] (1-based, inclusive; a reversed or
+    out-of-range span is simply empty) of `normalized_lines` matches
+    `_CANDIDATE_LABEL_RE`. Only ever called with a span strictly between
+    two consecutive AST-recorded PROCEDURE DIVISION boundaries -- see
+    `_CANDIDATE_LABEL_RE`."""
+    for line_no in range(max(start, 1), min(end, len(normalized_lines)) + 1):
+        if _CANDIDATE_LABEL_RE.match(normalized_lines[line_no - 1]):
+            return True
+    return False
+
+
+def _paragraph_body_span(program, line: int) -> tuple[str, int, int | None] | None:
+    """(owner_name, owner_header_line, next_boundary_line) for the
+    PROCEDURE DIVISION paragraph whose own body strictly contains
+    normalized-text line `line`, or None when that cannot be proven --
+    fail closed. None covers: a multi-program compilation unit (warning
+    lines could index a contained program the AST doesn't model here), no
+    PROCEDURE DIVISION, unverifiable paragraph source order, any line at
+    or before the first paragraph header (DATA DIVISION content is
+    program-global), a line ON a paragraph/section header line, and any
+    line whose nearest preceding header is a SECTION header or a phantom
+    '.'/'' paragraph rather than a real paragraph (content there has no
+    single owning paragraph body). `next_boundary_line` is None when no
+    further boundary follows -- the owner is the program's last paragraph,
+    its body runs to end of file.
 
     "Strictly contains" means: the last header line before `line`
     (paragraph headers, named-section headers, and phantom-paragraph
@@ -335,14 +380,45 @@ def _paragraph_owning_line(program, line: int) -> str | None:
         # ON a header line (a one-line `P. <content>` layout, a section
         # header, a phantom anchor): never attributable to a body.
         return None
-    owner: str | None = None
-    found = False
-    for start, _, name in boundaries:
+    owner_idx: int | None = None
+    for i, (start, _, _) in enumerate(boundaries):
         if start < line:
-            owner, found = name, True
+            owner_idx = i
         else:
             break
-    return owner if found else None
+    if owner_idx is None or boundaries[owner_idx][2] is None:
+        return None
+    owner_start = boundaries[owner_idx][0]
+    owner_name = boundaries[owner_idx][2]
+    assert owner_name is not None  # just checked above
+    next_start = (
+        boundaries[owner_idx + 1][0] if owner_idx + 1 < len(boundaries) else None
+    )
+    return owner_name, owner_start, next_start
+
+
+def _paragraph_owning_line(
+    program, line: int, normalized_lines: list[str] | None = None
+) -> str | None:
+    """`_paragraph_body_span`'s owner name, or None -- see that function's
+    docstring for the base attribution rules.
+
+    When `normalized_lines` is given, ownership additionally requires
+    `_has_unaccounted_label` to find nothing suspicious in the candidate
+    owner's own body (see `_CANDIDATE_LABEL_RE`'s docstring for why):
+    classification fails closed rather than trust a paragraph boundary
+    that might not be where it looks. Every *_scoped call site must pass
+    it; omitting it is only for callers that genuinely have no source
+    text yet."""
+    span = _paragraph_body_span(program, line)
+    if span is None:
+        return None
+    owner, start, next_start = span
+    if normalized_lines is not None:
+        end = next_start - 1 if next_start is not None else len(normalized_lines)
+        if _has_unaccounted_label(normalized_lines, start + 1, end):
+            return None
+    return owner
 
 
 def check_whole_program(parse_result) -> list[RefusalReason]:
@@ -369,26 +445,33 @@ def check_whole_program(parse_result) -> list[RefusalReason]:
     run_static_checks uses check_whole_program_scoped instead, which holds
     provably paragraph-local warnings back for the reachability-union gate
     (see the module docstring)."""
-    reasons, scoped = _whole_program_reasons(parse_result, classify=False)
+    reasons, scoped = _whole_program_reasons(
+        parse_result, classify=False, raw_source=None
+    )
     assert not scoped  # classify=False never holds a warning back
     return reasons
 
 
 def check_whole_program_scoped(
-    parse_result,
+    parse_result, raw_source: str
 ) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
     """check_whole_program, except each PARSE_WARNING whose text carries a
     line number that `_paragraph_owning_line` proves to sit inside exactly
-    one PROCEDURE DIVISION paragraph's own body is returned as a held-back
+    one PROCEDURE DIVISION paragraph's own body -- AND that survives
+    `_paragraph_owning_line`'s independent label-scan safety net over
+    `raw_source` (see `_CANDIDATE_LABEL_RE`) -- is returned as a held-back
     ParagraphScopedRefusal instead of an immediate reason. Everything else
     -- parse errors, warnings with no recognizable line, lines that cannot
     be attributed to one paragraph, DECLARATIVES/ALTER -- stays in the
-    first (whole-program, refuse-now) list, fail closed."""
-    return _whole_program_reasons(parse_result, classify=True)
+    first (whole-program, refuse-now) list, fail closed. `raw_source` must
+    be the exact text `parse_cobol` was called with -- it is normalized
+    here independently, purely for the label-scan; nothing derived from it
+    is spliced or otherwise trusted as authoritative over the AST."""
+    return _whole_program_reasons(parse_result, classify=True, raw_source=raw_source)
 
 
 def _whole_program_reasons(
-    parse_result, classify: bool
+    parse_result, classify: bool, raw_source: str | None
 ) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
     reasons: list[RefusalReason] = []
     scoped: list[ParagraphScopedRefusal] = []
@@ -403,6 +486,11 @@ def _whole_program_reasons(
             )
         )
     program = getattr(parse_result, "ast", None)
+    normalized_lines = (
+        normalize_fixed_format(raw_source.splitlines()).splitlines()
+        if classify and raw_source is not None
+        else None
+    )
     for warning in getattr(parse_result, "warnings", None) or []:
         # cobolparser >= af08deb blanks un-expanded COPY statements before
         # lexing and reports each as a "COPY <member> not expanded" warning
@@ -418,7 +506,9 @@ def _whole_program_reasons(
         if classify and parse_result.success and program is not None:
             match = _WARNING_LINE_RE.search(text)
             if match:
-                owner = _paragraph_owning_line(program, int(match.group(1)))
+                owner = _paragraph_owning_line(
+                    program, int(match.group(1)), normalized_lines
+                )
         if owner is None:
             reasons.append(
                 RefusalReason(
@@ -646,7 +736,11 @@ def check_unresolved_copybooks_scoped(
     scoped: list[ParagraphScopedRefusal] = []
     for index in copy_indices:
         line = tokens[index].location.line
-        owner = _paragraph_owning_line(program, line) if program is not None else None
+        owner = (
+            _paragraph_owning_line(program, line, normalized_lines)
+            if program is not None
+            else None
+        )
         span = (
             _copy_own_line_span(normalized_lines, line) if owner is not None else None
         )

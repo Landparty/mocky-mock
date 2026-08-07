@@ -152,7 +152,9 @@ def run_static_checks(
     # (scoped_warnings) for the reachability-union gate in step 4b.
     parse_result = parse_cobol(raw_source, filename=source_path.name)
     out.parse_result = parse_result
-    whole_program_reasons, scoped_warnings = check_whole_program_scoped(parse_result)
+    whole_program_reasons, scoped_warnings = check_whole_program_scoped(
+        parse_result, raw_source
+    )
     if whole_program_reasons:
         out.problems.extend(
             f"refused ({r.code}): {r.message}" for r in whole_program_reasons
