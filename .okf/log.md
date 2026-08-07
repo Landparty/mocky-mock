@@ -26,14 +26,16 @@
   contained program) all stay whole-program refusals — worst case is
   exactly yesterday's behavior.
 * **A waived unresolved COPY is also commented out of `lines`**
-  (`_copy_statement_span` → `comment_and_replace`, count-preserving):
+  (`_copy_own_line_span` → `comment_and_replace`, count-preserving):
   cobc cannot compile an unresolvable COPY even in an unexecuted
   paragraph, so waiving the static refusal without the text edit would
-  just trade a clean refusal for a cryptic compile failure. The span is
-  verified to own its lines outright (COPY token first on its first line,
-  terminating PERIOD last on its last line, no paragraph/section header
-  inside — a period-less COPY would otherwise swallow the next header);
-  anything unverifiable refuses whole-program instead.
+  just trade a clean refusal for a cryptic compile failure. Only the
+  single-line `COPY MEMBER.` layout owning its whole normalized line
+  qualifies, verified textually (starts with COPY, ends with its
+  terminating period, no other period) — the lexer exposes no PERIOD
+  token type, so a token-walk to the terminator isn't available; sibling
+  code on the line, a second statement after the terminator, and
+  multi-line COPY ... REPLACING all refuse whole-program instead.
 * **Why an unexecuted paragraph's incomplete AST is safe to waive**: the
   dropped/missing text still compiles verbatim (mockymock splices raw
   text, not the AST); no splice is derived from statements inside it;

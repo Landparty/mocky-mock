@@ -138,10 +138,11 @@ are unresolvable names that refuse (UNRESOLVED_FLOW_TARGET /
 UNKNOWN_PARAGRAPH) the moment a reachable paragraph carries one. A waived
 unresolved COPY additionally has its statement commented out of the
 spliced lines (its verified own-line span rides on the
-ParagraphScopedRefusal) so cobc never sees a COPY it cannot resolve; a
-COPY whose span cannot be verified to own its lines outright (sibling
-tokens, missing terminating period, a paragraph/section header inside the
-span) stays whole-program. generate/fixtures have no test cases to scope
+ParagraphScopedRefusal) so cobc never sees a COPY it cannot resolve; only
+the single-line `COPY MEMBER.` layout owning its whole line qualifies
+(_copy_own_line_span), so sibling code on the line, a second statement
+after the terminator, and multi-line COPY ... REPLACING all stay
+whole-program. generate/fixtures have no test cases to scope
 by, so the plain check_whole_program/check_unresolved_copybooks entry
 points still refuse everything, unchanged.
 
@@ -622,30 +623,32 @@ def check_unresolved_copybooks_scoped(
 ) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
     """check_unresolved_copybooks, except a COPY statement that
     `_paragraph_owning_line` proves to sit inside exactly one PROCEDURE
-    DIVISION paragraph's own body (a procedural copybook) AND whose full
-    statement span `_copy_statement_span` verifies to own its lines
-    outright is returned as a held-back ParagraphScopedRefusal carrying
-    that span. When the refusal is later waived (no selected test case can
-    execute the paragraph), the caller must comment the span out of the
-    spliced lines -- the raw COPY text would otherwise still reach cobc,
-    which cannot compile an unresolvable COPY. Every other COPY -- DATA
-    DIVISION ones, ones on/between headers, ones whose span cannot be
-    verified -- stays in the first (whole-program, refuse-now) list, fail
-    closed. `program` is the parsed AST of this same source (pass None to
-    classify nothing)."""
+    DIVISION paragraph's own body (a procedural copybook) AND whose
+    single-line span `_copy_own_line_span` verifies to own its
+    normalized-text line outright is returned as a held-back
+    ParagraphScopedRefusal carrying that span. When the refusal is later
+    waived (no selected test case can execute the paragraph), the caller
+    must comment the span out of the spliced lines -- the raw COPY text
+    would otherwise still reach cobc, which cannot compile an
+    unresolvable COPY. Every other COPY -- DATA DIVISION ones, ones
+    on/between headers, ones whose line cannot be verified -- stays in
+    the first (whole-program, refuse-now) list, fail closed. `program` is
+    the parsed AST of this same source (pass None to classify
+    nothing)."""
     normalized = normalize_fixed_format(raw_source.splitlines())
     lexer = CobolLexer(normalized, free_form=True)
     tokens = lexer.tokenize()
     copy_indices = [i for i, t in enumerate(tokens) if t.type == TokenType.COPY]
     if not copy_indices:
         return [], []
+    normalized_lines = normalized.splitlines()
     whole_lines: set[int] = set()
     scoped: list[ParagraphScopedRefusal] = []
     for index in copy_indices:
         line = tokens[index].location.line
         owner = _paragraph_owning_line(program, line) if program is not None else None
         span = (
-            _copy_statement_span(tokens, index, program) if owner is not None else None
+            _copy_own_line_span(normalized_lines, line) if owner is not None else None
         )
         if owner is None or span is None:
             whole_lines.add(line)
@@ -693,43 +696,32 @@ def check_unresolved_copybooks_scoped(
     return reasons, scoped
 
 
-def _copy_statement_span(tokens, index: int, program) -> tuple[int, int] | None:
-    """The 1-based inclusive normalized-line span [COPY token line ..
-    terminating period's line] of the COPY statement at `tokens[index]`,
-    verified safe to comment out wholesale, or None (fail closed) when:
-    the lexer exposes no PERIOD token type, no terminating period follows,
-    a sibling token shares the span's first line before the COPY or its
-    last line after the period (commenting whole lines would delete that
-    sibling code -- the same own-your-lines rule the splicer applies via
-    statement_top_level_problem), or any paragraph/section header line
-    falls inside the span (a malformed COPY missing its own period would
-    otherwise swallow the next header)."""
-    period_type = getattr(TokenType, "PERIOD", None)
-    if period_type is None:
+def _copy_own_line_span(
+    normalized_lines: list[str], line: int
+) -> tuple[int, int] | None:
+    """The single-line span (line, line) of a COPY statement verified to
+    own its normalized-text line outright, or None -- fail closed, purely
+    textual (no reliance on the lexer's token inventory beyond the COPY
+    detection that located `line`). The line must start with the COPY
+    keyword (nothing before it), end with its terminating period, and
+    contain no other period, so a second statement after the terminator
+    (`COPY A. DISPLAY X.`), a quoted text-name containing '.', and a
+    multi-line `COPY ... REPLACING` (its first line has no period) never
+    qualify -- those stay whole-program refusals. Single-line
+    `COPY MEMBER.` is the one procedural-copybook layout this narrowing
+    supports: commenting out exactly that one line cannot touch sibling
+    code or a following paragraph header."""
+    if not 1 <= line <= len(normalized_lines):
         return None
-    start = tokens[index].location.line
-    end_index = None
-    for j in range(index + 1, len(tokens)):
-        if tokens[j].type == period_type:
-            end_index = j
-            break
-    if end_index is None:
+    stripped = normalized_lines[line - 1].strip()
+    upper = stripped.upper()
+    if not upper.startswith("COPY") or upper[4:5].strip():
         return None
-    end = tokens[end_index].location.line
-    if index > 0 and tokens[index - 1].location.line >= start:
+    if not stripped.endswith("."):
         return None
-    if end_index + 1 < len(tokens) and tokens[end_index + 1].location.line <= end:
+    if stripped.find(".") != len(stripped) - 1:
         return None
-    procedure = program.get_division("PROCEDURE")
-    if procedure is None:
-        return None
-    header_lines = {p.location.line for p in _all_paragraphs(procedure)}
-    for section_name, section in getattr(procedure, "_sections", {}).items():
-        if (section_name or "").strip("."):
-            header_lines.add(section.location.line)
-    if any(start < header <= end for header in header_lines):
-        return None
-    return start, end
+    return line, line
 
 
 def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:

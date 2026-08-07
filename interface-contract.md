@@ -96,9 +96,10 @@ mockymock too.
 - `cobolparser.lexer.CobolLexer(text, free_form=True)` + `TokenType.COPY` —
   `refusal.py` re-lexes the raw source to detect unresolved COPY statements
   (they leave zero trace in the AST). The paragraph-scoped COPY narrowing
-  additionally uses `TokenType.PERIOD` to find a COPY statement's
-  terminating period (absent via `getattr` → the COPY stays a whole-program
-  refusal, fail closed).
+  only uses the COPY token's line; the statement's extent is verified
+  textually (`_copy_own_line_span`, single-line `COPY MEMBER.` only) with
+  no reliance on the lexer's period/terminator token inventory (verified:
+  the lexer exposes no `PERIOD` token type).
 - **Soft dependency (degrades safely):** dropped-content entries in
   `ParseResult.warnings` carry the affected line as `line <N>` in the
   warning text, with `<N>` indexing the NORMALIZED free-form text (the same
