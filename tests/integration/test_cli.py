@@ -94,17 +94,30 @@ TESTCASE "PARA-TWO calls DISCRATE"
 """
 
 
-# INVOKE has no registered statement parser: cobolparser drops it from the
+# EXHIBIT has no registered statement parser: cobolparser drops it from the
 # AST with success=True, errors=0, and a ParseResult.warnings entry (its
 # 2026-07-07 silent-drop remediation). A scaffold or splice built from that
 # AST would silently miss program behavior, so both commands refuse.
+#
+# Originally used INVOKE; cobolparser has since registered a real parser
+# for INVOKE (see procedure_recovery.py's UNSUPPORTED_VERBS comment: "...
+# now dispatch through the registry instead of reaching this warn-and-
+# discard path"), so INVOKE no longer reproduces the drop-with-warning
+# behavior these tests exist to pin. Swapped to EXHIBIT -- the sibling
+# example named in that same cobolparser comment, and still listed in
+# UNSUPPORTED_VERBS -- matching the same fix already applied to
+# tests/unit/test_refusal.py's UNSUPPORTED_VERB_SOURCE fixture.
 INVOKER_CBL = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. INVOKER.
 
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-FIELD PIC X(5).
+
        PROCEDURE DIVISION.
        MAIN-PARA.
-           INVOKE SOME-OBJECT "someMethod".
+           EXHIBIT NAMED WS-FIELD.
            DISPLAY "done".
 """
 

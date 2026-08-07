@@ -64,6 +64,21 @@ jobs:
           BIN="build/${{ matrix.artifact }}"
           chmod +x "$BIN" || true
           "$BIN" --help
+      - name: Analyze subcommand bundles cobolparser's CLI
+        # _cmd_analyze is the only place in mockymock that imports anything
+        # from cobolparser.cli -- every other code path only reaches
+        # cobolparser.models/.parsers/.lexer/.preprocess/.generators. A
+        # Nuitka bundling miss for this specific subpackage would pass the
+        # plain --help smoke test above (analyze --help never imports
+        # cobolparser.cli.parse -- that import is inside _cmd_analyze, not
+        # reached by argparse's own -h handling) and would also pass the
+        # extension's own capability probe, which only checks
+        # `analyze --help`. This step is the only thing that actually
+        # exercises the import.
+        shell: bash
+        run: |
+          BIN="build/${{ matrix.artifact }}"
+          "$BIN" analyze dead-code examples/custinq/CUSTINQ.cbl --compact | head -c 200
       - name: End-to-end smoke test against a real example (Docker required)
         # GitHub-hosted ubuntu-latest runners have a working Docker daemon;
         # macos-latest/windows-latest don't reliably, and mockymock is

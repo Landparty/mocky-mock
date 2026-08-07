@@ -4,8 +4,6 @@ import subprocess
 import sys
 from unittest import mock
 
-import pytest
-
 from mockymock.cli.main import build_parser, main
 from mockymock.web import server
 
@@ -24,8 +22,8 @@ def test_dashboard_defaults_to_the_servers_default_port():
 def test_port_help_text_matches_the_actual_default(capsys):
     """--port's help text carries the only literal copy of the port
     number; pin it against the real constant so the two can't drift."""
-    with pytest.raises(SystemExit):
-        main(["dashboard", "--help"])
+    exit_code = main(["dashboard", "--help"])
+    assert exit_code == 0
     assert f"default {server.DEFAULT_PORT}" in capsys.readouterr().out
 
 
