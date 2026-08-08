@@ -19,9 +19,8 @@ Building the Nuitka executable now happens in the sibling
 only): it checks out this repo at its latest release tag, runs the same
 Nuitka build (`scripts/build_executable.sh`) this concept used to
 describe running here, packages the result into the VS Code extension's
-`.vsix`, and publishes that. See that repo's own `.okf`-equivalent design
-doc, `docs/superpowers/specs/2026-08-07-cross-repo-dispatch-build-design.md`,
-for the full pipeline.
+`.vsix`, and publishes that. See that repo's own `PUBLISHING.md` and the
+workflow itself for the full pipeline.
 
 `release-please.yml` still cuts this repo's own version-bump PRs and a
 GitHub Release with generated changelog notes on merge to `main` — it just
@@ -31,13 +30,15 @@ no longer attaches any binaries to that release.
 
 - **Nuitka ignores `[tool.setuptools.package-data]`.** A non-`.py` file
   resolved via `Path(__file__)` can be correctly listed there, appear in a
-  built wheel, pass every unit test, and still be missing from the three
-  released executables — the primary artifact for users with no repo
-  access. Each such file needs its own `--include-data-files` /
+  built wheel, pass every unit test, and still be missing from the
+  released executables the sibling `mocky-mock-vscode` repo now bundles
+  into its `.vsix` — the primary artifact for users with no repo access.
+  Each such file needs its own `--include-data-files` /
   `--include-data-dir` flag in `scripts/build_executable.sh`. The
   `Dockerfile` and `mockymock/web/static/` are the two current cases; both
-  have a CI step in `build-executables.yml` that exercises them *through
-  the built binary*, which is the only place this class of bug is visible.
+  have a CI step in that sibling repo's `build-and-release.yml` that
+  exercises them *through the built binary*, which is the only place this
+  class of bug is visible.
 
 - `release-please-config.json`'s `packages["."].release-as` is a one-time
   version override, not a permanent pin. Left set after the bootstrap

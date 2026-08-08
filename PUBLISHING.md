@@ -4,7 +4,7 @@ mockymock and its `cobolparser` dependency are both private, proprietary
 repos (see `LICENSE`). Today, *installing* mockymock at all — even just to
 run it, never mind reading it — requires GitHub read access to both: the
 README's own install instructions say as much ("Authenticate git/uv to
-GitHub — both `samdion1994/mocky-mock` and its `cobolparser` dependency are
+GitHub — both `Landparty/mocky-mock` and its `cobolparser` dependency are
 private repos"). That means every current user of this tool is, by
 necessity, someone who *could* just clone and read the full source of both
 repos. There is no GitHub permission tier that grants "run mockymock" or
@@ -35,8 +35,8 @@ so:
   comments, or function bodies).
 - The end user runs **one binary** and never invokes `pip`/`uv`/`git`
   against either private repo themselves — CI does that once, with
-  `COBOL_PARSER_PAT` (or `GITHUB_TOKEN`) providing the read access to
-  `cobolparser` that an end user would otherwise need personally.
+  `COBOL_PARSER_PAT` providing the read access to `cobolparser` that an
+  end user would otherwise need personally.
 - `mockymock/runtime/docker/Dockerfile` is bundled in explicitly via
   Nuitka's `--include-data-files` (see `scripts/build_executable.sh`) — it's
   the one place in the codebase that resolves a resource path off
@@ -62,12 +62,13 @@ them.
 Both are gone. The only consumer of these executables was
 `mocky-mock-vscode`'s packaging step, and that now builds mockymock from
 source itself, on demand, in its own `build-and-release.yml` — see that
-repo's `PUBLISHING.md` and
-`docs/superpowers/specs/2026-08-07-cross-repo-dispatch-build-design.md`.
-If you need the standalone CLI outside of VS Code, build it locally (see
+repo's `PUBLISHING.md` and the workflow itself for the full pipeline. If
+you need the standalone CLI outside of VS Code, build it locally (see
 "Local build" below) or run `mocky-mock-vscode`'s dispatch workflow and
 unzip the resulting `.vsix` — `extension/bin/mockymock` is the same
-binary.
+binary (the Windows package bundles it as `extension/bin/mockymock.exe`
+instead; only the linux-x64 and darwin-arm64 packages use the
+extensionless name).
 
 ## Local build
 

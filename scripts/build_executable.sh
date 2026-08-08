@@ -17,6 +17,13 @@
 # the active Python environment (see the release workflow for the exact
 # install steps, including patchelf on Linux and the cobolparser auth
 # needed to resolve the git-pinned dependency).
+#
+# No automated workflow in this repo calls this script anymore -- its
+# sole CI caller is now the sibling `mocky-mock-vscode` repo's
+# `build-and-release.yml` workflow (cross-repo), which checks out this
+# repo at a release tag and runs it. Do not delete this as apparent dead
+# code (see PUBLISHING.md's "Local build" section for the other caller:
+# a human running it by hand).
 set -euo pipefail
 
 OUTPUT_NAME="${1:?usage: build_executable.sh <output-filename>}"

@@ -2,10 +2,10 @@
 
 ## 2026-08-07 — Standalone executable distribution retired; build moved to mocky-mock-vscode
 
-Part of the cross-repo-dispatch-build initiative (design doc lives in the
-sibling `mocky-mock-vscode` repo:
-`docs/superpowers/specs/2026-08-07-cross-repo-dispatch-build-design.md`).
-This repo no longer builds or publishes standalone `mockymock` executables.
+Part of the cross-repo-dispatch-build initiative (see the sibling
+`mocky-mock-vscode` repo's own `PUBLISHING.md` and its
+`build-and-release.yml` workflow for the full pipeline). This repo no
+longer builds or publishes standalone `mockymock` executables.
 
 * **Deleted `.github/workflows/build-executables.yml` and
   `.github/workflows/publish-public.yml`** (`c159d02`): the reusable
@@ -26,9 +26,10 @@ This repo no longer builds or publishes standalone `mockymock` executables.
 * Docs updated to match: `PUBLISHING.md` (the "Reaching people with no
   repo access at all" section replaced with "Standalone distribution has
   been retired"), [publishing.md](publishing.md) (frontmatter description
-  and Overview rewritten; Gotchas/See Also left as-is — the Nuitka
-  `--include-data-*` and `release-please-config.json` gotchas are still
-  accurate wherever the build now runs), and [index.md](index.md)'s
+  and Overview rewritten; Gotchas' `build-executables.yml` citation
+  repointed to the sibling repo's `build-and-release.yml` — the Nuitka
+  `--include-data-*` and `release-please-config.json` gotchas themselves
+  are still accurate wherever the build now runs), and [index.md](index.md)'s
   Publishing one-liner.
 
 ## 2026-08-07 — Independent label-scan safety net for the PARSE_WARNING narrowing (PR #49 review)

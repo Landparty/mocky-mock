@@ -3,7 +3,7 @@ type: Module
 title: Web Dashboard
 description: mockymock dashboard — a loopback-only static page that polls a read-only Docker toolchain health probe, plus the runtime.status probe behind it.
 tags: [cli, web, docker, runtime]
-timestamp: 2026-08-03T00:00:00Z
+timestamp: 2026-08-07T00:00:00Z
 ---
 
 # Overview
@@ -108,15 +108,18 @@ distribution modes, three separate mechanisms:**
 |------|-----------|-------------|
 | editable / source | files sit next to `server.py` | `test_static_assets_are_bundled_under_the_package` |
 | wheel (`pip`/`uv tool install`) | `[tool.setuptools.package-data]` `"mockymock.web" = ["static/**/*"]` | confirmed present in a built wheel (2026-08-03) |
-| Nuitka onefile binary | `--include-data-dir=mockymock/web/static=...` in `scripts/build_executable.sh` | the `Dashboard serves its bundled static assets` step in `build-executables.yml` |
+| Nuitka onefile binary | `--include-data-dir=mockymock/web/static=...` in `scripts/build_executable.sh` | the `Dashboard serves its bundled static assets` step in the sibling `mocky-mock-vscode` repo's `build-and-release.yml` |
 
 The third is the one that bites: **Nuitka does not read
 `package-data`**, so an asset can ship correctly in the wheel and still be
 absent from the released executables — the primary artifact — while every
 unit test passes. Any future non-`.py` file resolved via `Path(__file__)`
 needs its own `--include-data-*` flag in `build_executable.sh`, and the CI
-step above is what proves it (it curls `/`, `/style.css`, `/app.js`, and
-`/api/status` out of the freshly built binary on all three platforms).
+step above (now in the sibling `mocky-mock-vscode` repo's
+`build-and-release.yml`, since this repo's own reusable build workflow
+that used to run it is deleted) is what proves it (it curls `/`,
+`/style.css`, `/app.js`, and `/api/status` out of the freshly built binary
+on all three platforms).
 
 # Gotchas
 
