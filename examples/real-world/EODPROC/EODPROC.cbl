@@ -257,7 +257,8 @@
            END-EXEC
 
            IF SQLCODE = 0
-               IF ABS(HV-TOTAL-ASSETS - HV-TOTAL-LIABILITIES) < 0.01
+               IF FUNCTION ABS(HV-TOTAL-ASSETS - HV-TOTAL-LIABILITIES)
+                   < 0.01
                    SET WS-EOD-BALANCED TO TRUE
                    DISPLAY 'EODPROC: GL IS BALANCED'
                ELSE

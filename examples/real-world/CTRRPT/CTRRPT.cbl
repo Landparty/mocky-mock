@@ -123,7 +123,7 @@
            05  WS-CTR-BANK-NAME      PIC X(40)
                VALUE 'FIRST NATIONAL BANK                     '.
            05  WS-CTR-BANK-EIN       PIC X(09) VALUE '123456789'.
-           05  WS-CTR-CUSOMER-NAME   PIC X(56).
+           05  WS-CTR-CUSTOMER-NAME   PIC X(56).
            05  WS-CTR-SSN            PIC X(09).
            05  WS-CTR-ADDR           PIC X(40).
            05  WS-CTR-ACCT           PIC X(12).
@@ -279,7 +279,7 @@
       *    BUILD FINCEN OUTPUT RECORD
            STRING HV-FIRST-NAME DELIMITED BY SPACE ' '
                   DELIMITED BY SIZE HV-LAST-NAME DELIMITED BY SPACE
-                  INTO WS-CTR-CUSOMER-NAME
+                  INTO WS-CTR-CUSTOMER-NAME
            MOVE HV-SSN              TO WS-CTR-SSN
            MOVE HV-ADDR1            TO WS-CTR-ADDR
            MOVE HV-ACCT-NUMBER      TO WS-CTR-ACCT

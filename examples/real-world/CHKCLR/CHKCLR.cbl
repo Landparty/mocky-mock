@@ -88,7 +88,7 @@
 
        01  WS-CHK-STATUS             PIC X(02).
            88  WS-CHK-OK             VALUE '00'.
-           88  WS-CHK-EOF            VALUE '10'.
+           88  WS-CHK-STATUS-EOF     VALUE '10'.
        01  WS-SP-STATUS              PIC X(02).
            88  WS-SP-OK              VALUE '00'.
            88  WS-SP-NOT-FOUND       VALUE '23'.
@@ -310,7 +310,7 @@
            MOVE CHK-AMOUNT       TO WS-CD-AMOUNT
            MOVE 'CLEARED'        TO WS-CD-STATUS
            MOVE SPACES           TO WS-CD-RETURN
-           WRITE RPT-RECORD FROM WS-CHK-DETAIL
+           WRITE RPT-RECORD FROM WS-CHK-DETAIL.
 
        2000-EXIT.
            PERFORM 1100-READ-CHECK.

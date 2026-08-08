@@ -1,57 +1,355 @@
 TESTSUITE "EODPROC"
 
-TESTCASE "empty input"
+*> 1000-INITIALIZE: opens the two output files and writes the report
+*> header + separator line before any totals are computed.
+TESTCASE "1000-INITIALIZE opens the EOD report and control files"
     MOCK OPEN EODRPT
     END-MOCK
     MOCK OPEN EODCTRL
     END-MOCK
+    MOCK WRITE EOD-RPT-RECORD
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    VERIFY OPEN EODRPT WAS CALLED ONCE
+    VERIFY OPEN EODCTRL WAS CALLED ONCE
+    VERIFY WRITE EOD-RPT-RECORD WAS CALLED 2 TIMES
+
+*> 2000-EOD-TRANSACTION-SUMMARY happy path: the DB2 aggregate SELECT
+*> succeeds, so the paragraph falls through into 2100-WRITE-TRANS-SUMMARY
+*> and every category total gets currency-formatted and written.
+TESTCASE "2000-EOD-TRANSACTION-SUMMARY computes and reports daily totals"
+    MOCK SQL "SELECT COUNT ( * ),"
+        MOVE 842 TO HV-TRAN-COUNT
+        MOVE 458732.50 TO HV-TOTAL-DEPOSITS
+        MOVE 312890.25 TO HV-TOTAL-WITHDRAWALS
+        MOVE 75000.00 TO HV-TOTAL-TRANSFERS
+        MOVE 98450.75 TO HV-TOTAL-ACH-CREDITS
+        MOVE 64200.10 TO HV-TOTAL-ACH-DEBITS
+        MOVE 142600.00 TO HV-TOTAL-CHECKS
+        MOVE 8320.45 TO HV-TOTAL-INTEREST
+        MOVE 1250.00 TO HV-TOTAL-FEES
+        MOVE 21000.00 TO HV-TOTAL-LOAN-PMTS
+        MOVE 0 TO SQLCODE
+    END-MOCK
     MOCK CALL "CURRFMT"
+        EVALUATE CF-AMOUNT
+            WHEN 458732.50
+                MOVE "$458,732.50" TO CF-RESULT
+            WHEN 312890.25
+                MOVE "$312,890.25" TO CF-RESULT
+            WHEN 98450.75
+                MOVE "$98,450.75" TO CF-RESULT
+            WHEN 64200.10
+                MOVE "$64,200.10" TO CF-RESULT
+            WHEN 142600.00
+                MOVE "$142,600.00" TO CF-RESULT
+            WHEN 8320.45
+                MOVE "$8,320.45" TO CF-RESULT
+            WHEN OTHER
+                MOVE "$0.00" TO CF-RESULT
+        END-EVALUATE
     END-MOCK
+    MOCK WRITE EOD-RPT-RECORD
+    END-MOCK
+    PERFORM 2000-EOD-TRANSACTION-SUMMARY
+    EXPECT WS-ERROR-COUNT TO BE 0
+    EXPECT WS-EOD-VALUE TO BE "$8,320.45"
+    VERIFY SQL "SELECT COUNT ( * )," WAS CALLED ONCE
+    VERIFY CALL "CURRFMT" WAS CALLED 6 TIMES
+    VERIFY WRITE EOD-RPT-RECORD WAS CALLED 7 TIMES
+
+*> 2000-EOD-TRANSACTION-SUMMARY error path: proves the SQLCODE guard --
+*> a failed aggregate query logs an error and skips 2100 entirely, so
+*> CURRFMT/WRITE (statically reachable, still need mocks) must never fire.
+TESTCASE "2000-EOD-TRANSACTION-SUMMARY logs an error and skips the report on SQL failure"
+    MOCK SQL "SELECT COUNT ( * ),"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK CALL "CURRFMT"
+        MOVE "$0.00" TO CF-RESULT
+    END-MOCK
+    MOCK WRITE EOD-RPT-RECORD
+    END-MOCK
+    PERFORM 2000-EOD-TRANSACTION-SUMMARY
+    EXPECT WS-ERROR-COUNT TO BE 1
+    VERIFY SQL "SELECT COUNT ( * )," WAS CALLED ONCE
+    VERIFY CALL "CURRFMT" WAS CALLED NEVER
+    VERIFY WRITE EOD-RPT-RECORD WAS CALLED NEVER
+
+*> 2100-WRITE-TRANS-SUMMARY directly: exercises the currency formatting
+*> and detail-line writing in isolation from the SQL query that feeds it.
+TESTCASE "2100-WRITE-TRANS-SUMMARY formats and writes each transaction total"
+    MOCK CALL "CURRFMT"
+        EVALUATE CF-AMOUNT
+            WHEN 610450.00
+                MOVE "$610,450.00" TO CF-RESULT
+            WHEN 395120.80
+                MOVE "$395,120.80" TO CF-RESULT
+            WHEN 121005.60
+                MOVE "$121,005.60" TO CF-RESULT
+            WHEN 88750.15
+                MOVE "$88,750.15" TO CF-RESULT
+            WHEN 203400.00
+                MOVE "$203,400.00" TO CF-RESULT
+            WHEN 11940.22
+                MOVE "$11,940.22" TO CF-RESULT
+            WHEN OTHER
+                MOVE "$0.00" TO CF-RESULT
+        END-EVALUATE
+    END-MOCK
+    MOCK WRITE EOD-RPT-RECORD
+    END-MOCK
+    MOVE 1103 TO HV-TRAN-COUNT
+    MOVE 610450.00 TO HV-TOTAL-DEPOSITS
+    MOVE 395120.80 TO HV-TOTAL-WITHDRAWALS
+    MOVE 121005.60 TO HV-TOTAL-ACH-CREDITS
+    MOVE 88750.15 TO HV-TOTAL-ACH-DEBITS
+    MOVE 203400.00 TO HV-TOTAL-CHECKS
+    MOVE 11940.22 TO HV-TOTAL-INTEREST
+    PERFORM 2100-WRITE-TRANS-SUMMARY
+    EXPECT CF-AMOUNT TO BE 11940.22
+    EXPECT WS-EOD-VALUE TO BE "$11,940.22"
+    VERIFY CALL "CURRFMT" WAS CALLED 6 TIMES
+    VERIFY WRITE EOD-RPT-RECORD WAS CALLED 7 TIMES
+
+*> 3000-EOD-ACCOUNT-SUMMARY happy path: the open-account count query
+*> succeeds and its line is written to the report.
+TESTCASE "3000-EOD-ACCOUNT-SUMMARY reports the open account count"
+    MOCK SQL "SELECT COUNT ( * ) INTO:HV-ACCT-COUNT"
+        MOVE 84210 TO HV-ACCT-COUNT
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE EOD-RPT-RECORD
+    END-MOCK
+    PERFORM 3000-EOD-ACCOUNT-SUMMARY
+    EXPECT HV-ACCT-COUNT TO BE 84210
+    VERIFY SQL "SELECT COUNT ( * ) INTO:HV-ACCT-COUNT" WAS CALLED ONCE
+    VERIFY WRITE EOD-RPT-RECORD WAS CALLED ONCE
+
+*> 3000-EOD-ACCOUNT-SUMMARY error path: a failed account-count query
+*> writes nothing (no error counter here -- this paragraph has none).
+TESTCASE "3000-EOD-ACCOUNT-SUMMARY skips the report line on SQL failure"
+    MOCK SQL "SELECT COUNT ( * ) INTO:HV-ACCT-COUNT"
+        MOVE -805 TO SQLCODE
+    END-MOCK
+    MOCK WRITE EOD-RPT-RECORD
+    END-MOCK
+    PERFORM 3000-EOD-ACCOUNT-SUMMARY
+    VERIFY SQL "SELECT COUNT ( * ) INTO:HV-ACCT-COUNT" WAS CALLED ONCE
+    VERIFY WRITE EOD-RPT-RECORD WAS CALLED NEVER
+
+*> 4000-EOD-GL-SUMMARY happy path: assets equal liabilities, so the
+*> general ledger is in balance.
+TESTCASE "4000-EOD-GL-SUMMARY flags a balanced general ledger"
     MOCK SQL "SELECT SUM"
-        MOVE 203366.63 TO HV-TOTAL-ASSETS
-        MOVE -131330.79 TO HV-TOTAL-LIABILITIES
-        MOVE 100 TO SQLCODE
+        MOVE 5000000.00 TO HV-TOTAL-ASSETS
+        MOVE 5000000.00 TO HV-TOTAL-LIABILITIES
+        MOVE 0 TO SQLCODE
     END-MOCK
+    PERFORM 4000-EOD-GL-SUMMARY
+    EXPECT WS-EOD-BALANCE-OK TO BE "Y"
+    EXPECT WS-ERROR-COUNT TO BE 0
+    VERIFY SQL "SELECT SUM" WAS CALLED ONCE
+
+*> 4000-EOD-GL-SUMMARY out-of-balance path: assets and liabilities
+*> disagree by well more than the one-cent tolerance -- the GL is out
+*> of balance and it counts as a processing error.
+TESTCASE "4000-EOD-GL-SUMMARY flags an out-of-balance general ledger as an error"
+    MOCK SQL "SELECT SUM"
+        MOVE 5250000.00 TO HV-TOTAL-ASSETS
+        MOVE 5000000.00 TO HV-TOTAL-LIABILITIES
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    PERFORM 4000-EOD-GL-SUMMARY
+    EXPECT WS-EOD-BALANCE-OK TO BE "N"
+    EXPECT WS-ERROR-COUNT TO BE 1
+    VERIFY SQL "SELECT SUM" WAS CALLED ONCE
+
+*> 4000-EOD-GL-SUMMARY SQL error path: the balance check itself is
+*> guarded by SQLCODE = 0, so a failed GL query leaves the balance flag
+*> at its initial "N" default and -- notably -- does not increment
+*> WS-ERROR-COUNT (the failure is silently skipped, not counted).
+TESTCASE "4000-EOD-GL-SUMMARY skips the balance check on SQL failure"
+    MOCK SQL "SELECT SUM"
+        MOVE -204 TO SQLCODE
+    END-MOCK
+    PERFORM 4000-EOD-GL-SUMMARY
+    EXPECT WS-EOD-BALANCE-OK TO BE "N"
+    EXPECT WS-ERROR-COUNT TO BE 0
+    VERIFY SQL "SELECT SUM" WAS CALLED ONCE
+
+*> 5000-SET-NEXT-BUSINESS-DATE: hands the current business date to the
+*> assembler date utility and stores back the next business day (e.g.
+*> a Friday posting date rolls to the following Monday).
+TESTCASE "5000-SET-NEXT-BUSINESS-DATE calls the date utility for the next business day"
     MOCK CALL "DATEUTIL"
-        MOVE "3" TO DP-FUNC
-        MOVE "3OGG1NJ8" TO DP-INDATE
-        MOVE "3XGHUIYI" TO DP-INDATE2
-        MOVE "5HDA92CO" TO DP-OUTDATE
-        MOVE 688832624 TO DP-DAYSDIFF
-        MOVE "E" TO DP-RETCODE
+        MOVE "20260810" TO DP-OUTDATE
+        MOVE "0" TO DP-RETCODE
     END-MOCK
+    MOVE 2026 TO WS-CURRENT-YEAR
+    MOVE 08 TO WS-CURRENT-MONTH
+    MOVE 07 TO WS-CURRENT-DAY
+    PERFORM 5000-SET-NEXT-BUSINESS-DATE
+    EXPECT WS-EOD-NEXT-BUS-DATE TO BE "20260810"
+    VERIFY CALL "DATEUTIL" WAS CALLED ONCE
+
+*> 6000-WRITE-EOD-CONTROL-RECORD: re-stamps the report header date and
+*> writes the EOD-complete control record used to signal downstream jobs.
+TESTCASE "6000-WRITE-EOD-CONTROL-RECORD writes the completion control record"
+    MOCK WRITE EOD-RPT-RECORD
+    END-MOCK
+    MOCK WRITE EOD-CTRL-RECORD
+    END-MOCK
+    MOVE "2026-08-07" TO WS-BUSINESS-DATE
+    MOVE "20260810" TO WS-EOD-NEXT-BUS-DATE
+    PERFORM 6000-WRITE-EOD-CONTROL-RECORD
+    EXPECT WS-EOD-HDR-DATE TO BE "2026-08-07"
+    EXPECT WS-EOD-VALUE TO BE "20260810"
+    VERIFY WRITE EOD-RPT-RECORD WAS CALLED ONCE
+    VERIFY WRITE EOD-CTRL-RECORD WAS CALLED ONCE
+
+*> 7000-FINALIZE clean run: GL balanced, no errors -- commits, closes
+*> both files, and sets a zero return code.
+TESTCASE "7000-FINALIZE commits and closes files on a clean run"
     MOCK SQL "COMMIT"
     END-MOCK
     MOCK CLOSE EODRPT
     END-MOCK
+    MOVE "Y" TO WS-EOD-BALANCE-OK
+    MOVE 0 TO WS-ERROR-COUNT
+    PERFORM 7000-FINALIZE
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY CLOSE EODRPT WAS CALLED ONCE
+
+*> 7000-FINALIZE with non-fatal errors: GL balanced but other steps
+*> logged errors -- return code 4 (warning), not 8.
+TESTCASE "7000-FINALIZE sets return code 4 when processing errors occurred"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE EODRPT
+    END-MOCK
+    MOVE "Y" TO WS-EOD-BALANCE-OK
+    MOVE 2 TO WS-ERROR-COUNT
+    PERFORM 7000-FINALIZE
+    EXPECT RETURN-CODE TO BE 4
+    VERIFY CLOSE EODRPT WAS CALLED ONCE
+
+*> 7000-FINALIZE out of balance: an out-of-balance GL always wins with
+*> return code 8, regardless of the error count.
+TESTCASE "7000-FINALIZE sets return code 8 when the GL is out of balance"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE EODRPT
+    END-MOCK
+    MOVE "N" TO WS-EOD-BALANCE-OK
+    MOVE 1 TO WS-ERROR-COUNT
+    PERFORM 7000-FINALIZE
+    EXPECT RETURN-CODE TO BE 8
+    VERIFY CLOSE EODRPT WAS CALLED ONCE
+
+*> 0000-MAIN-PROCESS end-to-end: a full EOD cycle with a balanced GL,
+*> realistic daily totals, and a clean commit -- the whole-program
+*> happy path.
+TESTCASE "0000-MAIN-PROCESS runs a full balanced end-of-day cycle"
+    MOCK OPEN EODRPT
+    END-MOCK
+    MOCK OPEN EODCTRL
+    END-MOCK
     MOCK WRITE EOD-RPT-RECORD
-    END-MOCK
-    MOCK SQL "SELECT COUNT ( * ),"
-        MOVE 0 TO SQLCODE
-    END-MOCK
-    MOCK SQL "SELECT COUNT ( * ) INTO:HV-ACCT-COUNT"
-        MOVE 0 TO SQLCODE
     END-MOCK
     MOCK WRITE EOD-CTRL-RECORD
     END-MOCK
+    MOCK SQL "SELECT COUNT ( * ),"
+        MOVE 1976 TO HV-TRAN-COUNT
+        MOVE 812340.00 TO HV-TOTAL-DEPOSITS
+        MOVE 604115.50 TO HV-TOTAL-WITHDRAWALS
+        MOVE 150000.00 TO HV-TOTAL-TRANSFERS
+        MOVE 220980.25 TO HV-TOTAL-ACH-CREDITS
+        MOVE 175430.60 TO HV-TOTAL-ACH-DEBITS
+        MOVE 298760.00 TO HV-TOTAL-CHECKS
+        MOVE 19540.75 TO HV-TOTAL-INTEREST
+        MOVE 3200.00 TO HV-TOTAL-FEES
+        MOVE 47500.00 TO HV-TOTAL-LOAN-PMTS
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "SELECT COUNT ( * ) INTO:HV-ACCT-COUNT"
+        MOVE 91875 TO HV-ACCT-COUNT
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "SELECT SUM"
+        MOVE 42500000.00 TO HV-TOTAL-ASSETS
+        MOVE 42500000.00 TO HV-TOTAL-LIABILITIES
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CALL "CURRFMT"
+        MOVE "$FORMATTED" TO CF-RESULT
+    END-MOCK
+    MOCK CALL "DATEUTIL"
+        MOVE "20260810" TO DP-OUTDATE
+        MOVE "0" TO DP-RETCODE
+    END-MOCK
+    MOCK CLOSE EODRPT
+    END-MOCK
     PERFORM 0000-MAIN-PROCESS
-    VERIFY OPEN EODRPT WAS CALLED 1 TIMES
-    VERIFY OPEN EODCTRL WAS CALLED 1 TIMES
-    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
-    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
-    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
-    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
-    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
-    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
-    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
-    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
-    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
-    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
-    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
-    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
-    VERIFY SQL "SELECT SUM" WAS CALLED 1 TIMES
-    VERIFY CALL "DATEUTIL" WAS CALLED 1 TIMES
-    *> STUB EXPECT WS-DATE-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
-    VERIFY SQL "COMMIT" WAS CALLED 1 TIMES
-    VERIFY CLOSE EODRPT WAS CALLED 1 TIMES
-    EXPECT WS-EOD-TOTALS.WS-EOD-NEXT-BUS-DATE TO BE "5HDA92CO"
+    EXPECT WS-EOD-BALANCE-OK TO BE "Y"
+    EXPECT WS-ERROR-COUNT TO BE 0
+    EXPECT WS-EOD-NEXT-BUS-DATE TO BE "20260810"
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY OPEN EODRPT WAS CALLED ONCE
+    VERIFY OPEN EODCTRL WAS CALLED ONCE
+    VERIFY SQL "SELECT COUNT ( * )," WAS CALLED ONCE
+    VERIFY SQL "SELECT COUNT ( * ) INTO:HV-ACCT-COUNT" WAS CALLED ONCE
+    VERIFY SQL "SELECT SUM" WAS CALLED ONCE
+    VERIFY CALL "CURRFMT" WAS CALLED 6 TIMES
+    VERIFY CALL "DATEUTIL" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY CLOSE EODRPT WAS CALLED ONCE
+
+*> 0000-MAIN-PROCESS end-to-end, out-of-balance path: same daily
+*> totals, but the GL fails to balance -- proves the whole cycle still
+*> completes (report written, files closed, commit issued) while
+*> surfacing the failure through both the balance flag and the fatal
+*> return code 8, which takes priority over the transaction-summary
+*> error path.
+TESTCASE "0000-MAIN-PROCESS completes but reports failure when the GL is out of balance"
+    MOCK OPEN EODRPT
+    END-MOCK
+    MOCK OPEN EODCTRL
+    END-MOCK
+    MOCK WRITE EOD-RPT-RECORD
+    END-MOCK
+    MOCK WRITE EOD-CTRL-RECORD
+    END-MOCK
+    MOCK SQL "SELECT COUNT ( * ),"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "SELECT COUNT ( * ) INTO:HV-ACCT-COUNT"
+        MOVE 91875 TO HV-ACCT-COUNT
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "SELECT SUM"
+        MOVE 42750000.00 TO HV-TOTAL-ASSETS
+        MOVE 42500000.00 TO HV-TOTAL-LIABILITIES
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CALL "CURRFMT"
+        MOVE "$FORMATTED" TO CF-RESULT
+    END-MOCK
+    MOCK CALL "DATEUTIL"
+        MOVE "20260810" TO DP-OUTDATE
+        MOVE "0" TO DP-RETCODE
+    END-MOCK
+    MOCK CLOSE EODRPT
+    END-MOCK
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-EOD-BALANCE-OK TO BE "N"
+    EXPECT WS-ERROR-COUNT TO BE 2
+    EXPECT RETURN-CODE TO BE 8
+    VERIFY CALL "CURRFMT" WAS CALLED NEVER
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY CLOSE EODRPT WAS CALLED ONCE

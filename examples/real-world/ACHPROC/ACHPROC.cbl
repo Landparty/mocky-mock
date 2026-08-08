@@ -71,7 +71,7 @@
       *-----------------------------------------------------------------
        01  WS-ACH-STATUS             PIC X(02).
            88  WS-ACH-OK             VALUE '00'.
-           88  WS-ACH-EOF            VALUE '10'.
+           88  WS-ACH-STATUS-EOF     VALUE '10'.
        01  WS-RET-STATUS             PIC X(02).
 
       *-----------------------------------------------------------------
@@ -208,7 +208,7 @@
 
            EVALUATE TRUE
                WHEN AED-RECORD-TYPE = '1'
-                   CONTINUE  /* FILE HEADER VALIDATED BY ACHPARSE */
+                   CONTINUE  *> FILE HEADER VALIDATED BY ACHPARSE
                WHEN AED-RECORD-TYPE = '5'
                    PERFORM 2100-PROCESS-BATCH-HEADER
                WHEN AED-RECORD-TYPE = '6'
@@ -216,9 +216,9 @@
                WHEN AED-RECORD-TYPE = '8'
                    PERFORM 2300-VERIFY-BATCH-CONTROL
                WHEN AED-RECORD-TYPE = '9'
-                   CONTINUE  /* FILE CONTROL - SKIPPED */
+                   CONTINUE  *> FILE CONTROL - SKIPPED
                WHEN OTHER
-                   CONTINUE  /* PADDING RECORDS */
+                   CONTINUE  *> PADDING RECORDS
            END-EVALUATE
 
            PERFORM 1100-READ-ACH-RECORD.
@@ -332,7 +332,7 @@
            ADD 1 TO WS-TRAN-SEED
            MOVE WS-TRAN-SEED TO HV-TRAN-ID
            MOVE WS-BUSINESS-DATE TO HV-POST-DATE
-           MOVE HV-CO-NAME(1:22) TO HV-TRAN-DESC(1:22)
+           MOVE HV-CO-NAME(1:16) TO HV-TRAN-DESC(1:16)
            STRING 'ACH ' DELIMITED BY SIZE HV-SEC-CODE
                   DELIMITED BY SIZE ' ' DELIMITED BY SIZE
                   HV-CO-ID(1:10) DELIMITED BY SIZE
@@ -373,7 +373,7 @@
                DISPLAY 'ACHPROC: ERROR POSTING ENTRY ACCT='
                        HV-ACCT-NUMBER ' SQLCODE=' SQLCODE
                ADD 1 TO WS-ERROR-COUNT
-           END-IF
+           END-IF.
 
        2200-EXIT.
            CONTINUE.

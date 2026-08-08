@@ -50,6 +50,9 @@
        COPY ACCTMAST.
        COPY CUSTMAST.
 
+       01  WS-FATAL-ERROR-FLAG       PIC X(01) VALUE 'N'.
+           88  FATAL-ERROR-FOUND     VALUE 'Y'.
+
       *-----------------------------------------------------------------
       * PARAMETER CARD STRUCTURE
       *-----------------------------------------------------------------

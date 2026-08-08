@@ -34,6 +34,9 @@
        COPY WSCOMMON.
        COPY ERRORCD.
 
+       01  WS-FATAL-ERROR-FLAG       PIC X(01) VALUE 'N'.
+           88  FATAL-ERROR-FOUND     VALUE 'Y'.
+
       *-----------------------------------------------------------------
       * DB2 HOST VARIABLES
       *-----------------------------------------------------------------
@@ -148,6 +151,7 @@
            05  WS-INT-ERRORS        PIC 9(05) COMP-3 VALUE ZERO.
            05  WS-TOTAL-ACCRUAL     PIC S9(15)V99 COMP-3 VALUE ZERO.
            05  WS-TOTAL-PAID        PIC S9(15)V99 COMP-3 VALUE ZERO.
+           05  WS-COMMITS           PIC 9(05) COMP-3 VALUE ZERO.
 
        PROCEDURE DIVISION.
        0000-MAIN-PROCESS.
@@ -232,7 +236,7 @@
            ADD 1 TO WS-INT-ACCRUED-CNT
 
       *    CHECK IF THIS IS INTEREST PAYMENT DATE (STMT CYCLE DAY)
-           MOVE WS-STMT-CYCLE TO WS-STMT-DAY
+           MOVE HV-STMT-CYCLE TO WS-STMT-DAY
            IF WS-CURRENT-DAY = WS-STMT-DAY
                MOVE 'Y' TO WS-PAYMENT-FLAG
            ELSE
@@ -291,7 +295,7 @@
            MOVE HV-DAY-INTEREST    TO WS-DET-DAILY
            MOVE HV-INTEREST-ACCRUED TO WS-DET-ACCRUED
            MOVE WS-PAYMENT-FLAG    TO WS-DET-PAID
-           WRITE RPT-RECORD FROM WS-DETAIL
+           WRITE RPT-RECORD FROM WS-DETAIL.
 
        2200-EXIT.
            CONTINUE.
