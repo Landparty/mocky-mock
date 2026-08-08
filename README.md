@@ -34,14 +34,14 @@ non-trivial changes.
 Two one-time prerequisites, then a single install command.
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
-2. Authenticate git/uv to GitHub — both `samdion1994/mocky-mock` and its
+2. Authenticate git/uv to GitHub — both `Landparty/mocky-mock` and its
    `cobolparser` dependency are private repos. Run `gh auth setup-git`
    (with the [GitHub CLI](https://cli.github.com/)), or set up an SSH
    key/PAT with `repo` read access, first. This is the single most
    common install failure, on every OS.
 
 ```bash
-uv tool install git+https://github.com/samdion1994/mocky-mock.git
+uv tool install git+https://github.com/Landparty/mocky-mock.git
 ```
 
 Upgrade with `uv tool upgrade mockymock`; remove with
