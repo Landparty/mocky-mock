@@ -1,0 +1,57 @@
+TESTSUITE "EODPROC"
+
+TESTCASE "empty input"
+    MOCK OPEN EODRPT
+    END-MOCK
+    MOCK OPEN EODCTRL
+    END-MOCK
+    MOCK CALL "CURRFMT"
+    END-MOCK
+    MOCK SQL "SELECT SUM"
+        MOVE 203366.63 TO HV-TOTAL-ASSETS
+        MOVE -131330.79 TO HV-TOTAL-LIABILITIES
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOCK CALL "DATEUTIL"
+        MOVE "3" TO DP-FUNC
+        MOVE "3OGG1NJ8" TO DP-INDATE
+        MOVE "3XGHUIYI" TO DP-INDATE2
+        MOVE "5HDA92CO" TO DP-OUTDATE
+        MOVE 688832624 TO DP-DAYSDIFF
+        MOVE "E" TO DP-RETCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE EODRPT
+    END-MOCK
+    MOCK WRITE EOD-RPT-RECORD
+    END-MOCK
+    MOCK SQL "SELECT COUNT ( * ),"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "SELECT COUNT ( * ) INTO:HV-ACCT-COUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE EOD-CTRL-RECORD
+    END-MOCK
+    PERFORM 0000-MAIN-PROCESS
+    VERIFY OPEN EODRPT WAS CALLED 1 TIMES
+    VERIFY OPEN EODCTRL WAS CALLED 1 TIMES
+    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
+    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
+    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
+    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
+    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
+    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
+    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
+    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
+    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
+    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
+    VERIFY CALL "CURRFMT" WAS CALLED 1 TIMES
+    *> STUB EXPECT WS-CF-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
+    VERIFY SQL "SELECT SUM" WAS CALLED 1 TIMES
+    VERIFY CALL "DATEUTIL" WAS CALLED 1 TIMES
+    *> STUB EXPECT WS-DATE-PARMS -- bidirectional: the OUT aspect (value the caller supplies) is not asserted in v1 (provenance=caller-dataflow)
+    VERIFY SQL "COMMIT" WAS CALLED 1 TIMES
+    VERIFY CLOSE EODRPT WAS CALLED 1 TIMES
+    EXPECT WS-EOD-TOTALS.WS-EOD-NEXT-BUS-DATE TO BE "5HDA92CO"
