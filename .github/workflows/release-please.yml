@@ -13,52 +13,10 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    outputs:
-      # `releases_created` is the aggregate flag for manifest mode: true on the
-      # run where the "chore: release X" PR is merged and the release is cut.
-      releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
-          # GITHUB_TOKEN works out of the box. Releases it creates do NOT
-          # trigger other workflows -- that's why the build/publish jobs
-          # below live in THIS same workflow (gated on the output) instead
-          # of a separate release-triggered workflow, which would never fire.
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-
-  # Builds the 3 Nuitka executables. Extracted into a reusable workflow
-  # (build-executables.yml) so this automatic path and publish-public.yml's
-  # manual-dispatch path share one build definition instead of two that can
-  # drift. See PUBLISHING.md.
-  build-nuitka-executables:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
-    uses: ./.github/workflows/build-executables.yml
-    secrets: inherit
-
-  # Attach every built executable to the GitHub Release.
-  publish:
-    needs: [release-please, build-nuitka-executables]
-    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: dist-exe-*
-          path: dist/
-          merge-multiple: true
-      - name: Resolve the release tag from the manifest
-        id: tag
-        # The merge commit that triggered this run already bumped the
-        # manifest to the released version; tags use the v<version> format
-        # (include-component-in-tag: false), matching the sibling
-        # cobol-parser repo's release-please.yml.
-        run: echo "tag=v$(jq -r '.["."]' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
-      - name: Attach executables to the GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ steps.tag.outputs.tag }}" dist/* --clobber
