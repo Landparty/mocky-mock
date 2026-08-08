@@ -46,34 +46,24 @@ Docker itself is unaffected by any of this: mockymock is Docker-only by
 design (see `docker_toolchain.py`), and the compiled executable still
 needs a working Docker install on the machine that runs it, same as today.
 
-## Reaching people with no repo access at all
+## Standalone distribution has been retired
 
-A GitHub Release on a **private** repo is only downloadable by people who
-already have read access to the repo — the same access that lets them
-`git clone` the source. Attaching a source-free binary here doesn't change
-who can reach it; it changes what they get once they're already a
-collaborator (a working executable instead of "clone and build it
-yourself").
+mockymock no longer builds or publishes standalone executables from this
+repo. That used to mean two things: `release-please.yml` attaching 3
+Nuitka executables to this repo's own private Release, and a separate
+`publish-public.yml` relaying the same 3 executables to a public repo
+(`cobol-mocky-mock`) so people without access to this repo could download
+them.
 
-Reaching people who have *no* access to this repo at all — customers,
-non-technical users, anyone outside the collaborator list — needs a
-distribution point whose access isn't tied to this repo's permissions.
-That's what [`samdion1994/cobol-mocky-mock`](https://github.com/samdion1994/cobol-mocky-mock)
-is: a separate, public, binary-only repo that's never given the source.
-`.github/workflows/publish-public.yml` (`workflow_dispatch`-triggered —
-launched manually, not tied to `release-please` cutting a release here)
-builds the same 3 executables via the shared `build-executables.yml`
-reusable workflow, then publishes only the binaries and `LICENSE` there.
-Auth uses a separate `PUBLISH_REPO_PAT` secret (`contents: write` scoped to
-just that repo) — `GITHUB_TOKEN` can't write to a different repo, and
-unlike `COBOL_PARSER_PAT` this has no `GITHUB_TOKEN` fallback.
-
-See also the companion VS Code extension's own `PUBLISHING.md`
-(`mocky-mock-vscode`) — its CLI auto-bootstrap currently runs
-`uv tool install git+https://github.com/samdion1994/mocky-mock.git`, which
-hits this exact private-repo-auth wall for anyone without collaborator
-access. That's being changed to fetch `cobol-mocky-mock`'s Nuitka
-executable instead.
+Both are gone. The only consumer of these executables was
+`mocky-mock-vscode`'s packaging step, and that now builds mockymock from
+source itself, on demand, in its own `build-and-release.yml` — see that
+repo's `PUBLISHING.md` and
+`docs/superpowers/specs/2026-08-07-cross-repo-dispatch-build-design.md`.
+If you need the standalone CLI outside of VS Code, build it locally (see
+"Local build" below) or run `mocky-mock-vscode`'s dispatch workflow and
+unzip the resulting `.vsix` — `extension/bin/mockymock` is the same
+binary.
 
 ## Local build
 

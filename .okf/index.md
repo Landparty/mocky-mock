@@ -30,7 +30,7 @@ and reports pass/fail. Version 0.1.0. Author: Samuel Dion.
 
 ## Publishing
 
-* [Publishing](publishing.md) — the shared `build-executables.yml` reusable workflow, the automatic `release-please.yml` path, and the manual `publish-public.yml` path to the public `cobol-mocky-mock` repo
+* [Publishing](publishing.md) — mockymock is no longer independently distributed; it's built from source on demand by mocky-mock-vscode's `build-and-release.yml`
 
 ## Change History
 

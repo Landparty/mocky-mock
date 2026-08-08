@@ -1,5 +1,36 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-07 — Standalone executable distribution retired; build moved to mocky-mock-vscode
+
+Part of the cross-repo-dispatch-build initiative (design doc lives in the
+sibling `mocky-mock-vscode` repo:
+`docs/superpowers/specs/2026-08-07-cross-repo-dispatch-build-design.md`).
+This repo no longer builds or publishes standalone `mockymock` executables.
+
+* **Deleted `.github/workflows/build-executables.yml` and
+  `.github/workflows/publish-public.yml`** (previous commit, `c159d02`):
+  the reusable Nuitka matrix build and the manual relay to the public
+  `cobol-mocky-mock` repo are both gone. That public repo is now unused —
+  `publish-public.yml` was its only writer.
+* **`release-please.yml` stripped down**: it still cuts this repo's own
+  version-bump PRs and a GitHub Release with generated changelog notes on
+  merge to `main`, but no longer calls `build-executables.yml` or attaches
+  any binaries to that release — its `build-nuitka-executables`/`publish`
+  jobs are gone.
+* **The sole remaining build path** is the sibling `mocky-mock-vscode`
+  repo's new `build-and-release.yml` (`workflow_dispatch` only): it checks
+  out this repo at its latest release tag, runs the same Nuitka build
+  (`scripts/build_executable.sh`) this repo used to run itself, and
+  packages the result straight into the VS Code extension's `.vsix` — no
+  intermediate binary artifact or public relay repo involved.
+* Docs updated to match: `PUBLISHING.md` (the "Reaching people with no
+  repo access at all" section replaced with "Standalone distribution has
+  been retired"), [publishing.md](publishing.md) (frontmatter description
+  and Overview rewritten; Gotchas/See Also left as-is — the Nuitka
+  `--include-data-*` and `release-please-config.json` gotchas are still
+  accurate wherever the build now runs), and [index.md](index.md)'s
+  Publishing one-liner.
+
 ## 2026-08-07 — Independent label-scan safety net for the PARSE_WARNING narrowing (PR #49 review)
 
 * **Closed a real gap in the paragraph-scoped `PARSE_WARNING` narrowing**
