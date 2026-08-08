@@ -1,0 +1,506 @@
+TESTSUITE "INTCALC"
+
+*> INTCALC is the daily interest-accrual batch. It walks every open
+*> interest-bearing account (SAV/MMA/CDA/IRA) via INT_CURSOR, calls the
+*> INTRATE assembler routine to compute one day's interest on the
+*> current balance, accrues it into the account, and -- only on that
+*> account's statement-cycle day -- pays the accrued interest out as a
+*> posted transaction and resets the accrual to zero. Every account also
+*> gets a BANK.DAILY_BALANCE snapshot row. These cases exercise: the
+*> cursor-open failure abort, the fetch dispatch (hit/exhausted/fatal
+*> DB2 error), the accrue-only vs. pay-day branches, a zero-balance
+*> edge case, the INTRATE and DB2-update error paths, the interest
+*> posting sub-paragraph on its own (success and insert-failure), a
+*> multi-account run across three product tiers, and the finalize
+*> return-code logic.
+*>
+*> NOTE ON TEST SHAPE: 0000-MAIN-PROCESS and 1000-INITIALIZE's own
+*> STOP RUN cannot be exercised through the top-level entry point in
+*> this suite -- see the "THRU 2200-EXIT" note below for why -- so every
+*> case here targets the specific paragraph whose logic it is verifying,
+*> the same style used by examples/real-world/DEPTMQP/DEPTMQP.cut.
+
+*> ---------------------------------------------------------------------
+*> 1000-INITIALIZE
+*> ---------------------------------------------------------------------
+
+TESTCASE "1000-INITIALIZE opens the report file and the interest cursor"
+    MOCK OPEN INTRPT
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK SQL "OPEN"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    VERIFY OPEN INTRPT WAS CALLED ONCE
+    VERIFY WRITE RPT-RECORD WAS CALLED 2 TIMES
+    VERIFY SQL "OPEN" WAS CALLED ONCE
+
+*> If INT_CURSOR can't open (e.g. DB2 subsystem down), the batch must
+*> abort immediately with RC 16 rather than attempt to process accounts
+*> against a cursor that was never opened.
+TESTCASE "1000-INITIALIZE aborts with RC 16 when the interest cursor fails to open"
+    MOCK OPEN INTRPT
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK SQL "OPEN"
+        MOVE -805 TO SQLCODE
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    EXPECT RETURN-CODE TO BE 16
+    VERIFY SQL "OPEN" WAS CALLED ONCE
+
+*> ---------------------------------------------------------------------
+*> 2100-FETCH-ACCOUNT (cursor dispatch)
+*> ---------------------------------------------------------------------
+
+TESTCASE "2100-FETCH-ACCOUNT calculates interest for a fetched account"
+    MOCK SQL "FETCH"
+        MOVE "HV000000001" TO HV-ACCT-NUMBER
+        MOVE "SAV" TO HV-ACCT-TYPE
+        MOVE 15000.00 TO HV-CURRENT-BALANCE
+        MOVE 2.500000 TO HV-INTEREST-RATE
+        MOVE 10.00 TO HV-INTEREST-ACCRUED
+        MOVE 200.00 TO HV-INTEREST-YTD
+        MOVE "20" TO HV-STMT-CYCLE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "INTRATE"
+        COMPUTE IP-INTEREST-AMT ROUNDED = IP-BALANCE * IP-ANNUAL-RATE / 36500
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. DAILY_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOVE 08 TO WS-CURRENT-DAY
+    PERFORM 2100-FETCH-ACCOUNT
+    EXPECT WS-ACCTS-PROCESSED TO BE 1
+    EXPECT WS-INT-ACCRUED-CNT TO BE 1
+    VERIFY CALL "INTRATE" WAS CALLED ONCE
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED" WAS CALLED ONCE
+
+*> WHEN +100: the cursor is exhausted -- CONTINUE, no account is
+*> touched.
+TESTCASE "2100-FETCH-ACCOUNT does nothing once the cursor is exhausted"
+    MOCK SQL "FETCH"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOCK CALL "INTRATE"
+        MOVE 0 TO IP-INTEREST-AMT
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. DAILY_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    PERFORM 2100-FETCH-ACCOUNT
+    EXPECT WS-ACCTS-PROCESSED TO BE 0
+    EXPECT WS-FATAL-ERROR-FLAG TO BE "N"
+    VERIFY CALL "INTRATE" WAS CALLED NEVER
+
+*> WHEN OTHER: an unexpected DB2 error on FETCH sets FATAL-ERROR-FOUND,
+*> which is what stops 2000-PROCESS-ACCOUNTS's loop early.
+TESTCASE "2100-FETCH-ACCOUNT sets the fatal-error flag on an unexpected DB2 error"
+    MOCK SQL "FETCH"
+        MOVE -905 TO SQLCODE
+    END-MOCK
+    MOCK CALL "INTRATE"
+        MOVE 0 TO IP-INTEREST-AMT
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. DAILY_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    PERFORM 2100-FETCH-ACCOUNT
+    EXPECT WS-ACCTS-PROCESSED TO BE 0
+    EXPECT WS-FATAL-ERROR-FLAG TO BE "Y"
+    VERIFY CALL "INTRATE" WAS CALLED NEVER
+
+*> ---------------------------------------------------------------------
+*> 2200-CALCULATE-INTEREST
+*> ---------------------------------------------------------------------
+
+*> Happy path, non-payday: interest accrues into the running total but
+*> nothing is paid out yet.
+TESTCASE "2200-CALCULATE-INTEREST accrues daily interest on a savings account"
+    MOCK CALL "INTRATE"
+        COMPUTE IP-INTEREST-AMT ROUNDED = IP-BALANCE * IP-ANNUAL-RATE / 36500
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. DAILY_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOVE "HV000000001" TO HV-ACCT-NUMBER
+    MOVE "SAV" TO HV-ACCT-TYPE
+    MOVE 15000.00 TO HV-CURRENT-BALANCE
+    MOVE 2.500000 TO HV-INTEREST-RATE
+    MOVE 10.00 TO HV-INTEREST-ACCRUED
+    MOVE 200.00 TO HV-INTEREST-YTD
+    MOVE "20" TO HV-STMT-CYCLE
+    MOVE 08 TO WS-CURRENT-DAY
+    PERFORM 2200-CALCULATE-INTEREST
+    EXPECT HV-INTEREST-ACCRUED TO BE 11.03
+    EXPECT HV-INTEREST-YTD TO BE 201.03
+    EXPECT WS-TOTAL-ACCRUAL TO BE 1.03
+    EXPECT WS-INT-ACCRUED-CNT TO BE 1
+    EXPECT WS-INT-PAID-CNT TO BE 0
+    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST" WAS CALLED NEVER
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE" WAS CALLED NEVER
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED" WAS CALLED ONCE
+    VERIFY SQL "INSERT INTO BANK. DAILY_BALANCE" WAS CALLED ONCE
+    VERIFY WRITE RPT-RECORD WAS CALLED ONCE
+
+*> Edge case: a zero-balance interest-bearing account (e.g. just opened,
+*> not yet funded) must accrue zero interest cleanly, not error out.
+TESTCASE "2200-CALCULATE-INTEREST accrues zero interest on a zero-balance account"
+    MOCK CALL "INTRATE"
+        COMPUTE IP-INTEREST-AMT ROUNDED = IP-BALANCE * IP-ANNUAL-RATE / 36500
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. DAILY_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOVE "HV000000002" TO HV-ACCT-NUMBER
+    MOVE "SAV" TO HV-ACCT-TYPE
+    MOVE 0.00 TO HV-CURRENT-BALANCE
+    MOVE 5.000000 TO HV-INTEREST-RATE
+    MOVE 0.00 TO HV-INTEREST-ACCRUED
+    MOVE 0.00 TO HV-INTEREST-YTD
+    MOVE "20" TO HV-STMT-CYCLE
+    MOVE 08 TO WS-CURRENT-DAY
+    PERFORM 2200-CALCULATE-INTEREST
+    EXPECT HV-INTEREST-ACCRUED TO BE 0.00
+    EXPECT WS-INT-ACCRUED-CNT TO BE 1
+    EXPECT WS-INT-ERRORS TO BE 0
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED" WAS CALLED ONCE
+
+*> Happy path, statement-cycle day: the newly-accrued interest is paid
+*> out through 2300-POST-INTEREST-PAYMENT and the running accrual
+*> resets to zero.
+TESTCASE "2200-CALCULATE-INTEREST posts the accrued interest on the statement cycle day"
+    MOCK CALL "INTRATE"
+        COMPUTE IP-INTEREST-AMT ROUNDED = IP-BALANCE * IP-ANNUAL-RATE / 36500
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. DAILY_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOVE "HV000000003" TO HV-ACCT-NUMBER
+    MOVE "SAV" TO HV-ACCT-TYPE
+    MOVE 15000.00 TO HV-CURRENT-BALANCE
+    MOVE 2.500000 TO HV-INTEREST-RATE
+    MOVE 25.50 TO HV-INTEREST-ACCRUED
+    MOVE 300.00 TO HV-INTEREST-YTD
+    MOVE "08" TO HV-STMT-CYCLE
+    MOVE 08 TO WS-CURRENT-DAY
+    PERFORM 2200-CALCULATE-INTEREST
+    EXPECT HV-INTEREST-ACCRUED TO BE 0.00
+    EXPECT HV-INTEREST-YTD TO BE 301.03
+    EXPECT HV-CURRENT-BALANCE TO BE 15026.53
+    EXPECT WS-TOTAL-PAID TO BE 26.53
+    EXPECT WS-INT-PAID-CNT TO BE 1
+    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST" WAS CALLED ONCE
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE" WAS CALLED ONCE
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED" WAS CALLED ONCE
+    VERIFY WRITE RPT-RECORD WAS CALLED ONCE
+
+*> Error path -- INTRATE fails. NOTE: the real call site
+*> (2100-FETCH-ACCOUNT's "PERFORM 2200-CALCULATE-INTEREST") is missing
+*> "THRU 2200-EXIT"; see the bug write-up at the bottom of this file.
+*> Testing this branch via the bare, uncorrected call site makes the
+*> instrumented program fall through 2200-EXIT into
+*> 2300-POST-INTEREST-PAYMENT and then 3000-FINALIZE for real (not just
+*> a mocked boundary), which crashes on the never-opened INTRPT file.
+*> "THRU 2200-EXIT" here scopes the PERFORM the way the paragraph's own
+*> GO TO 2200-EXIT idiom was clearly written to be called, so this test
+*> can verify 2200's own early-exit logic without tripping over the
+*> caller-side bug it is not this suite's job to work around.
+TESTCASE "2200-CALCULATE-INTEREST records an error and skips posting when INTRATE fails"
+    MOCK CALL "INTRATE"
+        MOVE 8 TO RETURN-CODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. DAILY_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOVE "HV000000004" TO HV-ACCT-NUMBER
+    MOVE "SAV" TO HV-ACCT-TYPE
+    MOVE 15000.00 TO HV-CURRENT-BALANCE
+    MOVE 2.500000 TO HV-INTEREST-RATE
+    MOVE 0.00 TO HV-INTEREST-ACCRUED
+    MOVE "99" TO HV-STMT-CYCLE
+    PERFORM 2200-CALCULATE-INTEREST THRU 2200-EXIT
+    EXPECT WS-INT-ERRORS TO BE 1
+    EXPECT WS-INT-ACCRUED-CNT TO BE 0
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED" WAS CALLED NEVER
+    VERIFY WRITE RPT-RECORD WAS CALLED NEVER
+
+*> Error path -- the DB2 UPDATE of INTEREST_ACCRUED fails after INTRATE
+*> succeeds: roll back and record the error, skip the daily-balance
+*> insert and the report line. See the note on the previous test case
+*> for why this uses "THRU 2200-EXIT".
+TESTCASE "2200-CALCULATE-INTEREST rolls back when the DB2 account update fails"
+    MOCK CALL "INTRATE"
+        COMPUTE IP-INTEREST-AMT ROUNDED = IP-BALANCE * IP-ANNUAL-RATE / 36500
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. DAILY_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOVE "HV000000005" TO HV-ACCT-NUMBER
+    MOVE "SAV" TO HV-ACCT-TYPE
+    MOVE 15000.00 TO HV-CURRENT-BALANCE
+    MOVE 2.500000 TO HV-INTEREST-RATE
+    MOVE 0.00 TO HV-INTEREST-ACCRUED
+    MOVE "99" TO HV-STMT-CYCLE
+    PERFORM 2200-CALCULATE-INTEREST THRU 2200-EXIT
+    EXPECT WS-INT-ERRORS TO BE 1
+    EXPECT WS-INT-ACCRUED-CNT TO BE 1
+    VERIFY SQL "ROLLBACK" WAS CALLED ONCE
+    VERIFY SQL "INSERT INTO BANK. DAILY_BALANCE" WAS CALLED NEVER
+    VERIFY WRITE RPT-RECORD WAS CALLED NEVER
+
+*> ---------------------------------------------------------------------
+*> 2300-POST-INTEREST-PAYMENT
+*> ---------------------------------------------------------------------
+
+TESTCASE "2300-POST-INTEREST-PAYMENT posts a successful interest payment"
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOVE "HV000000006" TO HV-ACCT-NUMBER
+    MOVE 100.00 TO HV-INTEREST-ACCRUED
+    MOVE 1000.00 TO HV-CURRENT-BALANCE
+    MOVE "2026-08-08" TO WS-BUSINESS-DATE
+    PERFORM 2300-POST-INTEREST-PAYMENT
+    EXPECT WS-INT-PAID-CNT TO BE 1
+    EXPECT HV-INTEREST-ACCRUED TO BE 0
+    EXPECT HV-CURRENT-BALANCE TO BE 1100.00
+    EXPECT HV-INT-LAST-PAID TO BE "2026-08-08"
+    EXPECT WS-TOTAL-PAID TO BE 100.00
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE" WAS CALLED ONCE
+
+*> The host variables are already mutated locally (balance bumped,
+*> accrual zeroed) before the INSERT is attempted, but the DB2 UPDATE
+*> that would persist the new balance is only reached when the insert
+*> itself succeeds -- so a failed insert leaves the real account row
+*> untouched while WS-INT-PAID-CNT never increments.
+TESTCASE "2300-POST-INTEREST-PAYMENT records an error and skips the balance update when the insert fails"
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE -803 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOVE "HV000000007" TO HV-ACCT-NUMBER
+    MOVE 100.00 TO HV-INTEREST-ACCRUED
+    MOVE 1000.00 TO HV-CURRENT-BALANCE
+    PERFORM 2300-POST-INTEREST-PAYMENT
+    EXPECT WS-INT-PAID-CNT TO BE 0
+    EXPECT WS-INT-ERRORS TO BE 1
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE" WAS CALLED NEVER
+
+*> ---------------------------------------------------------------------
+*> 2000-PROCESS-ACCOUNTS (multi-account loop)
+*> ---------------------------------------------------------------------
+
+*> A realistic day's run touching three different product tiers (SAV,
+*> MMA, CDA) with distinct rates -- proves the cursor loop drives every
+*> row through 2100/2200 and stops cleanly at SQLCODE +100.
+TESTCASE "2000-PROCESS-ACCOUNTS processes multiple accounts across product tiers"
+    MOCK SQL "FETCH" ROWS
+        ( HV-ACCT-NUMBER = "HV000000008", HV-ACCT-TYPE = "SAV", HV-CURRENT-BALANCE = 15000.00, HV-INTEREST-RATE = 2.500000, HV-INTEREST-ACCRUED = 0.00, HV-INTEREST-YTD = 0.00, HV-INT-LAST-PAID = "2026-07-01", HV-STMT-CYCLE = "20" )
+        ( HV-ACCT-NUMBER = "HV000000009", HV-ACCT-TYPE = "MMA", HV-CURRENT-BALANCE = 50000.00, HV-INTEREST-RATE = 3.750000, HV-INTEREST-ACCRUED = 0.00, HV-INTEREST-YTD = 0.00, HV-INT-LAST-PAID = "2026-07-01", HV-STMT-CYCLE = "21" )
+        ( HV-ACCT-NUMBER = "HV000000010", HV-ACCT-TYPE = "CDA", HV-CURRENT-BALANCE = 100000.00, HV-INTEREST-RATE = 4.800000, HV-INTEREST-ACCRUED = 0.00, HV-INTEREST-YTD = 0.00, HV-INT-LAST-PAID = "2026-07-01", HV-STMT-CYCLE = "22" )
+    END-MOCK
+    MOCK CALL "INTRATE"
+        COMPUTE IP-INTEREST-AMT ROUNDED = IP-BALANCE * IP-ANNUAL-RATE / 36500
+        MOVE 0 TO RETURN-CODE
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. DAILY_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOVE 08 TO WS-CURRENT-DAY
+    PERFORM 2000-PROCESS-ACCOUNTS
+    EXPECT WS-ACCTS-PROCESSED TO BE 3
+    EXPECT WS-INT-ACCRUED-CNT TO BE 3
+    EXPECT WS-TOTAL-ACCRUAL TO BE 19.32
+    EXPECT WS-INT-PAID-CNT TO BE 0
+    VERIFY SQL "FETCH" WAS CALLED 4 TIMES
+    VERIFY CALL "INTRATE" WAS CALLED 3 TIMES
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED" WAS CALLED 3 TIMES
+    VERIFY WRITE RPT-RECORD WAS CALLED 3 TIMES
+
+*> ---------------------------------------------------------------------
+*> 3000-FINALIZE
+*> ---------------------------------------------------------------------
+
+*> NOTE ON ORDERING: this suite compiles to one binary that runs every
+*> TESTCASE in sequence, and RETURN-CODE is a single shared COBOL special
+*> register that GnuCOBOL also uses as the binary's own process exit
+*> code -- so whichever case runs last leaves its RETURN-CODE behind as
+*> the whole test binary's exit status. The warning-code case is
+*> deliberately placed before the success case (not after) so the suite
+*> as a whole still exits 0 when every case passes.
+TESTCASE "3000-FINALIZE returns a warning code when interest errors occurred"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE"
+    END-MOCK
+    MOCK CLOSE INTRPT
+    END-MOCK
+    MOVE 3 TO WS-INT-ERRORS
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 4
+
+TESTCASE "3000-FINALIZE returns success when no interest errors occurred"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE"
+    END-MOCK
+    MOCK CLOSE INTRPT
+    END-MOCK
+    MOVE 0 TO WS-INT-ERRORS
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY SQL "CLOSE" WAS CALLED ONCE
+    VERIFY CLOSE INTRPT WAS CALLED ONCE

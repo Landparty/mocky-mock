@@ -1,0 +1,564 @@
+TESTSUITE "STMTGEN statement generation"
+
+*> ---------------------------------------------------------------------
+*> 1000-INITIALIZE: startup, output files, ACCOUNT cursor open
+*> ---------------------------------------------------------------------
+
+*> Happy path: both output files and the account cursor open cleanly.
+TESTCASE "1000-INITIALIZE opens output files and the account cursor"
+    MOCK OPEN STMTOUT
+    END-MOCK
+    MOCK OPEN STMTRPT
+    END-MOCK
+    MOCK SQL "OPEN STMT_ACCT_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    VERIFY OPEN STMTOUT WAS CALLED ONCE
+    VERIFY OPEN STMTRPT WAS CALLED ONCE
+    VERIFY SQL "OPEN STMT_ACCT_CUR" WAS CALLED ONCE
+
+*> Error path: the account cursor fails to open -- the program sets
+*> RETURN-CODE 16 and STOPs RUN immediately (verifies the terminator
+*> neutralization keeps the rest of the suite alive).
+TESTCASE "1000-INITIALIZE aborts with RC 16 when the account cursor cannot open"
+    MOCK OPEN STMTOUT
+    END-MOCK
+    MOCK OPEN STMTRPT
+    END-MOCK
+    MOCK SQL "OPEN STMT_ACCT_CUR"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    EXPECT RETURN-CODE TO BE 16
+    VERIFY SQL "OPEN STMT_ACCT_CUR" WAS CALLED ONCE
+
+*> ---------------------------------------------------------------------
+*> 2100-FETCH-ACCOUNT: one account cursor FETCH + full per-account chain
+*> ---------------------------------------------------------------------
+
+*> No accounts due for a statement this cycle: FETCH returns SQLCODE 100
+*> immediately -- nothing downstream (customer lookup, formatter, update)
+*> may ever fire.
+TESTCASE "2100-FETCH-ACCOUNT: cursor already exhausted (SQLCODE 100)"
+    MOCK SQL "FETCH STMT_ACCT_CUR"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOCK SQL "SELECT"
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK SQL "OPEN STMT_TRAN_CUR"
+    END-MOCK
+    MOCK SQL "FETCH STMT_TRAN_CUR"
+    END-MOCK
+    MOCK SQL "CLOSE STMT_TRAN_CUR"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    MOCK SQL "UPDATE"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    PERFORM 2100-FETCH-ACCOUNT
+    VERIFY SQL "FETCH STMT_ACCT_CUR" WAS CALLED ONCE
+    VERIFY SQL "SELECT" WAS CALLED NEVER
+    VERIFY CALL "STMTFMT" WAS CALLED NEVER
+    VERIFY SQL "UPDATE" WAS CALLED NEVER
+
+*> A DB2 error on the account FETCH (not 0, not 100) is fatal: the
+*> program DISPLAYs the SQLCODE and sets FATAL-ERROR-FOUND, which is what
+*> lets the driving PERFORM ... UNTIL loop in 2000-PROCESS-STATEMENTS
+*> stop even though SQLCODE itself never reaches +100 -- the bug this
+*> field's earlier missing WORKING-STORAGE declaration was masking.
+TESTCASE "2100-FETCH-ACCOUNT: fatal SQLCODE sets the fatal-error flag"
+    MOCK SQL "FETCH STMT_ACCT_CUR"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "SELECT"
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK SQL "OPEN STMT_TRAN_CUR"
+    END-MOCK
+    MOCK SQL "FETCH STMT_TRAN_CUR"
+    END-MOCK
+    MOCK SQL "CLOSE STMT_TRAN_CUR"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    MOCK SQL "UPDATE"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    PERFORM 2100-FETCH-ACCOUNT
+    EXPECT WS-FATAL-ERROR-FLAG TO BE "Y"
+    VERIFY SQL "FETCH STMT_ACCT_CUR" WAS CALLED ONCE
+    VERIFY SQL "SELECT" WAS CALLED NEVER
+    VERIFY CALL "STMTFMT" WAS CALLED NEVER
+
+*> Happy path: a real account row drives the full per-account chain --
+*> customer lookup, a two-line statement (one debit, one credit
+*> transaction) through the transaction cursor, and the LAST_STMT_DATE
+*> update -- in a single call, proving both the account-cursor real-row
+*> path and the transaction-cursor real-row-then-EOF path together.
+TESTCASE "2100-FETCH-ACCOUNT: real account drives customer, statement, and update"
+    MOCK SQL "FETCH STMT_ACCT_CUR"
+        MOVE "ACCT00000001" TO HV-ACCT-NUMBER
+        MOVE "CHK" TO HV-ACCT-TYPE
+        MOVE "CIF0000001" TO HV-CIF-NUMBER
+        MOVE "2026-07-01" TO HV-LAST-STMT-DATE
+        MOVE "01" TO HV-STMT-CYCLE
+        MOVE 1000.00 TO HV-CURRENT-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "JANE" TO HV-FIRST-NAME
+        MOVE "DOE" TO HV-LAST-NAME
+        MOVE "1 MAIN ST" TO HV-ADDR1
+        MOVE SPACES TO HV-ADDR2
+        MOVE "SPRINGFIELD" TO HV-CITY
+        MOVE "IL" TO HV-STATE
+        MOVE "62704" TO HV-ZIP
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK SQL "OPEN STMT_TRAN_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH STMT_TRAN_CUR" ROWS
+        ( HV-TRAN-ID = "TRN0000000000001", HV-TRAN-TYPE = "DR", HV-TRAN-CODE = "0001", HV-TRAN-AMOUNT = 100.00, HV-TRAN-DATE = "2026-07-01", HV-POST-DATE = "2026-07-01", HV-TRAN-DESC = "DEBIT CARD PURCHASE", HV-CHECK-NUM = SPACES, HV-RUN-BAL = 900.00 )
+        ( HV-TRAN-ID = "TRN0000000000002", HV-TRAN-TYPE = "CR", HV-TRAN-CODE = "0002", HV-TRAN-AMOUNT = 500.00, HV-TRAN-DATE = "2026-07-05", HV-POST-DATE = "2026-07-05", HV-TRAN-DESC = "PAYROLL DEPOSIT", HV-CHECK-NUM = SPACES, HV-RUN-BAL = 1400.00 )
+    END-MOCK
+    MOCK SQL "CLOSE STMT_TRAN_CUR"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    PERFORM 2100-FETCH-ACCOUNT
+    EXPECT WS-STMT-LINE-CNT TO BE 2
+    EXPECT WS-TRAN-LINES TO BE 2
+    EXPECT WS-STMTS-GENERATED TO BE 1
+    VERIFY SQL "FETCH STMT_ACCT_CUR" WAS CALLED ONCE
+    VERIFY SQL "SELECT" WAS CALLED ONCE
+    VERIFY SQL "FETCH STMT_TRAN_CUR" WAS CALLED 3 TIMES
+    VERIFY CALL "STMTFMT" WAS CALLED 4 TIMES
+    VERIFY WRITE STMT-OUTPUT-RECORD WAS CALLED 4 TIMES
+    VERIFY SQL "UPDATE" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+
+*> ---------------------------------------------------------------------
+*> 2200-FETCH-CUSTOMER-INFO
+*> ---------------------------------------------------------------------
+
+*> CIF number has no matching customer row: the program falls back to
+*> blanking the name fields rather than leaving stale/garbage data.
+TESTCASE "2200-FETCH-CUSTOMER-INFO: customer not found blanks the name"
+    MOCK SQL "SELECT"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOVE "GARBAGE" TO HV-FIRST-NAME
+    MOVE "JUNK" TO HV-LAST-NAME
+    PERFORM 2200-FETCH-CUSTOMER-INFO
+    EXPECT HV-FIRST-NAME TO BE SPACES
+    EXPECT HV-LAST-NAME TO BE SPACES
+    VERIFY SQL "SELECT" WAS CALLED ONCE
+
+*> ---------------------------------------------------------------------
+*> 2300-GENERATE-STATEMENT: header/detail/summary assembly for one account
+*> ---------------------------------------------------------------------
+
+*> Zero-transaction account: the transaction cursor is exhausted on its
+*> very first FETCH, so only the header and summary lines are written --
+*> a distinct code path from the multi-transaction statement below (no
+*> detail line, no page break bookkeeping).
+TESTCASE "2300-GENERATE-STATEMENT: account with no transactions this period"
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK SQL "OPEN STMT_TRAN_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH STMT_TRAN_CUR"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOCK SQL "CLOSE STMT_TRAN_CUR"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    MOVE "ACCT00000002" TO HV-ACCT-NUMBER
+    MOVE "JOHN" TO HV-FIRST-NAME
+    MOVE "SMITH" TO HV-LAST-NAME
+    MOVE "2026-07-01" TO HV-LAST-STMT-DATE
+    MOVE "2026-08-01" TO WS-BUSINESS-DATE
+    MOVE 2500.00 TO HV-CURRENT-BALANCE
+    PERFORM 2300-GENERATE-STATEMENT
+    EXPECT WS-STMTS-GENERATED TO BE 1
+    EXPECT WS-STMT-LINE-CNT TO BE 0
+    VERIFY SQL "FETCH STMT_TRAN_CUR" WAS CALLED ONCE
+    VERIFY CALL "STMTFMT" WAS CALLED 2 TIMES
+    VERIFY WRITE STMT-OUTPUT-RECORD WAS CALLED 2 TIMES
+
+*> Multi-transaction statement built end to end via the ROWS cursor
+*> sugar: two real transaction rows, then the transaction cursor's own
+*> end-of-cursor (SQLCODE 100) closes out the loop.
+TESTCASE "2300-GENERATE-STATEMENT: account with two transactions"
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK SQL "OPEN STMT_TRAN_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH STMT_TRAN_CUR" ROWS
+        ( HV-TRAN-ID = "TRN0000000000003", HV-TRAN-TYPE = "DR", HV-TRAN-CODE = "0003", HV-TRAN-AMOUNT = 42.50, HV-TRAN-DATE = "2026-07-10", HV-POST-DATE = "2026-07-10", HV-TRAN-DESC = "ATM WITHDRAWAL", HV-CHECK-NUM = SPACES, HV-RUN-BAL = 2457.50 )
+        ( HV-TRAN-ID = "TRN0000000000004", HV-TRAN-TYPE = "CR", HV-TRAN-CODE = "0004", HV-TRAN-AMOUNT = 1200.00, HV-TRAN-DATE = "2026-07-20", HV-POST-DATE = "2026-07-20", HV-TRAN-DESC = "WIRE TRANSFER IN", HV-CHECK-NUM = SPACES, HV-RUN-BAL = 3657.50 )
+    END-MOCK
+    MOCK SQL "CLOSE STMT_TRAN_CUR"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    MOVE "ACCT00000003" TO HV-ACCT-NUMBER
+    MOVE "MARY" TO HV-FIRST-NAME
+    MOVE "JONES" TO HV-LAST-NAME
+    MOVE "2026-07-01" TO HV-LAST-STMT-DATE
+    MOVE "2026-08-01" TO WS-BUSINESS-DATE
+    MOVE 3657.50 TO HV-CURRENT-BALANCE
+    PERFORM 2300-GENERATE-STATEMENT
+    EXPECT WS-STMTS-GENERATED TO BE 1
+    EXPECT WS-STMT-LINE-CNT TO BE 2
+    EXPECT WS-TRAN-LINES TO BE 2
+    VERIFY SQL "FETCH STMT_TRAN_CUR" WAS CALLED 3 TIMES
+    VERIFY CALL "STMTFMT" WAS CALLED 4 TIMES
+    VERIFY WRITE STMT-OUTPUT-RECORD WAS CALLED 4 TIMES
+
+*> ---------------------------------------------------------------------
+*> 2400-FETCH-TRANSACTIONS: single transaction-cursor FETCH in isolation
+*> ---------------------------------------------------------------------
+
+*> A debit transaction populates SF-DEBIT-AMT and zeroes SF-CREDIT-AMT.
+TESTCASE "2400-FETCH-TRANSACTIONS: debit transaction populates debit column"
+    MOCK SQL "FETCH STMT_TRAN_CUR"
+        MOVE "TRN0000000000005" TO HV-TRAN-ID
+        MOVE "DR" TO HV-TRAN-TYPE
+        MOVE "0005" TO HV-TRAN-CODE
+        MOVE 75.25 TO HV-TRAN-AMOUNT
+        MOVE "2026-07-15" TO HV-TRAN-DATE
+        MOVE "2026-07-15" TO HV-POST-DATE
+        MOVE "POS PURCHASE" TO HV-TRAN-DESC
+        MOVE SPACES TO HV-CHECK-NUM
+        MOVE 924.75 TO HV-RUN-BAL
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    PERFORM 2400-FETCH-TRANSACTIONS
+    EXPECT SF-DEBIT-AMT TO BE 75.25
+    EXPECT SF-CREDIT-AMT TO BE 0
+    EXPECT SF-RUN-BAL TO BE 924.75
+    EXPECT WS-STMT-LINE-CNT TO BE 1
+    EXPECT WS-TRAN-LINES TO BE 1
+    VERIFY CALL "STMTFMT" WAS CALLED ONCE
+    VERIFY WRITE STMT-OUTPUT-RECORD WAS CALLED ONCE
+
+*> A non-"DR" transaction type populates SF-CREDIT-AMT and zeroes
+*> SF-DEBIT-AMT.
+TESTCASE "2400-FETCH-TRANSACTIONS: credit transaction populates credit column"
+    MOCK SQL "FETCH STMT_TRAN_CUR"
+        MOVE "TRN0000000000006" TO HV-TRAN-ID
+        MOVE "CR" TO HV-TRAN-TYPE
+        MOVE "0006" TO HV-TRAN-CODE
+        MOVE 300.00 TO HV-TRAN-AMOUNT
+        MOVE "2026-07-16" TO HV-TRAN-DATE
+        MOVE "2026-07-16" TO HV-POST-DATE
+        MOVE "DIRECT DEPOSIT" TO HV-TRAN-DESC
+        MOVE SPACES TO HV-CHECK-NUM
+        MOVE 1224.75 TO HV-RUN-BAL
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    PERFORM 2400-FETCH-TRANSACTIONS
+    EXPECT SF-CREDIT-AMT TO BE 300.00
+    EXPECT SF-DEBIT-AMT TO BE 0
+    EXPECT WS-STMT-LINE-CNT TO BE 1
+    VERIFY CALL "STMTFMT" WAS CALLED ONCE
+    VERIFY WRITE STMT-OUTPUT-RECORD WAS CALLED ONCE
+
+*> End of cursor: no line/transaction counters move and no detail line
+*> is formatted or written.
+TESTCASE "2400-FETCH-TRANSACTIONS: end of cursor writes nothing"
+    MOCK SQL "FETCH STMT_TRAN_CUR"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    PERFORM 2400-FETCH-TRANSACTIONS
+    EXPECT WS-STMT-LINE-CNT TO BE 0
+    EXPECT WS-TRAN-LINES TO BE 0
+    VERIFY CALL "STMTFMT" WAS CALLED NEVER
+    VERIFY WRITE STMT-OUTPUT-RECORD WAS CALLED NEVER
+
+*> A DB2 error on the transaction FETCH is non-fatal to the account: it
+*> is tallied into WS-STMT-ERRORS (which ultimately drives 3000-FINALIZE's
+*> RETURN-CODE) without ever reaching the formatter/writer.
+TESTCASE "2400-FETCH-TRANSACTIONS: fetch error is tallied, not formatted"
+    MOCK SQL "FETCH STMT_TRAN_CUR"
+        MOVE -805 TO SQLCODE
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    PERFORM 2400-FETCH-TRANSACTIONS
+    EXPECT WS-STMT-ERRORS TO BE 1
+    EXPECT WS-STMT-LINE-CNT TO BE 0
+    VERIFY CALL "STMTFMT" WAS CALLED NEVER
+    VERIFY WRITE STMT-OUTPUT-RECORD WAS CALLED NEVER
+
+*> Page break: pre-seeding the line counter to 50 (one below the
+*> threshold) means the 51st detail line trips the "> 50" guard, which
+*> emits an extra page-break formatter/write pair, bumps the page
+*> counter, and resets the line counter -- before formatting/writing its
+*> own detail line.
+TESTCASE "2400-FETCH-TRANSACTIONS: 51st line triggers a page break"
+    MOVE 50 TO WS-STMT-LINE-CNT
+    MOVE 3 TO WS-STMT-PAGE-CNT
+    MOCK SQL "FETCH STMT_TRAN_CUR"
+        MOVE "TRN0000000000007" TO HV-TRAN-ID
+        MOVE "DR" TO HV-TRAN-TYPE
+        MOVE "0007" TO HV-TRAN-CODE
+        MOVE 10.00 TO HV-TRAN-AMOUNT
+        MOVE "2026-07-17" TO HV-TRAN-DATE
+        MOVE "2026-07-17" TO HV-POST-DATE
+        MOVE "FEE" TO HV-TRAN-DESC
+        MOVE SPACES TO HV-CHECK-NUM
+        MOVE 1214.75 TO HV-RUN-BAL
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    PERFORM 2400-FETCH-TRANSACTIONS
+    EXPECT WS-STMT-LINE-CNT TO BE 0
+    EXPECT WS-STMT-PAGE-CNT TO BE 4
+    EXPECT SF-PAGE-NUM TO BE 4
+    VERIFY CALL "STMTFMT" WAS CALLED 2 TIMES
+    VERIFY WRITE STMT-OUTPUT-RECORD WAS CALLED 2 TIMES
+
+*> ---------------------------------------------------------------------
+*> 2600-UPDATE-STMT-DATE: positioned UPDATE + batch commit cadence
+*> ---------------------------------------------------------------------
+
+*> A successful update below the commit-frequency threshold advances the
+*> commit counter but never commits.
+TESTCASE "2600-UPDATE-STMT-DATE: below commit threshold does not commit"
+    MOVE 10 TO WS-COMMIT-COUNT
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    PERFORM 2600-UPDATE-STMT-DATE
+    EXPECT WS-COMMIT-COUNT TO BE 11
+    VERIFY SQL "UPDATE" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+
+*> Reaching WS-COMMIT-FREQ (500, from WSCOMMON) fires the batch COMMIT
+*> and resets the counter.
+TESTCASE "2600-UPDATE-STMT-DATE: reaching commit frequency commits and resets"
+    MOVE 499 TO WS-COMMIT-COUNT
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    PERFORM 2600-UPDATE-STMT-DATE
+    EXPECT WS-COMMIT-COUNT TO BE 0
+    VERIFY SQL "UPDATE" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+
+*> A failed positioned UPDATE never advances the commit counter and
+*> never commits.
+TESTCASE "2600-UPDATE-STMT-DATE: failed update leaves commit counter untouched"
+    MOVE 7 TO WS-COMMIT-COUNT
+    MOCK SQL "UPDATE"
+        MOVE -803 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    PERFORM 2600-UPDATE-STMT-DATE
+    EXPECT WS-COMMIT-COUNT TO BE 7
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+
+*> ---------------------------------------------------------------------
+*> 3000-FINALIZE: run-level RETURN-CODE determination
+*> ---------------------------------------------------------------------
+
+*> A clean run (no transaction-fetch errors accumulated) returns RC 0.
+TESTCASE "3000-FINALIZE: clean run returns RC 0"
+    MOVE 0 TO WS-STMT-ERRORS
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE STMT_ACCT_CUR"
+    END-MOCK
+    MOCK CLOSE STMTOUT
+    END-MOCK
+    MOCK CLOSE STMTRPT
+    END-MOCK
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY SQL "CLOSE STMT_ACCT_CUR" WAS CALLED ONCE
+
+*> A run that accumulated transaction-fetch errors returns RC 4 so the
+*> batch scheduler flags it, even though every statement was generated.
+TESTCASE "3000-FINALIZE: accumulated errors return RC 4"
+    MOVE 3 TO WS-STMT-ERRORS
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE STMT_ACCT_CUR"
+    END-MOCK
+    MOCK CLOSE STMTOUT
+    END-MOCK
+    MOCK CLOSE STMTRPT
+    END-MOCK
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 4
+
+*> ---------------------------------------------------------------------
+*> 0000-MAIN-PROCESS: full end-to-end wiring across both cursors
+*> ---------------------------------------------------------------------
+
+*> One account, two transactions, start to finish: proves 1000/2000/3000
+*> are wired together correctly and that the account cursor's own
+*> real-row-then-EOF pattern composes with the transaction cursor's.
+TESTCASE "0000-MAIN-PROCESS: end to end for one account with two transactions"
+    MOCK OPEN STMTOUT
+    END-MOCK
+    MOCK OPEN STMTRPT
+    END-MOCK
+    MOCK SQL "OPEN STMT_ACCT_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH STMT_ACCT_CUR" ROWS
+        ( HV-ACCT-NUMBER = "ACCT00000009", HV-ACCT-TYPE = "CHK", HV-CIF-NUMBER = "CIF0000009", HV-LAST-STMT-DATE = "2026-07-01", HV-STMT-CYCLE = "01", HV-CURRENT-BALANCE = 5000.00 )
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "ROBERT" TO HV-FIRST-NAME
+        MOVE "LEE" TO HV-LAST-NAME
+        MOVE "9 OAK AVE" TO HV-ADDR1
+        MOVE SPACES TO HV-ADDR2
+        MOVE "AUSTIN" TO HV-CITY
+        MOVE "TX" TO HV-STATE
+        MOVE "73301" TO HV-ZIP
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK SQL "OPEN STMT_TRAN_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH STMT_TRAN_CUR" ROWS
+        ( HV-TRAN-ID = "TRN0000000000010", HV-TRAN-TYPE = "DR", HV-TRAN-CODE = "0010", HV-TRAN-AMOUNT = 60.00, HV-TRAN-DATE = "2026-07-08", HV-POST-DATE = "2026-07-08", HV-TRAN-DESC = "GROCERY STORE", HV-CHECK-NUM = SPACES, HV-RUN-BAL = 4940.00 )
+        ( HV-TRAN-ID = "TRN0000000000011", HV-TRAN-TYPE = "CR", HV-TRAN-CODE = "0011", HV-TRAN-AMOUNT = 2000.00, HV-TRAN-DATE = "2026-07-14", HV-POST-DATE = "2026-07-14", HV-TRAN-DESC = "PAYROLL DEPOSIT", HV-CHECK-NUM = SPACES, HV-RUN-BAL = 6940.00 )
+    END-MOCK
+    MOCK SQL "CLOSE STMT_TRAN_CUR"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE STMT_ACCT_CUR"
+    END-MOCK
+    MOCK CLOSE STMTOUT
+    END-MOCK
+    MOCK CLOSE STMTRPT
+    END-MOCK
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-STMTS-GENERATED TO BE 1
+    EXPECT WS-TRAN-LINES TO BE 2
+    EXPECT WS-STMT-ERRORS TO BE 0
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY SQL "OPEN STMT_ACCT_CUR" WAS CALLED ONCE
+    VERIFY SQL "FETCH STMT_ACCT_CUR" WAS CALLED 2 TIMES
+    VERIFY SQL "SELECT" WAS CALLED ONCE
+    VERIFY SQL "FETCH STMT_TRAN_CUR" WAS CALLED 3 TIMES
+    VERIFY CALL "STMTFMT" WAS CALLED 4 TIMES
+    VERIFY WRITE STMT-OUTPUT-RECORD WAS CALLED 4 TIMES
+    VERIFY SQL "UPDATE" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY SQL "CLOSE STMT_ACCT_CUR" WAS CALLED ONCE
+
+*> Two accounts, neither with any transactions this period: proves the
+*> outer account-cursor loop actually iterates more than once and that
+*> the inner transaction-cursor lifecycle (OPEN/FETCH/CLOSE) is repeated
+*> cleanly per account rather than leaking state across accounts.
+TESTCASE "0000-MAIN-PROCESS: end to end for two accounts, no transactions"
+    MOCK OPEN STMTOUT
+    END-MOCK
+    MOCK OPEN STMTRPT
+    END-MOCK
+    MOCK SQL "OPEN STMT_ACCT_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH STMT_ACCT_CUR" ROWS
+        ( HV-ACCT-NUMBER = "ACCT00000020", HV-ACCT-TYPE = "CHK", HV-CIF-NUMBER = "CIF0000020", HV-LAST-STMT-DATE = "2026-07-01", HV-STMT-CYCLE = "01", HV-CURRENT-BALANCE = 100.00 )
+        ( HV-ACCT-NUMBER = "ACCT00000021", HV-ACCT-TYPE = "SAV", HV-CIF-NUMBER = "CIF0000021", HV-LAST-STMT-DATE = "2026-07-01", HV-STMT-CYCLE = "01", HV-CURRENT-BALANCE = 200.00 )
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "PATRICIA" TO HV-FIRST-NAME
+        MOVE "NGUYEN" TO HV-LAST-NAME
+        MOVE "5 ELM ST" TO HV-ADDR1
+        MOVE SPACES TO HV-ADDR2
+        MOVE "DENVER" TO HV-CITY
+        MOVE "CO" TO HV-STATE
+        MOVE "80202" TO HV-ZIP
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "STMTFMT"
+    END-MOCK
+    MOCK SQL "OPEN STMT_TRAN_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH STMT_TRAN_CUR"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOCK SQL "CLOSE STMT_TRAN_CUR"
+    END-MOCK
+    MOCK WRITE STMT-OUTPUT-RECORD
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE STMT_ACCT_CUR"
+    END-MOCK
+    MOCK CLOSE STMTOUT
+    END-MOCK
+    MOCK CLOSE STMTRPT
+    END-MOCK
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-STMTS-GENERATED TO BE 2
+    EXPECT WS-TRAN-LINES TO BE 0
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY SQL "FETCH STMT_ACCT_CUR" WAS CALLED 3 TIMES
+    VERIFY SQL "OPEN STMT_TRAN_CUR" WAS CALLED 2 TIMES
+    VERIFY SQL "FETCH STMT_TRAN_CUR" WAS CALLED 2 TIMES
+    VERIFY SQL "CLOSE STMT_TRAN_CUR" WAS CALLED 2 TIMES
+    VERIFY CALL "STMTFMT" WAS CALLED 4 TIMES
+    VERIFY SQL "UPDATE" WAS CALLED 2 TIMES
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
