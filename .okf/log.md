@@ -8,8 +8,8 @@ sibling `mocky-mock-vscode` repo:
 This repo no longer builds or publishes standalone `mockymock` executables.
 
 * **Deleted `.github/workflows/build-executables.yml` and
-  `.github/workflows/publish-public.yml`** (previous commit, `c159d02`):
-  the reusable Nuitka matrix build and the manual relay to the public
+  `.github/workflows/publish-public.yml`** (`c159d02`): the reusable
+  Nuitka matrix build and the manual relay to the public
   `cobol-mocky-mock` repo are both gone. That public repo is now unused —
   `publish-public.yml` was its only writer.
 * **`release-please.yml` stripped down**: it still cuts this repo's own

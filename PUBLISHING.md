@@ -10,15 +10,19 @@ necessity, someone who *could* just clone and read the full source of both
 repos. There is no GitHub permission tier that grants "run mockymock" or
 "download the Release" without also granting "read the source."
 
-## What the release workflow builds
+## What the retired release pipeline built
 
-`.github/workflows/release-please.yml` has a `build-nuitka-executables`
-job (gated on `release-please` actually cutting a release) that calls the
-reusable `.github/workflows/build-executables.yml` workflow (via `uses:`,
-`secrets: inherit`) to compile a single-file `mockymock` executable per OS
-with [Nuitka](https://nuitka.net/): `mockymock-linux-x86_64`,
-`mockymock-macos-arm64`, `mockymock-windows-amd64.exe`, attached to the
-GitHub Release by the `publish` job.
+`.github/workflows/release-please.yml` used to have a
+`build-nuitka-executables` job (gated on `release-please` actually cutting
+a release) that called the reusable `.github/workflows/build-executables.yml`
+workflow (via `uses:`, `secrets: inherit`) to compile a single-file
+`mockymock` executable per OS with [Nuitka](https://nuitka.net/):
+`mockymock-linux-x86_64`, `mockymock-macos-arm64`,
+`mockymock-windows-amd64.exe`, attached to the GitHub Release by the
+`publish` job. Both jobs and `build-executables.yml` itself are deleted
+(see "Standalone distribution has been retired" below); the description
+that follows is kept because the same Nuitka mechanics still apply
+wherever the build runs today.
 
 Nuitka compiles mockymock **and** the pinned `cobolparser` dependency
 straight to machine code in one pass (it follows the whole import graph),
@@ -40,7 +44,7 @@ so:
   (`docker_toolchain.py`'s module-level `IMAGE = f"...{_image_tag()}"`), so
   a bundling mistake surfaces immediately as a Python traceback rather than
   a confusing later Docker error. `build-executables.yml`'s Linux-only
-  end-to-end smoke-test step runs `mockymock setup` for exactly this reason.
+  end-to-end smoke-test step ran `mockymock setup` for exactly this reason.
 
 Docker itself is unaffected by any of this: mockymock is Docker-only by
 design (see `docker_toolchain.py`), and the compiled executable still
