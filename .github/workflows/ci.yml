@@ -127,7 +127,7 @@ jobs:
           # https://github.com/Landparty/cobol-parser.git` lists this sha as
           # both `HEAD` and `refs/heads/main`. Keep in sync with
           # pyproject.toml's dependency line per this step's own comment.
-          ref: ff64b25c377150da432c57f39c43a0357ffeba86
+          ref: 83478ba735402f88f3005af529c0fed633632096
 
       - uses: actions/setup-python@v5
         with:
@@ -186,7 +186,7 @@ jobs:
           path: cobol-parser
           token: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
           # Keep in sync with the `test` job's identical step above.
-          ref: ff64b25c377150da432c57f39c43a0357ffeba86
+          ref: 83478ba735402f88f3005af529c0fed633632096
 
       - uses: actions/setup-python@v5
         with:
