@@ -6,23 +6,20 @@ TESTSUITE "CHKCLR"
 *> 2000-PROCESS-CHECKS' six early-return guards (routing invalid, account
 *> not found, SQL error, closed account, stop payment, NSF) all end with
 *> "PERFORM 2800-WRITE-RETURN / PERFORM 1100-READ-CHECK / GO TO
-*> 2000-EXIT". Because the driving PERFORM in 0000-MAIN-PROCESS
-*> ("PERFORM 2000-PROCESS-CHECKS UNTIL WS-CHK-FILE-EOF") never says
-*> "THRU 2000-EXIT", GO TO jumps past the compiler-inserted return point
-*> for a plain "PERFORM 2000-PROCESS-CHECKS" call: real GnuCOBOL falls
-*> through 2000-EXIT into 2800-WRITE-RETURN a second time (duplicating
-*> the return record) and then into 3000-FINALIZE (COMMIT/CLOSE/
-*> RETURN-CODE) before finally returning. That is real, verified runtime
-*> behavior of this source file (confirmed against the mockymock-cobc
-*> GnuCOBOL toolchain), not a test artifact -- see the write-up at the
-*> bottom of this file. The six early-return TESTCASEs below drive
-*> "PERFORM 2000-PROCESS-CHECKS THRU 3000-FINALIZE" (mocking every
-*> boundary that chain really reaches, including CLOSE) so the test can
-*> observe the guard's own business outcome without the run crashing on
-*> an unmocked CLOSE of files that were never opened in an isolated
-*> paragraph test. The cleared/happy-path and posting-failure cases never
-*> hit a GO TO, so a plain "PERFORM 2000-PROCESS-CHECKS" is faithful to
-*> the real control flow for them.
+*> 2000-EXIT". 0000-MAIN-PROCESS used to drive the loop with a bare
+*> "PERFORM 2000-PROCESS-CHECKS UNTIL WS-CHK-FILE-EOF" (no "THRU
+*> 2000-EXIT"), so GO TO jumped past the compiler-inserted return point:
+*> real GnuCOBOL fell through 2000-EXIT into 2800-WRITE-RETURN a second
+*> time (duplicating the return record) and then into 3000-FINALIZE
+*> (COMMIT/CLOSE/RETURN-CODE) before finally returning -- the program
+*> could not correctly process a multi-record CHKFILE. FIXED upstream
+*> (both this copy and the legacy-application canonical copy) by adding
+*> "THRU 2000-EXIT" to that PERFORM; see the write-up at the bottom of
+*> this file. Every TESTCASE below now drives
+*> "PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT" to mirror the real,
+*> fixed call site -- this always reaches 1100-READ-CHECK's priming read
+*> of the next record (whether the item cleared or was rejected), and
+*> never reaches 2800-WRITE-RETURN or 3000-FINALIZE a second/extra time.
 *> ---------------------------------------------------------------------
 
 *> Happy path: routing validates, the account is open with enough
@@ -63,7 +60,7 @@ TESTCASE "cleared check posts a debit and updates the account"
     MOVE "ACCT00000001"  TO CHK-ACCT-NUMBER
     MOVE "CHK0000001"    TO CHK-CHECK-NUMBER
     MOVE 250.00           TO CHK-AMOUNT
-    PERFORM 2000-PROCESS-CHECKS
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
     EXPECT WS-ITEMS-CLEARED TO BE 1
     EXPECT WS-TOTAL-CLEARED TO BE 250.00
     EXPECT WS-CHK-ERRORS TO BE 0
@@ -74,11 +71,10 @@ TESTCASE "cleared check posts a debit and updates the account"
     VERIFY SQL "COMMIT" WAS CALLED NEVER
     VERIFY SQL "ROLLBACK" WAS CALLED NEVER
     VERIFY WRITE RETURN-RECORD WAS CALLED NEVER
-    *> Real behavior of this source, not a test gap: a bare "PERFORM
-    *> 2000-PROCESS-CHECKS" returns at the compiler-inserted boundary
-    *> right before 2000-EXIT, so 1100-READ-CHECK's READ CHKFILE never
-    *> fires on the cleared path -- see the note at the top of this file.
-    VERIFY READ CHKFILE WAS CALLED NEVER
+    *> Now that the driving PERFORM is properly scoped THRU 2000-EXIT,
+    *> the cleared path correctly reaches 1100-READ-CHECK and primes the
+    *> next record, same as every rejection path below.
+    VERIFY READ CHKFILE WAS CALLED ONCE
 
 *> Same happy-path setup, but the INSERT into TRANSACTION_HIST fails at
 *> the database. The program rolls back and bumps the error counter --
@@ -119,13 +115,14 @@ TESTCASE "SQL error during posting is rolled back and not counted as cleared"
     MOVE "ACCT00000008"  TO CHK-ACCT-NUMBER
     MOVE "CHK0000008"    TO CHK-CHECK-NUMBER
     MOVE 250.00           TO CHK-AMOUNT
-    PERFORM 2000-PROCESS-CHECKS
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
     EXPECT WS-CHK-ERRORS TO BE 1
     EXPECT WS-ITEMS-CLEARED TO BE 0
     EXPECT WS-CD-STATUS TO BE "CLEARED"
     VERIFY SQL "ROLLBACK" WAS CALLED ONCE
     VERIFY SQL "UPDATE" WAS CALLED NEVER
     VERIFY SQL "COMMIT" WAS CALLED NEVER
+    VERIFY READ CHKFILE WAS CALLED ONCE
 
 *> Routing number fails ACCTVAL's 'R' (routing) check -- returned R06
 *> before the account is ever looked up in DB2.
@@ -157,19 +154,21 @@ TESTCASE "invalid routing number is returned as R06 without an account lookup"
     MOCK READ CHKFILE
         SET WS-CHK-FILE-EOF TO TRUE
     END-MOCK
-    MOCK CLOSE CHKFILE
-    END-MOCK
     MOVE "999999999"     TO CHK-ROUTING-NUMBER
     MOVE "ACCT00000002"  TO CHK-ACCT-NUMBER
     MOVE "CHK0000002"    TO CHK-CHECK-NUMBER
     MOVE 100.00           TO CHK-AMOUNT
-    PERFORM 2000-PROCESS-CHECKS THRU 3000-FINALIZE
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
     EXPECT WS-RETURN-REASON TO BE "R06"
     EXPECT WS-ROUTING-INVALID TO BE 1
     EXPECT WS-CHK-ERRORS TO BE 0
-    EXPECT RETURN-CODE TO BE 0
     VERIFY CALL "ACCTVAL" WAS CALLED ONCE
     VERIFY SQL "SELECT" WAS CALLED NEVER
+    *> Concrete evidence for finding #4 at the bottom of this file: this
+    *> guard PERFORMs 1100-READ-CHECK itself before "GO TO 2000-EXIT",
+    *> and 2000-EXIT PERFORMs it again -- CHKFILE really does advance
+    *> twice for one rejected item.
+    VERIFY READ CHKFILE WAS CALLED 2 TIMES
 
 *> DB2 finds no row for the account (SQLCODE +100) -- returned R03.
 TESTCASE "account not found in DB2 is returned as R03 without a stop-pay check"
@@ -199,25 +198,22 @@ TESTCASE "account not found in DB2 is returned as R03 without a stop-pay check"
     MOCK READ CHKFILE
         SET WS-CHK-FILE-EOF TO TRUE
     END-MOCK
-    MOCK CLOSE CHKFILE
-    END-MOCK
     MOVE "021000021"     TO CHK-ROUTING-NUMBER
     MOVE "ACCT00009999"  TO CHK-ACCT-NUMBER
     MOVE "CHK0000003"    TO CHK-CHECK-NUMBER
     MOVE 100.00           TO CHK-AMOUNT
-    PERFORM 2000-PROCESS-CHECKS THRU 3000-FINALIZE
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
     EXPECT WS-RETURN-REASON TO BE "R03"
     EXPECT WS-ITEMS-CLOSED TO BE 1
-    EXPECT RETURN-CODE TO BE 0
     VERIFY READ STOPPAY WAS CALLED NEVER
 
 *> Any other DB2 failure (deadlock, resource unavailable, etc.) during
-*> the account lookup is a hard error: the item is skipped, WS-CHK-ERRORS
-*> is bumped (driving RETURN-CODE 4 at end of run), and -- unlike the
-*> other five guards -- 2800-WRITE-RETURN is never PERFORMed directly on
-*> this branch (no WS-RETURN-REASON is set either), so the one return
-*> record that gets written comes solely from the GO TO 2000-EXIT
-*> fall-through, not a normal guard write.
+*> the account lookup is a hard error: the item is skipped and
+*> WS-CHK-ERRORS is bumped (driving RETURN-CODE 4 at end of run, proven
+*> separately by the dedicated 3000-FINALIZE test below). Unlike the
+*> other five guards, this branch never PERFORMs 2800-WRITE-RETURN (no
+*> WS-RETURN-REASON is set either) -- no return record is written for a
+*> hard DB2 error, only a logged error count.
 TESTCASE "unexpected SQL error during account lookup counts as a hard error"
     MOCK CALL "ACCTVAL"
         MOVE "V" TO WS-AV-RESULT-CODE
@@ -245,17 +241,14 @@ TESTCASE "unexpected SQL error during account lookup counts as a hard error"
     MOCK READ CHKFILE
         SET WS-CHK-FILE-EOF TO TRUE
     END-MOCK
-    MOCK CLOSE CHKFILE
-    END-MOCK
     MOVE "021000021"     TO CHK-ROUTING-NUMBER
     MOVE "ACCT00000004"  TO CHK-ACCT-NUMBER
     MOVE "CHK0000004"    TO CHK-CHECK-NUMBER
     MOVE 100.00           TO CHK-AMOUNT
-    PERFORM 2000-PROCESS-CHECKS THRU 3000-FINALIZE
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
     EXPECT WS-CHK-ERRORS TO BE 1
-    EXPECT RETURN-CODE TO BE 4
     VERIFY READ STOPPAY WAS CALLED NEVER
-    VERIFY WRITE RETURN-RECORD WAS CALLED ONCE
+    VERIFY WRITE RETURN-RECORD WAS CALLED NEVER
 
 *> Account is found but flagged closed ('C') -- returned R02, again
 *> without ever consulting the stop-payment file.
@@ -287,16 +280,13 @@ TESTCASE "closed account is returned as R02"
     MOCK READ CHKFILE
         SET WS-CHK-FILE-EOF TO TRUE
     END-MOCK
-    MOCK CLOSE CHKFILE
-    END-MOCK
     MOVE "021000021"     TO CHK-ROUTING-NUMBER
     MOVE "ACCT00000005"  TO CHK-ACCT-NUMBER
     MOVE "CHK0000005"    TO CHK-CHECK-NUMBER
     MOVE 100.00           TO CHK-AMOUNT
-    PERFORM 2000-PROCESS-CHECKS THRU 3000-FINALIZE
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
     EXPECT WS-RETURN-REASON TO BE "R02"
     EXPECT WS-ITEMS-CLOSED TO BE 1
-    EXPECT RETURN-CODE TO BE 0
     VERIFY READ STOPPAY WAS CALLED NEVER
 
 *> Account is open and has plenty of available balance, but the
@@ -331,16 +321,13 @@ TESTCASE "stop payment on file is returned as R08"
     MOCK READ CHKFILE
         SET WS-CHK-FILE-EOF TO TRUE
     END-MOCK
-    MOCK CLOSE CHKFILE
-    END-MOCK
     MOVE "021000021"     TO CHK-ROUTING-NUMBER
     MOVE "ACCT00000006"  TO CHK-ACCT-NUMBER
     MOVE "CHK0000006"    TO CHK-CHECK-NUMBER
     MOVE 500.00           TO CHK-AMOUNT
-    PERFORM 2000-PROCESS-CHECKS THRU 3000-FINALIZE
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
     EXPECT WS-RETURN-REASON TO BE "R08"
     EXPECT WS-ITEMS-STOPPED TO BE 1
-    EXPECT RETURN-CODE TO BE 0
     VERIFY SQL "INSERT" WAS CALLED NEVER
 
 *> Account is open, not stopped, but the available balance is less than
@@ -375,16 +362,13 @@ TESTCASE "insufficient funds is returned as R01 without posting a debit"
     MOCK READ CHKFILE
         SET WS-CHK-FILE-EOF TO TRUE
     END-MOCK
-    MOCK CLOSE CHKFILE
-    END-MOCK
     MOVE "021000021"     TO CHK-ROUTING-NUMBER
     MOVE "ACCT00000007"  TO CHK-ACCT-NUMBER
     MOVE "CHK0000007"    TO CHK-CHECK-NUMBER
     MOVE 500.00           TO CHK-AMOUNT
-    PERFORM 2000-PROCESS-CHECKS THRU 3000-FINALIZE
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
     EXPECT WS-RETURN-REASON TO BE "R01"
     EXPECT WS-ITEMS-NSF TO BE 1
-    EXPECT RETURN-CODE TO BE 0
     VERIFY SQL "INSERT" WAS CALLED NEVER
 
 *> 1000-INITIALIZE builds WS-BUSINESS-DATE from FUNCTION CURRENT-DATE,
@@ -453,20 +437,32 @@ TESTCASE "3000-FINALIZE signals success when no errors occurred"
 *>    above it as one unterminated sentence -- GnuCOBOL failed to parse
 *>    "2000-EXIT" as a paragraph name once anything was spliced into
 *>    that tree. Added the missing period.
-*> 3. NOT FIXED (out of scope -- a control-flow bug, not a compile
-*>    blocker, and off limits per the task's business-logic constraint):
-*>    0000-MAIN-PROCESS drives the loop with "PERFORM 2000-PROCESS-CHECKS
-*>    UNTIL WS-CHK-FILE-EOF" -- missing "THRU 2000-EXIT". Verified against
-*>    the real GnuCOBOL toolchain: a bare PERFORM of 2000-PROCESS-CHECKS
-*>    returns at the compiler-inserted boundary *before* 2000-EXIT, so on
-*>    a CLEARED check 1100-READ-CHECK's READ CHKFILE never fires -- the
-*>    file position never advances (the loop would spin on the same
-*>    record forever). On any of the six GO TO 2000-EXIT paths, the GOTO
-*>    jumps past that same boundary and falls all the way through
-*>    2000-EXIT -> 2800-WRITE-RETURN (a second, duplicate return-record
-*>    write) -> 3000-FINALIZE (COMMIT/CLOSE/RETURN-CODE) -> end of
-*>    PROCEDURE DIVISION, terminating the whole batch job after just one
-*>    item. As written, this program cannot correctly process a
-*>    multi-record CHKFILE. The intended fix would be
-*>    "PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT UNTIL WS-CHK-FILE-EOF".
+*> 3. FIXED (both this copy and the legacy-application canonical copy):
+*>    0000-MAIN-PROCESS used to drive the loop with a bare "PERFORM
+*>    2000-PROCESS-CHECKS UNTIL WS-CHK-FILE-EOF" -- missing "THRU
+*>    2000-EXIT". Verified against the real GnuCOBOL toolchain: a bare
+*>    PERFORM of 2000-PROCESS-CHECKS returned at the compiler-inserted
+*>    boundary *before* 2000-EXIT, so on a CLEARED check 1100-READ-CHECK's
+*>    READ CHKFILE never fired -- the file position never advanced (the
+*>    loop would spin on the same record forever). On any of the six
+*>    GO TO 2000-EXIT paths, the GOTO jumped past that same boundary and
+*>    fell all the way through 2000-EXIT -> 2800-WRITE-RETURN (a second,
+*>    duplicate return-record write) -> 3000-FINALIZE (COMMIT/CLOSE/
+*>    RETURN-CODE) -> end of PROCEDURE DIVISION, terminating the whole
+*>    batch job after just one item. Fixed by adding "THRU 2000-EXIT" to
+*>    that PERFORM.
+*> 4. NOT FIXED (a separate, smaller control-flow quirk surfaced by fixing
+*>    #3, off limits per the same business-logic constraint): each of the
+*>    five guards that PERFORM 2800-WRITE-RETURN also already PERFORMs
+*>    1100-READ-CHECK itself, immediately before "GO TO 2000-EXIT" --
+*>    and 2000-EXIT unconditionally PERFORMs 1100-READ-CHECK again. Now
+*>    that GO TO correctly reaches 2000-EXIT (instead of falling through
+*>    past it), a rejected item advances CHKFILE by *two* records instead
+*>    of one, silently skipping the check immediately after any rejected
+*>    one. The cleared/happy path is unaffected (it has no such guard-side
+*>    read; 2000-EXIT's read is the only one). Not covered by any EXPECT/
+*>    VERIFY here since it doesn't fail this suite either way -- flagging
+*>    for whoever owns this program's logic next: the real fix is
+*>    removing each guard's own "PERFORM 1100-READ-CHECK" and leaving
+*>    2000-EXIT as the single place that reads the next record.
 *> ---------------------------------------------------------------------

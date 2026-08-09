@@ -14,11 +14,13 @@ TESTSUITE "INTCALC"
 *> multi-account run across three product tiers, and the finalize
 *> return-code logic.
 *>
-*> NOTE ON TEST SHAPE: 0000-MAIN-PROCESS and 1000-INITIALIZE's own
-*> STOP RUN cannot be exercised through the top-level entry point in
-*> this suite -- see the "THRU 2200-EXIT" note below for why -- so every
-*> case here targets the specific paragraph whose logic it is verifying,
-*> the same style used by examples/real-world/DEPTMQP/DEPTMQP.cut.
+*> NOTE ON TEST SHAPE: every case here targets the specific paragraph
+*> whose logic it is verifying (the same style used by
+*> examples/real-world/DEPTMQP/DEPTMQP.cut) rather than driving the
+*> whole run through 0000-MAIN-PROCESS -- a deliberate style choice for
+*> finer-grained assertions, not a workaround for anything: see the
+*> "THRU 2200-EXIT" note below for the control-flow bug this used to be
+*> a workaround for, now fixed upstream.
 
 *> ---------------------------------------------------------------------
 *> 1000-INITIALIZE
@@ -295,17 +297,15 @@ TESTCASE "2200-CALCULATE-INTEREST posts the accrued interest on the statement cy
     VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_ACCRUED" WAS CALLED ONCE
     VERIFY WRITE RPT-RECORD WAS CALLED ONCE
 
-*> Error path -- INTRATE fails. NOTE: the real call site
-*> (2100-FETCH-ACCOUNT's "PERFORM 2200-CALCULATE-INTEREST") is missing
-*> "THRU 2200-EXIT"; see the bug write-up at the bottom of this file.
-*> Testing this branch via the bare, uncorrected call site makes the
-*> instrumented program fall through 2200-EXIT into
-*> 2300-POST-INTEREST-PAYMENT and then 3000-FINALIZE for real (not just
-*> a mocked boundary), which crashes on the never-opened INTRPT file.
-*> "THRU 2200-EXIT" here scopes the PERFORM the way the paragraph's own
-*> GO TO 2200-EXIT idiom was clearly written to be called, so this test
-*> can verify 2200's own early-exit logic without tripping over the
-*> caller-side bug it is not this suite's job to work around.
+*> Error path -- INTRATE fails. FIXED BUG: the real call site
+*> (2100-FETCH-ACCOUNT's "PERFORM 2200-CALCULATE-INTEREST") used to be
+*> missing "THRU 2200-EXIT" -- taking this GO TO for real fell through
+*> 2200-EXIT into 2300-POST-INTEREST-PAYMENT and then 3000-FINALIZE
+*> (crashing on the never-opened INTRPT file), ending the whole daily
+*> interest-accrual batch after mis-processing just one account. Fixed
+*> upstream (both this copy and the legacy-application canonical copy)
+*> by adding "THRU 2200-EXIT" to that PERFORM. This test mirrors the fix
+*> locally so it can verify 2200's own early-exit logic directly.
 TESTCASE "2200-CALCULATE-INTEREST records an error and skips posting when INTRATE fails"
     MOCK CALL "INTRATE"
         MOVE 8 TO RETURN-CODE
@@ -343,7 +343,7 @@ TESTCASE "2200-CALCULATE-INTEREST records an error and skips posting when INTRAT
 *> Error path -- the DB2 UPDATE of INTEREST_ACCRUED fails after INTRATE
 *> succeeds: roll back and record the error, skip the daily-balance
 *> insert and the report line. See the note on the previous test case
-*> for why this uses "THRU 2200-EXIT".
+*> for the (now-fixed) bug "THRU 2200-EXIT" mirrors.
 TESTCASE "2200-CALCULATE-INTEREST rolls back when the DB2 account update fails"
     MOCK CALL "INTRATE"
         COMPUTE IP-INTEREST-AMT ROUNDED = IP-BALANCE * IP-ANNUAL-RATE / 36500

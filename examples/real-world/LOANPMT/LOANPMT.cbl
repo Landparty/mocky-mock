@@ -323,8 +323,7 @@
                        'LOAN PAYMENT', 'BAT', 'P')
            END-EXEC
 
-           MOVE WS-BUSINESS-DATE TO HV-LAST-PMT-DATE
-           MOVE ZERO TO HV-DAYS-PAST-DUE.
+           MOVE WS-BUSINESS-DATE TO HV-LAST-PMT-DATE.
 
        2400-CHECK-LATE-FEE.
       *    ASSESS LATE FEE IF > 15 DAYS PAST DUE AND NOT YET CHARGED
@@ -347,7 +346,11 @@
                            :WS-BUSINESS-DATE,
                            'LATE PAYMENT FEE', 'BAT', 'P')
                END-EXEC
-           END-IF.
+           END-IF
+
+      *    PAYMENT BRINGS THE LOAN CURRENT REGARDLESS OF WHETHER A
+      *    LATE FEE WAS JUST ASSESSED FOR THE CYCLE THAT ELAPSED
+           MOVE ZERO TO HV-DAYS-PAST-DUE.
 
        2500-UPDATE-LOAN-RECORD.
            EXEC SQL

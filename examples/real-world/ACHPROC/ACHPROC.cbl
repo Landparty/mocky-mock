@@ -212,7 +212,7 @@
                WHEN AED-RECORD-TYPE = '5'
                    PERFORM 2100-PROCESS-BATCH-HEADER
                WHEN AED-RECORD-TYPE = '6'
-                   PERFORM 2200-PROCESS-ENTRY-DETAIL
+                   PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
                WHEN AED-RECORD-TYPE = '8'
                    PERFORM 2300-VERIFY-BATCH-CONTROL
                WHEN AED-RECORD-TYPE = '9'
