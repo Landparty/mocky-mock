@@ -123,11 +123,26 @@ jobs:
           # 95 skipped, 1 xfailed (coverage 87.48%, unchanged from the
           # pre-bump baseline of 957 passed -- the +1 is the newly-ported
           # test_bundle_surface.py). Confirmed pushed and resolvable
-          # (2026-08-05): `git ls-remote
+          # (2026-08-05, now superseded by the entry below): `git ls-remote
+          # https://github.com/Landparty/cobol-parser.git` listed this sha
+          # as both `HEAD` and `refs/heads/main` at the time.
+          #
+          # Bumped again (2026-08-09, PR #121) to pull in the EVALUATE
+          # WHEN-clause truncation fix: a schema-qualified SQL table name's
+          # period inside a nested EXEC SQL statement (e.g.
+          # "BANK.GL_ACCOUNT") used to be mistaken for the EVALUATE's own
+          # terminating period, truncating the WHEN clause's AST right
+          # after the EXEC SQL statement -- every statement physically
+          # below it, and any following WHEN clause entirely, got
+          # misparsed as flat top-level paragraph statements. That
+          # corrupted this project's own splice-span computation for any
+          # boundary statement inside such a WHEN clause (see
+          # examples/real-world/GLRECON's now-fixed workaround, #53).
+          # Confirmed pushed and resolvable (2026-08-09): `git ls-remote
           # https://github.com/Landparty/cobol-parser.git` lists this sha as
           # both `HEAD` and `refs/heads/main`. Keep in sync with
           # pyproject.toml's dependency line per this step's own comment.
-          ref: ff64b25c377150da432c57f39c43a0357ffeba86
+          ref: 83478ba735402f88f3005af529c0fed633632096
 
       - uses: actions/setup-python@v5
         with:
@@ -186,7 +201,7 @@ jobs:
           path: cobol-parser
           token: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
           # Keep in sync with the `test` job's identical step above.
-          ref: ff64b25c377150da432c57f39c43a0357ffeba86
+          ref: 83478ba735402f88f3005af529c0fed633632096
 
       - uses: actions/setup-python@v5
         with:

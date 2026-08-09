@@ -45,10 +45,20 @@ dependencies = [
     # PR #112 (EJECT statement support) landed on top -- see
     # tests/unit/test_bundle_surface.py, which pins the exact bundle surface
     # consumed here, and cobol-parser's docs/fixture-bundle-schema.md for the
-    # authoritative shape. Confirmed pushed and resolvable (2026-08-05):
-    # `git ls-remote https://github.com/Landparty/cobol-parser.git` lists
-    # this sha as both `HEAD` and `refs/heads/main`.
-    "cobolparser @ git+https://github.com/Landparty/cobol-parser.git@ff64b25c377150da432c57f39c43a0357ffeba86",
+    # authoritative shape.
+    # Bumped again (PR #121) to pull in the EVALUATE WHEN-clause truncation
+    # fix: a schema-qualified SQL table name's period inside a nested
+    # EXEC SQL statement (e.g. "BANK.GL_ACCOUNT") used to be mistaken for
+    # the EVALUATE's own terminating period, truncating the WHEN clause's
+    # AST right after the EXEC SQL statement -- every statement physically
+    # below it, and any following WHEN clause entirely, got misparsed as
+    # flat top-level paragraph statements. That corrupted this project's
+    # own splice-span computation for any boundary statement inside such a
+    # WHEN clause (see examples/real-world/GLRECON's now-removed workaround
+    # commentary). Confirmed pushed and resolvable: `git ls-remote
+    # https://github.com/Landparty/cobol-parser.git` lists this sha as both
+    # `HEAD` and `refs/heads/main`.
+    "cobolparser @ git+https://github.com/Landparty/cobol-parser.git@83478ba735402f88f3005af529c0fed633632096",
 ]
 
 [project.optional-dependencies]
