@@ -1,0 +1,327 @@
+TESTSUITE "GLRECON"
+
+*> ===================================================================
+*> Full-program runs (PERFORM 0000-MAIN-PROCESS)
+*>
+*> GLRECON's real logic: GL_AGG_CUR sums today's posted transactions
+*> by TRAN_CODE/TRAN_TYPE into HV-TOTAL-DEBITS (one running host
+*> variable -- HV-TOTAL-CREDITS is declared but is never fetched by
+*> either cursor or set anywhere else in the program, so it stays
+*> zero for the life of the run; that is genuine source behavior, not
+*> a test artifact, so every scenario below reconciles against real
+*> GnuCOBOL output rather than an assumed "correct" double-entry
+*> result). GL_BAL_CUR then walks every active GL account, adds the
+*> last-fetched HV-TOTAL-DEBITS/HV-TOTAL-CREDITS onto that account's
+*> current balances, updates BANK.GL_ACCOUNT, and writes a GLRPT
+*> detail line. 4000-VERIFY-BALANCE compares the sum of every updated
+*> debit balance against the sum of every updated credit balance and
+*> raises the out-of-balance exception when they differ.
+*> ===================================================================
+
+TESTCASE "full run reconciles two GL accounts in balance"
+    MOCK OPEN GLRPT
+    END-MOCK
+    MOCK OPEN GLEXCPT
+    END-MOCK
+    MOCK OPEN GLMAP
+    END-MOCK
+    MOCK WRITE GLRPT-RECORD
+    END-MOCK
+    MOCK WRITE GLEXCPT-RECORD
+    END-MOCK
+    MOCK CLOSE GLRPT
+    END-MOCK
+    MOCK CLOSE GLEXCPT
+    END-MOCK
+    MOCK CLOSE GLMAP
+    END-MOCK
+    MOCK SQL "OPEN GL_AGG_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH GL_AGG_CUR" ROWS
+        ( HV-TRAN-CODE = "DP01", HV-GL-TYPE = "D", HV-TOTAL-DEBITS = 500.00, HV-TRAN-COUNT = 10 )
+        ( HV-TRAN-CODE = "WD01", HV-GL-TYPE = "C", HV-TOTAL-DEBITS = 300.00, HV-TRAN-COUNT = 5 )
+    END-MOCK
+    MOCK SQL "CLOSE GL_AGG_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "OPEN GL_BAL_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH GL_BAL_CUR" ROWS
+        ( HV-GL-ACCT = "GL0001000", HV-GL-TYPE = "A", HV-CURRENT-DEBIT-BAL = 1000.00, HV-CURRENT-CREDIT-BAL = 1300.00, HV-CURRENT-NET-BAL = -300.00, HV-MTD-DR = 5000.00, HV-MTD-CR = 6000.00 )
+        ( HV-GL-ACCT = "GL0002000", HV-GL-TYPE = "L", HV-CURRENT-DEBIT-BAL = 2000.00, HV-CURRENT-CREDIT-BAL = 2300.00, HV-CURRENT-NET-BAL = -300.00, HV-MTD-DR = 8000.00, HV-MTD-CR = 9000.00 )
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "CLOSE GL_BAL_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    PERFORM 0000-MAIN-PROCESS
+    *> Only the last-fetched aggregate row (WD01, 300.00) is still in
+    *> HV-TOTAL-DEBITS by the time GL_BAL_CUR runs -- both accounts'
+    *> opening credit balances were chosen 300.00 above their opening
+    *> debit balances so the reconciliation itself lands exactly in
+    *> balance (WS-OUT-OF-BALANCE / totals / diff below).
+    EXPECT WS-TRAN-TYPES-PROC TO BE 2
+    EXPECT WS-GL-ACCTS-PROC TO BE 2
+    EXPECT WS-GL-ERRORS TO BE 0
+    EXPECT WS-OUT-OF-BALANCE TO BE "N"
+    EXPECT WS-TOTAL-ALL-DEBITS TO BE 3600.00
+    EXPECT WS-TOTAL-ALL-CREDITS TO BE 3600.00
+    EXPECT WS-BALANCE-DIFF TO BE 0
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY SQL "OPEN GL_AGG_CUR" WAS CALLED ONCE
+    VERIFY SQL "FETCH GL_AGG_CUR" WAS CALLED 3 TIMES
+    VERIFY SQL "CLOSE GL_AGG_CUR" WAS CALLED ONCE
+    VERIFY SQL "OPEN GL_BAL_CUR" WAS CALLED ONCE
+    VERIFY SQL "FETCH GL_BAL_CUR" WAS CALLED 3 TIMES
+    VERIFY SQL "CLOSE GL_BAL_CUR" WAS CALLED ONCE
+    VERIFY SQL "UPDATE" WAS CALLED 2 TIMES
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY WRITE GLRPT-RECORD WAS CALLED 4 TIMES
+    VERIFY WRITE GLEXCPT-RECORD WAS CALLED NEVER
+    VERIFY CLOSE GLRPT WAS CALLED ONCE
+    VERIFY CLOSE GLEXCPT WAS CALLED ONCE
+    VERIFY CLOSE GLMAP WAS CALLED ONCE
+
+TESTCASE "full run detects an out-of-balance GL and writes the exception report"
+    MOCK OPEN GLRPT
+    END-MOCK
+    MOCK OPEN GLEXCPT
+    END-MOCK
+    MOCK OPEN GLMAP
+    END-MOCK
+    MOCK WRITE GLRPT-RECORD
+    END-MOCK
+    MOCK WRITE GLEXCPT-RECORD
+    END-MOCK
+    MOCK CLOSE GLRPT
+    END-MOCK
+    MOCK CLOSE GLEXCPT
+    END-MOCK
+    MOCK CLOSE GLMAP
+    END-MOCK
+    MOCK SQL "OPEN GL_AGG_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH GL_AGG_CUR" ROWS
+        ( HV-TRAN-CODE = "DP01", HV-GL-TYPE = "D", HV-TOTAL-DEBITS = 750.00, HV-TRAN-COUNT = 3 )
+    END-MOCK
+    MOCK SQL "CLOSE GL_AGG_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "OPEN GL_BAL_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH GL_BAL_CUR" ROWS
+        ( HV-GL-ACCT = "GL0003000", HV-GL-TYPE = "A", HV-CURRENT-DEBIT-BAL = 200.00, HV-CURRENT-CREDIT-BAL = 100.00, HV-CURRENT-NET-BAL = 100.00, HV-MTD-DR = 1000.00, HV-MTD-CR = 500.00 )
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "CLOSE GL_BAL_CUR"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    PERFORM 0000-MAIN-PROCESS
+    *> 750.00 posted debits against a 100.00 opening debit/credit gap
+    *> (never offset, since GL_AGG_CUR's SUM(AMOUNT) only ever reaches
+    *> HV-TOTAL-DEBITS) pushes total debits 850.00 above total credits.
+    *> WS-GL-ERRORS is 1: the real out-of-balance branch in
+    *> 4000-VERIFY-BALANCE.
+    EXPECT WS-GL-ACCTS-PROC TO BE 1
+    EXPECT WS-OUT-OF-BALANCE TO BE "Y"
+    EXPECT WS-TOTAL-ALL-DEBITS TO BE 950.00
+    EXPECT WS-TOTAL-ALL-CREDITS TO BE 100.00
+    EXPECT WS-BALANCE-DIFF TO BE 850.00
+    EXPECT WS-GL-ERRORS TO BE 1
+    EXPECT RETURN-CODE TO BE 8
+    VERIFY WRITE GLRPT-RECORD WAS CALLED 3 TIMES
+    VERIFY WRITE GLEXCPT-RECORD WAS CALLED 2 TIMES
+
+*> ===================================================================
+*> 2100-FETCH-AGGREGATE in isolation -- the GL_AGG_CUR FETCH/EVALUATE
+*> ===================================================================
+
+TESTCASE "2100-FETCH-AGGREGATE counts a successfully fetched aggregate row"
+    MOCK SQL "FETCH GL_AGG_CUR"
+        MOVE "DP01" TO HV-TRAN-CODE
+        MOVE "D" TO HV-GL-TYPE
+        MOVE 425.50 TO HV-TOTAL-DEBITS
+        MOVE 7 TO HV-TRAN-COUNT
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    PERFORM 2100-FETCH-AGGREGATE
+    EXPECT WS-TRAN-TYPES-PROC TO BE 1
+    EXPECT WS-GL-ERRORS TO BE 0
+    VERIFY SQL "FETCH GL_AGG_CUR" WAS CALLED ONCE
+
+TESTCASE "2100-FETCH-AGGREGATE leaves counters alone at end of cursor"
+    MOCK SQL "FETCH GL_AGG_CUR"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    PERFORM 2100-FETCH-AGGREGATE
+    EXPECT WS-TRAN-TYPES-PROC TO BE 0
+    EXPECT WS-GL-ERRORS TO BE 0
+    VERIFY SQL "FETCH GL_AGG_CUR" WAS CALLED ONCE
+
+TESTCASE "2100-FETCH-AGGREGATE records a DB2 error without counting a type"
+    MOCK SQL "FETCH GL_AGG_CUR"
+        MOVE -805 TO SQLCODE
+    END-MOCK
+    PERFORM 2100-FETCH-AGGREGATE
+    EXPECT WS-GL-ERRORS TO BE 1
+    EXPECT WS-TRAN-TYPES-PROC TO BE 0
+    VERIFY SQL "FETCH GL_AGG_CUR" WAS CALLED ONCE
+
+*> ===================================================================
+*> 3100-FETCH-GL-ACCOUNT in isolation -- the GL_BAL_CUR FETCH/EVALUATE,
+*> the balance UPDATE, and the GLRPT detail line
+*> ===================================================================
+
+TESTCASE "3100-FETCH-GL-ACCOUNT applies the aggregate delta and updates the balance"
+    MOCK SQL "FETCH GL_BAL_CUR"
+        MOVE "GL0004000" TO HV-GL-ACCT
+        MOVE "A" TO HV-GL-TYPE
+        MOVE 1000.00 TO HV-CURRENT-DEBIT-BAL
+        MOVE 400.00 TO HV-CURRENT-CREDIT-BAL
+        MOVE 600.00 TO HV-CURRENT-NET-BAL
+        MOVE 5000.00 TO HV-MTD-DR
+        MOVE 2000.00 TO HV-MTD-CR
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE GLRPT-RECORD
+    END-MOCK
+    MOVE 500.00 TO HV-TOTAL-DEBITS
+    MOVE 0 TO HV-TOTAL-CREDITS
+    PERFORM 3100-FETCH-GL-ACCOUNT
+    EXPECT HV-CURRENT-DEBIT-BAL TO BE 1500.00
+    EXPECT HV-CURRENT-CREDIT-BAL TO BE 400.00
+    EXPECT HV-CURRENT-NET-BAL TO BE 1100.00
+    EXPECT HV-MTD-DR TO BE 5500.00
+    EXPECT HV-MTD-CR TO BE 2000.00
+    EXPECT WS-GL-ACCTS-PROC TO BE 1
+    EXPECT WS-GL-ERRORS TO BE 0
+    EXPECT WS-TOTAL-ALL-DEBITS TO BE 1500.00
+    EXPECT WS-TOTAL-ALL-CREDITS TO BE 400.00
+    VERIFY SQL "UPDATE" WAS CALLED ONCE
+    VERIFY WRITE GLRPT-RECORD WAS CALLED ONCE
+
+TESTCASE "3100-FETCH-GL-ACCOUNT does nothing at end of cursor"
+    MOCK SQL "FETCH GL_BAL_CUR"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE GLRPT-RECORD
+    END-MOCK
+    PERFORM 3100-FETCH-GL-ACCOUNT
+    *> End-of-cursor is a real no-op (WHEN +100 / CONTINUE): no balance
+    *> update, no GLRPT line, and no error counted.
+    EXPECT WS-GL-ACCTS-PROC TO BE 0
+    EXPECT WS-GL-ERRORS TO BE 0
+    EXPECT WS-TOTAL-ALL-DEBITS TO BE 0
+    EXPECT WS-TOTAL-ALL-CREDITS TO BE 0
+    VERIFY SQL "UPDATE" WAS CALLED NEVER
+    VERIFY WRITE GLRPT-RECORD WAS CALLED NEVER
+
+TESTCASE "3100-FETCH-GL-ACCOUNT records a DB2 error without touching balances"
+    MOCK SQL "FETCH GL_BAL_CUR"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE GLRPT-RECORD
+    END-MOCK
+    PERFORM 3100-FETCH-GL-ACCOUNT
+    EXPECT WS-GL-ERRORS TO BE 1
+    EXPECT WS-GL-ACCTS-PROC TO BE 0
+    VERIFY SQL "UPDATE" WAS CALLED NEVER
+    VERIFY WRITE GLRPT-RECORD WAS CALLED NEVER
+
+*> ===================================================================
+*> 4000-VERIFY-BALANCE in isolation -- the reconciliation/mismatch
+*> decision itself, independent of how the totals were accumulated
+*> ===================================================================
+
+TESTCASE "4000-VERIFY-BALANCE confirms in-balance when debits equal credits"
+    MOCK WRITE GLEXCPT-RECORD
+    END-MOCK
+    MOVE 10000.00 TO WS-TOTAL-ALL-DEBITS
+    MOVE 10000.00 TO WS-TOTAL-ALL-CREDITS
+    PERFORM 4000-VERIFY-BALANCE
+    EXPECT WS-OUT-OF-BALANCE TO BE "N"
+    EXPECT WS-BALANCE-DIFF TO BE 0
+    EXPECT WS-GL-ERRORS TO BE 0
+    VERIFY WRITE GLEXCPT-RECORD WAS CALLED NEVER
+
+TESTCASE "4000-VERIFY-BALANCE flags a mismatch and writes both exception lines"
+    MOCK WRITE GLEXCPT-RECORD
+    END-MOCK
+    MOVE 15000.00 TO WS-TOTAL-ALL-DEBITS
+    MOVE 14750.25 TO WS-TOTAL-ALL-CREDITS
+    PERFORM 4000-VERIFY-BALANCE
+    EXPECT WS-OUT-OF-BALANCE TO BE "Y"
+    EXPECT WS-BALANCE-DIFF TO BE 249.75
+    EXPECT WS-GL-ERRORS TO BE 1
+    VERIFY WRITE GLEXCPT-RECORD WAS CALLED 2 TIMES
+
+*> ===================================================================
+*> 5000-FINALIZE in isolation -- the RETURN-CODE decision (8/4/0)
+*> ===================================================================
+
+TESTCASE "5000-FINALIZE returns 8 when the ledger is out of balance"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE GLRPT
+    END-MOCK
+    MOCK CLOSE GLEXCPT
+    END-MOCK
+    MOCK CLOSE GLMAP
+    END-MOCK
+    MOVE "Y" TO WS-OUT-OF-BALANCE
+    MOVE 1 TO WS-GL-ERRORS
+    PERFORM 5000-FINALIZE
+    EXPECT RETURN-CODE TO BE 8
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY CLOSE GLRPT WAS CALLED ONCE
+    VERIFY CLOSE GLEXCPT WAS CALLED ONCE
+    VERIFY CLOSE GLMAP WAS CALLED ONCE
+
+TESTCASE "5000-FINALIZE returns 4 when in balance but errors were recorded"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE GLRPT
+    END-MOCK
+    MOCK CLOSE GLEXCPT
+    END-MOCK
+    MOCK CLOSE GLMAP
+    END-MOCK
+    MOVE "N" TO WS-OUT-OF-BALANCE
+    MOVE 2 TO WS-GL-ERRORS
+    PERFORM 5000-FINALIZE
+    EXPECT RETURN-CODE TO BE 4
+
+TESTCASE "5000-FINALIZE returns 0 for a clean, in-balance run"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE GLRPT
+    END-MOCK
+    MOCK CLOSE GLEXCPT
+    END-MOCK
+    MOCK CLOSE GLMAP
+    END-MOCK
+    MOVE "N" TO WS-OUT-OF-BALANCE
+    MOVE 0 TO WS-GL-ERRORS
+    PERFORM 5000-FINALIZE
+    EXPECT RETURN-CODE TO BE 0

@@ -1,0 +1,468 @@
+TESTSUITE "CHKCLR"
+
+*> ---------------------------------------------------------------------
+*> A note on how these test cases are shaped:
+*>
+*> 2000-PROCESS-CHECKS' six early-return guards (routing invalid, account
+*> not found, SQL error, closed account, stop payment, NSF) all end with
+*> "PERFORM 2800-WRITE-RETURN / PERFORM 1100-READ-CHECK / GO TO
+*> 2000-EXIT". 0000-MAIN-PROCESS used to drive the loop with a bare
+*> "PERFORM 2000-PROCESS-CHECKS UNTIL WS-CHK-FILE-EOF" (no "THRU
+*> 2000-EXIT"), so GO TO jumped past the compiler-inserted return point:
+*> real GnuCOBOL fell through 2000-EXIT into 2800-WRITE-RETURN a second
+*> time (duplicating the return record) and then into 3000-FINALIZE
+*> (COMMIT/CLOSE/RETURN-CODE) before finally returning -- the program
+*> could not correctly process a multi-record CHKFILE. FIXED upstream
+*> (both this copy and the legacy-application canonical copy) by adding
+*> "THRU 2000-EXIT" to that PERFORM; see the write-up at the bottom of
+*> this file. Every TESTCASE below now drives
+*> "PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT" to mirror the real,
+*> fixed call site -- this always reaches 1100-READ-CHECK's priming read
+*> of the next record (whether the item cleared or was rejected), and
+*> never reaches 2800-WRITE-RETURN or 3000-FINALIZE a second/extra time.
+*> ---------------------------------------------------------------------
+
+*> Happy path: routing validates, the account is open with enough
+*> available balance, there's no stop payment on file, and both the
+*> INSERT and UPDATE succeed -- the check clears and the ledger balance
+*> is debited.
+TESTCASE "cleared check posts a debit and updates the account"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "A" TO HV-ACCT-STATUS
+        MOVE 5000.00 TO HV-CURRENT-BALANCE
+        MOVE 5000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK READ STOPPAY
+        MOVE "23" TO WS-SP-STATUS
+    END-MOCK
+    MOCK SQL "INSERT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ CHKFILE
+        SET WS-CHK-FILE-EOF TO TRUE
+    END-MOCK
+    MOVE "021000021"     TO CHK-ROUTING-NUMBER
+    MOVE "ACCT00000001"  TO CHK-ACCT-NUMBER
+    MOVE "CHK0000001"    TO CHK-CHECK-NUMBER
+    MOVE 250.00           TO CHK-AMOUNT
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
+    EXPECT WS-ITEMS-CLEARED TO BE 1
+    EXPECT WS-TOTAL-CLEARED TO BE 250.00
+    EXPECT WS-CHK-ERRORS TO BE 0
+    EXPECT WS-CD-STATUS TO BE "CLEARED"
+    VERIFY CALL "ACCTVAL" WAS CALLED ONCE
+    VERIFY SQL "SELECT" WAS CALLED ONCE
+    VERIFY SQL "UPDATE" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+    VERIFY SQL "ROLLBACK" WAS CALLED NEVER
+    VERIFY WRITE RETURN-RECORD WAS CALLED NEVER
+    *> Now that the driving PERFORM is properly scoped THRU 2000-EXIT,
+    *> the cleared path correctly reaches 1100-READ-CHECK and primes the
+    *> next record, same as every rejection path below.
+    VERIFY READ CHKFILE WAS CALLED ONCE
+
+*> Same happy-path setup, but the INSERT into TRANSACTION_HIST fails at
+*> the database. The program rolls back and bumps the error counter --
+*> but note it still unconditionally reports the item as "CLEARED" on
+*> the run report and never calls UPDATE, since that MOVE/WRITE sequence
+*> isn't guarded by the SQLCODE check above it.
+TESTCASE "SQL error during posting is rolled back and not counted as cleared"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "A" TO HV-ACCT-STATUS
+        MOVE 5000.00 TO HV-CURRENT-BALANCE
+        MOVE 5000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK READ STOPPAY
+        MOVE "23" TO WS-SP-STATUS
+    END-MOCK
+    MOCK SQL "INSERT"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ CHKFILE
+        SET WS-CHK-FILE-EOF TO TRUE
+    END-MOCK
+    MOVE "021000021"     TO CHK-ROUTING-NUMBER
+    MOVE "ACCT00000008"  TO CHK-ACCT-NUMBER
+    MOVE "CHK0000008"    TO CHK-CHECK-NUMBER
+    MOVE 250.00           TO CHK-AMOUNT
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
+    EXPECT WS-CHK-ERRORS TO BE 1
+    EXPECT WS-ITEMS-CLEARED TO BE 0
+    EXPECT WS-CD-STATUS TO BE "CLEARED"
+    VERIFY SQL "ROLLBACK" WAS CALLED ONCE
+    VERIFY SQL "UPDATE" WAS CALLED NEVER
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+    VERIFY READ CHKFILE WAS CALLED ONCE
+
+*> Routing number fails ACCTVAL's 'R' (routing) check -- returned R06
+*> before the account is ever looked up in DB2.
+TESTCASE "invalid routing number is returned as R06 without an account lookup"
+    MOCK CALL "ACCTVAL"
+        MOVE "N" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "A" TO HV-ACCT-STATUS
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK READ STOPPAY
+        MOVE "23" TO WS-SP-STATUS
+    END-MOCK
+    MOCK SQL "INSERT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ CHKFILE
+        SET WS-CHK-FILE-EOF TO TRUE
+    END-MOCK
+    MOVE "999999999"     TO CHK-ROUTING-NUMBER
+    MOVE "ACCT00000002"  TO CHK-ACCT-NUMBER
+    MOVE "CHK0000002"    TO CHK-CHECK-NUMBER
+    MOVE 100.00           TO CHK-AMOUNT
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
+    EXPECT WS-RETURN-REASON TO BE "R06"
+    EXPECT WS-ROUTING-INVALID TO BE 1
+    EXPECT WS-CHK-ERRORS TO BE 0
+    VERIFY CALL "ACCTVAL" WAS CALLED ONCE
+    VERIFY SQL "SELECT" WAS CALLED NEVER
+    *> Concrete evidence for finding #4 at the bottom of this file: this
+    *> guard PERFORMs 1100-READ-CHECK itself before "GO TO 2000-EXIT",
+    *> and 2000-EXIT PERFORMs it again -- CHKFILE really does advance
+    *> twice for one rejected item.
+    VERIFY READ CHKFILE WAS CALLED 2 TIMES
+
+*> DB2 finds no row for the account (SQLCODE +100) -- returned R03.
+TESTCASE "account not found in DB2 is returned as R03 without a stop-pay check"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOCK READ STOPPAY
+        MOVE "23" TO WS-SP-STATUS
+    END-MOCK
+    MOCK SQL "INSERT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ CHKFILE
+        SET WS-CHK-FILE-EOF TO TRUE
+    END-MOCK
+    MOVE "021000021"     TO CHK-ROUTING-NUMBER
+    MOVE "ACCT00009999"  TO CHK-ACCT-NUMBER
+    MOVE "CHK0000003"    TO CHK-CHECK-NUMBER
+    MOVE 100.00           TO CHK-AMOUNT
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
+    EXPECT WS-RETURN-REASON TO BE "R03"
+    EXPECT WS-ITEMS-CLOSED TO BE 1
+    VERIFY READ STOPPAY WAS CALLED NEVER
+
+*> Any other DB2 failure (deadlock, resource unavailable, etc.) during
+*> the account lookup is a hard error: the item is skipped and
+*> WS-CHK-ERRORS is bumped (driving RETURN-CODE 4 at end of run, proven
+*> separately by the dedicated 3000-FINALIZE test below). Unlike the
+*> other five guards, this branch never PERFORMs 2800-WRITE-RETURN (no
+*> WS-RETURN-REASON is set either) -- no return record is written for a
+*> hard DB2 error, only a logged error count.
+TESTCASE "unexpected SQL error during account lookup counts as a hard error"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE -818 TO SQLCODE
+    END-MOCK
+    MOCK READ STOPPAY
+        MOVE "23" TO WS-SP-STATUS
+    END-MOCK
+    MOCK SQL "INSERT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ CHKFILE
+        SET WS-CHK-FILE-EOF TO TRUE
+    END-MOCK
+    MOVE "021000021"     TO CHK-ROUTING-NUMBER
+    MOVE "ACCT00000004"  TO CHK-ACCT-NUMBER
+    MOVE "CHK0000004"    TO CHK-CHECK-NUMBER
+    MOVE 100.00           TO CHK-AMOUNT
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
+    EXPECT WS-CHK-ERRORS TO BE 1
+    VERIFY READ STOPPAY WAS CALLED NEVER
+    VERIFY WRITE RETURN-RECORD WAS CALLED NEVER
+
+*> Account is found but flagged closed ('C') -- returned R02, again
+*> without ever consulting the stop-payment file.
+TESTCASE "closed account is returned as R02"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "C" TO HV-ACCT-STATUS
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK READ STOPPAY
+        MOVE "23" TO WS-SP-STATUS
+    END-MOCK
+    MOCK SQL "INSERT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ CHKFILE
+        SET WS-CHK-FILE-EOF TO TRUE
+    END-MOCK
+    MOVE "021000021"     TO CHK-ROUTING-NUMBER
+    MOVE "ACCT00000005"  TO CHK-ACCT-NUMBER
+    MOVE "CHK0000005"    TO CHK-CHECK-NUMBER
+    MOVE 100.00           TO CHK-AMOUNT
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
+    EXPECT WS-RETURN-REASON TO BE "R02"
+    EXPECT WS-ITEMS-CLOSED TO BE 1
+    VERIFY READ STOPPAY WAS CALLED NEVER
+
+*> Account is open and has plenty of available balance, but the
+*> account/check-number pair has an active stop payment on file --
+*> returned R08 before the funds-availability check ever runs.
+TESTCASE "stop payment on file is returned as R08"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "A" TO HV-ACCT-STATUS
+        MOVE 5000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK READ STOPPAY
+        MOVE "00" TO WS-SP-STATUS
+    END-MOCK
+    MOCK SQL "INSERT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ CHKFILE
+        SET WS-CHK-FILE-EOF TO TRUE
+    END-MOCK
+    MOVE "021000021"     TO CHK-ROUTING-NUMBER
+    MOVE "ACCT00000006"  TO CHK-ACCT-NUMBER
+    MOVE "CHK0000006"    TO CHK-CHECK-NUMBER
+    MOVE 500.00           TO CHK-AMOUNT
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
+    EXPECT WS-RETURN-REASON TO BE "R08"
+    EXPECT WS-ITEMS-STOPPED TO BE 1
+    VERIFY SQL "INSERT" WAS CALLED NEVER
+
+*> Account is open, not stopped, but the available balance is less than
+*> the check amount -- returned R01 (NSF) and the ledger is never
+*> touched (no INSERT/UPDATE).
+TESTCASE "insufficient funds is returned as R01 without posting a debit"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "A" TO HV-ACCT-STATUS
+        MOVE 50.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK READ STOPPAY
+        MOVE "23" TO WS-SP-STATUS
+    END-MOCK
+    MOCK SQL "INSERT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ CHKFILE
+        SET WS-CHK-FILE-EOF TO TRUE
+    END-MOCK
+    MOVE "021000021"     TO CHK-ROUTING-NUMBER
+    MOVE "ACCT00000007"  TO CHK-ACCT-NUMBER
+    MOVE "CHK0000007"    TO CHK-CHECK-NUMBER
+    MOVE 500.00           TO CHK-AMOUNT
+    PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT
+    EXPECT WS-RETURN-REASON TO BE "R01"
+    EXPECT WS-ITEMS-NSF TO BE 1
+    VERIFY SQL "INSERT" WAS CALLED NEVER
+
+*> 1000-INITIALIZE builds WS-BUSINESS-DATE from FUNCTION CURRENT-DATE,
+*> opens all four files, writes the report header, and primes the first
+*> read.
+TESTCASE "1000-INITIALIZE opens files and primes the first read"
+    MOCK OPEN CHKFILE
+    END-MOCK
+    MOCK OPEN STOPPAY
+    END-MOCK
+    MOCK OPEN CHKRETURNS
+    END-MOCK
+    MOCK OPEN CHKRPT
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ CHKFILE
+        SET WS-CHK-FILE-EOF TO TRUE
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    EXPECT WS-BUSINESS-DATE TO BE "2026-08-08"
+    VERIFY OPEN CHKFILE WAS CALLED ONCE
+    VERIFY OPEN STOPPAY WAS CALLED ONCE
+    VERIFY OPEN CHKRETURNS WAS CALLED ONCE
+    VERIFY OPEN CHKRPT WAS CALLED ONCE
+    VERIFY WRITE RPT-RECORD WAS CALLED ONCE
+    VERIFY READ CHKFILE WAS CALLED ONCE
+
+*> 3000-FINALIZE surfaces a nonzero RETURN-CODE to the JCL step whenever
+*> any item hit a hard processing error during the run.
+TESTCASE "3000-FINALIZE signals failure to the caller when errors occurred"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE CHKFILE
+    END-MOCK
+    MOVE 3 TO WS-CHK-ERRORS
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 4
+
+*> ...and reports success (RETURN-CODE 0) when the run had none.
+TESTCASE "3000-FINALIZE signals success when no errors occurred"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE CHKFILE
+    END-MOCK
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 0
+
+*> ---------------------------------------------------------------------
+*> Source bugs found while writing this suite (see the top-of-file note
+*> for the runtime evidence):
+*>
+*> 1. FIXED (both this copy and the legacy-application canonical copy):
+*>    WORKING-STORAGE declared two data items sharing the literal name
+*>    WS-CHK-EOF -- the 88-level "88 WS-CHK-EOF VALUE '10'." under
+*>    WS-CHK-STATUS, and the unrelated top-level EOF flag "01 WS-CHK-EOF
+*>    PIC X(01)". Neither the program itself nor this suite ever
+*>    references the bare name (the program always qualifies via
+*>    WS-CHK-FILE-EOF), but mockymock's own generated
+*>    UT-RESET-WORKING-STORAGE paragraph does reset every VALUE'd field
+*>    by name and hit "'WS-CHK-EOF' is ambiguous" from GnuCOBOL. Renamed
+*>    the dead, never-referenced 88-level to WS-CHK-STATUS-EOF.
+*> 2. FIXED (both copies): "WRITE RPT-RECORD FROM WS-CHK-DETAIL" at the
+*>    end of 2000-PROCESS-CHECKS had no terminating period before the
+*>    "2000-EXIT." paragraph header, leaving the entire IF/EVALUATE tree
+*>    above it as one unterminated sentence -- GnuCOBOL failed to parse
+*>    "2000-EXIT" as a paragraph name once anything was spliced into
+*>    that tree. Added the missing period.
+*> 3. FIXED (both this copy and the legacy-application canonical copy):
+*>    0000-MAIN-PROCESS used to drive the loop with a bare "PERFORM
+*>    2000-PROCESS-CHECKS UNTIL WS-CHK-FILE-EOF" -- missing "THRU
+*>    2000-EXIT". Verified against the real GnuCOBOL toolchain: a bare
+*>    PERFORM of 2000-PROCESS-CHECKS returned at the compiler-inserted
+*>    boundary *before* 2000-EXIT, so on a CLEARED check 1100-READ-CHECK's
+*>    READ CHKFILE never fired -- the file position never advanced (the
+*>    loop would spin on the same record forever). On any of the six
+*>    GO TO 2000-EXIT paths, the GOTO jumped past that same boundary and
+*>    fell all the way through 2000-EXIT -> 2800-WRITE-RETURN (a second,
+*>    duplicate return-record write) -> 3000-FINALIZE (COMMIT/CLOSE/
+*>    RETURN-CODE) -> end of PROCEDURE DIVISION, terminating the whole
+*>    batch job after just one item. Fixed by adding "THRU 2000-EXIT" to
+*>    that PERFORM.
+*> 4. NOT FIXED (a separate, smaller control-flow quirk surfaced by fixing
+*>    #3, off limits per the same business-logic constraint): each of the
+*>    five guards that PERFORM 2800-WRITE-RETURN also already PERFORMs
+*>    1100-READ-CHECK itself, immediately before "GO TO 2000-EXIT" --
+*>    and 2000-EXIT unconditionally PERFORMs 1100-READ-CHECK again. Now
+*>    that GO TO correctly reaches 2000-EXIT (instead of falling through
+*>    past it), a rejected item advances CHKFILE by *two* records instead
+*>    of one, silently skipping the check immediately after any rejected
+*>    one. The cleared/happy path is unaffected (it has no such guard-side
+*>    read; 2000-EXIT's read is the only one). Not covered by any EXPECT/
+*>    VERIFY here since it doesn't fail this suite either way -- flagging
+*>    for whoever owns this program's logic next: the real fix is
+*>    removing each guard's own "PERFORM 1100-READ-CHECK" and leaving
+*>    2000-EXIT as the single place that reads the next record.
+*> ---------------------------------------------------------------------

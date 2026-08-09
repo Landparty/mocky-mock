@@ -1,0 +1,402 @@
+TESTSUITE "ACCTMNT"
+
+*> ACCTMNT is a daily account-maintenance batch program driven by parm
+*> cards (SYSIN): RATE changes an account type's interest rate, FEES
+*> assesses the monthly minimum-balance fee across every open account
+*> (DB2 cursor loop), DORM flags accounts dormant past a parm-supplied
+*> day threshold, and anything else is an invalid-function error. Each
+*> DB2 UPDATE/INSERT is independently committed or rolled back per parm
+*> card / per fetched row.
+*>
+*> NOTE ON TEST GRANULARITY: these cases PERFORM the individual 1000/
+*> 2000/2100/2200/2300/3000 paragraphs directly instead of driving the
+*> whole run through 0000-MAIN-PROCESS. That's a deliberate style choice
+*> (matching mockymock's own DEPTMQP/CTRRPT reference examples) for
+*> finer-grained, more business-meaningful assertions -- it is no longer
+*> a workaround for anything: 2200-PROCESS-FEE-POSTING's cursor-open-
+*> failure path used to GO TO 2290-FEE-DONE without ever being PERFORMed
+*> THRU it, so taking that branch fell through every paragraph physically
+*> below 2290-FEE-DONE and off the end of the PROCEDURE DIVISION. Fixed
+*> upstream by adding THRU 2290-FEE-DONE to the PERFORM in
+*> 2000-PROCESS-PARM-CARDS; see the cursor-open-failure case in the
+*> 2200-PROCESS-FEE-POSTING block below, which now exercises that branch
+*> directly and safely.
+
+*> FIXED BUG: neither SELECT clause in the ENVIRONMENT DIVISION used to
+*> carry a FILE STATUS IS clause, so WS-FILE-STATUS was never actually
+*> populated by the real OPEN statements -- the "IF NOT WS-FILE-OK" guard
+*> right after both OPENs was evaluating a field OPEN never touched, so
+*> the batch job aborted with RETURN-CODE 16 on every run even when both
+*> files opened cleanly. Fixed upstream by adding
+*> FILE STATUS IS WS-FILE-STATUS to both SELECT clauses. This case now
+*> proves the guard does the right thing on a genuine OPEN failure. Both
+*> SELECTs share the one WS-FILE-STATUS field (WSCOMMON's common idiom
+*> in this corpus), so whichever OPEN runs *last* is the status the
+*> guard actually sees -- the failure has to land on ACCTMRPT (the
+*> second OPEN) for this case to exercise the guard at all.
+TESTCASE "1000-INITIALIZE aborts with RETURN-CODE 16 when a file genuinely fails to open"
+    MOCK OPEN PARMFILE
+        MOVE "00" TO WS-FILE-STATUS
+    END-MOCK
+    MOCK OPEN ACCTMRPT
+        MOVE "35" TO WS-FILE-STATUS
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ PARMFILE
+        SET WS-EOF TO TRUE
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    EXPECT RETURN-CODE TO BE 16
+    VERIFY OPEN PARMFILE WAS CALLED ONCE
+    VERIFY OPEN ACCTMRPT WAS CALLED ONCE
+    VERIFY WRITE RPT-RECORD WAS CALLED NEVER
+    VERIFY READ PARMFILE WAS CALLED NEVER
+
+*> Now that FILE STATUS IS WS-FILE-STATUS is wired up, a mocked OPEN
+*> moving "00" (simulating a real successful open) correctly clears the
+*> guard and lets the rest of the paragraph run -- this is what actually
+*> happens in production today, not a workaround.
+TESTCASE "1000-INITIALIZE writes the report header and primes the first read once past the guard"
+    MOCK OPEN PARMFILE
+        MOVE "00" TO WS-FILE-STATUS
+    END-MOCK
+    MOCK OPEN ACCTMRPT
+        MOVE "00" TO WS-FILE-STATUS
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ PARMFILE
+        MOVE "RATE" TO WS-PARM-FUNC
+        MOVE "SAV" TO WS-PARM-ACCT-TYPE
+        MOVE 4.750000 TO WS-PARM-NEW-RATE
+        MOVE 180 TO WS-PARM-DORM-DAYS
+        MOVE "OPR00001" TO WS-PARM-USER-ID
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    EXPECT WS-PARM-FUNC TO BE "RATE"
+    EXPECT WS-PARM-ACCT-TYPE TO BE "SAV"
+    VERIFY OPEN PARMFILE WAS CALLED ONCE
+    VERIFY OPEN ACCTMRPT WAS CALLED ONCE
+    VERIFY WRITE RPT-RECORD WAS CALLED ONCE
+    VERIFY READ PARMFILE WAS CALLED ONCE
+
+*> 2000-PROCESS-PARM-CARDS: EVALUATE dispatch on the parm card already
+*> loaded into WS-PARM-RECORD. Happy path: a RATE card routes to
+*> 2100-PROCESS-RATE-CHANGE exactly once.
+TESTCASE "2000-PROCESS-PARM-CARDS dispatches a RATE card to 2100-PROCESS-RATE-CHANGE"
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_RATE"
+        MOVE 0 TO SQLCODE
+        MOVE 30 TO SQLERRD(3)
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "OPEN"
+    END-MOCK
+    MOCK SQL "FETCH"
+    END-MOCK
+    MOCK SQL "CLOSE"
+    END-MOCK
+    MOCK SQL "INSERT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET ACCT_STATUS"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ PARMFILE
+        SET WS-EOF TO TRUE
+    END-MOCK
+    MOVE "RATE" TO WS-PARM-FUNC
+    MOVE "CHK" TO WS-PARM-ACCT-TYPE
+    MOVE 2.250000 TO WS-PARM-NEW-RATE
+    MOVE "OPR00002" TO WS-PARM-USER-ID
+    PERFORM 2000-PROCESS-PARM-CARDS
+    EXPECT WS-RECORD-COUNT TO BE 1
+    EXPECT WS-RATES-CHANGED TO BE 30
+    EXPECT WS-ERRORS TO BE 0
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_RATE" WAS CALLED ONCE
+    VERIFY SQL "OPEN" WAS CALLED NEVER
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET ACCT_STATUS" WAS CALLED NEVER
+    VERIFY READ PARMFILE WAS CALLED ONCE
+
+*> Error path: an unrecognized WS-PARM-FUNC must fall through to
+*> WHEN OTHER and never touch any of the three real functions' boundaries
+*> -- proves the EVALUATE dispatch guard, not just static reachability.
+TESTCASE "2000-PROCESS-PARM-CARDS flags an unrecognized function code without dispatching"
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_RATE"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOCK SQL "OPEN"
+    END-MOCK
+    MOCK SQL "FETCH"
+    END-MOCK
+    MOCK SQL "CLOSE"
+    END-MOCK
+    MOCK SQL "INSERT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET ACCT_STATUS"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ PARMFILE
+        SET WS-EOF TO TRUE
+    END-MOCK
+    MOVE "XXXX" TO WS-PARM-FUNC
+    PERFORM 2000-PROCESS-PARM-CARDS
+    EXPECT WS-ERRORS TO BE 1
+    EXPECT WS-RECORD-COUNT TO BE 1
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_RATE" WAS CALLED NEVER
+    VERIFY SQL "OPEN" WAS CALLED NEVER
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET ACCT_STATUS" WAS CALLED NEVER
+    VERIFY READ PARMFILE WAS CALLED ONCE
+
+*> 2100-PROCESS-RATE-CHANGE happy path: DB2 accepts the mass UPDATE for
+*> the given account type; SQLERRD(3) (rows-affected) accumulates into
+*> WS-RATES-CHANGED and the unit of work commits.
+TESTCASE "2100-PROCESS-RATE-CHANGE applies a rate change and commits"
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_RATE"
+        MOVE 0 TO SQLCODE
+        MOVE 128 TO SQLERRD(3)
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOVE "SAV" TO WS-PARM-ACCT-TYPE
+    MOVE 4.750000 TO WS-PARM-NEW-RATE
+    MOVE "OPR00003" TO WS-PARM-USER-ID
+    PERFORM 2100-PROCESS-RATE-CHANGE
+    EXPECT HV-ACCT-TYPE TO BE "SAV"
+    EXPECT HV-NEW-RATE TO BE 4.750000
+    EXPECT WS-RATES-CHANGED TO BE 128
+    EXPECT WS-ERRORS TO BE 0
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET INTEREST_RATE" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY SQL "ROLLBACK" WAS CALLED NEVER
+
+*> Error path: DB2 rejects the UPDATE (e.g. a deadlock) -- the unit of
+*> work must roll back instead of commit, and the failure is counted,
+*> not silently absorbed.
+TESTCASE "2100-PROCESS-RATE-CHANGE rolls back and counts an error when DB2 rejects the update"
+    MOCK SQL "UPDATE BANK. ACCOUNT SET INTEREST_RATE"
+        MOVE -803 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOVE "CDA" TO WS-PARM-ACCT-TYPE
+    MOVE 3.100000 TO WS-PARM-NEW-RATE
+    MOVE "OPR00004" TO WS-PARM-USER-ID
+    PERFORM 2100-PROCESS-RATE-CHANGE
+    EXPECT WS-RATES-CHANGED TO BE 0
+    EXPECT WS-ERRORS TO BE 1
+    VERIFY SQL "ROLLBACK" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+
+*> 2200-PROCESS-FEE-POSTING happy path: the fetched account's balance is
+*> below its minimum and it carries a monthly fee, so 2220/2230 post a
+*> DR transaction and debit both balances by the fee amount. NOTE: the
+*> cursor is deliberately NEVER expected to close here -- see the bug
+*> note further down for why.
+TESTCASE "2200-PROCESS-FEE-POSTING posts a monthly fee when the balance is below the minimum"
+    MOCK SQL "OPEN"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH" ROWS
+        ( HV-ACCT-NUMBER = "ACCT00000101", HV-ACCT-TYPE = "CHK", HV-ACCT-STATUS = "O", HV-CIF-NUMBER = "CIF0000101", HV-INTEREST-RATE = 0.010000, HV-CURRENT-BALANCE = 450.00, HV-AVAILABLE-BALANCE = 450.00, HV-LAST-ACTIVITY-DATE = "2026-07-15", HV-MONTHLY-FEE = 12.00, HV-MIN-BALANCE = 500.00 )
+    END-MOCK
+    MOCK SQL "INSERT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    PERFORM 2200-PROCESS-FEE-POSTING
+    EXPECT WS-ACCTS-READ TO BE 1
+    EXPECT WS-FEES-POSTED TO BE 1
+    EXPECT WS-ERRORS TO BE 0
+    EXPECT WS-COMMIT-COUNT TO BE 1
+    EXPECT HV-CURRENT-BALANCE TO BE 438.00
+    EXPECT HV-AVAILABLE-BALANCE TO BE 438.00
+    VERIFY SQL "FETCH" WAS CALLED 2 TIMES
+    VERIFY SQL "INSERT" WAS CALLED ONCE
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE" WAS CALLED ONCE
+    VERIFY WRITE RPT-RECORD WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+    VERIFY SQL "CLOSE" WAS CALLED NEVER
+
+*> Edge path: the fetched account's balance is at/above its minimum, so
+*> the fee-posting guard (2220) must skip both the INSERT and the
+*> balance UPDATE entirely.
+TESTCASE "2200-PROCESS-FEE-POSTING skips the fee when the balance is not below the minimum"
+    MOCK SQL "OPEN"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH" ROWS
+        ( HV-ACCT-NUMBER = "ACCT00000102", HV-ACCT-TYPE = "SAV", HV-ACCT-STATUS = "O", HV-CIF-NUMBER = "CIF0000102", HV-INTEREST-RATE = 0.500000, HV-CURRENT-BALANCE = 5000.00, HV-AVAILABLE-BALANCE = 5000.00, HV-LAST-ACTIVITY-DATE = "2026-08-01", HV-MONTHLY-FEE = 12.00, HV-MIN-BALANCE = 500.00 )
+    END-MOCK
+    MOCK SQL "INSERT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    PERFORM 2200-PROCESS-FEE-POSTING
+    EXPECT WS-ACCTS-READ TO BE 1
+    EXPECT WS-FEES-POSTED TO BE 0
+    EXPECT HV-CURRENT-BALANCE TO BE 5000.00
+    VERIFY SQL "INSERT" WAS CALLED NEVER
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE" WAS CALLED NEVER
+    VERIFY WRITE RPT-RECORD WAS CALLED NEVER
+
+*> Error path: the cursor opens fine but the FETCH itself errors out --
+*> the paragraph must count the error and force the loop to stop
+*> (MOVE +100 TO SQLCODE) instead of looping forever. Stays inside the
+*> ordinary "PERFORM ... UNTIL" loop (no GO TO involved), so unlike the
+*> cursor-open-failure scenario below it is safe to drive directly.
+TESTCASE "2200-PROCESS-FEE-POSTING counts a fetch error and stops the loop"
+    MOCK SQL "OPEN"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    PERFORM 2200-PROCESS-FEE-POSTING
+    EXPECT WS-ERRORS TO BE 1
+    EXPECT WS-ACCTS-READ TO BE 0
+    EXPECT WS-FEES-POSTED TO BE 0
+    VERIFY SQL "FETCH" WAS CALLED ONCE
+    VERIFY SQL "INSERT" WAS CALLED NEVER
+    VERIFY SQL "CLOSE" WAS CALLED NEVER
+
+*> FIXED BUG: when the cursor OPEN fails, 2200-PROCESS-FEE-POSTING does
+*> "GO TO 2290-FEE-DONE" to close the cursor. 2290-FEE-DONE is a separate
+*> paragraph, and the call site in 2000-PROCESS-PARM-CARDS used to
+*> PERFORM 2200-PROCESS-FEE-POSTING bare (no THRU), so taking this GO TO
+*> for real fell through the rest of the source file in physical order
+*> and off the end of the PROCEDURE DIVISION, silently ending the whole
+*> program. Fixed upstream by adding THRU 2290-FEE-DONE to that PERFORM.
+*> This TESTCASE mirrors that fix locally (PERFORM ... THRU 2290-FEE-DONE)
+*> so the branch can be driven safely and directly: the cursor never gets
+*> fetched from, but it does still get closed via 2290-FEE-DONE.
+TESTCASE "2200-PROCESS-FEE-POSTING counts an error and closes the cursor when OPEN fails"
+    MOCK SQL "OPEN"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH"
+    END-MOCK
+    MOCK SQL "INSERT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    PERFORM 2200-PROCESS-FEE-POSTING THRU 2290-FEE-DONE
+    EXPECT WS-ERRORS TO BE 1
+    EXPECT WS-ACCTS-READ TO BE 0
+    EXPECT WS-FEES-POSTED TO BE 0
+    VERIFY SQL "FETCH" WAS CALLED NEVER
+    VERIFY SQL "INSERT" WAS CALLED NEVER
+    VERIFY SQL "CLOSE" WAS CALLED ONCE
+
+*> 2300-PROCESS-DORMANCY-CHECK happy path: DB2 accepts the mass UPDATE
+*> flagging every stale CHK/SAV/MMA account dormant; SQLERRD(3) accumulates
+*> into WS-DORM-FLAGGED and the unit of work commits.
+TESTCASE "2300-PROCESS-DORMANCY-CHECK flags accounts inactive past the dormancy threshold"
+    MOCK SQL "UPDATE BANK. ACCOUNT SET ACCT_STATUS"
+        MOVE 0 TO SQLCODE
+        MOVE 47 TO SQLERRD(3)
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOVE 180 TO WS-PARM-DORM-DAYS
+    PERFORM 2300-PROCESS-DORMANCY-CHECK
+    EXPECT WS-DORM-FLAGGED TO BE 47
+    EXPECT WS-ERRORS TO BE 0
+    VERIFY SQL "UPDATE BANK. ACCOUNT SET ACCT_STATUS" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY SQL "ROLLBACK" WAS CALLED NEVER
+
+*> Error path: DB2 rejects the dormancy UPDATE -- must roll back and
+*> count the error instead of committing a partial/no-op change.
+TESTCASE "2300-PROCESS-DORMANCY-CHECK rolls back and counts an error when DB2 rejects the update"
+    MOCK SQL "UPDATE BANK. ACCOUNT SET ACCT_STATUS"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "ROLLBACK"
+    END-MOCK
+    MOVE 90 TO WS-PARM-DORM-DAYS
+    PERFORM 2300-PROCESS-DORMANCY-CHECK
+    EXPECT WS-DORM-FLAGGED TO BE 0
+    EXPECT WS-ERRORS TO BE 1
+    VERIFY SQL "ROLLBACK" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+
+*> 3000-FINALIZE: the batch's own exit-code contract -- any error counted
+*> during the run must surface as a non-zero RETURN-CODE for the job
+*> scheduler, even though every individual unit of work already committed
+*> or rolled back on its own.
+TESTCASE "3000-FINALIZE sets a non-zero return code when errors occurred"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE PARMFILE
+    END-MOCK
+    MOCK CLOSE ACCTMRPT
+    END-MOCK
+    MOVE 3 TO WS-ERRORS
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 4
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY CLOSE PARMFILE WAS CALLED ONCE
+    VERIFY CLOSE ACCTMRPT WAS CALLED ONCE
+
+*> Happy path: a clean run (no errors counted) must exit 0.
+TESTCASE "3000-FINALIZE sets a zero return code when the run is clean"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE PARMFILE
+    END-MOCK
+    MOCK CLOSE ACCTMRPT
+    END-MOCK
+    MOVE 0 TO WS-ERRORS
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY SQL "COMMIT" WAS CALLED ONCE

@@ -1,0 +1,696 @@
+TESTSUITE "ACHPROC ACH batch processing"
+
+*> ---------------------------------------------------------------------
+*> 1000-INITIALIZE: startup -- open the four files, read the one control
+*> parm record, and prime the first ACH read.
+*> ---------------------------------------------------------------------
+
+*> Happy path: all four files open clean, the control parm is read once,
+*> and HV-FILE-ID is populated from it before the priming READ ACHFILE.
+TESTCASE "1000-INITIALIZE opens files, reads the control parm, and primes the first read"
+    MOCK OPEN ACHFILE
+    END-MOCK
+    MOCK OPEN ACHRETURN
+    END-MOCK
+    MOCK OPEN ACHRPT
+    END-MOCK
+    MOCK OPEN PARMFILE
+    END-MOCK
+    MOCK READ PARMFILE
+        MOVE "FILEID00000000000001" TO WS-PARM-FILE-ID
+        MOVE "I" TO WS-PARM-DIRECTION
+    END-MOCK
+    MOCK READ ACHFILE
+        MOVE "1" TO AED-RECORD-TYPE
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    EXPECT HV-FILE-ID TO BE "FILEID00000000000001"
+    VERIFY OPEN ACHFILE WAS CALLED ONCE
+    VERIFY OPEN ACHRETURN WAS CALLED ONCE
+    VERIFY OPEN ACHRPT WAS CALLED ONCE
+    VERIFY OPEN PARMFILE WAS CALLED ONCE
+    VERIFY READ PARMFILE WAS CALLED ONCE
+    VERIFY READ ACHFILE WAS CALLED ONCE
+
+*> Error path: ACHFILE fails to open. All four OPENs still fire (they're
+*> unconditional and precede the status check), but the program aborts
+*> with RETURN-CODE 16 before ever reading PARMFILE or ACHFILE -- proves
+*> the "IF NOT WS-ACH-OK ... STOP RUN" guard actually short-circuits.
+TESTCASE "1000-INITIALIZE aborts with RETURN-CODE 16 when ACHFILE fails to open"
+    MOCK OPEN ACHFILE
+        FILE-STATUS IS FILE-NOT-FOUND
+    END-MOCK
+    MOCK OPEN ACHRETURN
+    END-MOCK
+    MOCK OPEN ACHRPT
+    END-MOCK
+    MOCK OPEN PARMFILE
+    END-MOCK
+    MOCK READ PARMFILE
+    END-MOCK
+    MOCK READ ACHFILE
+    END-MOCK
+    PERFORM 1000-INITIALIZE
+    EXPECT RETURN-CODE TO BE 16
+    VERIFY OPEN ACHRETURN WAS CALLED ONCE
+    VERIFY OPEN ACHRPT WAS CALLED ONCE
+    VERIFY OPEN PARMFILE WAS CALLED ONCE
+    VERIFY READ PARMFILE WAS CALLED NEVER
+    VERIFY READ ACHFILE WAS CALLED NEVER
+
+*> ---------------------------------------------------------------------
+*> 2100-PROCESS-BATCH-HEADER: opens a new batch and inserts BANK.ACH_BATCH
+*> ---------------------------------------------------------------------
+
+*> Happy path: batch header fields copy into the DB2 host variables, the
+*> batch is marked active, and the INSERT succeeds.
+TESTCASE "2100-PROCESS-BATCH-HEADER opens a batch and inserts BANK.ACH_BATCH"
+    MOCK SQL "INSERT INTO BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOVE "1512345678" TO ABH-COMPANY-ID
+    MOVE "GLOBAL PAYROLL" TO ABH-COMPANY-NAME
+    MOVE "PPD" TO ABH-SEC-CODE
+    MOVE "200" TO ABH-SERVICE-CLASS
+    MOVE 1000042 TO ABH-BATCH-NUMBER
+    PERFORM 2100-PROCESS-BATCH-HEADER
+    EXPECT WS-BATCHES-READ TO BE 1
+    EXPECT WS-BATCH-ACTIVE TO BE "Y"
+    EXPECT WS-ERROR-COUNT TO BE 0
+    EXPECT HV-CO-ID TO BE "1512345678"
+    EXPECT HV-SEC-CODE TO BE "PPD"
+    VERIFY SQL "INSERT INTO BANK. ACH_BATCH" WAS CALLED ONCE
+
+*> Error path: the batch control INSERT fails at the database -- the
+*> program logs it and bumps WS-ERROR-COUNT but keeps going (no abort).
+TESTCASE "2100-PROCESS-BATCH-HEADER counts an error when the ACH_BATCH insert fails"
+    MOCK SQL "INSERT INTO BANK. ACH_BATCH"
+        MOVE -803 TO SQLCODE
+    END-MOCK
+    MOVE "1512345678" TO ABH-COMPANY-ID
+    MOVE "GLOBAL PAYROLL" TO ABH-COMPANY-NAME
+    MOVE "PPD" TO ABH-SEC-CODE
+    MOVE "200" TO ABH-SERVICE-CLASS
+    MOVE 1000042 TO ABH-BATCH-NUMBER
+    PERFORM 2100-PROCESS-BATCH-HEADER
+    EXPECT WS-BATCHES-READ TO BE 1
+    EXPECT WS-ERROR-COUNT TO BE 1
+    VERIFY SQL "INSERT INTO BANK. ACH_BATCH" WAS CALLED ONCE
+
+*> ---------------------------------------------------------------------
+*> 2200-PROCESS-ENTRY-DETAIL: the core per-entry decision tree -- routing
+*> validation via ACCTVAL, account lookup/status, NSF check, and posting.
+*> ---------------------------------------------------------------------
+
+*> Reject path: ACCTVAL (the assembler routing/check-digit validator)
+*> comes back invalid -- entry is returned R14 before any DB2 lookup or
+*> posting is ever attempted.
+TESTCASE "2200-PROCESS-ENTRY-DETAIL returns R14 when ACCTVAL rejects the routing number"
+    MOCK CALL "ACCTVAL"
+        MOVE "N" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE "27" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 500000 TO AED-AMOUNT
+    MOVE "071000139000001" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT WS-ENTRIES-READ TO BE 1
+    EXPECT WS-RETURN-CODE-WORK TO BE "R14"
+    EXPECT WS-ROUTING-ERRORS TO BE 1
+    EXPECT WS-ENTRIES-RETURNED TO BE 1
+    VERIFY CALL "ACCTVAL" WAS CALLED ONCE
+    VERIFY SQL "SELECT" WAS CALLED NEVER
+    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST" WAS CALLED NEVER
+    VERIFY WRITE RETURN-RECORD WAS CALLED ONCE
+
+*> Reject path: routing passes, but BANK.ACCOUNT has no matching row
+*> (SQLCODE +100, DB2's "not found") -- entry is returned R03.
+TESTCASE "2200-PROCESS-ENTRY-DETAIL returns R03 when the account is not on file"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE 100 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE "22" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 250000 TO AED-AMOUNT
+    MOVE "071000139000002" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT WS-RETURN-CODE-WORK TO BE "R03"
+    EXPECT WS-ACCT-ERRORS TO BE 1
+    EXPECT WS-ENTRIES-RETURNED TO BE 1
+    VERIFY SQL "SELECT" WAS CALLED ONCE
+    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST" WAS CALLED NEVER
+    VERIFY WRITE RETURN-RECORD WAS CALLED ONCE
+
+*> Error path (not a business rejection): the account lookup itself blows
+*> up with a real DB2 error -- WS-ERROR-COUNT is bumped and the entry is
+*> abandoned WITHOUT writing a return item (that only happens for the
+*> known R0x reject reasons).
+TESTCASE "2200-PROCESS-ENTRY-DETAIL logs an error and skips the entry on a DB2 lookup failure"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE "22" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 250000 TO AED-AMOUNT
+    MOVE "071000139000003" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT WS-ERROR-COUNT TO BE 1
+    EXPECT WS-ENTRIES-RETURNED TO BE 0
+    VERIFY SQL "SELECT" WAS CALLED ONCE
+    VERIFY WRITE RETURN-RECORD WAS CALLED NEVER
+
+*> Reject path: the account is found but closed (ACCT-STATUS = 'C') --
+*> entry is returned R02.
+TESTCASE "2200-PROCESS-ENTRY-DETAIL returns R02 when the account is closed"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "C" TO HV-ACCT-STATUS
+        MOVE 5000.00 TO HV-CURRENT-BALANCE
+        MOVE 5000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE "22" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 250000 TO AED-AMOUNT
+    MOVE "071000139000004" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT WS-RETURN-CODE-WORK TO BE "R02"
+    EXPECT WS-ACCT-ERRORS TO BE 1
+    EXPECT WS-ENTRIES-RETURNED TO BE 1
+    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST" WAS CALLED NEVER
+
+*> Reject path: a debit entry (transaction code 27) against an open
+*> account whose available balance is less than the entry amount --
+*> returned R01 (insufficient funds), never posted.
+TESTCASE "2200-PROCESS-ENTRY-DETAIL returns R01 NSF when a debit exceeds the available balance"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "O" TO HV-ACCT-STATUS
+        MOVE 25.00 TO HV-CURRENT-BALANCE
+        MOVE 25.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE "27" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 500000 TO AED-AMOUNT
+    MOVE "071000139000005" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT WS-RETURN-CODE-WORK TO BE "R01"
+    EXPECT WS-NSF-RETURNS TO BE 1
+    EXPECT WS-ENTRIES-RETURNED TO BE 1
+    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST" WAS CALLED NEVER
+    VERIFY WRITE RETURN-RECORD WAS CALLED ONCE
+
+*> Happy path: a debit entry with sufficient available balance posts --
+*> both balances are debited, TRAN-TYPE/TRAN-CODE are set for a debit,
+*> and no return item is written.
+TESTCASE "2200-PROCESS-ENTRY-DETAIL posts a debit entry with sufficient funds"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "O" TO HV-ACCT-STATUS
+        MOVE 10000.00 TO HV-CURRENT-BALANCE
+        MOVE 10000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE "27" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 500000 TO AED-AMOUNT
+    MOVE "071000139000006" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT HV-TRAN-TYPE TO BE "DR"
+    EXPECT HV-TRAN-CODE TO BE "ACHD"
+    EXPECT HV-CURRENT-BALANCE TO BE 5000.00
+    EXPECT HV-AVAILABLE-BALANCE TO BE 5000.00
+    EXPECT WS-ENTRIES-POSTED TO BE 1
+    EXPECT WS-COMMIT-COUNT TO BE 1
+    EXPECT WS-ENTRIES-RETURNED TO BE 0
+    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST" WAS CALLED ONCE
+    VERIFY SQL "UPDATE BANK. ACCOUNT" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+    VERIFY WRITE RETURN-RECORD WAS CALLED NEVER
+
+*> Happy path: a credit entry (transaction code 22) posts -- both
+*> balances are credited, TRAN-TYPE/TRAN-CODE are set for a credit. No
+*> NSF check applies to credits at all.
+TESTCASE "2200-PROCESS-ENTRY-DETAIL posts a credit entry"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "O" TO HV-ACCT-STATUS
+        MOVE 1000.00 TO HV-CURRENT-BALANCE
+        MOVE 1000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE "22" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 250000 TO AED-AMOUNT
+    MOVE "071000139000007" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT HV-TRAN-TYPE TO BE "CR"
+    EXPECT HV-TRAN-CODE TO BE "ACHC"
+    EXPECT HV-CURRENT-BALANCE TO BE 3500.00
+    EXPECT HV-AVAILABLE-BALANCE TO BE 3500.00
+    EXPECT WS-ENTRIES-POSTED TO BE 1
+    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST" WAS CALLED ONCE
+    VERIFY SQL "UPDATE BANK. ACCOUNT" WAS CALLED ONCE
+    VERIFY WRITE RETURN-RECORD WAS CALLED NEVER
+
+*> Error path: the TRANSACTION_HIST insert itself fails at the database --
+*> WS-ERROR-COUNT is bumped, the account UPDATE is never attempted, and
+*> nothing is counted as posted (even though the balance math already
+*> ran in working storage -- it's just never persisted).
+TESTCASE "2200-PROCESS-ENTRY-DETAIL logs an error when the TRANSACTION_HIST insert fails"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "O" TO HV-ACCT-STATUS
+        MOVE 1000.00 TO HV-CURRENT-BALANCE
+        MOVE 1000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE -803 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE "22" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 250000 TO AED-AMOUNT
+    MOVE "071000139000008" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT WS-ERROR-COUNT TO BE 1
+    EXPECT WS-ENTRIES-POSTED TO BE 0
+    VERIFY SQL "UPDATE BANK. ACCOUNT" WAS CALLED NEVER
+
+*> Edge case (real behavior, not a bug we're allowed to fix): the
+*> TRANSACTION_HIST insert succeeds but the follow-up ACCOUNT UPDATE
+*> fails -- the code has no ELSE for that inner IF, so the failure is
+*> silently swallowed: WS-ERROR-COUNT is NOT bumped, WS-ENTRIES-POSTED is
+*> NOT incremented, and the local working-storage balance already
+*> reflects the debit/credit even though it was never persisted.
+TESTCASE "2200-PROCESS-ENTRY-DETAIL silently does not count a post when the ACCOUNT update fails"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "O" TO HV-ACCT-STATUS
+        MOVE 2000.00 TO HV-CURRENT-BALANCE
+        MOVE 2000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE "22" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 100000 TO AED-AMOUNT
+    MOVE "071000139000009" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT WS-ERROR-COUNT TO BE 0
+    EXPECT WS-ENTRIES-POSTED TO BE 0
+    EXPECT WS-COMMIT-COUNT TO BE 0
+    EXPECT HV-CURRENT-BALANCE TO BE 3000.00
+    VERIFY SQL "UPDATE BANK. ACCOUNT" WAS CALLED ONCE
+    VERIFY SQL "COMMIT" WAS CALLED NEVER
+
+*> Batch commit threshold: once WS-COMMIT-COUNT reaches WS-COMMIT-FREQ
+*> (500) a successful post triggers an intermediate EXEC SQL COMMIT and
+*> resets the counter, instead of waiting for end-of-run.
+TESTCASE "2200-PROCESS-ENTRY-DETAIL commits and resets the counter at the commit-frequency threshold"
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "O" TO HV-ACCT-STATUS
+        MOVE 1000.00 TO HV-CURRENT-BALANCE
+        MOVE 1000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOVE 499 TO WS-COMMIT-COUNT
+    MOVE "22" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 100000 TO AED-AMOUNT
+    MOVE "071000139000010" TO AED-TRACE-NUMBER
+    PERFORM 2200-PROCESS-ENTRY-DETAIL THRU 2200-EXIT
+    EXPECT WS-ENTRIES-POSTED TO BE 1
+    EXPECT WS-COMMIT-COUNT TO BE 0
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+
+*> ---------------------------------------------------------------------
+*> 2300-VERIFY-BATCH-CONTROL: closes out a batch (type 8 control record)
+*> ---------------------------------------------------------------------
+
+TESTCASE "2300-VERIFY-BATCH-CONTROL closes the batch and updates BANK.ACH_BATCH"
+    MOCK SQL "UPDATE BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOVE "Y" TO WS-BATCH-ACTIVE
+    MOVE "FILEID00000000000001" TO HV-FILE-ID
+    MOVE 1000042 TO HV-BATCH-NUM
+    PERFORM 2300-VERIFY-BATCH-CONTROL
+    EXPECT WS-BATCH-ACTIVE TO BE "N"
+    VERIFY SQL "UPDATE BANK. ACH_BATCH" WAS CALLED ONCE
+
+*> ---------------------------------------------------------------------
+*> 2000-PROCESS-ACH-FILE: the EVALUATE dispatch on AED-RECORD-TYPE (which
+*> is byte 0 of the ACHFILE record, shared with every other record type's
+*> own -RECORD-TYPE field). Skip record types must not touch any DB2/CALL
+*> boundary at all; the real dispatch to entry processing must actually
+*> post through the ACCTVAL/SQL chain.
+*> ---------------------------------------------------------------------
+
+*> File header (type 1) is validated upstream by ACHPARSE -- ACHPROC
+*> itself just skips it. No batch/entry/control boundary should fire.
+*> Every boundary any EVALUATE arm could reach must be mocked regardless
+*> of which record type this particular case drives (static, not
+*> runtime, reachability) -- these three VERIFY NEVER blocks are what
+*> actually prove the skip arms short-circuit instead of merely being
+*> statically reachable.
+TESTCASE "2000-PROCESS-ACH-FILE skips a file header (type 1) record untouched"
+    MOCK SQL "INSERT INTO BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK READ ACHFILE
+    END-MOCK
+    MOVE "1" TO AED-RECORD-TYPE
+    PERFORM 2000-PROCESS-ACH-FILE
+    EXPECT WS-RECORD-COUNT TO BE 1
+    EXPECT WS-BATCHES-READ TO BE 0
+    EXPECT WS-ENTRIES-READ TO BE 0
+    VERIFY READ ACHFILE WAS CALLED ONCE
+    VERIFY SQL "INSERT INTO BANK. ACH_BATCH" WAS CALLED NEVER
+    VERIFY CALL "ACCTVAL" WAS CALLED NEVER
+    VERIFY SQL "UPDATE BANK. ACH_BATCH" WAS CALLED NEVER
+
+*> File control (type 9) is likewise skipped by ACHPROC.
+TESTCASE "2000-PROCESS-ACH-FILE skips a file control (type 9) record untouched"
+    MOCK SQL "INSERT INTO BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK READ ACHFILE
+    END-MOCK
+    MOVE "9" TO AED-RECORD-TYPE
+    PERFORM 2000-PROCESS-ACH-FILE
+    EXPECT WS-RECORD-COUNT TO BE 1
+    EXPECT WS-BATCHES-READ TO BE 0
+    EXPECT WS-ENTRIES-READ TO BE 0
+    VERIFY READ ACHFILE WAS CALLED ONCE
+    VERIFY SQL "UPDATE BANK. ACH_BATCH" WAS CALLED NEVER
+
+*> Anything else (blocking/padding records) falls into WHEN OTHER and is
+*> skipped the same way.
+TESTCASE "2000-PROCESS-ACH-FILE skips an unrecognized/padding record type"
+    MOCK SQL "INSERT INTO BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK READ ACHFILE
+    END-MOCK
+    MOVE "P" TO AED-RECORD-TYPE
+    PERFORM 2000-PROCESS-ACH-FILE
+    EXPECT WS-RECORD-COUNT TO BE 1
+    EXPECT WS-BATCHES-READ TO BE 0
+    EXPECT WS-ENTRIES-READ TO BE 0
+    VERIFY READ ACHFILE WAS CALLED ONCE
+    VERIFY SQL "UPDATE BANK. ACH_BATCH" WAS CALLED NEVER
+
+*> Wiring sanity check: an entry detail (type 6) record dispatches through
+*> to 2200-PROCESS-ENTRY-DETAIL for real, posts a credit, and -- crucially
+*> -- control correctly falls back out through 2200-EXIT and returns to
+*> 2000-PROCESS-ACH-FILE's own trailing PERFORM 1100-READ-ACH-RECORD
+*> (proving the GO TO 2200-EXIT early-exit idiom used throughout 2200
+*> doesn't run away past its intended boundary).
+TESTCASE "2000-PROCESS-ACH-FILE dispatches a type 6 record to entry processing and returns cleanly"
+    MOCK SQL "INSERT INTO BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK CALL "ACCTVAL"
+        MOVE "V" TO WS-AV-RESULT-CODE
+    END-MOCK
+    MOCK SQL "SELECT"
+        MOVE "O" TO HV-ACCT-STATUS
+        MOVE 1000.00 TO HV-CURRENT-BALANCE
+        MOVE 1000.00 TO HV-AVAILABLE-BALANCE
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "INSERT INTO BANK. TRANSACTION_HIST"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACH_BATCH"
+        MOVE 0 TO SQLCODE
+    END-MOCK
+    MOCK WRITE RETURN-RECORD
+    END-MOCK
+    MOCK READ ACHFILE
+    END-MOCK
+    MOVE "6" TO AED-RECORD-TYPE
+    MOVE "22" TO AED-TRANSACTION-CODE
+    MOVE "07100013" TO AED-RDFI-ID
+    MOVE "9" TO AED-CHECK-DIGIT
+    MOVE "12345678901234567" TO AED-DFI-ACCT-NUMBER
+    MOVE 250000 TO AED-AMOUNT
+    MOVE "071000139000011" TO AED-TRACE-NUMBER
+    PERFORM 2000-PROCESS-ACH-FILE
+    EXPECT WS-ENTRIES-READ TO BE 1
+    EXPECT WS-ENTRIES-POSTED TO BE 1
+    VERIFY CALL "ACCTVAL" WAS CALLED ONCE
+    VERIFY READ ACHFILE WAS CALLED ONCE
+
+*> ---------------------------------------------------------------------
+*> 3000-FINALIZE: end-of-run commit, closes all four files, and derives
+*> the program's final RETURN-CODE from the run's error/return tallies.
+*> ---------------------------------------------------------------------
+
+*> Clean run: no errors and no returned entries -> RETURN-CODE 0.
+*> A run that logged errors and/or generated ACH returns must surface
+*> RETURN-CODE 4 to the job scheduler so downstream steps can react.
+*> (Deliberately NOT the last TESTCASE in this file: RETURN-CODE is
+*> COBOL's real special register, mapped straight to the OS process exit
+*> code at the suite's own closing STOP RUN, and it is never reset
+*> between cases -- whichever case runs last determines the whole test
+*> binary's exit status. The "returns 0" case below runs last on
+*> purpose so a clean suite run also exits the container process 0.)
+TESTCASE "3000-FINALIZE returns 4 when the run logged errors or returns"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE ACHFILE
+    END-MOCK
+    MOCK CLOSE ACHRETURN
+    END-MOCK
+    MOCK CLOSE ACHRPT
+    END-MOCK
+    MOCK CLOSE PARMFILE
+    END-MOCK
+    MOVE 1 TO WS-ENTRIES-RETURNED
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 4
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+
+TESTCASE "3000-FINALIZE returns 0 on a clean run with no errors or returns"
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK CLOSE ACHFILE
+    END-MOCK
+    MOCK CLOSE ACHRETURN
+    END-MOCK
+    MOCK CLOSE ACHRPT
+    END-MOCK
+    MOCK CLOSE PARMFILE
+    END-MOCK
+    PERFORM 3000-FINALIZE
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY SQL "COMMIT" WAS CALLED ONCE
+    VERIFY CLOSE ACHFILE WAS CALLED ONCE
+    VERIFY CLOSE ACHRETURN WAS CALLED ONCE
+    VERIFY CLOSE ACHRPT WAS CALLED ONCE
+    VERIFY CLOSE PARMFILE WAS CALLED ONCE

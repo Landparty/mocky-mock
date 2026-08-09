@@ -47,7 +47,7 @@
            05  ACH-R08-DESC              PIC X(30)
                VALUE 'PAYMENT STOPPED               '.
            05  ACH-R10                   PIC X(03) VALUE 'R10'.
-           05  ACH-R10-DESC              PIC X(30)
+           05  ACH-R10-DESC              PIC X(31)
                VALUE 'CUSTOMER ADVISES NOT AUTHORIZED'.
            05  ACH-R29                   PIC X(03) VALUE 'R29'.
            05  ACH-R29-DESC              PIC X(30)
