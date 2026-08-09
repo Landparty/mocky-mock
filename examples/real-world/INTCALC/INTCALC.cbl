@@ -203,7 +203,7 @@
            EVALUATE SQLCODE
                WHEN 0
                    ADD 1 TO WS-ACCTS-PROCESSED
-                   PERFORM 2200-CALCULATE-INTEREST
+                   PERFORM 2200-CALCULATE-INTEREST THRU 2200-EXIT
                WHEN +100
                    CONTINUE
                WHEN OTHER

@@ -66,28 +66,14 @@ TESTCASE "full run reconciles two GL accounts in balance"
     *> opening credit balances were chosen 300.00 above their opening
     *> debit balances so the reconciliation itself lands exactly in
     *> balance (WS-OUT-OF-BALANCE / totals / diff below).
-    *>
-    *> WS-GL-ERRORS is 1, not 0, and RETURN-CODE is therefore 4, not 0
-    *> -- verified via `mockymock run --trace`, not a GLRECON business
-    *> rule. Splicing MOCK WRITE GLRPT-RECORD over the WRITE statement
-    *> at the end of 3100-FETCH-GL-ACCOUNT's "WHEN 0" clause (line 301,
-    *> immediately followed by "WHEN +100" with no period between --
-    *> valid COBOL) also swallows that "WHEN +100" clause header, so
-    *> the compiled EVALUATE has no +100 branch left: SQLCODE=100 at
-    *> cursor exhaustion falls through to "WHEN OTHER" and spuriously
-    *> ADDs 1 TO WS-GL-ERRORS every time GL_BAL_CUR is drained to EOF
-    *> in this suite. This is a mockymock splicer span-boundary defect
-    *> (out of scope for this .cut per this task's constraints), not a
-    *> defect in GLRECON.cbl -- the underlying business computation
-    *> (WS-OUT-OF-BALANCE, the totals, the diff) is unaffected.
     EXPECT WS-TRAN-TYPES-PROC TO BE 2
     EXPECT WS-GL-ACCTS-PROC TO BE 2
-    EXPECT WS-GL-ERRORS TO BE 1
+    EXPECT WS-GL-ERRORS TO BE 0
     EXPECT WS-OUT-OF-BALANCE TO BE "N"
     EXPECT WS-TOTAL-ALL-DEBITS TO BE 3600.00
     EXPECT WS-TOTAL-ALL-CREDITS TO BE 3600.00
     EXPECT WS-BALANCE-DIFF TO BE 0
-    EXPECT RETURN-CODE TO BE 4
+    EXPECT RETURN-CODE TO BE 0
     VERIFY SQL "OPEN GL_AGG_CUR" WAS CALLED ONCE
     VERIFY SQL "FETCH GL_AGG_CUR" WAS CALLED 3 TIMES
     VERIFY SQL "CLOSE GL_AGG_CUR" WAS CALLED ONCE
@@ -146,19 +132,14 @@ TESTCASE "full run detects an out-of-balance GL and writes the exception report"
     *> 750.00 posted debits against a 100.00 opening debit/credit gap
     *> (never offset, since GL_AGG_CUR's SUM(AMOUNT) only ever reaches
     *> HV-TOTAL-DEBITS) pushes total debits 850.00 above total credits.
-    *>
-    *> WS-GL-ERRORS is 2 here: 1 from the real out-of-balance branch in
-    *> 4000-VERIFY-BALANCE, plus 1 spurious count from the same
-    *> mockymock WRITE-splice defect documented in the in-balance case
-    *> above (GL_BAL_CUR's exhaustion always adds one, independent of
-    *> the reconciliation outcome). RETURN-CODE is unaffected -- 8 for
-    *> out-of-balance already wins regardless of the error count.
+    *> WS-GL-ERRORS is 1: the real out-of-balance branch in
+    *> 4000-VERIFY-BALANCE.
     EXPECT WS-GL-ACCTS-PROC TO BE 1
     EXPECT WS-OUT-OF-BALANCE TO BE "Y"
     EXPECT WS-TOTAL-ALL-DEBITS TO BE 950.00
     EXPECT WS-TOTAL-ALL-CREDITS TO BE 100.00
     EXPECT WS-BALANCE-DIFF TO BE 850.00
-    EXPECT WS-GL-ERRORS TO BE 2
+    EXPECT WS-GL-ERRORS TO BE 1
     EXPECT RETURN-CODE TO BE 8
     VERIFY WRITE GLRPT-RECORD WAS CALLED 3 TIMES
     VERIFY WRITE GLEXCPT-RECORD WAS CALLED 2 TIMES
@@ -244,17 +225,10 @@ TESTCASE "3100-FETCH-GL-ACCOUNT does nothing at end of cursor"
     MOCK WRITE GLRPT-RECORD
     END-MOCK
     PERFORM 3100-FETCH-GL-ACCOUNT
-    *> No balance update and no GLRPT line -- the business-meaningful
-    *> assertions for this branch. WS-GL-ERRORS TO BE 1 is the same
-    *> mockymock WRITE-splice defect documented on the full-run
-    *> in-balance case above (confirmed via --trace): with a MOCK
-    *> WRITE GLRPT-RECORD present anywhere in this suite, splicing it
-    *> swallows the source's "WHEN +100" clause header in this
-    *> paragraph's EVALUATE, so SQLCODE=100 falls through to
-    *> "WHEN OTHER" and adds 1 TO WS-GL-ERRORS instead of hitting the
-    *> real CONTINUE no-op -- not a GLRECON.cbl business rule.
+    *> End-of-cursor is a real no-op (WHEN +100 / CONTINUE): no balance
+    *> update, no GLRPT line, and no error counted.
     EXPECT WS-GL-ACCTS-PROC TO BE 0
-    EXPECT WS-GL-ERRORS TO BE 1
+    EXPECT WS-GL-ERRORS TO BE 0
     EXPECT WS-TOTAL-ALL-DEBITS TO BE 0
     EXPECT WS-TOTAL-ALL-CREDITS TO BE 0
     VERIFY SQL "UPDATE" WAS CALLED NEVER

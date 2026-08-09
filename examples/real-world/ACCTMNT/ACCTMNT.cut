@@ -10,40 +10,36 @@ TESTSUITE "ACCTMNT"
 *>
 *> NOTE ON TEST GRANULARITY: these cases PERFORM the individual 1000/
 *> 2000/2100/2200/2300/3000 paragraphs directly instead of driving the
-*> whole run through 0000-MAIN-PROCESS, for two independent reasons that
-*> both trace back to the same root cause -- 2200-PROCESS-FEE-POSTING's
-*> "GO TO 2290-FEE-DONE" error exit, and 2290-FEE-DONE having no
-*> unconditional exit of its own:
-*>   1. mockymock's terminator-safety analysis correctly refuses to
-*>      instrument either STOP RUN site (1000-INITIALIZE's file-open
-*>      guard, 0000-MAIN-PROCESS's normal exit) once 3000-FINALIZE shows
-*>      up both as a legitimate PERFORM target from 0000-MAIN-PROCESS
-*>      *and* inside that GO TO's fall-through hazard zone.
-*>   2. Confirmed empirically (see the comment on the dropped cursor-open-
-*>      failure case below, in the 2200-PROCESS-FEE-POSTING block): taking
-*>      that GO TO for real, even in a paragraph-scoped test, cascades
-*>      through every paragraph physically below 2290-FEE-DONE (2210,
-*>      2220, 2230, 2300, 3000-FINALIZE) and off the physical end of the
-*>      PROCEDURE DIVISION, ending the whole test binary early.
-*> Testing each paragraph directly (matching mockymock's own DEPTMQP/
-*> CTRRPT reference examples) sidesteps both and gives finer-grained,
-*> more business-meaningful assertions besides.
+*> whole run through 0000-MAIN-PROCESS. That's a deliberate style choice
+*> (matching mockymock's own DEPTMQP/CTRRPT reference examples) for
+*> finer-grained, more business-meaningful assertions -- it is no longer
+*> a workaround for anything: 2200-PROCESS-FEE-POSTING's cursor-open-
+*> failure path used to GO TO 2290-FEE-DONE without ever being PERFORMed
+*> THRU it, so taking that branch fell through every paragraph physically
+*> below 2290-FEE-DONE and off the end of the PROCEDURE DIVISION. Fixed
+*> upstream by adding THRU 2290-FEE-DONE to the PERFORM in
+*> 2000-PROCESS-PARM-CARDS; see the cursor-open-failure case in the
+*> 2200-PROCESS-FEE-POSTING block below, which now exercises that branch
+*> directly and safely.
 
-*> BUG (real, not a test artifact): neither SELECT clause in the
-*> ENVIRONMENT DIVISION carries a FILE STATUS IS clause, so WS-FILE-STATUS
-*> is never actually populated by the real OPEN statements -- the
-*> "IF NOT WS-FILE-OK" guard right after both OPENs is evaluating a field
-*> that OPEN never touches. Its value is whatever WS-FILE-STATUS defaults
-*> to (it has no VALUE clause), which is never '00'. This test proves the
-*> production consequence: the batch job aborts with RETURN-CODE 16 on
-*> every run, even when both files open cleanly, and never processes a
-*> single parameter card. Left unfixed per this task's scope (not a
-*> syntax bug, and fixing it would be a business-logic change to the
-*> .cbl) -- flagged prominently in the task report instead.
-TESTCASE "1000-INITIALIZE aborts with RETURN-CODE 16 even though both files open cleanly"
+*> FIXED BUG: neither SELECT clause in the ENVIRONMENT DIVISION used to
+*> carry a FILE STATUS IS clause, so WS-FILE-STATUS was never actually
+*> populated by the real OPEN statements -- the "IF NOT WS-FILE-OK" guard
+*> right after both OPENs was evaluating a field OPEN never touched, so
+*> the batch job aborted with RETURN-CODE 16 on every run even when both
+*> files opened cleanly. Fixed upstream by adding
+*> FILE STATUS IS WS-FILE-STATUS to both SELECT clauses. This case now
+*> proves the guard does the right thing on a genuine OPEN failure. Both
+*> SELECTs share the one WS-FILE-STATUS field (WSCOMMON's common idiom
+*> in this corpus), so whichever OPEN runs *last* is the status the
+*> guard actually sees -- the failure has to land on ACCTMRPT (the
+*> second OPEN) for this case to exercise the guard at all.
+TESTCASE "1000-INITIALIZE aborts with RETURN-CODE 16 when a file genuinely fails to open"
     MOCK OPEN PARMFILE
+        MOVE "00" TO WS-FILE-STATUS
     END-MOCK
     MOCK OPEN ACCTMRPT
+        MOVE "35" TO WS-FILE-STATUS
     END-MOCK
     MOCK WRITE RPT-RECORD
     END-MOCK
@@ -57,12 +53,10 @@ TESTCASE "1000-INITIALIZE aborts with RETURN-CODE 16 even though both files open
     VERIFY WRITE RPT-RECORD WAS CALLED NEVER
     VERIFY READ PARMFILE WAS CALLED NEVER
 
-*> The same paragraph's OTHER responsibilities (business-date build,
-*> report header, priming read) *would* work correctly if the FILE STATUS
-*> bug above were fixed -- this case forces WS-FILE-STATUS to '00' inside
-*> the OPEN mocks (something the real, unmocked OPEN never does) purely to
-*> reach and prove that downstream logic; it does not claim this happens
-*> in production today.
+*> Now that FILE STATUS IS WS-FILE-STATUS is wired up, a mocked OPEN
+*> moving "00" (simulating a real successful open) correctly clears the
+*> guard and lets the rest of the paragraph run -- this is what actually
+*> happens in production today, not a workaround.
 TESTCASE "1000-INITIALIZE writes the report header and primes the first read once past the guard"
     MOCK OPEN PARMFILE
         MOVE "00" TO WS-FILE-STATUS
@@ -305,29 +299,39 @@ TESTCASE "2200-PROCESS-FEE-POSTING counts a fetch error and stops the loop"
     VERIFY SQL "INSERT" WAS CALLED NEVER
     VERIFY SQL "CLOSE" WAS CALLED NEVER
 
-*> BUG (real, not a test artifact), and NOT independently testable here:
-*> when the cursor OPEN fails, 2200-PROCESS-FEE-POSTING does
-*> "GO TO 2290-FEE-DONE" to close the cursor -- but 2290-FEE-DONE has no
-*> unconditional exit of its own (no PERFORM-bounded return, since GO TO
-*> was used instead of a guarded IF), so control genuinely falls through
-*> the *rest of the source file* in physical order: 2210-FETCH-AND-ASSESS-
-*> FEE (an unplanned extra FETCH), 2220/2230 (an unplanned, unconditional
-*> extra fee-INSERT/balance-UPDATE attempt regardless of any balance
-*> check), 2300-PROCESS-DORMANCY-CHECK (an unplanned dormancy mass
-*> UPDATE), and finally 3000-FINALIZE (an unplanned early COMMIT/CLOSE) --
-*> at which point control runs off the physical end of the PROCEDURE
-*> DIVISION and the program silently terminates. This was confirmed by
-*> actually driving this scenario: even with every downstream boundary
-*> mocked, the run ends the moment 3000-FINALIZE's fall-off-the-end
-*> implicit STOP RUN is reached -- there is no COBOL statement there for
-*> mockymock's terminator-safety analysis to see and neutralize, so this
-*> one case alone silently truncated every following TESTCASE in the
-*> whole suite. A single cursor-open failure during a real FEES run would
-*> just as silently skip the rest of that run's processing in production.
-*> Left unfixed per this task's scope (not a syntax bug) and, unlike the
-*> two paragraphs above, this exact branch cannot be exercised through
-*> mockymock in isolation at all without reproducing the same crash --
-*> flagged prominently in the task report instead.
+*> FIXED BUG: when the cursor OPEN fails, 2200-PROCESS-FEE-POSTING does
+*> "GO TO 2290-FEE-DONE" to close the cursor. 2290-FEE-DONE is a separate
+*> paragraph, and the call site in 2000-PROCESS-PARM-CARDS used to
+*> PERFORM 2200-PROCESS-FEE-POSTING bare (no THRU), so taking this GO TO
+*> for real fell through the rest of the source file in physical order
+*> and off the end of the PROCEDURE DIVISION, silently ending the whole
+*> program. Fixed upstream by adding THRU 2290-FEE-DONE to that PERFORM.
+*> This TESTCASE mirrors that fix locally (PERFORM ... THRU 2290-FEE-DONE)
+*> so the branch can be driven safely and directly: the cursor never gets
+*> fetched from, but it does still get closed via 2290-FEE-DONE.
+TESTCASE "2200-PROCESS-FEE-POSTING counts an error and closes the cursor when OPEN fails"
+    MOCK SQL "OPEN"
+        MOVE -911 TO SQLCODE
+    END-MOCK
+    MOCK SQL "FETCH"
+    END-MOCK
+    MOCK SQL "INSERT"
+    END-MOCK
+    MOCK SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE"
+    END-MOCK
+    MOCK SQL "COMMIT"
+    END-MOCK
+    MOCK SQL "CLOSE"
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    PERFORM 2200-PROCESS-FEE-POSTING THRU 2290-FEE-DONE
+    EXPECT WS-ERRORS TO BE 1
+    EXPECT WS-ACCTS-READ TO BE 0
+    EXPECT WS-FEES-POSTED TO BE 0
+    VERIFY SQL "FETCH" WAS CALLED NEVER
+    VERIFY SQL "INSERT" WAS CALLED NEVER
+    VERIFY SQL "CLOSE" WAS CALLED ONCE
 
 *> 2300-PROCESS-DORMANCY-CHECK happy path: DB2 accepts the mass UPDATE
 *> flagging every stale CHK/SAV/MMA account dormant; SQLERRD(3) accumulates

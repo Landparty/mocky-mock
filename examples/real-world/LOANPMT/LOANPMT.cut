@@ -12,18 +12,16 @@ TESTSUITE "LOANPMT"
 *> FETCH "OTHER" fatal-error halt, an empty due-today day, and a
 *> failed UPDATE that rolls back but still counts as a loan error.
 *>
-*> They also pin a real ordering bug found while reading the source:
-*> 2300-APPLY-PAYMENT unconditionally resets HV-DAYS-PAST-DUE to
-*> ZERO *before* 2400-CHECK-LATE-FEE ever checks
-*> "HV-DAYS-PAST-DUE > 15" -- so in an actual run the late-fee branch
-*> can never fire, no matter how delinquent the loan was at FETCH
-*> time. 2400-CHECK-LATE-FEE's own logic is correct in isolation
-*> (see the two isolated cases below), so two complementary things
-*> are asserted: the paragraph's own branch logic works when entered
-*> directly, and the full loan loop never actually reaches it because
-*> of the reset-before-check ordering. Not fixed here -- it's a
-*> business-logic defect, not the compile-blocking syntax bug this
-*> task is scoped to repair.
+*> FIXED BUG found while reading the source: 2300-APPLY-PAYMENT used to
+*> unconditionally reset HV-DAYS-PAST-DUE to ZERO *before*
+*> 2400-CHECK-LATE-FEE ever checked "HV-DAYS-PAST-DUE > 15" -- so in an
+*> actual run the late-fee branch could never fire, no matter how
+*> delinquent the loan was at FETCH time. Fixed upstream (both this copy
+*> and the legacy-application canonical copy) by moving that reset to
+*> the end of 2400-CHECK-LATE-FEE, after the fee check runs -- a payment
+*> still always brings the loan current, just after the fee decision
+*> instead of before it. The full-loop integration case below and the
+*> two isolated 2400-CHECK-LATE-FEE cases now agree.
 
 *> 1000-INITIALIZE: if LOAN_CURSOR fails to open, the program must
 *> abort immediately with RETURN-CODE 16 and never reach the fetch
@@ -116,16 +114,17 @@ TESTCASE "2000-PROCESS-LOANS: a regular on-time payment splits principal and int
     VERIFY SQL "COMMIT" WAS CALLED ONCE
     VERIFY WRITE RPT-RECORD WAS CALLED 2 TIMES
 
-*> Bug-pinning integration case: the loan is 20 days past due (well
-*> over the 15-day threshold) and has not yet had a fee assessed --
-*> by the source comment's own intent this should charge a $25 late
-*> fee -- but 2300-APPLY-PAYMENT's unconditional
-*> "MOVE ZERO TO HV-DAYS-PAST-DUE" runs first and wipes out the value
-*> 2400-CHECK-LATE-FEE is about to test, so the fee never posts. This
-*> pins the real, current behavior of the full loop (see the two
-*> isolated 2400-CHECK-LATE-FEE cases below for proof the paragraph's
-*> own AND condition is otherwise correct).
-TESTCASE "2000-PROCESS-LOANS: a past-due loan's late fee never posts because 2300-APPLY-PAYMENT resets DAYS-PAST-DUE first"
+*> FIXED BUG: the loan is 20 days past due (well over the 15-day
+*> threshold) and has not yet had a fee assessed. 2300-APPLY-PAYMENT
+*> used to unconditionally "MOVE ZERO TO HV-DAYS-PAST-DUE" *before*
+*> 2400-CHECK-LATE-FEE ever got to test it, so the fee could never post
+*> regardless of how delinquent the loan was. Fixed upstream (both this
+*> copy and the legacy-application canonical copy) by moving that reset
+*> to the end of 2400-CHECK-LATE-FEE, after the fee check runs. This
+*> full-loop integration case now proves the fee actually posts (see the
+*> two isolated 2400-CHECK-LATE-FEE cases below for proof the paragraph's
+*> own AND condition was always correct in isolation).
+TESTCASE "2000-PROCESS-LOANS: a past-due loan is assessed a $25 late fee"
     MOCK OPEN PMTFILE
     END-MOCK
     MOCK OPEN LOANRPT
@@ -171,11 +170,11 @@ TESTCASE "2000-PROCESS-LOANS: a past-due loan's late fee never posts because 230
     MOCK CLOSE LOANRPT
     END-MOCK
     PERFORM 0000-MAIN-PROCESS
-    EXPECT HV-CURRENT-BALANCE TO BE 94275.00
-    EXPECT HV-LATE-FEE-ASSESSED TO BE "N"
-    EXPECT WS-LATE-FEES TO BE 0
+    EXPECT HV-CURRENT-BALANCE TO BE 94300.00
+    EXPECT HV-LATE-FEE-ASSESSED TO BE "Y"
+    EXPECT WS-LATE-FEES TO BE 1
     EXPECT WS-LOAN-ERRORS TO BE 0
-    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST ( TRAN_ID, ACCT_NUMBER, TRAN_TYPE, TRAN_CODE, AMOUNT, EFFECTIVE_DATE, POST_DATE, DESCRIPTION, CHANNEL, TRAN_STATUS ) VALUES (:HV-TRAN-ID,:HV-ACCT-NUMBER, DR, FEE" WAS CALLED NEVER
+    VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST ( TRAN_ID, ACCT_NUMBER, TRAN_TYPE, TRAN_CODE, AMOUNT, EFFECTIVE_DATE, POST_DATE, DESCRIPTION, CHANNEL, TRAN_STATUS ) VALUES (:HV-TRAN-ID,:HV-ACCT-NUMBER, DR, FEE" WAS CALLED ONCE
     VERIFY SQL "INSERT INTO BANK. TRANSACTION_HIST ( TRAN_ID, ACCT_NUMBER, TRAN_TYPE, TRAN_CODE, AMOUNT, EFFECTIVE_DATE, POST_DATE, DESCRIPTION, CHANNEL, TRAN_STATUS ) VALUES (:HV-TRAN-ID,:HV-ACCT-NUMBER, DR, LPM" WAS CALLED ONCE
 
 *> Isolated proof that 2400-CHECK-LATE-FEE's own AND condition is
