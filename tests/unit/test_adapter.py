@@ -292,6 +292,63 @@ def test_disconnect_closes_the_gdb_session():
     assert session.gdb.closed is True
 
 
+def test_second_launch_closes_the_first_session_and_resets_breakpoints():
+    """Audit finding F16: a second `launch` used to unconditionally
+    overwrite self._session without closing the first GdbSession --
+    leaking its docker exec/gdb subprocess -- and left
+    self._breakpoint_numbers stale, pointing at IDs from the now-orphaned
+    session."""
+    requests = [
+        _request(1, "launch", {}),
+        _request(
+            2,
+            "setBreakpoints",
+            {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 14}]},
+        ),
+        _request(3, "launch", {}),
+        _request(
+            4,
+            "setBreakpoints",
+            {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 20}]},
+        ),
+    ]
+    input_stream = io.BytesIO(b"".join(_frame(r) for r in requests))
+    output_stream = io.BytesIO()
+    sessions = []
+
+    def _launch(arguments):
+        session = _fake_launch_session(arguments)
+        sessions.append(session)
+        return session
+
+    adapter = DapAdapter(input_stream, output_stream, _launch)
+    adapter.run()
+    messages = _drain(output_stream)
+
+    assert len(sessions) == 2
+    assert sessions[0].gdb.closed is True
+    # The second session's setBreakpoints must not try to delete a
+    # breakpoint number left over from the first (now-closed) session.
+    assert sessions[1].gdb.deleted == []
+    assert list(sessions[1].gdb.breakpoints.values()) == [("fixture.cbl", 20)]
+    assert all(m["success"] for m in messages)
+
+
+def test_malformed_content_length_header_shuts_down_cleanly():
+    """Audit finding F17: a garbled Content-Length must not raise an
+    unhandled ValueError straight out of run()'s top-level loop and kill
+    the adapter process -- every other framing problem (EOF, an
+    unsupported command) degrades gracefully; this must too."""
+    input_stream = io.BytesIO(b"Content-Length: not-a-number\r\n\r\n")
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+
+    adapter.run()  # must not raise
+
+    messages = _drain(output_stream)
+    assert any(m.get("event") == "output" for m in messages)
+
+
 def test_unsupported_command_gets_a_clean_failure_response():
     messages = _run_adapter([_request(1, "notARealDapCommand", {})])
     assert messages[0]["success"] is False

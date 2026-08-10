@@ -55,9 +55,18 @@ class DebugSession:
 LaunchSession = Callable[..., DebugSession]
 
 
+class DapFramingError(RuntimeError):
+    """The `Content-Length` framing itself was unparseable. Unlike a
+    request-handler exception, there is no request to fail and no way to
+    know how many bytes the corrupted message's body would have been --
+    the stream is unrecoverable, so this always means the adapter shuts
+    down, never a per-request failure to report."""
+
+
 def read_dap_message(stream: IO[bytes]) -> dict | None:
     """Reads one `Content-Length`-framed DAP JSON message. Returns None at
-    EOF (the client closed its side, e.g. VS Code exiting)."""
+    EOF (the client closed its side, e.g. VS Code exiting). Raises
+    DapFramingError if the Content-Length header cannot be parsed."""
     headers: dict[str, str] = {}
     while True:
         raw_line = stream.readline()
@@ -68,7 +77,13 @@ def read_dap_message(stream: IO[bytes]) -> dict | None:
             break
         name, _, value = line.partition(":")
         headers[name.strip().lower()] = value.strip()
-    length = int(headers.get("content-length", "0"))
+    raw_length = headers.get("content-length", "0")
+    try:
+        length = int(raw_length)
+    except ValueError as exc:
+        raise DapFramingError(
+            f"malformed Content-Length header: {raw_length!r}"
+        ) from exc
     body = stream.read(length)
     return json.loads(body.decode("utf-8"))
 
@@ -112,7 +127,18 @@ class DapAdapter:
         """The adapter's main loop: read requests until the client
         disconnects or its stdin closes, dispatching each to a handler."""
         while not self._done:
-            message = read_dap_message(self._input)
+            try:
+                message = read_dap_message(self._input)
+            except DapFramingError as exc:
+                # Fail closed, not crash: a corrupted Content-Length
+                # header leaves no way to know where the next message
+                # starts, so the stream is unrecoverable -- shut down the
+                # same way an EOF does, instead of letting the exception
+                # propagate out of the loop and kill the process
+                # (audit finding F17).
+                self._on_output(f"mockymock debug: {exc}")
+                self._shutdown()
+                return
             if message is None:
                 self._shutdown()
                 return
@@ -192,6 +218,14 @@ class DapAdapter:
 
     def _handle_launch(self, request: dict) -> None:
         arguments = request.get("arguments", {})
+        if self._session is not None:
+            # A second `launch` must not leak the first session's gdb
+            # subprocess (the same PIDS_LIMIT risk as a hung debuggee),
+            # nor leave breakpoint numbers pointing at the now-orphaned
+            # session's gdb (audit finding F16).
+            self._session.gdb.close()
+            self._session = None
+            self._breakpoint_numbers = {}
         try:
             self._session = self._launch_session(arguments)
         except (

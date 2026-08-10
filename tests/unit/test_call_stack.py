@@ -157,6 +157,55 @@ def test_synthesize_stack_matches_the_verified_spike_scenario():
     assert stack[1].original_line == 15
 
 
+def test_synthesize_stack_skips_an_unresolvable_frame_without_failing_the_rest():
+    """Audit finding F14: one bad frame (a GdbCommandError resolving a
+    corrupted slot or unresolvable address) must not fail the whole
+    stackTrace request -- frame 0 and every other resolvable caller
+    frame are still returned."""
+    from mockymock.debug.gdb_session import GdbCommandError
+
+    class _OneBadFrameSession:
+        def __init__(self):
+            self.sent: list[str] = []
+
+        def send(self, command: str):
+            self.sent.append(command)
+            if command == "-data-evaluate-expression frame_ptr-frame_stack":
+                return [_done("2")]
+            if (
+                command
+                == "-data-evaluate-expression (long)frame_stack[2]"
+                ".return_address_ptr"
+            ):
+                raise GdbCommandError("corrupted slot")
+            if (
+                command
+                == "-data-evaluate-expression (long)frame_stack[1]"
+                ".return_address_ptr"
+            ):
+                return [_done("94317603726646")]
+            raise AssertionError(f"unexpected command: {command!r}")
+
+        def resolve_address(self, address: int) -> dict:
+            assert address == 94317603726646
+            return {"file": "fixture.c", "fullname": "/work/x/fixture.c", "line": "9"}
+
+    stack = synthesize_stack(
+        _OneBadFrameSession(),
+        _identity_line_map(),
+        build_generated_c_line_map(GENERATED_C_TEXT),
+        _spike_paragraph_index(),
+        current_file="/work/x/fixture.cbl",
+        current_line=20,
+    )
+
+    # Frame 0 (current) + the resolvable frame_stack[1] caller; the
+    # unresolvable frame_stack[2] slot is skipped, not fatal.
+    assert len(stack) == 2
+    assert stack[0].paragraph == "CALC-INTEREST"
+    assert stack[1].paragraph == "MAIN-PARA"
+
+
 def test_synthesize_stack_stops_at_zero_depth_with_only_the_current_frame():
     class _NoCallerSession(_FakeGdbSession):
         def send(self, command: str):
