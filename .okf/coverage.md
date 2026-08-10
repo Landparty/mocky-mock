@@ -3,7 +3,7 @@ type: Module
 title: Coverage Reporting
 description: GnuCOBOL --coverage/gcov instrumentation wired into `mockymock run`, reporting per-line coverage of the instrumented source.
 tags: [coverage, gcov, cli, runtime]
-timestamp: 2026-07-17T00:00:00Z
+timestamp: 2026-08-10T00:00:00Z
 ---
 # Overview
 
@@ -28,6 +28,12 @@ cli/main.py: _cmd_run
   --coverage / --coverage-out wiring; printed/written after run_binary succeeds,
   before the sandbox is cleaned up (the .gcda/.gcov files live in the same tmp dir)
 ```
+
+`--coverage-out PATH` implies `--coverage`, same as `--coverage-json PATH`
+below (fixed 2026-08-10, audit finding F12 — only the JSON flag carried the
+implication in code even though docs/options-reference.md already
+documented both; `--coverage-out` alone used to silently produce nothing
+instead of running gcov).
 
 # Data Model
 

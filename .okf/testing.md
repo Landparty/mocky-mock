@@ -3,7 +3,7 @@ type: Test Suite
 title: Testing
 description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, FLOWMOCK, TAXFILE, STATELKUP, REGNAVG, CPYPROC, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-08-04T00:00:00Z
+timestamp: 2026-08-10T00:00:00Z
 ---
 # Overview
 
@@ -357,6 +357,22 @@ checkout (avoid `git checkout` there --
 ../cobol-parser>@<pinned commit>"` -- pip clones into its own temp build
 dir, so the shared working tree is never touched. Confirm with the same
 `direct_url.json` check as above.
+
+**Two more pinned-cobolparser landmines, found 2026-08-10 hunting for a
+replacement `UNREACHED_INVOKE_CBL` fixture (audit finding F-0b, once
+`INVOKE` itself stopped producing a `PARSE_WARNING` — see
+[analysis](analysis.md)'s `PARSE_WARNING` row) — both flagged to
+cobol-parser separately, not fixed here, but worth knowing before picking
+a stand-in "unsupported verb" line for a mockymock fixture:**
+- A bare-identifier operand after several unsupported verbs (`EXHIBIT
+  NAMED WS-X.`, `PURGE WS-X.`, and others tried) gets misparsed into a
+  *spurious paragraph* named after that identifier, reparenting every
+  statement after it — the same failure shape as the DIVIDE/`ROUNDED`
+  entry above, different trigger. A quoted-literal operand (`TRANSFORM
+  "x".`) avoids it; a bare identifier operand does not.
+- A bare `RESUME.` (no operand) hangs cobolparser's parse indefinitely —
+  confirmed via `timeout 8`. Never use it, even transiently, without a
+  wrapping timeout.
 
 # CI (.github/workflows/ci.yml)
 

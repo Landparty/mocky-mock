@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-08-05T00:00:00Z
+timestamp: 2026-08-10T00:00:00Z
 ---
 
 # Overview
@@ -92,9 +92,16 @@ Flow (`_cmd_generate`):
    deliberate improvement over the parked `feature/generate-with-data`
    branch's own silent no-op on the same case.
 5. Read `program`; if `--copybook-path` given (repeatable), run
-   `expand_copybooks` first and use the expanded source from then on.
-   `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
-   on a lossy copybook decode before the corrupted text is ever parsed.
+   `expand_copybooks` first (wrapped in try/except since 2026-08-10, audit
+   finding F6 — a genuinely circular/oversized/mis-encoded copybook chain
+   raises `CircularReferenceError`/`NestingDepthError`/
+   `TotalExpansionSizeExceededError`/`EncodingError` for realistic inputs,
+   and this call site was the one of six sharing this pattern that still
+   let it traceback instead of printing `copybook expansion failed: ...`
+   and exiting 1 — `_cmd_fixtures` below already had the same guard) and
+   use the expanded source from then on. `check_expansion_warnings(expansion)`
+   refuses (EXPANSION_WARNING, exit 1) on a lossy copybook decode before the
+   corrupted text is ever parsed.
 6. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
    and exit 1 (never reaches analysis). On a successful parse,
    `check_whole_program(result)` still refuses (PARSE_WARNING, exit 1) if
@@ -243,7 +250,12 @@ Flags beyond the pipeline inputs:
   the context manager (the printed path must still exist when the user
   reads it), but the CLI explicitly removes the sandbox afterwards when the
   run got past compilation, so plain `--verbose` leaves no cruft on
-  success.
+  success. That removal is a `try/finally` around the whole compile/run
+  body since 2026-08-10 (audit finding F10) so it also runs on a compile
+  failure's own early exit and on an exception from `compile_source`/
+  `run_binary`/`run_gcov` — previously a bare statement placed after the
+  `with` block, both of which skipped straight past it and leaked the
+  sandbox permanently. See [runtime](runtime.md)'s Sandbox model section.
 
 Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
 
@@ -256,7 +268,10 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
    (so `mockymock setup` is optional before `run`); also recreates the
    container when its image tag is stale (see [runtime](runtime.md)).
    `DockerNotAvailableError` -> print and exit 1.
-2. Read `program`, apply `--copybook-path` expansion same as `generate`.
+2. Read `program`, apply `--copybook-path` expansion same as `generate`
+   (`run_static_checks` wraps this in try/except too, since 2026-08-10,
+   audit finding F6 — shared by `run`/`lint`/`debug`/`export`/`mutate`, so
+   this one guard covers all five instead of each needing its own).
    `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
    on a lossy copybook decode before the corrupted text is ever parsed.
 3. `parse_cobol` -> `check_whole_program_scoped(result)` refusals
@@ -396,6 +411,23 @@ captured MI transcripts and end-to-end tested against a live container
   it, the position displayed in the client froze across repeated Step Over
   clicks — indistinguishable from an infinite loop even though the program
   was progressing normally (see `log.md`).
+  `send`/`_read_until_stopped`'s `readline()` is bounded to 30s since
+  2026-08-10 (audit finding F4) — a debuggee stuck in an infinite loop
+  produces no further MI record and gdb itself never reports it, and an
+  unbounded blocking read there used to wedge the whole DAP adapter
+  forever with no way for the client to even send `disconnect`. Bounded
+  with a one-shot daemon thread per read (Windows pipe handles support no
+  portable non-blocking/`select()`-based timeout), raising the existing
+  `GdbSessionClosedError` on expiry. `decode_c_escape` (shared with
+  `variable_map.py` below) handles gdb's octal byte-escape (`\NNN`) as
+  well as the named ones (`\n \t \\ \"`) since 2026-08-10 (audit finding
+  F15) — a non-printable byte with no named form used to decode as the
+  literal digit characters instead of the single byte gdb meant.
+  `runtime.start_gdb_session`'s `subprocess.Popen` now sets
+  `encoding="utf-8", errors="replace"` (audit finding F5) so a
+  garbage/non-UTF-8 byte from the debuggee's own output degrades that one
+  line instead of raising `UnicodeDecodeError` and crashing the whole
+  session.
 - `line_map.py` — bidirectional original ↔ instrumented line mapping,
   built on `report/coverage.py`'s existing (one-directional)
   `build_original_line_map`.
@@ -403,12 +435,18 @@ captured MI transcripts and end-to-end tested against a live container
   `<name>.c.l.h` comment table (not gdb symbols, which don't exist for
   COBOL names, and not a byte-offset decoder). Decodes packed-decimal
   (COMP-3) and binary (COMP) values via GnuCOBOL's own `cob_field_attr`
-  type/digits/scale, read live via MI.
+  type/digits/scale, read live via MI. `_unquote_c_string` shares
+  `gdb_session.py`'s `decode_c_escape` (see F15 above).
 - `call_stack.py` — synthesizes the COBOL paragraph/section call stack
   from GnuCOBOL's internal `frame_stack`, since gdb's own backtrace is
   always exactly one frame (`PERFORM` is a computed-goto, not a real C
   call). `frame_stack[0]` is a sentinel, not a real caller — see the
-  design doc's Empirical basis for why.
+  design doc's Empirical basis for why. `synthesize_stack`'s per-frame
+  walk over `frame_stack[1..depth]` catches `GdbCommandError` on any one
+  frame and skips it (`continue`) since 2026-08-10 (audit finding F14) —
+  previously one unresolvable frame (gdb refusing the evaluate/
+  resolve_address for it) failed the entire `stackTrace` request instead
+  of just omitting that frame.
 - `adapter.py` — the DAP server: `Content-Length`-framed JSON over
   injectable streams, `initialize`/`launch`/`setBreakpoints`/
   `configurationDone`/`threads`/`stackTrace`/`scopes`/`variables`/
@@ -417,6 +455,16 @@ captured MI transcripts and end-to-end tested against a live container
   three send the same DAP request — but only resolves plain COBOL
   identifiers already in `variable_table` (the same lookup `variables`
   uses); arithmetic/member-access expressions fail cleanly, not silently.
+  `_handle_launch` closes any prior `self._session` and resets
+  `self._breakpoint_numbers` before creating a new one (audit finding
+  F16) — a second `launch` on one adapter (a client retry, or a bug) used
+  to leak the first gdb session's process into the shared container and
+  hand out breakpoint numbers that pointed at a session already gone.
+  `read_dap_message`'s `Content-Length` header parse raises the new
+  `DapFramingError` on a non-integer value instead of an unhandled
+  `ValueError` (audit finding F17); `run()` catches it, fires
+  `_on_output`, and shuts down cleanly, rather than crashing the whole
+  adapter process on one malformed frame.
 
 Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
@@ -426,13 +474,24 @@ items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
 
 Mutation testing (see docs/2026-07-29-mutation-testing-design.md).
 `--list` prints the generated mutants and exits — pure
-`mutation.operators`, no Docker. A real run baseline-checks the suite
+`mutation.operators`, no Docker. `mutation.operators`' verb/scope/
+condition/deletable-verb regexes now match on COBOL-word boundaries via a
+shared `_cobol_word()` helper (negative lookaround treating `-` as part
+of the identifier, not a boundary) instead of plain `\b` (audit finding
+F8, 2026-08-10) — `\bREAD\b` used to match inside `WS-READ-COUNT` and
+generate mutants that were never real READ statements at all. A real run
+baseline-checks the suite
 (red/empty baseline aborts with exit 1: every verdict would be noise),
 then for each mutant patches one original line and re-runs the exact
 `run` pipeline (static checks → splice → compile → run) in its own
 sandbox, classifying `killed` / `survived` / `timeout` (counts as a
 kill; default 15 s) / `stillborn` (refusal or compile error — excluded
-from the score). Console output streams one line per mutant, then lists
+from the score) via `mutation.runner._classify_execution` (audit finding
+F28, 2026-08-10) — this now checks `suite_result.duplicate_case_starts`,
+orphan `CASE FAIL`s, and a zero-cases-run stdout before falling back to a
+bare "binary exited N" message, instead of citing the exit code even when
+it was 0 and the real cause was one of those three. Console output
+streams one line per mutant, then lists
 survivors with a `-`/`+` diff and the score
 (killed+timeouts over scored). `--json-report` writes the full
 machine-readable outcome; `--fail-under` exits 1 below the given

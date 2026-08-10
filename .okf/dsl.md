@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-08-06T00:00:00Z
+timestamp: 2026-08-10T00:00:00Z
 ---
 
 # Overview
@@ -115,6 +115,14 @@ digits like `FILE-STATUS IS EOF10`, a missing value) raises `CutParseError`
 at that line instead of silently falling through to `body_lines` and being
 spliced verbatim into generated COBOL, where it would surface as a
 confusing `cobc` compile error instead of a `.cut`-level refusal.
+
+`FILE-STATUS IS` also parses correctly *inside* an open `MOCK READ ...
+ROWS` body, not just in the ordinary mock-body case above — fixed
+2026-08-10 (audit finding F19). `parser.py`'s `elif` chain used to check
+`in_mock.rows is not None` (the generic ROWS-row branch) before the
+FILE-STATUS IS / malformed-FILE-STATUS branches, so any `FILE-STATUS IS`
+line written inside a `ROWS` body fell into "malformed ROWS row" instead
+— reordered so the FILE-STATUS IS branches are checked first.
 
 ## Case rules
 

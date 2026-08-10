@@ -3,7 +3,7 @@ type: Module
 title: Docker Runtime
 description: mockymock-cobc container lifecycle, docker exec-based compile/run, and the Docker-only sandbox model that replaced the local cobc toolchain.
 tags: [runtime, docker, gnucobol]
-timestamp: 2026-07-09T00:00:00Z
+timestamp: 2026-08-10T00:00:00Z
 ---
 
 # Overview
@@ -85,6 +85,17 @@ won the race between our inspect and run), it re-inspects and adopts the
 winner's container — starting it if it exists but is stopped — instead of
 raising. Any other `docker run` failure still raises
 `DockerNotAvailableError`.
+
+The stale-image path (step 3's `docker rm -f` + recreate) has the mirror
+-image race: two invocations can both see the same stale tag and both try
+to remove it. The winner's `rm -f` succeeds; the loser's then fails
+against an already-gone container with stderr containing *"No such
+container"* — not a real failure, just evidence the winner got there
+first. Fixed 2026-08-10 (audit finding F9) to fall through to
+`_create_container()` in that case instead of raising
+`DockerNotAvailableError`, same treatment as the "already in use" race
+above, just on the removal side of the sequence rather than the creation
+side.
 
 Constants (asserted by unit tests, must not drift in shape):
 
@@ -197,13 +208,23 @@ re-mounted per run. Consequences:
 
 `compile_source(source_path: Path) -> CompileResult`:
 - Maps source and binary paths to container paths via `to_container_path`.
-- Runs `docker exec mockymock-cobc cobc -free -x <container_source> -o <container_binary>`.
+- Runs `docker exec mockymock-cobc timeout -k 5 585 cobc -free -x <container_source> -o <container_binary>`
+  (fixed 2026-08-10, audit finding F1 — previously unwrapped: a `cobc`
+  invocation that hung inside the shared container had no container-side
+  bound at all and outlived even the host's own 600s `subprocess.run`
+  timeout, leaking an orphaned process into a container every other run
+  also uses). The container-side ceiling (585s) stays under the host-side
+  `subprocess.run(timeout=600)` guard, same `-k 5` SIGKILL-escalation
+  pattern as `run_binary` below.
 - Success requires **both** `returncode == 0` **and** `binary_path.exists()`
   on the host side — a zero exit with no binary materializing (e.g. a stale
   mount) is treated as failure, not a phantom success.
 - `OSError` (docker CLI vanished mid-call) and `subprocess.TimeoutExpired`
   (600s) are both caught and turned into a failed `CompileResult` with an
   explanatory `stderr`, never an unhandled exception.
+
+`run_gcov(source_path: Path) -> GcovResult` is wrapped the same way (`timeout
+-k 5 50`, fixed alongside F1 for the identical orphaned-process risk).
 
 `run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult`:
 - Runs `docker exec -w <container_dir> mockymock-cobc timeout -k 5 <timeout_seconds> <container_binary>`
@@ -266,9 +287,15 @@ ignore_errors=True)`). `sandbox_dir_maybe_kept(root, keep)` is what the
 CLI's `run` actually uses: with `keep=True` the directory is **left on
 disk** — `--keep-sandbox` keeps it unconditionally (and prints its path);
 `--verbose` keeps it through the context so the instrumented-source path
-printed on compile failure still exists, but the CLI removes it afterwards
-when the run got past compilation. So sandboxes are *not* always removed
-on exit. Their only Docker-specific feature:
+printed on compile failure still exists, but `_cmd_run` removes it
+afterwards when `--keep-sandbox` was not also given. That removal now
+lives in a `try/finally` wrapping the whole compile/run/coverage body
+(fixed 2026-08-10, audit finding F10) — it used to be a bare statement
+after the `with` block, so a compile failure's early `return 1`, or any
+exception from `compile_source`/`run_binary`/`run_gcov`, skipped it and
+leaked the sandbox permanently. `finally` now runs on every exit path.
+So sandboxes are *not* always removed on exit. Their only Docker-specific
+feature:
 when `root` is given, the temp dir is created *under* that directory (creating
 `root` first if missing) via `tempfile.mkdtemp(prefix="mockymock-", dir=root)`.
 The Docker toolchain always calls it as `sandbox_dir(root=docker_toolchain.WORK_ROOT)`

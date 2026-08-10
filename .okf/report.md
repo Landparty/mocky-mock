@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-08-04T00:00:00Z
+timestamp: 2026-08-10T00:00:00Z
 ---
 # Overview
 
@@ -163,6 +163,14 @@ driver's failure-reason strings against the model, splitting on the LAST
 binary never printed a START marker for. `format_junit_xml` additionally
 stamps `classname="<suite name>"` on every `<testcase>` (suite-qualified
 identity for consumers that merge reports or meet duplicate case names).
+
+`build_json_report` keys its `.cut`-suite lookups (`cut_cases_by_index`)
+by each case's 1-based position — matching the driver's own `case_id =
+f"{index:03d}"` scheme — not by `MockTestCase.name`, since 2026-08-10
+(audit finding F7). `TESTCASE` names are not required unique; keying by
+name meant two cases sharing a name collided in the lookup dict and the
+second one silently vanished from the report (both from the main
+per-result loop and from the `"not_run"` synthesis above).
 
 ## Execution trace (`report/trace.py`)
 
