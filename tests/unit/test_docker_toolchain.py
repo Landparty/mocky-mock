@@ -889,3 +889,11 @@ def test_start_gdb_session_execs_mi_interpreter_against_container_binary(tmp_pat
     assert captured["kwargs"]["stdin"] == subprocess.PIPE
     assert captured["kwargs"]["stdout"] == subprocess.PIPE
     assert captured["kwargs"]["text"] is True
+    # Audit finding F5: text=True with no encoding=/errors= decodes
+    # strictly -- a DISPLAY of an uninitialized/garbage alphanumeric
+    # field (exactly what someone chasing a data bug would inspect) can
+    # contain a byte that isn't valid there, raising an uncaught
+    # UnicodeDecodeError inside GdbSession.readline() and killing the
+    # whole session. errors="replace" degrades that one line instead.
+    assert captured["kwargs"]["encoding"] == "utf-8"
+    assert captured["kwargs"]["errors"] == "replace"

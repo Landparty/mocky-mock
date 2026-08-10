@@ -499,5 +499,15 @@ def start_gdb_session(binary_path: Path) -> subprocess.Popen:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        # A DISPLAY of an uninitialized/garbage alphanumeric field -- the
+        # exact thing someone debugging a data bug would inspect -- can
+        # contain a byte that isn't valid in the default strict decoding,
+        # which raised an uncaught UnicodeDecodeError deep inside
+        # GdbSession.readline() and killed the whole session (audit
+        # finding F5). errors="replace" degrades that one line instead of
+        # crashing, matching runtime/executor.py's existing convention
+        # for decoding subprocess output that may contain garbage bytes.
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
