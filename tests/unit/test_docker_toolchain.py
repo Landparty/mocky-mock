@@ -315,6 +315,39 @@ def test_ensure_toolchain_raises_when_stale_container_cannot_be_removed():
             ensure_toolchain()
 
 
+def test_ensure_toolchain_recreates_when_concurrent_rm_already_removed_it(tmp_path):
+    """F9: two invocations can both see the stale image tag and both race to
+    `docker rm -f` it. The loser's rm fails with "No such container" --
+    not a real failure, just evidence the winner already cleaned up -- and
+    must fall through to (re)creating the container instead of raising."""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["docker", "inspect"]:
+            return _completed(argv, stdout="true mockymock-gnucobol:00000000\n")
+        if argv[:2] == ["docker", "rm"]:
+            return _completed(
+                argv,
+                returncode=1,
+                stderr="Error response from daemon: No such container: "
+                f"{CONTAINER}",
+            )
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+    ):
+        ensure_toolchain()  # must not raise
+
+    run_calls = [c for c in calls if c[:2] == ["docker", "run"]]
+    assert len(run_calls) == 1
+    assert IMAGE in run_calls[0]
+
+
 def test_ensure_toolchain_adopts_container_created_by_concurrent_invocation(tmp_path):
     """Two first-ever invocations race on `docker run --name`: the loser's
     run fails with "name already in use", but the winner's container is

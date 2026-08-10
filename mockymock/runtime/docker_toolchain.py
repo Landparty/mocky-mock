@@ -235,12 +235,16 @@ def ensure_toolchain() -> None:
         # the content-hash tag entirely: every compile would keep running
         # in the stale toolchain forever. Remove and recreate.
         rm = _docker("rm", "-f", CONTAINER, timeout=60)
-        if rm.returncode != 0:
+        if rm.returncode != 0 and "no such container" not in rm.stderr.lower():
             raise DockerNotAvailableError(
                 f"container {CONTAINER} was created from image "
                 f"{container_image!r} (expected {IMAGE}) and could not be "
                 f"removed for recreation:\n{rm.stderr.strip()}"
             )
+        # "No such container" means a concurrent invocation racing on the
+        # same stale-image check already removed it -- same race as the
+        # "already in use" recovery below, just on the other end of the
+        # remove-then-recreate sequence. Proceed to create/adopt either way.
         _create_container()
         return
     if not running:
