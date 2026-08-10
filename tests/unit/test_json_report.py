@@ -233,6 +233,73 @@ def test_format_json_report_round_trips():
     assert json.loads(text)["version"] == 1
 
 
+# --- audit finding F7: duplicate TESTCASE names must not drop a case -----
+
+
+def test_duplicate_testcase_names_do_not_drop_the_second_case():
+    """Nothing in dsl/parser.py enforces TESTCASE-name uniqueness, so two
+    same-named TESTCASEs used to collide in a name-keyed lookup -- the
+    second vanished from `cases` with zero trace, and `casesNotRun` read 0
+    even though it never ran. Attribution and not-run synthesis must key
+    by case position (case_id), not name."""
+    cut_text = (
+        'TESTSUITE "dup names"\n\n'
+        'TESTCASE "Happy path"\n'
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-X TO BE 1\n\n"
+        'TESTCASE "Happy path"\n'
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-X TO BE 2\n"
+    )
+    # Only the first case's CASE START prints -- e.g. a container-level
+    # abort before the second case ever runs.
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: dup names\n"
+        "__MOCKYMOCK__ CASE 001 START: Happy path\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    report = build_json_report(
+        parse_stdout(stdout),
+        cut_suite=parse_cut(cut_text),
+        cut_file="PROG.cut",
+        program_file="PROG.cbl",
+    )
+    assert len(report["cases"]) == 2
+    assert report["cases"][0]["status"] == "passed"
+    assert report["cases"][0]["line"] == 3
+    assert report["cases"][1]["status"] == "not_run"
+    assert report["cases"][1]["line"] == 7
+    assert report["summary"]["casesNotRun"] == 1
+
+
+def test_duplicate_testcase_names_attribute_failures_to_the_right_occurrence():
+    """Same-named cases that BOTH run must not misattribute a failure from
+    one occurrence's EXPECT line to the other's."""
+    cut_text = (
+        'TESTSUITE "dup names"\n\n'
+        'TESTCASE "Happy path"\n'
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-X TO BE 1\n\n"
+        'TESTCASE "Happy path"\n'
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-X TO BE 2\n"
+    )
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: dup names\n"
+        "__MOCKYMOCK__ CASE 001 START: Happy path\n"
+        "__MOCKYMOCK__ CASE 001 FAIL: expected WS-X = 1, got 9\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ CASE 002 START: Happy path\n"
+        "__MOCKYMOCK__ CASE 002 FAIL: expected WS-X = 2, got 9\n"
+        "__MOCKYMOCK__ CASE 002 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=2\n"
+    )
+    report = build_json_report(parse_stdout(stdout), cut_suite=parse_cut(cut_text))
+    assert report["cases"][0]["failures"][0]["line"] == 5
+    assert report["cases"][1]["failures"][0]["line"] == 9
+
+
 def test_report_without_cut_suite_still_works():
     """The .cut model is optional: results alone produce a report with no
     lines/tags/not-run synthesis (belt-and-braces for callers that only

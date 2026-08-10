@@ -104,6 +104,18 @@ def _case_status(result: TestResult) -> str:
     return "passed" if result.passed else "failed"
 
 
+def _case_index(case_id: str) -> int | None:
+    """The driver assigns case_id = f"{index:03d}" over the same
+    (possibly --case/--tag filtered) suite.test_cases list build_driver
+    was given -- a 1-based position, not a name. Returns None for anything
+    that doesn't parse as that, so a caller degrades to "no .cut model
+    match" instead of crashing."""
+    try:
+        return int(case_id)
+    except ValueError:
+        return None
+
+
 def build_json_report(
     suite_result: TestSuiteResult,
     cut_suite: MockTestSuite | None = None,
@@ -115,17 +127,21 @@ def build_json_report(
     --case/--tag, already filtered) .cut model; when provided it supplies
     line numbers, tags, failure attribution, and synthesizes a "not_run"
     entry for every selected case the binary never printed a START marker
-    for (a mid-suite crash ate them)."""
-    cut_cases_by_name: dict[str, MockTestCase] = {}
+    for (a mid-suite crash ate them). Matched by position (case_id), not
+    name: TESTCASE names are not required to be unique, and a name-keyed
+    match would drop or misattribute duplicate-named cases."""
+    cut_cases_by_index: dict[int, MockTestCase] = {}
     if cut_suite is not None:
-        for cut_case in cut_suite.test_cases:
-            cut_cases_by_name.setdefault(cut_case.name, cut_case)
+        for position, cut_case in enumerate(cut_suite.test_cases, start=1):
+            cut_cases_by_index[position] = cut_case
 
     cases: list[dict[str, Any]] = []
-    seen_names: set[str] = set()
+    seen_indices: set[int] = set()
     for result in suite_result.results:
-        model_case = cut_cases_by_name.get(result.case_name)
-        seen_names.add(result.case_name)
+        index = _case_index(result.case_id)
+        model_case = cut_cases_by_index.get(index) if index is not None else None
+        if index is not None:
+            seen_indices.add(index)
         failures = [
             _attribute_failure(reason, model_case).to_dict()
             for reason in result.failure_reasons
@@ -143,8 +159,8 @@ def build_json_report(
 
     not_run = 0
     if cut_suite is not None:
-        for cut_case in cut_suite.test_cases:
-            if cut_case.name in seen_names:
+        for position, cut_case in enumerate(cut_suite.test_cases, start=1):
+            if position in seen_indices:
                 continue
             not_run += 1
             cases.append(
