@@ -285,7 +285,27 @@ def compile_source(
     binary_path = source_path.with_suffix("")
     container_binary = to_container_path(binary_path, WORK_ROOT)
     container_dir = container_source.rsplit("/", 1)[0]
-    cmd = ["docker", "exec", "-w", container_dir, CONTAINER, "cobc", "-free"]
+    # Wrapped in the same in-container `timeout -k` run_binary uses for
+    # the execute phase: without it, the host-side subprocess.run(timeout=)
+    # below only kills the LOCAL `docker exec` client on expiry -- a
+    # pathological source that makes cobc hang leaves it orphaned inside
+    # the shared, long-lived container, burning CPU/PIDS_LIMIT against
+    # every other run sharing it (audit finding F1). 585s leaves a 15s
+    # margin under the host-side 600s guard, the same ratio run_binary
+    # uses between its container and host timeouts.
+    cmd = [
+        "docker",
+        "exec",
+        "-w",
+        container_dir,
+        CONTAINER,
+        "timeout",
+        "-k",
+        "5",
+        "585",
+        "cobc",
+        "-free",
+    ]
     if coverage:
         cmd.append("--coverage")
     if trace:
@@ -441,7 +461,19 @@ def run_gcov(source_path: Path) -> GcovResult:
     container_dir = container_source.rsplit("/", 1)[0]
     try:
         result = subprocess.run(
-            ["docker", "exec", "-w", container_dir, CONTAINER, "gcov", gcda_path.name],
+            [
+                "docker",
+                "exec",
+                "-w",
+                container_dir,
+                CONTAINER,
+                "timeout",
+                "-k",
+                "5",
+                "50",
+                "gcov",
+                gcda_path.name,
+            ],
             capture_output=True,
             text=True,
             timeout=60,
