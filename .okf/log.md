@@ -1,5 +1,47 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-10 — PR #57 review fixes: gdb session teardown, DAP framing validation, ledger corrections
+
+Automated review on the audit-remediation PR (below) found two real gaps
+in the F4/F17 fixes themselves, plus three OKF inaccuracies in that same
+PR's own doc updates.
+
+* **`gdb_session.py`/`adapter.py`** (`2db89b0`) — F4's read deadline
+  raised `GdbSessionClosedError` but left the `GdbSession` looking
+  alive: a before-response handler (evaluate/variables/stackTrace)
+  just failed its one request and left the dead session in place, so
+  the *next* request tried it again -- spawning a second per-call
+  reader thread racing the first, still-blocked one for whatever the
+  pipe produced next, able to silently hand one command's response to
+  a different command's caller. Run-control handlers (continue/next/
+  step) stopped the adapter's own loop but never actually closed the
+  gdb subprocess, leaking it into the shared container. Fixed with a
+  `_closed` flag on `GdbSession` (set the moment EOF or the deadline
+  fires; every later read short-circuits instead of starting a new
+  reader) and by having `DapAdapter._dispatch` call `_shutdown()`
+  whenever the caught exception is specifically `GdbSessionClosedError`
+  (not `GdbCommandError` or a malformed-request exception -- neither
+  means the session itself died).
+* **`adapter.py`** (`2db89b0`) — F17's `Content-Length` validation only
+  caught a non-numeric header. A missing or explicit-zero header
+  defaulted to length 0 and reached `json.loads(b"")` -- a
+  `JSONDecodeError`, not a `DapFramingError`, so it escaped `run()`'s
+  clean-shutdown handling and would have crashed the adapter process. A
+  negative length reached `stream.read(n)` with `n < 0`, which reads to
+  EOF instead of raising -- on a live stdin pipe, blocks forever. Now
+  requires the header to parse as a positive integer.
+* **Ledger corrections** —
+  [log.md](log.md) itself listed F20 in a "not fixed" range even though
+  it was closed in the same PR; [cli.md](cli.md) described
+  `_cmd_generate`'s copybook-expansion guard as printing
+  `run_static_checks`'s message (`copybook expansion failed: ...`)
+  instead of its own (`mockymock generate: {exc}`); [report.md](report.md)
+  said the pre-F7 JSON report *dropped* a duplicate-named TESTCASE that
+  emitted a START marker, when it actually misattributed that case's
+  metadata/failures to the first same-named model case instead --
+  dropping only happened to an unrun duplicate via the name-based
+  `not_run` synthesis.
+
 ## 2026-08-10 — Audit remediation: 20 findings fixed across runtime, debug, mutation, DSL, report
 
 Worked through a code-quality/reliability audit (41 findings: 1 P0
@@ -94,6 +136,9 @@ Gotchas.
 * **F28** (`bb752b6`) — the mutation runner's fallback classification
   cited "binary exited N" even when N was 0 and the real cause was a
   duplicate `CASE START`, an orphan `CASE FAIL`, or zero cases run.
+* **F20** (`c912865`, alongside F10) — `--keep-sandbox`'s own retention
+  path had no test at all (`test_keep_sandbox_retains_the_directory_
+  after_a_clean_run`); the flag itself was untouched.
 
 **Cleanup:**
 * **F35** (`c7bee0f`) — removed `_step`'s unused `_dap_command`
@@ -102,7 +147,7 @@ Gotchas.
 **Not fixed (out of scope for a code change, or deliberately deferred
 — see the session's final ledger for the full ~20-item ledger):**
 F-0a (P0: CI's `COBOL_PARSER_PAT` secret needs a repo admin, not a PR),
-F13, F18, F20–F26, F29–F34, F36.
+F13, F18, F21–F26, F29–F34, F36.
 
 Docs touched: [runtime](runtime.md) (F1, F2, F9, F10 sections plus a
 leftover-stale F2 mention in Threat model's Tuning paragraph),

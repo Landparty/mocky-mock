@@ -97,9 +97,14 @@ Flow (`_cmd_generate`):
    raises `CircularReferenceError`/`NestingDepthError`/
    `TotalExpansionSizeExceededError`/`EncodingError` for realistic inputs,
    and this call site was the one of six sharing this pattern that still
-   let it traceback instead of printing `copybook expansion failed: ...`
-   and exiting 1 — `_cmd_fixtures` below already had the same guard) and
-   use the expanded source from then on. `check_expansion_warnings(expansion)`
+   let it traceback instead of exiting 1 cleanly — `_cmd_fixtures` below
+   already had the same guard). Each command prints the exception under
+   its own prefix, not a shared one: `generate` prints
+   `mockymock generate: {exc}` (this step); `fixtures` prints
+   `mockymock fixtures: {exc}` to stderr (see below); `run`/`lint`/
+   `debug`/`export`/`mutate`, sharing `run_static_checks`, print
+   `copybook expansion failed: {exc}` (see that step under `run` below).
+   Then use the expanded source from then on. `check_expansion_warnings(expansion)`
    refuses (EXPANSION_WARNING, exit 1) on a lossy copybook decode before the
    corrupted text is ever parsed.
 6. `parse_cobol(raw_source, filename=...)` — on parse failure, print each error
