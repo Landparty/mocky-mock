@@ -149,6 +149,28 @@ def test_read_rows_with_terminal_but_no_status_field_is_accepted():
     assert not [r for r in reasons if r.code == "UNRESOLVED_FILE_STATUS_TARGET"]
 
 
+CUT_READ_ROWS_SUGAR_NO_TERMINAL = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK READ ORDER-FILE ROWS
+        ( ORDER-QTY = 50 )
+        FILE-STATUS IS SUCCESS
+    END-MOCK
+    PERFORM READ-AN-ORDER
+"""
+
+
+def test_file_status_sugar_and_missing_terminal_refuse_only_once():
+    """Audit finding F27: when a MOCK READ ... ROWS directive both uses
+    FILE-STATUS IS sugar AND is missing a TERMINAL on a file absent from
+    file_status_fields, two independent checks used to both fire
+    UNRESOLVED_FILE_STATUS_TARGET for the same directive -- still fails
+    closed, just redundant and confusing."""
+    reasons = _reasons_for(PROGRAM_NO_STATUS_FIELD, CUT_READ_ROWS_SUGAR_NO_TERMINAL)
+    matches = [r for r in reasons if r.code == "UNRESOLVED_FILE_STATUS_TARGET"]
+    assert len(matches) == 1
+
+
 def test_check_test_case_defaults_file_status_fields_to_empty():
     """The new parameter is optional -- every existing caller that omits
     it must keep working exactly as before."""

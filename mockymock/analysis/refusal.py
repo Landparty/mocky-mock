@@ -1245,9 +1245,8 @@ def check_test_case(
             )
 
     for directive in case.mocks:
-        if directive.file_status is not None and (
-            directive.key.upper() not in file_status_fields
-        ):
+        missing_status_field = directive.key.upper() not in file_status_fields
+        if directive.file_status is not None and missing_status_field:
             reasons.append(
                 RefusalReason(
                     code="UNRESOLVED_FILE_STATUS_TARGET",
@@ -1260,11 +1259,16 @@ def check_test_case(
                     ),
                 )
             )
-        if (
+        # elif, not a second independent `if`: both checks share the same
+        # missing_status_field root cause. When FILE-STATUS IS sugar is
+        # ALSO in play the block above already reported it for this exact
+        # directive -- firing this one too would double-refuse the same
+        # directive with a second, redundant message (audit finding F27).
+        elif (
             directive.category is MockCategory.READ
             and directive.rows is not None
             and directive.terminal_row is None
-            and directive.key.upper() not in file_status_fields
+            and missing_status_field
         ):
             reasons.append(
                 RefusalReason(
