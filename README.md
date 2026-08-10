@@ -109,6 +109,10 @@ The full DSL — `MOCK CALL`/`PARAGRAPH`/`SECTION`, `VERIFY`, `PROVIDER`
 data tables, `BEFORE-EACH`, `FILE-STATUS IS`, the SQL `ROWS` cursor
 sugar — is documented in [`.okf/dsl.md`](.okf/dsl.md).
 
+For a complete, example-driven walkthrough of every CLI flag and every
+`.cut` directive in one place, see the
+[options reference](docs/options-reference.md).
+
 ### Worked examples
 
 Each pairs a `.cbl` with a `.cut` and its own README. Start with
