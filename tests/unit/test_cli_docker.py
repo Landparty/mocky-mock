@@ -522,6 +522,49 @@ def test_run_coverage_writes_coverage_out_file(tmp_path, capsys):
     assert "66.67% lines executed (2/3)" in out_path.read_text()
 
 
+def test_coverage_out_alone_implies_coverage(tmp_path, capsys):
+    """Audit finding F12: --coverage-out without --coverage used to be a
+    silent no-op -- exits 0, prints nothing about coverage, writes no
+    file. docs/options-reference.md already documents "Implies
+    --coverage" (matching --coverage-json's own precedent one line
+    away); the code must match the doc."""
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    gcov_result = GcovResult(success=True, gcov_text=COVERAGE_GCOV_TEXT, stderr="")
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+    out_path = tmp_path / "coverage.txt"
+
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=fake_compile,
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_gcov", return_value=gcov_result
+        ) as gcov_mock,
+    ):
+        exit_code = main(
+            ["run", str(program), "--cut", str(cut), "--coverage-out", str(out_path)]
+        )
+    assert exit_code == 0
+    gcov_mock.assert_called_once()
+    assert "66.67% lines executed (2/3)" in out_path.read_text()
+
+
 def test_run_coverage_reports_missing_data_without_failing_the_run(tmp_path, capsys):
     """gcov failing (e.g. no .gcda because the binary timed out) must not
     change the pass/fail exit code -- coverage is purely additive."""

@@ -533,8 +533,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if not _check_input_files("mockymock run", source_path, cut_path):
         return 1
 
-    # Asking for the coverage JSON is asking for coverage.
+    # Asking for the coverage JSON, or a coverage report file, is asking
+    # for coverage.
     if args.coverage_json:
+        args.coverage = True
+    if args.coverage_out:
         args.coverage = True
 
     # Asking for the trace JSON is asking for the trace.
