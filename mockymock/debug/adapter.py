@@ -363,17 +363,17 @@ class DapAdapter:
         self._resume(session.gdb.continue_)
 
     def _handle_next(self, request: dict) -> None:
-        self._step(request, "next")
+        self._step(request)
 
     def _handle_stepIn(self, request: dict) -> None:
         # v1 does not step across a mocked CALL boundary (see design doc
         # Non-goals) -- aliased to the same coalesced-next behavior.
-        self._step(request, "stepIn")
+        self._step(request)
 
     def _handle_stepOut(self, request: dict) -> None:
-        self._step(request, "stepOut")
+        self._step(request)
 
-    def _step(self, request: dict, _dap_command: str) -> None:
+    def _step(self, request: dict) -> None:
         session = self._require_session(request)
         if session is None:
             return
