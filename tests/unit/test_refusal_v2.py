@@ -56,6 +56,16 @@ SOURCE = """\
                UPDATE CUSTOMERS SET ACTIVE = 'N' WHERE ID = :WS-CUST-ID
            END-EXEC.
 
+       DO-CICS.
+           EXEC CICS
+               SEND MAP('ORDMAP')
+           END-EXEC.
+
+       DO-DLI.
+           EXEC DLI
+               GU SEGMENT-NAME
+           END-EXEC.
+
        ASK-USER.
            ACCEPT WS-CHOICE.
 """
@@ -168,6 +178,38 @@ def test_too_broad_sql_prefix_is_ambiguous():
     )
     reasons = check_test_case(surface, ast, case)
     assert any(r.code == "AMBIGUOUS_MOCK" for r in reasons)
+
+
+def test_mocked_cics_passes_and_unmocked_cics_refuses():
+    """Audit finding F11: the fail-closed guarantee for EXEC CICS -- never
+    compile-and-run an unverified CICS touchpoint -- had zero regression
+    coverage for the refusal side."""
+    surface, ast = _surface_and_ast()
+    good = MockTestCase(
+        name="c",
+        mocks=[MockDirective(MockCategory.CICS, "SEND MAP")],
+        perform_target="DO-CICS",
+    )
+    assert check_test_case(surface, ast, good) == []
+
+    bad = MockTestCase(name="c", mocks=[], perform_target="DO-CICS")
+    reasons = check_test_case(surface, ast, bad)
+    assert [r.code for r in reasons] == ["UNMOCKED_CICS"]
+
+
+def test_mocked_dli_passes_and_unmocked_dli_refuses():
+    """Same fail-closed guarantee, for EXEC DLI."""
+    surface, ast = _surface_and_ast()
+    good = MockTestCase(
+        name="c",
+        mocks=[MockDirective(MockCategory.DLI, "GU")],
+        perform_target="DO-DLI",
+    )
+    assert check_test_case(surface, ast, good) == []
+
+    bad = MockTestCase(name="c", mocks=[], perform_target="DO-DLI")
+    reasons = check_test_case(surface, ast, bad)
+    assert [r.code for r in reasons] == ["UNMOCKED_DLI"]
 
 
 def test_mocked_console_accept_passes():
