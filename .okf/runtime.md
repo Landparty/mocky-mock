@@ -163,10 +163,10 @@ one mount). Per-run mount isolation and a non-root uid strategy that survives
 the Windows bind mount are the remaining hardening steps, not yet done.
 
 Tuning: `PIDS_LIMIT` and `MEMORY_LIMIT` are module-level constants. Changing
-`_HARDENING_FLAGS` does **not** change `IMAGE` (they live on `docker run`, not
-in the Dockerfile), so to force existing containers to be recreated, bump the
-`docker/Dockerfile` content (a comment edit is enough) — that changes the
-content-hash tag and step 3 rm+recreates.
+either, or any of `_HARDENING_FLAGS`, changes `IMAGE` automatically
+(`_image_tag()` hashes the flags alongside the Dockerfile content — see
+above) and step 3 rm+recreates the container on the next `ensure_toolchain()`
+call; no manual Dockerfile edit is needed to force that.
 
 # Host <-> container filesystem boundary
 

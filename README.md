@@ -160,10 +160,15 @@ rest each add one distinctive feature.
   `FILE-STATUS IS SUCCESS` — so the `.cut` DSL reads like the program
   it's testing, not like generated plumbing.
 - **Minimal host footprint.** Only `uv` and Docker are required; COBOL
-  compilation and execution are fully containerized and sandboxed
+  compilation and execution are containerized and hardened
   (`--network none`, dropped capabilities, memory/PID limits), so it's
   safe to run untrusted `.cbl` and mock bodies, identically on Windows,
-  macOS, and Linux.
+  macOS, and Linux. Hardening is not full isolation, though: every run
+  shares one long-lived container over one bind mount, so a hostile
+  `.cbl` can still read or tamper with another concurrent run's sandbox,
+  and the container itself still runs as root inside its own boundary
+  (see `.okf/runtime.md`'s Threat model for the full rationale and
+  residual risk).
 
 ## Credits
 
