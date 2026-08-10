@@ -36,6 +36,7 @@ from mockymock.debug.gdb_session import (
     GdbCommandError,
     GdbSession,
     ResultRecord,
+    decode_c_escape,
     evaluate,
 )
 
@@ -204,9 +205,8 @@ def _unquote_c_string(text: str) -> str | None:
     i = 0
     while i < len(body):
         if body[i] == "\\" and i + 1 < len(body):
-            escape = body[i + 1]
-            out.append({"n": "\n", "t": "\t", "\\": "\\", '"': '"'}.get(escape, escape))
-            i += 2
+            decoded, i = decode_c_escape(body, i + 1)
+            out.append(decoded)
         else:
             out.append(body[i])
             i += 1

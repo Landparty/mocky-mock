@@ -38,6 +38,17 @@ def test_parse_mi_line_filters_benign_aslr_warning():
     assert parse_mi_line(line) is None
 
 
+def test_parse_mi_line_decodes_octal_byte_escape_in_a_quoted_value():
+    """Audit finding F15: gdb encodes a non-printable byte with no named
+    escape as \\NNN (octal), not one of the C escapes this parser
+    otherwise recognizes (\\n \\t \\\\ \\"). \\001 must decode to the
+    single control byte it represents, not the three literal characters
+    "001"."""
+    record = parse_mi_line('^done,value="\\001ABC"\n')
+    assert isinstance(record, ResultRecord)
+    assert record.payload["value"] == "\x01ABC"
+
+
 def test_parse_mi_line_parses_done_bkpt_result():
     line = (
         '^done,bkpt={number="1",type="breakpoint",disp="keep",enabled="y",'

@@ -112,6 +112,29 @@ def _require(condition: bool, message: str) -> None:
         raise MalformedMIRecordError(message)
 
 
+_OCTAL_DIGITS = "01234567"
+_NAMED_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"'}
+
+
+def decode_c_escape(text: str, i: int) -> tuple[str, int]:
+    """`text[i]` is the character right after a backslash. Returns the
+    decoded character and the index just past the whole escape sequence.
+    Handles gdb's own octal-byte escape (`\\NNN`, 1-3 octal digits) for any
+    non-printable byte with no named form, plus the named escapes gdb
+    emits (`\\n \\t \\\\ \\"`). Without the octal case, `\\001` decoded as
+    the three literal characters "001" instead of the single control byte
+    it represents -- shared with variable_map.py's `_unquote_c_string`,
+    which decodes the same gdb-quoted-string shape from a different call
+    site (a whole string at once, not incrementally within a larger MI
+    record)."""
+    if text[i] in _OCTAL_DIGITS:
+        start = i
+        while i < len(text) and i - start < 3 and text[i] in _OCTAL_DIGITS:
+            i += 1
+        return chr(int(text[start:i], 8)), i
+    return _NAMED_ESCAPES.get(text[i], text[i]), i + 1
+
+
 def _parse_c_string(text: str, i: int) -> tuple[str, int]:
     _require(i < len(text) and text[i] == '"', "expected opening quote")
     i += 1
@@ -120,11 +143,11 @@ def _parse_c_string(text: str, i: int) -> tuple[str, int]:
         if text[i] == "\\":
             i += 1
             _require(i < len(text), "dangling escape in MI string")
-            escape = text[i]
-            out.append({"n": "\n", "t": "\t", "\\": "\\", '"': '"'}.get(escape, escape))
+            decoded, i = decode_c_escape(text, i)
+            out.append(decoded)
         else:
             out.append(text[i])
-        i += 1
+            i += 1
     _require(i < len(text), "unterminated MI string")
     return "".join(out), i + 1
 
