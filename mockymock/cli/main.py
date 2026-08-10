@@ -662,52 +662,62 @@ def _cmd_run(args: argparse.Namespace) -> int:
     with sandbox_dir_maybe_kept(
         root=docker_toolchain.WORK_ROOT, keep=args.keep_sandbox or args.verbose
     ) as tmp:
-        if args.keep_sandbox:
-            print(f"mockymock run: keeping sandbox {tmp}")
+        # try/finally, not just a statement after the `with`: plain --verbose
+        # (no --keep-sandbox) asks sandbox_dir_maybe_kept to retain `tmp` for
+        # the duration of the block (so a compile-failure message can still
+        # point at it) and relies on this cleanup running afterward. A
+        # `return 1` on compile failure or an exception from compile_source/
+        # run_binary/run_gcov used to skip straight past that cleanup and
+        # leak the directory permanently -- `finally` runs on every exit path.
+        try:
+            if args.keep_sandbox:
+                print(f"mockymock run: keeping sandbox {tmp}")
 
-        instrumented_path = tmp / source_path.with_suffix(".cbl").name
-        instrumented_path.write_text(
-            "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
-        )
+            instrumented_path = tmp / source_path.with_suffix(".cbl").name
+            instrumented_path.write_text(
+                "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
+            )
 
-        compiled = docker_toolchain.compile_source(
-            instrumented_path, coverage=args.coverage, trace=args.trace
-        )
-        if not compiled.success:
-            print("mockymock run: compile failed:")
-            print(compiled.stderr)
-            if args.verbose or args.keep_sandbox:
-                print(f"mockymock run: instrumented source at {instrumented_path}")
-            return 1
+            compiled = docker_toolchain.compile_source(
+                instrumented_path, coverage=args.coverage, trace=args.trace
+            )
+            if not compiled.success:
+                print("mockymock run: compile failed:")
+                print(compiled.stderr)
+                if args.verbose or args.keep_sandbox:
+                    print(
+                        f"mockymock run: instrumented source at {instrumented_path}"
+                    )
+                return 1
 
-        assert compiled.binary_path is not None  # implied by compiled.success
-        trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
-        executed = docker_toolchain.run_binary(
-            compiled.binary_path, trace_path=trace_path
-        )
+            assert compiled.binary_path is not None  # implied by compiled.success
+            trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
+            executed = docker_toolchain.run_binary(
+                compiled.binary_path, trace_path=trace_path
+            )
 
-        # Must be read while the sandbox still exists -- the context manager
-        # removes it on exit unless --keep-sandbox was given.
-        trace_text = ""
-        if trace_path is not None and trace_path.exists():
-            trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
+            # Must be read while the sandbox still exists -- the context
+            # manager removes it on exit unless --keep-sandbox was given.
+            trace_text = ""
+            if trace_path is not None and trace_path.exists():
+                trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
 
-        coverage_text = None
-        coverage_report = None
-        if args.coverage:
-            gcov_result = docker_toolchain.run_gcov(instrumented_path)
-            if gcov_result.success:
-                coverage_report = parse_gcov(gcov_result.gcov_text)
-                coverage_text = format_coverage_console(
-                    coverage_report, instrumented_path.name
-                )
-            else:
-                coverage_text = (
-                    f"mockymock run: coverage: {gcov_result.stderr.rstrip()}"
-                )
-
-    if args.verbose and not args.keep_sandbox:
-        shutil.rmtree(tmp, ignore_errors=True)
+            coverage_text = None
+            coverage_report = None
+            if args.coverage:
+                gcov_result = docker_toolchain.run_gcov(instrumented_path)
+                if gcov_result.success:
+                    coverage_report = parse_gcov(gcov_result.gcov_text)
+                    coverage_text = format_coverage_console(
+                        coverage_report, instrumented_path.name
+                    )
+                else:
+                    coverage_text = (
+                        f"mockymock run: coverage: {gcov_result.stderr.rstrip()}"
+                    )
+        finally:
+            if args.verbose and not args.keep_sandbox:
+                shutil.rmtree(tmp, ignore_errors=True)
 
     suite_result = parse_stdout(executed.stdout)
 

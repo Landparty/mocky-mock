@@ -4,6 +4,8 @@ these tests must pass without Docker installed."""
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from mockymock.cli.main import main
 from mockymock.runtime.docker_toolchain import DockerNotAvailableError
 
@@ -673,3 +675,86 @@ def test_run_tag_selection_runs_only_tagged_cases(tmp_path):
     assert exit_code == 0
     payload = json.loads(report_path.read_text())
     assert [case["name"] for case in payload["cases"]] == ["calls discrate"]
+
+
+# --- audit F10/F20: sandbox retention must survive every exit path,
+# including ones that don't reach the cleanup statement that used to sit
+# after the `with sandbox_dir_maybe_kept(...)` block ------------------------
+
+
+def _sandbox_dirs(tmp_path):
+    work = tmp_path / "work"
+    if not work.exists():
+        return []
+    return list(work.glob("mockymock-*"))
+
+
+def test_verbose_without_keep_sandbox_cleans_up_after_compile_failure(tmp_path):
+    """A compile failure returns 1 from inside the `with` block. Before the
+    fix, that `return` skipped the cleanup statement that lived after the
+    `with`, permanently leaking the sandbox whenever --verbose (without
+    --keep-sandbox) was passed."""
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+
+    def failing_compile(source_path: Path, coverage: bool = False, trace: bool = False):
+        return CompileResult(success=False, binary_path=None, stdout="", stderr="err")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=failing_compile,
+        ),
+    ):
+        exit_code = main(
+            ["run", str(program), "--cut", str(cut), "--verbose"]
+        )
+    assert exit_code == 1
+    assert _sandbox_dirs(tmp_path) == []
+
+
+def test_verbose_without_keep_sandbox_cleans_up_after_run_binary_raises(tmp_path):
+    """An exception mid-run (e.g. run_binary blowing up) must not leak the
+    sandbox either -- the cleanup has to run on every exit path, not just
+    the ones that fall off the end of the `with` block normally."""
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+
+    def fake_compile(source_path: Path, coverage: bool = False, trace: bool = False):
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=fake_compile,
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_binary",
+            side_effect=RuntimeError("container vanished"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="container vanished"):
+            main(["run", str(program), "--cut", str(cut), "--verbose"])
+    assert _sandbox_dirs(tmp_path) == []
+
+
+def test_keep_sandbox_retains_the_directory_after_a_clean_run(tmp_path):
+    """F20: --keep-sandbox's own retention path was never exercised by a
+    test -- assert the directory (and the instrumented source inside it)
+    really does survive a normal, successful run."""
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    exit_code = _run_cli(tmp_path, executed, ["--keep-sandbox"])
+    assert exit_code == 0
+    dirs = _sandbox_dirs(tmp_path)
+    assert len(dirs) == 1
+    assert (dirs[0] / "ORDRPROC.cbl").exists()
