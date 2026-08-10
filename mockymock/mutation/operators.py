@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+
 # Plain `\b` treats `-` as a boundary (it's not a `\w` character), so
 # `\bREAD\b` false-matches inside an identifier like WS-READ-COUNT or
 # WS-CALL-FLAG -- COBOL naming conventions routinely compose exactly these
@@ -50,8 +51,7 @@ _DELETABLE_VERB = re.compile(
     re.IGNORECASE,
 )
 _SCOPE_TOKENS = re.compile(
-    _cobol_word("IF|ELSE|EVALUATE|WHEN|PERFORM|UNTIL|VARYING")
-    + r"|(?<![A-Z0-9-])END-",
+    _cobol_word("IF|ELSE|EVALUATE|WHEN|PERFORM|UNTIL|VARYING") + r"|(?<![A-Z0-9-])END-",
     re.IGNORECASE,
 )
 

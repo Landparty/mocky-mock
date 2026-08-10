@@ -84,8 +84,7 @@ def _readline_with_deadline(stream, timeout: float) -> str:
         return result.get(timeout=timeout)
     except queue.Empty:
         raise GdbSessionClosedError(
-            f"gdb produced no output for {timeout:.0f}s (the debuggee may "
-            "be hung)"
+            f"gdb produced no output for {timeout:.0f}s (the debuggee may " "be hung)"
         ) from None
 
 

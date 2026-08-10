@@ -716,9 +716,7 @@ def test_verbose_without_keep_sandbox_survives_a_compile_failure(tmp_path):
             side_effect=failing_compile,
         ),
     ):
-        exit_code = main(
-            ["run", str(program), "--cut", str(cut), "--verbose"]
-        )
+        exit_code = main(["run", str(program), "--cut", str(cut), "--verbose"])
     assert exit_code == 1
     dirs = _sandbox_dirs(tmp_path)
     assert len(dirs) == 1

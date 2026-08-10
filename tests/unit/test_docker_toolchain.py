@@ -330,8 +330,7 @@ def test_ensure_toolchain_recreates_when_concurrent_rm_already_removed_it(tmp_pa
             return _completed(
                 argv,
                 returncode=1,
-                stderr="Error response from daemon: No such container: "
-                f"{CONTAINER}",
+                stderr="Error response from daemon: No such container: " f"{CONTAINER}",
             )
         return _completed(argv)
 

@@ -173,14 +173,12 @@ def test_synthesize_stack_skips_an_unresolvable_frame_without_failing_the_rest()
             if command == "-data-evaluate-expression frame_ptr-frame_stack":
                 return [_done("2")]
             if (
-                command
-                == "-data-evaluate-expression (long)frame_stack[2]"
+                command == "-data-evaluate-expression (long)frame_stack[2]"
                 ".return_address_ptr"
             ):
                 raise GdbCommandError("corrupted slot")
             if (
-                command
-                == "-data-evaluate-expression (long)frame_stack[1]"
+                command == "-data-evaluate-expression (long)frame_stack[1]"
                 ".return_address_ptr"
             ):
                 return [_done("94317603726646")]
