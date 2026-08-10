@@ -29,9 +29,13 @@ from mockymock.analysis.refusal import (
 from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.parser import parse_cut
 
-# An INVOKE statement parses "clean" (success=True) but is dropped from the
-# AST with only a ParseResult.warnings entry. Here it sits in a paragraph
-# (DIRTY-PARA) no edge from CLEAN-PARA ever reaches.
+# TRANSFORM has no registered statement parser (cobolparser's
+# UNSUPPORTED_VERBS) so it parses "clean" (success=True) but is dropped
+# from the AST with only a ParseResult.warnings entry -- the same "clean
+# parse, silent drop" shape INVOKE used to have before cobol-parser shipped
+# a first-class InvokeStatement AST node for it (see
+# test_invoke_no_longer_produces_a_parse_warning below). Here it sits in a
+# paragraph (DIRTY-PARA) no edge from CLEAN-PARA ever reaches.
 UNREACHED_INVOKE_CBL = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. SCOPEDW.
@@ -45,7 +49,7 @@ UNREACHED_INVOKE_CBL = """\
            MOVE 1 TO WS-X.
 
        DIRTY-PARA.
-           INVOKE SOME-OBJECT "someMethod".
+           TRANSFORM "x".
            DISPLAY "done".
 """
 
@@ -68,8 +72,27 @@ TESTCASE "reaches the dirty paragraph"
 def _invoke_result():
     result = parse_cobol(UNREACHED_INVOKE_CBL, filename="scopedw.cbl")
     assert result.success, result.errors
-    assert result.warnings  # precondition: the INVOKE drop is warned about
+    assert result.warnings  # precondition: the TRANSFORM drop is warned about
     return result
+
+
+def test_invoke_no_longer_produces_a_parse_warning():
+    """Regression pin (audit finding F-0b): cobol-parser now has a
+    first-class InvokeStatement AST node, so INVOKE parses clean with zero
+    warnings -- it's why this suite's scoping fixtures use TRANSFORM instead
+    to exercise the "clean parse, silently dropped content" shape. If this
+    ever starts failing, cobol-parser dropped INVOKE support again."""
+    result = parse_cobol(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. INVOKEW.\n"
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       MAIN-PARA.\n"
+        '           INVOKE SOME-OBJECT "someMethod".\n',
+        filename="invokew.cbl",
+    )
+    assert result.success, result.errors
+    assert result.warnings == []
 
 
 def test_dropped_content_warnings_carry_a_locatable_line_number():
@@ -183,7 +206,7 @@ GOTO_FALLTHROUGH_CBL = """\
            MOVE 2 TO WS-X.
 
        DIRTY-PARA.
-           INVOKE SOME-OBJECT "someMethod".
+           TRANSFORM "x".
 """
 
 # Same shape, except HOP-PARA ends in an unconditional GO TO, so nothing
@@ -206,7 +229,7 @@ GOTO_NO_FALLTHROUGH_CBL = """\
            GO TO TAIL-PARA.
 
        DIRTY-PARA.
-           INVOKE SOME-OBJECT "someMethod".
+           TRANSFORM "x".
 
        TAIL-PARA.
            MOVE 3 TO WS-X.
