@@ -288,12 +288,15 @@ CLI's `run` actually uses: with `keep=True` the directory is **left on
 disk** — `--keep-sandbox` keeps it unconditionally (and prints its path);
 `--verbose` keeps it through the context so the instrumented-source path
 printed on compile failure still exists, but `_cmd_run` removes it
-afterwards when `--keep-sandbox` was not also given. That removal now
-lives in a `try/finally` wrapping the whole compile/run/coverage body
-(fixed 2026-08-10, audit finding F10) — it used to be a bare statement
-after the `with` block, so a compile failure's early `return 1`, or any
-exception from `compile_source`/`run_binary`/`run_gcov`, skipped it and
-leaked the sandbox permanently. `finally` now runs on every exit path.
+afterwards when `--keep-sandbox` was not also given. A compile failure's
+own `return 1` deliberately skips that removal (the path it just printed
+must still resolve — that survival is itself covered by
+`tests/integration/test_cli.py`). What used to leak permanently was the
+*next* phase: `run_binary`/`run_gcov` raising, which prints no path
+pointing at the sandbox at all. That phase's removal now lives in its own
+`try/finally` (fixed 2026-08-10, audit finding F10) instead of a bare
+statement after the `with` block, which only ran on that phase's normal
+completion.
 So sandboxes are *not* always removed on exit. Their only Docker-specific
 feature:
 when `root` is given, the temp dir is created *under* that directory (creating

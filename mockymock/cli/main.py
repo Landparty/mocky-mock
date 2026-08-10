@@ -662,34 +662,43 @@ def _cmd_run(args: argparse.Namespace) -> int:
     with sandbox_dir_maybe_kept(
         root=docker_toolchain.WORK_ROOT, keep=args.keep_sandbox or args.verbose
     ) as tmp:
+        if args.keep_sandbox:
+            print(f"mockymock run: keeping sandbox {tmp}")
+
+        instrumented_path = tmp / source_path.with_suffix(".cbl").name
+        instrumented_path.write_text(
+            "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
+        )
+
+        compiled = docker_toolchain.compile_source(
+            instrumented_path, coverage=args.coverage, trace=args.trace
+        )
+        if not compiled.success:
+            print("mockymock run: compile failed:")
+            print(compiled.stderr)
+            if args.verbose or args.keep_sandbox:
+                print(f"mockymock run: instrumented source at {instrumented_path}")
+            # Deliberately no cleanup here even under plain --verbose: the
+            # path just printed must still resolve after this function
+            # returns, which is the whole point of printing it. Contrast
+            # the try/finally below, guarding the run_binary/run_gcov
+            # phase -- unlike a compile failure, an exception there prints
+            # no path pointing at the sandbox, so leaving it behind would
+            # just leak silently instead of helping anyone (audit finding
+            # F10; a `return 1` from *this* branch used to be lumped in
+            # with that same fix, which broke the documented, tested
+            # --verbose-survives-a-compile-failure contract below).
+            return 1
+
         # try/finally, not just a statement after the `with`: plain --verbose
         # (no --keep-sandbox) asks sandbox_dir_maybe_kept to retain `tmp` for
-        # the duration of the block (so a compile-failure message can still
-        # point at it) and relies on this cleanup running afterward. A
-        # `return 1` on compile failure or an exception from compile_source/
-        # run_binary/run_gcov used to skip straight past that cleanup and
-        # leak the directory permanently -- `finally` runs on every exit path.
+        # this phase and relies on this cleanup running afterward. A bare
+        # statement placed after the `with` block used to rely on this
+        # phase never raising -- an exception from run_binary/run_gcov
+        # skipped it and leaked the directory permanently, with no printed
+        # path (unlike the compile-failure branch above) to tell anyone it
+        # was there (audit finding F10).
         try:
-            if args.keep_sandbox:
-                print(f"mockymock run: keeping sandbox {tmp}")
-
-            instrumented_path = tmp / source_path.with_suffix(".cbl").name
-            instrumented_path.write_text(
-                "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
-            )
-
-            compiled = docker_toolchain.compile_source(
-                instrumented_path, coverage=args.coverage, trace=args.trace
-            )
-            if not compiled.success:
-                print("mockymock run: compile failed:")
-                print(compiled.stderr)
-                if args.verbose or args.keep_sandbox:
-                    print(
-                        f"mockymock run: instrumented source at {instrumented_path}"
-                    )
-                return 1
-
             assert compiled.binary_path is not None  # implied by compiled.success
             trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
             executed = docker_toolchain.run_binary(

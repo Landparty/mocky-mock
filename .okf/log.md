@@ -57,9 +57,19 @@ Gotchas.
   loser's `docker rm -f` failed against an already-gone container and
   raised, instead of falling through to recreate like the sibling
   "already in use" race does.
-* **F10** (`c912865`) — sandbox retention leaked permanently on any
-  mid-run exception or the compile-failure early return; the cleanup
-  statement lived after the `with` block instead of in a `finally`.
+* **F10** (`c912865`, corrected in a follow-up commit same day) —
+  sandbox retention leaked permanently when `run_binary`/`run_gcov`
+  raised, since the cleanup statement lived after the `with` block
+  instead of in a `finally`. The first pass over-applied this to the
+  compile-failure `return 1` branch too, which broke an existing,
+  intentional, integration-tested contract (`--verbose`'s printed
+  "instrumented source at `<path>`" message on compile failure must
+  still resolve after `main()` returns) — caught by
+  `tests/integration/test_cli.py::test_run_verbose_prints_instrumented_source_path_on_compile_failure`
+  when re-run against the real Docker toolchain (the unit suite alone,
+  with Docker mocked, did not exercise this). Fixed by scoping the
+  `try/finally` to only the `run_binary`/`run_gcov` phase, leaving the
+  compile-failure branch's deliberate no-cleanup behavior untouched.
 * **F12** (`3a355ff`) — `--coverage-out` alone was a silent no-op;
   only `--coverage-json` actually implied `--coverage` in code, though
   both were documented to.

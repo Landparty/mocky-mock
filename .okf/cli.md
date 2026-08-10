@@ -248,14 +248,16 @@ Flags beyond the pipeline inputs:
 - `--verbose` — on compile failure, print the path to the instrumented
   source. Implementation detail: this also forces sandbox retention through
   the context manager (the printed path must still exist when the user
-  reads it), but the CLI explicitly removes the sandbox afterwards when the
-  run got past compilation, so plain `--verbose` leaves no cruft on
-  success. That removal is a `try/finally` around the whole compile/run
-  body since 2026-08-10 (audit finding F10) so it also runs on a compile
-  failure's own early exit and on an exception from `compile_source`/
-  `run_binary`/`run_gcov` — previously a bare statement placed after the
-  `with` block, both of which skipped straight past it and leaked the
-  sandbox permanently. See [runtime](runtime.md)'s Sandbox model section.
+  reads it — deliberately, and covered by an integration test), but the
+  CLI explicitly removes the sandbox afterwards when the run got past
+  compilation, so plain `--verbose` leaves no cruft on success. Since
+  2026-08-10 (audit finding F10) that removal is a `try/finally` around
+  just the `run_binary`/`run_gcov` phase, not the compile-failure branch
+  above — an exception there prints no path pointing at the sandbox (unlike
+  a compile failure), so it used to leak permanently instead of ever being
+  found. A bare statement placed after the `with` block only ran on that
+  phase's normal completion. See [runtime](runtime.md)'s Sandbox model
+  section.
 
 Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
 

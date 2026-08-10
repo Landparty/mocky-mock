@@ -677,9 +677,12 @@ def test_run_tag_selection_runs_only_tagged_cases(tmp_path):
     assert [case["name"] for case in payload["cases"]] == ["calls discrate"]
 
 
-# --- audit F10/F20: sandbox retention must survive every exit path,
-# including ones that don't reach the cleanup statement that used to sit
-# after the `with sandbox_dir_maybe_kept(...)` block ------------------------
+# --- audit F10/F20: --verbose's sandbox cleanup must fire when the
+# run_binary/run_gcov phase raises (previously leaked forever, silently --
+# nothing prints a path to it), but must NOT fire on a compile failure,
+# whose printed "instrumented source at <path>" message is retention by
+# design, not a leak -- F10's fix has to preserve that documented,
+# integration-tested contract while still closing the real gap ------------
 
 
 def _sandbox_dirs(tmp_path):
@@ -689,11 +692,14 @@ def _sandbox_dirs(tmp_path):
     return list(work.glob("mockymock-*"))
 
 
-def test_verbose_without_keep_sandbox_cleans_up_after_compile_failure(tmp_path):
-    """A compile failure returns 1 from inside the `with` block. Before the
-    fix, that `return` skipped the cleanup statement that lived after the
-    `with`, permanently leaking the sandbox whenever --verbose (without
-    --keep-sandbox) was passed."""
+def test_verbose_without_keep_sandbox_survives_a_compile_failure(tmp_path):
+    """A compile failure prints 'instrumented source at <path>' -- that
+    path must still resolve after main() returns, or the message is
+    useless. This is deliberate retention, not the F10 leak: contrast
+    test_verbose_without_keep_sandbox_cleans_up_after_run_binary_raises
+    below, where nothing prints a path and the directory must NOT
+    survive. (tests/integration/test_cli.py pins the same contract
+    end-to-end against a real compile failure.)"""
     program = tmp_path / "ORDRPROC.cbl"
     program.write_text(RUN_PROGRAM)
     cut = tmp_path / "ORDRPROC.cut"
@@ -714,7 +720,9 @@ def test_verbose_without_keep_sandbox_cleans_up_after_compile_failure(tmp_path):
             ["run", str(program), "--cut", str(cut), "--verbose"]
         )
     assert exit_code == 1
-    assert _sandbox_dirs(tmp_path) == []
+    dirs = _sandbox_dirs(tmp_path)
+    assert len(dirs) == 1
+    assert (dirs[0] / "ORDRPROC.cbl").exists()
 
 
 def test_verbose_without_keep_sandbox_cleans_up_after_run_binary_raises(tmp_path):
