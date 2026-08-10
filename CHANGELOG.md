@@ -15,6 +15,16 @@
 - `splicer/injector.build_rows_block` generalized from a SQL-only function that hardcoded SQLCODE 0/100 to `build_rows_block(tally_name, rows, *, row_suffix_moves, exhausted_moves)`, with the SQLCODE literals moved to their SQL call site in `build_site_dispatch` and a new READ call site alongside it.
 - Bumped the vendored `cobolparser` pin to `ff64b25` (includes upstream PR #110's gen-fixtures fixes and PR #112's EJECT support).
 
+## [0.5.1](https://github.com/Landparty/mocky-mock/compare/v0.5.0...v0.5.1) (2026-08-10)
+
+
+### Documentation
+
+* fix stale org references in install instructions ([a6bdab8](https://github.com/Landparty/mocky-mock/commit/a6bdab88cee56ebc3d9a0f319f8c9dace9b49a5c))
+* fix stale present-tense claims and commit citation from prior pass ([4a13386](https://github.com/Landparty/mocky-mock/commit/4a13386bd783f3bf27f13e1a269052ca8b5b6236))
+* fix whole-branch review accuracy defects vs sibling repo's actual workflow ([fda5926](https://github.com/Landparty/mocky-mock/commit/fda59265fdb449e53d72150fe92413e33b61fe18))
+* update publishing docs for the retired standalone pipeline ([fd9a7b4](https://github.com/Landparty/mocky-mock/commit/fd9a7b4e645a798effe1d5222fede395c5365302))
+
 ## [0.5.0](https://github.com/samdion1994/mocky-mock/compare/v0.4.0...v0.5.0) (2026-08-07)
 
 
