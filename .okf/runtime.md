@@ -72,9 +72,12 @@ automatically; `setup` is therefore optional).
 | 3. Container | one `docker inspect -f "{{.State.Running}} {{.Config.Image}}" mockymock-cobc` yields both running state and creating image | absent -> `_create_container()` (`docker run -d --name mockymock-cobc <hardening flags> -v <WORK_ROOT>:/work <IMAGE> sleep infinity`); **created from a different image tag** -> `docker rm -f` then `_create_container()` (a stale container would otherwise defeat the content-hash tag forever); present-but-stopped -> `docker start mockymock-cobc` |
 
 `<hardening flags>` is `_HARDENING_FLAGS` — see the **Threat model** section
-below; a pre-hardening container is picked up by the same tag-drift path (the
-Dockerfile comment bump changed `IMAGE`, so step 3 sees the old container's
-image `!= IMAGE` and rm+recreates it with the flags).
+below. `_image_tag()` hashes the Dockerfile content *and* `_HARDENING_FLAGS`
+together (fixed 2026-08-10, audit finding F2 — previously only the Dockerfile
+fed `IMAGE`, so an edit to the flags alone left a running container's
+hardening silently stale): editing either one changes `IMAGE`, so step 3 sees
+the old container's image `!= IMAGE` and rm+recreates it with the current
+flags. No manual "bump the Dockerfile" step is needed for a flags-only change.
 
 `_create_container()` also absorbs the concurrent-first-run race: if
 `docker run --name` fails with *"name already in use"* (another invocation
@@ -87,7 +90,7 @@ Constants (asserted by unit tests, must not drift in shape):
 
 | Name | Value |
 |------|-------|
-| `IMAGE` | `mockymock-gnucobol:<8-char sha256 of docker/Dockerfile>` — computed by `_image_tag()` at import, so editing the Dockerfile changes the tag, the image-inspect misses, a rebuild happens, **and** step 3 recreates the container from the new image |
+| `IMAGE` | `mockymock-gnucobol:<8-char sha256 of docker/Dockerfile content + _HARDENING_FLAGS>` — computed by `_image_tag()` at import, so editing *either* the Dockerfile *or* the hardening flags changes the tag, the image-inspect misses, a rebuild happens, **and** step 3 recreates the container from the new image |
 | `CONTAINER` | `mockymock-cobc` |
 | `WORK_ROOT` | `Path.home() / ".mockymock" / "work"` |
 

@@ -36,6 +36,39 @@ def test_image_tag_changes_with_dockerfile():
     assert dt.IMAGE.startswith("mockymock-gnucobol:")
 
 
+def test_image_tag_changes_with_hardening_flags():
+    """Audit finding F2: the hardening flags live purely on `docker run`,
+    never in the Dockerfile -- ensure_toolchain's only recreate signal is
+    IMAGE (container_image != IMAGE), so unless editing the flags also
+    changes IMAGE, an already-running container silently keeps whatever
+    hardening it started with."""
+    from mockymock.runtime import docker_toolchain as dt
+
+    same_dockerfile = "FROM debian:trixie-slim\n"
+    tag_a = dt._image_tag(
+        dockerfile_text=same_dockerfile, hardening_flags=("--network", "none")
+    )
+    tag_b = dt._image_tag(
+        dockerfile_text=same_dockerfile,
+        hardening_flags=("--network", "none", "--pids-limit", "512"),
+    )
+    assert tag_a != tag_b
+
+
+def test_image_constant_is_derived_from_the_real_hardening_flags():
+    """IMAGE (computed at import time from the real _HARDENING_FLAGS, not
+    a test double) must actually change if those flags do -- otherwise
+    the previous test only proves _image_tag's math works in isolation,
+    not that IMAGE itself is wired to it."""
+    from mockymock.runtime import docker_toolchain as dt
+
+    dockerfile_text = (dt._DOCKER_CONTEXT / "Dockerfile").read_text(encoding="utf-8")
+    real_tag = dt._image_tag(dockerfile_text, dt._HARDENING_FLAGS)
+    assert dt.IMAGE == f"mockymock-gnucobol:{real_tag}"
+    changed_tag = dt._image_tag(dockerfile_text, dt._HARDENING_FLAGS + ("--extra",))
+    assert changed_tag != real_tag
+
+
 def test_docker_context_dockerfile_is_bundled_under_the_package():
     """Regression test for a real bug: the Dockerfile must live under
     mockymock/runtime/docker/, not repo-root docker/, so it ships inside the

@@ -28,21 +28,6 @@ from mockymock.runtime.executor import (
 # checkout or a real `uv tool install` with no repo present at all.
 _DOCKER_CONTEXT = Path(__file__).resolve().parent / "docker"
 
-
-def _image_tag(dockerfile_text: str | None = None) -> str:
-    """8-char content hash of docker/Dockerfile, used as the image tag so
-    that editing the Dockerfile changes the tag, `docker image inspect`
-    misses, and `ensure_toolchain` rebuilds instead of silently reusing a
-    stale image."""
-    if dockerfile_text is None:
-        dockerfile_text = (_DOCKER_CONTEXT / "Dockerfile").read_text(encoding="utf-8")
-    return hashlib.sha256(dockerfile_text.encode()).hexdigest()[:8]
-
-
-IMAGE = f"mockymock-gnucobol:{_image_tag()}"
-CONTAINER = "mockymock-cobc"
-WORK_ROOT = Path.home() / ".mockymock" / "work"
-
 # Container hardening (2026-07-07 audit finding 4.3). The container compiles
 # and *runs untrusted COBOL*: a hostile `.cbl` -- or a MOCK body, which the
 # splicer injects verbatim -- can `CALL "SYSTEM"` and run arbitrary shell
@@ -94,6 +79,34 @@ _HARDENING_FLAGS: tuple[str, ...] = (
     "--security-opt",
     "no-new-privileges",
 )
+
+
+def _image_tag(
+    dockerfile_text: str | None = None,
+    hardening_flags: tuple[str, ...] | None = None,
+) -> str:
+    """8-char content hash of docker/Dockerfile PLUS the hardening flags
+    `docker run` applies at container-creation time, used as the image
+    tag so that editing EITHER changes the tag, `docker image inspect`
+    misses, and `ensure_toolchain` rebuilds/recreates instead of silently
+    reusing a stale image or a running container whose hardening no
+    longer matches what's in source. The flags are never baked into the
+    Dockerfile itself, so without folding them in here, editing
+    _HARDENING_FLAGS alone left IMAGE -- and therefore
+    ensure_toolchain's only recreate signal -- unchanged: an
+    already-running container would silently keep whatever hardening it
+    started with (audit finding F2)."""
+    if dockerfile_text is None:
+        dockerfile_text = (_DOCKER_CONTEXT / "Dockerfile").read_text(encoding="utf-8")
+    if hardening_flags is None:
+        hardening_flags = _HARDENING_FLAGS
+    digest_input = dockerfile_text + "\x00" + "\x00".join(hardening_flags)
+    return hashlib.sha256(digest_input.encode()).hexdigest()[:8]
+
+
+IMAGE = f"mockymock-gnucobol:{_image_tag()}"
+CONTAINER = "mockymock-cobc"
+WORK_ROOT = Path.home() / ".mockymock" / "work"
 
 
 class DockerNotAvailableError(RuntimeError):
