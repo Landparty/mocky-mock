@@ -22,6 +22,28 @@ def test_generate_reports_terminators_separately_from_unmockable(tmp_path, capsy
     assert "will be refused" not in out
 
 
+def test_generate_circular_copybook_reports_a_problem_instead_of_raising(
+    tmp_path, capsys
+):
+    """Audit finding F6: unlike _cmd_fixtures, _cmd_generate's own
+    expand_copybooks() call had no try/except -- a circular COPY (or an
+    oversized/deeply-nested chain, or a mis-encoded copybook file) raised
+    a raw Python traceback instead of a clean, on-topic error."""
+    (tmp_path / "SELFREF.cpy").write_text("           COPY SELFREF.\n")
+    cbl = tmp_path / "P.cbl"
+    cbl.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. P.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       COPY SELFREF.\n"
+    )
+    exit_code = main(["generate", str(cbl), "--copybook-path", str(tmp_path)])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "Circular copybook dependency" in out
+
+
 # --- mockymock lint -------------------------------------------------------
 
 from pathlib import Path

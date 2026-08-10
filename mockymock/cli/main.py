@@ -318,7 +318,13 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     raw_source = source_path.read_text(encoding="utf-8")
     if args.copybook_path:
-        expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        # See _cmd_fixtures's identical guard on the same call for why
+        # this can raise on realistic inputs (audit finding F6).
+        try:
+            expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
+            print(f"mockymock generate: {exc}")
+            return 1
         expansion_reasons = check_expansion_warnings(expansion)
         for reason in expansion_reasons:
             print(f"mockymock generate: refused ({reason.code}): {reason.message}")
