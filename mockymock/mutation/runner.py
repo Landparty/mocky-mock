@@ -121,14 +121,39 @@ def _run_suite_once(
         if execution.exit_code == TIMEOUT_EXIT_CODE:
             return "timeout", f"no exit within {timeout_seconds}s", notes
         suite_result = parse_stdout(execution.stdout)
-        if execution.exit_code == 0 and suite_result.all_passed:
-            return "passed", "", notes
-        for case in suite_result.results:
-            if case.failure_reasons:
-                return "failed", case.failure_reasons[0], notes
-            if case.crashed:
-                return "failed", f"case {case.case_name!r} crashed", notes
-        return "failed", f"binary exited {execution.exit_code}", notes
+        status, detail = _classify_execution(execution, suite_result)
+        return status, detail, notes
+
+
+def _classify_execution(execution, suite_result) -> tuple[str, str]:
+    """Reduces one execution's exit code + parsed stdout to a (status,
+    detail) pair. Split out of _run_suite_once so this decision --
+    notably which anomaly explains all_passed being False when no
+    individual case reports a failure or crash -- is testable without a
+    real compile/run."""
+    if execution.exit_code == 0 and suite_result.all_passed:
+        return "passed", ""
+    for case in suite_result.results:
+        if case.failure_reasons:
+            return "failed", case.failure_reasons[0]
+        if case.crashed:
+            return "failed", f"case {case.case_name!r} crashed"
+    # all_passed is False but no individual case explains why: name the
+    # actual anomaly rather than a misleading "binary exited 0" when the
+    # exit code, in fact, was 0 (audit finding F28).
+    if suite_result.duplicate_case_starts:
+        return "failed", "duplicate CASE START markers in the run"
+    if suite_result.orphan_failures:
+        return "failed", "a CASE FAIL had no matching CASE START"
+    if suite_result.tests_run == 0:
+        return "failed", "no test cases reported running"
+    if suite_result.failures:
+        return (
+            "failed",
+            f"SUMMARY reported {suite_result.failures} failure(s) with no "
+            f"attributable case",
+        )
+    return "failed", f"binary exited {execution.exit_code}"
 
 
 def run_mutation(
