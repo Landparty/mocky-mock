@@ -30,7 +30,9 @@ written, not assumed from GDB/MI documentation:
 
 from __future__ import annotations
 
+import queue
 import subprocess
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -48,6 +50,43 @@ _BENIGN_WARNING_SUBSTRING = "Error disabling address space randomization"
 # or a splicer-inserted run of mock/driver statements (same .cbl file, no
 # original-line counterpart) takes an unusually long time to coalesce past.
 _MAX_COALESCE_STEPS = 500
+
+# audit finding F4: a hung debuggee (an infinite loop past a mocked CALL,
+# same failure mode run_binary's own 30s default guards against -- see
+# docker_toolchain.py) produces no MI record at all, and a bare
+# `stdout.readline()` blocks the whole DAP adapter forever with no way to
+# recover short of killing the process from outside. Bounded at the same
+# order of magnitude as that other timeout.
+_READ_TIMEOUT_SECONDS = 30.0
+
+
+def _readline_with_deadline(stream, timeout: float) -> str:
+    """`stream.readline()`, but gives up after `timeout` seconds instead of
+    blocking forever. Popen pipes are OS pipes on both platforms mockymock
+    targets, and Windows pipe handles support no portable non-blocking or
+    select()-based read -- so the wait is bounded with a one-shot daemon
+    thread instead: cheap next to the round trip a real gdb command already
+    costs, and it leaves `stream`'s own call sequence untouched (still
+    exactly one `readline()` per line, in order), unlike a persistent
+    background reader would. An orphaned thread on timeout is harmless: it
+    is a daemon, and either later gets a line nobody reads or unblocks for
+    good when `close()` terminates the gdb process."""
+    result: queue.Queue[str] = queue.Queue(maxsize=1)
+
+    def _read() -> None:
+        try:
+            result.put(stream.readline())
+        except (OSError, ValueError):
+            result.put("")  # closed pipe -- same as EOF to every caller
+
+    threading.Thread(target=_read, daemon=True).start()
+    try:
+        return result.get(timeout=timeout)
+    except queue.Empty:
+        raise GdbSessionClosedError(
+            f"gdb produced no output for {timeout:.0f}s (the debuggee may "
+            "be hung)"
+        ) from None
 
 
 @dataclass
@@ -372,7 +411,9 @@ class GdbSession:
 
         records: list[MIRecord] = []
         while True:
-            raw_line = self._process.stdout.readline()
+            raw_line = _readline_with_deadline(
+                self._process.stdout, _READ_TIMEOUT_SECONDS
+            )
             if raw_line == "":
                 raise GdbSessionClosedError(
                     f"gdb process exited while waiting for a response to {command!r}"
@@ -512,7 +553,9 @@ class GdbSession:
         StopEvent."""
         assert self._process.stdout is not None
         while True:
-            raw_line = self._process.stdout.readline()
+            raw_line = _readline_with_deadline(
+                self._process.stdout, _READ_TIMEOUT_SECONDS
+            )
             if raw_line == "":
                 raise GdbSessionClosedError(
                     "gdb process exited before reporting *stopped"

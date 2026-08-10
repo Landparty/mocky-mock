@@ -6,6 +6,7 @@ design spike (see docs/2026-07-22-dap-debugger-design.md's Empirical
 basis) -- not hand-invented MI syntax.
 """
 
+import threading
 from unittest import mock
 
 import pytest
@@ -454,3 +455,48 @@ def test_close_terminates_process_if_gdb_exit_hangs():
     session = GdbSession(process)
     session.close()
     assert process.returncode == -15
+
+
+# --- audit F4: a hung debuggee (no MI record ever arrives -- e.g. an
+# infinite loop past a mocked CALL) must not block the read loop forever --
+
+
+class _HangingStdout:
+    """readline() that never returns, simulating a debuggee stuck producing
+    no output and no MI record at all."""
+
+    def readline(self):
+        threading.Event().wait()  # blocks forever; only a daemon thread waits on it
+        return ""  # pragma: no cover -- unreachable, wait() never returns
+
+
+class _ChainedStdout:
+    """Yields `lines` first (the immediate `^running` result an exec
+    command gets), then hangs -- simulating gdb never reporting the async
+    `*stopped` that should follow."""
+
+    def __init__(self, lines, then):
+        self._iter = iter(lines)
+        self._then = then
+
+    def readline(self):
+        line = next(self._iter, None)
+        return line if line is not None else self._then.readline()
+
+
+def test_send_raises_after_read_deadline_on_a_hung_debuggee():
+    process = _FakeProcess([])
+    process.stdout = _HangingStdout()
+    session = GdbSession(process)
+    with mock.patch("mockymock.debug.gdb_session._READ_TIMEOUT_SECONDS", 0.05):
+        with pytest.raises(GdbSessionClosedError, match="no output"):
+            session.send("-exec-continue")
+
+
+def test_read_until_stopped_raises_after_read_deadline_on_a_hung_debuggee():
+    process = _FakeProcess([])
+    process.stdout = _ChainedStdout(["^running\n"], _HangingStdout())
+    session = GdbSession(process)
+    with mock.patch("mockymock.debug.gdb_session._READ_TIMEOUT_SECONDS", 0.05):
+        with pytest.raises(GdbSessionClosedError, match="no output"):
+            session.run()
