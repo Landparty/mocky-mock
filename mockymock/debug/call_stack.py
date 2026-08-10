@@ -31,7 +31,7 @@ import bisect
 import re
 from dataclasses import dataclass
 
-from mockymock.debug.gdb_session import GdbSession, evaluate
+from mockymock.debug.gdb_session import GdbCommandError, GdbSession, evaluate
 from mockymock.debug.line_map import LineMap
 
 _LINE_DIRECTIVE_RE = re.compile(r'^#line (\d+) "([^"]*\.cbl)"')
@@ -183,8 +183,17 @@ def synthesize_stack(
     # P_cgerror error label, not any real call site). The real, populated
     # caller frames are frame_stack[1..depth], innermost first.
     for i in range(depth, 0, -1):
-        address = int(evaluate(session, f"(long)frame_stack[{i}].return_address_ptr"))
-        location = session.resolve_address(address)
+        # A single corrupted slot or unresolvable address must not fail
+        # the whole request -- frame 0 and every other caller frame are
+        # independently resolvable and the client still wants them
+        # (audit finding F14).
+        try:
+            address = int(
+                evaluate(session, f"(long)frame_stack[{i}].return_address_ptr")
+            )
+            location = session.resolve_address(address)
+        except GdbCommandError:
+            continue
         frame = _resolve_frame(
             location.get("file", ""),
             int(location["line"]),

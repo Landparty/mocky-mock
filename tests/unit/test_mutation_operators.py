@@ -99,6 +99,28 @@ def test_boundary_verbs_exclude_the_whole_line():
     assert mutants == []
 
 
+def test_hyphenated_identifier_containing_a_boundary_verb_is_not_excluded():
+    """Audit finding F8: _EXCLUDED_VERBS matched with `\\bREAD\\b`, and `-`
+    is not a word character in regex, so it false-matched inside
+    WS-READ-COUNT -- an ordinary COBOL naming convention, not a real READ
+    statement. The line must still be mutated."""
+    mutants = generate_mutants(_procedure("           IF WS-READ-COUNT > 5"))
+    assert [m for m in mutants if m.operator == "rel-swap"] != []
+
+
+def test_hyphenated_identifier_containing_call_is_not_excluded():
+    mutants = generate_mutants(_procedure("           MOVE 1 TO WS-CALL-FLAG."))
+    assert [m for m in mutants if m.operator == "move-literal"] != []
+
+
+def test_hyphenated_identifier_containing_scope_word_does_not_block_deletion():
+    """_SCOPE_TOKENS had the same \\b-vs-hyphen bug: PERFORM inside
+    WS-PERFORM-COUNT incorrectly looked like a scope-carrying line and
+    blocked an otherwise-safe MOVE deletion."""
+    mutants = generate_mutants(_procedure("           MOVE 1 TO WS-PERFORM-COUNT."))
+    assert [m for m in mutants if m.operator == "stmt-delete"] != []
+
+
 def test_scope_carrying_lines_are_never_deleted():
     mutants = generate_mutants(_procedure("           MOVE 1 TO WS-A IF WS-B > 2"))
     assert [m for m in mutants if m.operator == "stmt-delete"] == []

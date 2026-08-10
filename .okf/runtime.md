@@ -3,7 +3,7 @@ type: Module
 title: Docker Runtime
 description: mockymock-cobc container lifecycle, docker exec-based compile/run, and the Docker-only sandbox model that replaced the local cobc toolchain.
 tags: [runtime, docker, gnucobol]
-timestamp: 2026-07-09T00:00:00Z
+timestamp: 2026-08-10T00:00:00Z
 ---
 
 # Overview
@@ -72,9 +72,12 @@ automatically; `setup` is therefore optional).
 | 3. Container | one `docker inspect -f "{{.State.Running}} {{.Config.Image}}" mockymock-cobc` yields both running state and creating image | absent -> `_create_container()` (`docker run -d --name mockymock-cobc <hardening flags> -v <WORK_ROOT>:/work <IMAGE> sleep infinity`); **created from a different image tag** -> `docker rm -f` then `_create_container()` (a stale container would otherwise defeat the content-hash tag forever); present-but-stopped -> `docker start mockymock-cobc` |
 
 `<hardening flags>` is `_HARDENING_FLAGS` — see the **Threat model** section
-below; a pre-hardening container is picked up by the same tag-drift path (the
-Dockerfile comment bump changed `IMAGE`, so step 3 sees the old container's
-image `!= IMAGE` and rm+recreates it with the flags).
+below. `_image_tag()` hashes the Dockerfile content *and* `_HARDENING_FLAGS`
+together (fixed 2026-08-10, audit finding F2 — previously only the Dockerfile
+fed `IMAGE`, so an edit to the flags alone left a running container's
+hardening silently stale): editing either one changes `IMAGE`, so step 3 sees
+the old container's image `!= IMAGE` and rm+recreates it with the current
+flags. No manual "bump the Dockerfile" step is needed for a flags-only change.
 
 `_create_container()` also absorbs the concurrent-first-run race: if
 `docker run --name` fails with *"name already in use"* (another invocation
@@ -83,11 +86,22 @@ winner's container — starting it if it exists but is stopped — instead of
 raising. Any other `docker run` failure still raises
 `DockerNotAvailableError`.
 
+The stale-image path (step 3's `docker rm -f` + recreate) has the mirror
+-image race: two invocations can both see the same stale tag and both try
+to remove it. The winner's `rm -f` succeeds; the loser's then fails
+against an already-gone container with stderr containing *"No such
+container"* — not a real failure, just evidence the winner got there
+first. Fixed 2026-08-10 (audit finding F9) to fall through to
+`_create_container()` in that case instead of raising
+`DockerNotAvailableError`, same treatment as the "already in use" race
+above, just on the removal side of the sequence rather than the creation
+side.
+
 Constants (asserted by unit tests, must not drift in shape):
 
 | Name | Value |
 |------|-------|
-| `IMAGE` | `mockymock-gnucobol:<8-char sha256 of docker/Dockerfile>` — computed by `_image_tag()` at import, so editing the Dockerfile changes the tag, the image-inspect misses, a rebuild happens, **and** step 3 recreates the container from the new image |
+| `IMAGE` | `mockymock-gnucobol:<8-char sha256 of docker/Dockerfile content + _HARDENING_FLAGS>` — computed by `_image_tag()` at import, so editing *either* the Dockerfile *or* the hardening flags changes the tag, the image-inspect misses, a rebuild happens, **and** step 3 recreates the container from the new image |
 | `CONTAINER` | `mockymock-cobc` |
 | `WORK_ROOT` | `Path.home() / ".mockymock" / "work"` |
 
@@ -160,10 +174,10 @@ one mount). Per-run mount isolation and a non-root uid strategy that survives
 the Windows bind mount are the remaining hardening steps, not yet done.
 
 Tuning: `PIDS_LIMIT` and `MEMORY_LIMIT` are module-level constants. Changing
-`_HARDENING_FLAGS` does **not** change `IMAGE` (they live on `docker run`, not
-in the Dockerfile), so to force existing containers to be recreated, bump the
-`docker/Dockerfile` content (a comment edit is enough) — that changes the
-content-hash tag and step 3 rm+recreates.
+either, or any of `_HARDENING_FLAGS`, changes `IMAGE` automatically
+(`_image_tag()` hashes the flags alongside the Dockerfile content — see
+above) and step 3 rm+recreates the container on the next `ensure_toolchain()`
+call; no manual Dockerfile edit is needed to force that.
 
 # Host <-> container filesystem boundary
 
@@ -194,13 +208,23 @@ re-mounted per run. Consequences:
 
 `compile_source(source_path: Path) -> CompileResult`:
 - Maps source and binary paths to container paths via `to_container_path`.
-- Runs `docker exec mockymock-cobc cobc -free -x <container_source> -o <container_binary>`.
+- Runs `docker exec mockymock-cobc timeout -k 5 585 cobc -free -x <container_source> -o <container_binary>`
+  (fixed 2026-08-10, audit finding F1 — previously unwrapped: a `cobc`
+  invocation that hung inside the shared container had no container-side
+  bound at all and outlived even the host's own 600s `subprocess.run`
+  timeout, leaking an orphaned process into a container every other run
+  also uses). The container-side ceiling (585s) stays under the host-side
+  `subprocess.run(timeout=600)` guard, same `-k 5` SIGKILL-escalation
+  pattern as `run_binary` below.
 - Success requires **both** `returncode == 0` **and** `binary_path.exists()`
   on the host side — a zero exit with no binary materializing (e.g. a stale
   mount) is treated as failure, not a phantom success.
 - `OSError` (docker CLI vanished mid-call) and `subprocess.TimeoutExpired`
   (600s) are both caught and turned into a failed `CompileResult` with an
   explanatory `stderr`, never an unhandled exception.
+
+`run_gcov(source_path: Path) -> GcovResult` is wrapped the same way (`timeout
+-k 5 50`, fixed alongside F1 for the identical orphaned-process risk).
 
 `run_binary(binary_path: Path, timeout_seconds: int = 30) -> ExecutionResult`:
 - Runs `docker exec -w <container_dir> mockymock-cobc timeout -k 5 <timeout_seconds> <container_binary>`
@@ -263,9 +287,18 @@ ignore_errors=True)`). `sandbox_dir_maybe_kept(root, keep)` is what the
 CLI's `run` actually uses: with `keep=True` the directory is **left on
 disk** — `--keep-sandbox` keeps it unconditionally (and prints its path);
 `--verbose` keeps it through the context so the instrumented-source path
-printed on compile failure still exists, but the CLI removes it afterwards
-when the run got past compilation. So sandboxes are *not* always removed
-on exit. Their only Docker-specific feature:
+printed on compile failure still exists, but `_cmd_run` removes it
+afterwards when `--keep-sandbox` was not also given. A compile failure's
+own `return 1` deliberately skips that removal (the path it just printed
+must still resolve — that survival is itself covered by
+`tests/integration/test_cli.py`). What used to leak permanently was the
+*next* phase: `run_binary`/`run_gcov` raising, which prints no path
+pointing at the sandbox at all. That phase's removal now lives in its own
+`try/finally` (fixed 2026-08-10, audit finding F10) instead of a bare
+statement after the `with` block, which only ran on that phase's normal
+completion.
+So sandboxes are *not* always removed on exit. Their only Docker-specific
+feature:
 when `root` is given, the temp dir is created *under* that directory (creating
 `root` first if missing) via `tempfile.mkdtemp(prefix="mockymock-", dir=root)`.
 The Docker toolchain always calls it as `sandbox_dir(root=docker_toolchain.WORK_ROOT)`

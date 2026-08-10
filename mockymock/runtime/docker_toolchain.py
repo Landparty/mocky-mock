@@ -28,21 +28,6 @@ from mockymock.runtime.executor import (
 # checkout or a real `uv tool install` with no repo present at all.
 _DOCKER_CONTEXT = Path(__file__).resolve().parent / "docker"
 
-
-def _image_tag(dockerfile_text: str | None = None) -> str:
-    """8-char content hash of docker/Dockerfile, used as the image tag so
-    that editing the Dockerfile changes the tag, `docker image inspect`
-    misses, and `ensure_toolchain` rebuilds instead of silently reusing a
-    stale image."""
-    if dockerfile_text is None:
-        dockerfile_text = (_DOCKER_CONTEXT / "Dockerfile").read_text(encoding="utf-8")
-    return hashlib.sha256(dockerfile_text.encode()).hexdigest()[:8]
-
-
-IMAGE = f"mockymock-gnucobol:{_image_tag()}"
-CONTAINER = "mockymock-cobc"
-WORK_ROOT = Path.home() / ".mockymock" / "work"
-
 # Container hardening (2026-07-07 audit finding 4.3). The container compiles
 # and *runs untrusted COBOL*: a hostile `.cbl` -- or a MOCK body, which the
 # splicer injects verbatim -- can `CALL "SYSTEM"` and run arbitrary shell
@@ -94,6 +79,34 @@ _HARDENING_FLAGS: tuple[str, ...] = (
     "--security-opt",
     "no-new-privileges",
 )
+
+
+def _image_tag(
+    dockerfile_text: str | None = None,
+    hardening_flags: tuple[str, ...] | None = None,
+) -> str:
+    """8-char content hash of docker/Dockerfile PLUS the hardening flags
+    `docker run` applies at container-creation time, used as the image
+    tag so that editing EITHER changes the tag, `docker image inspect`
+    misses, and `ensure_toolchain` rebuilds/recreates instead of silently
+    reusing a stale image or a running container whose hardening no
+    longer matches what's in source. The flags are never baked into the
+    Dockerfile itself, so without folding them in here, editing
+    _HARDENING_FLAGS alone left IMAGE -- and therefore
+    ensure_toolchain's only recreate signal -- unchanged: an
+    already-running container would silently keep whatever hardening it
+    started with (audit finding F2)."""
+    if dockerfile_text is None:
+        dockerfile_text = (_DOCKER_CONTEXT / "Dockerfile").read_text(encoding="utf-8")
+    if hardening_flags is None:
+        hardening_flags = _HARDENING_FLAGS
+    digest_input = dockerfile_text + "\x00" + "\x00".join(hardening_flags)
+    return hashlib.sha256(digest_input.encode()).hexdigest()[:8]
+
+
+IMAGE = f"mockymock-gnucobol:{_image_tag()}"
+CONTAINER = "mockymock-cobc"
+WORK_ROOT = Path.home() / ".mockymock" / "work"
 
 
 class DockerNotAvailableError(RuntimeError):
@@ -222,12 +235,16 @@ def ensure_toolchain() -> None:
         # the content-hash tag entirely: every compile would keep running
         # in the stale toolchain forever. Remove and recreate.
         rm = _docker("rm", "-f", CONTAINER, timeout=60)
-        if rm.returncode != 0:
+        if rm.returncode != 0 and "no such container" not in rm.stderr.lower():
             raise DockerNotAvailableError(
                 f"container {CONTAINER} was created from image "
                 f"{container_image!r} (expected {IMAGE}) and could not be "
                 f"removed for recreation:\n{rm.stderr.strip()}"
             )
+        # "No such container" means a concurrent invocation racing on the
+        # same stale-image check already removed it -- same race as the
+        # "already in use" recovery below, just on the other end of the
+        # remove-then-recreate sequence. Proceed to create/adopt either way.
         _create_container()
         return
     if not running:
@@ -285,7 +302,27 @@ def compile_source(
     binary_path = source_path.with_suffix("")
     container_binary = to_container_path(binary_path, WORK_ROOT)
     container_dir = container_source.rsplit("/", 1)[0]
-    cmd = ["docker", "exec", "-w", container_dir, CONTAINER, "cobc", "-free"]
+    # Wrapped in the same in-container `timeout -k` run_binary uses for
+    # the execute phase: without it, the host-side subprocess.run(timeout=)
+    # below only kills the LOCAL `docker exec` client on expiry -- a
+    # pathological source that makes cobc hang leaves it orphaned inside
+    # the shared, long-lived container, burning CPU/PIDS_LIMIT against
+    # every other run sharing it (audit finding F1). 585s leaves a 15s
+    # margin under the host-side 600s guard, the same ratio run_binary
+    # uses between its container and host timeouts.
+    cmd = [
+        "docker",
+        "exec",
+        "-w",
+        container_dir,
+        CONTAINER,
+        "timeout",
+        "-k",
+        "5",
+        "585",
+        "cobc",
+        "-free",
+    ]
     if coverage:
         cmd.append("--coverage")
     if trace:
@@ -441,7 +478,19 @@ def run_gcov(source_path: Path) -> GcovResult:
     container_dir = container_source.rsplit("/", 1)[0]
     try:
         result = subprocess.run(
-            ["docker", "exec", "-w", container_dir, CONTAINER, "gcov", gcda_path.name],
+            [
+                "docker",
+                "exec",
+                "-w",
+                container_dir,
+                CONTAINER,
+                "timeout",
+                "-k",
+                "5",
+                "50",
+                "gcov",
+                gcda_path.name,
+            ],
             capture_output=True,
             text=True,
             timeout=60,
@@ -499,5 +548,15 @@ def start_gdb_session(binary_path: Path) -> subprocess.Popen:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        # A DISPLAY of an uninitialized/garbage alphanumeric field -- the
+        # exact thing someone debugging a data bug would inspect -- can
+        # contain a byte that isn't valid in the default strict decoding,
+        # which raised an uncaught UnicodeDecodeError deep inside
+        # GdbSession.readline() and killed the whole session (audit
+        # finding F5). errors="replace" degrades that one line instead of
+        # crashing, matching runtime/executor.py's existing convention
+        # for decoding subprocess output that may contain garbage bytes.
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )

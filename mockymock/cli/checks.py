@@ -136,7 +136,18 @@ def run_static_checks(
     # 1. Read source; expand copybooks and check expansion warnings.
     raw_source = source_path.read_text(encoding="utf-8")
     if copybook_paths:
-        expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
+        # cobolparser genuinely raises for realistic inputs (a copybook
+        # that COPYs itself, an oversized/deeply-nested chain, a
+        # mis-encoded file) -- CircularReferenceError, NestingDepthError,
+        # TotalExpansionSizeExceededError, EncodingError. Shared by
+        # run/lint/debug/export/mutate: an unhandled traceback here
+        # reached six different subcommands (audit finding F6). Mirrors
+        # _cmd_fixtures's existing broad catch for the same call.
+        try:
+            expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
+        except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
+            out.problems.append(f"copybook expansion failed: {exc}")
+            return out
         expansion_reasons = check_expansion_warnings(expansion)
         if expansion_reasons:
             out.problems.extend(

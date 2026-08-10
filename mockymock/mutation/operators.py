@@ -19,12 +19,24 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+
+# Plain `\b` treats `-` as a boundary (it's not a `\w` character), so
+# `\bREAD\b` false-matches inside an identifier like WS-READ-COUNT or
+# WS-CALL-FLAG -- COBOL naming conventions routinely compose exactly these
+# verbs with hyphens. A COBOL word boundary must also reject a neighboring
+# `-` (or alphanumeric), which `\b` alone cannot express.
+def _cobol_word(alternatives: str) -> str:
+    return rf"(?<![A-Z0-9-])(?:{alternatives})(?![A-Z0-9-])"
+
+
 # Statements the splicer owns: external boundaries (mocked) plus verbs the
 # terminator/flow machinery rewrites. Any line where one of these appears
 # as a word (outside literals) is excluded wholesale.
 _EXCLUDED_VERBS = re.compile(
-    r"\b(CALL|CANCEL|ENTRY|EXEC|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START"
-    r"|UNLOCK|ACCEPT|STOP|GOBACK|EXIT)\b",
+    _cobol_word(
+        "CALL|CANCEL|ENTRY|EXEC|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START"
+        "|UNLOCK|ACCEPT|STOP|GOBACK|EXIT"
+    ),
     re.IGNORECASE,
 )
 
@@ -35,14 +47,15 @@ _PROCEDURE_DIVISION = re.compile(r"\bPROCEDURE\s+DIVISION\b", re.IGNORECASE)
 # scope-carrying lines are never deleted -- removing an IF or END-IF
 # guarantees a stillborn (or worse, silently restructured) program.
 _DELETABLE_VERB = re.compile(
-    r"^(MOVE|ADD|SUBTRACT|COMPUTE|MULTIPLY|DIVIDE|INITIALIZE|SET)\b",
+    r"^(?:MOVE|ADD|SUBTRACT|COMPUTE|MULTIPLY|DIVIDE|INITIALIZE|SET)(?![A-Z0-9-])",
     re.IGNORECASE,
 )
 _SCOPE_TOKENS = re.compile(
-    r"\b(IF|ELSE|EVALUATE|WHEN|PERFORM|UNTIL|VARYING)\b|END-", re.IGNORECASE
+    _cobol_word("IF|ELSE|EVALUATE|WHEN|PERFORM|UNTIL|VARYING") + r"|(?<![A-Z0-9-])END-",
+    re.IGNORECASE,
 )
 
-_CONDITION_CONTEXT = re.compile(r"\b(IF|UNTIL|WHEN)\b", re.IGNORECASE)
+_CONDITION_CONTEXT = re.compile(_cobol_word("IF|UNTIL|WHEN"), re.IGNORECASE)
 
 # Relational-symbol swaps, one mutant per occurrence. Compound symbols are
 # matched before their single-character prefixes so `>=` never double-fires

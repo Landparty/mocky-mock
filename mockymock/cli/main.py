@@ -318,7 +318,13 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     raw_source = source_path.read_text(encoding="utf-8")
     if args.copybook_path:
-        expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        # See _cmd_fixtures's identical guard on the same call for why
+        # this can raise on realistic inputs (audit finding F6).
+        try:
+            expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
+            print(f"mockymock generate: {exc}")
+            return 1
         expansion_reasons = check_expansion_warnings(expansion)
         for reason in expansion_reasons:
             print(f"mockymock generate: refused ({reason.code}): {reason.message}")
@@ -533,8 +539,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if not _check_input_files("mockymock run", source_path, cut_path):
         return 1
 
-    # Asking for the coverage JSON is asking for coverage.
+    # Asking for the coverage JSON, or a coverage report file, is asking
+    # for coverage.
     if args.coverage_json:
+        args.coverage = True
+    if args.coverage_out:
         args.coverage = True
 
     # Asking for the trace JSON is asking for the trace.
@@ -669,36 +678,55 @@ def _cmd_run(args: argparse.Namespace) -> int:
             print(compiled.stderr)
             if args.verbose or args.keep_sandbox:
                 print(f"mockymock run: instrumented source at {instrumented_path}")
+            # Deliberately no cleanup here even under plain --verbose: the
+            # path just printed must still resolve after this function
+            # returns, which is the whole point of printing it. Contrast
+            # the try/finally below, guarding the run_binary/run_gcov
+            # phase -- unlike a compile failure, an exception there prints
+            # no path pointing at the sandbox, so leaving it behind would
+            # just leak silently instead of helping anyone (audit finding
+            # F10; a `return 1` from *this* branch used to be lumped in
+            # with that same fix, which broke the documented, tested
+            # --verbose-survives-a-compile-failure contract below).
             return 1
 
-        assert compiled.binary_path is not None  # implied by compiled.success
-        trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
-        executed = docker_toolchain.run_binary(
-            compiled.binary_path, trace_path=trace_path
-        )
+        # try/finally, not just a statement after the `with`: plain --verbose
+        # (no --keep-sandbox) asks sandbox_dir_maybe_kept to retain `tmp` for
+        # this phase and relies on this cleanup running afterward. A bare
+        # statement placed after the `with` block used to rely on this
+        # phase never raising -- an exception from run_binary/run_gcov
+        # skipped it and leaked the directory permanently, with no printed
+        # path (unlike the compile-failure branch above) to tell anyone it
+        # was there (audit finding F10).
+        try:
+            assert compiled.binary_path is not None  # implied by compiled.success
+            trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
+            executed = docker_toolchain.run_binary(
+                compiled.binary_path, trace_path=trace_path
+            )
 
-        # Must be read while the sandbox still exists -- the context manager
-        # removes it on exit unless --keep-sandbox was given.
-        trace_text = ""
-        if trace_path is not None and trace_path.exists():
-            trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
+            # Must be read while the sandbox still exists -- the context
+            # manager removes it on exit unless --keep-sandbox was given.
+            trace_text = ""
+            if trace_path is not None and trace_path.exists():
+                trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
 
-        coverage_text = None
-        coverage_report = None
-        if args.coverage:
-            gcov_result = docker_toolchain.run_gcov(instrumented_path)
-            if gcov_result.success:
-                coverage_report = parse_gcov(gcov_result.gcov_text)
-                coverage_text = format_coverage_console(
-                    coverage_report, instrumented_path.name
-                )
-            else:
-                coverage_text = (
-                    f"mockymock run: coverage: {gcov_result.stderr.rstrip()}"
-                )
-
-    if args.verbose and not args.keep_sandbox:
-        shutil.rmtree(tmp, ignore_errors=True)
+            coverage_text = None
+            coverage_report = None
+            if args.coverage:
+                gcov_result = docker_toolchain.run_gcov(instrumented_path)
+                if gcov_result.success:
+                    coverage_report = parse_gcov(gcov_result.gcov_text)
+                    coverage_text = format_coverage_console(
+                        coverage_report, instrumented_path.name
+                    )
+                else:
+                    coverage_text = (
+                        f"mockymock run: coverage: {gcov_result.stderr.rstrip()}"
+                    )
+        finally:
+            if args.verbose and not args.keep_sandbox:
+                shutil.rmtree(tmp, ignore_errors=True)
 
     suite_result = parse_stdout(executed.stdout)
 

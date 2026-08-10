@@ -142,3 +142,32 @@ def test_read_variable_falls_back_to_unquoted_buffer_for_plain_display_items():
 
     assert value.kind == "alphanumeric"
     assert value.decoded == "CUST00001 "
+
+
+def test_unquoted_buffer_decodes_gdbs_octal_byte_escapes():
+    """Audit finding F15: gdb encodes an arbitrary non-printable byte as
+    \\NNN (octal), not a named escape -- exactly the kind of value someone
+    debugging a data bug (an uninitialized or garbage alphanumeric field)
+    would be inspecting. \\001 must decode to the single control byte
+    it represents, not the three literal characters "001"."""
+
+    class _ErroringThenValueSession:
+        def __init__(self):
+            self.sent: list[str] = []
+
+        def send(self, command: str):
+            self.sent.append(command)
+            if command == "-data-evaluate-expression (int)(b_17).attr->type":
+                return [
+                    ResultRecord("error", {"msg": "There is no member named attr."})
+                ]
+            if command == "-data-evaluate-expression b_17":
+                # A garbage byte (0x01) followed by ordinary text -- gdb's
+                # own quoted-string printing of a raw char buffer.
+                return [_done('"\\001ABC"')]
+            raise AssertionError(f"unexpected MI command: {command!r}")
+
+    value = read_variable(_ErroringThenValueSession(), "WS-CUSTOMER-ID", "b_17")
+
+    assert value.kind == "alphanumeric"
+    assert value.decoded == "\x01ABC"

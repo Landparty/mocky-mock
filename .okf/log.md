@@ -1,5 +1,162 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-10 — PR #57 review fixes: gdb session teardown, DAP framing validation, ledger corrections
+
+Automated review on the audit-remediation PR (below) found two real gaps
+in the F4/F17 fixes themselves, plus three OKF inaccuracies in that same
+PR's own doc updates.
+
+* **`gdb_session.py`/`adapter.py`** (`2db89b0`) — F4's read deadline
+  raised `GdbSessionClosedError` but left the `GdbSession` looking
+  alive: a before-response handler (evaluate/variables/stackTrace)
+  just failed its one request and left the dead session in place, so
+  the *next* request tried it again -- spawning a second per-call
+  reader thread racing the first, still-blocked one for whatever the
+  pipe produced next, able to silently hand one command's response to
+  a different command's caller. Run-control handlers (continue/next/
+  step) stopped the adapter's own loop but never actually closed the
+  gdb subprocess, leaking it into the shared container. Fixed with a
+  `_closed` flag on `GdbSession` (set the moment EOF or the deadline
+  fires; every later read short-circuits instead of starting a new
+  reader) and by having `DapAdapter._dispatch` call `_shutdown()`
+  whenever the caught exception is specifically `GdbSessionClosedError`
+  (not `GdbCommandError` or a malformed-request exception -- neither
+  means the session itself died).
+* **`adapter.py`** (`2db89b0`) — F17's `Content-Length` validation only
+  caught a non-numeric header. A missing or explicit-zero header
+  defaulted to length 0 and reached `json.loads(b"")` -- a
+  `JSONDecodeError`, not a `DapFramingError`, so it escaped `run()`'s
+  clean-shutdown handling and would have crashed the adapter process. A
+  negative length reached `stream.read(n)` with `n < 0`, which reads to
+  EOF instead of raising -- on a live stdin pipe, blocks forever. Now
+  requires the header to parse as a positive integer.
+* **Ledger corrections** —
+  [log.md](log.md) itself listed F20 in a "not fixed" range even though
+  it was closed in the same PR; [cli.md](cli.md) described
+  `_cmd_generate`'s copybook-expansion guard as printing
+  `run_static_checks`'s message (`copybook expansion failed: ...`)
+  instead of its own (`mockymock generate: {exc}`); [report.md](report.md)
+  said the pre-F7 JSON report *dropped* a duplicate-named TESTCASE that
+  emitted a START marker, when it actually misattributed that case's
+  metadata/failures to the first same-named model case instead --
+  dropping only happened to an unrun duplicate via the name-based
+  `not_run` synthesis.
+
+## 2026-08-10 — Audit remediation: 20 findings fixed across runtime, debug, mutation, DSL, report
+
+Worked through a code-quality/reliability audit (41 findings: 1 P0
+infra, 1 P0 coverage gap, 11 High, 8 Medium, 9 Low, 8 Cleanup, plus 8
+verified strengths). Every fix followed the same discipline: a
+regression test proving the bug, confirmed failing via `git stash` of
+the source-only change, then the fix, then the full unit suite
+(`python -m pytest tests/unit -q --no-cov`) for regressions, then a
+commit. Verified against an isolated `uv venv` pinned to the exact
+cobol-parser commit CI/production actually resolve (`83478ba7`), not
+the locally-drifted sibling checkout — see [testing](testing.md)'s
+Gotchas.
+
+**P0 / test-coverage gap:**
+* **F-0b** (`551c9c7`) — 8 of `test_scoped_refusals.py`'s tests
+  depended on `INVOKE` producing a `PARSE_WARNING`; cobolparser's
+  pinned commit now parses it into its own AST node instead. Fixture
+  swapped to `TRANSFORM "x".` — see [analysis](analysis.md)'s
+  `PARSE_WARNING` row and [testing](testing.md)'s Gotchas for two real
+  cobolparser bugs hit picking the replacement (flagged upstream, not
+  fixed here).
+* **F11** (`ba37243`) — `UNMOCKED_CICS`/`UNMOCKED_DLI`/`DYNAMIC_CALL`
+  had zero test coverage despite being core fail-closed refusal codes.
+
+**High (11/11 closed):**
+* **F1** (`2261a30`) — `compile_source`/`run_gcov` had no in-container
+  kill wrapper; a hang inside the shared container outlived even the
+  host-side `subprocess.run` timeout. Wrapped in `timeout -k 5 585` /
+  `timeout -k 5 50`, matching `run_binary`'s existing pattern.
+* **F2** (`b156b62`) — `_HARDENING_FLAGS` lived only on `docker run`,
+  never fed `IMAGE`; editing them left an already-running container's
+  hardening silently stale. `_image_tag()` now hashes the flags
+  alongside the Dockerfile content.
+* **F3** (`d46da86`) — README's "fully containerized and sandboxed"
+  had no caveat about the shared, unpartitioned `WORK_ROOT` mount.
+  Softened the claim and pointed at [runtime](runtime.md)'s Threat
+  model.
+* **F4** (`99e27e0`) — `GdbSession.send`/`_read_until_stopped` blocked
+  forever on a hung debuggee, wedging the whole DAP adapter. Bounded
+  to 30s via a one-shot daemon thread per read (Windows pipes support
+  no portable timeout mechanism otherwise).
+* **F5** (`601eb5d`) — non-UTF-8 debuggee output crashed the whole
+  debug session (`UnicodeDecodeError`); `start_gdb_session`'s `Popen`
+  now sets `errors="replace"`.
+* **F6** (`3ab4e4b`) — `expand_copybooks()` was unguarded on 6 of 7
+  call sites; a circular/oversized/mis-encoded copybook chain
+  tracebacked instead of refusing.
+* **F7** (`c8e1891`) — `build_json_report` keyed TESTCASE lookups by
+  name; duplicate names silently dropped the second case. Keyed by
+  1-based index instead, matching the driver's own `case_id` scheme.
+* **F8** (`bcd23ab`) — mutation operator regexes used plain `\b`,
+  matching `READ` inside `WS-READ-COUNT`. Added a COBOL-word boundary
+  helper treating `-` as part of the identifier.
+* **F9** (`dca29a9`) — concurrent stale-container removal raced: the
+  loser's `docker rm -f` failed against an already-gone container and
+  raised, instead of falling through to recreate like the sibling
+  "already in use" race does.
+* **F10** (`c912865`, corrected in a follow-up commit same day) —
+  sandbox retention leaked permanently when `run_binary`/`run_gcov`
+  raised, since the cleanup statement lived after the `with` block
+  instead of in a `finally`. The first pass over-applied this to the
+  compile-failure `return 1` branch too, which broke an existing,
+  intentional, integration-tested contract (`--verbose`'s printed
+  "instrumented source at `<path>`" message on compile failure must
+  still resolve after `main()` returns) — caught by
+  `tests/integration/test_cli.py::test_run_verbose_prints_instrumented_source_path_on_compile_failure`
+  when re-run against the real Docker toolchain (the unit suite alone,
+  with Docker mocked, did not exercise this). Fixed by scoping the
+  `try/finally` to only the `run_binary`/`run_gcov` phase, leaving the
+  compile-failure branch's deliberate no-cleanup behavior untouched.
+* **F12** (`3a355ff`) — `--coverage-out` alone was a silent no-op;
+  only `--coverage-json` actually implied `--coverage` in code, though
+  both were documented to.
+
+**Medium/Low (selected):**
+* **F14, F16, F17** (`3ab4507`) — `synthesize_stack`
+  failed its whole `stackTrace` request on one unresolvable frame
+  instead of skipping it (F14); a second `launch` leaked the first
+  gdb session and stale breakpoint numbers (F16); a malformed
+  `Content-Length` header crashed the adapter process instead of
+  shutting down cleanly (F17).
+* **F15** (`f6ad5a1`) — gdb's octal byte-escape (`\NNN`) decoded as
+  literal digit characters instead of the byte it represents, in both
+  `gdb_session.py` and `variable_map.py`'s C-string unquoters.
+* **F19** (`ad3e0e2`) — `FILE-STATUS IS` inside an open `MOCK READ ...
+  ROWS` body fell into "malformed ROWS row" instead of parsing —
+  `elif` ordering checked the generic ROWS-row branch first.
+* **F27** (`e284894`) — a directive using both `FILE-STATUS IS` sugar
+  and a `ROWS` block with no `TERMINAL`, on a file missing a status
+  field, refused `UNRESOLVED_FILE_STATUS_TARGET` twice for the one
+  root cause.
+* **F28** (`bb752b6`) — the mutation runner's fallback classification
+  cited "binary exited N" even when N was 0 and the real cause was a
+  duplicate `CASE START`, an orphan `CASE FAIL`, or zero cases run.
+* **F20** (`c912865`, alongside F10) — `--keep-sandbox`'s own retention
+  path had no test at all (`test_keep_sandbox_retains_the_directory_
+  after_a_clean_run`); the flag itself was untouched.
+
+**Cleanup:**
+* **F35** (`c7bee0f`) — removed `_step`'s unused `_dap_command`
+  parameter, threaded through 3 call sites for no reason.
+
+**Not fixed (out of scope for a code change, or deliberately deferred
+— see the session's final ledger for the full ~20-item ledger):**
+F-0a (P0: CI's `COBOL_PARSER_PAT` secret needs a repo admin, not a PR),
+F13, F18, F21–F26, F29–F34, F36.
+
+Docs touched: [runtime](runtime.md) (F1, F2, F9, F10 sections plus a
+leftover-stale F2 mention in Threat model's Tuning paragraph),
+[cli](cli.md) (F4, F5, F6, F8, F12, F14, F16, F17, F28 — debug/mutate
+sections), [coverage](coverage.md) (F12), [analysis](analysis.md) (F27,
+plus the F-0b `INVOKE` PARSE_WARNING correction), [dsl](dsl.md) (F19),
+[report](report.md) (F7), [testing](testing.md) (F-0b Gotchas, two new
+cobolparser landmines found along the way).
+
 ## 2026-08-07 — Standalone executable distribution retired; build moved to mocky-mock-vscode
 
 Part of the cross-repo-dispatch-build initiative (see the sibling

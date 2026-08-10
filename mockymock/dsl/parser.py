@@ -439,26 +439,6 @@ def parse_cut(text: str) -> MockTestSuite:
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.terminal_row = terminal
-            elif in_mock.rows is not None:
-                row_match = _ROW_RE.match(line)
-                if row_match is None:
-                    raise CutParseError(
-                        f"line {line_no}: malformed ROWS row {line!r} -- "
-                        f"expected ( FIELD = value, FIELD = value, ... )"
-                    )
-                row: list[tuple[str, str]] = []
-                for raw_pair in _split_top_level(row_match.group("pairs"), ","):
-                    pair_match = _ROW_PAIR_RE.match(raw_pair.strip())
-                    if pair_match is None:
-                        raise CutParseError(
-                            f"line {line_no}: malformed ROWS field "
-                            f"assignment {raw_pair.strip()!r} -- expected "
-                            f"FIELD = value"
-                        )
-                    row.append(
-                        (pair_match.group("field"), pair_match.group("value").strip())
-                    )
-                in_mock.rows.append(row)
             elif (m := _FILE_STATUS_RE.match(line)) is not None:
                 if in_mock.category not in FILE_STATUS_CATEGORIES:
                     eligible = "/".join(
@@ -501,6 +481,26 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"expected FILE-STATUS IS <mnemonic> (one of {valid}) "
                     f'or FILE-STATUS IS "xx" (a quoted two-character code)'
                 )
+            elif in_mock.rows is not None:
+                row_match = _ROW_RE.match(line)
+                if row_match is None:
+                    raise CutParseError(
+                        f"line {line_no}: malformed ROWS row {line!r} -- "
+                        f"expected ( FIELD = value, FIELD = value, ... )"
+                    )
+                row: list[tuple[str, str]] = []
+                for raw_pair in _split_top_level(row_match.group("pairs"), ","):
+                    pair_match = _ROW_PAIR_RE.match(raw_pair.strip())
+                    if pair_match is None:
+                        raise CutParseError(
+                            f"line {line_no}: malformed ROWS field "
+                            f"assignment {raw_pair.strip()!r} -- expected "
+                            f"FIELD = value"
+                        )
+                    row.append(
+                        (pair_match.group("field"), pair_match.group("value").strip())
+                    )
+                in_mock.rows.append(row)
             else:
                 in_mock.body_lines.append(line)
             continue

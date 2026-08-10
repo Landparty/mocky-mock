@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import IO
 
 from mockymock.debug.call_stack import CallFrame, ParagraphIndex, synthesize_stack
-from mockymock.debug.gdb_session import GdbSession, StopEvent
+from mockymock.debug.gdb_session import GdbSession, GdbSessionClosedError, StopEvent
 from mockymock.debug.line_map import LineMap
 from mockymock.debug.variable_map import VariableValue, read_variable
 
@@ -55,9 +55,25 @@ class DebugSession:
 LaunchSession = Callable[..., DebugSession]
 
 
+class DapFramingError(RuntimeError):
+    """The `Content-Length` framing itself was unparseable. Unlike a
+    request-handler exception, there is no request to fail and no way to
+    know how many bytes the corrupted message's body would have been --
+    the stream is unrecoverable, so this always means the adapter shuts
+    down, never a per-request failure to report."""
+
+
 def read_dap_message(stream: IO[bytes]) -> dict | None:
     """Reads one `Content-Length`-framed DAP JSON message. Returns None at
-    EOF (the client closed its side, e.g. VS Code exiting)."""
+    EOF (the client closed its side, e.g. VS Code exiting). Raises
+    DapFramingError if the Content-Length header is missing or is not a
+    positive integer -- a missing/zero length used to default to 0 and
+    reach `json.loads(b"")` (a JSONDecodeError, not a DapFramingError, so
+    it escaped run()'s clean-shutdown handling entirely), and a negative
+    length made `stream.read(n)` block reading the rest of the stream
+    instead of raising anything at all (code review on the F17 fix,
+    PR #57 -- neither case is a real DAP message: the smallest valid body,
+    `{}`, is never fewer than 2 bytes)."""
     headers: dict[str, str] = {}
     while True:
         raw_line = stream.readline()
@@ -68,7 +84,15 @@ def read_dap_message(stream: IO[bytes]) -> dict | None:
             break
         name, _, value = line.partition(":")
         headers[name.strip().lower()] = value.strip()
-    length = int(headers.get("content-length", "0"))
+    raw_length = headers.get("content-length")
+    length = None
+    if raw_length is not None:
+        try:
+            length = int(raw_length)
+        except ValueError:
+            length = None
+    if length is None or length <= 0:
+        raise DapFramingError(f"malformed Content-Length header: {raw_length!r}")
     body = stream.read(length)
     return json.loads(body.decode("utf-8"))
 
@@ -112,7 +136,18 @@ class DapAdapter:
         """The adapter's main loop: read requests until the client
         disconnects or its stdin closes, dispatching each to a handler."""
         while not self._done:
-            message = read_dap_message(self._input)
+            try:
+                message = read_dap_message(self._input)
+            except DapFramingError as exc:
+                # Fail closed, not crash: a corrupted Content-Length
+                # header leaves no way to know where the next message
+                # starts, so the stream is unrecoverable -- shut down the
+                # same way an EOF does, instead of letting the exception
+                # propagate out of the loop and kill the process
+                # (audit finding F17).
+                self._on_output(f"mockymock debug: {exc}")
+                self._shutdown()
+                return
             if message is None:
                 self._shutdown()
                 return
@@ -147,6 +182,21 @@ class DapAdapter:
                 self._on_output(f"mockymock debug: session error: {exc}")
                 self._send_event("terminated")
                 self._done = True
+            if isinstance(exc, GdbSessionClosedError):
+                # The gdb subprocess is confirmed dead or unreachable (EOF,
+                # or GdbSession's own read deadline expired -- see
+                # gdb_session.py's `_closed`). Distinct from a
+                # GdbCommandError or a malformed-request exception, neither
+                # of which means the session itself is broken. Tear it down
+                # now instead of leaving self._session pointing at it:
+                # before-response handlers (stackTrace/scopes/variables/
+                # evaluate) would otherwise just fail this one request and
+                # leave the dead session in place for the next request to
+                # try again, and run-control handlers (which already set
+                # _done above) never actually closed the gdb subprocess at
+                # all -- both leaked the process into the shared container
+                # (code review on the F4 fix, PR #57).
+                self._shutdown()
 
     # -- Protocol plumbing ------------------------------------------------
 
@@ -192,6 +242,14 @@ class DapAdapter:
 
     def _handle_launch(self, request: dict) -> None:
         arguments = request.get("arguments", {})
+        if self._session is not None:
+            # A second `launch` must not leak the first session's gdb
+            # subprocess (the same PIDS_LIMIT risk as a hung debuggee),
+            # nor leave breakpoint numbers pointing at the now-orphaned
+            # session's gdb (audit finding F16).
+            self._session.gdb.close()
+            self._session = None
+            self._breakpoint_numbers = {}
         try:
             self._session = self._launch_session(arguments)
         except (
@@ -329,17 +387,17 @@ class DapAdapter:
         self._resume(session.gdb.continue_)
 
     def _handle_next(self, request: dict) -> None:
-        self._step(request, "next")
+        self._step(request)
 
     def _handle_stepIn(self, request: dict) -> None:
         # v1 does not step across a mocked CALL boundary (see design doc
         # Non-goals) -- aliased to the same coalesced-next behavior.
-        self._step(request, "stepIn")
+        self._step(request)
 
     def _handle_stepOut(self, request: dict) -> None:
-        self._step(request, "stepOut")
+        self._step(request)
 
-    def _step(self, request: dict, _dap_command: str) -> None:
+    def _step(self, request: dict) -> None:
         session = self._require_session(request)
         if session is None:
             return

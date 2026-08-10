@@ -189,6 +189,29 @@ def test_identifier_less_dynamic_call_stays_unmockable():
 # --- refusal gate ---------------------------------------------------------
 
 
+def test_unresolvable_dynamic_call_identifier_produces_dynamic_call_refusal():
+    """Fail closed, all the way through the gate: when cobolparser cannot
+    capture a dynamic CALL's target identifier at all (category None,
+    see test_identifier_less_dynamic_call_stays_unmockable above), the
+    site has no .cut syntax that could ever cover it -- MOCK CALL needs a
+    key -- so it must refuse with DYNAMIC_CALL specifically, not silently
+    pass and not fall through as the ordinary UNMOCKED_CALL an unmocked
+    but *resolvable* dynamic call gets (see the mocked WS-PGM-NAME call
+    below, which passes clean)."""
+    surface, ast = _surface_and_ast()
+    statement = CallStatement(SourceLocation(line=1, column=1))
+    statement.set_called_program("", is_dynamic=True)
+    _classify_statement(statement, "DYNAMIC-PARAGRAPH", surface, nested=False)
+
+    case = MockTestCase(
+        name="c",
+        mocks=[MockDirective(MockCategory.DYNCALL, "WS-PGM-NAME")],
+        perform_target="DYNAMIC-PARAGRAPH",
+    )
+    reasons = check_test_case(surface, ast, case)
+    assert [r.code for r in reasons] == ["DYNAMIC_CALL"]
+
+
 def test_mocked_dynamic_call_passes():
     surface, ast = _surface_and_ast()
     case = MockTestCase(

@@ -30,7 +30,9 @@ written, not assumed from GDB/MI documentation:
 
 from __future__ import annotations
 
+import queue
 import subprocess
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -48,6 +50,42 @@ _BENIGN_WARNING_SUBSTRING = "Error disabling address space randomization"
 # or a splicer-inserted run of mock/driver statements (same .cbl file, no
 # original-line counterpart) takes an unusually long time to coalesce past.
 _MAX_COALESCE_STEPS = 500
+
+# audit finding F4: a hung debuggee (an infinite loop past a mocked CALL,
+# same failure mode run_binary's own 30s default guards against -- see
+# docker_toolchain.py) produces no MI record at all, and a bare
+# `stdout.readline()` blocks the whole DAP adapter forever with no way to
+# recover short of killing the process from outside. Bounded at the same
+# order of magnitude as that other timeout.
+_READ_TIMEOUT_SECONDS = 30.0
+
+
+def _readline_with_deadline(stream, timeout: float) -> str:
+    """`stream.readline()`, but gives up after `timeout` seconds instead of
+    blocking forever. Popen pipes are OS pipes on both platforms mockymock
+    targets, and Windows pipe handles support no portable non-blocking or
+    select()-based read -- so the wait is bounded with a one-shot daemon
+    thread instead: cheap next to the round trip a real gdb command already
+    costs, and it leaves `stream`'s own call sequence untouched (still
+    exactly one `readline()` per line, in order), unlike a persistent
+    background reader would. An orphaned thread on timeout is harmless: it
+    is a daemon, and either later gets a line nobody reads or unblocks for
+    good when `close()` terminates the gdb process."""
+    result: queue.Queue[str] = queue.Queue(maxsize=1)
+
+    def _read() -> None:
+        try:
+            result.put(stream.readline())
+        except (OSError, ValueError):
+            result.put("")  # closed pipe -- same as EOF to every caller
+
+    threading.Thread(target=_read, daemon=True).start()
+    try:
+        return result.get(timeout=timeout)
+    except queue.Empty:
+        raise GdbSessionClosedError(
+            f"gdb produced no output for {timeout:.0f}s (the debuggee may " "be hung)"
+        ) from None
 
 
 @dataclass
@@ -112,6 +150,29 @@ def _require(condition: bool, message: str) -> None:
         raise MalformedMIRecordError(message)
 
 
+_OCTAL_DIGITS = "01234567"
+_NAMED_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"'}
+
+
+def decode_c_escape(text: str, i: int) -> tuple[str, int]:
+    """`text[i]` is the character right after a backslash. Returns the
+    decoded character and the index just past the whole escape sequence.
+    Handles gdb's own octal-byte escape (`\\NNN`, 1-3 octal digits) for any
+    non-printable byte with no named form, plus the named escapes gdb
+    emits (`\\n \\t \\\\ \\"`). Without the octal case, `\\001` decoded as
+    the three literal characters "001" instead of the single control byte
+    it represents -- shared with variable_map.py's `_unquote_c_string`,
+    which decodes the same gdb-quoted-string shape from a different call
+    site (a whole string at once, not incrementally within a larger MI
+    record)."""
+    if text[i] in _OCTAL_DIGITS:
+        start = i
+        while i < len(text) and i - start < 3 and text[i] in _OCTAL_DIGITS:
+            i += 1
+        return chr(int(text[start:i], 8)), i
+    return _NAMED_ESCAPES.get(text[i], text[i]), i + 1
+
+
 def _parse_c_string(text: str, i: int) -> tuple[str, int]:
     _require(i < len(text) and text[i] == '"', "expected opening quote")
     i += 1
@@ -120,11 +181,11 @@ def _parse_c_string(text: str, i: int) -> tuple[str, int]:
         if text[i] == "\\":
             i += 1
             _require(i < len(text), "dangling escape in MI string")
-            escape = text[i]
-            out.append({"n": "\n", "t": "\t", "\\": "\\", '"': '"'}.get(escape, escape))
+            decoded, i = decode_c_escape(text, i)
+            out.append(decoded)
         else:
             out.append(text[i])
-        i += 1
+            i += 1
     _require(i < len(text), "unterminated MI string")
     return "".join(out), i + 1
 
@@ -327,6 +388,18 @@ class GdbSession:
     ) -> None:
         self._process = process
         self._on_output = on_output or (lambda text: None)
+        # Set once EOF or a read deadline fires (see _readline below) and
+        # never cleared: a session that has already timed out must never
+        # attempt another read. `_readline_with_deadline` spawns a fresh
+        # daemon thread per call and leaves the previous one blocked
+        # in-flight on timeout (see its own docstring) -- a second call on
+        # the same stream races that orphaned thread for whatever the pipe
+        # produces next, and either thread can end up consuming the other's
+        # response, silently misdirecting output between two unrelated
+        # commands. Guarding every read behind this flag is what makes the
+        # orphaned thread actually harmless instead of merely unlikely to
+        # matter (code review on the F4 fix, PR #57).
+        self._closed = False
 
     def set_output_handler(self, on_output: Callable[[str], None]) -> None:
         """Rebinds the program-output callback -- used by adapter.py,
@@ -336,6 +409,32 @@ class GdbSession:
         the adapter ever sees the session)."""
         self._on_output = on_output
 
+    def _readline(self, context: str) -> str:
+        """`_readline_with_deadline` plus the closed-session bookkeeping
+        every read site needs: refuses to read at all once this session is
+        already marked closed (no new reader thread gets a chance to race
+        an earlier call's orphaned one -- see `_closed`'s docstring), and
+        marks it closed the moment EOF or the read deadline proves the
+        process is dead/unreachable, so every read after this one takes the
+        same fast, threadless path instead of paying another deadline."""
+        if self._closed:
+            raise GdbSessionClosedError(
+                f"gdb session already closed (a prior read timed out or hit "
+                f"EOF) -- refusing to read again while {context}"
+            )
+        assert self._process.stdout is not None
+        try:
+            raw_line = _readline_with_deadline(
+                self._process.stdout, _READ_TIMEOUT_SECONDS
+            )
+        except GdbSessionClosedError:
+            self._closed = True
+            raise
+        if raw_line == "":
+            self._closed = True
+            raise GdbSessionClosedError(f"gdb process exited while {context}")
+        return raw_line
+
     def send(self, command: str) -> list[MIRecord]:
         """Issue a command and read until ITS OWN immediate result record
         (`^done`/`^error`/`^running`/`^exit`/`^connected`). For exec
@@ -343,17 +442,12 @@ class GdbSession:
         asynchronous and arrives later; use `run`/`continue_`/`step`
         rather than calling `send` directly for those."""
         assert self._process.stdin is not None
-        assert self._process.stdout is not None
         self._process.stdin.write(command + "\n")
         self._process.stdin.flush()
 
         records: list[MIRecord] = []
         while True:
-            raw_line = self._process.stdout.readline()
-            if raw_line == "":
-                raise GdbSessionClosedError(
-                    f"gdb process exited while waiting for a response to {command!r}"
-                )
+            raw_line = self._readline(f"waiting for a response to {command!r}")
             record = parse_mi_line(raw_line)
             if record is None:
                 continue
@@ -487,13 +581,8 @@ class GdbSession:
         """Reads records (forwarding ProgramOutput via `on_output`) until
         an async `*stopped` record appears, and converts it to a
         StopEvent."""
-        assert self._process.stdout is not None
         while True:
-            raw_line = self._process.stdout.readline()
-            if raw_line == "":
-                raise GdbSessionClosedError(
-                    "gdb process exited before reporting *stopped"
-                )
+            raw_line = self._readline("waiting for *stopped")
             record = parse_mi_line(raw_line)
             if record is None:
                 continue

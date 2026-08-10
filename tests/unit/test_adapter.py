@@ -12,7 +12,7 @@ from mockymock.debug.adapter import (
     read_dap_message,
 )
 from mockymock.debug.call_stack import ParagraphIndex
-from mockymock.debug.gdb_session import ResultRecord, StopEvent
+from mockymock.debug.gdb_session import GdbSessionClosedError, ResultRecord, StopEvent
 from mockymock.debug.line_map import LineMap
 
 
@@ -292,6 +292,106 @@ def test_disconnect_closes_the_gdb_session():
     assert session.gdb.closed is True
 
 
+def test_second_launch_closes_the_first_session_and_resets_breakpoints():
+    """Audit finding F16: a second `launch` used to unconditionally
+    overwrite self._session without closing the first GdbSession --
+    leaking its docker exec/gdb subprocess -- and left
+    self._breakpoint_numbers stale, pointing at IDs from the now-orphaned
+    session."""
+    requests = [
+        _request(1, "launch", {}),
+        _request(
+            2,
+            "setBreakpoints",
+            {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 14}]},
+        ),
+        _request(3, "launch", {}),
+        _request(
+            4,
+            "setBreakpoints",
+            {"source": {"path": "fixture.cbl"}, "breakpoints": [{"line": 20}]},
+        ),
+    ]
+    input_stream = io.BytesIO(b"".join(_frame(r) for r in requests))
+    output_stream = io.BytesIO()
+    sessions = []
+
+    def _launch(arguments):
+        session = _fake_launch_session(arguments)
+        sessions.append(session)
+        return session
+
+    adapter = DapAdapter(input_stream, output_stream, _launch)
+    adapter.run()
+    messages = _drain(output_stream)
+
+    assert len(sessions) == 2
+    assert sessions[0].gdb.closed is True
+    # The second session's setBreakpoints must not try to delete a
+    # breakpoint number left over from the first (now-closed) session.
+    assert sessions[1].gdb.deleted == []
+    assert list(sessions[1].gdb.breakpoints.values()) == [("fixture.cbl", 20)]
+    assert all(m["success"] for m in messages)
+
+
+def test_malformed_content_length_header_shuts_down_cleanly():
+    """Audit finding F17: a garbled Content-Length must not raise an
+    unhandled ValueError straight out of run()'s top-level loop and kill
+    the adapter process -- every other framing problem (EOF, an
+    unsupported command) degrades gracefully; this must too."""
+    input_stream = io.BytesIO(b"Content-Length: not-a-number\r\n\r\n")
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+
+    adapter.run()  # must not raise
+
+    messages = _drain(output_stream)
+    assert any(m.get("event") == "output" for m in messages)
+
+
+def test_missing_content_length_header_shuts_down_cleanly():
+    """Code review on the F17 fix, PR #57: a missing header used to default
+    to length 0 -- not caught as DapFramingError at all, `json.loads(b"")`
+    raised an unrelated JSONDecodeError that escaped run()'s handling."""
+    input_stream = io.BytesIO(b"\r\n")  # blank headers section, no length
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+
+    adapter.run()  # must not raise
+
+    messages = _drain(output_stream)
+    assert any(m.get("event") == "output" for m in messages)
+
+
+def test_zero_content_length_header_shuts_down_cleanly():
+    """Same gap as the missing-header case: the smallest real DAP body is
+    `{}` (2 bytes), so Content-Length: 0 can only be a corrupted frame."""
+    input_stream = io.BytesIO(b"Content-Length: 0\r\n\r\n")
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+
+    adapter.run()  # must not raise
+
+    messages = _drain(output_stream)
+    assert any(m.get("event") == "output" for m in messages)
+
+
+def test_negative_content_length_header_shuts_down_cleanly():
+    """A negative length used to reach `stream.read(n)` with n < 0, which
+    reads-to-EOF instead of raising -- on a live stdin pipe that blocks
+    forever rather than a bounded BytesIO, so this only reproduces the
+    *acceptance* half here (no crash, no hang) rather than the hang
+    itself."""
+    input_stream = io.BytesIO(b"Content-Length: -5\r\n\r\ngarbage-trailer")
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+
+    adapter.run()  # must not raise
+
+    messages = _drain(output_stream)
+    assert any(m.get("event") == "output" for m in messages)
+
+
 def test_unsupported_command_gets_a_clean_failure_response():
     messages = _run_adapter([_request(1, "notARealDapCommand", {})])
     assert messages[0]["success"] is False
@@ -387,3 +487,63 @@ def test_resume_failure_after_responding_terminates_cleanly():
     assert config_responses[0]["success"] is True
     # ...and the broken resume terminated the session rather than crashing.
     assert any(m.get("event") == "terminated" for m in messages)
+
+
+# --- code review on the F4 fix (PR #57): GdbSessionClosedError specifically
+# means the gdb subprocess is confirmed dead, unlike a GdbCommandError or a
+# malformed-request exception -- _dispatch must tear the session down (not
+# just fail the request or set _done) so nothing tries to reuse it -------
+
+
+def test_before_response_session_death_shuts_down_the_gdb_session():
+    """A GdbSessionClosedError from a before-response handler (evaluate,
+    variables, stackTrace, setBreakpoints) used to just fail that one
+    request and leave the dead session in self._session -- the next
+    request would try it again and hang for another read deadline instead
+    of failing fast with 'no active debug session'."""
+
+    class _DeadGdb(_FakeGdb):
+        def send(self, command):
+            raise GdbSessionClosedError("gdb produced no output for 30s")
+
+    def launch(arguments):
+        session = _fake_launch_session(arguments)
+        session.gdb = _DeadGdb()
+        return session
+
+    messages, session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(2, "evaluate", {"expression": "WS-CUSTOMER-ID"}),
+            _request(3, "evaluate", {"expression": "WS-CUSTOMER-ID"}),
+        ],
+        launch=launch,
+    )
+    by_seq = {m.get("request_seq"): m for m in messages if m["type"] == "response"}
+    assert by_seq[2]["success"] is False
+    assert session.gdb.closed is True
+    assert by_seq[3]["success"] is False
+    assert "no active debug session" in by_seq[3]["message"]
+
+
+def test_resume_session_death_shuts_down_the_gdb_session():
+    """The run-control path (test_resume_failure_after_responding_
+    terminates_cleanly above) reports 'terminated' and stops the adapter
+    loop, but never actually called _shutdown() -- the dead gdb subprocess
+    was never closed/terminated, leaking it into the shared container."""
+
+    class _DyingGdb(_FakeGdb):
+        def run(self):
+            raise GdbSessionClosedError("gdb produced no output for 30s")
+
+    def launch(arguments):
+        session = _fake_launch_session(arguments)
+        session.gdb = _DyingGdb()
+        return session
+
+    messages, session = _run_adapter_capturing_session(
+        [_request(1, "launch", {}), _request(2, "configurationDone", {})],
+        launch=launch,
+    )
+    assert any(m.get("event") == "terminated" for m in messages)
+    assert session.gdb.closed is True

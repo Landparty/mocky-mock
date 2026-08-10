@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-08-04T00:00:00Z
+timestamp: 2026-08-10T00:00:00Z
 ---
 # Overview
 
@@ -163,6 +163,22 @@ driver's failure-reason strings against the model, splitting on the LAST
 binary never printed a START marker for. `format_junit_xml` additionally
 stamps `classname="<suite name>"` on every `<testcase>` (suite-qualified
 identity for consumers that merge reports or meet duplicate case names).
+
+`build_json_report` keys its `.cut`-suite lookups (`cut_cases_by_index`)
+by each case's 1-based position — matching the driver's own `case_id =
+f"{index:03d}"` scheme — not by `MockTestCase.name`, since 2026-08-10
+(audit finding F7). `TESTCASE` names are not required unique, and the old
+name-keyed lookup (`dict.setdefault`, so a name's entry always pinned to
+the *first* case with that name) mishandled a duplicate two different
+ways depending on whether the second occurrence actually ran: if it
+printed its own START/END markers, its result still made it into `cases`
+(nothing in the main per-result loop drops it) but was attributed the
+*first* same-named case's line numbers/tags/EXPECT-VERIFY matches instead
+of its own -- silent misattribution, not a drop. Only a duplicate that
+never ran at all actually vanished: the `"not_run"` synthesis loop's
+`cut_case.name in seen_names` check saw the name as "seen" (added by the
+first occurrence's real result) and skipped synthesizing an entry for the
+second, so it appeared in neither `cases` nor the not-run count.
 
 ## Execution trace (`report/trace.py`)
 

@@ -36,6 +36,39 @@ def test_image_tag_changes_with_dockerfile():
     assert dt.IMAGE.startswith("mockymock-gnucobol:")
 
 
+def test_image_tag_changes_with_hardening_flags():
+    """Audit finding F2: the hardening flags live purely on `docker run`,
+    never in the Dockerfile -- ensure_toolchain's only recreate signal is
+    IMAGE (container_image != IMAGE), so unless editing the flags also
+    changes IMAGE, an already-running container silently keeps whatever
+    hardening it started with."""
+    from mockymock.runtime import docker_toolchain as dt
+
+    same_dockerfile = "FROM debian:trixie-slim\n"
+    tag_a = dt._image_tag(
+        dockerfile_text=same_dockerfile, hardening_flags=("--network", "none")
+    )
+    tag_b = dt._image_tag(
+        dockerfile_text=same_dockerfile,
+        hardening_flags=("--network", "none", "--pids-limit", "512"),
+    )
+    assert tag_a != tag_b
+
+
+def test_image_constant_is_derived_from_the_real_hardening_flags():
+    """IMAGE (computed at import time from the real _HARDENING_FLAGS, not
+    a test double) must actually change if those flags do -- otherwise
+    the previous test only proves _image_tag's math works in isolation,
+    not that IMAGE itself is wired to it."""
+    from mockymock.runtime import docker_toolchain as dt
+
+    dockerfile_text = (dt._DOCKER_CONTEXT / "Dockerfile").read_text(encoding="utf-8")
+    real_tag = dt._image_tag(dockerfile_text, dt._HARDENING_FLAGS)
+    assert dt.IMAGE == f"mockymock-gnucobol:{real_tag}"
+    changed_tag = dt._image_tag(dockerfile_text, dt._HARDENING_FLAGS + ("--extra",))
+    assert changed_tag != real_tag
+
+
 def test_docker_context_dockerfile_is_bundled_under_the_package():
     """Regression test for a real bug: the Dockerfile must live under
     mockymock/runtime/docker/, not repo-root docker/, so it ships inside the
@@ -282,6 +315,38 @@ def test_ensure_toolchain_raises_when_stale_container_cannot_be_removed():
             ensure_toolchain()
 
 
+def test_ensure_toolchain_recreates_when_concurrent_rm_already_removed_it(tmp_path):
+    """F9: two invocations can both see the stale image tag and both race to
+    `docker rm -f` it. The loser's rm fails with "No such container" --
+    not a real failure, just evidence the winner already cleaned up -- and
+    must fall through to (re)creating the container instead of raising."""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["docker", "inspect"]:
+            return _completed(argv, stdout="true mockymock-gnucobol:00000000\n")
+        if argv[:2] == ["docker", "rm"]:
+            return _completed(
+                argv,
+                returncode=1,
+                stderr="Error response from daemon: No such container: " f"{CONTAINER}",
+            )
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+    ):
+        ensure_toolchain()  # must not raise
+
+    run_calls = [c for c in calls if c[:2] == ["docker", "run"]]
+    assert len(run_calls) == 1
+    assert IMAGE in run_calls[0]
+
+
 def test_ensure_toolchain_adopts_container_created_by_concurrent_invocation(tmp_path):
     """Two first-ever invocations race on `docker run --name`: the loser's
     run fails with "name already in use", but the winner's container is
@@ -396,6 +461,10 @@ def test_compile_source_execs_cobc_with_container_paths(tmp_path):
             "-w",
             "/work/mockymock-x",
             CONTAINER,
+            "timeout",
+            "-k",
+            "5",
+            "585",
             "cobc",
             "-free",
             "-x",
@@ -494,6 +563,10 @@ def test_compile_source_with_coverage_passes_flag_to_cobc(tmp_path):
             "-w",
             "/work/mockymock-x",
             CONTAINER,
+            "timeout",
+            "-k",
+            "5",
+            "585",
             "cobc",
             "-free",
             "--coverage",
@@ -658,6 +731,10 @@ def test_run_gcov_execs_gcov_with_container_dir_and_gcda_name(tmp_path):
             "-w",
             "/work/mockymock-x",
             CONTAINER,
+            "timeout",
+            "-k",
+            "5",
+            "50",
             "gcov",
             "PROG.gcda",
         ]
@@ -889,3 +966,11 @@ def test_start_gdb_session_execs_mi_interpreter_against_container_binary(tmp_pat
     assert captured["kwargs"]["stdin"] == subprocess.PIPE
     assert captured["kwargs"]["stdout"] == subprocess.PIPE
     assert captured["kwargs"]["text"] is True
+    # Audit finding F5: text=True with no encoding=/errors= decodes
+    # strictly -- a DISPLAY of an uninitialized/garbage alphanumeric
+    # field (exactly what someone chasing a data bug would inspect) can
+    # contain a byte that isn't valid there, raising an uncaught
+    # UnicodeDecodeError inside GdbSession.readline() and killing the
+    # whole session. errors="replace" degrades that one line instead.
+    assert captured["kwargs"]["encoding"] == "utf-8"
+    assert captured["kwargs"]["errors"] == "replace"

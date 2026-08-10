@@ -6,6 +6,7 @@ design spike (see docs/2026-07-22-dap-debugger-design.md's Empirical
 basis) -- not hand-invented MI syntax.
 """
 
+import threading
 from unittest import mock
 
 import pytest
@@ -36,6 +37,17 @@ def test_parse_mi_line_returns_none_for_blank_line():
 def test_parse_mi_line_filters_benign_aslr_warning():
     line = '&"warning: Error disabling address space randomization: Operation not permitted\\n"\n'
     assert parse_mi_line(line) is None
+
+
+def test_parse_mi_line_decodes_octal_byte_escape_in_a_quoted_value():
+    """Audit finding F15: gdb encodes a non-printable byte with no named
+    escape as \\NNN (octal), not one of the C escapes this parser
+    otherwise recognizes (\\n \\t \\\\ \\"). \\001 must decode to the
+    single control byte it represents, not the three literal characters
+    "001"."""
+    record = parse_mi_line('^done,value="\\001ABC"\n')
+    assert isinstance(record, ResultRecord)
+    assert record.payload["value"] == "\x01ABC"
 
 
 def test_parse_mi_line_parses_done_bkpt_result():
@@ -443,3 +455,83 @@ def test_close_terminates_process_if_gdb_exit_hangs():
     session = GdbSession(process)
     session.close()
     assert process.returncode == -15
+
+
+# --- audit F4: a hung debuggee (no MI record ever arrives -- e.g. an
+# infinite loop past a mocked CALL) must not block the read loop forever --
+
+
+class _HangingStdout:
+    """readline() that never returns, simulating a debuggee stuck producing
+    no output and no MI record at all."""
+
+    def readline(self):
+        threading.Event().wait()  # blocks forever; only a daemon thread waits on it
+        return ""  # pragma: no cover -- unreachable, wait() never returns
+
+
+class _ChainedStdout:
+    """Yields `lines` first (the immediate `^running` result an exec
+    command gets), then hangs -- simulating gdb never reporting the async
+    `*stopped` that should follow."""
+
+    def __init__(self, lines, then):
+        self._iter = iter(lines)
+        self._then = then
+
+    def readline(self):
+        line = next(self._iter, None)
+        return line if line is not None else self._then.readline()
+
+
+class _CountingHangingStdout:
+    """Like _HangingStdout, but counts calls -- used to prove a session
+    already marked closed by a prior deadline refuses to start a second
+    reader thread at all, rather than merely losing a race against it
+    (code review on the F4 fix, PR #57: a second reader on the same
+    stream can consume the response an earlier, still-blocked reader was
+    waiting for, silently misdirecting output between two commands)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def readline(self):
+        self.calls += 1
+        threading.Event().wait()
+        return ""  # pragma: no cover -- unreachable, wait() never returns
+
+
+def test_a_session_closed_by_a_read_deadline_refuses_further_reads():
+    process = _FakeProcess([])
+    stdout = _CountingHangingStdout()
+    process.stdout = stdout
+    session = GdbSession(process)
+    with mock.patch("mockymock.debug.gdb_session._READ_TIMEOUT_SECONDS", 0.05):
+        with pytest.raises(GdbSessionClosedError, match="no output"):
+            session.send("-exec-continue")
+        assert stdout.calls == 1
+        # The session is now permanently closed. A second call must fail
+        # immediately -- no new reader thread, no second wait -- instead of
+        # racing the first (still-blocked) reader for whatever the stream
+        # produces next.
+        with pytest.raises(GdbSessionClosedError, match="already closed"):
+            session.send("-exec-continue")
+    assert stdout.calls == 1
+
+
+def test_send_raises_after_read_deadline_on_a_hung_debuggee():
+    process = _FakeProcess([])
+    process.stdout = _HangingStdout()
+    session = GdbSession(process)
+    with mock.patch("mockymock.debug.gdb_session._READ_TIMEOUT_SECONDS", 0.05):
+        with pytest.raises(GdbSessionClosedError, match="no output"):
+            session.send("-exec-continue")
+
+
+def test_read_until_stopped_raises_after_read_deadline_on_a_hung_debuggee():
+    process = _FakeProcess([])
+    process.stdout = _ChainedStdout(["^running\n"], _HangingStdout())
+    session = GdbSession(process)
+    with mock.patch("mockymock.debug.gdb_session._READ_TIMEOUT_SECONDS", 0.05):
+        with pytest.raises(GdbSessionClosedError, match="no output"):
+            session.run()

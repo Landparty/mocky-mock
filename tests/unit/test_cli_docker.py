@@ -4,6 +4,8 @@ these tests must pass without Docker installed."""
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from mockymock.cli.main import main
 from mockymock.runtime.docker_toolchain import DockerNotAvailableError
 
@@ -522,6 +524,49 @@ def test_run_coverage_writes_coverage_out_file(tmp_path, capsys):
     assert "66.67% lines executed (2/3)" in out_path.read_text()
 
 
+def test_coverage_out_alone_implies_coverage(tmp_path, capsys):
+    """Audit finding F12: --coverage-out without --coverage used to be a
+    silent no-op -- exits 0, prints nothing about coverage, writes no
+    file. docs/options-reference.md already documents "Implies
+    --coverage" (matching --coverage-json's own precedent one line
+    away); the code must match the doc."""
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    gcov_result = GcovResult(success=True, gcov_text=COVERAGE_GCOV_TEXT, stderr="")
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+    out_path = tmp_path / "coverage.txt"
+
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=fake_compile,
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_gcov", return_value=gcov_result
+        ) as gcov_mock,
+    ):
+        exit_code = main(
+            ["run", str(program), "--cut", str(cut), "--coverage-out", str(out_path)]
+        )
+    assert exit_code == 0
+    gcov_mock.assert_called_once()
+    assert "66.67% lines executed (2/3)" in out_path.read_text()
+
+
 def test_run_coverage_reports_missing_data_without_failing_the_run(tmp_path, capsys):
     """gcov failing (e.g. no .gcda because the binary timed out) must not
     change the pass/fail exit code -- coverage is purely additive."""
@@ -630,3 +675,92 @@ def test_run_tag_selection_runs_only_tagged_cases(tmp_path):
     assert exit_code == 0
     payload = json.loads(report_path.read_text())
     assert [case["name"] for case in payload["cases"]] == ["calls discrate"]
+
+
+# --- audit F10/F20: --verbose's sandbox cleanup must fire when the
+# run_binary/run_gcov phase raises (previously leaked forever, silently --
+# nothing prints a path to it), but must NOT fire on a compile failure,
+# whose printed "instrumented source at <path>" message is retention by
+# design, not a leak -- F10's fix has to preserve that documented,
+# integration-tested contract while still closing the real gap ------------
+
+
+def _sandbox_dirs(tmp_path):
+    work = tmp_path / "work"
+    if not work.exists():
+        return []
+    return list(work.glob("mockymock-*"))
+
+
+def test_verbose_without_keep_sandbox_survives_a_compile_failure(tmp_path):
+    """A compile failure prints 'instrumented source at <path>' -- that
+    path must still resolve after main() returns, or the message is
+    useless. This is deliberate retention, not the F10 leak: contrast
+    test_verbose_without_keep_sandbox_cleans_up_after_run_binary_raises
+    below, where nothing prints a path and the directory must NOT
+    survive. (tests/integration/test_cli.py pins the same contract
+    end-to-end against a real compile failure.)"""
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+
+    def failing_compile(source_path: Path, coverage: bool = False, trace: bool = False):
+        return CompileResult(success=False, binary_path=None, stdout="", stderr="err")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=failing_compile,
+        ),
+    ):
+        exit_code = main(["run", str(program), "--cut", str(cut), "--verbose"])
+    assert exit_code == 1
+    dirs = _sandbox_dirs(tmp_path)
+    assert len(dirs) == 1
+    assert (dirs[0] / "ORDRPROC.cbl").exists()
+
+
+def test_verbose_without_keep_sandbox_cleans_up_after_run_binary_raises(tmp_path):
+    """An exception mid-run (e.g. run_binary blowing up) must not leak the
+    sandbox either -- the cleanup has to run on every exit path, not just
+    the ones that fall off the end of the `with` block normally."""
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+
+    def fake_compile(source_path: Path, coverage: bool = False, trace: bool = False):
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=fake_compile,
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_binary",
+            side_effect=RuntimeError("container vanished"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="container vanished"):
+            main(["run", str(program), "--cut", str(cut), "--verbose"])
+    assert _sandbox_dirs(tmp_path) == []
+
+
+def test_keep_sandbox_retains_the_directory_after_a_clean_run(tmp_path):
+    """F20: --keep-sandbox's own retention path was never exercised by a
+    test -- assert the directory (and the instrumented source inside it)
+    really does survive a normal, successful run."""
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    exit_code = _run_cli(tmp_path, executed, ["--keep-sandbox"])
+    assert exit_code == 0
+    dirs = _sandbox_dirs(tmp_path)
+    assert len(dirs) == 1
+    assert (dirs[0] / "ORDRPROC.cbl").exists()

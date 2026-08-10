@@ -85,6 +85,43 @@ TESTCASE "c"
         parse_cut(cut)
 
 
+def test_file_status_inside_a_rows_body_resolves():
+    """Audit finding F19: once inside a MOCK READ ... ROWS block, any line
+    that isn't END-MOCK or TERMINAL used to fall into the "force-parse as
+    a row" branch before FILE-STATUS handling was ever reached -- so this
+    raised a generic "malformed ROWS row" error instead of resolving the
+    mnemonic, and the sugar was entirely unusable together with ROWS."""
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK READ INV-FILE ROWS
+        ( ORDER-QTY = 50 )
+        FILE-STATUS IS FILE-NOT-FOUND
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    mock = _mock(cut)
+    assert mock.file_status == "35"
+    assert mock.rows == [[("ORDER-QTY", "50")]]
+
+
+def test_malformed_file_status_inside_a_rows_body_names_the_real_problem():
+    """Same fix, the error-message side: a malformed FILE-STATUS clause
+    inside ROWS must still be diagnosed as a FILE-STATUS problem, not as
+    a malformed row."""
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK READ INV-FILE ROWS
+        ( ORDER-QTY = 50 )
+        FILE-STATUS IS NOT-A-REAL-MNEMONIC
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="unrecognized FILE-STATUS mnemonic"):
+        parse_cut(cut)
+
+
 def test_file_status_inside_write_is_rejected():
     cut = """\
 TESTSUITE "s"

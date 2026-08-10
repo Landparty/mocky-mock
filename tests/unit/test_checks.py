@@ -50,6 +50,32 @@ def test_case_selection_filters_suite(tmp_path):
     assert [case.name for case in result.suite.test_cases] == [keep]
 
 
+def test_circular_copybook_reports_a_problem_instead_of_raising(tmp_path):
+    """Audit finding F6: expand_copybooks() genuinely raises for realistic
+    inputs (a copybook that COPYs itself, an oversized/deeply-nested
+    chain, a mis-encoded file) -- CircularReferenceError,
+    NestingDepthError, TotalExpansionSizeExceededError, EncodingError.
+    Unguarded here, any of those propagated as a raw Python traceback on
+    six subcommands (run/lint/debug/export/mutate share this pipeline,
+    generate has its own copy of the same call)."""
+    (tmp_path / "SELFREF.cpy").write_text("           COPY SELFREF.\n")
+    program = tmp_path / "P.cbl"
+    program.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. P.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       COPY SELFREF.\n"
+    )
+    cut = tmp_path / "P.cut"
+    cut.write_text('TESTSUITE "s"\n')
+
+    result = run_static_checks(program, cut, [str(tmp_path)])
+
+    assert not result.ok
+    assert any("Circular copybook dependency" in p for p in result.problems)
+
+
 def test_unknown_case_name_is_a_problem_listing_available_cases():
     result = run_static_checks(
         ORDRPROC_CBL, ORDRPROC_CUT, None, case_names=["no such case"]
