@@ -388,6 +388,18 @@ class GdbSession:
     ) -> None:
         self._process = process
         self._on_output = on_output or (lambda text: None)
+        # Set once EOF or a read deadline fires (see _readline below) and
+        # never cleared: a session that has already timed out must never
+        # attempt another read. `_readline_with_deadline` spawns a fresh
+        # daemon thread per call and leaves the previous one blocked
+        # in-flight on timeout (see its own docstring) -- a second call on
+        # the same stream races that orphaned thread for whatever the pipe
+        # produces next, and either thread can end up consuming the other's
+        # response, silently misdirecting output between two unrelated
+        # commands. Guarding every read behind this flag is what makes the
+        # orphaned thread actually harmless instead of merely unlikely to
+        # matter (code review on the F4 fix, PR #57).
+        self._closed = False
 
     def set_output_handler(self, on_output: Callable[[str], None]) -> None:
         """Rebinds the program-output callback -- used by adapter.py,
@@ -397,6 +409,32 @@ class GdbSession:
         the adapter ever sees the session)."""
         self._on_output = on_output
 
+    def _readline(self, context: str) -> str:
+        """`_readline_with_deadline` plus the closed-session bookkeeping
+        every read site needs: refuses to read at all once this session is
+        already marked closed (no new reader thread gets a chance to race
+        an earlier call's orphaned one -- see `_closed`'s docstring), and
+        marks it closed the moment EOF or the read deadline proves the
+        process is dead/unreachable, so every read after this one takes the
+        same fast, threadless path instead of paying another deadline."""
+        if self._closed:
+            raise GdbSessionClosedError(
+                f"gdb session already closed (a prior read timed out or hit "
+                f"EOF) -- refusing to read again while {context}"
+            )
+        assert self._process.stdout is not None
+        try:
+            raw_line = _readline_with_deadline(
+                self._process.stdout, _READ_TIMEOUT_SECONDS
+            )
+        except GdbSessionClosedError:
+            self._closed = True
+            raise
+        if raw_line == "":
+            self._closed = True
+            raise GdbSessionClosedError(f"gdb process exited while {context}")
+        return raw_line
+
     def send(self, command: str) -> list[MIRecord]:
         """Issue a command and read until ITS OWN immediate result record
         (`^done`/`^error`/`^running`/`^exit`/`^connected`). For exec
@@ -404,19 +442,12 @@ class GdbSession:
         asynchronous and arrives later; use `run`/`continue_`/`step`
         rather than calling `send` directly for those."""
         assert self._process.stdin is not None
-        assert self._process.stdout is not None
         self._process.stdin.write(command + "\n")
         self._process.stdin.flush()
 
         records: list[MIRecord] = []
         while True:
-            raw_line = _readline_with_deadline(
-                self._process.stdout, _READ_TIMEOUT_SECONDS
-            )
-            if raw_line == "":
-                raise GdbSessionClosedError(
-                    f"gdb process exited while waiting for a response to {command!r}"
-                )
+            raw_line = self._readline(f"waiting for a response to {command!r}")
             record = parse_mi_line(raw_line)
             if record is None:
                 continue
@@ -550,15 +581,8 @@ class GdbSession:
         """Reads records (forwarding ProgramOutput via `on_output`) until
         an async `*stopped` record appears, and converts it to a
         StopEvent."""
-        assert self._process.stdout is not None
         while True:
-            raw_line = _readline_with_deadline(
-                self._process.stdout, _READ_TIMEOUT_SECONDS
-            )
-            if raw_line == "":
-                raise GdbSessionClosedError(
-                    "gdb process exited before reporting *stopped"
-                )
+            raw_line = self._readline("waiting for *stopped")
             record = parse_mi_line(raw_line)
             if record is None:
                 continue

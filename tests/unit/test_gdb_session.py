@@ -484,6 +484,41 @@ class _ChainedStdout:
         return line if line is not None else self._then.readline()
 
 
+class _CountingHangingStdout:
+    """Like _HangingStdout, but counts calls -- used to prove a session
+    already marked closed by a prior deadline refuses to start a second
+    reader thread at all, rather than merely losing a race against it
+    (code review on the F4 fix, PR #57: a second reader on the same
+    stream can consume the response an earlier, still-blocked reader was
+    waiting for, silently misdirecting output between two commands)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def readline(self):
+        self.calls += 1
+        threading.Event().wait()
+        return ""  # pragma: no cover -- unreachable, wait() never returns
+
+
+def test_a_session_closed_by_a_read_deadline_refuses_further_reads():
+    process = _FakeProcess([])
+    stdout = _CountingHangingStdout()
+    process.stdout = stdout
+    session = GdbSession(process)
+    with mock.patch("mockymock.debug.gdb_session._READ_TIMEOUT_SECONDS", 0.05):
+        with pytest.raises(GdbSessionClosedError, match="no output"):
+            session.send("-exec-continue")
+        assert stdout.calls == 1
+        # The session is now permanently closed. A second call must fail
+        # immediately -- no new reader thread, no second wait -- instead of
+        # racing the first (still-blocked) reader for whatever the stream
+        # produces next.
+        with pytest.raises(GdbSessionClosedError, match="already closed"):
+            session.send("-exec-continue")
+    assert stdout.calls == 1
+
+
 def test_send_raises_after_read_deadline_on_a_hung_debuggee():
     process = _FakeProcess([])
     process.stdout = _HangingStdout()

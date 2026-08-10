@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import IO
 
 from mockymock.debug.call_stack import CallFrame, ParagraphIndex, synthesize_stack
-from mockymock.debug.gdb_session import GdbSession, StopEvent
+from mockymock.debug.gdb_session import GdbSession, GdbSessionClosedError, StopEvent
 from mockymock.debug.line_map import LineMap
 from mockymock.debug.variable_map import VariableValue, read_variable
 
@@ -66,7 +66,14 @@ class DapFramingError(RuntimeError):
 def read_dap_message(stream: IO[bytes]) -> dict | None:
     """Reads one `Content-Length`-framed DAP JSON message. Returns None at
     EOF (the client closed its side, e.g. VS Code exiting). Raises
-    DapFramingError if the Content-Length header cannot be parsed."""
+    DapFramingError if the Content-Length header is missing or is not a
+    positive integer -- a missing/zero length used to default to 0 and
+    reach `json.loads(b"")` (a JSONDecodeError, not a DapFramingError, so
+    it escaped run()'s clean-shutdown handling entirely), and a negative
+    length made `stream.read(n)` block reading the rest of the stream
+    instead of raising anything at all (code review on the F17 fix,
+    PR #57 -- neither case is a real DAP message: the smallest valid body,
+    `{}`, is never fewer than 2 bytes)."""
     headers: dict[str, str] = {}
     while True:
         raw_line = stream.readline()
@@ -77,13 +84,15 @@ def read_dap_message(stream: IO[bytes]) -> dict | None:
             break
         name, _, value = line.partition(":")
         headers[name.strip().lower()] = value.strip()
-    raw_length = headers.get("content-length", "0")
-    try:
-        length = int(raw_length)
-    except ValueError as exc:
-        raise DapFramingError(
-            f"malformed Content-Length header: {raw_length!r}"
-        ) from exc
+    raw_length = headers.get("content-length")
+    length = None
+    if raw_length is not None:
+        try:
+            length = int(raw_length)
+        except ValueError:
+            length = None
+    if length is None or length <= 0:
+        raise DapFramingError(f"malformed Content-Length header: {raw_length!r}")
     body = stream.read(length)
     return json.loads(body.decode("utf-8"))
 
@@ -173,6 +182,21 @@ class DapAdapter:
                 self._on_output(f"mockymock debug: session error: {exc}")
                 self._send_event("terminated")
                 self._done = True
+            if isinstance(exc, GdbSessionClosedError):
+                # The gdb subprocess is confirmed dead or unreachable (EOF,
+                # or GdbSession's own read deadline expired -- see
+                # gdb_session.py's `_closed`). Distinct from a
+                # GdbCommandError or a malformed-request exception, neither
+                # of which means the session itself is broken. Tear it down
+                # now instead of leaving self._session pointing at it:
+                # before-response handlers (stackTrace/scopes/variables/
+                # evaluate) would otherwise just fail this one request and
+                # leave the dead session in place for the next request to
+                # try again, and run-control handlers (which already set
+                # _done above) never actually closed the gdb subprocess at
+                # all -- both leaked the process into the shared container
+                # (code review on the F4 fix, PR #57).
+                self._shutdown()
 
     # -- Protocol plumbing ------------------------------------------------
 
