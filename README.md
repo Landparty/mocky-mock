@@ -68,6 +68,21 @@ python -m pytest tests/unit -v
 `tests/integration/` additionally needs the Docker daemon reachable and
 is skipped automatically if it isn't.
 
+## AI assistant skill
+
+mockymock ships a [Claude Code](https://claude.com/claude-code) skill
+teaching an AI assistant how to scaffold, edit, and run `.cut` test
+files. Install it once:
+
+```bash
+mockymock skills install
+```
+
+This writes to `~/.claude/skills/mockymock` by default (works across
+every COBOL repo you test with mockymock); pass `--project` to install
+into the current repo's `.claude/skills/mockymock` instead, so a team can
+commit it for shared use. See `mockymock skills install --help`.
+
 ## Example & usage
 
 A `.cut` file mocks a program's boundaries and asserts on the result:
