@@ -52,6 +52,7 @@ from __future__ import annotations
 import re
 
 from mockymock.dsl.model import (
+    CAPTURE_CATEGORIES,
     FILE_STATUS_CATEGORIES,
     DataProvider,
     ExpectDirective,
@@ -162,6 +163,22 @@ _FILE_STATUS_RE = re.compile(
 # spliced verbatim into the generated COBOL -- that produces a cobc compile
 # error pointing at generated code instead of a clear .cut-level refusal.
 _FILE_STATUS_PREFIX_RE = re.compile(r"^FILE-STATUS\b")
+
+# CAPTURE ARG <n> INTO <target> -- n is a 1-based USING-parameter
+# position (never a COBOL variable name), resolved against the real call
+# site's CallStatement.using_parameters at splice time (injector.py), not
+# here -- .cut parsing has no access to the target .cbl's AST. <target>
+# reuses _SUBSCRIPTED_NAME, same as MOVE/EXPECT.
+_CAPTURE_RE = re.compile(
+    rf"^CAPTURE\s+ARG\s+(?P<index>\S+)\s+INTO\s+(?P<target>{_SUBSCRIPTED_NAME})$"
+)
+_CAPTURE_INDEX_RE = re.compile(r"^[1-9][0-9]*$")
+# Any line that starts with the CAPTURE keyword but doesn't fully match
+# _CAPTURE_RE above (missing INTO, typos like FROM, missing target, etc.)
+# must not silently fall through to body_lines and get spliced verbatim into
+# the generated COBOL -- that produces a cobc compile error pointing at
+# generated code instead of a clear .cut-level refusal.
+_CAPTURE_PREFIX_RE = re.compile(r"^CAPTURE\b")
 
 
 class CutParseError(ValueError):
@@ -480,6 +497,41 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"line {line_no}: malformed FILE-STATUS IS {line!r} -- "
                     f"expected FILE-STATUS IS <mnemonic> (one of {valid}) "
                     f'or FILE-STATUS IS "xx" (a quoted two-character code)'
+                )
+            elif (m := _CAPTURE_RE.match(line)) is not None:
+                if in_mock.category not in CAPTURE_CATEGORIES:
+                    raise CutParseError(
+                        f"line {line_no}: CAPTURE ARG is only valid inside "
+                        f"MOCK CALL bodies (static or dynamic), not MOCK "
+                        f"{in_mock.category.keyword}"
+                    )
+                index_text = m.group("index")
+                if _CAPTURE_INDEX_RE.match(index_text) is None:
+                    raise CutParseError(
+                        f"line {line_no}: CAPTURE ARG {index_text!r} must "
+                        f"be a positive integer (1-based USING parameter "
+                        f"position)"
+                    )
+                try:
+                    index = int(index_text)
+                except ValueError as exc:
+                    raise CutParseError(
+                        f"line {line_no}: CAPTURE ARG {index_text!r} must "
+                        f"be a positive integer (1-based USING parameter "
+                        f"position)"
+                    ) from exc
+                if index in {n for n, _ in in_mock.captures}:
+                    raise CutParseError(
+                        f"line {line_no}: duplicate CAPTURE ARG {index} in "
+                        f"one MOCK body -- only one CAPTURE per argument "
+                        f"position is allowed"
+                    )
+                in_mock.captures.append((index, m.group("target")))
+            elif _CAPTURE_PREFIX_RE.match(line) is not None:
+                raise CutParseError(
+                    f"line {line_no}: malformed CAPTURE statement {line!r} -- "
+                    f"expected CAPTURE ARG <n> INTO <target> where <n> is a "
+                    f"positive integer (1-based USING parameter position)"
                 )
             elif in_mock.rows is not None:
                 row_match = _ROW_RE.match(line)

@@ -42,6 +42,11 @@ mockymock too.
   name* the CALL goes through (verified empirically: `CALL WS-PGM-NAME`
   yields `called_program == "WS-PGM-NAME"`); dynamic-CALL mocking keys on
   this.
+- `cobolparser.models.statements.call.CallStatement.using_parameters:
+  list[CallParameter]`, `CallParameter.name: str` — the `USING` clause's
+  data-names in source order, for both static and dynamic CALLs.
+  `CAPTURE ARG <n> INTO <target>` resolves `<n>` against this list (1-based)
+  at splice time (see `.okf/splicer.md`).
 - `cobolparser.models.statements.control.PerformStatement.target_paragraph: str | None`,
   `.inline_statements: list[CobolStatement]` (populated for inline `PERFORM ... END-PERFORM`)
 - `cobolparser.models.statements.control.IfStatement.then_statements`/`.else_statements: list[CobolStatement]`

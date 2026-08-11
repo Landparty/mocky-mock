@@ -48,6 +48,47 @@ unit (1219 passed) and Docker-gated integration suites re-run clean (one
 pre-existing, unrelated `test_read_rows_terminal_example` failure confirmed
 via `git stash` to predate this change). Updated `.okf/analysis.md`.
 
+## 2026-08-11 — `CAPTURE_ARG_OUT_OF_RANGE` widened to a whole-program site set
+
+Final whole-branch review of the argument-capture feature caught a gate/
+splicer disagreement no single task's scope could see. The refusal check in
+`check_test_case` filtered candidate sites by the owning test case's own
+reachability (`surface.sites_in(reachable - mocked_flow_names)`), but
+`splicer.orchestrator.splice_program` does not filter by reachability at
+all: it walks every `surface.boundary_sites` entry and splices any one that
+`directive_matches_site` matches for any directive of any case (category+key
+only). So a program with `CALL "X" USING A B` in one paragraph and
+`CALL "X" USING A` in another, mocked by two independent cases where only
+the first uses `CAPTURE ARG 2`, passed `mockymock lint` clean and then died
+in `export`/`run` with an unhandled `ValueError` from
+`injector.build_site_dispatch`. The check now runs against
+`surface.boundary_sites` unfiltered -- a superset of what the splicer
+processes -- for the same reason `NESTED_EXEC` is whole-program rather than
+per-case. Regression coverage is CLI-level
+(`tests/unit/test_cli.py`, `main(["lint", ...])` and `main(["export", ...])`)
+because that is the layer the bug escaped through; the unit tests in
+`tests/unit/test_refusal_capture.py` were retargeted (one of them had
+encoded the buggy assumption). Also closed the stale "still open" entries
+for this feature in `docs/2026-08-10-framework-audit-and-roadmap.md`, whose
+originally-proposed `VERIFY ... WAS CALLED WITH ...` syntax the design doc
+had explicitly rejected. Updated `.okf/analysis.md` and `.okf/dsl.md`.
+
+## 2026-08-11 — Argument-capture assertions on mocked CALLs
+
+`CAPTURE ARG <n> INTO <target>` inside a `MOCK CALL`/`MOCK MQ`/bare-DYNCALL
+body: positionally resolves the real call site's Nth `USING` parameter
+(via `BoundarySite.statement`, already carrying the AST node -- no new
+analysis field needed) into an ordinary WORKING-STORAGE field, asserted
+with the existing `EXPECT` (no new assertion syntax or report protocol).
+New fail-closed `CAPTURE_ARG_OUT_OF_RANGE` refusal when an index exceeds
+some matching site's real argument count (program-wide -- see the
+2026-08-11 follow-up entry above). Closes the "argument
+capture/spies on mocked CALLs" gap named in the 2026-07-06 readiness
+audit's Finding 6. Proven end-to-end via `examples/ordrproc/`'s existing
+Docker-gated integration test. See
+docs/2026-08-11-argument-capture-design.md and
+docs/superpowers/plans/2026-08-11-argument-capture.md.
+
 ## 2026-08-11 — Add `mockymock skills install` and two Claude Code skills
 
 Two Claude Code skills: `.claude/skills/mockymock-dev/` (repo-local,

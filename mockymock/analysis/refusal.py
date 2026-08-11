@@ -113,6 +113,13 @@ regardless of reachability -- a nested EXEC with no validated splice span
 (same preconditions as above) therefore refuses the file by its mere
 existence anywhere in the program.
 
+CAPTURE_ARG_OUT_OF_RANGE lives in check_test_case (a CAPTURE ARG directive
+belongs to exactly one test case) but is evaluated over the WHOLE program's
+boundary sites for the same reason: splice_program matches directives to
+sites by category+key alone, with no reachability filter, so a CAPTURE ARG
+index is spliced against every physical site sharing the mocked key --
+including ones the owning case never reaches.
+
 check_whole_program refuses on parse errors (PARSE_ERROR) and — since
 cobolparser's 2026-07-07 silent-drop remediation gave dropped content a
 signal — on every `ParseResult.warnings` entry (PARSE_WARNING): unsupported
@@ -188,6 +195,7 @@ from dataclasses import dataclass, field
 
 from cobolparser.lexer import CobolLexer, TokenType
 from cobolparser.models.program import CobolParagraph
+from cobolparser.models.statements.call import CallStatement
 from cobolparser.models.statements.control import (
     GoStatement,
     PerformStatement,
@@ -1405,6 +1413,47 @@ def check_test_case(
                     ),
                 )
             )
+
+    # Whole-program, NOT reachability-filtered -- same reasoning as
+    # check_nested_exec's NESTED_EXEC/UNSPLICEABLE_EXEC (see .okf/
+    # analysis.md, "Why NESTED_EXEC is whole-program, not per-case"):
+    # splice_program iterates every BoundarySite in the program and splices
+    # any one that `directive_matches_site` matches for ANY directive of ANY
+    # case -- pure category+key matching, deliberately blind to which case's
+    # control flow reaches which physical site, so that one directive can
+    # cover several physical sites sharing a key. build_site_dispatch then
+    # emits this directive's CAPTURE MOVEs into that site's dispatch block
+    # (and raises ValueError when the index exceeds its USING count). So the
+    # site set checked here must be a superset of what the splicer will
+    # actually process for this directive: every matching site program-wide,
+    # not just the ones reachable from this directive's own owning case.
+    # Each directive belongs to exactly one case's `case.mocks`, so this
+    # still reports each out-of-range capture exactly once per suite.
+    for directive in case.mocks:
+        if not directive.captures:
+            continue
+        matching_sites = [
+            s for s in surface.boundary_sites if directive_matches_site(directive, s)
+        ]
+        for index, target in directive.captures:
+            for site in matching_sites:
+                if not isinstance(site.statement, CallStatement):
+                    continue
+                arg_count = len(site.statement.using_parameters)
+                if index > arg_count:
+                    reasons.append(
+                        RefusalReason(
+                            code="CAPTURE_ARG_OUT_OF_RANGE",
+                            message=(
+                                f"MOCK {directive.describe()} CAPTURE ARG "
+                                f"{index} INTO {target} -- the CALL at "
+                                f"line {site.line} (paragraph "
+                                f"'{site.paragraph_name}') only declares "
+                                f"{arg_count} USING parameter"
+                                f"{'s' if arg_count != 1 else ''}"
+                            ),
+                        )
+                    )
 
     return reasons
 

@@ -86,6 +86,12 @@ FILE_STATUS_CATEGORIES = frozenset(
     }
 )
 
+# CAPTURE ARG <n> INTO <target> is valid only inside a mock body whose
+# category can carry a COBOL USING clause -- CALL/DYNCALL. MQ is sugar
+# for CALL at parse time (see MockCategory docstring), so it never
+# appears here as its own category.
+CAPTURE_CATEGORIES = frozenset({MockCategory.CALL, MockCategory.DYNCALL})
+
 
 @dataclass
 class MockDirective:
@@ -110,6 +116,13 @@ class MockDirective:
     `MOCK READ ... ROWS` block, from its optional `TERMINAL ( F = v, ... )`
     line. Always `None` for SQL rows (SQLCODE 100 is fixed) and for
     non-ROWS mocks."""
+    captures: list[tuple[int, str]] = field(default_factory=list)
+    """CAPTURE ARG <n> INTO <target> lines from this mock's body: (n, target)
+    pairs, n a 1-based USING-parameter position, in declaration order.
+    Only ever populated for CAPTURE_CATEGORIES (CALL/DYNCALL) directives;
+    empty for every other category. Resolved against the real call site's
+    CallStatement.using_parameters at splice time -- see
+    injector.build_site_dispatch."""
 
     @property
     def program_name(self) -> str:

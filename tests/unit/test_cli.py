@@ -88,6 +88,80 @@ def test_lint_reports_invalid_cut_file(tmp_path, capsys):
     assert "invalid .cut file" in out
 
 
+_CAPTURE_REPRO_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. REPRO.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A          PIC 9(5).
+       01  WS-B          PIC 9(5).
+       01  WS-CAPTURED   PIC 9(5).
+       PROCEDURE DIVISION.
+       RICH-PATH.
+           CALL "VALIDATE" USING WS-A WS-B.
+       LEAN-PATH.
+           CALL "VALIDATE" USING WS-A.
+"""
+
+# Two independent cases mocking the SAME key; only "rich" CAPTUREs, and only
+# "rich" reaches the two-argument site. LEAN-PATH's one-argument site is
+# unreachable from "rich" -- yet splice_program matches "rich"'s directive
+# against it anyway (directive_matches_site is category+key only, blind to
+# which case is being spliced), so build_site_dispatch would emit
+# `CAPTURE ARG 2` there and raise.
+_CAPTURE_REPRO_CUT = """\
+TESTSUITE "repro"
+TESTCASE "rich"
+    MOCK CALL "VALIDATE"
+        CAPTURE ARG 2 INTO WS-CAPTURED
+    END-MOCK
+    PERFORM RICH-PATH
+TESTCASE "lean"
+    MOCK CALL "VALIDATE"
+        MOVE 0 TO WS-A
+    END-MOCK
+    PERFORM LEAN-PATH
+"""
+
+
+def _write_capture_repro(tmp_path):
+    cbl = tmp_path / "REPRO.cbl"
+    cbl.write_text(_CAPTURE_REPRO_CBL)
+    cut = tmp_path / "REPRO.cut"
+    cut.write_text(_CAPTURE_REPRO_CUT)
+    return cbl, cut
+
+
+def test_lint_refuses_capture_arg_against_a_site_only_another_case_reaches(
+    tmp_path, capsys
+):
+    """Whole-branch review bug: the CAPTURE_ARG_OUT_OF_RANGE gate filtered
+    sites by the owning case's reachability while the splicer does not, so
+    `lint` reported no problems and `export`/`run` then died with an
+    unhandled ValueError from injector.build_site_dispatch. The gate now
+    checks every matching site program-wide, so the CLI refuses cleanly."""
+    cbl, cut = _write_capture_repro(tmp_path)
+    exit_code = main(["lint", str(cbl), "--cut", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "mockymock lint: refused (CAPTURE_ARG_OUT_OF_RANGE)" in out
+    assert "LEAN-PATH" in out
+    assert "1 USING parameter" in out
+
+
+def test_export_refuses_the_same_shape_instead_of_raising(tmp_path, capsys):
+    """The other half of the invariant: whenever build_site_dispatch could
+    raise its CAPTURE_ARG_OUT_OF_RANGE ValueError, the gate must have
+    refused first -- so export exits 1 with a refusal, never a traceback."""
+    cbl, cut = _write_capture_repro(tmp_path)
+    exit_code = main(
+        ["export", str(cbl), "--cut", str(cut), "--out", str(tmp_path / "out")]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "refused (CAPTURE_ARG_OUT_OF_RANGE)" in out
+
+
 def test_lint_missing_inputs_fail_cleanly(tmp_path, capsys):
     exit_code = main(
         ["lint", str(tmp_path / "NOPE.cbl"), "--cut", str(tmp_path / "NOPE.cut")]

@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-06T00:00:00Z
+timestamp: 2026-08-11T00:00:00Z
 ---
 
 # Overview
@@ -228,6 +228,17 @@ ever reached if the `.cut` file used `FILE-STATUS IS` sugar against such a
 file, or -- see below -- a `MOCK READ ... ROWS` directive with no
 `TERMINAL` group targets one). See
 `docs/2026-07-20-before-blocks-and-file-status-design.md`.
+
+**`CAPTURE ARG` resolution.** For a matched `CALL`/`DYNCALL` directive
+with `directive.captures`, `build_site_dispatch` emits one `MOVE
+<real-arg-name> TO <target>` line per `(n, target)` pair, resolved
+against *this exact physical site's* own AST node
+(`site.statement`, narrowed via `isinstance(..., CallStatement)` --
+`BoundarySite.statement` already carries the original AST statement for
+every site, so no new analysis-phase field was needed) --
+`site.statement.using_parameters[n - 1].name`. Emitted before
+`directive.body_lines`, in declared order. See [dsl](dsl.md)'s `CAPTURE
+ARG` grammar section and docs/2026-08-11-argument-capture-design.md.
 
 **`ROWS` dispatch (`MOCK SQL ... ROWS` and `MOCK READ ... ROWS`, see
 [dsl](dsl.md)).** `build_rows_block(tally_name, rows, *, row_suffix_moves,
