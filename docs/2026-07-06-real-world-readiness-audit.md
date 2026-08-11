@@ -287,8 +287,9 @@ developer wouldn't have without training:
   (`realworld-cobol-examples-design.md`).
 - Use bare literals, never named constants, in mock bodies (Finding 4).
 - `EXPECT` is **equality only** — no ranges, comparisons, substring, or
-  tolerance; no way to assert on the *arguments* a mocked `CALL` received
-  (only tally counts), and no cross-mock ordering assertions.
+  tolerance, and no cross-mock ordering assertions. (Closed 2026-08-11:
+  asserting on the *arguments* a mocked `CALL` received -- see
+  `CAPTURE ARG <n> INTO <target>`, `docs/2026-08-11-argument-capture-design.md`.)
 - Silent footguns in the DSL: an unterminated `MOCK` body doesn't error (it
   swallows the rest of the file); a second `PERFORM` in a case silently
   wins over the first (`dsl.md`, Gotchas).
@@ -310,6 +311,11 @@ re-declaring the same `MOCK` in every `TESTCASE`) and `FILE-STATUS IS`
 sugar with an implicit default-success status landed — see
 `docs/2026-07-20-before-blocks-and-file-status-design.md` and
 `examples/taxfile/`.
+
+**Closed 2026-08-11**: `CAPTURE ARG <n> INTO <target>` — positional
+argument capture on mocked `CALL`/dynamic-`CALL`s, asserted via the
+existing `EXPECT` — landed. See
+`docs/2026-08-11-argument-capture-design.md` and `examples/ordrproc/`.
 
 ---
 

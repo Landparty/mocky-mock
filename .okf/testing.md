@@ -146,11 +146,11 @@ Run: `mockymock run examples/invupdt/INVUPDT.cbl --cut examples/invupdt/INVUPDT.
 ## ORDRPROC (`examples/ordrproc/`)
 
 Minimal program calling an external `DISCRATE` subprogram for a discount
-rate, then computing a net amount. Demonstrates v1's narrowest mockable
-category -- static `CALL` (a literal program name, as opposed to INVUPDT's
-richer boundary set or the dynamic-call fixture's identifier-valued `CALL`).
+rate, then computing a net amount. Demonstrates static `CALL` mocking
+plus `CAPTURE ARG <n> INTO <target>` — capturing the `ORD-AMOUNT` value
+the program passes into `DISCRATE` and asserting it with an ordinary `EXPECT`.
 The README frames it as the smallest possible teaching example: flip
-`EXPECT WS-NET-AMOUNT TO BE 90.00` to a wrong value to see a FAIL, or run
+`EXPECT WS-CAPTURED-AMOUNT TO BE 100.00` to a wrong value to see a FAIL, or run
 `mockymock generate ORDRPROC.cbl` to see what auto-scaffolding produces from
 a bare `.cbl` with no `.cut` at all.
 

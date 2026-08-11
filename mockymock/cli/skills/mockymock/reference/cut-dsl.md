@@ -112,6 +112,29 @@ END-MOCK
 - `ROWS` is only valid on `SQL` and `READ`; using it elsewhere is a parse
   error.
 
+### `CAPTURE ARG <n> INTO <target>` -- argument capture (`CALL`/dynamic `CALL` only)
+
+Captures the real value a mocked `CALL` was passed, so you can assert on
+it with an ordinary `EXPECT`:
+
+```
+MOCK CALL "DISCRATE"
+    CAPTURE ARG 1 INTO WS-CAPTURED-RATE
+    MOVE 0 TO RETURN-CODE
+END-MOCK
+...
+PERFORM CALC-DISCOUNT
+EXPECT WS-CAPTURED-RATE TO BE 0.15
+```
+
+- `<n>` is 1-based and positional (the CALL's Nth `USING` argument), not
+  a COBOL variable name -- it works even if different call sites of the
+  same mocked key use differently-named arguments.
+- If the mocked `CALL` runs more than once in one `TESTCASE` (e.g. inside
+  a loop), the captured field ends up holding the *last* call's value.
+- Only valid inside `MOCK CALL`/`MOCK MQ` bodies; using it elsewhere is a
+  parse error.
+
 ## `MOVE <value> TO <target>`
 
 Sets up working-storage before the test runs, evaluated in file order (a

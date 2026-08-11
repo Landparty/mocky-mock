@@ -137,7 +137,7 @@ rest each add one distinctive feature.
 
 | Example | Demonstrates |
 |---------|--------------|
-| [`examples/ordrproc/`](examples/ordrproc/) | Smallest possible teaching example: one static `CALL` |
+| [`examples/ordrproc/`](examples/ordrproc/) | Smallest possible teaching example: one static `CALL`, `CAPTURE ARG` |
 | [`examples/invupdt/`](examples/invupdt/) | Every boundary category in one program (file I/O, `EXEC SQL`, MQ, `ACCEPT`), tally-driven EOF |
 | [`examples/custinq/`](examples/custinq/) | `EXEC CICS` (`READ`/`RETURN`), `GOBACK` neutralization |
 | [`examples/claimseg/`](examples/claimseg/) | Raw `EXEC DLI` (`GU`/`ISRT`) |

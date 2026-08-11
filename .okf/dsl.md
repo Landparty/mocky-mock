@@ -124,6 +124,58 @@ FILE-STATUS IS / malformed-FILE-STATUS branches, so any `FILE-STATUS IS`
 line written inside a `ROWS` body fell into "malformed ROWS row" instead
 — reordered so the FILE-STATUS IS branches are checked first.
 
+### `CAPTURE ARG <n> INTO <target>`
+
+Usable inside a `MOCK CALL "..."` / `MOCK MQ "..."` (category `CALL`) or
+bare `MOCK CALL <identifier>` (category `DYNCALL`) body only — any other
+category raises `CutParseError` at that line. `<n>` is a 1-based
+positive integer selecting the real `CALL`'s Nth `USING` parameter
+*positionally* — deliberately not by COBOL variable name, so one
+`CAPTURE` line stays correct even when two physical call sites sharing
+the mocked key use differently-named arguments. `<target>` reuses
+`_SUBSCRIPTED_NAME` (same fragment as `MOVE`'s target and `EXPECT`'s
+data-name).
+
+```
+MOCK CALL "DISCRATE"
+    CAPTURE ARG 1 INTO WS-CAPTURED-RATE
+    MOVE 0 TO RETURN-CODE
+END-MOCK
+...
+PERFORM CALC-DISCOUNT
+EXPECT WS-CAPTURED-RATE TO BE 0.15
+```
+
+At splice time (`injector.build_site_dispatch`, see
+[splicer](splicer.md)), `<n>` is resolved against *that exact physical
+call site's* `CallStatement.using_parameters` and emitted as `MOVE
+<real-arg-name> TO <target>`, before the directive's own body lines —
+the captured value is then asserted with the ordinary `EXPECT`, no new
+assertion syntax. Multiple `CAPTURE` lines in one body are allowed (one
+per `USING` argument worth capturing); the same `<n>` twice in one body
+is a `CutParseError`. `<n>` of `0` or non-numeric is a `CutParseError`.
+
+**Multi-call semantics: last call wins.** The `MOVE` re-fires on every
+dispatch through that site's `WHEN` branch, identical to any
+hand-written mock-body `MOVE` — if the mocked `CALL` is reached more than
+once in one `TESTCASE` (e.g. inside a loop), the captured field holds
+whichever call happened *last* by the time `EXPECT` runs. Per-call
+history/table capture is not supported.
+
+**Fail-closed validation:** `CAPTURE_ARG_OUT_OF_RANGE` (see
+[analysis](analysis.md)) refuses if `<n>` exceeds the real `USING`
+parameter count of any reachable call site the directive matches. Because
+dispatch is per physical *site*, not per key, two sites sharing one
+mocked key can legitimately declare a different number of `USING`
+parameters — this refuses if **any** matching site has too few, even if
+another matching site would be fine (fail closed over partial safety,
+same posture as `UNRESOLVED_FILE_STATUS_TARGET`).
+
+See docs/2026-08-11-argument-capture-design.md for the full design and
+rejected alternatives (a dedicated `VERIFY ... WAS CALLED WITH ARG n =
+value` combined syntax; capturing by COBOL variable name instead of
+position; per-call history capture).
+
 ## Case rules
 
 Every DSL keyword is case-sensitive uppercase (`testsuite "x"` is an
@@ -253,7 +305,7 @@ docs/2026-08-04-record-expectations-design.md for the full design.
 | Class | Fields | Notes |
 |---|---|---|
 | `MockCategory` (Enum) | `CALL, DYNCALL, OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START, UNLOCK, SQL, CICS, DLI, ACCEPT, PARAGRAPH, SECTION` | `.keyword` property maps `DYNCALL → "CALL"`, everything else to its own name |
-| `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None, terminal_row: list[tuple[str, str]] \| None` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS` or `MOCK READ <file> ROWS` directive and is mutually exclusive with `body_lines`; `terminal_row` holds a READ ROWS directive's optional `TERMINAL ( FIELD = value, ... )` group (its rows-exhausted `WHEN OTHER` field assignments) — always `None` for SQL rows (SQLCODE 100 is fixed) and for non-ROWS mocks |
+| `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None, terminal_row: list[tuple[str, str]] \| None, captures: list[tuple[int, str]]` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS` or `MOCK READ <file> ROWS` directive and is mutually exclusive with `body_lines`; `terminal_row` holds a READ ROWS directive's optional `TERMINAL ( FIELD = value, ... )` group (its rows-exhausted `WHEN OTHER` field assignments) — always `None` for SQL rows (SQLCODE 100 is fixed) and for non-ROWS mocks; `captures` holds `CAPTURE ARG <n> INTO <target>` `(n, target)` pairs, only ever non-empty for CALL/DYNCALL directives |
 | `DataProvider` | `name, line, header: list[str], rows: list[list[str]], row_lines: list[int]` | Parser-internal only -- never stored on `MockTestSuite`/`MockTestCase`; consumed and discarded by `_expand_providers` before `parse_cut()` returns |
 | `ExpectDirective` | `data_name, expected_value` | one `EXPECT` line |
 | `VerifyDirective` | `category, key, expectation` | `.program_name` same v1-compat alias as `MockDirective` |

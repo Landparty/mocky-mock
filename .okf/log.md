@@ -1,5 +1,20 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-11 — Argument-capture assertions on mocked CALLs
+
+`CAPTURE ARG <n> INTO <target>` inside a `MOCK CALL`/`MOCK MQ`/bare-DYNCALL
+body: positionally resolves the real call site's Nth `USING` parameter
+(via `BoundarySite.statement`, already carrying the AST node -- no new
+analysis field needed) into an ordinary WORKING-STORAGE field, asserted
+with the existing `EXPECT` (no new assertion syntax or report protocol).
+New fail-closed `CAPTURE_ARG_OUT_OF_RANGE` refusal when an index exceeds
+some reachable matching site's real argument count. Closes the "argument
+capture/spies on mocked CALLs" gap named in the 2026-07-06 readiness
+audit's Finding 6. Proven end-to-end via `examples/ordrproc/`'s existing
+Docker-gated integration test. See
+docs/2026-08-11-argument-capture-design.md and
+docs/superpowers/plans/2026-08-11-argument-capture.md.
+
 ## 2026-08-11 — Add `mockymock skills install` and two Claude Code skills
 
 Two Claude Code skills: `.claude/skills/mockymock-dev/` (repo-local,
