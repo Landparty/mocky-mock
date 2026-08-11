@@ -308,6 +308,33 @@ def _result():
     return result
 
 
+# SAFE-PARAGRAPH's static CALL "DISCRATE" in isolation: no other paragraph
+# anywhere in the program shares its key. Contrast with SOURCE above, where
+# the SAME literal key also matches the unspliceable nested CALL inside
+# SIZE-ERROR-PARAGRAPH's ON SIZE ERROR clause -- a paragraph SAFE-PARAGRAPH
+# itself never reaches, exercised by
+# test_per_case_check_refuses_nested_mock_target_matched_program_wide below.
+ISOLATED_CALL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ISOLATED.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-RATE            PIC 9V99.
+
+       PROCEDURE DIVISION.
+       SAFE-PARAGRAPH.
+           CALL "DISCRATE" USING WS-AMOUNT WS-RATE.
+"""
+
+
+def _isolated_call_result():
+    result = parse_cobol(ISOLATED_CALL_SOURCE, filename="isolated.cbl")
+    assert result.success, result.errors
+    return result
+
+
 def _file_io_result():
     result = parse_cobol(FILE_IO_SOURCE, filename="filesamp.cbl")
     assert result.success, result.errors
@@ -606,12 +633,32 @@ def test_check_unresolved_copybooks_does_not_false_positive_on_copy_substring():
 
 
 def test_per_case_check_allows_static_call_only_paragraph():
-    result = _result()
+    result = _isolated_call_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
         surface, result.ast, _case("SAFE-PARAGRAPH", call_names={"DISCRATE"})
     )
     assert reasons == []
+
+
+def test_per_case_check_refuses_nested_mock_target_matched_program_wide():
+    """Whole-program mismatch, same bug class as AMBIGUOUS_MOCK's CLI-level
+    regression in test_cli.py: SAFE-PARAGRAPH's own reachable CALL
+    "DISCRATE" is a clean top-level site, but the same key also matches the
+    unspliceable CALL "DISCRATE" nested inside SIZE-ERROR-PARAGRAPH's ON
+    SIZE ERROR clause elsewhere in the program -- a paragraph this case's
+    own PERFORM target never reaches. orchestrator.splice_program matches
+    directives to sites by category+key alone, with no reachability filter
+    (see splice_program's `mocked = any(...)` check), so that nested site
+    would still get spliced -- and orchestrator's own defensive "the
+    refusal gate should have refused it" check would raise -- if
+    check_test_case did not also check sites program-wide."""
+    result = _result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("SAFE-PARAGRAPH", call_names={"DISCRATE"})
+    )
+    assert any(r.code == "UNSUPPORTED_NESTED_MOCK_TARGET" for r in reasons)
 
 
 def test_per_case_check_refuses_unmocked_dynamic_call():
