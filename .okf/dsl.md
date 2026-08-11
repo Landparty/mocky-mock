@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-08-11T00:00:00Z
+timestamp: 2026-08-11T12:00:00Z
 ---
 
 # Overview
@@ -164,12 +164,13 @@ history/table capture is not supported.
 
 **Fail-closed validation:** `CAPTURE_ARG_OUT_OF_RANGE` (see
 [analysis](analysis.md)) refuses if `<n>` exceeds the real `USING`
-parameter count of any reachable call site the directive matches. Because
-dispatch is per physical *site*, not per key, two sites sharing one
-mocked key can legitimately declare a different number of `USING`
-parameters — this refuses if **any** matching site has too few, even if
-another matching site would be fine (fail closed over partial safety,
-same posture as `UNRESOLVED_FILE_STATUS_TARGET`).
+parameter count of any call site the directive matches **anywhere in the
+program** — reachability is deliberately not a filter, because the splicer
+isn't one either. Because dispatch is per physical *site*, not per key,
+two sites sharing one mocked key can legitimately declare a different
+number of `USING` parameters — this refuses if **any** matching site has
+too few, even if another matching site would be fine (fail closed over
+partial safety, same posture as `UNRESOLVED_FILE_STATUS_TARGET`).
 
 See docs/2026-08-11-argument-capture-design.md for the full design and
 rejected alternatives (a dedicated `VERIFY ... WAS CALLED WITH ARG n =
