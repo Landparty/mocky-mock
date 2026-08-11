@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-08-10T00:00:00Z
+timestamp: 2026-08-11T00:00:00Z
 ---
 
 # Overview

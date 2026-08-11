@@ -298,8 +298,9 @@ developer wouldn't have without training:
   `HEADER`/`ROW` parameterized test cases,
   `docs/2026-07-20-provider-parameterized-test-cases-design.md`.
 
-**What closing it takes:** richer assertions (comparison operators, argument
-capture/spies on mocked CALLs); a `.cut` linter that flags unterminated
+**What closing it takes:** richer assertions (comparison operators, per-call
+history/table capture on mocked CALLs — the "spy" pattern; basic positional
+argument capture is closed 2026-08-11); a `.cut` linter that flags unterminated
 mocks, duplicate `PERFORM`s, terminator-reaching targets, and the SQL-period
 quirk before a run; and surfacing the sharp edges in a user tutorial. The
 `generate` scaffolder already lowers the authoring barrier — leaning into it

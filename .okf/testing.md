@@ -3,7 +3,7 @@ type: Test Suite
 title: Testing
 description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, FLOWMOCK, TAXFILE, STATELKUP, REGNAVG, CPYPROC, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-08-10T00:00:00Z
+timestamp: 2026-08-11T00:00:00Z
 ---
 # Overview
 
