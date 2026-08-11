@@ -894,14 +894,18 @@ READ_LOOP_WITH_INLINE_CALL_SOURCE = """\
 
 def test_placeholder_downgraded_read_demotes_a_downstream_verify_in_the_same_loop():
     """Issue #47: a CALL made once per row inside the SAME READ-LOOP
-    paragraph as a --placeholder-downgraded READ is reached exactly ONCE
-    at runtime once the READ signals EOF on its first call -- not the
-    bundle's original 10 (one per un-downgraded row). Rendering the
-    bundle's stale `VERIFY CALL "LOGROW" WAS CALLED 10 TIMES` unchanged
-    pins an assertion the generated .cut cannot itself satisfy, the exact
-    same runnable-by-construction violation the READ's own VERIFY count
-    was already fixed for. The downstream CALL's VERIFY must be demoted to
-    a `*>` comment instead, same as an unknowable count."""
+    paragraph as a --placeholder-downgraded READ is reached a DIFFERENT
+    number of times once that READ is downgraded -- here, the downgraded
+    READ signals EOF unconditionally on its very first call, so the
+    `IF WS-EOF = "N"` guard around the CALL never passes and it is reached
+    ZERO times at runtime, not the bundle's original 2 (one per
+    un-downgraded row). Rendering the bundle's stale `VERIFY CALL "LOGROW"
+    WAS CALLED 2 TIMES` unchanged pins an assertion the generated .cut
+    cannot itself satisfy, the exact same runnable-by-construction
+    violation the READ's own VERIFY count was already fixed for. The
+    downstream CALL's VERIFY must be demoted to a `*>` comment instead,
+    same as an unknowable count -- the fix does not attempt to compute the
+    new count (0 here), only to stop asserting the stale one."""
     result = parse_cobol(READ_LOOP_WITH_INLINE_CALL_SOURCE, filename="readloop.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
