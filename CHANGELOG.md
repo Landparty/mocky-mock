@@ -19,6 +19,15 @@
 
 - `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
 
+## [0.5.2](https://github.com/Landparty/mocky-mock/compare/v0.5.1...v0.5.2) (2026-08-11)
+
+
+### Bug Fixes
+
+* 47 stale downstream VERIFY counts, add [#48](https://github.com/Landparty/mocky-mock/issues/48) Docker coverage for READ ROWS/TERMINAL ([7e0ee64](https://github.com/Landparty/mocky-mock/commit/7e0ee64a878c844a05113b629d8bd3050cd5e399))
+* Replace verbose Gotchas section with condensed pointer list to .okf/ ([b8696e5](https://github.com/Landparty/mocky-mock/commit/b8696e5100d9c3ba790b0b3394058e5469f9c6cf))
+* Restore 6th gotcha (Docker tests) and use quote-based references instead of ordinals ([c7ec53f](https://github.com/Landparty/mocky-mock/commit/c7ec53ff94f825d969cfb6c91909372edc633c18))
+
 ## [0.5.1](https://github.com/Landparty/mocky-mock/compare/v0.5.0...v0.5.1) (2026-08-10)
 
 
