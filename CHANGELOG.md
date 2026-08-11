@@ -19,6 +19,32 @@
 
 - `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
 
+## [0.6.0](https://github.com/Landparty/mocky-mock/compare/v0.5.2...v0.6.0) (2026-08-11)
+
+
+### Features
+
+* add CAPTURE ARG &lt;n&gt; INTO &lt;target&gt; grammar to MOCK CALL bodies ([18b7ca7](https://github.com/Landparty/mocky-mock/commit/18b7ca785e19a69c0ae3f468f1fb15789142d865))
+* refuse CAPTURE_ARG_OUT_OF_RANGE when a CAPTURE index exceeds a site's real USING-parameter count ([b8c6654](https://github.com/Landparty/mocky-mock/commit/b8c6654fa5db08984a3cd931e6e22fcba44ff8a1))
+* splice CAPTURE ARG's resolved MOVE before a CALL/DYNCALL mock's body lines ([ff22fbb](https://github.com/Landparty/mocky-mock/commit/ff22fbb66943468fcacc620691c824be4e331639))
+
+
+### Bug Fixes
+
+* add fail-closed guard for malformed CAPTURE statements + test coverage ([c8da6fa](https://github.com/Landparty/mocky-mock/commit/c8da6fa9ea4bd9ea1bd004ddac05b41b49770f5c))
+* check AMBIGUOUS_MOCK (and nested/layout checks) against every matching site program-wide ([3e0c286](https://github.com/Landparty/mocky-mock/commit/3e0c286164f968b22f8ca5ccd1333d183025057c))
+* check AMBIGUOUS_MOCK against every matching site program-wide ([251d9e8](https://github.com/Landparty/mocky-mock/commit/251d9e87adff8d875d88d6e3835a98473acd2649))
+* check CAPTURE_ARG_OUT_OF_RANGE against every matching site program-wide ([723079b](https://github.com/Landparty/mocky-mock/commit/723079bcc846f94d4ca8a85f7ffd7347b4fa35e1))
+* handle oversized CAPTURE ARG index parse errors and align design doc semantics ([c45aad4](https://github.com/Landparty/mocky-mock/commit/c45aad49f0873de58fe5fda9a4c49d48da8e1fa4))
+* resolve audit doc contradiction and refresh OKF timestamps ([95ff0fd](https://github.com/Landparty/mocky-mock/commit/95ff0fda6fb533f25d5d8ff57d6d243e561926ef))
+
+
+### Documentation
+
+* demonstrate CAPTURE ARG in the ordrproc worked example, proven via Docker ([b4cbb8a](https://github.com/Landparty/mocky-mock/commit/b4cbb8a3825006846dd225833302a02a66fedf87))
+* document CAPTURE ARG argument capture across OKF bundle, AI skill, and audit doc ([a3fbcaf](https://github.com/Landparty/mocky-mock/commit/a3fbcaf76d560da57f1daf5a302dac4ca70bc9d5))
+* mark argument capture closed in the 2026-08-10 framework audit roadmap ([513ba7a](https://github.com/Landparty/mocky-mock/commit/513ba7ab8b31762ed282202e2a47f5023ae1ad8b))
+
 ## [0.5.2](https://github.com/Landparty/mocky-mock/compare/v0.5.1...v0.5.2) (2026-08-11)
 
 
