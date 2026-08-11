@@ -29,36 +29,24 @@ parse (cobolparser) -> analyze (mock_surface: CALL/file-I-O/EXEC SQL·CICS·DLI/
 See `.okf/dsl.md`, `.okf/analysis.md`, `.okf/splicer.md`,
 `.okf/runtime.md`, `.okf/report.md`, `.okf/cli.md` for each stage.
 
-## Gotchas that don't show up from reading one file
+## Gotchas worth knowing before you start
 
-- **`build_parser()` may not import a `_cmd_*` body's dependencies.** It
-  runs on every invocation including `--help`. `mockymock dashboard`
-  regressed this once (importing `web.server` for a port default pulled
-  in `docker_toolchain`); `test_cli_dashboard.py`'s
-  `test_building_the_parser_does_not_import_the_docker_toolchain` pins it.
-- **`annotate_nested_sites` must run before anything inspects
-  `surface.boundary_sites` for nested spliceability** -- in both
-  `generate` and `run`. An unannotated nested site looks unspliceable by
-  construction; calling this late produces false refusals.
-- **`transform_data_division_exec` is called twice in `_cmd_run`**: once
-  to precheck `SQLCA` refusal reasons (return value discarded), once for
-  real after splicing (splicing shifts line numbers/spans the first call
-  would otherwise have invalidated). Collapsing this into one call
-  silently breaks splice-target alignment.
-- **Refusal checks are cumulative within one gate, fail-fast between
-  gates.** `check_test_case` loops every test case before exiting, so a
-  user sees every problem in one run; but the command exits at the first
-  *gate* (parse -> unresolved-copybook -> nested-exec -> ... ->
-  check_test_case) that fires, so later gates never run.
-- **Docker-dependent tests are opt-in, not opt-out.**
-  `tests/integration/` needs a reachable Docker daemon and is skipped
-  automatically when one isn't available; `tests/unit/` never touches
-  Docker. Run `python -m pytest tests/unit -v` for a fast inner loop.
-- **`mockymock lint` is a structural guarantee, not just a convention** --
-  `_cmd_lint` must never import `mockymock.runtime.docker_toolchain`,
-  tested by `tests/unit/test_checks.py`. `run`/`lint` share
-  `run_static_checks` specifically so they can never disagree about what
-  refuses.
+Each of these is explained in full in `.okf/cli.md`'s own Gotchas section
+(or the module doc named) -- read that before touching the code it
+covers; this list exists so you know to look, not as a substitute.
+
+- `build_parser()` must not import anything a `_cmd_*` body needs. See
+  `.okf/cli.md`'s Gotchas section, first bullet.
+- `annotate_nested_sites` ordering is load-bearing in both `generate` and
+  `run`. See `.okf/cli.md`'s Gotchas section, third bullet, and
+  `.okf/splicer.md`.
+- `transform_data_division_exec` is deliberately called twice in
+  `_cmd_run`. See `.okf/cli.md`'s Gotchas section, second bullet.
+- Refusal checks are cumulative within one gate, fail-fast between gates.
+  See `.okf/cli.md`'s Gotchas section, fourth bullet.
+- `mockymock lint` never importing `docker_toolchain` is a structural
+  guarantee, tested directly. See `.okf/cli.md`'s "`mockymock lint`"
+  subsection.
 
 ## Before you start
 
