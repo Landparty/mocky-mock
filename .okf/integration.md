@@ -3,7 +3,7 @@ type: Contract
 title: cobolparser Interface Contract
 description: The exact cobolparser AST surface (ParseResult, statement node fields, node_type quirks) that mockymock depends on.
 tags: [integration, cobolparser, contract]
-timestamp: 2026-07-09T00:00:00Z
+timestamp: 2026-08-11T00:00:00Z
 ---
 
 # Overview
@@ -66,6 +66,7 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 | `CobolDivision.paragraphs` / `._sections: dict[str, CobolSection]` | paragraph enumeration (sections also have `.paragraphs`) |
 | `CobolParagraph.paragraph_name`, `.statements`, `.location.line` | reachability graph, splice targeting |
 | `CallStatement.called_program: str \| None`, `.is_dynamic` (property) | dynamic-CALL mocking keys on `called_program` when `is_dynamic` |
+| `CallStatement.using_parameters: list[CallParameter]`, `CallParameter.name: str` | `CAPTURE ARG <n> INTO <target>` resolves `<n>` against this list (1-based) at splice time, for both static CALL and DYNCALL sites |
 | `CallStatement.on_exception` / `.not_on_exception` / `.on_overflow` | exception-branch statement lists |
 | `PerformStatement.target_paragraph`, `.thru_paragraph`, `.inline_statements` | reachability BFS; THRU triggers a refusal (see Gotchas) |
 | `IfStatement.then_statements` / `.else_statements` | branch traversal |

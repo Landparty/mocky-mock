@@ -176,6 +176,7 @@ from dataclasses import dataclass, field
 
 from cobolparser.lexer import CobolLexer, TokenType
 from cobolparser.models.program import CobolParagraph
+from cobolparser.models.statements.call import CallStatement
 from cobolparser.models.statements.control import (
     GoStatement,
     PerformStatement,
@@ -1315,6 +1316,34 @@ def check_test_case(
                     ),
                 )
             )
+
+    for directive in case.mocks:
+        if not directive.captures:
+            continue
+        matching_sites = [
+            s
+            for s in surface.sites_in(reachable - mocked_flow_names)
+            if directive_matches_site(directive, s)
+        ]
+        for index, target in directive.captures:
+            for site in matching_sites:
+                if not isinstance(site.statement, CallStatement):
+                    continue
+                arg_count = len(site.statement.using_parameters)
+                if index > arg_count:
+                    reasons.append(
+                        RefusalReason(
+                            code="CAPTURE_ARG_OUT_OF_RANGE",
+                            message=(
+                                f"MOCK {directive.describe()} CAPTURE ARG "
+                                f"{index} INTO {target} -- the CALL at "
+                                f"line {site.line} (paragraph "
+                                f"'{site.paragraph_name}') only declares "
+                                f"{arg_count} USING parameter"
+                                f"{'s' if arg_count != 1 else ''}"
+                            ),
+                        )
+                    )
 
     return reasons
 
