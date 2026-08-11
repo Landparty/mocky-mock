@@ -1,9 +1,9 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-08-10T00:00:00Z
+timestamp: 2026-08-11T00:00:00Z
 ---
 
 # Overview
@@ -28,6 +28,7 @@ mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.ru
 mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
 mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed)
 mockymock dashboard -> web.server (loopback HTTP) -> runtime.status.probe()  (read-only Docker)
+mockymock analyze   -> sys.argv monkeypatch -> cobolparser.cli.parse.main() (no Docker, pure pass-through)
 mockymock export    -> cli.checks (static) -> splicer -> cli.mainframe_export (no Docker)
 mockymock skills    -> skills_cmd (no Docker, no parsing -- a copytree)
 ```
@@ -548,6 +549,22 @@ the constant at parser-build time would import `web.server` ->
 `runtime.status` -> `runtime.docker_toolchain` (which reads the Dockerfile
 at import to compute `IMAGE`) on every `mockymock --help`. See the Gotchas
 below.
+
+## `mockymock analyze [cobolparser-args...]`
+
+The only subcommand that's a pure pass-through: it forwards straight to
+cobol-parser's own CLI (`dead-code`, `program-flow`, `io-sequence`,
+`move-type-check`, `linkage-check`, `language-env`, `ims-dli`, `analyze`),
+not `mockymock.analysis`. `cobolparser_args` is declared with
+`nargs=argparse.REMAINDER`, so every token after `mockymock analyze` —
+including anything that looks like a mockymock flag — belongs to
+cobol-parser, never to this parser. `_cmd_analyze` monkeypatches
+`sys.argv` to `["cobol-parser", *args.cobolparser_args]` (restored in a
+`finally`) because `cobolparser.cli.parse.main()` takes no `argv`
+parameter and reads `sys.argv[1:]` directly — the standard idiom for
+delegating to an argparse CLI that doesn't accept one, safe here because
+the CLI is single-threaded and sequential. Its `SystemExit.code` is
+returned as-is when it's already an `int`, else 1. No Docker.
 
 ## `mockymock export <program> --cut PATH [-o/--output PATH] [--copybook-path DIR ...] [--case NAME ...] [--tag TAG ...]`
 

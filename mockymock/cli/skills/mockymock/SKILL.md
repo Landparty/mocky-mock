@@ -74,4 +74,4 @@ and reports pass/fail. Use it to write and run `.cut` test files against
   `BEFORE-ALL`/`BEFORE-EACH`, `PROVIDER`/`HEADER`/`ROW`, `*> STUB EXPECT`.
 - `reference/cli-flags.md` -- every subcommand and flag: `setup`,
   `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`,
-  `dashboard`, `export`, `analyze`.
+  `dashboard`, `export`, `analyze`, `skills`.
