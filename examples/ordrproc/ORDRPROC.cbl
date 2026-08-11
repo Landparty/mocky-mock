@@ -6,6 +6,7 @@
        01  ORD-AMOUNT          PIC 9(5)V99.
        01  WS-DISCOUNT-PCT     PIC 9V99.
        01  WS-NET-AMOUNT       PIC 9(5)V99.
+       01  WS-CAPTURED-AMOUNT  PIC 9(5)V99.
 
        PROCEDURE DIVISION.
        PROCESS-ORDER.
