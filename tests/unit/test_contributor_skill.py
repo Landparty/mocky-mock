@@ -6,7 +6,11 @@ to catch it, so pin the shape here."""
 from pathlib import Path
 
 SKILL_PATH = (
-    Path(__file__).resolve().parents[2] / ".claude" / "skills" / "mockymock-dev" / "SKILL.md"
+    Path(__file__).resolve().parents[2]
+    / ".claude"
+    / "skills"
+    / "mockymock-dev"
+    / "SKILL.md"
 )
 
 
