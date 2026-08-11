@@ -1,6 +1,8 @@
 """Unit tests for the mock injector (per-site dispatch, v2)."""
 
 import pytest
+from cobolparser.models.ast_base import SourceLocation
+from cobolparser.models.statements.call import CallStatement
 
 from mockymock.analysis.mock_surface import BoundarySite
 from mockymock.dsl.model import (
@@ -31,6 +33,25 @@ def _site(
         line=10,
         nested=False,
         statement=object(),
+    )
+
+
+def _call_site(using_names, key="DISCRATE"):
+    """A BoundarySite whose .statement is a real CallStatement with the
+    given USING parameter names, in order -- what CAPTURE codegen reads."""
+    statement = CallStatement(SourceLocation(line=10, column=1))
+    statement.set_called_program(key)
+    for name in using_names:
+        statement.add_using_parameter(name)
+    return BoundarySite(
+        category=MockCategory.CALL,
+        label="CALL",
+        keys=(key,),
+        match_text=None,
+        paragraph_name="P",
+        line=10,
+        nested=False,
+        statement=statement,
     )
 
 
@@ -528,3 +549,76 @@ def test_flow_dispatch_emits_mock_marker_in_trace_mode():
 
     plain = build_flow_dispatch(plan, suite, TallyRegistry(suite))
     assert not any("__MOCKYMOCK__ MOCK:" in line for line in plain)
+
+
+# --- argument capture (docs/2026-08-11-argument-capture-design.md) -----------
+
+
+def test_capture_emits_move_from_the_real_using_parameter_name():
+    site = _call_site(["ORD-AMOUNT", "WS-DISCOUNT-PCT"])
+    case = MockTestCase(
+        name="capture",
+        mocks=[
+            MockDirective(
+                MockCategory.CALL,
+                "DISCRATE",
+                body_lines=["MOVE 0.10 TO WS-DISCOUNT-PCT"],
+                captures=[(1, "WS-CAPTURED-AMOUNT")],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    joined = "\n".join(_dispatch(suite, site))
+    assert "MOVE ORD-AMOUNT TO WS-CAPTURED-AMOUNT" in joined
+
+
+def test_capture_move_precedes_the_directives_own_body_lines():
+    site = _call_site(["ORD-AMOUNT"])
+    case = MockTestCase(
+        name="capture",
+        mocks=[
+            MockDirective(
+                MockCategory.CALL,
+                "DISCRATE",
+                body_lines=["MOVE 0.10 TO WS-DISCOUNT-PCT"],
+                captures=[(1, "WS-CAPTURED-AMOUNT")],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = _dispatch(suite, site)
+    capture_index = next(i for i, ln in enumerate(lines) if "WS-CAPTURED-AMOUNT" in ln)
+    body_index = next(
+        i for i, ln in enumerate(lines) if "WS-DISCOUNT-PCT" in ln and "MOVE 0.10" in ln
+    )
+    assert capture_index < body_index
+
+
+def test_multiple_captures_each_emit_their_own_move_in_declared_order():
+    site = _call_site(["ORD-AMOUNT", "WS-DISCOUNT-PCT"])
+    case = MockTestCase(
+        name="capture",
+        mocks=[
+            MockDirective(
+                MockCategory.CALL,
+                "DISCRATE",
+                captures=[(2, "WS-CAPTURED-PCT"), (1, "WS-CAPTURED-AMOUNT")],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = _dispatch(suite, site)
+    pct_index = next(i for i, ln in enumerate(lines) if "WS-CAPTURED-PCT" in ln)
+    amount_index = next(i for i, ln in enumerate(lines) if "WS-CAPTURED-AMOUNT" in ln)
+    assert "MOVE WS-DISCOUNT-PCT TO WS-CAPTURED-PCT" in lines[pct_index]
+    assert "MOVE ORD-AMOUNT TO WS-CAPTURED-AMOUNT" in lines[amount_index]
+    assert pct_index < amount_index
+
+
+def test_directive_with_no_captures_emits_no_extra_move():
+    """Zero-cost when absent: a directive with captures == [] (the
+    default) must produce byte-for-byte the same dispatch as before this
+    feature existed."""
+    site = _call_site(["ORD-AMOUNT", "WS-DISCOUNT-PCT"])
+    joined = "\n".join(_dispatch(_suite(), site))
+    assert "CAPTURED" not in joined

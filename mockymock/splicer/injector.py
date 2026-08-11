@@ -17,6 +17,8 @@ trap records a failure instead of silently doing nothing.
 
 from __future__ import annotations
 
+from cobolparser.models.statements.call import CallStatement
+
 from mockymock.analysis.mock_surface import BoundarySite
 from mockymock.analysis.refusal import directive_matches_site
 from mockymock.dsl.model import FILE_STATUS_CATEGORIES, MockCategory, MockTestSuite
@@ -69,6 +71,14 @@ def build_site_dispatch(
     own body; an explicit FILE-STATUS IS (`directive.file_status`) follows
     it and therefore wins, same as any hand-written MOVE the author adds
     after it -- see docs/2026-07-20-before-blocks-and-file-status-design.md.
+
+    A directive with CAPTURE ARG <n> INTO <target> entries (CALL/DYNCALL
+    only) emits one `MOVE <real using-parameter name> TO <target>` line
+    per entry, resolved against this exact site's own
+    CallStatement.using_parameters -- before directive.body_lines, so a
+    capture always reflects the value the real caller passed, never
+    something an earlier body line might otherwise have overwritten it
+    with. See docs/2026-08-11-argument-capture-design.md.
 
     A `MOCK READ ... ROWS` directive's exhaustion (`WHEN OTHER`) branch
     follows the SAME implicit-default-then-explicit-override ordering as
@@ -133,6 +143,28 @@ def build_site_dispatch(
                         f'                   MOVE "{directive.file_status}" '
                         f"TO {status_field}"
                     )
+        if directive.captures:
+            if not isinstance(site.statement, CallStatement):
+                raise ValueError(
+                    f"MOCK {directive.describe()} has CAPTURE ARG entries "
+                    f"but the site at line {site.line} is not a CALL "
+                    f"statement -- refusal gate should have caught this "
+                    f"(CAPTURE_ARG_OUT_OF_RANGE)"
+                )
+            using = site.statement.using_parameters
+            for capture_index, target in directive.captures:
+                if capture_index > len(using):
+                    raise ValueError(
+                        f"MOCK {directive.describe()} CAPTURE ARG "
+                        f"{capture_index} exceeds {len(using)} USING "
+                        f"parameter(s) at line {site.line} -- refusal "
+                        f"gate should have caught this "
+                        f"(CAPTURE_ARG_OUT_OF_RANGE)"
+                    )
+                lines.append(
+                    f"                   MOVE {using[capture_index - 1].name} "
+                    f"TO {target}"
+                )
         if directive.rows is not None and directive.category is MockCategory.READ:
             status_field = file_status_fields.get(directive.key.upper())
             if directive.terminal_row is None and status_field is None:
