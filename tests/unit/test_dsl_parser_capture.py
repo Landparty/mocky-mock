@@ -87,6 +87,20 @@ TESTCASE "c"
         parse_cut(cut)
 
 
+def test_capture_overly_large_numeric_index_is_a_parse_error():
+    index = "1" * 5000
+    cut = f"""\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK CALL "DISCRATE"
+        CAPTURE ARG {index} INTO WS-CAPTURED-RATE
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="positive integer"):
+        parse_cut(cut)
+
+
 def test_capture_outside_call_category_is_a_parse_error():
     cut = """\
 TESTSUITE "s"

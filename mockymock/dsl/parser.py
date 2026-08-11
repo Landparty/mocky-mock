@@ -512,7 +512,14 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"be a positive integer (1-based USING parameter "
                         f"position)"
                     )
-                index = int(index_text)
+                try:
+                    index = int(index_text)
+                except ValueError as exc:
+                    raise CutParseError(
+                        f"line {line_no}: CAPTURE ARG {index_text!r} must "
+                        f"be a positive integer (1-based USING parameter "
+                        f"position)"
+                    ) from exc
                 if index in {n for n, _ in in_mock.captures}:
                     raise CutParseError(
                         f"line {line_no}: duplicate CAPTURE ARG {index} in "

@@ -35,7 +35,7 @@ a "spy" mock is for.
   reference — so one `.cut` line stays correct even when two call sites
   sharing the same mocked key use differently-named arguments.
 - A new fail-closed refusal (`CAPTURE_ARG_OUT_OF_RANGE`) when a requested
-  index exceeds what some reachable call site actually declares.
+  index exceeds what some matching call site actually declares.
 - Reuse of the existing `EXPECT` statement to assert the captured value —
   no new assertion syntax.
 
@@ -130,7 +130,7 @@ category site by construction — `_classify_statement` only creates a
 New per-test-case check in `refusal.check_test_case` (`analysis/refusal.py`),
 in the same final pass that already checks `UNRESOLVED_FILE_STATUS_TARGET`
 over `case.mocks`: for every directive with a non-empty `captures` list,
-for every site in the reachable set that directive matches
+for every program-wide boundary site that directive matches
 (`directive_matches_site`), if `capture_index > len(site.statement.using_parameters)`
 for any `(capture_index, _)` in `directive.captures`, refuse — naming the
 directive's `.describe()` text, the requested index, and the actual
@@ -150,8 +150,8 @@ other than what the author asked for.
 declare a different number of `USING` parameters (e.g. two different
 `CALL "VALIDATE"` sites in different paragraphs, one passing one argument,
 the other passing two). `CAPTURE ARG 2` is valid for the second site and
-invalid for the first. This check refuses if **any** reachable matching
-site fails — same fail-closed-over-partial-safety posture the codebase
+invalid for the first. This check refuses if **any** matching site fails —
+same fail-closed-over-partial-safety posture the codebase
 uses throughout (e.g. `UNRESOLVED_FILE_STATUS_TARGET` doesn't try to
 special-case "safe for some call sites, unsafe for others" either). A
 `.cut` author who genuinely needs to capture from only the site that has
