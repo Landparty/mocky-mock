@@ -1,16 +1,16 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-08-10T00:00:00Z
+timestamp: 2026-08-11T00:00:00Z
 ---
 
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines ten subcommands —
-`setup`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `dashboard`, `export` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines twelve subcommands —
+`setup`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `dashboard`, `export`, `analyze`, `skills` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -28,7 +28,9 @@ mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.ru
 mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
 mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed)
 mockymock dashboard -> web.server (loopback HTTP) -> runtime.status.probe()  (read-only Docker)
+mockymock analyze   -> sys.argv monkeypatch -> cobolparser.cli.parse.main() (no Docker, pure pass-through)
 mockymock export    -> cli.checks (static) -> splicer -> cli.mainframe_export (no Docker)
+mockymock skills    -> skills_cmd (no Docker, no parsing -- a copytree)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -548,6 +550,22 @@ the constant at parser-build time would import `web.server` ->
 at import to compute `IMAGE`) on every `mockymock --help`. See the Gotchas
 below.
 
+## `mockymock analyze [cobolparser-args...]`
+
+The only subcommand that's a pure pass-through: it forwards straight to
+cobol-parser's own CLI (`dead-code`, `program-flow`, `io-sequence`,
+`move-type-check`, `linkage-check`, `language-env`, `ims-dli`, `analyze`),
+not `mockymock.analysis`. `cobolparser_args` is declared with
+`nargs=argparse.REMAINDER`, so every token after `mockymock analyze` —
+including anything that looks like a mockymock flag — belongs to
+cobol-parser, never to this parser. `_cmd_analyze` monkeypatches
+`sys.argv` to `["cobol-parser", *args.cobolparser_args]` (restored in a
+`finally`) because `cobolparser.cli.parse.main()` takes no `argv`
+parameter and reads `sys.argv[1:]` directly — the standard idiom for
+delegating to an argparse CLI that doesn't accept one, safe here because
+the CLI is single-threaded and sequential. Its `SystemExit.code` is
+returned as-is when it's already an `int`, else 1. No Docker.
+
 ## `mockymock export <program> --cut PATH [-o/--output PATH] [--copybook-path DIR ...] [--case NAME ...] [--tag TAG ...]`
 
 Writes the instrumented source to a file after running the same parse → static-checks → splice
@@ -565,6 +583,28 @@ in -- `export` refuses (`mockymock export: refused (COLUMN_OVERFLOW): ...`) and 
 
 Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
 [docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).
+
+## `mockymock skills install [--project] [--force]`
+
+Copies the packaged Claude Code skill
+(`mockymock/cli/skills/mockymock/`) to
+`~/.claude/skills/mockymock` (default) or `./.claude/skills/mockymock`
+(`--project`). Implementation lives in `mockymock/cli/skills_cmd.py`,
+imported lazily inside `_cmd_skills_install` for the same deferred-import
+reason every other subcommand uses, even though nothing here is actually
+heavy (`shutil`/`pathlib` only) -- consistency with the rest of this
+module.
+
+`resolve_target(project: bool) -> Path` picks the base directory
+(`Path.cwd()` or `Path.home()`); `install_skill(target, force=False)`
+refuses (`SkillTargetExistsError`, fail-closed) if `target` already
+exists and `force` is `False`, so a user's local edits to a previously
+installed copy are never silently clobbered. The skill content itself is
+declared in `pyproject.toml`'s `[tool.setuptools.package-data]` under
+`"mockymock.cli"` -- it has no `__init__.py` of its own, so it rides
+along with the already-discovered `mockymock.cli` package the same way
+`mockymock/runtime/docker/` and `mockymock/web/static/` ride along with
+theirs.
 
 # Gotchas
 

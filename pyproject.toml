@@ -88,6 +88,12 @@ mockymock = ["py.typed"]
 # package and are resolved via Path(__file__), so they must be packaged
 # explicitly or `mockymock dashboard` 404s under `uv tool install`.
 "mockymock.web" = ["static/**/*"]
+# The packaged Claude Code skill `mockymock skills install` copies out;
+# same "must be under a discovered package, resolved via Path(__file__)"
+# reasoning as the two entries above. Recursive glob (not two literal
+# globs) so any future file added under skills/ -- e.g. an examples/
+# subdirectory -- ships in the wheel without another pyproject.toml edit.
+"mockymock.cli" = ["skills/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

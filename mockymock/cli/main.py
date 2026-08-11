@@ -1277,6 +1277,31 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_skills_install(args: argparse.Namespace) -> int:
+    """Copy the packaged Claude Code skill to ~/.claude/skills/mockymock
+    (or ./.claude/skills/mockymock with --project). Pure file copy -- no
+    Docker, no parsing -- so it's always available, same tier as
+    lint/collect."""
+    from mockymock.cli.skills_cmd import (
+        SkillTargetExistsError,
+        install_skill,
+        resolve_target,
+    )
+
+    target = resolve_target(args.project)
+    try:
+        install_skill(target, force=args.force)
+    except SkillTargetExistsError as exc:
+        print(f"mockymock skills install: {exc}")
+        return 1
+    print(f"mockymock skills install: installed -> {target}")
+    print(
+        "mockymock skills install: restart Claude Code (or start a new "
+        "session) to pick it up"
+    )
+    return 0
+
+
 def _cmd_analyze(args: argparse.Namespace) -> int:
     # cobolparser.cli.parse.main() takes no argv parameter -- unlike this
     # module's own main(), it reads sys.argv[1:] directly. Patching it here
@@ -1719,6 +1744,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     export_parser.set_defaults(func=_cmd_export)
+
+    skills_parser = subparsers.add_parser(
+        "skills", help="Manage the packaged Claude Code skill for mockymock"
+    )
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_command")
+    skills_install_parser = skills_subparsers.add_parser(
+        "install",
+        help=(
+            "Install the mockymock Claude Code skill (SKILL.md + "
+            "reference/ files) so a Claude Code session can use it"
+        ),
+    )
+    skills_install_parser.add_argument(
+        "--project",
+        action="store_true",
+        help=(
+            "Install into ./.claude/skills/mockymock instead of "
+            "~/.claude/skills/mockymock"
+        ),
+    )
+    skills_install_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing install at the target path",
+    )
+    skills_install_parser.set_defaults(func=_cmd_skills_install)
 
     return parser
 

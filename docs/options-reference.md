@@ -24,6 +24,7 @@ This document only covers *usage*.
   - [`dashboard`](#mockymock-dashboard)
   - [`export`](#mockymock-export)
   - [`analyze`](#mockymock-analyze)
+  - [`skills install`](#mockymock-skills-install)
 - [The `.cut` file: directives and options](#the-cut-file-directives-and-options)
 - [Environment variables](#environment-variables)
 - [Options quick-reference table](#options-quick-reference-table)
@@ -35,8 +36,9 @@ mockymock <subcommand> [options]
 mockymock --version
 ```
 
-There are eleven subcommands: `setup`, `generate`, `fixtures`, `run`,
-`debug`, `lint`, `mutate`, `collect`, `dashboard`, `export`, `analyze`.
+There are twelve subcommands: `setup`, `generate`, `fixtures`, `run`,
+`debug`, `lint`, `mutate`, `collect`, `dashboard`, `export`, `analyze`,
+`skills`.
 Running `mockymock` with no subcommand prints help and exits with status 1.
 
 A repeatable flag (noted below as "repeatable") can be passed more than
@@ -371,6 +373,26 @@ mockymock analyze program-flow ORDRPROC.cbl
 Those flags belong to cobol-parser, not mockymock — see cobol-parser's own
 CLI documentation for the full list.
 
+### `mockymock skills install`
+
+```bash
+mockymock skills install [--project] [--force]
+```
+
+Installs the packaged Claude Code skill (`SKILL.md` plus `reference/`
+files teaching an AI assistant to scaffold, edit, and run `.cut` files)
+so a Claude Code session can use it.
+
+| Option | Default | Description |
+|---|---|---|
+| `--project` | off | Install into `./.claude/skills/mockymock` instead of `~/.claude/skills/mockymock`. |
+| `--force` | off | Overwrite an existing install at the target path. Without it, an existing target refuses the install so local edits are never silently clobbered. |
+
+```bash
+mockymock skills install
+mockymock skills install --project --force
+```
+
 ## The `.cut` file: directives and options
 
 The `.cut` file is a small DSL, not YAML/JSON/TOML — it's the other place
@@ -655,3 +677,4 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | `dashboard` | read-only probe | `--port`, `--no-browser` |
 | `export` | no | `--cut`, `-o`, `--copybook-path`, `--case`, `--tag` |
 | `analyze` | no | *(forwarded to cobol-parser)* |
+| `skills install` | no | `--project`, `--force` |

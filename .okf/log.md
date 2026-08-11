@@ -1,5 +1,19 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-11 — Add `mockymock skills install` and two Claude Code skills
+
+Two Claude Code skills: `.claude/skills/mockymock-dev/` (repo-local,
+routes contributors into this OKF bundle) and a packaged end-user skill
+teaching an AI assistant to scaffold/edit/run `.cut` files, installed via
+the new `mockymock skills install [--project] [--force]` subcommand
+(`mockymock/cli/skills_cmd.py`). Skill content lives under
+`mockymock/cli/skills/mockymock/` rather than a new top-level
+`mockymock/skills/` package -- setuptools `package-data` only applies
+under an already-discovered package (one with `__init__.py`), so it rides
+along with `mockymock.cli` the same way the Dockerfile and dashboard
+static assets ride along with `mockymock.runtime`/`mockymock.web`. See
+`docs/superpowers/specs/2026-08-11-mockymock-ai-skills-design.md`.
+
 ## 2026-08-10 — Framework audit findings 1 & 2: ON SIZE ERROR blind spot, phantom-paragraph guard
 
 `docs/2026-08-10-framework-audit-and-roadmap.md` (executed audit: live
