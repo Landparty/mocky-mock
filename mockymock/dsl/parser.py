@@ -173,6 +173,12 @@ _CAPTURE_RE = re.compile(
     rf"^CAPTURE\s+ARG\s+(?P<index>\S+)\s+INTO\s+(?P<target>{_SUBSCRIPTED_NAME})$"
 )
 _CAPTURE_INDEX_RE = re.compile(r"^[1-9][0-9]*$")
+# Any line that starts with the CAPTURE keyword but doesn't fully match
+# _CAPTURE_RE above (missing INTO, typos like FROM, missing target, etc.)
+# must not silently fall through to body_lines and get spliced verbatim into
+# the generated COBOL -- that produces a cobc compile error pointing at
+# generated code instead of a clear .cut-level refusal.
+_CAPTURE_PREFIX_RE = re.compile(r"^CAPTURE\b")
 
 
 class CutParseError(ValueError):
@@ -514,6 +520,12 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"position is allowed"
                     )
                 in_mock.captures.append((index, m.group("target")))
+            elif _CAPTURE_PREFIX_RE.match(line) is not None:
+                raise CutParseError(
+                    f"line {line_no}: malformed CAPTURE statement {line!r} -- "
+                    f"expected CAPTURE ARG <n> INTO <target> where <n> is a "
+                    f"positive integer (1-based USING parameter position)"
+                )
             elif in_mock.rows is not None:
                 row_match = _ROW_RE.match(line)
                 if row_match is None:

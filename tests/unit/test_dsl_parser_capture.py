@@ -124,3 +124,54 @@ TESTCASE "c"
     PERFORM MAIN-PROCESS
 """
     assert _mock(cut).captures == []
+
+
+def test_capture_missing_into_is_a_parse_error():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK CALL "DISCRATE"
+        CAPTURE ARG 1 WS-CAPTURED-RATE
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="malformed CAPTURE statement"):
+        parse_cut(cut)
+
+
+def test_capture_with_from_instead_of_into_is_a_parse_error():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK CALL "DISCRATE"
+        CAPTURE ARG 1 FROM WS-CAPTURED-RATE
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="malformed CAPTURE statement"):
+        parse_cut(cut)
+
+
+def test_capture_with_negative_index_is_a_parse_error():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK CALL "DISCRATE"
+        CAPTURE ARG -1 INTO WS-CAPTURED-RATE
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    with pytest.raises(CutParseError, match="positive integer"):
+        parse_cut(cut)
+
+
+def test_capture_works_on_mock_mq_key():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK MQ "SOMESERVICE"
+        CAPTURE ARG 1 INTO WS-CAPTURED-ARG1
+    END-MOCK
+    PERFORM MAIN-PROCESS
+"""
+    assert _mock(cut).captures == [(1, "WS-CAPTURED-ARG1")]
