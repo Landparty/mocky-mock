@@ -361,7 +361,7 @@ remains genuinely open. No new analysis, listed so the roadmap is complete.
 |---|---|---|
 | README has no "what a passing run proves" section | Readiness F1 | **Still absent** — README headers are Installation / Example & usage / Design goals / Credits. Recommended by every prior audit; ~5 weeks open. See below. |
 | `EXPECT` is equality-only (`TO BE`) | Readiness F6 | Confirmed — no comparison/range/substring forms in `dsl/parser.py` |
-| No argument capture / spies on mocked `CALL`s | Readiness F6 | Confirmed — tallies only |
+| ~~No argument capture / spies on mocked `CALL`s~~ | Readiness F6 | **DONE 2026-08-11** — `CAPTURE ARG <n> INTO <target>` in a `MOCK CALL`/dynamic-`CALL` body, asserted with the existing `EXPECT`; fail-closed `CAPTURE_ARG_OUT_OF_RANGE`. See [design doc 2026-08-11](2026-08-11-argument-capture-design.md) and `examples/ordrproc/`. Full per-call *history* (the richer "spy" pattern) is still open |
 | No cross-mock ordering assertions | Readiness F6 | Confirmed |
 | CSV-sourced `ROW`s | [design doc 2026-07-31](2026-07-31-csv-sourced-rows-design.md) | Designed, **not implemented** — no CSV handling in `dsl/parser.py` |
 | `SORT`/`MERGE`/`RELEASE`/`RETURN` refused | Readiness F5 | Confirmed — `UNSUPPORTED_SORT_MERGE` in `refusal.py` |
@@ -460,11 +460,24 @@ prior recommendations behind them; 5–8 are new proposals.
 contortions for anything computed. Highest ergonomic return per line of
 code in the DSL, and purely additive to the grammar.
 
-**2. Argument capture / spies on mocked `CALL`s.** Today you can assert a
-call happened *n* times but not *what it was called with*. `VERIFY CALL
-"SUBPGM" WAS CALLED WITH WS-ACCT-ID` closes the single largest hole in the
-assertion model — a test can currently pass while passing garbage across a
-boundary.
+**2. ~~Argument capture / spies on mocked `CALL`s.~~** — **DONE
+2026-08-11**. You can now assert not just that a call happened *n* times
+but *what it was called with*, closing the single largest hole in the
+assertion model (a test could previously pass while passing garbage across
+a boundary). The shipped syntax is **not** the `VERIFY CALL "SUBPGM" WAS
+CALLED WITH WS-ACCT-ID` form proposed here: it is `CAPTURE ARG <n> INTO
+<target>` inside the `MOCK` body, with the assertion left to the existing
+`EXPECT`. [The design doc](2026-08-11-argument-capture-design.md) explicitly
+considered this doc's combined capture-and-assert form and rejected it —
+see its "Why reuse `EXPECT` instead of a dedicated capture+assert
+statement" section: a combined statement would need a second, parallel
+assertion engine (new comparison codegen, a new `__MOCKYMOCK__` marker,
+new `report.py` parsing, new FAIL-line formatting) duplicating what
+`EXPECT` already does, whereas routing the captured value through an
+ordinary WORKING-STORAGE field adds zero runtime/report protocol and
+inherits `PROVIDER`/`{Placeholder}` substitution and subscripted
+data-names for free. Full per-call *history* across repeated invocations
+(capture into an `OCCURS` table) remains deferred, not shipped.
 
 **3. CSV-sourced `ROW`s.** Already designed
 ([2026-07-31](2026-07-31-csv-sourced-rows-design.md)), never built. Inline
