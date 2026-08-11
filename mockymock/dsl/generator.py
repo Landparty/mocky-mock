@@ -747,21 +747,22 @@ def _bundle_directive_for(
     status override; CALL/DYNCALL/ACCEPT/CICS/DLI/a single-row SQL
     fixture never emit ROWS sugar at all), so `_placeholder_body_for`
     stays correct for them and no override of THEIR OWN call count is
-    needed. This is narrower than "unaffected by --placeholder": only the
-    downgraded boundary's own call_count is recomputed here. A DIFFERENT
-    boundary's call count -- one that is itself program-flow-driven by
-    how many times the now-downgraded loop executes, e.g. a CALL made
-    once per row inside the same READ loop being downgraded -- is NOT
-    adjusted and can go stale (the bundle's original count assumed the
-    loop's original, un-downgraded row count; --placeholder can make the
-    loop run fewer times, or zero, without touching that other
-    boundary's VERIFY at all). This is inherited behavior, not new here:
-    every in-loop call count was already heuristic (program-flow-derived
-    from the bundle's own generated sequence length, not independently
-    re-derived from the downgraded body), --placeholder just makes it
-    easier to reach in practice by changing how many times the loop
-    actually runs. Review the VERIFYs on any other boundary inside the
-    same loop as a downgraded one before trusting the generated file."""
+    needed. Only the downgraded boundary's own call_count is recomputed
+    here -- a DIFFERENT boundary's call count that is itself program-flow-
+    driven by how many times the now-downgraded loop executes, e.g. a CALL
+    made once per row inside the same READ loop being downgraded, is NOT
+    known here at all (this function sees one fixture at a time). That
+    cascade is handled one level up, by `_bundle_mock_directives`'s own
+    post-pass over the `CallCountOverride`s this function returns: every
+    OTHER declared boundary in the SAME paragraph as a loop-driving
+    downgrade (`site.paragraph_name`, mockymock's own analysis, not the
+    bundle's `fixture.paragraph`) gets its own call_count demoted to a
+    `*>` comment too, on the same "same paragraph as the READ/FETCH loop"
+    heuristic the ordinary READ-loop-with-inline-CALL shape satisfies
+    exactly. A boundary reached only through a nested PERFORM from inside
+    that paragraph is not caught by this heuristic and can still go
+    stale -- review the VERIFYs on any other boundary inside the same loop
+    as a downgraded one before trusting the generated file."""
     try:
         category = MockCategory(fixture.category)
     except ValueError:
@@ -962,6 +963,44 @@ def _bundle_mock_directives(
         lines.extend(f"    {line}" for line in body)
         lines.append("END-MOCK")
         declared_keys.add((category, key))
+
+    # Issue #47: a loop-driving downgrade's own CallCountOverride (READ
+    # ROWS / SQL ROWS -- the only categories `_bundle_directive_for` ever
+    # attaches one to) changes how many times ITS OWN loop runs, which can
+    # make any OTHER boundary reached only inside that loop stale too (a
+    # CALL made once per row, for instance) -- the bundle's original count
+    # assumed the loop's un-downgraded row count. "Reached only inside
+    # that loop" is approximated by "declared in the SAME paragraph as the
+    # downgraded boundary's own statement" (`site.paragraph_name`,
+    # mockymock's own program analysis -- not the bundle's `fixture.
+    # paragraph`, so this holds even for a bundle that leaves it blank):
+    # exact for the ordinary READ/FETCH-loop-with-inline-CALL shape the
+    # issue's own repro uses, though a boundary reached through a nested
+    # PERFORM from inside that paragraph still isn't caught. Demoting
+    # reuses the same `*>` comment `CallCountOverride.demote_reason`
+    # already renders for a downgraded boundary's own unknowable count.
+    for loop_category, loop_key in list(call_count_overrides.keys()):
+        loop_site = mockymock_keys.get((loop_category, loop_key))
+        if loop_site is None:
+            continue
+        for other_key_pair in declared_keys:
+            if other_key_pair == (loop_category, loop_key):
+                continue
+            if other_key_pair in call_count_overrides:
+                continue
+            other_site = mockymock_keys.get(other_key_pair)
+            if other_site is None:
+                continue
+            if other_site.paragraph_name != loop_site.paragraph_name:
+                continue
+            call_count_overrides[other_key_pair] = CallCountOverride(
+                demote_reason=(
+                    f"in the same paragraph as {loop_category.value}:"
+                    f"{loop_key}, downgraded by --placeholder -- how many "
+                    f"times that loop actually executes changed, so this "
+                    f"call count is no longer known by construction"
+                )
+            )
     return lines, declared_keys, call_count_overrides
 
 
