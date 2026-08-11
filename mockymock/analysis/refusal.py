@@ -547,6 +547,20 @@ def _whole_program_reasons(
     return reasons, scoped
 
 
+# The five arithmetic statements whose scope terminator cobolparser (as of
+# the pin this project resolves) fails to consume when it appears alone on
+# its own line followed by a period -- it is parsed as a paragraph name
+# instead, silently reparenting every following statement into it (see
+# docs/2026-08-10-framework-audit-and-roadmap.md Finding 2; same bug class
+# as the fixed ROUNDED-after-GIVING phantom paragraph, .okf/log.md
+# 2026-07-21). Deliberately the exact five reserved words, not a pattern
+# like `^END-[A-Z]+$` -- that would also match legitimate paragraph names
+# such as END-OF-JOB or END-RUN.
+_PHANTOM_TERMINATOR_PARAGRAPH_NAMES = frozenset(
+    {"END-ADD", "END-SUBTRACT", "END-MULTIPLY", "END-DIVIDE", "END-COMPUTE"}
+)
+
+
 def _check_unsupported_control_flow(program) -> list[RefusalReason]:
     """UNSUPPORTED_DECLARATIVES / UNSUPPORTED_ALTER, unconditional
     whole-program refusals (like SORT/MERGE, but independent of
@@ -592,6 +606,25 @@ def _check_unsupported_control_flow(program) -> list[RefusalReason]:
                         f"statement -- ALTER rewrites GO TO targets at "
                         f"runtime, so no static reachability analysis of "
                         f"this program is sound"
+                    ),
+                )
+            )
+    for paragraph in _all_paragraphs(procedure):
+        if paragraph.paragraph_name.upper() in _PHANTOM_TERMINATOR_PARAGRAPH_NAMES:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_PHANTOM_PARAGRAPH",
+                    message=(
+                        f"paragraph '{paragraph.paragraph_name}' (line "
+                        f"{paragraph.location.line}) is named after a "
+                        f"reserved arithmetic scope terminator -- cobolparser "
+                        f"failed to consume it as the preceding "
+                        f"ADD/SUBTRACT/MULTIPLY/DIVIDE/COMPUTE's own "
+                        f"terminator and parsed it as a paragraph instead, "
+                        f"silently reparenting every statement after it; "
+                        f"drop the explicit terminator and end the "
+                        f"statement with a period instead (moving it to "
+                        f"the same line does not avoid this)"
                     ),
                 )
             )

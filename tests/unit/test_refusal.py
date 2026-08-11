@@ -41,6 +41,11 @@ SOURCE = """\
 
        WRAPPER-PARAGRAPH.
            PERFORM DYNAMIC-PARAGRAPH.
+
+       SIZE-ERROR-PARAGRAPH.
+           ADD 1 TO WS-AMOUNT
+               ON SIZE ERROR
+                   CALL "DISCRATE" USING WS-AMOUNT WS-RATE.
 """
 
 # File I/O source: mirrors tests/unit/test_mock_surface.py's proven-parseable
@@ -620,6 +625,35 @@ def test_per_case_check_refuses_unmocked_dynamic_call():
     assert any(r.code == "UNMOCKED_CALL" for r in reasons)
 
 
+def test_per_case_check_refuses_unmocked_call_nested_in_on_size_error():
+    """A CALL nested inside an arithmetic statement's ON SIZE ERROR clause
+    must refuse UNMOCKED_CALL exactly like one nested inside an IF -- this
+    is the confirmed fix for the 2026-08-10 audit's Finding 1: before
+    "on_size_error"/"not_on_size_error" were added to mock_surface.py's
+    _NESTED_STATEMENT_ATTRS, this call was invisible to the analysis layer
+    entirely and the test case passed silently with an unmocked boundary."""
+    result = _result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("SIZE-ERROR-PARAGRAPH", call_names=())
+    )
+    assert any(r.code == "UNMOCKED_CALL" for r in reasons)
+
+
+def test_per_case_check_refuses_mocking_call_nested_in_on_size_error():
+    """Mirrors test_per_case_check_refuses_mock_call_targeting_nested_call_site:
+    now that the CALL is visible to the analysis layer at all (this fix),
+    mockymock correctly falls back to the same fail-closed treatment as any
+    other unsplicable nested clause body (IF/EVALUATE/...) rather than
+    silently allowing a splice cobolparser gives no location data for."""
+    result = _result()
+    surface = analyze(result.ast)
+    reasons = check_test_case(
+        surface, result.ast, _case("SIZE-ERROR-PARAGRAPH", call_names={"DISCRATE"})
+    )
+    assert any(r.code == "UNSUPPORTED_NESTED_MOCK_TARGET" for r in reasons)
+
+
 def test_per_case_check_follows_perform_to_find_dynamic_call():
     result = _result()
     surface = analyze(result.ast)
@@ -1193,6 +1227,70 @@ def test_whole_program_check_refuses_alter():
 
 def test_whole_program_check_does_not_flag_clean_programs_for_control_flow():
     assert check_whole_program(_result()) == []
+
+
+# --- phantom arithmetic-terminator paragraphs (2026-08-10 audit Finding 2) ---
+
+PHANTOM_PARAGRAPH_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PHANTOMSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-X               PIC 9(4) VALUE 1.
+       01  WS-RESULT          PIC X(10) VALUE "UNSET".
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE "START" TO WS-RESULT.
+           ADD 1 TO WS-X
+           END-ADD.
+           MOVE "DONE" TO WS-RESULT.
+"""
+
+# Negative control: a paragraph legitimately named after job-completion
+# convention, not one of the five reserved arithmetic scope terminators --
+# a guard matching the broad `^END-[A-Z]+\\.$` pattern instead of the exact
+# five names would wrongly refuse this valid program.
+LEGITIMATE_END_PARAGRAPH_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ENDRUNSAMP.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY "WORKING".
+           PERFORM END-OF-JOB.
+
+       END-OF-JOB.
+           DISPLAY "DONE".
+           STOP RUN.
+"""
+
+
+def test_whole_program_check_refuses_phantom_arithmetic_terminator_paragraph():
+    """2026-08-10 audit Finding 2: cobolparser parses a standalone
+    `END-ADD.` (and the SUBTRACT/MULTIPLY/DIVIDE/COMPUTE siblings) as a
+    paragraph name rather than consuming it as ADD's scope terminator,
+    silently reparenting every following statement -- warning-free, so
+    nothing else catches it. Fail closed like DECLARATIVES/ALTER."""
+    result = parse_cobol(PHANTOM_PARAGRAPH_SOURCE, filename="phantomsamp.cbl")
+    assert result.success, result.errors
+    assert not result.warnings  # precondition: nothing else would catch it
+    reasons = check_whole_program(result)
+    phantom = [r for r in reasons if r.code == "UNSUPPORTED_PHANTOM_PARAGRAPH"]
+    assert len(phantom) == 1
+    assert "END-ADD" in phantom[0].message
+
+
+def test_whole_program_check_allows_legitimate_end_prefixed_paragraph():
+    """Regression guard against over-refusing: a paragraph name that merely
+    starts with END- (END-OF-JOB) but isn't one of the five reserved
+    arithmetic terminators must not be flagged."""
+    result = parse_cobol(LEGITIMATE_END_PARAGRAPH_SOURCE, filename="endrunsamp.cbl")
+    assert result.success, result.errors
+    assert not result.warnings
+    reasons = check_whole_program(result)
+    assert not any(r.code == "UNSUPPORTED_PHANTOM_PARAGRAPH" for r in reasons)
 
 
 # --- REDEFINES data items -----------------------------------------------------

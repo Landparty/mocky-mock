@@ -248,6 +248,8 @@ _NESTED_STATEMENT_ATTRS = (
     "on_exception",
     "not_on_exception",
     "on_overflow",
+    "on_size_error",
+    "not_on_size_error",
 )
 
 

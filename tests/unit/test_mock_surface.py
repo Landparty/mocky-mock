@@ -118,6 +118,16 @@ NESTED_SOURCE = """\
                ON EXCEPTION
                    CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE
            END-CALL.
+
+       CALL-INSIDE-ON-SIZE-ERROR.
+           ADD 1 TO WS-AMOUNT
+               ON SIZE ERROR
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE.
+
+       CALL-INSIDE-NOT-ON-SIZE-ERROR.
+           ADD 1 TO WS-AMOUNT
+               NOT ON SIZE ERROR
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE.
 """
 
 
@@ -293,6 +303,30 @@ def test_top_level_call_is_not_marked_nested():
     assert len(static) == 1
     assert static[0].paragraph_name == "PROCESS-ORDER"
     assert static[0].nested is False
+
+
+def test_detects_static_call_nested_inside_on_size_error():
+    surface = analyze(_nested_ast())
+    static = [
+        c
+        for c in surface.static_call_sites()
+        if c.paragraph_name == "CALL-INSIDE-ON-SIZE-ERROR"
+    ]
+    assert len(static) == 1
+    assert static[0].program_name == "NESTED-DISCRATE"
+    assert static[0].nested is True
+
+
+def test_detects_static_call_nested_inside_not_on_size_error():
+    surface = analyze(_nested_ast())
+    static = [
+        c
+        for c in surface.static_call_sites()
+        if c.paragraph_name == "CALL-INSIDE-NOT-ON-SIZE-ERROR"
+    ]
+    assert len(static) == 1
+    assert static[0].program_name == "NESTED-DISCRATE"
+    assert static[0].nested is True
 
 
 def test_detects_call_nested_inside_read_at_end():

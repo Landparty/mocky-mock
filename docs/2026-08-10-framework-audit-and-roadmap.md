@@ -52,11 +52,25 @@ survives careful review and only falls out of execution.
 
 ---
 
-## Finding 1 — `ON SIZE ERROR` hides boundaries from the refusal gate (HIGH, silent, confirmed)
+## Finding 1 — `ON SIZE ERROR` hides boundaries from the refusal gate (HIGH, silent, confirmed) — **FIXED same day**
 
-**Status: confirmed at the pinned commit, reproduced end-to-end. This is a
-false-clean PASS — the exact failure class the refusal gate exists to
-prevent.**
+**Status: confirmed at the pinned commit, reproduced end-to-end, and fixed.
+This was a false-clean PASS — the exact failure class the refusal gate
+exists to prevent.**
+
+`on_size_error`/`not_on_size_error` were added to
+`_NESTED_STATEMENT_ATTRS`, following TDD (regression tests in
+`tests/unit/test_mock_surface.py` and `tests/unit/test_refusal.py`,
+confirmed failing before the fix via `git stash`). The `SILENT` fixture
+below now refuses `UNMOCKED_CALL` end-to-end against real GnuCOBOL, same as
+the `CONTROL` fixture always did. One nuance surfaced by the fix: *mocking*
+the now-visible nested `CALL` correctly falls back to
+`UNSUPPORTED_NESTED_MOCK_TARGET` — the same fail-closed treatment every
+other unsplicable nested clause body (`IF`/`EVALUATE`/...) already gets,
+since cobolparser gives no location data to safely splice inside an
+`ON SIZE ERROR` body. That is the intended, existing contract, not a new
+gap. Full unit (1058 passed) and integration (124 passed, real Docker)
+suites pass with no regressions; see `.okf/log.md`'s 2026-08-10 entry.
 
 `mockymock/analysis/mock_surface.py`'s `_NESTED_STATEMENT_ATTRS`
 ([mock_surface.py:239](../mockymock/analysis/mock_surface.py#L239)) is the
@@ -172,10 +186,36 @@ silent-wrongness hole in the tool's core safety property.
 
 ---
 
-## Finding 2 — Arithmetic scope terminators create phantom paragraphs (HIGH, silent, upstream)
+## Finding 2 — Arithmetic scope terminators create phantom paragraphs (HIGH, silent, upstream) — **defense-in-depth guard shipped same day**
 
 **Status: confirmed at the pinned commit. Root cause is in `cobolparser`,
-not mockymock — but mockymock is where the damage lands.**
+not mockymock, and remains open there — but the fail-closed guard proposed
+below (track 2) has been implemented in mockymock.**
+
+`refusal.py`'s `_check_unsupported_control_flow` (the same whole-program
+check that already refuses `UNSUPPORTED_DECLARATIVES`/`UNSUPPORTED_ALTER`)
+now also refuses `UNSUPPORTED_PHANTOM_PARAGRAPH` when a paragraph is named
+exactly one of the five reserved terminators — **not** the broader
+`^END-[A-Z]+$` pattern this document originally floated, which would also
+have refused legitimate paragraphs like `END-OF-JOB`/`END-RUN`. A
+regression test (`test_whole_program_check_allows_legitimate_end_prefixed_paragraph`)
+guards against that false positive; the full example/test corpus (1058
+unit tests) has zero collisions with the exact-name form. The `SIZEPROB`
+fixture that previously produced an unexplained `[CRASH]` now produces:
+
+```
+mockymock run: refused (UNSUPPORTED_PHANTOM_PARAGRAPH): paragraph
+'END-ADD' (line 13) is named after a reserved arithmetic scope terminator
+-- cobolparser failed to consume it as the preceding ADD/SUBTRACT/
+MULTIPLY/DIVIDE/COMPUTE's own terminator and parsed it as a paragraph
+instead, silently reparenting every statement after it; drop the
+explicit terminator and end the statement with a period instead (moving
+it to the same line does not avoid this)
+```
+
+The upstream `cobol-parser` fix (track 1 below) is still open — this
+guard converts the silent-wrong outcome into a loud one, it doesn't
+restore the ability to use an explicit `END-ADD` terminator.
 
 An explicit arithmetic scope terminator written on its own line in Area B
 and followed by a period is parsed as a **paragraph name**, silently
@@ -374,14 +414,15 @@ seams in a broad, well-built structure.
 
 ### Do now
 1. **Rotate `COBOL_PARSER_PAT`** (Finding 3). Nothing else can be trusted
-   until CI runs again. Minutes.
-2. **Add `on_size_error`/`not_on_size_error` to `_NESTED_STATEMENT_ATTRS`**
-   (Finding 1), with per-statement-type regression tests and the end-to-end
-   refusal case. Hours.
-3. **Add the phantom-paragraph fail-closed guard** (Finding 2, track 2),
-   and file the upstream `cobol-parser` bug for the real fix. Hours.
+   until CI runs again. Minutes. **Still open** — needs GitHub secrets
+   access this session doesn't have.
+2. ~~Add `on_size_error`/`not_on_size_error` to `_NESTED_STATEMENT_ATTRS`~~
+   (Finding 1) — **DONE 2026-08-10**, TDD, verified end-to-end.
+3. ~~Add the phantom-paragraph fail-closed guard~~ (Finding 2, track 2) —
+   **DONE 2026-08-10**, TDD, verified end-to-end. The upstream
+   `cobol-parser` fix (track 1) is still open — worth filing there.
 4. **Write the README "what a passing run proves" section.** Under an hour,
-   open since 2026-07-06.
+   open since 2026-07-06. Still open.
 
 ### Do next
 5. Split `cli/main.py` into per-command modules — unblocks three
