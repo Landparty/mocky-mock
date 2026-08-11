@@ -52,13 +52,23 @@ this work.
 ### Package layout
 
 ```
-mockymock/skills/mockymock/
+mockymock/cli/skills/mockymock/
 ├── SKILL.md                  # concise: when to use, core workflow
 ├── reference/
 │   ├── cut-dsl.md            # .cut directive reference (MOCK/EXPECT/VERIFY/
 │   │                         #   PROVIDER/BEFORE-EACH/FILE-STATUS/ROWS)
 │   └── cli-flags.md          # per-subcommand flag reference
 ```
+
+Nested under `mockymock/cli/` (an existing, already-discovered package)
+rather than a new top-level `mockymock/skills/` — setuptools'
+`[tool.setuptools.package-data]` only applies glob patterns under a
+package it actually discovered (one with `__init__.py`), and a new
+directory with no `__init__.py` of its own wouldn't be found by
+`packages.find`'s `include = ["mockymock*"]`. This mirrors how the
+Dockerfile (`mockymock/runtime/docker/`) and dashboard assets
+(`mockymock/web/static/`) are packaged: a plain data subdirectory nested
+under a real package.
 
 `SKILL.md` stays short (frontmatter + a task-oriented workflow: scaffold →
 fill in mocks → run → read refusals/failures → lint before Docker if
@@ -82,7 +92,7 @@ reference files.
 Add to `pyproject.toml`'s `[tool.setuptools.package-data]`:
 
 ```toml
-"mockymock.skills" = ["mockymock/SKILL.md", "mockymock/reference/*.md"]
+"mockymock.cli" = ["skills/mockymock/SKILL.md", "skills/mockymock/reference/*.md"]
 ```
 
 Same pattern already used for the Dockerfile and dashboard static assets —
