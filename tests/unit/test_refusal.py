@@ -1,3 +1,4 @@
+import pytest
 from cobolparser import parse_cobol
 
 from mockymock.analysis.mock_surface import analyze
@@ -1280,6 +1281,59 @@ def test_whole_program_check_refuses_phantom_arithmetic_terminator_paragraph():
     phantom = [r for r in reasons if r.code == "UNSUPPORTED_PHANTOM_PARAGRAPH"]
     assert len(phantom) == 1
     assert "END-ADD" in phantom[0].message
+
+
+# The other four reserved terminators, each with its own minimal fixture
+# (SUBTRACT/MULTIPLY/DIVIDE/COMPUTE have different parser classes than ADD
+# in cobolparser -- code-review follow-up on the 2026-08-10 audit fix, not
+# safe to assume from ADD's shape alone).
+_OTHER_PHANTOM_TERMINATOR_STATEMENTS = {
+    "SUBTRACT": ("SUBTRACT 1 FROM WS-X", "END-SUBTRACT"),
+    "MULTIPLY": ("MULTIPLY WS-X BY 2", "END-MULTIPLY"),
+    "DIVIDE": ("DIVIDE WS-X BY WS-Y GIVING WS-X", "END-DIVIDE"),
+    "COMPUTE": ("COMPUTE WS-X = WS-Y + 1", "END-COMPUTE"),
+}
+
+
+@pytest.mark.parametrize(
+    "verb, statement_and_terminator",
+    _OTHER_PHANTOM_TERMINATOR_STATEMENTS.items(),
+)
+def test_whole_program_check_refuses_every_phantom_arithmetic_terminator(
+    verb, statement_and_terminator
+):
+    statement, terminator = statement_and_terminator
+    source = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. PHANTOMALL.\n"
+        "\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  WS-X               PIC 9(4) VALUE 1.\n"
+        "       01  WS-Y               PIC 9(4) VALUE 2.\n"
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       MAIN-PARA.\n"
+        f"           {statement}\n"
+        f"           {terminator}.\n"
+    )
+    result = parse_cobol(source, filename="phantomall.cbl")
+    assert result.success, result.errors
+    assert not result.warnings  # precondition: nothing else would catch it
+    # Confirm the upstream bug this guard exists for is actually reproduced
+    # by this fixture -- i.e. the terminator really did parse as a
+    # paragraph -- before checking that the refusal gate catches it.
+    paragraph_names = {
+        p.paragraph_name for p in result.ast.procedure_division.paragraphs
+    }
+    assert terminator in paragraph_names, (
+        f"{verb}: fixture did not reproduce the phantom-paragraph parse "
+        f"this guard exists for"
+    )
+    reasons = check_whole_program(result)
+    phantom = [r for r in reasons if r.code == "UNSUPPORTED_PHANTOM_PARAGRAPH"]
+    assert len(phantom) == 1
+    assert terminator in phantom[0].message
 
 
 def test_whole_program_check_allows_legitimate_end_prefixed_paragraph():

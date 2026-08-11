@@ -72,11 +72,16 @@ since cobolparser gives no location data to safely splice inside an
 gap. Full unit (1058 passed) and integration (124 passed, real Docker)
 suites pass with no regressions; see `.okf/log.md`'s 2026-08-10 entry.
 
+**The rest of this section is preserved as originally written** — the
+investigation and reproduction that led to the fix above, describing the
+code as it stood *before* that fix. Table entries, code excerpts, and the
+closing recommendation below are all pre-fix state, not current state.
+
 `mockymock/analysis/mock_surface.py`'s `_NESTED_STATEMENT_ATTRS`
-([mock_surface.py:239](../mockymock/analysis/mock_surface.py#L239)) is the
+([mock_surface.py:239](../mockymock/analysis/mock_surface.py#L239)) was the
 single list every boundary detector, the GO TO/PERFORM reachability BFS,
 ALTER detection, and the splicer's span computation consult to see inside
-nested statement bodies. It has **no entry for `on_size_error` /
+nested statement bodies. It had **no entry for `on_size_error` /
 `not_on_size_error`**.
 
 `cobolparser` at the pinned commit exposes both as ordinary nested
@@ -160,29 +165,31 @@ nested inside an unread clause, it lives in a paragraph the BFS never
 visits. Terminator neutralization, paragraph mocks, and coverage
 attribution all inherit this truncated view.
 
-### The fix is two lines
+### The fix was two lines
 
 I enumerated every sibling clause type at the same pin to check whether the
-gap is broader. It is not — it is exactly two attributes wide:
+gap was broader. It was not — it was exactly two attributes wide:
 
-| Clause | Parser attribute | In `_NESTED_STATEMENT_ATTRS`? |
+| Clause | Parser attribute | In `_NESTED_STATEMENT_ATTRS` (pre-fix)? |
 |---|---|---|
 | `IF` / `ELSE` | `then_statements`, `else_statements` | yes |
 | `READ ... AT END` | `at_end_clause` | yes |
 | `CALL ... ON EXCEPTION` | `on_exception` | yes |
 | `STRING ... ON OVERFLOW` | `on_overflow` | yes |
 | `SEARCH ... WHEN` | (dedicated `isinstance` branch) | yes |
-| **`... ON SIZE ERROR`** | **`on_size_error`** | **NO** |
-| **`... NOT ON SIZE ERROR`** | **`not_on_size_error`** | **NO** |
+| **`... ON SIZE ERROR`** | **`on_size_error`** | **NO — fixed 2026-08-10** |
+| **`... NOT ON SIZE ERROR`** | **`not_on_size_error`** | **NO — fixed 2026-08-10** |
 
-Adding both names to the tuple is the whole fix; no other function needs
+Adding both names to the tuple was the whole fix; no other function needed
 touching, since refusal, splicer, and source-map all consume this one
-function. It needs a regression test per statement type
-(`ADD`/`SUBTRACT`/`MULTIPLY`/`DIVIDE`/`COMPUTE`), plus an end-to-end case
-asserting the `SILENT` fixture above now refuses.
+function. Landed with a regression test per statement type
+(`ADD`/`SUBTRACT`/`MULTIPLY`/`DIVIDE`/`COMPUTE` — each verified individually
+to expose the same two attribute names at the pinned commit, see
+[analysis.md](../.okf/analysis.md)), plus the end-to-end case confirming the
+`SILENT` fixture above now refuses.
 
-**Recommendation: fix this first.** It is small, surgical, and closes a
-silent-wrongness hole in the tool's core safety property.
+Fixed first, as recommended: small, surgical, closed a silent-wrongness
+hole in the tool's core safety property.
 
 ---
 

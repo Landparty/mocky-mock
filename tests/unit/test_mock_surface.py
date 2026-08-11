@@ -1,3 +1,4 @@
+import pytest
 from cobolparser import parse_cobol
 
 from mockymock.analysis.mock_surface import CallKind, analyze
@@ -325,6 +326,49 @@ def test_detects_static_call_nested_inside_not_on_size_error():
         if c.paragraph_name == "CALL-INSIDE-NOT-ON-SIZE-ERROR"
     ]
     assert len(static) == 1
+    assert static[0].program_name == "NESTED-DISCRATE"
+    assert static[0].nested is True
+
+
+# cobolparser's on_size_error/not_on_size_error attribute name is not
+# guaranteed uniform across statement types by anything mockymock controls
+# -- ADD's parser class is not SUBTRACT's or COMPUTE's. Verify each of the
+# five arithmetic verbs individually rather than trusting ADD's shape
+# generalizes (code-review follow-up on the 2026-08-10 audit fix).
+_ARITHMETIC_SIZE_ERROR_STATEMENTS = {
+    "ADD": "ADD 1 TO WS-AMOUNT",
+    "SUBTRACT": "SUBTRACT 1 FROM WS-AMOUNT",
+    "MULTIPLY": "MULTIPLY WS-AMOUNT BY 2",
+    "DIVIDE": "DIVIDE WS-AMOUNT BY WS-RATE GIVING WS-AMOUNT",
+    "COMPUTE": "COMPUTE WS-AMOUNT = WS-RATE + 1",
+}
+
+
+@pytest.mark.parametrize("verb, statement", _ARITHMETIC_SIZE_ERROR_STATEMENTS.items())
+@pytest.mark.parametrize("clause", ["ON SIZE ERROR", "NOT ON SIZE ERROR"])
+def test_detects_call_nested_inside_every_arithmetic_size_error_clause(
+    verb, statement, clause
+):
+    source = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. SIZEALL.\n"
+        "\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  WS-AMOUNT          PIC 9(5)V99.\n"
+        "       01  WS-RATE            PIC 9V99.\n"
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       MAIN-PARA.\n"
+        f"           {statement}\n"
+        f"               {clause}\n"
+        '                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE.\n'
+    )
+    result = parse_cobol(source, filename="sizeall.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    static = surface.static_call_sites()
+    assert len(static) == 1, f"{verb} {clause}: expected exactly one CALL site"
     assert static[0].program_name == "NESTED-DISCRATE"
     assert static[0].nested is True
 
