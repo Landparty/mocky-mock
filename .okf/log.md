@@ -1,5 +1,53 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-11 — `AMBIGUOUS_MOCK` (and nested/layout checks) widened to a whole-program site set
+
+The refusal gate's `AMBIGUOUS_MOCK` check in `check_test_case` only examined
+sites reachable from the owning test case's own PERFORM target
+(`surface.sites_in(reachable - mocked_flow_names)`), but
+`splicer.orchestrator.splice_program` does not filter by reachability at
+all: it walks every `surface.boundary_sites` entry and splices any one that
+`directive_matches_site` matches for any directive of any case (category/key
+or normalized-text only), not narrowed by `mocked_flow_names` either. So a
+multi-file `OPEN INPUT A OUTPUT B` in a paragraph no test case's PERFORM
+ever reaches, incidentally matched by one case's `MOCK OPEN A` + `MOCK OPEN
+B` (each individually satisfying that same case's own reachable single-file
+sites elsewhere, so nothing looked ambiguous within its reachable set),
+passed `mockymock lint` clean and then died in `export`/`run` with an
+unhandled `ValueError` from `injector.build_site_dispatch` ("matched by
+multiple directives ... refusal gate should have caught this
+(AMBIGUOUS_MOCK)"). One test case reproduces it; no `PROVIDER`/multi-case
+machinery needed.
+
+`check_test_case` now runs a second pass, after the reachable-set loop, over
+`surface.boundary_sites` unfiltered (skipping sites the first pass already
+visited, to avoid double-refusing), for the same reachability-narrowing bug
+this checks for on **three** conditions, not just `AMBIGUOUS_MOCK`:
+`orchestrator.splice_program`'s own defensive invariant checks re-derive
+`UNSUPPORTED_NESTED_MOCK_TARGET`/`UNSUPPORTED_MOCK_TARGET_LAYOUT` the exact
+same way, against the exact same unfiltered site set, and would raise their
+own (differently-worded) unhandled `ValueError`s if a case's directive
+happened to match an unspliceable site elsewhere in the program that no
+case's own reachability BFS ever visits. Confirmed concretely for
+`UNSUPPORTED_NESTED_MOCK_TARGET`: `tests/unit/test_refusal.py`'s
+`test_per_case_check_allows_static_call_only_paragraph` had been asserting
+zero refusals for exactly this shape (a clean top-level `CALL "DISCRATE"`
+whose key coincidentally also matches an unspliceable nested `CALL
+"DISCRATE"` inside a different, unreachable paragraph's `ON SIZE ERROR`
+clause) — retargeted to an isolated single-paragraph fixture with no key
+collision, and the original shape became a new positive test,
+`test_per_case_check_refuses_nested_mock_target_matched_program_wide`,
+proving the fix. Same general invariant as `NESTED_EXEC`'s own whole-program
+check: for any refusal-gate check whose violation the splicer treats as
+"should have been refused already," the gate's site set must be a true
+superset of the splicer's site set — reachability was never the operative
+filter for what the splicer processes. Regression coverage is CLI-level
+(`tests/unit/test_cli.py`, `main(["lint", ...])` and `main(["export",
+...])`) because that is the layer the original bug escaped through. Full
+unit (1219 passed) and Docker-gated integration suites re-run clean (one
+pre-existing, unrelated `test_read_rows_terminal_example` failure confirmed
+via `git stash` to predate this change). Updated `.okf/analysis.md`.
+
 ## 2026-08-11 — `CAPTURE_ARG_OUT_OF_RANGE` widened to a whole-program site set
 
 Final whole-branch review of the argument-capture feature caught a gate/

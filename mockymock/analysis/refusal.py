@@ -70,6 +70,18 @@ A directive matching no reachable site is UNMATCHED_MOCK; a VERIFY whose
 (category, key) no MOCK directive of the same case declares is
 VERIFY_WITHOUT_MOCK (its tally field would be stale or undeclared).
 
+AMBIGUOUS_MOCK / UNSUPPORTED_NESTED_MOCK_TARGET / UNSUPPORTED_MOCK_TARGET_
+LAYOUT are additionally re-checked a second time, program-wide (2026-08-11
+fix): splicer.orchestrator.splice_program matches directives to sites by
+category/key alone, with no reachability filter at all, so a case's own
+directive can get spliced against a physical site its own PERFORM target
+never reaches. check_test_case's reachable-set loop alone could pass
+`lint` clean on a shape that then crashed `export`/`run` with an unhandled
+ValueError from injector.build_site_dispatch or orchestrator's own
+defensive checks. See check_test_case's second pass over
+surface.boundary_sites (unfiltered) below, and .okf/analysis.md's
+"check_test_case" section for the full writeup.
+
 - matched but sharing a source line with other code (top-level sites) ->
   UNSUPPORTED_MOCK_TARGET_LAYOUT: a top-level splice comments out whole
   lines, so a boundary statement that does not own its line(s) -- sibling
@@ -1236,6 +1248,84 @@ def check_test_case(
                         f" -- splicing it would comment out the sibling code "
                         f"sharing its line(s); put the statement on its own "
                         f"line(s)"
+                    ),
+                )
+            )
+
+    # Whole-program, NOT reachability-filtered -- same reasoning as
+    # check_nested_exec's NESTED_EXEC/UNSPLICEABLE_EXEC (see .okf/
+    # analysis.md, "Why NESTED_EXEC is whole-program, not per-case"):
+    # orchestrator.splice_program iterates every BoundarySite in
+    # surface.boundary_sites and splices any one that `directive_matches_
+    # site` matches for ANY directive of ANY case -- pure category/key
+    # (or normalized-text) matching, deliberately blind to which case's
+    # control flow reaches which physical site, and not narrowed by
+    # mocked_flow_names either (splice_program does not skip boundary
+    # sites inside a flow-mocked paragraph's body -- see [splicer] Flow-
+    # Mock Header Dispatch: body lines never move). build_site_dispatch
+    # then re-derives AMBIGUOUS_MOCK itself (raising ValueError when 2+ of
+    # THIS case's directives match one physical site), and orchestrator's
+    # own defensive checks re-derive UNSUPPORTED_NESTED_MOCK_TARGET /
+    # UNSUPPORTED_MOCK_TARGET_LAYOUT the same way -- all three against
+    # surface.boundary_sites unfiltered. So the site set this gate checks
+    # against this case's mocks must be a true superset of what the
+    # splicer will actually process for it: every matching site program-
+    # wide, not just the ones reachable from this case's own PERFORM
+    # target. Sites already visited by the reachable-set loop above are
+    # skipped here -- they were already reported with a precise
+    # "reachable from ..." message, and re-checking them would double-
+    # refuse the same physical site.
+    already_checked_ids = {
+        id(site.statement) for site in surface.sites_in(reachable - mocked_flow_names)
+    }
+    for site in surface.boundary_sites:
+        if site.category is None or id(site.statement) in already_checked_ids:
+            continue
+        matches = [d for d in case.mocks if directive_matches_site(d, site)]
+        if not matches:
+            continue
+        if len(matches) > 1:
+            described = ", ".join(d.describe() for d in matches)
+            reasons.append(
+                RefusalReason(
+                    code="AMBIGUOUS_MOCK",
+                    message=(
+                        f"{site.label} boundary at line {site.line} (paragraph "
+                        f"'{site.paragraph_name}') is not reachable from "
+                        f"'{case.perform_target}' but is matched by more than "
+                        f"one of this test case's own MOCK directives "
+                        f"({described}) -- the splicer matches directives to "
+                        f"sites program-wide, independent of reachability, so "
+                        f"this is refused too; make the keys unambiguous"
+                    ),
+                )
+            )
+        elif site.nested and site.span is None:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_NESTED_MOCK_TARGET",
+                    message=(
+                        f"MOCK {matches[0].describe()} matches a statement at "
+                        f"line {site.line} that is not reachable from "
+                        f"'{case.perform_target}' but is nested elsewhere in "
+                        f"the program inside a conditional/loop body "
+                        f"(IF/EVALUATE/inline PERFORM) that cannot be safely "
+                        f"spliced: {site.unspliceable_reason or _UNANNOTATED}"
+                    ),
+                )
+            )
+        elif not site.nested and site.unspliceable_reason:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_MOCK_TARGET_LAYOUT",
+                    message=(
+                        f"MOCK {matches[0].describe()} matches a top-level "
+                        f"statement at line {site.line} (paragraph "
+                        f"'{site.paragraph_name}') that is not reachable from "
+                        f"'{case.perform_target}' but {site.unspliceable_reason}"
+                        f" elsewhere in the program -- splicing it would "
+                        f"comment out the sibling code sharing its line(s); "
+                        f"put the statement on its own line(s)"
                     ),
                 )
             )

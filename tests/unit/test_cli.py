@@ -171,6 +171,101 @@ def test_lint_missing_inputs_fail_cleanly(tmp_path, capsys):
     assert "mockymock lint: no such file" in out
 
 
+_AMBIGUOUS_REPRO_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. REPRO.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT IN-FILE ASSIGN TO "IN"
+               ORGANIZATION IS SEQUENTIAL.
+           SELECT OUT-FILE ASSIGN TO "OUT"
+               ORGANIZATION IS SEQUENTIAL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  IN-FILE.
+       01  IN-REC PIC X(10).
+       FD  OUT-FILE.
+       01  OUT-REC PIC X(10).
+       PROCEDURE DIVISION.
+       MAIN-BOTH.
+           PERFORM CASE-A-PATH.
+           PERFORM CASE-B-PATH.
+       CASE-A-PATH.
+           OPEN INPUT IN-FILE.
+           CLOSE IN-FILE.
+       CASE-B-PATH.
+           OPEN OUTPUT OUT-FILE.
+           CLOSE OUT-FILE.
+       DEAD-CODE-PATH.
+           OPEN INPUT IN-FILE OUTPUT OUT-FILE.
+           CLOSE IN-FILE OUT-FILE.
+"""
+
+# One test case, mocking IN-FILE and OUT-FILE separately for its own
+# reachable single-file OPEN/CLOSE sites (CASE-A-PATH, CASE-B-PATH) -- no
+# ambiguity there. DEAD-CODE-PATH's multi-file OPEN/CLOSE is never PERFORMed
+# by anyone, so no test case's own reachability BFS ever examines it -- yet
+# orchestrator.splice_program matches directives to sites program-wide
+# (directive_matches_site is category+key only, blind to reachability), so
+# both of this case's directives match DEAD-CODE-PATH's sites too, and
+# injector.build_site_dispatch would raise its "matched by multiple
+# directives ... AMBIGUOUS_MOCK" ValueError.
+_AMBIGUOUS_REPRO_CUT = """\
+TESTSUITE "repro"
+TESTCASE "both"
+    MOCK OPEN IN-FILE
+    END-MOCK
+    MOCK OPEN OUT-FILE
+    END-MOCK
+    MOCK CLOSE IN-FILE
+    END-MOCK
+    MOCK CLOSE OUT-FILE
+    END-MOCK
+    PERFORM MAIN-BOTH
+"""
+
+
+def _write_ambiguous_repro(tmp_path):
+    cbl = tmp_path / "REPRO.cbl"
+    cbl.write_text(_AMBIGUOUS_REPRO_CBL)
+    cut = tmp_path / "REPRO.cut"
+    cut.write_text(_AMBIGUOUS_REPRO_CUT)
+    return cbl, cut
+
+
+def test_lint_refuses_ambiguous_mock_against_a_site_unreachable_by_any_case(
+    tmp_path, capsys
+):
+    """Whole-program review bug: the AMBIGUOUS_MOCK gate only examined
+    sites reachable from the owning case's own PERFORM target, while the
+    splicer matches directives to sites program-wide with no reachability
+    filter at all -- so `lint` reported no problems and `export`/`run` then
+    died with an unhandled ValueError from injector.build_site_dispatch
+    ("matched by multiple directives ... AMBIGUOUS_MOCK"). The gate now
+    checks every matching site program-wide too, so the CLI refuses
+    cleanly instead."""
+    cbl, cut = _write_ambiguous_repro(tmp_path)
+    exit_code = main(["lint", str(cbl), "--cut", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "mockymock lint: refused (AMBIGUOUS_MOCK)" in out
+    assert "DEAD-CODE-PATH" in out
+
+
+def test_export_refuses_the_ambiguous_mock_shape_instead_of_raising(tmp_path, capsys):
+    """The other half of the invariant: whenever build_site_dispatch could
+    raise its AMBIGUOUS_MOCK ValueError, the gate must have refused first --
+    so export exits 1 with a refusal, never a traceback."""
+    cbl, cut = _write_ambiguous_repro(tmp_path)
+    exit_code = main(
+        ["export", str(cbl), "--cut", str(cut), "--output", str(tmp_path / "out.cbl")]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "refused (AMBIGUOUS_MOCK)" in out
+
+
 # --- mockymock collect ----------------------------------------------------
 
 
