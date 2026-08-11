@@ -49,5 +49,12 @@ def install_skill(target: Path, *, force: bool = False) -> None:
     if target.exists() and not force:
         raise SkillTargetExistsError(target)
     if target.exists():
-        shutil.rmtree(target)
+        # rmtree refuses a non-directory (a plain file, or a symlink even
+        # when it points at a directory) -- unlink removes just the path
+        # entry in both cases, without following a symlink into deleting
+        # whatever it points at.
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
     shutil.copytree(SOURCE_DIR, target)

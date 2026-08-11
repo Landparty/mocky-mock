@@ -51,3 +51,24 @@ def test_install_skill_overwrites_with_force(tmp_path):
     install_skill(target, force=True)
     assert (target / "SKILL.md").is_file()
     assert not (target / "stray.txt").exists()
+
+
+def test_install_skill_creates_missing_parent_directories(tmp_path):
+    # shutil.copytree's destination goes through os.makedirs internally,
+    # so a target several directories deeper than anything that exists
+    # yet (e.g. a fresh ~/.claude/skills/mockymock with no ~/.claude/
+    # at all) must still succeed without a separate mkdir step here.
+    target = tmp_path / "does" / "not" / "exist" / "yet"
+    install_skill(target)
+    assert (target / "SKILL.md").is_file()
+
+
+def test_install_skill_force_overwrites_a_plain_file_target(tmp_path):
+    # shutil.rmtree refuses to operate on a non-directory; a target that
+    # already exists as a plain file (not a previous install) must still
+    # be replaceable with --force instead of crashing.
+    target = tmp_path / "dest"
+    target.write_text("not a directory", encoding="utf-8")
+    install_skill(target, force=True)
+    assert target.is_dir()
+    assert (target / "SKILL.md").is_file()
