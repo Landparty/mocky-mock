@@ -21,7 +21,9 @@ def test_resolve_target_project_uses_cwd(monkeypatch, tmp_path):
 
 def test_resolve_target_global_uses_home(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    assert resolve_target(project=False) == tmp_path / ".claude" / "skills" / "mockymock"
+    assert (
+        resolve_target(project=False) == tmp_path / ".claude" / "skills" / "mockymock"
+    )
 
 
 def test_install_skill_copies_expected_files(tmp_path):
