@@ -31,22 +31,29 @@ See `.okf/dsl.md`, `.okf/analysis.md`, `.okf/splicer.md`,
 
 ## Gotchas worth knowing before you start
 
-Each of these is explained in full in `.okf/cli.md`'s own Gotchas section
-(or the module doc named) -- read that before touching the code it
-covers; this list exists so you know to look, not as a substitute.
+Each of these is explained in full in `.okf/cli.md`'s own Gotchas
+section (or the module doc named) -- read that before touching the code
+it covers; this list exists so you know to look, not as a substitute.
 
 - `build_parser()` must not import anything a `_cmd_*` body needs. See
-  `.okf/cli.md`'s Gotchas section, first bullet.
-- `annotate_nested_sites` ordering is load-bearing in both `generate` and
-  `run`. See `.okf/cli.md`'s Gotchas section, third bullet, and
-  `.okf/splicer.md`.
+  `.okf/cli.md`'s Gotchas section, the "Nothing in `build_parser()`..."
+  bullet.
 - `transform_data_division_exec` is deliberately called twice in
-  `_cmd_run`. See `.okf/cli.md`'s Gotchas section, second bullet.
+  `_cmd_run`. See `.okf/cli.md`'s Gotchas section, the
+  "`transform_data_division_exec` is called twice..." bullet.
 - Refusal checks are cumulative within one gate, fail-fast between gates.
-  See `.okf/cli.md`'s Gotchas section, fourth bullet.
+  See `.okf/cli.md`'s Gotchas section, the "Refusal checks are
+  cumulative..." bullet.
+- `annotate_nested_sites` ordering is load-bearing in both `generate` and
+  `run`. See `.okf/cli.md`'s Gotchas section, the "`annotate_nested_sites`
+  ordering is load-bearing..." bullet, and `.okf/splicer.md`.
 - `mockymock lint` never importing `docker_toolchain` is a structural
   guarantee, tested directly. See `.okf/cli.md`'s "`mockymock lint`"
   subsection.
+- Docker-dependent tests are opt-in, not opt-out: `tests/integration/`
+  needs a reachable Docker daemon and is skipped automatically when one
+  isn't available; `tests/unit/` never touches Docker. See
+  `.okf/testing.md`'s "Docker-availability skip pattern" section.
 
 ## Before you start
 
