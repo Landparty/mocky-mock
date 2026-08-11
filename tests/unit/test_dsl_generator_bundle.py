@@ -21,6 +21,7 @@ from mockymock.dsl.fixture_bundle import (
 from mockymock.dsl.generator import scaffold_cut
 from mockymock.dsl.model import MockCategory
 from mockymock.dsl.parser import parse_cut
+from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
 FIXTURES_EXAMPLE_DIR = Path(__file__).parent.parent.parent / "examples" / "fixtures"
 
@@ -909,6 +910,11 @@ def test_placeholder_downgraded_read_demotes_a_downstream_verify_in_the_same_loo
     result = parse_cobol(READ_LOOP_WITH_INLINE_CALL_SOURCE, filename="readloop.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
+    lines = READ_LOOP_WITH_INLINE_CALL_SOURCE.splitlines()
+    # the CALL is nested inside an IF, so its span -- and its key
+    # eligibility -- only exists after annotate_nested_sites, as
+    # cli/main.py:388 does before calling scaffold_cut.
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
 
     bundle = FixtureBundle(
         bundle_version=1,
