@@ -14,6 +14,42 @@ along with `mockymock.cli` the same way the Dockerfile and dashboard
 static assets ride along with `mockymock.runtime`/`mockymock.web`. See
 `docs/superpowers/specs/2026-08-11-mockymock-ai-skills-design.md`.
 
+## 2026-08-10 — Framework audit findings 1 & 2: ON SIZE ERROR blind spot, phantom-paragraph guard
+
+`docs/2026-08-10-framework-audit-and-roadmap.md` (executed audit: live
+Docker + `cobolparser` pinned to `83478ba7` in an isolated venv, not a
+static read) confirmed the one gap the prior 2026-08-01 follow-up had to
+leave unconfirmed for lack of exactly that access, plus one new upstream
+bug. Both fixed same day, each via a regression test that failed for the
+right reason before the fix (confirmed via `git stash`), then the fix,
+then the full unit (`1058 passed`) and integration (`124 passed`) suites
+for regressions, matching this project's usual discipline.
+
+* **`mock_surface.py`** (`_NESTED_STATEMENT_ATTRS`) — added
+  `on_size_error`/`not_on_size_error`. Before this, a `CALL`/file-op/EXEC/
+  `ACCEPT`/`PERFORM` nested inside an arithmetic statement's `ON SIZE
+  ERROR` clause was invisible to both boundary detection and the
+  reachability BFS: an unmocked boundary there produced a silent `PASS`
+  end to end against real GnuCOBOL, not a refusal — confirmed via a
+  controlled contrast against the identical construct nested in `IF`
+  (which correctly refused `UNMOCKED_CALL`). See [analysis](analysis.md).
+* **`refusal.py`** (`_check_unsupported_control_flow`) — new
+  `UNSUPPORTED_PHANTOM_PARAGRAPH` whole-program refusal. A separate,
+  upstream `cobol-parser` bug: `END-ADD`/`END-SUBTRACT`/`END-MULTIPLY`/
+  `END-DIVIDE`/`END-COMPUTE` written alone on their own line parse as
+  paragraph *names* instead of being consumed as their statement's scope
+  terminator, silently reparenting every following statement (same class
+  as the fixed `ROUNDED`-after-`GIVING` phantom paragraph). Converts an
+  unexplained `[CRASH]` into a loud, actionable refusal. Deliberately
+  matches the five exact reserved names, not a `^END-[A-Z]+$` pattern —
+  that broader form would also refuse legitimate paragraphs like
+  `END-OF-JOB`/`END-RUN` (a false-positive regression test guards this).
+  Root cause is still open upstream in cobol-parser.
+
+Not addressed in this pass: Finding 3 (CI red on `main` since 2026-08-09,
+`COBOL_PARSER_PAT` no longer resolving) needs GitHub secrets access this
+session doesn't have.
+
 ## 2026-08-10 — PR #57 review fixes: gdb session teardown, DAP framing validation, ledger corrections
 
 Automated review on the audit-remediation PR (below) found two real gaps

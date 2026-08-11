@@ -853,3 +853,119 @@ def test_placeholder_downgraded_read_with_no_termination_signal_demotes_verify()
     suite = parse_cut(text)
     assert len(suite.test_cases) == 1
     assert check_test_case(surface, result.ast, suite.test_cases[0]) == []
+
+
+READ_LOOP_WITH_INLINE_CALL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. READLOOP.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT INV-FILE ASSIGN TO "INV.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL
+               FILE STATUS IS WS-STATUS.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  INV-FILE.
+       01  INV-REC.
+           05  INV-QTY        PIC 9(4).
+
+       WORKING-STORAGE SECTION.
+       01  WS-STATUS          PIC XX.
+       01  WS-EOF             PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           OPEN INPUT INV-FILE.
+           PERFORM READ-LOOP UNTIL WS-EOF = "Y".
+           CLOSE INV-FILE.
+
+       READ-LOOP.
+           READ INV-FILE
+               AT END MOVE "Y" TO WS-EOF
+           END-READ.
+           IF WS-EOF = "N"
+               CALL "LOGROW" USING INV-QTY
+           END-IF.
+"""
+
+
+def test_placeholder_downgraded_read_demotes_a_downstream_verify_in_the_same_loop():
+    """Issue #47: a CALL made once per row inside the SAME READ-LOOP
+    paragraph as a --placeholder-downgraded READ is reached a DIFFERENT
+    number of times once that READ is downgraded -- here, the downgraded
+    READ signals EOF unconditionally on its very first call, so the
+    `IF WS-EOF = "N"` guard around the CALL never passes and it is reached
+    ZERO times at runtime, not the bundle's original 2 (one per
+    un-downgraded row). Rendering the bundle's stale `VERIFY CALL "LOGROW"
+    WAS CALLED 2 TIMES` unchanged pins an assertion the generated .cut
+    cannot itself satisfy, the exact same runnable-by-construction
+    violation the READ's own VERIFY count was already fixed for. The
+    downstream CALL's VERIFY must be demoted to a `*>` comment instead,
+    same as an unknowable count -- the fix does not attempt to compute the
+    new count (0 here), only to stop asserting the stale one."""
+    result = parse_cobol(READ_LOOP_WITH_INLINE_CALL_SOURCE, filename="readloop.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+
+    bundle = FixtureBundle(
+        bundle_version=1,
+        program_name="READLOOP",
+        seed=1,
+        scenarios=[
+            Scenario(
+                name="happy path",
+                entry="MAIN-PROCESS",
+                fixtures=[
+                    BoundaryFixture(
+                        category="READ",
+                        key="INV-FILE",
+                        paragraph="READ-LOOP",
+                        line=1,
+                        direction="IN",
+                        layout=[_field("INV-QTY")],
+                        sequence=[{"INV-QTY": "5"}, {"INV-QTY": "12"}],
+                        status={"WS-STATUS": "00"},
+                    ),
+                    BoundaryFixture(
+                        category="CALL",
+                        key="LOGROW",
+                        paragraph="READ-LOOP",
+                        line=2,
+                        direction="OUT",
+                        layout=[_field("INV-QTY")],
+                        sequence=[{"INV-QTY": "5"}],
+                        status={},
+                    ),
+                ],
+                expectations=[
+                    Expectation(kind="call_count", ref="READ:INV-FILE", value=3),
+                    Expectation(kind="call_count", ref="CALL:LOGROW", value=2),
+                ],
+            )
+        ],
+    )
+
+    without_placeholder = scaffold_cut("READLOOP", surface, bundle)
+    assert "VERIFY READ INV-FILE WAS CALLED 3 TIMES" in without_placeholder
+    assert 'VERIFY CALL "LOGROW" WAS CALLED 2 TIMES' in without_placeholder
+
+    with_placeholder = scaffold_cut(
+        "READLOOP",
+        surface,
+        bundle,
+        placeholder_keys=frozenset({("READ", "INV-FILE")}),
+    )
+    # the downgraded boundary's own count is corrected, as already covered
+    # by test_placeholder_downgraded_read_gets_a_corrected_verify_count
+    assert "VERIFY READ INV-FILE WAS CALLED 1 TIMES" in with_placeholder
+    # the downstream CALL, only reachable inside the now-shortened loop,
+    # is demoted too -- not left pinned to the stale bundle count
+    assert 'VERIFY CALL "LOGROW" WAS CALLED 2 TIMES' not in with_placeholder
+    assert '*> VERIFY CALL "LOGROW" WAS CALLED' in with_placeholder
+    assert "same paragraph as READ:INV-FILE" in with_placeholder
+    # the demoted output still round-trips
+    suite = parse_cut(with_placeholder)
+    assert len(suite.test_cases) == 1

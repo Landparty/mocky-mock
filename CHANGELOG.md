@@ -15,6 +15,10 @@
 - `splicer/injector.build_rows_block` generalized from a SQL-only function that hardcoded SQLCODE 0/100 to `build_rows_block(tally_name, rows, *, row_suffix_moves, exhausted_moves)`, with the SQLCODE literals moved to their SQL call site in `build_site_dispatch` and a new READ call site alongside it.
 - Bumped the vendored `cobolparser` pin to `ff64b25` (includes upstream PR #110's gen-fixtures fixes and PR #112's EJECT support).
 
+### Fixed
+
+- `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
+
 ## [0.5.1](https://github.com/Landparty/mocky-mock/compare/v0.5.0...v0.5.1) (2026-08-10)
 
 
