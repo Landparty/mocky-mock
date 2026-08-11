@@ -1,0 +1,13 @@
+TESTSUITE "RDROWST row-driven READ terminated via TERMINAL group"
+
+TESTCASE "consumes both rows in order then terminates on exhaustion"
+    MOCK READ INV-FILE ROWS
+        ( INV-QTY = 5 )
+        ( INV-QTY = 12 )
+        TERMINAL ( WS-EOF = "Y" )
+    END-MOCK
+    PERFORM MAIN-PROCESS
+    EXPECT WS-TOTAL-QTY TO BE 17
+    EXPECT WS-ROW-COUNT TO BE 2
+    EXPECT WS-EOF TO BE "Y"
+    VERIFY READ INV-FILE WAS PERFORMED 3 TIMES
