@@ -1,5 +1,33 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-12 — Sixth framework audit: 20 new findings, none fixed yet
+
+[docs/2026-08-12-framework-audit.md](../docs/2026-08-12-framework-audit.md) —
+a static read-through (no Docker, no `cobolparser` reachable in this
+environment — the private-repo clone hit the same auth wall the 2026-08-10
+CI-outage finding described) split across six areas run in parallel: core
+engine (`analysis/`, `splicer/`), DSL (`dsl/`), CLI (`cli/`), runtime/web
+(`runtime/`, `web/`), report (`report/`), and debugger/mutation (`debug/`,
+`mutation/`). Two HIGH findings worth flagging here specifically since they
+bear on trust in the tool's own signal: (1) `TestSuiteResult.all_passed`
+(the CLI's exit-code source, `report/results.py`) is derived only from the
+driver's own `SUMMARY: FAILURES=` count, never cross-checked against parsed
+`CASE ... FAIL:` markers, so a COBOL program's own `DISPLAY` output
+colliding with the `__MOCKYMOCK__` line-start protocol can produce exit 0
+while console/JUnit/JSON simultaneously render that case as `[FAIL]`; (2) a
+`.cut` test case's own `PERFORM <section> THRU <target>` (section, not
+paragraph, as the seed) silently drops the THRU range in
+`analysis/refusal.py`'s reachability BFS — same silent-under-approximation
+bug class as the 2026-08-10 audit's Finding 1, in a different corner of the
+same function. Eighteen more findings (DSL parser accepting an unbalanced
+subscript when there's no space before the stray `(`; `skills install`
+crashing on a dangling symlink target; several DAP-adapter/gdb crash paths
+on malformed input; a `record_rewrite.py` dedup-by-dict silently corrupting
+a golden value when the same field is stub-recorded twice per case; and
+more) are detailed in the doc. Nothing in this entry has been fixed yet —
+this session was audit-only; see the doc's "Prioritized recommendations"
+for suggested fix order.
+
 ## 2026-08-11 — `AMBIGUOUS_MOCK` (and nested/layout checks) widened to a whole-program site set
 
 The refusal gate's `AMBIGUOUS_MOCK` check in `check_test_case` only examined
