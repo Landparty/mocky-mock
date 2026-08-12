@@ -20,6 +20,21 @@
 - **Reachability gate: GO TO fall-through closure (HIGH).** `_reachable_paragraphs` stopped at a `GO TO` target, so a paragraph entered by falling off that target's end — ordinary sequential execution, which `union_executed_paragraphs`, the terminator guard, and cobolparser's `ProgramFlowAnalyzer` all already modeled — was invisible to the per-case mock gates: a `CALL`/file-op/`ACCEPT` there passed `lint`/`run` unmocked (exit 0) and executed for real at runtime. The BFS now closes over the fall-through hazard to a fixpoint via `_falls_through`, failing closed (`UNRESOLVED_FLOW_TARGET`) when paragraph source order is unverifiable or a GO TO target cannot be anchored in it. Pinned by `tests/unit/test_refusal_goto_fallthrough.py`.
 - `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
 
+## [0.6.1](https://github.com/Landparty/mocky-mock/compare/v0.6.0...v0.6.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* close the reachability BFS over GO TO fall-through ([b5301ce](https://github.com/Landparty/mocky-mock/commit/b5301ce2be1e04e93e8695ebecba2ae62e49f3e8))
+* close the reachability BFS over GO TO fall-through ([162f205](https://github.com/Landparty/mocky-mock/commit/162f2050b5f2179448ed93cb6fb59431806d5815))
+* key orphan-record skip diagnosis on (case_id, data_name) ([dc95c4d](https://github.com/Landparty/mocky-mock/commit/dc95c4d7fda5a70043acec47a6b899f4480214d4))
+* remediate 19 of the 2026-08-12 audit's 20 findings, TDD at the pin ([a9c7ba6](https://github.com/Landparty/mocky-mock/commit/a9c7ba68d93ad14ebed76cd5def4d3c2a17e31ea))
+
+
+### Documentation
+
+* sixth framework audit — 20 new findings, none fixed ([04fccda](https://github.com/Landparty/mocky-mock/commit/04fccdaf6dd3c42ef2624c548fbbe5cda50072e7))
+
 ## [0.6.0](https://github.com/Landparty/mocky-mock/compare/v0.5.2...v0.6.0) (2026-08-11)
 
 
