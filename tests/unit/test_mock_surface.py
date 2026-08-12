@@ -399,6 +399,123 @@ def test_detects_call_nested_inside_read_at_end():
     assert site.nested_in_boundary is True
 
 
+WRITE_EOP_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EOPSURF.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT RPT-FILE ASSIGN TO "RPT".
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  RPT-FILE
+           LINAGE IS 60 LINES.
+       01  RPT-REC            PIC X(80).
+
+       WORKING-STORAGE SECTION.
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-RATE            PIC 9V99.
+
+       PROCEDURE DIVISION.
+       CALL-INSIDE-AT-EOP.
+           WRITE RPT-REC
+               AT END-OF-PAGE
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE.
+
+       CALL-INSIDE-NOT-AT-EOP.
+           WRITE RPT-REC
+               NOT AT END-OF-PAGE
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE.
+"""
+
+
+@pytest.mark.parametrize("paragraph", ["CALL-INSIDE-AT-EOP", "CALL-INSIDE-NOT-AT-EOP"])
+def test_detects_call_nested_inside_write_eop_clauses(paragraph):
+    """2026-08-12 audit Finding 3: not_at_eop_clause was missing from
+    _NESTED_STATEMENT_ATTRS (at_eop_clause was present), so a boundary
+    statement inside WRITE ... NOT AT END-OF-PAGE was invisible to the
+    whole analysis layer -- same bug class as the 2026-08-10 audit's
+    on_size_error fix. Both halves verified here."""
+    result = parse_cobol(WRITE_EOP_SOURCE, filename="eopsurf.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    static = [c for c in surface.static_call_sites() if c.paragraph_name == paragraph]
+    assert len(static) == 1, f"{paragraph}: expected exactly one CALL site"
+    assert static[0].program_name == "NESTED-DISCRATE"
+    assert static[0].nested is True
+
+
+STRING_OVERFLOW_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. STROVFL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A               PIC X(5) VALUE "AAA".
+       01  WS-B               PIC X(5) VALUE "BBB".
+       01  WS-OUT             PIC X(6).
+       01  WS-AMOUNT          PIC 9(5)V99.
+       01  WS-RATE            PIC 9V99.
+
+       PROCEDURE DIVISION.
+       CALL-INSIDE-STRING-OVERFLOW.
+           STRING WS-A DELIMITED BY SPACE
+                  WS-B DELIMITED BY SPACE
+               INTO WS-OUT
+               ON OVERFLOW
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE
+           END-STRING.
+
+       CALL-INSIDE-STRING-NOT-OVERFLOW.
+           STRING WS-A DELIMITED BY SPACE
+                  WS-B DELIMITED BY SPACE
+               INTO WS-OUT
+               NOT ON OVERFLOW
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE
+           END-STRING.
+
+       CALL-INSIDE-UNSTRING-OVERFLOW.
+           UNSTRING WS-OUT DELIMITED BY SPACE
+               INTO WS-A WS-B
+               ON OVERFLOW
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE
+           END-UNSTRING.
+
+       CALL-INSIDE-UNSTRING-NOT-OVERFLOW.
+           UNSTRING WS-OUT DELIMITED BY SPACE
+               INTO WS-A WS-B
+               NOT ON OVERFLOW
+                   CALL "NESTED-DISCRATE" USING WS-AMOUNT WS-RATE
+           END-UNSTRING.
+"""
+
+
+@pytest.mark.parametrize(
+    "paragraph",
+    [
+        "CALL-INSIDE-STRING-OVERFLOW",
+        "CALL-INSIDE-STRING-NOT-OVERFLOW",
+        "CALL-INSIDE-UNSTRING-OVERFLOW",
+        "CALL-INSIDE-UNSTRING-NOT-OVERFLOW",
+    ],
+)
+def test_detects_call_nested_inside_string_unstring_overflow_clauses(paragraph):
+    """2026-08-12 audit Finding 3: not_on_overflow was missing from
+    _NESTED_STATEMENT_ATTRS. StringStatement/UnstringStatement expose their
+    ON OVERFLOW body under the same `on_overflow` name CallStatement uses
+    (already in the tuple, verified by the positive halves here), but their
+    NOT ON OVERFLOW body under `not_on_overflow`, which had no entry."""
+    result = parse_cobol(STRING_OVERFLOW_SOURCE, filename="strovfl.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    static = [c for c in surface.static_call_sites() if c.paragraph_name == paragraph]
+    assert len(static) == 1, f"{paragraph}: expected exactly one CALL site"
+    assert static[0].program_name == "NESTED-DISCRATE"
+    assert static[0].nested is True
+
+
 def test_detects_exec_sql_nested_inside_inline_perform():
     surface = analyze(_nested_ast())
     assert "EXEC-INSIDE-INLINE-PERFORM" in surface.exec_paragraphs

@@ -1582,17 +1582,41 @@ def _reachable_paragraphs(
 
     reasons: list[RefusalReason] = []
     stack = [start]
-    if thru is not None and start in by_name:
-        members, problem = _expand_thru_range(
-            ordered,
-            start,
-            thru,
-            "test case PERFORM",
-            missing_code="UNKNOWN_PARAGRAPH",
-        )
-        if problem is not None:
-            reasons.append(problem)
-        stack.extend(members)
+    if thru is not None:
+        if start in section_members or thru in section_members:
+            # 2026-08-12 audit Finding 2: this seed used to be guarded by
+            # `start in by_name` alone -- built from paragraphs only -- so
+            # a section-named start silently skipped both the expansion
+            # AND its fail-closed refusal, dropping `thru` entirely while
+            # the spliced driver still emits the literal PERFORM ... THRU
+            # (GnuCOBOL executes the full fall-through range). Refuse loud
+            # instead of modeling less than the compiled driver runs.
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_PERFORM_THRU",
+                    message=(
+                        f"test case PERFORM: PERFORM {start} THRU {thru} "
+                        f"names a SECTION as a range endpoint -- THRU "
+                        f"range expansion is only modeled over paragraphs, "
+                        f"so the reachable set cannot be trusted; PERFORM "
+                        f"the section without THRU, or name the range's "
+                        f"boundary paragraphs directly"
+                    ),
+                )
+            )
+        elif start in by_name:
+            members, problem = _expand_thru_range(
+                ordered,
+                start,
+                thru,
+                "test case PERFORM",
+                missing_code="UNKNOWN_PARAGRAPH",
+            )
+            if problem is not None:
+                reasons.append(problem)
+            stack.extend(members)
+        # else: the seed itself is unresolvable -- check_test_case reports
+        # it as UNKNOWN_PARAGRAPH and returns before reading thru_reasons.
 
     def push_target(target: str, origin: str, verb: str) -> None:
         if target in by_name or target in section_members:

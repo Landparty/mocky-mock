@@ -181,8 +181,29 @@ _CAPTURE_INDEX_RE = re.compile(r"^[1-9][0-9]*$")
 _CAPTURE_PREFIX_RE = re.compile(r"^CAPTURE\b")
 
 
+# The strict shape a data-name token containing parens must have: one
+# non-nested, closed `(...)` group. _SUBSCRIPTED_NAME's `\S+` fallback
+# exists for literal {Placeholder} tokens, but with no space before a
+# stray `(` it also swallowed 'WS-TAB(1' whole -- a syntactically invalid
+# COBOL target that only surfaced later as a confusing cobc compile error
+# (2026-08-12 audit Finding 4). Any matched token that contains a paren is
+# re-checked against this and refused at .cut level when it doesn't hold.
+_BALANCED_SUBSCRIPT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\s*\([^()]*\)$")
+
+
 class CutParseError(ValueError):
     """Raised when a .cut file doesn't match the grammar."""
+
+
+def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
+    """Refuse a data-name token with a stray/unclosed paren that the `\\S+`
+    fallback of _SUBSCRIPTED_NAME would otherwise pass through verbatim."""
+    if ("(" in token or ")" in token) and _BALANCED_SUBSCRIPT_RE.match(token) is None:
+        raise CutParseError(
+            f"line {line_no}: unbalanced parenthesis in data-name "
+            f"{token!r} -- a subscript must be one closed (...) group, "
+            f"e.g. WS-TABLE(1, 2)"
+        )
 
 
 def _resolve_category(cat: str | None, bare_key: bool = False) -> MockCategory:
@@ -526,6 +547,7 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"one MOCK body -- only one CAPTURE per argument "
                         f"position is allowed"
                     )
+                _reject_unbalanced_subscript(m.group("target"), line_no)
                 in_mock.captures.append((index, m.group("target")))
             elif _CAPTURE_PREFIX_RE.match(line) is not None:
                 raise CutParseError(
@@ -815,6 +837,7 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"{in_before} (only MOCK directives are)"
                     )
                 raise CutParseError(f"line {line_no}: MOVE outside TESTCASE")
+            _reject_unbalanced_subscript(m.group("target"), line_no)
             case.setup_moves.append((m.group("value"), m.group("target")))
         elif (m := _PERFORM_RE.match(line)) is not None:
             if case is None:
@@ -840,6 +863,7 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"{in_before} (only MOCK directives are)"
                     )
                 raise CutParseError(f"line {line_no}: EXPECT outside TESTCASE")
+            _reject_unbalanced_subscript(m.group("name"), line_no)
             case.expectations.append(
                 ExpectDirective(
                     data_name=m.group("name"),

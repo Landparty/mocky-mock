@@ -91,16 +91,33 @@ class TestSuiteResult:
 
     @property
     def all_passed(self) -> bool:
+        # The per-case cross-check (2026-08-12 audit Finding 1): the
+        # SUMMARY line's FAILURES= counter is the driver's own claim, but
+        # the formatters render each case from its parsed FAIL/END lines.
+        # Deriving the exit code solely from the counter let the two
+        # disagree -- a stray stdout line matching the CASE ... FAIL:
+        # shape (program-controlled DISPLAY output; no adversarial intent
+        # needed) produced exit 0 alongside a rendered [FAIL]. The exit
+        # code must never claim less than what the report shows.
         return (
             self.failures == 0
             and self.tests_run > 0
             and not self.orphan_failures
             and not self.duplicate_case_starts
+            and all(result.passed for result in self.results)
         )
 
 
 def parse_stdout(stdout: str) -> TestSuiteResult:
-    """Parse a compiled test binary's captured stdout into a TestSuiteResult."""
+    """Parse a compiled test binary's captured stdout into a TestSuiteResult.
+
+    Known limitation (2026-08-12 audit Finding 11, open): the protocol is
+    line-oriented with no escaping, so a PIC X field whose value contains a
+    raw newline splits its own RECORD/FAIL marker across two physical
+    lines -- the continuation matches no marker and is silently dropped,
+    truncating the recorded value/reason at the newline. A real fix needs
+    the generated driver to escape control bytes before DISPLAYing
+    (a protocol change; see the audit doc), not a parser-side patch."""
     suite = TestSuiteResult(suite_name="")
     by_id: dict[str, TestResult] = {}
 

@@ -1,5 +1,71 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-12 — Audit remediation: 19 of the 20 findings fixed, TDD, at the pin
+
+Same-day follow-up to the audit below, in a session that DID have
+cobolparser (cloned and checked out at the exact `pyproject.toml` pin
+`83478ba7`, installed `--no-deps -e`; still no Docker, so the integration
+tier self-skipped — the end-to-end GnuCOBOL re-verification of Finding 2
+remains for a Docker session). Every fix landed test-first (each new test
+confirmed failing before its fix), full gates green after: 1204 passed /
+97 skipped / 1 xfailed (`pytest tests/`), `ruff` + `black` + `mypy` clean.
+42 new regression tests. Highlights, in audit-finding order:
+
+- **F1** `report/results.py`: `all_passed` now cross-checks
+  `all(result.passed ...)` against the per-case FAIL/END lines instead of
+  trusting the driver's `SUMMARY FAILURES=` counter alone — exit code can
+  no longer say 0 while the rendered report says `[FAIL]`/`[CRASH]`.
+- **F2** `analysis/refusal.py`: a driver-side `PERFORM <start> THRU
+  <thru>` where either endpoint names a SECTION now refuses
+  `UNSUPPORTED_PERFORM_THRU` (section-specific message) instead of
+  silently dropping the THRU range from the reachable set; section
+  targets without THRU unchanged.
+- **F3** `analysis/mock_surface.py`: the audit's two suspected missing
+  nested-clause attrs both confirmed real against cobolparser's own
+  `_CLAUSE_BODY_ATTRS` at the pin and added: `not_at_eop_clause`,
+  `not_on_overflow`. Same bug class as 2026-08-10's `on_size_error` fix.
+- **F4** `dsl/parser.py`: `_reject_unbalanced_subscript` refuses
+  `WS-TAB(1` (no-space unbalanced paren, previously swallowed whole by
+  `_SUBSCRIPTED_NAME`'s `\S+` fallback) at MOVE/EXPECT/CAPTURE sites.
+- **F5** `cli/skills_cmd.py`: a dangling-symlink target now counts as
+  occupied (refuse without `--force`, replace with it) instead of
+  crashing copytree.
+- **F6–F9** `debug/`: framing errors now cover truncated/non-UTF-8
+  bodies and non-ASCII headers; `_dispatch`/`_send_response` survive
+  requests missing `command`/`seq`; `call_stack` skips a frame whose gdb
+  location has no `line`; relaunch clears `_current_stop` so a pre-stop
+  `stackTrace` reports no frames instead of the previous session's.
+- **F10/F12** `report/record_rewrite.py` + `json_report.py`: recorded
+  values are matched per (case, data-name) in emission order (two stubs
+  for one field each get their own value; dict-collapse corrupted the
+  earlier golden); orphan RECORD markers now surface as
+  `orphanRecords` in the JSON report and get their own skip reason
+  instead of the misleading "crashed" one. **F11** (newline-in-value
+  marker truncation) deliberately deferred — needs protocol-level
+  escaping in the generated driver; documented in `parse_stdout`.
+- **F13–F16** `cli/`: `generate -o` and `mutate --json-report` route
+  through `_write_report_file` (generate's file is the deliverable →
+  exit 1; mutate's is auxiliary → exit code stands on the outcome);
+  bare `mockymock skills` prints its own usage; `fixture_bundle.py`
+  raises typed `MalformedBundleError`; `mutate --list` refuses
+  `--json-report`/`--fail-under` instead of ignoring them.
+- **F17–F19** `runtime/` + `web/`: the "already in use" race-recovery
+  branch now compares the adopted container's image to `IMAGE` and
+  rm+recreates once on mismatch; `_inspect_container`/`cobc_version`
+  take a `timeout` param so `status.py`'s probes are genuinely bounded
+  by `PROBE_TIMEOUT`; `/api/status` coalesces concurrent polls behind a
+  lock + 2s TTL cache.
+- **F20** `dsl/generator.py`: a MOCK key containing `"` (representable
+  in COBOL via a single-quoted literal, unrepresentable in the .cut
+  grammar) is skipped fail-closed like an unparsed key — run's refusal
+  gate names the unmocked site — rather than scaffolding a `.cut` that
+  `parse_cut` itself rejects; `_quote_safe` substitution stays
+  names-only since substituting inside a KEY would silently unmatch it.
+
+Concept docs refreshed: [analysis](analysis.md) (attrs tuple + the two
+2026-08-12 fixes), [report](report.md) (`all_passed` semantics). The
+audit doc itself now carries per-finding status lines.
+
 ## 2026-08-12 — Sixth framework audit: 20 new findings, none fixed yet
 
 [docs/2026-08-12-framework-audit.md](../docs/2026-08-12-framework-audit.md) —

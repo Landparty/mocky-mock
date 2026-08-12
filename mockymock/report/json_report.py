@@ -199,6 +199,13 @@ def build_json_report(
             for case_id, previous_name, new_name in suite_result.duplicate_case_starts
         ],
         "orphanEnds": list(suite_result.orphan_ends),
+        "orphanRecords": [
+            # A RECORD marker whose case id never STARTed -- non-gating
+            # (no pass/fail evidence to lose) but previously surfaced in
+            # NO output format at all (2026-08-12 audit Finding 12).
+            {"caseId": case_id, "dataName": name, "value": value}
+            for case_id, name, value in suite_result.orphan_records
+        ],
         "summary": {
             "testsRun": suite_result.tests_run or len(suite_result.results),
             "casesFailed": sum(

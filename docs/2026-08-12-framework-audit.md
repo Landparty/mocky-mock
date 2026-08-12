@@ -1,6 +1,10 @@
 # mockymock — Framework Audit — 2026-08-12
 
 Date: 2026-08-12
+Remediation status: **19 of 20 findings fixed same day** (TDD, full suite
+green at the pinned cobolparser commit; Finding 11 deliberately deferred —
+see its entry). The per-finding sections below are preserved as written
+during the audit; a status line has been added to each heading.
 Scope: whole-framework read-through audit, six parallel deep dives (core
 engine, DSL, CLI, runtime/dashboard, report/coverage, debugger/mutation)
 Verification tier: **static** — no live Docker daemon and no `cobolparser`
@@ -31,6 +35,8 @@ elsewhere.
 ---
 
 ## Finding 1 — `all_passed` (the CLI's exit-code source) and the rendered report can disagree (HIGH, confirmed)
+
+**FIXED 2026-08-12** — `all_passed` now also requires `all(result.passed ...)`; regression tests in `tests/unit/test_report.py`.
 
 `mockymock/cli/main.py:864` gates the process exit code on
 `suite_result.all_passed`, and `TestSuiteResult.all_passed`
@@ -85,6 +91,8 @@ closes today's specific inconsistency immediately.
 ---
 
 ## Finding 2 — `PERFORM <section> THRU <target>` as a test case's own entry point silently drops the THRU range (HIGH, confirmed)
+
+**FIXED 2026-08-12** — a driver-side THRU with a section-named endpoint now refuses `UNSUPPORTED_PERFORM_THRU` loudly (section targets without THRU stay supported); tests in `tests/unit/test_refusal.py`. Unit-verified at the pin; the end-to-end GnuCOBOL run still needs a Docker session.
 
 `mockymock/analysis/refusal.py`'s `_reachable_paragraphs`
 (around line 1584) seeds its BFS like this:
@@ -153,6 +161,8 @@ philosophy ("fail closed... rather than being mis-parsed").
 
 ## Finding 3 — Two other nested-clause attributes may share the fixed `ON SIZE ERROR` bug (MEDIUM, suspected — needs cobolparser)
 
+**CONFIRMED AND FIXED 2026-08-12** — the five-minute check ran in the remediation session (cobolparser attached at the pin): both `not_at_eop_clause` and `not_on_overflow` exist, held statements, and were invisible. Added to `_NESTED_STATEMENT_ATTRS`; parametrized tests cover both halves of WRITE/STRING/UNSTRING clauses.
+
 The 2026-08-10 audit's Finding 1 was a two-attribute gap in
 `mockymock/analysis/mock_surface.py`'s `_NESTED_STATEMENT_ATTRS`
 (`on_size_error`/`not_on_size_error` missing, hiding boundaries inside
@@ -190,6 +200,8 @@ manual sweep each time.
 ---
 
 ## Finding 4 — DSL parser silently accepts an unbalanced subscript when there's no space before the stray `(` (MEDIUM, confirmed)
+
+**FIXED 2026-08-12** — `_reject_unbalanced_subscript` now refuses at all three `_SUBSCRIPTED_NAME` consumption sites (MOVE/EXPECT/CAPTURE).
 
 `mockymock/dsl/parser.py:112`:
 
@@ -230,6 +242,8 @@ every other malformed-input case in this file.
 
 ## Finding 5 — `mockymock skills install` crashes with a raw `FileExistsError` on a dangling symlink target (MEDIUM, confirmed)
 
+**FIXED 2026-08-12** — a symlink (dangling or not) now counts as an occupied target: refused without `--force`, replaced with it.
+
 `mockymock/cli/skills_cmd.py:41-60` (`install_skill`) only guards two
 target states: doesn't exist, or exists as a real file/dir/symlink-to-something.
 A **dangling** symlink (points at a path that doesn't exist) satisfies
@@ -263,6 +277,17 @@ create-fresh path.
 ---
 
 ## Findings 6–20 — remaining new findings from the six-way review, by area
+
+**Status 2026-08-12: all fixed same day except Finding 11** — 6–9
+(DAP adapter/call-stack crash paths), 10 and 12 (record_rewrite ordered
+matching + orphan-record surfacing/labeling), 13–16 (CLI write guards,
+skills usage, typed `MalformedBundleError`, `mutate --list` flag refusal),
+17–19 (race-adoption image check, probe timeout plumbing, dashboard probe
+coalescing), and 20 (unrepresentable MOCK keys skipped fail-closed).
+Finding 11 (newline-in-value marker truncation) is deliberately deferred:
+the real fix is protocol-level escaping in the generated COBOL driver (a
+design-doc change, not a parser patch) — documented as a known limitation
+in `parse_stdout`'s docstring.
 
 Grouped by module; severity is my judgment after reading each, not the
 sub-review's own label. All are newly surfaced by this pass (none overlap

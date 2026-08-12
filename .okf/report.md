@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-08-10T00:00:00Z
+timestamp: 2026-08-12T00:00:00Z
 ---
 # Overview
 
@@ -107,7 +107,11 @@ class TestSuiteResult:
     @property
     def all_passed(self) -> bool: ...
     # failures == 0 and tests_run > 0 and not orphan_failures
-    # and not duplicate_case_starts (orphan_ends/orphan_records do NOT gate -- see Gotchas)
+    # and not duplicate_case_starts and all(r.passed for r in results)
+    # (orphan_ends/orphan_records do NOT gate -- see Gotchas; the
+    # per-case cross-check was added 2026-08-12, audit Finding 1: the
+    # SUMMARY counter alone let a stray FAIL-shaped stdout line render
+    # [FAIL] in every formatter while the exit code stayed 0)
 ```
 
 Pass/fail/crash is derived, not stored directly. `crashed` is true when a

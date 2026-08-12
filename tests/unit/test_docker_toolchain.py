@@ -405,6 +405,48 @@ def test_ensure_toolchain_starts_concurrently_created_but_stopped_container(tmp_
     assert ["docker", "start", CONTAINER] in calls
 
 
+def test_race_adoption_recreates_a_concurrently_created_stale_image_container(
+    tmp_path,
+):
+    """2026-08-12 audit Finding 17: the "already in use" race-recovery
+    branch adopted whatever container won the race WITHOUT comparing its
+    image to this invocation's IMAGE -- bypassing the stale-image
+    rm-and-recreate safeguard ensure_toolchain's main path enforces. Two
+    invocations from different installed versions (different hardening
+    flags -> different content-hash tag) racing on first creation left the
+    loser silently using the other version's container."""
+    calls = []
+    inspects = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["docker", "inspect"]:
+            inspects.append(argv)
+            if len(inspects) == 1:
+                return _completed(argv, returncode=1)  # not there yet
+            # The concurrent winner created it -- from a DIFFERENT image.
+            return _completed(argv, stdout="true mockymock-gnucobol:deadbeef\n")
+        if argv[:2] == ["docker", "run"]:
+            run_count = len([c for c in calls if c[:2] == ["docker", "run"]])
+            if run_count == 1:
+                return _completed(argv, returncode=125, stderr="name already in use")
+            return _completed(argv)  # the recreate succeeds
+        return _completed(argv)
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+    ):
+        ensure_toolchain()  # must not raise, must NOT adopt the stale container
+
+    assert ["docker", "rm", "-f", CONTAINER] in calls
+    run_calls = [c for c in calls if c[:2] == ["docker", "run"]]
+    assert len(run_calls) == 2  # the losing first attempt + the recreate
+    assert IMAGE in run_calls[1]
+
+
 def test_ensure_toolchain_still_fails_on_unrelated_docker_run_error(tmp_path):
     def fake_run(argv, **kwargs):
         if argv[:2] == ["docker", "inspect"]:

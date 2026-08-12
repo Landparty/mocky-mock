@@ -32,6 +32,13 @@ class UnsupportedBundleVersionError(Exception):
     how to read."""
 
 
+class MalformedBundleError(Exception):
+    """Raised when bundle text/data is structurally broken -- not JSON, not
+    an object, or missing a required key -- as a typed error instead of the
+    raw KeyError/JSONDecodeError tracebacks these cases used to escape as
+    (2026-08-12 audit Finding 15)."""
+
+
 @dataclass
 class FieldSpec:
     name: str
@@ -170,26 +177,41 @@ def load_fixture_bundle(data: dict[str, Any]) -> FixtureBundle:
             f"Regenerate the bundle with a compatible cobol-parser, or "
             f"upgrade mockymock."
         )
-    return FixtureBundle(
-        bundle_version=version,
-        program_name=data.get("program_name"),
-        seed=data["seed"],
-        scenarios=[_load_scenario(s) for s in data.get("scenarios") or []],
-        layouts={
-            name: [_load_field_spec(f) for f in fields]
-            for name, fields in (data.get("layouts") or {}).items()
-        },
-        coverage=dict(data.get("coverage") or {}),
-        unresolved=list(data.get("unresolved") or []),
-        scenario_coverage=data.get("scenario_coverage"),
-    )
+    try:
+        return FixtureBundle(
+            bundle_version=version,
+            program_name=data.get("program_name"),
+            seed=data["seed"],
+            scenarios=[_load_scenario(s) for s in data.get("scenarios") or []],
+            layouts={
+                name: [_load_field_spec(f) for f in fields]
+                for name, fields in (data.get("layouts") or {}).items()
+            },
+            coverage=dict(data.get("coverage") or {}),
+            unresolved=list(data.get("unresolved") or []),
+            scenario_coverage=data.get("scenario_coverage"),
+        )
+    except KeyError as exc:
+        raise MalformedBundleError(
+            f"fixture bundle is missing required key {exc.args[0]!r}"
+        ) from exc
+    except (TypeError, AttributeError) as exc:
+        raise MalformedBundleError(f"malformed fixture bundle: {exc}") from exc
 
 
 def parse_fixture_bundle(text: str) -> FixtureBundle:
     """Parse raw bundle JSON text (e.g. cobolparser's
     `FixtureBundle.to_json()` output, or a `gen-fixtures --format json`
     file) into a `FixtureBundle`."""
-    return load_fixture_bundle(json.loads(text))
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise MalformedBundleError(f"fixture bundle is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise MalformedBundleError(
+            f"fixture bundle must be a JSON object, got {type(data).__name__}"
+        )
+    return load_fixture_bundle(data)
 
 
 def load_fixture_bundle_file(path: Path) -> FixtureBundle:

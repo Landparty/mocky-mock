@@ -398,6 +398,96 @@ def test_unsupported_command_gets_a_clean_failure_response():
     assert "unsupported request" in messages[0]["message"]
 
 
+def test_truncated_body_shuts_down_cleanly():
+    """2026-08-12 audit Finding 6: a client dying mid-send leaves a valid
+    Content-Length header but a short body -- stream.read() returns the
+    short read without raising, then json.loads on the truncated JSON
+    raised a JSONDecodeError that run() (catching only DapFramingError)
+    let kill the whole adapter process instead of the documented
+    fail-closed shutdown."""
+    input_stream = io.BytesIO(b'Content-Length: 500\r\n\r\n{"type": "requ')
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+
+    adapter.run()  # must not raise
+
+    messages = _drain(output_stream)
+    assert any(m.get("event") == "output" for m in messages)
+
+
+def test_non_utf8_body_shuts_down_cleanly():
+    """Companion to the truncated-body case: a body that is not valid
+    UTF-8 raised a UnicodeDecodeError out of run()'s loop."""
+    body = b"\xff\xfe{}"
+    frame = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body
+    input_stream = io.BytesIO(frame)
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+
+    adapter.run()  # must not raise
+
+    messages = _drain(output_stream)
+    assert any(m.get("event") == "output" for m in messages)
+
+
+def test_non_ascii_header_shuts_down_cleanly():
+    """A header line that is not ASCII raised a UnicodeDecodeError from
+    read_dap_message's header decode, same escape path as the body cases."""
+    input_stream = io.BytesIO(b"Content-Length: 2\r\nX-Junk: caf\xc3\xa9\r\n\r\n{}")
+    output_stream = io.BytesIO()
+    adapter = DapAdapter(input_stream, output_stream, _fake_launch_session)
+
+    adapter.run()  # must not raise
+
+    messages = _drain(output_stream)
+    assert any(m.get("event") == "output" for m in messages)
+
+
+def test_request_missing_command_gets_a_clean_failure_response():
+    """2026-08-12 audit Finding 7: _dispatch indexed request["command"]
+    before its try/except, so a request without one raised an uncaught
+    KeyError out of the loop."""
+    messages = _run_adapter([{"seq": 1, "type": "request"}])
+    assert messages[0]["type"] == "response"
+    assert messages[0]["success"] is False
+
+
+def test_request_missing_seq_gets_a_clean_failure_response():
+    """Finding 7's worse half: a failing handler's recovery path itself
+    indexed request["seq"] inside _send_response -- the code meant to
+    keep a malformed request from killing the session was what killed it."""
+    # No arguments -> _handle_setBreakpoints raises KeyError; the failure
+    # response must still be written even with no seq to echo.
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            {"type": "request", "command": "setBreakpoints"},
+        ]
+    )
+    failure = messages[-1]
+    assert failure["type"] == "response"
+    assert failure["success"] is False
+
+
+def test_stack_trace_before_new_session_stops_reports_no_frames():
+    """2026-08-12 audit Finding 9: a relaunch reset the session and
+    breakpoint numbers (F16) but not _current_stop, so a stackTrace sent
+    after the second launch and before the new session's first stop
+    synthesized a stack from the PREVIOUS session's stale stop location
+    instead of reporting no frames."""
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(2, "configurationDone", {}),  # first session stops
+            _request(3, "launch", {}),  # relaunch: no stop yet
+            _request(4, "stackTrace", {"threadId": 1}),
+        ]
+    )
+    stack_response = next(m for m in messages if m.get("command") == "stackTrace")
+    assert stack_response["success"] is True
+    assert stack_response["body"]["stackFrames"] == []
+
+
 def test_set_breakpoints_replaces_the_previous_set_for_that_source():
     """DAP setBreakpoints replaces ALL breakpoints for a source. gdb has
     no per-file clear, so the adapter must delete the numbers it inserted

@@ -26,6 +26,8 @@ pyproject's `[tool.setuptools.package-data]`.
 from __future__ import annotations
 
 import json
+import threading
+import time
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,6 +41,33 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+
+# Server-side probe coalescing (2026-08-12 audit Finding 19).
+# ThreadingHTTPServer spawns an unbounded thread per request, and one
+# probe shells out to docker up to four times with PROBE_TIMEOUT-bounded
+# calls -- against a slow daemon, a page polling every few seconds piles
+# up concurrent docker subprocesses without this. The lock keeps at most
+# one probe in flight; the short TTL collapses a burst of polls (and any
+# threads that queued on the lock behind the winner) into one docker
+# sweep. Well under the page's own poll interval, so the browser-facing
+# `Cache-Control: no-store` freshness contract is unaffected.
+_PROBE_CACHE_TTL = 2.0
+_probe_lock = threading.Lock()
+_probe_cache: tuple[float, dict[str, Any]] | None = None
+
+
+def _cached_probe() -> dict[str, Any]:
+    global _probe_cache
+    with _probe_lock:
+        if (
+            _probe_cache is not None
+            and time.monotonic() - _probe_cache[0] < _PROBE_CACHE_TTL
+        ):
+            return _probe_cache[1]
+        payload = status.probe().to_dict()
+        _probe_cache = (time.monotonic(), payload)
+        return payload
+
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -74,7 +103,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's API
         path = urlparse(self.path).path
         if path == "/api/status":
-            self._send_json(status.probe().to_dict())
+            self._send_json(_cached_probe())
             return
         target = resolve_static(path)
         if target is None:

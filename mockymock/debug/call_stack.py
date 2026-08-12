@@ -194,9 +194,22 @@ def synthesize_stack(
             location = session.resolve_address(address)
         except GdbCommandError:
             continue
+        # .get + explicit skip, not int(location["line"]): gdb can resolve
+        # an address it cannot attribute a source line to (library/PLT
+        # code), returning a location with no 'line' at all -- that slot
+        # is as unresolvable as a GdbCommandError and must be skipped the
+        # same way, not raise a KeyError that fails the whole request
+        # (2026-08-12 audit Finding 8).
+        raw_line = location.get("line")
+        if raw_line is None:
+            continue
+        try:
+            resolved_line = int(raw_line)
+        except ValueError:
+            continue
         frame = _resolve_frame(
             location.get("file", ""),
-            int(location["line"]),
+            resolved_line,
             line_map,
             generated_c_lines,
             paragraph_index,

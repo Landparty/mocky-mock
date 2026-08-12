@@ -836,6 +836,78 @@ def test_per_case_check_unknown_driver_side_thru_endpoint():
     assert any(r.code == "UNKNOWN_PARAGRAPH" for r in reasons)
 
 
+# Three sections in source order; the middle one holds an unmocked CALL.
+# A .cut `PERFORM ENTRY-SEC THRU CLEANUP-SEC` really executes all three by
+# fall-through under GnuCOBOL (the spliced driver emits the literal
+# PERFORM ... THRU), so the refusal gate must never model less than that.
+SECTION_THRU_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTHRU.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT          PIC X(10).
+
+       PROCEDURE DIVISION.
+       ENTRY-SEC SECTION.
+       ENTRY-PARA.
+           MOVE "START" TO WS-RESULT.
+
+       MIDDLE-SEC SECTION.
+       MIDDLE-PARA.
+           CALL "AUDITPGM" USING WS-RESULT.
+
+       CLEANUP-SEC SECTION.
+       CLEANUP-PARA.
+           MOVE "DONE" TO WS-RESULT.
+"""
+
+
+def test_per_case_check_refuses_section_seeded_driver_side_thru():
+    """2026-08-12 audit Finding 2: the driver-side THRU seed was guarded by
+    `start in by_name` -- built from paragraphs only -- so a test case's
+    own PERFORM naming a SECTION as its start silently skipped both the
+    range expansion and its fail-closed refusal, dropping `thru` entirely.
+    MIDDLE-SEC's unmocked CALL (really executed by the compiled driver's
+    fall-through) then produced a clean pass. The gate must refuse loudly
+    whenever either driver-side THRU endpoint names a section."""
+    result = parse_cobol(SECTION_THRU_SOURCE, filename="secthru.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    case = _case("ENTRY-SEC", call_names=(), perform_thru="CLEANUP-SEC")
+    reasons = check_test_case(surface, result.ast, case)
+    thru = [r for r in reasons if r.code == "UNSUPPORTED_PERFORM_THRU"]
+    assert len(thru) == 1
+    assert "SECTION" in thru[0].message
+
+
+def test_per_case_check_refuses_section_named_driver_side_thru_endpoint():
+    """Companion to the seed-side check: a paragraph-named start whose THRU
+    endpoint names a SECTION must also refuse with the section-specific
+    message, not the misleading 'not found in PROCEDURE DIVISION' one
+    (the section exists -- it is just not a paragraph)."""
+    result = parse_cobol(SECTION_THRU_SOURCE, filename="secthru.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    case = _case("ENTRY-PARA", call_names=(), perform_thru="CLEANUP-SEC")
+    reasons = check_test_case(surface, result.ast, case)
+    thru = [r for r in reasons if r.code == "UNSUPPORTED_PERFORM_THRU"]
+    assert len(thru) == 1
+    assert "SECTION" in thru[0].message
+
+
+def test_per_case_check_section_target_without_thru_still_allowed():
+    """Guard against over-refusing: PERFORMing a section with no THRU is
+    long-supported (the BFS expands its members) and must stay allowed --
+    the new refusal is scoped to THRU ranges only. MIDDLE-SEC is not
+    reached from ENTRY-SEC without the THRU, so no mock is needed."""
+    result = parse_cobol(SECTION_THRU_SOURCE, filename="secthru.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    case = _case("ENTRY-SEC", call_names=())
+    assert check_test_case(surface, result.ast, case) == []
+
+
 def test_expand_thru_range_refuses_unverifiable_order():
     """The runtime source-order guarantee: when ordering could not be
     verified (`ordered is None`, a parser-regression guard no real program

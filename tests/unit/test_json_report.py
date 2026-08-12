@@ -211,10 +211,22 @@ def test_orphan_ends_are_reported():
     assert report["orphanEnds"] == ["042"]
 
 
+def test_orphan_records_are_reported():
+    """2026-08-12 audit Finding 12: orphan_records was captured by
+    parse_stdout but surfaced in NO output format -- the one parsed-output
+    anomaly missing from this report's anomaly section."""
+    stdout = STDOUT_ALL_RUN + "__MOCKYMOCK__ RECORD 042 WS-TOTAL: 99.95\n"
+    report = _report(stdout)
+    assert report["orphanRecords"] == [
+        {"caseId": "042", "dataName": "WS-TOTAL", "value": "99.95"}
+    ]
+
+
 def test_no_anomalies_report_as_empty_lists():
     report = _report(STDOUT_ALL_RUN)
     assert report["duplicateCaseStarts"] == []
     assert report["orphanEnds"] == []
+    assert report["orphanRecords"] == []
 
 
 def test_summary_counts():

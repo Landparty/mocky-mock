@@ -156,10 +156,14 @@ def _docker(*args: str, timeout: int = 600) -> subprocess.CompletedProcess:
 _CONTAINER_INSPECT_FORMAT = "{{.State.Running}} {{.Config.Image}}"
 
 
-def _inspect_container() -> tuple[bool, str] | None:
+def _inspect_container(timeout: int = 30) -> tuple[bool, str] | None:
     """Return (running, image) for the toolchain container, or None if no
-    container with that name exists."""
-    state = _docker("inspect", "-f", _CONTAINER_INSPECT_FORMAT, CONTAINER, timeout=30)
+    container with that name exists. `timeout` is overridable so the
+    dashboard's read-only probe can enforce its own shorter PROBE_TIMEOUT
+    (2026-08-12 audit Finding 18)."""
+    state = _docker(
+        "inspect", "-f", _CONTAINER_INSPECT_FORMAT, CONTAINER, timeout=timeout
+    )
     if state.returncode != 0:
         return None
     running, _, image = state.stdout.strip().partition(" ")
@@ -174,7 +178,7 @@ def _start_container() -> None:
         )
 
 
-def _create_container() -> None:
+def _create_container(_recreate_on_stale: bool = True) -> None:
     WORK_ROOT.mkdir(parents=True, exist_ok=True)
     run = _docker(
         "run",
@@ -195,7 +199,33 @@ def _create_container() -> None:
         if "already in use" in run.stderr:
             found = _inspect_container()
             if found is not None:
-                running, _image = found
+                running, image = found
+                if image != IMAGE:
+                    # The race winner was a DIFFERENT installed version
+                    # (different Dockerfile/hardening flags -> different
+                    # content-hash tag). Adopting its container would
+                    # bypass the stale-image safeguard ensure_toolchain's
+                    # main path enforces (2026-08-12 audit Finding 17) --
+                    # remove and recreate once, same as that path.
+                    if not _recreate_on_stale:
+                        raise DockerNotAvailableError(
+                            f"container {CONTAINER} keeps reappearing with "
+                            f"image {image!r} (expected {IMAGE}) -- another "
+                            f"mockymock version is racing this one; retry "
+                            f"when it is done"
+                        )
+                    rm = _docker("rm", "-f", CONTAINER, timeout=60)
+                    if (
+                        rm.returncode != 0
+                        and "no such container" not in rm.stderr.lower()
+                    ):
+                        raise DockerNotAvailableError(
+                            f"container {CONTAINER} was created from image "
+                            f"{image!r} (expected {IMAGE}) and could not be "
+                            f"removed for recreation:\n{rm.stderr.strip()}"
+                        )
+                    _create_container(_recreate_on_stale=False)
+                    return
                 if running:
                     return
                 _start_container()
@@ -251,9 +281,10 @@ def ensure_toolchain() -> None:
         _start_container()
 
 
-def cobc_version() -> str:
-    """First line of `cobc --version` from inside the container."""
-    result = _docker("exec", CONTAINER, "cobc", "--version", timeout=30)
+def cobc_version(timeout: int = 30) -> str:
+    """First line of `cobc --version` from inside the container.
+    `timeout` is overridable for the dashboard probe (Finding 18)."""
+    result = _docker("exec", CONTAINER, "cobc", "--version", timeout=timeout)
     if result.returncode != 0:
         raise DockerNotAvailableError(
             f"could not query cobc inside {CONTAINER}:\n{result.stderr.strip()}"

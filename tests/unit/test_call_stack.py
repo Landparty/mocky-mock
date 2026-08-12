@@ -204,6 +204,56 @@ def test_synthesize_stack_skips_an_unresolvable_frame_without_failing_the_rest()
     assert stack[1].paragraph == "MAIN-PARA"
 
 
+def test_synthesize_stack_skips_a_frame_whose_location_has_no_line():
+    """2026-08-12 audit Finding 8: the F14 skip guard covered only the
+    GdbCommandError path -- _resolve_frame's `int(location["line"])` sat
+    OUTSIDE the try block, so a frame gdb can address but cannot attribute
+    a source line to (library/PLT code returns a location dict without
+    'line') raised an uncaught KeyError that aborted the entire stackTrace
+    request. Note the pre-fix asymmetry: `location.get("file", "")` one
+    argument earlier already used .get."""
+
+    class _NoLineFrameSession:
+        def __init__(self):
+            self.sent: list[str] = []
+
+        def send(self, command: str):
+            self.sent.append(command)
+            if command == "-data-evaluate-expression frame_ptr-frame_stack":
+                return [_done("2")]
+            if (
+                command == "-data-evaluate-expression (long)frame_stack[2]"
+                ".return_address_ptr"
+            ):
+                return [_done("140000000000000")]
+            if (
+                command == "-data-evaluate-expression (long)frame_stack[1]"
+                ".return_address_ptr"
+            ):
+                return [_done("94317603726646")]
+            raise AssertionError(f"unexpected command: {command!r}")
+
+        def resolve_address(self, address: int) -> dict:
+            if address == 140000000000000:
+                return {"file": "libcob.so"}  # no 'line': PLT/library code
+            return {"file": "fixture.c", "fullname": "/work/x/fixture.c", "line": "9"}
+
+    stack = synthesize_stack(
+        _NoLineFrameSession(),
+        _identity_line_map(),
+        build_generated_c_line_map(GENERATED_C_TEXT),
+        _spike_paragraph_index(),
+        current_file="/work/x/fixture.cbl",
+        current_line=20,
+    )
+
+    # Frame 0 (current) + the resolvable frame_stack[1] caller; the
+    # line-less frame_stack[2] slot is skipped, not fatal.
+    assert len(stack) == 2
+    assert stack[0].paragraph == "CALC-INTEREST"
+    assert stack[1].paragraph == "MAIN-PARA"
+
+
 def test_synthesize_stack_stops_at_zero_depth_with_only_the_current_frame():
     class _NoCallerSession(_FakeGdbSession):
         def send(self, command: str):
