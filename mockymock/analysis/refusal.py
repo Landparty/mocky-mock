@@ -18,10 +18,13 @@ Flow-edge model (fail closed):
   fall-through).
 - GO TO pushes every target -- a computed `GO TO A B C DEPENDING ON X`
   carries all of its targets in GoStatement.target_paragraphs. Targets may
-  be paragraphs or sections. (A GO TO that escapes its PERFORM range and
-  relies on falling through *past* its target paragraph is NOT a flow edge
-  the reachability BFS itself follows -- but the hazard it creates for
-  `find_terminator_plans` IS separately guarded: `_go_to_fallthrough_targets`
+  be paragraphs or sections. The BFS additionally closes over GO TO
+  fall-through (2026-08-12 bug review): every reached GO TO target is
+  walked forward through source order via `_falls_through`, and each
+  paragraph reachable by falling off one's end is fed back into the BFS to
+  a fixpoint -- without this, a boundary in a fallen-into paragraph passed
+  every mock gate and then executed unmocked at runtime. (The same hazard
+  for `find_terminator_plans` was already guarded: `_go_to_fallthrough_targets`
   walks source order forward from every GO TO target, via `_falls_through`,
   to find every paragraph reachable only by falling off the end of one --
   the same EXIT PARAGRAPH hazard spike #4 found for a direct GO TO target,
@@ -1554,6 +1557,19 @@ def _reachable_paragraphs(
     unreachable. Callers that feed the result to `MockSurface.sites_in`
     must subtract these names first.
 
+    The BFS additionally closes over the GO TO fall-through hazard
+    (2026-08-12 bug review): a reached GO TO target whose body does not
+    provably divert control (`_falls_through`) continues -- by ordinary
+    sequential execution, not a flow edge -- into the next paragraph in
+    source order, which therefore executes real statements (boundary
+    sites included) without any PERFORM/GO TO edge naming it. Before this
+    closure, a CALL/file-op/ACCEPT in such a paragraph passed every gate
+    unmocked and then executed for real at runtime. The closure is the
+    same fixpoint `union_executed_paragraphs` already applies for
+    warning-waiving, and it fails closed (refusal, never a silent skip)
+    when source order is unverifiable or a GO TO target cannot be
+    anchored in it.
+
     A PERFORM ... THRU pushes every paragraph of its source-order range
     (fall-through executes them all); `thru` seeds the BFS with the test
     case's own driver-side range, whose missing endpoints are the .cut
@@ -1636,58 +1652,118 @@ def _reachable_paragraphs(
             )
 
     seen: set[str] = set()
-    while stack:
-        name = stack.pop()
-        if name in seen:
-            continue
-        if name in skip_traversal:
-            # Flow-mocked for this case: reached, but its body is replaced
-            # by the mock dispatch -- never walk into it.
-            seen.add(name)
-            continue
-        if name not in by_name:
-            if name in section_members:
-                # A performed/jumped-to section executes every one of its
-                # paragraphs by fall-through.
-                seen.add(name)
-                stack.extend(section_members[name])
-            # else: only the driver-side seed can be unresolved here (every
-            # in-program edge was resolvability-checked before pushing);
-            # check_test_case reports it as UNKNOWN_PARAGRAPH.
-            continue
-        seen.add(name)
-        for statement in _find_flow_statements(by_name[name].statements):
-            if isinstance(statement, GoStatement):
-                targets = list(statement.target_paragraphs)
-                if not targets and statement.target_paragraph:
-                    targets = [statement.target_paragraph]
-                if not targets:
-                    reasons.append(
-                        RefusalReason(
-                            code="UNRESOLVED_FLOW_TARGET",
-                            message=(
-                                f"paragraph '{name}' (line "
-                                f"{statement.location.line}) contains a GO TO "
-                                f"whose target(s) the parser did not capture "
-                                f"-- fail closed"
-                            ),
-                        )
-                    )
-                for target in targets:
-                    push_target(target, name, "GO TO")
+    go_to_targets = _go_to_targets(program)
+    index_by_name = (
+        {p.paragraph_name: i for i, p in enumerate(ordered)} if ordered else {}
+    )
+    while True:
+        while stack:
+            name = stack.pop()
+            if name in seen:
                 continue
-            if statement.target_paragraph:
-                push_target(statement.target_paragraph, name, "PERFORM")
-                if statement.thru_paragraph:
-                    members, problem = _expand_thru_range(
-                        ordered,
-                        statement.target_paragraph,
-                        statement.thru_paragraph,
-                        f"paragraph '{name}'",
+            if name in skip_traversal:
+                # Flow-mocked for this case: reached, but its body is replaced
+                # by the mock dispatch -- never walk into it.
+                seen.add(name)
+                continue
+            if name not in by_name:
+                if name in section_members:
+                    # A performed/jumped-to section executes every one of its
+                    # paragraphs by fall-through.
+                    seen.add(name)
+                    stack.extend(section_members[name])
+                # else: only the driver-side seed can be unresolved here
+                # (every in-program edge was resolvability-checked before
+                # pushing); check_test_case reports it as UNKNOWN_PARAGRAPH.
+                continue
+            seen.add(name)
+            for statement in _find_flow_statements(by_name[name].statements):
+                if isinstance(statement, GoStatement):
+                    targets = list(statement.target_paragraphs)
+                    if not targets and statement.target_paragraph:
+                        targets = [statement.target_paragraph]
+                    if not targets:
+                        reasons.append(
+                            RefusalReason(
+                                code="UNRESOLVED_FLOW_TARGET",
+                                message=(
+                                    f"paragraph '{name}' (line "
+                                    f"{statement.location.line}) contains a "
+                                    f"GO TO whose target(s) the parser did "
+                                    f"not capture -- fail closed"
+                                ),
+                            )
+                        )
+                    for target in targets:
+                        push_target(target, name, "GO TO")
+                    continue
+                if statement.target_paragraph:
+                    push_target(statement.target_paragraph, name, "PERFORM")
+                    if statement.thru_paragraph:
+                        members, problem = _expand_thru_range(
+                            ordered,
+                            statement.target_paragraph,
+                            statement.thru_paragraph,
+                            f"paragraph '{name}'",
+                        )
+                        if problem is not None:
+                            reasons.append(problem)
+                        stack.extend(members)
+
+        # GO TO fall-through closure (see docstring): every reached GO TO
+        # target is walked forward through source order via _falls_through
+        # -- the same conservative predicate _go_to_fallthrough_targets and
+        # union_executed_paragraphs use -- and each paragraph reachable by
+        # falling off one's end is fed back into the BFS, to a fixpoint.
+        # `seen & go_to_targets` over-approximates (a paragraph both
+        # PERFORMed here and GO-TO'd elsewhere still triggers the walk),
+        # which is the fail-closed direction: at worst an extra required
+        # mock, never a silently executing unmocked boundary.
+        hazard_sources = seen & go_to_targets
+        if not hazard_sources:
+            break
+        if ordered is None:
+            reasons.append(
+                RefusalReason(
+                    code="UNRESOLVED_FLOW_TARGET",
+                    message=(
+                        "paragraph source order could not be verified, so "
+                        "the GO TO fall-through walk cannot run -- the "
+                        "reachable set cannot be trusted"
+                    ),
+                )
+            )
+            break
+        anchor_failed = False
+        additions: list[str] = []
+        for name in sorted(hazard_sources):
+            cursor = index_by_name.get(name)
+            if cursor is None:
+                section_paras = section_members.get(name)
+                cursor = index_by_name.get(section_paras[0]) if section_paras else None
+            if cursor is None:
+                # A GO TO target the walk cannot anchor (e.g. an empty
+                # section): the closure is incomplete, fail closed.
+                reasons.append(
+                    RefusalReason(
+                        code="UNRESOLVED_FLOW_TARGET",
+                        message=(
+                            f"GO TO target '{name}' cannot be anchored in "
+                            f"source order for the fall-through walk -- the "
+                            f"reachable set cannot be trusted"
+                        ),
                     )
-                    if problem is not None:
-                        reasons.append(problem)
-                    stack.extend(members)
+                )
+                anchor_failed = True
+                continue
+            while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
+                cursor += 1
+                fallen = ordered[cursor].paragraph_name
+                if fallen not in seen and fallen not in additions:
+                    additions.append(fallen)
+        if anchor_failed or not additions:
+            break
+        stack.extend(additions)
     return seen, reasons
 
 

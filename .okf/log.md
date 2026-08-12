@@ -1,5 +1,29 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-12 — Reachability BFS closed over GO TO fall-through (HIGH)
+
+Cross-repo bug review (cobol-parser + mocky-mock, same session). Found and
+fixed the one gap where the per-case mock gate under-approximated
+execution: `_reachable_paragraphs` stopped at a `GO TO` target, but the
+target's own body falls through — ordinary sequential execution, not a
+flow edge — into the next paragraph in source order whenever
+`_falls_through` can't prove it diverts. A `CALL`/file-op/`ACCEPT` in that
+fallen-into paragraph passed `lint`/`run` unmocked ("no problems found",
+exit 0), survived splicing verbatim, and executed for real. Three sibling
+models already agreed the paragraph executes (`union_executed_paragraphs`'
+closure, `_go_to_fallthrough_targets`' terminator guard, cobolparser's own
+`ProgramFlowAnalyzer` FALL_THROUGH edge) — only the safety-critical one
+didn't. The BFS now runs the same `_falls_through` fixpoint closure over
+every reached GO TO target, failing closed (`UNRESOLVED_FLOW_TARGET`) when
+source order is unverifiable or a target can't be anchored in it.
+[analysis.md](analysis.md)'s Gotcha claiming "no under-approximation
+results" was the documented misunderstanding that hid this; rewritten.
+Pinned by `tests/unit/test_refusal_goto_fallthrough.py` (6 tests: single
+hop, multi-paragraph chain, GOBACK stops the walk, gate refuses
+UNMOCKED_CALL, mocking the fallen CALL satisfies it, past-terminator
+paragraphs still need no mock). Full suite 1211 passed / 97 skipped /
+1 xfailed.
+
 ## 2026-08-12 — Audit remediation: 19 of the 20 findings fixed, TDD, at the pin
 
 Same-day follow-up to the audit below, in a session that DID have
