@@ -79,7 +79,14 @@ def read_dap_message(stream: IO[bytes]) -> dict | None:
         raw_line = stream.readline()
         if raw_line == b"":
             return None
-        line = raw_line.decode("ascii").rstrip("\r\n")
+        try:
+            line = raw_line.decode("ascii").rstrip("\r\n")
+        except UnicodeDecodeError as exc:
+            # Same unrecoverable-stream semantics as a bad Content-Length:
+            # a non-ASCII header byte means the framing can't be trusted
+            # (2026-08-12 audit Finding 6 -- this used to escape run()'s
+            # DapFramingError-only handling and kill the process).
+            raise DapFramingError(f"non-ASCII header line: {raw_line!r}") from exc
         if line == "":
             break
         name, _, value = line.partition(":")
@@ -94,7 +101,17 @@ def read_dap_message(stream: IO[bytes]) -> dict | None:
     if length is None or length <= 0:
         raise DapFramingError(f"malformed Content-Length header: {raw_length!r}")
     body = stream.read(length)
-    return json.loads(body.decode("utf-8"))
+    if len(body) < length:
+        # The client died mid-send: read() returned the short remainder
+        # without raising, and json.loads on the truncated prefix used to
+        # raise a JSONDecodeError past run()'s handling (Finding 6).
+        raise DapFramingError(
+            f"truncated body: expected {length} bytes, got {len(body)}"
+        )
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DapFramingError(f"unparseable message body: {exc}") from exc
 
 
 def write_dap_message(stream: IO[bytes], message: dict) -> None:
@@ -156,7 +173,11 @@ class DapAdapter:
             self._dispatch(message)
 
     def _dispatch(self, request: dict) -> None:
-        command = request["command"]
+        # .get, not [...]: a request with no command still deserves a
+        # failure response, not an uncaught KeyError out of run()'s loop
+        # (2026-08-12 audit Finding 7). The empty-string fallback can never
+        # collide with a real handler name.
+        command = request.get("command", "")
         handler = getattr(self, f"_handle_{command}", None)
         if handler is None:
             self._send_response(
@@ -211,12 +232,16 @@ class DapAdapter:
         body: dict | None = None,
         message: str | None = None,
     ) -> None:
+        # .get on both echoed fields: this method is also the recovery path
+        # for malformed requests (Finding 7) -- indexing request["seq"] here
+        # made the error handler itself the crash site when a request had a
+        # command but no seq. 0 is DAP's conventional "unknown seq".
         response = {
             "seq": self._next_seq(),
             "type": "response",
-            "request_seq": request["seq"],
+            "request_seq": request.get("seq", 0),
             "success": success,
-            "command": request["command"],
+            "command": request.get("command", ""),
         }
         if body is not None:
             response["body"] = body
@@ -250,6 +275,12 @@ class DapAdapter:
             self._session.gdb.close()
             self._session = None
             self._breakpoint_numbers = {}
+            # The stale stop position must go too: a stackTrace between
+            # this relaunch and the new session's first stop otherwise
+            # synthesizes frames from the PREVIOUS session's location
+            # against the new gdb (2026-08-12 audit Finding 9).
+            self._current_stop = None
+            self._breakpoint_original_file = ""
         try:
             self._session = self._launch_session(arguments)
         except (

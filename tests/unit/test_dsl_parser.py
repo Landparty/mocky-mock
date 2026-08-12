@@ -158,6 +158,50 @@ def test_move_unbalanced_paren_target_raises():
         parse_cut(text)
 
 
+# 2026-08-12 audit Finding 4: with NO space before the stray paren, the
+# _SUBSCRIPTED_NAME fragment's first alternative fails (no closing paren)
+# and the `\S+` fallback -- meant only for {Placeholder} tokens -- silently
+# swallowed the whole malformed token as one opaque name ('WS-TAB(1'),
+# producing a syntactically invalid COBOL target that only surfaced later
+# as a confusing cobc compile error. The spaced form above was already
+# covered; these no-space forms were the actual gap.
+@pytest.mark.parametrize("target", ["WS-TAB(1", "WS-TAB(1))"])
+def test_move_no_space_unbalanced_paren_target_raises(target):
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        f"    MOVE 100 TO {target}\n"
+        "    PERFORM MAIN\n"
+    )
+    with pytest.raises(CutParseError, match="unbalanced"):
+        parse_cut(text)
+
+
+@pytest.mark.parametrize("name", ["WS-X(1", "WS-X(1))"])
+def test_expect_no_space_unbalanced_paren_raises(name):
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        f"    EXPECT {name} TO BE 5\n"
+    )
+    with pytest.raises(CutParseError, match="unbalanced"):
+        parse_cut(text)
+
+
+def test_capture_no_space_unbalanced_paren_target_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL "SUBPGM"\n'
+        "        CAPTURE ARG 1 INTO WS-X(1\n"
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+    )
+    with pytest.raises(CutParseError, match="unbalanced"):
+        parse_cut(text)
+
+
 def test_testcase_before_testsuite_raises():
     with pytest.raises(CutParseError):
         parse_cut('TESTCASE "orphan"\nPERFORM X\n')

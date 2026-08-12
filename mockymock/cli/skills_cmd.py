@@ -46,9 +46,14 @@ def install_skill(target: Path, *, force: bool = False) -> None:
     local edits to a previously installed copy are never silently
     clobbered.
     """
-    if target.exists() and not force:
+    # is_symlink() is checked alongside exists() because exists() follows
+    # symlinks: a dangling symlink target (its referent gone) is still an
+    # occupied directory entry that copytree would crash on, and still the
+    # user's setup to protect (2026-08-12 audit Finding 5).
+    occupied = target.exists() or target.is_symlink()
+    if occupied and not force:
         raise SkillTargetExistsError(target)
-    if target.exists():
+    if occupied:
         # rmtree refuses a non-directory (a plain file, or a symlink even
         # when it points at a directory) -- unlink removes just the path
         # entry in both cases, without following a symlink into deleting

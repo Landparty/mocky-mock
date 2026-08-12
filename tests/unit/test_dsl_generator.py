@@ -240,3 +240,32 @@ def test_scaffold_suite_name_with_double_quote_stays_parseable():
     text = scaffold_cut('BAD"NAME', MockSurface())
     suite = parse_cut(text)
     assert suite.name == "BAD'NAME"
+
+
+def test_scaffold_skips_a_call_key_containing_a_double_quote():
+    """2026-08-12 audit Finding 20: _quote_safe protects TESTSUITE/TESTCASE
+    names but MOCK keys were interpolated raw, so a CALL literal containing
+    a double quote (legal via a single-quoted COBOL literal, `CALL 'AB"C'`)
+    scaffolded a .cut that parse_cut itself rejects. Substituting the quote
+    is no fix for a KEY -- the directive would silently stop matching its
+    site -- so the unrepresentable key is skipped like a key that never
+    parsed: run's refusal gate names the unmocked site loudly."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. QUOTEY.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMOUNT          PIC 9(5)V99.
+
+       PROCEDURE DIVISION.
+       PROCESS-ORDER.
+           CALL 'AB"C' USING WS-AMOUNT.
+           CALL "DISCRATE" USING WS-AMOUNT.
+"""
+    surface, _ast = _surface_and_ast(source)
+    text = scaffold_cut("QUOTEY", surface)
+    suite = parse_cut(text)  # must round-trip
+    keys = [m.key for case in suite.test_cases for m in case.mocks]
+    assert "DISCRATE" in keys
+    assert not any('"' in key for key in keys)

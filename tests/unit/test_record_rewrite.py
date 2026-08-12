@@ -93,6 +93,108 @@ def test_stub_whose_case_never_recorded_is_skipped_as_crashed():
     assert "crashed before reaching the record point" in report.skipped[0].reason
 
 
+def test_same_field_stub_recorded_twice_in_one_case_keeps_both_values():
+    """2026-08-12 audit Finding 10: build_recording_report collapsed a
+    case's recorded (name, value) pairs with dict(), so two stubs for the
+    SAME data-name in one TESTCASE (e.g. a counter captured before and
+    after a step) both silently got the LAST recorded value -- the earlier
+    golden was corrupted with no warning. Values must be consumed in
+    emission order, which is stub line order (record_targets is built by
+    appending stubs in scan order and the driver DISPLAYs in list order)."""
+    text = """\
+TESTSUITE "S"
+
+TESTCASE "calc"
+    PERFORM CALC-TOTALS
+    *> STUB EXPECT WS-COUNT -- before the second step
+    *> STUB EXPECT WS-COUNT -- after the second step
+"""
+    scan = _scan(text)
+    suite_result = _TestSuiteResult(
+        suite_name="S",
+        results=[
+            _TestResult(
+                case_id="001",
+                case_name="calc",
+                recorded=[("WS-COUNT", "1"), ("WS-COUNT", "2")],
+            )
+        ],
+    )
+    report = build_recording_report(scan, suite_result)
+    assert [(r.stub.line, r.value) for r in report.recorded] == [(5, "1"), (6, "2")]
+    assert report.skipped == []
+
+
+def test_more_stubs_than_recorded_values_skips_only_the_unmatched_tail():
+    """When the same-name queue runs dry (fewer recorded values than
+    stubs), only the surplus stubs are skipped -- the matched head keeps
+    its correct values."""
+    text = """\
+TESTSUITE "S"
+
+TESTCASE "calc"
+    PERFORM CALC-TOTALS
+    *> STUB EXPECT WS-COUNT -- first
+    *> STUB EXPECT WS-COUNT -- second, never recorded
+"""
+    scan = _scan(text)
+    suite_result = _TestSuiteResult(
+        suite_name="S",
+        results=[
+            _TestResult(
+                case_id="001",
+                case_name="calc",
+                recorded=[("WS-COUNT", "1")],
+            )
+        ],
+    )
+    report = build_recording_report(scan, suite_result)
+    assert [(r.stub.line, r.value) for r in report.recorded] == [(5, "1")]
+    assert len(report.skipped) == 1
+    assert report.skipped[0].line == 6
+
+
+def test_stub_with_only_an_orphan_record_is_skipped_with_the_real_reason():
+    """2026-08-12 audit Finding 12 (half of it): when a stub's RECORD
+    marker was parsed but could not be attributed to its case (an orphan
+    record), the skip used to claim the case 'crashed before reaching the
+    record point' -- the wrong diagnosis, with the right one sitting
+    discarded in orphan_records. The orphan here carries the stub's OWN
+    case id (the lost-START shape: the RECORD line parsed but no
+    TestResult exists for its id), so the match must fire."""
+    scan = _scan()
+    suite_result = _TestSuiteResult(
+        suite_name="S",
+        results=[],  # case 001's START never parsed
+        orphan_records=[("001", "WS-NET-TOTAL", "145.50")],
+    )
+    report = build_recording_report(scan, suite_result)
+    assert report.recorded == []
+    assert len(report.skipped) == 1
+    assert "unattributable" in report.skipped[0].reason
+    assert "crashed" not in report.skipped[0].reason
+
+
+def test_unrelated_orphan_record_does_not_hijack_a_crashed_case_diagnosis():
+    """Copilot review on PR #68: the first cut of the orphan-record match
+    keyed on data-name alone, so ANY orphan for that name -- even one
+    whose case id has nothing to do with this stub's case -- flipped a
+    legitimate 'crashed before reaching the record point' diagnosis to
+    the orphan reason. The match must key on (case_id, data_name)."""
+    scan = _scan()
+    suite_result = _TestSuiteResult(
+        suite_name="S",
+        # Case 001 really did start and crash before its record point...
+        results=[_TestResult(case_id="001", case_name="calc")],
+        # ...while an unrelated orphan for the same field name exists.
+        orphan_records=[("999", "WS-NET-TOTAL", "145.50")],
+    )
+    report = build_recording_report(scan, suite_result)
+    assert report.recorded == []
+    assert len(report.skipped) == 1
+    assert "crashed before reaching the record point" in report.skipped[0].reason
+
+
 def test_pre_existing_scan_skips_pass_through_unchanged():
     text = """\
 TESTSUITE "S"

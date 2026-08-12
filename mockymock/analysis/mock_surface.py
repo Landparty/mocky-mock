@@ -245,9 +245,11 @@ _NESTED_STATEMENT_ATTRS = (
     "invalid_key_clause",
     "not_invalid_key_clause",
     "at_eop_clause",
+    "not_at_eop_clause",
     "on_exception",
     "not_on_exception",
     "on_overflow",
+    "not_on_overflow",
     "on_size_error",
     "not_on_size_error",
 )

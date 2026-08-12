@@ -83,6 +83,42 @@ def test_all_passed_is_true_for_clean_run():
     assert parse_stdout(clean).all_passed is True
 
 
+def test_all_passed_is_false_when_a_case_shows_fail_despite_clean_summary():
+    """2026-08-12 audit Finding 1: all_passed was derived solely from the
+    driver's own SUMMARY FAILURES= counter, never cross-checked against the
+    per-case FAIL lines actually parsed. A COBOL program's own DISPLAY
+    output starting a line with the __MOCKYMOCK__ CASE ... FAIL: shape
+    (program-controlled data echoed to stdout -- no adversarial intent
+    needed) then produced exit code 0 while console/JUnit/JSON all rendered
+    that case as failed: an internally contradictory report whose dangerous
+    half (the exit code) is the only part CI ever looks at."""
+    contradictory = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: only case\n"
+        "__MOCKYMOCK__ CASE 001 FAIL: program-controlled text\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(contradictory)
+    assert suite.results[0].passed is False  # what the report renders
+    assert suite.all_passed is False  # the exit code must agree with it
+
+
+def test_all_passed_is_false_when_a_case_never_ended_despite_clean_summary():
+    """Companion to the cross-check above: a case whose START printed but
+    whose END never did is rendered [CRASH] by every formatter, so
+    all_passed must not report True for it even if a (spoofed or corrupt)
+    SUMMARY line claims FAILURES=0."""
+    truncated = (
+        "__MOCKYMOCK__ TESTSUITE: X\n"
+        "__MOCKYMOCK__ CASE 001 START: only case\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(truncated)
+    assert suite.results[0].crashed is True
+    assert suite.all_passed is False
+
+
 def test_format_console_lists_each_case_and_reasons():
     suite = parse_stdout(SAMPLE_STDOUT)
     output = format_console(suite)

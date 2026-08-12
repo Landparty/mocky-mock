@@ -66,33 +66,53 @@ def build_recording_report(
 
     `scan.stubs` only ever contains stubs whose case survived
     `--case`/`--tag` selection (the scanner is expected to run against the
-    post-filter suite -- see `scan_stub_expectations`), so the only reason
-    a stub's case-id has no matching recorded value here is that the case
+    post-filter suite -- see `scan_stub_expectations`), so a stub's
+    case-id having no matching recorded value here normally means the case
     started but crashed before reaching the record point (a `RECORD`
     marker, like `EXPECT`/`VERIFY` checks, is only ever printed after the
     case's own `PERFORM` returns -- a case that never gets there prints
-    none of its RECORD markers, not a partial set).
+    none of its RECORD markers, not a partial set). The one other cause is
+    a RECORD marker that parsed but could not be attributed to any case
+    (`suite_result.orphan_records`) -- reported with its own reason, not
+    the misleading crash one (2026-08-12 audit Finding 12).
+
+    Values are matched per (case, data-name) in emission order, NOT via a
+    name-keyed dict: two stubs for the same data-name in one TESTCASE
+    (e.g. a counter captured before and after a step) each consume their
+    own recorded value -- a dict collapse silently gave both stubs the
+    LAST value, corrupting the earlier golden (2026-08-12 audit Finding
+    10). Emission order is stub line order: `record_targets` is built by
+    appending stubs in scan order and the driver DISPLAYs in list order.
     """
-    recorded_by_case: dict[str, dict[str, str]] = {
-        result.case_id: dict(result.recorded) for result in suite_result.results
-    }
+    recorded_by_case: dict[str, dict[str, list[str]]] = {}
+    for result in suite_result.results:
+        queues = recorded_by_case.setdefault(result.case_id, {})
+        for name, value in result.recorded:
+            queues.setdefault(name, []).append(value)
+    # Keyed on (case_id, data_name), not data-name alone: an orphan
+    # record for an UNRELATED case id must not hijack a legitimate
+    # crashed-before-record diagnosis for this stub's own case (Copilot
+    # review on PR #68). The id-matching shape this catches is the
+    # lost-START one: the RECORD line parsed with this case's id, but no
+    # TestResult exists for that id to attach it to.
+    orphaned = {(case_id, name) for case_id, name, _ in suite_result.orphan_records}
 
     report = RecordingReport(skipped=list(scan.skipped))
     for stub in scan.stubs:
         case_id = f"{stub.case_index:03d}"
-        values = recorded_by_case.get(case_id, {})
-        if stub.data_name not in values:
-            report.skipped.append(
-                SkippedStub(
-                    stub.line,
-                    stub.data_name,
-                    "case crashed before reaching the record point",
+        queue = recorded_by_case.get(case_id, {}).get(stub.data_name)
+        if not queue:
+            if (case_id, stub.data_name) in orphaned:
+                reason = (
+                    "its RECORD marker was unattributable to any case "
+                    "(orphan record -- see the run's parsed output "
+                    "anomalies), not recorded for this one"
                 )
-            )
+            else:
+                reason = "case crashed before reaching the record point"
+            report.skipped.append(SkippedStub(stub.line, stub.data_name, reason))
             continue
-        report.recorded.append(
-            RecordedExpectation(stub=stub, value=values[stub.data_name])
-        )
+        report.recorded.append(RecordedExpectation(stub=stub, value=queue.pop(0)))
     return report
 
 

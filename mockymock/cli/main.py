@@ -391,7 +391,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     )
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
-    output_path.write_text(cut_text, encoding="utf-8")
+    # Unlike run's auxiliary report flags, this file IS the deliverable:
+    # a failed write is a failed command (same convention as export).
+    if not _write_report_file("generate", "-o/--output", str(output_path), cut_text):
+        return 1
     case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
     if bundle is not None:
@@ -1039,6 +1042,25 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
         return 1
 
     if args.list:
+        # --list never runs anything, so flags that only mean something
+        # for a real mutation run would be silently ignored -- refuse the
+        # combination instead (2026-08-12 audit Finding 16). --timeout is
+        # exempt only because argparse always materializes its default.
+        ignored = [
+            flag
+            for flag, value in (
+                ("--json-report", args.json_report),
+                ("--fail-under", args.fail_under),
+            )
+            if value is not None
+        ]
+        if ignored:
+            print(
+                f"mockymock mutate: --list only lists mutants and would "
+                f"ignore {', '.join(ignored)} -- drop --list to run the "
+                f"mutation suite, or drop the other flag(s)"
+            )
+            return 1
         mutants = generate_mutants(source_path.read_text(encoding="utf-8").splitlines())
         for mutant in mutants:
             print(f"line {mutant.line} [{mutant.operator}] {mutant.description}")
@@ -1073,10 +1095,16 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
 
     print(format_console(outcome))
     if args.json_report:
-        Path(args.json_report).write_text(
-            json.dumps(to_json_dict(outcome), indent=2) + "\n", encoding="utf-8"
-        )
-        print(f"mockymock mutate: wrote JSON report -> {args.json_report}")
+        # Same convention as run's report flags: an auxiliary report file
+        # that can't be written is reported cleanly, and the exit code
+        # stands on the mutation outcome itself.
+        if _write_report_file(
+            "mutate",
+            "--json-report",
+            args.json_report,
+            json.dumps(to_json_dict(outcome), indent=2) + "\n",
+        ):
+            print(f"mockymock mutate: wrote JSON report -> {args.json_report}")
 
     score = outcome.score
     if args.fail_under is not None:
@@ -1749,6 +1777,16 @@ def build_parser() -> argparse.ArgumentParser:
         "skills", help="Manage the packaged Claude Code skill for mockymock"
     )
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command")
+
+    # Bare `mockymock skills` (no subcommand) must print THIS parser's
+    # usage, not fall through to main()'s top-level-help fallback -- the
+    # user typed a valid subcommand and needs its own options, not all
+    # twelve commands (2026-08-12 audit Finding 14).
+    def _cmd_skills_help(args: argparse.Namespace) -> int:
+        skills_parser.print_help()
+        return 1
+
+    skills_parser.set_defaults(func=_cmd_skills_help)
     skills_install_parser = skills_subparsers.add_parser(
         "install",
         help=(

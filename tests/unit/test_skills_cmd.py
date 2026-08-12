@@ -74,3 +74,25 @@ def test_install_skill_force_overwrites_a_plain_file_target(tmp_path):
     install_skill(target, force=True)
     assert target.is_dir()
     assert (target / "SKILL.md").is_file()
+
+
+def test_install_skill_refuses_dangling_symlink_target_without_force(tmp_path):
+    # 2026-08-12 audit Finding 5: Path.exists() follows symlinks, so a
+    # dangling symlink (e.g. left behind by a moved skill checkout) looked
+    # absent to both the refusal and the removal branch, and copytree then
+    # crashed with a raw FileExistsError regardless of --force. The entry
+    # exists on disk and is the user's setup: refuse without force.
+    target = tmp_path / "dest"
+    target.symlink_to(tmp_path / "no" / "such" / "path")
+    with pytest.raises(SkillTargetExistsError) as exc_info:
+        install_skill(target)
+    assert exc_info.value.target == target
+    assert target.is_symlink()  # left untouched
+
+
+def test_install_skill_force_replaces_a_dangling_symlink_target(tmp_path):
+    target = tmp_path / "dest"
+    target.symlink_to(tmp_path / "no" / "such" / "path")
+    install_skill(target, force=True)
+    assert not target.is_symlink()
+    assert (target / "SKILL.md").is_file()

@@ -115,7 +115,7 @@ def _probe_container() -> tuple[Check, bool]:
     label = "Toolchain container"
     name = docker_toolchain.CONTAINER
     try:
-        found = docker_toolchain._inspect_container()
+        found = docker_toolchain._inspect_container(timeout=PROBE_TIMEOUT)
     except DockerNotAvailableError as exc:
         return Check("container", label, DOWN, str(exc)), False
     if found is None:
@@ -156,7 +156,7 @@ def _probe_cobc(container_usable: bool) -> tuple[Check, str | None]:
     if not container_usable:
         return Check("cobc", label, UNKNOWN, "container not running"), None
     try:
-        version = docker_toolchain.cobc_version()
+        version = docker_toolchain.cobc_version(timeout=PROBE_TIMEOUT)
     except DockerNotAvailableError as exc:
         # Container is up but cobc is broken inside the image.
         return Check("cobc", label, DOWN, str(exc)), None

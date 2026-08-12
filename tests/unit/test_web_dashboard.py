@@ -143,6 +143,31 @@ def test_probe_never_mutates_the_toolchain():
     assert not [args for args in calls if args and args[0] in mutating]
 
 
+def test_every_probe_docker_call_is_bounded_by_probe_timeout():
+    """2026-08-12 audit Finding 18: _probe_container/_probe_cobc reused
+    docker_toolchain helpers whose timeout was hardcoded at 30s with no
+    override, so the documented 15s PROBE_TIMEOUT ceiling only actually
+    bounded two of the four checks -- one degraded-daemon poll could block
+    ~90s, six times the per-check bound the module docstring promises."""
+    seen_timeouts = []
+    real_docker = docker_toolchain._docker
+
+    def record(*args, timeout=None):
+        seen_timeouts.append(timeout)
+        if args[:2] == ("inspect", "-f"):
+            return _completed(stdout=f"true {docker_toolchain.IMAGE}\n")
+        if args[0] == "exec":
+            return _completed(stdout="cobc (GnuCOBOL) 3.2.0\n")
+        return _completed()
+
+    del real_docker  # only the recorder runs; nothing shells out
+    with mock.patch.object(docker_toolchain, "_docker", side_effect=record):
+        result = status.probe()
+
+    assert result.ready is True
+    assert seen_timeouts == [status.PROBE_TIMEOUT] * 4
+
+
 def test_to_dict_is_json_serializable_with_the_agreed_keys():
     payload = status.ToolchainStatus(
         ready=True,
@@ -202,6 +227,15 @@ def test_resolve_static_refuses_traversal_and_misses(path):
 # --- server -----------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _fresh_probe_cache():
+    """The probe-coalescing cache is module-global; a payload cached by
+    one test must never satisfy another test's request."""
+    server._probe_cache = None
+    yield
+    server._probe_cache = None
+
+
 @pytest.fixture
 def dashboard():
     """A dashboard bound to an ephemeral port, torn down after the test."""
@@ -214,6 +248,27 @@ def dashboard():
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+def test_api_status_coalesces_a_burst_of_polls_into_one_probe(dashboard):
+    """2026-08-12 audit Finding 19: ThreadingHTTPServer spawns an
+    unbounded thread per request and each probe shells out to docker up
+    to four times; a polling page against a slow daemon piled up
+    concurrent docker subprocesses. Requests inside the short TTL window
+    must be served from the coalescing cache -- exactly one probe runs."""
+    fake = status.ToolchainStatus(
+        ready=True,
+        checked_at="2026-08-03T00:00:00+00:00",
+        image="img",
+        container="ctr",
+        cobc_version="cobc 3.2.0",
+        checks=(status.Check("daemon", "Docker daemon", status.OK, "reachable"),),
+    )
+    with mock.patch.object(status, "probe", return_value=fake) as probe:
+        for _ in range(3):
+            code, _, _ = _get(f"{dashboard}/api/status")
+            assert code == 200
+    assert probe.call_count == 1
 
 
 def _get(url):

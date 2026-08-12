@@ -44,6 +44,110 @@ def test_generate_circular_copybook_reports_a_problem_instead_of_raising(
     assert "Circular copybook dependency" in out
 
 
+def test_generate_bad_output_dir_reports_cleanly(tmp_path, capsys):
+    """2026-08-12 audit Finding 13: generate's -o write was a bare
+    write_text with no guard -- a bad parent directory raised a raw
+    OSError traceback after a full parse+analyze pass, unlike run/export
+    whose writes route through _write_report_file."""
+    cbl = tmp_path / "TERMDEMO.cbl"
+    cbl.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. TERMDEMO.\n"
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       0000-MAIN-PROCESS.\n"
+        "           STOP RUN.\n"
+    )
+    bad_target = tmp_path / "no" / "such" / "dir" / "out.cut"
+    exit_code = main(["generate", str(cbl), "-o", str(bad_target)])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "could not write" in out
+    assert str(bad_target) in out
+
+
+def test_mutate_bad_json_report_dir_reports_cleanly(tmp_path, capsys, monkeypatch):
+    """Finding 13's mutate half: --json-report was a bare write_text; a
+    bad parent directory raised a raw traceback AFTER a full (potentially
+    multi-minute) mutation run. Like run's report flags, a failed
+    auxiliary write must not flip an otherwise-clean outcome's exit code."""
+    import mockymock.mutation.runner as runner
+    from mockymock.mutation.operators import Mutant
+    from mockymock.mutation.report import MutantResult, MutationOutcome
+
+    mutant = Mutant(
+        line=6,
+        operator="move-literal",
+        original="           MOVE 1 TO WS-X.",
+        mutated="           MOVE 2 TO WS-X.",
+        description="MOVE literal changed",
+    )
+    outcome = MutationOutcome(
+        program="P.cbl",
+        cut="P.cut",
+        results=[MutantResult(mutant=mutant, status="killed", detail="")],
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_mutation",
+        lambda *args, **kwargs: ([], outcome, []),
+    )
+    cbl = tmp_path / "P.cbl"
+    cbl.write_text("           MOVE 1 TO WS-X.\n")
+    cut = tmp_path / "P.cut"
+    cut.write_text('TESTSUITE "s"\n')
+    bad_target = tmp_path / "no" / "such" / "dir" / "report.json"
+    exit_code = main(
+        [
+            "mutate",
+            str(cbl),
+            "--cut",
+            str(cut),
+            "--json-report",
+            str(bad_target),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert "could not write" in out
+    assert exit_code == 0  # outcome was clean; the report file is auxiliary
+
+
+def test_skills_without_subcommand_prints_skills_usage(capsys):
+    """2026-08-12 audit Finding 14: `mockymock skills` used to print the
+    full top-level help (all subcommands) because only skills install set
+    a func default."""
+    exit_code = main(["skills"])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "install" in out
+    # The top-level subcommand list must NOT be what got printed.
+    assert "mutate" not in out
+
+
+def test_mutate_list_refuses_flags_it_would_silently_ignore(tmp_path, capsys):
+    """2026-08-12 audit Finding 16: --list returned before --json-report/
+    --fail-under were ever read, silently ignoring them."""
+    cbl = tmp_path / "P.cbl"
+    cbl.write_text("           MOVE 1 TO WS-X.\n")
+    cut = tmp_path / "P.cut"
+    cut.write_text('TESTSUITE "s"\n')
+    exit_code = main(
+        [
+            "mutate",
+            str(cbl),
+            "--cut",
+            str(cut),
+            "--list",
+            "--json-report",
+            str(tmp_path / "r.json"),
+        ]
+    )
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "--list" in out
+    assert "--json-report" in out
+
+
 # --- mockymock lint -------------------------------------------------------
 
 from pathlib import Path

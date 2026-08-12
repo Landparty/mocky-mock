@@ -253,6 +253,13 @@ def _directive_for(
             # refusal gate will name the unmocked site.
             return None
         key = site.keys[0]
+        if '"' in key:
+            # The .cut grammar cannot represent a quote inside a quoted
+            # key, and _quote_safe's substitution is no fix for a KEY --
+            # the directive would silently stop matching its site. Skip
+            # it like an unparsed key: run's refusal gate names the
+            # unmocked site loudly (2026-08-12 audit Finding 20).
+            return None
         keyword = "MQ" if site.is_mq else "CALL"
         return f'MOCK {keyword} "{key}"', _placeholder_body_for(category, key)
 
@@ -278,6 +285,11 @@ def _directive_for(
     # that is unique among the program's sites of the same category, so the
     # scaffold never generates an AMBIGUOUS_MOCK pair.
     prefix = _unique_prefix(site, surface)
+    if '"' in prefix:
+        # Same unrepresentable-quote skip as the CALL branch above: an
+        # EXEC statement whose unique prefix runs into a string literal
+        # containing a double quote cannot be written as a quoted key.
+        return None
     return f'MOCK {category.value} "{prefix}"', _placeholder_body_for(category, prefix)
 
 
@@ -338,11 +350,21 @@ def _mockymock_boundary_keys(
         if site.category is None or (site.nested and site.span is None):
             continue
         if site.category in EXEC_CATEGORIES:
-            pair = (site.category, _unique_prefix(site, surface))
+            prefix = _unique_prefix(site, surface)
+            if '"' in prefix:
+                # Unrepresentable in the .cut grammar (see _directive_for's
+                # quote skip) -- excluding it here makes the bundle path
+                # degrade through the existing loud machinery: the key
+                # shows up "only in the fixture bundle" in
+                # _warn_on_key_mismatch and is left unmocked.
+                continue
+            pair = (site.category, prefix)
             if pair not in keys:
                 keys[pair] = site
             continue
         for key in site.keys:
+            if site.category is MockCategory.CALL and '"' in key:
+                continue  # same unrepresentable-quote skip as above
             pair = (site.category, key)
             if pair not in keys:
                 keys[pair] = site

@@ -9,6 +9,7 @@ import pytest
 
 from mockymock.dsl.fixture_bundle import (
     SUPPORTED_BUNDLE_VERSION,
+    MalformedBundleError,
     UnsupportedBundleVersionError,
     load_fixture_bundle,
     load_fixture_bundle_file,
@@ -164,6 +165,45 @@ def test_missing_bundle_version_raises():
 
 def test_supported_bundle_version_constant_matches_current_schema():
     assert SUPPORTED_BUNDLE_VERSION == 1
+
+
+# 2026-08-12 audit Finding 15: every required-field access was a bare
+# data["key"], so a right-versioned but otherwise malformed bundle raised a
+# raw KeyError (and non-JSON text a raw JSONDecodeError) with no typed-error
+# contract at all -- masked only by the one CLI call site's blanket
+# `except Exception`. Any other caller got the traceback.
+
+
+def test_missing_required_top_level_key_raises_malformed():
+    bad = dict(MINIMAL_BUNDLE)
+    del bad["seed"]
+    with pytest.raises(MalformedBundleError, match="seed"):
+        load_fixture_bundle(bad)
+
+
+def test_scenario_missing_required_key_raises_malformed():
+    bad = dict(MINIMAL_BUNDLE, scenarios=[{"entry": "MAIN-PARA"}])
+    with pytest.raises(MalformedBundleError, match="name"):
+        load_fixture_bundle(bad)
+
+
+def test_fixture_missing_required_key_raises_malformed():
+    bad = dict(
+        MINIMAL_BUNDLE,
+        scenarios=[{"name": "s", "fixtures": [{"category": "CALL", "key": "X"}]}],
+    )
+    with pytest.raises(MalformedBundleError, match="direction"):
+        load_fixture_bundle(bad)
+
+
+def test_invalid_json_text_raises_malformed():
+    with pytest.raises(MalformedBundleError, match="not valid JSON"):
+        parse_fixture_bundle("{not json")
+
+
+def test_non_object_json_raises_malformed():
+    with pytest.raises(MalformedBundleError):
+        parse_fixture_bundle('["a", "list"]')
 
 
 def test_parse_fixture_bundle_from_json_text():
