@@ -89,14 +89,20 @@ def build_recording_report(
         queues = recorded_by_case.setdefault(result.case_id, {})
         for name, value in result.recorded:
             queues.setdefault(name, []).append(value)
-    orphaned_names = {name for _, name, _ in suite_result.orphan_records}
+    # Keyed on (case_id, data_name), not data-name alone: an orphan
+    # record for an UNRELATED case id must not hijack a legitimate
+    # crashed-before-record diagnosis for this stub's own case (Copilot
+    # review on PR #68). The id-matching shape this catches is the
+    # lost-START one: the RECORD line parsed with this case's id, but no
+    # TestResult exists for that id to attach it to.
+    orphaned = {(case_id, name) for case_id, name, _ in suite_result.orphan_records}
 
     report = RecordingReport(skipped=list(scan.skipped))
     for stub in scan.stubs:
         case_id = f"{stub.case_index:03d}"
         queue = recorded_by_case.get(case_id, {}).get(stub.data_name)
         if not queue:
-            if stub.data_name in orphaned_names:
+            if (case_id, stub.data_name) in orphaned:
                 reason = (
                     "its RECORD marker was unattributable to any case "
                     "(orphan record -- see the run's parsed output "

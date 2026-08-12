@@ -159,18 +159,40 @@ def test_stub_with_only_an_orphan_record_is_skipped_with_the_real_reason():
     marker was parsed but could not be attributed to its case (an orphan
     record), the skip used to claim the case 'crashed before reaching the
     record point' -- the wrong diagnosis, with the right one sitting
-    discarded in orphan_records."""
+    discarded in orphan_records. The orphan here carries the stub's OWN
+    case id (the lost-START shape: the RECORD line parsed but no
+    TestResult exists for its id), so the match must fire."""
     scan = _scan()
     suite_result = _TestSuiteResult(
         suite_name="S",
-        results=[_TestResult(case_id="001", case_name="calc")],
-        orphan_records=[("999", "WS-NET-TOTAL", "145.50")],
+        results=[],  # case 001's START never parsed
+        orphan_records=[("001", "WS-NET-TOTAL", "145.50")],
     )
     report = build_recording_report(scan, suite_result)
     assert report.recorded == []
     assert len(report.skipped) == 1
     assert "unattributable" in report.skipped[0].reason
     assert "crashed" not in report.skipped[0].reason
+
+
+def test_unrelated_orphan_record_does_not_hijack_a_crashed_case_diagnosis():
+    """Copilot review on PR #68: the first cut of the orphan-record match
+    keyed on data-name alone, so ANY orphan for that name -- even one
+    whose case id has nothing to do with this stub's case -- flipped a
+    legitimate 'crashed before reaching the record point' diagnosis to
+    the orphan reason. The match must key on (case_id, data_name)."""
+    scan = _scan()
+    suite_result = _TestSuiteResult(
+        suite_name="S",
+        # Case 001 really did start and crash before its record point...
+        results=[_TestResult(case_id="001", case_name="calc")],
+        # ...while an unrelated orphan for the same field name exists.
+        orphan_records=[("999", "WS-NET-TOTAL", "145.50")],
+    )
+    report = build_recording_report(scan, suite_result)
+    assert report.recorded == []
+    assert len(report.skipped) == 1
+    assert "crashed before reaching the record point" in report.skipped[0].reason
 
 
 def test_pre_existing_scan_skips_pass_through_unchanged():
