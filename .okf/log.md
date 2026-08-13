@@ -1,5 +1,30 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-13 — Reworded the four GO TO/fall-through `UNSUPPORTED_TERMINATOR_LAYOUT` messages
+
+A user hit the `chain_fallthrough_names` refusal on `examples/real-world/
+INTCALC/INTCALC.cbl` (its `GO TO 2200-EXIT` early-exit idiom falls through
+past `2200-EXIT` into `3000-FINALIZE`) and, from the message alone, read it
+as a mockymock limitation rather than a property of the COBOL. The old
+wording was mechanism-first ("early-exit propagation chain", "EXIT
+PARAGRAPH only works correctly when...") — accurate, but it explains
+mockymock's own transform internals before ever saying what's true about
+the user's source.
+
+Reworded all four `problem` strings in `find_terminator_plans`
+(`analysis/refusal.py`, the `go_to_targets`/`go_to_fallthrough`/
+`chain_go_to_names`/`chain_fallthrough_names` branches, ~lines 2236-2292):
+now leads with "is unsafe to test automatically" + which paragraph is a GO
+TO target (or is reached by falling through past one), and ends with a
+concrete remediation hint — replace the named `GO TO <target>` with `EXIT
+PARAGRAPH` when it exists purely as an early exit. `RefusalReason`'s shape
+(`code`, `message`) is unchanged — this is a content-only edit, so nothing
+downstream (JSON report, JUnit, VS Code diagnostics) needed touching.
+Verified no test asserts on the old exact substrings (only `.code` is
+checked); full `tests/unit/test_terminators.py` (32) still green. Did not
+extend this framing to other `UNSUPPORTED_*` refusal families in this
+pass — flagged as a natural follow-up, not done here.
+
 ## 2026-08-13 — Test-coverage follow-up: `run` reports on failure, `--timeout`, one new fixture-bundle gap
 
 Requested test-coverage analysis, then asked to implement a scoped subset
