@@ -1,6 +1,7 @@
 """CLI behavior around the Docker toolchain, with the toolchain mocked --
 these tests must pass without Docker installed."""
 
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -764,3 +765,162 @@ def test_keep_sandbox_retains_the_directory_after_a_clean_run(tmp_path):
     dirs = _sandbox_dirs(tmp_path)
     assert len(dirs) == 1
     assert (dirs[0] / "ORDRPROC.cbl").exists()
+
+
+# --- report files on refusal/compile failure (carried-over open item,
+# 2026-08-10 audit) -----------------------------------------------------
+#
+# Before this, a refusal or a compile failure returned exit 1 with the
+# --junit-xml/--json-report target left untouched -- a CI pipeline that
+# always publishes whatever that path holds saw "no test results found"
+# instead of a visible failure.
+
+
+def test_run_writes_junit_xml_and_json_report_on_refusal(tmp_path, capsys):
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    # PERFORMs into the CALL but never MOCKs it -> UNMOCKED_CALL refusal,
+    # raised before ensure_toolchain is ever reached.
+    cut.write_text(
+        'TESTSUITE "ORDRPROC"\n\n'
+        'TESTCASE "calls discrate"\n'
+        "    PERFORM PROCESS-ORDER\n"
+    )
+    junit_path = tmp_path / "report.xml"
+    json_path = tmp_path / "report.json"
+    with mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain") as ensure:
+        exit_code = main(
+            [
+                "run",
+                str(program),
+                "--cut",
+                str(cut),
+                "--junit-xml",
+                str(junit_path),
+                "--json-report",
+                str(json_path),
+            ]
+        )
+    assert exit_code == 1
+    ensure.assert_not_called()
+    out = capsys.readouterr().out
+    assert "refused" in out
+
+    xml_text = junit_path.read_text()
+    assert 'testsuite name="ORDRPROC"' in xml_text
+    assert 'failures="1"' in xml_text
+    assert "refused" in xml_text
+
+    report = json.loads(json_path.read_text())
+    assert report["suite"]["name"] == "ORDRPROC"
+    assert report["cases"][0]["status"] == "failed"
+    assert "refused" in report["cases"][0]["failures"][0]["message"]
+
+
+def test_run_writes_junit_xml_and_json_report_on_compile_failure(tmp_path, capsys):
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+
+    def failing_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
+        return CompileResult(
+            success=False,
+            binary_path=None,
+            stdout="",
+            stderr="cobc: error: syntax error, unexpected DISCRATE\n",
+        )
+
+    junit_path = tmp_path / "report.xml"
+    json_path = tmp_path / "report.json"
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=failing_compile,
+        ),
+    ):
+        exit_code = main(
+            [
+                "run",
+                str(program),
+                "--cut",
+                str(cut),
+                "--junit-xml",
+                str(junit_path),
+                "--json-report",
+                str(json_path),
+            ]
+        )
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "compile failed" in out
+
+    xml_text = junit_path.read_text()
+    assert 'testsuite name="ORDRPROC"' in xml_text
+    assert "syntax error" in xml_text
+
+    report = json.loads(json_path.read_text())
+    assert report["suite"]["name"] == "ORDRPROC"
+    assert "syntax error" in report["cases"][0]["failures"][0]["message"]
+
+
+def test_run_without_report_flags_does_not_touch_the_filesystem_on_refusal(
+    tmp_path, capsys
+):
+    """No --junit-xml/--json-report given -> nothing new is written; the
+    helper must not assume either flag is set."""
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text('TESTSUITE "ORDRPROC"\n\nTESTCASE "calls discrate"\n')
+    before = set(tmp_path.iterdir())
+    exit_code = main(["run", str(program), "--cut", str(cut)])
+    assert exit_code == 1
+    assert set(tmp_path.iterdir()) == before
+
+
+# --- run --timeout (mirrors mutate's own flag; F18-adjacent carried-over
+# open item, 2026-08-10 audit: `run` had no way to shorten or lengthen the
+# 30s default a hung mocked CALL is bound by) ----------------------------
+
+
+def test_run_timeout_defaults_to_30_seconds():
+    from mockymock.cli.main import build_parser
+
+    args = build_parser().parse_args(["run", "P.cbl", "--cut", "P.cut"])
+    assert args.timeout == 30
+
+
+def test_run_passes_timeout_flag_through_to_run_binary(tmp_path):
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=fake_compile,
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
+        ) as run_binary,
+    ):
+        exit_code = main(["run", str(program), "--cut", str(cut), "--timeout", "5"])
+    assert exit_code == 0
+    assert run_binary.call_args.kwargs["timeout_seconds"] == 5

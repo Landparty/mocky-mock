@@ -1,5 +1,69 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-13 — Test-coverage follow-up: `run` reports on failure, `--timeout`, one new fixture-bundle gap
+
+Requested test-coverage analysis, then asked to implement a scoped subset
+of its own recommendations (CI coverage measurement turned out to already
+be wired up via `pyproject.toml`'s `[tool.pytest.ini_options]` addopts
+--cov-fail-under=83`, contradicting the analysis's own claim — corrected,
+no change needed there). Environment had neither Docker nor a usable
+`cobolparser` install (`add_repo` for the `Landparty/cobol-parser` sibling
+returned an approval error this session couldn't grant itself — same
+constraint the 2026-08-01/2026-08-12 audits hit); CLI-level changes were
+verified by direct unit-level exercise of the touched functions plus
+manual code tracing, not a live `pytest tests/` run — the ~26 test files
+that import cobolparser at module level fail to collect here, same as
+those audits.
+
+- **`_write_failure_reports`** (new helper, `cli/main.py`): `mockymock
+  run`'s `--junit-xml`/`--json-report` now get written on a static refusal
+  or a compile failure too, not just a run that reached execution — a
+  carried-over open item from the 2026-08-10 audit ("No report written on
+  refusal/compile-failure exit"). Builds one synthetic `TestResult`
+  standing in for the whole run and reuses the existing
+  `format_junit_xml`/`build_json_report` formatters rather than a bespoke
+  shape. Tests in `tests/unit/test_cli_docker.py`.
+- **`run --timeout S`** (default 30, mirrors `mutate`'s own flag): threads
+  into `docker_toolchain.run_binary(timeout_seconds=...)` — previously
+  only `mutate` could shorten/lengthen the bound a hung mocked CALL is
+  killed by. Test in `tests/unit/test_cli_docker.py`.
+- **`dsl/fixture_bundle.py`: `load_fixture_bundle` rejected a non-dict
+  argument with a raw `AttributeError`, not `MalformedBundleError`** — a
+  genuinely new gap, found while building a malformed-input regression
+  sweep (`tests/unit/test_malformed_input_sweep.py`), in the same class as
+  the 2026-08-12 audit's Finding 15 but missed by it: `data.get(...)` ran
+  one line before that fix's try/except block, so was invisible to it.
+  `parse_fixture_bundle` (the JSON-text entry point) already guarded
+  non-dict JSON, but `load_fixture_bundle` is itself public and called
+  directly by `cli/main.py`'s `--with-data` path — a future caller (or a
+  misbehaving cobolparser version) handing it a non-dict would still have
+  hit the raw traceback. Fixed with an `isinstance` check at the top of
+  the function, matching `parse_fixture_bundle`'s own message wording.
+  Regression test in `test_fixture_bundle.py`.
+- **`tests/unit/test_report.py`**: two new regression tests pin Finding
+  11 (deferred, 2026-08-12 audit — the stdout protocol has no escaping, so
+  a raw newline in a RECORD/FAIL marker's value truncates it at the
+  newline) as documented, unchanging behavior, so a future protocol-level
+  escaping fix has a red test to turn green.
+- **`tests/unit/test_malformed_input_sweep.py`** (new file): a standing,
+  parametrized "garbage input must never surface an untyped exception"
+  net for `dsl.parser.parse_cut` (always `CutParseError`) and
+  `report.results.parse_stdout` (never raises at all) — both already had
+  extensive per-shape coverage elsewhere; this file's value is a single
+  discoverable place checking the CONTRACT itself against a wide
+  adversarial battery (binary/control bytes, BOM prefixes, pathological
+  repetition, oversized fields) rather than only named shapes.
+
+Deliberately NOT done this pass (scoped out with the requester up front):
+bounding `docker_toolchain.run_binary`'s in-memory stdout/stderr capture
+(the remaining "resource/robustness" item — reworking it to a streaming
+Popen-based read with a size cap needs live-Docker verification this
+session didn't have, and the existing `test_run_binary_*` tests mock
+`subprocess.run` in a way a streaming rewrite would have to invasively
+change); the large-program-scale test; splitting `cli/main.py`/
+`refusal.py`; and extending Docker/GnuCOBOL verification to
+non-Linux CI runners.
+
 ## 2026-08-12 — Reachability BFS closed over GO TO fall-through (HIGH)
 
 Cross-repo bug review (cobol-parser + mocky-mock, same session). Found and

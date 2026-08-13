@@ -3,7 +3,7 @@ type: Test Suite
 title: Testing
 description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, FLOWMOCK, TAXFILE, STATELKUP, REGNAVG, CPYPROC, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-08-11T00:00:00Z
+timestamp: 2026-08-13T00:00:00Z
 ---
 # Overview
 
@@ -14,7 +14,7 @@ Two-tier split under `tests/`:
 | Unit | `tests/unit/` | DSL parser/generator, splicer, orchestrator, naming, refusal rules, SQLCA, sandbox, source maps, reporting -- all in-process, no compiler | No |
 | Integration | `tests/integration/` | Full pipeline: parse -> splice -> compile with real GnuCOBOL (in Docker) -> run -> assert exit code | Yes (skipped otherwise) |
 
-Unit tests (`tests/unit/`, 49 files) include `test_dsl_parser.py` / `test_dsl_parser_v2.py`,
+Unit tests (`tests/unit/`, 68 files) include `test_dsl_parser.py` / `test_dsl_parser_v2.py`,
 `test_dsl_generator.py`, `test_injector.py`, `test_mock_surface.py` / `_v2.py`,
 `test_orchestrator.py`, `test_refusal.py` / `_v2.py`, `test_dynamic_call.py`,
 `test_sqlca.py`, `test_sandbox.py`, `test_source_map.py`, `test_stub_writer.py`,
@@ -23,7 +23,12 @@ Unit tests (`tests/unit/`, 49 files) include `test_dsl_parser.py` / `test_dsl_pa
 `test_stub_expectations.py` (2026-08-04: the `*> STUB EXPECT` raw-text
 scanner), `test_record_rewrite.py` (2026-08-04: matching a scan against a
 recorded run, value rendering, `.cut` rewriting -- see
-docs/2026-08-04-record-expectations-design.md). The `_v2` files
+docs/2026-08-04-record-expectations-design.md),
+`test_malformed_input_sweep.py` (2026-08-13: a standing, parametrized
+"garbage input never surfaces an untyped exception" contract check for
+`dsl.parser.parse_cut`/`report.results.parse_stdout`, distinct from the
+many shape-specific tests already covering each parser elsewhere -- see
+[log.md](log.md)'s 2026-08-13 entry). The `_v2` files
 track a second generation of the DSL/mock-surface grammar living alongside the
 original -- both are still exercised, implying the surface is mid-migration
 rather than the v1 files being dead weight.

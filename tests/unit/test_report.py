@@ -688,3 +688,50 @@ def test_recorded_value_may_be_empty_or_contain_a_colon():
         ("WS-BLANK", ""),
         ("WS-TIME", "12:30:00"),
     ]
+
+
+def test_record_value_containing_a_raw_newline_is_truncated_at_the_newline():
+    """2026-08-12 audit Finding 11 (deferred, documented as a known
+    limitation in parse_stdout's docstring): the protocol is line-oriented
+    with no escaping, so a PIC X field whose displayed value contains a raw
+    newline splits its own RECORD marker across two physical lines. The
+    continuation matches no marker and is silently dropped -- the recorded
+    value is truncated at the newline, not escaped and not flagged as an
+    anomaly anywhere on the suite. A real fix needs the generated driver to
+    escape control bytes before DISPLAYing (a protocol change), not a
+    parser-side patch -- this test only pins the current behavior so it
+    can't drift unnoticed, and gives that eventual fix a red test to turn
+    green."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: S\n"
+        "__MOCKYMOCK__ CASE 001 START: only\n"
+        "__MOCKYMOCK__ RECORD 001 WS-FIELD: line one\nline two\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    suite = parse_stdout(stdout)
+    # "line two" -- the part of the DISPLAYed value after the embedded
+    # newline -- is gone: not appended to the recorded value, not surfaced
+    # as an orphan or a parse anomaly of any kind.
+    assert suite.results[0].recorded == [("WS-FIELD", "line one")]
+    assert suite.orphan_records == []
+    # The truncation is invisible to the rest of the pipeline too: the case
+    # still ends cleanly and the suite still reports all_passed.
+    assert suite.results[0].ended is True
+    assert suite.all_passed is True
+
+
+def test_fail_reason_containing_a_raw_newline_is_truncated_at_the_newline():
+    """Same Finding 11 gap, the FAIL-line half: a failure reason derived
+    from program-controlled data (e.g. an EXPECT's actual value) can carry
+    a raw newline the same way a RECORD value can."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: S\n"
+        "__MOCKYMOCK__ CASE 001 START: only\n"
+        "__MOCKYMOCK__ CASE 001 FAIL: expected 5, got 6\nstray continuation\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=1\n"
+    )
+    suite = parse_stdout(stdout)
+    assert suite.results[0].failure_reasons == ["expected 5, got 6"]
+    assert suite.orphan_failures == []
