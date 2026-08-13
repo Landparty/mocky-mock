@@ -2235,20 +2235,31 @@ def find_terminator_plans(
                 )
             elif paragraph_name in go_to_targets:
                 problem = (
-                    "is reachable via GO TO somewhere in this program -- "
-                    "the early-exit propagation mechanism (EXIT PARAGRAPH) "
-                    "only works correctly when a paragraph is entered "
-                    "exclusively via PERFORM"
+                    f"is unsafe to test automatically: paragraph "
+                    f"'{paragraph_name}' is itself a GO TO target "
+                    f"somewhere in this program, and a paragraph that can "
+                    f"be entered via GO TO can't reliably use EXIT "
+                    f"PARAGRAPH to signal an early exit back to its "
+                    f"caller -- mockymock refuses rather than risk "
+                    f"generating a test that silently runs further than "
+                    f"it should. To make this testable, replace the "
+                    f"`GO TO {paragraph_name}` with structured PERFORM/"
+                    f"EXIT PARAGRAPH logic (e.g. if it exists purely as "
+                    f"an early exit, an `EXIT PARAGRAPH` in its place "
+                    f"usually removes the need for the jump entirely)"
                 )
             elif paragraph_name in go_to_fallthrough:
                 problem = (
-                    f"is reached by falling through past the end of "
-                    f"paragraph '{go_to_fallthrough[paragraph_name]}', which "
-                    f"is itself reachable via GO TO somewhere in this "
-                    f"program -- a paragraph entered this way was never "
-                    f"PERFORMed either, so it shares the same EXIT PARAGRAPH "
-                    f"hazard as a direct GO TO target even though it is "
-                    f"never named by a GO TO itself"
+                    f"is unsafe to test automatically: control reaches it "
+                    f"by falling through past the end of paragraph "
+                    f"'{go_to_fallthrough[paragraph_name]}', which is a GO "
+                    f"TO target elsewhere in this program -- code entered "
+                    f"via GO TO never goes through PERFORM, so mockymock "
+                    f"can't insert an early-exit check here that would "
+                    f"correctly return to the right caller. Fixing the "
+                    f"`GO TO {go_to_fallthrough[paragraph_name]}` (e.g. "
+                    f"replacing it with `EXIT PARAGRAPH` if it exists "
+                    f"purely as an early exit) would remove this hazard"
                 )
             elif paragraph_name not in safe_names:
                 problem = (
@@ -2271,24 +2282,32 @@ def find_terminator_plans(
                 # is a subset of go_to_targets.
                 bad_name = sorted(chain_go_to_names)[0]
                 problem = (
-                    f"is only reachable through this test's own early-exit "
-                    f"propagation chain by way of '{bad_name}', which is "
-                    f"reachable via GO TO somewhere in this program -- the "
-                    f"early-exit propagation mechanism (EXIT PARAGRAPH) "
-                    f"only works correctly when a paragraph is entered "
-                    f"exclusively via PERFORM"
+                    f"is unsafe to test automatically: propagating this "
+                    f"early exit back to the test would require passing "
+                    f"through paragraph '{bad_name}', which is itself a "
+                    f"GO TO target somewhere in this program -- mockymock "
+                    f"can't safely instrument a paragraph that can be "
+                    f"entered other than via PERFORM. To make this "
+                    f"testable, replace the `GO TO {bad_name}` with "
+                    f"structured PERFORM/EXIT PARAGRAPH logic (e.g. if it "
+                    f"exists purely as an early exit, an `EXIT PARAGRAPH` "
+                    f"in its place usually removes the need for the jump "
+                    f"entirely)"
                 )
             elif chain_fallthrough_names:
                 bad_name = sorted(chain_fallthrough_names)[0]
                 problem = (
-                    f"is only reachable through this test's own early-exit "
-                    f"propagation chain by way of '{bad_name}', which is "
-                    f"reached by falling through past the end of paragraph "
-                    f"'{go_to_fallthrough[bad_name]}' rather than via "
-                    f"PERFORM -- the early-exit propagation mechanism "
-                    f"(EXIT PARAGRAPH) only works correctly when every "
-                    f"paragraph on the chain is entered exclusively via "
-                    f"PERFORM"
+                    f"is unsafe to test automatically: propagating this "
+                    f"early exit back to the test would require passing "
+                    f"through paragraph '{bad_name}', which is reached by "
+                    f"falling through past the end of paragraph "
+                    f"'{go_to_fallthrough[bad_name]}' -- a GO TO target "
+                    f"elsewhere in this program -- rather than via "
+                    f"PERFORM. mockymock can't safely instrument a "
+                    f"paragraph reached this way. Fixing the "
+                    f"`GO TO {go_to_fallthrough[bad_name]}` (e.g. "
+                    f"replacing it with `EXIT PARAGRAPH` if it exists "
+                    f"purely as an early exit) would remove this hazard"
                 )
             elif site.nested and site.span is None:
                 problem = (
