@@ -20,6 +20,13 @@
 - **Reachability gate: GO TO fall-through closure (HIGH).** `_reachable_paragraphs` stopped at a `GO TO` target, so a paragraph entered by falling off that target's end — ordinary sequential execution, which `union_executed_paragraphs`, the terminator guard, and cobolparser's `ProgramFlowAnalyzer` all already modeled — was invisible to the per-case mock gates: a `CALL`/file-op/`ACCEPT` there passed `lint`/`run` unmocked (exit 0) and executed for real at runtime. The BFS now closes over the fall-through hazard to a fixpoint via `_falls_through`, failing closed (`UNRESOLVED_FLOW_TARGET`) when paragraph source order is unverifiable or a GO TO target cannot be anchored in it. Pinned by `tests/unit/test_refusal_goto_fallthrough.py`.
 - `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
 
+## [0.6.3](https://github.com/Landparty/mocky-mock/compare/v0.6.2...v0.6.3) (2026-08-13)
+
+
+### Bug Fixes
+
+* lead GO TO/fall-through terminator refusals with the COBOL cause, not the mechanism ([33f0c2f](https://github.com/Landparty/mocky-mock/commit/33f0c2ff5a13cbf2bc1e0b2ce0796b12ae5b8b21))
+
 ## [0.6.2](https://github.com/Landparty/mocky-mock/compare/v0.6.1...v0.6.2) (2026-08-13)
 
 
