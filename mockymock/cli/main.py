@@ -205,6 +205,52 @@ def _write_report_file(command: str, flag: str, target: str, content: str) -> bo
     return True
 
 
+def _write_failure_reports(
+    args: argparse.Namespace, command: str, suite_name: str, reason: str
+) -> None:
+    """Write `run`'s --junit-xml/--json-report for an exit that never
+    produced a TestSuiteResult at all -- a static refusal or a compile
+    failure. Without this, those two exit paths returned 1 with nothing
+    written, so a CI pipeline that always publishes whatever the configured
+    report path holds (the common pattern) saw "no test results found"
+    instead of a visible failure -- worse than a failing test, since it can
+    read as "nothing ran" rather than "something failed" (carried-over open
+    item from the 2026-08-10 framework audit). Reuses the ordinary
+    formatters via one synthetic TestResult standing in for the whole run,
+    rather than a bespoke report shape only this path would exercise."""
+    if not args.junit_xml and not args.json_report:
+        return
+
+    from mockymock.report.formatters import format_junit_xml
+    from mockymock.report.json_report import build_json_report, format_json_report
+    from mockymock.report.results import TestResult, TestSuiteResult
+
+    suite_result = TestSuiteResult(
+        suite_name=suite_name,
+        results=[
+            TestResult(
+                case_id="0",
+                case_name=f"mockymock {command}",
+                failure_reasons=[reason],
+                ended=True,
+            )
+        ],
+        tests_run=1,
+        failures=1,
+    )
+    if args.junit_xml:
+        _write_report_file(
+            command, "--junit-xml", args.junit_xml, format_junit_xml(suite_result)
+        )
+    if args.json_report:
+        _write_report_file(
+            command,
+            "--json-report",
+            args.json_report,
+            format_json_report(build_json_report(suite_result)),
+        )
+
+
 def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
@@ -586,6 +632,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 print(problem)  # indented parse-error detail lines
             else:
                 print(f"mockymock run: {problem}")
+        _write_failure_reports(
+            args,
+            "run",
+            checked.suite.name if checked.suite is not None else "",
+            "\n".join(checked.problems),
+        )
         return 1
 
     try:
@@ -691,6 +743,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             # F10; a `return 1` from *this* branch used to be lumped in
             # with that same fix, which broke the documented, tested
             # --verbose-survives-a-compile-failure contract below).
+            _write_failure_reports(args, "run", suite.name, compiled.stderr)
             return 1
 
         # try/finally, not just a statement after the `with`: plain --verbose
@@ -705,7 +758,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             assert compiled.binary_path is not None  # implied by compiled.success
             trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
             executed = docker_toolchain.run_binary(
-                compiled.binary_path, trace_path=trace_path
+                compiled.binary_path,
+                timeout_seconds=args.timeout,
+                trace_path=trace_path,
             )
 
             # Must be read while the sandbox still exists -- the context
@@ -1577,6 +1632,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Write the machine-readable execution trace (executed path "
             "remapped onto the ORIGINAL .cbl's line numbers, plus the "
             "ordered mock timeline) to this file. Implies --trace"
+        ),
+    )
+    run_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=30,
+        help=(
+            "Binary execution timeout in seconds (default 30); a mocked "
+            "CALL that removes a loop's terminating condition can "
+            "otherwise hang until this limit kills it (mirrors mutate's "
+            "own --timeout)"
         ),
     )
     run_parser.add_argument(

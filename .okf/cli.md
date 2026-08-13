@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-08-11T00:00:00Z
+timestamp: 2026-08-13T00:00:00Z
 ---
 
 # Overview
@@ -193,7 +193,7 @@ Flow (`_cmd_fixtures`):
    to stderr as `mockymock fixtures: <exc>`, exit 1.
 5. `print(bundle.to_json())` to stdout, exit 0.
 
-## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--trace] [--trace-json PATH] [--record-expectations]`
+## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--trace] [--trace-json PATH] [--timeout S] [--record-expectations]`
 
 The full pipeline: parse, analyze, refuse-or-splice, compile in Docker, run,
 report. This is the only subcommand requiring the GnuCOBOL container.
@@ -208,13 +208,24 @@ never disagree about what refuses.
 Flags beyond the pipeline inputs:
 
 - `--junit-xml PATH` — write `format_junit_xml(...)` there after a run that
-  reaches execution (refusals/compile failures exit earlier and write no
-  XML). Each `<testcase>` carries `classname="<suite name>"`.
+  reaches execution. Each `<testcase>` carries `classname="<suite name>"`.
+  A refusal or a compile failure (steps 5b/10 and 15 below) also writes
+  this file when the flag is given, via `_write_failure_reports`: one
+  synthetic `<testcase>` standing in for the whole run, its `<failure>`
+  text carrying the refusal reasons or the compiler's stderr. Before this
+  (carried-over open item, 2026-08-10 framework audit), those two exit
+  paths left the target untouched, so a CI pipeline that always publishes
+  whatever the configured path holds saw "no test results found" instead
+  of a visible failure.
 - `--json-report PATH` — write `report.json_report`'s machine-readable run
   report: per-case status (`passed`/`failed`/`crashed`/`not_run`), `.cut`
   line numbers for cases and failing EXPECT/VERIFY directives,
   expected/actual split into fields, tags. Built for editor integrations
-  (the VS Code extension).
+  (the VS Code extension). Same refusal/compile-failure synthesis as
+  `--junit-xml` above applies here too.
+- `--timeout S` (default 30) — `run_binary`'s execution timeout in
+  seconds, mirroring `mutate`'s own `--timeout`; previously only `mutate`
+  could shorten or lengthen the bound a hung mocked CALL is killed by.
 - `--case NAME` (repeatable) / `--tag TAG` (repeatable) — run only the named
   or tagged TESTCASEs (union when both given). Selection happens in
   `run_static_checks` before any per-case refusal check, so a refused
@@ -321,7 +332,11 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     then `check_test_case(surface, result.ast, case, file_status_fields)`
     for every case in the suite — any refusal sets `refused = True`; all
     cases are checked before exiting (so a user sees every problem in one
-    run), then exit 1 if any fired. See [analysis](analysis.md).
+    run), then exit 1 if any fired. See [analysis](analysis.md). Every
+    refusal exit in `_cmd_run` (this step and every earlier one) calls
+    `_write_failure_reports(args, "run", <suite name or "">, <joined
+    problems>)` before returning 1 — see the `--junit-xml`/`--json-report`
+    bullets above.
 11. `collect_boundaries(result.ast)`, `TallyRegistry(suite)`,
     `find_terminator_plans(...)`, `find_flow_mock_plans(...)`,
     `splice_program(lines, boundaries, surface, suite, registry,
@@ -348,9 +363,11 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     insertions are one-shot via `inserted_ws`/`inserted_proc` flags).
 14. Write the instrumented source into a fresh `sandbox_dir(root=docker_toolchain.WORK_ROOT)`
     as `<program-stem>.cbl` (LF newlines forced via `newline="\n"`).
-15. `docker_toolchain.compile_source(...)` — on failure, print stderr and exit 1.
-16. `docker_toolchain.run_binary(compiled.binary_path)` — executes inside the
-    container.
+15. `docker_toolchain.compile_source(...)` — on failure, print stderr,
+    write `--junit-xml`/`--json-report` via `_write_failure_reports` (same
+    as a static refusal, `reason=compiled.stderr`), and exit 1.
+16. `docker_toolchain.run_binary(compiled.binary_path, timeout_seconds=args.timeout)`
+    — executes inside the container.
 17. `parse_stdout(executed.stdout)` -> `suite_result`. The binary's exit
     code is translated into `crash_detail` evidence for the formatters:
     exit 124 (TIMEOUT_EXIT_CODE) -> `"binary timed out (exit 124); see

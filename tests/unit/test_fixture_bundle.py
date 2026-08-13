@@ -206,6 +206,19 @@ def test_non_object_json_raises_malformed():
         parse_fixture_bundle('["a", "list"]')
 
 
+@pytest.mark.parametrize("bad", [["a", "list"], "a string", None, 42])
+def test_load_fixture_bundle_rejects_non_dict_directly(bad):
+    """`parse_fixture_bundle` guards non-dict JSON before ever calling
+    `load_fixture_bundle`, but `load_fixture_bundle` is itself a public
+    function (cli/main.py's --with-data path calls it directly with a
+    cobolparser-produced dict) -- a caller that skips that guard and hands
+    it a list/str/None/int must still get MalformedBundleError, not the
+    raw AttributeError `data.get(...)` would otherwise raise before the
+    function's own try/except even starts."""
+    with pytest.raises(MalformedBundleError, match="JSON object"):
+        load_fixture_bundle(bad)
+
+
 def test_parse_fixture_bundle_from_json_text():
     bundle = parse_fixture_bundle(json.dumps(MINIMAL_BUNDLE))
     assert bundle.program_name == "DOCEX"

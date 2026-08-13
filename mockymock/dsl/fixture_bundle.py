@@ -168,7 +168,20 @@ def load_fixture_bundle(data: dict[str, Any]) -> FixtureBundle:
     changed underneath it (see cobol-parser's fixture-bundle-schema.md
     "Versioning and compatibility policy": a breaking change always bumps
     this field).
+
+    Raises `MalformedBundleError` for a non-dict `data` too: `data.get(...)`
+    below would otherwise raise a raw, untyped AttributeError for a caller
+    that skips `parse_fixture_bundle`'s own JSON-object check and hands a
+    list/str/None/etc. straight to this function -- exactly the "typed
+    error, not a bare traceback" contract this loader promises everywhere
+    else (2026-08-12 audit Finding 15 covered every key access already
+    inside the try/except below; this one line ran before it, so was
+    invisible to that fix).
     """
+    if not isinstance(data, dict):
+        raise MalformedBundleError(
+            f"fixture bundle must be a JSON object, got {type(data).__name__}"
+        )
     version = data.get("bundle_version")
     if version != SUPPORTED_BUNDLE_VERSION:
         raise UnsupportedBundleVersionError(
