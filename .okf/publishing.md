@@ -33,7 +33,7 @@ no longer attaches any binaries to that release.
   unpacks the whole payload into a fresh temp dir on every single launch
   and deletes it on exit — a real cost for the VS Code extension, which
   fires several `mockymock`/`mockymock analyze` invocations per editor
-  switch. `build_executable.sh` pins the spec to
+  switch. `scripts/build_executable.sh` pins the spec to
   `{CACHE_DIR}/mockymock/{VERSION}` (with `--product-version` set from
   `mockymock.__version__`) so repeated launches of the *same* build reuse
   the extraction — Nuitka's bootstrap re-extracts automatically if the
