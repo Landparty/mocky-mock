@@ -3,7 +3,7 @@ type: Runbook
 title: Publishing
 description: mockymock is no longer independently distributed. It's built from source on demand by mocky-mock-vscode's build-and-release.yml dispatch workflow, which lives in that sibling repo.
 tags: [ci, release, publishing]
-timestamp: 2026-08-07T00:00:00Z
+timestamp: 2026-08-14T00:00:00Z
 ---
 
 # Overview
@@ -27,6 +27,25 @@ GitHub Release with generated changelog notes on merge to `main` — it just
 no longer attaches any binaries to that release.
 
 # Gotchas
+
+- **`--onefile-tempdir-spec` trades a re-extraction hazard for a
+  multi-second-per-launch tax.** Without it, Nuitka's onefile bootstrap
+  unpacks the whole payload into a fresh temp dir on every single launch
+  and deletes it on exit — a real cost for the VS Code extension, which
+  fires several `mockymock`/`mockymock analyze` invocations per editor
+  switch. `build_executable.sh` pins the spec to
+  `{CACHE_DIR}/mockymock/{VERSION}` (with `--product-version` set from
+  `mockymock.__version__`) so repeated launches of the *same* build reuse
+  the extraction — Nuitka's bootstrap re-extracts automatically if the
+  payload at that path doesn't match what's expected, so a stale dir left
+  by a different build is not silently reused. Caveat: `mockymock`'s own
+  version string does not change when `build-and-release.yml`'s
+  "Force-install cobol-parser's latest release" step overrides the pinned
+  `cobolparser` commit — two builds a day apart can share the same
+  `{VERSION}` path. That's still safe (the hash check catches it), just
+  worth knowing if you're ever debugging why a "same version" binary
+  behaves differently than expected on a machine with a stale cache dir —
+  `rm -rf` the platform cache dir's `mockymock/` subfolder rules it out.
 
 - **Nuitka ignores `[tool.setuptools.package-data]`.** A non-`.py` file
   resolved via `Path(__file__)` can be correctly listed there, appear in a

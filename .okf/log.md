@@ -1,5 +1,41 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-14 — Cache Nuitka onefile extraction across launches
+
+User reported the VS Code extension's Program Tree and Boundaries views
+taking a long time to show up. Investigation (spanning both repos) found
+two compounding causes: the extension fires several CLI invocations per
+editor switch (`fixtures` for Boundaries, `analyze program-flow --compact`
+for the Paragraph Tree, and both `--compact` + `--format mermaid` for the
+Program Flow view), and every one of those invocations paid Nuitka's
+onefile extraction cost from scratch — the bundled binary is built with
+`--onefile` and no `--onefile-tempdir-spec`, so the whole payload
+(mockymock + compiled cobolparser + data files) gets unpacked to a fresh
+temp dir and deleted again on every single launch.
+
+Fixed the extraction side here: `scripts/build_executable.sh` now passes
+`--onefile-tempdir-spec="{CACHE_DIR}/mockymock/{VERSION}"` and
+`--product-version` (read from `mockymock.__version__`), so repeated
+launches of the same build reuse the already-extracted payload instead of
+re-unpacking it every time. Documented the version-string caveat (CI's
+cobolparser force-reinstall doesn't bump mockymock's own version) in
+publishing.md's Gotchas — safe because Nuitka's bootstrap detects a
+payload mismatch and re-extracts, just worth knowing when debugging.
+
+Not done here (filed as follow-up, not requested for this pass): a
+lighter `fixtures`-equivalent that skips scenario-data generation for the
+Boundaries tree (which currently parses the program twice — once for the
+refusal gate, once inside `generate_with_scenarios_from_file`), and a
+longer-lived `mockymock serve` daemon to eliminate process-startup cost
+entirely. The VS Code side of this same investigation (deduping the
+Paragraph Tree and Program Flow views' redundant `analyze program-flow`
+calls) landed in the sibling mocky-mock-vscode repo, same branch.
+
+No test run here beyond `bash -n scripts/build_executable.sh` (syntax
+check) — verifying the Nuitka build itself requires the actual toolchain
+and is exercised by mocky-mock-vscode's `build-and-release.yml` CI, not a
+mocky-mock-local test.
+
 ## 2026-08-13 — Reworded the four GO TO/fall-through `UNSUPPORTED_TERMINATOR_LAYOUT` messages
 
 A user hit the `chain_fallthrough_names` refusal on `examples/real-world/
