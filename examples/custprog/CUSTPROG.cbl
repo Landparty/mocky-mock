@@ -1,10 +1,5 @@
        IDENTIFICATION DIVISION.
        PROGRAM-ID. CUSTPROG.
-      * Cursor-driven customer lister: EXEC SQL INCLUDE resolves a
-      * DCLGEN-style host-variable copybook (with its own embedded
-      * EXEC SQL DECLARE TABLE stanza) into real WORKING-STORAGE data
-      * items, then a DECLARE CURSOR/OPEN/FETCH-loop/CLOSE walks it,
-      * driven entirely by a MOCK SQL "FETCH ..." ROWS block.
 
        DATA DIVISION.
        WORKING-STORAGE SECTION.
