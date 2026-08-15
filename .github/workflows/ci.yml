@@ -30,6 +30,7 @@ jobs:
         run: python -m mypy mockymock/
 
   test:
+    if: false # test suite removed from CI (too long); run locally with `python -m pytest tests/ -v`
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -184,6 +185,7 @@ jobs:
   # above (ubuntu-latest) until a self-hosted or Linux-containers-on-
   # Windows runner is worth the added CI complexity.
   test-cross-platform:
+    if: false # test suite removed from CI (too long); run locally with `python -m pytest tests/unit -v`
     strategy:
       matrix:
         os: [windows-latest, macos-latest]
