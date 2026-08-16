@@ -14,8 +14,10 @@ same shape.
 mockymock fixtures PROGRAM.cbl --scenarios all > /tmp/bundle.json
 ```
 
-`--scenarios all` up front is deliberate: it is the only mode that also
-populates `scenario_coverage` (used in step 2), and **every scenario in
+`--scenarios all` up front is deliberate: it's the broadest single call --
+it populates `scenario_coverage` (also true of `branches`, just not
+`happy`; used in step 2) AND, being a superset, still gives the full
+boundary inventory below, so one call covers both jobs. **every scenario in
 every mode carries a fixture for every boundary the program touches** --
 so `bundle["scenarios"][0]["fixtures"]` alone is already a complete
 inventory, regardless of which scenario you pick.
