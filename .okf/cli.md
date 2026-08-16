@@ -623,6 +623,12 @@ along with the already-discovered `mockymock.cli` package the same way
 `mockymock/runtime/docker/` and `mockymock/web/static/` ride along with
 theirs.
 
+As of 2026-08-16, the packaged skill's `SKILL.md` Workflow and its new
+`reference/scenario-generation.md` also teach the agent to inventory
+boundaries and recommend a `--scenarios` mode from a program's own
+`scenario_coverage` before generating -- not just a copytree of static
+reference material.
+
 # Gotchas
 
 **Nothing in `build_parser()` may import a `_cmd_*` body's dependencies.**

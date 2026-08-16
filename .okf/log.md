@@ -1,5 +1,24 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-16 — Teach the mockymock skill to reason about scenario generation
+
+The VS Code extension's "COBOL Boundaries" tree view (checkboxes +
+happy/branches/all quick-pick) was reported unintuitive: the mode picker
+named three words with no explanation, and the generated `.cut` landed
+with no read-back on whether it was actually right. Rather than redesign
+that UI, moved the reasoning into the already-shipped, already-packaged
+`mockymock` Claude Code skill (`mockymock skills install`) instead --
+`SKILL.md`'s Workflow step 1 now walks inventory boundaries -> recommend
+a mode with reasoning tied to `scenario_coverage.total_arms` -> generate
+-> read back unresolved boundaries by paragraph, backed by a new
+`reference/scenario-generation.md`. No CLI/packaging change; the
+`generate`/`fixtures` subcommands' behavior is unchanged. Companion
+change: the VS Code tree view itself is removed in
+`mocky-mock-vscode-extension` (see that repo's `.okf/log.md`), since it's
+now a redundant, worse UI for the same underlying calls.
+
+See `docs/superpowers/specs/2026-08-16-scenario-generation-skill-design.md`.
+
 ## 2026-08-14 — Cache Nuitka onefile extraction across launches
 
 User reported the VS Code extension's Program Tree and Boundaries views
