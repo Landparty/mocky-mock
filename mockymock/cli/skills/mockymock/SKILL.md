@@ -6,8 +6,10 @@ description: Use when writing or running .cut test files for mockymock (a COBOL 
 <!--
 Maintainer note: this is a curated duplicate of docs/options-reference.md
 in the mocky-mock repo, adapted for agent consumption. A .cut directive or
-CLI flag change there should be reflected in reference/cut-dsl.md and
-reference/cli-flags.md here too.
+CLI flag change should be reflected in reference/cut-dsl.md and
+reference/cli-flags.md here too. A FixtureBundle schema change
+(docs/fixture-bundle-schema.md in cobol-parser) should be reflected in
+reference/scenario-generation.md.
 -->
 
 # mockymock: COBOL unit testing
@@ -20,15 +22,34 @@ and reports pass/fail. Use it to write and run `.cut` test files against
 
 ## Workflow
 
-1. **Scaffold a starting point** instead of writing a `.cut` file by hand:
-   ```bash
-   mockymock generate PROGRAM.cbl                                       # placeholder mocks, one TESTCASE per paragraph
-   mockymock generate PROGRAM.cbl --with-data --seed 7 --scenarios all  # real generated data + EXPECT/VERIFY per scenario
-   ```
-   `generate` also prints every boundary it could **not** mock (an
-   unidentifiable dynamic `CALL`, an unspliceable nested site) -- a test
-   case that reaches one of those will be refused by `run` until you
-   resolve it.
+1. **Understand before generating** -- for a program you haven't
+   scaffolded a data-driven `.cut` for yet, don't jump straight to
+   `--with-data`:
+   a. Run `mockymock fixtures PROGRAM.cbl --scenarios all` and read the
+      first scenario's `fixtures` plus any OUT-only boundaries in its
+      `expectations` (every scenario carries a fixture for every boundary
+      the program touches, so one scenario is a complete inventory).
+      Explain in plain language what's mockable -- which CALLs/files/
+      SQL/ACCEPT, and each one's direction -- before generating anything.
+      See `reference/scenario-generation.md` for exactly which bundle
+      fields to read and how to phrase this.
+   b. Recommend a `--scenarios` mode with a reason tied to the program's
+      own `scenario_coverage.total_arms` from that same bundle (0 arms:
+      `happy`; 1+: `branches`, or `all` if the developer also wants fixed
+      edge-case families), instead of defaulting silently to `happy`.
+      Confirm with the developer.
+      ```bash
+      mockymock generate PROGRAM.cbl                                       # placeholder mocks, one TESTCASE per paragraph
+      mockymock generate PROGRAM.cbl --with-data --seed 7 --scenarios all  # real generated data + EXPECT/VERIFY per scenario
+      ```
+   c. Generate with the confirmed mode. `generate` also prints every
+      boundary it could **not** mock (an unidentifiable dynamic `CALL`,
+      an unspliceable nested site) -- a test case that reaches one of
+      those will be refused by `run` until you resolve it.
+   d. Read back the result: name any unresolved boundaries by paragraph
+      (from `unresolved` and each fixture's own `unresolved`), not just a
+      count. Offer to refine (`--placeholder CATEGORY:KEY`, a different
+      `--seed`, a narrower `--scenarios`) based on what's missing.
 
 2. **Fill in / edit mocks** using the `.cut` DSL -- see
    `reference/cut-dsl.md` for the full directive reference. The shape:
@@ -75,3 +96,7 @@ and reports pass/fail. Use it to write and run `.cut` test files against
 - `reference/cli-flags.md` -- every subcommand and flag: `setup`,
   `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`,
   `dashboard`, `export`, `analyze`, `skills`.
+- `reference/scenario-generation.md` -- how to read a `mockymock
+  fixtures` bundle (boundary inventory, branch-arm coverage, unresolved
+  gaps), how to recommend a `--scenarios` mode, and how to phrase a
+  generation read-back.
