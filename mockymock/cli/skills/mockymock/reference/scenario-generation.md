@@ -17,10 +17,12 @@ mockymock fixtures PROGRAM.cbl --scenarios all > /tmp/bundle.json
 `--scenarios all` up front is deliberate: it's the broadest single call --
 it populates `scenario_coverage` (also true of `branches`, just not
 `happy`; used in step 2) AND, being a superset, still gives the full
-boundary inventory below, so one call covers both jobs. **every scenario in
-every mode carries a fixture for every boundary the program touches** --
-so `bundle["scenarios"][0]["fixtures"]` alone is already a complete
-inventory, regardless of which scenario you pick.
+boundary inventory below, so one call covers both jobs. **every scenario
+in every mode carries a fixture for every boundary that HAS one**
+(IN/BIDIRECTIONAL/STATUS_ONLY -- OUT-direction boundaries never get a
+fixture, see below) -- so `bundle["scenarios"][0]["fixtures"]` alone is
+already a complete inventory of everything that can be seeded, regardless
+of which scenario you pick.
 
 For each entry in `fixtures`, read:
 
@@ -39,11 +41,18 @@ to seed."
 
 **OUT-direction boundaries never appear in `fixtures`** (nothing to mock;
 the program produces the value) -- find them instead in that same
-scenario's `expectations` list, filtering for `kind == "stub"` and a
-`ref` shaped like `"CATEGORY:KEY"` (as opposed to a bare field name,
-which is a `field_equals`/other-kind stub about a single field, not a
-boundary). Describe these as "writes/produces `<key>` -- nothing to
-seed, but `run` can assert on it later."
+scenario's `expectations` list, filtering for `kind == "stub"`. Two
+shapes are worth naming separately:
+
+- a `ref` shaped like `"CATEGORY:KEY"` -- a whole OUT-direction boundary
+  (WRITE, SQL INSERT/UPDATE/DELETE, etc.). Describe these as
+  "writes/produces `<key>` -- nothing to seed, but `run` can assert on it
+  later."
+- a bare-name `ref` (just a field name) -- typically a CALL argument's
+  OUT aspect on an otherwise `BIDIRECTIONAL` boundary; check the `note`
+  field for context (e.g. `"bidirectional: the OUT aspect ... is not
+  asserted in v1"`). Describe these as "the OUT side of `<ref>` isn't
+  asserted yet, but it is mocked in."
 
 Also check the bundle's top-level `unresolved` list (program-level gaps
 not tied to one boundary, e.g. an unresolved `COPY` member or an
@@ -67,13 +76,17 @@ on the inventory call rather than needing a second one):
 - `total_arms >= 1` but every `details[]` entry is `"missed"` -- `branches`
   alone has nothing to target and `generate --scenarios branches` will
   fail outright ("the fixture bundle has zero scenarios"). Recommend
-  `happy`, or `all` if the developer wants the fixed-family scenarios
-  (empty input/error status/boundary values) despite no real branch
-  coverage being reachable -- name the `reason` from a couple of
+  `happy`, despite no real branch coverage being reachable -- or `all` if
+  the developer wants whichever of the fixed families (empty input, error
+  status, boundary values) the program's own structure happens to
+  support (not all three are guaranteed to materialize; e.g. a program
+  with no `INVALID KEY`/`ON EXCEPTION`/status-checked handler won't get a
+  boundary-values family). Either way, name the `reason` from a couple of
   `details[]` entries so the developer understands why branch coverage
   isn't available here.
-- If any `details[]` entry has `status == "missed"`, mention it and its
-  `reason` -- that arm won't get its own scenario in either mode.
+- In the mixed case (some arms `"targeted"`/`"merged"`, some `"missed"`),
+  also mention any missed arm and its `reason` -- that arm won't get its
+  own scenario in either mode.
 
 Confirm the mode with the developer before generating -- don't pick
 silently.
