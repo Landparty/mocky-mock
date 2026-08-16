@@ -57,12 +57,21 @@ only populated for `"branches"`/`"all"`, so this recommendation piggybacks
 on the inventory call rather than needing a second one):
 
 - `total_arms == 0` -- no branching worth separating; recommend `happy`.
-- `total_arms >= 1` -- recommend `branches` (one scenario per reachable
-  arm), naming the arm count and, if you want to be specific, the
-  `parent_proc` of a few `details[]` entries (e.g. "3 reachable arms, 2
-  of them in `VALIDATE-ORDER`"). Mention `all` as the option if the
-  developer also wants fixed edge-case families (empty input, error
-  status, boundary values) beyond what's reachable by construction.
+- `total_arms >= 1` and at least one arm is `"targeted"` or `"merged"` --
+  recommend `branches` (one scenario per reachable arm), naming the arm
+  count and, if you want to be specific, the `parent_proc` of a few
+  `details[]` entries (e.g. "3 reachable arms, 2 of them in
+  `VALIDATE-ORDER`"). Mention `all` as the option if the developer also
+  wants fixed edge-case families (empty input, error status, boundary
+  values) beyond what's reachable by construction.
+- `total_arms >= 1` but every `details[]` entry is `"missed"` -- `branches`
+  alone has nothing to target and `generate --scenarios branches` will
+  fail outright ("the fixture bundle has zero scenarios"). Recommend
+  `happy`, or `all` if the developer wants the fixed-family scenarios
+  (empty input/error status/boundary values) despite no real branch
+  coverage being reachable -- name the `reason` from a couple of
+  `details[]` entries so the developer understands why branch coverage
+  isn't available here.
 - If any `details[]` entry has `status == "missed"`, mention it and its
   `reason` -- that arm won't get its own scenario in either mode.
 
