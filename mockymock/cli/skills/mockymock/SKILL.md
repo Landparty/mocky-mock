@@ -28,24 +28,28 @@ and reports pass/fail. Use it to write and run `.cut` test files against
    a. Run `mockymock fixtures PROGRAM.cbl --scenarios all` and read the
       first scenario's `fixtures` plus any OUT-only boundaries in its
       `expectations` (every scenario carries a fixture for every boundary
-      the program touches, so one scenario is a complete inventory).
+      that has one -- IN/BIDIRECTIONAL/STATUS_ONLY; OUT-direction
+      boundaries show up only in `expectations` -- so one scenario is a
+      complete inventory of what's mockable).
       Explain in plain language what's mockable -- which CALLs/files/
       SQL/ACCEPT, and each one's direction -- before generating anything.
       See `reference/scenario-generation.md` for exactly which bundle
       fields to read and how to phrase this.
    b. Recommend a `--scenarios` mode with a reason tied to the program's
-      own `scenario_coverage.total_arms` from that same bundle (0 arms:
-      `happy`; 1+: `branches`, or `all` if the developer also wants fixed
-      edge-case families), instead of defaulting silently to `happy`.
-      Confirm with the developer.
+      own `scenario_coverage.total_arms` from that same bundle (0 arms,
+      or every arm missed: `happy`/`all`; at least one arm reachable:
+      `branches`), instead of defaulting silently to `happy`. Confirm
+      with the developer. See `reference/scenario-generation.md` section
+      2 for the full three-way reasoning.
+   c. Generate with the confirmed mode.
       ```bash
-      mockymock generate PROGRAM.cbl                                       # placeholder mocks, one TESTCASE per paragraph
-      mockymock generate PROGRAM.cbl --with-data --seed 7 --scenarios all  # real generated data + EXPECT/VERIFY per scenario
+      mockymock generate PROGRAM.cbl                                                    # placeholder mocks, one TESTCASE per paragraph
+      mockymock generate PROGRAM.cbl --with-data --seed 7 --scenarios <confirmed-mode>  # real generated data + EXPECT/VERIFY per scenario
       ```
-   c. Generate with the confirmed mode. `generate` also prints every
-      boundary it could **not** mock (an unidentifiable dynamic `CALL`,
-      an unspliceable nested site) -- a test case that reaches one of
-      those will be refused by `run` until you resolve it.
+      `generate` also prints every boundary it could **not** mock (an
+      unidentifiable dynamic `CALL`, an unspliceable nested site) -- a
+      test case that reaches one of those will be refused by `run` until
+      you resolve it.
    d. Read back the result: name any unresolved boundaries by paragraph
       (from `unresolved` and each fixture's own `unresolved`), not just a
       count. Offer to refine (`--placeholder CATEGORY:KEY`, a different
