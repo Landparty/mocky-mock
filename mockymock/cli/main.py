@@ -552,7 +552,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     import json
 
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_terminator_plans
+    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.analysis.stub_expectations import scan_stub_expectations
     from mockymock.cli.checks import run_static_checks
     from mockymock.report.coverage import (
@@ -672,6 +672,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     terminator_plans, _ = find_terminator_plans(
         surface, result.ast, suite, scope_map, lines
     )
+    goto_exit_plans, _ = find_goto_exit_plans(result.ast, scope_map, lines)
     flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
     lines = splice_program(
         lines,
@@ -682,6 +683,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         terminator_plans,
         flow_plans,
         checked.file_status_fields,
+        goto_exit_plans=goto_exit_plans,
         trace=args.trace,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
@@ -936,7 +938,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     import sys
 
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_terminator_plans
+    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.cli.checks import run_static_checks
     from mockymock.debug.adapter import DapAdapter, DebugSession
     from mockymock.debug.call_stack import ParagraphIndex, build_generated_c_line_map
@@ -1019,6 +1021,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     terminator_plans, _ = find_terminator_plans(
         surface, result.ast, suite, scope_map, lines
     )
+    goto_exit_plans, _ = find_goto_exit_plans(result.ast, scope_map, lines)
     flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
     lines = splice_program(
         lines,
@@ -1029,6 +1032,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         terminator_plans,
         flow_plans,
         checked.file_status_fields,
+        goto_exit_plans=goto_exit_plans,
         trace=False,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
@@ -1211,7 +1215,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     identical pre-splice pipeline to `run` (via run_static_checks),
     stopping before compile_source/run_binary."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_terminator_plans
+    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.cli.checks import run_static_checks
     from mockymock.cli.mainframe_export import (
         build_provenance_header,
@@ -1278,6 +1282,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     terminator_plans, _ = find_terminator_plans(
         surface, result.ast, suite, scope_map, lines
     )
+    goto_exit_plans, _ = find_goto_exit_plans(result.ast, scope_map, lines)
     flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
     lines = splice_program(
         lines,
@@ -1288,6 +1293,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         terminator_plans,
         flow_plans,
         checked.file_status_fields,
+        goto_exit_plans=goto_exit_plans,
         trace=False,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)

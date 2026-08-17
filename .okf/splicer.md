@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-11T00:00:00Z
+timestamp: 2026-08-17T01:00:00Z
 ---
 
 # Overview
@@ -533,6 +533,123 @@ returns. An earlier design (`GO TO` redirect into a `PERFORM ... THRU
 ...` range) was proven unsound by a verification spike and replaced
 before any of it shipped -- see
 [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md).
+
+# GO-TO-to-EXIT-PARAGRAPH Simplification
+
+**STATUS: implemented, not yet verified against real GnuCOBOL** -- see
+[docs/2026-08-17-goto-exit-paragraph-simplification-design.md](../docs/2026-08-17-goto-exit-paragraph-simplification-design.md)'s
+Status note before trusting this in production; the Docker-required
+integration fixture that would confirm it has not been run.
+
+`refusal.find_goto_exit_plans(program, scope_map, lines)` is whole-program
+and unconditional on any test case (like `NESTED_EXEC`'s reasoning, but
+"plan or silently skip" rather than "plan or refusal" -- declining this
+optimization is always safe). It targets the idiomatic mainframe
+early-exit pattern `find_terminator_plans`'s own `UNSUPPORTED_TERMINATOR_
+LAYOUT` message already names as a workaround: `IF cond GO TO MAIN-EXIT
+END-IF ... MAIN-EXIT. EXIT.` -- a `GO TO` into a paragraph whose entire
+body is one bare `EXIT.` (`refusal._is_exit_only_paragraph`). Rather than
+trying to fix the *target* paragraph's return machinery the way the two
+rejected candidates in
+[docs/2026-07-10-goto-reachable-terminators-design.md](../docs/2026-07-10-goto-reachable-terminators-design.md)
+did, this splices the `GO TO` **itself**, at its own call site, into
+`EXIT PARAGRAPH`/`EXIT SECTION` -- control never physically transfers to
+the target at runtime, so the "was this paragraph ever entered via GO TO"
+hazard never applies to it.
+
+Safety preconditions mirror `find_terminator_plans`' own: the GO TO's
+enclosing paragraph must not itself be in `_go_to_targets`/
+`_go_to_fallthrough_targets`, and must be top-level -- `SECTION`-scoped
+enclosing paragraphs are declined, not supported (see below). The
+exit-only paragraph must also be the enclosing paragraph's immediate
+successor in source order, with nothing else between them. All-or-nothing
+per target paragraph -- `_go_to_targets` is a whole-program property, so
+neutralizing some but not all `GO TO`s naming one exit-only paragraph
+would leave it exactly as hazardous as before; a computed or multi-target
+`GO TO` merely *naming* the target (even one `_go_statement_target` can't
+resolve to a site) disqualifies it too (`_go_statement_raw_targets`).
+
+**An independent code review (same day, pre-Docker-verification) found
+three more soundness holes beyond the span bug, all fixed before the PR
+left draft:**
+1. Nothing enforced the immediate-successor adjacency requirement above
+   -- it was described in the design doc but not checked in code. A
+   `PERFORM ... THRU <exit-paragraph>` range (a `.cut` test's own, or one
+   written in-program) covering a real intermediate paragraph got a
+   clean plan and a silently changed early-exit path: the original
+   `GO TO` skips the intermediate paragraph, `EXIT PARAGRAPH` doesn't.
+2. `EXIT SECTION` support (the original `_safe_section_entry_points`
+   first-paragraph shape) was unsound two ways -- a cleanup paragraph
+   after the exit-only paragraph inside the same section was silently
+   skipped, and the splice applied even in `find_terminator_plans`' own
+   unverified "shape 3" (a `.cut` `perform_target` naming the section's
+   first paragraph directly). Both need suite-case context this
+   whole-program function doesn't have; SECTION support is removed for
+   now rather than patched further (`GotoExitPlan.exit_kind` is always
+   `"PARAGRAPH"`).
+3. A computed or multi-target `GO TO` naming the exit-only paragraph was
+   invisible to the all-or-nothing check (`_go_statement_target` returns
+   `None` for it), so it never disqualified that target even though it's
+   a real GO TO edge into it -- `find_terminator_plans` could narrow
+   `_go_to_targets` by a paragraph that wasn't actually fully
+   neutralized. Fixed with a separate scan
+   (`_go_statement_raw_targets`) that disqualifies any target named by a
+   GO TO the per-site loop can't resolve.
+
+The same review also caught a fourth `find_terminator_plans` call site
+(`mutation/runner.py`, backing `mockymock mutate`) that was never wired
+up to compute or pass `goto_exit_plans` -- fixed the same way as
+`run`/`debug`/`export`. See
+`docs/2026-08-17-goto-exit-paragraph-simplification-design.md`'s
+"Revision note 2" for the full account.
+
+**Span computation is the load-bearing detail, and the first
+implementation got it wrong** (caught by actually running `mockymock
+export` on the textbook idiom, not by any check): a `GO TO` nested inside
+an `IF`/`EVALUATE` branch -- the idiom's own motivating shape -- cannot
+use `statement_span` (correct only for top-level statements; it has no
+location data for block words like `END-IF`, so it silently extended the
+replacement span past the `GO TO` and commented out the enclosing
+`END-IF` too, turning `EXIT PARAGRAPH` unconditional and permanently
+dead-coding whatever followed the `IF`). Fixed with `source_map.
+nested_statement_span` -- `_nested_site_span`'s "stop before the next
+scope-map boundary" rule, factored out to operate on a raw statement
+with no `MockCategory`/own-terminator concept -- and a
+`refusal._go_statements_with_nesting` walker (mirrors
+`_plain_perform_statements`' `nested`/`in_boundary` tagging) so
+`find_goto_exit_plans` knows which span function applies. `GotoExitPlan`
+carries the precomputed, validated `span` (never `None` on a returned
+plan); `splicer.orchestrator.splice_program`'s `goto_exit_plans` loop
+uses it as-is via `comment_and_replace`, never re-deriving it. Regression-
+pinned by `tests/unit/test_goto_exit.py::test_nested_goto_replacement_
+does_not_swallow_the_enclosing_end_if`.
+
+No `UT-EARLY-EXIT` flag is involved -- unlike terminator neutralization,
+this never propagates through an intermediate `PERFORM` chain (no
+`chain_performs`, no `build_chain_check`), since it always ends the SAME
+paragraph the `GO TO` already lived in
+(`injector.build_goto_exit_replacement`).
+
+`refusal.find_terminator_plans` narrows its own `_go_to_targets` by every
+fully-neutralized `GotoExitPlan` target before deriving
+`_go_to_fallthrough_targets` from it -- so a terminator chain whose only
+obstacle was this exact idiom (the exit-only paragraph falling through,
+per `_falls_through`, into whatever follows it in source order) now
+qualifies for flag-propagation neutralization too, where before it
+refused `UNSUPPORTED_TERMINATOR_LAYOUT`.
+
+Also closes, for this one shape, an adjacent gap the design doc names but
+does not otherwise fix: mockymock's reachability BFS always follows a
+`GO TO` edge regardless of whether the `.cut` test declared a matching
+`PERFORM ... THRU`, but the compiled driver's own `PERFORM {target}
+[THRU {thru}]` has no cross-check against what the program's control flow
+needs for correct runtime return semantics -- a `.cut` author who forgot
+`THRU MAIN-EXIT` could get a suite that compiles clean and runs silently
+wrong. Once the `GO TO` is spliced away, a plain `PERFORM` (no `THRU`)
+behaves correctly on both paths, provided the exit-only paragraph is the
+immediate next paragraph after the perform target in source order (the
+one THRU-elision shape this feature claims; a THRU range covering real
+intermediate paragraphs is not touched).
 
 # Generated SQLCA (sqlca.py)
 

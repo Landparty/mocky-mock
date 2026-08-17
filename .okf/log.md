@@ -51,6 +51,88 @@ had reason to consider.
 See `docs/2026-08-17-sort-merge-using-giving-mocking-design.md` and
 `tests/unit/test_sort_merge_mocking.py`.
 
+## 2026-08-17 — GO-TO-to-EXIT-PARAGRAPH simplification (STATUS: unverified against real GnuCOBOL)
+
+Added `refusal.find_goto_exit_plans`: automates the workaround
+`find_terminator_plans`'s own `UNSUPPORTED_TERMINATOR_LAYOUT` message
+already suggests for a GO-TO-target/fall-through hazard -- "if it exists
+purely as an early exit, an `EXIT PARAGRAPH` in its place usually removes
+the need for the jump entirely." For a `GO TO` into a provably no-op
+paragraph (`_is_exit_only_paragraph`: one bare `EXIT.` statement, nothing
+else) whose enclosing paragraph is itself safe, the `GO TO` is spliced
+directly into `EXIT PARAGRAPH`/`EXIT SECTION` at its own call site --
+sidestepping, rather than attempting to fix, the exact hazard the two
+candidate mechanisms in `docs/2026-07-10-goto-reachable-terminators-design.md`
+tried and failed to solve at the *target* paragraph. `find_terminator_plans`
+narrows its own `_go_to_targets` by every fully-neutralized target before
+deriving `_go_to_fallthrough_targets`, so a terminator chain whose only
+obstacle was this exact idiom now qualifies for neutralization too.
+
+Caught a real bug via `mockymock export` (not any check): the first
+implementation used `statement_span` unconditionally for the replacement
+span, which has no location data for block words -- a GO TO nested inside
+an `IF` (the idiom's own motivating shape) had its span silently extended
+past the `END-IF`, commenting it out too and turning `EXIT PARAGRAPH`
+unconditional. Fixed with a new `source_map.nested_statement_span`
+(`_nested_site_span`'s span rule, factored out for a raw statement with
+no clause bodies of its own) and a `refusal._go_statements_with_nesting`
+walker. Regression-pinned in `tests/unit/test_goto_exit.py`.
+
+**Not yet verified against real GnuCOBOL** -- no Docker daemon was
+available in the session that built this. A Docker-gated integration
+fixture (`tests/integration/test_goto_exit_support.py`) is written and
+ready but has not been run; its Docker-free companion test (through
+`mockymock export`) was run and passed, confirming the splice mechanics
+end-to-end but not GnuCOBOL's own runtime behavior. See
+`docs/2026-08-17-goto-exit-paragraph-simplification-design.md` for the
+full design, including a "Revision note" documenting the span bug, and
+an "Adjacent gap" section noting a separate, pre-existing, unrelated
+correctness gap discovered while designing this (the compiled driver's
+own `PERFORM ... THRU` has no cross-check against what a program's real
+control flow needs) -- not fixed here, flagged for future work.
+
+**Same-day addendum:** an independent multi-angle code review of the PR
+(before any Docker verification ran) found four more soundness holes in
+the version above, all confirmed by constructing the exact failing
+program and running it through `find_goto_exit_plans` directly, then
+fixed before the PR left draft:
+
+1. **No adjacency check.** The design doc claimed "the exit-only
+   paragraph is the immediate next paragraph after the perform target"
+   was the one safe shape, but no code enforced it -- a
+   `PERFORM ... THRU <exit-paragraph>` range (declared by a `.cut` test,
+   or written in-program) covering a real intermediate paragraph got a
+   clean plan and zero notes, silently changing that paragraph's
+   execution on the early-exit path. Fixed by checking
+   `_source_ordered_paragraphs` places the target immediately after the
+   enclosing paragraph before a site qualifies.
+2. **SECTION support was unsound two ways**, so it's removed for now
+   rather than patched further: `EXIT SECTION` silently skipped a
+   cleanup paragraph following the exit-only paragraph inside the same
+   section, and applied even in `find_terminator_plans`' own unverified
+   "shape 3" (a `.cut` `perform_target` naming a section's first
+   paragraph directly, bypassing `PERFORM <section-name>`).
+   `GotoExitPlan.exit_kind` is always `"PARAGRAPH"` now.
+3. **Computed/multi-target `GO TO`s were invisible to the all-or-nothing
+   check** -- `_go_statement_target` correctly returns `None` for one,
+   but that meant it was never counted as a site against its possible
+   targets, so it didn't disqualify them even though it's a real GO TO
+   edge into whichever one it happens to hit at runtime. Fixed with
+   `_go_statement_raw_targets`, a separate whole-program scan that
+   disqualifies any target named by a GO TO the per-site loop can't
+   resolve.
+4. **A fourth `find_terminator_plans` call site was missed**:
+   `mockymock/mutation/runner.py` (backing `mockymock mutate`) got the
+   goto-narrowed terminator plans but never computed or passed
+   `goto_exit_plans` to `splice_program` -- fixed the same way as
+   `run`/`debug`/`export`.
+
+See `docs/2026-08-17-goto-exit-paragraph-simplification-design.md`'s
+"Revision note 2" for the full account, including which lower-priority
+findings from the same review (duplicated helper logic, discarded
+decline-notes, `find_goto_exit_plans` computed twice per command) were
+deliberately deferred as non-correctness plumbing debt.
+
 ## 2026-08-16 — Teach the mockymock skill to reason about scenario generation
 
 The VS Code extension's "COBOL Boundaries" tree view (checkboxes +

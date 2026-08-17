@@ -304,6 +304,18 @@ def build_terminator_neutralization(exit_kind: str = "PARAGRAPH") -> list[str]:
     ]
 
 
+def build_goto_exit_replacement(exit_kind: str = "PARAGRAPH") -> list[str]:
+    """Replacement for a GO TO statement found safe to splice directly
+    into EXIT PARAGRAPH/EXIT SECTION at its own call site (see
+    docs/2026-08-17-goto-exit-paragraph-simplification-design.md and
+    analysis.refusal.GotoExitPlan). Unlike
+    build_terminator_neutralization, no UT-EARLY-EXIT flag is set here --
+    this transform never propagates through an intermediate PERFORM
+    chain, it always ends the SAME paragraph the GO TO already lived in.
+    STATUS: implemented, not yet verified against real GnuCOBOL."""
+    return [f"           EXIT {exit_kind}"]
+
+
 def build_chain_check() -> list[str]:
     """Inserted immediately after an intermediate PERFORM statement lying
     on a safe chain toward a neutralized terminator: if the flag is set,

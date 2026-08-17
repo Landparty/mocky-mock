@@ -39,7 +39,7 @@ def _run_suite_once(
     doctored source with no visible sign of it, breaking the same
     transparency guarantee `run`/`debug`/`export`/`lint` keep."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_terminator_plans
+    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.cli.checks import run_static_checks
     from mockymock.cli.main import _insert_driver
     from mockymock.report.results import parse_stdout
@@ -81,6 +81,7 @@ def _run_suite_once(
         terminator_plans, _ = find_terminator_plans(
             surface, result.ast, suite, scope_map, lines
         )
+        goto_exit_plans, _ = find_goto_exit_plans(result.ast, scope_map, lines)
         flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
         lines = splice_program(
             lines,
@@ -91,6 +92,7 @@ def _run_suite_once(
             terminator_plans,
             flow_plans,
             checked.file_status_fields,
+            goto_exit_plans=goto_exit_plans,
             trace=False,
         )
         lines, _ = transform_data_division_exec(lines, copybook_paths=copybook_paths)
