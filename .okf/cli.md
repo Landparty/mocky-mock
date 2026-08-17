@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-08-16T00:00:00Z
+timestamp: 2026-08-17T00:00:00Z
 ---
 
 # Overview
@@ -140,8 +140,12 @@ Flow (`_cmd_generate`):
 
 `_report_unsupported_boundaries` is the only non-trivial logic in this module:
 it walks `surface.boundary_sites` and names every site that stays unmockable —
-either `site.category is None` (uncategorized boundary, e.g. SORT/MERGE
-family or an identifier-less dynamic CALL) or `site.nested and site.span is
+either `site.category is None` (uncategorized boundary, e.g. a SORT/MERGE
+mixing a USING/GIVING file with an INPUT/OUTPUT PROCEDURE on the other
+side, or an identifier-less dynamic CALL — a plain-file-form SORT/MERGE, a
+pure-procedure-form SORT [never even recorded as a site], and RELEASE/
+RETURN all have a category and never appear here, see `analysis.md`) or
+`site.nested and site.span is
 None` (a nested site the splicer couldn't isolate, printed with
 `site.unspliceable_reason`). This list is purely informational at `generate`
 time — the scaffold is emitted regardless — but it documents exactly which

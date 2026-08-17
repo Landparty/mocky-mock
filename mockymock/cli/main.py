@@ -484,11 +484,15 @@ def _print_linkage_neutralization(command: str, plan, applied: bool) -> None:
 
 
 def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
-    """Name every detected boundary point that stays unmockable (the
-    SORT/MERGE family, identifier-less dynamic CALLs, unspliceable nested
-    sites), so the scaffold is never mistaken for complete coverage of the
-    program's outputs. Test cases whose PERFORM target reaches one of
-    these are refused by `run`.
+    """Name every detected boundary point that stays unmockable (a SORT/
+    MERGE mixing a USING/GIVING file with an INPUT/OUTPUT PROCEDURE on the
+    other side -- a plain-file-form SORT/MERGE and a pure-procedure-form
+    SORT are both mockable [the latter via its own RELEASE/RETURN] and
+    never appear here, see mock_surface.py's `_is_plain_sort_merge`/
+    `_is_pure_procedure_sort` -- identifier-less dynamic CALLs,
+    unspliceable nested sites), so the scaffold is never mistaken for
+    complete coverage of the program's outputs. Test cases whose PERFORM
+    target reaches one of these are refused by `run`.
 
     STOP RUN/GOBACK sites are reported separately and more cautiously:
     unlike the other category=None labels, `run` does not always refuse a

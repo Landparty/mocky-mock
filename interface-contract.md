@@ -65,6 +65,30 @@ mockymock too.
   ReleaseStatement,ReturnStatement}` — SORT/MERGE read and write real files
   (USING/GIVING and the SD sort file); RELEASE/RETURN are the sort-file
   write/read verbs. All four are classified as file I/O by `mock_surface.py`.
+  A `SortStatement`/`MergeStatement` is further classified as *mockable*
+  (`MockCategory.SORT`/`MERGE`, keyed by `.file_name`) exactly when both
+  `.input_procedure is None` and `.output_procedure is None` (the plain
+  `USING ... GIVING ...` file form) — `MergeStatement` has no
+  `input_procedure` attribute at all (MERGE has no INPUT PROCEDURE clause
+  in COBOL), read via `getattr(..., None)`. A `SortStatement` with BOTH
+  `.input_procedure is not None` and `.output_procedure is not None`, AND
+  empty `.using_files`/`.giving_files` (defensive: cobolparser's grammar
+  does not itself enforce COBOL's "exactly one of USING/INPUT PROCEDURE"
+  mutual exclusivity), touches no physical file at all and is left real/
+  unspliced -- not recorded as a `BoundarySite` (`_is_pure_procedure_sort`,
+  MERGE can never satisfy this shape). Any OTHER procedure-clause
+  combination (a USING/GIVING file paired with a procedure clause on the
+  other side) stays unmockable (`category=None`, `UNSUPPORTED_SORT_MERGE`).
+  `ReleaseStatement`/`ReturnStatement` are independently mockable
+  (`MockCategory.RELEASE` keyed by `.record_name`, `MockCategory.RETURN`
+  keyed by `.file_name`) regardless of which of the three SORT/MERGE
+  shapes above encloses them. `.input_procedure_thru`/`.output_procedure_
+  thru` (both `str | None`, mirroring `PerformStatement.thru_paragraph`)
+  are consumed by `refusal.py`'s `_reachable_paragraphs`, which must model
+  a SORT/MERGE's INPUT/OUTPUT PROCEDURE names as an implicit PERFORM edge
+  (no `PerformStatement` AST node represents it) or a RELEASE/RETURN
+  reachable only through one is invisible to the fail-closed gate. See
+  `docs/2026-08-17-sort-merge-using-giving-mocking-design.md`.
 - `cobolparser.models.statements.io.IOAcceptStatement.from_source: str | None`
   — `None` (plain `ACCEPT x`) or any source outside the known
   non-interactive set (DATE/DAY/DAY-OF-WEEK/TIME/COMMAND-LINE/ENVIRONMENT/

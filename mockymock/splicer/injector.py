@@ -32,16 +32,19 @@ def build_rows_block(
     row_suffix_moves: list[str],
     exhausted_moves: list[str],
 ) -> list[str]:
-    """EVALUATE block for a MOCK SQL/READ ... ROWS directive: row N's MOVEs
-    fire once `tally_name` (already incremented by the caller before this
-    runs, so the first call sees tally == 1) reaches N, followed by
-    `row_suffix_moves` (already-formed MOVE lines appended after every
-    row -- `["MOVE 0 TO SQLCODE"]` for SQL rows; `[]` for READ rows, whose
-    implicit default-success MOVE already precedes the whole block, see
-    build_site_dispatch); once rows are exhausted, `exhausted_moves` fires
-    instead (SQL: `["MOVE 100 TO SQLCODE"]`, DB2's real "not found" code;
-    READ: the resolved end-of-data signal -- either the mock's own
-    TERMINAL group or a default `MOVE "10" TO <status field>`)."""
+    """EVALUATE block for a MOCK SQL/READ/RETURN ... ROWS directive: row
+    N's MOVEs fire once `tally_name` (already incremented by the caller
+    before this runs, so the first call sees tally == 1) reaches N,
+    followed by `row_suffix_moves` (already-formed MOVE lines appended
+    after every row -- `["MOVE 0 TO SQLCODE"]` for SQL rows; `[]` for
+    READ/RETURN rows, whose implicit default-success MOVE, when one
+    exists, already precedes the whole block, see build_site_dispatch);
+    once rows are exhausted, `exhausted_moves` fires instead (SQL:
+    `["MOVE 100 TO SQLCODE"]`, DB2's real "not found" code; READ/RETURN:
+    the resolved end-of-data signal -- either the mock's own TERMINAL
+    group or, for READ only, a default `MOVE "10" TO <status field>` --
+    RETURN is never in FILE_STATUS_CATEGORIES, so its TERMINAL group is
+    the only source)."""
     lines = ["EVALUATE TRUE"]
     for index, row in enumerate(rows, start=1):
         lines.append(f"    WHEN {tally_name} = {index}")
@@ -80,24 +83,27 @@ def build_site_dispatch(
     something an earlier body line might otherwise have overwritten it
     with. See docs/2026-08-11-argument-capture-design.md.
 
-    A `MOCK READ ... ROWS` directive's exhaustion (`WHEN OTHER`) branch
-    follows the SAME implicit-default-then-explicit-override ordering as
-    the FILE-STATUS default-success MOVE above: when the file declares a
-    status field it always starts with the implicit `MOVE "10" TO <status
-    field>` (COBOL's real end-of-file code), and the directive's own
-    `TERMINAL ( ... )` group's MOVEs -- when present -- are appended right
-    after, so an author's own MOVE to that same field naturally wins by
-    coming later in the same WHEN branch, exactly like a hand-written MOVE
-    would. A TERMINAL group that never mentions the status field no
-    longer leaves it stuck at whatever the default-success `MOVE "00"`
-    set on the call that triggered this WHEN OTHER path -- it gets the
-    correct "10" instead. If the file has no status field, only the
-    TERMINAL group's own MOVEs fire (there is no field to default). If
-    NEITHER a status field nor a TERMINAL group is available this raises
-    ValueError rather than emit a READ loop with no way to terminate --
-    every production call site gates on `refusal.check_test_case`
-    (UNRESOLVED_FILE_STATUS_TARGET) first, using this same
-    `file_status_fields` dict, so that should be unreachable in practice.
+    A `MOCK READ ... ROWS` or `MOCK RETURN ... ROWS` directive's exhaustion
+    (`WHEN OTHER`) branch follows the SAME implicit-default-then-explicit-
+    override ordering as the FILE-STATUS default-success MOVE above: when
+    the file declares a status field it always starts with the implicit
+    `MOVE "10" TO <status field>` (COBOL's real end-of-file code), and the
+    directive's own `TERMINAL ( ... )` group's MOVEs -- when present --
+    are appended right after, so an author's own MOVE to that same field
+    naturally wins by coming later in the same WHEN branch, exactly like a
+    hand-written MOVE would. A TERMINAL group that never mentions the
+    status field no longer leaves it stuck at whatever the default-success
+    `MOVE "00"` set on the call that triggered this WHEN OTHER path -- it
+    gets the correct "10" instead. If the file has no status field, only
+    the TERMINAL group's own MOVEs fire (there is no field to default) --
+    this is always true for RETURN (not in FILE_STATUS_CATEGORIES, see
+    dsl/model.py), so a `MOCK RETURN ... ROWS` needs its own TERMINAL
+    group unconditionally. If NEITHER a status field nor a TERMINAL group
+    is available this raises ValueError rather than emit a READ/RETURN
+    loop with no way to terminate -- every production call site gates on
+    `refusal.check_test_case` (UNRESOLVED_FILE_STATUS_TARGET) first, using
+    this same `file_status_fields` dict, so that should be unreachable in
+    practice.
     """
     file_status_fields = file_status_fields or {}
     lines = ["           EVALUATE UT-CURRENT-CASE"]
@@ -165,7 +171,10 @@ def build_site_dispatch(
                     f"                   MOVE {using[capture_index - 1].name} "
                     f"TO {target}"
                 )
-        if directive.rows is not None and directive.category is MockCategory.READ:
+        if directive.rows is not None and directive.category in (
+            MockCategory.READ,
+            MockCategory.RETURN,
+        ):
             status_field = file_status_fields.get(directive.key.upper())
             if directive.terminal_row is None and status_field is None:
                 raise ValueError(

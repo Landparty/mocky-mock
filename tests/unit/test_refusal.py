@@ -1060,12 +1060,19 @@ def test_per_case_check_refuses_reachable_start_statement():
 
 
 def test_per_case_check_refuses_reachable_sort_statement():
+    # SORTS-THE-FILE's `SORT ... USING ... GIVING ...` is the plain
+    # file-to-file form -- no INPUT/OUTPUT PROCEDURE -- so it is mockable
+    # (MockCategory.SORT) since the SORT/MERGE USING/GIVING mocking
+    # feature landed; an unmocked reachable site refuses UNMOCKED_FILE_OP
+    # like any other file-op boundary, not UNSUPPORTED_SORT_MERGE (that
+    # code is now reserved for the INPUT/OUTPUT PROCEDURE form -- see
+    # test_sort_merge_mocking.py for both).
     result = _file_family_result()
     surface = analyze(result.ast)
     reasons = check_test_case(
         surface, result.ast, _case("SORTS-THE-FILE", call_names=())
     )
-    assert any(r.code == "UNSUPPORTED_SORT_MERGE" for r in reasons)
+    assert any(r.code == "UNMOCKED_FILE_OP" for r in reasons)
 
 
 def test_per_case_check_refuses_reachable_console_accept():

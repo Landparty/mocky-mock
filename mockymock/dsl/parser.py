@@ -66,9 +66,18 @@ from mockymock.dsl.model import (
 _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
 # CALL also appears here: the bare-key form is the dynamic-CALL mock.
 # PARAGRAPH/SECTION mock an internal flow target (a PROCEDURE DIVISION
-# paragraph or section) rather than an external boundary.
+# paragraph or section) rather than an external boundary. SORT/MERGE key
+# on their own SD file name (bare COBOL word), same shape as READ/DELETE/
+# START/UNLOCK -- only the plain USING ... GIVING ... file form, and the
+# pure INPUT PROCEDURE ... OUTPUT PROCEDURE ... form (via its own
+# RELEASE/RETURN below), are mockable; a form mixing USING/GIVING with a
+# procedure clause on the other side stays unsupported (see
+# mock_surface.py). RELEASE keys on the record name (WRITE-shaped);
+# RETURN keys on the SD file name (READ-shaped, including an AT END
+# clause).
 _BARE_CATS = (
-    "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT" "|PARAGRAPH|SECTION"
+    "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
+    "|SORT|MERGE|RELEASE|RETURN|PARAGRAPH|SECTION"
 )
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
@@ -457,10 +466,10 @@ def parse_cut(text: str) -> MockTestSuite:
                 in_mock.rows is not None
                 and (term_match := _TERMINAL_RE.match(line)) is not None
             ):
-                if in_mock.category is not MockCategory.READ:
+                if in_mock.category not in (MockCategory.READ, MockCategory.RETURN):
                     raise CutParseError(
                         f"line {line_no}: TERMINAL is only supported for "
-                        f"MOCK READ ... ROWS"
+                        f"MOCK READ ... ROWS and MOCK RETURN ... ROWS"
                     )
                 if in_mock.terminal_row is not None:
                     raise CutParseError(f"line {line_no}: duplicate TERMINAL group")
@@ -807,10 +816,13 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/" f"BEFORE-ALL"
                 )
             category = _resolve_category(m.group("cat"), bare_key=True)
-            if m.group("rows") and category is not MockCategory.READ:
+            if m.group("rows") and category not in (
+                MockCategory.READ,
+                MockCategory.RETURN,
+            ):
                 raise CutParseError(
-                    f"line {line_no}: ROWS is only supported for MOCK SQL "
-                    f'and MOCK READ, not MOCK {m.group("cat")}'
+                    f"line {line_no}: ROWS is only supported for MOCK SQL, "
+                    f'MOCK READ, and MOCK RETURN, not MOCK {m.group("cat")}'
                 )
             in_mock = _open_mock(
                 MockDirective(

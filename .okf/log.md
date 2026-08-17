@@ -1,5 +1,56 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-17 — Mock SORT/MERGE: plain file form + RELEASE/RETURN
+
+Closed the long-open "SORT/MERGE modeling" backlog item. Landed in two
+passes within the same day, the second reframing what "closed" actually
+meant:
+
+**Pass 1 (plain file form):** a plain `SORT ... USING <in>... GIVING
+<out>...` / `MERGE ... USING <in>... GIVING <out>...` (no INPUT/OUTPUT
+PROCEDURE) is mockable via `MOCK SORT <sd-name>` / `MOCK MERGE
+<sd-name>`, exactly like any other file-op boundary -- new
+`MockCategory.SORT`/`MERGE`, keyed by the statement's own SD file name.
+No splicer changes needed: `mock_surface.py`'s `_is_plain_sort_merge`
+classification was the only load-bearing change, since
+`splicer.orchestrator.splice_program`/`injector.build_site_dispatch` and
+`refusal.py`'s per-site loop were already fully category-generic.
+
+**Pass 2 (RELEASE/RETURN, prompted by user follow-up):** the remaining
+INPUT/OUTPUT PROCEDURE form isn't actually "an algorithm" -- `RELEASE
+record-name` is WRITE-shaped, `RETURN file-name ... AT END ...` is
+READ-shaped (its `AT END` clause already existed as an AST field). A
+SORT with BOTH procedures set and no USING/GIVING at all (MERGE can never
+reach this shape -- no INPUT PROCEDURE clause exists for it) touches no
+physical file, so it's now left real/unspliced (not even recorded as a
+boundary site, like `DISPLAY`), while its own `RELEASE`/`RETURN`
+statements become independently mockable (`MockCategory.RELEASE`/
+`RETURN`; `RETURN` also gained the `ROWS ( ... ) TERMINAL ( ... )` sugar
+previously READ-only, with `TERMINAL` effectively mandatory since RETURN
+is never in `FILE_STATUS_CATEGORIES`). Only a SORT/MERGE MIXING a
+USING/GIVING file with a procedure clause on the other side stays
+refused (`UNSUPPORTED_SORT_MERGE`) -- neither replacing nor leaving that
+shape real is safe.
+
+The one genuinely correctness-critical piece of pass 2: a SORT/MERGE
+statement is not a `PerformStatement` AST node, so its INPUT PROCEDURE/
+OUTPUT PROCEDURE names were invisible to `refusal.py`'s reachability BFS
+-- confirmed as a real (not theoretical) gap by running
+`_reachable_paragraphs` against a minimal pure-procedure SORT program
+before the fix: its own INPUT/OUTPUT PROCEDURE paragraphs were entirely
+absent from the reachable set, meaning an unmocked RELEASE/RETURN (or ANY
+other boundary) inside one would have silently executed for real at
+runtime, unmocked, exit 0. Fixed by modeling the implicit PERFORM edge
+`_reachable_paragraphs` needed (reusing `_expand_thru_range` for
+`input_procedure_thru`/`output_procedure_thru`, exactly like `PERFORM
+... THRU`) -- the same hazard class the project's 2026-07-07
+reachability-hole remediation and 2026-08-12 GO-TO-fall-through closure
+both exist to prevent, this time for a construct neither of those passes
+had reason to consider.
+
+See `docs/2026-08-17-sort-merge-using-giving-mocking-design.md` and
+`tests/unit/test_sort_merge_mocking.py`.
+
 ## 2026-08-17 — GO-TO-to-EXIT-PARAGRAPH simplification (STATUS: unverified against real GnuCOBOL)
 
 Added `refusal.find_goto_exit_plans`: automates the workaround
