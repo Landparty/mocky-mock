@@ -354,6 +354,54 @@ def statement_top_level_problem(
     return None
 
 
+def nested_statement_span(
+    statement, scope_map: ScopeMap, lines: list[str]
+) -> tuple[tuple[int, int] | None, str | None]:
+    """The validated replacement span for a NESTED statement that has no
+    clause bodies or scope terminator of its own (e.g. a GO TO nested
+    inside an IF/EVALUATE branch) -- the same "stop before the next
+    scope-map boundary" rule `_nested_site_span` applies to BoundarySites,
+    factored out to operate on a raw statement with no MockCategory/own-
+    terminator concept (there is no `_VERB_TERMINATORS` entry to exclude,
+    and no END-EXEC-style tail check). Callers must not use this for a
+    statement that owns clause bodies of its own -- check
+    `_nested_statement_lists(statement)` is empty first.
+
+    Exists because `statement_span`'s boundary list
+    (`collect_boundaries`) tracks only top-level statement/paragraph/
+    SECTION-header lines -- it has no location data for block words like
+    END-IF, so calling it on a nested statement can silently extend the
+    computed span PAST the statement's own line and swallow the scope
+    terminator that closes the block it's nested in. Verified concretely
+    while building GO-TO-to-EXIT-PARAGRAPH splicing (docs/2026-08-17-
+    goto-exit-paragraph-simplification-design.md): a `GO TO` nested
+    inside an `IF`, replaced via `statement_span`, commented out its own
+    `END-IF` too, turning `EXIT PARAGRAPH` into an unconditional
+    statement instead of one gated by the `IF`."""
+    start = statement.location.line
+    column = statement.location.column
+    if lines[start - 1][: column - 1].strip():
+        return None, "does not start its own line"
+
+    if any(
+        b.line == start and not (b.column == column and b.word == "")
+        for b in scope_map.boundaries
+    ):
+        return None, "shares its start line with another statement or scope word"
+
+    following = [b for b in scope_map.boundaries if b.line > start]
+    if not following:
+        return None, "no following statement or scope word to bound the span"
+    nxt = following[0]
+    if lines[nxt.line - 1][: nxt.column - 1].strip():
+        return None, (
+            f"the next scope word or statement (line {nxt.line}) does not "
+            f"start its own line"
+        )
+    end = _trim_trailing_blank_lines(start, nxt.line - 1, lines)
+    return (start, end), None
+
+
 def _nested_site_span(
     site: BoundarySite, scope_map: ScopeMap, lines: list[str]
 ) -> tuple[tuple[int, int] | None, str | None]:

@@ -1,5 +1,45 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-17 — GO-TO-to-EXIT-PARAGRAPH simplification (STATUS: unverified against real GnuCOBOL)
+
+Added `refusal.find_goto_exit_plans`: automates the workaround
+`find_terminator_plans`'s own `UNSUPPORTED_TERMINATOR_LAYOUT` message
+already suggests for a GO-TO-target/fall-through hazard -- "if it exists
+purely as an early exit, an `EXIT PARAGRAPH` in its place usually removes
+the need for the jump entirely." For a `GO TO` into a provably no-op
+paragraph (`_is_exit_only_paragraph`: one bare `EXIT.` statement, nothing
+else) whose enclosing paragraph is itself safe, the `GO TO` is spliced
+directly into `EXIT PARAGRAPH`/`EXIT SECTION` at its own call site --
+sidestepping, rather than attempting to fix, the exact hazard the two
+candidate mechanisms in `docs/2026-07-10-goto-reachable-terminators-design.md`
+tried and failed to solve at the *target* paragraph. `find_terminator_plans`
+narrows its own `_go_to_targets` by every fully-neutralized target before
+deriving `_go_to_fallthrough_targets`, so a terminator chain whose only
+obstacle was this exact idiom now qualifies for neutralization too.
+
+Caught a real bug via `mockymock export` (not any check): the first
+implementation used `statement_span` unconditionally for the replacement
+span, which has no location data for block words -- a GO TO nested inside
+an `IF` (the idiom's own motivating shape) had its span silently extended
+past the `END-IF`, commenting it out too and turning `EXIT PARAGRAPH`
+unconditional. Fixed with a new `source_map.nested_statement_span`
+(`_nested_site_span`'s span rule, factored out for a raw statement with
+no clause bodies of its own) and a `refusal._go_statements_with_nesting`
+walker. Regression-pinned in `tests/unit/test_goto_exit.py`.
+
+**Not yet verified against real GnuCOBOL** -- no Docker daemon was
+available in the session that built this. A Docker-gated integration
+fixture (`tests/integration/test_goto_exit_support.py`) is written and
+ready but has not been run; its Docker-free companion test (through
+`mockymock export`) was run and passed, confirming the splice mechanics
+end-to-end but not GnuCOBOL's own runtime behavior. See
+`docs/2026-08-17-goto-exit-paragraph-simplification-design.md` for the
+full design, including a "Revision note" documenting the span bug, and
+an "Adjacent gap" section noting a separate, pre-existing, unrelated
+correctness gap discovered while designing this (the compiled driver's
+own `PERFORM ... THRU` has no cross-check against what a program's real
+control flow needs) -- not fixed here, flagged for future work.
+
 ## 2026-08-16 — Teach the mockymock skill to reason about scenario generation
 
 The VS Code extension's "COBOL Boundaries" tree view (checkboxes +

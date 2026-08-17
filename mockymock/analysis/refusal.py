@@ -229,7 +229,12 @@ from mockymock.dsl.model import (
     MockTestCase,
     MockTestSuite,
 )
-from mockymock.splicer.source_map import statement_top_level_problem
+from mockymock.splicer.source_map import (
+    collect_boundaries,
+    nested_statement_span,
+    statement_span,
+    statement_top_level_problem,
+)
 
 _UNMOCKED_CODES = {
     MockCategory.CALL: "UNMOCKED_CALL",
@@ -288,6 +293,35 @@ class TerminatorPlan:
     site: BoundarySite
     chain_performs: list = field(default_factory=list)
     exit_kind: str = "PARAGRAPH"
+
+
+@dataclass
+class GotoExitPlan:
+    """One physical GO TO statement found safe to splice directly into
+    EXIT PARAGRAPH/EXIT SECTION at its own call site, because its target
+    is a paragraph whose entire body is a no-op EXIT statement -- see
+    docs/2026-08-17-goto-exit-paragraph-simplification-design.md.
+    STATUS: implemented, not yet verified against real GnuCOBOL (no
+    Docker daemon was available when this was written) -- see that
+    design doc's Status note before trusting this in production.
+
+    Unlike TerminatorPlan, this never carries chain_performs: the
+    replacement ends the SAME paragraph the GO TO already lived in, so
+    there is nothing to propagate through an intermediate PERFORM chain
+    -- no UT-EARLY-EXIT flag is involved at all.
+
+    `span` is precomputed by find_goto_exit_plans (never None on a
+    returned plan -- a plan whose span could not be validated is not
+    returned at all): a top-level GO TO's span comes from `statement_span`,
+    a nested one's from `nested_statement_span`. Precomputing it here,
+    once, at the same place the safety checks run, means the splicer
+    never has to re-derive nested-vs-top-level span logic itself -- see
+    `nested_statement_span`'s docstring for the bug this avoids."""
+
+    statement: GoStatement
+    paragraph_name: str
+    exit_kind: str = "PARAGRAPH"
+    span: tuple[int, int] | None = None
 
 
 # Shown when a nested site reaches a check before annotate_nested_sites ran
@@ -2093,6 +2127,233 @@ def _plain_perform_edges_from(
     return seen, edges
 
 
+def _is_exit_only_paragraph(paragraph) -> bool:
+    """True when `paragraph`'s entire body is one bare EXIT statement --
+    an ExitStatement whose exit_type is none of PARAGRAPH/SECTION/PROGRAM,
+    the same no-op-placeholder shape _falls_through's docstring already
+    names (`MAIN-EXIT. EXIT.`, the idiomatic mainframe early-exit landing
+    pad .okf/analysis.md calls out by name). Deliberately does NOT accept
+    an empty (zero-statement) body -- narrower, harder-to-misclassify
+    shape chosen deliberately for v1; see
+    docs/2026-08-17-goto-exit-paragraph-simplification-design.md's "What
+    counts as an exit-only paragraph"."""
+    statements = paragraph.statements
+    if len(statements) != 1:
+        return False
+    statement = statements[0]
+    return isinstance(statement, ExitStatement) and statement.exit_type not in (
+        "PARAGRAPH",
+        "SECTION",
+        "PROGRAM",
+    )
+
+
+def _go_statements_with_nesting(
+    statements: list, nested: bool = False, in_boundary: bool = False
+) -> list[tuple[GoStatement, bool, bool]]:
+    """Recursively collect every GoStatement in `statements`, tagged with
+    `nested` (False only for a direct top-level member of the paragraph's
+    own .statements list) and `in_boundary` (sticky -- True once recursion
+    has entered another boundary statement's clause body) -- the exact
+    same propagation `_plain_perform_statements` applies to PerformStatement
+    and `mock_surface._walk_statements` applies to boundary sites. Needed
+    because a top-level GO TO's replacement span comes from
+    `statement_span` (correct only when nothing between it and the next
+    top-level statement has its own scope terminator), while a nested GO
+    TO (inside an IF/EVALUATE branch) needs the validated
+    `nested_statement_span` instead -- see that function's docstring for
+    the bug this distinction exists to avoid."""
+    found: list[tuple[GoStatement, bool, bool]] = []
+    for statement in statements:
+        if isinstance(statement, GoStatement):
+            found.append((statement, nested, in_boundary))
+        child_in_boundary = in_boundary or isinstance(
+            statement, _BOUNDARY_STATEMENT_TYPES
+        )
+        for nested_list in _nested_statement_lists(statement):
+            found.extend(
+                _go_statements_with_nesting(
+                    nested_list, nested=True, in_boundary=child_in_boundary
+                )
+            )
+    return found
+
+
+def _go_statement_target(statement: GoStatement) -> str | None:
+    """The single, unconditional target name of `statement`, or None when
+    it is computed (`depending_on_variable` is not None) or names more
+    than one paragraph -- both excluded because neither resolves to
+    "always this one paragraph," which GO-TO-to-EXIT-PARAGRAPH splicing
+    requires. Mirrors `_reachable_paragraphs`' own target-list handling
+    (`target_paragraphs` first, falling back to the singular
+    `target_paragraph`)."""
+    if statement.depending_on_variable is not None:
+        return None
+    targets = list(statement.target_paragraphs) if statement.target_paragraphs else []
+    if not targets and statement.target_paragraph:
+        targets = [statement.target_paragraph]
+    if len(targets) != 1:
+        return None
+    return targets[0]
+
+
+def find_goto_exit_plans(
+    program, scope_map, lines: list[str]
+) -> tuple[list[GotoExitPlan], list[str]]:
+    """Whole-program, unconditional on any test case -- like NESTED_EXEC's
+    reasoning, but "plan or silently skip" rather than "plan or refusal":
+    declining this optimization is always safe, the program compiles and
+    runs exactly as it does today, so an ineligible candidate is reported
+    as an informational note, never a RefusalReason that would block the
+    run. See
+    docs/2026-08-17-goto-exit-paragraph-simplification-design.md.
+    STATUS: implemented, not yet verified against real GnuCOBOL.
+
+    A GO TO qualifies only when: it names a single, unconditional target
+    (`_go_statement_target`) that is an exit-only paragraph
+    (`_is_exit_only_paragraph`); it owns its own source line
+    (`statement_top_level_problem` -- a GO TO has no nested clause body of
+    its own, so this single check is sufficient, no terminator-style span
+    lookup needed); and its enclosing paragraph is itself safe to issue
+    EXIT PARAGRAPH/EXIT SECTION from -- the exact preconditions
+    find_terminator_plans already enforces on a terminator's own
+    paragraph: not in `_go_to_targets`, not in
+    `_go_to_fallthrough_targets`, and either a top-level paragraph or the
+    first paragraph of a `_safe_section_entry_points` entry.
+
+    All-or-nothing per target paragraph: `_go_to_targets`/
+    `_go_to_fallthrough_targets` are whole-program properties, so
+    neutralizing some but not all GO TOs naming one exit-only paragraph
+    would leave that paragraph exactly as hazardous as before. If every
+    GO TO naming a given exit-only paragraph qualifies, all are
+    neutralized together; if even one fails, none of that paragraph's GO
+    TOs are touched and a note explains why.
+
+    `_safe_section_entry_points`'s own internal `_go_to_targets` check is
+    deliberately NOT narrowed by any OTHER goto-exit plan already found --
+    composing two neutralizations to unlock a section entry is real
+    additional complexity with no corpus example needing it; at worst
+    this costs an extra declined optimization, never unsoundness."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return [], []
+
+    paragraphs = _all_paragraphs(procedure)
+    exit_only_names = {
+        p.paragraph_name for p in paragraphs if _is_exit_only_paragraph(p)
+    }
+    if not exit_only_names:
+        return [], []
+
+    top_level_names = {p.paragraph_name for p in procedure.paragraphs}
+    go_to_targets = _go_to_targets(program)
+    go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
+    safe_section_entries = _safe_section_entry_points(program)
+    safe_section_first_names = set(safe_section_entries.values())
+    boundaries = collect_boundaries(program)
+    last_line = len(lines)
+
+    by_target: dict[str, list[tuple[GoStatement, str, bool, bool]]] = {}
+    for paragraph in paragraphs:
+        for statement, nested, in_boundary in _go_statements_with_nesting(
+            paragraph.statements
+        ):
+            target = _go_statement_target(statement)
+            if target is not None and target in exit_only_names:
+                by_target.setdefault(target, []).append(
+                    (statement, paragraph.paragraph_name, nested, in_boundary)
+                )
+
+    plans: list[GotoExitPlan] = []
+    notes: list[str] = []
+    for target_name, sites in sorted(by_target.items()):
+        problems: list[str] = []
+        computed: list[tuple[GoStatement, str, str, tuple[int, int]]] = []
+        for statement, enclosing, nested, in_boundary in sites:
+            if enclosing in go_to_targets:
+                problems.append(
+                    f"line {statement.location.line}: enclosing paragraph "
+                    f"'{enclosing}' is itself a GO TO target elsewhere in "
+                    f"the program"
+                )
+                continue
+            if enclosing in go_to_fallthrough:
+                problems.append(
+                    f"line {statement.location.line}: enclosing paragraph "
+                    f"'{enclosing}' is reached only by falling through "
+                    f"past a GO TO target elsewhere in the program"
+                )
+                continue
+            if (
+                enclosing not in top_level_names
+                and enclosing not in safe_section_first_names
+            ):
+                problems.append(
+                    f"line {statement.location.line}: enclosing paragraph "
+                    f"'{enclosing}' belongs to a SECTION that is not a "
+                    f"safely-enterable-only-by-name entry point"
+                )
+                continue
+            if in_boundary:
+                problems.append(
+                    f"line {statement.location.line}: nested inside another "
+                    f"boundary statement's clause body -- splicing the "
+                    f"enclosing statement would remove this GO TO along "
+                    f"with it"
+                )
+                continue
+
+            exit_kind = (
+                "SECTION" if enclosing in safe_section_first_names else "PARAGRAPH"
+            )
+            if nested:
+                # Never true for a GoStatement in practice (it has no
+                # clause bodies of its own), checked anyway for the same
+                # reason _nested_site_span checks it: defense in depth
+                # against a future statement-model change.
+                if _nested_statement_lists(statement):
+                    problems.append(
+                        f"line {statement.location.line}: has conditional "
+                        f"clause bodies of its own"
+                    )
+                    continue
+                span, reason = nested_statement_span(statement, scope_map, lines)
+                if span is None:
+                    problems.append(f"line {statement.location.line}: {reason}")
+                    continue
+            else:
+                line_problem = statement_top_level_problem(statement, scope_map, lines)
+                if line_problem is not None:
+                    problems.append(
+                        f"line {statement.location.line}: the GO TO "
+                        f"statement {line_problem}"
+                    )
+                    continue
+                span = statement_span(statement, boundaries, last_line, lines)
+
+            computed.append((statement, enclosing, exit_kind, span))
+
+        if problems:
+            notes.append(
+                f"GO TO {target_name} left as-is at {len(sites)} site(s) -- "
+                f"not all are safe to splice into EXIT PARAGRAPH/SECTION "
+                f"automatically: " + "; ".join(problems)
+            )
+            continue
+
+        for statement, enclosing, exit_kind, span in computed:
+            plans.append(
+                GotoExitPlan(
+                    statement=statement,
+                    paragraph_name=enclosing,
+                    exit_kind=exit_kind,
+                    span=span,
+                )
+            )
+
+    return plans, notes
+
+
 def find_terminator_plans(
     surface: MockSurface,
     program,
@@ -2158,7 +2419,22 @@ def find_terminator_plans(
         return [], []
 
     top_level_names = {p.paragraph_name for p in procedure.paragraphs}
-    go_to_targets = _go_to_targets(program)
+    # A paragraph fully covered by a GotoExitPlan (every GO TO naming it
+    # gets spliced into EXIT PARAGRAPH/SECTION at its own call site) is no
+    # longer entered via GO TO at all once splicing runs -- narrow
+    # go_to_targets before deriving go_to_fallthrough from it, so a
+    # terminator chain whose only obstacle was this exact idiom
+    # (docs/2026-08-17-goto-exit-paragraph-simplification-design.md)
+    # qualifies for neutralization here too. _safe_section_entry_points'
+    # own internal go_to_targets check is deliberately left un-narrowed --
+    # see find_goto_exit_plans' docstring.
+    goto_exit_plans, _goto_exit_notes = find_goto_exit_plans(program, scope_map, lines)
+    neutralized_goto_targets = {
+        target
+        for target in (_go_statement_target(plan.statement) for plan in goto_exit_plans)
+        if target is not None
+    }
+    go_to_targets = _go_to_targets(program) - neutralized_goto_targets
     safe_section_entries = _safe_section_entry_points(program)
     safe_section_first_names = set(safe_section_entries.values())
     go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
