@@ -34,6 +34,8 @@ class MockCategory(Enum):
     UNLOCK = "UNLOCK"
     SORT = "SORT"
     MERGE = "MERGE"
+    RELEASE = "RELEASE"
+    RETURN = "RETURN"
     SQL = "SQL"
     CICS = "CICS"
     DLI = "DLI"
@@ -54,6 +56,10 @@ class MockCategory(Enum):
 # a plain-file-form SORT/MERGE (USING ... GIVING ..., no INPUT/OUTPUT
 # PROCEDURE) keys on its own SD file name, the same bare-word shape as
 # READ/DELETE/START/UNLOCK -- see mock_surface.py's classification.
+# RELEASE/RETURN -- the record-supply verbs used inside a SORT/MERGE's
+# INPUT/OUTPUT PROCEDURE -- join it too: RELEASE keys on the record name
+# (WRITE-shaped), RETURN keys on the SD file name (READ-shaped, including
+# an AT END clause -- see FILE_OP_CATEGORIES' ROWS/TERMINAL note below).
 FILE_OP_CATEGORIES = frozenset(
     {
         MockCategory.OPEN,
@@ -66,6 +72,8 @@ FILE_OP_CATEGORIES = frozenset(
         MockCategory.UNLOCK,
         MockCategory.SORT,
         MockCategory.MERGE,
+        MockCategory.RELEASE,
+        MockCategory.RETURN,
     }
 )
 
@@ -85,6 +93,11 @@ FLOW_CATEGORIES = frozenset({MockCategory.PARAGRAPH, MockCategory.SECTION})
 # are excluded for the same reason WRITE/REWRITE are: a SORT/MERGE's SD
 # has no FILE STATUS clause of its own (the status, if any, belongs to
 # the USING/GIVING FDs), so there is no single field to default/override.
+# RELEASE/RETURN are excluded too, for the same reason -- a MOCK RETURN
+# ... ROWS block's rows-exhausted branch therefore always needs its own
+# TERMINAL group (there is no implicit-default fallback to lean on); see
+# refusal.py's UNRESOLVED_FILE_STATUS_TARGET check and injector.py's ROWS
+# dispatch, both widened from READ-only to (READ, RETURN).
 FILE_STATUS_CATEGORIES = frozenset(
     {
         MockCategory.OPEN,

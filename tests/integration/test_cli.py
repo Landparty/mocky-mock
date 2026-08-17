@@ -459,15 +459,17 @@ BOUNDARY_MIX_CBL = """\
 
 
 def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys):
-    """The mock surface still detects boundaries no version can mock (a
-    SORT/MERGE using an INPUT/OUTPUT PROCEDURE, and RELEASE/RETURN
-    belonging to one). generate must say so, not silently drop them --
-    otherwise the scaffold looks like complete coverage of the program's
-    boundary points when it isn't. File I/O, console ACCEPT, dynamic CALL
-    (since the 2026-07-06 design), and a plain-file-form SORT/MERGE --
-    `USING ... GIVING ...`, no procedure clause -- (since the SORT/MERGE
-    USING/GIVING mocking feature) are all mockable and must NOT be
-    reported."""
+    """The mock surface still detects boundaries no version can mock: a
+    SORT/MERGE mixing a USING/GIVING file with a procedure clause on the
+    other side. generate must say so, not silently drop it -- otherwise
+    the scaffold looks like complete coverage of the program's boundary
+    points when it isn't. File I/O, console ACCEPT, dynamic CALL (since
+    the 2026-07-06 design), a plain-file-form SORT/MERGE (`USING ...
+    GIVING ...`, no procedure clause), and a RELEASE belonging to a
+    mixed-form SORT's INPUT PROCEDURE (independently mockable regardless
+    of the enclosing SORT's own shape) are all mockable and must NOT be
+    reported -- since the SORT/MERGE USING/GIVING + RELEASE/RETURN
+    mocking features."""
     program = tmp_path / "BOUNDMIX.cbl"
     program.write_text(BOUNDARY_MIX_CBL)
     output = tmp_path / "BOUNDMIX.cut"
@@ -479,7 +481,7 @@ def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys
     assert "not mockable" in out
     assert "SORT/MERGE" in out
     assert "SORTS-DATA-WITH-PROCEDURE" in out
-    assert "FEEDS-THE-SORT" in out
+    assert "FEEDS-THE-SORT" not in out  # its RELEASE is independently mockable
     assert "SORTS-DATA'" not in out  # the plain USING/GIVING form
     assert "dynamic CALL" not in out
     assert "file I/O" not in out

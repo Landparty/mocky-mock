@@ -239,13 +239,13 @@ Two key syntaxes, split by category:
 | Syntax | Categories | Key regex | Example |
 |---|---|---|---|
 | Quoted | `CALL`, `MQ` (sugar), `SQL`, `CICS`, `DLI` | `"[^"]*"` | `MOCK CALL "DISCRATE"`, `MOCK SQL "UPDATE INVENTORY"` |
-| Bare COBOL word | `CALL` (dynamic form), `OPEN`, `CLOSE`, `READ`, `WRITE`, `REWRITE`, `DELETE`, `START`, `UNLOCK`, `SORT`, `MERGE`, `ACCEPT`, `PARAGRAPH`, `SECTION` | `[A-Za-z0-9][A-Za-z0-9-]*` | `MOCK OPEN INV-FILE`, `MOCK CALL WS-PGM-NAME`, `MOCK SORT SORT-FILE`, `MOCK PARAGRAPH CALC-TOTALS` |
+| Bare COBOL word | `CALL` (dynamic form), `OPEN`, `CLOSE`, `READ`, `WRITE`, `REWRITE`, `DELETE`, `START`, `UNLOCK`, `SORT`, `MERGE`, `RELEASE`, `RETURN`, `ACCEPT`, `PARAGRAPH`, `SECTION` | `[A-Za-z0-9][A-Za-z0-9-]*` | `MOCK OPEN INV-FILE`, `MOCK CALL WS-PGM-NAME`, `MOCK SORT SORT-FILE`, `MOCK RETURN SORT-FILE ROWS ... TERMINAL (...)`, `MOCK PARAGRAPH CALC-TOTALS` |
 
 Bare keys are upper-cased by the parser (`m.group("key").upper()`); quoted
 keys are kept exactly as written.
 
-`MockCategory` (in `model.py`) has 18 members. `MOCK`/`VERIFY` text spells
-18 distinct keywords too (`sorted(set(m.keyword for m in MockCategory) |
+`MockCategory` (in `model.py`) has 20 members. `MOCK`/`VERIFY` text spells
+20 distinct keywords too (`sorted(set(m.keyword for m in MockCategory) |
 {"MQ"})`), but the two counts don't line up member-for-member: `DYNCALL`
 collapses into the `CALL` keyword (no `.cut` file is ever written with
 `DYNCALL`), while `MQ` is a keyword with no member of its own (pure sugar
@@ -257,7 +257,8 @@ for `CALL`) — see `_resolve_category` in `parser.py`:
 | `DYNCALL` | `CALL` | `MOCK CALL WS-PGM` (bare key) — **never written as `DYNCALL`** in `.cut` files |
 | `SQL`, `CICS`, `DLI` | `SQL`, `CICS`, `DLI` | quoted key, prefix-matches normalized EXEC text |
 | `OPEN`,`CLOSE`,`READ`,`WRITE`,`REWRITE`,`DELETE`,`START`,`UNLOCK` | same | bare key = file/record name |
-| `SORT`, `MERGE` | same | bare key = the SORT/MERGE statement's own SD file name -- only a plain-file-form site (`USING ... GIVING ...`, no INPUT/OUTPUT PROCEDURE) is ever classified into these categories; the procedure form stays `category=None`/`UNSUPPORTED_SORT_MERGE`, see [analysis](analysis.md) |
+| `SORT`, `MERGE` | same | bare key = the SORT/MERGE statement's own SD file name -- only a plain-file-form site (`USING ... GIVING ...`, no INPUT/OUTPUT PROCEDURE) is ever classified into these categories; a mixed-form site (a USING/GIVING file paired with a procedure clause on the other side) stays `category=None`/`UNSUPPORTED_SORT_MERGE`, see [analysis](analysis.md) |
+| `RELEASE`, `RETURN` | same | RELEASE keys on the record name (WRITE-shaped); RETURN keys on the SD file name (READ-shaped, `ROWS ( ... ) TERMINAL ( ... )` sugar reused from READ -- see below -- but RETURN always needs its own `TERMINAL` group since it is never in `FILE_STATUS_CATEGORIES`). Both only ever appear inside a SORT's INPUT/OUTPUT PROCEDURE, but are mockable independent of whether the enclosing SORT/MERGE turned out pure-procedure (left real) or mixed-form (still refused) |
 | `ACCEPT` | `ACCEPT` | bare key = data-name being accepted into |
 | `PARAGRAPH`, `SECTION` | same | bare key = a PROCEDURE DIVISION paragraph/section name — flow-target mocks, not boundaries; grouped as `FLOW_CATEGORIES` in `model.py` (see [analysis](analysis.md)'s `flow_mocks.py` and [splicer](splicer.md)'s header dispatch) |
 | `CALL` (again) | `MQ` | `MOCK MQ "X"` — pure sugar, becomes a `CALL` directive; MQ is invoked through static `CALL`s, so there is no `MockCategory.MQ` |
@@ -310,7 +311,7 @@ docs/2026-08-04-record-expectations-design.md for the full design.
 | Class | Fields | Notes |
 |---|---|---|
 | `MockCategory` (Enum) | `CALL, DYNCALL, OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START, UNLOCK, SQL, CICS, DLI, ACCEPT, PARAGRAPH, SECTION` | `.keyword` property maps `DYNCALL → "CALL"`, everything else to its own name |
-| `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None, terminal_row: list[tuple[str, str]] \| None, captures: list[tuple[int, str]]` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS` or `MOCK READ <file> ROWS` directive and is mutually exclusive with `body_lines`; `terminal_row` holds a READ ROWS directive's optional `TERMINAL ( FIELD = value, ... )` group (its rows-exhausted `WHEN OTHER` field assignments) — always `None` for SQL rows (SQLCODE 100 is fixed) and for non-ROWS mocks; `captures` holds `CAPTURE ARG <n> INTO <target>` `(n, target)` pairs, only ever non-empty for CALL/DYNCALL directives |
+| `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None, terminal_row: list[tuple[str, str]] \| None, captures: list[tuple[int, str]]` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS`, `MOCK READ <file> ROWS`, or `MOCK RETURN <sd-file> ROWS` directive and is mutually exclusive with `body_lines`; `terminal_row` holds a READ/RETURN ROWS directive's optional (READ) or effectively mandatory (RETURN) `TERMINAL ( FIELD = value, ... )` group (its rows-exhausted `WHEN OTHER` field assignments) — always `None` for SQL rows (SQLCODE 100 is fixed) and for non-ROWS mocks; `captures` holds `CAPTURE ARG <n> INTO <target>` `(n, target)` pairs, only ever non-empty for CALL/DYNCALL directives |
 | `DataProvider` | `name, line, header: list[str], rows: list[list[str]], row_lines: list[int]` | Parser-internal only -- never stored on `MockTestSuite`/`MockTestCase`; consumed and discarded by `_expand_providers` before `parse_cut()` returns |
 | `ExpectDirective` | `data_name, expected_value` | one `EXPECT` line |
 | `VerifyDirective` | `category, key, expectation` | `.program_name` same v1-compat alias as `MockDirective` |
@@ -426,32 +427,44 @@ Rules:
   inside a quoted name, so interpolating one raw would make the scaffold
   unparseable.
 
-### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`)
+### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`)
 
 `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
-END-MOCK` and `MOCK READ <file> ROWS ( FIELD = value, ... ) ( ... )
-[TERMINAL ( FIELD = value, ... )] END-MOCK` are the only two categories
-`ROWS` is valid on — any other category raises `CutParseError` at parse
-time (`"ROWS is only supported for MOCK SQL and MOCK READ, not MOCK
-<cat>"`). Both store structured rows on `MockDirective.rows` instead of
-free-form `body_lines` — the two are mutually exclusive by construction
-(the parser routes lines to one or the other based on whether `ROWS`
-appeared on the opening line). Row values are unparsed free text
-(matching `EXPECT ... TO BE <value>`'s convention) split on top-level
-commas — `_split_top_level` in `parser.py` is quote-aware, so a value like
-`EMP-NAME = "SMITH, JR."` isn't cut at the comma inside the literal. An
-empty `ROWS` block (`ROWS` immediately followed by `END-MOCK`/`TERMINAL`)
-is a `CutParseError`, not a silent no-op.
+END-MOCK`, `MOCK READ <file> ROWS ( FIELD = value, ... ) ( ... )
+[TERMINAL ( FIELD = value, ... )] END-MOCK`, and `MOCK RETURN <sd-file>
+ROWS ( FIELD = value, ... ) ( ... ) TERMINAL ( FIELD = value, ... )
+END-MOCK` are the only three categories `ROWS` is valid on (RETURN joined
+2026-08-17, SORT/MERGE mocking) — any other category raises
+`CutParseError` at parse time (`"ROWS is only supported for MOCK SQL,
+MOCK READ, and MOCK RETURN, not MOCK <cat>"`). All three store structured
+rows on `MockDirective.rows` instead of free-form `body_lines` — the two
+are mutually exclusive by construction (the parser routes lines to one or
+the other based on whether `ROWS` appeared on the opening line). Row
+values are unparsed free text (matching `EXPECT ... TO BE <value>`'s
+convention) split on top-level commas — `_split_top_level` in `parser.py`
+is quote-aware, so a value like `EMP-NAME = "SMITH, JR."` isn't cut at the
+comma inside the literal. An empty `ROWS` block (`ROWS` immediately
+followed by `END-MOCK`/`TERMINAL`) is a `CutParseError`, not a silent
+no-op.
 
-**`TERMINAL ( FIELD = value, ... )`** is READ-only grammar (`_TERMINAL_RE`
-in `parser.py`): an optional line inside a `MOCK READ ... ROWS` body, at
-most one per directive, giving the rows-exhausted branch's own field
-assignments instead of the parser's implicit default. Parsed only while
-`in_mock.rows is not None` (i.e. only inside an open `ROWS` block); using
-it inside `MOCK SQL ... ROWS` is a `CutParseError` (SQLCODE's exhaustion
-value is fixed at 100, not overridable), as is a second `TERMINAL` group
-on the same directive (`"duplicate TERMINAL group"`). Stored on
-`MockDirective.terminal_row`, `None` when omitted.
+**`TERMINAL ( FIELD = value, ... )`** is READ/RETURN-only grammar
+(`_TERMINAL_RE` in `parser.py`): an optional (for READ) or, in practice,
+**mandatory** (for RETURN — see below) line inside a `MOCK READ ... ROWS`
+or `MOCK RETURN ... ROWS` body, at most one per directive, giving the
+rows-exhausted branch's own field assignments instead of the parser's
+implicit default. Parsed only while `in_mock.rows is not None` (i.e. only
+inside an open `ROWS` block); using it inside `MOCK SQL ... ROWS` is a
+`CutParseError` (SQLCODE's exhaustion value is fixed at 100, not
+overridable), as is a second `TERMINAL` group on the same directive
+(`"duplicate TERMINAL group"`). Stored on `MockDirective.terminal_row`,
+`None` when omitted. **RETURN has no implicit default at all** — it is
+never in `FILE_STATUS_CATEGORIES` (a SORT/MERGE's SD has no FILE STATUS
+clause of its own, same reasoning as WRITE/REWRITE, see
+[analysis](analysis.md)) — so `refusal.check_test_case`'s
+`UNRESOLVED_FILE_STATUS_TARGET` check refuses a `MOCK RETURN ... ROWS`
+with no `TERMINAL` group unconditionally, not just when a status field
+happens to be missing (unlike READ, where the same check only fires when
+BOTH the TERMINAL group and a FILE STATUS field are absent).
 
 A `PERFORM ... UNTIL <flag> = <value>` loop driven by the READ's own
 `AT END`-set flag (rather than the file's `FILE STATUS` field) needs that

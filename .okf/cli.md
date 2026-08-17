@@ -141,9 +141,11 @@ Flow (`_cmd_generate`):
 `_report_unsupported_boundaries` is the only non-trivial logic in this module:
 it walks `surface.boundary_sites` and names every site that stays unmockable —
 either `site.category is None` (uncategorized boundary, e.g. a SORT/MERGE
-using an INPUT/OUTPUT PROCEDURE, RELEASE/RETURN belonging to one, or an
-identifier-less dynamic CALL — a plain-file-form SORT/MERGE has a category
-and never appears here, see `analysis.md`) or `site.nested and site.span is
+mixing a USING/GIVING file with an INPUT/OUTPUT PROCEDURE on the other
+side, or an identifier-less dynamic CALL — a plain-file-form SORT/MERGE, a
+pure-procedure-form SORT [never even recorded as a site], and RELEASE/
+RETURN all have a category and never appear here, see `analysis.md`) or
+`site.nested and site.span is
 None` (a nested site the splicer couldn't isolate, printed with
 `site.unspliceable_reason`). This list is purely informational at `generate`
 time — the scaffold is emitted regardless — but it documents exactly which

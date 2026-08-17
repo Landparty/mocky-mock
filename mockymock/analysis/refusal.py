@@ -96,14 +96,20 @@ Detected-but-unmockable sites keep their own refusals: DYNAMIC_CALL (now
 only for a dynamic CALL whose target identifier cobolparser failed to
 capture -- identifier-carrying dynamic CALLs are mockable via
 MOCK CALL <identifier>, see docs/2026-07-06-dynamic-call-mocks-design.md)
-and UNSUPPORTED_SORT_MERGE (now only for a SORT/MERGE using an INPUT or
-OUTPUT PROCEDURE, and RELEASE/RETURN which only ever appear inside one --
-that form mocks an algorithm plus its procedure contract, not a boundary
-statement. A plain-file-form SORT/MERGE -- `USING ... GIVING ...`, no
+and UNSUPPORTED_SORT_MERGE (now only for a SORT/MERGE mixing a USING/
+GIVING file with an INPUT/OUTPUT PROCEDURE on the other side -- that
+shape touches a physical file mockymock cannot seed/read AND runs a
+procedure whose other logic a whole-statement mock would silently skip,
+so it stays unsupported. Two other SORT/MERGE shapes are NOT refused
+here: a plain-file-form SORT/MERGE -- `USING ... GIVING ...`, no
 procedure clause -- is mockable via MOCK SORT/MOCK MERGE <sd-file-name>
-like any other file-op boundary and falls through the ordinary UNMOCKED_
-FILE_OP/AMBIGUOUS_MOCK/nested/layout checks below, see mock_surface.py's
-`_is_plain_sort_merge`).
+like any other file-op boundary (see mock_surface.py's
+`_is_plain_sort_merge`), and a pure-procedure-form SORT -- `INPUT
+PROCEDURE ... OUTPUT PROCEDURE ...`, no USING/GIVING at all -- is left
+real/unspliced (see `_is_pure_procedure_sort`), with its RELEASE/RETURN
+statements independently mockable via MOCK RELEASE/MOCK RETURN. All
+three mockable categories fall through the ordinary UNMOCKED_FILE_OP/
+AMBIGUOUS_MOCK/nested/layout checks below like any other file op).
 A reachable CANCEL is covered when the test case mocks CALL (static or
 dynamic) for the same name -- the mocked CALL never loads a real module,
 so the CANCEL is a guaranteed GnuCOBOL no-op left in place -- and refuses
@@ -214,6 +220,8 @@ from cobolparser.models.statements.misc import (
     AlterStatement,
     ExitStatement,
     GobackStatement,
+    MergeStatement,
+    SortStatement,
 )
 from cobolparser.preprocess import normalize_fixed_format
 
@@ -1178,19 +1186,31 @@ def check_test_case(
                 # satisfy check_test_case's unrelated matching rules.
                 pass
             else:
+                # Only a mixed-form SORT/MERGE reaches this branch now
+                # (category=None): plain-file-form is mockable
+                # (MockCategory.SORT/MERGE), and a pure-procedure-form
+                # SORT is left real/unspliced and never even recorded as
+                # a boundary site -- see mock_surface.py's
+                # `_is_plain_sort_merge`/`_is_pure_procedure_sort`.
                 reasons.append(
                     RefusalReason(
                         code="UNSUPPORTED_SORT_MERGE",
                         message=(
                             f"paragraph '{site.paragraph_name}' (line {site.line}) "
-                            f"contains a SORT/MERGE-family statement using an "
-                            f"INPUT/OUTPUT PROCEDURE, or a RELEASE/RETURN "
-                            f"belonging to one, which mocks an algorithm plus "
-                            f"its procedure contract rather than a boundary -- "
-                            f"not supported (a plain `SORT ... USING ... "
-                            f"GIVING ...`/`MERGE ... USING ... GIVING ...` "
-                            f"with no procedure clause is mockable via MOCK "
-                            f"SORT/MOCK MERGE)"
+                            f"contains a SORT/MERGE statement mixing a "
+                            f"USING/GIVING file with an INPUT/OUTPUT "
+                            f"PROCEDURE on the other side -- that shape "
+                            f"touches a physical file mockymock cannot "
+                            f"seed/read and runs a procedure whose other "
+                            f"logic a whole-statement mock would silently "
+                            f"skip, so it stays unsupported (a plain `SORT "
+                            f"... USING ... GIVING ...`/`MERGE ... USING "
+                            f"... GIVING ...` with no procedure clause is "
+                            f"mockable via MOCK SORT/MOCK MERGE; a pure "
+                            f"`INPUT PROCEDURE ... OUTPUT PROCEDURE ...` "
+                            f"SORT with no USING/GIVING at all is left "
+                            f"real, with its RELEASE/RETURN independently "
+                            f"mockable via MOCK RELEASE/MOCK RETURN)"
                         ),
                     )
                 )
@@ -1408,8 +1428,13 @@ def check_test_case(
         # ALSO in play the block above already reported it for this exact
         # directive -- firing this one too would double-refuse the same
         # directive with a second, redundant message (audit finding F27).
+        # RETURN joins READ here (2026-08-17, SORT/MERGE mocking): RETURN
+        # is never in FILE_STATUS_CATEGORIES at all (see dsl/model.py), so
+        # `missing_status_field` is unconditionally True for it -- a MOCK
+        # RETURN ... ROWS with no TERMINAL group ALWAYS refuses, not just
+        # when the SD happens to lack a FILE STATUS field.
         elif (
-            directive.category is MockCategory.READ
+            directive.category in (MockCategory.READ, MockCategory.RETURN)
             and directive.rows is not None
             and directive.terminal_row is None
             and missing_status_field
@@ -1418,11 +1443,12 @@ def check_test_case(
                 RefusalReason(
                     code="UNRESOLVED_FILE_STATUS_TARGET",
                     message=(
-                        f"MOCK READ {directive.key} ROWS has no way to "
-                        f"signal end-of-data: the file declares no FILE "
-                        f"STATUS field and the mock has no "
-                        f"TERMINAL ( ... ) group -- add one or the read "
-                        f"loop cannot terminate"
+                        f"MOCK {directive.category.keyword} {directive.key} "
+                        f"ROWS has no way to signal end-of-data: the file "
+                        f"declares no FILE STATUS field and the mock has "
+                        f"no TERMINAL ( ... ) group -- add one or the "
+                        f"{directive.category.keyword.lower()} loop cannot "
+                        f"terminate"
                     ),
                 )
             )
@@ -1479,6 +1505,20 @@ def _find_flow_statements(statements: list) -> list:
     reimplementing nested-statement detection.
     """
     return _find_statements_of_type(statements, (PerformStatement, GoStatement))
+
+
+def _find_sort_merge_statements(statements: list) -> list:
+    """Recursively collect every SortStatement/MergeStatement in
+    `statements`, same traversal as `_find_flow_statements`. A
+    SORT/MERGE's INPUT/OUTPUT PROCEDURE names are an implicit PERFORM
+    edge the reachability BFS must follow even though the AST node isn't
+    a PerformStatement -- otherwise a RELEASE/RETURN (or any other
+    boundary statement) reachable only through one of those paragraphs is
+    invisible to the fail-closed gate, the same hazard class the GO TO
+    fall-through / PERFORM-section / SEARCH-WHEN reachability fixes
+    closed for other constructs (see the module docstring's "2026-07-07
+    reachability-hole remediation" and .okf/analysis.md)."""
+    return _find_statements_of_type(statements, (SortStatement, MergeStatement))
 
 
 def _source_ordered_paragraphs(procedure) -> list | None:
@@ -1555,7 +1595,10 @@ def _reachable_paragraphs(
     skip_traversal: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[set[str], list[RefusalReason]]:
     """Return (reachable paragraph/section names, flow refusals), computed
-    in a single BFS pass over PerformStatement and GoStatement edges.
+    in a single BFS pass over PerformStatement and GoStatement edges, plus
+    the implicit PERFORM edge a SORT/MERGE's INPUT PROCEDURE/OUTPUT
+    PROCEDURE names represent (2026-08-17, SORT/MERGE mocking) -- see
+    `_find_sort_merge_statements`.
 
     `skip_traversal` holds paragraph/section names mocked as flow targets
     (MOCK PARAGRAPH/SECTION) by the test case under analysis: a name in it
@@ -1714,6 +1757,33 @@ def _reachable_paragraphs(
                             ordered,
                             statement.target_paragraph,
                             statement.thru_paragraph,
+                            f"paragraph '{name}'",
+                        )
+                        if problem is not None:
+                            reasons.append(problem)
+                        stack.extend(members)
+
+            # A SORT/MERGE's INPUT PROCEDURE/OUTPUT PROCEDURE names an
+            # implicit PERFORM edge no PerformStatement AST node
+            # represents -- modeled unconditionally for any SORT/MERGE
+            # with a procedure clause (both the now-mockable pure form
+            # and the still-refused mixed form), so a RELEASE/RETURN
+            # reachable only through one is never invisible to the gate.
+            for statement in _find_sort_merge_statements(by_name[name].statements):
+                for procedure_attr, thru_attr in (
+                    ("input_procedure", "input_procedure_thru"),
+                    ("output_procedure", "output_procedure_thru"),
+                ):
+                    procedure_target = getattr(statement, procedure_attr, None)
+                    if procedure_target is None:
+                        continue
+                    push_target(procedure_target, name, statement.statement_type)
+                    procedure_thru = getattr(statement, thru_attr, None)
+                    if procedure_thru:
+                        members, problem = _expand_thru_range(
+                            ordered,
+                            procedure_target,
+                            procedure_thru,
                             f"paragraph '{name}'",
                         )
                         if problem is not None:
