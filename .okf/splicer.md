@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-17T00:00:00Z
+timestamp: 2026-08-17T01:00:00Z
 ---
 
 # Overview
@@ -559,11 +559,49 @@ hazard never applies to it.
 
 Safety preconditions mirror `find_terminator_plans`' own: the GO TO's
 enclosing paragraph must not itself be in `_go_to_targets`/
-`_go_to_fallthrough_targets`, and must be top-level or a
-`_safe_section_entry_points` first paragraph. All-or-nothing per target
-paragraph -- `_go_to_targets` is a whole-program property, so neutralizing
-some but not all `GO TO`s naming one exit-only paragraph would leave it
-exactly as hazardous as before.
+`_go_to_fallthrough_targets`, and must be top-level -- `SECTION`-scoped
+enclosing paragraphs are declined, not supported (see below). The
+exit-only paragraph must also be the enclosing paragraph's immediate
+successor in source order, with nothing else between them. All-or-nothing
+per target paragraph -- `_go_to_targets` is a whole-program property, so
+neutralizing some but not all `GO TO`s naming one exit-only paragraph
+would leave it exactly as hazardous as before; a computed or multi-target
+`GO TO` merely *naming* the target (even one `_go_statement_target` can't
+resolve to a site) disqualifies it too (`_go_statement_raw_targets`).
+
+**An independent code review (same day, pre-Docker-verification) found
+three more soundness holes beyond the span bug, all fixed before the PR
+left draft:**
+1. Nothing enforced the immediate-successor adjacency requirement above
+   -- it was described in the design doc but not checked in code. A
+   `PERFORM ... THRU <exit-paragraph>` range (a `.cut` test's own, or one
+   written in-program) covering a real intermediate paragraph got a
+   clean plan and a silently changed early-exit path: the original
+   `GO TO` skips the intermediate paragraph, `EXIT PARAGRAPH` doesn't.
+2. `EXIT SECTION` support (the original `_safe_section_entry_points`
+   first-paragraph shape) was unsound two ways -- a cleanup paragraph
+   after the exit-only paragraph inside the same section was silently
+   skipped, and the splice applied even in `find_terminator_plans`' own
+   unverified "shape 3" (a `.cut` `perform_target` naming the section's
+   first paragraph directly). Both need suite-case context this
+   whole-program function doesn't have; SECTION support is removed for
+   now rather than patched further (`GotoExitPlan.exit_kind` is always
+   `"PARAGRAPH"`).
+3. A computed or multi-target `GO TO` naming the exit-only paragraph was
+   invisible to the all-or-nothing check (`_go_statement_target` returns
+   `None` for it), so it never disqualified that target even though it's
+   a real GO TO edge into it -- `find_terminator_plans` could narrow
+   `_go_to_targets` by a paragraph that wasn't actually fully
+   neutralized. Fixed with a separate scan
+   (`_go_statement_raw_targets`) that disqualifies any target named by a
+   GO TO the per-site loop can't resolve.
+
+The same review also caught a fourth `find_terminator_plans` call site
+(`mutation/runner.py`, backing `mockymock mutate`) that was never wired
+up to compute or pass `goto_exit_plans` -- fixed the same way as
+`run`/`debug`/`export`. See
+`docs/2026-08-17-goto-exit-paragraph-simplification-design.md`'s
+"Revision note 2" for the full account.
 
 **Span computation is the load-bearing detail, and the first
 implementation got it wrong** (caught by actually running `mockymock

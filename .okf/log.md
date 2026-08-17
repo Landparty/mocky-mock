@@ -40,6 +40,48 @@ correctness gap discovered while designing this (the compiled driver's
 own `PERFORM ... THRU` has no cross-check against what a program's real
 control flow needs) -- not fixed here, flagged for future work.
 
+**Same-day addendum:** an independent multi-angle code review of the PR
+(before any Docker verification ran) found four more soundness holes in
+the version above, all confirmed by constructing the exact failing
+program and running it through `find_goto_exit_plans` directly, then
+fixed before the PR left draft:
+
+1. **No adjacency check.** The design doc claimed "the exit-only
+   paragraph is the immediate next paragraph after the perform target"
+   was the one safe shape, but no code enforced it -- a
+   `PERFORM ... THRU <exit-paragraph>` range (declared by a `.cut` test,
+   or written in-program) covering a real intermediate paragraph got a
+   clean plan and zero notes, silently changing that paragraph's
+   execution on the early-exit path. Fixed by checking
+   `_source_ordered_paragraphs` places the target immediately after the
+   enclosing paragraph before a site qualifies.
+2. **SECTION support was unsound two ways**, so it's removed for now
+   rather than patched further: `EXIT SECTION` silently skipped a
+   cleanup paragraph following the exit-only paragraph inside the same
+   section, and applied even in `find_terminator_plans`' own unverified
+   "shape 3" (a `.cut` `perform_target` naming a section's first
+   paragraph directly, bypassing `PERFORM <section-name>`).
+   `GotoExitPlan.exit_kind` is always `"PARAGRAPH"` now.
+3. **Computed/multi-target `GO TO`s were invisible to the all-or-nothing
+   check** -- `_go_statement_target` correctly returns `None` for one,
+   but that meant it was never counted as a site against its possible
+   targets, so it didn't disqualify them even though it's a real GO TO
+   edge into whichever one it happens to hit at runtime. Fixed with
+   `_go_statement_raw_targets`, a separate whole-program scan that
+   disqualifies any target named by a GO TO the per-site loop can't
+   resolve.
+4. **A fourth `find_terminator_plans` call site was missed**:
+   `mockymock/mutation/runner.py` (backing `mockymock mutate`) got the
+   goto-narrowed terminator plans but never computed or passed
+   `goto_exit_plans` to `splice_program` -- fixed the same way as
+   `run`/`debug`/`export`.
+
+See `docs/2026-08-17-goto-exit-paragraph-simplification-design.md`'s
+"Revision note 2" for the full account, including which lower-priority
+findings from the same review (duplicated helper logic, discarded
+decline-notes, `find_goto_exit_plans` computed twice per command) were
+deliberately deferred as non-correctness plumbing debt.
+
 ## 2026-08-16 — Teach the mockymock skill to reason about scenario generation
 
 The VS Code extension's "COBOL Boundaries" tree view (checkboxes +

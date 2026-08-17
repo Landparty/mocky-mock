@@ -170,6 +170,82 @@ confirmed to pass against the fix). The rest of this document (below)
 still describes the intended shape; only the span-computation mechanics
 changed from what's written there.
 
+## Revision note 2 (independent code review, same day)
+
+An independent multi-angle code review of the PR (before any Docker
+verification ran) found four more soundness holes in the first shipped
+version — all confirmed by constructing the exact failing program and
+running it through `find_goto_exit_plans` directly, the same discipline
+as Revision note 1. Fixed the same day, before the PR left draft:
+
+1. **No adjacency check.** Nothing required the exit-only paragraph to
+   be the immediate next paragraph after the GO TO's enclosing paragraph
+   in source order — exactly the "one THRU-elision-safe shape" this
+   document already claimed was the only one supported, but no code
+   enforced it. A `PERFORM ... THRU <exit-paragraph>` range (declared by
+   a `.cut` test, or written in-program) covering a real intermediate
+   paragraph got a clean plan and zero notes: the original `GO TO` skips
+   the intermediate paragraph, but `EXIT PARAGRAPH` only ends the
+   enclosing paragraph, so the THRU range's own fall-through then runs
+   it on the early-exit path where it never did before — a silent
+   behavior change on every affected program. Fixed by requiring
+   `target_idx == enclosing_idx + 1` in `_source_ordered_paragraphs`'
+   result before a site qualifies.
+2. **SECTION support was unsound in two ways**, so it's removed
+   entirely for now rather than patched further: (a) a cleanup paragraph
+   following the exit-only paragraph inside the same section was
+   silently skipped by `EXIT SECTION` (the original fall-through ran it;
+   nothing checked the exit-only paragraph was the section's *last*
+   paragraph); (b) the splice was applied even in
+   `find_terminator_plans`' own "shape 3" — a `.cut` test's
+   `perform_target` naming the section's first paragraph directly,
+   bypassing `PERFORM <section-name>` — a shape that function itself
+   still refuses as unverified. Both need suite-case context this
+   whole-program function doesn't have; deferred rather than
+   half-solved. `GotoExitPlan.exit_kind` is always `"PARAGRAPH"` now.
+3. **Computed/multi-target GO TOs were invisible to the all-or-nothing
+   check.** `_go_statement_target` correctly returns `None` for a
+   computed `GO TO ... DEPENDING ON`, but that meant such a GO TO was
+   never counted as a "site" against its possible targets at all — so a
+   computed GO TO naming the exit-only paragraph as one of its targets
+   didn't disqualify it, even though it's exactly as real a GO TO edge
+   into that paragraph as the resolvable one. `find_terminator_plans`
+   would then narrow `_go_to_targets` by a paragraph that was NOT, in
+   fact, fully neutralized — the computed GO TO stays live in the
+   compiled source, reopening the spike-#4 silent-halt hazard for any
+   terminator behind it. Fixed with a separate whole-program scan
+   (`_go_statement_raw_targets`, deliberately ignoring
+   `depending_on_variable`) that disqualifies a target named by ANY GO
+   TO the per-site loop can't resolve, before the per-site loop runs.
+4. **`mockymock mutate`'s fourth `find_terminator_plans` call site was
+   never updated** (`mockymock/mutation/runner.py`) — it got the
+   goto-narrowed terminator plans but never computed or passed
+   `goto_exit_plans` to `splice_program`, so mutants (and the baseline
+   run) kept a live GO TO while the terminator it made reachable was
+   neutralized anyway. Fixed by adding the same `find_goto_exit_plans`
+   call and `goto_exit_plans=` kwarg `run`/`debug`/`export` already had.
+
+All four are pinned by new/updated tests in `tests/unit/test_goto_exit.py`
+(`test_find_goto_exit_plans_declines_when_thru_range_would_cover_a_real_paragraph`,
+`test_find_goto_exit_plans_declines_section_scoped_enclosing_paragraph`,
+`test_find_goto_exit_plans_declines_when_a_computed_goto_also_names_the_target`)
+and verified against the exact failing programs the review constructed.
+The `mockymock mutate` fix has no dedicated test — `tests/unit/` doesn't
+exercise `mutation/runner.py`'s splice wiring directly, matching that
+module's existing test coverage shape; flagged here rather than silently
+left uncovered.
+
+**Not fixed, deliberately deferred as lower priority** (not correctness
+bugs — see the review's other findings): `find_goto_exit_plans` is still
+computed twice per command (once inside `find_terminator_plans`, once by
+each caller) rather than threaded through as a single value; its decline
+notes are still discarded at every call site rather than surfacing under
+`--verbose`; and several internal helpers duplicate logic that already
+exists elsewhere in this module (the nested/in_boundary tagging walker,
+the GO TO target-list normalization, the trailing-period splice idiom).
+None of these cause wrong output — they're consolidation/plumbing debt,
+left for a follow-up pass.
+
 ## Detection: `_is_exit_only_paragraph` and `find_goto_exit_plans`
 
 ### What counts as an exit-only paragraph
@@ -188,14 +264,21 @@ same posture the SECTION-scoped terminator work has followed throughout.
 
 ### What counts as a safely-neutralizable GO TO
 
-A `GoStatement` qualifies only when **all** of:
+A `GoStatement` qualifies only when **all** of (updated by "Revision note
+2" above — items 2-3 below did not exist in the first shipped version):
 
 - Single, unconditional target: `depending_on_variable is None`, and
   exactly one name in `target_paragraphs` (or `target_paragraph` alone,
   no list) — a computed `GO TO ... DEPENDING ON` is excluded because it
   might not go to the exit-only paragraph at all, and a multi-target
   plain `GO TO A B` is unresolvable to "always this one paragraph."
-- That one target name is an exit-only paragraph (above).
+- That one target name is an exit-only paragraph (above), and no OTHER
+  GO TO anywhere in the program — including a computed or multi-target
+  one that fails the check above — could also land on it
+  (`_go_statement_raw_targets`, checked separately, ignoring
+  `depending_on_variable`): such a GO TO is invisible to this per-site
+  loop but is exactly as real a GO TO edge into that paragraph as a
+  resolvable one, so its mere existence disqualifies the whole target.
 - The statement owns its own source line and a validated replacement
   span exists for it: a top-level GO TO uses
   `statement_top_level_problem`/`statement_span` (the same helpers
@@ -203,16 +286,23 @@ A `GoStatement` qualifies only when **all** of:
   statements); a GO TO nested inside an `IF`/`EVALUATE` branch — the
   idiom's own motivating shape — uses `nested_statement_span` instead,
   the same "stop before the next scope-map boundary" rule
-  `_nested_site_span` applies to `BoundarySite`s. See "Revision note"
+  `_nested_site_span` applies to `BoundarySite`s. See "Revision note 1"
   above: the first implementation used `statement_span` unconditionally
   and silently swallowed the enclosing `END-IF` for the nested case.
 - Its **enclosing paragraph** (found by walking `_all_paragraphs` and
   checking statement identity, since `GoStatement` carries no back-
-  pointer) is itself safe to issue `EXIT PARAGRAPH`/`EXIT SECTION` from —
-  reusing the exact preconditions `find_terminator_plans` already
-  enforces on a terminator's own paragraph: not in `_go_to_targets`, not
-  in `_go_to_fallthrough_targets`, and either a top-level paragraph or the
-  first paragraph of a `_safe_section_entry_points` entry.
+  pointer) is itself safe to issue `EXIT PARAGRAPH` from — reusing the
+  exact preconditions `find_terminator_plans` already enforces on a
+  terminator's own paragraph: top-level (`SECTION`-scoped enclosing
+  paragraphs are declined — see "Revision note 2" above), not in
+  `_go_to_targets`, not in `_go_to_fallthrough_targets`.
+- The exit-only paragraph is the **immediate next paragraph** after the
+  enclosing paragraph in source order, with nothing else between them —
+  the one THRU-elision-safe shape "THRU elision" below describes. See
+  "Revision note 2" above: the first shipped version had no code
+  enforcing this, so a `PERFORM ... THRU <exit-paragraph>` range
+  covering a real intermediate paragraph got a clean plan and a silently
+  changed early-exit path.
 
 ### All-or-nothing per target paragraph
 
@@ -273,11 +363,16 @@ silently mis-execute on the early-exit path (see "Adjacent gap" below).
 The `THRU` keyword becomes optional advice, not a correctness requirement,
 for this one shape.
 
-No new analysis function is needed for this half: it falls out of the
-splice itself. `GO TO MAIN-EXIT` no longer exists in the compiled source
-after splicing, so `PERFORM MAIN-PROCESS` (THRU or not) behaves
-identically on the early-exit path once the immediate-next-paragraph
-condition holds — nothing additional to compute or gate.
+**Revision note (see "Revision note 2" above):** the paragraph below
+originally claimed "no new analysis function is needed for this half...
+nothing additional to compute or gate" — that was wrong, and was the
+root cause of one of the four holes the independent code review found.
+`find_goto_exit_plans` now explicitly enforces the immediate-next-
+paragraph condition itself (not just relying on it being true in
+practice); a target that fails it is declined with a note rather than
+silently spliced. What *is* still true: once a plan is emitted, no
+further THRU-specific splice logic is needed — the enforcement lives
+entirely in the eligibility check, not in a separate transform.
 
 ## Splice mechanics
 

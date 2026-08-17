@@ -277,13 +277,95 @@ def test_find_goto_exit_plans_is_all_or_nothing_per_target():
     assert "2 site(s)" in notes[0]
 
 
-def test_find_goto_exit_plans_supports_safe_section_entry():
+def test_find_goto_exit_plans_declines_section_scoped_enclosing_paragraph():
+    """SECTION support is deliberately NOT implemented (see the module
+    docstring): both a cleanup paragraph after the exit-only paragraph
+    inside the same section, and find_terminator_plans' own unverified
+    "shape 3" (a .cut perform_target naming the section's first paragraph
+    directly) need suite-case context this whole-program function does
+    not have. A SECTION-scoped enclosing paragraph is declined, not
+    silently mishandled."""
     program, _, scope_map, lines = _analyze(SECTION_ENTRY_SOURCE)
     plans, notes = find_goto_exit_plans(program, scope_map, lines)
-    assert notes == []
-    assert len(plans) == 1
-    assert plans[0].paragraph_name == "1000-ENTRY"
-    assert plans[0].exit_kind == "SECTION"
+    assert plans == []
+    assert len(notes) == 1
+    assert "SECTION" in notes[0]
+
+
+def test_find_goto_exit_plans_declines_when_thru_range_would_cover_a_real_paragraph():
+    """Regression pin for a real bug found by code review: without an
+    adjacency check, splicing GO TO -> EXIT PARAGRAPH silently changes
+    the early-exit path's behavior whenever a PERFORM ... THRU range
+    (declared by a .cut test, or written in-program) covers a REAL
+    paragraph between the GO TO's enclosing paragraph and the exit-only
+    target -- the original GO TO skips it, but EXIT PARAGRAPH only ends
+    the enclosing paragraph, so the THRU range's own fall-through then
+    runs it on the early-exit path where it never did before."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. THRUMID.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-COND             PIC X VALUE "N".
+       01  WS-Y                PIC 9 VALUE 0.
+
+       PROCEDURE DIVISION.
+       1000-STEP.
+           IF WS-COND = "Y"
+               GO TO 9000-EXIT
+           END-IF
+           DISPLAY "NORMAL".
+
+       2000-MORE.
+           MOVE 2 TO WS-Y.
+
+       9000-EXIT.
+           EXIT.
+"""
+    program, _, scope_map, lines = _analyze(source)
+    plans, notes = find_goto_exit_plans(program, scope_map, lines)
+    assert plans == []
+    assert len(notes) == 1
+    assert "not the paragraph immediately following" in notes[0]
+
+
+def test_find_goto_exit_plans_declines_when_a_computed_goto_also_names_the_target():
+    """Regression pin for a real bug found by code review: a computed or
+    multi-target GO TO naming the exit-only paragraph is invisible to
+    _go_statement_target (returns None), so it was never counted as a
+    site against that target -- but it is still a real GO TO edge into
+    it. Left unguarded, find_terminator_plans' narrowing of
+    _go_to_targets by a "fully neutralized" target would be unsound: the
+    computed GO TO stays live in the compiled source, entering the
+    (formerly) exit-only paragraph via GO TO exactly as before."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COMPUTEDBLIND.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-COND             PIC X VALUE "N".
+       01  WS-N                PIC 9 VALUE 9.
+
+       PROCEDURE DIVISION.
+       1000-PROC.
+           IF WS-COND = "Y"
+               GO TO 9000-EXIT
+           END-IF
+           DISPLAY "WORK".
+
+       9000-EXIT.
+           EXIT.
+
+       2000-OTHER.
+           GO TO 9000-EXIT 9000-EXIT DEPENDING ON WS-N.
+"""
+    program, _, scope_map, lines = _analyze(source)
+    plans, notes = find_goto_exit_plans(program, scope_map, lines)
+    assert plans == []
+    assert len(notes) == 1
+    assert "computed or multi-target GO TO" in notes[0]
 
 
 # --- wiring into find_terminator_plans --------------------------------------
