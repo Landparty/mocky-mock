@@ -14,6 +14,7 @@ from mockymock.dsl.model import (
 from mockymock.splicer.injector import (
     build_chain_check,
     build_exec_trap,
+    build_goto_exit_replacement,
     build_rows_block,
     build_site_dispatch,
     build_terminator_neutralization,
@@ -181,6 +182,16 @@ def test_chain_check_exits_paragraph_when_flag_set():
         "               EXIT PARAGRAPH",
         "           END-IF",
     ]
+
+
+def test_goto_exit_replacement_exits_paragraph_no_flag():
+    lines = build_goto_exit_replacement()
+    assert lines == ["           EXIT PARAGRAPH"]
+
+
+def test_goto_exit_replacement_with_section_exit_kind_exits_section():
+    lines = build_goto_exit_replacement("SECTION")
+    assert lines == ["           EXIT SECTION"]
 
 
 def test_rows_block_codegens_indexed_when_branches_and_exhaustion():

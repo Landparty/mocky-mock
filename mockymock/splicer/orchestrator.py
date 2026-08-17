@@ -38,12 +38,17 @@ from collections.abc import Sequence
 
 from mockymock.analysis.flow_mocks import FlowMockPlan
 from mockymock.analysis.mock_surface import MockSurface
-from mockymock.analysis.refusal import TerminatorPlan, directive_matches_site
+from mockymock.analysis.refusal import (
+    GotoExitPlan,
+    TerminatorPlan,
+    directive_matches_site,
+)
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
 from mockymock.splicer.injector import (
     build_chain_check,
     build_exec_trap,
     build_flow_dispatch,
+    build_goto_exit_replacement,
     build_site_dispatch,
     build_terminator_neutralization,
 )
@@ -62,6 +67,7 @@ def splice_program(
     flow_plans: Sequence[FlowMockPlan] = (),
     file_status_fields: dict[str, str] | None = None,
     trace: bool = False,
+    goto_exit_plans: Sequence[GotoExitPlan] = (),
 ) -> list[str]:
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
@@ -157,6 +163,37 @@ def splice_program(
                     f"should have refused it"
                 )
             start, end = statement_span(site.statement, boundaries, last_line, lines)
+        last_span_line = next(
+            (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
+            "",
+        )
+        if last_span_line.rstrip().endswith("."):
+            replacement = replacement[:-1] + [replacement[-1] + "."]
+        spans.append((start, end, replacement))
+
+    # GO-TO-to-EXIT-PARAGRAPH splices (docs/2026-08-17-goto-exit-paragraph-
+    # simplification-design.md, STATUS: not yet verified against real
+    # GnuCOBOL): replace the GO TO statement's own span. `plan.span` is
+    # precomputed by find_goto_exit_plans -- a top-level GO TO's span via
+    # statement_span, a nested one's (inside an IF/EVALUATE branch) via
+    # nested_statement_span -- and must be used as-is here, NOT
+    # recomputed with statement_span directly: statement_span alone does
+    # not know about block words like END-IF and can silently swallow one
+    # when the GO TO is nested (see nested_statement_span's docstring).
+    seen_goto_ids: set[int] = set()
+    for goto_plan in goto_exit_plans:
+        if id(goto_plan.statement) in seen_goto_ids:
+            continue
+        seen_goto_ids.add(id(goto_plan.statement))
+        if goto_plan.span is None:
+            raise ValueError(
+                f"GO TO in paragraph '{goto_plan.paragraph_name}' reached "
+                f"the splicer without a precomputed span -- "
+                f"find_goto_exit_plans should never return a plan with "
+                f"span=None"
+            )
+        start, end = goto_plan.span
+        replacement = build_goto_exit_replacement(goto_plan.exit_kind)
         last_span_line = next(
             (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
             "",
