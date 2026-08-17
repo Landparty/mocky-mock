@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-08-12T00:00:00Z
+timestamp: 2026-08-17T00:00:00Z
 ---
 
 # Overview
@@ -106,7 +106,8 @@ Both modules depend only on the small set of cobolparser attributes pinned in [i
 | `IOOpenStatement` / `IOCloseStatement` | `OPEN` / `CLOSE` | every name in `.file_names` | multi-file OPEN/CLOSE both keyed |
 | `IOReadStatement` / `IODeleteStatement` / `IOStartStatement` / `IOUnlockStatement` | `READ`/`DELETE`/`START`/`UNLOCK` | `.file_name` | one file each |
 | `IOWriteStatement` / `IORewriteStatement` | `WRITE`/`REWRITE` | `.record_name` | keyed by **record**, not FD — matches COBOL's own syntax |
-| `SortStatement`/`MergeStatement`/`ReleaseStatement`/`ReturnStatement` | `None` (detected, unmockable) | — | label `"SORT/MERGE"`; gates `UNSUPPORTED_SORT_MERGE` |
+| `SortStatement`/`MergeStatement`, plain file form (`input_procedure is None and output_procedure is None` — `USING ... GIVING ...`, no procedure clause; `MergeStatement` has no `input_procedure` attribute at all, so `_is_plain_sort_merge` reads it via `getattr(..., None)`) | `MockCategory.SORT`/`MockCategory.MERGE` | `.file_name` (the SD, uppercased) | label `"SORT"`/`"MERGE"`; bare-word key (`FILE_OP_CATEGORIES` membership), same shape as READ/DELETE/START/UNLOCK — not in `FILE_STATUS_CATEGORIES` (no FILE STATUS clause on an SD) |
+| `SortStatement`/`MergeStatement`, INPUT/OUTPUT PROCEDURE form; `ReleaseStatement`/`ReturnStatement` (only ever appear inside such a procedure) | `None` (detected, unmockable) | — | label `"SORT/MERGE"`; gates `UNSUPPORTED_SORT_MERGE` — mocks an algorithm plus its procedure contract, not a boundary statement |
 | `CancelStatement` | `None` (detected, never spliced) | `.program_names` (all names on the statement) | label `"CANCEL"`; not "unmockable" like SORT/MERGE — `refusal.py` treats it as covered when every name is also mocked via `MOCK CALL`/dynamic-CALL identifier in the same test case (a mocked CALL never loads a real module, so CANCEL of that program is a guaranteed no-op), else `UNMOCKED_CANCEL` (audit finding 1.6) |
 | `StopStatement` (stop_type == "RUN") / `GobackStatement` | `None` (detected, neutralized when found on a safe plain-PERFORM chain) | — | label `"STOP RUN"`/`"GOBACK"`; see [splicer](splicer.md) and [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md) -- unlike CANCEL/SORT-MERGE this category IS spliced, via a dedicated path (`refusal.find_terminator_plans` / `injector.build_terminator_neutralization`/`build_chain_check`), not `directive_matches_site` |
 | `ExecSQLStatement` (incl. subclasses: DeclareCursor, Fetch, DynamicSQL, …) | `SQL` | `match_text` = normalized `sql_text` | detected via `isinstance`, not `node_type` (base `CobolStatement.node_type` is hardcoded `"Statement"`) |
@@ -135,7 +136,7 @@ The same audit's Finding 2 fixed a THRU-seed hole in `_reachable_paragraphs`: th
 - **`nested` flag**: every recursive call passes `nested=True` literally, not the parent's value — so a site is `nested=True` at *every* depth ≥ 1, while only true top-level statements stay `nested=False`.
 - **`in_boundary` flag is sticky**: `child_in_boundary = in_boundary or isinstance(statement, _BOUNDARY_STATEMENT_TYPES)`. Once recursion enters a boundary statement's own clause body (e.g. inside a CALL's `ON EXCEPTION`, or a READ's `AT END`), every site found below is `nested_in_boundary=True` forever, regardless of further nesting shape — because splicing the *enclosing* boundary statement removes that whole clause body wholesale, so a site inside it can never be spliced independently no matter what directive matches it.
 
-`_BOUNDARY_STATEMENT_TYPES` = `CallStatement` + all 8 file-op types + the 4 SORT/MERGE types + `ExecSQLStatement`/`ExecCicsStatement`/`ExecImsStatement` + `IOAcceptStatement`.
+`_BOUNDARY_STATEMENT_TYPES` = `CallStatement` + all 8 file-op types + the 4 SORT/MERGE types (`SortStatement`/`MergeStatement`/`ReleaseStatement`/`ReturnStatement` — regardless of whether a given SORT/MERGE site turns out mockable or not) + `ExecSQLStatement`/`ExecCicsStatement`/`ExecImsStatement` + `IOAcceptStatement`.
 
 Paragraph attribution is depth-independent: nested statements stay attributed to the *enclosing paragraph name*, since that's the granularity the refusal gate's reachability check cares about.
 
@@ -178,10 +179,10 @@ For every `BoundarySite` in the reachable set:
 | Condition | Code | Why |
 |---|---|---|
 | `category is None`, label `"dynamic CALL"` | `DYNAMIC_CALL` | identifier cobolparser failed to capture — no static match key exists at all |
-| `category is None`, label `"SORT/MERGE"` | `UNSUPPORTED_SORT_MERGE` | mocks an algorithm + its INPUT/OUTPUT PROCEDURE contract, not a boundary statement |
+| `category is None`, label `"SORT/MERGE"` | `UNSUPPORTED_SORT_MERGE` | a SORT/MERGE using an INPUT/OUTPUT PROCEDURE (or a RELEASE/RETURN belonging to one) mocks an algorithm + its procedure contract, not a boundary statement. A plain-file-form SORT/MERGE has `category` set (`MockCategory.SORT`/`MERGE`), so it never reaches this row at all — it falls through to the ordinary rows below like any other file-op site |
 | `category is None`, label `"CANCEL"` | `UNMOCKED_CANCEL` (unless covered) | see the CANCEL subsection below |
 | terminator site (`StopStatement`(RUN-form)/`GobackStatement`) found unsafe by `find_terminator_plans` | `UNSUPPORTED_TERMINATOR_LAYOUT` | evaluated by `check_terminator_layout`, run alongside `check_test_case` in the CLI's refusal loop, not as one of `check_test_case`'s own per-site conditions above -- see [splicer](splicer.md#terminator-neutralization-gobackstop-run-approach-b). One narrow SECTION-scoped shape is safe (a `SECTION`'s first paragraph, entered exclusively via `PERFORM <section-name>`) and produces a plan instead of a refusal — see `_safe_section_entry_points` and `docs/2026-07-10-section-scoped-terminator-support-design.md` |
-| zero directives match | `UNMOCKED_CALL`/`UNMOCKED_FILE_OP`/`UNMOCKED_SQL`/`UNMOCKED_CICS`/`UNMOCKED_DLI`/`UNMOCKED_CONSOLE_ACCEPT` | unmocked CALL has nowhere to link; unmocked file I/O hits a nonexistent sandbox file; unmocked EXEC can't compile; unmocked console ACCEPT reads whatever stdin is attached |
+| zero directives match | `UNMOCKED_CALL`/`UNMOCKED_FILE_OP`/`UNMOCKED_SQL`/`UNMOCKED_CICS`/`UNMOCKED_DLI`/`UNMOCKED_CONSOLE_ACCEPT` | unmocked CALL has nowhere to link; unmocked file I/O (including a plain-file-form SORT/MERGE, which shares `UNMOCKED_FILE_OP` via `_UNMOCKED_CODES`'s per-category default) hits a nonexistent sandbox file; unmocked EXEC can't compile; unmocked console ACCEPT reads whatever stdin is attached |
 | 2+ directives match | `AMBIGUOUS_MOCK` | fail closed rather than pick one |
 | exactly 1 match, `site.nested and site.span is None` | `UNSUPPORTED_NESTED_MOCK_TARGET` | no validated replacement span — splicing could swallow a block terminator and corrupt control flow (an earlier attempt without the scope map did exactly that) |
 | exactly 1 match, `not site.nested and site.unspliceable_reason` | `UNSUPPORTED_MOCK_TARGET_LAYOUT` (2026-07-07, audit finding 2.1) | a top-level statement that does not own its source line(s) — sibling code before it, a one-line paragraph header, or another statement sharing the line — would have its whole-line splice delete that sibling code |

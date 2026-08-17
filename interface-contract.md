@@ -65,6 +65,15 @@ mockymock too.
   ReleaseStatement,ReturnStatement}` — SORT/MERGE read and write real files
   (USING/GIVING and the SD sort file); RELEASE/RETURN are the sort-file
   write/read verbs. All four are classified as file I/O by `mock_surface.py`.
+  A `SortStatement`/`MergeStatement` is further classified as *mockable*
+  (`MockCategory.SORT`/`MERGE`, keyed by `.file_name`) exactly when both
+  `.input_procedure is None` and `.output_procedure is None` (the plain
+  `USING ... GIVING ...` file form) — `MergeStatement` has no
+  `input_procedure` attribute at all (MERGE has no INPUT PROCEDURE clause
+  in COBOL), read via `getattr(..., None)`. Any procedure clause present
+  keeps the statement, and any RELEASE/RETURN, unmockable
+  (`category=None`, `UNSUPPORTED_SORT_MERGE`). See
+  `docs/2026-08-17-sort-merge-using-giving-mocking-design.md`.
 - `cobolparser.models.statements.io.IOAcceptStatement.from_source: str | None`
   — `None` (plain `ACCEPT x`) or any source outside the known
   non-interactive set (DATE/DAY/DAY-OF-WEEK/TIME/COMMAND-LINE/ENVIRONMENT/

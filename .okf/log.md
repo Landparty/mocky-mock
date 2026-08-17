@@ -1,5 +1,28 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-17 — Mock plain-file-form SORT/MERGE (`USING ... GIVING ...`)
+
+Closed the long-open "SORT/MERGE modeling" backlog item for its tractable
+half: a plain `SORT ... USING <in>... GIVING <out>...` / `MERGE ... USING
+<in>... GIVING <out>...` (no INPUT/OUTPUT PROCEDURE) is now mockable via
+`MOCK SORT <sd-name>` / `MOCK MERGE <sd-name>`, exactly like any other
+file-op boundary -- new `MockCategory.SORT`/`MERGE`, keyed by the
+statement's own SD file name. The INPUT/OUTPUT PROCEDURE form (and
+RELEASE/RETURN, which only ever appear inside one) stays exactly as
+unsupported as before (`UNSUPPORTED_SORT_MERGE`) -- mocking a procedure
+body's record-supply contract is a materially larger, separate project,
+not something this pass attempted.
+
+No splicer changes were needed at all: `mock_surface.py`'s
+`_is_plain_sort_merge` classification was the only load-bearing change:
+`splicer.orchestrator.splice_program`/`injector.build_site_dispatch` and
+`refusal.py`'s per-site loop were already fully category-generic (gated on
+`site.category is None`, not an enumerated category list), so a plain-form
+site with a real category set flows through the existing dispatch/refusal
+machinery unchanged. See
+`docs/2026-08-17-sort-merge-using-giving-mocking-design.md` and
+`tests/unit/test_sort_merge_mocking.py`.
+
 ## 2026-08-16 — Teach the mockymock skill to reason about scenario generation
 
 The VS Code extension's "COBOL Boundaries" tree view (checkboxes +

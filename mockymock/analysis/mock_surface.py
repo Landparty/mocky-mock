@@ -4,14 +4,18 @@ v2 mocks static CALL sites (including MQ API calls), dynamic CALL sites
 (keyed by the identifier they call through -- `CALL WS-PGM-NAME` is
 mockable as `MOCK CALL WS-PGM-NAME`; the splicer replaces the whole
 statement, so the runtime target never needs resolving), the eight file-op
-verbs (OPEN/CLOSE/READ/WRITE/REWRITE/DELETE/START/UNLOCK), EXEC
-SQL/CICS/DLI, and console ACCEPT. Each mockable statement is recorded as a
-`BoundarySite` carrying its AST statement reference so the splicer can
-compute replacement spans without re-scanning paragraphs. The SORT/MERGE
-family, CANCEL, and -- fail closed -- a dynamic CALL whose identifier
-cobolparser did not capture are *detected* (category None) for the refusal
-gate but never spliced (CANCEL counts as covered when the test case mocks
-the CALL for the same program name; see refusal.py).
+verbs (OPEN/CLOSE/READ/WRITE/REWRITE/DELETE/START/UNLOCK), a plain-file-form
+SORT/MERGE (`SORT ... USING ... GIVING ...`, no INPUT/OUTPUT PROCEDURE --
+keyed by its own SD file name, same bare-word shape as READ/DELETE/START/
+UNLOCK), EXEC SQL/CICS/DLI, and console ACCEPT. Each mockable statement is
+recorded as a `BoundarySite` carrying its AST statement reference so the
+splicer can compute replacement spans without re-scanning paragraphs. A
+SORT/MERGE using an INPUT or OUTPUT PROCEDURE, RELEASE/RETURN (the
+sort-file write/read verbs used inside such a procedure), CANCEL, and --
+fail closed -- a dynamic CALL whose identifier cobolparser did not capture
+are *detected* (category None) for the refusal gate but never spliced
+(CANCEL counts as covered when the test case mocks the CALL for the same
+program name; see refusal.py).
 """
 
 from __future__ import annotations
@@ -106,10 +110,12 @@ class BoundarySite:
     """One mockable (or detected-but-unmockable) boundary statement.
 
     `category` is the MockCategory a directive must use to mock this site,
-    or None for detected-but-unmockable sites (dynamic CALL, SORT/MERGE
-    family). `keys` holds the candidate match keys (call name, file names,
-    record name, ACCEPT target); `match_text` holds the normalized EXEC
-    text that SQL/CICS/DLI prefix keys match against.
+    or None for detected-but-unmockable sites (dynamic CALL with no
+    captured identifier, a SORT/MERGE using an INPUT/OUTPUT PROCEDURE and
+    RELEASE/RETURN belonging to one). `keys` holds the candidate match
+    keys (call name, file names, record name, SORT/MERGE SD file name,
+    ACCEPT target); `match_text` holds the normalized EXEC text that
+    SQL/CICS/DLI prefix keys match against.
     """
 
     category: MockCategory | None
@@ -173,10 +179,34 @@ _FILE_OP_SPECS: tuple[tuple[type, MockCategory], ...] = (
 
 # SORT/MERGE read and write real files (USING/GIVING and the SD sort file);
 # RELEASE/RETURN are the sort-file write/read verbs used inside INPUT/OUTPUT
-# PROCEDUREs. Mocking a SORT means mocking an algorithm plus its procedure
-# contract, not a boundary statement, so all four stay unmockable and gate
-# a refusal.
+# PROCEDUREs. Mocking a SORT/MERGE that uses an INPUT/OUTPUT PROCEDURE means
+# mocking an algorithm plus its procedure contract, not a boundary
+# statement, so that form (and RELEASE/RETURN, which only ever appear
+# inside one) stays unmockable and gates a refusal. A plain-file-form
+# SORT/MERGE (`USING ... GIVING ...`, no procedure clause) is different:
+# it is exactly as replaceable as any other file-op boundary -- see
+# `_is_plain_sort_merge` below.
 _SORT_MERGE_TYPES = (SortStatement, MergeStatement, ReleaseStatement, ReturnStatement)
+
+# The MockCategory a plain-file-form SORT/MERGE site is classified under,
+# keyed by its own AST node type.
+_SORT_MERGE_MOCKABLE_CATEGORY: dict[type, MockCategory] = {
+    SortStatement: MockCategory.SORT,
+    MergeStatement: MockCategory.MERGE,
+}
+
+
+def _is_plain_sort_merge(statement: SortStatement | MergeStatement) -> bool:
+    """True for a SORT/MERGE using only the USING/GIVING file form -- no
+    INPUT PROCEDURE and no OUTPUT PROCEDURE. `MergeStatement` has no
+    `input_procedure` attribute at all (MERGE has no INPUT PROCEDURE
+    clause in COBOL -- it always reads from USING files); `getattr(...,
+    None)` covers both statement shapes without an isinstance branch."""
+    return (
+        getattr(statement, "input_procedure", None) is None
+        and statement.output_procedure is None
+    )
+
 
 # STOP RUN/GOBACK are detected (category None, like CANCEL/SORT-MERGE) but
 # never spliced by directive-matching -- a .cut author never writes a MOCK
@@ -369,7 +399,20 @@ def _classify_statement(
             add_site(category, category.value, keys=_file_op_keys(statement, category))
             return
 
-    if isinstance(statement, _SORT_MERGE_TYPES):
+    if isinstance(statement, (SortStatement, MergeStatement)):
+        surface.file_io_paragraphs.add(paragraph_name)
+        if _is_plain_sort_merge(statement):
+            category = _SORT_MERGE_MOCKABLE_CATEGORY[type(statement)]
+            name = statement.file_name or ""
+            add_site(category, category.value, keys=(name.upper(),) if name else ())
+        else:
+            add_site(None, "SORT/MERGE")
+        return
+
+    if isinstance(statement, (ReleaseStatement, ReturnStatement)):
+        # Only ever used inside a SORT/MERGE's INPUT/OUTPUT PROCEDURE --
+        # that form stays unmockable regardless of whether some OTHER
+        # plain-file-form SORT/MERGE elsewhere in the program is mocked.
         surface.file_io_paragraphs.add(paragraph_name)
         add_site(None, "SORT/MERGE")
         return

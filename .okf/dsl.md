@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-08-11T12:00:00Z
+timestamp: 2026-08-17T00:00:00Z
 ---
 
 # Overview
@@ -239,14 +239,17 @@ Two key syntaxes, split by category:
 | Syntax | Categories | Key regex | Example |
 |---|---|---|---|
 | Quoted | `CALL`, `MQ` (sugar), `SQL`, `CICS`, `DLI` | `"[^"]*"` | `MOCK CALL "DISCRATE"`, `MOCK SQL "UPDATE INVENTORY"` |
-| Bare COBOL word | `CALL` (dynamic form), `OPEN`, `CLOSE`, `READ`, `WRITE`, `REWRITE`, `DELETE`, `START`, `UNLOCK`, `ACCEPT`, `PARAGRAPH`, `SECTION` | `[A-Za-z0-9][A-Za-z0-9-]*` | `MOCK OPEN INV-FILE`, `MOCK CALL WS-PGM-NAME`, `MOCK PARAGRAPH CALC-TOTALS` |
+| Bare COBOL word | `CALL` (dynamic form), `OPEN`, `CLOSE`, `READ`, `WRITE`, `REWRITE`, `DELETE`, `START`, `UNLOCK`, `SORT`, `MERGE`, `ACCEPT`, `PARAGRAPH`, `SECTION` | `[A-Za-z0-9][A-Za-z0-9-]*` | `MOCK OPEN INV-FILE`, `MOCK CALL WS-PGM-NAME`, `MOCK SORT SORT-FILE`, `MOCK PARAGRAPH CALC-TOTALS` |
 
 Bare keys are upper-cased by the parser (`m.group("key").upper()`); quoted
 keys are kept exactly as written.
 
-`MockCategory` (in `model.py`) has 14 members, but `MOCK`/`VERIFY` text only
-ever spells 12 keywords, because two collapse via sugar/aliasing at parse
-time (`_resolve_category` in `parser.py`):
+`MockCategory` (in `model.py`) has 18 members. `MOCK`/`VERIFY` text spells
+18 distinct keywords too (`sorted(set(m.keyword for m in MockCategory) |
+{"MQ"})`), but the two counts don't line up member-for-member: `DYNCALL`
+collapses into the `CALL` keyword (no `.cut` file is ever written with
+`DYNCALL`), while `MQ` is a keyword with no member of its own (pure sugar
+for `CALL`) — see `_resolve_category` in `parser.py`:
 
 | Category enum | `.cut` keyword | How it's reached |
 |---|---|---|
@@ -254,6 +257,7 @@ time (`_resolve_category` in `parser.py`):
 | `DYNCALL` | `CALL` | `MOCK CALL WS-PGM` (bare key) — **never written as `DYNCALL`** in `.cut` files |
 | `SQL`, `CICS`, `DLI` | `SQL`, `CICS`, `DLI` | quoted key, prefix-matches normalized EXEC text |
 | `OPEN`,`CLOSE`,`READ`,`WRITE`,`REWRITE`,`DELETE`,`START`,`UNLOCK` | same | bare key = file/record name |
+| `SORT`, `MERGE` | same | bare key = the SORT/MERGE statement's own SD file name -- only a plain-file-form site (`USING ... GIVING ...`, no INPUT/OUTPUT PROCEDURE) is ever classified into these categories; the procedure form stays `category=None`/`UNSUPPORTED_SORT_MERGE`, see [analysis](analysis.md) |
 | `ACCEPT` | `ACCEPT` | bare key = data-name being accepted into |
 | `PARAGRAPH`, `SECTION` | same | bare key = a PROCEDURE DIVISION paragraph/section name — flow-target mocks, not boundaries; grouped as `FLOW_CATEGORIES` in `model.py` (see [analysis](analysis.md)'s `flow_mocks.py` and [splicer](splicer.md)'s header dispatch) |
 | `CALL` (again) | `MQ` | `MOCK MQ "X"` — pure sugar, becomes a `CALL` directive; MQ is invoked through static `CALL`s, so there is no `MockCategory.MQ` |

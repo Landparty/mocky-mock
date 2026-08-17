@@ -66,9 +66,14 @@ from mockymock.dsl.model import (
 _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
 # CALL also appears here: the bare-key form is the dynamic-CALL mock.
 # PARAGRAPH/SECTION mock an internal flow target (a PROCEDURE DIVISION
-# paragraph or section) rather than an external boundary.
+# paragraph or section) rather than an external boundary. SORT/MERGE key
+# on their own SD file name (bare COBOL word), same shape as READ/DELETE/
+# START/UNLOCK -- only the plain USING ... GIVING ... file form is
+# mockable this way; the INPUT/OUTPUT PROCEDURE form stays unsupported
+# (see mock_surface.py).
 _BARE_CATS = (
-    "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT" "|PARAGRAPH|SECTION"
+    "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
+    "|SORT|MERGE|PARAGRAPH|SECTION"
 )
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')

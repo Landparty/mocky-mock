@@ -32,6 +32,8 @@ class MockCategory(Enum):
     DELETE = "DELETE"
     START = "START"
     UNLOCK = "UNLOCK"
+    SORT = "SORT"
+    MERGE = "MERGE"
     SQL = "SQL"
     CICS = "CICS"
     DLI = "DLI"
@@ -48,7 +50,10 @@ class MockCategory(Enum):
 
 
 # File-op categories key on a bare COBOL word (file or record name);
-# CALL/SQL/CICS/DLI key on a quoted literal.
+# CALL/SQL/CICS/DLI key on a quoted literal. SORT/MERGE join this set too:
+# a plain-file-form SORT/MERGE (USING ... GIVING ..., no INPUT/OUTPUT
+# PROCEDURE) keys on its own SD file name, the same bare-word shape as
+# READ/DELETE/START/UNLOCK -- see mock_surface.py's classification.
 FILE_OP_CATEGORIES = frozenset(
     {
         MockCategory.OPEN,
@@ -59,6 +64,8 @@ FILE_OP_CATEGORIES = frozenset(
         MockCategory.DELETE,
         MockCategory.START,
         MockCategory.UNLOCK,
+        MockCategory.SORT,
+        MockCategory.MERGE,
     }
 )
 
@@ -74,7 +81,10 @@ FLOW_CATEGORIES = frozenset({MockCategory.PARAGRAPH, MockCategory.SECTION})
 # to these six file-op categories -- WRITE/REWRITE key on the *record*
 # name, not the file name, and resolving record -> owning FD -> file
 # name is out of scope (see
-# docs/2026-07-20-before-blocks-and-file-status-design.md).
+# docs/2026-07-20-before-blocks-and-file-status-design.md). SORT/MERGE
+# are excluded for the same reason WRITE/REWRITE are: a SORT/MERGE's SD
+# has no FILE STATUS clause of its own (the status, if any, belongs to
+# the USING/GIVING FDs), so there is no single field to default/override.
 FILE_STATUS_CATEGORIES = frozenset(
     {
         MockCategory.OPEN,

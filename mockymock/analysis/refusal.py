@@ -96,8 +96,14 @@ Detected-but-unmockable sites keep their own refusals: DYNAMIC_CALL (now
 only for a dynamic CALL whose target identifier cobolparser failed to
 capture -- identifier-carrying dynamic CALLs are mockable via
 MOCK CALL <identifier>, see docs/2026-07-06-dynamic-call-mocks-design.md)
-and UNSUPPORTED_SORT_MERGE (SORT/MERGE/RELEASE/RETURN mock an algorithm
-plus its INPUT/OUTPUT PROCEDURE contract, not a boundary statement).
+and UNSUPPORTED_SORT_MERGE (now only for a SORT/MERGE using an INPUT or
+OUTPUT PROCEDURE, and RELEASE/RETURN which only ever appear inside one --
+that form mocks an algorithm plus its procedure contract, not a boundary
+statement. A plain-file-form SORT/MERGE -- `USING ... GIVING ...`, no
+procedure clause -- is mockable via MOCK SORT/MOCK MERGE <sd-file-name>
+like any other file-op boundary and falls through the ordinary UNMOCKED_
+FILE_OP/AMBIGUOUS_MOCK/nested/layout checks below, see mock_surface.py's
+`_is_plain_sort_merge`).
 A reachable CANCEL is covered when the test case mocks CALL (static or
 dynamic) for the same name -- the mocked CALL never loads a real module,
 so the CANCEL is a guaranteed GnuCOBOL no-op left in place -- and refuses
@@ -1177,10 +1183,14 @@ def check_test_case(
                         code="UNSUPPORTED_SORT_MERGE",
                         message=(
                             f"paragraph '{site.paragraph_name}' (line {site.line}) "
-                            f"contains a SORT/MERGE-family statement "
-                            f"(SORT/MERGE/RELEASE/RETURN), which mocks an "
-                            f"algorithm plus its INPUT/OUTPUT PROCEDURE "
-                            f"contract rather than a boundary -- not supported"
+                            f"contains a SORT/MERGE-family statement using an "
+                            f"INPUT/OUTPUT PROCEDURE, or a RELEASE/RETURN "
+                            f"belonging to one, which mocks an algorithm plus "
+                            f"its procedure contract rather than a boundary -- "
+                            f"not supported (a plain `SORT ... USING ... "
+                            f"GIVING ...`/`MERGE ... USING ... GIVING ...` "
+                            f"with no procedure clause is mockable via MOCK "
+                            f"SORT/MOCK MERGE)"
                         ),
                     )
                 )
