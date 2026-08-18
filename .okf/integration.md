@@ -9,18 +9,18 @@ timestamp: 2026-08-11T00:00:00Z
 # Overview
 
 mockymock is a one-way consumer of `cobolparser`: mockymock depends on cobolparser,
-cobolparser has zero knowledge of mockymock. Day-to-day contributor setup still
-installs cobolparser separately, editable, from the sibling `cobol-parser`
-repo (`requirements-dev.txt`: `-e ../cobol-parser`) per workspace convention —
-that checkout, whatever commit it's on, always wins in a dev environment.
-`pyproject.toml`'s `dependencies` now also carries a pinned git reference
-(`cobolparser @ git+https://github.com/Landparty/cobol-parser.git@<sha>`, kept
-in sync with `.github/workflows/ci.yml`'s `ref:`), added so `uv tool install`
-can resolve a working install with no sibling checkout present (see README
-"Install"). That pin is a floor for non-dev installs, not a substitute for
-the interface contract below — any change to a symbol below is still a
-breaking change for this repo even though the pin only catches it once
-re-bumped.
+cobolparser has zero knowledge of mockymock. Since cobol-parser started
+publishing closed-source wheels to PyPI (see [publishing.md](publishing.md)),
+`cobolparser` resolves as an ordinary versioned PyPI dependency
+(`pyproject.toml`'s `dependencies`: `cobol-parser>=X,<Y`) — no sibling
+checkout, no separate CI cross-repo checkout step, one place to bump. That
+pin is a floor, not a substitute for the interface contract below — any
+change to a symbol below is still a breaking change for this repo even
+though the pin only catches it once re-bumped. A local editable sibling
+checkout (`pip install -e ../cobol-parser`) still works for day-to-day
+cobol-parser development that needs to be exercised against mockymock
+before its own release ships, but is no longer required or documented as
+the default setup.
 
 **Two kinds of dependency, since Phase 8 of the gen-fixtures initiative**:
 this file's table below covers the low-level AST surface `mock_surface.py`
@@ -110,8 +110,6 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 **`CobolSection.location.line` is unreliable for a DATA DIVISION section.** Verified empirically: every section under one DATA DIVISION (`FILE`/`WORKING-STORAGE`/`LINKAGE`) reports that DIVISION's own line, not its own header line — unlike PROCEDURE DIVISION's `_sections`, which do report correct per-section header lines (`source_map.collect_boundaries` depends on that). `analysis.linkage.linkage_plan` works around this by deriving the LINKAGE SECTION header line as `(first LINKAGE item).location.line - 1`, and `refusal.check_linkage_layout` verifies that line's text before ever commenting it out.
 
 **`ParseResult.warnings` is a dropped-content signal, not advice (cobolparser ≥ the 2026-07-07 silent-drop remediation, PR #77).** A "clean" parse (`success=True, errors=0`) can still be missing statements: unsupported verbs (INVOKE, EXHIBIT, ...), unparsed clause leftovers, and multi-program compilation units (everything after the first `END PROGRAM` lands in `ast.contained_programs`, which the splicer and reachability BFS never look at) are reported ONLY through `.warnings`. `check_whole_program` therefore refuses per warning (PARSE_WARNING). Known upstream residual: an unknown verb directly following a period-less statement (e.g. `MOVE 1 TO X` newline `INVOKE ...`) can still be swallowed by the preceding statement's parser with no warning — period-terminated statements (the normal layout) are covered.
-
-**The git pin is currently an interim branch pin, not a `main` commit.** As of the gen-fixtures initiative's Phase 8, `pyproject.toml`/`ci.yml` pin cobol-parser's `claude/data-generation-function-k2mbbj` branch (an exact commit SHA on it, not the branch name) because `generate --with-data` depends on that branch's `ProgramLayoutIndex`/`BoundaryInventoryAnalyzer`/`ProgramFixtureGenerator`/`ConstraintExtractor`/`ScenarioPlanner`/expectations work end to end, none of which is on cobol-parser `main` yet (see cobol-parser PR #108). Re-bump to a `main` commit once that PR merges — do not treat the branch pin as a long-term arrangement.
 
 **cobol-parser's `expand_copybooks` does not resolve DCLGEN-style `EXEC SQL INCLUDE <member> END-EXEC`.** Only plain `COPY <member>` is expanded; an `EXEC SQL INCLUDE` member (e.g. `examples/custprog/copybooks/CUSTREC.CPY`) is left untouched in cobol-parser's own parse, so any host variable it declares never becomes a real `CobolDataItem` in cobol-parser's AST. `ProgramFixtureGenerator` correctly reports the gap via `bundle.unresolved` rather than guessing, but this means a boundary whose only host variables live in such an include (custprog's SQL FETCH) is silently absent from the bundle entirely — it never gets a fixture *or* an expectation, so it cannot even be *detected* as unresolved by scanning the bundle's own `unresolved` list keyed by boundary; only the free-text reason string says so. mockymock's own splicer resolves this same construct independently, via its own copybook-path search purely for compiling test runs (`splicer/sqlca.py`) — the two tools' preprocessing pipelines are not unified here, which is exactly why `test_fixture_bundle_contract.py` carries one documented `xfail` for `custprog`.
 

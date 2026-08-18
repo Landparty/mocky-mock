@@ -1,5 +1,38 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-18 — cobol-parser dependency and mockymock's own release both move to PyPI
+
+Two related changes, mirroring the sibling cobol-parser repo's CI shape
+(that repo now publishes `cobol-parser` to PyPI: v1.7.7 live, v1.7.8 in
+flight at the time of this change).
+
+**Dependency direction:** `cobolparser` no longer resolves via a
+git-pinned commit (`pyproject.toml`) plus an editable sibling checkout
+(`requirements-dev.txt: -e ../cobol-parser`) kept in sync with a
+`ci.yml` checkout `ref:`. It's now a normal versioned PyPI dependency
+(`cobol-parser>=1.7.7,<2`). `.github/workflows/ci.yml`'s `test`/
+`test-cross-platform` jobs (both currently `if: false`) no longer check
+out a sibling `cobol-parser` repo or need `COBOL_PARSER_PAT` —
+`requirements-dev.txt` collapsed to `-e .[dev]`. See [integration.md](integration.md).
+
+**Publish direction (reversal):** mockymock's own package now publishes
+to PyPI as `mocky-mock` too, reversing the 2026-08-14
+"no longer independently distributed" decision. Unlike cobol-parser's
+closed-source Cython/cibuildwheel wheels, mockymock ships a plain
+sdist+wheel with source visible — it has no compiled extension, and
+building one just to hide source was explicitly scoped out as
+disproportionate to this change. `release-please.yml` gained `build`
+(plain `python -m build`), `publish` (attach dist to the GitHub Release),
+and `publish-pypi` (Trusted Publishing, with a `testpypi` rehearsal
+`workflow_dispatch` target) jobs, mirroring cobol-parser's job shape
+minus the cibuildwheel matrix. The Nuitka-executable path for
+`mocky-mock-vscode` is untouched — it builds from source directly and
+never consumes the new PyPI wheel. **Not yet done:** the PyPI Trusted
+Publisher registration for the `mocky-mock` project is a one-time manual
+step (pypi.org UI) that has to happen before `publish-pypi` can
+succeed — same gap cobol-parser had before its first publish. See
+[publishing.md](publishing.md).
+
 ## 2026-08-17 — Mock SORT/MERGE: plain file form + RELEASE/RETURN
 
 Closed the long-open "SORT/MERGE modeling" backlog item. Landed in two

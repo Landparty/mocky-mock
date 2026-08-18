@@ -1,23 +1,5 @@
-# cobolparser is consumed as an editable sibling checkout (mockymock is
-# not on PyPI and neither is cobol-parser). There is no version pin here
-# because pip cannot pin a path install -- the pin lives in
-# .github/workflows/ci.yml, which checks the sibling out at an exact
-# commit (`ref:`). Keep that ref in sync when adopting new cobol-parser
-# behavior.
--e ../cobol-parser
-
-# Dev-only tooling. Listed explicitly (not via mockymock's own `[dev]`
-# extra) because pulling that extra in also pulls mockymock's runtime
-# [project.dependencies] -- including the git-pinned cobolparser added so
-# `uv tool install` can resolve with no sibling checkout present (see
-# pyproject.toml / README "Install"). Resolving that pin alongside the
-# editable sibling checkout above is a hard conflict for pip (a local-path
-# req and a URL-pinned req for the same package can't be reconciled), so
-# mockymock itself is installed separately with --no-deps -- see README
-# "Setup (contributing)". Keep this list in sync with pyproject.toml's
-# [project.optional-dependencies].dev.
-pytest>=7.0
-pytest-cov>=4.0
-ruff>=0.1.0
-black>=23.0.0
-mypy>=1.5.0
+# cobol-parser now resolves as a normal PyPI dependency declared in
+# pyproject.toml's [project.dependencies] -- no more sibling checkout, no
+# separate --no-deps install step. This file just installs mockymock
+# itself, editable, with its [dev] extra.
+-e .[dev]

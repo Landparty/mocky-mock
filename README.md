@@ -31,17 +31,15 @@ non-trivial changes.
 
 ### As a CLI tool
 
-Two one-time prerequisites, then a single install command.
+Both mockymock and its `cobolparser` dependency are published to PyPI as
+`mocky-mock` and `cobol-parser` respectively, so a single install command
+is enough — no GitHub auth needed, even though the source repos themselves
+stay private.
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
-2. Authenticate git/uv to GitHub — both `Landparty/mocky-mock` and its
-   `cobolparser` dependency are private repos. Run `gh auth setup-git`
-   (with the [GitHub CLI](https://cli.github.com/)), or set up an SSH
-   key/PAT with `repo` read access, first. This is the single most
-   common install failure, on every OS.
 
 ```bash
-uv tool install git+https://github.com/Landparty/mocky-mock.git
+uv tool install mocky-mock
 ```
 
 Upgrade with `uv tool upgrade mockymock`; remove with
@@ -57,10 +55,8 @@ host.
 ```bash
 python -m venv .venv
 .venv/Scripts/activate   # or source .venv/bin/activate on macOS/Linux
-pip install -r requirements-dev.txt
-pip install --no-deps -e .   # skips the pinned-git cobolparser dep,
-                              # which would conflict with the editable
-                              # sibling checkout requirements-dev.txt installed
+pip install -r requirements-dev.txt   # editable mockymock + [dev] extra;
+                                       # cobolparser resolves from PyPI
 mockymock setup           # builds the GnuCOBOL image, starts mockymock-cobc
 python -m pytest tests/unit -v
 ```
