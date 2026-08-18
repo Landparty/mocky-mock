@@ -1,30 +1,53 @@
 ---
 type: Runbook
 title: Publishing
-description: mockymock is no longer independently distributed. It's built from source on demand by mocky-mock-vscode's build-and-release.yml dispatch workflow, which lives in that sibling repo.
-tags: [ci, release, publishing]
-timestamp: 2026-08-14T00:00:00Z
+description: mockymock publishes a plain (source-visible) sdist+wheel to PyPI on every release-please release, mirroring cobol-parser's PyPI pipeline; the Nuitka executable path for mocky-mock-vscode is separate and unaffected.
+tags: [ci, release, publishing, pypi]
+timestamp: 2026-08-18T00:00:00Z
 ---
 
 # Overview
 
-`mockymock` and its `cobolparser` dependency are both private repos (see
-`LICENSE`, `PUBLISHING.md`). This repo no longer builds or publishes
-standalone executables — `build-executables.yml` and `publish-public.yml`
-are deleted, and the public `cobol-mocky-mock` distribution repo they fed
-is unused.
+`mockymock` and its `cobolparser` dependency are both private *repos* (see
+`LICENSE`, `PUBLISHING.md`), but as of 2026-08-18 mockymock's package is
+published to PyPI as `mocky-mock` — reversing the 2026-08-14
+"no longer independently distributed" decision this concept used to
+describe. `cobol-parser` was published to PyPI first (as closed-source
+Cython wheels — see that repo's own `.github/workflows/release-please.yml`
+and `docs/superpowers/specs/2026-08-14-pypi-closed-source-release-design.md`);
+mockymock's own release pipeline now mirrors that shape, with one
+deliberate difference: **mockymock ships a plain wheel, source visible**.
+It's pure Python with no compiled extension (no `.pyx`/`build_ext` anywhere
+in this repo), so matching cobol-parser's closed-source cibuildwheel matrix
+would mean introducing a whole new Cython build system, not just copying
+CI — that was explicitly scoped out when this reversal was decided.
 
-Building the Nuitka executable now happens in the sibling
+`release-please.yml`'s jobs, in order:
+- `release-please` — cuts the version-bump PR / GitHub Release (unchanged).
+- `build` — `python -m build` (sdist + wheel, `ubuntu-latest`, single job,
+  no matrix — nothing here needs a per-OS/per-Python native build).
+- `publish` — attaches the built dist files to the GitHub Release.
+- `publish-pypi` — uploads to PyPI via Trusted Publishing (OIDC, no stored
+  token), gated the same way as `build`/`publish` (`releases_created` or a
+  manual `workflow_dispatch`, with a `testpypi` rehearsal target mirroring
+  cobol-parser's).
+
+The Nuitka executable path is untouched by any of this: the sibling
 `mocky-mock-vscode` repo's `build-and-release.yml` (`workflow_dispatch`
-only): it checks out this repo at its latest release tag, runs the same
-Nuitka build (`scripts/build_executable.sh`) this concept used to
-describe running here, packages the result into the VS Code extension's
-`.vsix`, and publishes that. See that repo's own `PUBLISHING.md` and the
-workflow itself for the full pipeline.
+only) still checks out this repo at its latest release tag, runs
+`scripts/build_executable.sh`, and packages the result into the VS Code
+extension's `.vsix`. That pipeline builds from source directly — it does
+not consume the PyPI wheel — so the two distribution channels (PyPI wheel
+for `pip install`/library use, Nuitka binary for the VS Code extension)
+coexist without touching each other. See that repo's own `PUBLISHING.md`.
 
-`release-please.yml` still cuts this repo's own version-bump PRs and a
-GitHub Release with generated changelog notes on merge to `main` — it just
-no longer attaches any binaries to that release.
+**One-time manual step, not yet done as of this writing:** a PyPI Trusted
+Publisher must be registered for the `mocky-mock` project
+(pypi.org → publishing settings → add a pending publisher, or on the
+existing project's page once it has a first release) pointing at this
+repo's `release-please.yml` workflow, before `publish-pypi` can succeed.
+Same requirement cobol-parser's own publish-pypi job notes for
+`cobol-parser`.
 
 # Gotchas
 

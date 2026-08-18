@@ -30,7 +30,7 @@ and reports pass/fail. Version 0.1.0. Author: Samuel Dion.
 
 ## Publishing
 
-* [Publishing](publishing.md) — mockymock is no longer independently distributed; it's built from source on demand by mocky-mock-vscode's `build-and-release.yml`
+* [Publishing](publishing.md) — mockymock publishes a plain sdist+wheel to PyPI (`release-please.yml`); the separate Nuitka-executable path mocky-mock-vscode's `build-and-release.yml` builds from source is unaffected
 
 ## Change History
 

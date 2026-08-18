@@ -1,9 +1,32 @@
 name: release-please
 
+# Mirrors the sibling cobol-parser repo's release-please + PyPI-publish
+# shape. mockymock ships plain source-visible wheels (pure Python, no
+# compiled extension), unlike cobol-parser's closed-source cibuildwheel
+# matrix -- see .okf/publishing.md for why and PUBLISHING.md for the
+# retired Nuitka-executable path this does not replace (mocky-mock-vscode
+# still builds its own binary from source separately).
 on:
   push:
     branches:
       - main
+  # Manual dry run of the build + publish path. PyPI filenames are burned
+  # permanently on first upload, so `target: testpypi` exists to rehearse
+  # the whole pipeline against test.pypi.org before the first real publish.
+  # Using it requires a SEPARATE one-time manual step -- registering a
+  # Trusted Publisher for this repo/workflow on test.pypi.org, exactly like
+  # the pypi.org registration noted on publish-pypi below.
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Package index the publish-pypi job uploads to"
+        type: choice
+        options:
+          - pypi
+          - testpypi
+        # Defaults to the safe rehearsal target -- an accidental dispatch
+        # must not publish to the live index. Choose "pypi" explicitly.
+        default: testpypi
 
 permissions:
   contents: write
@@ -13,6 +36,8 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -20,3 +45,73 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Pure-Python sdist + wheel -- no cibuildwheel matrix needed since
+  # mockymock has no compiled extension. Both artifacts ship readable .py
+  # source (see .okf/publishing.md: source visibility was a deliberate
+  # choice, not an oversight).
+  build:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.releases_created == 'true' || github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build
+      - run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # Attach the built distributions to the GitHub Release for traceability /
+  # manual download. Deliberately NOT run on workflow_dispatch: a manual
+  # dispatch cuts no release, so there is no tag to upload to.
+  publish:
+    needs: [release-please, build]
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Resolve the release tag from the manifest
+        id: tag
+        run: echo "tag=v$(jq -r '.["."]' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
+      - name: Attach distributions to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.tag.outputs.tag }}" dist/* --clobber
+
+  # Publish to PyPI via Trusted Publishing (OIDC) -- no stored API
+  # token/secret. Requires a one-time manual step on pypi.org registering
+  # this repo/workflow as a trusted publisher for the "mocky-mock" project
+  # (must match [project].name in pyproject.toml exactly).
+  publish-pypi:
+    needs: [release-please, build]
+    if: ${{ needs.release-please.outputs.releases_created == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/mocky-mock/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          # Re-running this job after a partial upload would otherwise fail
+          # on the files that already landed. PyPI filenames are immutable,
+          # so skipping them is the only recoverable behavior.
+          skip-existing: true
+          repository-url: ${{ (github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi') && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}

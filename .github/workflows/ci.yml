@@ -36,115 +36,7 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - name: Check out mockymock
-        uses: actions/checkout@v4
-        with:
-          path: mocky-mock
-
-      # requirements-dev.txt installs cobolparser via `-e ../cobol-parser`,
-      # i.e. as an editable sibling directory -- mockymock is not on PyPI
-      # and depends on cobol-parser the same way (see this repo's own
-      # CLAUDE.md "Backend Integration" section and interface-contract.md).
-      # A single default checkout only gives CI this one repo, so
-      # cobol-parser must be checked out as a second, sibling job step for
-      # `../cobol-parser` to resolve relative to mocky-mock's working
-      # directory.
-      #
-      # KNOWN GAP (flagged, not silently worked around): this step assumes
-      # samdi94dion/Landparty's cobol-parser repo is either public, or that
-      # `secrets.COBOL_PARSER_PAT` (a personal access token / deploy key
-      # with read access, added as a repo or org secret) is configured. The
-      # default GITHUB_TOKEN cannot check out a different private repo. If
-      # neither holds, this step will fail with a checkout/auth error --
-      # that failure is the intended, visible signal that the cross-repo
-      # dependency needs to be resolved (e.g. by adding the PAT secret, by
-      # vendoring a pinned cobolparser snapshot into this repo instead of an
-      # editable sibling install, or by making cobol-parser public).
-      - name: Check out cobol-parser (sibling editable dependency)
-        uses: actions/checkout@v4
-        with:
-          repository: Landparty/cobol-parser
-          path: cobol-parser
-          token: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
-          # Pinned: mockymock's refusal gate leans on cobolparser behavior
-          # (PARSE_WARNING reporting, the 2026-07-07 silent-drop
-          # remediation); an unpinned checkout lets a sibling regression
-          # silently weaken this repo's guarantees with no signal here.
-          # Bump deliberately, with a test run, when adopting new
-          # cobol-parser work. Bumped to cobol-parser main (on top of the
-          # previous 392f8ce pin, which pulled in VALUE ALL <literal>
-          # support -- see tests/regression/test_value_all_clause.py
-          # upstream) to pull in out-of-line PERFORM ... VARYING parsing
-          # (upstream commit 59a016c): at the old pin the VARYING clause
-          # was dropped with an "Unparsed token" content-drop warning and
-          # the PERFORM mistagged SIMPLE, failing
-          # tests/unit/test_refusal.py's
-          # test_out_of_line_perform_varying_parses_correctly, its
-          # test_terminators.py sibling, and test_terminator_support.py's
-          # Docker-gated integration case -- all three were written
-          # against the fixed parser but the pin was never bumped.
-          # Local mockymock suite at this pin: tests/unit 484 passed
-          # (Docker-gated tests skip locally; the `mockymock run` tests
-          # that need a live daemon run in CI).
-          #
-          # Bumped again to pull in the DIVIDE/MULTIPLY GIVING ... ROUNDED
-          # fix (cobol-parser commit 4db8394): ROUNDED after GIVING was left
-          # unconsumed by parse_size_error_clauses() and misread as a
-          # phantom paragraph named "ROUNDED", silently reparenting every
-          # statement after it in the real paragraph -- see
-          # tests/integration/test_divide_rounded.py, which reproduces the
-          # failure via a MOCK'd CALL placed right after the ROUNDED DIVIDE
-          # in the same paragraph (UNMATCHED_MOCK at the old pin). Full
-          # mockymock suite at this pin: 748 passed locally.
-          # Confirmed pushed and resolvable (2026-07-21) via `gh api
-          # repos/Landparty/cobol-parser/commits/<sha>` and a live
-          # `uv tool install`.
-          #
-          # INTERIM BUMP (2026-08-04): pinned to cobol-parser's
-          # claude/data-generation-function-k2mbbj branch, not main, to pull
-          # in the gen-fixtures initiative's Phases 1-8 end to end
-          # (ProgramLayoutIndex, BoundaryInventoryAnalyzer,
-          # ProgramFixtureGenerator, ConstraintExtractor, ScenarioPlanner,
-          # Expectations, and the terminal-status-field fix this repo's own
-          # Phase 8 contract testing found) -- `mockymock generate
-          # --with-data` depends on all of it and none of it is on
-          # cobol-parser main yet (see cobol-parser PR #108).
-          #
-          # Bumped off that interim branch pin onto cobol-parser main
-          # (2026-08-05, unify-with-data reconciliation Task 1): PR #108
-          # landed the gen-fixtures initiative on main, then PR #110 (dead
-          # `gen-fixtures --describe` flag removed, `write_csv_dir`
-          # MANIFEST.json `sequence` type fixed -- neither consumed here),
-          # PR #111 (NULL/NULLS recognized as figurative constants), and
-          # PR #112 (EJECT statement support) landed on top. Verified
-          # against tests/unit/test_bundle_surface.py (pins the exact bundle
-          # surface consumed here) and tests/unit/test_fixture_bundle_contract.py
-          # (bundle-key == mock_surface key agreement) -- both pass unchanged
-          # at this pin. Full local mockymock suite at this pin: 958 passed,
-          # 95 skipped, 1 xfailed (coverage 87.48%, unchanged from the
-          # pre-bump baseline of 957 passed -- the +1 is the newly-ported
-          # test_bundle_surface.py). Confirmed pushed and resolvable
-          # (2026-08-05, now superseded by the entry below): `git ls-remote
-          # https://github.com/Landparty/cobol-parser.git` listed this sha
-          # as both `HEAD` and `refs/heads/main` at the time.
-          #
-          # Bumped again (2026-08-09, PR #121) to pull in the EVALUATE
-          # WHEN-clause truncation fix: a schema-qualified SQL table name's
-          # period inside a nested EXEC SQL statement (e.g.
-          # "BANK.GL_ACCOUNT") used to be mistaken for the EVALUATE's own
-          # terminating period, truncating the WHEN clause's AST right
-          # after the EXEC SQL statement -- every statement physically
-          # below it, and any following WHEN clause entirely, got
-          # misparsed as flat top-level paragraph statements. That
-          # corrupted this project's own splice-span computation for any
-          # boundary statement inside such a WHEN clause (see
-          # examples/real-world/GLRECON's now-fixed workaround, #53).
-          # Confirmed pushed and resolvable (2026-08-09): `git ls-remote
-          # https://github.com/Landparty/cobol-parser.git` lists this sha as
-          # both `HEAD` and `refs/heads/main`. Keep in sync with
-          # pyproject.toml's dependency line per this step's own comment.
-          ref: 83478ba735402f88f3005af529c0fed633632096
-
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -154,21 +46,12 @@ jobs:
       # ship with Docker; the integration tests build the mockymock-gnucobol
       # image on first use (~1 min per job).
 
+      # cobol-parser resolves from PyPI as a normal pinned dependency (see
+      # pyproject.toml) -- no sibling checkout, no cross-repo PAT needed.
       - name: Install dependencies
-        working-directory: mocky-mock
-        # requirements-dev.txt no longer installs mockymock itself (it only
-        # covers the editable cobol-parser sibling checkout + dev tooling --
-        # see that file's comments): pyproject.toml's `dependencies` now
-        # carries a git-pinned cobolparser (for `uv tool install`), which
-        # conflicts with the editable sibling checkout if resolved together.
-        # mockymock installs separately with --no-deps to skip that
-        # resolution, matching README "Setup (contributing)".
-        run: |
-          pip install -r requirements-dev.txt
-          pip install --no-deps -e .
+        run: pip install -r requirements-dev.txt
 
       - name: Run tests
-        working-directory: mocky-mock
         run: python -m pytest tests/ -v
 
   # Cross-platform signal for the Python/DSL layer (parser, splicer, CLI,
@@ -191,30 +74,13 @@ jobs:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Check out mockymock
-        uses: actions/checkout@v4
-        with:
-          path: mocky-mock
-
-      - name: Check out cobol-parser (sibling editable dependency)
-        uses: actions/checkout@v4
-        with:
-          repository: Landparty/cobol-parser
-          path: cobol-parser
-          token: ${{ secrets.COBOL_PARSER_PAT || secrets.GITHUB_TOKEN }}
-          # Keep in sync with the `test` job's identical step above.
-          ref: 83478ba735402f88f3005af529c0fed633632096
-
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
       - name: Install dependencies
-        working-directory: mocky-mock
-        run: |
-          pip install -r requirements-dev.txt
-          pip install --no-deps -e .
+        run: pip install -r requirements-dev.txt
 
       - name: Run unit tests
-        working-directory: mocky-mock
         run: python -m pytest tests/unit -v
