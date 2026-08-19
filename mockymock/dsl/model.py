@@ -169,6 +169,17 @@ class MockDirective:
         return f'{self.category.keyword} "{self.key}"'
 
 
+#: Every comparison operator an EXPECT directive can carry, in the
+#: canonical COBOL-relation spelling the parser normalizes the English
+#: phrase down to ("TO BE GREATER THAN OR EQUAL TO" -> ">=", "NOT TO BE"
+#: -> "NOT ="). splicer/driver.py compiles each one's *negation* into the
+#: generated IF (the IF guards the failure branch) -- keep this set in
+#: sync with driver.py's _EXPECT_FAIL_CONDITIONS.
+EXPECT_OPERATORS = frozenset(
+    {"=", "NOT =", ">", "NOT >", "<", "NOT <", ">=", "NOT >=", "<=", "NOT <="}
+)
+
+
 @dataclass
 class ExpectDirective:
     data_name: str
@@ -176,6 +187,13 @@ class ExpectDirective:
     line: int = 0
     """1-based .cut line of the EXPECT statement (0 when built outside the
     parser, e.g. hand-assembled in tests)."""
+    operator: str = "="
+    """The asserted relation between `data_name` and `expected_value`, as a
+    canonical COBOL relation operator -- one of EXPECT_OPERATORS. `"="` is
+    the plain `EXPECT ... TO BE ...` form (and the default, so every
+    hand-built directive and pre-operator caller keeps its old meaning);
+    the parser sets the others from `NOT TO BE` / `TO BE GREATER THAN` /
+    `TO BE LESS THAN [OR EQUAL TO]` phrases."""
 
 
 @dataclass

@@ -314,3 +314,49 @@ def test_record_targets_route_to_the_correct_case():
     joined = "\n".join(_build(suite, record_targets={2: ["WS-B"]}).procedure_lines)
     assert "RECORD 001" not in joined
     assert 'DISPLAY "__MOCKYMOCK__ RECORD 002 WS-B: " WS-B' in joined
+
+
+# --- EXPECT negation/comparison operators ------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("operator", "fail_condition"),
+    [
+        ("=", "NOT ="),
+        ("NOT =", "="),
+        (">", "NOT >"),
+        ("NOT >", ">"),
+        ("<", "NOT <"),
+        ("NOT <", "<"),
+        (">=", "<"),
+        ("NOT >=", ">="),
+        ("<=", ">"),
+        ("NOT <=", "<="),
+    ],
+)
+def test_expect_operator_compiles_to_its_negated_fail_condition(
+    operator, fail_condition
+):
+    """The generated IF guards the *failure* branch, so each operator
+    emits its negation; >=/<= negate to the equivalent plain relation
+    (</>) rather than a NOT-prefixed compound."""
+    suite = _suite()
+    suite.test_cases[0].expectations = [ExpectDirective("WS-X", "5", operator=operator)]
+    joined = "\n".join(_build(suite).procedure_lines)
+    assert f"IF WS-X {fail_condition} 5" in joined
+
+
+def test_expect_fail_message_carries_the_asserted_operator():
+    suite = _suite()
+    suite.test_cases[0].expectations = [ExpectDirective("WS-X", "5", operator="NOT =")]
+    joined = "\n".join(_build(suite).procedure_lines)
+    assert 'expected WS-X NOT = 5, got " WS-X' in joined
+
+
+def test_unrecognized_expect_operator_raises():
+    """Parser validation is the real gate; codegen still fails loudly on a
+    hand-built directive carrying an operator it cannot compile."""
+    suite = _suite()
+    suite.test_cases[0].expectations = [ExpectDirective("WS-X", "5", operator="<>")]
+    with pytest.raises(ValueError, match="unrecognized EXPECT operator"):
+        _build(suite)

@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-17T01:00:00Z
+timestamp: 2026-08-19T00:00:00Z
 ---
 
 # Overview
@@ -749,15 +749,24 @@ Each `UT-TESTCASE-NNN` paragraph: optionally performs the reset paragraph,
 moves the case ID into `UT-CURRENT-CASE` (this is what every injected
 EVALUATE dispatch block switches on), zeroes every tally this case's mocks
 touch, displays a `CASE NNN START` marker, runs any `setup_moves`,
-performs the target paragraph, then checks `expectations` (data-name
-equality) and `verifications` (tally-based `VERIFY ... WAS CALLED`
-conditions from `_verify_condition`: `ONCE` → `NOT = 1`, `NEVER` → `NOT =
-0`, `AT LEAST ONCE` → `< 1`, `N TIMES` → `NOT = N`), incrementing
-`UT-FAIL-COUNT` and displaying a `CASE NNN FAIL` line on any mismatch.
+performs the target paragraph, then checks `expectations` (the
+directive's own relation from `ExpectDirective.operator` — `=` for plain
+`TO BE`, plus `NOT =`/`>`/`<`/`>=`/`<=` and their negations from the
+`[NOT] TO BE [GREATER|LESS THAN [OR EQUAL TO]]` phrases, compiled to the
+operator's *negation* via `_EXPECT_FAIL_CONDITIONS` since the generated
+IF guards the failure branch; `>=`/`<=` negate to plain `<`/`>` so every
+emitted condition stays a simple COBOL-85 relational — keep the map in
+sync with `model.EXPECT_OPERATORS`) and `verifications` (tally-based
+`VERIFY ... WAS CALLED` conditions from `_verify_condition`: `ONCE` →
+`NOT = 1`, `NEVER` → `NOT = 0`, `AT LEAST ONCE` → `< 1`, `N TIMES` →
+`NOT = N`), incrementing `UT-FAIL-COUNT` and displaying a `CASE NNN
+FAIL` line on any mismatch.
 
 FAIL lines include the actual value alongside the expectation, mirroring
 the format the MVP plan and `report` tests always assumed: an EXPECT
-mismatch displays `expected <name> = <value>, got ` followed by the data
+mismatch displays `expected <name> <operator> <value>, got ` (the
+operator echoed verbatim, so the pre-operator `=` shape is unchanged for
+plain `TO BE`) followed by the data
 item itself (shown in the field's own PIC formatting, e.g. `00090.00`),
 and a VERIFY mismatch appends `, got <n>` where `<n>` is the tally moved
 through the shared `UT-TALLY-EDITED` scratch field (`PIC Z(8)9`, declared

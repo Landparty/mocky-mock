@@ -25,7 +25,7 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
     [ MOCK <category> <key> ... END-MOCK ]*
     [ MOVE <value> TO <target> ]*
     PERFORM <paragraph> [ THRU|THROUGH <paragraph> ]
-    [ EXPECT <data-name> TO BE <value> ]*
+    [ EXPECT <data-name> [NOT] TO BE [GREATER|LESS THAN [OR EQUAL TO]] <value> ]*
     [ VERIFY [<category>] <key> WAS CALLED|PERFORMED <expectation> ]*
 ```
 
@@ -154,14 +154,28 @@ PERFORM MAIN-PROCESS
 PERFORM VALIDATE-INPUT THRU VALIDATE-INPUT-EXIT
 ```
 
-## `EXPECT <data-name> TO BE <value>`
+## `EXPECT <data-name> [NOT] TO BE [<comparison>] <value>`
 
 An assertion checked after `PERFORM` returns:
 
 ```
 EXPECT WS-TOTAL-QTY TO BE 10
 EXPECT WS-TABLE(1, 2) TO BE "Y"
+EXPECT WS-STATUS NOT TO BE "99"
+EXPECT WS-COUNT TO BE GREATER THAN 0
+EXPECT WS-RATE TO BE LESS THAN OR EQUAL TO 0.15
 ```
+
+The relation phrase is one of (each also negatable with a leading `NOT`,
+e.g. `NOT TO BE GREATER THAN` asserts `<=`):
+
+| Phrase | Asserts |
+|---|---|
+| `TO BE` | `=` |
+| `TO BE GREATER THAN` | `>` |
+| `TO BE LESS THAN` | `<` |
+| `TO BE GREATER THAN OR EQUAL TO` | `>=` |
+| `TO BE LESS THAN OR EQUAL TO` | `<=` |
 
 Subscripts (`FIELD(1, 2)` or `FIELD(1:5)` reference modification) are
 supported for both the data-name and the `MOVE` target above; qualified

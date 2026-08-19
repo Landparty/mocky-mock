@@ -126,8 +126,19 @@ _PERFORM_RE = re.compile(
     r"^PERFORM\s+(?P<target>\S+)(?:\s+(?:THRU|THROUGH)\s+(?P<thru>\S+))?$"
 )
 _EXPECT_RE = re.compile(
-    rf"^EXPECT\s+(?P<name>{_SUBSCRIPTED_NAME})\s+TO\s+BE\s+(?P<value>.+)$"
+    rf"^EXPECT\s+(?P<name>{_SUBSCRIPTED_NAME})\s+(?P<negated>NOT\s+)?TO\s+BE"
+    rf"(?:\s+(?P<comparison>GREATER\s+THAN(?:\s+OR\s+EQUAL\s+TO)?"
+    rf"|LESS\s+THAN(?:\s+OR\s+EQUAL\s+TO)?))?"
+    rf"\s+(?P<value>.+)$"
 )
+# A value that starts with one of the comparison-phrase words means the
+# phrase itself was malformed ("TO BE GREATER 5", "GREATER THAN OR EQUAL
+# 5") and the regex above fell back to swallowing the leftover words into
+# <value> -- which would splice into the generated IF verbatim and surface
+# as a cobc compile error pointing at generated code. Fail closed at the
+# .cut line instead. The trailing (?:\s|$) keeps a legitimate hyphenated
+# identifier like OR-FLAG or GREATER-VALUE parsing as an ordinary value.
+_EXPECT_DANGLING_PHRASE_RE = re.compile(r"^(?:GREATER|LESS|THAN|OR|EQUAL)(?:\s|$)")
 _VERIFY_QUOTED_RE = re.compile(
     rf'^VERIFY\s+(?:(?P<cat>{_QUOTED_CATS})\s+)?"(?P<key>[^"]*)"'
     rf"\s+WAS\s+(?:CALLED|PERFORMED)\s+(?P<expectation>.+)$"
@@ -223,6 +234,23 @@ def _resolve_category(cat: str | None, bare_key: bool = False) -> MockCategory:
     return MockCategory(cat)
 
 
+def _expect_operator(negated: bool, comparison: str | None) -> str:
+    """Normalize an EXPECT line's English phrase to its canonical COBOL
+    relation operator (one of model.EXPECT_OPERATORS): `TO BE` -> "=",
+    `TO BE GREATER THAN` -> ">", `TO BE LESS THAN OR EQUAL TO` -> "<=",
+    with a leading `NOT` prefixing the operator (`NOT TO BE GREATER THAN`
+    -> "NOT >"). driver.py compiles the operator's negation into the
+    generated failure-branch IF."""
+    if comparison is None:
+        base = "="
+    else:
+        words = comparison.split()
+        base = {"GREATER": ">", "LESS": "<"}[words[0]]
+        if "EQUAL" in words:
+            base += "="
+    return f"NOT {base}" if negated else base
+
+
 def _validate_expectation(expectation: str, line_no: int) -> None:
     """Reject a VERIFY expectation the driver codegen cannot compile.
 
@@ -315,6 +343,7 @@ def _instantiate_row(
                 expectation.line,
             ),
             line=expectation.line,
+            operator=expectation.operator,
         )
         for expectation in case.expectations
     ]
@@ -876,11 +905,21 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 raise CutParseError(f"line {line_no}: EXPECT outside TESTCASE")
             _reject_unbalanced_subscript(m.group("name"), line_no)
+            if _EXPECT_DANGLING_PHRASE_RE.match(m.group("value")):
+                raise CutParseError(
+                    f"line {line_no}: malformed EXPECT comparison: {line!r} "
+                    f"(expected [NOT] TO BE, [NOT] TO BE GREATER THAN "
+                    f"[OR EQUAL TO], or [NOT] TO BE LESS THAN [OR EQUAL TO], "
+                    f"followed by the value)"
+                )
             case.expectations.append(
                 ExpectDirective(
                     data_name=m.group("name"),
                     expected_value=m.group("value"),
                     line=line_no,
+                    operator=_expect_operator(
+                        m.group("negated") is not None, m.group("comparison")
+                    ),
                 )
             )
         elif (m := _VERIFY_QUOTED_RE.match(line)) is not None:

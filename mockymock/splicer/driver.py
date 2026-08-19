@@ -143,12 +143,15 @@ def _build_testcase_paragraph(
     lines.append("")
 
     for expectation in case.expectations:
+        fail_operator = _expect_fail_condition(expectation.operator)
         lines.append(
-            f"           IF {expectation.data_name} NOT = {expectation.expected_value}"
+            f"           IF {expectation.data_name} {fail_operator} "
+            f"{expectation.expected_value}"
         )
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: expected '
-            f"{expectation.data_name} = {_display_text(expectation.expected_value)}, "
+            f"{expectation.data_name} {expectation.operator} "
+            f"{_display_text(expectation.expected_value)}, "
             f'got " {expectation.data_name}'
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
@@ -188,6 +191,34 @@ def _build_testcase_paragraph(
 
     lines.append(f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} END".')
     return lines
+
+
+# EXPECT asserts <name> <operator> <value>; the generated IF guards the
+# *failure* branch, so each operator compiles to its own negation. The
+# ">="/"<=" rows use the equivalent plain relation ("<"/">") rather than a
+# NOT-prefixed compound, keeping the emitted conditions to the simplest
+# COBOL-85 relational forms. Keys must cover exactly the operators
+# parser.py's _expect_operator can produce (model.EXPECT_OPERATORS) --
+# keep the two in sync.
+_EXPECT_FAIL_CONDITIONS = {
+    "=": "NOT =",
+    "NOT =": "=",
+    ">": "NOT >",
+    "NOT >": ">",
+    "<": "NOT <",
+    "NOT <": "<",
+    ">=": "<",
+    "NOT >=": ">=",
+    "<=": ">",
+    "NOT <=": "<=",
+}
+
+
+def _expect_fail_condition(operator: str) -> str:
+    try:
+        return _EXPECT_FAIL_CONDITIONS[operator]
+    except KeyError:
+        raise ValueError(f"unrecognized EXPECT operator: {operator!r}") from None
 
 
 def _verify_condition(expectation: str, tally_field: str) -> str:
