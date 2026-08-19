@@ -15,6 +15,7 @@ expected/actual fields.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +31,20 @@ JSON_REPORT_VERSION = 1
 _EXPECT_PREFIX = "expected "
 _VERIFY_PREFIX = "VERIFY "
 _GOT_SEPARATOR = ", got "
+
+# An EXPECT failure head after _EXPECT_PREFIX: `<name> <operator>
+# <expected>`, where <operator> is one of the canonical relation operators
+# an ExpectDirective can carry (model.EXPECT_OPERATORS -- driver.py echoes
+# the directive's own operator into the FAIL line verbatim). Compound
+# alternatives must come before their prefixes ("NOT >=" before "NOT >",
+# ">=" before ">") or the longer operator mis-splits. The non-greedy name
+# stops at the FIRST operator occurrence, mirroring the pre-operator
+# behavior of splitting on the first " = " -- an expected value that itself
+# contains an operator-shaped substring keeps it.
+_EXPECT_HEAD_RE = re.compile(
+    r"^(?P<name>.+?) (?P<op>NOT >=|NOT <=|NOT =|NOT >|NOT <|>=|<=|=|>|<) "
+    r"(?P<expected>.*)$"
+)
 
 
 @dataclass
@@ -62,8 +77,20 @@ def _attribute_failure(reason: str, case: MockTestCase | None) -> AttributedFail
     if _GOT_SEPARATOR in reason:
         head, actual = reason.rsplit(_GOT_SEPARATOR, 1)
         actual = actual.strip()
-        if head.startswith(_EXPECT_PREFIX) and " = " in head:
-            data_name, expected = head[len(_EXPECT_PREFIX) :].split(" = ", 1)
+        if (
+            head.startswith(_EXPECT_PREFIX)
+            and (m := _EXPECT_HEAD_RE.match(head[len(_EXPECT_PREFIX) :])) is not None
+        ):
+            data_name = m.group("name")
+            # Plain equality keeps the bare value (the pre-operator report
+            # shape, so existing consumers see no change); any other
+            # operator is prefixed so `expected` stays self-describing
+            # ("> 5", "NOT = 0").
+            expected = (
+                m.group("expected")
+                if m.group("op") == "="
+                else f"{m.group('op')} {m.group('expected')}"
+            )
             line = None
             if case is not None:
                 for expectation in case.expectations:

@@ -1,5 +1,25 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-19 — EXPECT negation and comparison operators
+
+`EXPECT <name> [NOT] TO BE [GREATER THAN|LESS THAN [OR EQUAL TO]]
+<value>` — the DSL's assertion, previously exact-equality only, now
+carries a relation. `ExpectDirective` gained `operator` (canonical COBOL
+relation spelling, `model.EXPECT_OPERATORS`, default `"="` so every
+hand-built directive and pre-operator `.cut` file is unchanged);
+`parser.py` normalizes the English phrase (`_expect_operator`) and fails
+closed on a dangling one (`_EXPECT_DANGLING_PHRASE_RE`: `TO BE GREATER
+5` is a `CutParseError`, not a cobc error in generated code);
+`splicer/driver.py` compiles each operator's negation into the generated
+failure-branch IF (`_EXPECT_FAIL_CONDITIONS` — keep in sync with
+`EXPECT_OPERATORS`) and echoes the operator into the FAIL DISPLAY;
+`report/json_report.py`'s attribution splits the FAIL head on the
+operator (`_EXPECT_HEAD_RE`), keeping the bare-value `expected` field
+for `=` and prefixing the operator otherwise. PROVIDER expansion
+carries the operator through untouched. Updated [dsl.md](dsl.md),
+[splicer.md](splicer.md), [report.md](report.md); design doc
+`docs/2026-08-19-expect-comparison-operators-design.md`.
+
 ## 2026-08-18 — cobol-parser dependency and mockymock's own release both move to PyPI
 
 Two related changes, mirroring the sibling cobol-parser repo's CI shape

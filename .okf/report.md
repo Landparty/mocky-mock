@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-08-12T00:00:00Z
+timestamp: 2026-08-19T00:00:00Z
 ---
 # Overview
 
@@ -164,7 +164,13 @@ attribution (`kind` expect/verify/unknown, the failing directive's `.cut`
 line, `expected`/`actual` split into fields — recovered by re-matching the
 driver's failure-reason strings against the model, splitting on the LAST
 `", got "`), and a synthesized `"not_run"` entry for every selected case the
-binary never printed a START marker for. `format_junit_xml` additionally
+binary never printed a START marker for. An EXPECT failure head is split
+into name/operator/expected by `_EXPECT_HEAD_RE` (the operator is one of
+`model.EXPECT_OPERATORS`, echoed verbatim by the driver's FAIL line;
+compound alternatives ordered before their prefixes so `NOT >=` never
+mis-splits as `NOT >`); the reported `expected` field keeps the bare
+value for plain `=` (the pre-operator shape) and is operator-prefixed
+otherwise (`"> 5"`, `"NOT = 0"`). `format_junit_xml` additionally
 stamps `classname="<suite name>"` on every `<testcase>` (suite-qualified
 identity for consumers that merge reports or meet duplicate case names).
 

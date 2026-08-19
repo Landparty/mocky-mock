@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-08-17T00:00:00Z
+timestamp: 2026-08-19T00:00:00Z
 ---
 
 # Overview
@@ -39,7 +39,7 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
       END-MOCK ]*
     [ MOVE <value> TO <target> ]*
     PERFORM <paragraph> [ THRU|THROUGH <paragraph> ]
-    [ EXPECT <data-name> TO BE <value> ]*
+    [ EXPECT <data-name> [NOT] TO BE [GREATER|LESS THAN [OR EQUAL TO]] <value> ]*
     [ VERIFY [<category>] <key> WAS CALLED|PERFORMED <expectation> ]*
 ```
 
@@ -70,6 +70,27 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   (all default 0 for hand-built models). Editor integrations rely on these
   for navigation and failure locations — keep them accurate when touching
   the parse loop.
+- `EXPECT` supports negation and comparison phrases: `EXPECT <name>
+  [NOT] TO BE [GREATER THAN|LESS THAN [OR EQUAL TO]] <value>`. Each
+  phrase normalizes at parse time to one canonical COBOL relation
+  operator on `ExpectDirective.operator` (`model.EXPECT_OPERATORS`:
+  `=`, `NOT =`, `>`, `NOT >`, `<`, `NOT <`, `>=`, `NOT >=`, `<=`,
+  `NOT <=`); plain `TO BE` stays `=`, so pre-operator `.cut` files and
+  hand-built directives are unchanged. `splicer/driver.py`'s
+  `_EXPECT_FAIL_CONDITIONS` compiles each operator's *negation* into the
+  generated `IF` (the IF guards the failure branch; `>=`/`<=` negate to
+  the equivalent plain `<`/`>` to keep emitted conditions to the
+  simplest COBOL-85 relational forms) — keep that map in sync with
+  `EXPECT_OPERATORS`. The FAIL `DISPLAY` carries the operator between
+  name and value (`expected WS-X > 5, got ...`), and
+  `report/json_report.py`'s `_EXPECT_HEAD_RE` splits attribution on it
+  (`expected` field keeps the bare value for `=`, is operator-prefixed
+  otherwise). Fail-closed: a dangling phrase (`TO BE GREATER 5`,
+  `... OR EQUAL 5`) raises `CutParseError` at the line instead of
+  splicing leftover words into the generated IF
+  (`_EXPECT_DANGLING_PHRASE_RE`, whole-word so `GREATER-VALUE` still
+  parses as an ordinary value). Phrase words are case-sensitive
+  uppercase like every other keyword.
 - `EXPECT <data-name> TO BE <value>`'s `<data-name>` and `MOVE <value> TO
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
   to an identifier — a table subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`,
@@ -313,7 +334,7 @@ docs/2026-08-04-record-expectations-design.md for the full design.
 | `MockCategory` (Enum) | `CALL, DYNCALL, OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START, UNLOCK, SQL, CICS, DLI, ACCEPT, PARAGRAPH, SECTION` | `.keyword` property maps `DYNCALL → "CALL"`, everything else to its own name |
 | `MockDirective` | `category, key, body_lines: list[str], rows: list[list[tuple[str, str]]] \| None, terminal_row: list[tuple[str, str]] \| None, captures: list[tuple[int, str]]` | `.program_name` is v1-compat alias for `.key` (CALL-only meaning); `.describe()` renders `.cut`-style text (`CALL "X"`, `CALL WS-PGM`, `READ INFILE`) used in refusal messages; `rows` is set only for a `MOCK SQL "..." ROWS`, `MOCK READ <file> ROWS`, or `MOCK RETURN <sd-file> ROWS` directive and is mutually exclusive with `body_lines`; `terminal_row` holds a READ/RETURN ROWS directive's optional (READ) or effectively mandatory (RETURN) `TERMINAL ( FIELD = value, ... )` group (its rows-exhausted `WHEN OTHER` field assignments) — always `None` for SQL rows (SQLCODE 100 is fixed) and for non-ROWS mocks; `captures` holds `CAPTURE ARG <n> INTO <target>` `(n, target)` pairs, only ever non-empty for CALL/DYNCALL directives |
 | `DataProvider` | `name, line, header: list[str], rows: list[list[str]], row_lines: list[int]` | Parser-internal only -- never stored on `MockTestSuite`/`MockTestCase`; consumed and discarded by `_expand_providers` before `parse_cut()` returns |
-| `ExpectDirective` | `data_name, expected_value` | one `EXPECT` line |
+| `ExpectDirective` | `data_name, expected_value, operator` | one `EXPECT` line; `operator` is the canonical relation asserted between the two (one of `EXPECT_OPERATORS`, default `"="`) |
 | `VerifyDirective` | `category, key, expectation` | `.program_name` same v1-compat alias as `MockDirective` |
 | `MockTestCase` | `name, mocks, setup_moves: list[(value,target)], perform_target, perform_thru: str\|None, expectations, verifications` | `perform_thru` is `None` unless `PERFORM X THRU Y` was used |
 | `MockTestSuite` | `name, test_cases` | `all_mock_keys()` returns every distinct `(category, key)` pair across all test cases, **first-appearance order** — this ordering is load-bearing: the tally registry, driver bookkeeping, and the splice loop all iterate this list, so first-appearance order determines codegen order |

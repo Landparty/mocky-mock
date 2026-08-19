@@ -128,6 +128,43 @@ def test_expect_failure_with_subscripted_data_name_attributes_correctly():
     assert failure["line"] == 5
 
 
+def test_expect_failure_with_comparison_operator_attributes_correctly():
+    """An operator EXPECT's FAIL line carries the operator between name and
+    value; attribution must split on it, keep the operator in `expected`
+    (so the field stays self-describing), and still recover the line."""
+    cut_text = (
+        'TESTSUITE "s"\n\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-COUNT TO BE GREATER THAN 5\n"
+        "    EXPECT WS-FLAG NOT TO BE 9\n"
+    )
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ CASE 001 FAIL: expected WS-COUNT > 5, got 004\n"
+        "__MOCKYMOCK__ CASE 001 FAIL: expected WS-FLAG NOT = 9, got 9\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=2\n"
+    )
+    report = build_json_report(
+        parse_stdout(stdout),
+        cut_suite=parse_cut(cut_text),
+        crash_detail=None,
+        cut_file="PROG.cut",
+        program_file="PROG.cbl",
+    )
+    greater, negated = report["cases"][0]["failures"]
+    assert greater["kind"] == "expect"
+    assert greater["expected"] == "> 5"
+    assert greater["actual"] == "004"
+    assert greater["line"] == 5
+    assert negated["kind"] == "expect"
+    assert negated["expected"] == "NOT = 9"
+    assert negated["actual"] == "9"
+    assert negated["line"] == 6
+
+
 def test_verify_failure_attributes_line_expected_actual():
     report = _report(STDOUT_ALL_RUN)
     verify_failure = report["cases"][1]["failures"][1]
