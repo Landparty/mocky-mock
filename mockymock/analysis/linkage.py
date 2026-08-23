@@ -22,11 +22,16 @@ class LinkagePlan:
     """Everything the guardrail checks and the splicer transform need.
 
     `header_line` is 1-indexed into the NORMALIZED free-form text (the same
-    text `mockymock.splicer` edits) -- derived as one line before the first
-    LINKAGE SECTION data item's own location, since cobolparser does not
-    reliably report a DATA-DIVISION section's own header location (verified
-    empirically: every section under one DATA DIVISION reports that
-    DIVISION's own line, not its own header line).
+    text `mockymock.splicer` edits) -- taken directly from the LINKAGE
+    SECTION's own `CobolSection.location`. cobolparser used to report every
+    DATA DIVISION section at its parent division's location rather than its
+    own header token; that was fixed upstream (cobolparser 2026-07-09,
+    "Section/Paragraph Location Tracking"), so `location.line` is now
+    reliable. Do NOT go back to deriving this from the first data item's
+    location minus one -- that assumption silently breaks whenever anything
+    (a comment block, blank lines) separates the LINKAGE SECTION header from
+    its first 01-level item, which is common in real IMS PCB-mask linkage
+    sections and was measured to drift 12-14 lines on real-world programs.
     """
 
     entry_statements: list
@@ -47,7 +52,9 @@ def linkage_plan(program) -> LinkagePlan | None:
     linkage_section = data._sections.get("LINKAGE")
     if linkage_section is None or not linkage_section.data_items:
         return None
-    header_line = linkage_section.data_items[0].location.line - 1
+    if linkage_section.location is None:
+        return None
+    header_line = linkage_section.location.line
     return LinkagePlan(
         entry_statements=entries,
         linkage_items=linkage_section.data_items,

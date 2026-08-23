@@ -46,6 +46,36 @@ ORDINARY_SOURCE = """\
            STOP RUN.
 """
 
+# Mirrors real IMS PCB-mask linkage sections: a boilerplate comment block
+# sits between "LINKAGE SECTION." and the first 01-level item. Regression
+# for the header_line derivation that used to assume the header is always
+# exactly one line above the first data item (measured to drift 12-14 lines
+# on real-world programs whose LINKAGE SECTION opens with such a comment
+# block -- see linkage_plan's docstring).
+COMMENTED_LINKAGE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. IMSSAMP2.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE PIC X VALUE 'N'.
+
+       LINKAGE SECTION.
+      *****************************************************
+      * PCB MASK FOR CUSTOMER DATABASE
+      * DESCRIBES THE DL/I PCB LAYOUT FOR THIS PROGRAM
+      *****************************************************
+       01  CUST-PCB-LNK.
+           05  CUST-DBD-NAME     PIC X(08).
+           05  CUST-STATUS       PIC X(02).
+
+       PROCEDURE DIVISION.
+       ENTRY 'DLITCBL' USING CUST-PCB-LNK.
+       0000-MAIN.
+           DISPLAY CUST-STATUS
+           STOP RUN.
+"""
+
 # Named ENTRY present, but the default entry ALSO declares its own USING --
 # the general CALL-driving case (Milestone B), not this feature's scope.
 DEFAULT_ENTRY_USING_SOURCE = """\
@@ -99,6 +129,25 @@ def test_check_linkage_layout_clean_for_qualifying_program():
     assert check_linkage_layout(program, lines) == []
 
 
+def test_linkage_plan_header_line_survives_comment_block_before_first_item():
+    program, lines = _parse(COMMENTED_LINKAGE_SOURCE)
+    plan = linkage_plan(program)
+    assert plan is not None
+    assert lines[plan.header_line - 1].strip().upper() == "LINKAGE SECTION."
+    # The naive "one line above the first data item" derivation would have
+    # landed inside the comment block instead of on the header.
+    assert (
+        plan.header_line
+        != program.get_division("DATA")._sections["LINKAGE"].data_items[0].location.line
+        - 1
+    )
+
+
+def test_check_linkage_layout_clean_with_comment_block_before_first_item():
+    program, lines = _parse(COMMENTED_LINKAGE_SOURCE)
+    assert check_linkage_layout(program, lines) == []
+
+
 def test_check_linkage_layout_refuses_default_entry_using():
     program, lines = _parse(DEFAULT_ENTRY_USING_SOURCE)
     reasons = check_linkage_layout(program, lines)
@@ -124,8 +173,9 @@ class _FakeItem:
 
 
 class _FakeSection:
-    def __init__(self, data_items):
+    def __init__(self, data_items, line=None):
         self.data_items = data_items
+        self.location = _FakeLocation(line) if line is not None else None
 
 
 class _FakeDataDivision:
@@ -174,9 +224,9 @@ def test_check_linkage_layout_refuses_when_linkage_is_not_last_section():
         entries=[_FakeEntry("ALT", 8)],
         data_division=_FakeDataDivision(
             {
-                "WORKING-STORAGE": _FakeSection([_FakeItem("WS-DONE", 2)]),
-                "LINKAGE": _FakeSection([_FakeItem("LNK-ITEM", 4)]),
-                "REPORT": _FakeSection([_FakeItem("RPT-ITEM", 6)]),
+                "WORKING-STORAGE": _FakeSection([_FakeItem("WS-DONE", 2)], line=1),
+                "LINKAGE": _FakeSection([_FakeItem("LNK-ITEM", 4)], line=3),
+                "REPORT": _FakeSection([_FakeItem("RPT-ITEM", 6)], line=5),
             }
         ),
         procedure_division=_FakeProcDivision(7),
