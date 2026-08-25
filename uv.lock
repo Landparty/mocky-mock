@@ -97,9 +97,20 @@ wheels = [
 ]
 
 [[package]]
-name = "cobolparser"
-version = "1.2.0"
-source = { git = "https://github.com/Landparty/cobol-parser.git?rev=4db83941dccefbf3d185d02a518378c37c392d46#4db83941dccefbf3d185d02a518378c37c392d46" }
+name = "cobol-parser"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/17/8f/be3c77f2fe0c1bfa4afe77bad2e3f112be823bf68fd8f7cf80e181a57e6d/cobol_parser-1.8.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:64afcc29a27e7da6bcee6fb4a079a822e403d02f66b19c328170b6870c201979", size = 7036851, upload-time = "2026-08-20T12:41:27.071Z" },
+    { url = "https://files.pythonhosted.org/packages/62/3e/486d3bc7ae733a20f5bb1544346369b8f9bb71d5ed71a560c1b326dccba3/cobol_parser-1.8.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e78d5cf6e5f7d8a25003af8a0e1d4cadbbe4ba3ad8fc409e7ff254423814b299", size = 47331724, upload-time = "2026-08-20T12:41:31.325Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/65/56bf3be5c74abae925678ed5f8c4bb8c1c30cc9083ecd55d1eb0df352068/cobol_parser-1.8.0-cp311-cp311-win_amd64.whl", hash = "sha256:2b892fb74872502f16dd27484e2ce0631316b35a00da4c8784f01ddfb237d564", size = 6320092, upload-time = "2026-08-20T12:41:34.3Z" },
+    { url = "https://files.pythonhosted.org/packages/74/a5/8a422c62bb2f2b14eabec5324b5c8100409edf221f935e3dbc8d94f55e13/cobol_parser-1.8.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:86e36c07e0fb720c2ae7b32f69eb2766ebe6d49681a23a047f42aeb73eadc5ae", size = 7002268, upload-time = "2026-08-20T12:41:36.403Z" },
+    { url = "https://files.pythonhosted.org/packages/55/f0/1eafc4870f49332ae6150ca6b6184ee2507c562fdda14c2223a0d859e8e6/cobol_parser-1.8.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ffcf6ddd089823db9cedc804e7459666155217ba39ae8ea8ec41a1da1efde158", size = 47272886, upload-time = "2026-08-20T12:41:40.993Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/37/075fa18daf54d131923e431a8d76adf877d4b97c6e89ec3bc00b37c9c6e3/cobol_parser-1.8.0-cp312-cp312-win_amd64.whl", hash = "sha256:bbef193ea0083fb00cf3913379761da8ed4c4b58cf3e172b57dfd06c4a9acc25", size = 6142857, upload-time = "2026-08-20T12:41:44.197Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/a6/56ff8f148a1fd6a4e4db4b873b3bb1ff5a13df6a9e7e5c984288bb6a1c93/cobol_parser-1.8.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:76653644b7c99a6352cf8f6d7cd1bac7c17b8a93d6a2b0d7ea416cb9f6f56d1e", size = 6918869, upload-time = "2026-08-20T12:41:46.864Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/91/d8527ee5904772bc0cea3f37727635ea30942b2976b1d4ac682d230ed028/cobol_parser-1.8.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6e8203aba8e35746c34041e64d03311e68433a14d9a3b38333c8fb52b4b17c05", size = 46354177, upload-time = "2026-08-20T12:41:52.023Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/c9/9a686f6ef63d7a187ba4f85fbe29dbd76d488b9f043fee33e1309228e754/cobol_parser-1.8.0-cp313-cp313-win_amd64.whl", hash = "sha256:07bd50a48e74417b059c07a925b54044403afd1419c29b3ab18f7bc6c61192f4", size = 6083210, upload-time = "2026-08-20T12:41:55.259Z" },
+]
 
 [[package]]
 name = "colorama"
@@ -284,11 +295,11 @@ wheels = [
 ]
 
 [[package]]
-name = "mockymock"
-version = "0.1.0"
+name = "mocky-mock"
+version = "0.6.4"
 source = { editable = "." }
 dependencies = [
-    { name = "cobolparser" },
+    { name = "cobol-parser" },
 ]
 
 [package.optional-dependencies]
@@ -303,7 +314,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "cobolparser", git = "https://github.com/Landparty/cobol-parser.git?rev=4db83941dccefbf3d185d02a518378c37c392d46" },
+    { name = "cobol-parser", specifier = ">=1.7.7,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
