@@ -1,5 +1,33 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-25 — GO-TO-exit reachability narrowing (mock gates agree with the splice)
+
+The reachability BFS behind the per-case mock gates now consumes the
+same `GotoExitPlan`s the splicer applies: a `GO TO <exit-label>` fully
+covered by a plan (all-or-nothing per target, computed/multi-target
+aliases disqualify — `find_goto_exit_plans`, unchanged) is no longer a
+flow edge, and its exit-label target is dropped from the GO TO
+fall-through closure's seed set. New shared helper
+`refusal.neutralized_goto_targets(program, scope_map, lines)`;
+`find_terminator_plans` now uses it too (replacing its inline
+equivalent) and passes it into its own `_reachable_paragraphs` call;
+`cli.checks.run_static_checks` step 8 computes it once and threads it
+into every `check_test_case`. Why: on a real CICS program, every
+paragraph using the idiomatic `GO TO <own-adjacent-EXIT-label>`
+early-return shape pulled its bare-`EXIT.` landing pad into
+`go_to_targets`, whose fall-through walk cascaded reachability from the
+exit label to the literal end of the program — demanding mocks (and
+refusing terminator layouts) for boundaries the *compiled* test can
+never execute, since the splice replaces that exact GO TO with `EXIT
+PARAGRAPH`. `union_executed_paragraphs` deliberately stays un-narrowed
+(runs before `lines`/`scope_map` exist; un-narrowed only waives fewer
+warnings). Behavior flip to know about: `.cut` files that over-mocked
+the old cascade now refuse `UNMATCHED_MOCK` on those stale directives.
+Pinned by `tests/unit/test_reachability_goto_exit.py`; updated
+[analysis.md](analysis.md). The underlying splice's GnuCOBOL
+verification status is unchanged (still pending — this change only
+aligns the static model with it).
+
 ## 2026-08-19 — EXPECT negation and comparison operators
 
 `EXPECT <name> [NOT] TO BE [GREATER THAN|LESS THAN [OR EQUAL TO]]

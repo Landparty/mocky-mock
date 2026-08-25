@@ -40,6 +40,15 @@ Flow-edge model (fail closed):
 - Any PERFORM/GO TO target that resolves to neither a paragraph nor a
   section refuses with UNRESOLVED_FLOW_TARGET instead of being skipped: a
   target the model cannot resolve means the reachable set is not trusted.
+- A GO TO fully covered by a GotoExitPlan (`neutralized_goto_targets`,
+  2026-08-25) is NOT an edge: the splicer replaces it with EXIT PARAGRAPH
+  at its own call site, so modeling it would make the gate demand mocks
+  for a fall-through cascade the compiled test can never execute -- the
+  "GO TO <own-exit-label>" idiom used to pull in every paragraph from the
+  exit label to the end of the program this way. check_test_case takes
+  the neutralized set from its caller (cli.checks.run_static_checks
+  computes it once per run); the same set already narrowed
+  find_terminator_plans' hazard sets.
 
 check_whole_program additionally refuses two constructs the flow model
 deliberately does not attempt to handle, by their mere presence anywhere
@@ -943,7 +952,13 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
     MOCK PARAGRAPH dispatch replaces a body per-case at runtime, but the
     original text still compiles, so for warning-waiving purposes a
     flow-mocked paragraph stays "executable" (conservative -- at worst an
-    extra refusal, which is exactly today's behavior).
+    extra refusal, which is exactly today's behavior). The GO-TO-exit
+    `neutralized_goto` narrowing (2026-08-25) is deliberately NOT applied
+    here either, for the same reason plus a mechanical one: this runs in
+    run_static_checks step 4b, before the normalized `lines`/`scope_map`
+    find_goto_exit_plans validates spans against exist -- and leaving the
+    spliced-away GO TO modeled as a live edge only ever waives FEWER
+    warnings, never more.
 
     On top of the per-case union, this closes over the GO TO fall-through
     hazard the BFS deliberately does not model as a flow edge (see the
@@ -1098,7 +1113,17 @@ def check_test_case(
     program,
     case: MockTestCase,
     file_status_fields: dict[str, str] | None = None,
+    neutralized_goto: frozenset[str] | set[str] = frozenset(),
 ) -> list[RefusalReason]:
+    """`neutralized_goto` must be `neutralized_goto_targets(...)` computed
+    over the same (program, scope_map, lines) the splicer will use --
+    passing it makes this gate's reachable set agree with the program
+    that actually compiles (each covered GO TO becomes EXIT PARAGRAPH,
+    so its exit-label target no longer cascades fall-through
+    reachability). Callers without a scope map (or predicting a run that
+    will not splice) leave the default: an empty set is strictly more
+    conservative -- at worst extra UNMOCKED_* refusals, never a silently
+    executing unmocked boundary."""
     from mockymock.analysis.flow_mocks import resolved_flow_targets
 
     file_status_fields = file_status_fields or {}
@@ -1111,6 +1136,7 @@ def check_test_case(
         case.perform_target,
         case.perform_thru,
         skip_traversal=mocked_flow_names,
+        neutralized_goto=neutralized_goto,
     )
 
     if case.perform_target not in reachable:
@@ -1633,6 +1659,7 @@ def _reachable_paragraphs(
     start: str,
     thru: str | None = None,
     skip_traversal: frozenset[str] | set[str] = frozenset(),
+    neutralized_goto: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[set[str], list[RefusalReason]]:
     """Return (reachable paragraph/section names, flow refusals), computed
     in a single BFS pass over PerformStatement and GoStatement edges, plus
@@ -1673,7 +1700,25 @@ def _reachable_paragraphs(
     UNRESOLVED_FLOW_TARGET -- fail closed, never a silent skip: an edge
     the model cannot resolve means the reachable set cannot be trusted.
     (The seed `start` is exempt: check_test_case turns an unresolvable
-    driver-side target into UNKNOWN_PARAGRAPH.)"""
+    driver-side target into UNKNOWN_PARAGRAPH.)
+
+    `neutralized_goto` holds exit-only paragraph names every GO TO of
+    which is covered by a GotoExitPlan (`neutralized_goto_targets`) --
+    the splicer replaces each of those GO TOs with EXIT PARAGRAPH at its
+    own call site, so in the program that actually compiles and runs,
+    control NEVER transfers to such a paragraph via GO TO. Two effects,
+    mirroring the narrowing find_terminator_plans already applied to its
+    own hazard sets (2026-08-25): a single-target unconditional GO TO
+    naming a neutralized paragraph is not a flow edge (its target is not
+    pushed), and the neutralized names are subtracted from the GO TO
+    fall-through closure's seed set -- which is what stops the
+    "GO TO <own-exit-label>" idiom's bare-EXIT landing pad from
+    cascading the walk through the entire rest of the program. Sound
+    only because find_goto_exit_plans is all-or-nothing per target and
+    disqualifies any target also named by a computed/multi-target GO TO:
+    a name in this set is therefore never reachable through any GO TO
+    shape this walk would otherwise have to model. Callers that do not
+    splice (or predict a run that will not splice) must leave it empty."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
@@ -1745,7 +1790,7 @@ def _reachable_paragraphs(
             )
 
     seen: set[str] = set()
-    go_to_targets = _go_to_targets(program)
+    go_to_targets = _go_to_targets(program) - set(neutralized_goto)
     index_by_name = (
         {p.paragraph_name: i for i, p in enumerate(ordered)} if ordered else {}
     )
@@ -1772,6 +1817,15 @@ def _reachable_paragraphs(
             seen.add(name)
             for statement in _find_flow_statements(by_name[name].statements):
                 if isinstance(statement, GoStatement):
+                    single_target = _go_statement_target(statement)
+                    if single_target is not None and single_target in neutralized_goto:
+                        # Covered by a GotoExitPlan: the splicer replaces
+                        # this exact GO TO with EXIT PARAGRAPH, so it is
+                        # not a flow edge in the program that runs. (A
+                        # computed/multi-target GO TO can never name a
+                        # neutralized paragraph -- its mere existence
+                        # disqualifies the target in find_goto_exit_plans.)
+                        continue
                     targets = list(statement.target_paragraphs)
                     if not targets and statement.target_paragraph:
                         targets = [statement.target_paragraph]
@@ -2310,6 +2364,15 @@ def find_goto_exit_plans(
     docs/2026-08-17-goto-exit-paragraph-simplification-design.md.
     STATUS: implemented, not yet verified against real GnuCOBOL.
 
+    Consumers beyond the splicer itself go through
+    `neutralized_goto_targets` (the fully-neutralized target names):
+    `find_terminator_plans`' hazard-set narrowing, and -- since
+    2026-08-25 -- `check_test_case`/`_reachable_paragraphs`' reachable
+    set, so the mock gates stop demanding mocks for the fall-through
+    cascade a spliced-away GO TO can no longer trigger. Any soundness
+    condition added or relaxed here therefore changes what those gates
+    waive, not just what the splicer rewrites.
+
     A GO TO qualifies only when ALL of:
     - it names a single, unconditional target (`_go_statement_target`)
       that is an exit-only paragraph (`_is_exit_only_paragraph`);
@@ -2523,6 +2586,27 @@ def find_goto_exit_plans(
     return plans, notes
 
 
+def neutralized_goto_targets(program, scope_map, lines: list[str]) -> frozenset[str]:
+    """The exit-only paragraph names every GO TO of which is covered by a
+    GotoExitPlan -- i.e. the targets `find_goto_exit_plans` fully
+    neutralizes (all-or-nothing per target, so a name appears here only
+    when EVERY GO TO naming it gets spliced into EXIT PARAGRAPH). The
+    shared narrowing set for every consumer that must agree with what the
+    splicer actually compiles: `find_terminator_plans`' hazard sets and
+    `_reachable_paragraphs`/`check_test_case`'s reachable-set walk
+    (2026-08-25 -- before that, the reachability BFS still modeled the
+    spliced-away GO TO as a live edge, so the "GO TO <own-exit-label>"
+    idiom's bare-EXIT landing pad cascaded fall-through reachability
+    through the entire rest of the program, demanding mocks for
+    boundaries the compiled test can never execute)."""
+    plans, _notes = find_goto_exit_plans(program, scope_map, lines)
+    return frozenset(
+        target
+        for target in (_go_statement_target(plan.statement) for plan in plans)
+        if target is not None
+    )
+
+
 def find_terminator_plans(
     surface: MockSurface,
     program,
@@ -2597,13 +2681,8 @@ def find_terminator_plans(
     # qualifies for neutralization here too. _safe_section_entry_points'
     # own internal go_to_targets check is deliberately left un-narrowed --
     # see find_goto_exit_plans' docstring.
-    goto_exit_plans, _goto_exit_notes = find_goto_exit_plans(program, scope_map, lines)
-    neutralized_goto_targets = {
-        target
-        for target in (_go_statement_target(plan.statement) for plan in goto_exit_plans)
-        if target is not None
-    }
-    go_to_targets = _go_to_targets(program) - neutralized_goto_targets
+    neutralized_goto = neutralized_goto_targets(program, scope_map, lines)
+    go_to_targets = _go_to_targets(program) - neutralized_goto
     safe_section_entries = _safe_section_entry_points(program)
     safe_section_first_names = set(safe_section_entries.values())
     go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
@@ -2631,6 +2710,7 @@ def find_terminator_plans(
             case.perform_target,
             case.perform_thru,
             skip_traversal=mocked_flow_names,
+            neutralized_goto=neutralized_goto,
         )
         reachable -= mocked_flow_names
         safe_names, chain_performs = _plain_perform_edges_from(
