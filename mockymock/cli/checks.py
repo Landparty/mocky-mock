@@ -122,6 +122,7 @@ def run_static_checks(
         check_test_case,
         check_unresolved_copybooks_scoped,
         check_whole_program_scoped,
+        neutralized_goto_targets,
         resolve_scoped_refusals,
         union_executed_paragraphs,
     )
@@ -283,12 +284,22 @@ def run_static_checks(
 
     # 8. Per-test-case checks, then flow-mock (MOCK PARAGRAPH/SECTION) and
     # terminator layout -- accumulated across all cases rather than
-    # short-circuiting, matching `run`'s behavior.
+    # short-circuiting, matching `run`'s behavior. The neutralized-GO-TO
+    # set is computed over the same (ast, scope_map, lines) every splicing
+    # command feeds find_goto_exit_plans, so the reachable set each case
+    # is gated on agrees with the program that actually compiles -- a
+    # "GO TO <own-exit-label>" spliced into EXIT PARAGRAPH no longer
+    # cascades fall-through reachability past its exit label.
+    neutralized_goto = neutralized_goto_targets(parse_result.ast, scope_map, lines)
     for case in suite.test_cases:
         out.problems.extend(
             f"refused ({r.code}): {r.message}"
             for r in check_test_case(
-                surface, parse_result.ast, case, out.file_status_fields
+                surface,
+                parse_result.ast,
+                case,
+                out.file_status_fields,
+                neutralized_goto=neutralized_goto,
             )
         )
     out.problems.extend(
