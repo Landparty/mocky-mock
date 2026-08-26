@@ -277,6 +277,67 @@ def test_find_goto_exit_plans_is_all_or_nothing_per_target():
     assert "2 site(s)" in notes[0]
 
 
+def test_find_goto_exit_plans_resolves_a_transitive_fallthrough_chain():
+    """Regression pin for a real bug: three back-to-back validation-style
+    paragraphs, each GO TO-ing its own following bare-EXIT paragraph.
+    2000-VALIDATE-B is only reachable, on paper, by falling through past
+    1000-EXIT (a GO TO target) -- but 1000-EXIT's own GO TO is itself
+    safe to neutralize, which drops 1000-EXIT out of _go_to_targets and
+    un-marks 2000-VALIDATE-B as a fallthrough hazard. A single static
+    pass over the raw, whole-program hazard sets sees 2000-VALIDATE-B
+    (and, transitively, 3000-VALIDATE-C) as hazardous from the very start
+    and declines the whole chain; find_goto_exit_plans must instead
+    re-evaluate every remaining candidate as each earlier one confirms,
+    resolving the chain to a fixpoint in one call."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOCHAIN.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-COND             PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       1000-VALIDATE-A.
+           IF WS-COND = "Y"
+               GO TO 1000-EXIT
+           END-IF
+           DISPLAY "A".
+
+       1000-EXIT.
+           EXIT.
+
+       2000-VALIDATE-B.
+           IF WS-COND = "Y"
+               GO TO 2000-EXIT
+           END-IF
+           DISPLAY "B".
+
+       2000-EXIT.
+           EXIT.
+
+       3000-VALIDATE-C.
+           IF WS-COND = "Y"
+               GO TO 3000-EXIT
+           END-IF
+           DISPLAY "C".
+
+       3000-EXIT.
+           EXIT.
+
+       4000-TERMINATE.
+           STOP RUN.
+"""
+    program, _, scope_map, lines = _analyze(source)
+    plans, notes = find_goto_exit_plans(program, scope_map, lines)
+    assert notes == []
+    assert {plan.paragraph_name for plan in plans} == {
+        "1000-VALIDATE-A",
+        "2000-VALIDATE-B",
+        "3000-VALIDATE-C",
+    }
+
+
 def test_find_goto_exit_plans_declines_section_scoped_enclosing_paragraph():
     """SECTION support is deliberately NOT implemented (see the module
     docstring): both a cleanup paragraph after the exit-only paragraph

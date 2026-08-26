@@ -2642,7 +2642,31 @@ def find_goto_exit_plans(
     deliberately NOT narrowed by any OTHER goto-exit plan already found --
     composing two neutralizations to unlock a section entry is real
     additional complexity with no corpus example needing it; at worst
-    this costs an extra declined optimization, never unsoundness."""
+    this costs an extra declined optimization, never unsoundness.
+
+    The fixpoint loop below is a narrower, unrelated thing: it re-narrows
+    THIS function's own `_go_to_targets`/`_go_to_fallthrough_targets` by
+    targets THIS function has already confirmed, within a single call --
+    it never touches `_safe_section_entry_points`. Back-to-back
+    validation-style paragraphs (`2211-VALIDER-MNT` /
+    `2211-EXIT`, immediately followed by `2212-VALIDER-...` / `2212-EXIT`,
+    and so on) chain: neutralizing `2211-EXIT` drops it out of
+    `_go_to_targets`, which is exactly what un-marks `2212-VALIDER-...` as
+    a `_go_to_fallthrough_targets` hazard (it was only hazardous because
+    `2211-EXIT`, a bare-EXIT paragraph, falls through into it) -- which is
+    what lets `2212-EXIT` neutralize in turn, and so on transitively
+    through however many such paragraphs sit back-to-back. A single static
+    pass over the RAW, whole-program `_go_to_targets`/
+    `_go_to_fallthrough_targets` sees every paragraph on that chain as
+    hazardous from the very first paragraph's still-live GO TO and
+    declines the entire chain at once. So this evaluates every candidate
+    target repeatedly, each round narrowing `_go_to_targets` (and, through
+    it, `_go_to_fallthrough_targets`) by every target CONFIRMED in an
+    EARLIER round -- mirroring the narrowing `find_terminator_plans` and
+    `_reachable_paragraphs` already apply using this function's own FINAL
+    output -- until a round confirms nothing new. Monotonic and therefore
+    terminates: confirmed targets are never revisited, and each round
+    either confirms at least one new target or the loop stops."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return [], []
@@ -2655,8 +2679,7 @@ def find_goto_exit_plans(
         return [], []
 
     top_level_names = {p.paragraph_name for p in procedure.paragraphs}
-    go_to_targets = _go_to_targets(program)
-    go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
+    base_go_to_targets = _go_to_targets(program)
     boundaries = collect_boundaries(program)
     last_line = len(lines)
     ordered = _source_ordered_paragraphs(procedure)
@@ -2703,94 +2726,115 @@ def find_goto_exit_plans(
             f"basis"
         )
 
-    for target_name, sites in sorted(by_target.items()):
-        problems: list[str] = []
-        computed: list[tuple[GoStatement, str, str, tuple[int, int]]] = []
-        for statement, enclosing, nested, in_boundary in sites:
-            if enclosing in go_to_targets:
-                problems.append(
-                    f"line {statement.location.line}: enclosing paragraph "
-                    f"'{enclosing}' is itself a GO TO target elsewhere in "
-                    f"the program"
-                )
-                continue
-            if enclosing in go_to_fallthrough:
-                problems.append(
-                    f"line {statement.location.line}: enclosing paragraph "
-                    f"'{enclosing}' is reached only by falling through "
-                    f"past a GO TO target elsewhere in the program"
-                )
-                continue
-            if enclosing not in top_level_names:
-                problems.append(
-                    f"line {statement.location.line}: enclosing paragraph "
-                    f"'{enclosing}' belongs to a SECTION -- SECTION-scoped "
-                    f"enclosing paragraphs are not yet supported"
-                )
-                continue
-            if not immediately_follows(enclosing, target_name):
-                problems.append(
-                    f"line {statement.location.line}: '{target_name}' is "
-                    f"not the paragraph immediately following enclosing "
-                    f"paragraph '{enclosing}' in source order -- a "
-                    f"PERFORM ... THRU range ending at '{target_name}' "
-                    f"could cover real paragraphs between them, whose "
-                    f"early-exit-path behavior this splice would change"
-                )
-                continue
-            if in_boundary:
-                problems.append(
-                    f"line {statement.location.line}: nested inside another "
-                    f"boundary statement's clause body -- splicing the "
-                    f"enclosing statement would remove this GO TO along "
-                    f"with it"
-                )
-                continue
+    confirmed: set[str] = set()
+    remaining = dict(by_target)
+    last_problems: dict[str, list[str]] = {}
+    while remaining:
+        go_to_targets = base_go_to_targets - confirmed
+        go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
+        newly_confirmed: list[str] = []
 
-            if nested:
-                # Never true for a GoStatement in practice (it has no
-                # clause bodies of its own), checked anyway for the same
-                # reason _nested_site_span checks it: defense in depth
-                # against a future statement-model change.
-                if _nested_statement_lists(statement):
+        for target_name, sites in sorted(remaining.items()):
+            problems: list[str] = []
+            computed: list[tuple[GoStatement, str, str, tuple[int, int]]] = []
+            for statement, enclosing, nested, in_boundary in sites:
+                if enclosing in go_to_targets:
                     problems.append(
-                        f"line {statement.location.line}: has conditional "
-                        f"clause bodies of its own"
+                        f"line {statement.location.line}: enclosing paragraph "
+                        f"'{enclosing}' is itself a GO TO target elsewhere in "
+                        f"the program"
                     )
                     continue
-                span, reason = nested_statement_span(statement, scope_map, lines)
-                if span is None:
-                    problems.append(f"line {statement.location.line}: {reason}")
-                    continue
-            else:
-                line_problem = statement_top_level_problem(statement, scope_map, lines)
-                if line_problem is not None:
+                if enclosing in go_to_fallthrough:
                     problems.append(
-                        f"line {statement.location.line}: the GO TO "
-                        f"statement {line_problem}"
+                        f"line {statement.location.line}: enclosing paragraph "
+                        f"'{enclosing}' is reached only by falling through "
+                        f"past a GO TO target elsewhere in the program"
                     )
                     continue
-                span = statement_span(statement, boundaries, last_line, lines)
+                if enclosing not in top_level_names:
+                    problems.append(
+                        f"line {statement.location.line}: enclosing paragraph "
+                        f"'{enclosing}' belongs to a SECTION -- SECTION-scoped "
+                        f"enclosing paragraphs are not yet supported"
+                    )
+                    continue
+                if not immediately_follows(enclosing, target_name):
+                    problems.append(
+                        f"line {statement.location.line}: '{target_name}' is "
+                        f"not the paragraph immediately following enclosing "
+                        f"paragraph '{enclosing}' in source order -- a "
+                        f"PERFORM ... THRU range ending at '{target_name}' "
+                        f"could cover real paragraphs between them, whose "
+                        f"early-exit-path behavior this splice would change"
+                    )
+                    continue
+                if in_boundary:
+                    problems.append(
+                        f"line {statement.location.line}: nested inside another "
+                        f"boundary statement's clause body -- splicing the "
+                        f"enclosing statement would remove this GO TO along "
+                        f"with it"
+                    )
+                    continue
 
-            computed.append((statement, enclosing, "PARAGRAPH", span))
+                if nested:
+                    # Never true for a GoStatement in practice (it has no
+                    # clause bodies of its own), checked anyway for the same
+                    # reason _nested_site_span checks it: defense in depth
+                    # against a future statement-model change.
+                    if _nested_statement_lists(statement):
+                        problems.append(
+                            f"line {statement.location.line}: has conditional "
+                            f"clause bodies of its own"
+                        )
+                        continue
+                    span, reason = nested_statement_span(statement, scope_map, lines)
+                    if span is None:
+                        problems.append(f"line {statement.location.line}: {reason}")
+                        continue
+                else:
+                    line_problem = statement_top_level_problem(
+                        statement, scope_map, lines
+                    )
+                    if line_problem is not None:
+                        problems.append(
+                            f"line {statement.location.line}: the GO TO "
+                            f"statement {line_problem}"
+                        )
+                        continue
+                    span = statement_span(statement, boundaries, last_line, lines)
 
-        if problems:
-            notes.append(
-                f"GO TO {target_name} left as-is at {len(sites)} site(s) -- "
-                f"not all are safe to splice into EXIT PARAGRAPH "
-                f"automatically: " + "; ".join(problems)
-            )
-            continue
+                computed.append((statement, enclosing, "PARAGRAPH", span))
 
-        for statement, enclosing, exit_kind, span in computed:
-            plans.append(
-                GotoExitPlan(
-                    statement=statement,
-                    paragraph_name=enclosing,
-                    exit_kind=exit_kind,
-                    span=span,
+            last_problems[target_name] = problems
+            if problems:
+                continue
+
+            for statement, enclosing, exit_kind, span in computed:
+                plans.append(
+                    GotoExitPlan(
+                        statement=statement,
+                        paragraph_name=enclosing,
+                        exit_kind=exit_kind,
+                        span=span,
+                    )
                 )
-            )
+            newly_confirmed.append(target_name)
+
+        if not newly_confirmed:
+            break
+        for target_name in newly_confirmed:
+            del remaining[target_name]
+            confirmed.add(target_name)
+
+    for target_name, sites in sorted(remaining.items()):
+        problems = last_problems[target_name]
+        notes.append(
+            f"GO TO {target_name} left as-is at {len(sites)} site(s) -- "
+            f"not all are safe to splice into EXIT PARAGRAPH "
+            f"automatically: " + "; ".join(problems)
+        )
 
     return plans, notes
 
