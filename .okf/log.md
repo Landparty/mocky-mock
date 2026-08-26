@@ -1,5 +1,38 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-26 — Section-scoped GO TO fall-through closure (gate-only)
+
+The 2026-08-25 narrowing below only helps once `find_goto_exit_plans`
+neutralizes a target, and that function's adjacency precondition can only
+match ONE enclosing paragraph per target. The equally idiomatic shape it
+was never meant to cover — several validation paragraphs in one SECTION
+each doing `GO TO <shared-section-exit-label>` as an early bailout — was
+still declined all-or-nothing, so every case reaching it inherited the
+un-neutralized fall-through cascade: on a real program, even the
+simplest test case (performing one such validation paragraph's own
+SECTION) refused with hundreds of spurious `UNMOCKED_CALL`/
+`UNMOCKED_CICS`, cascading all the way to the program's terminator
+paragraph. Fixed on the *gate* side only — `find_goto_exit_plans`/
+`find_terminator_plans` splice exactly as before. New
+`_fallthrough_safe_sections(program)` proves a SECTION is entered ONLY
+via `PERFORM <section-name>` (stricter than `_safe_section_entry_points`:
+checked for every member, not just the first; an internal GO TO/PERFORM
+between two members of the same section is not disqualifying — that's
+the idiom itself), and `_walk_fallthrough_from` (new shared walk;
+`_reachable_paragraphs`/`union_executed_paragraphs` now call it instead
+of each carrying its own copy of the same loop) stops the moment it
+would cross past such a section's own last paragraph — the exact point
+GnuCOBOL's implicit `PERFORM`-range return fires, fall-through or
+internal GO TO alike. `_paragraph_safe_section_map` closes the one
+remaining gap this could open (a `.cut` case's PERFORM target/thru
+naming a section member directly, invisible to the whole-program AST
+scan) by excluding that section entirely for the caller whose own
+entry point does that. Shrinks the reachable set only, never grows it —
+so this can only reduce refusals, never introduce a new unmocked-boundary
+miss on its own. Pinned by
+`tests/unit/test_reachability_goto_exit_section_scoped.py`; updated
+[analysis.md](analysis.md).
+
 ## 2026-08-25 — GO-TO-exit reachability narrowing (mock gates agree with the splice)
 
 The reachability BFS behind the per-case mock gates now consumes the
