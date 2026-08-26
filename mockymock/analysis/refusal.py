@@ -965,10 +965,16 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
     module docstring): a paragraph entered via GO TO that falls off its own
     end continues into the next paragraph in source order, which therefore
     executes without any PERFORM/GO TO edge naming it. Every GO TO target
-    the union reaches is walked forward through `_falls_through` (the same
-    conservative predicate `_go_to_fallthrough_targets` uses, section
-    boundaries transparent), and each newly executable paragraph's own
-    downstream BFS is folded in, to a fixpoint."""
+    the union reaches is walked forward via `_walk_fallthrough_from` (the
+    same shared walk `_reachable_paragraphs` uses), and each newly
+    executable paragraph's own downstream BFS is folded in, to a fixpoint.
+    2026-08-26: that walk now stops at the end of a SECTION
+    `_fallthrough_safe_sections` proves is entered only via `PERFORM
+    <section-name>` instead of cascading past it -- section boundaries are
+    NOT transparent for such a section -- with `case_seeds` excluding any
+    section a selected case's own PERFORM target/thru bypasses by naming a
+    member paragraph directly (see `_paragraph_safe_section_map`); a
+    section that doesn't qualify is walked exactly as before."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return None
@@ -993,26 +999,33 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
                 section_name, [p.paragraph_name for p in section.paragraphs]
             )
 
-    def entry_index(name: str) -> int | None:
-        i = index_by_name.get(name)
-        if i is not None:
-            return i
-        members = section_members.get(name)
-        return index_by_name.get(members[0]) if members else None
+    # Every selected case's own entry point(s): unlike _reachable_paragraphs
+    # (one start/thru per call), this closure walk operates on the union
+    # across the whole suite, so a section is excluded here whenever ANY
+    # selected case's PERFORM target/thru names one of its member
+    # paragraphs directly -- see _paragraph_safe_section_map's docstring.
+    case_seeds: set[str] = set()
+    for case in suite.test_cases:
+        case_seeds.add(case.perform_target)
+        if case.perform_thru:
+            case_seeds.add(case.perform_thru)
+    paragraph_safe_section = _paragraph_safe_section_map(
+        section_members, _fallthrough_safe_sections(program), case_seeds
+    )
 
     changed = True
     while changed:
         changed = False
         for name in sorted(union & go_to_targets):
-            cursor = entry_index(name)
-            if cursor is None:
+            reached = _walk_fallthrough_from(
+                name, ordered, index_by_name, section_members, paragraph_safe_section
+            )
+            if reached is None:
                 # A reached GO TO target the fall-through walk can't anchor
                 # (e.g. an empty section): the closure is incomplete, so the
                 # union cannot be trusted to waive anything.
                 return None
-            while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
-                cursor += 1
-                fallen = ordered[cursor].paragraph_name
+            for fallen in reached:
                 if fallen in union:
                     continue
                 fallen_seen, fallen_reasons = _reachable_paragraphs(program, fallen)
@@ -1690,6 +1703,28 @@ def _reachable_paragraphs(
     when source order is unverifiable or a GO TO target cannot be
     anchored in it.
 
+    2026-08-26: the walk (`_walk_fallthrough_from`) no longer cascades
+    past the LAST paragraph of a SECTION `_fallthrough_safe_sections`
+    proves is entered only via `PERFORM <section-name>` anywhere in the
+    program -- reaching that exact point is where GnuCOBOL's own implicit
+    PERFORM return marker fires, regardless of whether it was reached by
+    plain fall-through or by an internal GO TO. Without this, a program's
+    "several paragraphs each `GO TO` a shared, section-scoped exit label"
+    idiom -- the common multi-caller shape `find_goto_exit_plans`' own
+    per-enclosing-paragraph adjacency check can't neutralize (see that
+    function's docstring) -- made every paragraph physically after the
+    section look hazardous, demanding mocks for boundaries the compiled
+    program never actually reaches. `start`/`thru` (this call's OWN entry
+    point) additionally exclude any section either one enters by naming a
+    member paragraph directly, since that DSL-level bypass of `PERFORM
+    <section-name>` is invisible to the whole-program AST scan
+    `_fallthrough_safe_sections` runs -- see `_paragraph_safe_section_map`.
+    This only ever SHRINKS the reachable set (declines to add paragraphs
+    fall-through would have added before), so it can only reduce refusals,
+    never a soundness regression on its own -- and never changes what
+    `find_goto_exit_plans`/`find_terminator_plans` actually splice, since
+    neither reads this function's narrowed fall-through map.
+
     A PERFORM ... THRU pushes every paragraph of its source-order range
     (fall-through executes them all); `thru` seeds the BFS with the test
     case's own driver-side range, whose missing endpoints are the .cut
@@ -1793,6 +1828,15 @@ def _reachable_paragraphs(
     go_to_targets = _go_to_targets(program) - set(neutralized_goto)
     index_by_name = (
         {p.paragraph_name: i for i, p in enumerate(ordered)} if ordered else {}
+    )
+    # This call's own entry point(s): a section otherwise safe for the GO
+    # TO fall-through closure below is excluded whenever `start`/`thru`
+    # name one of its member paragraphs directly, bypassing `PERFORM
+    # <section-name>` -- see _paragraph_safe_section_map's docstring.
+    paragraph_safe_section = _paragraph_safe_section_map(
+        section_members,
+        _fallthrough_safe_sections(program),
+        {start} | ({thru} if thru else set()),
     )
     while True:
         while stack:
@@ -1911,11 +1955,10 @@ def _reachable_paragraphs(
         anchor_failed = False
         additions: list[str] = []
         for name in sorted(hazard_sources):
-            cursor = index_by_name.get(name)
-            if cursor is None:
-                section_paras = section_members.get(name)
-                cursor = index_by_name.get(section_paras[0]) if section_paras else None
-            if cursor is None:
+            reached = _walk_fallthrough_from(
+                name, ordered, index_by_name, section_members, paragraph_safe_section
+            )
+            if reached is None:
                 # A GO TO target the walk cannot anchor (e.g. an empty
                 # section): the closure is incomplete, fail closed.
                 reasons.append(
@@ -1930,9 +1973,7 @@ def _reachable_paragraphs(
                 )
                 anchor_failed = True
                 continue
-            while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
-                cursor += 1
-                fallen = ordered[cursor].paragraph_name
+            for fallen in reached:
                 if fallen not in seen and fallen not in additions:
                     additions.append(fallen)
         if anchor_failed or not additions:
@@ -2045,6 +2086,174 @@ def _falls_through(paragraph) -> bool:
     ):
         return False
     return True
+
+
+def _fallthrough_safe_sections(program) -> set[str]:
+    """SECTION names whose LAST paragraph a GO TO fall-through walk may
+    treat as a hard stop (see `_walk_fallthrough_from`): reaching that
+    exact physical point -- by ordinary fall-through from an earlier
+    member, or by an internal GO TO landing anywhere within the section
+    -- is where GnuCOBOL's own `PERFORM <section-name>` implicit return
+    marker fires (the same address-based "own exit label" mechanism this
+    module already relies on elsewhere for a single paragraph's own
+    trailing EXIT landing pad), so modeling fall-through as continuing
+    PAST it into whatever source text physically follows is wrong --
+    exactly the false cascade that made every paragraph after a
+    program's "GO TO <shared-validation-exit-label>" idiom look
+    hazardous, all the way to the end of the file (2026-08-26 fix: this
+    idiom -- several paragraphs each doing `GO TO <shared-exit>` as an
+    early bailout -- was already the whole reason `find_goto_exit_plans`
+    exists, but that function's own adjacency precondition only ever
+    matches ONE of the several enclosing paragraphs, so its all-or-
+    nothing neutralization declines the target and every case that ever
+    reaches it inherits the full un-neutralized cascade; this closes the
+    gate side of that gap without touching what `find_goto_exit_plans`
+    splices).
+
+    Deliberately STRICTER than `_safe_section_entry_points` (which only
+    proves the section's FIRST paragraph has no other entry point
+    anywhere in the program): here EVERY member paragraph must be
+    provably unreachable except from within the section itself -- never
+    a GO TO target from OUTSIDE it, never named by a PERFORM (plain,
+    THRU endpoint, or conditional/looping, at any nesting depth) from
+    OUTSIDE it. A GO TO/PERFORM from ONE member to ANOTHER member of the
+    SAME section does not disqualify anything -- that is precisely the
+    "several validation paragraphs share one section-scoped exit label"
+    idiom this fix exists for, and an internal helper PERFORM among a
+    section's own paragraphs doesn't change how the section itself was
+    entered. A section failing the outside-entry check for even one
+    non-first member is exactly as unsafe for this optimization as one
+    failing it for its first member: a `PERFORM <that-member>` reached
+    from elsewhere would start executing mid-section, where the implicit
+    return marker this optimization trusts is that OTHER PERFORM's own
+    (much narrower) range, not this section's end -- continuing to treat
+    the section's own end as a safe stop there would silently hide
+    paragraphs that genuinely execute.
+
+    Whole-program AST only: a `.cut` test case's own PERFORM target/thru
+    (DSL content, not a COBOL statement) can still name a member
+    paragraph directly and is invisible to this scan -- callers must
+    additionally exclude a section whenever their own entry point(s) do
+    that; see `_paragraph_safe_section_map`."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return set()
+    section_of: dict[str, str] = {}
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        if not section_name:
+            continue
+        for paragraph in section.paragraphs:
+            section_of[paragraph.paragraph_name] = section_name
+
+    external_go_to_targets: set[str] = set()
+    external_performed_names: set[str] = set()
+    for paragraph in _all_paragraphs(procedure):
+        enclosing_section = section_of.get(paragraph.paragraph_name)
+        for statement in _find_statements_of_type(
+            paragraph.statements, PerformStatement
+        ):
+            for target in (statement.target_paragraph, statement.thru_paragraph):
+                if target and section_of.get(target) != enclosing_section:
+                    external_performed_names.add(target)
+        for statement in _find_statements_of_type(paragraph.statements, GoStatement):
+            targets = (
+                list(statement.target_paragraphs) if statement.target_paragraphs else []
+            )
+            if not targets and statement.target_paragraph:
+                targets = [statement.target_paragraph]
+            for target in targets:
+                if section_of.get(target) != enclosing_section:
+                    external_go_to_targets.add(target)
+
+    safe: set[str] = set()
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        if not section_name or not section.paragraphs:
+            continue
+        members = [p.paragraph_name for p in section.paragraphs]
+        if section_name in external_go_to_targets:
+            continue
+        if any(member in external_go_to_targets for member in members):
+            continue
+        if any(member in external_performed_names for member in members):
+            continue
+        safe.add(section_name)
+    return safe
+
+
+def _paragraph_safe_section_map(
+    section_members: dict[str, list[str]],
+    safe_sections: set[str],
+    exclude_seeds: frozenset[str] | set[str] = frozenset(),
+) -> dict[str, str]:
+    """member paragraph name -> owning SECTION name, for every member of
+    a section in `safe_sections` (`_fallthrough_safe_sections`) -- EXCEPT
+    a section that `exclude_seeds` (a caller's own PERFORM target/thru,
+    or any other DSL-level entry point invisible to that whole-program
+    scan) enters directly by naming one of its member paragraphs instead
+    of the section itself: that bypasses the `PERFORM <section-name>`
+    return-marker guarantee the optimization depends on, so the section
+    is excluded entirely for this caller rather than risk hiding
+    paragraphs that genuinely execute from mid-section onward."""
+    excluded = {
+        section
+        for section, members in section_members.items()
+        if section in safe_sections and any(seed in members for seed in exclude_seeds)
+    }
+    return {
+        member: section
+        for section, members in section_members.items()
+        if section in safe_sections and section not in excluded
+        for member in members
+    }
+
+
+def _walk_fallthrough_from(
+    name: str,
+    ordered: list,
+    index_by_name: dict[str, int],
+    section_members: dict[str, list[str]],
+    paragraph_safe_section: dict[str, str],
+) -> list[str] | None:
+    """Every paragraph name reached, in source order, by walking forward
+    from GO-TO-target `name` (a paragraph or section name) via
+    `_falls_through` -- the shared walk `_reachable_paragraphs` and
+    `union_executed_paragraphs` both apply (see module docstring: a
+    paragraph reached this way carries the exact same EXIT PARAGRAPH
+    hazard as one directly named by a GO TO). `name` unanchorable in
+    `index_by_name`/`section_members` (e.g. an empty section) returns
+    None -- callers must fail closed on that, same as before this helper
+    existed.
+
+    Stops at the first paragraph whose own last statement provably
+    diverts control away (`_falls_through`), or -- the instant it would
+    cross past -- the LAST paragraph of a SECTION `name` resolves into
+    per `paragraph_safe_section` (see `_fallthrough_safe_sections`/
+    `_paragraph_safe_section_map` for the soundness conditions that map
+    already enforces)."""
+    start = index_by_name.get(name)
+    anchor_name = name
+    if start is None:
+        members = section_members.get(name)
+        if not members:
+            return None
+        start = index_by_name.get(members[0])
+        if start is None:
+            return None
+        anchor_name = members[0]
+    origin_section = paragraph_safe_section.get(anchor_name)
+    stop_before = None
+    if origin_section is not None:
+        section_paragraphs = section_members.get(origin_section)
+        if section_paragraphs:
+            stop_before = section_paragraphs[-1]
+    reached: list[str] = []
+    cursor = start
+    while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
+        if stop_before is not None and ordered[cursor].paragraph_name == stop_before:
+            break
+        cursor += 1
+        reached.append(ordered[cursor].paragraph_name)
+    return reached
 
 
 def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, str]:
