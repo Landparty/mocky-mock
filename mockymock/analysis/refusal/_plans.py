@@ -1,0 +1,687 @@
+"""GO-TO-exit and terminator plan construction.
+
+Split out of the former monolithic `refusal.py` (2026-08-26 audit): this
+module turns a reachability analysis (see `_reachability.py`) into the
+concrete splice plans the splicer consumes -- `GotoExitPlan` (a GO TO safe
+to replace with `EXIT PARAGRAPH` in place) and `TerminatorPlan` (a
+STOP RUN/GOBACK safe to neutralize, plus the intermediate PERFORM chain
+that needs early-exit instrumentation). Both plan finders can themselves
+produce `RefusalReason`s for shapes they find unsafe to plan for -- see
+`_types.py` for why `RefusalReason` lives outside `_gates.py`.
+
+See `.okf/analysis.md` for the full refusal-package overview and
+docs/2026-08-17-goto-exit-paragraph-simplification-design.md /
+docs/2026-07-08-goback-stop-run-support-design.md /
+docs/2026-07-10-section-scoped-terminator-support-design.md /
+docs/2026-07-10-goto-fallthrough-terminator-hazard-design.md for the
+design history behind these two plan shapes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from cobolparser.models.statements.control import GoStatement
+
+from mockymock.analysis.mock_surface import (
+    _TERMINATOR_LABELS,
+    BoundarySite,
+    MockSurface,
+    _all_paragraphs,
+    _nested_statement_lists,
+)
+from mockymock.dsl.model import MockTestSuite
+from mockymock.splicer.source_map import (
+    collect_boundaries,
+    nested_statement_span,
+    statement_span,
+    statement_top_level_problem,
+)
+
+from ._reachability import (
+    _go_statement_raw_targets,
+    _go_statement_target,
+    _go_statements_with_nesting,
+    _go_to_fallthrough_targets,
+    _go_to_targets,
+    _is_exit_only_paragraph,
+    _plain_perform_edges_from,
+    _reachable_paragraphs,
+    _safe_section_entry_points,
+    _source_ordered_paragraphs,
+)
+from ._types import _UNANNOTATED, RefusalReason
+
+
+@dataclass
+class TerminatorPlan:
+    """One physical STOP RUN(RUN-form)/GOBACK statement found safe to
+    neutralize, plus every intermediate PERFORM statement (deduped across
+    the whole suite by identity) that needs the early-exit flag-check
+    inserted after it for this terminator's propagation to correctly
+    reach the test driver. Empty `chain_performs` means the terminator
+    sits directly in a test's own PERFORM target -- no intermediate
+    instrumentation needed. `exit_kind` is "PARAGRAPH" (the default) or
+    "SECTION" for the one SECTION-scoped shape
+    docs/2026-07-10-section-scoped-terminator-support-design.md supports
+    -- a terminator in a SECTION's first paragraph, entered exclusively
+    via PERFORM <section-name>. See
+    docs/2026-07-08-goback-stop-run-support-design.md and
+    docs/2026-07-10-section-scoped-terminator-support-design.md."""
+
+    site: BoundarySite
+    chain_performs: list = field(default_factory=list)
+    exit_kind: str = "PARAGRAPH"
+
+
+@dataclass
+class GotoExitPlan:
+    """One physical GO TO statement found safe to splice directly into
+    EXIT PARAGRAPH at its own call site, because its target is a
+    paragraph whose entire body is a no-op EXIT statement -- see
+    docs/2026-08-17-goto-exit-paragraph-simplification-design.md.
+    STATUS: implemented, not yet verified against real GnuCOBOL (no
+    Docker daemon was available when this was written) -- see that
+    design doc's Status note before trusting this in production.
+
+    `exit_kind` is always "PARAGRAPH" today: find_goto_exit_plans only
+    accepts a top-level enclosing paragraph (SECTION-scoped enclosing
+    paragraphs are declined -- see that function's docstring for why).
+    Kept as a field, matching TerminatorPlan's shape, in case SECTION
+    support is added later.
+
+    Unlike TerminatorPlan, this never carries chain_performs: the
+    replacement ends the SAME paragraph the GO TO already lived in, so
+    there is nothing to propagate through an intermediate PERFORM chain
+    -- no UT-EARLY-EXIT flag is involved at all.
+
+    `span` is precomputed by find_goto_exit_plans (never None on a
+    returned plan -- a plan whose span could not be validated is not
+    returned at all): a top-level GO TO's span comes from `statement_span`,
+    a nested one's from `nested_statement_span`. Precomputing it here,
+    once, at the same place the safety checks run, means the splicer
+    never has to re-derive nested-vs-top-level span logic itself -- see
+    `nested_statement_span`'s docstring for the bug this avoids."""
+
+    statement: GoStatement
+    paragraph_name: str
+    exit_kind: str = "PARAGRAPH"
+    span: tuple[int, int] | None = None
+
+
+# Shown when a nested site reaches a check before annotate_nested_sites ran
+# (or was skipped): treat it as unspliceable rather than assume it is safe.
+def find_goto_exit_plans(
+    program, scope_map, lines: list[str]
+) -> tuple[list[GotoExitPlan], list[str]]:
+    """Whole-program, unconditional on any test case -- like NESTED_EXEC's
+    reasoning, but "plan or silently skip" rather than "plan or refusal":
+    declining this optimization is always safe, the program compiles and
+    runs exactly as it does today, so an ineligible candidate is reported
+    as an informational note, never a RefusalReason that would block the
+    run. See
+    docs/2026-08-17-goto-exit-paragraph-simplification-design.md.
+    STATUS: implemented, not yet verified against real GnuCOBOL.
+
+    Consumers beyond the splicer itself go through
+    `neutralized_goto_targets` (the fully-neutralized target names):
+    `find_terminator_plans`' hazard-set narrowing, and -- since
+    2026-08-25 -- `check_test_case`/`_reachable_paragraphs`' reachable
+    set, so the mock gates stop demanding mocks for the fall-through
+    cascade a spliced-away GO TO can no longer trigger. Any soundness
+    condition added or relaxed here therefore changes what those gates
+    waive, not just what the splicer rewrites.
+
+    A GO TO qualifies only when ALL of:
+    - it names a single, unconditional target (`_go_statement_target`)
+      that is an exit-only paragraph (`_is_exit_only_paragraph`);
+    - no OTHER GoStatement anywhere in the program -- including a
+      computed or multi-target one `_go_statement_target` can't resolve
+      -- could ALSO land on that same paragraph (`_go_statement_raw_
+      targets`): a computed `GO TO` naming the exit-only paragraph as one
+      of several possible targets is invisible to the per-site checks
+      below but is exactly as much of a real `GO TO` edge into it as the
+      resolvable one, so its mere existence disqualifies the whole
+      target;
+    - a validated replacement span exists for the statement
+      (`statement_top_level_problem`/`statement_span` for a top-level GO
+      TO, `nested_statement_span` for one nested inside an
+      IF/EVALUATE branch -- see that function's docstring for the bug
+      this distinction exists to avoid) and it is not nested inside
+      another boundary statement's own clause body;
+    - its enclosing paragraph is itself safe to issue `EXIT PARAGRAPH`
+      from -- top-level (`top_level_names`), not in `_go_to_targets`, not
+      in `_go_to_fallthrough_targets` (the same preconditions
+      `find_terminator_plans` enforces on a terminator's own paragraph);
+    - the exit-only paragraph is the IMMEDIATE NEXT paragraph after the
+      enclosing paragraph in source order, with nothing else between them
+      (`_source_ordered_paragraphs`). This is the one THRU-elision-safe
+      shape the design doc describes: without it, a `PERFORM ... THRU
+      <exit-paragraph>` range (declared by a `.cut` test, OR written
+      in-program) covering real intermediate paragraphs would have its
+      early-exit semantics silently changed by this splice -- the
+      original `GO TO` skips those paragraphs entirely, but `EXIT
+      PARAGRAPH` only ends the enclosing paragraph, so the THRU range's
+      own fall-through would then run them on the early-exit path where
+      it never did before. Confirmed empirically against this exact
+      shape before this check existed (see the PR review that added it).
+
+    SECTION-scoped enclosing paragraphs are NOT supported (unlike
+    `find_terminator_plans`, which handles the one narrow safe-section-
+    entry shape via `EXIT SECTION`): both a cleanup paragraph following
+    the exit-only paragraph inside the same section (which `EXIT SECTION`
+    would skip, where the original fall-through ran it) and
+    `find_terminator_plans`' own "shape 3" gap (a `.cut` test's
+    `perform_target` naming the section's first paragraph directly,
+    bypassing `PERFORM <section-name>` -- a shape that function itself
+    treats as unverified) would need suite-case context this whole-
+    program function does not have. Deferred rather than half-solved;
+    an enclosing paragraph that is a SECTION member is declined with a
+    note, exactly like any other non-top-level enclosing paragraph.
+
+    All-or-nothing per target paragraph: `_go_to_targets`/
+    `_go_to_fallthrough_targets` are whole-program properties, so
+    neutralizing some but not all GO TOs naming one exit-only paragraph
+    would leave that paragraph exactly as hazardous as before. If every
+    GO TO naming a given exit-only paragraph qualifies, all are
+    neutralized together; if even one fails (including a computed/multi-
+    target GO TO that merely NAMES it, never itself a "site"), none of
+    that paragraph's GO TOs are touched and a note explains why.
+
+    `_safe_section_entry_points`'s own internal `_go_to_targets` check is
+    deliberately NOT narrowed by any OTHER goto-exit plan already found --
+    composing two neutralizations to unlock a section entry is real
+    additional complexity with no corpus example needing it; at worst
+    this costs an extra declined optimization, never unsoundness.
+
+    The fixpoint loop below is a narrower, unrelated thing: it re-narrows
+    THIS function's own `_go_to_targets`/`_go_to_fallthrough_targets` by
+    targets THIS function has already confirmed, within a single call --
+    it never touches `_safe_section_entry_points`. Back-to-back
+    validation-style paragraphs (`2211-VALIDER-MNT` /
+    `2211-EXIT`, immediately followed by `2212-VALIDER-...` / `2212-EXIT`,
+    and so on) chain: neutralizing `2211-EXIT` drops it out of
+    `_go_to_targets`, which is exactly what un-marks `2212-VALIDER-...` as
+    a `_go_to_fallthrough_targets` hazard (it was only hazardous because
+    `2211-EXIT`, a bare-EXIT paragraph, falls through into it) -- which is
+    what lets `2212-EXIT` neutralize in turn, and so on transitively
+    through however many such paragraphs sit back-to-back. A single static
+    pass over the RAW, whole-program `_go_to_targets`/
+    `_go_to_fallthrough_targets` sees every paragraph on that chain as
+    hazardous from the very first paragraph's still-live GO TO and
+    declines the entire chain at once. So this evaluates every candidate
+    target repeatedly, each round narrowing `_go_to_targets` (and, through
+    it, `_go_to_fallthrough_targets`) by every target CONFIRMED in an
+    EARLIER round -- mirroring the narrowing `find_terminator_plans` and
+    `_reachable_paragraphs` already apply using this function's own FINAL
+    output -- until a round confirms nothing new. Monotonic and therefore
+    terminates: confirmed targets are never revisited, and each round
+    either confirms at least one new target or the loop stops."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return [], []
+
+    paragraphs = _all_paragraphs(procedure)
+    exit_only_names = {
+        p.paragraph_name for p in paragraphs if _is_exit_only_paragraph(p)
+    }
+    if not exit_only_names:
+        return [], []
+
+    top_level_names = {p.paragraph_name for p in procedure.paragraphs}
+    base_go_to_targets = _go_to_targets(program)
+    boundaries = collect_boundaries(program)
+    last_line = len(lines)
+    ordered = _source_ordered_paragraphs(procedure)
+    index_by_name = {p.paragraph_name: i for i, p in enumerate(ordered or [])}
+
+    def immediately_follows(enclosing_name: str, target_name: str) -> bool:
+        enclosing_idx = index_by_name.get(enclosing_name)
+        target_idx = index_by_name.get(target_name)
+        if enclosing_idx is None or target_idx is None:
+            return False
+        return target_idx == enclosing_idx + 1
+
+    by_target: dict[str, list[tuple[GoStatement, str, bool, bool]]] = {}
+    disqualified_by_computed_goto: set[str] = set()
+    for paragraph in paragraphs:
+        for statement, nested, in_boundary in _go_statements_with_nesting(
+            paragraph.statements
+        ):
+            target = _go_statement_target(statement)
+            if target is not None and target in exit_only_names:
+                by_target.setdefault(target, []).append(
+                    (statement, paragraph.paragraph_name, nested, in_boundary)
+                )
+                continue
+            if target is None:
+                # A computed or multi-target GO TO: every name it could
+                # possibly reach is a standing GO TO edge into that
+                # paragraph, regardless of whether this per-site loop
+                # can ever resolve it to a single safe target.
+                disqualified_by_computed_goto.update(
+                    name
+                    for name in _go_statement_raw_targets(statement)
+                    if name in exit_only_names
+                )
+
+    plans: list[GotoExitPlan] = []
+    notes: list[str] = []
+    for target_name in sorted(disqualified_by_computed_goto & by_target.keys()):
+        sites = by_target.pop(target_name)
+        notes.append(
+            f"GO TO {target_name} left as-is at {len(sites)} site(s) -- "
+            f"also named by a computed or multi-target GO TO elsewhere in "
+            f"the program, which cannot be safely excluded on a per-site "
+            f"basis"
+        )
+
+    confirmed: set[str] = set()
+    remaining = dict(by_target)
+    last_problems: dict[str, list[str]] = {}
+    while remaining:
+        go_to_targets = base_go_to_targets - confirmed
+        go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
+        newly_confirmed: list[str] = []
+
+        for target_name, sites in sorted(remaining.items()):
+            problems: list[str] = []
+            computed: list[tuple[GoStatement, str, str, tuple[int, int]]] = []
+            for statement, enclosing, nested, in_boundary in sites:
+                if enclosing in go_to_targets:
+                    problems.append(
+                        f"line {statement.location.line}: enclosing paragraph "
+                        f"'{enclosing}' is itself a GO TO target elsewhere in "
+                        f"the program"
+                    )
+                    continue
+                if enclosing in go_to_fallthrough:
+                    problems.append(
+                        f"line {statement.location.line}: enclosing paragraph "
+                        f"'{enclosing}' is reached only by falling through "
+                        f"past a GO TO target elsewhere in the program"
+                    )
+                    continue
+                if enclosing not in top_level_names:
+                    problems.append(
+                        f"line {statement.location.line}: enclosing paragraph "
+                        f"'{enclosing}' belongs to a SECTION -- SECTION-scoped "
+                        f"enclosing paragraphs are not yet supported"
+                    )
+                    continue
+                if not immediately_follows(enclosing, target_name):
+                    problems.append(
+                        f"line {statement.location.line}: '{target_name}' is "
+                        f"not the paragraph immediately following enclosing "
+                        f"paragraph '{enclosing}' in source order -- a "
+                        f"PERFORM ... THRU range ending at '{target_name}' "
+                        f"could cover real paragraphs between them, whose "
+                        f"early-exit-path behavior this splice would change"
+                    )
+                    continue
+                if in_boundary:
+                    problems.append(
+                        f"line {statement.location.line}: nested inside another "
+                        f"boundary statement's clause body -- splicing the "
+                        f"enclosing statement would remove this GO TO along "
+                        f"with it"
+                    )
+                    continue
+
+                if nested:
+                    # Never true for a GoStatement in practice (it has no
+                    # clause bodies of its own), checked anyway for the same
+                    # reason _nested_site_span checks it: defense in depth
+                    # against a future statement-model change.
+                    if _nested_statement_lists(statement):
+                        problems.append(
+                            f"line {statement.location.line}: has conditional "
+                            f"clause bodies of its own"
+                        )
+                        continue
+                    span, reason = nested_statement_span(statement, scope_map, lines)
+                    if span is None:
+                        problems.append(f"line {statement.location.line}: {reason}")
+                        continue
+                else:
+                    line_problem = statement_top_level_problem(
+                        statement, scope_map, lines
+                    )
+                    if line_problem is not None:
+                        problems.append(
+                            f"line {statement.location.line}: the GO TO "
+                            f"statement {line_problem}"
+                        )
+                        continue
+                    span = statement_span(statement, boundaries, last_line, lines)
+
+                computed.append((statement, enclosing, "PARAGRAPH", span))
+
+            last_problems[target_name] = problems
+            if problems:
+                continue
+
+            for statement, enclosing, exit_kind, span in computed:
+                plans.append(
+                    GotoExitPlan(
+                        statement=statement,
+                        paragraph_name=enclosing,
+                        exit_kind=exit_kind,
+                        span=span,
+                    )
+                )
+            newly_confirmed.append(target_name)
+
+        if not newly_confirmed:
+            break
+        for target_name in newly_confirmed:
+            del remaining[target_name]
+            confirmed.add(target_name)
+
+    for target_name, sites in sorted(remaining.items()):
+        problems = last_problems[target_name]
+        notes.append(
+            f"GO TO {target_name} left as-is at {len(sites)} site(s) -- "
+            f"not all are safe to splice into EXIT PARAGRAPH "
+            f"automatically: " + "; ".join(problems)
+        )
+
+    return plans, notes
+
+
+def neutralized_goto_targets(program, scope_map, lines: list[str]) -> frozenset[str]:
+    """The exit-only paragraph names every GO TO of which is covered by a
+    GotoExitPlan -- i.e. the targets `find_goto_exit_plans` fully
+    neutralizes (all-or-nothing per target, so a name appears here only
+    when EVERY GO TO naming it gets spliced into EXIT PARAGRAPH). The
+    shared narrowing set for every consumer that must agree with what the
+    splicer actually compiles: `find_terminator_plans`' hazard sets and
+    `_reachable_paragraphs`/`check_test_case`'s reachable-set walk
+    (2026-08-25 -- before that, the reachability BFS still modeled the
+    spliced-away GO TO as a live edge, so the "GO TO <own-exit-label>"
+    idiom's bare-EXIT landing pad cascaded fall-through reachability
+    through the entire rest of the program, demanding mocks for
+    boundaries the compiled test can never execute)."""
+    plans, _notes = find_goto_exit_plans(program, scope_map, lines)
+    return frozenset(
+        target
+        for target in (_go_statement_target(plan.statement) for plan in plans)
+        if target is not None
+    )
+
+
+def find_terminator_plans(
+    surface: MockSurface,
+    program,
+    suite: MockTestSuite,
+    scope_map,
+    lines: list[str],
+) -> tuple[list[TerminatorPlan], list[RefusalReason]]:
+    """For every STOP RUN(RUN-form)/GOBACK reachable from at least one test
+    case, decide whether it is safely neutralizable and return either a
+    TerminatorPlan or an UNSUPPORTED_TERMINATOR_LAYOUT RefusalReason --
+    never both for the same physical statement. Sites unreachable from
+    every test case are omitted entirely (left untouched, like any other
+    unmocked boundary).
+
+    Safe means: the terminator's enclosing paragraph is a top-level
+    paragraph (not a SECTION member) -- or is the first paragraph of a
+    SECTION whose only entry point, whole-program, is `PERFORM
+    <section-name>` (`_safe_section_entry_points`; see
+    docs/2026-07-10-section-scoped-terminator-support-design.md; notably,
+    for a SECTION-scoped terminator, the test's own perform_target must name
+    the SECTION itself, not the paragraph directly, as direct paragraph
+    naming (shape 3 of the design doc) bypasses the section entry point and
+    remains unverified) -- is reachable from the test's own
+    perform_target via `_plain_perform_edges_from` (a chain of nothing but
+    plain, unconditional, top-level PERFORM statements), and no paragraph
+    anywhere on that whole restricted-reachable chain -- not just the
+    terminator's own paragraph, but every paragraph the case's
+    over-inclusive chain_performs instrumentation would touch, including
+    the perform_target itself -- is ever a GO TO target anywhere in the
+    program, or is missing from `top_level_names` (a dead-end BFS target
+    that turned out to be a SECTION name rather than a real paragraph, e.g.
+    `PERFORM some-section`). The terminator's own statement must also own
+    its line/have a validated span (`site.span`/`site.unspliceable_reason`,
+    populated by a broadened `annotate_nested_sites` call the caller must
+    have already made), and every intermediate PERFORM on the case's
+    restricted-reachable chain must also own its own line
+    (`statement_top_level_problem`, checked once per case since the same
+    chain_performs set is a candidate for every terminator that case
+    reaches -- the design doc describes a per-terminator backward walk,
+    but this implementation computes one forward, whole-case reachable
+    set instead and reuses it for every terminator that case finds,
+    which is why the GO-TO/SECTION checks below are also computed over
+    the whole chain rather than just the terminator's own paragraph: any
+    terminator sharing this case's chain_performs would be instrumented
+    with the same hazardous paragraph regardless of whether it sits on
+    that specific terminator's own ancestor path -- noted by the
+    2026-07-09 final branch review: this over-inclusiveness is fail-SAFE
+    (it can only ever cause an extra, unnecessary refusal of a terminator
+    that would actually have been fine, never miss an unsafe one), but it
+    is a real usability cliff on large paragraphs -- a GO-TO target or
+    SECTION member anywhere in the case's reachable set refuses every
+    terminator that case finds, even ones with no path through the
+    hazardous paragraph at all. If this bites in practice, narrowing to
+    the terminator's actual ancestor path is the fix, not loosening the
+    check). Once ANY test case
+    finds a given terminator unsafe, it is
+    refused permanently -- fail-closed, regardless of what other test
+    cases' paths say. `scope_map`/`lines` must be the same
+    `collect_scope_map(program, lines)` result and normalized lines the
+    caller already computed for `annotate_nested_sites`."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return [], []
+
+    top_level_names = {p.paragraph_name for p in procedure.paragraphs}
+    # A paragraph fully covered by a GotoExitPlan (every GO TO naming it
+    # gets spliced into EXIT PARAGRAPH/SECTION at its own call site) is no
+    # longer entered via GO TO at all once splicing runs -- narrow
+    # go_to_targets before deriving go_to_fallthrough from it, so a
+    # terminator chain whose only obstacle was this exact idiom
+    # (docs/2026-08-17-goto-exit-paragraph-simplification-design.md)
+    # qualifies for neutralization here too. _safe_section_entry_points'
+    # own internal go_to_targets check is deliberately left un-narrowed --
+    # see find_goto_exit_plans' docstring.
+    neutralized_goto = neutralized_goto_targets(program, scope_map, lines)
+    go_to_targets = _go_to_targets(program) - neutralized_goto
+    safe_section_entries = _safe_section_entry_points(program)
+    safe_section_first_names = set(safe_section_entries.values())
+    go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
+    terminator_sites = {
+        id(s.statement): s
+        for s in surface.boundary_sites
+        if s.category is None and s.label in _TERMINATOR_LABELS
+    }
+
+    plans_by_statement: dict[int, TerminatorPlan] = {}
+    reasons: list[RefusalReason] = []
+    refused_statement_ids: set[int] = set()
+
+    from mockymock.analysis.flow_mocks import resolved_flow_targets
+
+    for case in suite.test_cases:
+        # A terminator inside a paragraph/section this case flow-mocks
+        # (MOCK PARAGRAPH/SECTION) is unreachable for this case -- the mock
+        # dispatch replaces the body -- so it must not demand a plan or a
+        # refusal on this case's account. Other cases still evaluate it.
+        mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
+        mocked_flow_names = mocked_paragraphs | mocked_sections
+        reachable, _ = _reachable_paragraphs(
+            program,
+            case.perform_target,
+            case.perform_thru,
+            skip_traversal=mocked_flow_names,
+            neutralized_goto=neutralized_goto,
+        )
+        reachable -= mocked_flow_names
+        safe_names, chain_performs = _plain_perform_edges_from(
+            program, case.perform_target, safe_section_entries
+        )
+        chain_section_names = safe_names - (top_level_names | safe_section_first_names)
+        chain_go_to_names = safe_names & go_to_targets
+        chain_fallthrough_names = safe_names & go_to_fallthrough.keys()
+
+        chain_problem: str | None = None
+        for perform, _nested in chain_performs:
+            line_problem = statement_top_level_problem(perform, scope_map, lines)
+            if line_problem is not None:
+                chain_problem = (
+                    f"an intermediate PERFORM {perform.target_paragraph} at "
+                    f"line {perform.location.line} {line_problem} -- "
+                    f"inserting the early-exit check after it would corrupt "
+                    f"sibling code sharing its line"
+                )
+                break
+
+        qualified_keys: list[int] = []
+
+        for site in surface.sites_in(reachable):
+            key = id(site.statement)
+            if key not in terminator_sites or key in refused_statement_ids:
+                continue
+
+            paragraph_name = site.paragraph_name
+            problem = None
+            if paragraph_name not in top_level_names and (
+                paragraph_name not in safe_section_first_names
+                # A safe_section_first_names entry is only genuinely safe
+                # when reached via PERFORM <section-name> (an intermediate
+                # chain edge, or perform_target naming the section itself).
+                # _safe_section_entry_points already excludes any paragraph
+                # that is a PERFORM target anywhere -- so the only other way
+                # to land here is the test's own perform_target naming this
+                # paragraph directly, bypassing the section name entirely.
+                # That's shape 3 (docs/2026-07-10-section-scoped-terminator-
+                # support-design.md), still out of scope and unverified.
+                or paragraph_name == case.perform_target
+            ):
+                problem = (
+                    "is inside a paragraph that belongs to a SECTION -- "
+                    "SECTION-scoped terminators are not yet supported"
+                )
+            elif paragraph_name in go_to_targets:
+                problem = (
+                    f"is unsafe to test automatically: paragraph "
+                    f"'{paragraph_name}' is itself a GO TO target "
+                    f"somewhere in this program, and a paragraph that can "
+                    f"be entered via GO TO can't reliably use EXIT "
+                    f"PARAGRAPH to signal an early exit back to its "
+                    f"caller -- mockymock refuses rather than risk "
+                    f"generating a test that silently runs further than "
+                    f"it should. To make this testable, replace the "
+                    f"`GO TO {paragraph_name}` with structured PERFORM/"
+                    f"EXIT PARAGRAPH logic (e.g. if it exists purely as "
+                    f"an early exit, an `EXIT PARAGRAPH` in its place "
+                    f"usually removes the need for the jump entirely)"
+                )
+            elif paragraph_name in go_to_fallthrough:
+                problem = (
+                    f"is unsafe to test automatically: control reaches it "
+                    f"by falling through past the end of paragraph "
+                    f"'{go_to_fallthrough[paragraph_name]}', which is a GO "
+                    f"TO target elsewhere in this program -- code entered "
+                    f"via GO TO never goes through PERFORM, so mockymock "
+                    f"can't insert an early-exit check here that would "
+                    f"correctly return to the right caller. Fixing the "
+                    f"`GO TO {go_to_fallthrough[paragraph_name]}` (e.g. "
+                    f"replacing it with `EXIT PARAGRAPH` if it exists "
+                    f"purely as an early exit) would remove this hazard"
+                )
+            elif paragraph_name not in safe_names:
+                problem = (
+                    f"is reachable from '{case.perform_target}' but not via "
+                    f"a chain of plain, unconditional, top-level PERFORM "
+                    f"statements -- this is the only shape this feature can "
+                    f"safely neutralize today"
+                )
+            elif chain_section_names:
+                bad_name = sorted(chain_section_names)[0]
+                problem = (
+                    f"is only reachable through this test's own early-exit "
+                    f"propagation chain by way of '{bad_name}', which is "
+                    f"not a top-level paragraph (it belongs to a SECTION) "
+                    f"-- SECTION-scoped chains are not yet supported"
+                )
+            elif chain_go_to_names:
+                # paragraph_name can't be a member here: the preceding elif
+                # already excluded it from go_to_targets, and chain_go_to_names
+                # is a subset of go_to_targets.
+                bad_name = sorted(chain_go_to_names)[0]
+                problem = (
+                    f"is unsafe to test automatically: propagating this "
+                    f"early exit back to the test would require passing "
+                    f"through paragraph '{bad_name}', which is itself a "
+                    f"GO TO target somewhere in this program -- mockymock "
+                    f"can't safely instrument a paragraph that can be "
+                    f"entered other than via PERFORM. To make this "
+                    f"testable, replace the `GO TO {bad_name}` with "
+                    f"structured PERFORM/EXIT PARAGRAPH logic (e.g. if it "
+                    f"exists purely as an early exit, an `EXIT PARAGRAPH` "
+                    f"in its place usually removes the need for the jump "
+                    f"entirely)"
+                )
+            elif chain_fallthrough_names:
+                bad_name = sorted(chain_fallthrough_names)[0]
+                problem = (
+                    f"is unsafe to test automatically: propagating this "
+                    f"early exit back to the test would require passing "
+                    f"through paragraph '{bad_name}', which is reached by "
+                    f"falling through past the end of paragraph "
+                    f"'{go_to_fallthrough[bad_name]}' -- a GO TO target "
+                    f"elsewhere in this program -- rather than via "
+                    f"PERFORM. mockymock can't safely instrument a "
+                    f"paragraph reached this way. Fixing the "
+                    f"`GO TO {go_to_fallthrough[bad_name]}` (e.g. "
+                    f"replacing it with `EXIT PARAGRAPH` if it exists "
+                    f"purely as an early exit) would remove this hazard"
+                )
+            elif site.nested and site.span is None:
+                problem = (
+                    f"is nested inside a conditional/loop body and cannot "
+                    f"be safely spliced: "
+                    f"{site.unspliceable_reason or _UNANNOTATED}"
+                )
+            elif not site.nested and site.unspliceable_reason:
+                problem = (
+                    f"{site.unspliceable_reason} -- splicing it would "
+                    f"corrupt sibling code sharing its line(s)"
+                )
+            elif chain_problem is not None:
+                problem = chain_problem
+
+            if problem is not None:
+                reasons.append(
+                    RefusalReason(
+                        code="UNSUPPORTED_TERMINATOR_LAYOUT",
+                        message=(
+                            f"{site.label} at line {site.line} (paragraph "
+                            f"'{paragraph_name}') {problem}"
+                        ),
+                    )
+                )
+                refused_statement_ids.add(key)
+                plans_by_statement.pop(key, None)
+                continue
+
+            if key not in plans_by_statement:
+                exit_kind = (
+                    "SECTION"
+                    if paragraph_name in safe_section_first_names
+                    else "PARAGRAPH"
+                )
+                plans_by_statement[key] = TerminatorPlan(
+                    site=terminator_sites[key], exit_kind=exit_kind
+                )
+            qualified_keys.append(key)
+
+        for key in qualified_keys:
+            plan = plans_by_statement[key]
+            existing_ids = {id(p) for p in plan.chain_performs}
+            for perform, _nested in chain_performs:
+                if id(perform) not in existing_ids:
+                    plan.chain_performs.append(perform)
+                    existing_ids.add(id(perform))
+
+    return list(plans_by_statement.values()), reasons
