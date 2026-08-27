@@ -217,6 +217,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from cobolparser.analysis.unused_variables import collect_declared_items
 from cobolparser.lexer import CobolLexer, TokenType
 from cobolparser.models.program import CobolParagraph
 from cobolparser.models.statements.call import CallStatement
@@ -1051,11 +1052,12 @@ def resolve_scoped_refusals(
 
 def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:
     """UNSUPPORTED_LINKAGE_LAYOUT: gates `mockymock.splicer.linkage`'s
-    ENTRY/LINKAGE-SECTION neutralization transform (see
-    docs/2026-07-08-ims-linkage-support-design.md). `[]` when
-    `linkage.linkage_plan` finds nothing to do (no ENTRY statement, or an
-    absent/empty LINKAGE SECTION -- an ordinary CALL-only program) or when
-    the shape is safe to neutralize; otherwise one reason per guardrail that
+    LINKAGE-SECTION neutralization transform (see
+    docs/2026-07-08-ims-linkage-support-design.md and
+    docs/2026-08-27-cics-eib-linkage-support-design.md for the no-ENTRY
+    generalization). `[]` when `linkage.linkage_plan` finds nothing to do
+    (an absent/empty LINKAGE SECTION -- an ordinary CALL-only program) or
+    when the shape is safe to neutralize; otherwise one reason per guardrail that
     failed, fail-closed rather than risk commenting out the wrong line or
     silently breaking a shape this transform was never verified against.
 
@@ -1117,6 +1119,63 @@ def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:
                 ),
             )
         )
+
+    return reasons
+
+
+_DFHRESP_MACRO_RE = re.compile(r"\bDFH(?:RESP|VALUE)\s*\(", re.IGNORECASE)
+_DFHCOMMAREA_RE = re.compile(r"\bDFHCOMMAREA\b")
+
+
+def check_cics_eib_layout(program, lines: list[str]) -> list[RefusalReason]:
+    """`UNSUPPORTED_CICS_MACRO` / `UNSUPPORTED_CICS_DFHCOMMAREA`: guards the
+    two CICS-implicit-linkage situations `analysis.cics_eib`/`splicer.
+    cics_eib` cannot safely handle (see
+    docs/2026-08-27-cics-eib-linkage-support-design.md's "Guardrails"
+    section). Independent of `cics_eib_plan` -- both checks below can fire
+    even for a program that references no EIB field at all -- and
+    independent of `check_linkage_layout`: additive, not exclusive-or.
+
+    `lines` must be the same NORMALIZED free-form text
+    (`normalize_fixed_format` output) the splicer edits, same convention as
+    `check_linkage_layout`.
+    """
+    reasons: list[RefusalReason] = []
+    text = "\n".join(lines)
+
+    if _DFHRESP_MACRO_RE.search(text):
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_CICS_MACRO",
+                message=(
+                    "program references DFHRESP(...)/DFHVALUE(...) -- these "
+                    "are CICS-translator macro-functions (e.g. "
+                    "DFHRESP(NORMAL) expands to a literal response code from "
+                    "a large, translator-version-sensitive condition table) "
+                    "that mockymock cannot safely expand without a real CICS "
+                    "translator, so this program is not supported"
+                ),
+            )
+        )
+
+    if _DFHCOMMAREA_RE.search(text):
+        declared = {item.name.upper() for item in collect_declared_items(program)}
+        if "DFHCOMMAREA" not in declared:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_CICS_DFHCOMMAREA",
+                    message=(
+                        "program references DFHCOMMAREA but never declares "
+                        "it anywhere in its own DATA DIVISION -- its size "
+                        "and layout are unknowable, so mockymock cannot "
+                        "safely synthesize storage for it (a program that "
+                        "declares its own `LINKAGE SECTION. 01 DFHCOMMAREA."
+                        "..` is supported via the generalized LINKAGE "
+                        "neutralization instead, see "
+                        "docs/2026-08-27-cics-eib-linkage-support-design.md)"
+                    ),
+                )
+            )
 
     return reasons
 

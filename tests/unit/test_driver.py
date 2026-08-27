@@ -49,6 +49,28 @@ def test_working_storage_declares_bookkeeping_fields():
     assert "UT-FAIL-COUNT" in joined
 
 
+def test_extra_working_storage_lines_appended_after_bookkeeping_fields():
+    suite = _suite()
+    artifact = build_driver(
+        suite,
+        reset_lines=[],
+        registry=TallyRegistry(suite),
+        extra_working_storage_lines=[
+            "01  DFHEIBLK.",
+            "    05  EIBCALEN PIC S9(4) COMP.",
+        ],
+    )
+    assert artifact.working_storage_lines[-2:] == [
+        "01  DFHEIBLK.",
+        "    05  EIBCALEN PIC S9(4) COMP.",
+    ]
+
+
+def test_extra_working_storage_lines_omitted_by_default():
+    joined = "\n".join(_build().working_storage_lines)
+    assert "DFHEIBLK" not in joined
+
+
 def test_working_storage_declares_tally_per_mock_key():
     suite = _suite()
     suite.test_cases[0].mocks.append(MockDirective(MockCategory.READ, "INFILE"))
