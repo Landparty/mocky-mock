@@ -29,7 +29,7 @@ mockymock setup / mockymock run
    ├─ sandbox_dir_maybe_kept(root=WORK_ROOT, keep=...)   ~/.mockymock/work/mockymock-XXXX/
    │     instrumented .cbl written with newline="\n" (cobc runs Linux-side)
    │
-   ├─ compile_source()   docker exec mockymock-cobc cobc -free -x /work/<sb>/PROG.cbl -o /work/<sb>/PROG
+   ├─ compile_source()   docker exec mockymock-cobc cobc -free -std=mvs -x /work/<sb>/PROG.cbl -o /work/<sb>/PROG
    │
    └─ run_binary()       docker exec -w /work/<sb> mockymock-cobc timeout -k 5 30 /work/<sb>/PROG
                             stdout parsed by report/results.py, unchanged
@@ -208,7 +208,7 @@ re-mounted per run. Consequences:
 
 `compile_source(source_path: Path) -> CompileResult`:
 - Maps source and binary paths to container paths via `to_container_path`.
-- Runs `docker exec mockymock-cobc timeout -k 5 585 cobc -free -x <container_source> -o <container_binary>`
+- Runs `docker exec mockymock-cobc timeout -k 5 585 cobc -free -std=mvs -x <container_source> -o <container_binary>`
   (fixed 2026-08-10, audit finding F1 — previously unwrapped: a `cobc`
   invocation that hung inside the shared container had no container-side
   bound at all and outlived even the host's own 600s `subprocess.run`
@@ -216,6 +216,11 @@ re-mounted per run. Consequences:
   also uses). The container-side ceiling (585s) stays under the host-side
   `subprocess.run(timeout=600)` guard, same `-k 5` SIGKILL-escalation
   pattern as `run_binary` below.
+- `-std=mvs` is required because GnuCOBOL's default dialect doesn't
+  implement the IBM compiler-directing statements (`EJECT`,
+  `SKIP1`/`SKIP2`/`SKIP3`) that real z/OS mainframe sources use between
+  paragraphs/sections — those otherwise fail to compile even though
+  cobol-parser itself already treats them as no-ops.
 - Success requires **both** `returncode == 0` **and** `binary_path.exists()`
   on the host side — a zero exit with no binary materializing (e.g. a stale
   mount) is treated as failure, not a phantom success.
