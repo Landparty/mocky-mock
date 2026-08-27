@@ -53,6 +53,32 @@ SAFE_GOTO_EXIT_SOURCE = """\
            STOP RUN.
 """
 
+PHANTOM_PARAGRAPH_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOEXITPHANTOM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-COND             PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-DO-WORK
+           IF WS-COND = "Y"
+               GO TO 0000-MAIN-EXIT
+           END-IF
+           PERFORM 2000-TERMINATE.
+       .
+       0000-MAIN-EXIT.
+           EXIT.
+
+       1000-DO-WORK.
+           DISPLAY "WORK".
+
+       2000-TERMINATE.
+           STOP RUN.
+"""
+
 COMPUTED_GOTO_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. COMPUTEDGOTO.
@@ -237,6 +263,30 @@ def test_find_goto_exit_plans_accepts_the_textbook_idiom():
     assert len(plans) == 1
     plan = plans[0]
     assert isinstance(plan, GotoExitPlan)
+    assert plan.paragraph_name == "0000-MAIN-PROCESS"
+    assert plan.exit_kind == "PARAGRAPH"
+
+
+def test_find_goto_exit_plans_tolerates_a_phantom_paragraph_before_the_target():
+    """Regression pin: cobolparser inserts an empty-artifact paragraph
+    literally named "." for a bare "." line sitting before the next
+    paragraph's header -- source-order adjacency between the enclosing
+    paragraph and the exit-only target must tolerate that phantom the same
+    way _expand_thru_range already does, instead of treating it as a real
+    intervening paragraph and declining the splice."""
+    program, _, scope_map, lines = _analyze(PHANTOM_PARAGRAPH_SOURCE)
+    procedure = program.get_division("PROCEDURE")
+    assert [p.paragraph_name for p in procedure.paragraphs] == [
+        "0000-MAIN-PROCESS",
+        ".",
+        "0000-MAIN-EXIT",
+        "1000-DO-WORK",
+        "2000-TERMINATE",
+    ]
+    plans, notes = find_goto_exit_plans(program, scope_map, lines)
+    assert notes == []
+    assert len(plans) == 1
+    plan = plans[0]
     assert plan.paragraph_name == "0000-MAIN-PROCESS"
     assert plan.exit_kind == "PARAGRAPH"
 
