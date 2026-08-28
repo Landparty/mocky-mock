@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-08-25T00:00:00Z
+timestamp: 2026-08-27T00:00:00Z
 ---
 
 # Overview
@@ -14,6 +14,8 @@ Cooperating modules under `mockymock/analysis/`:
 |--------|-----|
 | `mock_surface.py` | Walk `PROCEDURE DIVISION`, classify every statement that touches an external resource into a `BoundarySite`/`CallSite`. Whole-program, category-generic, no knowledge of any test case. Also `analyze_file_status_fields(program)`: a separate ENVIRONMENT DIVISION walk (FILE-CONTROL SELECT entries) that maps each uppercased file name to its declared `FILE STATUS IS <field>`, feeding both `refusal.check_test_case`'s `UNRESOLVED_FILE_STATUS_TARGET` check and `splicer.injector.build_site_dispatch`'s default-success MOVE (see [dsl](dsl.md)'s `FILE-STATUS IS` section and [splicer](splicer.md)). |
 | `refusal.py` | Whole-program checks (parse errors, unresolved COPY, nested EXEC) + per-`MockTestCase` checks (reachability via BFS, directive-to-site matching, fail-closed refusals). |
+| `linkage.py` | `linkage_plan(program)`: detects a program's unbound LINKAGE SECTION shape (any non-empty LINKAGE SECTION, `ENTRY` statements optional) for `splicer.linkage.neutralize`. See [splicer](splicer.md)'s "ENTRY/LINKAGE Neutralization" section. |
+| `cics_eib.py` | `cics_eib_plan(program, lines)`: detects a program referencing CICS EIB fields (`EIBCALEN`, `EIBAID`, ...)/`DFHEIBLK` without declaring them, for `splicer.cics_eib`'s synthesis. See [splicer](splicer.md)'s "CICS EIB Field Synthesis" section and docs/2026-08-27-cics-eib-linkage-support-design.md. |
 | `flow_mocks.py` | Flow-target mocks (`MOCK PARAGRAPH`/`MOCK SECTION`): resolves keys to paragraphs/sections, refuses every entry path the header-dispatch splice can't handle soundly (UNRESOLVED_FLOW_MOCK_TARGET / UNSUPPORTED_FLOW_MOCK_TARGET), and emits `FlowMockPlan`s the splicer consumes — the plan-or-refusal shape `find_terminator_plans` established. `resolved_flow_targets` feeds `check_test_case`/`find_terminator_plans` the per-case `skip_traversal` sets. See docs/2026-07-20-paragraph-section-mocks-design.md. |
 | `stub_expectations.py` | Backs `mockymock run --record-expectations` only — orthogonal to the refusal-gate pipeline above, not part of it. Raw-text-scans the `.cut` file (not the parsed AST/suite) for `*> STUB EXPECT <name> [-- <note>]` comments and attributes each to its owning TESTCASE's runtime case id. See below and [splicer](splicer.md)/[report](report.md) for the rest of the mechanism, and docs/2026-08-04-record-expectations-design.md for the full design. |
 
@@ -34,6 +36,8 @@ refusal.check_expansion_warnings() -> EXPANSION_WARNING      (lossy copybook dec
 refusal.check_unresolved_copybooks() -> UNRESOLVED_COPYBOOK  (textual, re-lexes raw source)
 refusal.check_nested_exec()        -> NESTED_EXEC / UNSPLICEABLE_EXEC (program-wide, ignores reachability)
 refusal.check_linkage_layout()     -> UNSUPPORTED_LINKAGE_LAYOUT (guards splicer.linkage.neutralize)
+refusal.check_cics_eib_layout()    -> UNSUPPORTED_CICS_MACRO / UNSUPPORTED_CICS_DFHCOMMAREA
+                                       (guards splicer.cics_eib synthesis; see below)
    |
    v
 per MockTestCase:

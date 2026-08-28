@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from cobolparser import ParseResult
 
+    from mockymock.analysis.cics_eib import CicsEibPlan
     from mockymock.analysis.linkage import LinkagePlan
     from mockymock.analysis.mock_surface import MockSurface
     from mockymock.dsl.model import MockTestSuite
@@ -37,6 +38,7 @@ class StaticCheckResult:
     lines: list[str] | None = None  # normalized + linkage-neutralized
     scope_map: ScopeMap | None = None
     linkage: LinkagePlan | None = None
+    cics_eib: CicsEibPlan | None = None
     file_status_fields: dict[str, str] | None = None
     # Transparency lines for checks that deliberately did NOT refuse: a
     # paragraph-scoped parse warning / unresolved COPY waived because no
@@ -111,10 +113,12 @@ def run_static_checks(
         strip_compiler_directives,
     )
 
+    from mockymock.analysis.cics_eib import cics_eib_plan
     from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.linkage import linkage_plan
     from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
     from mockymock.analysis.refusal import (
+        check_cics_eib_layout,
         check_expansion_warnings,
         check_linkage_layout,
         check_nested_exec,
@@ -257,6 +261,18 @@ def run_static_checks(
         # pipeline derives from the AST's locations -- safe to always apply
         # before returning `lines`.
         lines = neutralize(lines, parse_result.ast, linkage)
+
+    # 5b. CICS implicit-linkage guardrails (DFHRESP/DFHVALUE macro calls,
+    # an undeclared DFHCOMMAREA) -- independent of the LINKAGE guardrails
+    # above, additive not exclusive-or. See
+    # docs/2026-08-27-cics-eib-linkage-support-design.md.
+    cics_eib_reasons = check_cics_eib_layout(parse_result.ast, lines)
+    if cics_eib_reasons:
+        out.problems.extend(
+            f"refused ({r.code}): {r.message}" for r in cics_eib_reasons
+        )
+        return out
+    out.cics_eib = cics_eib_plan(parse_result.ast, lines)
     out.lines = lines
 
     # 6. Nested-site annotation (must precede any nested-site check), then

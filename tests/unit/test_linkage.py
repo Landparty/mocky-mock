@@ -76,6 +76,27 @@ COMMENTED_LINKAGE_SOURCE = """\
            STOP RUN.
 """
 
+# CICS-style shape: LINKAGE SECTION declaring DFHCOMMAREA, no ENTRY
+# statement at all. Covered by the 2026-08-27 generalization -- see
+# docs/2026-08-27-cics-eib-linkage-support-design.md Part 1.
+NO_ENTRY_LINKAGE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CICSSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE PIC X VALUE 'N'.
+
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  CA-FIELD PIC X(10).
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           DISPLAY CA-FIELD
+           STOP RUN.
+"""
+
 # Named ENTRY present, but the default entry ALSO declares its own USING --
 # the general CALL-driving case (Milestone B), not this feature's scope.
 DEFAULT_ENTRY_USING_SOURCE = """\
@@ -126,6 +147,20 @@ def test_check_linkage_layout_clean_for_ordinary_program():
 
 def test_check_linkage_layout_clean_for_qualifying_program():
     program, lines = _parse(QUALIFYING_SOURCE)
+    assert check_linkage_layout(program, lines) == []
+
+
+def test_linkage_plan_finds_linkage_with_no_entry_statement():
+    program, lines = _parse(NO_ENTRY_LINKAGE_SOURCE)
+    plan = linkage_plan(program)
+    assert plan is not None
+    assert plan.entry_statements == []
+    assert [item.name for item in plan.linkage_items] == ["DFHCOMMAREA"]
+    assert lines[plan.header_line - 1].strip().upper() == "LINKAGE SECTION."
+
+
+def test_check_linkage_layout_clean_with_no_entry_statement():
+    program, lines = _parse(NO_ENTRY_LINKAGE_SOURCE)
     assert check_linkage_layout(program, lines) == []
 
 

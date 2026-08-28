@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-19T00:00:00Z
+timestamp: 2026-08-27T00:00:00Z
 ---
 
 # Overview
@@ -455,8 +455,13 @@ GnuCOBOL toolchain: SIGSEGV, exit 139. See
 [docs/2026-07-08-ims-linkage-support-design.md](../docs/2026-07-08-ims-linkage-support-design.md).
 
 `analysis.linkage.linkage_plan(program)` detects the shape (`None` for an
-ordinary CALL-only program: no `ENTRY` statement, or an absent/empty
-LINKAGE SECTION). `refusal.check_linkage_layout(program, lines)` gates it
+ordinary CALL-only program: an absent/empty LINKAGE SECTION -- `ENTRY`
+statements are optional, generalized 2026-08-27 to cover the idiomatic CICS
+`LINKAGE SECTION. 01 DFHCOMMAREA. ...` / `PROCEDURE DIVISION.` shape with no
+`ENTRY` at all, since the IMS design's own finding 2 already proved the
+storage is unbound regardless of `ENTRY`'s presence -- see
+docs/2026-08-27-cics-eib-linkage-support-design.md Part 1).
+`refusal.check_linkage_layout(program, lines)` gates it
 with three guardrails, refusing `UNSUPPORTED_LINKAGE_LAYOUT` rather than
 guessing when any fails: the default entry must have no `USING` of its own
 (the general CALL-driving case, Milestone B, is untested and out of scope
@@ -488,6 +493,56 @@ access pattern, `CALL 'CBLTDLI' USING ...`, was already an ordinary
 `MockCategory.CALL` boundary; a `.cut` author can `MOCK CALL "CBLTDLI"` and
 `MOVE` a status value into what is now real, addressable WORKING-STORAGE
 (e.g. `CUST-STATUS`) to simulate a DL/I outcome.
+
+# CICS EIB Field Synthesis (cics_eib.py)
+
+Fixes a compile-time gap, not a runtime one: a real CICS translator inserts
+`DFHEIBLK`'s LINKAGE SECTION layout ahead of `cobc` ever seeing the source,
+so a program referencing `EIBCALEN`/`EIBAID`/etc. from ordinary COBOL
+(outside any `EXEC CICS` block, which `injector.build_exec_trap` already
+splices away whole) has no declaration for those names anywhere mockymock's
+pipeline ever sees -- an undeclared-data-name `cobc` compile error, not the
+IMS case's runtime SIGSEGV. See
+docs/2026-08-27-cics-eib-linkage-support-design.md.
+
+`analysis.cics_eib.cics_eib_plan(program, lines)` detects the shape (`None`
+when no EIB name is referenced anywhere in `lines`, or every referenced name
+is already declared somewhere in the program's own DATA DIVISION -- e.g. a
+hand-declared or `COPY DFHEIBLK`-expanded copy). `refusal.check_cics_eib_
+layout(program, lines)` guards the two situations this feature cannot
+safely handle -- `UNSUPPORTED_CICS_MACRO` (`DFHRESP(...)`/`DFHVALUE(...)`
+macro calls, which only a real CICS translator can expand) and
+`UNSUPPORTED_CICS_DFHCOMMAREA` (`DFHCOMMAREA` referenced but never declared
+anywhere -- unknowable size, refuse rather than guess one; a program that
+*does* declare its own `LINKAGE SECTION. 01 DFHCOMMAREA. ...` is covered by
+the generalized ENTRY/LINKAGE neutralization above instead) -- independent
+of `cics_eib_plan`, additive to `check_linkage_layout`, not exclusive-or.
+
+Unlike `splicer.linkage.neutralize` (comment-only, line-count-preserving,
+safe to run at any point in the pipeline), `splicer.cics_eib.working_
+storage_lines(plan)` *inserts* new physical lines -- a synthesized `01
+DFHEIBLK.` group with the standard IBM CICS EIB layout (29 named fields,
+2 `FILLER` reserved slots for byte-alignment; see the design doc for the
+full PICTURE clauses). Every `SourceLocation`-driven step downstream of
+`normalize_fixed_format` would misalign if this ran early like `linkage.py`
+does, so it never edits `lines` directly. Instead its output is merged into
+`driver.DriverArtifact.working_storage_lines` via `build_driver`'s new
+`extra_working_storage_lines` parameter, reaching `cli.main._insert_driver`
+the same way the driver's own bookkeeping fields (`UT-CURRENT-CASE` etc.)
+already do -- the one insertion point already proven safe, no second splice
+mechanism needed. `splicer.cics_eib.reset_lines(plan)` is a single
+`INITIALIZE DFHEIBLK` line, appended to `reset_move_lines`'s output the same
+way `linkage.extra_reset_lines` already is; `DFHEIBLK` carries no `VALUE`
+clauses, so `reset.py`'s existing VALUE-less-group rule (zero COMP/COMP-3,
+space-fill alphanumeric) applies, which happens to already be the realistic
+"no COMMAREA passed, first invocation" default (`EIBCALEN = 0`).
+
+Wired into all four splice-and-compile pipelines identically to `linkage`'s
+own wiring: `_cmd_run`, `_cmd_debug`, `_cmd_export`, and `mutation.runner.
+_run_suite_once`; `_cmd_generate` prints the same transparency preview
+(`applied=False`) `linkage` does. **Not yet verified against real GnuCOBOL**
+-- no working Docker daemon when this was built; see the design doc's "No
+corpus evidence" section for the required follow-up.
 
 # Terminator Neutralization (GOBACK/STOP RUN, Approach B)
 

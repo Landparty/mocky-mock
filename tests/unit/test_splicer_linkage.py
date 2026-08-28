@@ -70,6 +70,45 @@ def test_extra_reset_lines_covers_every_linkage_item():
     assert lines == ["INITIALIZE CUST-PCB-LNK"]
 
 
+# CICS-style shape: LINKAGE SECTION declaring DFHCOMMAREA, no ENTRY at all
+# -- see the 2026-08-27 generalization,
+# docs/2026-08-27-cics-eib-linkage-support-design.md Part 1.
+NO_ENTRY_LINKAGE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CICSSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE PIC X VALUE 'N'.
+
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  CA-FIELD PIC X(10).
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           DISPLAY CA-FIELD
+           STOP RUN.
+"""
+
+
+def test_neutralize_comments_out_only_linkage_header_when_no_entry():
+    program, lines = _parse(NO_ENTRY_LINKAGE_SOURCE)
+    plan = linkage_plan(program)
+    assert plan.entry_statements == []
+    original = list(lines)
+
+    result = neutralize(lines, program, plan)
+
+    assert len(result) == len(original)  # comment-only: no line inserted/removed
+    header_idx = plan.header_line - 1
+    assert result[header_idx] == "      *> " + original[header_idx]
+    for idx, (before, after) in enumerate(zip(original, result, strict=True)):
+        if idx == header_idx:
+            continue
+        assert before == after, f"line {idx + 1} changed unexpectedly"
+
+
 def test_neutralize_against_real_acctprg_source():
     acctprg = (
         Path(__file__).parent.parent.parent.parent
