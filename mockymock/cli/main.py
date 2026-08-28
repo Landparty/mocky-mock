@@ -480,17 +480,22 @@ def _print_linkage_neutralization(command: str, plan, applied: bool) -> None:
         repr(e.entry_name) for e in plan.entry_statements if e.entry_name
     )
     item_names = ", ".join(item.name for item in plan.linkage_items)
-    entry_clause = (
-        f"neutralized ENTRY statement(s) ({entry_names}) and folded "
-        if entry_names
-        else "folded "
-    )
     if applied:
-        action = f"{entry_clause}LINKAGE SECTION into WORKING-STORAGE ({item_names})"
-    else:
+        entry_clause = (
+            f"neutralized ENTRY statement(s) ({entry_names}) and "
+            if entry_names
+            else ""
+        )
         action = (
-            f"a later `run` will {entry_clause.replace('neutralized', 'neutralize')}"
-            f"LINKAGE SECTION into WORKING-STORAGE ({item_names})"
+            f"{entry_clause}folded LINKAGE SECTION into WORKING-STORAGE ({item_names})"
+        )
+    else:
+        entry_clause = (
+            f"neutralize ENTRY statement(s) ({entry_names}) and " if entry_names else ""
+        )
+        action = (
+            f"a later `run` will {entry_clause}fold LINKAGE SECTION into "
+            f"WORKING-STORAGE ({item_names})"
         )
     print(
         f"mockymock {command}: {action} -- the driver never binds LINKAGE "

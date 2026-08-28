@@ -43,6 +43,43 @@ ORDINARY_SOURCE = """\
            STOP RUN.
 """
 
+# Regression for a hyphenated data name that merely CONTAINS an EIB field
+# name as a substring (COBOL identifiers may contain hyphens, which are not
+# `\w` characters, so a plain `\b...\b` regex false-matches inside one) --
+# this program never references the real EIBCALEN at all.
+HYPHENATED_LOOKALIKE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOOKALIKE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-EIBCALEN-SAVED PIC S9(4) COMP VALUE 0.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY WS-EIBCALEN-SAVED
+           STOP RUN.
+"""
+
+# Regression for case-insensitive matching: COBOL identifiers are
+# case-insensitive, so a lowercase EIB reference is exactly as real as an
+# uppercase one.
+LOWERCASE_REFERENCE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOWERSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE PIC X VALUE 'N'.
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           IF eibcalen = 0
+               DISPLAY 'FIRST INVOCATION'
+           END-IF
+           STOP RUN.
+"""
+
 # Program that hand-declares its own DFHEIBLK (e.g. via COPY DFHEIBLK) --
 # synthesis must not double-declare it.
 ALREADY_DECLARED_SOURCE = """\
@@ -96,6 +133,23 @@ UNDECLARED_DFHCOMMAREA_SOURCE = """\
            STOP RUN.
 """
 
+# Regression: a hyphenated data name that merely CONTAINS "DFHCOMMAREA" as
+# a substring must not trigger the undeclared-DFHCOMMAREA refusal -- this
+# program never references the real DFHCOMMAREA at all.
+HYPHENATED_DFHCOMMAREA_LOOKALIKE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COMMLOOKALIKE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DFHCOMMAREA-LEN PIC 9(4) VALUE 0.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY WS-DFHCOMMAREA-LEN
+           STOP RUN.
+"""
+
 # DFHCOMMAREA hand-declared in LINKAGE SECTION, no ENTRY at all -- the
 # idiomatic CICS shape Part 1's generalized `linkage_plan` now covers
 # instead of refusing here.
@@ -143,6 +197,18 @@ def test_cics_eib_plan_none_when_already_declared():
     assert cics_eib_plan(program, lines) is None
 
 
+def test_cics_eib_plan_none_for_hyphenated_lookalike_name():
+    program, lines = _parse(HYPHENATED_LOOKALIKE_SOURCE)
+    assert cics_eib_plan(program, lines) is None
+
+
+def test_cics_eib_plan_finds_lowercase_reference():
+    program, lines = _parse(LOWERCASE_REFERENCE_SOURCE)
+    plan = cics_eib_plan(program, lines)
+    assert plan is not None
+    assert plan.referenced_names == ["EIBCALEN"]
+
+
 def test_check_cics_eib_layout_clean_for_ordinary_program():
     program, lines = _parse(ORDINARY_SOURCE)
     assert check_cics_eib_layout(program, lines) == []
@@ -163,6 +229,11 @@ def test_check_cics_eib_layout_refuses_undeclared_dfhcommarea():
     program, lines = _parse(UNDECLARED_DFHCOMMAREA_SOURCE)
     reasons = check_cics_eib_layout(program, lines)
     assert any(r.code == "UNSUPPORTED_CICS_DFHCOMMAREA" for r in reasons)
+
+
+def test_check_cics_eib_layout_clean_for_hyphenated_dfhcommarea_lookalike():
+    program, lines = _parse(HYPHENATED_DFHCOMMAREA_LOOKALIKE_SOURCE)
+    assert check_cics_eib_layout(program, lines) == []
 
 
 def test_check_cics_eib_layout_clean_when_dfhcommarea_is_declared():

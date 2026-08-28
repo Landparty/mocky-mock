@@ -1123,8 +1123,18 @@ def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:
     return reasons
 
 
-_DFHRESP_MACRO_RE = re.compile(r"\bDFH(?:RESP|VALUE)\s*\(", re.IGNORECASE)
-_DFHCOMMAREA_RE = re.compile(r"\bDFHCOMMAREA\b")
+# Not a plain `\b...\b`: COBOL identifiers may contain hyphens, which are
+# not `\w` characters, so `\b` alone false-matches inside an unrelated
+# hyphenated name (e.g. `\bDFHCOMMAREA\b` matches inside
+# `WS-DFHCOMMAREA-LEN`). See `analysis.cics_eib`'s identical fix for the
+# same reasoning. Matched case-insensitively -- COBOL identifiers are
+# themselves case-insensitive.
+_DFHRESP_MACRO_RE = re.compile(
+    r"(?<![A-Za-z0-9-])(?:DFHRESP|DFHVALUE)\s*\(", re.IGNORECASE
+)
+_DFHCOMMAREA_RE = re.compile(
+    r"(?<![A-Za-z0-9-])DFHCOMMAREA(?![A-Za-z0-9-])", re.IGNORECASE
+)
 
 
 def check_cics_eib_layout(program, lines: list[str]) -> list[RefusalReason]:

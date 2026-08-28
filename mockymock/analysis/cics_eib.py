@@ -70,7 +70,21 @@ EIB_FIELD_NAMES: frozenset[str] = frozenset(
 )
 
 _EIB_NAMES = EIB_FIELD_NAMES | {DFHEIBLK_NAME}
-_EIB_NAME_RES = {name: re.compile(rf"\b{re.escape(name)}\b") for name in _EIB_NAMES}
+# Plain `\b...\b` is wrong here: COBOL identifiers may contain hyphens,
+# which are not `\w` characters, so `\bEIBCALEN\b` would false-match inside
+# an unrelated hyphenated name like `WS-EIBCALEN-SAVED` (a `\b` boundary
+# exists at the transition between the non-word `-` and the word-char `E`).
+# Use an explicit lookaround against the full COBOL identifier character
+# class (letters/digits/hyphen) instead, and match case-insensitively --
+# COBOL identifiers are themselves case-insensitive, so a lowercase or
+# mixed-case source reference is exactly as real a reference as an
+# uppercase one.
+_EIB_NAME_RES = {
+    name: re.compile(
+        rf"(?<![A-Za-z0-9-]){re.escape(name)}(?![A-Za-z0-9-])", re.IGNORECASE
+    )
+    for name in _EIB_NAMES
+}
 
 
 @dataclass
