@@ -30,7 +30,9 @@ docs/2026-07-05-nested-mock-targets-design.md for the safety rules.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from bisect import bisect_right
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import cast
 
 from cobolparser.lexer import CobolLexer
@@ -180,6 +182,55 @@ class ScopeBoundary:
 class ScopeMap:
     boundaries: list[ScopeBoundary]  # sorted by (line, column)
 
+    # Lazily-built line index over `boundaries`. Every query below used to
+    # be a full linear scan (often materializing a filtered copy of the
+    # whole list first), and `annotate_nested_sites` runs one query per
+    # boundary site -- O(sites x boundaries), which is quadratic in program
+    # size and was measured as the single dominant cost of the whole static
+    # check pass on a large CICS program (13.3M generator steps on a
+    # 29k-line file). `boundaries` is built once by `collect_scope_map` and
+    # never mutated afterwards, so caching the index is safe; anything that
+    # starts mutating it must call `invalidate()`.
+    _by_line: dict[int, list[ScopeBoundary]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _index_lines: list[int] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def invalidate(self) -> None:
+        """Drop the cached line index -- required after any mutation of
+        `boundaries`."""
+        self._by_line = None
+        self._index_lines = None
+
+    def _index(self) -> tuple[dict[int, list[ScopeBoundary]], list[int]]:
+        by_line = self._by_line
+        index_lines = self._index_lines
+        if by_line is None or index_lines is None:
+            by_line = {}
+            for boundary in self.boundaries:
+                by_line.setdefault(boundary.line, []).append(boundary)
+            index_lines = sorted(by_line)
+            self._by_line = by_line
+            self._index_lines = index_lines
+        return by_line, index_lines
+
+    def at_line(self, line: int) -> list[ScopeBoundary]:
+        """Every boundary on `line`, in the same (line, column) order
+        `boundaries` holds them in."""
+        by_line, _ = self._index()
+        return by_line.get(line, [])
+
+    def iter_after_line(self, line: int) -> Iterator[ScopeBoundary]:
+        """Every boundary on a line strictly greater than `line`, in
+        (line, column) order -- the same sequence
+        `[b for b in boundaries if b.line > line]` yields, without
+        materializing it."""
+        by_line, index_lines = self._index()
+        for idx in range(bisect_right(index_lines, line), len(index_lines)):
+            yield from by_line[index_lines[idx]]
+
 
 def collect_scope_map(program, lines: list[str]) -> ScopeMap:
     """Every span boundary relevant to nested statements: SECTION and
@@ -219,13 +270,13 @@ def collect_scope_map(program, lines: list[str]) -> ScopeMap:
             )
         _collect_statement_starts(paragraph.statements, boundaries, exec_starts)
 
-    exec_ranges = [_exec_range(lines, start) for start in exec_starts]
+    exec_index = _exec_line_index([_exec_range(lines, start) for start in exec_starts])
     lexer = CobolLexer("\n".join(lines), free_form=True)
     for token in lexer.tokenize():
         word = str(token.value or "").upper()
         if word not in _SCOPE_WORDS:
             continue
-        if _inside_exec_range(exec_ranges, token.location.line, token.location.column):
+        if _inside_exec_range(exec_index, token.location.line, token.location.column):
             continue
         boundaries.append(
             ScopeBoundary(token.location.line, token.location.column, word)
@@ -267,15 +318,38 @@ def _exec_range(lines: list[str], start: int) -> tuple[int, int, int]:
     return start, start, len(lines[start - 1])
 
 
-def _inside_exec_range(
-    ranges: list[tuple[int, int, int]], line: int, column: int
-) -> bool:
+def _exec_line_index(
+    ranges: list[tuple[int, int, int]],
+) -> tuple[set[int], dict[int, int]]:
+    """`_inside_exec_range`'s ranges, flattened into (fully-covered lines,
+    end-line -> furthest END-EXEC end column).
+
+    Scanning the range list per token is O(tokens x EXEC blocks), which on
+    a CICS program -- where both grow with file size -- is quadratic; the
+    flattened form answers each query in constant time and costs only one
+    set entry per line actually inside an EXEC block. A line that is both
+    interior to one range and the end line of another stays covered by the
+    set, and `max` keeps the most permissive end column when several
+    ranges end on the same line, so both are exactly what the linear scan
+    returned."""
+    inside: set[int] = set()
+    end_columns: dict[int, int] = {}
     for start, end, end_column in ranges:
-        if start <= line < end:
-            return True
-        if line == end and column <= end_column:
-            return True
-    return False
+        inside.update(range(start, end))
+        previous = end_columns.get(end)
+        if previous is None or end_column > previous:
+            end_columns[end] = end_column
+    return inside, end_columns
+
+
+def _inside_exec_range(
+    index: tuple[set[int], dict[int, int]], line: int, column: int
+) -> bool:
+    inside, end_columns = index
+    if line in inside:
+        return True
+    end_column = end_columns.get(line)
+    return end_column is not None and column <= end_column
 
 
 def annotate_nested_sites(
@@ -346,10 +420,7 @@ def statement_top_level_problem(
     column = statement.location.column
     if lines[start - 1][: column - 1].strip():
         return "does not start its own line"
-    if any(
-        b.top_level and b.line == start and b.column != column
-        for b in scope_map.boundaries
-    ):
+    if any(b.top_level and b.column != column for b in scope_map.at_line(start)):
         return "shares its line with another statement or paragraph header"
     return None
 
@@ -383,16 +454,12 @@ def nested_statement_span(
     if lines[start - 1][: column - 1].strip():
         return None, "does not start its own line"
 
-    if any(
-        b.line == start and not (b.column == column and b.word == "")
-        for b in scope_map.boundaries
-    ):
+    if any(not (b.column == column and b.word == "") for b in scope_map.at_line(start)):
         return None, "shares its start line with another statement or scope word"
 
-    following = [b for b in scope_map.boundaries if b.line > start]
-    if not following:
+    nxt = next(scope_map.iter_after_line(start), None)
+    if nxt is None:
         return None, "no following statement or scope word to bound the span"
-    nxt = following[0]
     if lines[nxt.line - 1][: nxt.column - 1].strip():
         return None, (
             f"the next scope word or statement (line {nxt.line}) does not "
@@ -425,21 +492,22 @@ def _nested_site_span(
     own_terminator = (
         _VERB_TERMINATORS.get(site.category, "") if site.category is not None else ""
     )
-    relevant = [
-        b
-        for b in scope_map.boundaries
-        if not (own_terminator and b.word == own_terminator)
-    ]
+
+    def relevant(boundary: ScopeBoundary) -> bool:
+        return not (own_terminator and boundary.word == own_terminator)
 
     if any(
-        b.line == start and not (b.column == column and b.word == "") for b in relevant
+        relevant(b) and not (b.column == column and b.word == "")
+        for b in scope_map.at_line(start)
     ):
         return None, "shares its start line with another statement or scope word"
 
-    following = [b for b in relevant if b.line > start]
-    if not following:
+    nxt = next(
+        (b for b in scope_map.iter_after_line(start) if relevant(b)),
+        None,
+    )
+    if nxt is None:
         return None, "no following statement or scope word to bound the span"
-    nxt = following[0]
     if lines[nxt.line - 1][: nxt.column - 1].strip():
         return None, (
             f"the next scope word or statement (line {nxt.line}) does not "

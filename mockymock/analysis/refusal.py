@@ -290,12 +290,23 @@ class ParagraphScopedRefusal:
     normalized-line span, verified to own its lines outright, that
     cli.checks.run_static_checks comments out of the spliced source when
     the refusal is waived (the raw COPY text would otherwise still reach
-    cobc, which cannot compile an unresolvable COPY)."""
+    cobc, which cannot compile an unresolvable COPY).
+
+    `neutralize_span` plays the same role for a waived CICS
+    `DFHRESP(...)`/`DFHVALUE(...)` macro call -- (1-based line, 0-based
+    start column, 0-based end column) of the call text, which
+    run_static_checks overwrites in place with
+    `CICS_MACRO_PLACEHOLDER`, space-padded to the identical width so no
+    line or column any AST location indexes into ever moves. Same
+    reasoning as `blank_span`: the unexpanded macro would otherwise still
+    reach cobc, which has no CICS translator and cannot resolve it. At
+    most one of the two spans is ever set."""
 
     paragraph_name: str
     reason: RefusalReason
     waiver_note: str
     blank_span: tuple[int, int] | None = None
+    neutralize_span: tuple[int, int, int] | None = None
 
 
 @dataclass
@@ -485,7 +496,11 @@ def _paragraph_body_span(program, line: int) -> tuple[str, int, int | None] | No
 
 
 def _paragraph_owning_line(
-    program, line: int, normalized_lines: list[str] | None = None
+    program,
+    line: int,
+    normalized_lines: list[str] | None = None,
+    *,
+    label_scan_to_line: bool = False,
 ) -> str | None:
     """`_paragraph_body_span`'s owner name, or None -- see that function's
     docstring for the base attribution rules.
@@ -496,13 +511,29 @@ def _paragraph_owning_line(
     classification fails closed rather than trust a paragraph boundary
     that might not be where it looks. Every *_scoped call site must pass
     it; omitting it is only for callers that genuinely have no source
-    text yet."""
+    text yet.
+
+    `label_scan_to_line` narrows that scan to [owner header, `line`]
+    instead of the owner's whole body. Use it -- and ONLY it -- when
+    `line` marks evidence whose extent is exactly that one line, as a
+    `DFHRESP(...)` call's does: an unrecognized label AFTER `line` cannot
+    change which paragraph owns `line`, so scanning past it only produces
+    false vetoes (a bare `END-IF.`/`EXIT.` closing the very statement the
+    evidence sits in matches `_CANDIDATE_LABEL_RE`, and in the CICS
+    `IF ... DFHRESP(...) ... END-IF.` idiom it always does). The default
+    keeps the whole-body scan, which is what a PARSE_WARNING needs: its
+    line proves only where a drop STARTS, and error recovery may have
+    resynchronized past a real header further down inside the same
+    body."""
     span = _paragraph_body_span(program, line)
     if span is None:
         return None
     owner, start, next_start = span
     if normalized_lines is not None:
-        end = next_start - 1 if next_start is not None else len(normalized_lines)
+        if label_scan_to_line:
+            end = line
+        else:
+            end = next_start - 1 if next_start is not None else len(normalized_lines)
         if _has_unaccounted_label(normalized_lines, start + 1, end):
             return None
     return owner
@@ -993,6 +1024,9 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
 
     go_to_targets = _go_to_targets(program)
     index_by_name = {p.paragraph_name: i for i, p in enumerate(ordered)}
+    # Computed once here, not per walk: the closure below is a fixpoint
+    # loop over every reached GO TO target. See `_fallthrough_flags`.
+    falls = _fallthrough_flags(ordered)
     section_members: dict[str, list[str]] = {}
     for section_name, section in getattr(procedure, "_sections", {}).items():
         if section_name:
@@ -1019,7 +1053,12 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
         changed = False
         for name in sorted(union & go_to_targets):
             reached = _walk_fallthrough_from(
-                name, ordered, index_by_name, section_members, paragraph_safe_section
+                name,
+                ordered,
+                index_by_name,
+                section_members,
+                paragraph_safe_section,
+                falls=falls,
             )
             if reached is None:
                 # A reached GO TO target the fall-through walk can't anchor
@@ -1135,6 +1174,24 @@ _DFHRESP_MACRO_RE = re.compile(
 _DFHCOMMAREA_RE = re.compile(
     r"(?<![A-Za-z0-9-])DFHCOMMAREA(?![A-Za-z0-9-])", re.IGNORECASE
 )
+# The full single-line call, condition name included -- `_DFHRESP_MACRO_RE`
+# above only detects that one is present. A call this does not span
+# (continued across lines, or an argument that is not a single COBOL word)
+# is never classified as paragraph-local; it stays a whole-program refusal.
+_CICS_MACRO_CALL_RE = re.compile(
+    r"(?<![A-Za-z0-9-])(?:DFHRESP|DFHVALUE)\s*\(\s*[A-Za-z0-9$@#-]+\s*\)",
+    re.IGNORECASE,
+)
+
+# What a WAIVED macro call is rewritten to in the instrumented source.
+# cobc has no CICS translator, so leaving the call in place fails the
+# compile no matter which paragraph holds it -- exactly the reason a
+# waived unresolved COPY gets commented out (see `blank_span`). -1 is not
+# a value any real CICS condition expands to, so every comparison against
+# it is deterministically false: the honest reading of "this response code
+# cannot be evaluated", in code that the waiver has already established no
+# selected test case can execute.
+CICS_MACRO_PLACEHOLDER = "-1"
 
 
 def check_cics_eib_layout(program, lines: list[str]) -> list[RefusalReason]:
@@ -1150,23 +1207,72 @@ def check_cics_eib_layout(program, lines: list[str]) -> list[RefusalReason]:
     (`normalize_fixed_format` output) the splicer edits, same convention as
     `check_linkage_layout`.
     """
+    reasons, scoped = _cics_eib_reasons(program, lines, classify=False)
+    assert not scoped  # classify=False never holds an occurrence back
+    return reasons
+
+
+def check_cics_eib_layout_scoped(
+    program, lines: list[str]
+) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
+    """check_cics_eib_layout, except each `DFHRESP(...)`/`DFHVALUE(...)`
+    call that `_paragraph_owning_line` proves to sit inside exactly one
+    PROCEDURE DIVISION paragraph's own body -- and whose whole call text
+    `_CICS_MACRO_CALL_RE` spans on a single line -- is returned as a
+    held-back ParagraphScopedRefusal instead of an immediate reason, to be
+    resolved against `union_executed_paragraphs` like every other
+    paragraph-scoped refusal (see the module docstring).
+
+    Why this one is scopable at all: an unexpanded CICS macro is a
+    property of the *code that evaluates it*, not of the program's storage
+    layout, so a call in a paragraph no selected test case can execute
+    cannot affect the test's behavior. That is the whole difference from
+    `UNSUPPORTED_CICS_DFHCOMMAREA` below, which stays whole-program
+    unconditionally: an undeclared DFHCOMMAREA is a missing *declaration*,
+    and mockymock would have to synthesize storage of an unknowable size
+    for it however unreachable its references are.
+
+    A waived call still has to compile, so each held-back refusal carries
+    a `neutralize_span` for run_static_checks to overwrite -- see
+    `ParagraphScopedRefusal` and `CICS_MACRO_PLACEHOLDER`. Anything the
+    classification cannot pin down -- a call outside any paragraph body (a
+    DATA DIVISION VALUE clause, a line on a paragraph header), one
+    continued across lines, one whose argument is not a single COBOL word,
+    one too short to hold the placeholder -- stays in the first
+    (whole-program, refuse-now) list, fail closed."""
+    return _cics_eib_reasons(program, lines, classify=True)
+
+
+def _cics_eib_reasons(
+    program, lines: list[str], classify: bool
+) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
     reasons: list[RefusalReason] = []
+    scoped: list[ParagraphScopedRefusal] = []
     text = "\n".join(lines)
 
-    if _DFHRESP_MACRO_RE.search(text):
-        reasons.append(
-            RefusalReason(
-                code="UNSUPPORTED_CICS_MACRO",
-                message=(
-                    "program references DFHRESP(...)/DFHVALUE(...) -- these "
-                    "are CICS-translator macro-functions (e.g. "
-                    "DFHRESP(NORMAL) expands to a literal response code from "
-                    "a large, translator-version-sensitive condition table) "
-                    "that mockymock cannot safely expand without a real CICS "
-                    "translator, so this program is not supported"
-                ),
+    detected = _DFHRESP_MACRO_RE.findall(text)
+    if detected:
+        located = _classify_cics_macro_calls(program, lines) if classify else []
+        if len(located) != len(detected):
+            # Either classification is off (generate/fixtures), or at least
+            # one detected call could not be pinned to a paragraph body and
+            # rewritten -- refuse the whole program rather than waive an
+            # occurrence nothing proved paragraph-local.
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_CICS_MACRO",
+                    message=(
+                        "program references DFHRESP(...)/DFHVALUE(...) -- these "
+                        "are CICS-translator macro-functions (e.g. "
+                        "DFHRESP(NORMAL) expands to a literal response code from "
+                        "a large, translator-version-sensitive condition table) "
+                        "that mockymock cannot safely expand without a real CICS "
+                        "translator, so this program is not supported"
+                    ),
+                )
             )
-        )
+        else:
+            scoped.extend(located)
 
     if _DFHCOMMAREA_RE.search(text):
         declared = {item.name.upper() for item in collect_declared_items(program)}
@@ -1187,7 +1293,63 @@ def check_cics_eib_layout(program, lines: list[str]) -> list[RefusalReason]:
                 )
             )
 
-    return reasons
+    return reasons, scoped
+
+
+def _classify_cics_macro_calls(
+    program, lines: list[str]
+) -> list[ParagraphScopedRefusal]:
+    """One held-back refusal per `DFHRESP(...)`/`DFHVALUE(...)` call that
+    is provably confined to a single paragraph's body AND rewritable in
+    place. Returns fewer entries than the program has calls whenever any
+    of them fails either test -- the caller treats that as "classify
+    nothing" and refuses the whole program, so a partial result can never
+    waive an occurrence on its own."""
+    classified: list[ParagraphScopedRefusal] = []
+    for line_no, text in enumerate(lines, start=1):
+        for hit in _DFHRESP_MACRO_RE.finditer(text):
+            call = _CICS_MACRO_CALL_RE.match(text, hit.start())
+            if call is None:
+                continue
+            owner = _paragraph_owning_line(
+                program, line_no, lines, label_scan_to_line=True
+            )
+            if owner is None:
+                continue
+            start, end = call.start(), call.end()
+            if end - start < len(CICS_MACRO_PLACEHOLDER):
+                continue
+            classified.append(
+                ParagraphScopedRefusal(
+                    paragraph_name=owner,
+                    reason=RefusalReason(
+                        code="UNSUPPORTED_CICS_MACRO",
+                        message=(
+                            f"CICS macro call {call.group(0)!r} at line "
+                            f"{line_no} (inside paragraph '{owner}', which a "
+                            f"selected test case can execute) -- DFHRESP/"
+                            f"DFHVALUE are CICS-translator macro-functions "
+                            f"(DFHRESP(NORMAL) expands to a literal response "
+                            f"code from a large, translator-version-sensitive "
+                            f"condition table) that mockymock cannot safely "
+                            f"expand without a real CICS translator, so a test "
+                            f"case whose execution can reach this code is not "
+                            f"supported"
+                        ),
+                    ),
+                    waiver_note=(
+                        f"CICS macro call {call.group(0)!r} at line {line_no} "
+                        f"waived: it is confined to paragraph '{owner}', which "
+                        f"no selected test case can execute -- rewriting it to "
+                        f"{CICS_MACRO_PLACEHOLDER} (space-padded to the same "
+                        f"width, so no line or column moves) in the "
+                        f"instrumented source, since GnuCOBOL has no CICS "
+                        f"translator and could not compile the unexpanded macro"
+                    ),
+                    neutralize_span=(line_no, start, end),
+                )
+            )
+    return classified
 
 
 def check_test_case(
@@ -1898,6 +2060,9 @@ def _reachable_paragraphs(
     index_by_name = (
         {p.paragraph_name: i for i, p in enumerate(ordered)} if ordered else {}
     )
+    # Computed once, not per walk: the closure below is a fixpoint loop
+    # over every reached GO TO target. See `_fallthrough_flags`.
+    falls = _fallthrough_flags(ordered) if ordered else []
     # This call's own entry point(s): a section otherwise safe for the GO
     # TO fall-through closure below is excluded whenever `start`/`thru`
     # name one of its member paragraphs directly, bypassing `PERFORM
@@ -2025,7 +2190,12 @@ def _reachable_paragraphs(
         additions: list[str] = []
         for name in sorted(hazard_sources):
             reached = _walk_fallthrough_from(
-                name, ordered, index_by_name, section_members, paragraph_safe_section
+                name,
+                ordered,
+                index_by_name,
+                section_members,
+                paragraph_safe_section,
+                falls=falls,
             )
             if reached is None:
                 # A GO TO target the walk cannot anchor (e.g. an empty
@@ -2157,6 +2327,36 @@ def _falls_through(paragraph) -> bool:
     return True
 
 
+def _fallthrough_flags(ordered: list) -> list[bool]:
+    """`_falls_through` evaluated once per paragraph, in source order.
+
+    Every fall-through walk in this module re-asked the same question
+    about the same paragraph objects: `_go_to_fallthrough_targets` walks
+    forward from EVERY GO TO target, and both fall-through closures run
+    inside a fixpoint loop, so a program using the shared-exit-label
+    idiom (where no paragraph on the chain provably diverts, so every
+    walk runs to end of file) evaluated it O(targets x paragraphs) times
+    -- measured as 4.4M calls, the single largest cost of the static
+    check pass on a 53k-line program. The predicate depends only on the
+    paragraph's own last statement, so one pass over `ordered` answers
+    every walk."""
+    return [_falls_through(paragraph) for paragraph in ordered]
+
+
+def _first_non_fallthrough(falls: list[bool]) -> list[int | None]:
+    """For each index, the smallest index at or after it whose paragraph
+    does NOT fall through, or None when none does -- i.e. exactly where a
+    forward fall-through walk starting there stops. One backward pass,
+    so a walk costs only the paragraphs it actually reports."""
+    stops: list[int | None] = [None] * len(falls)
+    nxt: int | None = None
+    for i in range(len(falls) - 1, -1, -1):
+        if not falls[i]:
+            nxt = i
+        stops[i] = nxt
+    return stops
+
+
 def _fallthrough_safe_sections(program) -> set[str]:
     """SECTION names whose LAST paragraph a GO TO fall-through walk may
     treat as a hard stop (see `_walk_fallthrough_from`): reaching that
@@ -2282,6 +2482,7 @@ def _walk_fallthrough_from(
     index_by_name: dict[str, int],
     section_members: dict[str, list[str]],
     paragraph_safe_section: dict[str, str],
+    falls: list[bool] | None = None,
 ) -> list[str] | None:
     """Every paragraph name reached, in source order, by walking forward
     from GO-TO-target `name` (a paragraph or section name) via
@@ -2298,7 +2499,14 @@ def _walk_fallthrough_from(
     cross past -- the LAST paragraph of a SECTION `name` resolves into
     per `paragraph_safe_section` (see `_fallthrough_safe_sections`/
     `_paragraph_safe_section_map` for the soundness conditions that map
-    already enforces)."""
+    already enforces).
+
+    `falls` is `_fallthrough_flags(ordered)`; callers that walk repeatedly
+    (both of this function's own call sites run inside a fixpoint loop)
+    should compute it once and pass it in rather than pay for it per
+    walk. Omitting it is equivalent, just slower."""
+    if falls is None:
+        falls = _fallthrough_flags(ordered)
     start = index_by_name.get(name)
     anchor_name = name
     if start is None:
@@ -2317,7 +2525,7 @@ def _walk_fallthrough_from(
             stop_before = section_paragraphs[-1]
     reached: list[str] = []
     cursor = start
-    while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
+    while falls[cursor] and cursor + 1 < len(ordered):
         if stop_before is not None and ordered[cursor].paragraph_name == stop_before:
             break
         cursor += 1
@@ -2369,7 +2577,21 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
             section_name, [p.paragraph_name for p in section.paragraphs]
         )
 
+    falls = _fallthrough_flags(ordered)
+    stops = _first_non_fallthrough(falls)
+    last = len(ordered) - 1
+
     hazard: dict[str, str] = {}
+    # Indices already recorded by an earlier walk. Two walks that both pass
+    # through index k necessarily stop at the same index: the stop is
+    # `stops[start]`, and there is no non-fall-through paragraph strictly
+    # between two starts that both reach k. So hitting an already-recorded
+    # index means the whole rest of this walk is already recorded too, and
+    # the remaining `setdefault` calls would every one be a no-op -- which
+    # is what lets the walk break there and keeps the total linear rather
+    # than O(targets x paragraphs). Same keys, same first-writer-wins
+    # values as the unconditional walk it replaces.
+    recorded: set[int] = set()
     for name in go_to_targets:
         start = index_by_name.get(name)
         if start is None:
@@ -2379,9 +2601,12 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
             start = index_by_name.get(members[0])
             if start is None:
                 continue
-        cursor = start
-        while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
-            cursor += 1
+        stop = stops[start]
+        end = last if stop is None else stop
+        for cursor in range(start + 1, end + 1):
+            if cursor in recorded:
+                break
+            recorded.add(cursor)
             hazard.setdefault(ordered[cursor].paragraph_name, name)
     return hazard
 

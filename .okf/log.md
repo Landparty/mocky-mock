@@ -1,5 +1,55 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-28 — Reachability-scoped `UNSUPPORTED_CICS_MACRO`, and a linear static-check pass
+
+Two findings from running `mockymock lint` against a real 16.9k-line CICS
+transaction program (the same one the 2026-08-26 section-scoped
+fall-through entry came from).
+
+**`UNSUPPORTED_CICS_MACRO` refused the whole file over one unreachable
+paragraph.** The program references `DFHRESP(MAPFAIL)` exactly once, in a
+screen-handling paragraph (`2012-LIRE-ECRAN`) that neither tested
+paragraph (`2211-VALIDER-HYP-TERME`, `2212-VALIDER-MNT-CAPITAL`) can
+reach — but the guardrail fired on the mere presence of the text anywhere
+in the source, so every test case in the file was blocked and no `.cut`
+change could work around it. It now travels the held-back path
+PARSE_WARNING and UNRESOLVED_COPYBOOK already use
+(`check_cics_eib_layout_scoped` -> `union_executed_paragraphs` ->
+`resolve_scoped_refusals`), refusing only when a selected case can execute
+the paragraph holding the call. The macro is scopable at all because it
+describes *code that evaluates it*, not storage layout — which is exactly
+why `UNSUPPORTED_CICS_DFHCOMMAREA`, a missing declaration, stays
+whole-program unconditionally. A waived call still has to compile, so it
+is rewritten in place to `-1`, space-padded to the same width
+(`stub_writer.replace_columns`, `ParagraphScopedRefusal.neutralize_span`)
+so neither a line nor a column moves; that is the same reasoning behind
+commenting out a waived unresolved COPY, since cobc has no CICS
+translator either way. `_paragraph_owning_line` gained
+`label_scan_to_line=True` for this caller: a macro call's evidence is
+exactly one line, so an unrecognized label after it cannot change
+ownership, whereas scanning the whole body vetoed every realistic case
+(the idiom's own `END-IF.` matches `_CANDIDATE_LABEL_RE`). Everything
+unlocalizable — a DATA DIVISION occurrence, a continued call, a
+non-word argument — stays whole-program, fail closed. Pinned by
+`tests/unit/test_cics_macro_scoped.py`.
+
+**The static-check pass was quadratic in program size.** Three scans, all
+fixed as pure speedups with byte-identical `lint` output: `ScopeMap`
+queries (now a lazily-built line index — `annotate_nested_sites` runs one
+per boundary site, and two of the three queries materialized a filtered
+copy of the entire boundary list first), `collect_scope_map`'s per-token
+EXEC-range scan (now flattened once), and `_falls_through` re-evaluated on
+every GO TO target's walk (now `_fallthrough_flags` /
+`_first_non_fallthrough` / an already-walked break, with the flags threaded
+into `_walk_fallthrough_from`'s fixpoint call sites) — 4.4M calls on a
+53k-line program in the shared-exit-label shape, where nothing on the
+chain diverts so every walk ran to end of program. Also collapsed
+`cics_eib_plan`'s 29 separate whole-text regex searches into one
+alternation pass. Measured: 14.2s -> 5.5s on a 53k-line CICS-shaped
+program, growth now linear. Pinned by
+`tests/unit/test_static_check_scaling.py`, which checks each replacement
+against the naive scan it replaced rather than timing anything.
+
 ## 2026-08-26 — Section-scoped GO TO fall-through closure (gate-only)
 
 The 2026-08-25 narrowing below only helps once `find_goto_exit_plans`

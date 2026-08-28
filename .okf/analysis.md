@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-08-27T00:00:00Z
+timestamp: 2026-08-28T00:00:00Z
 ---
 
 # Overview
@@ -37,7 +37,10 @@ refusal.check_unresolved_copybooks() -> UNRESOLVED_COPYBOOK  (textual, re-lexes 
 refusal.check_nested_exec()        -> NESTED_EXEC / UNSPLICEABLE_EXEC (program-wide, ignores reachability)
 refusal.check_linkage_layout()     -> UNSUPPORTED_LINKAGE_LAYOUT (guards splicer.linkage.neutralize)
 refusal.check_cics_eib_layout()    -> UNSUPPORTED_CICS_MACRO / UNSUPPORTED_CICS_DFHCOMMAREA
-                                       (guards splicer.cics_eib synthesis; see below)
+                                       (guards splicer.cics_eib synthesis; see below.
+                                        run/lint/export/debug use the _scoped variant,
+                                        which holds a paragraph-local DFHRESP/DFHVALUE
+                                        call back for the reachability-union gate)
    |
    v
 per MockTestCase:
@@ -170,6 +173,8 @@ Paragraph attribution is depth-independent: nested statements stay attributed to
 | `check_nested_exec` | `NESTED_EXEC` | any EXEC (SQL/CICS/DLI) site with `nested=True` and `span is None` — **regardless of reachability** |
 | `check_nested_exec` | `UNSPLICEABLE_EXEC` | any EXEC site with `nested=False` and a non-`None` `unspliceable_reason` — a top-level EXEC that does not own its source line(s); every EXEC must be stubbed program-wide (unmocked ones get `build_exec_trap`) so this is whole-program too, not per-case (audit finding 2.1) |
 | `check_linkage_layout` | `UNSUPPORTED_LINKAGE_LAYOUT` | `linkage.linkage_plan` finds a named `ENTRY` + non-empty LINKAGE SECTION (the IMS `ENTRY 'DLITCBL'` shape), but one of three guardrails fails: the default entry itself declares `USING`; LINKAGE SECTION isn't the last DATA DIVISION section; or the computed header line doesn't textually verify. `[]` (no refusal) when there's nothing to do (`linkage_plan` is `None`) or the shape is safe — in the safe case, `splicer.linkage.neutralize` runs instead of any refusal. See [splicer](splicer.md#entrylinkage-neutralization-linkagepy) and [docs/2026-07-08-ims-linkage-support-design.md](../docs/2026-07-08-ims-linkage-support-design.md) |
+| `check_cics_eib_layout` | `UNSUPPORTED_CICS_MACRO` | the normalized text contains a `DFHRESP(...)`/`DFHVALUE(...)` call (`_DFHRESP_MACRO_RE`, COBOL-aware word boundaries, case-insensitive) — CICS-translator macro-functions expanding to literal response codes out of a large, translator-version-sensitive condition table, which mockymock has no translator to expand. **Narrowed for `run`/`lint`/`export`/`debug`** (via `check_cics_eib_layout_scoped`): a call `_paragraph_owning_line` proves to sit inside exactly one PROCEDURE DIVISION paragraph's own body, and whose whole call text `_CICS_MACRO_CALL_RE` spans on a single line, is held back as a `ParagraphScopedRefusal` and refused only when `union_executed_paragraphs` says that paragraph could execute. This one is scopable because an unexpanded macro is a property of the *code that evaluates it*, not of the program's storage layout. When waived, `run_static_checks` overwrites the call's own columns with `CICS_MACRO_PLACEHOLDER` (`-1`, space-padded to the identical width via `stub_writer.replace_columns`, so no line or column any AST location indexes into moves) — cobc has no CICS translator and could not compile the macro even in dead code, exactly the reason a waived `UNRESOLVED_COPYBOOK`'s line gets commented out. `-1` is not a value any real CICS condition expands to, so every comparison against it is deterministically false. The attribution passes `label_scan_to_line=True`: unlike a PARSE_WARNING (whose line proves only where a drop *starts*), a macro call's extent is exactly its own line, so an unrecognized label AFTER it cannot change ownership — scanning the whole body would veto essentially every real case, since the `IF ... DFHRESP(...) ... END-IF.` idiom's own bare `END-IF.` matches `_CANDIDATE_LABEL_RE`. Anything unlocalizable — a DATA DIVISION occurrence, a call continued across lines, an argument that is not a single COBOL word, a span too short to hold the placeholder — stays whole-program, fail closed, and any mismatch between detected and classified counts refuses everything. `generate`/`fixtures` keep the unscoped entry point (no cases to scope by) |
+| `check_cics_eib_layout` | `UNSUPPORTED_CICS_DFHCOMMAREA` | `DFHCOMMAREA` referenced in the normalized text but not among `collect_declared_items`' names — unknowable size/layout. **Never scoped**, unlike the macro check above: this reports a missing *declaration*, and mockymock would have to synthesize storage for it however unreachable its references are |
 
 **Why `UNRESOLVED_COPYBOOK` is textual, not AST-based:** cobolparser's `parse_cobol` does *not* raise a parse error for an unresolved `COPY` statement — verified empirically: raw source containing `COPY ORDREC.` yields `result.success is True` and an empty `data_items` list. Worse, the AST node class `CopyStatement` is never instantiated by any parser path, so an unresolved COPY leaves **zero trace in the AST**. The only reliable signal is textual: re-lex `raw_source` (with `free_form=True` — fixed-format column rules would garble already-normalized text) and look for a `TokenType.COPY` token, rather than a substring search that could false-positive on the word "COPY" inside a comment or string literal.
 
@@ -312,6 +317,30 @@ the `.cut` file.
 **The terminator-safety layer guards its own instance of the same hazard, separately.** A GO TO target paragraph whose own body has no unconditional exit (see `_falls_through`) really does fall through — via ordinary sequential execution, not a flow edge — into the next paragraph in source order at runtime. A paragraph reached that way was never PERFORMed either, so it shares the exact EXIT PARAGRAPH hazard spike #4 found for a direct GO TO target (docs/2026-07-08-goback-stop-run-support-design.md): silently halting instead of returning, once some other test case has neutralized the terminator it falls into. `find_terminator_plans` computes `_go_to_fallthrough_targets` (walking source order forward from every GO TO target until `_falls_through` says stop) and refuses `UNSUPPORTED_TERMINATOR_LAYOUT` for any terminator or chain paragraph inside that hazard zone — closed 2026-07-10, see [docs/2026-07-10-goto-fallthrough-terminator-hazard-design.md](../docs/2026-07-10-goto-fallthrough-terminator-hazard-design.md).
 
 **GO-TO-to-EXIT-PARAGRAPH simplification narrows the GO-TO hazard set itself (2026-08-17, STATUS: implemented, not yet verified against real GnuCOBOL).** `find_terminator_plans`'s own `UNSUPPORTED_TERMINATOR_LAYOUT` message for a GO-TO-target/fall-through hazard already suggests the fix: *"if it exists purely as an early exit, an `EXIT PARAGRAPH` in its place usually removes the need for the jump entirely."* `refusal.find_goto_exit_plans(program, scope_map, lines)` automates exactly that, whole-program and unconditional on any test case (like `NESTED_EXEC`'s reasoning, but "plan or silently skip" — declining it is always safe): for a `GO TO` into a provably no-op paragraph (`_is_exit_only_paragraph` — one bare `EXIT.` statement and nothing else) whose enclosing paragraph is itself safe (top-level, not a GO TO target, not a fall-through hazard) AND is the exit-only paragraph's immediate predecessor in source order, the `GO TO` is spliced directly into `EXIT PARAGRAPH` at its own call site — never physically transferring control to the target, so the "entered via GO TO" hazard the two rejected candidates in [docs/2026-07-10-goto-reachable-terminators-design.md](../docs/2026-07-10-goto-reachable-terminators-design.md) tried and failed to fix at the *target* never applies. All-or-nothing per target paragraph (a whole-program property can't be partially neutralized; a computed/multi-target GO TO merely *naming* the target, even one this loop can't resolve to a site, disqualifies it too — `_go_statement_raw_targets`). `find_terminator_plans` narrows its own `_go_to_targets` by every fully-neutralized target before deriving `_go_to_fallthrough_targets`, so a terminator chain whose only obstacle was this exact idiom now qualifies too — and `mockymock mutate` (`mutation/runner.py`) applies the same `goto_exit_plans` alongside `run`/`debug`/`export`.
+
+**Cost model: the static-check pass is linear in program size (2026-08-28).**
+It used not to be, and on a real 16.9k-line CICS program that showed up as
+minutes of CPU per `lint`. Three scans were quadratic and all three are now
+indexed or precomputed; anything added here should keep that property.
+(a) `ScopeMap` queries (`splicer.source_map`) were full linear scans of
+`boundaries`, two of them materializing a filtered copy of the whole list
+first, and `annotate_nested_sites` runs one per boundary site — now a
+lazily-built line index (`at_line`/`iter_after_line`; call `invalidate()`
+if you ever mutate `boundaries`). (b) `collect_scope_map` re-scanned the
+EXEC-block range list per lexed token — now flattened once by
+`_exec_line_index` into covered-lines/end-column form. (c) `_falls_through`
+was re-evaluated for every paragraph on every GO TO target's walk — 4.4M
+calls on a 53k-line program in the shared-exit-label shape, where nothing
+on the chain provably diverts so each walk runs to end of program. Now
+`_fallthrough_flags` answers it once per paragraph, `_first_non_fallthrough`
+gives each walk its stop index directly, `_go_to_fallthrough_targets` breaks
+on an already-walked index (sound because two walks that both pass through
+an index provably share a stop index), and the precomputed flags are threaded
+into `_walk_fallthrough_from`'s two fixpoint call sites. Measured on a
+53k-line CICS-shaped program: 14.2s -> 5.5s, with linear rather than
+quadratic growth. All three are pure speedups — `lint` output is
+byte-identical — and `tests/unit/test_static_check_scaling.py` pins each
+against the naive scan it replaced.
 
 **GO-TO-exit reachability narrowing (2026-08-25).** The splice above made `run`/`export`/`debug`/`mutate` compile a program with no `GO TO <exit-label>` edge, and `find_terminator_plans` already narrowed its hazard sets by the plans — but `check_test_case`/`_reachable_paragraphs` still modeled the spliced-away GO TO as a live edge. Consequence, seen on a real CICS program: any paragraph using the `GO TO <own-adjacent-EXIT-label>` early-return idiom pulled its bare-`EXIT.` landing pad into `go_to_targets`, whose fall-through walk then cascaded through every paragraph from the exit label to the end of the program — dozens of spurious `UNMOCKED_*`/`UNSUPPORTED_TERMINATOR_LAYOUT` refusals for boundaries the compiled test can never execute. Now: `neutralized_goto_targets(program, scope_map, lines)` (the fully-neutralized target names, all-or-nothing per target exactly as `find_goto_exit_plans` guarantees) is threaded by `cli.checks.run_static_checks` step 8 into every `check_test_case` call, and inside `_reachable_paragraphs` it (a) skips pushing a single-target unconditional GO TO whose target is neutralized and (b) subtracts the neutralized names from the fall-through closure's seed set. A computed/multi-target GO TO can never name a neutralized target (its existence disqualifies the target upstream), which is what makes (a)'s single-target check sufficient. `union_executed_paragraphs` (warning-waiving, step 4b) deliberately stays un-narrowed — it runs before `lines`/`scope_map` exist, and un-narrowed only ever waives *fewer* warnings. Flip side, intentional: a `.cut` that previously mocked cascade boundaries because the old model demanded them now refuses `UNMATCHED_MOCK` on those stale directives — delete them. Pinned by `tests/unit/test_reachability_goto_exit.py`.
 

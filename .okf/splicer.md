@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-27T00:00:00Z
+timestamp: 2026-08-28T00:00:00Z
 ---
 
 # Overview
@@ -517,6 +517,17 @@ anywhere -- unknowable size, refuse rather than guess one; a program that
 *does* declare its own `LINKAGE SECTION. 01 DFHCOMMAREA. ...` is covered by
 the generalized ENTRY/LINKAGE neutralization above instead) -- independent
 of `cics_eib_plan`, additive to `check_linkage_layout`, not exclusive-or.
+
+`UNSUPPORTED_CICS_MACRO` is reachability-scoped for `run`/`lint`/`export`/
+`debug` (`check_cics_eib_layout_scoped`; `generate`/`fixtures` keep the
+unscoped entry point). When a macro call is confined to a paragraph no
+selected test case can execute, `cli.checks.run_static_checks` waives the
+refusal and rewrites the call's own columns to `-1` with
+`stub_writer.replace_columns` -- space-padded to the identical width, so
+unlike `cics_eib`'s insertion below this edit moves neither a line nor a
+column, and is safe at the point in the pipeline where it happens (step
+5b, before `collect_scope_map`). See [analysis](analysis.md)'s
+whole-program refusal table for the full classification rules.
 
 Unlike `splicer.linkage.neutralize` (comment-only, line-count-preserving,
 safe to run at any point in the pipeline), `splicer.cics_eib.working_

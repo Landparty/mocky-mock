@@ -79,12 +79,20 @@ _EIB_NAMES = EIB_FIELD_NAMES | {DFHEIBLK_NAME}
 # COBOL identifiers are themselves case-insensitive, so a lowercase or
 # mixed-case source reference is exactly as real a reference as an
 # uppercase one.
-_EIB_NAME_RES = {
-    name: re.compile(
-        rf"(?<![A-Za-z0-9-]){re.escape(name)}(?![A-Za-z0-9-])", re.IGNORECASE
-    )
-    for name in _EIB_NAMES
-}
+# One combined alternation rather than 29 separate patterns: each pattern
+# starts with a lookbehind, which defeats `re`'s literal-prefix scan
+# optimization, so every name cost a full pass over the program text --
+# measured at 0.73s of a 2.5s static-check pass on a 29k-line program, ~15x
+# `refusal.check_cics_eib_layout`'s two-pattern equivalent. Longest name
+# first so a prefix never shadows a longer sibling (EIBRESP vs EIBRESP2);
+# occurrences cannot overlap, since the lookarounds delimit every match
+# with a non-identifier character on both sides.
+_EIB_NAME_RE = re.compile(
+    "(?<![A-Za-z0-9-])(?:"
+    + "|".join(sorted((re.escape(n) for n in _EIB_NAMES), key=len, reverse=True))
+    + ")(?![A-Za-z0-9-])",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -109,9 +117,7 @@ def cics_eib_plan(program, lines: list[str]) -> CicsEibPlan | None:
     storage for it).
     """
     text = "\n".join(lines)
-    referenced = sorted(
-        name for name, pattern in _EIB_NAME_RES.items() if pattern.search(text)
-    )
+    referenced = sorted({m.group(0).upper() for m in _EIB_NAME_RE.finditer(text)})
     if not referenced:
         return None
 
