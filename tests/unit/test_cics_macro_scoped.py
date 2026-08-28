@@ -164,6 +164,32 @@ def test_the_held_back_span_rewrites_without_moving_anything():
     assert rewritten[macro_line - 1][end:] == lines[macro_line - 1][end:]
 
 
+def test_replace_columns_rejects_a_span_outside_the_line():
+    # Python slicing tolerates out-of-range indices, so an unvalidated
+    # span silently rewrites the line to a different length -- which is
+    # the one guarantee this helper exists to make.
+    lines = ["ABCDE"]
+    for start, end in [(2, 40), (-3, 4), (4, 2), (7, 9)]:
+        try:
+            replace_columns(lines, 1, start, end, CICS_MACRO_PLACEHOLDER)
+        except ValueError:
+            continue
+        raise AssertionError(f"columns [{start}, {end}) should have been rejected")
+    assert lines == ["ABCDE"]
+
+
+def test_replace_columns_rejects_a_replacement_wider_than_the_span():
+    try:
+        replace_columns(["ABCDE"], 1, 1, 2, "TOO-WIDE")
+    except ValueError:
+        return
+    raise AssertionError("an oversized replacement should have been rejected")
+
+
+def test_replace_columns_accepts_a_span_ending_exactly_at_end_of_line():
+    assert replace_columns(["ABCDE"], 1, 3, 5, "-1") == ["ABC-1"]
+
+
 def test_unscoped_entry_point_still_refuses_whole_program():
     # generate/fixtures have no test cases to scope by and keep refusing.
     program, lines = _parse(UNREACHED_MACRO_CBL)

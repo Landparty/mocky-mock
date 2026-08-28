@@ -33,16 +33,29 @@ def replace_columns(
     Padding rather than substituting is the whole point: every downstream
     step indexes the source by `SourceLocation` line AND column, so an
     edit that shortened a line would silently move every statement after
-    it on that line. The caller must have verified `replacement` fits
-    (`len(replacement) <= end_column - start_column`)."""
+    it on that line.
+
+    The span is validated rather than trusted -- `0 <= start_column <=
+    end_column <= len(line)`, and `replacement` no wider than the span.
+    Python slicing tolerates out-of-range indices, so an unchecked span
+    past either end of the line would quietly rewrite it to a different
+    length: exactly the guarantee this function exists to make, broken
+    silently. Raises `ValueError` instead."""
+    if not 0 <= line_number - 1 < len(lines):
+        raise ValueError(f"line {line_number} is outside the source")
+    text = lines[line_number - 1]
     width = end_column - start_column
-    if not 0 <= line_number - 1 < len(lines) or len(replacement) > width:
+    if not 0 <= start_column <= end_column <= len(text):
+        raise ValueError(
+            f"columns [{start_column}, {end_column}) are outside line "
+            f"{line_number} (length {len(text)})"
+        )
+    if len(replacement) > width:
         raise ValueError(
             f"cannot fit {replacement!r} into columns "
             f"[{start_column}, {end_column}) of line {line_number}"
         )
     result = list(lines)
-    text = result[line_number - 1]
     result[line_number - 1] = (
         text[:start_column] + replacement.ljust(width) + text[end_column:]
     )
