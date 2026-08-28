@@ -19,6 +19,36 @@ def comment_and_replace(
     return result[:insert_at] + replacement + result[insert_at:]
 
 
+def replace_columns(
+    lines: list[str],
+    line_number: int,
+    start_column: int,
+    end_column: int,
+    replacement: str,
+) -> list[str]:
+    """Return a NEW list with columns [start_column, end_column) (0-based,
+    half-open) of `lines[line_number - 1]` overwritten by `replacement`,
+    space-padded to the original width.
+
+    Padding rather than substituting is the whole point: every downstream
+    step indexes the source by `SourceLocation` line AND column, so an
+    edit that shortened a line would silently move every statement after
+    it on that line. The caller must have verified `replacement` fits
+    (`len(replacement) <= end_column - start_column`)."""
+    width = end_column - start_column
+    if not 0 <= line_number - 1 < len(lines) or len(replacement) > width:
+        raise ValueError(
+            f"cannot fit {replacement!r} into columns "
+            f"[{start_column}, {end_column}) of line {line_number}"
+        )
+    result = list(lines)
+    text = result[line_number - 1]
+    result[line_number - 1] = (
+        text[:start_column] + replacement.ljust(width) + text[end_column:]
+    )
+    return result
+
+
 def insert_lines_after(
     lines: list[str], line_number: int, new_lines: list[str]
 ) -> list[str]:

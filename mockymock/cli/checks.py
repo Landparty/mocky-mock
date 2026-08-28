@@ -118,7 +118,8 @@ def run_static_checks(
     from mockymock.analysis.linkage import linkage_plan
     from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
     from mockymock.analysis.refusal import (
-        check_cics_eib_layout,
+        CICS_MACRO_PLACEHOLDER,
+        check_cics_eib_layout_scoped,
         check_expansion_warnings,
         check_linkage_layout,
         check_nested_exec,
@@ -134,7 +135,7 @@ def run_static_checks(
     from mockymock.splicer.linkage import neutralize
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
     from mockymock.splicer.sqlca import transform_data_division_exec
-    from mockymock.splicer.stub_writer import comment_and_replace
+    from mockymock.splicer.stub_writer import comment_and_replace, replace_columns
 
     out = StaticCheckResult()
 
@@ -210,10 +211,22 @@ def run_static_checks(
     # could execute; waive the rest with a transparency note each. A
     # waived COPY's verified span is commented out of `lines` in step 5 --
     # cobc cannot compile an unresolvable COPY, unreachable or not.
+    # Steps 4b and 5b both resolve against this, and it runs a full
+    # reachability BFS per selected test case -- compute it at most once,
+    # and only if some refusal was actually held back.
+    executed_computed = False
+    executed: set[str] | None = None
+
+    def executed_paragraphs() -> set[str] | None:
+        nonlocal executed_computed, executed
+        if not executed_computed:
+            executed = union_executed_paragraphs(parse_result.ast, suite)
+            executed_computed = True
+        return executed
+
     scoped = scoped_warnings + scoped_copies
     if scoped:
-        executed = union_executed_paragraphs(parse_result.ast, suite)
-        scoped_reasons = resolve_scoped_refusals(scoped, executed)
+        scoped_reasons = resolve_scoped_refusals(scoped, executed_paragraphs())
         if scoped_reasons:
             out.problems.extend(
                 f"refused ({r.code}): {r.message}" for r in scoped_reasons
@@ -266,7 +279,32 @@ def run_static_checks(
     # an undeclared DFHCOMMAREA) -- independent of the LINKAGE guardrails
     # above, additive not exclusive-or. See
     # docs/2026-08-27-cics-eib-linkage-support-design.md.
-    cics_eib_reasons = check_cics_eib_layout(parse_result.ast, lines)
+    # A DFHRESP/DFHVALUE call confined to a paragraph no selected test
+    # case can execute is held back and resolved against the same
+    # reachability union step 4b uses; when waived it is rewritten in
+    # place (width-preserving), because cobc has no CICS translator and
+    # could not compile the unexpanded macro even in dead code.
+    cics_eib_reasons, cics_macro_scoped = check_cics_eib_layout_scoped(
+        parse_result.ast, lines
+    )
+    if cics_macro_scoped:
+        macro_reasons = resolve_scoped_refusals(
+            cics_macro_scoped, executed_paragraphs()
+        )
+        if macro_reasons:
+            cics_eib_reasons.extend(macro_reasons)
+        else:
+            for item in cics_macro_scoped:
+                assert item.neutralize_span is not None
+                macro_line, start_column, end_column = item.neutralize_span
+                lines = replace_columns(
+                    lines,
+                    macro_line,
+                    start_column,
+                    end_column,
+                    CICS_MACRO_PLACEHOLDER,
+                )
+                out.notes.append(item.waiver_note)
     if cics_eib_reasons:
         out.problems.extend(
             f"refused ({r.code}): {r.message}" for r in cics_eib_reasons
