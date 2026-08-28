@@ -260,7 +260,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     )
 
     from mockymock.analysis.cics_eib import cics_eib_plan
-    from mockymock.analysis.linkage import linkage_plan
+    from mockymock.analysis.linkage import address_of_sites, linkage_plan
     from mockymock.analysis.mock_surface import analyze
     from mockymock.analysis.refusal import (
         check_cics_eib_layout,
@@ -415,7 +415,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
     linkage = linkage_plan(result.ast)
     if linkage is not None:
-        _print_linkage_neutralization("generate", linkage, applied=False)
+        preview_address_of, _ = address_of_sites(lines, linkage)
+        _print_linkage_neutralization(
+            "generate", linkage, applied=False, address_of=preview_address_of
+        )
 
     cics_eib_reasons = check_cics_eib_layout(result.ast, lines)
     for reason in cics_eib_reasons:
@@ -463,7 +466,9 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_linkage_neutralization(command: str, plan, applied: bool) -> None:
+def _print_linkage_neutralization(
+    command: str, plan, applied: bool, address_of=()
+) -> None:
     """Transparency for the LINKAGE neutralization transform: it never
     refuses (that's `check_linkage_layout`'s job) and edits source a `.cut`
     author didn't write, so say so rather than silently changing behavior.
@@ -475,7 +480,11 @@ def _print_linkage_neutralization(command: str, plan, applied: bool) -> None:
     docs/2026-08-27-cics-eib-linkage-support-design.md) -- e.g. a CICS
     program with its own `LINKAGE SECTION. 01 DFHCOMMAREA.` and no ENTRY at
     all -- in which case only the LINKAGE-folding half of the message
-    applies. See docs/2026-07-08-ims-linkage-support-design.md."""
+    applies. `address_of` carries the `SET ADDRESS OF <folded item>`
+    occurrences redirected into a scratch pointer, which is a second,
+    separately surprising edit and so gets its own sentence rather than
+    being folded silently into the message above.
+    See docs/2026-07-08-ims-linkage-support-design.md."""
     entry_names = ", ".join(
         repr(e.entry_name) for e in plan.entry_statements if e.entry_name
     )
@@ -502,6 +511,15 @@ def _print_linkage_neutralization(command: str, plan, applied: bool) -> None:
         f"SECTION storage, so this program's default entry gets real, "
         f"addressable storage instead"
     )
+    if address_of:
+        targets = ", ".join(sorted({site.item_name for site in address_of}))
+        verb = "redirected" if applied else "will redirect"
+        print(
+            f"mockymock {command}: {verb} {len(address_of)} "
+            f"`SET ADDRESS OF` target(s) ({targets}) to a discarded scratch "
+            f"pointer -- once folded into WORKING-STORAGE those items own "
+            f"real storage, which GnuCOBOL will not let a program rebind"
+        )
 
 
 def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:
@@ -598,7 +616,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.analysis.stub_expectations import scan_stub_expectations
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.cli.checks import extra_working_storage, run_static_checks
     from mockymock.report.coverage import (
         build_original_line_map,
         format_coverage_console,
@@ -674,7 +692,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     for note in checked.notes:
         print(f"mockymock run: {note}")
     if checked.linkage is not None:
-        _print_linkage_neutralization("run", checked.linkage, applied=True)
+        _print_linkage_neutralization(
+            "run",
+            checked.linkage,
+            applied=True,
+            address_of=checked.linkage_address_of,
+        )
     if checked.cics_eib is not None:
         _print_cics_eib_synthesis("run", checked.cics_eib, applied=True)
     if checked.problems:
@@ -766,11 +789,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         reset_lines,
         registry,
         record_targets=record_targets,
-        extra_working_storage_lines=(
-            cics_eib.working_storage_lines(cics_eib_plan_)
-            if cics_eib_plan_ is not None
-            else None
-        ),
+        extra_working_storage_lines=extra_working_storage(checked),
     )
 
     instrumented = _insert_driver(lines, artifact)
@@ -999,7 +1018,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
 
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.cli.checks import extra_working_storage, run_static_checks
     from mockymock.debug.adapter import DapAdapter, DebugSession
     from mockymock.debug.call_stack import ParagraphIndex, build_generated_c_line_map
     from mockymock.debug.gdb_session import GdbSession
@@ -1047,7 +1066,12 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     for note in checked.notes:
         print(f"mockymock debug: {note}")
     if checked.linkage is not None:
-        _print_linkage_neutralization("debug", checked.linkage, applied=True)
+        _print_linkage_neutralization(
+            "debug",
+            checked.linkage,
+            applied=True,
+            address_of=checked.linkage_address_of,
+        )
     if checked.cics_eib is not None:
         _print_cics_eib_synthesis("debug", checked.cics_eib, applied=True)
     if checked.problems:
@@ -1110,11 +1134,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         suite,
         reset_lines,
         registry,
-        extra_working_storage_lines=(
-            cics_eib.working_storage_lines(cics_eib_plan_)
-            if cics_eib_plan_ is not None
-            else None
-        ),
+        extra_working_storage_lines=extra_working_storage(checked),
     )
     instrumented = _insert_driver(lines, artifact)
 
@@ -1291,7 +1311,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     stopping before compile_source/run_binary."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.cli.checks import extra_working_storage, run_static_checks
     from mockymock.cli.mainframe_export import (
         build_provenance_header,
         insert_provenance_header,
@@ -1323,7 +1343,12 @@ def _cmd_export(args: argparse.Namespace) -> int:
     for note in checked.notes:
         print(f"mockymock export: {note}")
     if checked.linkage is not None:
-        _print_linkage_neutralization("export", checked.linkage, applied=True)
+        _print_linkage_neutralization(
+            "export",
+            checked.linkage,
+            applied=True,
+            address_of=checked.linkage_address_of,
+        )
     if checked.cics_eib is not None:
         _print_cics_eib_synthesis("export", checked.cics_eib, applied=True)
     if checked.problems:
@@ -1386,11 +1411,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         suite,
         reset_lines,
         registry,
-        extra_working_storage_lines=(
-            cics_eib.working_storage_lines(cics_eib_plan_)
-            if cics_eib_plan_ is not None
-            else None
-        ),
+        extra_working_storage_lines=extra_working_storage(checked),
     )
     instrumented = _insert_driver(lines, artifact)
 

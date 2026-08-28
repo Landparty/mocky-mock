@@ -287,3 +287,47 @@ def test_check_linkage_layout_refuses_when_header_line_cannot_be_verified():
         r.code == "UNSUPPORTED_LINKAGE_LAYOUT" and "could not locate" in r.message
         for r in reasons
     )
+
+
+# `SET ADDRESS OF <folded item>` shapes the redirect in
+# `splicer.linkage.redirect_address_of` cannot express as a single-line
+# column span. Left alone they are a hard cobc error once the LINKAGE
+# SECTION has been folded, so the gate refuses rather than emit source that
+# cannot compile.
+ADDRESS_OF_CONTINUED_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CLP100.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-PTR USAGE POINTER.
+
+       LINKAGE SECTION.
+       01  LKPCB-CLP100MA.
+           05  LKPCB-STATUS PIC X(2).
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           SET ADDRESS OF
+               LKPCB-CLP100MA TO WS-PTR
+           STOP RUN.
+"""
+
+
+def test_check_linkage_layout_refuses_an_unrewritable_address_of():
+    program, lines = _parse(ADDRESS_OF_CONTINUED_SOURCE)
+    reasons = check_linkage_layout(program, lines)
+    assert any(r.code == "UNSUPPORTED_LINKAGE_ADDRESSING" for r in reasons)
+    assert any("not BASED or a LINKAGE item" in r.message for r in reasons)
+
+
+def test_check_linkage_layout_allows_a_rewritable_address_of():
+    """The ordinary single-line DL/I shape is handled by the redirect, not
+    refused -- otherwise the whole IMS corpus would stop running."""
+    program, lines = _parse(
+        ADDRESS_OF_CONTINUED_SOURCE.replace(
+            "SET ADDRESS OF\n               LKPCB-CLP100MA TO WS-PTR",
+            "SET ADDRESS OF LKPCB-CLP100MA TO WS-PTR",
+        )
+    )
+    assert check_linkage_layout(program, lines) == []

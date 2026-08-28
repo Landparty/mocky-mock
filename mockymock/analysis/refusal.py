@@ -235,7 +235,7 @@ from cobolparser.models.statements.misc import (
 )
 from cobolparser.preprocess import normalize_fixed_format
 
-from mockymock.analysis.linkage import linkage_plan
+from mockymock.analysis.linkage import address_of_sites, linkage_plan
 from mockymock.analysis.mock_surface import (
     _BOUNDARY_STATEMENT_TYPES,
     _TERMINATOR_LABELS,
@@ -1108,6 +1108,25 @@ def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:
     if plan is None:
         return []
     reasons: list[RefusalReason] = []
+
+    # `SET ADDRESS OF <folded item>` occurrences the rewrite in
+    # `splicer.linkage.redirect_address_of` cannot classify or cannot express
+    # as a single-line column span. Left in place they are a hard cobc error
+    # ("cannot change address of 'X', which is not BASED or a LINKAGE item"),
+    # so refuse rather than emit source that cannot compile.
+    _, address_of_problems = address_of_sites(lines, plan)
+    for problem in address_of_problems:
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_LINKAGE_ADDRESSING",
+                message=(
+                    f"{problem} -- folding the LINKAGE SECTION into "
+                    "WORKING-STORAGE makes `SET ADDRESS OF` on its items "
+                    "illegal (GnuCOBOL: not BASED or a LINKAGE item), and "
+                    "this occurrence cannot be safely redirected"
+                ),
+            )
+        )
 
     data = program.get_division("DATA")
     section_names = list(data._sections.keys())

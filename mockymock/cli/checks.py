@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from cobolparser import ParseResult
 
     from mockymock.analysis.cics_eib import CicsEibPlan
-    from mockymock.analysis.linkage import LinkagePlan
+    from mockymock.analysis.linkage import AddressOfSite, LinkagePlan
     from mockymock.analysis.mock_surface import MockSurface
     from mockymock.dsl.model import MockTestSuite
     from mockymock.splicer.source_map import ScopeMap
@@ -38,6 +38,10 @@ class StaticCheckResult:
     lines: list[str] | None = None  # normalized + linkage-neutralized
     scope_map: ScopeMap | None = None
     linkage: LinkagePlan | None = None
+    # `SET ADDRESS OF <folded LINKAGE item>` receiving-side occurrences already
+    # rewritten in `lines`; non-empty means the driver must also declare the
+    # scratch pointer they were redirected to (see splicer.linkage).
+    linkage_address_of: list[AddressOfSite] = field(default_factory=list)
     cics_eib: CicsEibPlan | None = None
     file_status_fields: dict[str, str] | None = None
     # Transparency lines for checks that deliberately did NOT refuse: a
@@ -51,6 +55,27 @@ class StaticCheckResult:
     @property
     def ok(self) -> bool:
         return not self.problems
+
+
+def extra_working_storage(checked: StaticCheckResult) -> list[str] | None:
+    """Every WORKING-STORAGE line the instrumented program needs on top of
+    `driver.build_driver`'s own bookkeeping fields, in one place so all four
+    splice-and-compile pipelines (`run`, `debug`, `export`, mutation) stay in
+    step: the synthesized CICS EIB block, and the scratch pointer that
+    `splicer.linkage.redirect_address_of`'s rewritten `SET ADDRESS OF`
+    statements assign into.
+
+    `None` (not `[]`) when there is nothing to add, matching what
+    `build_driver` treats as "no extra lines".
+    """
+    from mockymock.splicer import cics_eib
+    from mockymock.splicer.linkage import extra_working_storage_lines
+
+    lines: list[str] = []
+    if checked.cics_eib is not None:
+        lines.extend(cics_eib.working_storage_lines(checked.cics_eib))
+    lines.extend(extra_working_storage_lines(checked.linkage_address_of))
+    return lines or None
 
 
 def filter_suite_cases(
@@ -115,7 +140,7 @@ def run_static_checks(
 
     from mockymock.analysis.cics_eib import cics_eib_plan
     from mockymock.analysis.flow_mocks import check_flow_mocks
-    from mockymock.analysis.linkage import linkage_plan
+    from mockymock.analysis.linkage import address_of_sites, linkage_plan
     from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
     from mockymock.analysis.refusal import (
         CICS_MACRO_PLACEHOLDER,
@@ -132,7 +157,7 @@ def run_static_checks(
         union_executed_paragraphs,
     )
     from mockymock.dsl.parser import CutParseError, parse_cut
-    from mockymock.splicer.linkage import neutralize
+    from mockymock.splicer.linkage import neutralize, redirect_address_of
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
     from mockymock.splicer.sqlca import transform_data_division_exec
     from mockymock.splicer.stub_writer import comment_and_replace, replace_columns
@@ -274,6 +299,16 @@ def run_static_checks(
         # pipeline derives from the AST's locations -- safe to always apply
         # before returning `lines`.
         lines = neutralize(lines, parse_result.ast, linkage)
+        # Folding those items into WORKING-STORAGE gives them real storage,
+        # which is exactly what makes `SET ADDRESS OF` on them illegal
+        # afterwards -- redirect each receiving-side occurrence into a scratch
+        # pointer. Width-preserving column edits, so like `neutralize` this
+        # shifts nothing the rest of the pipeline depends on. Anything
+        # unclassifiable already refused above via `check_linkage_layout`.
+        address_of, _ = address_of_sites(lines, linkage)
+        out.linkage_address_of = address_of
+        if address_of:
+            lines = redirect_address_of(lines, address_of)
 
     # 5b. CICS implicit-linkage guardrails (DFHRESP/DFHVALUE macro calls,
     # an undeclared DFHCOMMAREA) -- independent of the LINKAGE guardrails

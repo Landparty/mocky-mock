@@ -1,5 +1,44 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-28 — Two compile-blocking codegen bugs from the real-world corpus
+
+`mockymock run` now gets a ~31k-line GnuCOBOL program much further than
+before, which surfaced two genuinely new codegen bugs. Both are fixed and
+both were verified against real GnuCOBOL 4.0 (a local `cobc`, not Docker).
+
+* **Malformed re-quoted literal** (detailed in [splicer.md](splicer.md)'s
+  WORKING-STORAGE Reset section, "Embedded double quotes in a VALUE
+  clause"). CICS's `DFHAID` copybook legitimately declares
+  `DFHTRIG PIC X VALUE IS '"'` -- a single-quote-delimited literal whose
+  content is one quote character. The root cause is upstream: cobolparser
+  re-quotes a DECODED literal in double quotes without doubling an embedded
+  one, so the clause arrived here as three quote characters and
+  `UT-RESET-WORKING-STORAGE` emitted an unterminated `MOVE` operand,
+  desynchronizing `cobc`'s tokenizer for the rest of the program (reported
+  as a bogus `invalid symbol '%'` two lines later). Fixed upstream in
+  cobol-parser (`_literals.quote_literal`) AND defensively here, since the
+  dependency floor is `cobol-parser>=1.7.7` and every published wheel still
+  carries the bug: `reset.cobol_literal` grows each run of quote characters
+  to the next even length, repairing the malformed shape and staying
+  idempotent against the fixed parser.
+* **`SET ADDRESS OF` on folded LINKAGE items** (detailed in
+  [splicer.md](splicer.md)'s new "`SET ADDRESS OF` on a folded item"
+  subsection; refusal classification in [analysis.md](analysis.md)'s table).
+  The ENTRY/LINKAGE fold gives ~20 DL/I PCB/DIB masks real WORKING-STORAGE
+  storage, which is exactly what makes the program's own
+  `7000-SCHEDULE-PSB` rebinds illegal (`cannot change address of 'X', which
+  is not BASED or a LINKAGE item`) -- ~20 compile errors introduced by the
+  fold itself. Marking them `BASED` would restore legality by removing the
+  storage again, i.e. reopen the unbound-memory SIGSEGV the fold prevents,
+  so the statement gives instead: `splicer.linkage.redirect_address_of`
+  overwrites each receiving-side `ADDRESS OF <folded item>` with a scratch
+  `UT-ADDR-SINK USAGE POINTER`, width-preserving via `replace_columns`.
+  Value-side `SET <ptr> TO ADDRESS OF <item>` is left alone (still legal).
+  New fail-closed `UNSUPPORTED_LINKAGE_ADDRESSING` for shapes the rewrite
+  cannot express. Detection is textual because cobolparser's `SetStatement`
+  drops the target-side `ADDRESS OF` entirely -- a real AST-fidelity gap
+  worth fixing upstream eventually.
+
 ## 2026-08-28 — Reachability-scoped `UNSUPPORTED_CICS_MACRO`, and a linear static-check pass
 
 Two findings from running `mockymock lint` against a real 16.9k-line CICS
