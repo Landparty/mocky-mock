@@ -23,6 +23,12 @@ import re
 
 _REPEAT_GROUP_RE = re.compile(r"\(\d+\)")
 
+# A cobolparser `value_clause` for an alphanumeric literal, with the optional
+# `ALL ` repetition prefix split off: `ALL "="` -> ("ALL ", '"="').
+_ALL_PREFIX_RE = re.compile(r"^(ALL\s+)(.*)$", re.IGNORECASE | re.DOTALL)
+QUOTE = chr(34)
+_QUOTE_RUN_RE = re.compile(QUOTE + "+")
+
 # PIC symbols that make an item numeric or numeric-edited -- either way the
 # only legal reset literal is a number, never SPACES (cobc rejects
 # `MOVE SPACES TO <PIC ZZZ item>`). Z/*/$/+/- only ever appear in
@@ -78,6 +84,52 @@ def reset_lines_for_items(items) -> list[str]:
             if reset is not None:
                 lines.append(reset)
     return lines
+
+
+def cobol_literal(value_clause: str) -> str:
+    """Re-render a cobolparser `value_clause` as a well-formed COBOL operand.
+
+    cobolparser hands alphanumeric VALUE clauses back double-quote-delimited
+    around the literal's DECODED content, and versions through 1.8.0 did not
+    re-double an embedded quote when doing so. A copybook that legitimately
+    declares a one-character literal holding a double quote (CICS's own
+    DFHAID does, for DFHTRIG) therefore arrived here as three quote
+    characters -- an unterminated literal. Emitted verbatim into
+    UT-RESET-WORKING-STORAGE it desynchronized cobc's tokenizer for the rest
+    of the program, surfacing as a bogus `invalid symbol` error lines away
+    from the real cause.
+
+    Fixed upstream (cobol-parser, `_literals.quote_literal`), but this
+    project's floor is `cobol-parser>=1.7.7`, so the malformed shape still
+    reaches us from every currently published wheel. Normalizing here is also
+    idempotent against the fixed parser: a run of quotes is only ever grown
+    to the next even length, so an already-doubled pair is left alone. The
+    one shape this cannot recover is a literal whose real content is two
+    adjacent quotes coming from an unfixed parser -- indistinguishable from
+    one correctly-escaped quote, and resolved in favour of the well-formed
+    reading.
+
+    Non-literal clauses (numerics, figurative constants, identifiers) carry
+    no delimiters and are returned untouched.
+    """
+    prefix = ""
+    body = value_clause
+    match = _ALL_PREFIX_RE.match(body)
+    if match:
+        prefix, body = match.group(1), match.group(2)
+    if len(body) < 2 or not body.startswith(QUOTE) or not body.endswith(QUOTE):
+        return value_clause  # not a quoted literal -- numeric, figurative, ...
+    inner = _QUOTE_RUN_RE.sub(_double_quote_run, body[1:-1])
+    return f"{prefix}{QUOTE}{inner}{QUOTE}"
+
+
+def _double_quote_run(match: re.Match[str]) -> str:
+    """Grow a run of quote characters to the next even length: COBOL escapes
+    a delimiter inside a literal by repeating it, so every embedded quote must
+    appear in a pair. Already-paired runs are returned unchanged, which is
+    what makes `cobol_literal` idempotent."""
+    run = len(match.group(0))
+    return QUOTE * (run + run % 2)
 
 
 def _find_working_storage_section(data_division):
@@ -167,7 +219,7 @@ def _elementary_reset(item) -> str | None:
     if usage == "INDEX":
         return None  # no legal MOVE; fidelity limit
     if item.value_clause:
-        return f"MOVE {item.value_clause} TO {item.name}"
+        return f"MOVE {cobol_literal(item.value_clause)} TO {item.name}"
     if item.picture_clause is None:
         if usage in _FLOAT_USAGES:
             return f"MOVE 0 TO {item.name}"

@@ -40,7 +40,7 @@ def _run_suite_once(
     transparency guarantee `run`/`debug`/`export`/`lint` keep."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.cli.checks import extra_working_storage, run_static_checks
     from mockymock.cli.main import _insert_driver
     from mockymock.report.results import parse_stdout
     from mockymock.runtime import docker_toolchain
@@ -107,11 +107,7 @@ def _run_suite_once(
             suite,
             reset_lines,
             registry,
-            extra_working_storage_lines=(
-                cics_eib.working_storage_lines(checked.cics_eib)
-                if checked.cics_eib is not None
-                else None
-            ),
+            extra_working_storage_lines=extra_working_storage(checked),
         )
         instrumented = _insert_driver(lines, artifact)
 

@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-28T00:00:00Z
+timestamp: 2026-08-28T12:00:00Z
 ---
 
 # Overview
@@ -381,7 +381,7 @@ skipped.
 
 | Item shape | Reset line | Why |
 |---|---|---|
-| Elementary, has `VALUE` clause | `MOVE <value> TO <name>` | restores the declared initial value |
+| Elementary, has `VALUE` clause | `MOVE <value> TO <name>` | restores the declared initial value (the clause first passes through `cobol_literal` -- see below) |
 | Elementary, no `VALUE`, numeric or numeric-edited PIC | `MOVE 0 TO <name>` | numeric-edited PICs (e.g. `PIC ZZZ9`) reject `MOVE SPACES` — `_is_numeric` treats any of `9 V P Z * $ + -` in the (repeat-group-stripped) picture as numeric, not just `9`/`V`/`P` |
 | Elementary, no `VALUE`, alphanumeric PIC | `MOVE SPACES TO <name>` | COBOL's conventional type default, a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |
 | Elementary, no `PICTURE` (usage-typed), `USAGE POINTER`/`PROCEDURE-POINTER`/`FUNCTION-POINTER`/`PROGRAM-POINTER` | `SET <name> TO NULL` | pointers can only be assigned with `SET`; `NULL` is their only legal literal value — `MOVE SPACES` (the old picture-blind fallback) is rejected by cobc |
@@ -389,6 +389,28 @@ skipped.
 | Elementary, no `PICTURE`, `USAGE INDEX` | *(skipped — no line emitted)* | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; skipping is the only reset that never emits illegal COBOL (documented fidelity limit) |
 | Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE |
 | Group, no `VALUE` clause | `INITIALIZE <name>` | a `MOVE SPACES` over a group would write spaces across numeric children, corrupting them for the next case's arithmetic; `INITIALIZE` zeros numeric children and space-fills alphanumeric ones |
+
+**Embedded double quotes in a VALUE clause (2026-08-28 fix).** cobolparser
+hands an alphanumeric VALUE clause back double-quote-delimited around the
+literal's DECODED content, and versions through 1.8.0 did not re-double an
+embedded `"`. CICS's `DFHAID` copybook legitimately declares
+`DFHTRIG PIC X VALUE IS '"'` -- content: one quote character -- which arrived
+as three quote characters, an unterminated literal. Emitted verbatim it
+produced `MOVE """ TO DFHTRIG`, desynchronizing `cobc`'s tokenizer for
+the rest of the program: the error it eventually reports is a bogus
+`invalid symbol '%'` two lines further on, nowhere near the cause. Fixed
+upstream (`cobolparser._literals.quote_literal`), but this project's floor
+is `cobol-parser>=1.7.7`, so `_elementary_reset` routes every VALUE clause
+through `reset.cobol_literal` regardless of which parser produced it. That
+function grows each run of quote characters to the next EVEN length, which
+both repairs the malformed shape and is idempotent against the fixed parser
+(an already-doubled pair is left alone) -- so bumping the dependency floor
+later cannot double anything a second time. It handles the `ALL <literal>`
+repetition prefix and returns non-literal clauses (numerics, figurative
+constants, identifiers) untouched. The one shape it cannot recover is a
+literal whose real content is two adjacent quotes coming from an UNFIXED
+parser: indistinguishable from one correctly-escaped quote, resolved in
+favour of the well-formed reading.
 
 `_elementary_reset(item)` is the single function these rules route
 through (used both for top-level elementary items and, recursively, for
@@ -493,6 +515,62 @@ access pattern, `CALL 'CBLTDLI' USING ...`, was already an ordinary
 `MockCategory.CALL` boundary; a `.cut` author can `MOCK CALL "CBLTDLI"` and
 `MOVE` a status value into what is now real, addressable WORKING-STORAGE
 (e.g. `CUST-STATUS`) to simulate a DL/I outcome.
+
+## `SET ADDRESS OF` on a folded item (2026-08-28 fix)
+
+Folding the LINKAGE items into WORKING-STORAGE gives them real storage --
+which is precisely what makes rebinding their address illegal afterwards.
+GnuCOBOL only accepts `SET ADDRESS OF X TO <ptr>` when `X` is a LINKAGE or
+`BASED` item, and rejects a folded one with `cannot change address of 'X',
+which is not BASED or a LINKAGE item`. On the IMS DL/I PSB-scheduling idiom
+(a `7000-SCHEDULE-PSB` paragraph doing this once per PCB/DIB mask -- 
+`LK-DIB-LIST`, `HY7000-DIB`, `LKPCB-*`, ...) that is ~20 hard compile
+errors per program, every one of them introduced by the fold itself.
+
+Marking the folded items `BASED` is the obvious-looking fix and is wrong:
+a `BASED` item has no storage until something gives it an address, which
+puts the program straight back into the unbound-memory SIGSEGV this whole
+transform exists to prevent (the pointer would come from a mocked
+`CALL 'CBLTDLI'`, i.e. NULL). So the **statement** gives, not the storage.
+
+`analysis.linkage.address_of_sites(lines, plan)` finds every
+`ADDRESS OF <folded item>` occurrence on the RECEIVING side of a `SET` and
+`splicer.linkage.redirect_address_of` overwrites each one with
+`DISCARD_POINTER` (`UT-ADDR-SINK`), space-padded to the identical width via
+`stub_writer.replace_columns`. Consequences worth knowing:
+
+- **Column- and line-preserving**, like `neutralize` above and unlike
+  `cics_eib`'s insertion: nothing any `SourceLocation` indexes into moves,
+  so this is safe at the point in the pipeline where it runs (step 5 of
+  `cli.checks.run_static_checks`, right after `neutralize`).
+- **The `SET` keeps executing** -- the rebind is discarded, control flow and
+  sentence structure are unchanged, and (unlike commenting the statement
+  out) a sibling statement sharing the line is untouched.
+- **`UT-ADDR-SINK` is only declared when a site needed it**
+  (`extra_working_storage_lines`), reaching the source through
+  `driver.build_driver`'s `extra_working_storage_lines` -- the same route
+  `cics_eib`'s synthesized block takes, merged with it by
+  `cli.checks.extra_working_storage` so all four splice-and-compile
+  pipelines stay in step. It needs no reset line: nothing ever reads it.
+- **Value-side occurrences are deliberately left alone.**
+  `SET <ptr> TO ADDRESS OF <folded item>` is legal COBOL and stays correct
+  after the fold -- only *rebinding* the item becomes illegal. Sites are
+  classified per line: the nearest preceding `SET` wins, and an intervening
+  `TO` marks the occurrence as a value operand.
+- **Detection is textual, not AST-driven**, because cobolparser's
+  `SetStatement` drops the target-side `ADDRESS OF` entirely -- `SET ADDRESS
+  OF X TO Y` and `SET X TO Y` both arrive as `targets=["X"]`, so the AST
+  cannot tell the two apart (verified against cobolparser 1.8.0). Only the
+  *value* side carries a flag (`value_is_address_of`).
+- **Anything unclassifiable refuses** rather than being guessed at:
+  `refusal.check_linkage_layout` turns each problem `address_of_sites`
+  reports into `UNSUPPORTED_LINKAGE_ADDRESSING` -- an `ADDRESS OF` continued
+  onto the next line (no single-line span to rewrite), or one with no `SET`
+  before it on its own line.
+
+Verified end to end against real GnuCOBOL 4.0: the rewritten program
+compiles, runs and passes its test case; the un-rewritten one does not
+compile at all.
 
 # CICS EIB Field Synthesis (cics_eib.py)
 

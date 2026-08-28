@@ -1,6 +1,6 @@
 from cobolparser import parse_cobol
 
-from mockymock.splicer.reset import reset_move_lines
+from mockymock.splicer.reset import cobol_literal, reset_move_lines
 
 SOURCE = """\
        IDENTIFICATION DIVISION.
@@ -329,3 +329,63 @@ def test_group_with_redefines_children_resets_via_single_initialize():
     its own VALUE, so no extra per-child MOVE should be emitted for them."""
     lines = reset_move_lines(_ast_redefines())
     assert lines == ["INITIALIZE WS-RECORD"]
+
+
+# Embedded-quote literals: cobolparser wraps a VALUE clause's DECODED content
+# in double quotes, and versions through 1.8.0 did not re-double an embedded
+# quote when doing so -- CICS's DFHAID copybook declares exactly that shape
+# (`DFHTRIG PIC X VALUE IS '"'`), which reached the reset paragraph as an
+# unterminated three-quote literal and desynchronized cobc's tokenizer.
+QUOTE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFHAIDS.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  DFHTRIG            PIC X VALUE IS '"'.
+       01  WS-MIXED           PIC X(3) VALUE 'A"B'.
+       01  WS-PLAIN           PIC XX VALUE "OK".
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_value_clause_with_embedded_quote_is_reset_with_a_valid_literal():
+    result = parse_cobol(QUOTE_SOURCE, filename="dfhaids.cbl")
+    assert result.success, result.errors
+    lines = reset_move_lines(result.ast)
+    # Four quote characters: the two delimiters plus the doubled content.
+    assert 'MOVE """" TO DFHTRIG' in lines
+    assert 'MOVE "A""B" TO WS-MIXED' in lines
+    assert 'MOVE "OK" TO WS-PLAIN' in lines
+
+
+def test_cobol_literal_doubles_unescaped_quotes():
+    quote = chr(34)
+    # The malformed shape cobolparser <= 1.8.0 produces for a one-character
+    # literal holding a quote: three quotes in, four (a valid literal) out.
+    assert cobol_literal(quote * 3) == quote * 4
+    assert cobol_literal('"A' + quote + 'B"') == '"A' + quote * 2 + 'B"'
+
+
+def test_cobol_literal_is_idempotent_against_a_fixed_parser():
+    """The fixed cobolparser already doubles the embedded quote, so an
+    already-well-formed literal must pass through untouched -- otherwise
+    bumping the dependency floor would silently double it a second time."""
+    quote = chr(34)
+    assert cobol_literal(quote * 4) == quote * 4
+    assert cobol_literal(cobol_literal(quote * 3)) == quote * 4
+    assert cobol_literal('"A' + quote * 2 + 'B"') == '"A' + quote * 2 + 'B"'
+
+
+def test_cobol_literal_leaves_non_literal_clauses_alone():
+    for clause in ("0", "-5", "SPACES", "ZERO", "HIGH-VALUES", "WS-OTHER-ITEM"):
+        assert cobol_literal(clause) == clause
+
+
+def test_cobol_literal_handles_the_all_repetition_prefix():
+    quote = chr(34)
+    assert cobol_literal("ALL " + quote * 3) == "ALL " + quote * 4
+    assert cobol_literal('ALL "="') == 'ALL "="'

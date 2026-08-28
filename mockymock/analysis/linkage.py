@@ -29,6 +29,7 @@ list, so only this detection gate needed to change.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -74,3 +75,99 @@ def linkage_plan(program) -> LinkagePlan | None:
         linkage_items=linkage_section.data_items,
         header_line=header_line,
     )
+
+
+# `SET ADDRESS OF <item> TO <pointer>` -- the one statement that stops being
+# legal once `splicer.linkage.neutralize` has folded <item> out of LINKAGE and
+# into WORKING-STORAGE (GnuCOBOL: "cannot change address of 'X', which is not
+# BASED or a LINKAGE item"). Detected textually rather than off the AST because
+# cobolparser's `SetStatement` drops the target-side ADDRESS OF entirely --
+# `SET ADDRESS OF X TO Y` and `SET X TO Y` both arrive as `targets=["X"]`, so
+# the AST cannot tell the two apart. Verified against cobolparser 1.8.0.
+#
+# Not a plain `\b`: COBOL identifiers may contain hyphens, which are not `\w`
+# characters, so `\bLK-DIB\b` would false-match inside `WS-LK-DIB-SAVE` (same
+# reasoning as `analysis.cics_eib`'s name matching).
+_NAME_CHARS = r"A-Za-z0-9$@#-"
+_ADDRESS_OF_RE = re.compile(
+    rf"(?<![{_NAME_CHARS}])ADDRESS\s+OF\s+([{_NAME_CHARS}]+)", re.IGNORECASE
+)
+# An `ADDRESS OF` whose operand is not on the same line: the span this feature
+# rewrites would cross a line boundary, which `stub_writer.replace_columns`
+# cannot express. Fail closed rather than leave an illegal statement behind.
+_DANGLING_ADDRESS_OF_RE = re.compile(
+    rf"(?<![{_NAME_CHARS}])ADDRESS(\s+OF)?\s*$", re.IGNORECASE
+)
+_SET_RE = re.compile(rf"(?<![{_NAME_CHARS}])SET(?![{_NAME_CHARS}])", re.IGNORECASE)
+_TO_RE = re.compile(rf"(?<![{_NAME_CHARS}])TO(?![{_NAME_CHARS}])", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class AddressOfSite:
+    """One `ADDRESS OF <folded item>` occurrence on the RECEIVING side of a
+    SET, with the exact half-open column span to overwrite.
+
+    `line` is 1-indexed into the same normalized free-form text
+    `splicer.linkage.neutralize` edits; `start_column`/`end_column` are
+    0-based and half-open, the convention `stub_writer.replace_columns` takes.
+    """
+
+    line: int
+    start_column: int
+    end_column: int
+    item_name: str
+
+
+def address_of_sites(
+    lines: list[str], plan: LinkagePlan
+) -> tuple[list[AddressOfSite], list[str]]:
+    """Every `SET ADDRESS OF <folded item>` receiving-side occurrence, plus a
+    list of human-readable reasons for any occurrence this cannot classify.
+
+    Value-side occurrences (`SET <ptr> TO ADDRESS OF <folded item>`) are
+    deliberately NOT returned: taking the address of a WORKING-STORAGE item is
+    legal COBOL and stays correct after the fold. Only the receiving side --
+    which asks the runtime to *rebind* the item's storage -- becomes illegal.
+
+    Classification is per line: for each match, the nearest preceding `SET`
+    keyword on that line wins, and an intervening `TO` means the occurrence is
+    on the value side. An occurrence with no `SET` before it on its own line
+    (a continued target list) is reported as a problem rather than guessed at.
+    """
+    folded = {
+        item.name.upper() for item in plan.linkage_items if getattr(item, "name", None)
+    }
+    sites: list[AddressOfSite] = []
+    problems: list[str] = []
+    for index, text in enumerate(lines, start=1):
+        for match in _ADDRESS_OF_RE.finditer(text):
+            name = match.group(1)
+            if name.upper() not in folded:
+                continue
+            prefix = text[: match.start()]
+            set_positions = [m.start() for m in _SET_RE.finditer(prefix)]
+            if not set_positions:
+                problems.append(
+                    f"line {index}: `ADDRESS OF {name}` has no SET keyword on "
+                    f"its own line ({text.strip()!r}), so it cannot be "
+                    "classified as a receiving or a value operand"
+                )
+                continue
+            to_positions = [m.start() for m in _TO_RE.finditer(prefix)]
+            if to_positions and to_positions[-1] > set_positions[-1]:
+                continue  # value side: `SET <ptr> TO ADDRESS OF <item>`, legal
+            sites.append(
+                AddressOfSite(
+                    line=index,
+                    start_column=match.start(),
+                    end_column=match.end(),
+                    item_name=name,
+                )
+            )
+        if _DANGLING_ADDRESS_OF_RE.search(text):
+            problems.append(
+                f"line {index}: `ADDRESS OF` is continued onto the next line "
+                f"({text.strip()!r}) -- its operand cannot be rewritten "
+                "within one line"
+            )
+    return sites, problems
