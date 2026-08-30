@@ -3,8 +3,14 @@ extracted per docs/2026-07-18-cut-lint-command-design.md."""
 
 from pathlib import Path
 
-from mockymock.cli.checks import filter_suite_cases, run_static_checks
+from mockymock.cli.checks import (
+    extra_working_storage,
+    filter_suite_cases,
+    run_static_checks,
+)
 from mockymock.dsl.parser import parse_cut
+from mockymock.splicer.linkage import DISCARD_POINTER
+from mockymock.splicer.reset import reset_move_lines
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 ORDRPROC_CBL = EXAMPLES / "ordrproc" / "ORDRPROC.cbl"
@@ -234,3 +240,112 @@ def test_preserve_compiler_directives_keeps_them_in_lines(tmp_path):
     # the stripped variant exactly -- same invariant, opposite content.
     assert len(preserved.lines) == len(stripped.lines)
     assert preserved.lines[2] == stripped.lines[2] == "IDENTIFICATION DIVISION."
+
+
+# The two compile-blocking shapes the 2026-08-28 fixes address, together in
+# one program, laid out the way the real-world corpus has them: a DFHAID-style
+# VALUE-less group whose children carry their own VALUE clauses (one of them a
+# lone double quote), a CICS `DFHCOMMAREA` LINKAGE SECTION, an undeclared EIB
+# reference, and a DL/I `7000-SCHEDULE-PSB` paragraph rebinding every PCB/DIB
+# mask. Before the fixes GnuCOBOL rejected this with `invalid symbol '%'` in
+# UT-RESET-WORKING-STORAGE plus one `cannot change address of 'X', which is
+# not BASED or a LINKAGE item` per SET; after them it compiles and runs clean
+# (verified against real GnuCOBOL 4.0).
+CORPUS_SHAPED_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. HY0900IC.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  DFHAID.
+           02  DFHMSRE   PIC X VALUE IS 'x'.
+           02  DFHTRIG   PIC X VALUE IS '"'.
+           02  DFHPA1    PIC X VALUE IS '%'.
+       01  CST-NON       PIC X VALUE 'N'.
+
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  COM-ZONE            PIC X(10).
+       01  LK-UIB.
+           05  LK-UIB-DIB-LIST-PTR USAGE POINTER.
+       01  LK-DIB-LIST.
+           05  LK-DIB-PTR-HY7000-01 USAGE POINTER.
+       01  HY7000-DIB.
+           05  HY7000-STATUS       PIC X(2).
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           PERFORM 7000-SCHEDULE-PSB
+           DISPLAY 'EIBCALEN=' EIBCALEN
+           DISPLAY 'TRIG=' DFHTRIG
+           STOP RUN.
+
+       7000-SCHEDULE-PSB.
+           CALL 'CBLTDLI' USING CST-NON LK-UIB
+           SET ADDRESS OF LK-DIB-LIST   TO LK-UIB-DIB-LIST-PTR.
+           SET ADDRESS OF HY7000-DIB    TO LK-DIB-PTR-HY7000-01.
+"""
+
+CORPUS_SHAPED_CUT = """\
+TESTSUITE "HY0900IC schedule"
+
+TESTCASE "psb scheduling"
+    MOCK CALL "CBLTDLI"
+        MOVE "OK" TO HY7000-STATUS
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT HY7000-STATUS TO BE "OK"
+"""
+
+
+def _corpus_checked(tmp_path):
+    program = tmp_path / "HY0900IC.cbl"
+    program.write_text(CORPUS_SHAPED_PROGRAM)
+    cut = tmp_path / "HY0900IC.cut"
+    cut.write_text(CORPUS_SHAPED_CUT)
+    return run_static_checks(program, cut, None)
+
+
+def test_corpus_shaped_dli_program_passes_the_static_checks(tmp_path):
+    checked = _corpus_checked(tmp_path)
+    assert checked.problems == []
+    assert checked.ok
+    assert checked.linkage is not None
+
+
+def test_corpus_shaped_program_rewrites_every_receiving_set_address_of(tmp_path):
+    checked = _corpus_checked(tmp_path)
+    assert checked.lines is not None
+    body = "\n".join(checked.lines)
+    # Every rebind of a folded item is gone -- each one was a hard cobc error.
+    assert "ADDRESS OF LK-DIB-LIST" not in body
+    assert "ADDRESS OF HY7000-DIB" not in body
+    assert body.count("SET " + DISCARD_POINTER) == 2
+    assert [site.item_name for site in checked.linkage_address_of] == [
+        "LK-DIB-LIST",
+        "HY7000-DIB",
+    ]
+    # The pointer operands, and the statements' own periods, survive untouched.
+    assert "TO LK-UIB-DIB-LIST-PTR." in body
+    assert "TO LK-DIB-PTR-HY7000-01." in body
+
+
+def test_corpus_shaped_program_declares_the_sink_alongside_the_eib_block(tmp_path):
+    """Both extra-WORKING-STORAGE sources reach `build_driver` through the one
+    merged helper, so a program needing both gets both."""
+    checked = _corpus_checked(tmp_path)
+    declared = extra_working_storage(checked)
+    assert declared is not None
+    assert any(DISCARD_POINTER in line for line in declared)
+    assert any("DFHEIBLK" in line for line in declared)
+
+
+def test_corpus_shaped_program_resets_the_quote_literal_validly(tmp_path):
+    checked = _corpus_checked(tmp_path)
+    assert checked.parse_result is not None
+    reset = reset_move_lines(checked.parse_result.ast)
+    # Four quote characters, not three: the three-quote form is an
+    # unterminated literal that desynchronizes cobc for the rest of the file,
+    # reported lines later as `invalid symbol '%'` against the NEXT reset line.
+    assert 'MOVE """" TO DFHTRIG' in reset
+    assert 'MOVE "%" TO DFHPA1' in reset

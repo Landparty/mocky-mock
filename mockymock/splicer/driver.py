@@ -11,6 +11,13 @@ backs `mockymock run --record-expectations`: see
 docs/2026-08-04-record-expectations-design.md and
 `mockymock.analysis.stub_expectations`. Omitted or empty, it changes
 nothing -- ordinary `run` output is unaffected.
+
+`extra_working_storage_lines` backs CICS EIB field synthesis
+(`splicer.cics_eib.working_storage_lines`, see
+docs/2026-08-27-cics-eib-linkage-support-design.md): appended verbatim to
+this function's own bookkeeping fields, so it reaches the same
+`DriverArtifact.working_storage_lines` -> `cli.main._insert_driver`
+insertion point with no separate splice mechanism needed.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ def build_driver(
     reset_lines: list[str],
     registry: TallyRegistry,
     record_targets: dict[int, list[str]] | None = None,
+    extra_working_storage_lines: list[str] | None = None,
 ) -> DriverArtifact:
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
@@ -71,6 +79,8 @@ def build_driver(
         working_storage.append("01  UT-TALLY-EDITED        PIC Z(8)9.")
     for _, tally in registry.items():
         working_storage.append(f"01  {tally}      PIC 9(9) VALUE 0.")
+    if extra_working_storage_lines:
+        working_storage.extend(extra_working_storage_lines)
 
     procedure: list[str] = []
     procedure.append(f"       {suite_paragraph}.")

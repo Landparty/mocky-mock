@@ -353,6 +353,11 @@ def compile_source(
         "585",
         "cobc",
         "-free",
+        # GnuCOBOL's default dialect doesn't implement the IBM
+        # compiler-directing statements (EJECT, SKIP1/SKIP2/SKIP3) that
+        # real z/OS mainframe sources use between paragraphs/sections --
+        # `-std=mvs` is what makes those compile instead of erroring out.
+        "-std=mvs",
     ]
     if coverage:
         cmd.append("--coverage")

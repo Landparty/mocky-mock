@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from cobolparser import ParseResult
 
-    from mockymock.analysis.linkage import LinkagePlan
+    from mockymock.analysis.cics_eib import CicsEibPlan
+    from mockymock.analysis.linkage import AddressOfSite, LinkagePlan
     from mockymock.analysis.mock_surface import MockSurface
     from mockymock.dsl.model import MockTestSuite
     from mockymock.splicer.source_map import ScopeMap
@@ -37,6 +38,11 @@ class StaticCheckResult:
     lines: list[str] | None = None  # normalized + linkage-neutralized
     scope_map: ScopeMap | None = None
     linkage: LinkagePlan | None = None
+    # `SET ADDRESS OF <folded LINKAGE item>` receiving-side occurrences already
+    # rewritten in `lines`; non-empty means the driver must also declare the
+    # scratch pointer they were redirected to (see splicer.linkage).
+    linkage_address_of: list[AddressOfSite] = field(default_factory=list)
+    cics_eib: CicsEibPlan | None = None
     file_status_fields: dict[str, str] | None = None
     # Transparency lines for checks that deliberately did NOT refuse: a
     # paragraph-scoped parse warning / unresolved COPY waived because no
@@ -49,6 +55,27 @@ class StaticCheckResult:
     @property
     def ok(self) -> bool:
         return not self.problems
+
+
+def extra_working_storage(checked: StaticCheckResult) -> list[str] | None:
+    """Every WORKING-STORAGE line the instrumented program needs on top of
+    `driver.build_driver`'s own bookkeeping fields, in one place so all four
+    splice-and-compile pipelines (`run`, `debug`, `export`, mutation) stay in
+    step: the synthesized CICS EIB block, and the scratch pointer that
+    `splicer.linkage.redirect_address_of`'s rewritten `SET ADDRESS OF`
+    statements assign into.
+
+    `None` (not `[]`) when there is nothing to add, matching what
+    `build_driver` treats as "no extra lines".
+    """
+    from mockymock.splicer import cics_eib
+    from mockymock.splicer.linkage import extra_working_storage_lines
+
+    lines: list[str] = []
+    if checked.cics_eib is not None:
+        lines.extend(cics_eib.working_storage_lines(checked.cics_eib))
+    lines.extend(extra_working_storage_lines(checked.linkage_address_of))
+    return lines or None
 
 
 def filter_suite_cases(
@@ -111,10 +138,13 @@ def run_static_checks(
         strip_compiler_directives,
     )
 
+    from mockymock.analysis.cics_eib import cics_eib_plan
     from mockymock.analysis.flow_mocks import check_flow_mocks
-    from mockymock.analysis.linkage import linkage_plan
+    from mockymock.analysis.linkage import address_of_sites, linkage_plan
     from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
     from mockymock.analysis.refusal import (
+        CICS_MACRO_PLACEHOLDER,
+        check_cics_eib_layout_scoped,
         check_expansion_warnings,
         check_linkage_layout,
         check_nested_exec,
@@ -127,10 +157,10 @@ def run_static_checks(
         union_executed_paragraphs,
     )
     from mockymock.dsl.parser import CutParseError, parse_cut
-    from mockymock.splicer.linkage import neutralize
+    from mockymock.splicer.linkage import neutralize, redirect_address_of
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
     from mockymock.splicer.sqlca import transform_data_division_exec
-    from mockymock.splicer.stub_writer import comment_and_replace
+    from mockymock.splicer.stub_writer import comment_and_replace, replace_columns
 
     out = StaticCheckResult()
 
@@ -206,10 +236,22 @@ def run_static_checks(
     # could execute; waive the rest with a transparency note each. A
     # waived COPY's verified span is commented out of `lines` in step 5 --
     # cobc cannot compile an unresolvable COPY, unreachable or not.
+    # Steps 4b and 5b both resolve against this, and it runs a full
+    # reachability BFS per selected test case -- compute it at most once,
+    # and only if some refusal was actually held back.
+    executed_computed = False
+    executed: set[str] | None = None
+
+    def executed_paragraphs() -> set[str] | None:
+        nonlocal executed_computed, executed
+        if not executed_computed:
+            executed = union_executed_paragraphs(parse_result.ast, suite)
+            executed_computed = True
+        return executed
+
     scoped = scoped_warnings + scoped_copies
     if scoped:
-        executed = union_executed_paragraphs(parse_result.ast, suite)
-        scoped_reasons = resolve_scoped_refusals(scoped, executed)
+        scoped_reasons = resolve_scoped_refusals(scoped, executed_paragraphs())
         if scoped_reasons:
             out.problems.extend(
                 f"refused ({r.code}): {r.message}" for r in scoped_reasons
@@ -257,6 +299,53 @@ def run_static_checks(
         # pipeline derives from the AST's locations -- safe to always apply
         # before returning `lines`.
         lines = neutralize(lines, parse_result.ast, linkage)
+        # Folding those items into WORKING-STORAGE gives them real storage,
+        # which is exactly what makes `SET ADDRESS OF` on them illegal
+        # afterwards -- redirect each receiving-side occurrence into a scratch
+        # pointer. Width-preserving column edits, so like `neutralize` this
+        # shifts nothing the rest of the pipeline depends on. Anything
+        # unclassifiable already refused above via `check_linkage_layout`.
+        address_of, _ = address_of_sites(lines, linkage)
+        out.linkage_address_of = address_of
+        if address_of:
+            lines = redirect_address_of(lines, address_of)
+
+    # 5b. CICS implicit-linkage guardrails (DFHRESP/DFHVALUE macro calls,
+    # an undeclared DFHCOMMAREA) -- independent of the LINKAGE guardrails
+    # above, additive not exclusive-or. See
+    # docs/2026-08-27-cics-eib-linkage-support-design.md.
+    # A DFHRESP/DFHVALUE call confined to a paragraph no selected test
+    # case can execute is held back and resolved against the same
+    # reachability union step 4b uses; when waived it is rewritten in
+    # place (width-preserving), because cobc has no CICS translator and
+    # could not compile the unexpanded macro even in dead code.
+    cics_eib_reasons, cics_macro_scoped = check_cics_eib_layout_scoped(
+        parse_result.ast, lines
+    )
+    if cics_macro_scoped:
+        macro_reasons = resolve_scoped_refusals(
+            cics_macro_scoped, executed_paragraphs()
+        )
+        if macro_reasons:
+            cics_eib_reasons.extend(macro_reasons)
+        else:
+            for item in cics_macro_scoped:
+                assert item.neutralize_span is not None
+                macro_line, start_column, end_column = item.neutralize_span
+                lines = replace_columns(
+                    lines,
+                    macro_line,
+                    start_column,
+                    end_column,
+                    CICS_MACRO_PLACEHOLDER,
+                )
+                out.notes.append(item.waiver_note)
+    if cics_eib_reasons:
+        out.problems.extend(
+            f"refused ({r.code}): {r.message}" for r in cics_eib_reasons
+        )
+        return out
+    out.cics_eib = cics_eib_plan(parse_result.ast, lines)
     out.lines = lines
 
     # 6. Nested-site annotation (must precede any nested-site check), then

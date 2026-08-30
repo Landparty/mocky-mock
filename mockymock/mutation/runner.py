@@ -40,12 +40,13 @@ def _run_suite_once(
     transparency guarantee `run`/`debug`/`export`/`lint` keep."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.cli.checks import extra_working_storage, run_static_checks
     from mockymock.cli.main import _insert_driver
     from mockymock.report.results import parse_stdout
     from mockymock.runtime import docker_toolchain
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
+    from mockymock.splicer import cics_eib
     from mockymock.splicer.driver import build_driver
     from mockymock.splicer.linkage import extra_reset_lines
     from mockymock.splicer.naming import TallyRegistry
@@ -100,7 +101,14 @@ def _run_suite_once(
         reset_lines = reset_move_lines(result.ast)
         if checked.linkage is not None:
             reset_lines = reset_lines + extra_reset_lines(checked.linkage)
-        artifact = build_driver(suite, reset_lines, registry)
+        if checked.cics_eib is not None:
+            reset_lines = reset_lines + cics_eib.reset_lines(checked.cics_eib)
+        artifact = build_driver(
+            suite,
+            reset_lines,
+            registry,
+            extra_working_storage_lines=extra_working_storage(checked),
+        )
         instrumented = _insert_driver(lines, artifact)
 
         instrumented_path = tmp / f"instrumented_{source_name}"

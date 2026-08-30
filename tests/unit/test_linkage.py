@@ -76,6 +76,27 @@ COMMENTED_LINKAGE_SOURCE = """\
            STOP RUN.
 """
 
+# CICS-style shape: LINKAGE SECTION declaring DFHCOMMAREA, no ENTRY
+# statement at all. Covered by the 2026-08-27 generalization -- see
+# docs/2026-08-27-cics-eib-linkage-support-design.md Part 1.
+NO_ENTRY_LINKAGE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CICSSAMP.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DONE PIC X VALUE 'N'.
+
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  CA-FIELD PIC X(10).
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           DISPLAY CA-FIELD
+           STOP RUN.
+"""
+
 # Named ENTRY present, but the default entry ALSO declares its own USING --
 # the general CALL-driving case (Milestone B), not this feature's scope.
 DEFAULT_ENTRY_USING_SOURCE = """\
@@ -126,6 +147,20 @@ def test_check_linkage_layout_clean_for_ordinary_program():
 
 def test_check_linkage_layout_clean_for_qualifying_program():
     program, lines = _parse(QUALIFYING_SOURCE)
+    assert check_linkage_layout(program, lines) == []
+
+
+def test_linkage_plan_finds_linkage_with_no_entry_statement():
+    program, lines = _parse(NO_ENTRY_LINKAGE_SOURCE)
+    plan = linkage_plan(program)
+    assert plan is not None
+    assert plan.entry_statements == []
+    assert [item.name for item in plan.linkage_items] == ["DFHCOMMAREA"]
+    assert lines[plan.header_line - 1].strip().upper() == "LINKAGE SECTION."
+
+
+def test_check_linkage_layout_clean_with_no_entry_statement():
+    program, lines = _parse(NO_ENTRY_LINKAGE_SOURCE)
     assert check_linkage_layout(program, lines) == []
 
 
@@ -252,3 +287,47 @@ def test_check_linkage_layout_refuses_when_header_line_cannot_be_verified():
         r.code == "UNSUPPORTED_LINKAGE_LAYOUT" and "could not locate" in r.message
         for r in reasons
     )
+
+
+# `SET ADDRESS OF <folded item>` shapes the redirect in
+# `splicer.linkage.redirect_address_of` cannot express as a single-line
+# column span. Left alone they are a hard cobc error once the LINKAGE
+# SECTION has been folded, so the gate refuses rather than emit source that
+# cannot compile.
+ADDRESS_OF_CONTINUED_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CLP100.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-PTR USAGE POINTER.
+
+       LINKAGE SECTION.
+       01  LKPCB-CLP100MA.
+           05  LKPCB-STATUS PIC X(2).
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           SET ADDRESS OF
+               LKPCB-CLP100MA TO WS-PTR
+           STOP RUN.
+"""
+
+
+def test_check_linkage_layout_refuses_an_unrewritable_address_of():
+    program, lines = _parse(ADDRESS_OF_CONTINUED_SOURCE)
+    reasons = check_linkage_layout(program, lines)
+    assert any(r.code == "UNSUPPORTED_LINKAGE_ADDRESSING" for r in reasons)
+    assert any("not BASED or a LINKAGE item" in r.message for r in reasons)
+
+
+def test_check_linkage_layout_allows_a_rewritable_address_of():
+    """The ordinary single-line DL/I shape is handled by the redirect, not
+    refused -- otherwise the whole IMS corpus would stop running."""
+    program, lines = _parse(
+        ADDRESS_OF_CONTINUED_SOURCE.replace(
+            "SET ADDRESS OF\n               LKPCB-CLP100MA TO WS-PTR",
+            "SET ADDRESS OF LKPCB-CLP100MA TO WS-PTR",
+        )
+    )
+    assert check_linkage_layout(program, lines) == []
