@@ -8,6 +8,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Catches cobol-parser releases that drift from this project's pinned
+    # floor (see the cobol-parser-compat job below) without waiting for a
+    # push/PR here to surface it. Anchored off-peak; the exact minute
+    # doesn't matter since this isn't gating a deploy.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -83,4 +90,31 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Run unit tests
+        run: python -m pytest tests/unit -v
+
+  # Gates the seam between this repo and cobol-parser (2026-08-26 audit
+  # finding): pyproject.toml pins only a floor (`cobol-parser>=X,<2`), so
+  # `pip install mocky-mock` always resolves whatever cobol-parser has most
+  # recently published to PyPI within that range -- there was previously
+  # nothing here that noticed when a new release changed parser behavior
+  # this project's tests depend on (the exact way the pinned floor had to
+  # be bumped to 1.8.0 once cobol-parser fixed the phantom-arithmetic-
+  # terminator-paragraph bug test_refusal.py's UNSUPPORTED_PHANTOM_PARAGRAPH
+  # tests were built to reproduce). This job installs the real published
+  # package -- no sibling checkout, no local build -- exactly as a fresh
+  # `pip install mocky-mock` would, and runs the fast, Docker-free unit
+  # tier against it, so drift shows up as a red scheduled run instead of on
+  # a user's first install.
+  cobol-parser-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies (published cobol-parser from PyPI)
+        run: pip install -r requirements-dev.txt
+
+      - name: Run unit tests against the published cobol-parser
         run: python -m pytest tests/unit -v

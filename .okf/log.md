@@ -1,5 +1,20 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-08-30 — Refusal package kept CICS EIB support during the split
+
+A merge kept both the old monolithic `mockymock/analysis/refusal.py` and the
+new `mockymock/analysis/refusal/` package, which left the package missing the
+main-branch CICS EIB work. Re-applied the monolith's deltas into the split
+files: `ParagraphScopedRefusal` now carries `neutralize_span` for waived
+`DFHRESP(...)`/`DFHVALUE(...)` rewrites, `_paragraph_owning_line` can limit
+its label scan to the evidence line for those macros, `check_linkage_layout`
+again depends on `address_of_sites`, and `_gates.py` now owns the full CICS
+macro/DFHCOMMAREA guardrail surface (`check_cics_eib_layout`, scoped variant,
+regexes, and `CICS_MACRO_PLACEHOLDER`). Also restored the reachability-side
+fall-through precompute helpers (`_fallthrough_flags`, `_first_non_fallthrough`)
+plus the threaded `falls=` fast path and re-exported the new package names so
+unit tests and CLI imports keep working after deleting the obsolete monolith.
+
 ## 2026-08-28 — Two compile-blocking codegen bugs from the real-world corpus
 
 `mockymock run` now gets a ~31k-line GnuCOBOL program much further than

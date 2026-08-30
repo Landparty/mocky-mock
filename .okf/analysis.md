@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-08-28T12:00:00Z
+timestamp: 2026-08-30T16:15:18Z
 ---
 
 # Overview
@@ -13,7 +13,7 @@ Cooperating modules under `mockymock/analysis/`:
 | Module | Job |
 |--------|-----|
 | `mock_surface.py` | Walk `PROCEDURE DIVISION`, classify every statement that touches an external resource into a `BoundarySite`/`CallSite`. Whole-program, category-generic, no knowledge of any test case. Also `analyze_file_status_fields(program)`: a separate ENVIRONMENT DIVISION walk (FILE-CONTROL SELECT entries) that maps each uppercased file name to its declared `FILE STATUS IS <field>`, feeding both `refusal.check_test_case`'s `UNRESOLVED_FILE_STATUS_TARGET` check and `splicer.injector.build_site_dispatch`'s default-success MOVE (see [dsl](dsl.md)'s `FILE-STATUS IS` section and [splicer](splicer.md)). |
-| `refusal.py` | Whole-program checks (parse errors, unresolved COPY, nested EXEC) + per-`MockTestCase` checks (reachability via BFS, directive-to-site matching, fail-closed refusals). |
+| `refusal/` | Package re-exporting whole-program checks (parse errors, unresolved COPY, nested EXEC, CICS EIB/CICS macro layout) + per-`MockTestCase` checks (reachability via BFS, directive-to-site matching, fail-closed refusals). |
 | `linkage.py` | `linkage_plan(program)`: detects a program's unbound LINKAGE SECTION shape (any non-empty LINKAGE SECTION, `ENTRY` statements optional) for `splicer.linkage.neutralize`. See [splicer](splicer.md)'s "ENTRY/LINKAGE Neutralization" section. |
 | `cics_eib.py` | `cics_eib_plan(program, lines)`: detects a program referencing CICS EIB fields (`EIBCALEN`, `EIBAID`, ...)/`DFHEIBLK` without declaring them, for `splicer.cics_eib`'s synthesis. See [splicer](splicer.md)'s "CICS EIB Field Synthesis" section and docs/2026-08-27-cics-eib-linkage-support-design.md. |
 | `flow_mocks.py` | Flow-target mocks (`MOCK PARAGRAPH`/`MOCK SECTION`): resolves keys to paragraphs/sections, refuses every entry path the header-dispatch splice can't handle soundly (UNRESOLVED_FLOW_MOCK_TARGET / UNSUPPORTED_FLOW_MOCK_TARGET), and emits `FlowMockPlan`s the splicer consumes — the plan-or-refusal shape `find_terminator_plans` established. `resolved_flow_targets` feeds `check_test_case`/`find_terminator_plans` the per-case `skip_traversal` sets. See docs/2026-07-20-paragraph-section-mocks-design.md. |
