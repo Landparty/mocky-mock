@@ -155,15 +155,18 @@ def find_goto_exit_plans(
       `find_terminator_plans` enforces on a terminator's own paragraph);
     - the exit-only paragraph is the IMMEDIATE NEXT paragraph after the
       enclosing paragraph in source order, with nothing else between them
-      (`_source_ordered_paragraphs`). This is the one THRU-elision-safe
-      shape the design doc describes: without it, a `PERFORM ... THRU
-      <exit-paragraph>` range (declared by a `.cut` test, OR written
-      in-program) covering real intermediate paragraphs would have its
-      early-exit semantics silently changed by this splice -- the
-      original `GO TO` skips those paragraphs entirely, but `EXIT
-      PARAGRAPH` only ends the enclosing paragraph, so the THRU range's
-      own fall-through would then run them on the early-exit path where
-      it never did before. Confirmed empirically against this exact
+      (`_source_ordered_paragraphs`) other than a phantom "." paragraph --
+      cobolparser's empty-artifact node for a bare "." line sitting before
+      the next paragraph's header, tolerated the same way `_expand_thru_range`
+      already tolerates it elsewhere in this file (`immediately_follows`).
+      This is the one THRU-elision-safe shape the design doc describes:
+      without it, a `PERFORM ... THRU <exit-paragraph>` range (declared by a
+      `.cut` test, OR written in-program) covering real intermediate
+      paragraphs would have its early-exit semantics silently changed by
+      this splice -- the original `GO TO` skips those paragraphs entirely,
+      but `EXIT PARAGRAPH` only ends the enclosing paragraph, so the THRU
+      range's own fall-through would then run them on the early-exit path
+      where it never did before. Confirmed empirically against this exact
       shape before this check existed (see the PR review that added it).
 
     SECTION-scoped enclosing paragraphs are NOT supported (unlike
@@ -232,15 +235,26 @@ def find_goto_exit_plans(
     base_go_to_targets = _go_to_targets(program)
     boundaries = collect_boundaries(program)
     last_line = len(lines)
-    ordered = _source_ordered_paragraphs(procedure)
-    index_by_name = {p.paragraph_name: i for i, p in enumerate(ordered or [])}
+    ordered = _source_ordered_paragraphs(procedure) or []
+    index_by_name = {p.paragraph_name: i for i, p in enumerate(ordered)}
 
     def immediately_follows(enclosing_name: str, target_name: str) -> bool:
         enclosing_idx = index_by_name.get(enclosing_name)
         target_idx = index_by_name.get(target_name)
         if enclosing_idx is None or target_idx is None:
             return False
-        return target_idx == enclosing_idx + 1
+        if target_idx <= enclosing_idx:
+            return False
+        # A phantom "." paragraph (cobolparser's empty-artifact node for a
+        # bare "." line sitting before the next paragraph's header) is not
+        # real code standing between enclosing and target -- it rides along
+        # the same way _expand_thru_range already tolerates it elsewhere in
+        # this file, rather than disqualifying an otherwise textually
+        # adjacent exit-only paragraph.
+        return all(
+            ordered[i].paragraph_name == "."
+            for i in range(enclosing_idx + 1, target_idx)
+        )
 
     by_target: dict[str, list[tuple[GoStatement, str, bool, bool]]] = {}
     disqualified_by_computed_goto: set[str] = set()

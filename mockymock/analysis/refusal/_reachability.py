@@ -335,6 +335,9 @@ def _reachable_paragraphs(
     index_by_name = (
         {p.paragraph_name: i for i, p in enumerate(ordered)} if ordered else {}
     )
+    # Computed once, not per walk: the closure below is a fixpoint loop
+    # over every reached GO TO target. See `_fallthrough_flags`.
+    falls = _fallthrough_flags(ordered) if ordered else []
     # This call's own entry point(s): a section otherwise safe for the GO
     # TO fall-through closure below is excluded whenever `start`/`thru`
     # name one of its member paragraphs directly, bypassing `PERFORM
@@ -462,7 +465,12 @@ def _reachable_paragraphs(
         additions: list[str] = []
         for name in sorted(hazard_sources):
             reached = _walk_fallthrough_from(
-                name, ordered, index_by_name, section_members, paragraph_safe_section
+                name,
+                ordered,
+                index_by_name,
+                section_members,
+                paragraph_safe_section,
+                falls=falls,
             )
             if reached is None:
                 # A GO TO target the walk cannot anchor (e.g. an empty

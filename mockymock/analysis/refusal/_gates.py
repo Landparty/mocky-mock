@@ -794,11 +794,12 @@ def resolve_scoped_refusals(
 
 def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:
     """UNSUPPORTED_LINKAGE_LAYOUT: gates `mockymock.splicer.linkage`'s
-    ENTRY/LINKAGE-SECTION neutralization transform (see
-    docs/2026-07-08-ims-linkage-support-design.md). `[]` when
-    `linkage.linkage_plan` finds nothing to do (no ENTRY statement, or an
-    absent/empty LINKAGE SECTION -- an ordinary CALL-only program) or when
-    the shape is safe to neutralize; otherwise one reason per guardrail that
+    LINKAGE-SECTION neutralization transform (see
+    docs/2026-07-08-ims-linkage-support-design.md and
+    docs/2026-08-27-cics-eib-linkage-support-design.md for the no-ENTRY
+    generalization). `[]` when `linkage.linkage_plan` finds nothing to do
+    (an absent/empty LINKAGE SECTION -- an ordinary CALL-only program) or
+    when the shape is safe to neutralize; otherwise one reason per guardrail that
     failed, fail-closed rather than risk commenting out the wrong line or
     silently breaking a shape this transform was never verified against.
 
@@ -810,6 +811,25 @@ def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:
     if plan is None:
         return []
     reasons: list[RefusalReason] = []
+
+    # `SET ADDRESS OF <folded item>` occurrences the rewrite in
+    # `splicer.linkage.redirect_address_of` cannot classify or cannot express
+    # as a single-line column span. Left in place they are a hard cobc error
+    # ("cannot change address of 'X', which is not BASED or a LINKAGE item"),
+    # so refuse rather than emit source that cannot compile.
+    _, address_of_problems = address_of_sites(lines, plan)
+    for problem in address_of_problems:
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_LINKAGE_ADDRESSING",
+                message=(
+                    f"{problem} -- folding the LINKAGE SECTION into "
+                    "WORKING-STORAGE makes `SET ADDRESS OF` on its items "
+                    "illegal (GnuCOBOL: not BASED or a LINKAGE item), and "
+                    "this occurrence cannot be safely redirected"
+                ),
+            )
+        )
 
     data = program.get_division("DATA")
     section_names = list(data._sections.keys())
