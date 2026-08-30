@@ -594,6 +594,36 @@ def _falls_through(paragraph) -> bool:
     return True
 
 
+def _fallthrough_flags(ordered: list) -> list[bool]:
+    """`_falls_through` evaluated once per paragraph, in source order.
+
+    Every fall-through walk in this module re-asked the same question
+    about the same paragraph objects: `_go_to_fallthrough_targets` walks
+    forward from EVERY GO TO target, and both fall-through closures run
+    inside a fixpoint loop, so a program using the shared-exit-label
+    idiom (where no paragraph on the chain provably diverts, so every
+    walk runs to end of file) evaluated it O(targets x paragraphs) times
+    -- measured as 4.4M calls, the single largest cost of the static
+    check pass on a 53k-line program. The predicate depends only on the
+    paragraph's own last statement, so one pass over `ordered` answers
+    every walk."""
+    return [_falls_through(paragraph) for paragraph in ordered]
+
+
+def _first_non_fallthrough(falls: list[bool]) -> list[int | None]:
+    """For each index, the smallest index at or after it whose paragraph
+    does NOT fall through, or None when none does -- i.e. exactly where a
+    forward fall-through walk starting there stops. One backward pass,
+    so a walk costs only the paragraphs it actually reports."""
+    stops: list[int | None] = [None] * len(falls)
+    nxt: int | None = None
+    for i in range(len(falls) - 1, -1, -1):
+        if not falls[i]:
+            nxt = i
+        stops[i] = nxt
+    return stops
+
+
 def _fallthrough_safe_sections(program) -> set[str]:
     """SECTION names whose LAST paragraph a GO TO fall-through walk may
     treat as a hard stop (see `_walk_fallthrough_from`): reaching that
@@ -719,6 +749,7 @@ def _walk_fallthrough_from(
     index_by_name: dict[str, int],
     section_members: dict[str, list[str]],
     paragraph_safe_section: dict[str, str],
+    falls: list[bool] | None = None,
 ) -> list[str] | None:
     """Every paragraph name reached, in source order, by walking forward
     from GO-TO-target `name` (a paragraph or section name) via
@@ -735,7 +766,14 @@ def _walk_fallthrough_from(
     cross past -- the LAST paragraph of a SECTION `name` resolves into
     per `paragraph_safe_section` (see `_fallthrough_safe_sections`/
     `_paragraph_safe_section_map` for the soundness conditions that map
-    already enforces)."""
+    already enforces).
+
+    `falls` is `_fallthrough_flags(ordered)`; callers that walk repeatedly
+    (both of this function's own call sites run inside a fixpoint loop)
+    should compute it once and pass it in rather than pay for it per
+    walk. Omitting it is equivalent, just slower."""
+    if falls is None:
+        falls = _fallthrough_flags(ordered)
     start = index_by_name.get(name)
     anchor_name = name
     if start is None:
@@ -754,7 +792,7 @@ def _walk_fallthrough_from(
             stop_before = section_paragraphs[-1]
     reached: list[str] = []
     cursor = start
-    while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
+    while falls[cursor] and cursor + 1 < len(ordered):
         if stop_before is not None and ordered[cursor].paragraph_name == stop_before:
             break
         cursor += 1
@@ -806,7 +844,21 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
             section_name, [p.paragraph_name for p in section.paragraphs]
         )
 
+    falls = _fallthrough_flags(ordered)
+    stops = _first_non_fallthrough(falls)
+    last = len(ordered) - 1
+
     hazard: dict[str, str] = {}
+    # Indices already recorded by an earlier walk. Two walks that both pass
+    # through index k necessarily stop at the same index: the stop is
+    # `stops[start]`, and there is no non-fall-through paragraph strictly
+    # between two starts that both reach k. So hitting an already-recorded
+    # index means the whole rest of this walk is already recorded too, and
+    # the remaining `setdefault` calls would every one be a no-op -- which
+    # is what lets the walk break there and keeps the total linear rather
+    # than O(targets x paragraphs). Same keys, same first-writer-wins
+    # values as the unconditional walk it replaces.
+    recorded: set[int] = set()
     for name in go_to_targets:
         start = index_by_name.get(name)
         if start is None:
@@ -816,9 +868,12 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
             start = index_by_name.get(members[0])
             if start is None:
                 continue
-        cursor = start
-        while _falls_through(ordered[cursor]) and cursor + 1 < len(ordered):
-            cursor += 1
+        stop = stops[start]
+        end = last if stop is None else stop
+        for cursor in range(start + 1, end + 1):
+            if cursor in recorded:
+                break
+            recorded.add(cursor)
             hazard.setdefault(ordered[cursor].paragraph_name, name)
     return hazard
 

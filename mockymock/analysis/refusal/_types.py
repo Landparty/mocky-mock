@@ -44,12 +44,23 @@ class ParagraphScopedRefusal:
     normalized-line span, verified to own its lines outright, that
     cli.checks.run_static_checks comments out of the spliced source when
     the refusal is waived (the raw COPY text would otherwise still reach
-    cobc, which cannot compile an unresolvable COPY)."""
+    cobc, which cannot compile an unresolvable COPY).
+
+    `neutralize_span` plays the same role for a waived CICS
+    `DFHRESP(...)`/`DFHVALUE(...)` macro call -- (1-based line, 0-based
+    start column, 0-based end column) of the call text, which
+    run_static_checks overwrites in place with
+    `CICS_MACRO_PLACEHOLDER`, space-padded to the identical width so no
+    line or column any AST location indexes into ever moves. Same
+    reasoning as `blank_span`: the unexpanded macro would otherwise still
+    reach cobc, which has no CICS translator and cannot resolve it. At
+    most one of the two spans is ever set."""
 
     paragraph_name: str
     reason: RefusalReason
     waiver_note: str
     blank_span: tuple[int, int] | None = None
+    neutralize_span: tuple[int, int, int] | None = None
 
 
 _UNANNOTATED = "nested-site spliceability was not annotated"

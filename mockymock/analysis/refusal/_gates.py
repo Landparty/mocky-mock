@@ -46,12 +46,13 @@ from __future__ import annotations
 
 import re
 
+from cobolparser.analysis.unused_variables import collect_declared_items
 from cobolparser.lexer import CobolLexer, TokenType
 from cobolparser.models.statements.call import CallStatement
 from cobolparser.models.statements.misc import AlterStatement
 from cobolparser.preprocess import normalize_fixed_format
 
-from mockymock.analysis.linkage import linkage_plan
+from mockymock.analysis.linkage import address_of_sites, linkage_plan
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
     BoundarySite,
@@ -70,6 +71,7 @@ from mockymock.dsl.model import (
 
 from ._plans import find_terminator_plans
 from ._reachability import (
+    _fallthrough_flags,
     _fallthrough_safe_sections,
     _find_statements_of_type,
     _go_to_targets,
@@ -213,7 +215,11 @@ def _paragraph_body_span(program, line: int) -> tuple[str, int, int | None] | No
 
 
 def _paragraph_owning_line(
-    program, line: int, normalized_lines: list[str] | None = None
+    program,
+    line: int,
+    normalized_lines: list[str] | None = None,
+    *,
+    label_scan_to_line: bool = False,
 ) -> str | None:
     """`_paragraph_body_span`'s owner name, or None -- see that function's
     docstring for the base attribution rules.
@@ -224,13 +230,29 @@ def _paragraph_owning_line(
     classification fails closed rather than trust a paragraph boundary
     that might not be where it looks. Every *_scoped call site must pass
     it; omitting it is only for callers that genuinely have no source
-    text yet."""
+    text yet.
+
+    `label_scan_to_line` narrows that scan to [owner header, `line`]
+    instead of the owner's whole body. Use it -- and ONLY it -- when
+    `line` marks evidence whose extent is exactly that one line, as a
+    `DFHRESP(...)` call's does: an unrecognized label AFTER `line` cannot
+    change which paragraph owns `line`, so scanning past it only produces
+    false vetoes (a bare `END-IF.`/`EXIT.` closing the very statement the
+    evidence sits in matches `_CANDIDATE_LABEL_RE`, and in the CICS
+    `IF ... DFHRESP(...) ... END-IF.` idiom it always does). The default
+    keeps the whole-body scan, which is what a PARSE_WARNING needs: its
+    line proves only where a drop STARTS, and error recovery may have
+    resynchronized past a real header further down inside the same
+    body."""
     span = _paragraph_body_span(program, line)
     if span is None:
         return None
     owner, start, next_start = span
     if normalized_lines is not None:
-        end = next_start - 1 if next_start is not None else len(normalized_lines)
+        if label_scan_to_line:
+            end = line
+        else:
+            end = next_start - 1 if next_start is not None else len(normalized_lines)
         if _has_unaccounted_label(normalized_lines, start + 1, end):
             return None
     return owner
@@ -705,6 +727,9 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
 
     go_to_targets = _go_to_targets(program)
     index_by_name = {p.paragraph_name: i for i, p in enumerate(ordered)}
+    # Computed once here, not per walk: the closure below is a fixpoint
+    # loop over every reached GO TO target. See `_fallthrough_flags`.
+    falls = _fallthrough_flags(ordered)
     section_members: dict[str, list[str]] = {}
     for section_name, section in getattr(procedure, "_sections", {}).items():
         if section_name:
@@ -731,7 +756,12 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
         changed = False
         for name in sorted(union & go_to_targets):
             reached = _walk_fallthrough_from(
-                name, ordered, index_by_name, section_members, paragraph_safe_section
+                name,
+                ordered,
+                index_by_name,
+                section_members,
+                paragraph_safe_section,
+                falls=falls,
             )
             if reached is None:
                 # A reached GO TO target the fall-through walk can't anchor
@@ -832,6 +862,196 @@ def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:
         )
 
     return reasons
+
+
+# Not a plain `\b...\b`: COBOL identifiers may contain hyphens, which are
+# not `\w` characters, so `\b` alone false-matches inside an unrelated
+# hyphenated name (e.g. `\bDFHCOMMAREA\b` matches inside
+# `WS-DFHCOMMAREA-LEN`). See `analysis.cics_eib`'s identical fix for the
+# same reasoning. Matched case-insensitively -- COBOL identifiers are
+# themselves case-insensitive.
+_DFHRESP_MACRO_RE = re.compile(
+    r"(?<![A-Za-z0-9-])(?:DFHRESP|DFHVALUE)\s*\(", re.IGNORECASE
+)
+_DFHCOMMAREA_RE = re.compile(
+    r"(?<![A-Za-z0-9-])DFHCOMMAREA(?![A-Za-z0-9-])", re.IGNORECASE
+)
+# The full single-line call, condition name included -- `_DFHRESP_MACRO_RE`
+# above only detects that one is present. A call this does not span
+# (continued across lines, or an argument that is not a single COBOL word)
+# is never classified as paragraph-local; it stays a whole-program refusal.
+_CICS_MACRO_CALL_RE = re.compile(
+    r"(?<![A-Za-z0-9-])(?:DFHRESP|DFHVALUE)\s*\(\s*[A-Za-z0-9$@#-]+\s*\)",
+    re.IGNORECASE,
+)
+
+# What a WAIVED macro call is rewritten to in the instrumented source.
+# cobc has no CICS translator, so leaving the call in place fails the
+# compile no matter which paragraph holds it -- exactly the reason a
+# waived unresolved COPY gets commented out (see `blank_span`). -1 is not
+# a value any real CICS condition expands to, so every comparison against
+# it is deterministically false: the honest reading of "this response code
+# cannot be evaluated", in code that the waiver has already established no
+# selected test case can execute.
+CICS_MACRO_PLACEHOLDER = "-1"
+
+
+def check_cics_eib_layout(program, lines: list[str]) -> list[RefusalReason]:
+    """`UNSUPPORTED_CICS_MACRO` / `UNSUPPORTED_CICS_DFHCOMMAREA`: guards the
+    two CICS-implicit-linkage situations `analysis.cics_eib`/`splicer.
+    cics_eib` cannot safely handle (see
+    docs/2026-08-27-cics-eib-linkage-support-design.md's "Guardrails"
+    section). Independent of `cics_eib_plan` -- both checks below can fire
+    even for a program that references no EIB field at all -- and
+    independent of `check_linkage_layout`: additive, not exclusive-or.
+
+    `lines` must be the same NORMALIZED free-form text
+    (`normalize_fixed_format` output) the splicer edits, same convention as
+    `check_linkage_layout`.
+    """
+    reasons, scoped = _cics_eib_reasons(program, lines, classify=False)
+    assert not scoped  # classify=False never holds an occurrence back
+    return reasons
+
+
+def check_cics_eib_layout_scoped(
+    program, lines: list[str]
+) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
+    """check_cics_eib_layout, except each `DFHRESP(...)`/`DFHVALUE(...)`
+    call that `_paragraph_owning_line` proves to sit inside exactly one
+    PROCEDURE DIVISION paragraph's own body -- and whose whole call text
+    `_CICS_MACRO_CALL_RE` spans on a single line -- is returned as a
+    held-back ParagraphScopedRefusal instead of an immediate reason, to be
+    resolved against `union_executed_paragraphs` like every other
+    paragraph-scoped refusal (see the module docstring).
+
+    Why this one is scopable at all: an unexpanded CICS macro is a
+    property of the *code that evaluates it*, not of the program's storage
+    layout, so a call in a paragraph no selected test case can execute
+    cannot affect the test's behavior. That is the whole difference from
+    `UNSUPPORTED_CICS_DFHCOMMAREA` below, which stays whole-program
+    unconditionally: an undeclared DFHCOMMAREA is a missing *declaration*,
+    and mockymock would have to synthesize storage of an unknowable size
+    for it however unreachable its references are.
+
+    A waived call still has to compile, so each held-back refusal carries
+    a `neutralize_span` for run_static_checks to overwrite -- see
+    `ParagraphScopedRefusal` and `CICS_MACRO_PLACEHOLDER`. Anything the
+    classification cannot pin down -- a call outside any paragraph body (a
+    DATA DIVISION VALUE clause, a line on a paragraph header), one
+    continued across lines, one whose argument is not a single COBOL word,
+    one too short to hold the placeholder -- stays in the first
+    (whole-program, refuse-now) list, fail closed."""
+    return _cics_eib_reasons(program, lines, classify=True)
+
+
+def _cics_eib_reasons(
+    program, lines: list[str], classify: bool
+) -> tuple[list[RefusalReason], list[ParagraphScopedRefusal]]:
+    reasons: list[RefusalReason] = []
+    scoped: list[ParagraphScopedRefusal] = []
+    text = "\n".join(lines)
+
+    detected = _DFHRESP_MACRO_RE.findall(text)
+    if detected:
+        located = _classify_cics_macro_calls(program, lines) if classify else []
+        if len(located) != len(detected):
+            # Either classification is off (generate/fixtures), or at least
+            # one detected call could not be pinned to a paragraph body and
+            # rewritten -- refuse the whole program rather than waive an
+            # occurrence nothing proved paragraph-local.
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_CICS_MACRO",
+                    message=(
+                        "program references DFHRESP(...)/DFHVALUE(...) -- these "
+                        "are CICS-translator macro-functions (e.g. "
+                        "DFHRESP(NORMAL) expands to a literal response code from "
+                        "a large, translator-version-sensitive condition table) "
+                        "that mockymock cannot safely expand without a real CICS "
+                        "translator, so this program is not supported"
+                    ),
+                )
+            )
+        else:
+            scoped.extend(located)
+
+    if _DFHCOMMAREA_RE.search(text):
+        declared = {item.name.upper() for item in collect_declared_items(program)}
+        if "DFHCOMMAREA" not in declared:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_CICS_DFHCOMMAREA",
+                    message=(
+                        "program references DFHCOMMAREA but never declares "
+                        "it anywhere in its own DATA DIVISION -- its size "
+                        "and layout are unknowable, so mockymock cannot "
+                        "safely synthesize storage for it (a program that "
+                        "declares its own `LINKAGE SECTION. 01 DFHCOMMAREA."
+                        "..` is supported via the generalized LINKAGE "
+                        "neutralization instead, see "
+                        "docs/2026-08-27-cics-eib-linkage-support-design.md)"
+                    ),
+                )
+            )
+
+    return reasons, scoped
+
+
+def _classify_cics_macro_calls(
+    program, lines: list[str]
+) -> list[ParagraphScopedRefusal]:
+    """One held-back refusal per `DFHRESP(...)`/`DFHVALUE(...)` call that
+    is provably confined to a single paragraph's body AND rewritable in
+    place. Returns fewer entries than the program has calls whenever any
+    of them fails either test -- the caller treats that as "classify
+    nothing" and refuses the whole program, so a partial result can never
+    waive an occurrence on its own."""
+    classified: list[ParagraphScopedRefusal] = []
+    for line_no, text in enumerate(lines, start=1):
+        for hit in _DFHRESP_MACRO_RE.finditer(text):
+            call = _CICS_MACRO_CALL_RE.match(text, hit.start())
+            if call is None:
+                continue
+            owner = _paragraph_owning_line(
+                program, line_no, lines, label_scan_to_line=True
+            )
+            if owner is None:
+                continue
+            start, end = call.start(), call.end()
+            if end - start < len(CICS_MACRO_PLACEHOLDER):
+                continue
+            classified.append(
+                ParagraphScopedRefusal(
+                    paragraph_name=owner,
+                    reason=RefusalReason(
+                        code="UNSUPPORTED_CICS_MACRO",
+                        message=(
+                            f"CICS macro call {call.group(0)!r} at line "
+                            f"{line_no} (inside paragraph '{owner}', which a "
+                            f"selected test case can execute) -- DFHRESP/"
+                            f"DFHVALUE are CICS-translator macro-functions "
+                            f"(DFHRESP(NORMAL) expands to a literal response "
+                            f"code from a large, translator-version-sensitive "
+                            f"condition table) that mockymock cannot safely "
+                            f"expand without a real CICS translator, so a test "
+                            f"case whose execution can reach this code is not "
+                            f"supported"
+                        ),
+                    ),
+                    waiver_note=(
+                        f"CICS macro call {call.group(0)!r} at line {line_no} "
+                        f"waived: it is confined to paragraph '{owner}', which "
+                        f"no selected test case can execute -- rewriting it to "
+                        f"{CICS_MACRO_PLACEHOLDER} (space-padded to the same "
+                        f"width, so no line or column moves) in the "
+                        f"instrumented source, since GnuCOBOL has no CICS "
+                        f"translator and could not compile the unexpanded macro"
+                    ),
+                    neutralize_span=(line_no, start, end),
+                )
+            )
+    return classified
 
 
 def check_test_case(
