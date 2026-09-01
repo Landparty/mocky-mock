@@ -34,6 +34,51 @@
 - `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
 - **`find_goto_exit_plans`: adjacency check broke on a phantom `"."` paragraph between enclosing and target.** cobolparser inserts an empty-artifact paragraph literally named `"."` for a bare `.` line sitting on its own between a paragraph's last statement and the next paragraph's header; `immediately_follows` required `target_idx == enclosing_idx + 1` exactly, so a phantom sitting between an otherwise-adjacent `GO TO`'s enclosing paragraph and its exit-only target broke the adjacency check and cascaded into declining that target and every paragraph transitively chained after it. `immediately_follows` now accepts any run of only phantom `"."` paragraphs strictly between the two, the same tolerance `_expand_thru_range` already applies elsewhere. Pinned by `tests/unit/test_goto_exit.py::test_find_goto_exit_plans_tolerates_a_phantom_paragraph_before_the_target`.
 
+## [0.7.0](https://github.com/Landparty/mocky-mock/compare/v0.6.4...v0.7.0) (2026-09-01)
+
+
+### Features
+
+* **cics:** synthesize DFHEIBLK EIB fields and generalize LINKAGE neutralization to no-ENTRY programs ([4623b25](https://github.com/Landparty/mocky-mock/commit/4623b254f6dcca13e48904b893b17aa9762afc89))
+* consume cobol-parser from PyPI, publish mockymock to PyPI ([eb76616](https://github.com/Landparty/mocky-mock/commit/eb766167137343d08d4795c2253529c6cf765d0e))
+* EXPECT negation and comparison operators in the .cut DSL ([97aaf0c](https://github.com/Landparty/mocky-mock/commit/97aaf0cd7e85088f646dad075607a42a475ac173))
+* mock plain-file-form SORT/MERGE (USING ... GIVING ...) ([7872a68](https://github.com/Landparty/mocky-mock/commit/7872a68252773fdd61c3d64e49030658f9116fcf))
+* mock SORT/MERGE (USING/GIVING form + RELEASE/RETURN) ([989784e](https://github.com/Landparty/mocky-mock/commit/989784e3d2f17a19da8f3df7f5230de8e0c7d3b2))
+* mock SORT/MERGE's INPUT/OUTPUT PROCEDURE form via RELEASE/RETURN ([a32c20e](https://github.com/Landparty/mocky-mock/commit/a32c20ef8b4b4173d9d8bc6108177b41eddd621a))
+
+
+### Bug Fixes
+
+* **analysis:** resolve botched merge leaving stale refusal package ([d802f0c](https://github.com/Landparty/mocky-mock/commit/d802f0c3801e8878dc3c963d48703dccee919cc2))
+* **analysis:** resolve transitive GO-TO-exit fallthrough chains to a fixpoint ([46aa88a](https://github.com/Landparty/mocky-mock/commit/46aa88a8f313053712b4a4d91414e24db1522caf))
+* **analysis:** stop GO TO fall-through cascade past a safely-entered section ([63b8e69](https://github.com/Landparty/mocky-mock/commit/63b8e69b40bfce096364f163a98785250c1bfaea))
+* **analysis:** stop GO-TO-exit fall-through cascade in reachability gates ([25965c0](https://github.com/Landparty/mocky-mock/commit/25965c099e8d3499ba34879ede51586486ae7a79))
+* **cics:** COBOL-aware word boundaries and case-insensitive EIB/DFHCOMMAREA/DFHRESP matching ([cc07964](https://github.com/Landparty/mocky-mock/commit/cc07964f66a6d7a1e225f775d5d0d81da29eb1c0))
+* correct project name in pyproject.toml ([e26373b](https://github.com/Landparty/mocky-mock/commit/e26373be1a1063579689ae854320f1490da91503))
+* correct scenario_coverage documentation in scenario-generation.md ([2b2689f](https://github.com/Landparty/mocky-mock/commit/2b2689f419a2565ed24732c736f352ba85d0cb5a))
+* disable test suite in CI due to long execution time ([930b391](https://github.com/Landparty/mocky-mock/commit/930b391736dc0c7e14f52eb93bb9b18bdcd235d3))
+* **linkage:** read LINKAGE SECTION header line from CobolSection.location ([6d52232](https://github.com/Landparty/mocky-mock/commit/6d522326da3714596535cfc23261df3e023818d2))
+* prevent recommending --scenarios branches when all arms are missed ([5ff55b6](https://github.com/Landparty/mocky-mock/commit/5ff55b607b598c447da2485c771ad3c56965cdbe))
+* **refusal:** scope UNSUPPORTED_CICS_MACRO by reachability ([2df9002](https://github.com/Landparty/mocky-mock/commit/2df9002303946bbb098b62904c06b069f8b3722f))
+* **refusal:** tolerate phantom "." paragraphs in goto-exit adjacency check ([c8124f7](https://github.com/Landparty/mocky-mock/commit/c8124f77fee8f4de41b0845fa051dc85fb545652))
+* regenerate stale uv.lock pinning cobolparser to a July git SHA ([e305e1f](https://github.com/Landparty/mocky-mock/commit/e305e1f598fc289099e829a318d1ba2a621cba1b))
+* **runtime:** add -std=mvs so cobc compiles EJECT/SKIP1-3 sources ([ecc7dbe](https://github.com/Landparty/mocky-mock/commit/ecc7dbeacf4de9ac410e8c2a9d40fef114c0b416))
+* **splicer:** repair two compile-blocking codegen bugs from the corpus ([69ce403](https://github.com/Landparty/mocky-mock/commit/69ce403b849d04ff77e0de21f356dd5026f141b4))
+* **splicer:** validate replace_columns' span against the line ([1a11c8b](https://github.com/Landparty/mocky-mock/commit/1a11c8bbce099362e458a0c87d42c71198eee9af))
+
+
+### Performance Improvements
+
+* **analysis:** remove the quadratic scans from the static-check pass ([cc1f17e](https://github.com/Landparty/mocky-mock/commit/cc1f17e2d2dd5bdd24b1a0ba1353fff25fc25304))
+
+
+### Documentation
+
+* add scenario-generation reference for the mockymock skill ([9cbd3c7](https://github.com/Landparty/mocky-mock/commit/9cbd3c7c91a4571f868868554b1a0e04307a81a6))
+* fix OUT-boundary filter and overclaims in scenario-generation.md ([635fec3](https://github.com/Landparty/mocky-mock/commit/635fec32803b3ad7fe7bdcbc782f9d1ca40cccfe))
+* teach the mockymock skill to reason about scenario generation ([e5f3b0e](https://github.com/Landparty/mocky-mock/commit/e5f3b0e04d77333b7f251ce5f032884abe98a68d))
+* update OKF for scenario-generation skill enrichment ([98c54f5](https://github.com/Landparty/mocky-mock/commit/98c54f5d3385e10570cd98dbe57ef73eed77a305))
+
 ## [0.6.4](https://github.com/Landparty/mocky-mock/compare/v0.6.3...v0.6.4) (2026-08-14)
 
 
