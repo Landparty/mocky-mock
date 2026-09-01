@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mocky-mock"
-version = "0.6.4"
+version = "0.7.0"
 description = "Mock COBOL CALL statements, compile with GnuCOBOL, run, and assert"
 authors = [
     {name = "Samuel Dion"}
