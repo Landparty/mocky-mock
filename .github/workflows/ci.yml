@@ -1,8 +1,8 @@
 name: CI
 
 # Mirrors the sibling cobol-parser repo's workflow shape (push/PR to main,
-# ubuntu-latest, Python 3.11-3.13 matrix matching this project's
-# requires-python floor in pyproject.toml).
+# ubuntu-latest, Python 3.13 matching this project's requires-python
+# floor in pyproject.toml).
 on:
   push:
     branches: [main]
@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
