@@ -3,7 +3,7 @@ type: Contract
 title: cobolparser Interface Contract
 description: The exact cobolparser AST surface (ParseResult, statement node fields, node_type quirks) that mockymock depends on.
 tags: [integration, cobolparser, contract]
-timestamp: 2026-08-11T00:00:00Z
+timestamp: 2026-09-02T22:00:00Z
 ---
 
 # Overview
@@ -85,6 +85,10 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 | (v2) `IOReadStatement.file_name`, `IODeleteStatement.file_name`, `IOStartStatement.file_name`, `IOUnlockStatement.file_name` | file-keyed mock matching |
 | (v2) `IOWriteStatement.record_name`, `IORewriteStatement.record_name` | record-keyed mock matching (mirrors COBOL's own WRITE/REWRITE syntax) |
 | `CobolProgram.get_entry_statements() -> list[EntryStatement]` | `analysis.linkage.linkage_plan` detects the ENTRY/LINKAGE-SECTION shape `splicer.linkage` neutralizes; each has `.entry_name`, `.location.line` |
+| `InitiateStatement.report_names` / `TerminateStatement.report_names` / `GenerateStatement.report_name` (cobol-parser ≥ the 2026-09-02 verb-coverage release; imported via `mock_surface._optional_statement_types`, absent = not classified) | Report Writer mock keys |
+| `InvokeStatement.object_name` / `.method_name`, `ChainStatement.program`, `SendStatement`/`ReceiveStatement`/`EnableStatement`/`DisableStatement`/`PurgeStatement.cd_name`, `ReceiveStatement.no_data_clause` / `.with_data_clause`, `StopStatement.stop_type` (`"RUN"` or the operand text) | detected-unmockable sites (fail-closed refusals) -- see [analysis](analysis.md) |
+| `XmlJsonStatement.action`, `.processing_procedure`, `.processing_procedure_thru`, `.on_exception` / `.not_on_exception`, `.clause_text` | XML PARSE flow edge in the reachability BFS and handler-body walking; `clause_text` is only read to fail closed when the structured fields are absent |
+| every `CobolStatement` subclass NAME (`type(statement).__name__`) | `mock_surface._PASSTHROUGH_STATEMENT_NAMES` -- the by-name allowlist behind the `UNSUPPORTED_STATEMENT` catch-all; a renamed node class shows up as a refusal, never as a silent pass |
 | `CobolDivision._sections["LINKAGE"].data_items` (DATA division) | non-empty LINKAGE SECTION detection; same `._sections` access `reset.py` already uses for WORKING-STORAGE, generalized to DATA-division sections other than WORKING-STORAGE |
 
 # Gotchas
@@ -110,6 +114,10 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 **`CobolSection.location.line` is unreliable for a DATA DIVISION section.** Verified empirically: every section under one DATA DIVISION (`FILE`/`WORKING-STORAGE`/`LINKAGE`) reports that DIVISION's own line, not its own header line — unlike PROCEDURE DIVISION's `_sections`, which do report correct per-section header lines (`source_map.collect_boundaries` depends on that). `analysis.linkage.linkage_plan` works around this by deriving the LINKAGE SECTION header line as `(first LINKAGE item).location.line - 1`, and `refusal.check_linkage_layout` verifies that line's text before ever commenting it out.
 
 **`ParseResult.warnings` is a dropped-content signal, not advice (cobolparser ≥ the 2026-07-07 silent-drop remediation, PR #77).** A "clean" parse (`success=True, errors=0`) can still be missing statements: unsupported verbs (INVOKE, EXHIBIT, ...), unparsed clause leftovers, and multi-program compilation units (everything after the first `END PROGRAM` lands in `ast.contained_programs`, which the splicer and reachability BFS never look at) are reported ONLY through `.warnings`. `check_whole_program` therefore refuses per warning (PARSE_WARNING). Known upstream residual: an unknown verb directly following a period-less statement (e.g. `MOVE 1 TO X` newline `INVOKE ...`) can still be swallowed by the preceding statement's parser with no warning — period-terminated statements (the normal layout) are covered.
+
+**Every warning is dropped content, so an upstream verb gaining a parser moves the burden here (2026-09-02).** cobol-parser's statement-coverage release turned 22 warned-and-discarded verbs into real nodes. Each of those used to be refused by `PARSE_WARNING`; once they parse cleanly, only `mock_surface`'s classification stands between an external dependency and a silent `[PASS]`. `mock_surface` is now closed over statement type (see [analysis](analysis.md), "Fail-closed over statement types"); when cobol-parser adds a node class, mockymock refuses it as `UNSUPPORTED_STATEMENT` until someone classifies it -- the safe direction.
+
+**REPORT SECTION.** Releases before 2026-09-02 skip it with a "REPORT SECTION ... is not supported" warning, so every Report Writer program refuses `PARSE_WARNING` and the `INITIATE`/`GENERATE`/`TERMINATE` categories can never fire on them; from that release on the section parses (RD clauses and report groups as `CobolDataItem`s under a `CobolSection("REPORT")`, with `metadata["rd_report_name"]`/`["rd_clauses"]`/`["report_clauses"]`). `reset.py` only resets WORKING-STORAGE, so report groups are never reset.
 
 **cobol-parser's `expand_copybooks` does not resolve DCLGEN-style `EXEC SQL INCLUDE <member> END-EXEC`.** Only plain `COPY <member>` is expanded; an `EXEC SQL INCLUDE` member (e.g. `examples/custprog/copybooks/CUSTREC.CPY`) is left untouched in cobol-parser's own parse, so any host variable it declares never becomes a real `CobolDataItem` in cobol-parser's AST. `ProgramFixtureGenerator` correctly reports the gap via `bundle.unresolved` rather than guessing, but this means a boundary whose only host variables live in such an include (custprog's SQL FETCH) is silently absent from the bundle entirely — it never gets a fixture *or* an expectation, so it cannot even be *detected* as unresolved by scanning the bundle's own `unresolved` list keyed by boundary; only the free-text reason string says so. mockymock's own splicer resolves this same construct independently, via its own copybook-path search purely for compiling test runs (`splicer/sqlca.py`) — the two tools' preprocessing pipelines are not unified here, which is exactly why `test_fixture_bundle_contract.py` carries one documented `xfail` for `custprog`.
 

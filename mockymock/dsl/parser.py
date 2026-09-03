@@ -75,9 +75,12 @@ _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
 # mock_surface.py). RELEASE keys on the record name (WRITE-shaped);
 # RETURN keys on the SD file name (READ-shaped, including an AT END
 # clause).
+# INITIATE/GENERATE/TERMINATE (Report Writer, 2026-09-02) key on the
+# report name (GENERATE: report or group name) -- a bare COBOL word, no
+# ROWS/TERMINAL/FILE-STATUS sugar (see model.REPORT_WRITER_CATEGORIES).
 _BARE_CATS = (
     "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
-    "|SORT|MERGE|RELEASE|RETURN|PARAGRAPH|SECTION"
+    "|SORT|MERGE|RELEASE|RETURN|INITIATE|GENERATE|TERMINATE|PARAGRAPH|SECTION"
 )
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')

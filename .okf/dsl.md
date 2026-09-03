@@ -260,13 +260,13 @@ Two key syntaxes, split by category:
 | Syntax | Categories | Key regex | Example |
 |---|---|---|---|
 | Quoted | `CALL`, `MQ` (sugar), `SQL`, `CICS`, `DLI` | `"[^"]*"` | `MOCK CALL "DISCRATE"`, `MOCK SQL "UPDATE INVENTORY"` |
-| Bare COBOL word | `CALL` (dynamic form), `OPEN`, `CLOSE`, `READ`, `WRITE`, `REWRITE`, `DELETE`, `START`, `UNLOCK`, `SORT`, `MERGE`, `RELEASE`, `RETURN`, `ACCEPT`, `PARAGRAPH`, `SECTION` | `[A-Za-z0-9][A-Za-z0-9-]*` | `MOCK OPEN INV-FILE`, `MOCK CALL WS-PGM-NAME`, `MOCK SORT SORT-FILE`, `MOCK RETURN SORT-FILE ROWS ... TERMINAL (...)`, `MOCK PARAGRAPH CALC-TOTALS` |
+| Bare COBOL word | `CALL` (dynamic form), `OPEN`, `CLOSE`, `READ`, `WRITE`, `REWRITE`, `DELETE`, `START`, `UNLOCK`, `SORT`, `MERGE`, `RELEASE`, `RETURN`, `INITIATE`, `GENERATE`, `TERMINATE`, `ACCEPT`, `PARAGRAPH`, `SECTION` | `[A-Za-z0-9][A-Za-z0-9-]*` | `MOCK OPEN INV-FILE`, `MOCK CALL WS-PGM-NAME`, `MOCK SORT SORT-FILE`, `MOCK RETURN SORT-FILE ROWS ... TERMINAL (...)`, `MOCK PARAGRAPH CALC-TOTALS` |
 
 Bare keys are upper-cased by the parser (`m.group("key").upper()`); quoted
 keys are kept exactly as written.
 
-`MockCategory` (in `model.py`) has 20 members. `MOCK`/`VERIFY` text spells
-20 distinct keywords too (`sorted(set(m.keyword for m in MockCategory) |
+`MockCategory` (in `model.py`) has 23 members. `MOCK`/`VERIFY` text spells
+23 distinct keywords too (`sorted(set(m.keyword for m in MockCategory) |
 {"MQ"})`), but the two counts don't line up member-for-member: `DYNCALL`
 collapses into the `CALL` keyword (no `.cut` file is ever written with
 `DYNCALL`), while `MQ` is a keyword with no member of its own (pure sugar
@@ -281,6 +281,7 @@ for `CALL`) — see `_resolve_category` in `parser.py`:
 | `SORT`, `MERGE` | same | bare key = the SORT/MERGE statement's own SD file name -- only a plain-file-form site (`USING ... GIVING ...`, no INPUT/OUTPUT PROCEDURE) is ever classified into these categories; a mixed-form site (a USING/GIVING file paired with a procedure clause on the other side) stays `category=None`/`UNSUPPORTED_SORT_MERGE`, see [analysis](analysis.md) |
 | `RELEASE`, `RETURN` | same | RELEASE keys on the record name (WRITE-shaped); RETURN keys on the SD file name (READ-shaped, `ROWS ( ... ) TERMINAL ( ... )` sugar reused from READ -- see below -- but RETURN always needs its own `TERMINAL` group since it is never in `FILE_STATUS_CATEGORIES`). Both only ever appear inside a SORT's INPUT/OUTPUT PROCEDURE, but are mockable independent of whether the enclosing SORT/MERGE turned out pure-procedure (left real) or mixed-form (still refused) |
 | `ACCEPT` | `ACCEPT` | bare key = data-name being accepted into |
+| `INITIATE`, `GENERATE`, `TERMINATE` | same | Report Writer (2026-09-02). Bare key = the report name (INITIATE/TERMINATE; a statement naming several reports is one site with several keys, like a multi-file OPEN) or the report/detail-group name (GENERATE). Grouped as `REPORT_WRITER_CATEGORIES` in `model.py`: bare-word keys, free-form body, no ROWS/TERMINAL/FILE-STATUS sugar (an RD has no status field) -- the splice alone is the mock, the RD/FD stay declared and the report file is never touched. Needs a cobol-parser that parses the REPORT SECTION (the 2026-09-02 release); earlier releases warn on it and the whole program refuses PARSE_WARNING before any directive is considered |
 | `PARAGRAPH`, `SECTION` | same | bare key = a PROCEDURE DIVISION paragraph/section name — flow-target mocks, not boundaries; grouped as `FLOW_CATEGORIES` in `model.py` (see [analysis](analysis.md)'s `flow_mocks.py` and [splicer](splicer.md)'s header dispatch) |
 | `CALL` (again) | `MQ` | `MOCK MQ "X"` — pure sugar, becomes a `CALL` directive; MQ is invoked through static `CALL`s, so there is no `MockCategory.MQ` |
 

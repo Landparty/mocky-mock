@@ -405,16 +405,17 @@ def test_whole_program_check_flags_parse_errors():
 # missing statements would silently drop program behavior, so each warning
 # must refuse fail-closed.
 #
-# Originally used INVOKE as the unsupported verb; cobolparser has since
-# registered a real parser for INVOKE (see procedure_recovery.py's
-# UNSUPPORTED_VERBS comment: "ALLOCATE, FREE, and INVOKE ... now dispatch
-# through the registry instead of reaching this warn-and-discard path"),
-# so INVOKE no longer reproduces the drop-with-warning behavior this test
-# exists to pin. Swapped to EXHIBIT -- the sibling example named in that
-# same cobolparser comment, and still listed in UNSUPPORTED_VERBS
-# (verified against the current cobol-parser checkout) -- to keep this
-# test's fail-closed-on-any-warning behavior under real coverage rather
-# than silently degrading to a no-op precondition failure.
+# Originally used INVOKE as the unsupported verb, then EXHIBIT once
+# cobolparser registered a real parser for INVOKE. cobol-parser's
+# 2026-09-02 statement-coverage work gave EVERY real COBOL verb a parser
+# (EXHIBIT, TRANSFORM, CHAIN, SEND/RECEIVE, ... included), so the
+# warn-and-discard path now only covers the three verb-shaped reserved
+# words no dialect defines as a statement: EXECUTE, GOTO, RECOVER
+# (procedure_recovery.py's UNSUPPORTED_VERBS). RECOVER is used here to
+# keep this test's fail-closed-on-any-warning behavior under real coverage
+# rather than silently degrading to a no-op precondition failure -- and
+# it warns identically on every cobol-parser release this project
+# supports, so the test is version-independent.
 UNSUPPORTED_VERB_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. INVOKER.
@@ -425,7 +426,7 @@ UNSUPPORTED_VERB_SOURCE = """\
 
        PROCEDURE DIVISION.
        MAIN-PARA.
-           EXHIBIT NAMED WS-FIELD.
+           RECOVER WS-FIELD.
            DISPLAY "done".
 """
 
@@ -433,10 +434,10 @@ UNSUPPORTED_VERB_SOURCE = """\
 def test_whole_program_check_flags_parse_warnings():
     result = parse_cobol(UNSUPPORTED_VERB_SOURCE, filename="invoker.cbl")
     assert result.success, result.errors
-    assert result.warnings  # precondition: the EXHIBIT drop is warned about
+    assert result.warnings  # precondition: the RECOVER drop is warned about
     reasons = check_whole_program(result)
     assert any(r.code == "PARSE_WARNING" for r in reasons)
-    assert any("EXHIBIT" in r.message for r in reasons)
+    assert any("RECOVER" in r.message for r in reasons)
 
 
 # Regression pin for a gap the 2026-07-09 final branch review surfaced,
@@ -1394,15 +1395,74 @@ LEGITIMATE_END_PARAGRAPH_SOURCE = """\
 """
 
 
+def _assert_phantom_terminator_handled(result, terminator: str) -> None:
+    """The guard's contract is version-dependent on purpose. cobol-parser
+    releases before its 2026-09-02 statement-coverage work parse a
+    standalone `END-ADD.` (and the four siblings) as a PARAGRAPH named
+    END-ADD, silently reparenting everything after it -- the refusal gate
+    must catch that. Releases at or after that work consume the terminator
+    as the arithmetic statement's own scope terminator, so no phantom
+    paragraph exists and the guard must stay dormant (refusing a correctly
+    parsed program would be an over-refusal). Either outcome is asserted
+    exactly; the one thing that must never happen is a phantom paragraph
+    the gate lets through."""
+    assert result.success, result.errors
+    assert not result.warnings  # precondition: nothing else would catch it
+    paragraph_names = {
+        p.paragraph_name for p in result.ast.procedure_division.paragraphs
+    }
+    reasons = check_whole_program(result)
+    phantom = [r for r in reasons if r.code == "UNSUPPORTED_PHANTOM_PARAGRAPH"]
+    if terminator in paragraph_names:
+        # older cobol-parser: the upstream bug reproduces, the guard fires
+        assert len(phantom) == 1
+        assert terminator in phantom[0].message
+    else:
+        # fixed cobol-parser: the terminator was consumed, every statement
+        # stayed in MAIN-PARA, and the guard has nothing to refuse
+        assert paragraph_names == {"MAIN-PARA"}
+        assert phantom == []
+
+
 def test_whole_program_check_refuses_phantom_arithmetic_terminator_paragraph():
-    """2026-08-10 audit Finding 2: cobolparser parses a standalone
+    """2026-08-10 audit Finding 2: cobolparser parsed a standalone
     `END-ADD.` (and the SUBTRACT/MULTIPLY/DIVIDE/COMPUTE siblings) as a
     paragraph name rather than consuming it as ADD's scope terminator,
     silently reparenting every following statement -- warning-free, so
-    nothing else catches it. Fail closed like DECLARATIVES/ALTER."""
+    nothing else catches it. Fail closed like DECLARATIVES/ALTER. Fixed
+    upstream in cobol-parser's 2026-09-02 statement-coverage work; see
+    `_assert_phantom_terminator_handled` for the two accepted outcomes."""
     result = parse_cobol(PHANTOM_PARAGRAPH_SOURCE, filename="phantomsamp.cbl")
+    _assert_phantom_terminator_handled(result, "END-ADD")
+
+
+# A paragraph really named END-ADD -- not an ADD's terminator at all, since
+# no ADD precedes it -- parses as a paragraph on every cobol-parser
+# release, so the guard itself stays under direct coverage even once the
+# upstream terminator fix means the fixtures above no longer trip it.
+REAL_PHANTOM_NAMED_PARAGRAPH_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PHANTOMNAME.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT           PIC X(5).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE "START" TO WS-RESULT.
+       END-ADD.
+           MOVE "DONE" TO WS-RESULT.
+"""
+
+
+def test_whole_program_check_refuses_paragraph_literally_named_after_terminator():
+    result = parse_cobol(REAL_PHANTOM_NAMED_PARAGRAPH_SOURCE, filename="phn.cbl")
     assert result.success, result.errors
-    assert not result.warnings  # precondition: nothing else would catch it
+    paragraph_names = {
+        p.paragraph_name for p in result.ast.procedure_division.paragraphs
+    }
+    assert "END-ADD" in paragraph_names  # precondition: the guard's trigger
     reasons = check_whole_program(result)
     phantom = [r for r in reasons if r.code == "UNSUPPORTED_PHANTOM_PARAGRAPH"]
     assert len(phantom) == 1
@@ -1444,22 +1504,7 @@ def test_whole_program_check_refuses_every_phantom_arithmetic_terminator(
         f"           {terminator}.\n"
     )
     result = parse_cobol(source, filename="phantomall.cbl")
-    assert result.success, result.errors
-    assert not result.warnings  # precondition: nothing else would catch it
-    # Confirm the upstream bug this guard exists for is actually reproduced
-    # by this fixture -- i.e. the terminator really did parse as a
-    # paragraph -- before checking that the refusal gate catches it.
-    paragraph_names = {
-        p.paragraph_name for p in result.ast.procedure_division.paragraphs
-    }
-    assert terminator in paragraph_names, (
-        f"{verb}: fixture did not reproduce the phantom-paragraph parse "
-        f"this guard exists for"
-    )
-    reasons = check_whole_program(result)
-    phantom = [r for r in reasons if r.code == "UNSUPPORTED_PHANTOM_PARAGRAPH"]
-    assert len(phantom) == 1
-    assert terminator in phantom[0].message
+    _assert_phantom_terminator_handled(result, terminator)
 
 
 def test_whole_program_check_allows_legitimate_end_prefixed_paragraph():

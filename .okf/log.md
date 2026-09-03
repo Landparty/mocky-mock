@@ -1,5 +1,44 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-09-02 — Every COBOL dependency mockable or refused; sibling-parser bugs
+
+Asked: are there bugs against the current cobol-parser, and is every COBOL
+dependency mockable? Answered against the sibling checkout (which carries
+cobol-parser's 2026-09-02 statement-coverage work) plus a 582-file corpus
+sweep.
+
+* **Bugs fixed.** 16 unit failures against that cobol-parser: fixtures
+  relying on EXHIBIT/TRANSFORM producing a PARSE_WARNING (every real verb
+  now parses; switched to `RECOVER`, still warned on every supported
+  release), the standalone `END-ADD.` phantom-paragraph guard tests (the
+  upstream bug is fixed; tests accept either outcome, and a paragraph
+  genuinely named END-ADD keeps the guard under coverage), and
+  `mockymock.__version__` stuck at 0.6.4 after the 0.7.0 release commit
+  (release-please updated pyproject only).
+* **Fail-closed gap closed** ([analysis](analysis.md), "Fail-closed over
+  statement types"): the same upstream work made INVOKE, CHAIN,
+  SEND/RECEIVE/ENABLE/DISABLE/PURGE and friends parse cleanly, so they
+  walked past `mock_surface` unseen. Now detected with dedicated refusals
+  (`UNSUPPORTED_INVOKE` / `_CHAIN` / `_COMMUNICATION` / `_STOP_LITERAL`),
+  and `mock_surface` is closed over statement type via a by-name
+  pass-through allowlist -- anything else is `UNSUPPORTED_STATEMENT`.
+* **Mockable:** Report Writer `INITIATE` / `GENERATE` / `TERMINATE`
+  (`MockCategory` 20 -> 23, bare report-name keys, `UNMOCKED_REPORT_WRITER`)
+  -- see [dsl](dsl.md); requires the cobol-parser release that parses the
+  REPORT SECTION (added upstream in the same change).
+* **Reachability:** `XML PARSE ... PROCESSING PROCEDURE p [THRU q]` is an
+  implicit-PERFORM edge (cobol-parser now exposes it structurally, along
+  with real `ON EXCEPTION` bodies for XML/JSON); fails closed on a parser
+  that keeps it as text. `END-XML`/`END-JSON`/`END-RECEIVE` joined the
+  splicer's scope words; `no_data_clause`/`with_data_clause` joined
+  `_NESTED_STATEMENT_ATTRS`.
+* **Tests:** `tests/unit/test_verb_coverage_fail_closed.py` (+15, incl. an
+  `examples/**` corpus sweep asserting no catch-all site). Docker-free
+  `mockymock lint` over all 43 example `.cut`/`.cbl` pairs is byte-identical
+  before and after. Design note:
+  `docs/2026-09-02-verb-coverage-fail-closed-design.md`.
+
+
 ## 2026-08-30 — Refusal package kept CICS EIB support during the split
 
 A merge kept both the old monolithic `mockymock/analysis/refusal.py` and the

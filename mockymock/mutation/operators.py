@@ -35,7 +35,8 @@ def _cobol_word(alternatives: str) -> str:
 _EXCLUDED_VERBS = re.compile(
     _cobol_word(
         "CALL|CANCEL|ENTRY|EXEC|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START"
-        "|UNLOCK|ACCEPT|STOP|GOBACK|EXIT"
+        "|UNLOCK|ACCEPT|STOP|GOBACK|EXIT|SORT|MERGE|RELEASE|RETURN"
+        "|INITIATE|GENERATE|TERMINATE"
     ),
     re.IGNORECASE,
 )

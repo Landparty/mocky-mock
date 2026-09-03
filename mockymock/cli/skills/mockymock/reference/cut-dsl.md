@@ -66,6 +66,7 @@ syntaxes, split by category:
 | `SQL`, `CICS`, `DLI` | quoted literal (prefix of the statement text) | `MOCK SQL "UPDATE INVENTORY"` |
 | `OPEN`, `CLOSE`, `READ`, `WRITE`, `REWRITE`, `DELETE`, `START`, `UNLOCK` | bare file/record name | `MOCK OPEN INV-FILE`, `MOCK WRITE RPT-REC` |
 | `ACCEPT` | bare data-name | `MOCK ACCEPT WS-CONFIRM` |
+| `INITIATE`, `GENERATE`, `TERMINATE` (Report Writer) | bare report name (GENERATE: report or detail-group name) | `MOCK GENERATE DETAIL-LINE` |
 | `PARAGRAPH`, `SECTION` | bare paragraph/section name | `MOCK PARAGRAPH CALC-TOTALS` |
 
 The body between `MOCK` and `END-MOCK` is free-form COBOL, spliced in

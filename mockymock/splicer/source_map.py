@@ -149,6 +149,12 @@ _SCOPE_WORDS = frozenset(
         "END-DIVIDE",
         "END-DISPLAY",
         "END-RETURN",
+        # XML/JSON GENERATE/PARSE and RECEIVE carry statement bodies (ON
+        # EXCEPTION / NO DATA / WITH DATA) since cobol-parser 2026-09-02,
+        # so a boundary nested inside one is bounded by its terminator.
+        "END-XML",
+        "END-JSON",
+        "END-RECEIVE",
     }
 )
 

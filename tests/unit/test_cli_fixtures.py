@@ -135,7 +135,7 @@ def test_fixtures_copy_bearing_program_without_copybook_path_refuses(tmp_path, c
 
 UNSUPPORTED_VERB_SOURCE = """\
        IDENTIFICATION DIVISION.
-       PROGRAM-ID. EXHIBPGM.
+       PROGRAM-ID. RECOVPGM.
 
        DATA DIVISION.
        WORKING-STORAGE SECTION.
@@ -143,18 +143,21 @@ UNSUPPORTED_VERB_SOURCE = """\
 
        PROCEDURE DIVISION.
        MAIN-PARA.
-           EXHIBIT NAMED WS-FIELD.
+           RECOVER WS-FIELD.
            DISPLAY "done".
 """
 
 
 def test_fixtures_parse_warning_refuses(tmp_path, capsys):
-    """EXHIBIT parses "clean" (success=True, no errors) but is dropped from
-    the AST with only a ParseResult.warnings entry -- a bundle built from
-    that incomplete AST would silently miss the boundary, so
+    """RECOVER (one of the three verb-shaped reserved words cobol-parser
+    still warns-and-discards -- every real COBOL verb, EXHIBIT included,
+    has had its own parser since cobol-parser's 2026-09-02 statement-
+    coverage work) parses "clean" (success=True, no errors) but is dropped
+    from the AST with only a ParseResult.warnings entry -- a bundle built
+    from that incomplete AST would silently miss the boundary, so
     `check_whole_program`'s PARSE_WARNING must refuse it the same way
     `generate` does on the same input."""
-    cbl = tmp_path / "EXHIBPGM.cbl"
+    cbl = tmp_path / "RECOVPGM.cbl"
     cbl.write_text(UNSUPPORTED_VERB_SOURCE, encoding="utf-8")
     rc = main(["fixtures", str(cbl)])
     assert rc == 1
