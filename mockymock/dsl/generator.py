@@ -61,6 +61,7 @@ from mockymock.dsl.fixture_bundle import (
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
     FILE_OP_CATEGORIES,
+    REPORT_WRITER_CATEGORIES,
     MockCategory,
     MockDirective,
     MockTestCase,
@@ -281,6 +282,14 @@ def _directive_for(
         key = site.keys[0]
         return f"MOCK ACCEPT {key}", _placeholder_body_for(category, key)
 
+    if category in REPORT_WRITER_CATEGORIES:
+        # INITIATE/GENERATE/TERMINATE: bare report name, empty body (the
+        # splice alone is the mock -- nothing flows back into the program).
+        if not site.keys:
+            return None
+        key = site.keys[0]
+        return f"MOCK {category.value} {key}", _placeholder_body_for(category, key)
+
     # SQL / CICS / DLI: shortest word-prefix of this site's normalized text
     # that is unique among the program's sites of the same category, so the
     # scaffold never generates an AMBIGUOUS_MOCK pair.
@@ -328,6 +337,8 @@ def _directive_header(category: MockCategory, key: str, site: BoundarySite) -> s
         return f"MOCK {category.value} {key}"
     if category is MockCategory.ACCEPT:
         return f"MOCK ACCEPT {key}"
+    if category in REPORT_WRITER_CATEGORIES:
+        return f"MOCK {category.value} {key}"
     return f'MOCK {category.value} "{key}"'  # SQL / CICS / DLI
 
 

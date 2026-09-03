@@ -59,6 +59,8 @@ from cobolparser.models.statements.misc import (
 
 from mockymock.analysis.mock_surface import (
     _BOUNDARY_STATEMENT_TYPES,
+    _XML_JSON_TYPES,
+    XML_PROCESSING_PROCEDURE_RE,
     _all_paragraphs,
     _nested_statement_lists,
 )
@@ -90,6 +92,21 @@ def _find_flow_statements(statements: list) -> list:
     reimplementing nested-statement detection.
     """
     return _find_statements_of_type(statements, (PerformStatement, GoStatement))
+
+
+def _find_xml_parse_statements(statements: list) -> list:
+    """Recursively collect every XML PARSE statement in `statements`.
+    `XML PARSE doc PROCESSING PROCEDURE p [THRU q]` performs `p` (or the
+    range) once per XML event -- an implicit PERFORM edge with no
+    PerformStatement behind it, exactly like a SORT/MERGE's INPUT/OUTPUT
+    PROCEDURE, and modeled the same way in `_reachable_paragraphs`."""
+    if not _XML_JSON_TYPES:
+        return []
+    return [
+        statement
+        for statement in _find_statements_of_type(statements, _XML_JSON_TYPES)
+        if getattr(statement, "action", None) == "PARSE"
+    ]
 
 
 def _find_sort_merge_statements(statements: list) -> list:
@@ -436,6 +453,44 @@ def _reachable_paragraphs(
                         if problem is not None:
                             reasons.append(problem)
                         stack.extend(members)
+
+            # XML PARSE ... PROCESSING PROCEDURE p [THRU q]: the same
+            # implicit-PERFORM shape (2026-09-02). A cobol-parser that
+            # keeps the clause as text without exposing
+            # `processing_procedure` cannot be followed -- refuse rather
+            # than silently drop the edge.
+            for statement in _find_xml_parse_statements(by_name[name].statements):
+                procedure_target = getattr(statement, "processing_procedure", None)
+                if procedure_target is None:
+                    clause_text = getattr(statement, "clause_text", None) or ""
+                    if XML_PROCESSING_PROCEDURE_RE.search(clause_text):
+                        reasons.append(
+                            RefusalReason(
+                                code="UNRESOLVED_FLOW_TARGET",
+                                message=(
+                                    f"paragraph '{name}' (line "
+                                    f"{statement.location.line}) contains an "
+                                    f"XML PARSE with a PROCESSING PROCEDURE "
+                                    f"this cobol-parser release does not "
+                                    f"expose structurally, so the paragraph it "
+                                    f"performs cannot be followed by the "
+                                    f"reachability gate"
+                                ),
+                            )
+                        )
+                    continue
+                push_target(procedure_target, name, "XML PARSE")
+                procedure_thru = getattr(statement, "processing_procedure_thru", None)
+                if procedure_thru:
+                    members, problem = _expand_thru_range(
+                        ordered,
+                        procedure_target,
+                        procedure_thru,
+                        f"paragraph '{name}'",
+                    )
+                    if problem is not None:
+                        reasons.append(problem)
+                    stack.extend(members)
 
         # GO TO fall-through closure (see docstring): every reached GO TO
         # target is walked forward through source order via _falls_through

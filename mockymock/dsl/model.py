@@ -40,6 +40,9 @@ class MockCategory(Enum):
     CICS = "CICS"
     DLI = "DLI"
     ACCEPT = "ACCEPT"
+    INITIATE = "INITIATE"
+    GENERATE = "GENERATE"
+    TERMINATE = "TERMINATE"
     PARAGRAPH = "PARAGRAPH"
     SECTION = "SECTION"
 
@@ -78,6 +81,21 @@ FILE_OP_CATEGORIES = frozenset(
 )
 
 EXEC_CATEGORIES = frozenset({MockCategory.SQL, MockCategory.CICS, MockCategory.DLI})
+
+# Report Writer verbs (2026-09-02). INITIATE/GENERATE/TERMINATE write
+# through a report file's FD via the RD in the REPORT SECTION -- an output
+# dependency exactly like WRITE, keyed on the report name (INITIATE/
+# TERMINATE) or the report/group name (GENERATE) the statement names, as
+# a bare COBOL word. Splicing the statement out is the whole mock: the
+# RD/FD stay declared (GnuCOBOL compiles them), the file is never touched.
+# An INITIATE/TERMINATE naming several reports is one site with several
+# keys, like a multi-file OPEN/CLOSE. Deliberately NOT in
+# FILE_OP_CATEGORIES/FILE_STATUS_CATEGORIES: no ROWS/TERMINAL/FILE-STATUS
+# sugar applies (there is no status field on an RD), so a MOCK body is
+# free-form COBOL only.
+REPORT_WRITER_CATEGORIES = frozenset(
+    {MockCategory.INITIATE, MockCategory.GENERATE, MockCategory.TERMINATE}
+)
 
 # Flow-target categories mock a PROCEDURE DIVISION paragraph/section (a
 # bare COBOL name), not a boundary statement -- they never appear as
@@ -159,6 +177,7 @@ class MockDirective:
         if (
             self.category in FILE_OP_CATEGORIES
             or self.category in FLOW_CATEGORIES
+            or self.category in REPORT_WRITER_CATEGORIES
             or self.category
             in (
                 MockCategory.ACCEPT,

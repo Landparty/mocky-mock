@@ -21,10 +21,27 @@ SORT using INPUT PROCEDURE *and* OUTPUT PROCEDURE with no USING/GIVING at
 all touches no physical file, so it is left real/unspliced instead of
 detected as unmockable -- see refusal.py and `_is_pure_procedure_sort`
 below).
+
+Since 2026-09-02 the classification is fail-closed over the statement
+TYPE as well: every statement class is either a known pass-through
+(`_PASSTHROUGH_STATEMENT_NAMES` -- MOVE/IF/COMPUTE/DISPLAY/..., nothing
+outside the program), a classified boundary, or a detected-unmockable site
+(`category=None`) -- INVOKE, CHAIN, the Communication Module verbs
+(SEND/RECEIVE/ENABLE/DISABLE/PURGE), `STOP <literal>`, and, as the
+catch-all, any statement class this module does not know (label
+"unsupported statement"). cobol-parser's 2026-09-02 statement-coverage
+work gave every COBOL verb its own AST node; before it those verbs were
+warned-and-discarded, and mockymock's PARSE_WARNING refusal caught them --
+a verb that now parses cleanly would otherwise walk straight past this
+module unseen. The Report Writer verbs INITIATE/GENERATE/TERMINATE became
+mockable categories in the same change (keyed on report name, spliced out
+whole like any other boundary statement).
 """
 
 from __future__ import annotations
 
+import importlib
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -67,6 +84,135 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
 )
 
 from mockymock.dsl.model import MockCategory
+
+
+def _optional_statement_types(module: str, *names: str) -> tuple[type, ...]:
+    """The named cobolparser AST classes that exist in the installed
+    cobol-parser, as an isinstance-ready tuple (empty when none do).
+
+    mocky-mock pins only a floor on cobol-parser (see pyproject.toml), and
+    the release its CI compat lane installs predates the 2026-09-02
+    verb-coverage work that introduced the Communication Module, Report
+    Writer and legacy-verb nodes. On such a release the verbs behind these
+    classes are still warned-and-discarded by the parser, which the
+    PARSE_WARNING refusal already catches, so resolving them to nothing
+    here is sound -- the fail-closed guarantee holds either way."""
+    try:
+        mod = importlib.import_module(module)
+    except ImportError:
+        return ()
+    return tuple(t for t in (getattr(mod, n, None) for n in names) if t is not None)
+
+
+_INVOKE_TYPES = _optional_statement_types(
+    "cobolparser.models.statements.misc", "InvokeStatement"
+)
+_GENERATE_TYPES = _optional_statement_types(
+    "cobolparser.models.statements.misc", "GenerateStatement"
+)
+_XML_JSON_TYPES = _optional_statement_types(
+    "cobolparser.models.statements.misc", "XmlJsonStatement"
+)
+_CHAIN_TYPES = _optional_statement_types(
+    "cobolparser.models.statements.legacy", "ChainStatement"
+)
+_COMMUNICATION_TYPES = _optional_statement_types(
+    "cobolparser.models.statements.communication",
+    "SendStatement",
+    "ReceiveStatement",
+    "EnableStatement",
+    "DisableStatement",
+    "PurgeStatement",
+)
+_INITIATE_TYPES = _optional_statement_types(
+    "cobolparser.models.statements.report_writer", "InitiateStatement"
+)
+_TERMINATE_TYPES = _optional_statement_types(
+    "cobolparser.models.statements.report_writer", "TerminateStatement"
+)
+
+# Statement classes verified to touch nothing outside the program (data
+# movement, arithmetic, control flow, console DISPLAY, compiler-directing
+# and no-op legacy verbs). Closed by NAME rather than by imported class so
+# the list is independent of which cobol-parser release is installed, and
+# so a class this module has never heard of -- a future verb, a renamed
+# node -- can never be assumed harmless: `_classify_statement` records
+# anything outside this set that no boundary branch claimed as a
+# detected-unmockable "unsupported statement" site. Swept 2026-09-02
+# against every COBOL file in both repos (582 programs, NIST suite
+# included): the only classes outside this set and the boundary branches
+# were the Communication Module, Report Writer and STOP-literal ones, each
+# of which now has its own branch below.
+#
+# Notes on the less obvious members: ALTER and USE are refused whole-
+# program elsewhere (UNSUPPORTED_ALTER / UNSUPPORTED_DECLARATIVES);
+# SUPPRESS only ever appears inside a Report Writer USE BEFORE REPORTING
+# declarative (same refusal); ENTRY is handled by analysis.linkage;
+# COMMIT/ROLLBACK are file-commit verbs whose files are all mocked or
+# refused already; XML/JSON GENERATE/PARSE act on WORKING-STORAGE only
+# (an XML PARSE's PROCESSING PROCEDURE is a flow edge refusal.py models,
+# and its ON EXCEPTION bodies are walked via _NESTED_STATEMENT_ATTRS).
+_PASSTHROUGH_STATEMENT_NAMES = frozenset(
+    {
+        "AddStatement",
+        "AllocateStatement",
+        "AlterStatement",
+        "ArithmeticStatement",
+        "CommitStatement",
+        "ComputeStatement",
+        "ContinueStatement",
+        "CopyStatement",
+        "DisplayStatement",
+        "DivideStatement",
+        "EjectStatement",
+        "EnterStatement",
+        "EntryStatement",
+        "EvaluateStatement",
+        "ExamineStatement",
+        "ExhibitStatement",
+        "ExitStatement",
+        "FreeStatement",
+        "GoStatement",
+        "IfStatement",
+        "InitializeStatement",
+        "InspectStatement",
+        "MoveStatement",
+        "MultiplyStatement",
+        "NextSentenceStatement",
+        "NoteStatement",
+        "PerformStatement",
+        "RaiseStatement",
+        "ResumeStatement",
+        "RollbackStatement",
+        "SearchStatement",
+        "SelectStatement",
+        "ServiceStatement",
+        "SetStatement",
+        "SkipStatement",
+        "StringStatement",
+        "SubtractStatement",
+        "SuppressStatement",
+        "TitleStatement",
+        "TraceStatement",
+        "TransformStatement",
+        "UnstringStatement",
+        "UseStatement",
+        "ValidateStatement",
+        "XmlJsonStatement",
+    }
+)
+
+# The label every detected-unmockable site for an unknown statement class
+# carries; refusal.py keys its UNSUPPORTED_STATEMENT reason on it. The
+# site's `keys` holds the statement's own verb text for the message.
+UNSUPPORTED_STATEMENT_LABEL = "unsupported statement"
+
+# XML PARSE's optional processing-procedure clause, matched against
+# `clause_text` only to fail closed on a cobol-parser that keeps the
+# clause as text without exposing `processing_procedure` (see
+# refusal._reachability's XML PARSE edge).
+XML_PROCESSING_PROCEDURE_RE = re.compile(r"\bPROCESSING\s+PROCEDURE\b", re.IGNORECASE)
+_XML_EXCEPTION_RE = re.compile(r"\bEXCEPTION\b", re.IGNORECASE)
 
 
 class CallKind(Enum):
@@ -125,7 +271,10 @@ class BoundarySite:
     """
 
     category: MockCategory | None
-    label: str  # for messages: "CALL", "READ", "SQL", "dynamic CALL", "SORT/MERGE"
+    # for messages: "CALL", "READ", "SQL", "GENERATE", "dynamic CALL",
+    # "SORT/MERGE", "INVOKE", "CHAIN", "communication", "STOP literal",
+    # "unsupported statement" (the last five always with category None)
+    label: str
     keys: tuple[str, ...]
     match_text: str | None
     paragraph_name: str
@@ -271,6 +420,14 @@ _BOUNDARY_STATEMENT_TYPES = (
     ExecCicsStatement,
     ExecImsStatement,
     IOAcceptStatement,
+    # RECEIVE's NO DATA / WITH DATA bodies and INVOKE belong to sites that
+    # are refused outright, but the sticky flag still describes them
+    # correctly: nothing inside could ever be spliced independently.
+    *_COMMUNICATION_TYPES,
+    *_INVOKE_TYPES,
+    *_INITIATE_TYPES,
+    *_GENERATE_TYPES,
+    *_TERMINATE_TYPES,
 )
 
 # ACCEPT sources that never read the console: system registers and runtime
@@ -325,6 +482,11 @@ _NESTED_STATEMENT_ATTRS = (
     "not_on_overflow",
     "on_size_error",
     "not_on_size_error",
+    # RECEIVE ... NO DATA / WITH DATA (Communication Module, cobol-parser
+    # 2026-09-02). XML/JSON GENERATE/PARSE's ON EXCEPTION / NOT ON
+    # EXCEPTION bodies arrive under the CALL-shaped names already listed.
+    "no_data_clause",
+    "with_data_clause",
 )
 
 
@@ -504,10 +666,89 @@ def _classify_statement(
         return
 
     if isinstance(statement, StopStatement):
-        # STOP "literal" (stop_type == "literal") displays the literal and
-        # continues -- only STOP RUN terminates the run unit.
+        # Only STOP RUN terminates the run unit. Every other form (`STOP
+        # "literal"`, `STOP ZERO`, `STOP 123` -- `stop_type` holds the
+        # operand text) displays the operand and then waits for the
+        # operator on the console before continuing: a console read, so
+        # it fails closed exactly like an unmocked ACCEPT would.
         if statement.stop_type == "RUN":
             add_site(None, "STOP RUN")
+        else:
+            operand = str(statement.stop_type or "").strip()
+            add_site(None, "STOP literal", keys=(operand,) if operand else ())
+        return
+
+    if isinstance(statement, _INVOKE_TYPES):
+        # INVOKE object-ref "method": an external (object-oriented) call
+        # mockymock has no mock category for. Detected, never spliced.
+        keys = tuple(
+            k
+            for k in (
+                getattr(statement, "object_name", None),
+                getattr(statement, "method_name", None),
+            )
+            if k
+        )
+        add_site(None, "INVOKE", keys=keys)
+        return
+
+    if isinstance(statement, _CHAIN_TYPES):
+        # CHAIN "PROG" USING ...: a CALL that never returns (Micro Focus).
+        name = getattr(statement, "program", None) or ""
+        add_site(None, "CHAIN", keys=(name,) if name else ())
+        return
+
+    if isinstance(statement, _COMMUNICATION_TYPES):
+        # SEND/RECEIVE/ENABLE/DISABLE/PURGE: the COBOL-85 Communication
+        # Module's message queues, keyed by the CD name for the message.
+        cd_name = (getattr(statement, "cd_name", None) or "").upper()
+        add_site(None, "communication", keys=(cd_name,) if cd_name else ())
+        return
+
+    if isinstance(statement, (*_INITIATE_TYPES, *_TERMINATE_TYPES)):
+        # INITIATE/TERMINATE report-name ...: one site, one key per report
+        # (like a multi-file OPEN/CLOSE).
+        category = (
+            MockCategory.INITIATE
+            if isinstance(statement, _INITIATE_TYPES)
+            else MockCategory.TERMINATE
+        )
+        surface.file_io_paragraphs.add(paragraph_name)
+        report_names = getattr(statement, "report_names", None) or []
+        keys = tuple(name.upper() for name in report_names if name)
+        add_site(category, category.value, keys=keys)
+        return
+
+    if isinstance(statement, _GENERATE_TYPES):
+        # GENERATE report-or-group-name: writes the detail group (or the
+        # whole report's summary) through the report file.
+        surface.file_io_paragraphs.add(paragraph_name)
+        name = (getattr(statement, "report_name", None) or "").upper()
+        add_site(MockCategory.GENERATE, "GENERATE", keys=(name,) if name else ())
+        return
+
+    if isinstance(statement, _XML_JSON_TYPES):
+        # XML/JSON GENERATE/PARSE act on WORKING-STORAGE only -- not a
+        # boundary. Two fail-closed guards for older cobol-parser releases
+        # that kept the whole clause region as text: an exception-handler
+        # body hidden in `clause_text` could contain a CALL/file-op this
+        # walk would never see, and a PROCESSING PROCEDURE not exposed as
+        # `processing_procedure` is a flow edge refusal.py could not
+        # follow. Either makes the statement unmodelable here.
+        clause_text = getattr(statement, "clause_text", None) or ""
+        handlers_modeled = hasattr(statement, "on_exception")
+        procedure_modeled = hasattr(statement, "processing_procedure")
+        if (_XML_EXCEPTION_RE.search(clause_text) and not handlers_modeled) or (
+            XML_PROCESSING_PROCEDURE_RE.search(clause_text) and not procedure_modeled
+        ):
+            add_site(
+                None,
+                UNSUPPORTED_STATEMENT_LABEL,
+                keys=(
+                    f"{getattr(statement, 'statement_type', 'XML/JSON')} (this cobol-parser keeps its "
+                    f"handler/PROCESSING PROCEDURE clause as text only)",
+                ),
+            )
         return
 
     if isinstance(statement, GobackStatement):
@@ -550,6 +791,14 @@ def _classify_statement(
             surface.console_accept_paragraphs.add(paragraph_name)
             target = (statement.target or "").upper()
             add_site(MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ())
+        return
+
+    if type(statement).__name__ not in _PASSTHROUGH_STATEMENT_NAMES:
+        # Fail closed: a statement class no branch above claimed and this
+        # module has not verified as side-effect free. Never silently
+        # passed through -- see _PASSTHROUGH_STATEMENT_NAMES.
+        verb = getattr(statement, "statement_type", None) or type(statement).__name__
+        add_site(None, UNSUPPORTED_STATEMENT_LABEL, keys=(str(verb),))
 
 
 def _walk_statements(

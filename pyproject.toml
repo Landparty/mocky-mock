@@ -32,7 +32,13 @@ dependencies = [
     # tracked via git SHA (DIVIDE/MULTIPLY GIVING ROUNDED, the gen-fixtures
     # bundle surface, EVALUATE WHEN-clause truncation, ...). Bump the floor
     # deliberately, with a test run, when adopting new cobol-parser work --
-    # <2 guards against an unreviewed breaking major bump.
+    # <2 guards against an unreviewed breaking major bump. The Report
+    # Writer categories (INITIATE/GENERATE/TERMINATE), the INVOKE/CHAIN/
+    # Communication-Module refusals and the XML PARSE flow edge need the
+    # cobol-parser release carrying its 2026-09-02 statement-coverage and
+    # REPORT SECTION work; on older releases those verbs still warn (and so
+    # refuse PARSE_WARNING) and the extra node classes resolve to nothing
+    # (mock_surface._optional_statement_types), so the floor stays.
     "cobol-parser>=1.7.7,<2",
 ]
 

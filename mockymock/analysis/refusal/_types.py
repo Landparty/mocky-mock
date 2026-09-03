@@ -21,9 +21,67 @@ _UNMOCKED_CODES = {
     MockCategory.CICS: "UNMOCKED_CICS",
     MockCategory.DLI: "UNMOCKED_DLI",
     MockCategory.ACCEPT: "UNMOCKED_CONSOLE_ACCEPT",
+    MockCategory.INITIATE: "UNMOCKED_REPORT_WRITER",
+    MockCategory.GENERATE: "UNMOCKED_REPORT_WRITER",
+    MockCategory.TERMINATE: "UNMOCKED_REPORT_WRITER",
 }
 # every file-op category shares one code
 _UNMOCKED_FILE_OP_CODE = "UNMOCKED_FILE_OP"
+
+# Detected-but-unmockable boundary sites (mock_surface `category=None`),
+# keyed by the site's `label`: the refusal code check_test_case emits
+# when one is reachable, and the explanation appended to its message.
+# CANCEL / "dynamic CALL" / the terminator labels / "SORT/MERGE" have
+# their own dedicated branches in check_test_case; everything here shares
+# one generic "paragraph X (line N) contains <label> ..." shape. Every
+# label mock_surface can emit with category=None must either be handled
+# there or appear here -- `_UNSUPPORTED_STATEMENT_LABEL` is the catch-all
+# for a statement class mock_surface does not know at all (fail closed:
+# unknown semantics are never assumed side-effect-free).
+_UNSUPPORTED_STATEMENT_LABEL = "unsupported statement"
+_UNSUPPORTED_SITE_CODES: dict[str, tuple[str, str]] = {
+    "INVOKE": (
+        "UNSUPPORTED_INVOKE",
+        "an INVOKE method call on an object reference is an external "
+        "dependency mockymock has no mock category for (object-oriented "
+        "COBOL -- CLASS-ID / OBJECT REFERENCE / INVOKE -- is outside the "
+        "GnuCOBOL toolchain mockymock compiles with); isolate the paragraph "
+        "with MOCK PARAGRAPH, or PERFORM a caller whose flow never reaches it",
+    ),
+    "CHAIN": (
+        "UNSUPPORTED_CHAIN",
+        "CHAIN transfers control to another program without returning (a "
+        "Micro Focus extension) -- an external program dependency mockymock "
+        "cannot mock the way it mocks CALL, since nothing after it in the "
+        "test case would run; isolate the paragraph with MOCK PARAGRAPH, or "
+        "PERFORM a caller whose flow never reaches it",
+    ),
+    "communication": (
+        "UNSUPPORTED_COMMUNICATION",
+        "SEND/RECEIVE/ENABLE/DISABLE/PURGE go through the COBOL-85 "
+        "Communication Module's message control system (a CD in the "
+        "COMMUNICATION SECTION) -- an external message queue mockymock has "
+        "no mock category for; isolate the paragraph with MOCK PARAGRAPH, or "
+        "PERFORM a caller whose flow never reaches it",
+    ),
+    "STOP literal": (
+        "UNSUPPORTED_STOP_LITERAL",
+        "STOP <literal> displays the literal and then waits for the operator "
+        "on the console before continuing -- a console read like an "
+        "unmocked ACCEPT, so under a test runner it reads whatever stdin is "
+        "attached (or blocks until the executor timeout); replace it with "
+        "DISPLAY, or isolate the paragraph with MOCK PARAGRAPH",
+    ),
+    _UNSUPPORTED_STATEMENT_LABEL: (
+        "UNSUPPORTED_STATEMENT",
+        "mockymock does not model this statement: it is neither one of the "
+        "pass-through statements known to touch nothing outside the program "
+        "nor a mockable boundary, so its effects cannot be verified or "
+        "mocked (fail closed rather than assume it is side-effect free); "
+        "isolate the paragraph with MOCK PARAGRAPH, or PERFORM a caller "
+        "whose flow never reaches it",
+    ),
+}
 
 
 @dataclass

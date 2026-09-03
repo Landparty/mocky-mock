@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-08-30T16:15:18Z
+timestamp: 2026-09-02T22:00:00Z
 ---
 
 # Overview
@@ -131,10 +131,67 @@ Both modules depend only on the small set of cobolparser attributes pinned in [i
 | `ExecImsStatement` | `DLI` | `match_text` = normalized `f"{ims_command} {ims_text}"` | covers both `EXEC IMS` and `EXEC DLI` syntax; no separate DLI node type |
 | `IOAcceptStatement`, source not in `_NON_INTERACTIVE_ACCEPT_SOURCES` | `ACCEPT` | uppercased `.target` | fail-closed: no FROM, `FROM CONSOLE`, or unrecognized mnemonic all count as console input |
 | `IOAcceptStatement`, source in `_NON_INTERACTIVE_ACCEPT_SOURCES` | not recorded at all | — | DATE/DAY/DAY-OF-WEEK/TIME/COMMAND-LINE/ENVIRONMENT/ENVIRONMENT-VALUE/ARGUMENT-NUMBER/ARGUMENT-VALUE never touch stdin |
+| `InitiateStatement` / `TerminateStatement` (Report Writer, cobol-parser ≥ the 2026-09-02 verb-coverage release) | `INITIATE` / `TERMINATE` | every name in `.report_names`, uppercased | one site, one key per report -- like a multi-file OPEN/CLOSE. Splicing the statement out is the whole mock: the RD/FD stay declared, the report file is never touched (cobol-parser parses the REPORT SECTION warning-free since the same release; before it, the "REPORT SECTION not supported" warning refused the whole program as PARSE_WARNING) |
+| `GenerateStatement` | `GENERATE` | `.report_name` (the report or detail-group name), uppercased | label `"GENERATE"`; same splice-only mock. `REPORT_WRITER_CATEGORIES` in `dsl/model.py` -- bare-word keys, no ROWS/TERMINAL/FILE-STATUS sugar (an RD has no status field) |
+| `StopStatement`, `stop_type != "RUN"` (`STOP "literal"`, `STOP ZERO`, ...) | `None` (detected, unmockable) | the operand text | label `"STOP literal"`: displays the operand and waits for the operator on the console -- a console read, gated like an unmocked ACCEPT (`UNSUPPORTED_STOP_LITERAL`) |
+| `InvokeStatement` | `None` (detected, unmockable) | object name, method name | label `"INVOKE"` -- `UNSUPPORTED_INVOKE` |
+| `ChainStatement` (Micro Focus) | `None` (detected, unmockable) | program literal/identifier | label `"CHAIN"` -- `UNSUPPORTED_CHAIN` |
+| `SendStatement` / `ReceiveStatement` / `EnableStatement` / `DisableStatement` / `PurgeStatement` (Communication Module) | `None` (detected, unmockable) | `.cd_name`, uppercased | label `"communication"` -- `UNSUPPORTED_COMMUNICATION`. RECEIVE's `no_data_clause`/`with_data_clause` bodies are walked (added to `_NESTED_STATEMENT_ATTRS`) and marked `nested_in_boundary` |
+| `XmlJsonStatement` | not recorded (acts on WORKING-STORAGE only) | — | an XML PARSE's `PROCESSING PROCEDURE` is a flow edge `_reachable_paragraphs` models (see below); its `on_exception`/`not_on_exception` bodies are walked via the CALL-shaped attribute names already in `_NESTED_STATEMENT_ATTRS`. Fail closed on a cobol-parser that keeps either as text only (`clause_text` mentions EXCEPTION without an `on_exception` attribute, or PROCESSING PROCEDURE without `processing_procedure`): recorded as an `"unsupported statement"` site |
+| **any other statement class** not in `_PASSTHROUGH_STATEMENT_NAMES` | `None` (detected, unmockable) | the statement's `statement_type` | label `UNSUPPORTED_STATEMENT_LABEL` (`"unsupported statement"`) -- the fail-closed catch-all, `UNSUPPORTED_STATEMENT`. See "Fail-closed over statement types" below |
 
 `normalize_exec_text` uppercases and collapses whitespace — the form all SQL/CICS/DLI keys prefix-match against.
 
 `DISPLAY` is not classified at all — passthrough forever, not a boundary.
+
+## Fail-closed over statement types (2026-09-02)
+
+cobol-parser's 2026-09-02 statement-coverage work gave every COBOL verb its
+own AST node (INITIATE/TERMINATE/SUPPRESS, SEND/RECEIVE/ENABLE/DISABLE/
+PURGE, EXHIBIT/EXAMINE/TRANSFORM, ENTER, NOTE, CHAIN, READY/RESET TRACE,
+SERVICE, TITLE, RAISE/RESUME/VALIDATE; INVOKE had one already). Before it,
+those verbs were warned-and-discarded and `check_whole_program`'s
+PARSE_WARNING refused the program; after it they parse cleanly, so a verb
+`mock_surface` did not classify would have walked straight past the gate
+-- an external dependency (INVOKE, CHAIN, a message queue) silently left
+real. Confirmed against the sibling checkout before fixing: the 16 unit
+failures mocky-mock had against that cobol-parser were all fixtures that
+relied on EXHIBIT/TRANSFORM warning (now `RECOVER`, one of the three
+verb-shaped words still in `UNSUPPORTED_VERBS`) or on the standalone
+`END-ADD.` phantom paragraph the same release fixed (tests now accept
+either outcome; the guard stays for the released cobol-parser the CI
+compat lane installs).
+
+The classification is therefore closed over statement TYPE, not just over
+the boundary verbs it knows: `_PASSTHROUGH_STATEMENT_NAMES` is the
+by-name allowlist of classes verified to touch nothing outside the program
+(MOVE/IF/EVALUATE/PERFORM/GO TO/arithmetic/STRING/INSPECT/SET/DISPLAY/
+EXIT/CONTINUE/COMMIT/ROLLBACK/ALLOCATE/FREE, the compiler-directing and
+legacy no-op verbs, XML/JSON, ALTER and USE which are refused elsewhere,
+...). `_classify_statement` records anything outside it that no boundary
+branch claimed as a `category=None`, `label="unsupported statement"` site
+whose `keys[0]` is the verb; `check_test_case` refuses it as
+`UNSUPPORTED_STATEMENT` when reachable (never when unreachable or inside a
+flow-mocked paragraph -- no over-refusal). Swept 2026-09-02 across every
+COBOL file in both repos (582 programs, the NIST suite included): the only
+classes outside the allowlist and the boundary branches were the
+Communication Module, Report Writer and STOP-literal ones, each of which
+got its own branch; `tests/unit/test_verb_coverage_fail_closed.py`'s corpus
+test pins that no `examples/**/*.cbl` yields a catch-all site, and
+`test_every_passthrough_name_is_a_real_cobolparser_statement_class` pins
+that the allowlist has no typos. The new node classes are imported through
+`_optional_statement_types` (importlib, empty tuple when absent) so the
+module still imports on the released cobol-parser the CI compat lane
+installs -- where those verbs still warn, so PARSE_WARNING covers them.
+
+The label -> refusal-code table for detected-unmockable sites lives in
+`refusal/_types.py`'s `_UNSUPPORTED_SITE_CODES` (INVOKE ->
+`UNSUPPORTED_INVOKE`, CHAIN -> `UNSUPPORTED_CHAIN`, communication ->
+`UNSUPPORTED_COMMUNICATION`, STOP literal -> `UNSUPPORTED_STOP_LITERAL`,
+unsupported statement -> `UNSUPPORTED_STATEMENT`), each with the
+explanation its message carries; `check_test_case` dispatches on it after
+the CANCEL / dynamic-CALL / terminator branches, and asserts the only
+remaining `category=None` label is `"SORT/MERGE"`.
 
 ## Walking nested bodies
 
@@ -192,7 +249,8 @@ Reachability is computed by `_reachable_paragraphs`, a **self-contained BFS over
 - `PERFORM <section>` (audit finding 1.2 — previously silently `continue`d) pushes every paragraph of that section: a performed section executes all of them by fall-through. `_reachable_paragraphs` builds a `section_members: dict[str, list[str]]` map from `procedure._sections`; when a pushed name resolves to a section instead of a paragraph, the BFS marks the section name `seen` and pushes its member paragraph names.
 - `GO TO <target>` (audit finding 1.1 — previously not traversed at all) pushes every name in `GoStatement.target_paragraphs` — for `GO TO A B C DEPENDING ON X` that is all three, not just `target_paragraph` (the first one). Targets may themselves be paragraphs or sections, handled identically to PERFORM targets.
 - **A `SortStatement`/`MergeStatement`'s `input_procedure`/`output_procedure`** (2026-08-17, SORT/MERGE mocking) pushes each named paragraph exactly like a PERFORM target, with `input_procedure_thru`/`output_procedure_thru` range-expanded via `_expand_thru_range` exactly like `PERFORM ... THRU` — modeled via `_find_sort_merge_statements` (a `_find_statements_of_type` reuse, mirroring `_find_flow_statements`) inside the same per-paragraph loop, unconditionally for ANY SORT/MERGE with a procedure clause (both the now-mockable pure-procedure form and the still-refused mixed form). No `PerformStatement` AST node exists for this edge — a SORT/MERGE statement itself is not one — so without this, a RELEASE/RETURN (or any other boundary statement) reachable only through an INPUT/OUTPUT PROCEDURE paragraph would be invisible to the fail-closed gate, exactly the hazard class the 2026-07-07 remediation and the GO-TO-fall-through closure below both exist to prevent. Confirmed as a real, not just theoretical, gap: `tests/unit/test_sort_merge_mocking.py`'s `test_pure_procedure_reachability_edge_is_modeled` demonstrates the empty reachable set without this edge and the correct one with it.
-- Any PERFORM/GO TO/SORT-procedure target that resolves to **neither** a paragraph nor a section refuses `UNRESOLVED_FLOW_TARGET` instead of being silently skipped (the pre-fix `PERFORM <section>` bug) — fail closed: an edge the model cannot resolve means the reachable set cannot be trusted. The BFS seed (`case.perform_target`) is exempt from this and reports `UNKNOWN_PARAGRAPH` instead (a `.cut` author's typo, distinct from an in-program flow-target problem).
+- **An `XML PARSE`'s `PROCESSING PROCEDURE p [THRU q]`** (2026-09-02) is the same implicit-PERFORM shape: `_find_xml_parse_statements` (a `_find_statements_of_type` reuse over `XmlJsonStatement` with `action == "PARSE"`) pushes `processing_procedure` like a PERFORM target and range-expands `processing_procedure_thru` via `_expand_thru_range`. A cobol-parser that keeps the clause as text only (no `processing_procedure` attribute but `clause_text` matching `XML_PROCESSING_PROCEDURE_RE`) refuses `UNRESOLVED_FLOW_TARGET` rather than silently dropping the edge. Pinned by `test_verb_coverage_fail_closed.py`'s XML PARSE tests.
+- Any PERFORM/GO TO/SORT-procedure/XML-PARSE-procedure target that resolves to **neither** a paragraph nor a section refuses `UNRESOLVED_FLOW_TARGET` instead of being silently skipped (the pre-fix `PERFORM <section>` bug) — fail closed: an edge the model cannot resolve means the reachable set cannot be trusted. The BFS seed (`case.perform_target`) is exempt from this and reports `UNKNOWN_PARAGRAPH` instead (a `.cut` author's typo, distinct from an in-program flow-target problem).
 
 For every `BoundarySite` in the reachable set:
 
@@ -202,7 +260,8 @@ For every `BoundarySite` in the reachable set:
 | `category is None`, label `"SORT/MERGE"` | `UNSUPPORTED_SORT_MERGE` | only a **mixed-form** SORT/MERGE (a USING/GIVING file paired with a procedure clause on the other side) reaches this row — it touches a physical file mockymock cannot seed/read AND runs a procedure whose other logic a whole-statement mock would silently skip. A plain-file-form SORT/MERGE has `category` set (`MockCategory.SORT`/`MERGE`); a pure-procedure-form SORT is never recorded as a site at all (left real); RELEASE/RETURN always have `category` set (`MockCategory.RELEASE`/`RETURN`) regardless of the enclosing SORT/MERGE's shape — all three fall through to the ordinary rows below like any other file-op site |
 | `category is None`, label `"CANCEL"` | `UNMOCKED_CANCEL` (unless covered) | see the CANCEL subsection below |
 | terminator site (`StopStatement`(RUN-form)/`GobackStatement`) found unsafe by `find_terminator_plans` | `UNSUPPORTED_TERMINATOR_LAYOUT` | evaluated by `check_terminator_layout`, run alongside `check_test_case` in the CLI's refusal loop, not as one of `check_test_case`'s own per-site conditions above -- see [splicer](splicer.md#terminator-neutralization-gobackstop-run-approach-b). One narrow SECTION-scoped shape is safe (a `SECTION`'s first paragraph, entered exclusively via `PERFORM <section-name>`) and produces a plan instead of a refusal — see `_safe_section_entry_points` and `docs/2026-07-10-section-scoped-terminator-support-design.md` |
-| zero directives match | `UNMOCKED_CALL`/`UNMOCKED_FILE_OP`/`UNMOCKED_SQL`/`UNMOCKED_CICS`/`UNMOCKED_DLI`/`UNMOCKED_CONSOLE_ACCEPT` | unmocked CALL has nowhere to link; unmocked file I/O (including a plain-file-form SORT/MERGE and a RELEASE/RETURN, all of which share `UNMOCKED_FILE_OP` via `_UNMOCKED_CODES`'s per-category default) hits a nonexistent sandbox file; unmocked EXEC can't compile; unmocked console ACCEPT reads whatever stdin is attached |
+| `category is None`, label `"INVOKE"` / `"CHAIN"` / `"communication"` / `"STOP literal"` / `"unsupported statement"` | `UNSUPPORTED_INVOKE` / `UNSUPPORTED_CHAIN` / `UNSUPPORTED_COMMUNICATION` / `UNSUPPORTED_STOP_LITERAL` / `UNSUPPORTED_STATEMENT` | see "Fail-closed over statement types" above; the message names the paragraph, line and verb and suggests `MOCK PARAGRAPH` or performing a caller that never reaches it |
+| zero directives match | `UNMOCKED_CALL`/`UNMOCKED_FILE_OP`/`UNMOCKED_SQL`/`UNMOCKED_CICS`/`UNMOCKED_DLI`/`UNMOCKED_CONSOLE_ACCEPT`/`UNMOCKED_REPORT_WRITER` | unmocked CALL has nowhere to link; unmocked file I/O (including a plain-file-form SORT/MERGE and a RELEASE/RETURN, all of which share `UNMOCKED_FILE_OP` via `_UNMOCKED_CODES`'s per-category default) hits a nonexistent sandbox file; unmocked EXEC can't compile; unmocked console ACCEPT reads whatever stdin is attached |
 | 2+ directives match | `AMBIGUOUS_MOCK` | fail closed rather than pick one |
 | exactly 1 match, `site.nested and site.span is None` | `UNSUPPORTED_NESTED_MOCK_TARGET` | no validated replacement span — splicing could swallow a block terminator and corrupt control flow (an earlier attempt without the scope map did exactly that) |
 | exactly 1 match, `not site.nested and site.unspliceable_reason` | `UNSUPPORTED_MOCK_TARGET_LAYOUT` (2026-07-07, audit finding 2.1) | a top-level statement that does not own its source line(s) — sibling code before it, a one-line paragraph header, or another statement sharing the line — would have its whole-line splice delete that sibling code |

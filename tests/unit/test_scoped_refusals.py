@@ -29,11 +29,14 @@ from mockymock.analysis.refusal import (
 from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.parser import parse_cut
 
-# TRANSFORM has no registered statement parser (cobolparser's
-# UNSUPPORTED_VERBS) so it parses "clean" (success=True) but is dropped
-# from the AST with only a ParseResult.warnings entry -- the same "clean
-# parse, silent drop" shape INVOKE used to have before cobol-parser shipped
-# a first-class InvokeStatement AST node for it (see
+# RECOVER has no registered statement parser (it is one of the three
+# verb-shaped reserved words left in cobolparser's UNSUPPORTED_VERBS after
+# the 2026-09-02 statement-coverage work gave every real verb -- TRANSFORM,
+# which this fixture used before, included -- a parser of its own) so it
+# parses "clean" (success=True) but is dropped from the AST with only a
+# ParseResult.warnings entry -- the same "clean parse, silent drop" shape
+# INVOKE used to have before cobol-parser shipped a first-class
+# InvokeStatement AST node for it (see
 # test_invoke_no_longer_produces_a_parse_warning below). Here it sits in a
 # paragraph (DIRTY-PARA) no edge from CLEAN-PARA ever reaches.
 UNREACHED_INVOKE_CBL = """\
@@ -49,7 +52,7 @@ UNREACHED_INVOKE_CBL = """\
            MOVE 1 TO WS-X.
 
        DIRTY-PARA.
-           TRANSFORM "x".
+           RECOVER WS-X.
            DISPLAY "done".
 """
 
@@ -72,14 +75,14 @@ TESTCASE "reaches the dirty paragraph"
 def _invoke_result():
     result = parse_cobol(UNREACHED_INVOKE_CBL, filename="scopedw.cbl")
     assert result.success, result.errors
-    assert result.warnings  # precondition: the TRANSFORM drop is warned about
+    assert result.warnings  # precondition: the RECOVER drop is warned about
     return result
 
 
 def test_invoke_no_longer_produces_a_parse_warning():
     """Regression pin (audit finding F-0b): cobol-parser now has a
     first-class InvokeStatement AST node, so INVOKE parses clean with zero
-    warnings -- it's why this suite's scoping fixtures use TRANSFORM instead
+    warnings -- it's why this suite's scoping fixtures use RECOVER instead
     to exercise the "clean parse, silently dropped content" shape. If this
     ever starts failing, cobol-parser dropped INVOKE support again."""
     result = parse_cobol(
@@ -206,7 +209,7 @@ GOTO_FALLTHROUGH_CBL = """\
            MOVE 2 TO WS-X.
 
        DIRTY-PARA.
-           TRANSFORM "x".
+           RECOVER WS-X.
 """
 
 # Same shape, except HOP-PARA ends in an unconditional GO TO, so nothing
@@ -229,7 +232,7 @@ GOTO_NO_FALLTHROUGH_CBL = """\
            GO TO TAIL-PARA.
 
        DIRTY-PARA.
-           TRANSFORM "x".
+           RECOVER WS-X.
 
        TAIL-PARA.
            MOVE 3 TO WS-X.

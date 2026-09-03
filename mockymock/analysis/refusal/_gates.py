@@ -84,6 +84,8 @@ from ._types import (
     _UNANNOTATED,
     _UNMOCKED_CODES,
     _UNMOCKED_FILE_OP_CODE,
+    _UNSUPPORTED_SITE_CODES,
+    _UNSUPPORTED_STATEMENT_LABEL,
     ParagraphScopedRefusal,
     RefusalReason,
 )
@@ -1217,6 +1219,27 @@ def check_test_case(
                 # doesn't need every OTHER test case in the suite to also
                 # satisfy check_test_case's unrelated matching rules.
                 pass
+            elif site.label in _UNSUPPORTED_SITE_CODES:
+                # INVOKE / CHAIN / Communication Module / STOP literal /
+                # an unknown statement class (mock_surface's fail-closed
+                # catch-all): detected, never mockable, refused when
+                # reachable. The code and explanation live in _types.py.
+                code, explanation = _UNSUPPORTED_SITE_CODES[site.label]
+                what = (
+                    f"{site.keys[0]}"
+                    if site.label == _UNSUPPORTED_STATEMENT_LABEL and site.keys
+                    else site.label + (f" {'/'.join(site.keys)}" if site.keys else "")
+                )
+                reasons.append(
+                    RefusalReason(
+                        code=code,
+                        message=(
+                            f"paragraph '{site.paragraph_name}' (line {site.line}) "
+                            f"contains {what}, reachable from "
+                            f"'{case.perform_target}' -- {explanation}"
+                        ),
+                    )
+                )
             else:
                 # Only a mixed-form SORT/MERGE reaches this branch now
                 # (category=None): plain-file-form is mockable
@@ -1224,6 +1247,7 @@ def check_test_case(
                 # SORT is left real/unspliced and never even recorded as
                 # a boundary site -- see mock_surface.py's
                 # `_is_plain_sort_merge`/`_is_pure_procedure_sort`.
+                assert site.label == "SORT/MERGE", site.label
                 reasons.append(
                     RefusalReason(
                         code="UNSUPPORTED_SORT_MERGE",
