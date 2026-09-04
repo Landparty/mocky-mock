@@ -112,6 +112,56 @@ discovery (v2) is the real fix; and `stillborn` still lumps a refusal-gate
 rejection in with a compile error, which needs a new status the VS Code
 extension's `mutationReport.ts` would also have to learn.
 
+## 2026-09-04 — `export` continues a long literal instead of refusing it
+
+Reported from a real `mockymock export` run against `DTBC7D01.cbl`: after
+50 of 52 `COLUMN_OVERFLOW` refusals were worked around by editing the
+`.cut` file, two survived that no `.cut` edit could reach — they came
+from the program's own `DEBUT-WORKING-STORAGE` / `FIN-WORKING-STORAGE`
+storage-dump marker fields (declared, never referenced), whose `VALUE`
+clauses `splicer/reset.py` re-serializes into `UT-RESET-WORKING-STORAGE`
+as single-line `MOVE`s past column 72. Unconditional (it happens even
+restricting to one `TESTCASE`), with no CLI flag to skip it, so the only
+remedy was editing production COBOL to shorten a banner string.
+
+* **Root cause** ([cli](cli.md)): `mainframe_export` could wrap exactly
+  one shape — a generated `DISPLAY` — and refused everything else long,
+  fail-closed. A `MOVE` carrying a long literal had no wrapping path at
+  all, even though fixed-format COBOL has had one since forever:
+  continuation lines.
+* **Fixed**: new `wrap_long_literal_lines` splits the single quoted
+  literal of any still-too-long line across continuation lines (`-` in
+  the indicator area, literal re-opened at column 12), leaving the
+  statement and the literal's content byte-for-byte unchanged. New
+  `fit_within_columns` runs the DISPLAY pass first (its stdout
+  equivalence is what the `__MOCKYMOCK__` protocol rides on), then this
+  one over the residue, and reports only lines neither pass can fit; it
+  is now what `_cmd_export` calls.
+* **Load-bearing detail**: every continued line is filled to *exactly*
+  column 72, with the fill padding placed before the opening delimiter
+  (extra spaces there are only separators). Under fixed-format rules a
+  continued line's trailing blanks through column 72 are part of the open
+  literal, so a short line silently pads the value — reproduced against
+  real GnuCOBOL 4.0 both ways and pinned by
+  `tests/integration/test_export_literal_continuation.py`.
+* Also fixes a second, unrelated-looking refusal with the same cause: a
+  literal the *original* source already continued, which cobolparser's
+  `normalize_fixed_format` collapses onto one long line before
+  `restore_fixed_format_columns` pushes it 7 columns further right.
+* Still refused, fail-closed: a long line with no literal, with two
+  literals (which to split is ambiguous), whose non-literal text alone
+  overflows, or a `CBL`/`PROCESS` directive. The refusal hint now points
+  at identifier names rather than "shorten the literal", which is no
+  longer the remedy.
+* Tests: 13 new unit cases in `tests/unit/test_mainframe_export.py`
+  (including a 400-case randomized round-trip whose generator was run
+  through a real fixed-format GnuCOBOL compile — 342 compiled cases, zero
+  mismatches), two CLI cases in `tests/unit/test_cli_export.py`, one
+  Docker-gated integration case. `test_export_refuses_on_column_overflow_
+  from_cut_mock_body_text` was replaced: its literal-bearing `MOVE` is
+  now wrapped, and a literal-free `MOVE` guards the refusal path.
+
+
 ## 2026-09-04 — `AT END SET <88> TO TRUE` replicated into READ mock exhaustion
 
 Reported from a real `generate --with-data` run against a large program:

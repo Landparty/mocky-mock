@@ -645,14 +645,38 @@ Writes the instrumented source to a file after running the same parse → static
 pipeline as `run`, but without Docker or any GnuCOBOL step. The output is adjusted for compilation
 under a real fixed-format (z/OS) COBOL compiler instead of GnuCOBOL-only: `PROCESS`/`CBL` directives
 are preserved (where `run`/`lint` strip them), columns are restored to z/OS fixed-format discipline
-(7-space prefix for Area A), and very-long generated `DISPLAY` statements that overflow column 72 are
-wrapped into multiple lines. A provenance/disclaimer header is prepended, documenting that this is a
+(7-space prefix for Area A), and over-column-72 lines are fitted by `mainframe_export.fit_within_columns`.
+A provenance/disclaimer header is prepended, documenting that this is a
 mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
 to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.
-If a line still exceeds column 72 after wrapping and column restoration -- most commonly, long `.cut`
-MOCK body text (e.g. a `MOVE` statement) that `injector.py` re-indents past the limit when splicing it
-in -- `export` refuses (`mockymock export: refused (COLUMN_OVERFLOW): ...`) and writes nothing.
+
+`fit_within_columns` is two passes, in this order:
+
+1. `wrap_long_display_lines` — a generated `DISPLAY` becomes `DISPLAY "<chunk>" WITH NO ADVANCING`
+   fragments. First because its byte-identical-stdout equivalence is empirically established and the
+   `__MOCKYMOCK__` protocol rides on that text.
+2. `wrap_long_literal_lines` — anything still long that carries exactly one quoted literal is split
+   across fixed-format continuation lines (`-` in the indicator area, the literal re-opened at column
+   12), leaving the statement and the literal's content byte-for-byte unchanged. Two shapes reach this
+   routinely and neither is under the `.cut` file's control: `splicer/reset.py` re-serializes every
+   WORKING-STORAGE `VALUE` clause into `UT-RESET-WORKING-STORAGE` as a single-line `MOVE` (a program
+   declaring a wide storage-dump marker — `DEBUT-WORKING-STORAGE` / `FIN-WORKING-STORAGE`, standard in
+   IBM shops — overflows on its own declaration), and cobolparser's `normalize_fixed_format` collapses
+   a literal the *original* source already continued onto one long free-form line. Both were flat
+   refusals with no in-tool remedy before 2026-09-04.
+   **Every continued line is filled to exactly column 72**, and that is not cosmetic: under
+   fixed-format rules a continued line's trailing blanks through column 72 are part of the open
+   literal, so a short one silently pads the value with spaces (both facts verified against a real
+   fixed-format GnuCOBOL compile — see `tests/integration/test_export_literal_continuation.py`).
+   The fill padding goes before the opening delimiter, where extra spaces are only separators.
+
+The first pass's problems are discarded: it reports every line it declined to wrap, and the second
+pass re-examines exactly those. Only a line NEITHER pass can fit is reported — no literal to split, a
+second literal on the line (ambiguous), non-literal text that alone overflows, or a `CBL`/`PROCESS`
+directive (read before continuation rules apply). Then `export` refuses
+(`mockymock export: refused (COLUMN_OVERFLOW): ...`) and writes nothing. A full-line `*>` comment is
+exempt in both passes: columns 73+ are the identification field and are never compiled.
 
 Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
 [docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).

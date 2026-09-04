@@ -1326,9 +1326,9 @@ def _cmd_export(args: argparse.Namespace) -> int:
     from mockymock.cli.checks import extra_working_storage, run_static_checks
     from mockymock.cli.mainframe_export import (
         build_provenance_header,
+        fit_within_columns,
         insert_provenance_header,
         restore_fixed_format_columns,
-        wrap_long_display_lines,
     )
     from mockymock.splicer import cics_eib
     from mockymock.splicer.driver import build_driver
@@ -1427,7 +1427,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     )
     instrumented = _insert_driver(lines, artifact)
 
-    instrumented, overflow_problems = wrap_long_display_lines(instrumented)
+    instrumented, overflow_problems = fit_within_columns(instrumented)
     if overflow_problems:
         for problem in overflow_problems:
             print(f"mockymock export: refused (COLUMN_OVERFLOW): {problem}")
