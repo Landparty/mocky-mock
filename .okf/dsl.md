@@ -193,10 +193,50 @@ number of `USING` parameters — this refuses if **any** matching site has
 too few, even if another matching site would be fine (fail closed over
 partial safety, same posture as `UNRESOLVED_FILE_STATUS_TARGET`).
 
+**Synthesized targets (`UT-CAP-...`, 2026-09-04).** A `<target>` whose
+name starts with `splicer.captures.CAPTURE_TARGET_PREFIX` (`UT-CAP-`) means
+"declare this for me": `splicer.captures.plan_captures` synthesizes a
+WORKING-STORAGE item mirroring the captured argument's own PICTURE/USAGE
+(a DISPLAY-only group becomes one `PIC X(<byte length>)` field, which is
+exactly what a group MOVE copies) and a reset line, both threaded through
+`cli.checks.extra_working_storage` / `extra_reset_lines_for` so all four
+splice-and-compile pipelines (`run`, `debug`, `export`, `mutate`) stay in
+step. The reset matters as much as the declaration: the suite compiles to
+ONE binary, so an unreset capture would let a case that never reached its
+CALL assert against the previous case's value.
+
+That is what finally let `generate` scaffold captures at all — the target
+previously had to be an existing item of a compatible type, so finding or
+adding one was a manual step before every single capture, and the scaffold
+never emitted one. The reserved prefix is what keeps it from being a
+footgun: a mistyped real data name never starts with `UT-CAP-`, so it can
+never silently become a new field. Fail-closed on everything else:
+`UNRESOLVED_CAPTURE_TARGET` (raised from `run_static_checks` step 9)
+refuses a synthesized target whose argument names different items at
+different matching call sites, whose layout cannot be mirrored (a table, a
+PICTURE-less COMP-1/POINTER item, a group holding non-DISPLAY data whose
+bytes an alphanumeric copy would render unreadable), or whose name the
+program already declares. A target WITHOUT the prefix is untouched — it
+still has to exist in the program, exactly as before.
+
+`generate` emits a `CAPTURE ARG <n> INTO UT-CAP-<key>-<n>` per mirrorable
+argument (`_capture_lines_by_key`, precomputed onto `ProgramContext`),
+first in the mock body so the `.cut` reads the way it executes, plus one
+`*> STUB EXPECT <target>` comment per capture after the `PERFORM` — a
+captured value with nothing pointing at it is not an assertion, and `run
+--record-expectations` promotes those stubs to real `EXPECT` lines from an
+actual run, which is the workflow that makes a captured argument useful
+without the author guessing the value up front. The generator applies the
+same mirrorability and agreement checks the refusal does, so a scaffolded
+`.cut` never trips its own gate: an argument that fails either is simply
+not captured, and the boundary's other arguments still are.
+
 See docs/2026-08-11-argument-capture-design.md for the full design and
 rejected alternatives (a dedicated `VERIFY ... WAS CALLED WITH ARG n =
 value` combined syntax; capturing by COBOL variable name instead of
-position; per-call history capture).
+position; per-call history capture). That doc lists `generate` emitting
+`CAPTURE` automatically as explicitly out of scope for v1; this is the
+follow-up that closed it.
 
 ## Case rules
 

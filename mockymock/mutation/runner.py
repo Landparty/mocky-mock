@@ -49,7 +49,11 @@ def _run_suite_once(
     transparency guarantee `run`/`debug`/`export`/`lint` keep."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.cli.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
+    )
     from mockymock.cli.main import _insert_driver
     from mockymock.report.results import parse_stdout
     from mockymock.runtime import docker_toolchain
@@ -112,6 +116,7 @@ def _run_suite_once(
             reset_lines = reset_lines + extra_reset_lines(checked.linkage)
         if checked.cics_eib is not None:
             reset_lines = reset_lines + cics_eib.reset_lines(checked.cics_eib)
+        reset_lines = reset_lines + extra_reset_lines_for(checked)
         artifact = build_driver(
             suite,
             reset_lines,

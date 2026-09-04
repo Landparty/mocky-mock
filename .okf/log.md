@@ -3142,3 +3142,36 @@ the analysis knew something the generated `.cut` did not say:
 
 Unit-tested, including a lint gate on the generated `.cut`; no Docker, so
 the hang this closes was not re-reproduced end to end.
+
+## 2026-09-04 — `CAPTURE ARG` targets are synthesized, so `generate` can scaffold them
+
+**[dsl][splicer][cli]** `CAPTURE ARG <n> INTO <target>` could only ever be
+hand-written, because `<target>` had to be an existing data item of a
+compatible type: finding or adding one was a manual step before every
+capture, and `generate` never emitted one (the 2026-08-11 argument-capture
+design lists that as explicitly out of scope). New
+`mockymock/splicer/captures.py`: a target named with the reserved
+`UT-CAP-` prefix is synthesized -- a WORKING-STORAGE item mirroring the
+captured argument's own PICTURE/USAGE, plus a reset line, both threaded
+through `cli.checks.extra_working_storage` / the new
+`extra_reset_lines_for` so `run`/`debug`/`export`/`mutate` stay in step.
+The reset is not optional: the suite compiles to ONE binary, so an unreset
+capture lets a case that never reached its CALL assert against the previous
+case's value.
+
+Fail-closed via a new `UNRESOLVED_CAPTURE_TARGET` refusal (step 9 of
+`run_static_checks`) for an argument naming different items at different
+matching sites, a layout that cannot be mirrored, or a name the program
+already declares. Two subtleties worth knowing: cobol-parser reports a
+GROUP's own `usage` as DISPLAY regardless of its children, so
+`_data_item_index` stamps each group with a computed subtree-DISPLAY flag
+rather than trusting that field; and `generate` applies the same
+mirrorability/agreement checks the refusal does, so a scaffolded `.cut`
+can never trip its own gate.
+
+Refreshed `examples/fixtures/FIXTUREDEMO.cut` (the `--with-data` golden),
+which now carries the scaffolded capture for its `CALL "LOGALERT"`.
+
+Verified end to end without Docker as far as generate -> lint -> export
+(declarations, resets and capture MOVEs all present in the exported
+source); not compiled.

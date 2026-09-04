@@ -22,16 +22,12 @@ from cobolparser.generators.data.options import DataGeneratorOptions
 from mockymock.analysis.mock_surface import analyze
 from mockymock.dsl.fixture_bundle import load_fixture_bundle
 from mockymock.dsl.generator import (
-    SourceContext,
+    ProgramContext,
     _extract_at_end_imperative,
     scaffold_cut,
 )
 from mockymock.dsl.parser import parse_cut
-from mockymock.splicer.source_map import (
-    annotate_nested_sites,
-    collect_boundaries,
-    collect_scope_map,
-)
+from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
 # An AT END clause the AST-driven replication cannot touch: an
 # identifier-sourced MOVE (not a literal) followed by an ADD.
@@ -87,11 +83,7 @@ def _scaffold(source: str, name: str, rows: int = 3, with_source: bool = True) -
         .generate(result.ast, index, report, seed=7)
         .to_dict()
     )
-    context = (
-        SourceContext(lines=lines, statement_starts=collect_boundaries(result.ast))
-        if with_source
-        else None
-    )
+    context = ProgramContext.build(result.ast, lines, surface) if with_source else None
     return scaffold_cut(result.ast.program_name, surface, bundle, frozenset(), context)
 
 
@@ -204,7 +196,7 @@ def test_a_period_terminates_the_clause_rather_than_being_lifted_into_it():
         nested=False,
         statement=object(),
     )
-    context = SourceContext(
+    context = ProgramContext(
         lines=["READ INV-FILE AT END MOVE WS-M TO WS-EOF. ADD 1 TO WS-N"],
         statement_starts=[1],
     )

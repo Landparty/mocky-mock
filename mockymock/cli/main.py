@@ -275,12 +275,8 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         load_fixture_bundle,
         load_fixture_bundle_file,
     )
-    from mockymock.dsl.generator import SourceContext, scaffold_cut
-    from mockymock.splicer.source_map import (
-        annotate_nested_sites,
-        collect_boundaries,
-        collect_scope_map,
-    )
+    from mockymock.dsl.generator import ProgramContext, scaffold_cut
+    from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
     source_path = Path(args.program)
     if not _check_input_files("mockymock generate", source_path):
@@ -456,12 +452,12 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         bundle,
         frozenset(placeholder_pairs),
         # The same normalized lines + statement-start boundaries the
-        # splicer's own `statement_span` uses, so a generated MOCK READ's
+        # splicer's own `statement_span` uses (so a generated MOCK READ's
         # exhaustion branch can carry the program's own AT END imperative
-        # verbatim -- the exact text the splice is about to delete.
-        SourceContext(
-            lines=list(lines), statement_starts=collect_boundaries(result.ast)
-        ),
+        # verbatim -- the exact text the splice is about to delete), plus
+        # the CAPTURE ARG lines each CALL boundary can safely be
+        # scaffolded with.
+        ProgramContext.build(result.ast, lines, surface),
     )
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
@@ -630,7 +626,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.analysis.stub_expectations import scan_stub_expectations
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.cli.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
+    )
     from mockymock.report.coverage import (
         build_original_line_map,
         format_coverage_console,
@@ -788,6 +788,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
         reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
+    reset_lines = reset_lines + extra_reset_lines_for(checked)
 
     # --record-expectations: scan the raw .cut text (not the parsed suite --
     # a "*> STUB EXPECT" line is an ordinary comment to parse_cut) against
@@ -1082,7 +1083,11 @@ def _cmd_debug(args: argparse.Namespace) -> int:
 
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.cli.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
+    )
     from mockymock.debug.adapter import DapAdapter, DebugSession
     from mockymock.debug.call_stack import ParagraphIndex, build_generated_c_line_map
     from mockymock.debug.gdb_session import GdbSession
@@ -1194,6 +1199,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
         reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
+    reset_lines = reset_lines + extra_reset_lines_for(checked)
     artifact = build_driver(
         suite,
         reset_lines,
@@ -1375,7 +1381,11 @@ def _cmd_export(args: argparse.Namespace) -> int:
     stopping before compile_source/run_binary."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.cli.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
+    )
     from mockymock.cli.mainframe_export import (
         SourceAttribution,
         build_provenance_header,
@@ -1472,6 +1482,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
         reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
+    reset_lines = reset_lines + extra_reset_lines_for(checked)
     artifact = build_driver(
         suite,
         reset_lines,

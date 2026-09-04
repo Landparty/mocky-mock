@@ -49,7 +49,7 @@ gets its own TESTCASE, even near-duplicates.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mockymock.analysis.mock_surface import BoundarySite, MockSurface
 from mockymock.dsl.fixture_bundle import (
@@ -199,24 +199,46 @@ def _replicated_at_end_statements(statement: object) -> list[str]:
 
 
 @dataclass(frozen=True)
-class SourceContext:
-    """The normalized program text the scaffold needs to lift a statement's
-    own source back out of it.
+class ProgramContext:
+    """Facts about the program under test that the scaffold needs beyond
+    what `MockSurface` carries.
 
     `lines` is `run_static_checks`' normalized (free-form, comments blanked)
     line list; `statement_starts` is `splicer.source_map.collect_boundaries`'
     output for the same program -- the SAME two inputs the splicer's own
     `statement_span` uses to decide what text a boundary splice deletes.
-    Using the splicer's own span source here is what makes the lifted text
-    exactly the text that will be deleted, rather than a reconstruction that
-    could drift from it.
+    Using the splicer's own span source here is what makes a lifted `AT END`
+    clause exactly the text that will be deleted, rather than a
+    reconstruction that could drift from it.
+
+    `capture_lines` holds the `CAPTURE ARG <n> INTO <target>` lines each
+    CALL/DYNCALL boundary can safely be scaffolded with, precomputed by
+    `build` so the body builders need only this one object -- see
+    `_capture_lines_by_key`.
 
     Optional throughout: without it the scaffold falls back to the
-    AST-driven replication and, failing that, the honest TODO comment.
+    AST-driven `AT END` replication (and then the honest TODO comment), and
+    emits no captures.
     """
 
     lines: list[str]
     statement_starts: list[int]
+    capture_lines: dict[tuple[MockCategory, str], list[str]] = field(
+        default_factory=dict
+    )
+
+    @classmethod
+    def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
+        from mockymock.splicer.source_map import collect_boundaries
+
+        return cls(
+            lines=list(lines),
+            statement_starts=collect_boundaries(program),
+            capture_lines=_capture_lines_by_key(program, surface),
+        )
+
+    def captures_for(self, category: MockCategory, key: str) -> list[str]:
+        return self.capture_lines.get((category, key), [])
 
     def statement_text(self, line: int) -> str | None:
         """The full source text of the statement starting at 1-based
@@ -329,7 +351,9 @@ def _extract_at_end_imperative(statement_text: str) -> str | None:
     return lifted or None
 
 
-def _lifted_at_end_lines(site: BoundarySite, source: SourceContext | None) -> list[str]:
+def _lifted_at_end_lines(
+    site: BoundarySite, source: ProgramContext | None
+) -> list[str]:
     """The program's own `AT END` imperative, re-indented for a `.cut` MOCK
     body, or `[]` when it could not be lifted safely.
 
@@ -366,6 +390,123 @@ def _lifted_at_end_lines(site: BoundarySite, source: SourceContext | None) -> li
     ]
 
 
+def _capture_lines_by_key(
+    program, surface: MockSurface
+) -> dict[tuple[MockCategory, str], list[str]]:
+    """`CAPTURE ARG <n> INTO <target>` lines for every CALL/DYNCALL boundary
+    whose arguments mockymock can safely synthesize storage for.
+
+    Asserting on what a mocked `CALL` actually RECEIVED is usually the most
+    interesting assertion in a test, and `CAPTURE ARG` has supported it
+    since 2026-08-11 -- but only as hand-authoring, because the target had
+    to be an existing data item of a compatible type. `splicer.captures`
+    now declares a `UT-CAP-`-prefixed target on demand, which is what makes
+    scaffolding one possible at all.
+
+    Two things are checked here so the generated `.cut` never trips the
+    `UNRESOLVED_CAPTURE_TARGET` refusal that backs that synthesis -- a
+    scaffold that emits a refusable file is worse than one that emits less:
+
+    1. Every physical site sharing this (category, key) must name the SAME
+       data item at that argument position. One synthesized field cannot
+       mirror two layouts, and picking either would make the capture wrong
+       at one of the sites.
+    2. That item's layout must be mirrorable at all (not a table, not a
+       PICTURE-less COMP-1/POINTER item, not a group holding non-DISPLAY
+       data whose bytes an alphanumeric copy would render unreadable).
+
+    An argument failing either check is simply not captured; the rest of
+    that boundary's arguments still are.
+    """
+    from mockymock.splicer.captures import _declaration_for, capture_target_name
+
+    data_items = _capture_data_items(program)
+    by_key: dict[tuple[MockCategory, str], list[BoundarySite]] = {}
+    for site in surface.boundary_sites:
+        if site.category not in (MockCategory.CALL, MockCategory.DYNCALL):
+            continue
+        for key in site.keys:
+            by_key.setdefault((site.category, key), []).append(site)
+
+    result: dict[tuple[MockCategory, str], list[str]] = {}
+    # Two keys can sanitize to the same target body (they differ only in
+    # punctuation, or only past the length cap). Sharing one field between
+    # two different CALLs would silently make each capture assert on
+    # whichever fired last, so names are made unique here the same way
+    # `TallyRegistry` makes tally names unique.
+    taken: set[str] = set(data_items)
+    for (category, key), sites in sorted(
+        by_key.items(), key=lambda item: (item[0][0].value, item[0][1])
+    ):
+        argument_lists = [
+            getattr(site.statement, "using_parameters", None) or [] for site in sites
+        ]
+        if not argument_lists or not argument_lists[0]:
+            continue
+        lines: list[str] = []
+        for index in range(1, len(argument_lists[0]) + 1):
+            names = {
+                (arguments[index - 1].name or "").upper()
+                for arguments in argument_lists
+                if len(arguments) >= index
+            }
+            if len(names) != 1 or len(names) != len(argument_lists):
+                continue  # disagreement (or a site with fewer arguments)
+            source_name = next(iter(names))
+            item = data_items.get(source_name)
+            if item is None:
+                continue
+            target = capture_target_name(category, key, index)
+            if _declaration_for(target, item) is None:
+                continue
+            if target in taken:
+                suffix = 2
+                while f"{target}-{suffix}" in taken:
+                    suffix += 1
+                target = f"{target}-{suffix}"
+            taken.add(target)
+            lines.append(f"CAPTURE ARG {index} INTO {target}")
+        if lines:
+            result[(category, key)] = lines
+    return result
+
+
+def _capture_data_items(program) -> dict[str, dict]:
+    from mockymock.splicer.captures import _data_item_index
+
+    try:
+        return _data_item_index(program)
+    except Exception:  # pragma: no cover - a layout walk must never break generate
+        return {}
+
+
+def _capture_stub_lines(targets: list[str]) -> list[str]:
+    """One `*> STUB EXPECT` comment per scaffolded capture, so the value a
+    capture makes visible does not sit in the file with nothing pointing at
+    it. `mockymock run --record-expectations` promotes these to real
+    `EXPECT` lines from an actual run, which is exactly the workflow that
+    makes a captured argument useful without the author having to guess the
+    value up front."""
+    return [
+        f"*> STUB EXPECT {target} -- the value the program actually passed "
+        f"to this CALL"
+        for target in targets
+    ]
+
+
+def _capture_targets(lines: list[str]) -> list[str]:
+    """The targets of the `CAPTURE ARG` lines in an already-built mock body,
+    in order. Read back off the emitted text rather than recomputed, so the
+    stub comments can never name a capture the body did not actually
+    declare."""
+    targets: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.upper().startswith("CAPTURE ARG "):
+            targets.append(stripped.rsplit(" ", 1)[-1])
+    return targets
+
+
 def _quote_safe(name: str) -> str:
     """The .cut grammar cannot represent a double quote inside a quoted
     name (`"[^"]*"` -- no escape syntax), so a name containing one would
@@ -378,7 +519,7 @@ def scaffold_cut(
     surface: MockSurface,
     bundle: FixtureBundle | None = None,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
-    source: SourceContext | None = None,
+    source: ProgramContext | None = None,
 ) -> str:
     """Generate a starter .cut file. Without a bundle: one TESTCASE per
     paragraph with placeholder mock bodies (today's original behavior).
@@ -397,14 +538,16 @@ def scaffold_cut(
     -- see `_lifted_at_end_lines`. Optional: without it the scaffold falls
     back to the AST-driven replication and then to that TODO."""
     if bundle is None:
-        return _scaffold_placeholder(suite_name, surface)
+        return _scaffold_placeholder(suite_name, surface, source)
     return _scaffold_with_bundle(suite_name, surface, bundle, placeholder_keys, source)
 
 
 # --- placeholder scaffold (no bundle) ----------------------------------------
 
 
-def _scaffold_placeholder(suite_name: str, surface: MockSurface) -> str:
+def _scaffold_placeholder(
+    suite_name: str, surface: MockSurface, context: ProgramContext | None = None
+) -> str:
     sites_by_paragraph: dict[str, list[BoundarySite]] = {}
     for site in surface.boundary_sites:
         if site.category is None or (site.nested and site.span is None):
@@ -413,27 +556,32 @@ def _scaffold_placeholder(suite_name: str, surface: MockSurface) -> str:
 
     lines = [f'TESTSUITE "{_quote_safe(suite_name)}"', ""]
     for paragraph_name, sites in sites_by_paragraph.items():
-        directives = _directives_for(sites, surface)
+        directives = _directives_for(sites, surface, context)
         labels = ", ".join(dict.fromkeys(site.label for site in sites))
         lines.append(
             f'TESTCASE "{_quote_safe(f"{paragraph_name} boundaries: {labels}")}"'
         )
+        captured: list[str] = []
         for directive_line, body in directives:
             lines.append(f"    {directive_line}")
             lines.extend(f"        {body_line}" for body_line in body)
             lines.append("    END-MOCK")
+            captured.extend(_capture_targets(body))
         lines.append(f"    PERFORM {paragraph_name}")
+        lines.extend(f"    {line}" for line in _capture_stub_lines(captured))
         lines.append("")
     return "\n".join(lines)
 
 
 def _directives_for(
-    sites: list[BoundarySite], surface: MockSurface
+    sites: list[BoundarySite],
+    surface: MockSurface,
+    context: ProgramContext | None = None,
 ) -> list[tuple[str, list[str]]]:
     directives: list[tuple[str, list[str]]] = []
     seen: set[tuple[MockCategory | None, str]] = set()
     for site in sites:
-        directive = _directive_for(site, surface)
+        directive = _directive_for(site, surface, context)
         if directive is None:
             continue
         key_id = (site.category, directive[0])
@@ -442,6 +590,22 @@ def _directives_for(
         seen.add(key_id)
         directives.append(directive)
     return directives
+
+
+def _with_captures(
+    category: MockCategory,
+    key: str,
+    body: list[str],
+    context: ProgramContext | None,
+) -> list[str]:
+    """Prepend this boundary's scaffolded `CAPTURE ARG` lines to a mock
+    body. First, deliberately: `injector.build_site_dispatch` emits the
+    capture MOVEs before the body's own statements so a capture always
+    reflects what the real caller passed, and keeping the `.cut` in the
+    same order means the file reads the way it executes."""
+    if context is None:
+        return body
+    return context.captures_for(category, key) + body
 
 
 def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
@@ -459,7 +623,7 @@ def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
 
 
 def _directive_for(
-    site: BoundarySite, surface: MockSurface
+    site: BoundarySite, surface: MockSurface, context: ProgramContext | None = None
 ) -> tuple[str, list[str]] | None:
     category = site.category
     if category is None:
@@ -482,13 +646,17 @@ def _directive_for(
             # unmocked site loudly (2026-08-12 audit Finding 20).
             return None
         keyword = "MQ" if site.is_mq else "CALL"
-        return f'MOCK {keyword} "{key}"', _placeholder_body_for(category, key)
+        return f'MOCK {keyword} "{key}"', _with_captures(
+            category, key, _placeholder_body_for(category, key), context
+        )
 
     if category is MockCategory.DYNCALL:
         # bare key = dynamic CALL through this identifier; quoting it would
         # turn the directive into a static-literal mock that never matches
         key = site.keys[0]
-        return f"MOCK CALL {key}", _placeholder_body_for(category, key)
+        return f"MOCK CALL {key}", _with_captures(
+            category, key, _placeholder_body_for(category, key), context
+        )
 
     if category in FILE_OP_CATEGORIES:
         if not site.keys:
@@ -809,7 +977,7 @@ def _read_body(
     registry: TallyRegistry,
     category: MockCategory,
     site: BoundarySite,
-    source: SourceContext | None = None,
+    source: ProgramContext | None = None,
 ) -> list[str]:
     """READ's multi-row sequence: a tally-branching `EVALUATE TRUE` chain,
     one `WHEN <tally> = N` per generated row, `WHEN OTHER` moving
@@ -969,7 +1137,7 @@ def _bundle_directive_for(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
-    source: SourceContext | None = None,
+    source: ProgramContext | None = None,
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """The full `MOCK ... END-MOCK` (or `MOCK ... ROWS ... END-MOCK`) block
     for one scenario's boundary fixture, or None if this (category, key)
@@ -1075,6 +1243,7 @@ def _bundle_directive_for(
     else:
         body = _single_row_body(fixture)
 
+    body = _with_captures(category, fixture.key, body, source)
     lines = [_directive_header(category, fixture.key, site)]
     lines.extend(f"    {line}" for line in body)
     lines.append("END-MOCK")
@@ -1100,7 +1269,7 @@ def _bundle_directive_for_group(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
-    source: SourceContext | None = None,
+    source: ProgramContext | None = None,
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """Like `_bundle_directive_for`, but for every fixture that resolves
     to the SAME physical mockymock `BoundarySite` (only possible for
@@ -1151,7 +1320,7 @@ def _bundle_mock_directives(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
-    source: SourceContext | None = None,
+    source: ProgramContext | None = None,
 ) -> tuple[
     list[str],
     set[tuple[MockCategory, str]],
@@ -1430,7 +1599,7 @@ def _scaffold_with_bundle(
     surface: MockSurface,
     bundle: FixtureBundle,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
-    source: SourceContext | None = None,
+    source: ProgramContext | None = None,
 ) -> str:
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(mockymock_keys, _bundle_boundary_keys(bundle))
@@ -1451,6 +1620,10 @@ def _scaffold_with_bundle(
         )
         lines.extend(f"    {line}" for line in directive_lines)
         lines.append(f"    PERFORM {scenario.entry}")
+        lines.extend(
+            f"    {line}"
+            for line in _capture_stub_lines(_capture_targets(directive_lines))
+        )
         counted_boundaries = _rendered_call_count_refs(
             scenario.expectations, declared_keys, call_count_overrides
         )
