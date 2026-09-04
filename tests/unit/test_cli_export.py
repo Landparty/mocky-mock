@@ -159,20 +159,17 @@ def test_export_reports_refused_static_checks_and_writes_nothing(tmp_path, capsy
     assert not (tmp_path / "BAD.mainframe.cbl").exists()
 
 
-def test_export_refuses_on_column_overflow_from_cut_mock_body_text(tmp_path, capsys):
-    """The realistic, routinely-reachable COLUMN_OVERFLOW trigger: a `.cut`
-    file's own MOCK body text, not mockymock-generated DISPLAY boilerplate.
-    `injector.py`'s build_site_dispatch re-indents a MOCK body's lines by
-    19 columns when it splices them in, so an ordinary MOVE with a modest
+def test_export_wraps_a_long_cut_mock_body_line_instead_of_refusing(tmp_path, capsys):
+    """The routinely-reachable overflow: a `.cut` file's own MOCK body text.
+    `injector.py`'s build_site_dispatch re-indents a MOCK body's lines by 19
+    columns when it splices them in, so an ordinary MOVE with a modest
     literal and a modest field name routinely lands past column 72 once
     restore_fixed_format_columns's own 7-space prefix is added on top.
-    `examples/claimseg` used to be the one example reaching this refusal
-    path, but Task 4's `*>` comment-line carve-out stopped it from doing
-    so, leaving this path completely untested before this fixture.
-    Manually confirmed before writing this test: `mockymock lint` on this
-    exact program/cut pair reports no problems (this is not a static-check
-    refusal) while `export` refuses with COLUMN_OVERFLOW and writes
-    nothing."""
+
+    `export` used to refuse the whole file on it (COLUMN_OVERFLOW) even
+    though a COBOL statement may span as many fixed-format lines as it
+    needs. It now wraps: the statement is broken at whitespace, every line
+    fits, and nothing is lost."""
     cbl = tmp_path / "PROG.cbl"
     cbl.write_text(
         "       IDENTIFICATION DIVISION.\n"
@@ -201,9 +198,58 @@ def test_export_refuses_on_column_overflow_from_cut_mock_body_text(tmp_path, cap
 
     exit_code = main(["export", str(cbl), "--cut", str(cut)])
     out = capsys.readouterr().out
-    assert exit_code == 1
-    assert "COLUMN_OVERFLOW" in out
-    assert not (tmp_path / "PROG.mainframe.cbl").exists()
+    assert exit_code == 0
+    assert "COLUMN_OVERFLOW" not in out
+    written = (tmp_path / "PROG.mainframe.cbl").read_text().splitlines()
+    assert all(len(line) <= 72 for line in written)
+    # Broken across two lines, with both halves present and in order.
+    joined = "\n".join(written)
+    assert 'MOVE "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" TO' in joined
+    assert "WS-A-RATHER-LONG-FIELD-NAME-HERE" in joined
+
+
+def test_export_wraps_its_own_generated_working_storage_reset(tmp_path, capsys):
+    """The other routinely-reachable overflow, and the one no `.cut` edit
+    could ever have fixed: mockymock's OWN generated
+    `UT-RESET-WORKING-STORAGE` re-serializes a long VALUE clause onto a
+    single `MOVE "<literal>" TO <item>` line. The original program declared
+    it legally across two fixed-format lines; the reset block did not."""
+    cbl = tmp_path / "PROG.cbl"
+    cbl.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. PROG.\n"
+        "\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  DEBUT-WORKING-STORAGE  PIC X(52)\n"
+        '           VALUE "*** DEBUT DE LA WORKING STORAGE PROGRAMME XYZ ***".\n'
+        "\n"
+        "       PROCEDURE DIVISION.\n"
+        "       MAIN-PROCESS.\n"
+        '           CALL "SUBPROG"\n'
+        '           DISPLAY "DONE".\n'
+    )
+    cut = tmp_path / "PROG.cut"
+    cut.write_text(
+        'TESTSUITE "s"\n'
+        "\n"
+        'TESTCASE "c"\n'
+        '    MOCK CALL "SUBPROG"\n'
+        "        MOVE 0 TO RETURN-CODE\n"
+        "    END-MOCK\n"
+        "    PERFORM MAIN-PROCESS\n"
+    )
+
+    exit_code = main(["export", str(cbl), "--cut", str(cut)])
+    assert exit_code == 0
+    assert "COLUMN_OVERFLOW" not in capsys.readouterr().out
+    written = (tmp_path / "PROG.mainframe.cbl").read_text().splitlines()
+    assert all(len(line) <= 72 for line in written)
+    joined = "\n".join(written)
+    assert (
+        'MOVE "*** DEBUT DE LA WORKING STORAGE PROGRAMME XYZ ***" TO'
+        "\n           DEBUT-WORKING-STORAGE." in joined
+    )
 
 
 def test_export_never_imports_docker_toolchain(tmp_path):

@@ -617,14 +617,37 @@ Writes the instrumented source to a file after running the same parse → static
 pipeline as `run`, but without Docker or any GnuCOBOL step. The output is adjusted for compilation
 under a real fixed-format (z/OS) COBOL compiler instead of GnuCOBOL-only: `PROCESS`/`CBL` directives
 are preserved (where `run`/`lint` strip them), columns are restored to z/OS fixed-format discipline
-(7-space prefix for Area A), and very-long generated `DISPLAY` statements that overflow column 72 are
-wrapped into multiple lines. A provenance/disclaimer header is prepended, documenting that this is a
+(7-space prefix for Area A), and every line overflowing column 72 is wrapped (`wrap_long_lines`).
+A provenance/disclaimer header is prepended, documenting that this is a
 mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
 to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.
-If a line still exceeds column 72 after wrapping and column restoration -- most commonly, long `.cut`
-MOCK body text (e.g. a `MOVE` statement) that `injector.py` re-indents past the limit when splicing it
-in -- `export` refuses (`mockymock export: refused (COLUMN_OVERFLOW): ...`) and writes nothing.
+
+**Wrapping (rewritten 2026-09-04).** `wrap_long_lines` tries three things per over-long line, in order:
+a full-line `*>` comment is left alone (columns 73+ are the identification field, always ignored);
+mockymock's own generated `DISPLAY` shape gets the `WITH NO ADVANCING` split (`_wrap_display_line`,
+whose byte-identical-stdout property was verified empirically during design); everything else gets
+the **general fixed-format wrap** (`_wrap_source_line`) -- break the statement at whitespace between
+atoms, and split a too-long literal with the column-7 `-` continuation indicator, with continuation
+content always starting in Area B so it can never be read as a header or an 01/77 level. Before this,
+any non-`DISPLAY` overflow refused the whole file, which was far too blunt: the two routinely reachable
+overflows are a re-indented `.cut` MOCK body statement AND mockymock's OWN generated
+`UT-RESET-WORKING-STORAGE` re-serializing a long `VALUE` clause onto one `MOVE "<literal>" TO <item>`
+line -- and for the latter no `.cut` edit could ever have helped.
+
+Only a line with no literal to continue and no break point (a single over-long word) still refuses
+(`mockymock export: refused (COLUMN_OVERFLOW): ...`, writing nothing). That message now names where
+the line came from -- `SourceAttribution`, built from `_insert_driver_with_origins`' inserted-line
+indices plus exact stripped-text lookups in the `.cut` and `.cbl` -- instead of asserting one cause.
+The old message said the line "typically comes from a `.cut` file's MOCK body text" unconditionally,
+which sent readers to the wrong file whenever the real source was the generated reset block.
+
+**A continued literal's line must run exactly to column 72.** IBM's continuation rule makes the trailing
+blanks of a continued line part of the literal, so a chunk stopping short silently pads the value with
+spaces. `_split_literal_across_lines` fills every continued line exactly and refuses when it cannot
+(only reachable when the remaining content exactly equals a line's free width, or a doubled-quote escape
+pair straddles the last free column). A randomized round-trip test against a model of the compiler's own
+continuation semantics found the bug this rule prevents in the first version of that function.
 
 Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
 [docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).

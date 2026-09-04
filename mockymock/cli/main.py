@@ -1363,10 +1363,11 @@ def _cmd_export(args: argparse.Namespace) -> int:
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.cli.checks import extra_working_storage, run_static_checks
     from mockymock.cli.mainframe_export import (
+        SourceAttribution,
         build_provenance_header,
         insert_provenance_header,
         restore_fixed_format_columns,
-        wrap_long_display_lines,
+        wrap_long_lines,
     )
     from mockymock.splicer import cics_eib
     from mockymock.splicer.driver import build_driver
@@ -1463,9 +1464,18 @@ def _cmd_export(args: argparse.Namespace) -> int:
         registry,
         extra_working_storage_lines=extra_working_storage(checked),
     )
-    instrumented = _insert_driver(lines, artifact)
+    instrumented, driver_line_indices = _insert_driver_with_origins(lines, artifact)
 
-    instrumented, overflow_problems = wrap_long_display_lines(instrumented)
+    instrumented, overflow_problems = wrap_long_lines(
+        instrumented,
+        attribution=SourceAttribution(
+            driver_line_indices=driver_line_indices,
+            cut_path=str(cut_path),
+            cut_text=cut_path.read_text(encoding="utf-8", errors="replace"),
+            program_path=str(source_path),
+            program_text=source_path.read_text(encoding="utf-8", errors="replace"),
+        ),
+    )
     if overflow_problems:
         for problem in overflow_problems:
             print(f"mockymock export: refused (COLUMN_OVERFLOW): {problem}")
@@ -1580,22 +1590,41 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 def _insert_driver(lines: list[str], artifact) -> list[str]:
     """Insert WORKING-STORAGE additions after that section's header, and
     procedure_lines right after the PROCEDURE DIVISION header."""
+    return _insert_driver_with_origins(lines, artifact)[0]
+
+
+def _insert_driver_with_origins(
+    lines: list[str], artifact
+) -> tuple[list[str], set[int]]:
+    """`_insert_driver`, plus the 0-based indices of the lines it inserted.
+
+    `export` needs those indices to say truthfully where an over-long line
+    came from: mockymock's own generated driver (notably the
+    WORKING-STORAGE reset, which re-serializes a long VALUE clause onto one
+    line) is a routine overflow source, and it is not something any `.cut`
+    edit can fix. Knowing the exact inserted range is what keeps that
+    attribution a fact rather than a guess."""
     result: list[str] = []
+    inserted: set[int] = set()
     inserted_ws = False
     inserted_proc = False
+
+    def extend(new_lines) -> None:
+        for new_line in new_lines:
+            inserted.add(len(result))
+            result.append(new_line)
+
     for line in lines:
         result.append(line)
         upper = line.strip().upper()
         if not inserted_ws and upper.startswith("WORKING-STORAGE SECTION"):
-            result.extend(
-                f"       {ws_line}" for ws_line in artifact.working_storage_lines
-            )
+            extend(f"       {ws_line}" for ws_line in artifact.working_storage_lines)
             inserted_ws = True
         if not inserted_proc and upper.startswith("PROCEDURE DIVISION"):
-            result.append("")
-            result.extend(artifact.procedure_lines)
+            extend([""])
+            extend(artifact.procedure_lines)
             inserted_proc = True
-    return result
+    return result, inserted
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -3080,3 +3080,35 @@ practically misleading:
 
 Unit-tested throughout; no Docker daemon was available, so none of it is
 runtime-verified against real GnuCOBOL.
+
+## 2026-09-04 — `export` wraps instead of refusing; overflow refusals name their real source
+
+Two review findings on `mockymock export`'s `COLUMN_OVERFLOW`:
+
+- **[cli]** It only ever wrapped mockymock's own generated `DISPLAY` shape;
+  any other over-72 line refused the whole export. New `_wrap_source_line`
+  implements the general fixed-format rules -- break a statement at
+  whitespace between atoms (always legal), continue a too-long literal with
+  the column-7 `-` indicator, keep continuation content in Area B -- and
+  `wrap_long_lines` is the new `export` entry point (comment carve-out ->
+  DISPLAY transform -> general wrap -> refuse). The two overflows that
+  actually occur in practice, a re-indented `.cut` MOCK body statement and
+  the generated `UT-RESET-WORKING-STORAGE`'s `MOVE "<long VALUE>" TO
+  <item>`, both wrap now; the second was unfixable by any `.cut` edit.
+  Load-bearing subtlety: **every continued line must run exactly to column
+  72**, because IBM's continuation rule makes a short line's trailing blanks
+  part of the literal. A randomized round-trip test against a model of that
+  rule caught the bug in the first version of the splitter; 40,000 cases now
+  pass with 0% refusal on realistic literals.
+- **[cli]** The refusal message asserted one cause ("this typically comes
+  from a `.cut` file's MOCK body text") regardless of where the line came
+  from. New `SourceAttribution`, built from `_insert_driver_with_origins`'
+  inserted-line indices plus exact stripped-text lookups in the `.cut` and
+  `.cbl`, names the actual source -- and says "neither file" rather than
+  guessing when the text is in neither. `wrap_long_display_lines` survives
+  as the DISPLAY-only transform's own entry point for the tests that pin its
+  fragment shape; `export` no longer calls it.
+
+Unit-tested; not compiled by a real IBM COBOL compiler (nor GnuCOBOL -- no
+Docker daemon available), which the provenance header now says explicitly
+about the two new wrap shapes.
