@@ -111,7 +111,7 @@ def _is_safe_literal_source(source: str) -> bool:
     into a mock body: a quoted string literal, a numeric literal, or a
     figurative constant -- never a bare identifier, whose value in the
     mock's own splice-time context is not the real program's runtime
-    state at that point. See _replicated_at_end_moves."""
+    state at that point. See _replicated_at_end_statements."""
     if not source:
         return False
     if len(source) >= 2 and source[0] in ('"', "'") and source[-1] == source[0]:
@@ -122,34 +122,76 @@ def _is_safe_literal_source(source: str) -> bool:
     return digits.replace(".", "", 1).isdigit()
 
 
-def _replicated_at_end_moves(statement: object) -> list[str]:
-    """Extra `MOVE` lines for a READ mock's exhaustion (`WHEN OTHER`)
+#: `SetStatement.set_type` values that assign a *constant* to a level-88
+#: condition name and so are safe to replicate verbatim into a mock body,
+#: by the same standard `_is_safe_literal_source` applies to a `MOVE`
+#: source: the statement names no identifier whose runtime value differs
+#: between the real program's context and the mock's. Every other
+#: `set_type` (`TO` an identifier/index, `UP_BY`, `DOWN_BY`) does, and is
+#: left unreplicated. A replicated `SET ... TO FALSE` compiles iff the
+#: original did (it needs the 88's own `FALSE` phrase either way), so it
+#: is no less safe than `TRUE`.
+_CONSTANT_SET_TYPES = frozenset({"TRUE", "FALSE"})
+
+
+def _replicated_set_lines(clause_statement: object) -> list[str]:
+    """`SET <88-condition-name> TO TRUE` lines replicated out of an `AT
+    END` clause -- the condition-name spelling of the same EOF-flag idiom
+    `_replicated_at_end_statements` handles for `MOVE`.
+
+    `SET WS-FIN-FICHIER TO TRUE` against an `88 WS-FIN-FICHIER VALUE "O"`
+    is at least as common in the wild as `MOVE "Y" TO WS-EOF`, and fails
+    identically when it is dropped: the mock moves the FILE STATUS field,
+    the application-level flag is never flipped, and the program's own
+    `PERFORM UNTIL <condition-name>` loop spins forever. Skipped (leaving
+    `_read_exhaustion_lines`'s TODO comment to flag the gap honestly)
+    when the statement carries additional `groups` -- a multi-group `SET
+    A TO TRUE B TO FALSE` -- since replicating only the first group would
+    be a silent *partial* replication, which is worse than none."""
+    if type(clause_statement).__name__ != "SetStatement":
+        return []
+    if getattr(clause_statement, "groups", None):
+        return []
+    set_type = getattr(clause_statement, "set_type", None)
+    if set_type not in _CONSTANT_SET_TYPES:
+        return []
+    return [
+        f"SET {target} TO {set_type}"
+        for target in getattr(clause_statement, "targets", [])
+    ]
+
+
+def _replicated_at_end_statements(statement: object) -> list[str]:
+    """Extra lines for a READ mock's exhaustion (`WHEN OTHER`)
     branch: the splicer replaces the *whole* READ statement (see
     splicer/orchestrator.py's own module docstring), which also deletes
     its `AT END` clause's own statements. When that clause is the only
     place the program sets its own application-level EOF flag -- the
     "READ ... AT END MOVE 'Y' TO WS-EOF" idiom (see
     examples/invupdt/INVUPDT.cut's own hand-written mock doing the exact
-    same thing by hand) -- a generated mock that moves only the FILE
-    STATUS field never flips that flag, so the program's own `PERFORM ...
-    UNTIL WS-EOF = ...` loop never terminates: an infinite loop, not a
-    wrong value, at runtime (found via examples/fixtures/FIXTUREDEMO's
-    own Docker-gated CI run timing out). Deliberately conservative: only
-    a `MOVE` whose source is a literal or figurative constant is
-    replicated (`_is_safe_literal_source`); anything else in the clause
-    (a bare-identifier source, IF, PERFORM, ...) is left unreplicated --
-    a known, narrower gap than the one this closes, not silently
-    guessed at."""
+    same thing by hand), or its condition-name spelling "READ ... AT END
+    SET WS-FIN-FICHIER TO TRUE" -- a generated mock that moves only the
+    FILE STATUS field never flips that flag, so the program's own
+    `PERFORM ... UNTIL WS-EOF = ...` loop never terminates: an infinite
+    loop, not a wrong value, at runtime (found via
+    examples/fixtures/FIXTUREDEMO's own Docker-gated CI run timing out).
+    Deliberately conservative: only a `MOVE` whose source is a literal or
+    figurative constant (`_is_safe_literal_source`) and a constant-valued
+    `SET` (`_replicated_set_lines`) are replicated; anything else in the
+    clause (a bare-identifier source, IF, PERFORM, ...) is left
+    unreplicated -- a known, narrower gap than the one this closes, not
+    silently guessed at."""
     at_end = getattr(statement, "at_end_clause", None) or []
     lines: list[str] = []
     for clause_statement in at_end:
-        if type(clause_statement).__name__ != "MoveStatement":
+        if type(clause_statement).__name__ == "MoveStatement":
+            source = getattr(clause_statement, "source", None)
+            if not source or not _is_safe_literal_source(source):
+                continue
+            for target in getattr(clause_statement, "targets", []):
+                lines.append(f"MOVE {source} TO {target}")
             continue
-        source = getattr(clause_statement, "source", None)
-        if not source or not _is_safe_literal_source(source):
-            continue
-        for target in getattr(clause_statement, "targets", []):
-            lines.append(f"MOVE {source} TO {target}")
+        lines.extend(_replicated_set_lines(clause_statement))
     return lines
 
 
@@ -543,7 +585,7 @@ def _read_exhaustion_lines(
 ) -> list[str]:
     """The lines that fire once a READ mock's rows are exhausted:
     `fixture.terminal`'s status code MOVE(s) plus whatever of the
-    program's own `AT END` clause `_replicated_at_end_moves` could safely
+    program's own `AT END` clause `_replicated_at_end_statements` could safely
     replicate (or a TODO comment when it couldn't, see `_read_body`'s own
     docstring on that gating). Factored out of `_read_body` so this exact
     termination behavior -- not an empty body -- is what fires both for
@@ -566,7 +608,7 @@ def _read_exhaustion_lines(
     if at_end and not replicated:
         lines.append(
             "*> TODO: this program's AT END clause could not be "
-            "auto-replicated -- add its loop-guard MOVE by hand"
+            "auto-replicated -- add its loop-guard statement by hand"
         )
     return lines
 
@@ -582,7 +624,7 @@ def _read_body(
     `fixture.terminal`'s status code(s) once the sequence is exhausted (a
     file-status field is always alphanumeric, so its terminal code is
     always quoted -- unlike SQL's SQLCODE), plus whatever of the original
-    `AT END` clause's own statements `_replicated_at_end_moves` can safely
+    `AT END` clause's own statements `_replicated_at_end_statements` can safely
     replicate -- the program's own EOF-flag idiom, not just its FILE
     STATUS field, since the splicer deletes the real clause entirely. See
     `_read_exhaustion_lines` for the exhaustion content itself.
@@ -599,8 +641,8 @@ def _read_body(
     run, not by lint, which cannot see a splice-time no-op), leaving the
     application's own loop-guard flag untouched forever -- an infinite
     loop. When `at_end` is non-empty but nothing in it was safely
-    replicable (an identifier-sourced MOVE, an IF, ...), a comment flags
-    the gap rather than silently emitting nothing.
+    replicable (an identifier-sourced MOVE, a `SET ... UP BY`, an IF,
+    ...), a comment flags the gap rather than silently emitting nothing.
 
     An EMPTY `sequence` (fix round 1, unify-with-data Task 4: `--rows 0`
     on the self-generating path, or a bundle's own "empty input" scenario
@@ -626,7 +668,7 @@ def _read_body(
     both `READ` and `SQL`)."""
     sequence = fixture.sequence
     at_end = getattr(site.statement, "at_end_clause", None) or []
-    replicated = _replicated_at_end_moves(site.statement)
+    replicated = _replicated_at_end_statements(site.statement)
     needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
 
     if not sequence:
@@ -720,7 +762,7 @@ class CallCountOverride:
     here. `demote_reason`: set instead of `count` when the downgraded
     body carries no way to know the real count at all (e.g. a READ whose
     source `AT END` clause has no FILE STATUS field and nothing
-    `_replicated_at_end_moves` could safely replicate -- an entirely
+    `_replicated_at_end_statements` could safely replicate -- an entirely
     empty exhaustion body, not an "exact by construction" one) --
     `_render_expectation` renders a `*>` comment naming the reason
     instead of a speculative number in that case."""
@@ -808,7 +850,7 @@ def _bundle_directive_for(
     if (fixture.category, fixture.key) in placeholder_keys:
         if category is MockCategory.READ:
             at_end = getattr(site.statement, "at_end_clause", None) or []
-            replicated = _replicated_at_end_moves(site.statement)
+            replicated = _replicated_at_end_statements(site.statement)
             body = _read_exhaustion_lines(fixture, replicated, at_end)
             if fixture.terminal or replicated:
                 call_count_override = CallCountOverride(count=1)
