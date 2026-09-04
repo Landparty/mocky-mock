@@ -732,6 +732,17 @@ paragraph-grouped path described above, unchanged. A real
   --record-expectations` leaves it alone rather than mistaking `WRITE` for
   a data item — see `analysis.md`'s stub-expectation scanner for how a
   human promotes a real data-name stub comment to an `EXPECT`.
+- **Unverified-scenario notes** (`_verification_comment_lines`, 2026-09-04):
+  cobol-parser's bundle now carries a `Scenario.verification` verdict --
+  whether that scenario's own generated data actually satisfies the branch
+  it is named for. A scenario name is a claim; before that verdict existed
+  the only way to check it was `mockymock run --trace` on every case. An
+  `unverified` verdict renders as a `*> UNVERIFIED:` comment block directly
+  above the affected TESTCASE, listing each non-satisfied field verdict and
+  each path gap. A `verified` scenario gets nothing -- a note on every case
+  would be noise and would train readers to skip the ones that matter -- and
+  a bundle with no `verification` key at all (an older v1 bundle) is read as
+  "no verdict recorded", never as unverified.
 - **Lint gate**: `tests/integration/test_generate_with_data_lint_gate.py`
   generates a `.cut` for every corpus program across all three
   `--scenarios` modes (happy/branches/all) and asserts `mockymock lint`

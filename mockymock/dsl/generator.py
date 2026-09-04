@@ -507,6 +507,33 @@ def _capture_targets(lines: list[str]) -> list[str]:
     return targets
 
 
+def _verification_comment_lines(scenario: Scenario) -> list[str]:
+    """A `*>` note when cobol-parser could not verify that this scenario's
+    own generated data actually reaches the branch it is named for.
+
+    A scenario name is a claim; before the bundle carried a verdict, the
+    only way to check it was to run the case under `--trace`. Surfacing an
+    `unverified` verdict here means a reader of the generated `.cut` sees
+    the caveat next to the TESTCASE it applies to, instead of trusting a
+    label. Nothing is emitted for a verified scenario -- a note on every
+    case would be noise, and would train people to skip these.
+    """
+    verification = scenario.verification or {}
+    if verification.get("status") != "unverified":
+        return []
+    reasons = [
+        f"{entry.get('field')}: {entry.get('detail')}"
+        for entry in verification.get("fields") or []
+        if entry.get("status") != "satisfied"
+    ] + list(verification.get("gaps") or [])
+    lines = [
+        "*> UNVERIFIED: this scenario's generated data was not confirmed to "
+        "reach the branch it is named for:"
+    ]
+    lines.extend(f"*>   - {reason}" for reason in reasons)
+    return lines
+
+
 def _quote_safe(name: str) -> str:
     """The .cut grammar cannot represent a double quote inside a quoted
     name (`"[^"]*"` -- no escape syntax), so a name containing one would
@@ -1615,6 +1642,7 @@ def _scaffold_with_bundle(
             skipped_scenarios += 1
             continue
         lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
+        lines.extend(f"    {line}" for line in _verification_comment_lines(scenario))
         directive_lines, declared_keys, call_count_overrides = _bundle_mock_directives(
             scenario, surface, mockymock_keys, registry, placeholder_keys, source
         )

@@ -3175,3 +3175,16 @@ which now carries the scaffolded capture for its `CALL "LOGALERT"`.
 Verified end to end without Docker as far as generate -> lint -> export
 (declarations, resets and capture MOVEs all present in the exported
 source); not compiled.
+
+## 2026-09-04 — Generated TESTCASEs carry cobol-parser's unverified verdict
+
+**[dsl]** cobol-parser's bundle gained `Scenario.verification`: its own
+answer to "does this scenario's generated data actually satisfy the branch
+it is named for?". mockymock's loader reads it defensively (absent means no
+verdict was recorded, never "unverified" — an older bundle is still a valid
+v1 bundle), and `_verification_comment_lines` renders an `unverified`
+verdict as a `*> UNVERIFIED:` block above the affected TESTCASE, listing
+every non-satisfied field verdict and every path gap. A verified scenario
+gets nothing: a note on every case would be noise and would train readers to
+skip the ones that matter. Before this, the only way to check a scenario's
+own label was `mockymock run --trace`, per case.

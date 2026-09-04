@@ -1174,3 +1174,86 @@ def test_placeholder_downgraded_read_demotes_a_downstream_verify_in_the_same_loo
     # the demoted output still round-trips
     suite = parse_cut(with_placeholder)
     assert len(suite.test_cases) == 1
+
+
+# --- unverified-scenario notes (cobol-parser's Scenario.verification) --------
+
+
+def _scenario_with_verification(verification):
+    return Scenario(
+        name="CHECK-QTY: THEN",
+        intent="targets branch arm",
+        entry="MAIN-PROCESS",
+        fixtures=[],
+        expectations=[],
+        verification=verification,
+    )
+
+
+def _bundle_of(scenario):
+    return FixtureBundle(
+        bundle_version=1, program_name="P", seed=7, scenarios=[scenario]
+    )
+
+
+def test_unverified_scenario_gets_a_comment_naming_every_reason():
+    """A scenario name is a claim. cobol-parser now says whether its own
+    generated data actually reaches the branch; surfacing an `unverified`
+    verdict here means the reader sees the caveat next to the TESTCASE
+    instead of having to run the case under `--trace` to find out."""
+    surface, _ = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    scenario = _scenario_with_verification(
+        {
+            "status": "unverified",
+            "fields": [
+                {
+                    "field": "WS-AMOUNT",
+                    "status": "violated",
+                    "detail": "none of the 3 generated value(s) satisfy it",
+                },
+                {"field": "WS-RATE", "status": "satisfied", "detail": "row(s) 0"},
+            ],
+            "gaps": ["enclosing arm P@10:5/THEN has no modeled constraints"],
+        }
+    )
+    text = scaffold_cut("ORDRPROC", surface, _bundle_of(scenario))
+    assert "*> UNVERIFIED: this scenario's generated data was not confirmed" in text
+    assert "WS-AMOUNT: none of the 3 generated value(s) satisfy it" in text
+    assert "enclosing arm P@10:5/THEN has no modeled constraints" in text
+    # A field that DID verify is not listed as a reason.
+    assert "WS-RATE" not in text
+
+
+def test_a_verified_scenario_gets_no_note():
+    """A note on every case would be noise, and would train people to skip
+    the ones that matter."""
+    surface, _ = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    scenario = _scenario_with_verification({"status": "verified", "fields": []})
+    text = scaffold_cut("ORDRPROC", surface, _bundle_of(scenario))
+    assert "UNVERIFIED" not in text
+
+
+def test_a_bundle_without_the_verification_key_is_still_read():
+    """An older bundle is still a valid v1 bundle -- absent means "no verdict
+    was recorded", never "unverified"."""
+    surface, _ = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    text = scaffold_cut(
+        "ORDRPROC", surface, _bundle_of(_scenario_with_verification(None))
+    )
+    assert "UNVERIFIED" not in text
+
+
+def test_the_unverified_note_does_not_break_parsing_or_linting():
+    from mockymock.analysis.refusal import check_test_case
+
+    surface, bundle = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    bundle.scenarios[0].verification = {
+        "status": "unverified",
+        "fields": [{"field": "WS-AMOUNT", "status": "absent", "detail": "no fixture"}],
+        "gaps": [],
+    }
+    text = scaffold_cut("ORDRPROC", surface, bundle)
+    result = parse_cobol(ORDRPROC_SOURCE, filename="ordrproc.cbl")
+    suite = parse_cut(text)
+    for case in suite.test_cases:
+        assert check_test_case(surface, result.ast, case) == [], case.name

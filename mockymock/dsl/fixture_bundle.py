@@ -89,6 +89,13 @@ class Scenario:
     fixtures: list[BoundaryFixture] = field(default_factory=list)
     expectations: list[Expectation] = field(default_factory=list)
     unconstrained: list[str] = field(default_factory=list)
+    #: cobol-parser's own self-verification verdict for this scenario: did
+    #: the data it generated actually satisfy the branch the scenario is
+    #: named for? `{"status": "verified"|"unverified", "fields": [...],
+    #: "gaps": [...]}`, or `None` for a bundle produced before that check
+    #: existed (or a happy-path scenario, which targets no branch). Read
+    #: defensively -- an older bundle is still a valid v1 bundle.
+    verification: dict[str, Any] | None = None
 
 
 @dataclass
@@ -156,6 +163,7 @@ def _load_scenario(data: dict[str, Any]) -> Scenario:
         fixtures=[_load_fixture(f) for f in data.get("fixtures") or []],
         expectations=[_load_expectation(e) for e in data.get("expectations") or []],
         unconstrained=list(data.get("unconstrained") or []),
+        verification=data.get("verification"),
     )
 
 
