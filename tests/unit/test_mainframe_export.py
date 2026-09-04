@@ -413,6 +413,7 @@ def test_line_with_no_literal_is_still_reported():
     result, problems = wrap_long_literal_lines([line])
     assert len(problems) == 1
     assert "line 1" in problems[0]
+    assert "no single quoted literal to split" in problems[0]
     assert result == [line]
 
 
@@ -428,11 +429,16 @@ def test_line_with_two_literals_is_reported_not_guessed_at():
 
 def test_trailing_text_too_long_to_fit_is_reported():
     """A literal split cannot rescue a line whose NON-literal text alone
-    overflows -- the final continuation line still has to carry it."""
+    overflows -- the final continuation line still has to carry it. The
+    message must say that, not claim the line holds no literal: it holds
+    one, and reading "no literal" against your own MOVE is worse than no
+    message at all."""
     line = '           MOVE "SHORT" TO ' + "W" * 60
     assert len(line) > 72
     result, problems = wrap_long_literal_lines([line])
     assert len(problems) == 1
+    assert "the rest of the line does not fit" in problems[0]
+    assert "no single quoted literal" not in problems[0]
     assert result == [line]
 
 

@@ -563,10 +563,21 @@ def wrap_long_literal_lines(
             continue
         continued = _continue_literal(line, max_col)
         if continued is None:
+            # Two distinct failure modes, named apart: there was nothing to
+            # split, or there was and splitting it still didn't fit (the
+            # rest of the line has to share the final continuation line).
+            # Saying "no literal" for the second would be plainly false to
+            # anyone reading their own MOVE in the message.
+            if _find_single_literal(line) is None:
+                reason = "holds no single quoted literal to split"
+            else:
+                reason = (
+                    "could not be brought under it by continuing its "
+                    "literal -- the rest of the line does not fit"
+                )
             problems.append(
-                f"line {line_no} exceeds column {max_col} and holds no single "
-                f"quoted literal that could be split across continuation "
-                f"lines: {line!r}{_column_overflow_hint(max_col)}"
+                f"line {line_no} exceeds column {max_col} and {reason}: "
+                f"{line!r}{_column_overflow_hint(max_col)}"
             )
             new_lines.append(line)
             continue
