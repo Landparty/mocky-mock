@@ -36,9 +36,10 @@ def build_provenance_header(program_path: str, cut_path: str) -> list[str]:
     """A comment block (real column-7 `*>` inline-comment markers, like
     splicer/sqlca.py's own generated comments) stating this build is
     mock-only and naming the GnuCOBOL-vs-IBM-COBOL gaps a clean compile
-    here does not rule out -- including that the DISPLAY-wrap transform
-    below (wrap_long_display_lines) was verified against GnuCOBOL only,
-    never against a real IBM Enterprise COBOL compiler -- plus a note
+    here does not rule out -- including that the two column-fitting
+    transforms below (wrap_long_display_lines, wrap_long_literal_lines)
+    were verified against GnuCOBOL only, never against a real IBM
+    Enterprise COBOL compiler -- plus a note
     that original source comments are not preserved (normalize_fixed_format
     already blanked them before this pipeline ever saw the source), since
     unlike `run`'s throwaway sandbox build, this file is a durable
@@ -65,10 +66,13 @@ def build_provenance_header(program_path: str, cut_path: str) -> list[str]:
         "      *>   Numeric-edited PICTURE clauses and IBM intrinsic functions",
         "      *> See docs/2026-07-06-real-world-readiness-audit.md, Finding 1.",
         "      *>",
-        "      *> Also unverified against real IBM COBOL specifically:",
-        "      *> splitting a long generated DISPLAY into WITH NO ADVANCING",
-        "      *> fragments below was checked only against GnuCOBOL, never",
-        "      *> against IBM COBOL.",
+        "      *> Also unverified against real IBM COBOL specifically: the",
+        "      *> two column-fitting rewrites below were checked only",
+        "      *> against GnuCOBOL, never against IBM COBOL -- splitting a",
+        "      *> long generated DISPLAY into WITH NO ADVANCING fragments,",
+        "      *> and splitting a long literal across `-` continuation",
+        "      *> lines (standard fixed-format continuation; the literal's",
+        "      *> content is unchanged).",
         "      *>",
         "      *> NOTE: original source comments are NOT preserved above --",
         "      *> normalize_fixed_format already blanks them before this",
@@ -137,9 +141,9 @@ def _parse_display_args(rest: str) -> tuple[str, str] | None:
     return "".join(literal_chunks), rest[pos:].strip()
 
 
-def _atomic_units(escaped_text: str) -> list[str]:
+def _atomic_units(escaped_text: str, delimiter: str = '"') -> list[str]:
     """Split already-escaped literal text into atomic units: a
-    doubled-quote escape pair ('""') is one 2-character unit that must
+    doubled-delimiter escape pair ('""') is one 2-character unit that must
     never be split across a chunk boundary; every other character is its
     own 1-character unit. Grouping by whole units (in _chunk_units below)
     guarantees no chunk boundary ever bisects a pair, regardless of how
@@ -157,7 +161,11 @@ def _atomic_units(escaped_text: str) -> list[str]:
     i = 0
     n = len(escaped_text)
     while i < n:
-        if escaped_text[i] == '"' and i + 1 < n and escaped_text[i + 1] == '"':
+        if (
+            escaped_text[i] == delimiter
+            and i + 1 < n
+            and escaped_text[i + 1] == delimiter
+        ):
             units.append(escaped_text[i : i + 2])
             i += 2
         else:
@@ -193,22 +201,30 @@ def _chunk_units(units: list[str], budget: int) -> list[str]:
 
 
 def _column_overflow_hint(max_col: int) -> str:
-    """Explanation appended to the two COLUMN_OVERFLOW problem messages
-    that are actually reachable from user-authored `.cut` text (a line
-    that isn't a DISPLAY at all, or a DISPLAY whose arguments don't start
-    with a literal) -- both fire on lines that are NOT mockymock's own
+    """Explanation appended to the COLUMN_OVERFLOW problem messages that
+    are actually reachable from user-authored `.cut` text (a line that
+    isn't a DISPLAY at all, or a DISPLAY whose arguments don't start with
+    a literal) -- both fire on lines that are NOT mockymock's own
     generated shape, and in practice that means a MOCK body's own
     statement (e.g. a MOVE), which injector.py re-indents by 19 columns
     when it splices the body in, routinely pushing an ordinary-looking
-    line past column 72. The three budget/escape-cluster messages further
-    below are deliberately excluded: those only fire on a line that DID
-    match mockymock's generated DISPLAY shape but still couldn't be
-    wrapped, a failure mode this explanation would misdescribe."""
+    line past column 72. The budget/escape-cluster messages further below
+    are deliberately excluded: those only fire on a line that DID match
+    mockymock's generated DISPLAY shape but still couldn't be wrapped, a
+    failure mode this explanation would misdescribe.
+
+    The advice names identifiers rather than literals on purpose: a long
+    quoted literal is no longer a reason to refuse -- `fit_within_columns`
+    splits one across fixed-format continuation lines (see
+    `wrap_long_literal_lines`), so a line that still overflows is one
+    whose NON-literal text alone does not fit."""
     return (
         f" -- this typically comes from a `.cut` file's MOCK body text "
         f"(e.g. a MOVE statement inside a MOCK/END-MOCK block) that got "
-        f"re-indented past column {max_col} when spliced in; shortening "
-        f"the literal or the target field name usually resolves it"
+        f"re-indented past column {max_col} when spliced in; a long quoted "
+        f"literal is split across continuation lines automatically, so what "
+        f"is left to shorten here is the non-literal text (field or "
+        f"paragraph names)"
     )
 
 
@@ -372,3 +388,222 @@ def wrap_long_display_lines(
             continue
         new_lines.extend(fragments)
     return new_lines, problems
+
+
+# A fixed-format continuation line: columns 1-6 blank, `-` in the
+# indicator area (column 7), blanks up to column 12, where the continued
+# literal's re-opening quote goes. Both IBM Enterprise COBOL and GnuCOBOL
+# require exactly this -- a hyphen in the indicator area, and the first
+# nonblank character (which for a continued literal must be the opening
+# delimiter) in Area B (columns 12-72).
+_CONTINUATION_PREFIX = "      -    "
+
+# CBL / PROCESS compiler-directing statements (preserved verbatim by
+# `export`'s preserve_compiler_directives=True) are read by the compiler
+# BEFORE normal continuation rules apply and cannot be continued this
+# way, so they are refused rather than rewritten.
+_DIRECTIVE_RE = re.compile(r"^\s*(CBL|PROCESS)\b", re.IGNORECASE)
+
+
+def _find_single_literal(line: str) -> tuple[str, str, str, str] | None:
+    """Split `line` around its one and only quoted literal, returning
+    (prefix, delimiter, body, suffix) where `body` is the literal's raw
+    source text between the delimiters (doubled-delimiter escapes left as
+    they appear). Returns None when the line holds no literal, holds an
+    unterminated one, or holds a second one -- none of which this module
+    knows how to continue safely.
+
+    Both COBOL literal delimiters are accepted: mockymock's own generated
+    lines only ever use `"`, but a `.cut` MOCK body or a preserved line of
+    the original program may legitimately use `'` (e.g. under CBL APOST)."""
+    delimiter = ""
+    start = -1
+    for index, char in enumerate(line):
+        if char in ('"', "'"):
+            delimiter = char
+            start = index
+            break
+    if start < 0:
+        return None
+
+    pos = start + 1
+    body: list[str] = []
+    while True:
+        if pos >= len(line):
+            return None  # unterminated literal -- not a shape we rewrite
+        if line[pos] == delimiter:
+            if pos + 1 < len(line) and line[pos + 1] == delimiter:
+                body.append(delimiter * 2)
+                pos += 2
+                continue
+            break  # closing delimiter
+        body.append(line[pos])
+        pos += 1
+
+    suffix = line[pos + 1 :]
+    if delimiter in suffix:
+        return None  # a second literal: which one to split is ambiguous
+    return line[:start], delimiter, "".join(body), suffix
+
+
+def _continue_literal(line: str, max_col: int) -> list[str] | None:
+    """Rewrite one over-`max_col` line as a continued line plus one or
+    more fixed-format continuation lines, splitting its single quoted
+    literal, or None if that can't be done within `max_col`.
+
+    Every produced line but the last is filled to EXACTLY `max_col`. That
+    is not cosmetic: under fixed-format rules every character through
+    column 72 of a continued line -- trailing blanks included -- is part
+    of the literal, so a short continued line silently pads the literal
+    with spaces. Verified empirically against GnuCOBOL 4.0 while fixing
+    this: an exactly-filled split round-trips the literal byte-for-byte,
+    while the same split left short reproduced it with a run of spaces
+    injected at the split point.
+
+    Filling exactly is always possible because the padding goes in the
+    prefix, before the opening delimiter, where extra spaces are just
+    separators: the chunk is chosen first (whole units only, so a doubled
+    delimiter is never bisected -- see _atomic_units) and the line is then
+    padded up to the column limit."""
+    parsed = _find_single_literal(line)
+    if parsed is None:
+        return None
+    prefix, delimiter, body, suffix = parsed
+    units = _atomic_units(body, delimiter)
+    if not units:
+        return None  # an empty literal cannot be the reason this line is long
+
+    out: list[str] = []
+    current_prefix = prefix
+    pos = 0
+    while True:
+        remaining = units[pos:]
+        # The final line re-closes the literal and carries whatever
+        # followed it (` TO WS-FIELD`, a trailing period, ...).
+        final_budget = max_col - len(current_prefix) - 2 - len(suffix)
+        if 0 < sum(len(unit) for unit in remaining) <= final_budget:
+            out.append(
+                f"{current_prefix}{delimiter}{''.join(remaining)}"
+                f"{delimiter}{suffix}"
+            )
+            break
+
+        # Otherwise emit one continued line: no closing delimiter, filled
+        # to exactly max_col. Never consume the last unit here -- the
+        # final line's literal must not come out empty (illegal COBOL).
+        continued_budget = max_col - len(current_prefix) - 1
+        taken = 0
+        taken_len = 0
+        for unit in remaining[:-1]:
+            if taken_len + len(unit) > continued_budget:
+                break
+            taken_len += len(unit)
+            taken += 1
+        if taken == 0:
+            return None  # no progress possible: fail closed, caller reports
+
+        padding = " " * (continued_budget - taken_len)
+        out.append(f"{current_prefix}{padding}{delimiter}{''.join(remaining[:taken])}")
+        pos += taken
+        current_prefix = _CONTINUATION_PREFIX
+
+    # Safety net, same contract as wrap_long_display_lines': return lines
+    # that fit, or nothing at all. Every continued line must sit exactly
+    # on the column limit (short ones would pad the literal with blanks)
+    # and the final one must not exceed it.
+    if any(len(emitted) != max_col for emitted in out[:-1]):
+        return None
+    if len(out[-1]) > max_col:
+        return None
+    return out
+
+
+def wrap_long_literal_lines(
+    lines: list[str], max_col: int = COLUMN_LIMIT
+) -> tuple[list[str], list[str]]:
+    """Split every over-`max_col` line that carries exactly one quoted
+    literal across fixed-format continuation lines (`-` in the indicator
+    area), leaving the statement itself -- and the literal's content --
+    byte-for-byte what it was.
+
+    This is what makes an ordinary `MOVE "<long literal>" TO <field>`
+    exportable. Two shapes reach it routinely and neither is under the
+    `.cut` file's control: `splicer/reset.py` re-serializes every
+    WORKING-STORAGE VALUE clause into UT-RESET-WORKING-STORAGE as a
+    single-line MOVE (a program with a wide banner/marker field -- the
+    `DEBUT-WORKING-STORAGE` / `FIN-WORKING-STORAGE` storage-dump markers
+    common in IBM shops -- overflows on its own declaration), and
+    cobolparser's normalize_fixed_format collapses a literal the ORIGINAL
+    source already continued into one long free-form line, which
+    restore_fixed_format_columns then pushes 7 columns further right.
+    Before this, both were flat refusals with no in-tool remedy.
+
+    Lines that still can't be brought under `max_col` -- no literal at
+    all, a second literal (which one to split is ambiguous), or non-literal
+    text that alone overflows -- are reported in the returned problems list
+    rather than silently kept long, the same fail-closed contract
+    `wrap_long_display_lines` keeps. Full-line `*>` comments are exempt for
+    the reason given there (columns 73+ are the identification field, never
+    compiled)."""
+    new_lines: list[str] = []
+    problems: list[str] = []
+    for line_no, line in enumerate(lines, start=1):
+        if len(line) <= max_col:
+            new_lines.append(line)
+            continue
+        if line.lstrip().startswith("*>"):
+            new_lines.append(line)
+            continue
+        if _DIRECTIVE_RE.match(line):
+            problems.append(
+                f"line {line_no} exceeds column {max_col} and is a compiler-"
+                f"directing statement, which cannot be continued: {line!r}"
+            )
+            new_lines.append(line)
+            continue
+        continued = _continue_literal(line, max_col)
+        if continued is None:
+            # Two distinct failure modes, named apart: there was nothing to
+            # split, or there was and splitting it still didn't fit (the
+            # rest of the line has to share the final continuation line).
+            # Saying "no literal" for the second would be plainly false to
+            # anyone reading their own MOVE in the message.
+            if _find_single_literal(line) is None:
+                reason = "holds no single quoted literal to split"
+            else:
+                reason = (
+                    "could not be brought under it by continuing its "
+                    "literal -- the rest of the line does not fit"
+                )
+            problems.append(
+                f"line {line_no} exceeds column {max_col} and {reason}: "
+                f"{line!r}{_column_overflow_hint(max_col)}"
+            )
+            new_lines.append(line)
+            continue
+        new_lines.extend(continued)
+    return new_lines, problems
+
+
+def fit_within_columns(
+    lines: list[str], max_col: int = COLUMN_LIMIT
+) -> tuple[list[str], list[str]]:
+    """Bring every line within `max_col`, or report the ones that can't be:
+    the single entry point `export` uses for column fitting.
+
+    Two passes, in this order. `wrap_long_display_lines` first, because a
+    generated DISPLAY splits into `WITH NO ADVANCING` fragments whose
+    stdout equivalence is empirically established (see its docstring), and
+    the __MOCKYMOCK__ protocol depends on that text. `wrap_long_literal_lines`
+    second, over whatever is still long -- generated MOVEs, `.cut` MOCK
+    body statements, original-source literals normalize_fixed_format
+    collapsed onto one line.
+
+    The first pass's problems are deliberately dropped: it reports every
+    line it declined to wrap, but the second pass re-examines each of those
+    (they are returned unchanged, still over the limit) and reports its own
+    problem for any it also can't fix. Only lines NEITHER pass can wrap end
+    up in the returned problems -- reporting the first pass's list too would
+    mean refusing on lines that were, in fact, successfully wrapped."""
+    wrapped, _ = wrap_long_display_lines(lines, max_col)
+    return wrap_long_literal_lines(wrapped, max_col)

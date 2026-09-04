@@ -159,20 +159,15 @@ def test_export_reports_refused_static_checks_and_writes_nothing(tmp_path, capsy
     assert not (tmp_path / "BAD.mainframe.cbl").exists()
 
 
-def test_export_refuses_on_column_overflow_from_cut_mock_body_text(tmp_path, capsys):
-    """The realistic, routinely-reachable COLUMN_OVERFLOW trigger: a `.cut`
-    file's own MOCK body text, not mockymock-generated DISPLAY boilerplate.
-    `injector.py`'s build_site_dispatch re-indents a MOCK body's lines by
-    19 columns when it splices them in, so an ordinary MOVE with a modest
-    literal and a modest field name routinely lands past column 72 once
-    restore_fixed_format_columns's own 7-space prefix is added on top.
-    `examples/claimseg` used to be the one example reaching this refusal
-    path, but Task 4's `*>` comment-line carve-out stopped it from doing
-    so, leaving this path completely untested before this fixture.
-    Manually confirmed before writing this test: `mockymock lint` on this
-    exact program/cut pair reports no problems (this is not a static-check
-    refusal) while `export` refuses with COLUMN_OVERFLOW and writes
-    nothing."""
+def _column_overflow_program(tmp_path, mock_body):
+    """A program + `.cut` pair whose MOCK body line lands past column 72
+    once spliced. `injector.py`'s build_site_dispatch re-indents a MOCK
+    body's lines by 19 columns, so an ordinary statement with modest names
+    routinely overflows once restore_fixed_format_columns's own 7-space
+    prefix is added on top -- the routinely-reachable COLUMN_OVERFLOW
+    path, reached from user-authored text rather than from mockymock's own
+    generated DISPLAY boilerplate. `mockymock lint` reports no problems on
+    either pair below (neither is a static-check refusal)."""
     cbl = tmp_path / "PROG.cbl"
     cbl.write_text(
         "       IDENTIFICATION DIVISION.\n"
@@ -181,6 +176,7 @@ def test_export_refuses_on_column_overflow_from_cut_mock_body_text(tmp_path, cap
         "       DATA DIVISION.\n"
         "       WORKING-STORAGE SECTION.\n"
         "       01  WS-A-RATHER-LONG-FIELD-NAME-HERE   PIC X(40).\n"
+        "       01  WS-ANOTHER-RATHER-LONG-FIELD-NAME  PIC X(40).\n"
         "\n"
         "       PROCEDURE DIVISION.\n"
         "       MAIN-PROCESS.\n"
@@ -193,10 +189,44 @@ def test_export_refuses_on_column_overflow_from_cut_mock_body_text(tmp_path, cap
         "\n"
         'TESTCASE "long mock body line"\n'
         '    MOCK CALL "SUBPROG"\n'
-        '        MOVE "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" TO '
-        "WS-A-RATHER-LONG-FIELD-NAME-HERE\n"
+        f"        {mock_body}\n"
         "    END-MOCK\n"
         "    PERFORM MAIN-PROCESS\n"
+    )
+    return cbl, cut
+
+
+def test_export_continues_an_overlong_mock_body_literal(tmp_path, capsys):
+    """An over-72 line whose length comes from a quoted literal is split
+    across fixed-format continuation lines rather than refused: the
+    literal's content is unchanged, so there is nothing for the `.cut`
+    author to shorten. The same rewrite is what makes a program declaring
+    a wide WORKING-STORAGE marker field exportable at all -- reset.py
+    re-serializes its VALUE clause into a MOVE nothing outside the
+    program could shorten."""
+    cbl, cut = _column_overflow_program(
+        tmp_path,
+        'MOVE "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" TO '
+        "WS-A-RATHER-LONG-FIELD-NAME-HERE",
+    )
+
+    exit_code = main(["export", str(cbl), "--cut", str(cut)])
+    assert exit_code == 0, capsys.readouterr().out
+
+    written = (tmp_path / "PROG.mainframe.cbl").read_text().splitlines()
+    assert all(len(line) <= 72 for line in written)
+    continuations = [line for line in written if len(line) > 6 and line[6] == "-"]
+    assert continuations, "the long MOVE was expected to be continued"
+    assert all(line[7:].lstrip().startswith('"') for line in continuations)
+
+
+def test_export_still_refuses_when_the_overflow_is_not_a_literal(tmp_path, capsys):
+    """Continuation is not a licence to ship a too-long line: an overflow
+    with no literal to split still refuses with COLUMN_OVERFLOW and writes
+    nothing."""
+    cbl, cut = _column_overflow_program(
+        tmp_path,
+        "MOVE WS-A-RATHER-LONG-FIELD-NAME-HERE TO " "WS-ANOTHER-RATHER-LONG-FIELD-NAME",
     )
 
     exit_code = main(["export", str(cbl), "--cut", str(cut)])
