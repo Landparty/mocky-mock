@@ -351,8 +351,13 @@ either mocked or fails loudly; no real I/O executes).
 mockymock export ORDRPROC.cbl --cut ORDRPROC.cut -o ORDRPROC.mainframe.cbl
 ```
 
-If a generated line still doesn't fit within column 72 after adjustment,
-`export` refuses rather than writing an invalid fixed-format file.
+A line past column 72 is fitted automatically where it can be: a long generated
+`DISPLAY` splits into `WITH NO ADVANCING` fragments, and a long quoted literal
+(a `MOVE` restoring a wide `VALUE` clause, a `.cut` MOCK body's own statement)
+splits across fixed-format continuation lines with its content unchanged. Only a
+line neither rewrite can fit -- one with no literal to split, two literals, or
+non-literal text that alone overflows -- makes `export` refuse rather than write
+an invalid fixed-format file.
 
 ### `mockymock analyze`
 

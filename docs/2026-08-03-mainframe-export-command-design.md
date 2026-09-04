@@ -186,6 +186,13 @@ many pairs cluster together). A follow-up 20,000-case adversarial run
 (heavier quote density, indentation to 50 columns) against the redesign
 found zero round-trip or malformed-fragment failures.
 
+> **Superseded in part, 2026-09-04.** A long line is no longer refused
+> just because it isn't a generated `DISPLAY`: a second pass splits a
+> long quoted literal across fixed-format continuation lines, and
+> `fit_within_columns` sequences the two. The backstop below still stands
+> for what neither pass can fit. See
+> [2026-09-04-export-literal-continuation-design.md](2026-09-04-export-literal-continuation-design.md).
+
 A line that still can't be brought under 72 after wrapping is the honest
 fail-closed backstop: refuse (`COLUMN_OVERFLOW`), naming the line. Three
 things trigger it: not a recognized `DISPLAY` shape, a trailing expression
