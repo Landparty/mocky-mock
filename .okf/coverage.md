@@ -3,7 +3,7 @@ type: Module
 title: Coverage Reporting
 description: GnuCOBOL --coverage/gcov instrumentation wired into `mockymock run`, reporting per-line coverage of the instrumented source.
 tags: [coverage, gcov, cli, runtime]
-timestamp: 2026-08-10T00:00:00Z
+timestamp: 2026-09-04T00:00:00Z
 ---
 # Overview
 
@@ -107,6 +107,17 @@ works fine via `subprocess.run` (see `runtime.md`'s existing note on
 absolute path" due to Git Bash's own MSYS argument path-mangling, not a
 real Docker limitation. Don't mistake that shell artifact for a reason to
 avoid `-w` in the actual Python implementation.
+
+# Second consumer: `mockymock mutate`'s coverage gate
+
+`map_coverage_to_original` is no longer only a reporting view. Since
+2026-09-04 `mutation/runner.py` compiles the *baseline* with
+`--coverage`, remaps it the same way, and classifies any mutant on a
+provably unexecuted ORIGINAL line as `survived` without building it (see
+[cli](cli.md), `mockymock mutate`). The remap's deliberate exclusions are
+load-bearing there: a line the map omits is **unknown**, never
+"uncovered", and is always built. Widening what the remap claims to know
+would turn a reporting inaccuracy into a wrong mutation verdict.
 
 # See Also
 

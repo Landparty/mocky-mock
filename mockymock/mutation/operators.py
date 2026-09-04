@@ -4,14 +4,25 @@ v1 operates on the ORIGINAL source lines (the file the user edits, before
 `normalize_fixed_format`), so every reported mutant points at a line the
 user can open. Discovery is deliberately conservative: a site is only
 mutated when the whole match sits outside quoted literals, on a line that
-is (a) inside the PROCEDURE DIVISION, (b) not a comment, (c) free of
-boundary verbs (those statements are mocked/replaced by the splicer --
-mutating them fights the harness instead of testing the program), and
-(d) not a terminator (STOP RUN / GOBACK lines are rewritten by the
-splicer's terminator plans). A skipped real site costs one blind spot; a
-false site costs a stillborn compile per mutant, so precision wins over
-recall throughout. AST-driven discovery (via cobolparser statement nodes)
-is the documented v2 upgrade path.
+is (a) inside the PROCEDURE DIVISION, (b) not a comment or a
+continuation, (c) free of boundary verbs (those statements are
+mocked/replaced by the splicer -- mutating them fights the harness
+instead of testing the program), and (d) not a terminator (STOP RUN /
+GOBACK lines are rewritten by the splicer's terminator plans). A skipped
+real site costs one blind spot; a false site costs a stillborn compile
+per mutant, so precision wins over recall throughout. AST-driven
+discovery (via cobolparser statement nodes) is the documented v2 upgrade
+path.
+
+**Column discipline.** Every mutated line is rewritten *within columns
+1-72* with the identification area (columns 73-80) pinned exactly where
+it was. This is not cosmetic: mockymock feeds the patched source through
+`normalize_fixed_format`, which slices columns 8-72 and discards the
+rest, so a rewrite that grows the code (`ADD..TO` -> `SUBTRACT..FROM`
+adds seven characters) silently loses its own tail, and one that shrinks
+it (`>=` -> `>`) silently drags an identification-area character into
+column 72. Both are guaranteed stillborns. `_rewrite_code` reclaims what
+it can from interior whitespace and refuses the mutant when it cannot.
 """
 
 from __future__ import annotations
@@ -19,12 +30,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+#: 1-based last column of the program-text area. `normalize_fixed_format`
+#: slices columns 8-72 and throws away everything past this, so a mutated
+#: line whose code reaches beyond it is a stillborn by construction.
+CODE_END_COL = 72
+#: 1-based first column of the program-text area (Area A starts here).
+TEXT_START_COL = 8
+
 
 # Plain `\b` treats `-` as a boundary (it's not a `\w` character), so
 # `\bREAD\b` false-matches inside an identifier like WS-READ-COUNT or
 # WS-CALL-FLAG -- COBOL naming conventions routinely compose exactly these
 # verbs with hyphens. A COBOL word boundary must also reject a neighboring
-# `-` (or alphanumeric), which `\b` alone cannot express.
+# `-` (or alphanumeric), which `\b` alone cannot express. Every verb and
+# keyword pattern in this module must use it -- `\bADD\b` matches inside
+# `GRP-FOR-ADD-CORR-R`, and the resulting `SUBTRACT`/`FROM` rewrite of an
+# ordinary MOVE is a stillborn.
 def _cobol_word(alternatives: str) -> str:
     return rf"(?<![A-Z0-9-])(?:{alternatives})(?![A-Z0-9-])"
 
@@ -42,6 +63,15 @@ _EXCLUDED_VERBS = re.compile(
 )
 
 _PROCEDURE_DIVISION = re.compile(r"\bPROCEDURE\s+DIVISION\b", re.IGNORECASE)
+# A source file can hold more than one program (nested or batched). Once
+# either of these appears the PROCEDURE DIVISION we were in has ended, so
+# discovery must fall back to "not in a procedure" until the next
+# PROCEDURE DIVISION header -- otherwise the *next* program's DATA
+# DIVISION is treated as mutable procedural code.
+_PROGRAM_BOUNDARY = re.compile(
+    r"\bEND\s+PROGRAM\b|\bIDENTIFICATION\s+DIVISION\b|\bID\s+DIVISION\b",
+    re.IGNORECASE,
+)
 
 # A line whose only statement starts with one of these verbs may be
 # replaced wholesale by CONTINUE (statement deletion). Conditional /
@@ -53,6 +83,51 @@ _DELETABLE_VERB = re.compile(
 )
 _SCOPE_TOKENS = re.compile(
     _cobol_word("IF|ELSE|EVALUATE|WHEN|PERFORM|UNTIL|VARYING") + r"|(?<![A-Z0-9-])END-",
+    re.IGNORECASE,
+)
+
+# What may legally follow a *complete* statement. Deleting a line is only
+# safe when the statement provably ends on it, and a period is the only
+# self-evident proof; short of one, the next code line must open something
+# new. Note which scope terminators are absent: `END-ADD` and friends bind
+# to the very verb `_DELETABLE_VERB` deletes, so a line followed by one is
+# a multi-line statement, not a complete one. `END-IF`/`END-PERFORM` and
+# the rest belong to an enclosing construct and are fine.
+_STATEMENT_OPENER = re.compile(
+    _cobol_word(
+        "ACCEPT|ADD|ALLOCATE|ALTER|CALL|CANCEL|CLOSE|COMMIT|COMPUTE|CONTINUE"
+        "|DELETE|DISPLAY|DIVIDE|EJECT|ELSE|ENTRY|EVALUATE|EXEC|EXIT|FREE"
+        "|GENERATE|GO|GOBACK|IF|INITIALIZE|INITIATE|INSPECT|INVOKE|JSON"
+        "|MERGE|MOVE|MULTIPLY|OPEN|PERFORM|PURGE|RAISE|READ|RELEASE|RESUME"
+        "|RETURN|REWRITE|ROLLBACK|SEARCH|SET|SORT|START|STOP|STRING"
+        "|SUBTRACT|SUPPRESS|TERMINATE|UNLOCK|UNSTRING|USE|VALIDATE|WHEN"
+        "|WRITE|XML"
+        "|END-IF|END-PERFORM|END-EVALUATE|END-SEARCH|END-READ|END-WRITE"
+        "|END-REWRITE|END-DELETE|END-START|END-CALL|END-ACCEPT|END-DISPLAY"
+        "|END-STRING|END-UNSTRING|END-RETURN|END-EXEC|END-INVOKE|END-XML"
+        "|END-JSON"
+    ),
+    re.IGNORECASE,
+)
+# `NAME.` / `NAME SECTION.` / `<x> DIVISION` / `END PROGRAM <name>.` --
+# the other shapes that cannot be the tail of the previous statement.
+_HEADER_LINE = re.compile(
+    r"^(?:[A-Z0-9][A-Z0-9-]*(?:\s+SECTION)?\s*\."
+    r"|[A-Z]+\s+DIVISION\b"
+    r"|END\s+PROGRAM\b"
+    r"|DECLARATIVES\s*\.)",
+    re.IGNORECASE,
+)
+# A line ending in one of these is unambiguously mid-statement, whatever
+# the next line looks like. This is what keeps `MOVE WS-A TO` / `WS-B.`
+# (whose second line is indistinguishable from a paragraph header) out of
+# the deletion set.
+_DANGLING_TAIL = re.compile(
+    _cobol_word(
+        "TO|FROM|BY|INTO|GIVING|REMAINDER|OF|IN|AND|OR|NOT|USING|THRU"
+        "|THROUGH|DELIMITED|POINTER|REPLACING|TALLYING|CORRESPONDING|CORR"
+    )
+    + r"\s*$|[=+\-*/(,]\s*$",
     re.IGNORECASE,
 )
 
@@ -68,15 +143,27 @@ _REL_SWAPS: list[tuple[str, str]] = [
     ("<", "<="),
 ]
 
-_ADD_TO = re.compile(r"\bADD\b(?P<mid>.+?)\bTO\b", re.IGNORECASE)
-_SUBTRACT_FROM = re.compile(r"\bSUBTRACT\b(?P<mid>.+?)\bFROM\b", re.IGNORECASE)
-_MULTIPLY_BY = re.compile(r"\bMULTIPLY\b(?P<mid>.+?)\bBY\b", re.IGNORECASE)
-_DIVIDE_INTO = re.compile(r"\bDIVIDE\b(?P<mid>.+?)\bINTO\b", re.IGNORECASE)
+_ADD_TO = re.compile(
+    _cobol_word("ADD") + r"(?P<mid>.+?)" + _cobol_word("TO"), re.IGNORECASE
+)
+_SUBTRACT_FROM = re.compile(
+    _cobol_word("SUBTRACT") + r"(?P<mid>.+?)" + _cobol_word("FROM"), re.IGNORECASE
+)
+_MULTIPLY_BY = re.compile(
+    _cobol_word("MULTIPLY") + r"(?P<mid>.+?)" + _cobol_word("BY"), re.IGNORECASE
+)
+_DIVIDE_INTO = re.compile(
+    _cobol_word("DIVIDE") + r"(?P<mid>.+?)" + _cobol_word("INTO"), re.IGNORECASE
+)
 
-_MOVE_INT = re.compile(r"\b(MOVE)\s+(\d+)\s+(TO)\b", re.IGNORECASE)
+_MOVE_INT = re.compile(
+    _cobol_word("MOVE") + r"\s+(?P<value>\d+)\s+" + _cobol_word("TO"), re.IGNORECASE
+)
 # An integer directly following a relational symbol in a condition line --
 # the loop/branch boundary itself.
 _REL_INT = re.compile(r"([><]=?|=)\s*(\d+)\b")
+
+_SPACE_RUN = re.compile(r"  +")
 
 
 @dataclass(frozen=True)
@@ -121,11 +208,89 @@ def _is_comment(line: str) -> bool:
     return len(line) > 6 and line[6] in "*/"
 
 
+def _is_continuation(line: str) -> bool:
+    """Fixed-format continuation line (indicator column `-`). Its text is
+    a fragment of the previous line's statement -- often the tail of a
+    split literal -- so neither the word-level matching nor the deletion
+    rules below hold on it. Same best-effort indicator-column read as
+    `_is_comment`."""
+    return len(line) > 6 and line[6] == "-"
+
+
 def _sequence_area_end(line: str) -> int:
-    """Best-effort guard for fixed-format identification columns: mutate
-    nothing past column 72 (index 72). Lines shorter than that (the common
+    """Best-effort guard for fixed-format identification columns: an
+    EXCLUSIVE slice end, so `line[: _sequence_area_end(line)]` is the
+    program text through column 72 and nothing beyond it. Columns are
+    1-based and indices are not, so column 72 is index 71 and the slice
+    end is `CODE_END_COL` itself. Lines shorter than that (the common
     case in this repo's fixtures and modern sources) are unaffected."""
-    return min(len(line), 72)
+    return min(len(line), CODE_END_COL)
+
+
+def _text_start(code: str) -> int:
+    """Index of the first program-text character: the first non-blank at
+    or after column 8, skipping the sequence area and the indicator
+    column. Everything before it is layout that decides Area A vs Area B
+    for the statement's first word."""
+    i = TEXT_START_COL - 1
+    while i < len(code) and code[i] == " ":
+        i += 1
+    return i
+
+
+def _squeeze_code(code: str, needed: int) -> str | None:
+    """Reclaim `needed` columns from `code` by collapsing runs of two or
+    more spaces down to one, left to right. Only runs interior to the
+    statement qualify: the sequence area and the indent that positions
+    the statement's first word are never touched (collapsing those walks
+    the statement leftwards into Area A), and neither is anything inside
+    a quoted literal (that would change the program's data, not just its
+    layout). Returns None when the line cannot give up that many
+    columns."""
+    head = _text_start(code)
+    out = code
+    while needed > 0:
+        mask = _literal_mask(out)
+        run = next(
+            (
+                m
+                for m in _SPACE_RUN.finditer(out)
+                if m.start() >= head and _outside_literals(mask, m.start(), m.end())
+            ),
+            None,
+        )
+        if run is None:
+            return None
+        drop = min(needed, run.end() - run.start() - 1)
+        out = out[: run.end() - drop] + out[run.end() :]
+        needed -= drop
+    return out
+
+
+def _rewrite_code(line: str, start: int, end: int, replacement: str) -> str | None:
+    """Replace `line[start:end]` -- a span that must lie inside the code
+    area -- with `replacement`, returning the whole rewritten line, or
+    None when the result cannot be made to fit columns 1-72.
+
+    The identification area (columns 73-80) is re-pinned to column 73
+    rather than carried along by the edit, so neither a growing rewrite
+    (its own tail falls off the end) nor a shrinking one (an
+    identification character slides into column 72 and becomes code) can
+    produce a line that means something other than what the mutant says
+    it means.
+    """
+    tail = line[CODE_END_COL:]
+    code = line[:CODE_END_COL]
+    new_code = code[:start] + replacement + code[end:]
+    overflow = len(new_code.rstrip()) - CODE_END_COL
+    if overflow > 0:
+        squeezed = _squeeze_code(new_code, overflow)
+        if squeezed is None or len(squeezed.rstrip()) > CODE_END_COL:
+            return None
+        new_code = squeezed
+    if not tail:
+        return new_code
+    return new_code[:CODE_END_COL].ljust(CODE_END_COL) + tail
 
 
 def generate_mutants(lines: list[str]) -> list[Mutant]:
@@ -136,11 +301,14 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
 
     for index, line in enumerate(lines):
         line_no = index + 1
-        if _is_comment(line):
+        if _is_comment(line) or _is_continuation(line):
             continue
         if not in_procedure:
             if _PROCEDURE_DIVISION.search(line):
                 in_procedure = True
+            continue
+        if _PROGRAM_BOUNDARY.search(line):
+            in_procedure = False
             continue
 
         mask = _literal_mask(line)
@@ -167,7 +335,7 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
         mutants.extend(_arithmetic_verb_mutants(line, code, mask, line_no))
         mutants.extend(_move_literal_mutants(line, code, mask, line_no))
         mutants.extend(_boundary_literal_mutants(line, code, mask, line_no))
-        deletion = _statement_deletion_mutant(line, code, mask, line_no)
+        deletion = _statement_deletion_mutant(lines, index, code, mask, line_no)
         if deletion is not None:
             mutants.append(deletion)
 
@@ -198,7 +366,9 @@ def _relational_mutants(
             # A bare `>`/`<` must not re-match inside an already-claimed
             # `>=`/`<=`; compound symbols run first and claim their span.
             claimed.update(range(pos, end))
-            mutated = line[:pos] + target + line[end:]
+            mutated = _rewrite_code(line, pos, end, target)
+            if mutated is None:
+                continue
             mutants.append(
                 Mutant(
                     line=line_no,
@@ -225,13 +395,11 @@ def _arithmetic_verb_mutants(
         match = pattern.search(code)
         if match is None or not _outside_literals(mask, match.start(), match.end()):
             continue
-        mutated = (
-            line[: match.start()]
-            + verb
-            + match.group("mid")
-            + preposition
-            + line[match.end() :]
+        mutated = _rewrite_code(
+            line, match.start(), match.end(), verb + match.group("mid") + preposition
         )
+        if mutated is None:
+            continue
         mutants.append(
             Mutant(
                 line=line_no,
@@ -250,9 +418,11 @@ def _move_literal_mutants(
     match = _MOVE_INT.search(code)
     if match is None or not _outside_literals(mask, match.start(), match.end()):
         return []
-    value = int(match.group(2))
+    value = int(match.group("value"))
     replacement = str(value + 1)
-    mutated = line[: match.start(2)] + replacement + line[match.end(2) :]
+    mutated = _rewrite_code(line, match.start("value"), match.end("value"), replacement)
+    if mutated is None:
+        return []
     return [
         Mutant(
             line=line_no,
@@ -275,7 +445,9 @@ def _boundary_literal_mutants(
             continue
         value = int(match.group(2))
         replacement = str(value + 1)
-        mutated = line[: match.start(2)] + replacement + line[match.end(2) :]
+        mutated = _rewrite_code(line, match.start(2), match.end(2), replacement)
+        if mutated is None:
+            continue
         mutants.append(
             Mutant(
                 line=line_no,
@@ -288,9 +460,38 @@ def _boundary_literal_mutants(
     return mutants
 
 
+def _statement_ends_on_line(lines: list[str], index: int, code: str) -> bool:
+    """True when the statement starting on `lines[index]` provably ends
+    there. A trailing period proves it outright; short of one, the line
+    must not trail off mid-clause AND the next code-bearing line must open
+    something new (a statement, an unrelated scope terminator, a paragraph
+    or a header). Deleting the head of a multi-line statement leaves its
+    own continuation behind -- `CONTINUE` followed by `TO WS-TIME-AVG` or
+    by `END-ADD` -- which is a stillborn every time."""
+    stripped = code.rstrip()
+    if stripped.endswith("."):
+        return True
+    if _DANGLING_TAIL.search(stripped):
+        return False
+    for follower in lines[index + 1 :]:
+        if _is_continuation(follower):
+            # A continuation line is by definition part of this statement.
+            return False
+        if _is_comment(follower):
+            continue
+        text = follower[:CODE_END_COL].strip()
+        if not text:
+            continue
+        return bool(_STATEMENT_OPENER.match(text) or _HEADER_LINE.match(text))
+    # Nothing follows at all: there is no continuation for the deletion to
+    # strand, whatever the source's own missing period says about it.
+    return True
+
+
 def _statement_deletion_mutant(
-    line: str, code: str, mask: list[bool], line_no: int
+    lines: list[str], index: int, code: str, mask: list[bool], line_no: int
 ) -> Mutant | None:
+    line = lines[index]
     stripped = code.strip()
     if not _DELETABLE_VERB.match(stripped):
         return None
@@ -299,9 +500,13 @@ def _statement_deletion_mutant(
         for m in _SCOPE_TOKENS.finditer(code)
     ):
         return None
+    if not _statement_ends_on_line(lines, index, code):
+        return None
     indent = line[: len(line) - len(line.lstrip())]
     terminator = "." if stripped.rstrip().endswith(".") else ""
     mutated = f"{indent}CONTINUE{terminator}"
+    if len(mutated) > CODE_END_COL:
+        return None
     return Mutant(
         line=line_no,
         operator="stmt-delete",

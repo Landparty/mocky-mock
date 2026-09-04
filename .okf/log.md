@@ -1,5 +1,117 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-09-04 — `mockymock mutate` cost levers: a coverage gate and `--jobs`
+
+Asked to make mutation testing faster. Profiled the loop first, on a
+synthetic 3,610-line program: it generates 3,600 mutants, and
+`run_static_checks` alone — the Docker-free half, re-run once per mutant —
+costs 0.38 s warm, i.e. **~23 minutes of pure Python before a single
+`cobc` runs**. Built the design doc's own deferred items 1 and 3
+([cli](cli.md), `mockymock mutate`):
+
+* **Coverage gate, on by default.** The baseline compiles with
+  `--coverage`; gcov is remapped onto the ORIGINAL source with the
+  existing `report.coverage.map_coverage_to_original`, and any mutant on a
+  provably unexecuted line is classified `survived` without being built.
+  Exact, not heuristic: a line no case reaches cannot change what any case
+  observes. Absent from the remap = unknown = always built.
+* **Three safety rules on that gate.** (1) A `--coverage` build must never
+  be why a green suite reads red, so a baseline failing *at the compile
+  step*, or timing out, is re-run plain before it is believed — but a red
+  suite and a refusal-gate stop are not (gcov changes neither, and
+  re-running would double the wait on the commonest failure there is).
+  The new `SuiteRun.phase` ("checks"/"compile"/"run") is what makes that
+  distinction possible, and is also the hook the still-open
+  stillborn-vs-refused split needs. (2) A gcov pass producing nothing adds
+  a note and the run builds everything — same never-silent guarantee as a
+  waiver. (3) Gated survivors score identically; they carry `ran: false` /
+  `totals.not_compiled` in the JSON and print as `uncovered`, so a
+  coverage-derived verdict never reads as a mutant that was built and beat
+  the suite.
+* **`--jobs N`, default 1.** Worker *processes*, since the dominant
+  Docker-free cost is CPU-bound pure Python. `pool.map` consumed in
+  submission order keeps report/progress/notes byte-identical to a serial
+  run; the source goes to each worker once via the pool initializer, not
+  once per task. Measured 1.93x at 2 jobs, 3.90x at 4 on a 4-core box.
+* **Why 1 and not `min(4, cpu_count)`.** The binding constraint is the
+  shared `mockymock-cobc` container's `--memory 1g`, which every
+  concurrent `cobc` draws from at once — not the core count. An
+  OOM-killed compile comes back as a compile failure, which the loop would
+  record as `stillborn`: a wrong verdict, silently. Opting in per machine
+  beats guessing until that failure mode is distinguishable.
+
+**Not verified against real GnuCOBOL** — no Docker daemon available.
+`tests/unit/test_mutation_speed.py` (14 tests) covers both levers against
+a stubbed pipeline, including the one parallel-path failure no in-process
+test can reach (initarg/result picklability).
+
+**Measured but deliberately not fixed**, now in the design doc's still-
+deferred list: `run_static_checks` lexes the source **three** times per
+pass (`parse_cobol`, `check_unresolved_copybooks_scoped`,
+`collect_scope_map`), and the recursive `_find_statements_of_type` walk is
+~23% of a pass on its own. Both are shared with `run`/`lint`/`debug`/
+`export` — so a fix pays off well beyond `mutate` — and both live inside
+the fail-closed refusal package, which is why this change left them alone.
+
+## 2026-09-04 — `mockymock mutate`: 12.2% of generated mutants were defective by construction
+
+Reviewed how mutation is implemented, hunting for stillborns. Measured the
+generator over a 542-file corpus (vendored NIST CCVS85, the shamrice
+examples, this repo's own `.cbl` fixtures): **2,165 of 17,689 generated
+mutants — 12.2% — were defective**, each costing a full
+splice/compile/run cycle and inflating the very number that is supposed to
+measure operator precision. Running each one through the very
+`normalize_fixed_format` the pipeline feeds `cobc` puts a verified floor
+under that: 1,580 (8.9% of the whole population) compiled something other
+than what their own report line described. Four causes, all in `mutation.operators`, all
+fixed ([cli](cli.md), `mockymock mutate`):
+
+* **Identification-area drag (1,775).** Every operator built its mutant as
+  `line[:start] + replacement + line[end:]`, so a rewrite shorter than what
+  it replaced pulled columns 73-80 leftwards into the program text.
+  `SUBTRACT..FROM` → `ADD..TO` is seven characters shorter: `NC1014.2`
+  landed at column 66 and became code.
+* **Column overflow (671).** The inverse swap is seven characters longer,
+  and `normalize_fixed_format` slices columns 8-72 — so on any line whose
+  code already reached column 66+, the mutant lost its own tail.
+* Both are now one helper, `_rewrite_code`: edit within columns 1-72, re-pin
+  the identification area at column 73, buy the columns a longer verb needs
+  by collapsing interior runs of 2+ spaces (never the indent — that decides
+  Area A vs Area B for the statement's first word — and never inside a
+  literal), refuse the mutant when the line cannot give them up. 287 of the
+  671 overflowing sites still yield a mutant after squeezing.
+* **`\b` on the arithmetic verbs (102).** Audit finding F8 (2026-08-10)
+  replaced `\b` with `_cobol_word()` in `_EXCLUDED_VERBS`/`_SCOPE_TOKENS`
+  but not in `_ADD_TO`/`_SUBTRACT_FROM`/`_MULTIPLY_BY`/`_DIVIDE_INTO`/
+  `_MOVE_INT`, so `\bADD\b` still matched inside `GRP-FOR-ADD-CORR-R` and
+  turned a plain `MOVE` into `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...`.
+* **`stmt-delete` on a multi-line statement head (135).** `CONTINUE` in
+  place of `COMPUTE WS-AVG =` strands `WS-TOTAL / WS-COUNT` on the next
+  line; in place of an `ADD` it strands the `END-ADD` that binds to it.
+  Deletion now requires a trailing period, or a next code line that opens
+  something new (statement verb, *unrelated* scope terminator, paragraph /
+  section / division header — `END-ADD` and friends deliberately absent),
+  and always refuses a line trailing off in `TO`/`FROM`/`=`.
+* Also: fixed-format continuation lines (indicator `-`) are no longer
+  mutable code, and `in_procedure` resets at `END PROGRAM` / a following
+  `IDENTIFICATION DIVISION` so a second program's DATA DIVISION is not
+  mutated as procedural code.
+
+Net on the same corpus: 621 sites no longer offered at all, zero mutants
+left in any of the four classes, and every mutant that is still generated
+compiles the program its own report line describes. 13 unit tests added to
+`tests/unit/test_mutation_operators.py`; the Docker-gated integration
+fixture's pinned mutant population is unchanged (its lines are all under 72
+columns and single-statement).
+
+**Knowingly left open** (both documented in the design doc's Known
+limitations): `stmt-delete` on a line holding two statements still deletes
+both — an over-strong mutant that compiles and is very likely killed, so it
+inflates the score rather than the stillborn count, and AST-driven
+discovery (v2) is the real fix; and `stillborn` still lumps a refusal-gate
+rejection in with a compile error, which needs a new status the VS Code
+extension's `mutationReport.ts` would also have to learn.
+
 ## 2026-09-04 — `export` continues a long literal instead of refusing it
 
 Reported from a real `mockymock export` run against `DTBC7D01.cbl`: after
@@ -48,6 +160,7 @@ remedy was editing production COBOL to shorten a banner string.
   Docker-gated integration case. `test_export_refuses_on_column_overflow_
   from_cut_mock_body_text` was replaced: its literal-bearing `MOVE` is
   now wrapped, and a literal-free `MOVE` guards the refusal path.
+
 
 ## 2026-09-04 — `AT END SET <88> TO TRUE` replicated into READ mock exhaustion
 

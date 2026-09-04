@@ -500,17 +500,47 @@ Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
 `PERFORM`/`PERFORM THRU`/`GO TO` control flow in `call_stack.py`.
 
-## `mockymock mutate <program> --cut PATH [--copybook-path DIR ...] [--list] [--timeout S] [--json-report PATH] [--fail-under PCT]`
+## `mockymock mutate <program> --cut PATH [--copybook-path DIR ...] [--list] [--timeout S] [--jobs N] [--no-coverage-gate] [--json-report PATH] [--fail-under PCT]`
 
 Mutation testing (see docs/2026-07-29-mutation-testing-design.md).
 `--list` prints the generated mutants and exits — pure
 `mutation.operators`, no Docker. `mutation.operators`' verb/scope/
-condition/deletable-verb regexes now match on COBOL-word boundaries via a
+condition/deletable-verb regexes match on COBOL-word boundaries via a
 shared `_cobol_word()` helper (negative lookaround treating `-` as part
 of the identifier, not a boundary) instead of plain `\b` (audit finding
 F8, 2026-08-10) — `\bREAD\b` used to match inside `WS-READ-COUNT` and
-generate mutants that were never real READ statements at all. A real run
-baseline-checks the suite
+generate mutants that were never real READ statements at all. **The same
+helper now covers the arithmetic patterns too** (`_ADD_TO`,
+`_SUBTRACT_FROM`, `_MULTIPLY_BY`, `_DIVIDE_INTO`, `_MOVE_INT`), which F8
+missed: `\bADD\b` matched inside `GRP-FOR-ADD-CORR-R` and rewrote an
+ordinary `MOVE` into `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...`.
+
+Three further stillborn classes closed on 2026-09-04, all in
+`mutation.operators` (see
+docs/2026-07-29-mutation-testing-design.md's "Column discipline"):
+**every rewrite goes through `_rewrite_code`**, which edits strictly
+inside columns 1-72 and re-pins the identification area at column 73
+rather than letting the edit carry it along — `normalize_fixed_format`
+slices columns 8-72, so a growing swap (`ADD..TO` → `SUBTRACT..FROM`,
++7) used to lose its own tail and a shrinking one (−7, or `>=` → `>`)
+used to drag `NC1014.2` back into the program text. It buys the columns
+a longer verb needs from interior space runs (never the indent — that
+decides Area A vs Area B — and never inside a literal) and drops the
+mutant when it cannot. **`stmt-delete` now requires the statement to end
+on its own line** (trailing period, or a next code line opening
+something new; a line trailing off in `TO`/`FROM`/`=` is always
+refused): replacing the head of a multi-line statement with `CONTINUE`
+strands its own tail, or an `END-ADD` that binds to the deleted verb.
+**Continuation lines (indicator `-`) are skipped** and **`PROCEDURE
+DIVISION` state resets at `END PROGRAM`** so a second program's DATA
+DIVISION is not mutated. Measured over a 542-file corpus: 12.2% of
+generated mutants were defective before this (8.9% verified to compile
+something other than what their report line described, by running each
+through the pipeline's own `normalize_fixed_format`), none after. Still open: `stmt-delete` on a line holding two
+statements deletes both (over-strong, not stillborn), and `stillborn`
+still lumps refusal-gate rejections in with compile errors.
+
+A real run baseline-checks the suite
 (red/empty baseline aborts with exit 1: every verdict would be noise),
 then for each mutant patches one original line and re-runs the exact
 `run` pipeline (static checks → splice → compile → run) in its own
@@ -523,7 +553,29 @@ bare "binary exited N" message, instead of citing the exit code even when
 it was 0 and the real cause was one of those three. Console output
 streams one line per mutant, then lists
 survivors with a `-`/`+` diff and the score
-(killed+timeouts over scored). `--json-report` writes the full
+(killed+timeouts over scored).
+
+**Two cost levers, both added 2026-09-04, neither changing a verdict.**
+`--jobs N` (default 1) spreads the per-mutant pipeline over N worker
+*processes* -- processes, because the dominant Docker-free cost,
+`run_static_checks`, is CPU-bound pure Python (measured 3.90x on 4 cores).
+`pool.map` is consumed in submission order, so the report, the progress
+stream and the notes union are byte-identical to a serial run. The
+default is 1 because the ceiling is the shared container's `--memory 1g`,
+not the core count: an OOM-killed `cobc` would be recorded as a
+`stillborn`, a wrong verdict. The **coverage gate** (on by default,
+`--no-coverage-gate` to disable) compiles the baseline with `--coverage`,
+remaps gcov onto the original source via
+`report.coverage.map_coverage_to_original`, and classifies any mutant on
+a provably unexecuted line as `survived` without building it -- exact,
+since a line no case reaches cannot change what any case observes. A line
+*absent* from the remap is unknown and always built. A baseline that
+fails at the *compile* step or times out is re-run plain before it is
+believed (`SuiteRun.phase` distinguishes "checks"/"compile"/"run"); a red
+suite or a refusal-gate stop is not, since gcov changes neither. A failed
+gcov pass adds a note and the run builds everything. Gated survivors
+score identically, carry `ran: false` (and `totals.not_compiled`) in the
+JSON, and print as `uncovered`. `--json-report` writes the full
 machine-readable outcome; `--fail-under` exits 1 below the given
 percentage. Every baseline/mutant run's `StaticCheckResult.notes` (a
 paragraph-scoped `PARSE_WARNING`/`UNRESOLVED_COPYBOOK` waived rather than

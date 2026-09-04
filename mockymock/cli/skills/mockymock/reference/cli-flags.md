@@ -180,6 +180,8 @@ notices ("killed") or doesn't ("survived" -- a gap in the assertions).
 | `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path`. |
 | `--list` | off | Only list the mutants that would be generated, no Docker needed. |
 | `--timeout SECONDS` | `15` | Per-mutant execution timeout; a mutant that exceeds it counts as killed. |
+| `--jobs N` / `-j N` | `1` | Build and run N mutants in parallel, each in its own sandbox and worker process. The ceiling that matters is not the core count but the shared `mockymock-cobc` container's 1 GiB memory limit, which every concurrent `cobc` draws from at once -- raise it gradually and watch for compile failures on a large program. |
+| `--no-coverage-gate` | gate on | Build and run every mutant, including ones on lines the baseline proved the suite never executes. By default those are reported as survivors straight from the baseline's own gcov coverage -- the same verdict, without the compile. |
 | `--json-report PATH` | none | Write the full machine-readable mutation report. |
 | `--fail-under PERCENT` | none | Exit 1 if the mutation score is below this percentage. |
 
