@@ -246,6 +246,13 @@ def test_summarize_original_counts_and_texts_original_lines():
     assert [(u.line_number, u.text) for u in summary.uncovered_lines] == [
         (5, "    DISPLAY 'NEVER'.")
     ]
+    # Trailing blanks and the columns-73+ identification field go; LEADING
+    # blanks stay. Area A / Area B indentation is what distinguishes a
+    # paragraph header from a statement inside it at a glance, so stripping
+    # it would flatten every uncovered line to the same margin.
+    assert summary.uncovered_lines[0].text.startswith("    ")
+    assert not summary.uncovered_lines[0].text.endswith(" ")
+    assert "SEQ00500" not in summary.uncovered_lines[0].text
 
 
 def test_summarize_original_is_fully_covered_when_nothing_mapped():

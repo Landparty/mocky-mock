@@ -133,9 +133,12 @@ def summarize_original(
 ) -> OriginalCoverage:
     """Reduce `map_coverage_to_original`'s per-line view to the totals plus
     the uncovered lines, each carrying its own ORIGINAL source text (cut to
-    the fixed-format program area, columns 8-72, and stripped) so the
-    console report can name uncovered lines the way the reader's own editor
-    would show them. A `line` past the end of `original_lines` cannot happen
+    the fixed-format program area, columns 8-72, with trailing blanks
+    removed) so the console report can name uncovered lines the way the
+    reader's own editor would show them. Leading blanks are deliberately
+    KEPT: Area A / Area B indentation is what tells a paragraph header from
+    a statement inside it at a glance, and stripping it would flatten every
+    uncovered line to the same margin. A `line` past the end of `original_lines` cannot happen
     (every mapped line came from that same list) but renders as empty text
     rather than raising if it ever does."""
     uncovered = [

@@ -203,3 +203,60 @@ def test_capture_target_name_is_deterministic_and_a_valid_cobol_word():
     assert len(name) <= 30
     assert not name.endswith("-")
     assert all(c.isalnum() or c == "-" for c in name)
+
+
+def test_every_pipeline_that_builds_reset_lines_resets_the_captures():
+    """The suite compiles to ONE binary in `run`, `debug`, `export` AND
+    `mutate` alike, so a capture target left unreset in any one of them
+    lets a case that never reached its CALL assert against the previous
+    case's value. In `mutate` that is worse than a wrong assertion: the
+    stale value can "kill" a mutant the suite never actually noticed,
+    inflating the score.
+
+    This is a source-shape guard rather than a behavioural one because the
+    four pipelines each assemble their own `reset_lines` before a compile
+    that needs Docker -- and the way this broke once already was exactly
+    that: a merge restored one of the four call sites from a revision that
+    predated the capture resets, and nothing failed."""
+    import ast as _ast
+    from pathlib import Path
+
+    def _calls(tree, name):
+        return sum(
+            1
+            for node in _ast.walk(tree)
+            if isinstance(node, _ast.Call)
+            and isinstance(node.func, _ast.Name)
+            and node.func.id == name
+        )
+
+    root = Path(__file__).resolve().parents[2] / "mockymock"
+    for path in (root / "cli" / "main.py", root / "mutation" / "runner.py"):
+        tree = _ast.parse(path.read_text(encoding="utf-8"))
+        builds = _calls(tree, "reset_move_lines")
+        resets = _calls(tree, "extra_reset_lines_for")
+        assert builds > 0, f"{path} no longer assembles reset_lines at all"
+        assert builds == resets, (
+            f"{path} assembles reset_lines {builds} time(s) but appends the "
+            f"synthesized CAPTURE target resets {resets} time(s)"
+        )
+
+
+def test_a_nameless_argument_is_unresolved_not_a_crash():
+    """`CallParameter.name` is a `str` by contract and cobol-parser's CALL
+    parser substitutes "OMITTED" rather than emitting an empty one -- so
+    this shape cannot arise today. It is guarded anyway because this
+    comprehension is the only place a violation of that contract would
+    surface, and it would surface as an AttributeError out of the
+    static-check pass: a crash where the whole point of `plan_captures` is
+    to hand back a readable UNRESOLVED_CAPTURE_TARGET reason."""
+    program, surface, _ = _context_and_surface()
+    suite = parse_cut(_scaffold())
+    for site in surface.boundary_sites:
+        for param in getattr(site.statement, "using_parameters", []) or []:
+            param.name = None  # type: ignore[assignment]
+
+    plans, unresolved = plan_captures(program, suite, surface)
+    assert plans == []
+    assert unresolved
+    assert all("no resolvable data item" in reason for reason in unresolved)

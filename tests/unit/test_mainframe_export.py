@@ -537,3 +537,19 @@ def test_a_literal_less_line_is_broken_at_whitespace_rather_than_refused():
     assert all(len(fragment) <= 72 for fragment in result)
     assert len(result[1]) - len(result[1].lstrip(" ")) >= 11
     assert " ".join(part.strip() for part in result) == line.strip()
+
+
+def test_fit_within_columns_refuses_an_overlong_directive_rather_than_breaking_it():
+    """A compiler-directing statement has no continuation form, so the
+    literal pass refuses it. The whitespace-break pass runs after that and
+    would happily split it at a space -- turning one directive into a
+    directive plus a stray statement -- unless it refuses the same shape.
+    The refusal is the whole point: silently rewriting a `CBL`/`PROCESS`
+    line changes how the program compiles."""
+    line = "       CBL APOST,NOSEQ,LIB,TEST(NONE,SYM,SEPARATE)," + "X" * 40
+    assert len(line) > 72
+    result, problems = fit_within_columns([line])
+    assert result == [line]
+    assert len(problems) == 1
+    assert "compiler-directing" in problems[0]
+    assert repr(line) in problems[0]

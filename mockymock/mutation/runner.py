@@ -103,7 +103,11 @@ def _run_suite_once(
     """
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.cli.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
+    )
     from mockymock.cli.main import _insert_driver
     from mockymock.report.coverage import map_coverage_to_original, parse_gcov
     from mockymock.report.results import parse_stdout
@@ -170,6 +174,13 @@ def _run_suite_once(
             reset_lines = reset_lines + extra_reset_lines(checked.linkage)
         if checked.cics_eib is not None:
             reset_lines = reset_lines + cics_eib.reset_lines(checked.cics_eib)
+        # Synthesized CAPTURE targets need the same between-case reset the
+        # run/debug/export pipelines give them. The suite compiles to ONE
+        # binary here too, so without this a case that never reached its
+        # CALL would assert against the previous case's captured value --
+        # and a mutant could then be "killed" by that stale value rather
+        # than by the mutation, silently inflating the score.
+        reset_lines = reset_lines + extra_reset_lines_for(checked)
         artifact = build_driver(
             suite,
             reset_lines,

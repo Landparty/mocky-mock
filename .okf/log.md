@@ -1,5 +1,43 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-09-04 — Review round on the ten-findings branch: four fixes
+
+Automated review of the branch found four defects. Each was verified
+against the code before being changed, and each fix carries a regression
+test that fails without it:
+
+* **[splicer]/[cli]** `extra_reset_lines_for` was applied in `run`,
+  `debug` and `export` but not in the `mutate` pipeline, which assembles
+  its own `reset_lines` in `mutation/runner.py` — lost when that file was
+  restored from `main` during the merge. A synthesized `UT-CAP-` target
+  left unreset across cases is worse under `mutate` than under `run`: a
+  stale captured value can "kill" a mutant the suite never noticed,
+  inflating the score. The guard for it is a source-shape test (the four
+  pipelines each compile through Docker, so there is nothing to assert
+  behaviourally), asserting per file that `reset_move_lines` and
+  `extra_reset_lines_for` are called the same number of times — which is
+  exactly the shape that broke.
+* **[cli]** `fit_within_columns`' third pass (`_break_at_whitespace`)
+  had no `_DIRECTIVE_RE` guard, so an over-long `CBL`/`PROCESS` line that
+  `wrap_long_literal_lines` had explicitly REFUSED two passes earlier was
+  silently broken at a space — turning one directive into a directive plus
+  a stray statement. It is now refused in the third pass too, with the
+  same `SourceAttribution` tag every other overflow message carries.
+* **[coverage]** `summarize_original`'s docstring said uncovered-line text
+  was "stripped"; it is `rstrip()`-ed, and leading Area A / Area B
+  indentation is deliberately kept (it is what distinguishes a paragraph
+  header from a statement inside it). Docstring corrected to match the
+  behaviour the existing test already pinned.
+* **[splicer]** `plan_captures` read `.name.upper()` off a resolved USING
+  parameter. `CallParameter.name` is a `str` by contract and cobol-parser
+  substitutes `"OMITTED"` rather than an empty name, so this cannot arise
+  today — but that comprehension is the only place a violation would
+  surface, and it would surface as an `AttributeError` out of the
+  static-check pass instead of the `UNRESOLVED_CAPTURE_TARGET` refusal
+  `plan_captures` exists to produce. Nameless arguments are now filtered
+  into that refusal path.
+
+
 ## 2026-09-04 — `mockymock mutate` cost levers: a coverage gate and `--jobs`
 
 Asked to make mutation testing faster. Profiled the loop first, on a

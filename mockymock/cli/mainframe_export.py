@@ -830,6 +830,25 @@ def fit_within_columns(
         if len(line) <= max_col or line.lstrip().startswith("*>"):
             fitted.append(line)
             continue
+        if _DIRECTIVE_RE.match(line):
+            # A compiler-directing statement is one indivisible line to the
+            # compiler: it has no continuation form, and breaking it at a
+            # space would silently turn `PROCESS ...OPT` into a directive
+            # plus a stray statement. `wrap_long_literal_lines` already
+            # refuses these for that reason -- so must this pass, or the
+            # refusal it made two passes earlier is undone here.
+            source = (
+                f" -- source: {attribution.origin(index, line).detail}"
+                if attribution is not None
+                else ""
+            )
+            problems.append(
+                f"line {index + 1} exceeds column {max_col} and is a compiler-"
+                f"directing statement, which cannot be continued or broken: "
+                f"{line!r}{source}"
+            )
+            fitted.append(line)
+            continue
         broken = _break_at_whitespace(line, max_col)
         if broken is not None:
             fitted.extend(broken)

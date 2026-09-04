@@ -168,12 +168,22 @@ def plan_captures(
                 if not target.upper().startswith(CAPTURE_TARGET_PREFIX):
                     continue  # an author-declared target: not ours to make
                 target = target.upper()
+                # `.name` is a `str` by the CallStatement contract and the
+                # parser substitutes "OMITTED" rather than emitting an empty
+                # one -- but this set comprehension is the only place a
+                # violation of that would surface, and it would surface as
+                # an AttributeError out of the static-check pass rather
+                # than as the UNRESOLVED_CAPTURE_TARGET refusal this
+                # function exists to produce. Filter instead: a nameless
+                # argument then falls through to the "names no resolvable
+                # data item" branch below, which is what it is.
                 source_names = {
                     site.statement.using_parameters[arg_index - 1].name.upper()
                     for site in surface.boundary_sites
                     if directive_matches_site(directive, site)
                     and getattr(site.statement, "using_parameters", None)
                     and len(site.statement.using_parameters) >= arg_index
+                    and site.statement.using_parameters[arg_index - 1].name
                 }
                 if len(source_names) != 1:
                     unresolved.append(
