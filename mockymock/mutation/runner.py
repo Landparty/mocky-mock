@@ -32,7 +32,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from mockymock.mutation.operators import Mutant, generate_mutants
-from mockymock.mutation.report import MutantResult, MutationOutcome
+from mockymock.mutation.report import (
+    MutantResult,
+    MutationOutcome,
+    StillbornReason,
+)
 
 
 @dataclass(frozen=True)
@@ -543,7 +547,15 @@ def _run_one_mutant(
     # ran; "compile" -- GnuCOBOL rejected it). Carrying it through is what
     # lets the report say WHICH, instead of a bare count that makes a line
     # whose every mutant failed to compile look like a line with no mutants.
-    reason = run.phase if run.phase in ("checks", "compile") else None
+    # Assigned as literals, not narrowed from `run.phase` (a plain `str`):
+    # a membership test does not narrow to `StillbornReason` for a type
+    # checker, and widening the field to `str` would give up the guarantee
+    # that only these two values ever reach the report.
+    reason: StillbornReason | None = None
+    if run.phase == "checks":
+        reason = "checks"
+    elif run.phase == "compile":
+        reason = "compile"
     return (
         MutantResult(
             mutant=mutant,
