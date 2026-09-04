@@ -1209,6 +1209,8 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
             for flag, value in (
                 ("--json-report", args.json_report),
                 ("--fail-under", args.fail_under),
+                ("--jobs", args.jobs if args.jobs != 1 else None),
+                ("--no-coverage-gate", None if args.coverage_gate else True),
             )
             if value is not None
         ]
@@ -1225,6 +1227,10 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
         print(f"{len(mutants)} mutant(s)")
         return 0
 
+    if args.jobs < 1:
+        print(f"mockymock mutate: --jobs must be at least 1 (got {args.jobs})")
+        return 1
+
     def on_progress(result: MutantResult) -> None:
         marker = {
             "killed": "killed   ",
@@ -1232,6 +1238,10 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
             "stillborn": "stillborn",
             "timeout": "timeout  ",
         }[result.status]
+        if not result.ran:
+            # Same verdict, different evidence: say so rather than letting
+            # it read as a mutant that was built and beat the suite.
+            marker = "uncovered"
         print(
             f"  {marker} line {result.mutant.line} "
             f"[{result.mutant.operator}] {result.mutant.description}"
@@ -1243,6 +1253,8 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
         args.copybook_path,
         timeout_seconds=args.timeout,
         on_progress=on_progress,
+        jobs=args.jobs,
+        coverage_gate=args.coverage_gate,
     )
     for note in notes:
         print(f"mockymock mutate: {note}")
@@ -1853,6 +1865,31 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Per-mutant run timeout in seconds (default 15); a mutant that "
             "exceeds it counts as killed -- a hang would be noticed too"
+        ),
+    )
+    mutate_parser.add_argument(
+        "--jobs",
+        "-j",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Run N mutants in parallel, each in its own sandbox and worker "
+            "process (default 1). The useful ceiling is not the core count "
+            "but the shared mockymock-cobc container's 1 GiB memory limit, "
+            "which every concurrent cobc draws from at once -- raise this "
+            "gradually and watch for compile failures on a large program"
+        ),
+    )
+    mutate_parser.add_argument(
+        "--no-coverage-gate",
+        dest="coverage_gate",
+        action="store_false",
+        help=(
+            "Build and run every mutant, including ones on lines the "
+            "baseline proved the suite never executes. By default those are "
+            "reported as survivors straight from the baseline's coverage, "
+            "which is the same verdict for a fraction of the wall clock"
         ),
     )
     mutate_parser.add_argument(

@@ -1,5 +1,58 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-09-04 — `mockymock mutate` cost levers: a coverage gate and `--jobs`
+
+Asked to make mutation testing faster. Profiled the loop first, on a
+synthetic 3,610-line program: it generates 3,600 mutants, and
+`run_static_checks` alone — the Docker-free half, re-run once per mutant —
+costs 0.38 s warm, i.e. **~23 minutes of pure Python before a single
+`cobc` runs**. Built the design doc's own deferred items 1 and 3
+([cli](cli.md), `mockymock mutate`):
+
+* **Coverage gate, on by default.** The baseline compiles with
+  `--coverage`; gcov is remapped onto the ORIGINAL source with the
+  existing `report.coverage.map_coverage_to_original`, and any mutant on a
+  provably unexecuted line is classified `survived` without being built.
+  Exact, not heuristic: a line no case reaches cannot change what any case
+  observes. Absent from the remap = unknown = always built.
+* **Three safety rules on that gate.** (1) A `--coverage` build must never
+  be why a green suite reads red, so a baseline failing *at the compile
+  step*, or timing out, is re-run plain before it is believed — but a red
+  suite and a refusal-gate stop are not (gcov changes neither, and
+  re-running would double the wait on the commonest failure there is).
+  The new `SuiteRun.phase` ("checks"/"compile"/"run") is what makes that
+  distinction possible, and is also the hook the still-open
+  stillborn-vs-refused split needs. (2) A gcov pass producing nothing adds
+  a note and the run builds everything — same never-silent guarantee as a
+  waiver. (3) Gated survivors score identically; they carry `ran: false` /
+  `totals.not_compiled` in the JSON and print as `uncovered`, so a
+  coverage-derived verdict never reads as a mutant that was built and beat
+  the suite.
+* **`--jobs N`, default 1.** Worker *processes*, since the dominant
+  Docker-free cost is CPU-bound pure Python. `pool.map` consumed in
+  submission order keeps report/progress/notes byte-identical to a serial
+  run; the source goes to each worker once via the pool initializer, not
+  once per task. Measured 1.93x at 2 jobs, 3.90x at 4 on a 4-core box.
+* **Why 1 and not `min(4, cpu_count)`.** The binding constraint is the
+  shared `mockymock-cobc` container's `--memory 1g`, which every
+  concurrent `cobc` draws from at once — not the core count. An
+  OOM-killed compile comes back as a compile failure, which the loop would
+  record as `stillborn`: a wrong verdict, silently. Opting in per machine
+  beats guessing until that failure mode is distinguishable.
+
+**Not verified against real GnuCOBOL** — no Docker daemon available.
+`tests/unit/test_mutation_speed.py` (14 tests) covers both levers against
+a stubbed pipeline, including the one parallel-path failure no in-process
+test can reach (initarg/result picklability).
+
+**Measured but deliberately not fixed**, now in the design doc's still-
+deferred list: `run_static_checks` lexes the source **three** times per
+pass (`parse_cobol`, `check_unresolved_copybooks_scoped`,
+`collect_scope_map`), and the recursive `_find_statements_of_type` walk is
+~23% of a pass on its own. Both are shared with `run`/`lint`/`debug`/
+`export` — so a fix pays off well beyond `mutate` — and both live inside
+the fail-closed refusal package, which is why this change left them alone.
+
 ## 2026-09-04 — `mockymock mutate`: 12.2% of generated mutants were defective by construction
 
 Reviewed how mutation is implemented, hunting for stillborns. Measured the

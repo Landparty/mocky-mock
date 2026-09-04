@@ -15,8 +15,14 @@ class MutantResult:
     mutant: Mutant
     status: MutantStatus
     #: First failure reason for a kill; first compile/refusal line for a
-    #: stillborn; empty otherwise.
+    #: stillborn; for a coverage-gated survivor, why it was not built.
     detail: str = ""
+    #: False when the verdict came from the baseline's own coverage rather
+    #: than from building and running this mutant. Such a mutant sits on a
+    #: line the whole suite provably never executes, so it cannot change
+    #: what any case observes -- `survived` is the answer, and compiling to
+    #: confirm it is the work this flag records skipping.
+    ran: bool = True
 
 
 @dataclass
@@ -43,6 +49,13 @@ class MutationOutcome:
     @property
     def timeouts(self) -> int:
         return self._count("timeout")
+
+    @property
+    def not_compiled(self) -> int:
+        """Mutants the baseline's coverage classified without building
+        them. Scored like any other survivor -- the saving is wall-clock,
+        not a change of verdict."""
+        return sum(1 for r in self.results if not r.ran)
 
     @property
     def score(self) -> float | None:
@@ -73,6 +86,11 @@ def format_console(outcome: MutationOutcome) -> str:
         f"({outcome.killed} killed, {outcome.timeouts} timed out, "
         f"{outcome.survived} survived, {outcome.stillborn} stillborn)"
     )
+    if outcome.not_compiled:
+        lines.append(
+            f"{outcome.not_compiled} of those survivors sit on lines the suite "
+            "never executes -- decided from the baseline's coverage, never built"
+        )
     score = outcome.score
     if score is not None:
         lines.append(f"mutation score: {score * 100:.1f}%")
@@ -92,6 +110,7 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
             "timeouts": outcome.timeouts,
             "survived": outcome.survived,
             "stillborn": outcome.stillborn,
+            "not_compiled": outcome.not_compiled,
         },
         "mutants": [
             {
@@ -102,6 +121,7 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
                 "mutated": r.mutant.mutated,
                 "status": r.status,
                 "detail": r.detail,
+                "ran": r.ran,
             }
             for r in outcome.results
         ],

@@ -500,7 +500,7 @@ Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
 `PERFORM`/`PERFORM THRU`/`GO TO` control flow in `call_stack.py`.
 
-## `mockymock mutate <program> --cut PATH [--copybook-path DIR ...] [--list] [--timeout S] [--json-report PATH] [--fail-under PCT]`
+## `mockymock mutate <program> --cut PATH [--copybook-path DIR ...] [--list] [--timeout S] [--jobs N] [--no-coverage-gate] [--json-report PATH] [--fail-under PCT]`
 
 Mutation testing (see docs/2026-07-29-mutation-testing-design.md).
 `--list` prints the generated mutants and exits — pure
@@ -553,7 +553,29 @@ bare "binary exited N" message, instead of citing the exit code even when
 it was 0 and the real cause was one of those three. Console output
 streams one line per mutant, then lists
 survivors with a `-`/`+` diff and the score
-(killed+timeouts over scored). `--json-report` writes the full
+(killed+timeouts over scored).
+
+**Two cost levers, both added 2026-09-04, neither changing a verdict.**
+`--jobs N` (default 1) spreads the per-mutant pipeline over N worker
+*processes* -- processes, because the dominant Docker-free cost,
+`run_static_checks`, is CPU-bound pure Python (measured 3.90x on 4 cores).
+`pool.map` is consumed in submission order, so the report, the progress
+stream and the notes union are byte-identical to a serial run. The
+default is 1 because the ceiling is the shared container's `--memory 1g`,
+not the core count: an OOM-killed `cobc` would be recorded as a
+`stillborn`, a wrong verdict. The **coverage gate** (on by default,
+`--no-coverage-gate` to disable) compiles the baseline with `--coverage`,
+remaps gcov onto the original source via
+`report.coverage.map_coverage_to_original`, and classifies any mutant on
+a provably unexecuted line as `survived` without building it -- exact,
+since a line no case reaches cannot change what any case observes. A line
+*absent* from the remap is unknown and always built. A baseline that
+fails at the *compile* step or times out is re-run plain before it is
+believed (`SuiteRun.phase` distinguishes "checks"/"compile"/"run"); a red
+suite or a refusal-gate stop is not, since gcov changes neither. A failed
+gcov pass adds a note and the run builds everything. Gated survivors
+score identically, carry `ran: false` (and `totals.not_compiled`) in the
+JSON, and print as `uncovered`. `--json-report` writes the full
 machine-readable outcome; `--fail-under` exits 1 below the given
 percentage. Every baseline/mutant run's `StaticCheckResult.notes` (a
 paragraph-scoped `PARSE_WARNING`/`UNRESOLVED_COPYBOOK` waived rather than

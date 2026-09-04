@@ -1,9 +1,10 @@
 # mockymock — Mutation Testing (`mockymock mutate`)
 
 Date: 2026-07-29
-Status: v1 implemented (this doc); site-discovery hardened 2026-09-04
-(see "Column discipline" below); coverage filtering, per-case targeting,
-and mutant schemata deferred
+Status: v1 implemented (this doc); site-discovery hardened and the
+coverage gate + parallel workers built 2026-09-04 (see "Column
+discipline" and "Cost levers" below); per-case targeting and mutant
+schemata deferred
 
 ## Motivation
 
@@ -36,12 +37,14 @@ exist off-mainframe. The ingredients are all already in this repo:
 - `mockymock/mutation/operators.py` — pure, Docker-free mutant
   generation over the ORIGINAL source lines (so every report line points
   at a line the user can open).
-- `mockymock/mutation/runner.py` — baseline gate + serial kill loop:
-  patch one line → the same static-check/splice/compile/run sequence
-  `_cmd_run` performs → classify.
+- `mockymock/mutation/runner.py` — baseline gate + kill loop: patch one
+  line → the same static-check/splice/compile/run sequence `_cmd_run`
+  performs → classify. Serial by default; see "Cost levers" below for the
+  coverage gate and `--jobs`.
 - `mockymock/mutation/report.py` — outcome model, console + JSON.
 - CLI: `mockymock mutate <prog> --cut <file> [--copybook-path DIR ...]
-  [--list] [--timeout S] [--json-report PATH] [--fail-under PCT]`.
+  [--list] [--timeout S] [--jobs N] [--no-coverage-gate]
+  [--json-report PATH] [--fail-under PCT]`.
 
 ### Operators
 
@@ -132,7 +135,7 @@ text) does not change.
 |--------|---------|---------|
 | `killed` | any case failed, crashed, or the binary exited nonzero | yes |
 | `timeout` | no exit within `--timeout` (default 15 s) — a mutated loop condition that spins is a kill: a hang would be noticed | yes (as a kill) |
-| `survived` | suite green — the interesting ones, listed with a diff | yes |
+| `survived` | suite green, or the baseline's coverage proved the line never runs (`ran: false`) — the interesting ones, listed with a diff | yes |
 | `stillborn` | refusal or compile error on the mutated program | **no** — says nothing about the suite |
 
 Score = (killed + timeouts) / (killed + timeouts + survived).
@@ -143,17 +146,89 @@ The unmutated program must run green first (`run_mutation` refuses
 otherwise): against a red baseline every verdict is noise. Same
 fail-closed posture as the refusal gate.
 
-## Deferred (in value order)
+## Cost levers (2026-09-04)
 
-1. **Coverage filtering** — reuse the existing gcov path to mutate only
-   covered lines: an uncovered-line mutant is a guaranteed survivor that
-   coverage already reported. The biggest cost lever on real programs.
-2. **Per-case targeting + early exit** — per-case coverage says which
+Two of the deferred items below are now built. Both remove or spread
+work; neither changes a verdict.
+
+### Coverage gate (was deferred item 1) — on by default
+
+The baseline is compiled with `--coverage` and its gcov output remapped
+onto the ORIGINAL source by `report.coverage.map_coverage_to_original`.
+Any mutant whose line that map says was **never executed** is classified
+`survived` from the baseline's evidence alone, with no splice, compile or
+run of its own. This is exact, not heuristic: a line no test case reaches
+cannot change what any test case observes.
+
+Three rules keep it safe:
+
+- **Absent means unknown, never uncovered.** The remap deliberately omits
+  lines it cannot place (driver insertions, boundary replacements,
+  continuation merges). Those are always built.
+- **A coverage build must never be why a green suite reads red.**
+  `--coverage` is a different compile and a slower binary than the one
+  `run` performs, so a baseline that fails *at the compile step*, or times
+  out, is re-run plain before it is believed. A refusal-gate stop (before
+  any compiler runs) and a genuinely failing suite are not re-run —
+  gcov instrumentation does not change what the COBOL computes, and
+  doubling the wait on a red suite would help nobody. `SuiteRun.phase`
+  ("checks" / "compile" / "run") is what makes that distinction possible.
+- **Nothing goes silent.** A gcov pass that produces nothing appends a
+  note, printed like every other `mockymock mutate:` note, and the run
+  builds everything.
+
+Gated survivors are scored exactly like built ones — the score is the
+same number either way. They carry `ran: false` in the JSON report,
+`not_compiled` in `totals`, and print as `uncovered` rather than
+`SURVIVED` in the live stream, because a verdict reached from coverage
+should not read as a mutant that was built and beat the suite.
+`--no-coverage-gate` builds everything.
+
+The one thing given up: a gated mutant is never compiled, so one that
+*would* have been stillborn is reported as a survivor instead. After the
+2026-09-04 operator work (see "Column discipline") stillborns are rare,
+and on an uncovered line "your suite would not notice" is true regardless.
+
+### Parallel workers (was deferred item 3) — `--jobs N`, default 1
+
+Each mutant already runs in its own sandbox under `WORK_ROOT`, and the
+per-mutant static-check pass is CPU-bound *pure Python* — so the pool is
+processes, not threads. Results are consumed in submission order
+(`pool.map`), which keeps the report, the live progress stream and the
+notes union byte-identical to a serial run whatever order the workers
+finish in. The source is handed to each worker once through the pool
+initializer rather than pickled per task.
+
+Measured on a synthetic 3,610-line program (4 cores, the Docker-free half
+of the pipeline — `run_static_checks`, 0.38 s per mutant warm): **1.93×
+at `--jobs 2`, 3.90× at `--jobs 4`.** For scale, that program generates
+3,600 mutants, so its static-check cost alone is ~23 minutes serial before
+a single `cobc` runs.
+
+**Why the default is 1.** The ceiling is not the core count: the shared
+`mockymock-cobc` container runs under `--memory 1g`, and every concurrent
+`cobc` draws from that one budget. An OOM-killed compile comes back as a
+compile failure, which the loop would record as `stillborn` — a wrong
+verdict, quietly. Until that failure mode is distinguishable, opting in
+per machine beats guessing on the user's behalf.
+
+## Still deferred (in value order)
+
+1. **Per-case targeting + early exit** — per-case coverage says which
    cases execute the mutated line; compile only those (each mutant
    recompiles anyway, so narrowing is free) and stop at the first kill.
-3. **Parallel workers** — sandboxes are already isolated under
-   `WORK_ROOT`; the VS Code extension's `maxParallelRuns` establishes
-   the concurrent-compiles pattern.
+2. **Resource-failure detection** — an OOM-killed or otherwise
+   infrastructure-failed compile is currently indistinguishable from a
+   mutant that genuinely does not build, which is what keeps `--jobs`
+   opt-in. `SuiteRun.phase` is the hook.
+3. **Shared static-check work.** Profiled on the same 3,610-line program:
+   `run_static_checks` lexes the source *three* times per pass
+   (`parse_cobol`, `check_unresolved_copybooks_scoped`, and
+   `collect_scope_map`), and the recursive `_find_statements_of_type`
+   walk accounts for ~23% of a pass on its own. Both are shared with
+   `run`/`lint`/`debug`/`export`, so a fix pays for itself far beyond
+   `mutate` — and both are inside the fail-closed refusal package, which
+   is why neither was touched here.
 4. **Mutant schemata** — compile many mutants into ONE binary behind
    `IF UT-MUTANT-ID = n` dispatch, selected at runtime, amortizing the
    compile (the dominant cost). Low-risk here precisely because
@@ -172,10 +247,11 @@ fail-closed posture as the refusal gate.
   WORKING-STORAGE reset) so the behavior is documented, honest triage
   output rather than a surprise. Mitigation is a high-signal operator
   set, not detection.
-- Serial v1 wall-clock is fine for fixture/demo scale (~0.7 s/mutant)
-  and linear in program size beyond it — the deferred items above are
-  the answer, and `--fail-under` should gate changed code, not whole
-  legacy programs, until then.
+- Wall-clock is fine for fixture/demo scale (~0.7 s/mutant) and linear in
+  program size beyond it. The coverage gate and `--jobs` (above) are the
+  two levers built so far; until per-case targeting and schemata land,
+  `--fail-under` should still gate changed code rather than whole legacy
+  programs.
 - Text-level discovery skips keyword relational forms (`GREATER THAN`)
   and multi-line conditions — blind spots, never false mutants.
 - `stmt-delete` on a line holding more than one statement
@@ -195,6 +271,12 @@ fail-closed posture as the refusal gate.
   rules, exact rewrite text, and a pin of the integration fixture's
   full mutant population (so the Docker test's expectations stay
   explainable).
+- `tests/unit/test_mutation_speed.py` — the coverage gate (uncovered ->
+  survivor without a build, unmappable -> always built, gate off, gated
+  survivors still scored, the plain-baseline re-run and exactly when it
+  fires) and the worker pool (mutant-ordered results/progress/notes, no
+  pool below two workers or two mutants, the in-worker call path, initarg
+  and result picklability, a broken pool reported not raised).
 - `tests/integration/test_mutation.py` (Docker-gated) — the kill loop
   end-to-end against real GnuCOBOL: every mutant of
   `mutation_target.cbl` classified exactly as predicted (5 killed, 1
