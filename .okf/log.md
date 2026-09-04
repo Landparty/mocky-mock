@@ -31,6 +31,15 @@ Reported from a real `generate --with-data` run against a large program:
 * Tests: four new cases in `tests/unit/test_dsl_generator_bundle.py`
   (replication, ordering after the status move, `SET ... UP BY` still
   TODO-ing, multi-group SET never partially replicated).
+* **Related gap documented, not fixed**
+  ([docs/2026-09-04-scenario-branch-verification.md](../docs/2026-09-04-scenario-branch-verification.md)):
+  every `VERIFY` the bundle scaffold emits is boundary-keyed, so a scenario
+  seeded with data that cannot reach the arm it is *named* for still passes.
+  The DSL already supports `VERIFY PARAGRAPH <name> WAS PERFORMED n TIMES`
+  (`PARAGRAPH`/`SECTION` are `FLOW_CATEGORIES` members); the scaffold just
+  never emits one. Two of the three seeding defects behind this were fixed
+  upstream in cobol-parser the same day; the third (an arm reachable only via
+  a correlation between two records) is structural and still open.
 
 
 ## 2026-09-02 — Every COBOL dependency mockable or refused; sibling-parser bugs
