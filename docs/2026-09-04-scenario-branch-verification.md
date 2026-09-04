@@ -51,7 +51,7 @@ test failure. The scaffold simply never emits one.
 ## Proposed change
 
 For a bundle-driven scenario that targets a branch arm, emit a
-`VERIFY PARAGRAPH <target> WAS PERFORMED AT LEAST 1 TIMES` alongside the
+`VERIFY PARAGRAPH <target> WAS PERFORMED AT LEAST ONCE` alongside the
 existing boundary VERIFYs.
 
 Open questions, in the order they need answering:
@@ -68,14 +68,16 @@ Open questions, in the order they need answering:
    TESTCASE installs, the tally is a mock tally, not a real execution. The
    splicer's flow-mock dispatch already distinguishes these -- worth
    confirming before trusting the count.
-3. **`AT LEAST 1` vs an exact count.** Exact counts are appealing but a
+3. **`AT LEAST ONCE` vs an exact count.** Exact counts are appealing but a
    loop-driven arm fires once per matching row, and the row count is the
    scenario's own `sequence` length -- knowable, but only if the expectation
    is derived from the same place tier-1 `call_count` expectations are
-   (`program_fixtures`), not re-derived here. `AT LEAST 1` is the honest
-   minimum and needs no new derivation.
+   (`program_fixtures`), not re-derived here. `AT LEAST ONCE` is the honest
+   minimum and needs no new derivation. (It is also the only spelling the
+   grammar has for this: `_validate_expectation` accepts `ONCE`, `NEVER`,
+   `AT LEAST ONCE`, or `<n> TIMES` -- there is no `AT LEAST <n> TIMES`.)
 
-Worth doing item 3 first as `AT LEAST 1`: it catches every failure of this
+Worth doing item 3 first as `AT LEAST ONCE`: it catches every failure of this
 class, and it does not depend on resolving 1 and 2 perfectly.
 
 ## Interim guidance

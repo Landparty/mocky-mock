@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cobolparser import parse_cobol
 from cobolparser.generators import ProgramFixtureGenerator
+from cobolparser.generators.data.options import DataGeneratorOptions
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.dsl.fixture_bundle import (
@@ -73,7 +74,7 @@ MULTI_FILE_SOURCE = """\
 """
 
 
-def _surface_and_bundle(source, filename, seed=7):
+def _surface_and_bundle(source, filename, seed=7, rows=None):
     """Build mockymock's own surface and a real cobol-parser bundle from
     the SAME parsed AST, independently -- generate() (not
     generate_from_file, which needs a real path on disk) over an AST built
@@ -87,7 +88,12 @@ def _surface_and_bundle(source, filename, seed=7):
 
     index = ProgramLayoutIndex.build(result.ast)
     report = BoundaryInventoryAnalyzer().analyze(result.ast, index)
-    cp_bundle = ProgramFixtureGenerator().generate(result.ast, index, report, seed=seed)
+    generator = (
+        ProgramFixtureGenerator()
+        if rows is None
+        else ProgramFixtureGenerator(DataGeneratorOptions(rows=rows))
+    )
+    cp_bundle = generator.generate(result.ast, index, report, seed=seed)
     return surface, load_fixture_bundle(cp_bundle.to_dict())
 
 
@@ -382,6 +388,48 @@ SET_UP_BY_AT_END_SOURCE = (
         "       01  WS-INV-STATUS       PIC XX.\n       01  WS-IDX              PIC 9(4) VALUE 1.",
     )
 )
+
+
+def test_read_at_end_set_replicated_in_the_empty_sequence_body():
+    """The hang fix has to hold on all THREE paths that share
+    `_read_exhaustion_lines`, not just the multi-row `WHEN OTHER` branch.
+    With an empty `sequence` (`--rows 0`, or a bundle's own "empty input"
+    scenario family) every READ is immediately exhausted, so the
+    exhaustion content fires directly with no EVALUATE -- and it must
+    still carry the loop guard, or the program's PERFORM UNTIL loop hangs
+    on its very first READ."""
+    surface, bundle = _surface_and_bundle(
+        SET_CONDITION_NAME_AT_END_SOURCE, "seteof.cbl", rows=0
+    )
+    read_fixture = next(f for f in bundle.scenarios[0].fixtures if f.category == "READ")
+    assert read_fixture.sequence == []  # ground the test's own premise
+    text = scaffold_cut("SETEOF", surface, bundle)
+    assert "EVALUATE TRUE" not in text  # no row-selecting branch at all
+    assert "SET WS-EOF-REACHED TO TRUE" in text
+    assert "TODO" not in text
+
+
+def test_read_at_end_set_replicated_in_the_placeholder_downgrade():
+    """Third path: a `--placeholder`-downgraded READ reuses the same
+    helper to emit an "immediately at end" body. Dropping the loop guard
+    here would hang exactly like the other two, and `--placeholder` is
+    not allowed to trade away the "every generated .cut is runnable by
+    construction" invariant (see
+    test_placeholder_downgrades_read_boundary_to_an_immediately_at_end_body)."""
+    surface, bundle = _surface_and_bundle(
+        SET_CONDITION_NAME_AT_END_SOURCE, "seteof.cbl"
+    )
+    text = scaffold_cut(
+        "SETEOF",
+        surface,
+        bundle,
+        placeholder_keys=frozenset({("READ", "INV-FILE")}),
+    )
+    assert "MOCK READ INV-FILE" in text
+    assert "EVALUATE TRUE" not in text  # downgraded: no tally branching
+    assert 'MOVE "10" TO WS-INV-STATUS' in text  # fixture.terminal
+    assert "SET WS-EOF-REACHED TO TRUE" in text  # replicated loop guard
+    assert "TODO" not in text
 
 
 def test_read_at_end_non_constant_set_gets_a_todo_comment():
