@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cobolparser import parse_cobol
 from cobolparser.generators import ProgramFixtureGenerator
+from cobolparser.generators.data.options import DataGeneratorOptions
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.dsl.fixture_bundle import (
@@ -73,7 +74,7 @@ MULTI_FILE_SOURCE = """\
 """
 
 
-def _surface_and_bundle(source, filename, seed=7):
+def _surface_and_bundle(source, filename, seed=7, rows=None):
     """Build mockymock's own surface and a real cobol-parser bundle from
     the SAME parsed AST, independently -- generate() (not
     generate_from_file, which needs a real path on disk) over an AST built
@@ -87,7 +88,12 @@ def _surface_and_bundle(source, filename, seed=7):
 
     index = ProgramLayoutIndex.build(result.ast)
     report = BoundaryInventoryAnalyzer().analyze(result.ast, index)
-    cp_bundle = ProgramFixtureGenerator().generate(result.ast, index, report, seed=seed)
+    generator = (
+        ProgramFixtureGenerator()
+        if rows is None
+        else ProgramFixtureGenerator(DataGeneratorOptions(rows=rows))
+    )
+    cp_bundle = generator.generate(result.ast, index, report, seed=seed)
     return surface, load_fixture_bundle(cp_bundle.to_dict())
 
 
@@ -307,6 +313,157 @@ def test_read_at_end_clause_with_identifier_source_gets_a_todo_comment():
     assert "WHEN OTHER" in text
     assert "TODO" in text
     assert "WS-DONE-FLAG" not in text  # never blindly copied
+
+
+SET_CONDITION_NAME_AT_END_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SETEOF.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT INV-FILE ASSIGN TO "INV.DAT"
+               FILE STATUS IS WS-INV-STATUS.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  INV-FILE.
+       01  INV-REC.
+           05  INV-QTY        PIC 9(4).
+
+       WORKING-STORAGE SECTION.
+       01  WS-INV-STATUS       PIC XX.
+       01  WS-EOF-FLAG         PIC X VALUE "N".
+           88  WS-EOF-REACHED  VALUE "Y".
+
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           OPEN INPUT INV-FILE.
+           READ INV-FILE
+               AT END SET WS-EOF-REACHED TO TRUE
+           END-READ.
+           CLOSE INV-FILE.
+"""
+
+
+def test_read_at_end_set_condition_name_is_replicated():
+    """The condition-name spelling of the EOF-flag idiom -- `AT END SET
+    WS-EOF-REACHED TO TRUE` against an 88 -- must be replicated exactly
+    like `AT END MOVE "Y" TO WS-EOF` is. It parses to a SetStatement, not
+    a MoveStatement, so the original MOVE-only replication skipped it and
+    emitted only the FILE STATUS move plus a TODO: the application flag
+    was never flipped and the program's own PERFORM UNTIL loop spun
+    forever (the same infinite loop the MOVE case already fixed, reached
+    by a different-but-equally-common spelling)."""
+    surface, bundle = _surface_and_bundle(
+        SET_CONDITION_NAME_AT_END_SOURCE, "seteof.cbl"
+    )
+    text = scaffold_cut("SETEOF", surface, bundle)
+    assert "WHEN OTHER" in text
+    assert "SET WS-EOF-REACHED TO TRUE" in text
+    assert "TODO" not in text
+
+
+def test_read_at_end_set_replicated_after_the_status_field_move():
+    """Same ordering guarantee `test_read_at_end_clause_replicated_
+    alongside_a_real_status_field` pins for MOVE: the terminal FILE
+    STATUS move comes first, the replicated loop guard after it."""
+    surface, bundle = _surface_and_bundle(
+        SET_CONDITION_NAME_AT_END_SOURCE, "seteof.cbl"
+    )
+    text = scaffold_cut("SETEOF", surface, bundle)
+    when_other = text.split("WHEN OTHER", 1)[1]
+    assert when_other.index('MOVE "10" TO WS-INV-STATUS') < when_other.index(
+        "SET WS-EOF-REACHED TO TRUE"
+    )
+
+
+SET_UP_BY_AT_END_SOURCE = (
+    SET_CONDITION_NAME_AT_END_SOURCE.replace(
+        "PROGRAM-ID. SETEOF.", "PROGRAM-ID. SETUPBY."
+    )
+    .replace("AT END SET WS-EOF-REACHED TO TRUE", "AT END SET WS-IDX UP BY 1")
+    .replace(
+        "       01  WS-INV-STATUS       PIC XX.",
+        "       01  WS-INV-STATUS       PIC XX.\n       01  WS-IDX              PIC 9(4) VALUE 1.",
+    )
+)
+
+
+def test_read_at_end_set_replicated_in_the_empty_sequence_body():
+    """The hang fix has to hold on all THREE paths that share
+    `_read_exhaustion_lines`, not just the multi-row `WHEN OTHER` branch.
+    With an empty `sequence` (`--rows 0`, or a bundle's own "empty input"
+    scenario family) every READ is immediately exhausted, so the
+    exhaustion content fires directly with no EVALUATE -- and it must
+    still carry the loop guard, or the program's PERFORM UNTIL loop hangs
+    on its very first READ."""
+    surface, bundle = _surface_and_bundle(
+        SET_CONDITION_NAME_AT_END_SOURCE, "seteof.cbl", rows=0
+    )
+    read_fixture = next(f for f in bundle.scenarios[0].fixtures if f.category == "READ")
+    assert read_fixture.sequence == []  # ground the test's own premise
+    text = scaffold_cut("SETEOF", surface, bundle)
+    assert "EVALUATE TRUE" not in text  # no row-selecting branch at all
+    assert "SET WS-EOF-REACHED TO TRUE" in text
+    assert "TODO" not in text
+
+
+def test_read_at_end_set_replicated_in_the_placeholder_downgrade():
+    """Third path: a `--placeholder`-downgraded READ reuses the same
+    helper to emit an "immediately at end" body. Dropping the loop guard
+    here would hang exactly like the other two, and `--placeholder` is
+    not allowed to trade away the "every generated .cut is runnable by
+    construction" invariant (see
+    test_placeholder_downgrades_read_boundary_to_an_immediately_at_end_body)."""
+    surface, bundle = _surface_and_bundle(
+        SET_CONDITION_NAME_AT_END_SOURCE, "seteof.cbl"
+    )
+    text = scaffold_cut(
+        "SETEOF",
+        surface,
+        bundle,
+        placeholder_keys=frozenset({("READ", "INV-FILE")}),
+    )
+    assert "MOCK READ INV-FILE" in text
+    assert "EVALUATE TRUE" not in text  # downgraded: no tally branching
+    assert 'MOVE "10" TO WS-INV-STATUS' in text  # fixture.terminal
+    assert "SET WS-EOF-REACHED TO TRUE" in text  # replicated loop guard
+    assert "TODO" not in text
+
+
+def test_read_at_end_non_constant_set_gets_a_todo_comment():
+    """`SET ... UP BY 1` is not a constant assignment to a condition
+    name -- it reads the target's own runtime value, which the mock's
+    splice-time context does not have. Left unreplicated, with the TODO
+    flagging the gap, exactly like an identifier-sourced MOVE."""
+    surface, bundle = _surface_and_bundle(SET_UP_BY_AT_END_SOURCE, "setupby.cbl")
+    text = scaffold_cut("SETUPBY", surface, bundle)
+    assert "WHEN OTHER" in text
+    assert "TODO" in text
+    assert "UP BY" not in text  # never blindly copied
+
+
+def test_multi_group_set_is_not_partially_replicated():
+    """A multi-group `SET A TO TRUE B TO FALSE` carries its second group
+    in `groups`, which this generator has no way to render. Replicating
+    only the first group would be a SILENT PARTIAL replication -- worse
+    than none, since the TODO comment would not be emitted to flag it --
+    so the whole statement is skipped."""
+    from mockymock.dsl.generator import _replicated_set_lines
+
+    class _FakeSet:
+        def __init__(self):
+            self.set_type = "TRUE"
+            self.targets = ["WS-EOF-REACHED"]
+            self.groups = [{"targets": ["WS-OTHER"], "set_type": "FALSE"}]
+
+    fake = _FakeSet()
+    fake.__class__.__name__ = "SetStatement"
+    assert _replicated_set_lines(fake) == []
+
+    fake.groups = []
+    assert _replicated_set_lines(fake) == ["SET WS-EOF-REACHED TO TRUE"]
 
 
 # --- hand-built bundles for isolated logic -----------------------------------
