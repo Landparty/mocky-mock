@@ -28,6 +28,7 @@ from pathlib import Path
 
 import mockymock.mutation.runner as runner
 from mockymock.mutation.operators import Mutant
+from mockymock.mutation.runner import SuiteRun
 from mockymock.runtime import docker_toolchain
 
 
@@ -53,10 +54,10 @@ def test_baseline_notes_are_returned_even_with_no_mutants(monkeypatch, tmp_path)
     calls: list[str] = []
 
     def fake_run_suite_once(
-        source_text, source_name, cut_path, copybook_paths, timeout
+        source_text, source_name, cut_path, copybook_paths, timeout, **kwargs
     ):
         calls.append(source_text)
-        return "passed", "", ["parse warning waived: ..."], None
+        return SuiteRun("passed", "", ["parse warning waived: ..."])
 
     monkeypatch.setattr(runner, "_run_suite_once", fake_run_suite_once)
     monkeypatch.setattr(runner, "generate_mutants", lambda lines: [])
@@ -77,13 +78,10 @@ def test_baseline_not_green_still_surfaces_its_notes(monkeypatch, tmp_path):
     _fake_docker(monkeypatch)
 
     def fake_run_suite_once(
-        source_text, source_name, cut_path, copybook_paths, timeout
+        source_text, source_name, cut_path, copybook_paths, timeout, **kwargs
     ):
-        return (
-            "failed",
-            "case 'x' failed",
-            ["unresolved COPY statement waived: ..."],
-            None,
+        return SuiteRun(
+            "failed", "case 'x' failed", ["unresolved COPY statement waived: ..."]
         )
 
     monkeypatch.setattr(runner, "_run_suite_once", fake_run_suite_once)
@@ -107,21 +105,18 @@ def test_notes_from_baseline_and_every_mutant_are_merged_and_deduped(
         runner, "generate_mutants", lambda lines: [_mutant(5), _mutant(6)]
     )
 
-    # (status, detail, notes, stillborn_reason) per call, exactly what
-    # _run_suite_once returns: baseline first, then one per mutant in order.
+    # (status _run_suite_once would actually return, detail, notes) per
+    # call: baseline first, then one per mutant in order.
     responses = iter(
         [
-            # baseline
-            ("passed", "", ["waived: dropped content in DIRTY-PARA"], None),
-            # mutant 1
-            ("passed", "", ["waived: dropped content in DIRTY-PARA"], None),
-            # mutant 2
-            ("failed", "boom", ["waived: unresolved COPY in OTHER-PARA"], None),
+            SuiteRun("passed", "", ["waived: dropped content in DIRTY-PARA"]),
+            SuiteRun("passed", "", ["waived: dropped content in DIRTY-PARA"]),
+            SuiteRun("failed", "boom", ["waived: unresolved COPY in OTHER-PARA"]),
         ]
     )
 
     def fake_run_suite_once(
-        source_text, source_name, cut_path, copybook_paths, timeout
+        source_text, source_name, cut_path, copybook_paths, timeout, **kwargs
     ):
         return next(responses)
 

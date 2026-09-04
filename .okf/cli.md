@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-08-17T00:00:00Z
+timestamp: 2026-09-04T00:00:00Z
 ---
 
 # Overview
@@ -514,17 +514,47 @@ Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
 `PERFORM`/`PERFORM THRU`/`GO TO` control flow in `call_stack.py`.
 
-## `mockymock mutate <program> --cut PATH [--copybook-path DIR ...] [--list] [--timeout S] [--json-report PATH] [--fail-under PCT]`
+## `mockymock mutate <program> --cut PATH [--copybook-path DIR ...] [--list] [--timeout S] [--jobs N] [--no-coverage-gate] [--json-report PATH] [--fail-under PCT]`
 
 Mutation testing (see docs/2026-07-29-mutation-testing-design.md).
 `--list` prints the generated mutants and exits — pure
 `mutation.operators`, no Docker. `mutation.operators`' verb/scope/
-condition/deletable-verb regexes now match on COBOL-word boundaries via a
+condition/deletable-verb regexes match on COBOL-word boundaries via a
 shared `_cobol_word()` helper (negative lookaround treating `-` as part
 of the identifier, not a boundary) instead of plain `\b` (audit finding
 F8, 2026-08-10) — `\bREAD\b` used to match inside `WS-READ-COUNT` and
-generate mutants that were never real READ statements at all. A real run
-baseline-checks the suite
+generate mutants that were never real READ statements at all. **The same
+helper now covers the arithmetic patterns too** (`_ADD_TO`,
+`_SUBTRACT_FROM`, `_MULTIPLY_BY`, `_DIVIDE_INTO`, `_MOVE_INT`), which F8
+missed: `\bADD\b` matched inside `GRP-FOR-ADD-CORR-R` and rewrote an
+ordinary `MOVE` into `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...`.
+
+Three further stillborn classes closed on 2026-09-04, all in
+`mutation.operators` (see
+docs/2026-07-29-mutation-testing-design.md's "Column discipline"):
+**every rewrite goes through `_rewrite_code`**, which edits strictly
+inside columns 1-72 and re-pins the identification area at column 73
+rather than letting the edit carry it along — `normalize_fixed_format`
+slices columns 8-72, so a growing swap (`ADD..TO` → `SUBTRACT..FROM`,
++7) used to lose its own tail and a shrinking one (−7, or `>=` → `>`)
+used to drag `NC1014.2` back into the program text. It buys the columns
+a longer verb needs from interior space runs (never the indent — that
+decides Area A vs Area B — and never inside a literal) and drops the
+mutant when it cannot. **`stmt-delete` now requires the statement to end
+on its own line** (trailing period, or a next code line opening
+something new; a line trailing off in `TO`/`FROM`/`=` is always
+refused): replacing the head of a multi-line statement with `CONTINUE`
+strands its own tail, or an `END-ADD` that binds to the deleted verb.
+**Continuation lines (indicator `-`) are skipped** and **`PROCEDURE
+DIVISION` state resets at `END PROGRAM`** so a second program's DATA
+DIVISION is not mutated. Measured over a 542-file corpus: 12.2% of
+generated mutants were defective before this (8.9% verified to compile
+something other than what their report line described, by running each
+through the pipeline's own `normalize_fixed_format`), none after. Still open: `stmt-delete` on a line holding two
+statements deletes both (over-strong, not stillborn), and `stillborn`
+still lumps refusal-gate rejections in with compile errors.
+
+A real run baseline-checks the suite
 (red/empty baseline aborts with exit 1: every verdict would be noise),
 then for each mutant patches one original line and re-runs the exact
 `run` pipeline (static checks → splice → compile → run) in its own
@@ -537,19 +567,41 @@ bare "binary exited N" message, instead of citing the exit code even when
 it was 0 and the real cause was one of those three. Console output
 streams one line per mutant, then lists
 survivors with a `-`/`+` diff, then breaks the stillborn mutants down by
-WHY they were stillborn -- `refused` (a mockymock static gate rejected the
-mutated program, often an equivalent mutant) vs `compile_error` (GnuCOBOL
-rejected it, so that line was never probed at all) -- and finally the score
-(killed+timeouts over scored). That breakdown exists because stillborns are
-excluded from the score entirely: without it, a line whose every mutant
-failed to compile is indistinguishable from a line with no mutants, and a
-real gap the engine could not probe hides behind a clean-looking number.
-The reason is recorded where the status is decided
-(`mutation.runner._run_suite_once` returns it as a fourth element), never
+WHY they were stillborn -- `checks` (a mockymock static gate rejected the
+mutated program before any compiler ran, often an equivalent mutant) vs
+`compile` (GnuCOBOL rejected it, so that line was never probed at all) --
+and finally the score (killed+timeouts over scored). That breakdown exists
+because stillborns are excluded from the score entirely: without it, a line
+whose every mutant failed to compile is indistinguishable from a line with
+no mutants, and a real gap the engine could not probe hides behind a
+clean-looking number. The two names are `SuiteRun.phase`'s own values,
+carried straight onto `MutantResult.stillborn_reason` rather than
 re-derived afterwards by pattern-matching the raw `detail` line.
-`--json-report` writes the full machine-readable outcome (with
-`stillbornByReason` totals and a per-mutant `stillbornReason`);
-`--fail-under` exits 1 below the given percentage. Every baseline/mutant run's `StaticCheckResult.notes` (a
+
+**Two cost levers, both added 2026-09-04, neither changing a verdict.**
+`--jobs N` (default 1) spreads the per-mutant pipeline over N worker
+*processes* -- processes, because the dominant Docker-free cost,
+`run_static_checks`, is CPU-bound pure Python (measured 3.90x on 4 cores).
+`pool.map` is consumed in submission order, so the report, the progress
+stream and the notes union are byte-identical to a serial run. The
+default is 1 because the ceiling is the shared container's `--memory 1g`,
+not the core count: an OOM-killed `cobc` would be recorded as a
+`stillborn`, a wrong verdict. The **coverage gate** (on by default,
+`--no-coverage-gate` to disable) compiles the baseline with `--coverage`,
+remaps gcov onto the original source via
+`report.coverage.map_coverage_to_original`, and classifies any mutant on
+a provably unexecuted line as `survived` without building it -- exact,
+since a line no case reaches cannot change what any case observes. A line
+*absent* from the remap is unknown and always built. A baseline that
+fails at the *compile* step or times out is re-run plain before it is
+believed (`SuiteRun.phase` distinguishes "checks"/"compile"/"run"); a red
+suite or a refusal-gate stop is not, since gcov changes neither. A failed
+gcov pass adds a note and the run builds everything. Gated survivors
+score identically, carry `ran: false` (and `totals.not_compiled`) in the
+JSON, and print as `uncovered`. `--json-report` writes the full
+machine-readable outcome (with `stillbornByReason` totals and a per-mutant
+`stillbornReason`); `--fail-under` exits 1 below the given
+percentage. Every baseline/mutant run's `StaticCheckResult.notes` (a
 paragraph-scoped `PARSE_WARNING`/`UNRESOLVED_COPYBOOK` waived rather than
 refused — [analysis](analysis.md)) is collected (union, first-seen order,
 deduped) and printed as `mockymock mutate: <note>` lines before the
@@ -617,37 +669,54 @@ Writes the instrumented source to a file after running the same parse → static
 pipeline as `run`, but without Docker or any GnuCOBOL step. The output is adjusted for compilation
 under a real fixed-format (z/OS) COBOL compiler instead of GnuCOBOL-only: `PROCESS`/`CBL` directives
 are preserved (where `run`/`lint` strip them), columns are restored to z/OS fixed-format discipline
-(7-space prefix for Area A), and every line overflowing column 72 is wrapped (`wrap_long_lines`).
+(7-space prefix for Area A), and over-column-72 lines are fitted by `mainframe_export.fit_within_columns`.
 A provenance/disclaimer header is prepended, documenting that this is a
 mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
 to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.
 
-**Wrapping (rewritten 2026-09-04).** `wrap_long_lines` tries three things per over-long line, in order:
-a full-line `*>` comment is left alone (columns 73+ are the identification field, always ignored);
-mockymock's own generated `DISPLAY` shape gets the `WITH NO ADVANCING` split (`_wrap_display_line`,
-whose byte-identical-stdout property was verified empirically during design); everything else gets
-the **general fixed-format wrap** (`_wrap_source_line`) -- break the statement at whitespace between
-atoms, and split a too-long literal with the column-7 `-` continuation indicator, with continuation
-content always starting in Area B so it can never be read as a header or an 01/77 level. Before this,
-any non-`DISPLAY` overflow refused the whole file, which was far too blunt: the two routinely reachable
-overflows are a re-indented `.cut` MOCK body statement AND mockymock's OWN generated
-`UT-RESET-WORKING-STORAGE` re-serializing a long `VALUE` clause onto one `MOVE "<literal>" TO <item>`
-line -- and for the latter no `.cut` edit could ever have helped.
+`fit_within_columns` is three passes, in this order:
 
-Only a line with no literal to continue and no break point (a single over-long word) still refuses
-(`mockymock export: refused (COLUMN_OVERFLOW): ...`, writing nothing). That message now names where
-the line came from -- `SourceAttribution`, built from `_insert_driver_with_origins`' inserted-line
-indices plus exact stripped-text lookups in the `.cut` and `.cbl` -- instead of asserting one cause.
-The old message said the line "typically comes from a `.cut` file's MOCK body text" unconditionally,
-which sent readers to the wrong file whenever the real source was the generated reset block.
+1. `wrap_long_display_lines` — a generated `DISPLAY` becomes `DISPLAY "<chunk>" WITH NO ADVANCING`
+   fragments. First because its byte-identical-stdout equivalence is empirically established and the
+   `__MOCKYMOCK__` protocol rides on that text.
+2. `wrap_long_literal_lines` — anything still long that carries exactly one quoted literal is split
+   across fixed-format continuation lines (`-` in the indicator area, the literal re-opened at column
+   12), leaving the statement and the literal's content byte-for-byte unchanged. Two shapes reach this
+   routinely and neither is under the `.cut` file's control: `splicer/reset.py` re-serializes every
+   WORKING-STORAGE `VALUE` clause into `UT-RESET-WORKING-STORAGE` as a single-line `MOVE` (a program
+   declaring a wide storage-dump marker — `DEBUT-WORKING-STORAGE` / `FIN-WORKING-STORAGE`, standard in
+   IBM shops — overflows on its own declaration), and cobolparser's `normalize_fixed_format` collapses
+   a literal the *original* source already continued onto one long free-form line. Both were flat
+   refusals with no in-tool remedy before 2026-09-04.
+   **Every continued line is filled to exactly column 72**, and that is not cosmetic: under
+   fixed-format rules a continued line's trailing blanks through column 72 are part of the open
+   literal, so a short one silently pads the value with spaces (both facts verified against a real
+   fixed-format GnuCOBOL compile — see `tests/integration/test_export_literal_continuation.py`).
+   The fill padding goes before the opening delimiter, where extra spaces are only separators.
 
-**A continued literal's line must run exactly to column 72.** IBM's continuation rule makes the trailing
-blanks of a continued line part of the literal, so a chunk stopping short silently pads the value with
-spaces. `_split_literal_across_lines` fills every continued line exactly and refuses when it cannot
-(only reachable when the remaining content exactly equals a line's free width, or a doubled-quote escape
-pair straddles the last free column). A randomized round-trip test against a model of the compiler's own
-continuation semantics found the bug this rule prevents in the first version of that function.
+3. `_break_at_whitespace` — the one shape neither of the above covers: a line with *no* literal at
+   all (`MOVE WS-A-LONG-SOURCE-NAME TO WS-A-LONG-TARGET-NAME`), which pass 2 can only report as
+   "holds no single quoted literal to split". A COBOL statement may span as many fixed-format lines
+   as it needs — only a *literal* broken across the boundary needs the column-7 `-` — so this needs
+   no continuation machinery at all, just a break at a space with the remainder starting in Area B
+   (column 12) so it cannot be read as a new paragraph header or an 01/77 level.
+
+Each earlier pass's problems are discarded: every pass reports the lines it declined, and a later pass
+re-examines exactly those. Only a line NO pass can fit is reported — a single word too long for Area B
+(61 characters), a second literal on the line (ambiguous), or a `CBL`/`PROCESS` directive (read before
+continuation rules apply). Then `export` refuses
+(`mockymock export: refused (COLUMN_OVERFLOW): ...`) and writes nothing. A full-line `*>` comment is
+exempt in every pass: columns 73+ are the identification field and are never compiled.
+
+**The refusal names where the line came from** (`SourceAttribution`, 2026-09-04). It used to append a
+hint asserting the line "typically comes from a `.cut` file's MOCK body text" — true for one of the
+three real sources, and actively misleading for the other two, since the same overflow arises from
+mockymock's OWN generated driver/reset code, which exists in neither input file and which no `.cut`
+edit can shorten. `SourceAttribution` is built from `_insert_driver_with_origins`' inserted-line
+indices plus exact stripped-text lookups in the `.cut` and `.cbl`, so an attribution is a fact ("this
+text is on line 12 of PROG.cut"), never an inference — and text in neither file is reported as
+mockymock-generated instrumentation rather than blamed on either.
 
 Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
 [docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).

@@ -159,17 +159,15 @@ def test_export_reports_refused_static_checks_and_writes_nothing(tmp_path, capsy
     assert not (tmp_path / "BAD.mainframe.cbl").exists()
 
 
-def test_export_wraps_a_long_cut_mock_body_line_instead_of_refusing(tmp_path, capsys):
-    """The routinely-reachable overflow: a `.cut` file's own MOCK body text.
-    `injector.py`'s build_site_dispatch re-indents a MOCK body's lines by 19
-    columns when it splices them in, so an ordinary MOVE with a modest
-    literal and a modest field name routinely lands past column 72 once
-    restore_fixed_format_columns's own 7-space prefix is added on top.
-
-    `export` used to refuse the whole file on it (COLUMN_OVERFLOW) even
-    though a COBOL statement may span as many fixed-format lines as it
-    needs. It now wraps: the statement is broken at whitespace, every line
-    fits, and nothing is lost."""
+def _column_overflow_program(tmp_path, mock_body):
+    """A program + `.cut` pair whose MOCK body line lands past column 72
+    once spliced. `injector.py`'s build_site_dispatch re-indents a MOCK
+    body's lines by 19 columns, so an ordinary statement with modest names
+    routinely overflows once restore_fixed_format_columns's own 7-space
+    prefix is added on top -- the routinely-reachable COLUMN_OVERFLOW
+    path, reached from user-authored text rather than from mockymock's own
+    generated DISPLAY boilerplate. `mockymock lint` reports no problems on
+    either pair below (neither is a static-check refusal)."""
     cbl = tmp_path / "PROG.cbl"
     cbl.write_text(
         "       IDENTIFICATION DIVISION.\n"
@@ -178,6 +176,7 @@ def test_export_wraps_a_long_cut_mock_body_line_instead_of_refusing(tmp_path, ca
         "       DATA DIVISION.\n"
         "       WORKING-STORAGE SECTION.\n"
         "       01  WS-A-RATHER-LONG-FIELD-NAME-HERE   PIC X(40).\n"
+        "       01  WS-ANOTHER-RATHER-LONG-FIELD-NAME  PIC X(40).\n"
         "\n"
         "       PROCEDURE DIVISION.\n"
         "       MAIN-PROCESS.\n"
@@ -190,10 +189,44 @@ def test_export_wraps_a_long_cut_mock_body_line_instead_of_refusing(tmp_path, ca
         "\n"
         'TESTCASE "long mock body line"\n'
         '    MOCK CALL "SUBPROG"\n'
-        '        MOVE "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" TO '
-        "WS-A-RATHER-LONG-FIELD-NAME-HERE\n"
+        f"        {mock_body}\n"
         "    END-MOCK\n"
         "    PERFORM MAIN-PROCESS\n"
+    )
+    return cbl, cut
+
+
+def test_export_continues_an_overlong_mock_body_literal(tmp_path, capsys):
+    """An over-72 line whose length comes from a quoted literal is split
+    across fixed-format continuation lines rather than refused: the
+    literal's content is unchanged, so there is nothing for the `.cut`
+    author to shorten. The same rewrite is what makes a program declaring
+    a wide WORKING-STORAGE marker field exportable at all -- reset.py
+    re-serializes its VALUE clause into a MOVE nothing outside the
+    program could shorten."""
+    cbl, cut = _column_overflow_program(
+        tmp_path,
+        'MOVE "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" TO '
+        "WS-A-RATHER-LONG-FIELD-NAME-HERE",
+    )
+
+    exit_code = main(["export", str(cbl), "--cut", str(cut)])
+    assert exit_code == 0, capsys.readouterr().out
+
+    written = (tmp_path / "PROG.mainframe.cbl").read_text().splitlines()
+    assert all(len(line) <= 72 for line in written)
+    continuations = [line for line in written if len(line) > 6 and line[6] == "-"]
+    assert continuations, "the long MOVE was expected to be continued"
+    assert all(line[7:].lstrip().startswith('"') for line in continuations)
+
+
+def test_export_breaks_a_literal_less_overflow_at_whitespace(tmp_path, capsys):
+    """An overflow with no literal to continue is not a refusal either: a
+    COBOL statement may span as many fixed-format lines as it needs, so the
+    line is simply broken at a space with the remainder in Area B."""
+    cbl, cut = _column_overflow_program(
+        tmp_path,
+        "MOVE WS-A-RATHER-LONG-FIELD-NAME-HERE TO " "WS-ANOTHER-RATHER-LONG-FIELD-NAME",
     )
 
     exit_code = main(["export", str(cbl), "--cut", str(cut)])
@@ -202,54 +235,36 @@ def test_export_wraps_a_long_cut_mock_body_line_instead_of_refusing(tmp_path, ca
     assert "COLUMN_OVERFLOW" not in out
     written = (tmp_path / "PROG.mainframe.cbl").read_text().splitlines()
     assert all(len(line) <= 72 for line in written)
-    # Broken across two lines, with both halves present and in order.
     joined = "\n".join(written)
-    assert 'MOVE "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" TO' in joined
-    assert "WS-A-RATHER-LONG-FIELD-NAME-HERE" in joined
+    assert "MOVE WS-A-RATHER-LONG-FIELD-NAME-HERE TO" in joined
+    assert "WS-ANOTHER-RATHER-LONG-FIELD-NAME" in joined
 
 
-def test_export_wraps_its_own_generated_working_storage_reset(tmp_path, capsys):
-    """The other routinely-reachable overflow, and the one no `.cut` edit
-    could ever have fixed: mockymock's OWN generated
-    `UT-RESET-WORKING-STORAGE` re-serializes a long VALUE clause onto a
-    single `MOVE "<literal>" TO <item>` line. The original program declared
-    it legally across two fixed-format lines; the reset block did not."""
-    cbl = tmp_path / "PROG.cbl"
-    cbl.write_text(
-        "       IDENTIFICATION DIVISION.\n"
-        "       PROGRAM-ID. PROG.\n"
-        "\n"
-        "       DATA DIVISION.\n"
-        "       WORKING-STORAGE SECTION.\n"
-        "       01  DEBUT-WORKING-STORAGE  PIC X(52)\n"
-        '           VALUE "*** DEBUT DE LA WORKING STORAGE PROGRAMME XYZ ***".\n'
-        "\n"
-        "       PROCEDURE DIVISION.\n"
-        "       MAIN-PROCESS.\n"
-        '           CALL "SUBPROG"\n'
-        '           DISPLAY "DONE".\n'
-    )
-    cut = tmp_path / "PROG.cut"
-    cut.write_text(
-        'TESTSUITE "s"\n'
-        "\n"
-        'TESTCASE "c"\n'
-        '    MOCK CALL "SUBPROG"\n'
-        "        MOVE 0 TO RETURN-CODE\n"
-        "    END-MOCK\n"
-        "    PERFORM MAIN-PROCESS\n"
-    )
+def test_export_still_refuses_what_it_genuinely_cannot_fit(tmp_path, capsys):
+    """Fitting is not a licence to ship a too-long line. A single word too
+    long for Area B (columns 12-72, so 61 characters) has no literal to
+    continue AND no break point, so it still refuses with COLUMN_OVERFLOW
+    and writes nothing."""
+    cbl, cut = _column_overflow_program(tmp_path, "MOVE 1 TO WS-" + "X" * 62)
 
     exit_code = main(["export", str(cbl), "--cut", str(cut)])
-    assert exit_code == 0
-    assert "COLUMN_OVERFLOW" not in capsys.readouterr().out
-    written = (tmp_path / "PROG.mainframe.cbl").read_text().splitlines()
-    assert all(len(line) <= 72 for line in written)
-    joined = "\n".join(written)
-    assert (
-        'MOVE "*** DEBUT DE LA WORKING STORAGE PROGRAMME XYZ ***" TO'
-        "\n           DEBUT-WORKING-STORAGE." in joined
-    )
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "COLUMN_OVERFLOW" in out
+    assert not (tmp_path / "PROG.mainframe.cbl").exists()
+
+
+def test_a_refusal_names_where_the_line_actually_came_from(tmp_path, capsys):
+    """The message used to assert "this typically comes from a `.cut` file's
+    MOCK body text" whatever the real source was -- so a reader whose
+    offending line was mockymock's own generated reset went to the wrong
+    file first. It now names the actual source by exact text match."""
+    cbl, cut = _column_overflow_program(tmp_path, "MOVE 1 TO WS-" + "X" * 62)
+
+    assert main(["export", str(cbl), "--cut", str(cut)]) == 1
+    out = capsys.readouterr().out
+    assert "source: MOCK body text, " in out
+    assert str(cut) in out
 
 
 def test_export_never_imports_docker_toolchain(tmp_path):

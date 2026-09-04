@@ -9,23 +9,25 @@ from mockymock.mutation.operators import Mutant
 
 MutantStatus = Literal["killed", "survived", "stillborn", "timeout"]
 
-#: Why a mutant never reached a scorable run. Reported per mutant and
-#: summarized in the console report, because "stillborn" alone cannot be
-#: acted on: a `refused` mutant broke a mockymock precondition (the mutated
+#: Why a mutant never reached a scorable run -- `SuiteRun.phase`'s two
+#: pre-run values, carried through to the report. Reported per mutant and
+#: summarized in the console output, because "stillborn" alone cannot be
+#: acted on: a `checks` mutant broke a mockymock precondition (the mutated
 #: source no longer satisfies a static gate -- often an equivalent-mutant
-#: signal you can ignore), while a `compile_error` mutant was rejected by
-#: GnuCOBOL itself (usually an operator producing invalid COBOL -- a gap in
-#: the mutation engine, not in your suite). A cluster of either on lines
-#: your suite does not reach is a REAL coverage gap that the mutation score
-#: cannot show you, since stillborn mutants are excluded from it entirely.
-StillbornReason = Literal["refused", "compile_error"]
+#: signal you can ignore), while a `compile` mutant was rejected by GnuCOBOL
+#: itself, which is a gap in the mutation engine rather than in your suite.
+#: A cluster of either on lines your suite does not reach is a REAL coverage
+#: gap the mutation score cannot show you, since stillborn mutants are
+#: excluded from it entirely.
+StillbornReason = Literal["checks", "compile"]
 
 STILLBORN_REASON_LABELS: dict[str, str] = {
-    "refused": (
-        "mockymock refused the mutated program (a static gate no longer "
-        "holds on it) -- often an equivalent mutant, never a suite verdict"
+    "checks": (
+        "mockymock refused the mutated program before any compiler ran (a "
+        "static gate no longer holds on it) -- often an equivalent mutant, "
+        "never a suite verdict"
     ),
-    "compile_error": (
+    "compile": (
         "GnuCOBOL rejected the mutated program -- the mutation operator "
         "produced source this program cannot compile, so the suite never "
         "got to probe that line at all"
@@ -38,12 +40,18 @@ class MutantResult:
     mutant: Mutant
     status: MutantStatus
     #: First failure reason for a kill; first compile/refusal line for a
-    #: stillborn; empty otherwise.
+    #: stillborn; for a coverage-gated survivor, why it was not built.
     detail: str = ""
-    #: Set only when `status == "stillborn"`: which of the two ways a
-    #: mutant can be stillborn this one was. `None` for every other status
-    #: -- and never inferred from `detail` text, which is a raw compiler/
-    #: gate line and not a classification.
+    #: False when the verdict came from the baseline's own coverage rather
+    #: than from building and running this mutant. Such a mutant sits on a
+    #: line the whole suite provably never executes, so it cannot change
+    #: what any case observes -- `survived` is the answer, and compiling to
+    #: confirm it is the work this flag records skipping.
+    ran: bool = True
+    #: Set only when `status == "stillborn"`: which of the two ways a mutant
+    #: can be stillborn this one was, taken from `SuiteRun.phase`. `None` for
+    #: every other status -- and never inferred from `detail` text, which is
+    #: a raw compiler/gate line and not a classification.
     stillborn_reason: StillbornReason | None = None
 
 
@@ -67,10 +75,6 @@ class MutationOutcome:
     @property
     def stillborn(self) -> int:
         return self._count("stillborn")
-
-    @property
-    def timeouts(self) -> int:
-        return self._count("timeout")
 
     def stillborn_by_reason(self) -> dict[str, list[MutantResult]]:
         """Every stillborn mutant grouped by why it was stillborn, in
@@ -97,6 +101,17 @@ class MutationOutcome:
         if unknown:
             grouped["unknown"] = unknown
         return grouped
+
+    @property
+    def timeouts(self) -> int:
+        return self._count("timeout")
+
+    @property
+    def not_compiled(self) -> int:
+        """Mutants the baseline's coverage classified without building
+        them. Scored like any other survivor -- the saving is wall-clock,
+        not a change of verdict."""
+        return sum(1 for r in self.results if not r.ran)
 
     @property
     def score(self) -> float | None:
@@ -136,7 +151,7 @@ def format_console(outcome: MutationOutcome) -> str:
         for reason, results in stillborn_groups.items():
             label = STILLBORN_REASON_LABELS.get(
                 reason,
-                "reason not recorded -- this mutant's status was set " "without one",
+                "reason not recorded -- this mutant's status was set without one",
             )
             lines.append(f"  {reason} ({len(results)}): {label}")
             for result in results:
@@ -151,6 +166,11 @@ def format_console(outcome: MutationOutcome) -> str:
         f"({outcome.killed} killed, {outcome.timeouts} timed out, "
         f"{outcome.survived} survived, {outcome.stillborn} stillborn)"
     )
+    if outcome.not_compiled:
+        lines.append(
+            f"{outcome.not_compiled} of those survivors sit on lines the suite "
+            "never executes -- decided from the baseline's coverage, never built"
+        )
     score = outcome.score
     if score is not None:
         lines.append(f"mutation score: {score * 100:.1f}%")
@@ -170,6 +190,7 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
             "timeouts": outcome.timeouts,
             "survived": outcome.survived,
             "stillborn": outcome.stillborn,
+            "not_compiled": outcome.not_compiled,
         },
         "stillbornByReason": {
             reason: len(results)
@@ -184,6 +205,7 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
                 "mutated": r.mutant.mutated,
                 "status": r.status,
                 "detail": r.detail,
+                "ran": r.ran,
                 "stillbornReason": r.stillborn_reason,
             }
             for r in outcome.results
