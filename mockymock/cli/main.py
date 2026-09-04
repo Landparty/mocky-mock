@@ -275,7 +275,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         load_fixture_bundle,
         load_fixture_bundle_file,
     )
-    from mockymock.dsl.generator import scaffold_cut
+    from mockymock.dsl.generator import ProgramContext, scaffold_cut
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
     source_path = Path(args.program)
@@ -447,7 +447,17 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
     cut_text = scaffold_cut(
-        result.ast.program_name, surface, bundle, frozenset(placeholder_pairs)
+        result.ast.program_name,
+        surface,
+        bundle,
+        frozenset(placeholder_pairs),
+        # The same normalized lines + statement-start boundaries the
+        # splicer's own `statement_span` uses (so a generated MOCK READ's
+        # exhaustion branch can carry the program's own AT END imperative
+        # verbatim -- the exact text the splice is about to delete), plus
+        # the CAPTURE ARG lines each CALL boundary can safely be
+        # scaffolded with.
+        ProgramContext.build(result.ast, lines, surface),
     )
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
@@ -616,13 +626,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.analysis.stub_expectations import scan_stub_expectations
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.cli.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
+    )
     from mockymock.report.coverage import (
         build_original_line_map,
         format_coverage_console,
         format_coverage_json,
         map_coverage_to_original,
         parse_gcov,
+        summarize_original,
     )
     from mockymock.report.formatters import format_console, format_junit_xml
     from mockymock.report.json_report import build_json_report, format_json_report
@@ -660,6 +675,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.coverage_json:
         args.coverage = True
     if args.coverage_out:
+        args.coverage = True
+    # ... and so is asking for the coverage gate: --coverage-fail-under is
+    # the `run` counterpart of `mutate --fail-under`, so it must be usable
+    # on its own in a CI lane without also remembering --coverage.
+    if args.coverage_fail_under is not None:
         args.coverage = True
 
     # Asking for the trace JSON is asking for the trace.
@@ -768,6 +788,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
         reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
+    reset_lines = reset_lines + extra_reset_lines_for(checked)
 
     # --record-expectations: scan the raw .cut text (not the parsed suite --
     # a "*> STUB EXPECT" line is an ordinary comment to parse_cut) against
@@ -856,13 +877,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
             coverage_text = None
             coverage_report = None
+            instrumented_name = instrumented_path.name
             if args.coverage:
                 gcov_result = docker_toolchain.run_gcov(instrumented_path)
                 if gcov_result.success:
+                    # Only the raw gcov parse happens inside the sandbox
+                    # (the .gcov file dies with it); the console text is
+                    # formatted below, once the original-.cbl remap the
+                    # headline number comes from has been computed.
                     coverage_report = parse_gcov(gcov_result.gcov_text)
-                    coverage_text = format_coverage_console(
-                        coverage_report, instrumented_path.name
-                    )
                 else:
                     coverage_text = (
                         f"mockymock run: coverage: {gcov_result.stderr.rstrip()}"
@@ -937,19 +960,27 @@ def _cmd_run(args: argparse.Namespace) -> int:
             ),
         )
 
-    if args.coverage_json:
-        if coverage_report is None:
-            print(
-                "mockymock run: coverage JSON not written -- the gcov pass "
-                "failed (see the coverage error above)"
-            )
-        else:
-            mapped = map_coverage_to_original(
-                coverage_report,
-                instrumented,
-                normalized_lines,
-                source_path.read_text(encoding="utf-8").splitlines(),
-            )
+    # The original-.cbl remap is what BOTH the console headline and the
+    # --coverage-fail-under gate read, so it is computed once here for
+    # every --coverage run -- not only when --coverage-json asked for it,
+    # as it was when the instrumented number was the only one printed.
+    original_coverage = None
+    if coverage_report is not None:
+        original_source_lines = source_path.read_text(encoding="utf-8").splitlines()
+        mapped = map_coverage_to_original(
+            coverage_report,
+            instrumented,
+            normalized_lines,
+            original_source_lines,
+        )
+        original_coverage = summarize_original(mapped, original_source_lines)
+        coverage_text = format_coverage_console(
+            coverage_report,
+            instrumented_name,
+            original=original_coverage,
+            program_name=source_path.name,
+        )
+        if args.coverage_json:
             _write_report_file(
                 "run",
                 "--coverage-json",
@@ -958,9 +989,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     coverage_report,
                     mapped,
                     program_file=str(source_path),
-                    instrumented_name=instrumented_path.name,
+                    instrumented_name=instrumented_name,
                 ),
             )
+    elif args.coverage_json:
+        print(
+            "mockymock run: coverage JSON not written -- the gcov pass "
+            "failed (see the coverage error above)"
+        )
 
     if coverage_text is not None:
         print(coverage_text)
@@ -968,6 +1004,31 @@ def _cmd_run(args: argparse.Namespace) -> int:
             _write_report_file(
                 "run", "--coverage-out", args.coverage_out, coverage_text + "\n"
             )
+
+    # The coverage gate is the `run` counterpart of `mutate --fail-under`,
+    # and is judged against the ORIGINAL program's coverage -- gating on
+    # the instrumented number would make the threshold move whenever
+    # mockymock's own injected line count changed, which says nothing about
+    # the program under test. A failed gcov pass fails the gate rather than
+    # passing it silently: "no number" must never read as "good enough".
+    # Recorded, not returned on, so --trace still prints below: the gate is
+    # folded into this command's single final exit-code decision instead.
+    coverage_gate_failed = False
+    if args.coverage_fail_under is not None:
+        if original_coverage is None:
+            print(
+                f"mockymock run: coverage gate failed -- no coverage was "
+                f"measured (the gcov pass failed; see above), so "
+                f"--coverage-fail-under {args.coverage_fail_under} cannot "
+                f"be satisfied"
+            )
+            coverage_gate_failed = True
+        elif original_coverage.percentage < args.coverage_fail_under:
+            print(
+                f"mockymock run: coverage {original_coverage.percentage:.2f}% "
+                f"is below --coverage-fail-under {args.coverage_fail_under}"
+            )
+            coverage_gate_failed = True
 
     if args.trace:
         if not trace_text:
@@ -1003,7 +1064,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     # A nonzero binary exit is a failed run even when every case that got
     # to print its markers passed (e.g. libcob aborted after the SUMMARY
-    # line, or the timeout killed a straggler).
+    # line, or the timeout killed a straggler). A tripped
+    # --coverage-fail-under gate fails the command the same way, so a green
+    # suite under an unmet coverage floor still exits nonzero in CI.
+    if coverage_gate_failed:
+        return 1
     return 0 if suite_result.all_passed and executed.exit_code == 0 else 1
 
 
@@ -1018,7 +1083,11 @@ def _cmd_debug(args: argparse.Namespace) -> int:
 
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.cli.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
+    )
     from mockymock.debug.adapter import DapAdapter, DebugSession
     from mockymock.debug.call_stack import ParagraphIndex, build_generated_c_line_map
     from mockymock.debug.gdb_session import GdbSession
@@ -1130,6 +1199,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
         reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
+    reset_lines = reset_lines + extra_reset_lines_for(checked)
     artifact = build_driver(
         suite,
         reset_lines,
@@ -1323,8 +1393,13 @@ def _cmd_export(args: argparse.Namespace) -> int:
     stopping before compile_source/run_binary."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.cli.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
+    )
     from mockymock.cli.mainframe_export import (
+        SourceAttribution,
         build_provenance_header,
         fit_within_columns,
         insert_provenance_header,
@@ -1419,15 +1494,25 @@ def _cmd_export(args: argparse.Namespace) -> int:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
         reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
+    reset_lines = reset_lines + extra_reset_lines_for(checked)
     artifact = build_driver(
         suite,
         reset_lines,
         registry,
         extra_working_storage_lines=extra_working_storage(checked),
     )
-    instrumented = _insert_driver(lines, artifact)
+    instrumented, driver_line_indices = _insert_driver_with_origins(lines, artifact)
 
-    instrumented, overflow_problems = fit_within_columns(instrumented)
+    instrumented, overflow_problems = fit_within_columns(
+        instrumented,
+        attribution=SourceAttribution(
+            driver_line_indices=driver_line_indices,
+            cut_path=str(cut_path),
+            cut_text=cut_path.read_text(encoding="utf-8", errors="replace"),
+            program_path=str(source_path),
+            program_text=source_path.read_text(encoding="utf-8", errors="replace"),
+        ),
+    )
     if overflow_problems:
         for problem in overflow_problems:
             print(f"mockymock export: refused (COLUMN_OVERFLOW): {problem}")
@@ -1542,22 +1627,41 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 def _insert_driver(lines: list[str], artifact) -> list[str]:
     """Insert WORKING-STORAGE additions after that section's header, and
     procedure_lines right after the PROCEDURE DIVISION header."""
+    return _insert_driver_with_origins(lines, artifact)[0]
+
+
+def _insert_driver_with_origins(
+    lines: list[str], artifact
+) -> tuple[list[str], set[int]]:
+    """`_insert_driver`, plus the 0-based indices of the lines it inserted.
+
+    `export` needs those indices to say truthfully where an over-long line
+    came from: mockymock's own generated driver (notably the
+    WORKING-STORAGE reset, which re-serializes a long VALUE clause onto one
+    line) is a routine overflow source, and it is not something any `.cut`
+    edit can fix. Knowing the exact inserted range is what keeps that
+    attribution a fact rather than a guess."""
     result: list[str] = []
+    inserted: set[int] = set()
     inserted_ws = False
     inserted_proc = False
+
+    def extend(new_lines) -> None:
+        for new_line in new_lines:
+            inserted.add(len(result))
+            result.append(new_line)
+
     for line in lines:
         result.append(line)
         upper = line.strip().upper()
         if not inserted_ws and upper.startswith("WORKING-STORAGE SECTION"):
-            result.extend(
-                f"       {ws_line}" for ws_line in artifact.working_storage_lines
-            )
+            extend(f"       {ws_line}" for ws_line in artifact.working_storage_lines)
             inserted_ws = True
         if not inserted_proc and upper.startswith("PROCEDURE DIVISION"):
-            result.append("")
-            result.extend(artifact.procedure_lines)
+            extend([""])
+            extend(artifact.procedure_lines)
             inserted_proc = True
-    return result
+    return result, inserted
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1733,14 +1837,26 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Compile with GnuCOBOL's --coverage flag and report per-line "
-            "coverage after the run (gcov-based; reported against the "
-            "instrumented source, not the original .cbl -- see "
-            "docs/2026-07-17-coverage-reporting-design.md)"
+            "coverage after the run (gcov-based). The headline figure is "
+            "the ORIGINAL .cbl's own coverage; the instrumented sandbox "
+            "copy's higher number is reported below it for reference -- "
+            "see docs/2026-07-17-coverage-reporting-design.md"
         ),
     )
     run_parser.add_argument(
         "--coverage-out",
         help="Write the full coverage report (percentage + uncovered lines) to this file",
+    )
+    run_parser.add_argument(
+        "--coverage-fail-under",
+        type=float,
+        metavar="PERCENT",
+        help=(
+            "Exit nonzero when the ORIGINAL .cbl's line coverage is below "
+            "this percentage -- the `run` counterpart of `mutate "
+            "--fail-under`, so coverage can be CI-gated the same way. "
+            "Implies --coverage"
+        ),
     )
     run_parser.add_argument(
         "--coverage-json",

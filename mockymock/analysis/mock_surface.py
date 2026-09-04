@@ -293,12 +293,40 @@ class BoundarySite:
 
 
 @dataclass
+class NonInteractiveAccept:
+    """An `ACCEPT <target> FROM <system source>` -- DATE, TIME, DAY,
+    COMMAND-LINE, ... (`_NON_INTERACTIVE_ACCEPT_SOURCES`).
+
+    These are deliberately NOT boundary sites: GnuCOBOL resolves them from
+    the runtime without ever touching stdin, so there is nothing to mock
+    and nothing that could hang a test. Recording them anyway is purely for
+    error quality: a `MOCK ACCEPT WS-NOW` aimed at one of them matches no
+    boundary site, and without this list the refusal gate can only report
+    the generic UNMATCHED_MOCK ("does not match any boundary site reachable
+    from ..."), which reads as a reachability problem and sends the author
+    off verifying their call graph. The real answer -- this ACCEPT variant
+    is not mockable at all -- is a different problem and gets its own
+    refusal code (UNMOCKABLE_ACCEPT_SOURCE)."""
+
+    target: str
+    from_source: str
+    paragraph_name: str
+    line: int
+
+
+@dataclass
 class MockSurface:
     call_sites: list[CallSite] = field(default_factory=list)
     boundary_sites: list[BoundarySite] = field(default_factory=list)
     file_io_paragraphs: set[str] = field(default_factory=set)
     exec_paragraphs: set[str] = field(default_factory=set)
     console_accept_paragraphs: set[str] = field(default_factory=set)
+    #: Detected-and-deliberately-unmockable system ACCEPTs, for error
+    #: messages only -- see `NonInteractiveAccept`. Never spliced, never
+    #: refused on their own, never reported as unsupported boundaries (an
+    #: `ACCEPT WS-TODAY FROM DATE` is ordinary, working COBOL that needs no
+    #: mock; listing it as a gap would be noise on almost every program).
+    non_interactive_accepts: list[NonInteractiveAccept] = field(default_factory=list)
 
     def static_call_sites(self) -> list[CallSite]:
         return [c for c in self.call_sites if c.kind is CallKind.STATIC]
@@ -787,10 +815,23 @@ def _classify_statement(
         return
 
     if isinstance(statement, IOAcceptStatement):
+        target = (statement.target or "").upper()
         if statement.from_source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
             surface.console_accept_paragraphs.add(paragraph_name)
-            target = (statement.target or "").upper()
             add_site(MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ())
+        elif target:
+            # Not a boundary site (nothing to mock), but recorded so a
+            # MOCK ACCEPT aimed at it can be refused with the real reason
+            # instead of a generic "not reachable" -- see
+            # NonInteractiveAccept.
+            surface.non_interactive_accepts.append(
+                NonInteractiveAccept(
+                    target=target,
+                    from_source=str(statement.from_source),
+                    paragraph_name=paragraph_name,
+                    line=line,
+                )
+            )
         return
 
     if type(statement).__name__ not in _PASSTHROUGH_STATEMENT_NAMES:

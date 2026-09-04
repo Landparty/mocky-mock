@@ -9,6 +9,31 @@ from mockymock.mutation.operators import Mutant
 
 MutantStatus = Literal["killed", "survived", "stillborn", "timeout"]
 
+#: Why a mutant never reached a scorable run -- `SuiteRun.phase`'s two
+#: pre-run values, carried through to the report. Reported per mutant and
+#: summarized in the console output, because "stillborn" alone cannot be
+#: acted on: a `checks` mutant broke a mockymock precondition (the mutated
+#: source no longer satisfies a static gate -- often an equivalent-mutant
+#: signal you can ignore), while a `compile` mutant was rejected by GnuCOBOL
+#: itself, which is a gap in the mutation engine rather than in your suite.
+#: A cluster of either on lines your suite does not reach is a REAL coverage
+#: gap the mutation score cannot show you, since stillborn mutants are
+#: excluded from it entirely.
+StillbornReason = Literal["checks", "compile"]
+
+STILLBORN_REASON_LABELS: dict[str, str] = {
+    "checks": (
+        "mockymock refused the mutated program before any compiler ran (a "
+        "static gate no longer holds on it) -- often an equivalent mutant, "
+        "never a suite verdict"
+    ),
+    "compile": (
+        "GnuCOBOL rejected the mutated program -- the mutation operator "
+        "produced source this program cannot compile, so the suite never "
+        "got to probe that line at all"
+    ),
+}
+
 
 @dataclass
 class MutantResult:
@@ -23,6 +48,11 @@ class MutantResult:
     #: what any case observes -- `survived` is the answer, and compiling to
     #: confirm it is the work this flag records skipping.
     ran: bool = True
+    #: Set only when `status == "stillborn"`: which of the two ways a mutant
+    #: can be stillborn this one was, taken from `SuiteRun.phase`. `None` for
+    #: every other status -- and never inferred from `detail` text, which is
+    #: a raw compiler/gate line and not a classification.
+    stillborn_reason: StillbornReason | None = None
 
 
 @dataclass
@@ -45,6 +75,32 @@ class MutationOutcome:
     @property
     def stillborn(self) -> int:
         return self._count("stillborn")
+
+    def stillborn_by_reason(self) -> dict[str, list[MutantResult]]:
+        """Every stillborn mutant grouped by why it was stillborn, in
+        `STILLBORN_REASON_LABELS` order so the report reads the same way
+        every run. A stillborn with no recorded reason (only possible for a
+        `MutantResult` built by hand rather than by the runner) is grouped
+        under `"unknown"` rather than dropped -- silently losing a mutant
+        from the breakdown is exactly the black box this reporting exists
+        to open."""
+        grouped: dict[str, list[MutantResult]] = {}
+        for reason in STILLBORN_REASON_LABELS:
+            found = [
+                r
+                for r in self.results
+                if r.status == "stillborn" and r.stillborn_reason == reason
+            ]
+            if found:
+                grouped[reason] = found
+        unknown = [
+            r
+            for r in self.results
+            if r.status == "stillborn" and r.stillborn_reason is None
+        ]
+        if unknown:
+            grouped["unknown"] = unknown
+        return grouped
 
     @property
     def timeouts(self) -> int:
@@ -80,6 +136,30 @@ def format_console(outcome: MutationOutcome) -> str:
             lines.append(f"  line {m.line} [{m.operator}] {m.description}")
             lines.append(f"    - {m.original.strip()}")
             lines.append(f"    + {m.mutated.strip()}")
+    # Stillborn mutants are excluded from the score, so without this
+    # breakdown they are invisible: a line whose every mutant was stillborn
+    # looks identical to a line with no mutants at all, and a real coverage
+    # gap the engine could not probe reads as a clean score. Naming the
+    # reason is what separates "equivalent mutant, ignore" from "the
+    # mutation engine never got to test this line".
+    stillborn_groups = outcome.stillborn_by_reason()
+    if stillborn_groups:
+        lines.append(
+            "stillborn mutants (never scored -- these say nothing about the "
+            "suite, so read them as gaps in what was PROBED):"
+        )
+        for reason, results in stillborn_groups.items():
+            label = STILLBORN_REASON_LABELS.get(
+                reason,
+                "reason not recorded -- this mutant's status was set without one",
+            )
+            lines.append(f"  {reason} ({len(results)}): {label}")
+            for result in results:
+                m = result.mutant
+                detail = f" -- {result.detail}" if result.detail else ""
+                lines.append(
+                    f"    line {m.line} [{m.operator}] {m.description}{detail}"
+                )
     scored = outcome.killed + outcome.timeouts + outcome.survived
     lines.append(
         f"mutants: {len(outcome.results)} generated, {scored} scored "
@@ -112,6 +192,10 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
             "stillborn": outcome.stillborn,
             "not_compiled": outcome.not_compiled,
         },
+        "stillbornByReason": {
+            reason: len(results)
+            for reason, results in outcome.stillborn_by_reason().items()
+        },
         "mutants": [
             {
                 "line": r.mutant.line,
@@ -122,6 +206,7 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
                 "status": r.status,
                 "detail": r.detail,
                 "ran": r.ran,
+                "stillbornReason": r.stillborn_reason,
             }
             for r in outcome.results
         ],

@@ -1,5 +1,43 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-09-04 — Review round on the ten-findings branch: four fixes
+
+Automated review of the branch found four defects. Each was verified
+against the code before being changed, and each fix carries a regression
+test that fails without it:
+
+* **[splicer]/[cli]** `extra_reset_lines_for` was applied in `run`,
+  `debug` and `export` but not in the `mutate` pipeline, which assembles
+  its own `reset_lines` in `mutation/runner.py` — lost when that file was
+  restored from `main` during the merge. A synthesized `UT-CAP-` target
+  left unreset across cases is worse under `mutate` than under `run`: a
+  stale captured value can "kill" a mutant the suite never noticed,
+  inflating the score. The guard for it is a source-shape test (the four
+  pipelines each compile through Docker, so there is nothing to assert
+  behaviourally), asserting per file that `reset_move_lines` and
+  `extra_reset_lines_for` are called the same number of times — which is
+  exactly the shape that broke.
+* **[cli]** `fit_within_columns`' third pass (`_break_at_whitespace`)
+  had no `_DIRECTIVE_RE` guard, so an over-long `CBL`/`PROCESS` line that
+  `wrap_long_literal_lines` had explicitly REFUSED two passes earlier was
+  silently broken at a space — turning one directive into a directive plus
+  a stray statement. It is now refused in the third pass too, with the
+  same `SourceAttribution` tag every other overflow message carries.
+* **[coverage]** `summarize_original`'s docstring said uncovered-line text
+  was "stripped"; it is `rstrip()`-ed, and leading Area A / Area B
+  indentation is deliberately kept (it is what distinguishes a paragraph
+  header from a statement inside it). Docstring corrected to match the
+  behaviour the existing test already pinned.
+* **[splicer]** `plan_captures` read `.name.upper()` off a resolved USING
+  parameter. `CallParameter.name` is a `str` by contract and cobol-parser
+  substitutes `"OMITTED"` rather than an empty name, so this cannot arise
+  today — but that comprehension is the only place a violation would
+  surface, and it would surface as an `AttributeError` out of the
+  static-check pass instead of the `UNRESOLVED_CAPTURE_TARGET` refusal
+  `plan_captures` exists to produce. Nameless arguments are now filtered
+  into that refusal path.
+
+
 ## 2026-09-04 — `mockymock mutate` cost levers: a coverage gate and `--jobs`
 
 Asked to make mutation testing faster. Profiled the loop first, on a
@@ -3205,3 +3243,175 @@ docs-only -- no production code changed.
   `ACCTMNT`-based example: a separate cobol-parser bug (task_c5e3b268) drops
   some of `ACCTMNT.cbl`'s own EXEC SQL UPDATE/INSERT statements from the
   AST, causing a different, harder compile failure upstream of this fix.
+
+## 2026-09-04 — Reporting clarity: coverage headline, coverage CI gate, stillborn reasons; unmockable-ACCEPT refusal
+
+Four review findings, all about a tool answer being technically true and
+practically misleading:
+
+- **[coverage]** `run --coverage`'s stdout line reported the *instrumented
+  sandbox copy*'s percentage (inflated by injected harness code) while the
+  meaningful original-`.cbl` number lived only in `--coverage-json`. The
+  console report now leads with the original program's own number and its
+  own uncovered lines; the instrumented figure follows on one labelled
+  line. New `OriginalCoverage`/`summarize_original` in `report/coverage.py`;
+  `_cmd_run` now computes the remap for every `--coverage` run, not only
+  when `--coverage-json` asked for it. `--coverage-json`'s `original` block
+  gained an additive `percentage` key.
+- **[coverage][cli]** New `run --coverage-fail-under PERCENT`, the `run`
+  counterpart of `mutate --fail-under` (coverage could not be CI-gated at
+  all before). Judged against the original number, folded into the final
+  exit-code decision so `--trace` still prints, and failing closed when
+  gcov produced nothing.
+- **[cli]** `mutate`'s stillborn mutants are no longer a black box: the
+  console report groups them by `refused` vs `compile_error` and lists each
+  one, `--json-report` carries `stillbornByReason` plus a per-mutant
+  `stillbornReason`. `_run_suite_once` returns the reason as a fourth
+  element -- classified where the status is decided, never re-derived by
+  pattern-matching `detail`.
+- **[analysis]** `MOCK ACCEPT` aimed at an `ACCEPT ... FROM DATE/TIME/...`
+  refused `UNMATCHED_MOCK` ("does not match any boundary site reachable
+  from ..."), which reads as a reachability bug for a problem that is not
+  about reachability. New `UNMOCKABLE_ACCEPT_SOURCE` code, backed by a new
+  `MockSurface.non_interactive_accepts` list recorded for error quality
+  only (those ACCEPTs are still never spliced and never reported as
+  unsupported boundaries -- `ACCEPT WS-TODAY FROM DATE` is ordinary
+  working COBOL).
+
+Unit-tested throughout; no Docker daemon was available, so none of it is
+runtime-verified against real GnuCOBOL.
+
+## 2026-09-04 — `export` wraps instead of refusing; overflow refusals name their real source
+
+Two review findings on `mockymock export`'s `COLUMN_OVERFLOW`:
+
+- **[cli]** It only ever wrapped mockymock's own generated `DISPLAY` shape;
+  any other over-72 line refused the whole export. New `_wrap_source_line`
+  implements the general fixed-format rules -- break a statement at
+  whitespace between atoms (always legal), continue a too-long literal with
+  the column-7 `-` indicator, keep continuation content in Area B -- and
+  `wrap_long_lines` is the new `export` entry point (comment carve-out ->
+  DISPLAY transform -> general wrap -> refuse). The two overflows that
+  actually occur in practice, a re-indented `.cut` MOCK body statement and
+  the generated `UT-RESET-WORKING-STORAGE`'s `MOVE "<long VALUE>" TO
+  <item>`, both wrap now; the second was unfixable by any `.cut` edit.
+  Load-bearing subtlety: **every continued line must run exactly to column
+  72**, because IBM's continuation rule makes a short line's trailing blanks
+  part of the literal. A randomized round-trip test against a model of that
+  rule caught the bug in the first version of the splitter; 40,000 cases now
+  pass with 0% refusal on realistic literals.
+- **[cli]** The refusal message asserted one cause ("this typically comes
+  from a `.cut` file's MOCK body text") regardless of where the line came
+  from. New `SourceAttribution`, built from `_insert_driver_with_origins`'
+  inserted-line indices plus exact stripped-text lookups in the `.cut` and
+  `.cbl`, names the actual source -- and says "neither file" rather than
+  guessing when the text is in neither. `wrap_long_display_lines` survives
+  as the DISPLAY-only transform's own entry point for the tests that pin its
+  fragment shape; `export` no longer calls it.
+
+Unit-tested; not compiled by a real IBM COBOL compiler (nor GnuCOBOL -- no
+Docker daemon available), which the provenance header now says explicitly
+about the two new wrap shapes.
+
+## 2026-09-04 — `generate --with-data`: real AT END arms, and stub expectations that reach the file
+
+Two review findings on the bundle-driven scaffold, both the same shape --
+the analysis knew something the generated `.cut` did not say:
+
+- **[dsl]** A scaffolded `MOCK READ`'s `WHEN OTHER` arm was a `*> TODO`
+  comment whenever `_replicated_at_end_statements` could not prove a
+  statement safe from the AST. Leaving that TODO in does not fail visibly;
+  it hangs for 30 seconds at the executor timeout, because the splicer
+  deleted the program's own `AT END` clause and nothing sets the loop
+  guard. New `_lifted_at_end_lines`/`_extract_at_end_imperative` lift the
+  clause's own source text verbatim instead -- a slice of the program, not
+  a re-render, so it is general over every statement shape. `SourceContext`
+  (normalized lines + `collect_boundaries`' statement starts, the same two
+  inputs the splicer's `statement_span` uses) is threaded from
+  `_cmd_generate` through `scaffold_cut`, which is what keeps the lifted
+  text identical to the deleted text. The TODO survives as the fallback.
+- **[dsl]** Tier-3 boundary-level stub expectations (`"WRITE:RPT-REC"`)
+  were dropped unconditionally as "already covered by that boundary's own
+  call_count VERIFY" -- false for exactly the OUT-direction boundaries that
+  produce them, which have no such VERIFY. They now render as `*> STUB
+  EXPECT <CAT> <KEY>` comments and are dropped only when a live VERIFY for
+  that boundary was actually emitted (`_rendered_call_count_refs`). The
+  two-token form deliberately does not match `stub_expectations._STUB_RE`,
+  so `run --record-expectations` ignores it rather than reading `WRITE` as
+  a data name.
+
+Unit-tested, including a lint gate on the generated `.cut`; no Docker, so
+the hang this closes was not re-reproduced end to end.
+
+## 2026-09-04 — `CAPTURE ARG` targets are synthesized, so `generate` can scaffold them
+
+**[dsl][splicer][cli]** `CAPTURE ARG <n> INTO <target>` could only ever be
+hand-written, because `<target>` had to be an existing data item of a
+compatible type: finding or adding one was a manual step before every
+capture, and `generate` never emitted one (the 2026-08-11 argument-capture
+design lists that as explicitly out of scope). New
+`mockymock/splicer/captures.py`: a target named with the reserved
+`UT-CAP-` prefix is synthesized -- a WORKING-STORAGE item mirroring the
+captured argument's own PICTURE/USAGE, plus a reset line, both threaded
+through `cli.checks.extra_working_storage` / the new
+`extra_reset_lines_for` so `run`/`debug`/`export`/`mutate` stay in step.
+The reset is not optional: the suite compiles to ONE binary, so an unreset
+capture lets a case that never reached its CALL assert against the previous
+case's value.
+
+Fail-closed via a new `UNRESOLVED_CAPTURE_TARGET` refusal (step 9 of
+`run_static_checks`) for an argument naming different items at different
+matching sites, a layout that cannot be mirrored, or a name the program
+already declares. Two subtleties worth knowing: cobol-parser reports a
+GROUP's own `usage` as DISPLAY regardless of its children, so
+`_data_item_index` stamps each group with a computed subtree-DISPLAY flag
+rather than trusting that field; and `generate` applies the same
+mirrorability/agreement checks the refusal does, so a scaffolded `.cut`
+can never trip its own gate.
+
+Refreshed `examples/fixtures/FIXTUREDEMO.cut` (the `--with-data` golden),
+which now carries the scaffolded capture for its `CALL "LOGALERT"`.
+
+Verified end to end without Docker as far as generate -> lint -> export
+(declarations, resets and capture MOVEs all present in the exported
+source); not compiled.
+
+## 2026-09-04 — Generated TESTCASEs carry cobol-parser's unverified verdict
+
+**[dsl]** cobol-parser's bundle gained `Scenario.verification`: its own
+answer to "does this scenario's generated data actually satisfy the branch
+it is named for?". mockymock's loader reads it defensively (absent means no
+verdict was recorded, never "unverified" — an older bundle is still a valid
+v1 bundle), and `_verification_comment_lines` renders an `unverified`
+verdict as a `*> UNVERIFIED:` block above the affected TESTCASE, listing
+every non-satisfied field verdict and every path gap. A verified scenario
+gets nothing: a note on every case would be noise and would train readers to
+skip the ones that matter. Before this, the only way to check a scenario's
+own label was `mockymock run --trace`, per case.
+
+## 2026-09-04 — Merged main's overlapping export/mutation work
+
+`main` landed #100 (mutation stillborn reduction, `--jobs`, coverage gate)
+and #101 (export literal continuation) while this branch was open, both
+touching the same code. Resolved by taking **main's** implementations, which
+are better and — for the literal continuation — empirically verified against
+a real fixed-format GnuCOBOL compile, and re-applying only what was still
+missing:
+
+- **[cli]** main's `_continue_literal` independently found the same
+  fill-to-column-72 rule this branch did, and solves it more completely: it
+  pads *before* the opening delimiter, where extra spaces are only
+  separators, so exact fill is always possible and the refusal cases this
+  branch's own splitter had disappear. That splitter is gone; only
+  `_break_at_whitespace` survives from it, as `fit_within_columns`' third
+  pass, for the one shape main's passes cannot fit — a line with no literal
+  at all.
+- **[cli]** `SourceAttribution` still applies: main's message continues to
+  assert "this typically comes from a `.cut` file's MOCK body text"
+  unconditionally, which is the misattribution the review reported.
+- **[cli]** main's `SuiteRun.phase` ("checks"/"compile") already IS the
+  stillborn classification this branch was computing separately — it was
+  just dropped when the `MutantResult` was built. Carrying it through as
+  `stillborn_reason` replaces this branch's parallel plumbing entirely, and
+  the reported names are now main's (`checks`/`compile`) rather than this
+  branch's invented ones.

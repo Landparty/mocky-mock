@@ -193,10 +193,50 @@ number of `USING` parameters — this refuses if **any** matching site has
 too few, even if another matching site would be fine (fail closed over
 partial safety, same posture as `UNRESOLVED_FILE_STATUS_TARGET`).
 
+**Synthesized targets (`UT-CAP-...`, 2026-09-04).** A `<target>` whose
+name starts with `splicer.captures.CAPTURE_TARGET_PREFIX` (`UT-CAP-`) means
+"declare this for me": `splicer.captures.plan_captures` synthesizes a
+WORKING-STORAGE item mirroring the captured argument's own PICTURE/USAGE
+(a DISPLAY-only group becomes one `PIC X(<byte length>)` field, which is
+exactly what a group MOVE copies) and a reset line, both threaded through
+`cli.checks.extra_working_storage` / `extra_reset_lines_for` so all four
+splice-and-compile pipelines (`run`, `debug`, `export`, `mutate`) stay in
+step. The reset matters as much as the declaration: the suite compiles to
+ONE binary, so an unreset capture would let a case that never reached its
+CALL assert against the previous case's value.
+
+That is what finally let `generate` scaffold captures at all — the target
+previously had to be an existing item of a compatible type, so finding or
+adding one was a manual step before every single capture, and the scaffold
+never emitted one. The reserved prefix is what keeps it from being a
+footgun: a mistyped real data name never starts with `UT-CAP-`, so it can
+never silently become a new field. Fail-closed on everything else:
+`UNRESOLVED_CAPTURE_TARGET` (raised from `run_static_checks` step 9)
+refuses a synthesized target whose argument names different items at
+different matching call sites, whose layout cannot be mirrored (a table, a
+PICTURE-less COMP-1/POINTER item, a group holding non-DISPLAY data whose
+bytes an alphanumeric copy would render unreadable), or whose name the
+program already declares. A target WITHOUT the prefix is untouched — it
+still has to exist in the program, exactly as before.
+
+`generate` emits a `CAPTURE ARG <n> INTO UT-CAP-<key>-<n>` per mirrorable
+argument (`_capture_lines_by_key`, precomputed onto `ProgramContext`),
+first in the mock body so the `.cut` reads the way it executes, plus one
+`*> STUB EXPECT <target>` comment per capture after the `PERFORM` — a
+captured value with nothing pointing at it is not an assertion, and `run
+--record-expectations` promotes those stubs to real `EXPECT` lines from an
+actual run, which is the workflow that makes a captured argument useful
+without the author guessing the value up front. The generator applies the
+same mirrorability and agreement checks the refusal does, so a scaffolded
+`.cut` never trips its own gate: an argument that fails either is simply
+not captured, and the boundary's other arguments still are.
+
 See docs/2026-08-11-argument-capture-design.md for the full design and
 rejected alternatives (a dedicated `VERIFY ... WAS CALLED WITH ARG n =
 value` combined syntax; capturing by COBOL variable name instead of
-position; per-call history capture).
+position; per-call history capture). That doc lists `generate` emitting
+`CAPTURE` automatically as explicitly out of scope for v1; this is the
+follow-up that closed it.
 
 ## Case rules
 
@@ -638,24 +678,71 @@ paragraph-grouped path described above, unchanged. A real
   correctly (cobol-parser's `_resolve_status_field`), but the program's
   own `AT END` handler still fires every time the sequence exhausts and
   still needs replicating. Only a `MOVE` whose source is a quoted
-  string/numeric literal or figurative constant is replicated — never a
-  bare identifier, whose value in the mock's own splice-time context
-  isn't the real program's runtime state; when the clause exists but
-  nothing in it was safely replicable, a `*> TODO` comment flags the gap
-  in the generated `.cut` rather than silently emitting an `EVALUATE` with
-  no `WHEN OTHER` effect at all.
+  string/numeric literal or figurative constant is replicated from the AST
+  — never a bare identifier, whose value in the mock's own splice-time
+  context isn't the real program's runtime state.
+- **When the AST-driven replication comes up empty, the clause's own source
+  text is lifted verbatim instead** (`_lifted_at_end_lines`, 2026-09-04).
+  The `*> TODO` comment that used to be emitted there is not a visible gap
+  so much as a silently hanging test: a reader who leaves it in gets a
+  30-second executor timeout with no diagnosis, because the program's own
+  loop guard is never set. The lift is a *slice of the program's own
+  source* — exactly the text the splice is about to delete — not a
+  re-render limited to the shapes an AST walk knows about, which is what
+  makes it general enough to cover identifier-sourced MOVEs, `ADD`, `IF`,
+  `PERFORM`, and everything else a real `AT END` clause holds.
+  `SourceContext` (the normalized lines plus
+  `splicer.source_map.collect_boundaries`' statement starts — the SAME two
+  inputs the splicer's own `statement_span` uses, so the lifted text cannot
+  drift from the deleted text) is threaded from `_cmd_generate` through
+  `scaffold_cut`. `_extract_at_end_imperative` locates `AT END` positionally
+  with words scanned OUTSIDE quoted literals (so a `DISPLAY "AT END OF
+  FILE"` is never mistaken for the clause) and cuts at the first of `NOT AT
+  END` / `END-READ` / `INVALID KEY` / `NOT INVALID KEY` / a
+  sentence-terminating period (a period followed by whitespace or
+  end-of-text — COBOL's own rule, which is also what keeps a numeric
+  literal's decimal point from being read as one). A lifted line carries a
+  `*>` provenance comment naming the source line, since a generated file a
+  human reads should not silently contain code that did not come from the
+  fixture data. The `*> TODO` remains the fallback when no `SourceContext`
+  was supplied or the clause could not be located.
 - **Expectations** render via `_render_expectation(expectation,
-  declared_keys, call_count_overrides=None)`: tier 1 (`call_count`) →
+  declared_keys, call_count_overrides=None, counted_boundaries=None)`:
+  tier 1 (`call_count`) →
   `VERIFY <cat> <key> WAS CALLED n TIMES`, gated on `declared_keys` as
   above, `n` normally `expectation.value` but see `--placeholder`'s
   `call_count_overrides` below; tier 2 (`field_equals`) → `EXPECT <name>
-  TO BE <value>`; tier 3 (`stub`) → `*> STUB EXPECT <name>` comment when
-  `ref` is a real data-name, or nothing when `ref` is a
-  `"CATEGORY:KEY"`-shaped boundary-level reference (`_is_boundary_level_ref`
-  detects this via the colon, since COBOL names never contain one) — see
-  `analysis.md`'s stub-expectation scanner for how a human later promotes
-  a stub comment to a real `EXPECT` via `mockymock run
-  --record-expectations`.
+  TO BE <value>`; tier 3 (`stub`) → a `*> STUB EXPECT ...` comment. A
+  `"CATEGORY:KEY"`-shaped boundary-level `ref` (`_is_boundary_level_ref`
+  detects the colon, since COBOL names never contain one) renders as
+  `*> STUB EXPECT <CAT> <KEY>` — the way a MOCK/VERIFY for that boundary
+  reads — and is dropped ONLY when this same TESTCASE actually emits a live
+  `VERIFY ... WAS CALLED` for it (`_rendered_call_count_refs`, which
+  excludes both keys with no MOCK directive of their own and counts demoted
+  to a comment by a `--placeholder` downgrade). It used to be dropped
+  unconditionally on that "already covered by its own call_count VERIFY"
+  reasoning, which is simply false for an OUT-direction boundary: every
+  `WRITE:` stub the bundle produced under `--scenarios all` vanished, so
+  the analysis knew something the generated `.cut` never said. A `*>`
+  comment is inert, so surfacing it can never break the file; dropping it
+  opened a gap between what the analysis knew and what reached the file,
+  which is the one thing a scaffold must not do. The two-token boundary
+  form deliberately does NOT match the stub scanner's data-name grammar
+  (`analysis/stub_expectations.py`'s `_STUB_RE`), so `run
+  --record-expectations` leaves it alone rather than mistaking `WRITE` for
+  a data item — see `analysis.md`'s stub-expectation scanner for how a
+  human promotes a real data-name stub comment to an `EXPECT`.
+- **Unverified-scenario notes** (`_verification_comment_lines`, 2026-09-04):
+  cobol-parser's bundle now carries a `Scenario.verification` verdict --
+  whether that scenario's own generated data actually satisfies the branch
+  it is named for. A scenario name is a claim; before that verdict existed
+  the only way to check it was `mockymock run --trace` on every case. An
+  `unverified` verdict renders as a `*> UNVERIFIED:` comment block directly
+  above the affected TESTCASE, listing each non-satisfied field verdict and
+  each path gap. A `verified` scenario gets nothing -- a note on every case
+  would be noise and would train readers to skip the ones that matter -- and
+  a bundle with no `verification` key at all (an older v1 bundle) is read as
+  "no verdict recorded", never as unverified.
 - **Lint gate**: `tests/integration/test_generate_with_data_lint_gate.py`
   generates a `.cut` for every corpus program across all three
   `--scenarios` modes (happy/branches/all) and asserts `mockymock lint`

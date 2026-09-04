@@ -10,6 +10,7 @@ basis (spiked against a real cobolparser install and a real
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 COLUMN_LIMIT = 72
@@ -217,14 +218,19 @@ def _column_overflow_hint(max_col: int) -> str:
     quoted literal is no longer a reason to refuse -- `fit_within_columns`
     splits one across fixed-format continuation lines (see
     `wrap_long_literal_lines`), so a line that still overflows is one
-    whose NON-literal text alone does not fit."""
+    whose NON-literal text alone does not fit.
+
+    It also no longer asserts WHERE the line came from. The earlier wording
+    said it "typically comes from a `.cut` file's MOCK body text" -- true
+    for one of the three real sources, and actively misleading for the
+    other two, since the same overflow arises from mockymock's OWN
+    generated driver/reset code, which exists in neither input file and
+    which no `.cut` edit can shorten. `SourceAttribution` names the actual
+    source instead; this hint stays generic advice."""
     return (
-        f" -- this typically comes from a `.cut` file's MOCK body text "
-        f"(e.g. a MOVE statement inside a MOCK/END-MOCK block) that got "
-        f"re-indented past column {max_col} when spliced in; a long quoted "
-        f"literal is split across continuation lines automatically, so what "
-        f"is left to shorten here is the non-literal text (field or "
-        f"paragraph names)"
+        " -- a long quoted literal is split across continuation lines "
+        "automatically, so what is left to shorten here is the non-literal "
+        "text (field or paragraph names)"
     )
 
 
@@ -518,6 +524,99 @@ def _continue_literal(line: str, max_col: int) -> list[str] | None:
     return out
 
 
+# --- Breaking a literal-less line at whitespace ------------------------------
+#
+# `wrap_long_literal_lines` covers every overflow that carries a literal to
+# continue -- which is most of them. What it cannot do is a line with no
+# literal at all: `MOVE WS-A-LONG-SOURCE-NAME TO WS-A-LONG-TARGET-NAME`, which
+# it reports as "holds no single quoted literal to split". But a COBOL
+# statement may span as many fixed-format lines as it needs; only a *literal*
+# broken across the boundary requires the column-7 `-` indicator. So that line
+# needs no continuation machinery at all -- just a break at a space, with the
+# remainder starting in Area B so it cannot be read as a new paragraph header
+# or an 01/77 level.
+
+#: First column of Area B (1-based). A continuation line whose content started
+#: in Area A (columns 8-11) would be read as a new paragraph/section header or
+#: a level number, not as more of this statement.
+AREA_B_START = 12
+
+
+def _split_atoms(text: str) -> list[str] | None:
+    """Split statement text into atoms separable at whitespace: each quoted
+    literal is ONE atom (its own internal spaces are content), every other
+    whitespace-delimited run is one atom. `None` for text this cannot
+    tokenize safely -- an unterminated literal -- so the caller refuses
+    rather than emitting a break that could change what the compiler reads.
+    """
+    atoms: list[str] = []
+    pos = 0
+    length = len(text)
+    while pos < length:
+        if text[pos] == " ":
+            pos += 1
+            continue
+        if text[pos] in ('"', "'"):
+            delimiter = text[pos]
+            start = pos
+            pos += 1
+            while True:
+                if pos >= length:
+                    return None  # unterminated literal
+                if text[pos] == delimiter:
+                    if pos + 1 < length and text[pos + 1] == delimiter:
+                        pos += 2  # doubled-delimiter escape: content
+                        continue
+                    pos += 1
+                    break
+                pos += 1
+            atoms.append(text[start:pos])
+            continue
+        start = pos
+        while pos < length and text[pos] != " " and text[pos] not in ('"', "'"):
+            pos += 1
+        if pos == start:  # defensive: a delimiter immediately after a word
+            pos += 1
+        atoms.append(text[start:pos])
+    return atoms
+
+
+def _break_at_whitespace(line: str, max_col: int) -> list[str] | None:
+    """Break one over-`max_col` line at whitespace between atoms, or `None`
+    when no break helps (a single atom that alone overflows -- which for a
+    literal is `wrap_long_literal_lines`' job, not this one).
+
+    Continuation lines take the original line's own indentation when that
+    already sits in Area B, and the first Area B column otherwise."""
+    stripped = line.lstrip(" ")
+    indent = line[: len(line) - len(stripped)]
+    if not stripped:
+        return None
+    atoms = _split_atoms(stripped)
+    if not atoms or len(atoms) < 2:
+        return None
+    cont_indent = (
+        indent if len(indent) >= AREA_B_START - 1 else " " * (AREA_B_START - 1)
+    )
+    out: list[str] = []
+    current = indent
+    started = False
+    for atom in atoms:
+        candidate = (current + " " + atom) if started else (current + atom)
+        if len(candidate) <= max_col:
+            current, started = candidate, True
+            continue
+        if not started or len(cont_indent) + len(atom) > max_col:
+            return None  # this atom does not fit on a line of its own
+        out.append(current)
+        current, started = cont_indent + atom, True
+    if started:
+        out.append(current)
+    if any(len(rendered) > max_col for rendered in out):
+        return None  # never ship what we just declined to build
+    return out
+
+
 def wrap_long_literal_lines(
     lines: list[str], max_col: int = COLUMN_LIMIT
 ) -> tuple[list[str], list[str]]:
@@ -585,25 +684,184 @@ def wrap_long_literal_lines(
     return new_lines, problems
 
 
+# --- Where did this over-long line come from? --------------------------------
+#
+# The overflow message used to assert one cause: "this typically comes from a
+# `.cut` file's MOCK body text". That is a real cause, but so is mockymock's
+# OWN generated driver/reset code -- and being told to go edit a `.cut` when
+# the offending text exists only in the `.cbl`, or in neither file, sends the
+# reader to the wrong place first. Attribution here is by EXACT text match
+# against the two inputs, so it never guesses: a line is attributed only when
+# its content is literally present in the file named, and ambiguity is
+# reported as ambiguity.
+
+
+@dataclass(frozen=True)
+class LineOrigin:
+    """Where one line of the instrumented source came from."""
+
+    #: "driver" (mockymock's generated test driver, incl. the
+    #: WORKING-STORAGE reset), "cut", "program", or "instrumentation"
+    #: (splicer-generated dispatch code matching neither input file).
+    kind: str
+    #: Human-readable description, already naming the file and line(s).
+    detail: str
+
+
+class SourceAttribution:
+    """Maps an instrumented-source line back to the file it came from.
+
+    Built from the three things `export` already has in hand: the set of
+    line indices `_insert_driver_with_origins` inserted, the `.cut` text,
+    and the original `.cbl` text. Matching is on exact stripped content --
+    the splicer re-indents a MOCK body but never rewrites it -- so an
+    attribution is a statement of fact ("this text is on line 12 of
+    PROG.cut"), not an inference. Text present in neither file is reported
+    as mockymock-generated instrumentation rather than blamed on either.
+    """
+
+    def __init__(
+        self,
+        driver_line_indices: set[int],
+        cut_path: str,
+        cut_text: str,
+        program_path: str,
+        program_text: str,
+    ) -> None:
+        self._driver_indices = driver_line_indices
+        self._cut_path = cut_path
+        self._program_path = program_path
+        self._cut_lines = _index_by_content(cut_text)
+        self._program_lines = _index_by_content(
+            "\n".join(raw[7:72] for raw in program_text.splitlines())
+        )
+
+    def origin(self, index: int, line: str) -> LineOrigin:
+        """`index` is 0-based into the instrumented lines."""
+        stripped = line.strip()
+        if index in self._driver_indices:
+            reset_target = _reset_move_target(stripped)
+            if reset_target is not None:
+                return LineOrigin(
+                    "driver",
+                    f"mockymock's own generated WORKING-STORAGE reset for "
+                    f"{reset_target} -- it re-serializes that item's VALUE "
+                    f"clause onto one line, so no .cut edit can shorten it",
+                )
+            return LineOrigin("driver", "mockymock's own generated test-driver code")
+        for numbers, path, kind, note in (
+            (self._cut_lines.get(stripped), self._cut_path, "cut", "MOCK body text"),
+            (
+                self._program_lines.get(stripped),
+                self._program_path,
+                "program",
+                "your program's own source",
+            ),
+        ):
+            if numbers:
+                where = ", ".join(str(n) for n in numbers[:3])
+                more = " (and elsewhere)" if len(numbers) > 3 else ""
+                return LineOrigin(kind, f"{note}, {path} line {where}{more}")
+        return LineOrigin(
+            "instrumentation",
+            "mockymock-generated instrumentation -- this text is in neither "
+            "your .cut nor your .cbl",
+        )
+
+
+def _index_by_content(text: str) -> dict[str, list[int]]:
+    index: dict[str, list[int]] = {}
+    for number, raw in enumerate(text.splitlines(), start=1):
+        stripped = raw.strip()
+        if stripped:
+            index.setdefault(stripped, []).append(number)
+    return index
+
+
+_RESET_MOVE_RE = re.compile(r"^MOVE\s+.*\s+TO\s+(\S+)\s*$", re.I)
+_RESET_INIT_RE = re.compile(r"^INITIALIZE\s+(\S+)\s*$", re.I)
+
+
+def _reset_move_target(stripped: str) -> str | None:
+    """The data item a generated reset line targets, for the message."""
+    for pattern in (_RESET_MOVE_RE, _RESET_INIT_RE):
+        match = pattern.match(stripped)
+        if match is not None:
+            return match.group(1).rstrip(".")
+    return None
+
+
 def fit_within_columns(
-    lines: list[str], max_col: int = COLUMN_LIMIT
+    lines: list[str],
+    max_col: int = COLUMN_LIMIT,
+    attribution: SourceAttribution | None = None,
 ) -> tuple[list[str], list[str]]:
     """Bring every line within `max_col`, or report the ones that can't be:
     the single entry point `export` uses for column fitting.
 
-    Two passes, in this order. `wrap_long_display_lines` first, because a
+    Three passes, in this order. `wrap_long_display_lines` first, because a
     generated DISPLAY splits into `WITH NO ADVANCING` fragments whose
     stdout equivalence is empirically established (see its docstring), and
     the __MOCKYMOCK__ protocol depends on that text. `wrap_long_literal_lines`
     second, over whatever is still long -- generated MOVEs, `.cut` MOCK
     body statements, original-source literals normalize_fixed_format
-    collapsed onto one line.
+    collapsed onto one line. `_break_at_whitespace` last, for the one shape
+    neither covers: a line with no literal to continue at all, which a
+    plain break at a space fixes without any continuation machinery.
 
-    The first pass's problems are deliberately dropped: it reports every
-    line it declined to wrap, but the second pass re-examines each of those
+    The earlier passes' problems are deliberately dropped: each reports
+    every line it declined to wrap, but a later pass re-examines those
     (they are returned unchanged, still over the limit) and reports its own
-    problem for any it also can't fix. Only lines NEITHER pass can wrap end
-    up in the returned problems -- reporting the first pass's list too would
-    mean refusing on lines that were, in fact, successfully wrapped."""
+    problem for any it also can't fix. Only lines NO pass can wrap end up
+    in the returned problems -- reporting an earlier pass's list too would
+    mean refusing on lines that were, in fact, successfully wrapped.
+
+    `attribution`, when given, names where each still-unfittable line came
+    from: mockymock's own generated driver/reset code, the `.cut`, the
+    `.cbl`, or none of them. The message used to assert one of those
+    unconditionally, which sent readers to the wrong file whenever it
+    guessed wrong -- see `SourceAttribution`."""
     wrapped, _ = wrap_long_display_lines(lines, max_col)
-    return wrap_long_literal_lines(wrapped, max_col)
+    wrapped, _ = wrap_long_literal_lines(wrapped, max_col)
+
+    fitted: list[str] = []
+    problems: list[str] = []
+    for index, line in enumerate(wrapped):
+        if len(line) <= max_col or line.lstrip().startswith("*>"):
+            fitted.append(line)
+            continue
+        if _DIRECTIVE_RE.match(line):
+            # A compiler-directing statement is one indivisible line to the
+            # compiler: it has no continuation form, and breaking it at a
+            # space would silently turn `PROCESS ...OPT` into a directive
+            # plus a stray statement. `wrap_long_literal_lines` already
+            # refuses these for that reason -- so must this pass, or the
+            # refusal it made two passes earlier is undone here.
+            source = (
+                f" -- source: {attribution.origin(index, line).detail}"
+                if attribution is not None
+                else ""
+            )
+            problems.append(
+                f"line {index + 1} exceeds column {max_col} and is a compiler-"
+                f"directing statement, which cannot be continued or broken: "
+                f"{line!r}{source}"
+            )
+            fitted.append(line)
+            continue
+        broken = _break_at_whitespace(line, max_col)
+        if broken is not None:
+            fitted.extend(broken)
+            continue
+        source = (
+            f" -- source: {attribution.origin(index, line).detail}"
+            if attribution is not None
+            else ""
+        )
+        problems.append(
+            f"line {index + 1} exceeds column {max_col} and cannot be "
+            f"fitted (no literal to continue and no break point): "
+            f"{line!r}{_column_overflow_hint(max_col)}{source}"
+        )
+        fitted.append(line)
+    return fitted, problems

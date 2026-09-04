@@ -169,13 +169,55 @@ def test_out_direction_write_gets_a_placeholder_mock():
     assert "MOCK WRITE RPT-REC" in text
 
 
-def test_out_direction_write_has_no_duplicate_verify_or_expect():
-    """The WRITE boundary's own stub expectation (ref="WRITE:RPT-REC") is a
-    boundary-level ref, not a data-name -- it must not turn into a bogus
-    `EXPECT WRITE:RPT-REC ...` or `*> STUB EXPECT WRITE:RPT-REC` line."""
+def test_out_direction_write_stub_reaches_the_generated_file():
+    """The WRITE boundary's own tier-3 stub expectation (ref
+    "WRITE:RPT-REC") used to be dropped outright on the reasoning that the
+    same boundary's `call_count` VERIFY already covered it -- but no such
+    VERIFY exists for an OUT-direction WRITE, so the bundle knew something
+    the generated `.cut` never said. It is now surfaced as a `*> STUB
+    EXPECT` comment (inert, so it can never break the file) carrying the
+    bundle's own note."""
     surface, bundle = _surface_and_bundle(MULTI_FILE_SOURCE, "multifile.cbl")
     text = scaffold_cut("MULTIFILE", surface, bundle)
+    assert (
+        "*> STUB EXPECT WRITE RPT-REC -- value produced by the program "
+        "under test" in text
+    )
+    # Rendered the way a MOCK/VERIFY for that boundary reads, never as the
+    # raw `CATEGORY:KEY` bundle ref.
     assert "WRITE:RPT-REC" not in text
+    assert "EXPECT WRITE:RPT-REC" not in text
+
+
+def test_boundary_level_stub_is_ignored_by_the_record_expectations_scanner():
+    """`*> STUB EXPECT <data-name>` is a real feature -- `run
+    --record-expectations` rewrites those into `EXPECT` lines. A
+    boundary-level stub names a boundary, not a data item, so it must not
+    be picked up as one; its two-token shape simply does not match the
+    scanner's data-name grammar."""
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
+
+    surface, bundle = _surface_and_bundle(MULTI_FILE_SOURCE, "multifile.cbl")
+    text = scaffold_cut("MULTIFILE", surface, bundle)
+    scan = scan_stub_expectations(text, parse_cut(text))
+    assert [s.data_name for s in scan.stubs] == []
+    assert scan.skipped == []
+
+
+def test_boundary_level_stub_is_dropped_when_a_real_verify_covers_it():
+    """The original reasoning still applies where it is actually true: a
+    boundary this TESTCASE does emit a live `VERIFY ... WAS CALLED` for
+    needs no stub comment as well."""
+    from mockymock.dsl.generator import _render_expectation
+
+    stub = Expectation(kind="stub", ref="READ:INV-FILE", note="n")
+    declared = {(MockCategory.READ, "INV-FILE")}
+    counted = {(MockCategory.READ, "INV-FILE")}
+    assert _render_expectation(stub, declared, {}, counted) == []
+    # ... and is kept when no such VERIFY was rendered.
+    assert _render_expectation(stub, declared, {}, set()) == [
+        "*> STUB EXPECT READ INV-FILE -- n"
+    ]
 
 
 def test_read_multi_row_sequence_uses_tally_branching_evaluate():
@@ -1132,3 +1174,86 @@ def test_placeholder_downgraded_read_demotes_a_downstream_verify_in_the_same_loo
     # the demoted output still round-trips
     suite = parse_cut(with_placeholder)
     assert len(suite.test_cases) == 1
+
+
+# --- unverified-scenario notes (cobol-parser's Scenario.verification) --------
+
+
+def _scenario_with_verification(verification):
+    return Scenario(
+        name="CHECK-QTY: THEN",
+        intent="targets branch arm",
+        entry="MAIN-PROCESS",
+        fixtures=[],
+        expectations=[],
+        verification=verification,
+    )
+
+
+def _bundle_of(scenario):
+    return FixtureBundle(
+        bundle_version=1, program_name="P", seed=7, scenarios=[scenario]
+    )
+
+
+def test_unverified_scenario_gets_a_comment_naming_every_reason():
+    """A scenario name is a claim. cobol-parser now says whether its own
+    generated data actually reaches the branch; surfacing an `unverified`
+    verdict here means the reader sees the caveat next to the TESTCASE
+    instead of having to run the case under `--trace` to find out."""
+    surface, _ = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    scenario = _scenario_with_verification(
+        {
+            "status": "unverified",
+            "fields": [
+                {
+                    "field": "WS-AMOUNT",
+                    "status": "violated",
+                    "detail": "none of the 3 generated value(s) satisfy it",
+                },
+                {"field": "WS-RATE", "status": "satisfied", "detail": "row(s) 0"},
+            ],
+            "gaps": ["enclosing arm P@10:5/THEN has no modeled constraints"],
+        }
+    )
+    text = scaffold_cut("ORDRPROC", surface, _bundle_of(scenario))
+    assert "*> UNVERIFIED: this scenario's generated data was not confirmed" in text
+    assert "WS-AMOUNT: none of the 3 generated value(s) satisfy it" in text
+    assert "enclosing arm P@10:5/THEN has no modeled constraints" in text
+    # A field that DID verify is not listed as a reason.
+    assert "WS-RATE" not in text
+
+
+def test_a_verified_scenario_gets_no_note():
+    """A note on every case would be noise, and would train people to skip
+    the ones that matter."""
+    surface, _ = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    scenario = _scenario_with_verification({"status": "verified", "fields": []})
+    text = scaffold_cut("ORDRPROC", surface, _bundle_of(scenario))
+    assert "UNVERIFIED" not in text
+
+
+def test_a_bundle_without_the_verification_key_is_still_read():
+    """An older bundle is still a valid v1 bundle -- absent means "no verdict
+    was recorded", never "unverified"."""
+    surface, _ = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    text = scaffold_cut(
+        "ORDRPROC", surface, _bundle_of(_scenario_with_verification(None))
+    )
+    assert "UNVERIFIED" not in text
+
+
+def test_the_unverified_note_does_not_break_parsing_or_linting():
+    from mockymock.analysis.refusal import check_test_case
+
+    surface, bundle = _surface_and_bundle(ORDRPROC_SOURCE, "ordrproc.cbl")
+    bundle.scenarios[0].verification = {
+        "status": "unverified",
+        "fields": [{"field": "WS-AMOUNT", "status": "absent", "detail": "no fixture"}],
+        "gaps": [],
+    }
+    text = scaffold_cut("ORDRPROC", surface, bundle)
+    result = parse_cobol(ORDRPROC_SOURCE, filename="ordrproc.cbl")
+    suite = parse_cut(text)
+    for case in suite.test_cases:
+        assert check_test_case(surface, result.ast, case) == [], case.name

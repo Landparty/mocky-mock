@@ -32,7 +32,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from mockymock.mutation.operators import Mutant, generate_mutants
-from mockymock.mutation.report import MutantResult, MutationOutcome
+from mockymock.mutation.report import (
+    MutantResult,
+    MutationOutcome,
+    StillbornReason,
+)
 
 
 @dataclass(frozen=True)
@@ -99,7 +103,11 @@ def _run_suite_once(
     """
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.cli.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
+    )
     from mockymock.cli.main import _insert_driver
     from mockymock.report.coverage import map_coverage_to_original, parse_gcov
     from mockymock.report.results import parse_stdout
@@ -166,6 +174,13 @@ def _run_suite_once(
             reset_lines = reset_lines + extra_reset_lines(checked.linkage)
         if checked.cics_eib is not None:
             reset_lines = reset_lines + cics_eib.reset_lines(checked.cics_eib)
+        # Synthesized CAPTURE targets need the same between-case reset the
+        # run/debug/export pipelines give them. The suite compiles to ONE
+        # binary here too, so without this a case that never reached its
+        # CALL would assert against the previous case's captured value --
+        # and a mutant could then be "killed" by that stale value rather
+        # than by the mutation, silently inflating the score.
+        reset_lines = reset_lines + extra_reset_lines_for(checked)
         artifact = build_driver(
             suite,
             reset_lines,
@@ -538,7 +553,26 @@ def _run_one_mutant(
             MutantResult(mutant=mutant, status="timeout", detail=run.detail),
             run.notes,
         )
+    # `SuiteRun.phase` already distinguishes the two ways a mutant can be
+    # stillborn ("checks" -- a static gate refused it before any compiler
+    # ran; "compile" -- GnuCOBOL rejected it). Carrying it through is what
+    # lets the report say WHICH, instead of a bare count that makes a line
+    # whose every mutant failed to compile look like a line with no mutants.
+    # Assigned as literals, not narrowed from `run.phase` (a plain `str`):
+    # a membership test does not narrow to `StillbornReason` for a type
+    # checker, and widening the field to `str` would give up the guarantee
+    # that only these two values ever reach the report.
+    reason: StillbornReason | None = None
+    if run.phase == "checks":
+        reason = "checks"
+    elif run.phase == "compile":
+        reason = "compile"
     return (
-        MutantResult(mutant=mutant, status="stillborn", detail=run.detail),
+        MutantResult(
+            mutant=mutant,
+            status="stillborn",
+            detail=run.detail,
+            stillborn_reason=reason,
+        ),
         run.notes,
     )

@@ -79,9 +79,16 @@ exactly one MockDirective of the test case --
                    control flow (an earlier attempt without the scope map
                    did exactly that; see task-14-report.md).
 
-A directive matching no reachable site is UNMATCHED_MOCK; a VERIFY whose
-(category, key) no MOCK directive of the same case declares is
-VERIFY_WITHOUT_MOCK (its tally field would be stale or undeclared).
+A directive matching no reachable site is UNMATCHED_MOCK -- with one
+carve-out: a MOCK ACCEPT naming an `ACCEPT <target> FROM DATE/TIME/DAY/
+COMMAND-LINE/...` refuses UNMOCKABLE_ACCEPT_SOURCE instead. Those ACCEPTs
+read a system register, never the console, so mock_surface deliberately
+creates no boundary site for them (there is nothing to intercept and
+nothing that could hang) -- reporting that as "does not match any boundary
+site reachable from ..." describes a reachability failure that never
+happened. A VERIFY whose (category, key) no MOCK directive of the same case
+declares is VERIFY_WITHOUT_MOCK (its tally field would be stale or
+undeclared).
 
 AMBIGUOUS_MOCK / UNSUPPORTED_NESTED_MOCK_TARGET / UNSUPPORTED_MOCK_TARGET_
 LAYOUT are additionally re-checked a second time, program-wide (2026-08-11

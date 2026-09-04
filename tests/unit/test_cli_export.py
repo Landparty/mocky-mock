@@ -220,10 +220,10 @@ def test_export_continues_an_overlong_mock_body_literal(tmp_path, capsys):
     assert all(line[7:].lstrip().startswith('"') for line in continuations)
 
 
-def test_export_still_refuses_when_the_overflow_is_not_a_literal(tmp_path, capsys):
-    """Continuation is not a licence to ship a too-long line: an overflow
-    with no literal to split still refuses with COLUMN_OVERFLOW and writes
-    nothing."""
+def test_export_breaks_a_literal_less_overflow_at_whitespace(tmp_path, capsys):
+    """An overflow with no literal to continue is not a refusal either: a
+    COBOL statement may span as many fixed-format lines as it needs, so the
+    line is simply broken at a space with the remainder in Area B."""
     cbl, cut = _column_overflow_program(
         tmp_path,
         "MOVE WS-A-RATHER-LONG-FIELD-NAME-HERE TO " "WS-ANOTHER-RATHER-LONG-FIELD-NAME",
@@ -231,9 +231,40 @@ def test_export_still_refuses_when_the_overflow_is_not_a_literal(tmp_path, capsy
 
     exit_code = main(["export", str(cbl), "--cut", str(cut)])
     out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "COLUMN_OVERFLOW" not in out
+    written = (tmp_path / "PROG.mainframe.cbl").read_text().splitlines()
+    assert all(len(line) <= 72 for line in written)
+    joined = "\n".join(written)
+    assert "MOVE WS-A-RATHER-LONG-FIELD-NAME-HERE TO" in joined
+    assert "WS-ANOTHER-RATHER-LONG-FIELD-NAME" in joined
+
+
+def test_export_still_refuses_what_it_genuinely_cannot_fit(tmp_path, capsys):
+    """Fitting is not a licence to ship a too-long line. A single word too
+    long for Area B (columns 12-72, so 61 characters) has no literal to
+    continue AND no break point, so it still refuses with COLUMN_OVERFLOW
+    and writes nothing."""
+    cbl, cut = _column_overflow_program(tmp_path, "MOVE 1 TO WS-" + "X" * 62)
+
+    exit_code = main(["export", str(cbl), "--cut", str(cut)])
+    out = capsys.readouterr().out
     assert exit_code == 1
     assert "COLUMN_OVERFLOW" in out
     assert not (tmp_path / "PROG.mainframe.cbl").exists()
+
+
+def test_a_refusal_names_where_the_line_actually_came_from(tmp_path, capsys):
+    """The message used to assert "this typically comes from a `.cut` file's
+    MOCK body text" whatever the real source was -- so a reader whose
+    offending line was mockymock's own generated reset went to the wrong
+    file first. It now names the actual source by exact text match."""
+    cbl, cut = _column_overflow_program(tmp_path, "MOVE 1 TO WS-" + "X" * 62)
+
+    assert main(["export", str(cbl), "--cut", str(cut)]) == 1
+    out = capsys.readouterr().out
+    assert "source: MOCK body text, " in out
+    assert str(cut) in out
 
 
 def test_export_never_imports_docker_toolchain(tmp_path):

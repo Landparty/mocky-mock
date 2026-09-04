@@ -197,7 +197,7 @@ Flow (`_cmd_fixtures`):
    to stderr as `mockymock fixtures: <exc>`, exit 1.
 5. `print(bundle.to_json())` to stdout, exit 0.
 
-## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--trace] [--trace-json PATH] [--timeout S] [--record-expectations]`
+## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--coverage-fail-under PERCENT] [--trace] [--trace-json PATH] [--timeout S] [--record-expectations]`
 
 The full pipeline: parse, analyze, refuse-or-splice, compile in Docker, run,
 report. This is the only subcommand requiring the GnuCOBOL container.
@@ -236,11 +236,25 @@ Flags beyond the pipeline inputs:
   sibling case no longer blocks running a clean one. An unknown name/tag is
   a static problem listing what is available. The suite still runs as ONE
   compile + binary — just with only the selected cases spliced in.
+- `--coverage` — the console report leads with the ORIGINAL `.cbl`'s own
+  percentage and lists its own uncovered lines by their original line
+  numbers; the instrumented sandbox copy's higher number (it counts
+  mockymock's injected dispatch/driver lines) follows on one labelled
+  line. Before 2026-09-04 only the instrumented figure was printed and the
+  meaningful one lived solely in `--coverage-json`, so the number most
+  people read was the less useful one. See [coverage](coverage.md).
 - `--coverage-json PATH` (implies `--coverage`) — write machine-readable
   coverage remapped onto the ORIGINAL `.cbl`'s line numbers via
   `report.coverage.map_coverage_to_original` (difflib alignment
   instrumented -> normalized -> original; splicer-inserted lines are
-  excluded, so it answers "which of MY lines ran").
+  excluded, so it answers "which of MY lines ran"). Both `original` and
+  `instrumented` carry their own `percentage`.
+- `--coverage-fail-under PERCENT` (implies `--coverage`) — exit 1 when the
+  ORIGINAL program's coverage is below `PERCENT`: the `run` counterpart of
+  `mutate --fail-under`, so coverage can be CI-gated the same way mutation
+  score already could. Folded into the command's final exit-code decision
+  (so `--trace` still prints), and a failed `gcov` pass fails the gate
+  rather than silently satisfying it.
 - `--trace` / `--trace-json PATH` — replay ONE test case's execution: the
   path it took through the original `.cbl` plus the mocks that fired in
   order. `--trace-json` implies `--trace` (the same relationship
@@ -552,8 +566,17 @@ orphan `CASE FAIL`s, and a zero-cases-run stdout before falling back to a
 bare "binary exited N" message, instead of citing the exit code even when
 it was 0 and the real cause was one of those three. Console output
 streams one line per mutant, then lists
-survivors with a `-`/`+` diff and the score
-(killed+timeouts over scored).
+survivors with a `-`/`+` diff, then breaks the stillborn mutants down by
+WHY they were stillborn -- `checks` (a mockymock static gate rejected the
+mutated program before any compiler ran, often an equivalent mutant) vs
+`compile` (GnuCOBOL rejected it, so that line was never probed at all) --
+and finally the score (killed+timeouts over scored). That breakdown exists
+because stillborns are excluded from the score entirely: without it, a line
+whose every mutant failed to compile is indistinguishable from a line with
+no mutants, and a real gap the engine could not probe hides behind a
+clean-looking number. The two names are `SuiteRun.phase`'s own values,
+carried straight onto `MutantResult.stillborn_reason` rather than
+re-derived afterwards by pattern-matching the raw `detail` line.
 
 **Two cost levers, both added 2026-09-04, neither changing a verdict.**
 `--jobs N` (default 1) spreads the per-mutant pipeline over N worker
@@ -576,7 +599,8 @@ suite or a refusal-gate stop is not, since gcov changes neither. A failed
 gcov pass adds a note and the run builds everything. Gated survivors
 score identically, carry `ran: false` (and `totals.not_compiled`) in the
 JSON, and print as `uncovered`. `--json-report` writes the full
-machine-readable outcome; `--fail-under` exits 1 below the given
+machine-readable outcome (with `stillbornByReason` totals and a per-mutant
+`stillbornReason`); `--fail-under` exits 1 below the given
 percentage. Every baseline/mutant run's `StaticCheckResult.notes` (a
 paragraph-scoped `PARSE_WARNING`/`UNRESOLVED_COPYBOOK` waived rather than
 refused — [analysis](analysis.md)) is collected (union, first-seen order,
@@ -651,7 +675,7 @@ mock-only build (every boundary is either mocked or fails loudly; no real I/O ex
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
 to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.
 
-`fit_within_columns` is two passes, in this order:
+`fit_within_columns` is three passes, in this order:
 
 1. `wrap_long_display_lines` — a generated `DISPLAY` becomes `DISPLAY "<chunk>" WITH NO ADVANCING`
    fragments. First because its byte-identical-stdout equivalence is empirically established and the
@@ -671,12 +695,28 @@ to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'
    fixed-format GnuCOBOL compile — see `tests/integration/test_export_literal_continuation.py`).
    The fill padding goes before the opening delimiter, where extra spaces are only separators.
 
-The first pass's problems are discarded: it reports every line it declined to wrap, and the second
-pass re-examines exactly those. Only a line NEITHER pass can fit is reported — no literal to split, a
-second literal on the line (ambiguous), non-literal text that alone overflows, or a `CBL`/`PROCESS`
-directive (read before continuation rules apply). Then `export` refuses
+3. `_break_at_whitespace` — the one shape neither of the above covers: a line with *no* literal at
+   all (`MOVE WS-A-LONG-SOURCE-NAME TO WS-A-LONG-TARGET-NAME`), which pass 2 can only report as
+   "holds no single quoted literal to split". A COBOL statement may span as many fixed-format lines
+   as it needs — only a *literal* broken across the boundary needs the column-7 `-` — so this needs
+   no continuation machinery at all, just a break at a space with the remainder starting in Area B
+   (column 12) so it cannot be read as a new paragraph header or an 01/77 level.
+
+Each earlier pass's problems are discarded: every pass reports the lines it declined, and a later pass
+re-examines exactly those. Only a line NO pass can fit is reported — a single word too long for Area B
+(61 characters), a second literal on the line (ambiguous), or a `CBL`/`PROCESS` directive (read before
+continuation rules apply). Then `export` refuses
 (`mockymock export: refused (COLUMN_OVERFLOW): ...`) and writes nothing. A full-line `*>` comment is
-exempt in both passes: columns 73+ are the identification field and are never compiled.
+exempt in every pass: columns 73+ are the identification field and are never compiled.
+
+**The refusal names where the line came from** (`SourceAttribution`, 2026-09-04). It used to append a
+hint asserting the line "typically comes from a `.cut` file's MOCK body text" — true for one of the
+three real sources, and actively misleading for the other two, since the same overflow arises from
+mockymock's OWN generated driver/reset code, which exists in neither input file and which no `.cut`
+edit can shorten. `SourceAttribution` is built from `_insert_driver_with_origins`' inserted-line
+indices plus exact stripped-text lookups in the `.cut` and `.cbl`, so an attribution is a fact ("this
+text is on line 12 of PROG.cut"), never an inference — and text in neither file is reported as
+mockymock-generated instrumentation rather than blamed on either.
 
 Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
 [docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).

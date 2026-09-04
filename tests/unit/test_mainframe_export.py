@@ -511,11 +511,45 @@ def test_fit_within_columns_wraps_displays_and_continues_everything_else():
     assert "           MOVE 0 TO WS-X" in result
 
 
-def test_fit_within_columns_reports_only_what_neither_pass_can_wrap():
-    """A line the DISPLAY pass declines but the literal pass continues must
-    not be reported -- it was, in fact, wrapped."""
-    unwrappable = "           MOVE WS-SOURCE-FIELD-NAME TO " + "Z" * 40
-    result, problems = fit_within_columns([MARKER_MOVE, unwrappable])
+def test_fit_within_columns_reports_only_what_no_pass_can_fit():
+    """A line an earlier pass declines but a later one handles must not be
+    reported -- it was, in fact, fitted. Only a line NO pass can fit is a
+    problem: here, one whose single over-long word leaves nothing to break
+    at and no literal to continue."""
+    unfittable = "           " + "Z" * 70
+    result, problems = fit_within_columns([MARKER_MOVE, unfittable])
     assert len(problems) == 1
-    assert repr(unwrappable) in problems[0]
-    assert unwrappable in result
+    assert repr(unfittable) in problems[0]
+    assert unfittable in result
+
+
+def test_a_literal_less_line_is_broken_at_whitespace_rather_than_refused():
+    """`wrap_long_literal_lines` can only continue a line that HAS a literal.
+    A COBOL statement may span as many fixed-format lines as it needs, so a
+    literal-less overflow needs no continuation machinery at all -- just a
+    break at a space, with the remainder starting in Area B so it cannot be
+    read as a new paragraph header or an 01/77 level."""
+    line = "           MOVE WS-SOURCE-FIELD-NAME TO " + "Z" * 40
+    assert len(line) > 72
+    result, problems = fit_within_columns([line])
+    assert problems == []
+    assert len(result) == 2
+    assert all(len(fragment) <= 72 for fragment in result)
+    assert len(result[1]) - len(result[1].lstrip(" ")) >= 11
+    assert " ".join(part.strip() for part in result) == line.strip()
+
+
+def test_fit_within_columns_refuses_an_overlong_directive_rather_than_breaking_it():
+    """A compiler-directing statement has no continuation form, so the
+    literal pass refuses it. The whitespace-break pass runs after that and
+    would happily split it at a space -- turning one directive into a
+    directive plus a stray statement -- unless it refuses the same shape.
+    The refusal is the whole point: silently rewriting a `CBL`/`PROCESS`
+    line changes how the program compiles."""
+    line = "       CBL APOST,NOSEQ,LIB,TEST(NONE,SYM,SEPARATE)," + "X" * 40
+    assert len(line) > 72
+    result, problems = fit_within_columns([line])
+    assert result == [line]
+    assert len(problems) == 1
+    assert "compiler-directing" in problems[0]
+    assert repr(line) in problems[0]

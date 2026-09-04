@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from mockymock.analysis.linkage import AddressOfSite, LinkagePlan
     from mockymock.analysis.mock_surface import MockSurface
     from mockymock.dsl.model import MockTestSuite
+    from mockymock.splicer.captures import CapturePlan
     from mockymock.splicer.source_map import ScopeMap
 
 
@@ -44,6 +45,9 @@ class StaticCheckResult:
     linkage_address_of: list[AddressOfSite] = field(default_factory=list)
     cics_eib: CicsEibPlan | None = None
     file_status_fields: dict[str, str] | None = None
+    # Synthesized `CAPTURE ARG ... INTO UT-CAP-...` targets: the driver must
+    # declare each one and reset it between cases (see splicer.captures).
+    captures: list[CapturePlan] = field(default_factory=list)
     # Transparency lines for checks that deliberately did NOT refuse: a
     # paragraph-scoped parse warning / unresolved COPY waived because no
     # selected test case can execute its paragraph (the COPY additionally
@@ -65,17 +69,35 @@ def extra_working_storage(checked: StaticCheckResult) -> list[str] | None:
     `splicer.linkage.redirect_address_of`'s rewritten `SET ADDRESS OF`
     statements assign into.
 
+    Also the synthesized `CAPTURE ARG ... INTO UT-CAP-...` targets, which
+    exist so a `.cut` (hand-written or scaffolded) can assert on what a
+    mocked CALL actually received without the author first having to find
+    or add a spare field of a compatible type.
+
     `None` (not `[]`) when there is nothing to add, matching what
     `build_driver` treats as "no extra lines".
     """
     from mockymock.splicer import cics_eib
+    from mockymock.splicer.captures import capture_working_storage_lines
     from mockymock.splicer.linkage import extra_working_storage_lines
 
     lines: list[str] = []
     if checked.cics_eib is not None:
         lines.extend(cics_eib.working_storage_lines(checked.cics_eib))
     lines.extend(extra_working_storage_lines(checked.linkage_address_of))
+    lines.extend(capture_working_storage_lines(checked.captures))
     return lines or None
+
+
+def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
+    """Reset lines the synthesized capture targets need between test cases.
+    Kept beside `extra_working_storage` so the declaration and the reset can
+    never be added in one pipeline and forgotten in another -- the suite
+    compiles to ONE binary, so a capture left unreset would let a case that
+    never reached its CALL assert against the previous case's value."""
+    from mockymock.splicer.captures import capture_reset_lines
+
+    return capture_reset_lines(checked.captures)
 
 
 def filter_suite_cases(
@@ -157,6 +179,7 @@ def run_static_checks(
         union_executed_paragraphs,
     )
     from mockymock.dsl.parser import CutParseError, parse_cut
+    from mockymock.splicer.captures import plan_captures
     from mockymock.splicer.linkage import neutralize, redirect_address_of
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
     from mockymock.splicer.sqlca import transform_data_division_exec
@@ -400,5 +423,14 @@ def run_static_checks(
         for r in check_terminator_layout(
             surface, parse_result.ast, suite, scope_map, lines
         )
+    )
+    # 9. Synthesized CAPTURE targets. Fail closed: an argument whose layout
+    # cannot be mirrored exactly would otherwise reach the compiler as a
+    # missing declaration, or (worse) as a field whose type silently
+    # disagrees with the value moved into it.
+    out.captures, capture_problems = plan_captures(parse_result.ast, suite, surface)
+    out.problems.extend(
+        f"refused (UNRESOLVED_CAPTURE_TARGET): {problem}"
+        for problem in capture_problems
     )
     return out

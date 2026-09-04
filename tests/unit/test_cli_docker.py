@@ -396,17 +396,39 @@ def test_run_neutralizes_entry_linkage_and_reports_it(tmp_path, capsys):
 
 from mockymock.runtime.docker_toolchain import GcovResult
 
-COVERAGE_GCOV_TEXT = (
-    "        -:    0:Source:ORDRPROC.cbl\n"
-    "       1*:    1:PROCESS-ORDER.\n"
-    '       1*:    2:    CALL "DISCRATE" USING WS-AMOUNT.\n'
-    "    #####:    3:    DISPLAY 'UNREACHED'.\n"
-)
+
+def _gcov_side_effect(*uncovered_substrings: str):
+    """A `run_gcov` stand-in that produces gcov text for the REAL
+    instrumented file mockymock just wrote, marking every line containing
+    one of `uncovered_substrings` as never-executed and every other
+    non-blank, non-comment line as executed once.
+
+    Deriving the gcov text from the actual instrumented source (rather
+    than a hand-written blob with invented line numbers) is what makes the
+    instrumented -> original remap under test meaningful here: the line
+    numbers gcov reports are line numbers that really exist in the file
+    the remap aligns against, so an assertion about an ORIGINAL line
+    number is an assertion about the remap, not about a coincidence.
+    """
+
+    def side_effect(instrumented_path, *args, **kwargs):
+        lines = instrumented_path.read_text(encoding="utf-8").splitlines()
+        rendered = [f"        -:    0:Source:{instrumented_path.name}"]
+        for number, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("*>"):
+                marker = "        -"
+            elif any(needle in line for needle in uncovered_substrings):
+                marker = "    #####"
+            else:
+                marker = "        1"
+            rendered.append(f"{marker}:{number:5d}:{line}")
+        return GcovResult(success=True, gcov_text="\n".join(rendered) + "\n", stderr="")
+
+    return side_effect
 
 
-def _run_cli_with_coverage(
-    tmp_path, executed: ExecutionResult, gcov_result: GcovResult
-):
+def _run_cli_with_coverage(tmp_path, executed: ExecutionResult, gcov_side_effect):
     program = tmp_path / "ORDRPROC.cbl"
     program.write_text(RUN_PROGRAM)
     cut = tmp_path / "ORDRPROC.cut"
@@ -430,22 +452,34 @@ def _run_cli_with_coverage(
             "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
         ),
         mock.patch(
-            "mockymock.runtime.docker_toolchain.run_gcov", return_value=gcov_result
+            "mockymock.runtime.docker_toolchain.run_gcov",
+            side_effect=gcov_side_effect,
         ) as gcov_mock,
     ):
         exit_code = main(["run", str(program), "--cut", str(cut), "--coverage"])
     return exit_code, gcov_mock
 
 
-def test_run_coverage_prints_summary_and_uncovered_lines(tmp_path, capsys):
+def test_run_coverage_leads_with_the_original_programs_own_number(tmp_path, capsys):
+    """The headline coverage figure names the ORIGINAL .cbl and lists the
+    original file's own uncovered lines, by their original line numbers.
+    The instrumented sandbox copy's number -- inflated by mockymock's
+    injected dispatch/driver lines, which is exactly why it is the wrong
+    number to lead with -- still appears, once, on a subordinate line that
+    says so."""
     executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
-    gcov_result = GcovResult(success=True, gcov_text=COVERAGE_GCOV_TEXT, stderr="")
-    exit_code, gcov_mock = _run_cli_with_coverage(tmp_path, executed, gcov_result)
+    exit_code, gcov_mock = _run_cli_with_coverage(
+        tmp_path, executed, _gcov_side_effect("PROCESS-ORDER.")
+    )
     assert exit_code == 0
     gcov_mock.assert_called_once()
     out = capsys.readouterr().out
-    assert "coverage: 66.67% lines executed (2/3)" in out
-    assert "3:     DISPLAY 'UNREACHED'." in out
+    assert "coverage: 100.00% of ORDRPROC.cbl's own lines executed" not in out
+    assert "of ORDRPROC.cbl's own lines executed" in out
+    # PROCESS-ORDER. is line 9 of RUN_PROGRAM -- an ORIGINAL line number,
+    # not the instrumented one gcov actually reported.
+    assert "  9: PROCESS-ORDER." in out
+    assert "instrumented sandbox copy" in out
 
 
 def test_run_coverage_without_flag_never_calls_gcov(tmp_path, capsys):
@@ -482,7 +516,6 @@ def test_run_coverage_without_flag_never_calls_gcov(tmp_path, capsys):
 
 def test_run_coverage_writes_coverage_out_file(tmp_path, capsys):
     executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
-    gcov_result = GcovResult(success=True, gcov_text=COVERAGE_GCOV_TEXT, stderr="")
     program = tmp_path / "ORDRPROC.cbl"
     program.write_text(RUN_PROGRAM)
     cut = tmp_path / "ORDRPROC.cut"
@@ -507,7 +540,8 @@ def test_run_coverage_writes_coverage_out_file(tmp_path, capsys):
             "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
         ),
         mock.patch(
-            "mockymock.runtime.docker_toolchain.run_gcov", return_value=gcov_result
+            "mockymock.runtime.docker_toolchain.run_gcov",
+            side_effect=_gcov_side_effect("PROCESS-ORDER."),
         ),
     ):
         exit_code = main(
@@ -522,7 +556,9 @@ def test_run_coverage_writes_coverage_out_file(tmp_path, capsys):
             ]
         )
     assert exit_code == 0
-    assert "66.67% lines executed (2/3)" in out_path.read_text()
+    written = out_path.read_text()
+    assert "of ORDRPROC.cbl's own lines executed" in written
+    assert "  9: PROCESS-ORDER." in written
 
 
 def test_coverage_out_alone_implies_coverage(tmp_path, capsys):
@@ -532,7 +568,6 @@ def test_coverage_out_alone_implies_coverage(tmp_path, capsys):
     --coverage" (matching --coverage-json's own precedent one line
     away); the code must match the doc."""
     executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
-    gcov_result = GcovResult(success=True, gcov_text=COVERAGE_GCOV_TEXT, stderr="")
     program = tmp_path / "ORDRPROC.cbl"
     program.write_text(RUN_PROGRAM)
     cut = tmp_path / "ORDRPROC.cut"
@@ -557,7 +592,8 @@ def test_coverage_out_alone_implies_coverage(tmp_path, capsys):
             "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
         ),
         mock.patch(
-            "mockymock.runtime.docker_toolchain.run_gcov", return_value=gcov_result
+            "mockymock.runtime.docker_toolchain.run_gcov",
+            side_effect=_gcov_side_effect("PROCESS-ORDER."),
         ) as gcov_mock,
     ):
         exit_code = main(
@@ -565,7 +601,110 @@ def test_coverage_out_alone_implies_coverage(tmp_path, capsys):
         )
     assert exit_code == 0
     gcov_mock.assert_called_once()
-    assert "66.67% lines executed (2/3)" in out_path.read_text()
+    assert "of ORDRPROC.cbl's own lines executed" in out_path.read_text()
+
+
+def test_coverage_fail_under_gates_on_the_original_programs_coverage(tmp_path, capsys):
+    """`run --coverage-fail-under` is the `mutate --fail-under` counterpart
+    the CLI was missing: a green suite under an unmet coverage floor must
+    still exit nonzero, and the floor is judged against the ORIGINAL
+    program's coverage (gating on the instrumented number would move the
+    threshold whenever mockymock's own injected line count changed)."""
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    def run_with(threshold: str, gcov_side_effect):
+        with (
+            mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+            mock.patch(
+                "mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"
+            ),
+            mock.patch(
+                "mockymock.runtime.docker_toolchain.compile_source",
+                side_effect=fake_compile,
+            ),
+            mock.patch(
+                "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
+            ),
+            mock.patch(
+                "mockymock.runtime.docker_toolchain.run_gcov",
+                side_effect=gcov_side_effect,
+            ) as gcov_mock,
+        ):
+            code = main(
+                [
+                    "run",
+                    str(program),
+                    "--cut",
+                    str(cut),
+                    "--coverage-fail-under",
+                    threshold,
+                ]
+            )
+        return code, gcov_mock
+
+    # Nothing uncovered -> 100%, so a 100 floor passes. The flag implies
+    # --coverage on its own (no --coverage passed above).
+    exit_code, gcov_mock = run_with("100", _gcov_side_effect())
+    assert exit_code == 0
+    gcov_mock.assert_called_once()
+    assert "is below --coverage-fail-under" not in capsys.readouterr().out
+
+    # Something uncovered -> under 100%, so the same floor now fails even
+    # though the suite itself passed.
+    exit_code, _ = run_with("100", _gcov_side_effect("PROCESS-ORDER."))
+    assert exit_code == 1
+    assert "is below --coverage-fail-under 100.0" in capsys.readouterr().out
+
+
+def test_coverage_fail_under_fails_when_no_coverage_was_measured(tmp_path, capsys):
+    """ "No number" must never read as "good enough": a failed gcov pass
+    fails the gate rather than silently satisfying it."""
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    gcov_result = GcovResult(
+        success=False, gcov_text="", stderr="mockymock: no coverage data produced\n"
+    )
+    program = tmp_path / "ORDRPROC.cbl"
+    program.write_text(RUN_PROGRAM)
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(RUN_CUT)
+
+    def fake_compile(
+        source_path: Path, coverage: bool = False, trace: bool = False
+    ) -> CompileResult:
+        binary = source_path.with_suffix("")
+        binary.write_text("")
+        return CompileResult(success=True, binary_path=binary, stdout="", stderr="")
+
+    with (
+        mock.patch("mockymock.runtime.docker_toolchain.ensure_toolchain"),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", tmp_path / "work"),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.compile_source",
+            side_effect=fake_compile,
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_binary", return_value=executed
+        ),
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.run_gcov", return_value=gcov_result
+        ),
+    ):
+        exit_code = main(
+            ["run", str(program), "--cut", str(cut), "--coverage-fail-under", "50"]
+        )
+    assert exit_code == 1
+    assert "no coverage was measured" in capsys.readouterr().out
 
 
 def test_run_coverage_reports_missing_data_without_failing_the_run(tmp_path, capsys):
@@ -575,7 +714,9 @@ def test_run_coverage_reports_missing_data_without_failing_the_run(tmp_path, cap
     gcov_result = GcovResult(
         success=False, gcov_text="", stderr="mockymock: no coverage data produced\n"
     )
-    exit_code, _ = _run_cli_with_coverage(tmp_path, executed, gcov_result)
+    exit_code, _ = _run_cli_with_coverage(
+        tmp_path, executed, lambda *a, **k: gcov_result
+    )
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "coverage: mockymock: no coverage data produced" in out
