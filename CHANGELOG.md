@@ -50,6 +50,36 @@
 - `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
 - **`find_goto_exit_plans`: adjacency check broke on a phantom `"."` paragraph between enclosing and target.** cobolparser inserts an empty-artifact paragraph literally named `"."` for a bare `.` line sitting on its own between a paragraph's last statement and the next paragraph's header; `immediately_follows` required `target_idx == enclosing_idx + 1` exactly, so a phantom sitting between an otherwise-adjacent `GO TO`'s enclosing paragraph and its exit-only target broke the adjacency check and cascaded into declining that target and every paragraph transitively chained after it. `immediately_follows` now accepts any run of only phantom `"."` paragraphs strictly between the two, the same tolerance `_expand_thru_range` already applies elsewhere. Pinned by `tests/unit/test_goto_exit.py::test_find_goto_exit_plans_tolerates_a_phantom_paragraph_before_the_target`.
 
+## [0.8.0](https://github.com/Landparty/mocky-mock/compare/v0.7.0...v0.8.0) (2026-09-04)
+
+
+### Features
+
+* **generate:** scaffold CAPTURE ARG, and synthesize the storage it needs ([25076e0](https://github.com/Landparty/mocky-mock/commit/25076e01911e569e165c8a7cf9677adf878434b9))
+* **generate:** surface cobol-parser's unverified-scenario verdict in the generated .cut ([bec5a85](https://github.com/Landparty/mocky-mock/commit/bec5a85b02282396330820d270d6daaf3adafe23))
+* lead coverage with the original program's number, gate CI on it, and explain stillborn mutants ([073d4f7](https://github.com/Landparty/mocky-mock/commit/073d4f7b9763b96e2725b947ac1d2e5cb4f9aea9))
+* **mutate:** coverage gate and --jobs, the two mutation cost levers ([2127755](https://github.com/Landparty/mocky-mock/commit/212775556c6207588f671910b710ecca0dd94d7b))
+* refuse or mock every COBOL dependency cobol-parser now parses ([0fc46f2](https://github.com/Landparty/mocky-mock/commit/0fc46f28a6ed2a5852874d85300b320646c215eb))
+
+
+### Bug Fixes
+
+* address four review findings on the capture/export/coverage work ([1a8daea](https://github.com/Landparty/mocky-mock/commit/1a8daea47cce20c57a29b980d899f94c36417879))
+* correct VERIFY syntax in design note; cover all three exhaustion paths ([d343d9b](https://github.com/Landparty/mocky-mock/commit/d343d9b798e7ce0990b6fd4faf1011e47f6bbcd4))
+* **export:** continue a long literal instead of refusing the line ([4c9838f](https://github.com/Landparty/mocky-mock/commit/4c9838fea95c2282d80723afcaf80551f73763d5))
+* **export:** name the two literal-continuation failure modes apart ([26e3624](https://github.com/Landparty/mocky-mock/commit/26e36249ad669f015d801a7d9b63fa8f21f4d745))
+* **export:** wrap over-long lines instead of refusing, and name the real overflow source ([c7fef8f](https://github.com/Landparty/mocky-mock/commit/c7fef8f920da5ae7ce395d1977d90755d1670159))
+* **generate:** emit real READ exhaustion arms and stop dropping boundary stub expectations ([9fc8f7d](https://github.com/Landparty/mocky-mock/commit/9fc8f7d83eb57e041b8794fdfc1c9fc755a142e8))
+* **generate:** replicate AT END SET &lt;88&gt; TO TRUE into READ mock exhaustion ([625eec0](https://github.com/Landparty/mocky-mock/commit/625eec0cdf627fd4a7cc3a77459afa0e3aa84e6b))
+* **mutate:** stop generating mutants that cannot compile ([6ef9fee](https://github.com/Landparty/mocky-mock/commit/6ef9fee462cebede685d064220021f36faac89f5))
+* **mutate:** type the stillborn reason as a literal, not a narrowed str ([b193603](https://github.com/Landparty/mocky-mock/commit/b1936032803b61f6c6ad8c44a04fc221a8dca1da))
+
+
+### Documentation
+
+* **mutate:** say what _sequence_area_end actually returns ([e63320a](https://github.com/Landparty/mocky-mock/commit/e63320abdcfcd415ec7967087bb892c4e4940359))
+* record that generated scenarios never assert which branch they reach ([f45e228](https://github.com/Landparty/mocky-mock/commit/f45e2286a75cc87a5e77067318ebddaf95f97d3d))
+
 ## [0.7.0](https://github.com/Landparty/mocky-mock/compare/v0.6.4...v0.7.0) (2026-09-01)
 
 
