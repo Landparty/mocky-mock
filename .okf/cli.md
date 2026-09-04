@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-08-17T00:00:00Z
+timestamp: 2026-09-04T00:00:00Z
 ---
 
 # Overview
@@ -505,12 +505,42 @@ items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
 Mutation testing (see docs/2026-07-29-mutation-testing-design.md).
 `--list` prints the generated mutants and exits — pure
 `mutation.operators`, no Docker. `mutation.operators`' verb/scope/
-condition/deletable-verb regexes now match on COBOL-word boundaries via a
+condition/deletable-verb regexes match on COBOL-word boundaries via a
 shared `_cobol_word()` helper (negative lookaround treating `-` as part
 of the identifier, not a boundary) instead of plain `\b` (audit finding
 F8, 2026-08-10) — `\bREAD\b` used to match inside `WS-READ-COUNT` and
-generate mutants that were never real READ statements at all. A real run
-baseline-checks the suite
+generate mutants that were never real READ statements at all. **The same
+helper now covers the arithmetic patterns too** (`_ADD_TO`,
+`_SUBTRACT_FROM`, `_MULTIPLY_BY`, `_DIVIDE_INTO`, `_MOVE_INT`), which F8
+missed: `\bADD\b` matched inside `GRP-FOR-ADD-CORR-R` and rewrote an
+ordinary `MOVE` into `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...`.
+
+Three further stillborn classes closed on 2026-09-04, all in
+`mutation.operators` (see
+docs/2026-07-29-mutation-testing-design.md's "Column discipline"):
+**every rewrite goes through `_rewrite_code`**, which edits strictly
+inside columns 1-72 and re-pins the identification area at column 73
+rather than letting the edit carry it along — `normalize_fixed_format`
+slices columns 8-72, so a growing swap (`ADD..TO` → `SUBTRACT..FROM`,
++7) used to lose its own tail and a shrinking one (−7, or `>=` → `>`)
+used to drag `NC1014.2` back into the program text. It buys the columns
+a longer verb needs from interior space runs (never the indent — that
+decides Area A vs Area B — and never inside a literal) and drops the
+mutant when it cannot. **`stmt-delete` now requires the statement to end
+on its own line** (trailing period, or a next code line opening
+something new; a line trailing off in `TO`/`FROM`/`=` is always
+refused): replacing the head of a multi-line statement with `CONTINUE`
+strands its own tail, or an `END-ADD` that binds to the deleted verb.
+**Continuation lines (indicator `-`) are skipped** and **`PROCEDURE
+DIVISION` state resets at `END PROGRAM`** so a second program's DATA
+DIVISION is not mutated. Measured over a 542-file corpus: 12.2% of
+generated mutants were defective before this (8.9% verified to compile
+something other than what their report line described, by running each
+through the pipeline's own `normalize_fixed_format`), none after. Still open: `stmt-delete` on a line holding two
+statements deletes both (over-strong, not stillborn), and `stillborn`
+still lumps refusal-gate rejections in with compile errors.
+
+A real run baseline-checks the suite
 (red/empty baseline aborts with exit 1: every verdict would be noise),
 then for each mutant patches one original line and re-runs the exact
 `run` pipeline (static checks → splice → compile → run) in its own

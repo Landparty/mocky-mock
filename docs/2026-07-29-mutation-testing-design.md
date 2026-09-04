@@ -1,8 +1,9 @@
 # mockymock — Mutation Testing (`mockymock mutate`)
 
 Date: 2026-07-29
-Status: v1 implemented (this doc); coverage filtering, per-case
-targeting, and mutant schemata deferred
+Status: v1 implemented (this doc); site-discovery hardened 2026-09-04
+(see "Column discipline" below); coverage filtering, per-case targeting,
+and mutant schemata deferred
 
 ## Motivation
 
@@ -70,6 +71,54 @@ mutant — so every rule fails toward *not* mutating:
   `WHEN`/`PERFORM`/`END-*`): deleting those restructures, not deletes.
 - Relational swaps require an `IF`/`UNTIL`/`WHEN` on the line, so `=` in
   `COMPUTE` and `>` in `DISPLAY` literals are never touched.
+- Fixed-format continuation lines (indicator `-`) are skipped: their text
+  is a fragment of the previous line's statement, so neither word-level
+  matching nor the deletion rules hold on it.
+- `PROCEDURE DIVISION` state resets at `END PROGRAM` / a following
+  `IDENTIFICATION DIVISION`, so a second program's DATA DIVISION in the
+  same file is not mutated as if it were procedural code.
+- `stmt-delete` additionally requires the statement to provably *end on
+  its own line* — a trailing period, or a next code line that opens
+  something new (a statement verb, an unrelated scope terminator, a
+  paragraph/section/division header). A line trailing off in a
+  preposition (`MOVE WS-A TO`) is refused whatever follows it, since its
+  operand line is indistinguishable from a paragraph header. Deleting the
+  head of a multi-line statement strands its own tail — `CONTINUE`
+  followed by `WS-TOTAL / WS-COUNT`, or by an `END-ADD` that binds to the
+  very verb just deleted.
+
+### Column discipline (2026-09-04)
+
+Every rewrite happens *within columns 1-72*, with the identification area
+(columns 73-80) re-pinned at column 73 rather than carried along by the
+edit. `normalize_fixed_format` slices columns 8-72 and discards the rest,
+so on traditional 80-column source both directions of drift are silent
+stillborns:
+
+| direction | example | what breaks |
+|-----------|---------|-------------|
+| grows | `ADD..TO` → `SUBTRACT..FROM` (+7) | the statement's own tail falls off the end of column 72 |
+| shrinks | `SUBTRACT..FROM` → `ADD..TO` (−7), `>=` → `>` (−1) | `NC1014.2` slides back into the program text and becomes code |
+
+`_rewrite_code` reclaims the columns a longer verb needs by collapsing
+interior runs of two or more spaces — never the indent that decides Area A
+vs Area B for the statement's first word, never inside a quoted literal —
+and refuses the mutant when the line cannot give them up (which still
+recovers 287 of the 671 overflowing sites).
+
+Measured over a 542-file corpus (vendored NIST CCVS85, shamrice, this
+repo's fixtures), **2,165 of 17,689 mutants — 12.2% — were defective**:
+1,775 shifted the identification area, 671 overflowed column 72, 135 were
+multi-line deletion heads, and 102 came from `\b` matching a verb inside a
+hyphenated identifier (the same class as audit finding F8, which never
+reached the arithmetic patterns). Running each mutant through the very
+`normalize_fixed_format` the pipeline feeds `cobc` puts a verified floor
+under that: **1,580 of them (8.9% of the whole population) compiled
+something other than what their own report line described** — 546 with
+identification text leaked into the program, 1,209 with the statement's
+tail cut off. Afterwards: zero corrupted mutants, 621 sites no longer
+offered at all, and the Docker-gated integration fixture's pinned mutant
+population unchanged (its lines are short and single-statement).
 
 v1 discovery is text-level with these guards. AST-driven discovery via
 cobolparser statement nodes (exact spans, keyword forms like `GREATER
@@ -129,6 +178,16 @@ fail-closed posture as the refusal gate.
   legacy programs, until then.
 - Text-level discovery skips keyword relational forms (`GREATER THAN`)
   and multi-line conditions — blind spots, never false mutants.
+- `stmt-delete` on a line holding more than one statement
+  (`MOVE X TO Y. ADD 1 TO Z.`) still deletes both: an over-strong mutant
+  that compiles and is very likely killed, so it inflates the score rather
+  than the stillborn count. AST-driven discovery (v2) is the real fix.
+- `stillborn` still lumps a refusal-gate rejection in with a compile
+  error. A `stmt-delete` can genuinely change what the refusal gate sees
+  (a dynamic CALL target that is no longer resolvable, say), and that is
+  a harness limit, not an operator-precision failure. Splitting the two
+  means adding a status the VS Code extension's `mutationReport.ts` also
+  has to learn.
 
 ## Testing
 

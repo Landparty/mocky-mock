@@ -156,3 +156,216 @@ def test_fixture_yields_expected_mutant_set():
         (11, "arith-verb-swap"),
         (11, "stmt-delete"),
     ]
+
+
+# --- fixed-format column discipline -----------------------------------
+#
+# mockymock normalizes every source it compiles by slicing columns 8-72,
+# so a mutant that pushes its own code past column 72, or that drags the
+# identification area (columns 73-80) back into it, is a guaranteed
+# stillborn. Traditional 80-column mainframe source -- the kind this tool
+# exists for -- carries content in those columns on every line.
+
+
+def _fixed(code: str, seq: str = "001000", ident: str = "NC1014.2") -> str:
+    """One traditional 80-column line: sequence number in columns 1-6,
+    blank indicator, program text from column 8, identification area
+    pinned at column 73."""
+    body = f"{seq} {code}"
+    assert len(body) <= 72
+    return body.ljust(72) + ident
+
+
+def _fixed_procedure(*statements: str) -> list[str]:
+    return [
+        _fixed("IDENTIFICATION DIVISION."),
+        _fixed("PROGRAM-ID. SAMPLE."),
+        _fixed("PROCEDURE DIVISION."),
+        _fixed("MAIN-PARA."),
+        *statements,
+    ]
+
+
+def _code(line: str) -> str:
+    return line[:72]
+
+
+def test_growing_rewrite_reclaims_columns_from_interior_whitespace():
+    """ADD..TO -> SUBTRACT..FROM adds seven characters. On a line that
+    already reaches column 68 the rewrite would run to column 75 and lose
+    its own tail to the column-72 slice; the interior run of spaces pays
+    for it instead."""
+    line = _fixed("    ADD     1 TO WS-DEEPLY-QUALIFIED-RUNNING-TOTAL-FIELD-NAME")
+    swaps = [
+        m
+        for m in generate_mutants(_fixed_procedure(line))
+        if m.operator == "arith-verb-swap"
+    ]
+    assert len(swaps) == 1
+    mutated = swaps[0].mutated
+    # Three of the five columns between ADD and its operand paid for the
+    # seven the longer verb needed; the statement's own indent (and so its
+    # Area A / Area B position) is untouched, and the identification area
+    # still starts at column 73.
+    assert (
+        _code(mutated)
+        == "001000     SUBTRACT  1 FROM WS-DEEPLY-QUALIFIED-RUNNING-TOTAL-FIELD-NAME"
+    )
+    assert len(_code(mutated).rstrip()) <= 72
+    assert mutated[72:] == "NC1014.2"
+
+
+def test_growing_rewrite_is_refused_when_no_columns_can_be_reclaimed():
+    """Same line, single-spaced: there is nothing to give back, so the
+    mutant is not generated at all rather than generated stillborn."""
+    line = _fixed("    ADD 1 TO WS-DEEPLY-QUALIFIED-RUNNING-TOTAL-FIELD-NAME-XYZ")
+    mutants = generate_mutants(_fixed_procedure(line))
+    assert [m for m in mutants if m.operator == "arith-verb-swap"] == []
+
+
+def test_shrinking_rewrite_keeps_the_identification_area_at_column_73():
+    """SUBTRACT..FROM -> ADD..TO is seven characters shorter. Carrying the
+    rest of the line along would slide `NC1014.2` from column 73 to 66 --
+    inside the program text, where it becomes code."""
+    line = _fixed("    SUBTRACT 1 FROM WS-RUNNING-TOTAL.")
+    swaps = [
+        m
+        for m in generate_mutants(_fixed_procedure(line))
+        if m.operator == "arith-verb-swap"
+    ]
+    assert len(swaps) == 1
+    assert swaps[0].mutated[72:] == "NC1014.2"
+    assert _code(swaps[0].mutated).strip() == "001000     ADD 1 TO WS-RUNNING-TOTAL."
+
+
+def test_relational_swap_keeps_the_identification_area_at_column_73():
+    line = _fixed("    IF WS-I >= 4")
+    swaps = [
+        m for m in generate_mutants(_fixed_procedure(line)) if m.operator == "rel-swap"
+    ]
+    assert [m.mutated[72:] for m in swaps] == ["NC1014.2"]
+    assert _code(swaps[0].mutated).rstrip() == "001000     IF WS-I > 4"
+
+
+# --- COBOL word boundaries on the arithmetic verbs ---------------------
+
+
+def test_hyphenated_identifier_containing_add_is_not_an_arithmetic_site():
+    """Same class of bug as audit finding F8, one module-level regex
+    later: `\\bADD\\b` matches inside GRP-FOR-ADD-CORR-R, so an ordinary
+    MOVE was rewritten to `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...` -- a
+    stillborn, and 102 of them across the vendored NIST corpus."""
+    mutants = generate_mutants(
+        _procedure("           MOVE GRP-FOR-ADD-CORR-R TO COMPUTED-A.")
+    )
+    assert [m for m in mutants if m.operator == "arith-verb-swap"] == []
+
+
+def test_hyphenated_identifier_containing_to_is_not_the_preposition():
+    mutants = generate_mutants(_procedure("           ADD 1 TO WS-TO-DATE-COUNT."))
+    swaps = [m for m in mutants if m.operator == "arith-verb-swap"]
+    assert [m.mutated for m in swaps] == [
+        "           SUBTRACT 1 FROM WS-TO-DATE-COUNT."
+    ]
+
+
+# --- deletion only of statements that end on their own line ------------
+
+
+def test_multi_line_statement_head_is_never_deleted():
+    """`CONTINUE` followed by the orphaned second half of a COMPUTE is a
+    compile error, not a mutant."""
+    mutants = generate_mutants(
+        _procedure(
+            "           COMPUTE WS-AVG =",
+            "               WS-TOTAL / WS-COUNT",
+            "           DISPLAY WS-AVG.",
+        )
+    )
+    assert [m for m in mutants if m.operator == "stmt-delete"] == []
+
+
+def test_statement_followed_by_its_own_scope_terminator_is_never_deleted():
+    """END-ADD binds to the ADD being deleted; END-IF would not."""
+    mutants = generate_mutants(
+        _procedure(
+            "           ADD 1 TO WS-TOTAL",
+            "               ON SIZE ERROR MOVE 1 TO WS-FLAG",
+            "           END-ADD",
+        )
+    )
+    assert [m for m in mutants if m.operator == "stmt-delete"] == []
+
+
+def test_deletion_allowed_when_the_next_line_opens_a_new_statement():
+    mutants = generate_mutants(
+        _procedure(
+            "           MOVE 0 TO WS-TOTAL",
+            "           DISPLAY WS-TOTAL.",
+        )
+    )
+    deletions = [m for m in mutants if m.operator == "stmt-delete"]
+    assert [m.mutated for m in deletions] == ["           CONTINUE"]
+
+
+def test_deletion_allowed_before_an_enclosing_scope_terminator():
+    mutants = generate_mutants(
+        _procedure(
+            "           IF WS-FLAG = 1",
+            "               MOVE 0 TO WS-TOTAL",
+            "           END-IF.",
+        )
+    )
+    deletions = [m for m in mutants if m.operator == "stmt-delete"]
+    assert [m.mutated for m in deletions] == ["               CONTINUE"]
+
+
+def test_dangling_preposition_blocks_deletion():
+    """The operand line of a split MOVE is indistinguishable from a
+    paragraph header, so the trailing `TO` is what has to decide it."""
+    mutants = generate_mutants(
+        _procedure(
+            "           MOVE WS-A TO",
+            "               WS-B.",
+        )
+    )
+    assert [m for m in mutants if m.operator == "stmt-delete"] == []
+
+
+# --- continuation lines and program boundaries -------------------------
+
+
+def test_continuation_lines_are_not_mutated():
+    mutants = generate_mutants(
+        [
+            "       IDENTIFICATION DIVISION.",
+            "       PROGRAM-ID. SAMPLE.",
+            "       PROCEDURE DIVISION.",
+            "       MAIN-PARA.",
+            '           MOVE "ABCDEF',
+            '      -    "GHI" TO WS-X.',
+            "           MOVE 0 TO WS-TOTAL.",
+        ]
+    )
+    assert [m.line for m in mutants] == [7, 7]
+
+
+def test_a_second_programs_data_division_is_not_mutated():
+    """`in_procedure` is sticky, so without a program-boundary reset the
+    next program's WORKING-STORAGE looks like procedural code."""
+    mutants = generate_mutants(
+        [
+            "       IDENTIFICATION DIVISION.",
+            "       PROGRAM-ID. FIRST.",
+            "       PROCEDURE DIVISION.",
+            "       MAIN-PARA.",
+            "           MOVE 0 TO WS-TOTAL.",
+            "       END PROGRAM FIRST.",
+            "       IDENTIFICATION DIVISION.",
+            "       PROGRAM-ID. SECOND.",
+            "       DATA DIVISION.",
+            "       WORKING-STORAGE SECTION.",
+            "       01 WS-LIMIT PIC 9(4) VALUE 5.",
+        ]
+    )
+    assert sorted({m.line for m in mutants}) == [5]
