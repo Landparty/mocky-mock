@@ -218,8 +218,11 @@ def _is_continuation(line: str) -> bool:
 
 
 def _sequence_area_end(line: str) -> int:
-    """Best-effort guard for fixed-format identification columns: mutate
-    nothing past column 72 (index 72). Lines shorter than that (the common
+    """Best-effort guard for fixed-format identification columns: an
+    EXCLUSIVE slice end, so `line[: _sequence_area_end(line)]` is the
+    program text through column 72 and nothing beyond it. Columns are
+    1-based and indices are not, so column 72 is index 71 and the slice
+    end is `CODE_END_COL` itself. Lines shorter than that (the common
     case in this repo's fixtures and modern sources) are unaffected."""
     return min(len(line), CODE_END_COL)
 
