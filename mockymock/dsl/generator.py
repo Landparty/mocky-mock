@@ -195,6 +195,177 @@ def _replicated_at_end_statements(statement: object) -> list[str]:
     return lines
 
 
+# --- Lifting a READ's own AT END imperative verbatim -------------------------
+
+
+@dataclass(frozen=True)
+class SourceContext:
+    """The normalized program text the scaffold needs to lift a statement's
+    own source back out of it.
+
+    `lines` is `run_static_checks`' normalized (free-form, comments blanked)
+    line list; `statement_starts` is `splicer.source_map.collect_boundaries`'
+    output for the same program -- the SAME two inputs the splicer's own
+    `statement_span` uses to decide what text a boundary splice deletes.
+    Using the splicer's own span source here is what makes the lifted text
+    exactly the text that will be deleted, rather than a reconstruction that
+    could drift from it.
+
+    Optional throughout: without it the scaffold falls back to the
+    AST-driven replication and, failing that, the honest TODO comment.
+    """
+
+    lines: list[str]
+    statement_starts: list[int]
+
+    def statement_text(self, line: int) -> str | None:
+        """The full source text of the statement starting at 1-based
+        `line`, with its original line breaks preserved."""
+        if line < 1 or line > len(self.lines):
+            return None
+        later = [start for start in self.statement_starts if start > line]
+        end = (later[0] - 1) if later else len(self.lines)
+        while end > line and not self.lines[end - 1].strip():
+            end -= 1
+        return "\n".join(self.lines[line - 1 : end])
+
+
+def _scan_words(text: str):
+    """Yield `(start, end, upper_word)` for every word OUTSIDE a quoted
+    literal, plus `(index, index + 1, ".")` for every sentence-terminating
+    period (a period followed by whitespace or end of text -- COBOL's own
+    rule, which is also what keeps a numeric literal's decimal point from
+    being mistaken for one)."""
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char in ('"', "'"):
+            quote = char
+            index += 1
+            while index < length:
+                if text[index] == quote:
+                    if index + 1 < length and text[index + 1] == quote:
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            continue
+        if char.isspace():
+            index += 1
+            continue
+        if char == "." and (index + 1 >= length or text[index + 1].isspace()):
+            yield index, index + 1, "."
+            index += 1
+            continue
+        start = index
+        while (
+            index < length
+            and not text[index].isspace()
+            and text[index]
+            not in (
+                '"',
+                "'",
+            )
+        ):
+            index += 1
+        word = text[start:index]
+        if word.endswith(".") and (index >= length or text[index].isspace()):
+            yield start, index - 1, word[:-1].upper()
+            yield index - 1, index, "."
+            continue
+        yield start, index, word.upper()
+
+
+#: Word sequences that end a READ's AT END imperative. `NOT AT END` must be
+#: checked before `AT END` anywhere this list is used against a scan, since
+#: it shares its tail.
+_AT_END_TERMINATORS: tuple[tuple[str, ...], ...] = (
+    ("NOT", "AT", "END"),
+    ("END-READ",),
+    ("INVALID", "KEY"),
+    ("NOT", "INVALID", "KEY"),
+    (".",),
+)
+
+
+def _extract_at_end_imperative(statement_text: str) -> str | None:
+    """The text of a READ's `AT END` imperative, exactly as the program
+    wrote it -- original line breaks and all -- or None when it cannot be
+    located unambiguously.
+
+    Purely positional: the words are located outside quoted literals, and
+    the answer is a slice of the input, never a reconstruction. That is the
+    whole point -- an AST-driven re-render can only cover the statement
+    shapes it knows about, while the program's own text is by definition
+    the statement the splicer is about to delete.
+    """
+    words = list(_scan_words(statement_text))
+    start = None
+    for index in range(len(words) - 1):
+        if words[index][2] == "AT" and words[index + 1][2] == "END":
+            if index > 0 and words[index - 1][2] == "NOT":
+                continue
+            start = words[index + 1][1]
+            start_word = index + 2
+            break
+    if start is None:
+        return None
+
+    end = len(statement_text)
+    for index in range(start_word, len(words)):
+        for terminator in _AT_END_TERMINATORS:
+            if (
+                tuple(w[2] for w in words[index : index + len(terminator)])
+                == terminator
+            ):
+                end = words[index][0]
+                break
+        else:
+            continue
+        break
+    lifted = statement_text[start:end].strip()
+    return lifted or None
+
+
+def _lifted_at_end_lines(site: BoundarySite, source: SourceContext | None) -> list[str]:
+    """The program's own `AT END` imperative, re-indented for a `.cut` MOCK
+    body, or `[]` when it could not be lifted safely.
+
+    The splicer replaces the WHOLE `READ` statement, which deletes its `AT
+    END` clause with it -- so a generated mock that moves only the FILE
+    STATUS field never runs the program's own end-of-data handling, and a
+    `PERFORM ... UNTIL <eof-flag>` loop keyed on it spins until the executor
+    timeout. That is a 30-second hang with no diagnosis, which is a far
+    worse outcome than any of the shapes this refuses on.
+
+    Refused (returning `[]`, leaving the caller's TODO comment) when the
+    lifted text carries a sentence-terminating period of its own: a period
+    inside the spliced `EVALUATE` branch would close the enclosing sentence
+    early and silently restructure the generated program's control flow.
+    """
+    if source is None:
+        return []
+    statement_text = source.statement_text(site.line)
+    if statement_text is None:
+        return []
+    lifted = _extract_at_end_imperative(statement_text)
+    if lifted is None:
+        return []
+    if any(word == "." for _, _, word in _scan_words(lifted)):
+        return []
+    body = [line.strip() for line in lifted.splitlines() if line.strip()]
+    if not body:
+        return []
+    return [
+        f"*> replicated verbatim from this program's own READ ... AT END "
+        f"clause (line {site.line}) -- the splicer replaces the whole READ, "
+        f"deleting it",
+        *body,
+    ]
+
+
 def _quote_safe(name: str) -> str:
     """The .cut grammar cannot represent a double quote inside a quoted
     name (`"[^"]*"` -- no escape syntax), so a name containing one would
@@ -207,6 +378,7 @@ def scaffold_cut(
     surface: MockSurface,
     bundle: FixtureBundle | None = None,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
+    source: SourceContext | None = None,
 ) -> str:
     """Generate a starter .cut file. Without a bundle: one TESTCASE per
     paragraph with placeholder mock bodies (today's original behavior).
@@ -217,10 +389,16 @@ def scaffold_cut(
     bundle-side string category paired with the fixture's own key,
     e.g. `("READ", "ORDER-FILE")`) only has an effect with a bundle --
     without one, every site already gets a placeholder body, so there is
-    nothing left to downgrade. See `_bundle_directive_for`."""
+    nothing left to downgrade. See `_bundle_directive_for`.
+
+    `source` (the normalized program text plus its statement-start lines)
+    lets a generated `MOCK READ` lift the program's own `AT END` imperative
+    verbatim into its exhaustion branch instead of emitting a TODO comment
+    -- see `_lifted_at_end_lines`. Optional: without it the scaffold falls
+    back to the AST-driven replication and then to that TODO."""
     if bundle is None:
         return _scaffold_placeholder(suite_name, surface)
-    return _scaffold_with_bundle(suite_name, surface, bundle, placeholder_keys)
+    return _scaffold_with_bundle(suite_name, surface, bundle, placeholder_keys, source)
 
 
 # --- placeholder scaffold (no bundle) ----------------------------------------
@@ -581,7 +759,10 @@ def _single_row_body(fixture: BoundaryFixture) -> list[str]:
 
 
 def _read_exhaustion_lines(
-    fixture: BoundaryFixture, replicated: list[str], at_end: list[object]
+    fixture: BoundaryFixture,
+    replicated: list[str],
+    at_end: list[object],
+    lifted: list[str] | None = None,
 ) -> list[str]:
     """The lines that fire once a READ mock's rows are exhausted:
     `fixture.terminal`'s status code MOVE(s) plus whatever of the
@@ -606,10 +787,20 @@ def _read_exhaustion_lines(
         lines.append(f'MOVE "{code}" TO {field_name}')
     lines.extend(replicated)
     if at_end and not replicated:
-        lines.append(
-            "*> TODO: this program's AT END clause could not be "
-            "auto-replicated -- add its loop-guard statement by hand"
-        )
+        # The AST-driven replication above covers the two idioms it can
+        # prove safe. Everything else used to become a TODO comment -- and
+        # a TODO left in place is not a visible gap, it is a 30-second hang
+        # at the executor timeout with no diagnosis, since the program's own
+        # loop guard never gets set. Lifting the clause's own source text is
+        # both more general and more faithful than any re-render: it is
+        # exactly the text the splicer is deleting.
+        lines.extend(lifted or [])
+        if not lifted:
+            lines.append(
+                "*> TODO: this program's AT END clause could not be "
+                "auto-replicated -- add its loop-guard statement by hand, "
+                "or this mock will never end the program's read loop"
+            )
     return lines
 
 
@@ -618,6 +809,7 @@ def _read_body(
     registry: TallyRegistry,
     category: MockCategory,
     site: BoundarySite,
+    source: SourceContext | None = None,
 ) -> list[str]:
     """READ's multi-row sequence: a tally-branching `EVALUATE TRUE` chain,
     one `WHEN <tally> = N` per generated row, `WHEN OTHER` moving
@@ -669,10 +861,11 @@ def _read_body(
     sequence = fixture.sequence
     at_end = getattr(site.statement, "at_end_clause", None) or []
     replicated = _replicated_at_end_statements(site.statement)
+    lifted = _lifted_at_end_lines(site, source) if at_end and not replicated else []
     needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
 
     if not sequence:
-        return _read_exhaustion_lines(fixture, replicated, at_end)
+        return _read_exhaustion_lines(fixture, replicated, at_end, lifted)
 
     if len(sequence) == 1 and not needs_exhaustion_branch:
         return _row_move_lines(sequence[0], fixture)
@@ -686,7 +879,7 @@ def _read_body(
         body.append("    WHEN OTHER")
         body.extend(
             f"        {line}"
-            for line in _read_exhaustion_lines(fixture, replicated, at_end)
+            for line in _read_exhaustion_lines(fixture, replicated, at_end, lifted)
         )
     body.append("END-EVALUATE")
     return body
@@ -776,6 +969,7 @@ def _bundle_directive_for(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
+    source: SourceContext | None = None,
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """The full `MOCK ... END-MOCK` (or `MOCK ... ROWS ... END-MOCK`) block
     for one scenario's boundary fixture, or None if this (category, key)
@@ -851,8 +1045,11 @@ def _bundle_directive_for(
         if category is MockCategory.READ:
             at_end = getattr(site.statement, "at_end_clause", None) or []
             replicated = _replicated_at_end_statements(site.statement)
-            body = _read_exhaustion_lines(fixture, replicated, at_end)
-            if fixture.terminal or replicated:
+            lifted = (
+                _lifted_at_end_lines(site, source) if at_end and not replicated else []
+            )
+            body = _read_exhaustion_lines(fixture, replicated, at_end, lifted)
+            if fixture.terminal or replicated or lifted:
                 call_count_override = CallCountOverride(count=1)
             else:
                 call_count_override = CallCountOverride(
@@ -872,7 +1069,7 @@ def _bundle_directive_for(
     elif fixture.direction == "STATUS_ONLY":
         body = _status_only_body(fixture)
     elif category is MockCategory.READ:
-        body = _read_body(fixture, registry, category, site)
+        body = _read_body(fixture, registry, category, site, source)
     elif category is MockCategory.SQL and _sql_wants_rows(fixture):
         return _sql_rows_directive(category, fixture.key, fixture), None
     else:
@@ -903,6 +1100,7 @@ def _bundle_directive_for_group(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
+    source: SourceContext | None = None,
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """Like `_bundle_directive_for`, but for every fixture that resolves
     to the SAME physical mockymock `BoundarySite` (only possible for
@@ -927,7 +1125,7 @@ def _bundle_directive_for_group(
     exists to catch, made worse by staying silent instead."""
     if len(fixtures) == 1:
         return _bundle_directive_for(
-            fixtures[0], mockymock_keys, registry, placeholder_keys
+            fixtures[0], mockymock_keys, registry, placeholder_keys, source
         )
     primary = fixtures[0]
     try:
@@ -953,6 +1151,7 @@ def _bundle_mock_directives(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
+    source: SourceContext | None = None,
 ) -> tuple[
     list[str],
     set[tuple[MockCategory, str]],
@@ -1012,7 +1211,7 @@ def _bundle_mock_directives(
     for site_id in site_order:
         group = fixtures_by_site[site_id]
         result = _bundle_directive_for_group(
-            group, mockymock_keys, registry, placeholder_keys
+            group, mockymock_keys, registry, placeholder_keys, source
         )
         if result is not None:
             directive, override = result
@@ -1096,19 +1295,77 @@ def _is_boundary_level_ref(ref: str) -> bool:
     return bool(sep) and _is_known_category(category_str)
 
 
+def _rendered_call_count_refs(
+    expectations: list[Expectation],
+    declared_keys: set[tuple[MockCategory, str]],
+    call_count_overrides: dict[tuple[MockCategory, str], CallCountOverride],
+) -> set[tuple[MockCategory, str]]:
+    """The boundaries this TESTCASE will actually emit a real `VERIFY ...
+    WAS CALLED n TIMES` line for.
+
+    Needed by `_render_expectation`'s tier-3 branch: a boundary-level stub
+    expectation is redundant only when that same boundary genuinely got a
+    live count assertion here, and "genuinely" excludes both the keys with
+    no MOCK directive of their own and the counts demoted to a `*>` comment
+    by a `--placeholder` downgrade. Deriving it once, from the same
+    `declared_keys`/`call_count_overrides` the rendering itself reads, keeps
+    the two decisions from drifting apart."""
+    rendered: set[tuple[MockCategory, str]] = set()
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        try:
+            category = MockCategory(category_str)
+        except ValueError:
+            continue
+        if (category, key) not in declared_keys:
+            continue
+        override = call_count_overrides.get((category, key))
+        if override is not None and override.demote_reason is not None:
+            continue
+        rendered.add((category, key))
+    return rendered
+
+
+def _describe_boundary_ref(ref: str) -> str:
+    """`"WRITE:INV-REC"` -> `WRITE INV-REC`, matching how a MOCK/VERIFY
+    directive for that boundary reads in the `.cut`. Falls back to the raw
+    ref for a category this mockymock doesn't know."""
+    category_str, sep, key = ref.partition(":")
+    if not sep:
+        return ref
+    try:
+        return MockDirective(MockCategory(category_str), key).describe()
+    except ValueError:
+        return ref
+
+
 def _render_expectation(
     expectation: Expectation,
     declared_keys: set[tuple[MockCategory, str]],
     call_count_overrides: (
         dict[tuple[MockCategory, str], CallCountOverride] | None
     ) = None,
+    counted_boundaries: set[tuple[MockCategory, str]] | None = None,
 ) -> list[str]:
     """Tier 1 (`call_count`) -> `VERIFY ... WAS CALLED n TIMES`; tier 2
     (`field_equals`) -> `EXPECT <name> TO BE <value>`; tier 3 (`stub`) ->
-    a `*> STUB EXPECT <name>` comment when `ref` is a real data-name, or
-    nothing at all when it's a boundary-level ref (already covered by
-    that same boundary's own call_count VERIFY, and there is no single
-    data-name a boundary-level stub could attach to anyway).
+    a `*> STUB EXPECT ...` comment.
+
+    A boundary-level tier-3 ref (`"WRITE:INV-REC"` rather than a data-name)
+    is dropped ONLY when this same TESTCASE actually emits a live `VERIFY
+    ... WAS CALLED` for that boundary -- `counted_boundaries`, from
+    `_rendered_call_count_refs`. It used to be dropped unconditionally on
+    that reasoning, which was wrong whenever the count assertion did not in
+    fact get rendered (no MOCK directive of its own for that key, or a
+    `--placeholder` downgrade demoting the count to a comment): the bundle
+    knew something about an OUT boundary -- most visibly every `WRITE:` stub
+    under `--scenarios all` -- and the generated `.cut` said nothing at all
+    about it. A `*>` comment is inert, so surfacing it can never break the
+    generated file; silently dropping it opened a gap between what the
+    analysis knew and what reached the file, which is the one thing a
+    scaffold must not do.
 
     `declared_keys` (from `_bundle_mock_directives`) -- not the broader
     `mockymock_keys` -- is what call_count is checked against: a key that
@@ -1155,9 +1412,16 @@ def _render_expectation(
         rendered = render_expect_value(str(expectation.value))
         return [f"EXPECT {expectation.ref} TO BE {rendered}"]
     # kind == "stub"
-    if _is_boundary_level_ref(expectation.ref):
-        return []
     note = f" -- {expectation.note}" if expectation.note else ""
+    if _is_boundary_level_ref(expectation.ref):
+        category_str, _, key = expectation.ref.partition(":")
+        try:
+            pair = (MockCategory(category_str), key)
+        except ValueError:
+            pair = None
+        if pair is not None and pair in (counted_boundaries or set()):
+            return []  # already asserted by this case's own VERIFY ... WAS CALLED
+        return [f"*> STUB EXPECT {_describe_boundary_ref(expectation.ref)}{note}"]
     return [f"*> STUB EXPECT {expectation.ref}{note}"]
 
 
@@ -1166,6 +1430,7 @@ def _scaffold_with_bundle(
     surface: MockSurface,
     bundle: FixtureBundle,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
+    source: SourceContext | None = None,
 ) -> str:
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(mockymock_keys, _bundle_boundary_keys(bundle))
@@ -1182,15 +1447,21 @@ def _scaffold_with_bundle(
             continue
         lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
         directive_lines, declared_keys, call_count_overrides = _bundle_mock_directives(
-            scenario, surface, mockymock_keys, registry, placeholder_keys
+            scenario, surface, mockymock_keys, registry, placeholder_keys, source
         )
         lines.extend(f"    {line}" for line in directive_lines)
         lines.append(f"    PERFORM {scenario.entry}")
+        counted_boundaries = _rendered_call_count_refs(
+            scenario.expectations, declared_keys, call_count_overrides
+        )
         for expectation in scenario.expectations:
             lines.extend(
                 f"    {line}"
                 for line in _render_expectation(
-                    expectation, declared_keys, call_count_overrides
+                    expectation,
+                    declared_keys,
+                    call_count_overrides,
+                    counted_boundaries,
                 )
             )
         lines.append("")

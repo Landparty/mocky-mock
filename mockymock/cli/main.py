@@ -275,8 +275,12 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         load_fixture_bundle,
         load_fixture_bundle_file,
     )
-    from mockymock.dsl.generator import scaffold_cut
-    from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
+    from mockymock.dsl.generator import SourceContext, scaffold_cut
+    from mockymock.splicer.source_map import (
+        annotate_nested_sites,
+        collect_boundaries,
+        collect_scope_map,
+    )
 
     source_path = Path(args.program)
     if not _check_input_files("mockymock generate", source_path):
@@ -447,7 +451,17 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
     cut_text = scaffold_cut(
-        result.ast.program_name, surface, bundle, frozenset(placeholder_pairs)
+        result.ast.program_name,
+        surface,
+        bundle,
+        frozenset(placeholder_pairs),
+        # The same normalized lines + statement-start boundaries the
+        # splicer's own `statement_span` uses, so a generated MOCK READ's
+        # exhaustion branch can carry the program's own AT END imperative
+        # verbatim -- the exact text the splice is about to delete.
+        SourceContext(
+            lines=list(lines), statement_starts=collect_boundaries(result.ast)
+        ),
     )
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")

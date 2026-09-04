@@ -638,24 +638,60 @@ paragraph-grouped path described above, unchanged. A real
   correctly (cobol-parser's `_resolve_status_field`), but the program's
   own `AT END` handler still fires every time the sequence exhausts and
   still needs replicating. Only a `MOVE` whose source is a quoted
-  string/numeric literal or figurative constant is replicated — never a
-  bare identifier, whose value in the mock's own splice-time context
-  isn't the real program's runtime state; when the clause exists but
-  nothing in it was safely replicable, a `*> TODO` comment flags the gap
-  in the generated `.cut` rather than silently emitting an `EVALUATE` with
-  no `WHEN OTHER` effect at all.
+  string/numeric literal or figurative constant is replicated from the AST
+  — never a bare identifier, whose value in the mock's own splice-time
+  context isn't the real program's runtime state.
+- **When the AST-driven replication comes up empty, the clause's own source
+  text is lifted verbatim instead** (`_lifted_at_end_lines`, 2026-09-04).
+  The `*> TODO` comment that used to be emitted there is not a visible gap
+  so much as a silently hanging test: a reader who leaves it in gets a
+  30-second executor timeout with no diagnosis, because the program's own
+  loop guard is never set. The lift is a *slice of the program's own
+  source* — exactly the text the splice is about to delete — not a
+  re-render limited to the shapes an AST walk knows about, which is what
+  makes it general enough to cover identifier-sourced MOVEs, `ADD`, `IF`,
+  `PERFORM`, and everything else a real `AT END` clause holds.
+  `SourceContext` (the normalized lines plus
+  `splicer.source_map.collect_boundaries`' statement starts — the SAME two
+  inputs the splicer's own `statement_span` uses, so the lifted text cannot
+  drift from the deleted text) is threaded from `_cmd_generate` through
+  `scaffold_cut`. `_extract_at_end_imperative` locates `AT END` positionally
+  with words scanned OUTSIDE quoted literals (so a `DISPLAY "AT END OF
+  FILE"` is never mistaken for the clause) and cuts at the first of `NOT AT
+  END` / `END-READ` / `INVALID KEY` / `NOT INVALID KEY` / a
+  sentence-terminating period (a period followed by whitespace or
+  end-of-text — COBOL's own rule, which is also what keeps a numeric
+  literal's decimal point from being read as one). A lifted line carries a
+  `*>` provenance comment naming the source line, since a generated file a
+  human reads should not silently contain code that did not come from the
+  fixture data. The `*> TODO` remains the fallback when no `SourceContext`
+  was supplied or the clause could not be located.
 - **Expectations** render via `_render_expectation(expectation,
-  declared_keys, call_count_overrides=None)`: tier 1 (`call_count`) →
+  declared_keys, call_count_overrides=None, counted_boundaries=None)`:
+  tier 1 (`call_count`) →
   `VERIFY <cat> <key> WAS CALLED n TIMES`, gated on `declared_keys` as
   above, `n` normally `expectation.value` but see `--placeholder`'s
   `call_count_overrides` below; tier 2 (`field_equals`) → `EXPECT <name>
-  TO BE <value>`; tier 3 (`stub`) → `*> STUB EXPECT <name>` comment when
-  `ref` is a real data-name, or nothing when `ref` is a
-  `"CATEGORY:KEY"`-shaped boundary-level reference (`_is_boundary_level_ref`
-  detects this via the colon, since COBOL names never contain one) — see
-  `analysis.md`'s stub-expectation scanner for how a human later promotes
-  a stub comment to a real `EXPECT` via `mockymock run
-  --record-expectations`.
+  TO BE <value>`; tier 3 (`stub`) → a `*> STUB EXPECT ...` comment. A
+  `"CATEGORY:KEY"`-shaped boundary-level `ref` (`_is_boundary_level_ref`
+  detects the colon, since COBOL names never contain one) renders as
+  `*> STUB EXPECT <CAT> <KEY>` — the way a MOCK/VERIFY for that boundary
+  reads — and is dropped ONLY when this same TESTCASE actually emits a live
+  `VERIFY ... WAS CALLED` for it (`_rendered_call_count_refs`, which
+  excludes both keys with no MOCK directive of their own and counts demoted
+  to a comment by a `--placeholder` downgrade). It used to be dropped
+  unconditionally on that "already covered by its own call_count VERIFY"
+  reasoning, which is simply false for an OUT-direction boundary: every
+  `WRITE:` stub the bundle produced under `--scenarios all` vanished, so
+  the analysis knew something the generated `.cut` never said. A `*>`
+  comment is inert, so surfacing it can never break the file; dropping it
+  opened a gap between what the analysis knew and what reached the file,
+  which is the one thing a scaffold must not do. The two-token boundary
+  form deliberately does NOT match the stub scanner's data-name grammar
+  (`analysis/stub_expectations.py`'s `_STUB_RE`), so `run
+  --record-expectations` leaves it alone rather than mistaking `WRITE` for
+  a data item — see `analysis.md`'s stub-expectation scanner for how a
+  human promotes a real data-name stub comment to an `EXPECT`.
 - **Lint gate**: `tests/integration/test_generate_with_data_lint_gate.py`
   generates a `.cut` for every corpus program across all three
   `--scenarios` modes (happy/branches/all) and asserts `mockymock lint`

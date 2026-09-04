@@ -169,13 +169,55 @@ def test_out_direction_write_gets_a_placeholder_mock():
     assert "MOCK WRITE RPT-REC" in text
 
 
-def test_out_direction_write_has_no_duplicate_verify_or_expect():
-    """The WRITE boundary's own stub expectation (ref="WRITE:RPT-REC") is a
-    boundary-level ref, not a data-name -- it must not turn into a bogus
-    `EXPECT WRITE:RPT-REC ...` or `*> STUB EXPECT WRITE:RPT-REC` line."""
+def test_out_direction_write_stub_reaches_the_generated_file():
+    """The WRITE boundary's own tier-3 stub expectation (ref
+    "WRITE:RPT-REC") used to be dropped outright on the reasoning that the
+    same boundary's `call_count` VERIFY already covered it -- but no such
+    VERIFY exists for an OUT-direction WRITE, so the bundle knew something
+    the generated `.cut` never said. It is now surfaced as a `*> STUB
+    EXPECT` comment (inert, so it can never break the file) carrying the
+    bundle's own note."""
     surface, bundle = _surface_and_bundle(MULTI_FILE_SOURCE, "multifile.cbl")
     text = scaffold_cut("MULTIFILE", surface, bundle)
+    assert (
+        "*> STUB EXPECT WRITE RPT-REC -- value produced by the program "
+        "under test" in text
+    )
+    # Rendered the way a MOCK/VERIFY for that boundary reads, never as the
+    # raw `CATEGORY:KEY` bundle ref.
     assert "WRITE:RPT-REC" not in text
+    assert "EXPECT WRITE:RPT-REC" not in text
+
+
+def test_boundary_level_stub_is_ignored_by_the_record_expectations_scanner():
+    """`*> STUB EXPECT <data-name>` is a real feature -- `run
+    --record-expectations` rewrites those into `EXPECT` lines. A
+    boundary-level stub names a boundary, not a data item, so it must not
+    be picked up as one; its two-token shape simply does not match the
+    scanner's data-name grammar."""
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
+
+    surface, bundle = _surface_and_bundle(MULTI_FILE_SOURCE, "multifile.cbl")
+    text = scaffold_cut("MULTIFILE", surface, bundle)
+    scan = scan_stub_expectations(text, parse_cut(text))
+    assert [s.data_name for s in scan.stubs] == []
+    assert scan.skipped == []
+
+
+def test_boundary_level_stub_is_dropped_when_a_real_verify_covers_it():
+    """The original reasoning still applies where it is actually true: a
+    boundary this TESTCASE does emit a live `VERIFY ... WAS CALLED` for
+    needs no stub comment as well."""
+    from mockymock.dsl.generator import _render_expectation
+
+    stub = Expectation(kind="stub", ref="READ:INV-FILE", note="n")
+    declared = {(MockCategory.READ, "INV-FILE")}
+    counted = {(MockCategory.READ, "INV-FILE")}
+    assert _render_expectation(stub, declared, {}, counted) == []
+    # ... and is kept when no such VERIFY was rendered.
+    assert _render_expectation(stub, declared, {}, set()) == [
+        "*> STUB EXPECT READ INV-FILE -- n"
+    ]
 
 
 def test_read_multi_row_sequence_uses_tally_branching_evaluate():

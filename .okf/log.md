@@ -3112,3 +3112,33 @@ Two review findings on `mockymock export`'s `COLUMN_OVERFLOW`:
 Unit-tested; not compiled by a real IBM COBOL compiler (nor GnuCOBOL -- no
 Docker daemon available), which the provenance header now says explicitly
 about the two new wrap shapes.
+
+## 2026-09-04 — `generate --with-data`: real AT END arms, and stub expectations that reach the file
+
+Two review findings on the bundle-driven scaffold, both the same shape --
+the analysis knew something the generated `.cut` did not say:
+
+- **[dsl]** A scaffolded `MOCK READ`'s `WHEN OTHER` arm was a `*> TODO`
+  comment whenever `_replicated_at_end_statements` could not prove a
+  statement safe from the AST. Leaving that TODO in does not fail visibly;
+  it hangs for 30 seconds at the executor timeout, because the splicer
+  deleted the program's own `AT END` clause and nothing sets the loop
+  guard. New `_lifted_at_end_lines`/`_extract_at_end_imperative` lift the
+  clause's own source text verbatim instead -- a slice of the program, not
+  a re-render, so it is general over every statement shape. `SourceContext`
+  (normalized lines + `collect_boundaries`' statement starts, the same two
+  inputs the splicer's `statement_span` uses) is threaded from
+  `_cmd_generate` through `scaffold_cut`, which is what keeps the lifted
+  text identical to the deleted text. The TODO survives as the fallback.
+- **[dsl]** Tier-3 boundary-level stub expectations (`"WRITE:RPT-REC"`)
+  were dropped unconditionally as "already covered by that boundary's own
+  call_count VERIFY" -- false for exactly the OUT-direction boundaries that
+  produce them, which have no such VERIFY. They now render as `*> STUB
+  EXPECT <CAT> <KEY>` comments and are dropped only when a live VERIFY for
+  that boundary was actually emitted (`_rendered_call_count_refs`). The
+  two-token form deliberately does not match `stub_expectations._STUB_RE`,
+  so `run --record-expectations` ignores it rather than reading `WRITE` as
+  a data name.
+
+Unit-tested, including a lint gate on the generated `.cut`; no Docker, so
+the hang this closes was not re-reproduced end to end.
