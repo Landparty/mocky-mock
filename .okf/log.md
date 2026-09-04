@@ -3043,3 +3043,40 @@ docs-only -- no production code changed.
   `ACCTMNT`-based example: a separate cobol-parser bug (task_c5e3b268) drops
   some of `ACCTMNT.cbl`'s own EXEC SQL UPDATE/INSERT statements from the
   AST, causing a different, harder compile failure upstream of this fix.
+
+## 2026-09-04 — Reporting clarity: coverage headline, coverage CI gate, stillborn reasons; unmockable-ACCEPT refusal
+
+Four review findings, all about a tool answer being technically true and
+practically misleading:
+
+- **[coverage]** `run --coverage`'s stdout line reported the *instrumented
+  sandbox copy*'s percentage (inflated by injected harness code) while the
+  meaningful original-`.cbl` number lived only in `--coverage-json`. The
+  console report now leads with the original program's own number and its
+  own uncovered lines; the instrumented figure follows on one labelled
+  line. New `OriginalCoverage`/`summarize_original` in `report/coverage.py`;
+  `_cmd_run` now computes the remap for every `--coverage` run, not only
+  when `--coverage-json` asked for it. `--coverage-json`'s `original` block
+  gained an additive `percentage` key.
+- **[coverage][cli]** New `run --coverage-fail-under PERCENT`, the `run`
+  counterpart of `mutate --fail-under` (coverage could not be CI-gated at
+  all before). Judged against the original number, folded into the final
+  exit-code decision so `--trace` still prints, and failing closed when
+  gcov produced nothing.
+- **[cli]** `mutate`'s stillborn mutants are no longer a black box: the
+  console report groups them by `refused` vs `compile_error` and lists each
+  one, `--json-report` carries `stillbornByReason` plus a per-mutant
+  `stillbornReason`. `_run_suite_once` returns the reason as a fourth
+  element -- classified where the status is decided, never re-derived by
+  pattern-matching `detail`.
+- **[analysis]** `MOCK ACCEPT` aimed at an `ACCEPT ... FROM DATE/TIME/...`
+  refused `UNMATCHED_MOCK` ("does not match any boundary site reachable
+  from ..."), which reads as a reachability bug for a problem that is not
+  about reachability. New `UNMOCKABLE_ACCEPT_SOURCE` code, backed by a new
+  `MockSurface.non_interactive_accepts` list recorded for error quality
+  only (those ACCEPTs are still never spliced and never reported as
+  unsupported boundaries -- `ACCEPT WS-TODAY FROM DATE` is ordinary
+  working COBOL).
+
+Unit-tested throughout; no Docker daemon was available, so none of it is
+runtime-verified against real GnuCOBOL.

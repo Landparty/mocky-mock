@@ -162,9 +162,10 @@ This is the only subcommand other than `setup` that requires Docker.
 | `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path`. |
 | `--keep-sandbox` | off | Don't delete the temporary sandbox directory after the run; its path is printed so you can inspect the instrumented source and binary. |
 | `--verbose` | off | On a compile failure, print the path to the instrumented source (and keep the sandbox around so that path is still valid when you go look). |
-| `--coverage` | off | Compile with GnuCOBOL's `--coverage` flag and report per-line coverage (via `gcov`), remapped onto your original line numbers. |
+| `--coverage` | off | Compile with GnuCOBOL's `--coverage` flag and report per-line coverage (via `gcov`). The headline percentage is your **original** `.cbl`'s own coverage, and the uncovered lines are listed by their original line numbers; the instrumented sandbox copy's higher number (it counts mockymock's injected dispatch/driver lines) is printed below it, labelled. |
 | `--coverage-out PATH` | none | Write the full coverage report (percentage plus every uncovered line) to a file. Implies `--coverage`. |
-| `--coverage-json PATH` | none | Write a machine-readable coverage report to a file, mapped onto the original `.cbl`'s line numbers. Implies `--coverage`. |
+| `--coverage-json PATH` | none | Write a machine-readable coverage report to a file, mapped onto the original `.cbl`'s line numbers. Carries both `original` and `instrumented` percentages. Implies `--coverage`. |
+| `--coverage-fail-under PERCENT` | none | Exit 1 if the **original** program's line coverage falls below this percentage — the `run` counterpart of `mutate --fail-under`, so coverage can be CI-gated the same way. A failed `gcov` pass fails the gate rather than silently passing it. Implies `--coverage`. |
 | `--trace` | off | Replay one test case's execution: the statement path it actually took through the program, plus the mock timeline, in order. **Requires exactly one `--case` and no `--tag`** — a suite compiles and runs as a single binary, so a trace can only be attributed to one selected case. |
 | `--trace-json PATH` | none | Write a machine-readable execution trace to a file. Implies `--trace` (and the same one-case requirement). |
 | `--record-expectations` | off | Golden/characterization mode. For every `*> STUB EXPECT <name>` comment in the `.cut` file (see below), capture the value the program actually produced at runtime and rewrite that line into a real `EXPECT <name> TO BE <value>` line, in place. Never overwrites a hand-written `EXPECT`. Best-effort: prints a `recorded N, skipped M` summary and never changes the run's exit code. |
@@ -185,6 +186,9 @@ mockymock run ORDRPROC.cbl --cut ORDRPROC.cut \
 
 # Line coverage, machine-readable, mapped back to ORDRPROC.cbl's own lines
 mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --coverage-json coverage.json
+
+# Gate CI on coverage, the same way --fail-under gates the mutation score
+mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --coverage-fail-under 80
 
 # Debug a compile failure without deleting the evidence
 mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --verbose --keep-sandbox
@@ -669,7 +673,7 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | `setup` | yes | *(none)* |
 | `generate` | no | `-o`, `--copybook-path`, `--with-data`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder` |
 | `fixtures` | no | `--scenarios`, `--seed`, `--rows`, `--copybook-path` |
-| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json]`, `--trace[-json]`, `--record-expectations` |
+| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json]`, `--coverage-fail-under`, `--trace[-json]`, `--record-expectations` |
 | `debug` | yes | `--cut`, `--case`, `--copybook-path`, `--dap-stdio` |
 | `lint` | no | `--cut`, `--copybook-path` |
 | `mutate` | yes (unless `--list`) | `--cut`, `--copybook-path`, `--list`, `--timeout`, `--json-report`, `--fail-under` |

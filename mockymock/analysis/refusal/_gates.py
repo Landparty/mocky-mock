@@ -57,6 +57,7 @@ from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
     BoundarySite,
     MockSurface,
+    NonInteractiveAccept,
     _all_paragraphs,
     normalize_exec_text,
 )
@@ -1076,6 +1077,27 @@ def _classify_cics_macro_calls(
     return classified
 
 
+def _unmockable_accept_for(
+    directive: MockDirective, surface: MockSurface
+) -> NonInteractiveAccept | None:
+    """The `ACCEPT ... FROM <system source>` a MOCK ACCEPT directive was
+    aiming at, when that is why it matched nothing.
+
+    Only ever consulted on the fallthrough path where a directive matched
+    no boundary site at all, so it never competes with a real match. The
+    key is compared against the ACCEPT's target data-name, the same key
+    `_classify_statement` would have used had the statement been a
+    console ACCEPT -- so a directive that WOULD have matched a mockable
+    ACCEPT of the same name is the one this identifies."""
+    if directive.category is not MockCategory.ACCEPT:
+        return None
+    key = directive.key.upper()
+    for accept in surface.non_interactive_accepts:
+        if accept.target == key:
+            return accept
+    return None
+
+
 def check_test_case(
     surface: MockSurface,
     program,
@@ -1435,6 +1457,34 @@ def check_test_case(
                         f"MOCK {directive.describe()} is not reachable "
                         f"from '{case.perform_target}' -- no PERFORM/GO TO "
                         f"edge on this test case's flow ever enters it"
+                    ),
+                )
+            )
+            continue
+        unmockable = _unmockable_accept_for(directive, surface)
+        if unmockable is not None:
+            # Not a reachability problem at all -- this ACCEPT reads a
+            # system register, never the console, so mockymock never makes
+            # a boundary site for it and there is nothing a mock could
+            # intercept. Reporting it as UNMATCHED_MOCK ("does not match
+            # any boundary site reachable from ...") sends the author off
+            # verifying a call graph that was never the issue.
+            reasons.append(
+                RefusalReason(
+                    code="UNMOCKABLE_ACCEPT_SOURCE",
+                    message=(
+                        f"MOCK {directive.describe()} targets `ACCEPT "
+                        f"{unmockable.target} FROM {unmockable.from_source}` "
+                        f"at line {unmockable.line} (paragraph "
+                        f"'{unmockable.paragraph_name}'), which is not "
+                        f"mockable at all: FROM {unmockable.from_source} "
+                        f"reads a runtime/system value, never the console, "
+                        f"so it is deterministic, never blocks, and has no "
+                        f"boundary for a mock to intercept. Drop this MOCK "
+                        f"directive; to control the value, assign the field "
+                        f"in the mock body of a boundary the test does "
+                        f"reach, or make the program take it as a CALL/file "
+                        f"input"
                     ),
                 )
             )

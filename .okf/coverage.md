@@ -1,14 +1,21 @@
 ---
 type: Module
 title: Coverage Reporting
-description: GnuCOBOL --coverage/gcov instrumentation wired into `mockymock run`, reporting per-line coverage of the instrumented source.
+description: GnuCOBOL --coverage/gcov instrumentation wired into `mockymock run`, reporting per-line coverage of the ORIGINAL .cbl (with the instrumented copy as a labelled secondary figure) and gating CI on it via --coverage-fail-under.
 tags: [coverage, gcov, cli, runtime]
-timestamp: 2026-08-10T00:00:00Z
+timestamp: 2026-09-04T00:00:00Z
 ---
 # Overview
 
-`mockymock run --coverage` proves which lines of the *instrumented*
-COBOL source actually ran during a suite. It adds no new instrumentation
+`mockymock run --coverage` proves which lines of the program actually ran
+during a suite. Two numbers exist and only one of them is worth reading:
+the ORIGINAL `.cbl`'s own coverage (via `map_coverage_to_original`) is what
+the report leads with, and the instrumented sandbox copy's number -- always
+higher, because it counts mockymock's own injected dispatch/driver lines --
+is printed once below it with the reason it differs. Until 2026-09-04 the
+console line reported only the instrumented figure while the meaningful one
+existed solely inside `--coverage-json`, so the number most people read was
+the less useful one. It adds no new instrumentation
 engine — GnuCOBOL's own `cobc --coverage` flag builds on gcc's gcov
 machinery (`cobc` transpiles COBOL to C), and `-fgen-c-line-directives`
 (auto-enabled by `--coverage`) keeps gcov's line attribution pointed at
@@ -22,15 +29,19 @@ runtime/docker_toolchain.py
 
 report/coverage.py
   parse_gcov(gcov_text) -> CoverageReport   -- per-line hit counts -> totals + uncovered lines
-  format_coverage_console(report, name)     -- console rendering, same style as report/formatters.py
+  map_coverage_to_original(...)             -- instrumented lines -> ORIGINAL .cbl lines
+  summarize_original(mapped, original)      -> OriginalCoverage (totals + uncovered, with text)
+  format_coverage_console(report, name, original=, program_name=)
+                                            -- ORIGINAL number leads; instrumented labelled below
 
 cli/main.py: _cmd_run
-  --coverage / --coverage-out wiring; printed/written after run_binary succeeds,
-  before the sandbox is cleaned up (the .gcda/.gcov files live in the same tmp dir)
+  --coverage / --coverage-out / --coverage-fail-under wiring. Only parse_gcov runs
+  inside the sandbox (the .gcda/.gcov files die with it); the remap and the console
+  formatting happen after it, since the headline number comes from the remap.
 ```
 
 `--coverage-out PATH` implies `--coverage`, same as `--coverage-json PATH`
-below (fixed 2026-08-10, audit finding F12 — only the JSON flag carried the
+and `--coverage-fail-under PERCENT` below (fixed 2026-08-10, audit finding F12 — only the JSON flag carried the
 implication in code even though docs/options-reference.md already
 documented both; `--coverage-out` alone used to silently produce nothing
 instead of running gcov).
@@ -51,6 +62,15 @@ class CoverageReport:
 
     @property
     def percentage(self) -> float: ...  # 100.0 when total_executable == 0
+
+@dataclass
+class OriginalCoverage:            # summarize_original(mapped, original_lines)
+    total_executable: int          # mapped lines only -- a lower bound (see Gotchas)
+    total_covered: int
+    uncovered_lines: list[UncoveredLine]   # ORIGINAL line numbers + cols 8-72 text
+
+    @property
+    def percentage(self) -> float: ...  # the number the console report leads with
 ```
 
 ## Original-source remapping (`map_coverage_to_original`)
@@ -68,10 +88,36 @@ ran". `format_coverage_json` serializes both the instrumented totals and
 this mapped view; `run --coverage-json PATH` (implies `--coverage`) writes
 it.
 
+## `--coverage-fail-under PERCENT` (CI gate)
+
+The `run` counterpart of `mutate --fail-under`, added 2026-09-04: without
+it, mutation score could be CI-gated and coverage could not. It implies
+`--coverage`, is judged against the ORIGINAL program's percentage (gating
+on the instrumented one would move the threshold whenever mockymock's own
+injected line count changed -- which says nothing about the program under
+test), and is folded into `_cmd_run`'s single final exit-code decision
+rather than returned on early, so `--trace` output still prints. A failed
+`gcov` pass **fails** the gate: "no number" must never read as "good
+enough".
+
 # Gotchas
 
-**Coverage is against the instrumented source, not the original `.cbl`
-(v1, deliberate scope boundary).** Mock-body splicing and the generated
+**The two percentages are not interchangeable, and only one is about your
+program.** `CoverageReport.percentage` measures the instrumented sandbox
+copy; `OriginalCoverage.percentage` measures the user's own `.cbl`. Any
+new consumer (a report, a gate, an editor integration) wants the second.
+Both are in `--coverage-json` under `instrumented`/`original`, each with
+its own `percentage` key.
+
+**Original-line remapping is best-effort by construction, and fails
+safe.** Lines with no counterpart -- the splicer's own insertions,
+boundary-line replacements, continuation merges -- are simply absent from
+the mapped view, so they neither count as covered nor as uncovered. That
+makes `OriginalCoverage.total_executable` a lower bound on the program's
+executable lines, not a claim about all of them.
+
+**The instrumented number is still structurally deflated (v1 note, kept
+because it explains the second figure).** Mock-body splicing and the generated
 test-driver code shift every line number after the `WORKING-STORAGE
 SECTION`/`PROCEDURE DIVISION` insertion points, and boundary splicing can
 replace one line with a multi-line mock body anywhere in the file.
@@ -113,4 +159,4 @@ avoid `-w` in the actual Python implementation.
 - [runtime](runtime.md) — the Docker toolchain `compile_source`/`run_gcov` extend
 - [report](report.md) — `report/coverage.py` follows the same Docker-free
   parsing/formatting split as `report/results.py`/`report/formatters.py`
-- [cli](cli.md) — `run`'s `--coverage`/`--coverage-out` flags
+- [cli](cli.md) — `run`'s `--coverage`/`--coverage-out`/`--coverage-fail-under` flags

@@ -623,6 +623,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         format_coverage_json,
         map_coverage_to_original,
         parse_gcov,
+        summarize_original,
     )
     from mockymock.report.formatters import format_console, format_junit_xml
     from mockymock.report.json_report import build_json_report, format_json_report
@@ -660,6 +661,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.coverage_json:
         args.coverage = True
     if args.coverage_out:
+        args.coverage = True
+    # ... and so is asking for the coverage gate: --coverage-fail-under is
+    # the `run` counterpart of `mutate --fail-under`, so it must be usable
+    # on its own in a CI lane without also remembering --coverage.
+    if args.coverage_fail_under is not None:
         args.coverage = True
 
     # Asking for the trace JSON is asking for the trace.
@@ -856,13 +862,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
             coverage_text = None
             coverage_report = None
+            instrumented_name = instrumented_path.name
             if args.coverage:
                 gcov_result = docker_toolchain.run_gcov(instrumented_path)
                 if gcov_result.success:
+                    # Only the raw gcov parse happens inside the sandbox
+                    # (the .gcov file dies with it); the console text is
+                    # formatted below, once the original-.cbl remap the
+                    # headline number comes from has been computed.
                     coverage_report = parse_gcov(gcov_result.gcov_text)
-                    coverage_text = format_coverage_console(
-                        coverage_report, instrumented_path.name
-                    )
                 else:
                     coverage_text = (
                         f"mockymock run: coverage: {gcov_result.stderr.rstrip()}"
@@ -937,19 +945,27 @@ def _cmd_run(args: argparse.Namespace) -> int:
             ),
         )
 
-    if args.coverage_json:
-        if coverage_report is None:
-            print(
-                "mockymock run: coverage JSON not written -- the gcov pass "
-                "failed (see the coverage error above)"
-            )
-        else:
-            mapped = map_coverage_to_original(
-                coverage_report,
-                instrumented,
-                normalized_lines,
-                source_path.read_text(encoding="utf-8").splitlines(),
-            )
+    # The original-.cbl remap is what BOTH the console headline and the
+    # --coverage-fail-under gate read, so it is computed once here for
+    # every --coverage run -- not only when --coverage-json asked for it,
+    # as it was when the instrumented number was the only one printed.
+    original_coverage = None
+    if coverage_report is not None:
+        original_source_lines = source_path.read_text(encoding="utf-8").splitlines()
+        mapped = map_coverage_to_original(
+            coverage_report,
+            instrumented,
+            normalized_lines,
+            original_source_lines,
+        )
+        original_coverage = summarize_original(mapped, original_source_lines)
+        coverage_text = format_coverage_console(
+            coverage_report,
+            instrumented_name,
+            original=original_coverage,
+            program_name=source_path.name,
+        )
+        if args.coverage_json:
             _write_report_file(
                 "run",
                 "--coverage-json",
@@ -958,9 +974,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     coverage_report,
                     mapped,
                     program_file=str(source_path),
-                    instrumented_name=instrumented_path.name,
+                    instrumented_name=instrumented_name,
                 ),
             )
+    elif args.coverage_json:
+        print(
+            "mockymock run: coverage JSON not written -- the gcov pass "
+            "failed (see the coverage error above)"
+        )
 
     if coverage_text is not None:
         print(coverage_text)
@@ -968,6 +989,31 @@ def _cmd_run(args: argparse.Namespace) -> int:
             _write_report_file(
                 "run", "--coverage-out", args.coverage_out, coverage_text + "\n"
             )
+
+    # The coverage gate is the `run` counterpart of `mutate --fail-under`,
+    # and is judged against the ORIGINAL program's coverage -- gating on
+    # the instrumented number would make the threshold move whenever
+    # mockymock's own injected line count changed, which says nothing about
+    # the program under test. A failed gcov pass fails the gate rather than
+    # passing it silently: "no number" must never read as "good enough".
+    # Recorded, not returned on, so --trace still prints below: the gate is
+    # folded into this command's single final exit-code decision instead.
+    coverage_gate_failed = False
+    if args.coverage_fail_under is not None:
+        if original_coverage is None:
+            print(
+                f"mockymock run: coverage gate failed -- no coverage was "
+                f"measured (the gcov pass failed; see above), so "
+                f"--coverage-fail-under {args.coverage_fail_under} cannot "
+                f"be satisfied"
+            )
+            coverage_gate_failed = True
+        elif original_coverage.percentage < args.coverage_fail_under:
+            print(
+                f"mockymock run: coverage {original_coverage.percentage:.2f}% "
+                f"is below --coverage-fail-under {args.coverage_fail_under}"
+            )
+            coverage_gate_failed = True
 
     if args.trace:
         if not trace_text:
@@ -1003,7 +1049,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     # A nonzero binary exit is a failed run even when every case that got
     # to print its markers passed (e.g. libcob aborted after the SUMMARY
-    # line, or the timeout killed a straggler).
+    # line, or the timeout killed a straggler). A tripped
+    # --coverage-fail-under gate fails the command the same way, so a green
+    # suite under an unmet coverage floor still exits nonzero in CI.
+    if coverage_gate_failed:
+        return 1
     return 0 if suite_result.all_passed and executed.exit_code == 0 else 1
 
 
@@ -1721,14 +1771,26 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Compile with GnuCOBOL's --coverage flag and report per-line "
-            "coverage after the run (gcov-based; reported against the "
-            "instrumented source, not the original .cbl -- see "
-            "docs/2026-07-17-coverage-reporting-design.md)"
+            "coverage after the run (gcov-based). The headline figure is "
+            "the ORIGINAL .cbl's own coverage; the instrumented sandbox "
+            "copy's higher number is reported below it for reference -- "
+            "see docs/2026-07-17-coverage-reporting-design.md"
         ),
     )
     run_parser.add_argument(
         "--coverage-out",
         help="Write the full coverage report (percentage + uncovered lines) to this file",
+    )
+    run_parser.add_argument(
+        "--coverage-fail-under",
+        type=float,
+        metavar="PERCENT",
+        help=(
+            "Exit nonzero when the ORIGINAL .cbl's line coverage is below "
+            "this percentage -- the `run` counterpart of `mutate "
+            "--fail-under`, so coverage can be CI-gated the same way. "
+            "Implies --coverage"
+        ),
     )
     run_parser.add_argument(
         "--coverage-json",

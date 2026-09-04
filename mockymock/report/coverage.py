@@ -104,6 +104,59 @@ class MappedLineCoverage:
     covered: bool
 
 
+@dataclass
+class OriginalCoverage:
+    """The original-.cbl view of one run's coverage: the numbers a human
+    should actually read.
+
+    `CoverageReport` measures the INSTRUMENTED sandbox copy, which counts
+    the splicer's own injected dispatch/driver lines as program lines and
+    so reports a number that is inflated (and, worse, moves when the
+    harness changes rather than when the program's tested surface does).
+    This view drops every line that has no counterpart in the user's own
+    file, so `percentage` answers the question people think `--coverage`
+    is answering: how much of MY program ran."""
+
+    total_executable: int
+    total_covered: int
+    uncovered_lines: list[UncoveredLine] = field(default_factory=list)
+
+    @property
+    def percentage(self) -> float:
+        if self.total_executable == 0:
+            return 100.0
+        return 100.0 * self.total_covered / self.total_executable
+
+
+def summarize_original(
+    mapped: list[MappedLineCoverage], original_lines: list[str]
+) -> OriginalCoverage:
+    """Reduce `map_coverage_to_original`'s per-line view to the totals plus
+    the uncovered lines, each carrying its own ORIGINAL source text (cut to
+    the fixed-format program area, columns 8-72, and stripped) so the
+    console report can name uncovered lines the way the reader's own editor
+    would show them. A `line` past the end of `original_lines` cannot happen
+    (every mapped line came from that same list) but renders as empty text
+    rather than raising if it ever does."""
+    uncovered = [
+        UncoveredLine(
+            line_number=entry.line,
+            text=(
+                original_lines[entry.line - 1][7:72].rstrip()
+                if 0 < entry.line <= len(original_lines)
+                else ""
+            ),
+        )
+        for entry in mapped
+        if not entry.covered
+    ]
+    return OriginalCoverage(
+        total_executable=len(mapped),
+        total_covered=sum(1 for entry in mapped if entry.covered),
+        uncovered_lines=uncovered,
+    )
+
+
 def _matching_index_map(a: list[str], b: list[str]) -> dict[int, int]:
     """0-based index map b -> a over the lines the two sequences share, via
     difflib's matching blocks. Unlike a greedy forward scan, this never lets
@@ -225,8 +278,13 @@ def format_coverage_json(
     instrumented_name: str,
 ) -> str:
     """Machine-readable coverage for editor integrations: the instrumented
-    totals (same numbers the console formatter prints) plus the per-line
-    original-file view produced by `map_coverage_to_original`."""
+    totals plus the per-line original-file view produced by
+    `map_coverage_to_original`, each with its own percentage so a consumer
+    never has to recompute one (or pick the wrong one -- `original` is the
+    meaningful figure, `instrumented` counts mockymock's injected lines).
+    `original.percentage` was added alongside the console report leading
+    with the same number; it is an additive key, so a v1 consumer that
+    ignores it still reads this file correctly."""
     mapped_covered = sum(1 for entry in mapped if entry.covered)
     payload = {
         "version": COVERAGE_JSON_VERSION,
@@ -238,6 +296,9 @@ def format_coverage_json(
             "totalCovered": report.total_covered,
         },
         "original": {
+            "percentage": round(
+                100.0 * mapped_covered / len(mapped) if mapped else 100.0, 2
+            ),
             "totalExecutable": len(mapped),
             "totalCovered": mapped_covered,
             "lines": [
@@ -248,13 +309,53 @@ def format_coverage_json(
     return json.dumps(payload, indent=2) + "\n"
 
 
-def format_coverage_console(report: CoverageReport, source_name: str) -> str:
+def format_coverage_console(
+    report: CoverageReport,
+    source_name: str,
+    original: OriginalCoverage | None = None,
+    program_name: str | None = None,
+) -> str:
+    """The human-readable coverage report.
+
+    When `original` is supplied (which every `mockymock run --coverage`
+    invocation does), the ORIGINAL .cbl's own numbers lead and its own
+    uncovered lines are what get listed -- that is the number a reader can
+    act on. The instrumented sandbox copy's number is still printed, once,
+    on a clearly subordinate line labelled with WHY it is higher: it counts
+    the splicer's injected dispatch/driver lines as program lines. Leading
+    with the instrumented number (v1's behavior, kept as the `original is
+    None` fallback for callers that have no remap available) meant the more
+    prominent of the two figures was the less meaningful one.
+
+    `program_name` names the original file; it falls back to a generic
+    label so this function never has to be called with a path it does not
+    have."""
+    if original is None:
+        lines = [
+            f"mockymock run: coverage: {report.percentage:.2f}% lines executed "
+            f"({report.total_covered}/{report.total_executable}) in {source_name}"
+        ]
+        if report.uncovered_lines:
+            lines.append("mockymock run: coverage: uncovered lines:")
+            for uncovered in report.uncovered_lines:
+                lines.append(f"  {uncovered.line_number}: {uncovered.text}")
+        return "\n".join(lines)
+
+    shown_program = program_name or "the original program"
     lines = [
-        f"mockymock run: coverage: {report.percentage:.2f}% lines executed "
-        f"({report.total_covered}/{report.total_executable}) in {source_name}"
+        f"mockymock run: coverage: {original.percentage:.2f}% of "
+        f"{shown_program}'s own lines executed "
+        f"({original.total_covered}/{original.total_executable})"
     ]
-    if report.uncovered_lines:
-        lines.append("mockymock run: coverage: uncovered lines:")
-        for uncovered in report.uncovered_lines:
+    if original.uncovered_lines:
+        lines.append(f"mockymock run: coverage: uncovered lines in {shown_program}:")
+        for uncovered in original.uncovered_lines:
             lines.append(f"  {uncovered.line_number}: {uncovered.text}")
+    lines.append(
+        f"mockymock run: coverage: (instrumented sandbox copy {source_name}: "
+        f"{report.percentage:.2f}%, {report.total_covered}/"
+        f"{report.total_executable} -- higher because it counts mockymock's "
+        f"own injected dispatch/driver lines; the figure above is the one "
+        f"about your program)"
+    )
     return "\n".join(lines)

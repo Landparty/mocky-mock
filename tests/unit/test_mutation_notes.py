@@ -56,7 +56,7 @@ def test_baseline_notes_are_returned_even_with_no_mutants(monkeypatch, tmp_path)
         source_text, source_name, cut_path, copybook_paths, timeout
     ):
         calls.append(source_text)
-        return "passed", "", ["parse warning waived: ..."]
+        return "passed", "", ["parse warning waived: ..."], None
 
     monkeypatch.setattr(runner, "_run_suite_once", fake_run_suite_once)
     monkeypatch.setattr(runner, "generate_mutants", lambda lines: [])
@@ -79,7 +79,12 @@ def test_baseline_not_green_still_surfaces_its_notes(monkeypatch, tmp_path):
     def fake_run_suite_once(
         source_text, source_name, cut_path, copybook_paths, timeout
     ):
-        return "failed", "case 'x' failed", ["unresolved COPY statement waived: ..."]
+        return (
+            "failed",
+            "case 'x' failed",
+            ["unresolved COPY statement waived: ..."],
+            None,
+        )
 
     monkeypatch.setattr(runner, "_run_suite_once", fake_run_suite_once)
 
@@ -102,13 +107,16 @@ def test_notes_from_baseline_and_every_mutant_are_merged_and_deduped(
         runner, "generate_mutants", lambda lines: [_mutant(5), _mutant(6)]
     )
 
-    # (status _run_suite_once would actually return, detail, notes) per
-    # call: baseline first, then one per mutant in order.
+    # (status, detail, notes, stillborn_reason) per call, exactly what
+    # _run_suite_once returns: baseline first, then one per mutant in order.
     responses = iter(
         [
-            ("passed", "", ["waived: dropped content in DIRTY-PARA"]),  # baseline
-            ("passed", "", ["waived: dropped content in DIRTY-PARA"]),  # mutant 1
-            ("failed", "boom", ["waived: unresolved COPY in OTHER-PARA"]),  # mutant 2
+            # baseline
+            ("passed", "", ["waived: dropped content in DIRTY-PARA"], None),
+            # mutant 1
+            ("passed", "", ["waived: dropped content in DIRTY-PARA"], None),
+            # mutant 2
+            ("failed", "boom", ["waived: unresolved COPY in OTHER-PARA"], None),
         ]
     )
 

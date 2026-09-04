@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from mockymock.mutation.operators import Mutant, generate_mutants
-from mockymock.mutation.report import MutantResult, MutationOutcome
+from mockymock.mutation.report import MutantResult, MutationOutcome, StillbornReason
 
 
 def _run_suite_once(
@@ -25,11 +25,20 @@ def _run_suite_once(
     cut_path: Path,
     copybook_paths: list[str] | None,
     timeout_seconds: int,
-) -> tuple[str, str, list[str]]:
+) -> tuple[str, str, list[str], StillbornReason | None]:
     """Run one full splice/compile/run pass over `source_text` and reduce
-    it to a (status, detail, notes) triple with status in {"passed",
-    "failed", "stillborn", "timeout"}. `detail` carries the first refusal/
-    compile/failure line for diagnostics. `notes` is
+    it to a (status, detail, notes, stillborn_reason) tuple with status in
+    {"passed", "failed", "stillborn", "timeout"}. `detail` carries the
+    first refusal/compile/failure line for diagnostics.
+
+    `stillborn_reason` is set only for a `"stillborn"` status and says
+    WHICH of the two ways it was stillborn: `"refused"` (a mockymock static
+    gate rejected the mutated program) or `"compile_error"` (GnuCOBOL
+    rejected it). Those are different findings -- the first is usually an
+    equivalent mutant, the second is a line the mutation engine never got
+    to probe at all -- and collapsing both into a bare "stillborn" count is
+    what made stillborns unreadable. Classified at the point the status is
+    decided, never re-derived later by pattern-matching `detail` text. `notes` is
     `StaticCheckResult.notes` (e.g. a paragraph-scoped PARSE_WARNING/
     UNRESOLVED_COPYBOOK waived and, for a waived COPY, commented out of
     the source this pass goes on to compile) -- empty whenever
@@ -61,7 +70,7 @@ def _run_suite_once(
 
         checked = run_static_checks(source_path, cut_path, copybook_paths)
         if checked.problems:
-            return "stillborn", checked.problems[0], []
+            return "stillborn", checked.problems[0], [], "refused"
         notes = checked.notes
 
         result = checked.parse_result
@@ -122,6 +131,7 @@ def _run_suite_once(
                 "stillborn",
                 first_error[0] if first_error else "compile failed",
                 notes,
+                "compile_error",
             )
         assert compiled.binary_path is not None  # implied by compiled.success
 
@@ -129,10 +139,10 @@ def _run_suite_once(
             compiled.binary_path, timeout_seconds=timeout_seconds
         )
         if execution.exit_code == TIMEOUT_EXIT_CODE:
-            return "timeout", f"no exit within {timeout_seconds}s", notes
+            return "timeout", f"no exit within {timeout_seconds}s", notes, None
         suite_result = parse_stdout(execution.stdout)
         status, detail = _classify_execution(execution, suite_result)
-        return status, detail, notes
+        return status, detail, notes, None
 
 
 def _classify_execution(execution, suite_result) -> tuple[str, str]:
@@ -201,7 +211,7 @@ def run_mutation(
                 all_notes.append(note)
 
     original_text = source_path.read_text(encoding="utf-8")
-    status, detail, baseline_notes = _run_suite_once(
+    status, detail, baseline_notes, _ = _run_suite_once(
         original_text, source_path.name, cut_path, copybook_paths, timeout_seconds
     )
     _merge_notes(baseline_notes)
@@ -261,7 +271,7 @@ def _run_one_mutant(
     assumed stable from the baseline."""
     patched = list(original_lines)
     patched[mutant.line - 1] = mutant.mutated
-    status, detail, notes = _run_suite_once(
+    status, detail, notes, stillborn_reason = _run_suite_once(
         "\n".join(patched) + "\n",
         source_name,
         cut_path,
@@ -274,4 +284,12 @@ def _run_one_mutant(
         return MutantResult(mutant=mutant, status="killed", detail=detail), notes
     if status == "timeout":
         return MutantResult(mutant=mutant, status="timeout", detail=detail), notes
-    return MutantResult(mutant=mutant, status="stillborn", detail=detail), notes
+    return (
+        MutantResult(
+            mutant=mutant,
+            status="stillborn",
+            detail=detail,
+            stillborn_reason=stillborn_reason,
+        ),
+        notes,
+    )

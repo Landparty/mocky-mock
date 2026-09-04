@@ -216,3 +216,104 @@ def test_format_coverage_json_shape():
         {"line": 6, "covered": True},
         {"line": 9, "covered": False},
     ]
+
+
+# --- the ORIGINAL-.cbl view: what `--coverage`'s headline number reports ---
+
+
+def test_summarize_original_counts_and_texts_original_lines():
+    """`summarize_original` turns the per-line remap into the totals the
+    console headline reports, pulling each uncovered line's own text out of
+    the ORIGINAL source (fixed-format program area, columns 8-72) so the
+    report names lines the way the reader's editor shows them."""
+    from mockymock.report.coverage import MappedLineCoverage, summarize_original
+
+    original_lines = [
+        "000100 IDENTIFICATION DIVISION.",
+        "000200 PROGRAM-ID. PROG.",
+        "000300 PROCEDURE DIVISION.",
+        "000400 MAIN-PARA.",
+        "000500     DISPLAY 'NEVER'.                                             SEQ00500",
+    ]
+    mapped = [
+        MappedLineCoverage(line=4, covered=True),
+        MappedLineCoverage(line=5, covered=False),
+    ]
+    summary = summarize_original(mapped, original_lines)
+    assert summary.total_executable == 2
+    assert summary.total_covered == 1
+    assert summary.percentage == 50.0
+    assert [(u.line_number, u.text) for u in summary.uncovered_lines] == [
+        (5, "    DISPLAY 'NEVER'.")
+    ]
+
+
+def test_summarize_original_is_fully_covered_when_nothing_mapped():
+    from mockymock.report.coverage import summarize_original
+
+    summary = summarize_original([], ["      *nothing"])
+    assert summary.total_executable == 0
+    assert summary.percentage == 100.0
+
+
+def test_format_coverage_console_leads_with_original_and_labels_instrumented():
+    """The number a reader acts on comes first and names their own file;
+    the instrumented sandbox copy's higher number is still shown, once,
+    with the reason it is higher. Leading with the instrumented figure --
+    v1's behavior -- put the less meaningful of the two in the more
+    prominent position."""
+    from mockymock.report.coverage import OriginalCoverage, format_coverage_console
+
+    report = CoverageReport(total_executable=1000, total_covered=728)
+    original = OriginalCoverage(
+        total_executable=1000,
+        total_covered=839,
+        uncovered_lines=[UncoveredLine(line_number=42, text="    DISPLAY 'NEVER'")],
+    )
+    text = format_coverage_console(
+        report, "instrumented_PROG.cbl", original=original, program_name="PROG.cbl"
+    )
+    first, second = text.splitlines()[0], text.splitlines()[1]
+    assert "83.90% of PROG.cbl's own lines executed (839/1000)" in first
+    assert "uncovered lines in PROG.cbl" in second
+    assert "  42:     DISPLAY 'NEVER'" in text
+    instrumented_line = text.splitlines()[-1]
+    assert (
+        "instrumented sandbox copy instrumented_PROG.cbl: 72.80%" in instrumented_line
+    )
+    assert "72.80%" not in first
+
+
+def test_format_coverage_console_without_a_remap_keeps_the_v1_shape():
+    """Callers with no original-line remap available (there are none in
+    `run` today, but the parameter is optional) still get the v1 report
+    rather than a crash or a silently missing number."""
+    report = CoverageReport(
+        total_executable=2,
+        total_covered=1,
+        uncovered_lines=[UncoveredLine(line_number=8, text="    DISPLAY 'NEVER'")],
+    )
+    text = format_coverage_console(report, "PROG.cbl")
+    assert "50.00% lines executed (1/2)" in text
+    assert "  8:     DISPLAY 'NEVER'" in text
+
+
+def test_format_coverage_json_carries_the_original_percentage():
+    """Additive key: a consumer never has to recompute the meaningful
+    percentage (or accidentally read the instrumented one instead)."""
+    import json
+
+    from mockymock.report.coverage import MappedLineCoverage, format_coverage_json
+
+    report = CoverageReport(total_executable=4, total_covered=3)
+    mapped = [
+        MappedLineCoverage(line=6, covered=True),
+        MappedLineCoverage(line=9, covered=True),
+        MappedLineCoverage(line=11, covered=False),
+        MappedLineCoverage(line=12, covered=False),
+    ]
+    payload = json.loads(
+        format_coverage_json(report, mapped, "PROG.cbl", "PROG-instr.cbl")
+    )
+    assert payload["original"]["percentage"] == 50.0
+    assert payload["instrumented"]["percentage"] == 75.0

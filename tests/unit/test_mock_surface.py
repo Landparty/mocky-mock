@@ -253,6 +253,26 @@ def test_accept_from_system_source_is_not_console_input():
     assert "ACCEPT-FROM-SYSTEM" not in surface.console_accept_paragraphs
 
 
+def test_accept_from_system_source_is_recorded_as_unmockable_not_as_a_site():
+    """`ACCEPT ... FROM DATE` stays out of `boundary_sites` (nothing to
+    mock) but is recorded on its own list, so a MOCK ACCEPT aimed at it can
+    be refused with the real reason instead of a generic "not reachable".
+    """
+    surface = analyze(_file_family_ast())
+    assert not [
+        s for s in surface.boundary_sites if s.paragraph_name == "ACCEPT-FROM-SYSTEM"
+    ]
+    recorded = surface.non_interactive_accepts
+    assert [(a.target, a.from_source) for a in recorded] == [("WS-TODAY", "DATE")]
+    assert recorded[0].paragraph_name == "ACCEPT-FROM-SYSTEM"
+    assert recorded[0].line > 0
+
+
+def test_console_accept_is_not_recorded_as_unmockable():
+    surface = analyze(_file_family_ast())
+    assert all(a.target != "WS-NAME" for a in surface.non_interactive_accepts)
+
+
 def test_pure_compute_paragraph_is_not_flagged_by_file_family():
     surface = analyze(_file_family_ast())
     assert "PURE-COMPUTE" not in surface.file_io_paragraphs
