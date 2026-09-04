@@ -309,6 +309,115 @@ def test_read_at_end_clause_with_identifier_source_gets_a_todo_comment():
     assert "WS-DONE-FLAG" not in text  # never blindly copied
 
 
+SET_CONDITION_NAME_AT_END_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SETEOF.
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT INV-FILE ASSIGN TO "INV.DAT"
+               FILE STATUS IS WS-INV-STATUS.
+
+       DATA DIVISION.
+       FILE SECTION.
+       FD  INV-FILE.
+       01  INV-REC.
+           05  INV-QTY        PIC 9(4).
+
+       WORKING-STORAGE SECTION.
+       01  WS-INV-STATUS       PIC XX.
+       01  WS-EOF-FLAG         PIC X VALUE "N".
+           88  WS-EOF-REACHED  VALUE "Y".
+
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           OPEN INPUT INV-FILE.
+           READ INV-FILE
+               AT END SET WS-EOF-REACHED TO TRUE
+           END-READ.
+           CLOSE INV-FILE.
+"""
+
+
+def test_read_at_end_set_condition_name_is_replicated():
+    """The condition-name spelling of the EOF-flag idiom -- `AT END SET
+    WS-EOF-REACHED TO TRUE` against an 88 -- must be replicated exactly
+    like `AT END MOVE "Y" TO WS-EOF` is. It parses to a SetStatement, not
+    a MoveStatement, so the original MOVE-only replication skipped it and
+    emitted only the FILE STATUS move plus a TODO: the application flag
+    was never flipped and the program's own PERFORM UNTIL loop spun
+    forever (the same infinite loop the MOVE case already fixed, reached
+    by a different-but-equally-common spelling)."""
+    surface, bundle = _surface_and_bundle(
+        SET_CONDITION_NAME_AT_END_SOURCE, "seteof.cbl"
+    )
+    text = scaffold_cut("SETEOF", surface, bundle)
+    assert "WHEN OTHER" in text
+    assert "SET WS-EOF-REACHED TO TRUE" in text
+    assert "TODO" not in text
+
+
+def test_read_at_end_set_replicated_after_the_status_field_move():
+    """Same ordering guarantee `test_read_at_end_clause_replicated_
+    alongside_a_real_status_field` pins for MOVE: the terminal FILE
+    STATUS move comes first, the replicated loop guard after it."""
+    surface, bundle = _surface_and_bundle(
+        SET_CONDITION_NAME_AT_END_SOURCE, "seteof.cbl"
+    )
+    text = scaffold_cut("SETEOF", surface, bundle)
+    when_other = text.split("WHEN OTHER", 1)[1]
+    assert when_other.index('MOVE "10" TO WS-INV-STATUS') < when_other.index(
+        "SET WS-EOF-REACHED TO TRUE"
+    )
+
+
+SET_UP_BY_AT_END_SOURCE = (
+    SET_CONDITION_NAME_AT_END_SOURCE.replace(
+        "PROGRAM-ID. SETEOF.", "PROGRAM-ID. SETUPBY."
+    )
+    .replace("AT END SET WS-EOF-REACHED TO TRUE", "AT END SET WS-IDX UP BY 1")
+    .replace(
+        "       01  WS-INV-STATUS       PIC XX.",
+        "       01  WS-INV-STATUS       PIC XX.\n       01  WS-IDX              PIC 9(4) VALUE 1.",
+    )
+)
+
+
+def test_read_at_end_non_constant_set_gets_a_todo_comment():
+    """`SET ... UP BY 1` is not a constant assignment to a condition
+    name -- it reads the target's own runtime value, which the mock's
+    splice-time context does not have. Left unreplicated, with the TODO
+    flagging the gap, exactly like an identifier-sourced MOVE."""
+    surface, bundle = _surface_and_bundle(SET_UP_BY_AT_END_SOURCE, "setupby.cbl")
+    text = scaffold_cut("SETUPBY", surface, bundle)
+    assert "WHEN OTHER" in text
+    assert "TODO" in text
+    assert "UP BY" not in text  # never blindly copied
+
+
+def test_multi_group_set_is_not_partially_replicated():
+    """A multi-group `SET A TO TRUE B TO FALSE` carries its second group
+    in `groups`, which this generator has no way to render. Replicating
+    only the first group would be a SILENT PARTIAL replication -- worse
+    than none, since the TODO comment would not be emitted to flag it --
+    so the whole statement is skipped."""
+    from mockymock.dsl.generator import _replicated_set_lines
+
+    class _FakeSet:
+        def __init__(self):
+            self.set_type = "TRUE"
+            self.targets = ["WS-EOF-REACHED"]
+            self.groups = [{"targets": ["WS-OTHER"], "set_type": "FALSE"}]
+
+    fake = _FakeSet()
+    fake.__class__.__name__ = "SetStatement"
+    assert _replicated_set_lines(fake) == []
+
+    fake.groups = []
+    assert _replicated_set_lines(fake) == ["SET WS-EOF-REACHED TO TRUE"]
+
+
 # --- hand-built bundles for isolated logic -----------------------------------
 
 

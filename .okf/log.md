@@ -1,5 +1,38 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-09-04 — `AT END SET <88> TO TRUE` replicated into READ mock exhaustion
+
+Reported from a real `generate --with-data` run against a large program:
+`mockymock run` hung and timed out because every generated `MOCK READ`'s
+`WHEN OTHER` arm carried only the FILE STATUS move plus
+`*> TODO: ... add its loop-guard MOVE by hand`.
+
+* **Root cause** ([dsl](dsl.md)): `_replicated_at_end_moves` matched only
+  `MoveStatement`. The program's `READ ... AT END SET
+  WS088-FIN-FICH-EXT-PRISE-B TO TRUE` parses to a `SetStatement`, so
+  nothing was replicated, the application-level EOF flag was never
+  flipped, and the program's own `PERFORM UNTIL <condition-name>` loop
+  spun forever — the *same* infinite loop commit 3ad3378 fixed for the
+  `MOVE "Y" TO WS-EOF` spelling, reached by the equally common
+  condition-name spelling. Not program-specific: it hits every program
+  that ends its read loop with a level-88 flag.
+* **Fixed**: `_replicated_at_end_moves` renamed to
+  `_replicated_at_end_statements` and given a `_replicated_set_lines`
+  companion; `SET <target> TO TRUE|FALSE` (`_CONSTANT_SET_TYPES`) is now
+  replicated by the same "constant, or not at all" standard
+  `_is_safe_literal_source` applies to MOVE. Non-constant `set_type`s
+  (`TO` an identifier, `UP_BY`, `DOWN_BY`) and multi-`groups` SETs are
+  still skipped, leaving the TODO to flag the gap honestly rather than
+  replicating a statement only partially. The TODO text now says
+  "loop-guard statement", not "loop-guard MOVE".
+* Covers all three exhaustion paths, not just `WHEN OTHER`: the
+  `sequence`-less body (`--rows 0` / "empty input" scenario) and the
+  `--placeholder` downgrade share `_read_exhaustion_lines`.
+* Tests: four new cases in `tests/unit/test_dsl_generator_bundle.py`
+  (replication, ordering after the status move, `SET ... UP BY` still
+  TODO-ing, multi-group SET never partially replicated).
+
+
 ## 2026-09-02 — Every COBOL dependency mockable or refused; sibling-parser bugs
 
 Asked: are there bugs against the current cobol-parser, and is every COBOL

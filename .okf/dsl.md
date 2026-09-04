@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-08-19T00:00:00Z
+timestamp: 2026-09-04T00:00:00Z
 ---
 
 # Overview
@@ -609,15 +609,28 @@ paragraph-grouped path described above, unchanged. A real
   Values render through `_bundle_rendered_value`: numeric-family
   `FieldSpec` categories render bare, everything else quoted and escaped.
 - **`_read_body`'s `WHEN OTHER` branch also replicates the source `AT END`
-  clause's own literal MOVEs**, not just the FILE STATUS field
-  (`_replicated_at_end_moves`/`_is_safe_literal_source`): the splicer
-  replaces the *whole* READ statement (see `splicer/orchestrator.py`'s own
-  module docstring), which deletes the real `AT END MOVE "Y" TO WS-EOF`
+  clause's own constant-valued statements**, not just the FILE STATUS
+  field (`_replicated_at_end_statements`, via `_is_safe_literal_source`
+  for MOVE and `_replicated_set_lines` for SET): the splicer replaces the
+  *whole* READ statement (see `splicer/orchestrator.py`'s own module
+  docstring), which deletes the real `AT END MOVE "Y" TO WS-EOF`
   idiom along with it — a mock that moves only the FILE STATUS field never
   flips the program's own application-level EOF flag, so its `PERFORM ...
   UNTIL WS-EOF = ...` loop never terminates (an infinite loop, found via a
   real Docker CI run against `examples/fixtures/FIXTUREDEMO`, not by
   `mockymock lint`, which is static and cannot see a splice-time no-op).
+  **Both spellings of that idiom are covered**: the literal `MOVE`, and
+  the condition-name `SET WS-FIN-FICHIER TO TRUE` against an `88`
+  (`_CONSTANT_SET_TYPES` = `TRUE`/`FALSE`). SET was the later fix — it
+  parses to a `SetStatement`, not a `MoveStatement`, so the original
+  MOVE-only replication silently skipped it and shipped a `WHEN OTHER`
+  carrying nothing but the FILE STATUS move and a TODO comment, hanging
+  every generated scenario for any program using the condition-name
+  spelling. A `SET` is skipped (leaving the TODO to flag it) when its
+  `set_type` is not a constant (`TO` an identifier, `UP_BY`, `DOWN_BY`)
+  or when it carries additional `groups` — a multi-group `SET A TO TRUE B
+  TO FALSE`, where replicating only the first group would be a silent
+  *partial* replication, worse than none.
   Whether the `WHEN OTHER` branch is emitted at all is gated on the
   *source* `AT END` clause existing, deliberately not on
   `fixture.terminal` alone: a file with no `FILE STATUS` clause (e.g.
@@ -708,10 +721,10 @@ runnable-by-construction invariant covers assertions too, not just mock
 bodies. `_bundle_directive_for`/`_bundle_directive_for_group` compute a
 `CallCountOverride(count=1)` for a downgraded READ that still carries a
 real termination signal (`fixture.terminal` or a replicated `AT END`
-MOVE) and for a downgraded SQL-ROWS fixture unconditionally (its body is
+MOVE/SET) and for a downgraded SQL-ROWS fixture unconditionally (its body is
 always an unconditional literal MOVE, no replication gap possible); when
 a downgraded READ's exhaustion body carries NO termination signal at all
-(no `FILE STATUS` field and nothing `_replicated_at_end_moves` could
+(no `FILE STATUS` field and nothing `_replicated_at_end_statements` could
 safely replicate), `CallCountOverride(demote_reason=...)` instead — the
 real count is not knowable by construction. `_bundle_mock_directives`
 collects these per `(category, key)` into `call_count_overrides` (same
