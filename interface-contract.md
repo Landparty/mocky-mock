@@ -23,6 +23,17 @@ mockymock too.
   (EXPANSION_WARNING). The same list carries advisory lint heuristics
   ("may be missing terminating period", "contains only comments") that
   false-positive on valid copybooks and are deliberately not refused.
+- `cobolparser.generators.data.bundle.FieldSpec.to_dict()` keys, mirrored by
+  `mockymock.dsl.fixture_bundle.FieldSpec` — as of cobol-parser 2026-09-05 it
+  also carries `storage_size` (the item's real byte width, as opposed to
+  `size`, which counts PICTURE character positions and differs for every
+  non-DISPLAY `USAGE`), `sign_clause`, `synchronized`, and
+  `occurs_depending_on`. All four are **additive**: `bundle_version` stayed
+  `1` and this loader ignores unknown keys, so nothing here had to change.
+  mockymock does not read them today — it splices `MOVE <literal> TO <field>`
+  and lets GnuCOBOL do the packing, so it never needs byte widths — but a
+  future consumer that writes record images should read `storage_size`, never
+  `size`.
 - `cobolparser.preprocess.normalize_fixed_format(lines: list[str]) -> str`
   — mockymock splices THIS output, not the original file. See Global
   Constraints in the implementation plan for why.

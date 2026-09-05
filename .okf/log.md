@@ -1,5 +1,30 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-09-05 — Upstream record-image support reaches the copybook action for free
+
+cobol-parser gained `gen-data --format record|hex`: a copybook's `COMP-3` /
+`COMP-5` / `COMP-1` / `COMP-2` / signed-DISPLAY fields written as the real
+bytes a program reads, and a `--format hex` rendering of the same image
+annotated with each field's offset and length. See that repo's
+`.okf/generators.md` "Record images" and its 2026-09-05 log entry.
+
+* **No mockymock code changed.** `mockymock analyze` is an unguarded
+  `REMAINDER` passthrough into cobol-parser's own CLI, so
+  `mockymock analyze gen-data X.cpy --format hex` works as-is — which is the
+  exact invocation the VS Code extension's "Generate Data from Copybook"
+  action builds (`src/generateData/generateDataRunner.ts` in the
+  `mocky-mock-vscode` repo). Surfacing the format there is an extension-side
+  change, not one here. Documented in [cli.md](cli.md)'s `analyze` section.
+* **mockymock needs none of it for its own mocking.** The splicer emits
+  `MOVE <literal> TO <field>` and lets GnuCOBOL pack the value, so a COMP-3
+  boundary already worked and byte widths never entered into it.
+* **`examples/fixtures/FIXTUREDEMO.bundle.json` re-copied** from upstream, as
+  [testing.md](testing.md) requires. `FieldSpec` gained four additive keys
+  (`storage_size`, `sign_clause`, `synchronized`, `occurs_depending_on`);
+  `bundle_version` stayed `1` and `dsl/fixture_bundle.py` ignores unknown
+  keys, so the loader is unchanged. Recorded in
+  [../interface-contract.md](../interface-contract.md).
+
 ## 2026-09-04 — Review round on the ten-findings branch: four fixes
 
 Automated review of the branch found four defects. Each was verified
