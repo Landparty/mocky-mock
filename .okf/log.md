@@ -1,5 +1,43 @@
 # mocky-mock OKF Bundle — Update Log
 
+## 2026-09-05 — Seventh audit: nine findings, none fixed
+
+Whole-repository audit at `b0d5235`, every finding reproduced rather than
+inferred. Full report: [docs/2026-09-05-project-deep-audit.md](../docs/2026-09-05-project-deep-audit.md).
+
+* **Four HIGH findings, all one failure repeated: a correct guard that was
+  not running.** (1) The published 0.8.0 wheel reports `--version` as
+  `0.7.0` — `e26373b`'s `mockymock` → `mocky-mock` rename in
+  `[project].name` broke release-please's path to `mockymock/__init__.py`,
+  silently skipping it from the 0.7.0 release onward; `test_smoke.py`
+  already pins the invariant. (2) The reachability gate falsely refuses a
+  `GO TO` into the terminus of the `PERFORM ... THRU` range containing it —
+  control returns there, it does not fall through; bisected to `162f205`,
+  37-line repro in the report. (3) CI has run no tests since `930b391`
+  (2026-08-15), whose "too long" rationale the same workflow refutes at
+  9.07s for `tests/unit`; `main` is red on finding 1, and the Docker
+  compile/run tier is gated nowhere. (4) The `lint` job runs mypy without
+  installing `cobolparser`, so `ignore_missing_imports` degrades the whole
+  seam to `Any` — a clean checkout with the real dependency reports 4
+  errors that CI reports as success.
+* **Two MEDIUM.** Four shipped `examples/real-world/` programs (`ACCTMNT`,
+  `ACHPROC`, `CHKCLR`, `INTCALC`) are refused by `run`/`lint` — all
+  finding 2, passing at the commit that added them — while that directory's
+  README claims "238 test cases total, 0 failing". And the declared floor
+  `cobol-parser>=1.7.7` segfaults on any real program; both `ci.yml` and
+  `pyproject.toml` already say in prose that the floor should be 1.8.0.
+* **Three LOW.** `--cov-fail-under` in `addopts` fails every partial pytest
+  run; `uv.lock` is stale again (`mocky-mock` 0.6.4, `cobol-parser` 1.8.2);
+  `_superbol/lsp-cache` is a 172 KB binary editor cache committed and
+  ungitignored.
+* **Healthy, and worth recording:** no `shell=True`/`eval`/`pickle`
+  anywhere, argv-list subprocesses throughout, loopback-only dashboard with
+  a post-`resolve()` containment check, 1,478 unit tests at 88.36%, clean
+  `ruff`/`black`, and prior audit findings visibly still in force as
+  comments in the code they fixed.
+* **No code changed** — audit only, same convention as the 2026-08-12
+  sixth audit.
+
 ## 2026-09-05 — Upstream record-image support reaches the copybook action for free
 
 cobol-parser gained `gen-data --format record|hex`: a copybook's `COMP-3` /
