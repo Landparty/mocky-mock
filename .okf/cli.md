@@ -651,8 +651,8 @@ below.
 
 The only subcommand that's a pure pass-through: it forwards straight to
 cobol-parser's own CLI (`dead-code`, `program-flow`, `io-sequence`,
-`move-type-check`, `linkage-check`, `language-env`, `ims-dli`, `analyze`),
-not `mockymock.analysis`. `cobolparser_args` is declared with
+`move-type-check`, `linkage-check`, `language-env`, `ims-dli`, `analyze`,
+`gen-data`, `data-items`), not `mockymock.analysis`. `cobolparser_args` is declared with
 `nargs=argparse.REMAINDER`, so every token after `mockymock analyze` —
 including anything that looks like a mockymock flag — belongs to
 cobol-parser, never to this parser. `_cmd_analyze` monkeypatches
@@ -662,6 +662,25 @@ parameter and reads `sys.argv[1:]` directly — the standard idiom for
 delegating to an argparse CLI that doesn't accept one, safe here because
 the CLI is single-threaded and sequential. Its `SystemExit.code` is
 returned as-is when it's already an `int`, else 1. No Docker.
+
+This is the route the VS Code extension's **"Generate Data from Copybook"**
+action takes (`mockymock analyze gen-data <file> --rows 10`, built in that
+repo's `src/generateData/generateDataRunner.ts`). Because the passthrough is
+unguarded, every `gen-data` flag is available without a mockymock change —
+including cobol-parser's record-image formats added 2026-09-05:
+
+```bash
+mockymock analyze gen-data CUSTOMER.cpy --format hex          # annotated bytes
+mockymock analyze gen-data CUSTOMER.cpy --format record \
+    --charset ebcdic -o CUSTOMER.BIN                           # a z/OS-bound image
+```
+
+`--format hex` is the one worth knowing about here: it renders a copybook's
+`COMP-3`/`COMP-5`/`COMP-1` fields as the bytes a program would really read,
+annotated with each field's offset and length, as *text* — so unlike
+`--format record` it survives being opened in an editor, which is what the
+extension does with the CLI's stdout. See cobol-parser's `.okf/cli.md` and
+`.okf/generators.md`.
 
 ## `mockymock export <program> --cut PATH [-o/--output PATH] [--copybook-path DIR ...] [--case NAME ...] [--tag TAG ...]`
 
