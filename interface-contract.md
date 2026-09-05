@@ -23,17 +23,23 @@ mockymock too.
   (EXPANSION_WARNING). The same list carries advisory lint heuristics
   ("may be missing terminating period", "contains only comments") that
   false-positive on valid copybooks and are deliberately not refused.
-- `cobolparser.generators.data.bundle.FieldSpec.to_dict()` keys, mirrored by
-  `mockymock.dsl.fixture_bundle.FieldSpec` — as of cobol-parser 2026-09-05 it
-  also carries `storage_size` (the item's real byte width, as opposed to
-  `size`, which counts PICTURE character positions and differs for every
-  non-DISPLAY `USAGE`), `sign_clause`, `synchronized`, and
-  `occurs_depending_on`. All four are **additive**: `bundle_version` stayed
-  `1` and this loader ignores unknown keys, so nothing here had to change.
-  mockymock does not read them today — it splices `MOVE <literal> TO <field>`
-  and lets GnuCOBOL do the packing, so it never needs byte widths — but a
-  future consumer that writes record images should read `storage_size`, never
-  `size`.
+- `cobolparser.generators.data.bundle.FieldSpec.to_dict()` keys.
+  `mockymock.dsl.fixture_bundle.FieldSpec` declares a **subset** of them as
+  dataclass fields — the 15 from `name` through `redefines` — and
+  `_load_field_spec` drops every serialized key it does not declare. So the
+  contract here is "these keys keep their name and meaning", not "mockymock
+  has a field for each one".
+
+  As of cobol-parser 2026-09-05 the serialized shape also carries
+  `storage_size` (the item's real byte width, as opposed to `size`, which
+  counts PICTURE character positions and differs for every non-DISPLAY
+  `USAGE`), `sign_clause`, `synchronized`, and `occurs_depending_on`. All
+  four are **additive** and none is mirrored locally: `bundle_version` stayed
+  `1`, the loader ignores them, and nothing here had to change. mockymock has
+  no use for them today — it splices `MOVE <literal> TO <field>` and lets
+  GnuCOBOL do the packing, so it never needs byte widths. A future consumer
+  that writes record images would have to add `storage_size` to that
+  dataclass first, and should read it rather than `size`.
 - `cobolparser.preprocess.normalize_fixed_format(lines: list[str]) -> str`
   — mockymock splices THIS output, not the original file. See Global
   Constraints in the implementation plan for why.
