@@ -1,7 +1,7 @@
 import pytest
 from cobolparser import parse_cobol
 
-from mockymock.analysis.mock_surface import analyze
+from mockymock.analysis.mock_surface import _all_paragraphs, analyze
 from mockymock.analysis.refusal import (
     _expand_thru_range,
     check_expansion_warnings,
@@ -1339,6 +1339,34 @@ def test_whole_program_check_refuses_declaratives():
     assert not result.warnings  # precondition: nothing else would catch it
     reasons = check_whole_program(result)
     assert any(r.code == "UNSUPPORTED_DECLARATIVES" for r in reasons)
+
+
+def test_whole_program_check_refuses_declaratives_via_use_statement_fallback():
+    """GH issue Landparty/mocky-mock#106: the primary DECLARATIVES signal
+    (a stray paragraph literally named DECLARATIVES -- see
+    _check_unsupported_control_flow's docstring) is a coincidental
+    cobolparser parsing artifact, not a modeled flag. If that artifact is
+    ever lost -- resynchronization after unrelated dropped content
+    elsewhere in the program, or a future parser change -- the refusal
+    must not silently disappear with it: a USE statement is legal nowhere
+    outside a DECLARATIVES section, so its mere presence is an independent,
+    structural signal that the same refusal fires on. Simulates the loss
+    directly (renaming the AST paragraph) since the pinned cobolparser
+    reliably leaves the artifact behind for every DECLARATIVES shape tried
+    -- the whole point is that mockymock must not depend on that holding
+    forever."""
+    result = parse_cobol(DECLARATIVES_SOURCE, filename="declsamp.cbl")
+    assert result.success, result.errors
+    procedure = result.ast.get_division("PROCEDURE")
+    renamed = False
+    for paragraph in _all_paragraphs(procedure):
+        if paragraph.paragraph_name.upper() == "DECLARATIVES":
+            paragraph.paragraph_name = "NOT-DECLARATIVES-ANYMORE"
+            renamed = True
+    assert renamed  # precondition: the artifact was there to remove
+    reasons = check_whole_program(result)
+    declaratives = [r for r in reasons if r.code == "UNSUPPORTED_DECLARATIVES"]
+    assert len(declaratives) == 1
 
 
 def test_whole_program_check_refuses_alter():

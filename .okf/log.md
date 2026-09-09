@@ -3478,3 +3478,39 @@ missing:
   `stillborn_reason` replaces this branch's parallel plumbing entirely, and
   the reported names are now main's (`checks`/`compile`) rather than this
   branch's invented ones.
+
+## 2026-09-08 — DECLARATIVES refusal no longer trusts one coincidental artifact alone
+
+GH issue #106 reported a real IMS DL/I program (`DECLARATIVES` +
+`USE FOR DEBUGGING ON ALL PROCEDURES`, plus GSAM PCB linkage folding) whose
+"neutralized" report printed clean and whose spliced source then failed to
+compile in GnuCOBOL — meaning `UNSUPPORTED_DECLARATIVES` never fired for it,
+even though every synthetic repro of that exact shape (both the reporter's
+and this fix's own) refuses correctly. Could not reproduce the exact miss
+without the real file, but the mechanism is already documented and
+precedented in this codebase: `_check_unsupported_control_flow`'s only
+signal was a stray paragraph literally named `DECLARATIVES` that
+cobolparser's error-tolerant parsing happens to leave behind (see
+`.okf/analysis.md`'s prior caveat) — exactly the kind of artifact
+`_CANDIDATE_LABEL_RE`'s docstring already warns can be swallowed by error
+recovery resynchronizing after unrelated dropped content and erased from
+the AST's paragraph list, with no warning of its own.
+
+- **[analysis/refusal]** `_check_unsupported_control_flow` now also scans
+  PROCEDURE DIVISION for a bare `UseStatement` node (via the existing
+  `_find_statements_of_type` helper, same idiom as the `AlterStatement`
+  scan beside it) and refuses `UNSUPPORTED_DECLARATIVES` on that alone if
+  no paragraph named `DECLARATIVES` was found first. `USE` is legal
+  nowhere in COBOL except inside a `DECLARATIVES` section, so its mere
+  presence is an independent, structural proof — not another coincidental
+  artifact — that one exists. Deduplicated: only one reason is ever
+  returned, preferring the named-paragraph message (it carries a more
+  precise line number) when both signals are present, which is every case
+  seen so far.
+- **[tests]** `test_whole_program_check_refuses_declaratives_via_use_statement_fallback`
+  simulates the artifact's loss directly (renaming the AST paragraph after
+  a normal parse, since the pinned cobolparser reliably leaves it behind
+  for every shape tried) and asserts the USE-statement path alone still
+  refuses.
+- **[docs]** `.okf/analysis.md`'s DECLARATIVES caveat updated to describe
+  the fallback and link back to issue #106.

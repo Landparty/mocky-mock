@@ -49,7 +49,7 @@ import re
 from cobolparser.analysis.unused_variables import collect_declared_items
 from cobolparser.lexer import CobolLexer, TokenType
 from cobolparser.models.statements.call import CallStatement
-from cobolparser.models.statements.misc import AlterStatement
+from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.linkage import address_of_sites, linkage_plan
@@ -411,8 +411,21 @@ def _check_unsupported_control_flow(program) -> list[RefusalReason]:
       reachability BFS structurally cannot gate the boundary statements
       inside them. cobolparser parses a DECLARATIVES block warning-free,
       leaving a paragraph literally named DECLARATIVES (a reserved word no
-      valid user paragraph can use -- verified empirically), which is the
-      detection signal here.
+      valid user paragraph can use -- verified empirically); that is the
+      primary detection signal here, but it is a coincidental parser
+      artifact, not a modeled "this is a declaratives section" flag (see
+      .okf/analysis.md's "DECLARATIVES detection relies on cobolparser
+      emitting it as a paragraph name" caveat) -- resynchronization after
+      dropped content elsewhere, or a future parser change, could swallow
+      that stray paragraph and erase it from the AST without necessarily
+      producing a warning of its own (see the GH issue this guards:
+      Landparty/mocky-mock#106, where a real IMS DL/I program with
+      DECLARATIVES + USE FOR DEBUGGING was spliced and compiled with no
+      refusal at all). USE statements are legal nowhere else in COBOL, so
+      any UseStatement node anywhere in PROCEDURE DIVISION is an
+      independent, structural proof that a DECLARATIVES section exists --
+      checked as a second, unconditional detection path so the whole
+      refusal does not rest on the one coincidental artifact.
     - ALTER rewrites another paragraph's GO TO target at runtime, so no
       static edge set is sound for a program containing one.
     """
@@ -420,21 +433,47 @@ def _check_unsupported_control_flow(program) -> list[RefusalReason]:
     if procedure is None:
         return []
     reasons: list[RefusalReason] = []
+    declaratives_paragraph = None
     for paragraph in _all_paragraphs(procedure):
         if paragraph.paragraph_name.upper() == "DECLARATIVES":
-            reasons.append(
-                RefusalReason(
-                    code="UNSUPPORTED_DECLARATIVES",
-                    message=(
-                        f"program contains a DECLARATIVES block (line "
-                        f"{paragraph.location.line}) -- USE procedures run "
-                        f"on I/O conditions outside any PERFORM/GO TO edge, "
-                        f"so the reachability gate cannot check the boundary "
-                        f"statements inside them"
-                    ),
-                )
-            )
+            declaratives_paragraph = paragraph
             break
+    if declaratives_paragraph is not None:
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_DECLARATIVES",
+                message=(
+                    f"program contains a DECLARATIVES block (line "
+                    f"{declaratives_paragraph.location.line}) -- USE "
+                    f"procedures run on I/O conditions outside any "
+                    f"PERFORM/GO TO edge, so the reachability gate cannot "
+                    f"check the boundary statements inside them"
+                ),
+            )
+        )
+    else:
+        for paragraph in _all_paragraphs(procedure):
+            use_statements = _find_statements_of_type(
+                paragraph.statements, UseStatement
+            )
+            if use_statements:
+                reasons.append(
+                    RefusalReason(
+                        code="UNSUPPORTED_DECLARATIVES",
+                        message=(
+                            f"paragraph '{paragraph.paragraph_name}' (line "
+                            f"{use_statements[0].location.line}) contains a "
+                            f"USE statement -- legal only inside a "
+                            f"DECLARATIVES section, so the program has one "
+                            f"even though no paragraph literally named "
+                            f"DECLARATIVES survived parsing; USE procedures "
+                            f"run on I/O conditions outside any PERFORM/GO "
+                            f"TO edge, so the reachability gate cannot check "
+                            f"the boundary statements inside them"
+                        ),
+                    )
+                )
+                break
     for paragraph in _all_paragraphs(procedure):
         for statement in _find_statements_of_type(paragraph.statements, AlterStatement):
             reasons.append(
