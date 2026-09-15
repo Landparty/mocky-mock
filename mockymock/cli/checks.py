@@ -155,6 +155,7 @@ def run_static_checks(
     which accumulates across every case before returning."""
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
+        CopybookNotFoundError,
         expand_copybooks,
         normalize_fixed_format,
         strip_compiler_directives,
@@ -178,6 +179,7 @@ def run_static_checks(
         resolve_scoped_refusals,
         union_executed_paragraphs,
     )
+    from mockymock.cli.discovery import copybook_not_found_hint
     from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.splicer.captures import plan_captures
     from mockymock.splicer.linkage import neutralize, redirect_address_of
@@ -199,6 +201,10 @@ def run_static_checks(
         # _cmd_fixtures's existing broad catch for the same call.
         try:
             expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
+        except CopybookNotFoundError as exc:
+            out.problems.append(f"copybook expansion failed: {exc}")
+            out.problems.append(copybook_not_found_hint())
+            return out
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             out.problems.append(f"copybook expansion failed: {exc}")
             return out

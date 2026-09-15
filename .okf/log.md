@@ -3540,3 +3540,17 @@ file under the current directory (or a `mockymock.toml`/`pyproject.toml`
 winning. `setup --rebuild` forces a fresh, uncached image build. Top-level
 `--help` now groups commands by how often they're reached for. See
 [cli.md](cli.md) and `docs/2026-09-15-cli-ergonomics-design.md`.
+
+
+## 2026-09-15 -- Default copybook search directories + actionable hint
+
+`mockymock/cli/discovery.py`'s `effective_copybook_paths()`: once a
+program is resolved, its own `copybooks/` subdirectory is added to the
+copybook search path automatically when it exists (closing the gap that
+made every `examples/real-world/` program require a manually-typed
+`--copybook-path`). `copybook_not_found_hint()` appends a continuation
+line naming `--copybook-path` and the `[tool.mockymock]` config key to
+any `CopybookNotFoundError`. Companion fix in `Landparty/cobol-parser`:
+`suggest_similar_copybooks`'s did-you-mean pool no longer suggests a
+non-copybook file (the referencing program's own `.cbl`, previously).
+See [cli.md](cli.md) and `docs/2026-09-15-copybook-discovery-defaults-design.md`.
