@@ -14,19 +14,31 @@ initiative's own Phase 8 work found empirically -- .okf/log.md), not have
 its mismatch silently accepted here.
 
 The one documented exception is custprog/CUSTPROG.cbl, marked
-`xfail(strict=True)` below: it is mockymock-only on `(SQL, FETCH)` because
-cobol-parser's `expand_copybooks()` has no equivalent of mockymock's own
+`xfail(strict=True)` below *on cobol-parser releases that cannot expand
+`EXEC SQL INCLUDE`*: there it is mockymock-only on `(SQL, FETCH)` because
+`expand_copybooks()` had no equivalent of mockymock's own
 `splicer/sqlca.py` DCLGEN `EXEC SQL INCLUDE <member>` resolver, so
-`CUST-ID`/`CUST-NAME` never become real WORKING-STORAGE items in
-cobol-parser's AST and the FETCH boundary's host variables can't resolve.
-This is a pre-existing, general preprocessing gap in cobol-parser
-unrelated to anything Phases 1-8 introduced -- see the xfail reason for
-the full empirical trace. `generate --with-data` already degrades safely
-here (a placeholder `MOCK SQL "FETCH"` body, verified to pass `mockymock
-lint`), so this is tracked as a known v1 limitation, not fixed in place.
+`CUST-ID`/`CUST-NAME` never became real WORKING-STORAGE items in
+cobol-parser's AST and the FETCH boundary's host variables could not
+resolve (see the xfail reason for the full empirical trace; `generate
+--with-data` degrades safely there with a placeholder `MOCK SQL "FETCH"`
+body). cobol-parser's 2026-09-15 release expands `EXEC SQL INCLUDE` from
+the copybook path (`CopyStatementLexer(sql_include=True)`); the probe
+below detects that, and on such a release custprog is held to the same
+contract as every other example.
 """
 
+import inspect
 from pathlib import Path
+
+from cobolparser.preprocess.copy_statement_parser import CopyStatementLexer
+
+#: True on a cobol-parser that expands ``EXEC SQL INCLUDE member END-EXEC``
+#: like ``COPY`` (2026-09-15 and later): its COPY lexer takes the
+#: ``sql_include`` switch the expander turns on.
+PARSER_EXPANDS_SQL_INCLUDE = (
+    "sql_include" in inspect.signature(CopyStatementLexer.__init__).parameters
+)
 
 import pytest
 from cobolparser import parse_cobol
@@ -65,6 +77,7 @@ PROGRAMS = [
         ["custprog/copybooks"],
         id="custprog/CUSTPROG.cbl",
         marks=pytest.mark.xfail(
+            condition=not PARSER_EXPANDS_SQL_INCLUDE,
             reason=(
                 "known v1 gap: cobol-parser's expand_copybooks() does not "
                 "understand DCLGEN-style `EXEC SQL INCLUDE CUSTREC "

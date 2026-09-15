@@ -1,6 +1,16 @@
 """Unit tests for the DATA DIVISION EXEC SQL transform."""
 
+import inspect
+
+from cobolparser.preprocess.copy_statement_parser import CopyStatementLexer
+
 from mockymock.splicer.sqlca import transform_data_division_exec
+
+#: cobol-parser expands ``EXEC SQL INCLUDE`` itself from 2026-09-15 on
+#: (``CopyStatementLexer(sql_include=True)``); see the nested-INCLUDE test.
+PARSER_EXPANDS_SQL_INCLUDE = (
+    "sql_include" in inspect.signature(CopyStatementLexer.__init__).parameters
+)
 
 BASE = [
     "IDENTIFICATION DIVISION.",
@@ -313,7 +323,16 @@ def test_include_member_with_embedded_declare_table_is_commented_out(tmp_path):
     assert live_declare == []
 
 
-def test_nested_include_inside_resolved_member_refuses(tmp_path):
+def test_nested_include_inside_resolved_member(tmp_path):
+    """A resolved member that itself says ``EXEC SQL INCLUDE INNER``.
+
+    On a cobol-parser that expands EXEC SQL INCLUDE (2026-09-15+), the
+    expander inlines INNER while resolving OUTER -- the member content
+    mockymock gets back already holds INNER-FIELD and nothing nested is
+    left to refuse. On an older release only one level resolves here, and
+    the nested INCLUDE is refused rather than silently left as an EXEC SQL
+    block cobc cannot compile.
+    """
     copybook_dir = tmp_path / "copybooks"
     copybook_dir.mkdir()
     (copybook_dir / "OUTER.CPY").write_text("       EXEC SQL INCLUDE INNER END-EXEC.\n")
@@ -322,10 +341,15 @@ def test_nested_include_inside_resolved_member_refuses(tmp_path):
     lines, reasons = transform_data_division_exec(
         src, copybook_paths=[str(copybook_dir)]
     )
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_DATA_DIVISION_EXEC"
-    assert "nested" in reasons[0].message
-    assert "INNER" in reasons[0].message
+    if PARSER_EXPANDS_SQL_INCLUDE:
+        assert reasons == []
+        assert any("INNER-FIELD" in line for line in lines)
+        assert not any("EXEC SQL INCLUDE INNER" in line.upper() for line in lines)
+    else:
+        assert len(reasons) == 1
+        assert reasons[0].code == "UNSUPPORTED_DATA_DIVISION_EXEC"
+        assert "nested" in reasons[0].message
+        assert "INNER" in reasons[0].message
 
 
 def test_include_missing_member_with_copybook_path_refuses_unresolved(tmp_path):

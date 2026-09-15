@@ -342,6 +342,29 @@ def _whole_program_reasons(
         text = str(warning)
         if text.startswith("COPY ") and "not expanded" in text:
             continue
+        if text.startswith("Compilation unit contains "):
+            # cobol-parser parses every program unit of a multi-program
+            # compilation unit (nested and stacked PROGRAM-IDs, and an OO
+            # class's factory/object/method units) into
+            # ``ast.contained_programs`` -- the AST is complete. What is
+            # missing is mockymock's own support: the splicer and the
+            # reachability BFS only see the outermost unit, so a CALL
+            # into a contained program is neither a boundary nor a flow
+            # edge. Refuse under a code that says so, rather than as a
+            # dropped-content PARSE_WARNING, which it is not.
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_NESTED_PROGRAM",
+                    message=(
+                        "program is a multi-unit compilation unit (nested "
+                        "or stacked PROGRAM-IDs, or an object-oriented "
+                        "class) -- mockymock splices and gates only the "
+                        f"outermost unit, so a contained unit's boundaries "
+                        f"would go unmocked: {warning}"
+                    ),
+                )
+            )
+            continue
         owner: str | None = None
         if classify and parse_result.success and program is not None:
             match = _WARNING_LINE_RE.search(text)
@@ -433,12 +456,44 @@ def _check_unsupported_control_flow(program) -> list[RefusalReason]:
     if procedure is None:
         return []
     reasons: list[RefusalReason] = []
+    # cobol-parser (2026-09-15 and later) models DECLARATIVES: every section
+    # between ``DECLARATIVES.`` and ``END DECLARATIVES.`` carries
+    # ``is_declarative`` (metadata ``declarative``), and the two marker
+    # lines no longer leave a paragraph behind. That flag is the primary
+    # signal; the stray-paragraph artifact of older parsers and the USE
+    # statement fallback below stay, so the refusal holds on every pin.
+    declarative_section = next(
+        (
+            section
+            for section in getattr(procedure, "_sections", {}).values()
+            if getattr(section, "is_declarative", False)
+            or bool(section.get_metadata("declarative"))
+        ),
+        None,
+    )
+    if declarative_section is not None:
+        reasons.append(
+            RefusalReason(
+                code="UNSUPPORTED_DECLARATIVES",
+                message=(
+                    f"program contains a DECLARATIVES block (section "
+                    f"'{declarative_section.section_name}', line "
+                    f"{declarative_section.location.line}) -- USE "
+                    f"procedures run on I/O conditions outside any "
+                    f"PERFORM/GO TO edge, so the reachability gate cannot "
+                    f"check the boundary statements inside them"
+                ),
+            )
+        )
     declaratives_paragraph = None
-    for paragraph in _all_paragraphs(procedure):
-        if paragraph.paragraph_name.upper() == "DECLARATIVES":
-            declaratives_paragraph = paragraph
-            break
-    if declaratives_paragraph is not None:
+    if declarative_section is None:
+        for paragraph in _all_paragraphs(procedure):
+            if paragraph.paragraph_name.upper() == "DECLARATIVES":
+                declaratives_paragraph = paragraph
+                break
+    if declarative_section is not None:
+        pass
+    elif declaratives_paragraph is not None:
         reasons.append(
             RefusalReason(
                 code="UNSUPPORTED_DECLARATIVES",
