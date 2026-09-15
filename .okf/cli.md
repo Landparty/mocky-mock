@@ -1,7 +1,7 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
 timestamp: 2026-09-15T00:00:00Z
 ---
@@ -9,8 +9,8 @@ timestamp: 2026-09-15T00:00:00Z
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines thirteen subcommands —
-`setup`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `dashboard`, `doctor`, `export`, `analyze`, `skills` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines fourteen subcommands —
+`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `dashboard`, `doctor`, `export`, `analyze`, `skills` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -20,6 +20,7 @@ parser install to resolve.
 
 ```
 mockymock setup     -> runtime.docker_toolchain only (build image, start container)
+mockymock init      -> _cmd_generate(--with-data) then _cmd_run(--record-expectations), reentrant  (Docker iff doctor reports ready)
 mockymock generate  -> parse -> analysis.mock_surface -> dsl.generator  (no Docker)
 mockymock fixtures  -> parse -> cobolparser.ProgramFixtureGenerator -> JSON on stdout  (no Docker, no mockymock analysis at all)
 mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
@@ -78,6 +79,38 @@ No arguments. Orchestrates only `mockymock.runtime.docker_toolchain`:
 On `DockerNotAvailableError`, prints `mockymock setup: <exc>` and exits 1.
 Optional in normal workflows: `mockymock run` calls `ensure_toolchain()` itself,
 so `setup` exists mainly for a fast up-front check / CI warm-up.
+
+## `mockymock init <program> [-o/--output PATH] [--seed N] [--scenarios happy|branches|all] [--copybook-path DIR ...] [--force]` (2026-09-15)
+
+Composes `generate --with-data` + `run --record-expectations` into one
+step, so a first scaffold has real generated data and recorded expected
+values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
+
+1. `_check_input_files` on `program`; refuses if the resolved output
+   `.cut` path already exists and `--force` wasn't given (a check `init`
+   owns itself -- plain `generate` has no such guard at all, and adding
+   one there was out of scope for this design).
+2. Builds a real `generate --with-data --scenarios <...> [--seed <...>]
+   [--copybook-path <...>]*` argv list and parses it with this module's
+   own `build_parser()`, then calls `_cmd_generate` on the result --
+   reentrant rather than a refactor of `_cmd_generate`'s internals (a
+   deliberate departure from the original design doc's proposed
+   plain-function-returning-a-result-object refactor: lower risk for the
+   same external behavior). Stops here, propagating the exit code, if
+   `generate` itself failed (e.g. a zero-scenario bundle).
+3. `--scenarios branches|all` prints the scenario branch-verification
+   caveat (`docs/2026-09-04-scenario-branch-verification.md`) -- a
+   scenario named for an arm is not yet verified to reach it.
+4. `doctor.gather_full_status()` (read-only, mutates nothing) decides
+   whether to attempt a run at all. Not ready: prints a fallback message
+   naming the exact `run --cut ... --record-expectations` command to run
+   later, and returns 0 (the scaffold with real data is still a
+   strictly better outcome than plain `generate`, even unrecorded).
+   Ready: builds a `run --cut <output> --record-expectations
+   [--copybook-path <...>]*` argv the same way and calls `_cmd_run` on
+   it, returning its own exit code.
+
+See `docs/2026-09-15-init-command-design.md`.
 
 ## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...]`
 
