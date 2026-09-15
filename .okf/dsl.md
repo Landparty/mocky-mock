@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-09-04T00:00:00Z
+timestamp: 2026-09-15T00:00:00Z
 ---
 
 # Overview
@@ -473,6 +473,16 @@ Rules:
     generator itself never emits an `AMBIGUOUS_MOCK` pair that the splicer
     would later reject. Falls back to the full text if no proper prefix is
     unique.
+- **`directive_snippet(site, surface) -> str | None` (2026-09-15)** wraps
+  `_directive_for` to render one site's full `MOCK ... END-MOCK` block as a
+  single string (4-space header/footer, 8-space body — exactly what
+  `_scaffold_placeholder` itself emits). `None` whenever `_directive_for`
+  is. This is the one place `RefusalReason.suggested_fix`
+  (`analysis/refusal/_gates.py`) and `generate --fill`
+  (`cli/main.py`'s `_fill_cut_file`) both get their fix text from, so a
+  refusal's suggestion and a fresh scaffold can never disagree about what
+  a site's directive looks like. See
+  docs/2026-09-15-actionable-refusals-and-fill-design.md.
 - Output shape per paragraph:
   ```
   TESTCASE "<paragraph> boundaries: <label1>, <label2>"

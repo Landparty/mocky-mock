@@ -3526,3 +3526,21 @@ of it: `UNSUPPORTED_NESTED_PROGRAM` replaces the misleading `PARSE_WARNING`
 for multi-unit compilation units, and DECLARATIVES detection reads
 cobol-parser's new `is_declarative` section flag before the older
 stray-paragraph / USE-statement signals. See [analysis.md](analysis.md).
+
+
+## 2026-09-15 -- Actionable refusals (suggested_fix) + generate --fill
+
+`RefusalReason` gains an optional `suggested_fix` field, populated only
+for `UNMOCKED_*` reasons via the new `dsl.generator.directive_snippet()`
+-- the same renderer `generate`'s own scaffold uses, so a refusal's
+suggestion and a fresh scaffold can never disagree. `checks.py`'s shared
+`run_static_checks` appends it as an indented "Add to this TESTCASE:"
+block after the reason (reaching `lint`/`run`/`debug`/`export`/`mutate`
+alike) and exposes the raw per-case reasons as
+`StaticCheckResult.unmocked_reasons`. New `mockymock generate --fill
+CUT_FILE` inserts just the missing `MOCK` blocks into an existing `.cut`
+file (found via each case's `PERFORM` line, using
+`dsl.parser._PERFORM_RE`), leaving every existing directive, EXPECT/
+VERIFY, and comment untouched. See [cli.md](cli.md), [dsl.md](dsl.md),
+[analysis.md](analysis.md), and
+`docs/2026-09-15-actionable-refusals-and-fill-design.md`.
