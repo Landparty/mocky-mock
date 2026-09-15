@@ -1,7 +1,7 @@
 ---
 type: Module
 title: Analysis
-description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
+description: mock_surface.py finds every mockable boundary statement in a COBOL program; the refusal/ package decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
 timestamp: 2026-09-15T00:00:00Z
 ---
@@ -218,7 +218,17 @@ Paragraph attribution is depth-independent: nested statements stay attributed to
 
 `category` (None for detected-but-unmockable), `label` (message string), `keys` (candidate match tuple), `match_text` (normalized EXEC text), `nested`, `nested_in_boundary`, and two fields **not set by mock_surface.py** — filled in later by the splicer's `source_map.annotate_nested_sites`: `span: tuple[int,int] | None` (validated replacement span, nested sites only) and `unspliceable_reason: str | None`. Since the 2026-07-07 fix, `annotate_nested_sites` stamps `unspliceable_reason` on **top-level** sites too (leaving their `span` at `None` — top-level replacement spans still come from `source_map.statement_span`, not this field) when the statement does not own its source line(s); see [splicer](splicer.md#top-level-own-line-guard).
 
-# refusal.py — What Gets Refused, and Why
+# refusal/ — What Gets Refused, and Why
+
+Split into a package on 2026-08-30: `_types.py` (codes and `Refusal`,
+plus `suggested_fix`), `_gates.py` (the whole-program and per-case
+checks), `_reachability.py` (the BFS and its fall-through closures),
+`_plans.py` (terminator / GO-TO-exit plan derivation), and
+`_explanations.py` (the prose behind `mockymock explain`), all re-exported
+from `refusal/__init__.py`. **This file still writes `refusal.py` in
+running prose** for the module as a whole — read it as "the refusal
+package"; the import path callers use (`from mockymock.analysis.refusal
+import ...`) never changed.
 
 **Every code below has a prose explanation in `_explanations.py`'s
 `REFUSAL_EXPLANATIONS`** (2026-09-15), backing `mockymock explain <CODE>`

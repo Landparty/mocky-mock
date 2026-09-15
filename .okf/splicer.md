@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-28T12:00:00Z
+timestamp: 2026-09-15T00:00:00Z
 ---
 
 # Overview
@@ -239,6 +239,31 @@ every site, so no new analysis-phase field was needed) --
 `site.statement.using_parameters[n - 1].name`. Emitted before
 `directive.body_lines`, in declared order. See [dsl](dsl.md)'s `CAPTURE
 ARG` grammar section and docs/2026-08-11-argument-capture-design.md.
+
+The *target* half of the same feature lives in its own module,
+`splicer/captures.py` (2026-09-04), because it runs at static-check time
+rather than splice time. A target whose name starts with
+`CAPTURE_TARGET_PREFIX` (`UT-CAP-`) is mockymock's to declare:
+`plan_captures(program, suite, surface)` resolves each one against the
+matching CALL site's own `using_parameters` — the identical resolution
+`build_site_dispatch` does above, so the synthesized declaration always
+mirrors the item the generated `MOVE` will read — and returns
+`CapturePlan`s plus a reason per target it could not mirror.
+`capture_working_storage_lines` / `capture_reset_lines` then feed
+`driver.build_driver` through `cli.checks.extra_working_storage` /
+`extra_reset_lines_for`, the same route `cics_eib` and `UT-ADDR-SINK`
+take, so all four splice-and-compile pipelines (`run`, `debug`, `export`,
+`mutate`) declare and reset them identically. The reset half is
+load-bearing and was briefly lost in `mutate` (2026-09-04): one binary
+serves the whole suite, so an unreset capture lets a case that never
+reached its CALL assert against the previous case's value — and in
+`mutate` that stale value can "kill" a mutant, inflating the score.
+Anything unmirrorable (a table, a PICTURE-less `COMP-1`/`POINTER`, a group
+holding non-DISPLAY bytes, or one directive matching two sites whose
+argument `n` names different items) fails closed as
+`UNRESOLVED_CAPTURE_TARGET` rather than emitting a declaration that would
+not compile or would compare against raw binary. Full grammar and
+`generate` behavior in [dsl](dsl.md)'s "Synthesized targets" section.
 
 **`ROWS` dispatch (`MOCK SQL ... ROWS` and `MOCK READ ... ROWS`, see
 [dsl](dsl.md)).** `build_rows_block(tally_name, rows, *, row_suffix_moves,

@@ -7,25 +7,27 @@ okf_version: "0.1"
 Knowledge bundle for **mockymock** — mocks a COBOL program's external boundaries
 (subprogram `CALL`s including MQ, file I/O, `EXEC SQL`/`CICS`/`DLI`, console
 `ACCEPT`), compiles the instrumented copy with GnuCOBOL inside Docker, runs it,
-and reports pass/fail. Version 0.1.0. Author: Samuel Dion.
+and reports pass/fail. Version 0.8.0 (`mockymock/__init__.py`, kept in step with
+`pyproject.toml` by release-please's `extra-files`). Distributed on PyPI as
+`mocky-mock`. Author: Samuel Dion.
 
 ## The `.cut` DSL and Codegen Pipeline
 
 * [DSL](dsl.md) — `.cut` test-file grammar, `MockTestSuite`/`MockTestCase`/`MockDirective` model, parser, and the `generate` scaffolder
-* [Analysis](analysis.md) — `mock_surface` boundary-site detection (CALL/file-I-O/EXEC SQL·CICS·DLI/ACCEPT) + `refusal.py`'s fail-closed reachability gate
-* [Splicer](splicer.md) — turns boundary sites + a parsed `.cut` into spliced COBOL: dispatch blocks, tally fields, WORKING-STORAGE reset, generated SQLCA
+* [Analysis](analysis.md) — `mock_surface` boundary-site detection (CALL/file-I-O/EXEC SQL·CICS·DLI/ACCEPT) + the `refusal/` package's fail-closed reachability gate
+* [Splicer](splicer.md) — turns boundary sites + a parsed `.cut` into spliced COBOL: dispatch blocks, tally fields, WORKING-STORAGE reset, synthesized `UT-CAP-` capture targets, generated SQLCA
 * [Runtime](runtime.md) — Docker-only GnuCOBOL toolchain (`mockymock-cobc` container), compile/run, sandbox model
-* [Report](report.md) — `__MOCKYMOCK__` stdout protocol, `TestResult`/`TestSuiteResult` model, console + JUnit XML formatters
+* [Report](report.md) — `__MOCKYMOCK__` stdout protocol, `TestResult`/`TestSuiteResult` model, console + JUnit XML + JSON formatters, execution trace
 
 ## Entry Point
 
-* [CLI](cli.md) — `mockymock setup` / `generate` / `fixtures` / `run` / `debug` / `lint` / `mutate` / `collect` / `dashboard` / `export` and how each orchestrates the modules above
-* [Dashboard](dashboard.md) — `mockymock dashboard`: loopback static page + the read-only `runtime.status` Docker health probe behind it
+* [CLI](cli.md) — the fifteen subcommands (`setup` / `init` / `generate` / `fixtures` / `run` / `debug` / `lint` / `mutate` / `collect` / `explain` / `dashboard` / `doctor` / `export` / `analyze` / `skills`), how argument resolution and the project config file work, and how each subcommand orchestrates the modules above. Also the home of the `debug` DAP adapter (`mockymock/debug/`), `mutate` (`mockymock/mutation/`), and `export` (`cli/mainframe_export.py`) write-ups.
+* [Dashboard](dashboard.md) — `mockymock dashboard` (loopback static page) and `mockymock doctor` (terminal-native), plus the read-only `runtime.status` Docker health probe both sit on
 
 ## Integration & Testing
 
 * [Integration Contract](integration.md) — the cobolparser AST surface mockymock depends on (distills the repo-root [interface-contract.md](../interface-contract.md))
-* [Testing](testing.md) — unit/integration split, Docker-availability skip gate, `tests/integration/fixtures/` corpus, and the two worked examples (INVUPDT, ORDRPROC)
+* [Testing](testing.md) — unit/integration split, the Docker-availability skip gate, `tests/integration/fixtures/` corpus, the enterprise program-type corpus, the worked examples, and **which CI jobs are currently switched off**
 * [Coverage](coverage.md) — `mockymock run --coverage`: GnuCOBOL/gcov-based per-line coverage reporting
 
 ## Publishing
@@ -34,4 +36,4 @@ and reports pass/fail. Version 0.1.0. Author: Samuel Dion.
 
 ## Change History
 
-* [log.md](log.md) — Dated update log
+* [log.md](log.md) — Dated update log, **newest entry first**

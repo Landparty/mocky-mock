@@ -107,17 +107,26 @@ non-copybook file) is `Landparty/cobol-parser`'s own change.
 
 # Subcommands
 
-## `mockymock setup`
+## `mockymock setup [--rebuild]`
 
-No arguments. Orchestrates only `mockymock.runtime.docker_toolchain`:
+Orchestrates only `mockymock.runtime.docker_toolchain`:
 
-1. `docker_toolchain.ensure_toolchain()` — builds the GnuCOBOL image and starts
-   the `mockymock-cobc` container if not already running.
+1. `docker_toolchain.ensure_toolchain(force_rebuild=args.rebuild)` — builds the
+   GnuCOBOL image and starts the `mockymock-cobc` container if not already
+   running.
 2. `docker_toolchain.cobc_version()` — printed for confirmation.
 
 On `DockerNotAvailableError`, prints `mockymock setup: <exc>` and exits 1.
 Optional in normal workflows: `mockymock run` calls `ensure_toolchain()` itself,
 so `setup` exists mainly for a fast up-front check / CI warm-up.
+
+`--rebuild` is the only way to force a fresh image build when the
+content-hash tag hasn't changed (an edited base image, a poisoned layer
+cache). It also recreates the container, because the rebuilt image re-uses
+the same tag and the stale-container check compares tags — see
+[runtime](runtime.md)'s **Forced rebuild** section for why skipping that
+removal left every later compile in the old toolchain. To *inspect*
+readiness without building or starting anything, use `doctor` instead.
 
 ## `mockymock init <program> [-o/--output PATH] [--seed N] [--scenarios happy|branches|all] [--copybook-path DIR ...] [--force]` (2026-09-15)
 
@@ -810,6 +819,27 @@ the constant at parser-build time would import `web.server` ->
 `runtime.status` -> `runtime.docker_toolchain` (which reads the Dockerfile
 at import to compute `IMAGE`) on every `mockymock --help`. See the Gotchas
 below.
+
+## `mockymock doctor [--json]` (2026-09-15)
+
+The terminal-native counterpart to `dashboard`: one readiness report, no
+browser, no HTTP server, no toolchain mutation. `_cmd_doctor` is a thin
+shell over `cli/doctor.py`'s `gather_full_status()` ->
+`format_doctor_text()` / `format_doctor_json()`.
+
+Its checks are `runtime.status.probe()`'s four (`daemon`, `image`,
+`container`, `cobc`) plus two of its own: whether `cobolparser` imports,
+and which project config file this invocation would load (reported `WARN`
+when that file is malformed, rather than taking the whole report down with
+it).
+
+Exit code is `0 if report.ready else 1`, where doctor's `ready` means **no
+check is `DOWN`** — a `WARN` such as a stopped container or a broken config
+file still exits 0, because `setup` or the next `run` resolves it. That is
+deliberately looser than `probe()`'s own `ready`, which requires every
+check to be `ok`. Full write-up, including the check-state table it shares
+with the dashboard, lives in [dashboard](dashboard.md); the design doc is
+docs/2026-09-15-doctor-command-design.md.
 
 ## `mockymock analyze [cobolparser-args...]`
 
