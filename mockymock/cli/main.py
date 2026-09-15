@@ -14,7 +14,7 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     from mockymock.runtime import docker_toolchain
 
     try:
-        docker_toolchain.ensure_toolchain()
+        docker_toolchain.ensure_toolchain(force_rebuild=args.rebuild)
         version = docker_toolchain.cobc_version()
     except docker_toolchain.DockerNotAvailableError as exc:
         print(f"mockymock setup: {exc}")
@@ -59,6 +59,8 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
 
     if not _check_rows_non_negative("fixtures", args.rows):
         return 1
+
+    _apply_config_to_args(args)
 
     # Mirrors _cmd_generate's order: expand copybooks (if any --copybook-path
     # was given) before the parse gate below, so the gate sees the same
@@ -168,6 +170,75 @@ def _check_input_files(command: str, *paths: Path) -> bool:
             print(f"{command}: no such file: {path}")
             ok = False
     return ok
+
+
+def _resolve_program_and_cut(
+    command: str, args: argparse.Namespace
+) -> tuple[Path, Path] | None:
+    """Resolve exactly one (program, .cut) pair for a command that has
+    both a `program` positional and a `--cut` flag, filling in whichever
+    one is missing from its sibling by same-stem convention (see
+    mockymock/cli/discovery.py and docs/2026-09-15-cli-ergonomics-design.md).
+    An explicit value for either always wins. Prints a clean, actionable
+    error and returns None on any failure -- callers just `return 1`."""
+    from mockymock.cli.discovery import (
+        DiscoveryError,
+        resolve_cut_path,
+        resolve_program_path,
+    )
+
+    program_arg = getattr(args, "program", None)
+    cut_arg = getattr(args, "cut", None)
+    if program_arg is None and cut_arg is None:
+        print(
+            f"{command}: pass a program (and/or --cut) -- give at least "
+            f"one so the other can be inferred from its sibling file"
+        )
+        return None
+    try:
+        if program_arg is None:
+            assert cut_arg is not None  # the both-None case returned above
+            cut_path = Path(cut_arg)
+            source_path = resolve_program_path(None, cut_path)
+        elif cut_arg is None:
+            source_path = Path(program_arg)
+            cut_path = resolve_cut_path(None, source_path)
+        else:
+            source_path = Path(program_arg)
+            cut_path = Path(cut_arg)
+    except DiscoveryError as exc:
+        print(f"{command}: {exc}")
+        return None
+    if not _check_input_files(command, source_path, cut_path):
+        return None
+    return source_path, cut_path
+
+
+def _apply_config_to_args(args: argparse.Namespace) -> None:
+    """Merge the project config file (mockymock.toml or pyproject.toml's
+    [tool.mockymock], see mockymock/cli/config.py) into `args` for
+    whichever of copybook_path/seed this subcommand's subparser defined.
+    An explicit CLI flag always wins; this only fills in a value the
+    flag left at its argparse-level default (None, or an empty list for
+    --copybook-path's `action="append"`). Safe to call unconditionally
+    from any _cmd_* -- an attribute this command doesn't have is simply
+    skipped via hasattr.
+
+    --timeout is deliberately not config-overridable: run/mutate each
+    give it a real argparse-level default (30/15) that
+    test_run_timeout_defaults_to_30_seconds and its mutate counterpart
+    pin directly off build_parser() output, before any config file is
+    ever loaded -- overriding it here would need a sentinel default that
+    breaks telling 'the user passed --timeout 30' apart from 'nobody
+    passed --timeout at all', which isn't worth it for one flag most
+    projects won't want to fix project-wide anyway."""
+    from mockymock.cli.config import MockymockConfig, resolve, resolve_copybook_paths
+
+    config: MockymockConfig = getattr(args, "_config", None) or MockymockConfig()
+    if hasattr(args, "copybook_path"):
+        args.copybook_path = resolve_copybook_paths(args.copybook_path, config)
+    if hasattr(args, "seed"):
+        args.seed = resolve(args.seed, config.seed)
 
 
 def _check_rows_non_negative(command: str, rows: int | None) -> bool:
@@ -284,6 +355,8 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     if not _check_rows_non_negative("generate", args.rows):
         return 1
+
+    _apply_config_to_args(args)
 
     # Flag-only validation -- neither check needs the source file, so both
     # run before any parse/bundle work, same "fail fast on a bad
@@ -620,6 +693,72 @@ def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
             print(f"  - {finding}")
 
 
+def _per_pair_report_path(base: str, cut_path: Path) -> str:
+    """Insert the .cut file's own stem before the extension:
+    'report.xml' + 'ORDRPROC.cut' -> 'report-ORDRPROC.xml'. Used so
+    directory-mode --junit-xml/--json-report don't have every discovered
+    pair overwrite the same single report file."""
+    base_path = Path(base)
+    return str(
+        base_path.with_name(f"{base_path.stem}-{cut_path.stem}{base_path.suffix}")
+    )
+
+
+def _run_directory(args: argparse.Namespace) -> int:
+    """`mockymock run` with neither a program nor --cut given: discover
+    every .cut file under the test root (the config file's own
+    test_root, default '.') and run each against its sibling program.
+    Reuses _cmd_run's own single-pair code path unchanged, via a shallow
+    copy of args with program/cut filled in, rather than a parallel
+    implementation -- so a plain `mockymock run PROG.cbl --cut PROG.cut`
+    invocation is completely untouched by this function ever existing.
+    See docs/2026-09-15-cli-ergonomics-design.md."""
+    import copy
+
+    from mockymock.cli.discovery import (
+        DiscoveryError,
+        discover_cut_files,
+        resolve_program_path,
+    )
+
+    config = getattr(args, "_config", None)
+    test_root = Path((config.test_root if config else None) or ".")
+    cut_files = discover_cut_files(test_root)
+    if not cut_files:
+        print(f"mockymock run: no .cut files found under {test_root}")
+        return 1
+
+    exit_code = 0
+    ran = 0
+    unresolved: list[str] = []
+    for cut_path in cut_files:
+        try:
+            program_path = resolve_program_path(None, cut_path)
+        except DiscoveryError as exc:
+            unresolved.append(str(exc))
+            continue
+        ran += 1
+        sub_args = copy.copy(args)
+        sub_args.program = str(program_path)
+        sub_args.cut = str(cut_path)
+        if getattr(args, "junit_xml", None):
+            sub_args.junit_xml = _per_pair_report_path(args.junit_xml, cut_path)
+        if getattr(args, "json_report", None):
+            sub_args.json_report = _per_pair_report_path(args.json_report, cut_path)
+        print(f"== {cut_path} ==")
+        exit_code = _cmd_run(sub_args) or exit_code
+
+    for reason in unresolved:
+        print(f"mockymock run: {reason}")
+    print(
+        f"mockymock run: {ran} suite(s) run, {len(unresolved)} .cut file(s) "
+        f"skipped (no sibling program found)"
+    )
+    if ran == 0:
+        return 1
+    return exit_code
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     import json
 
@@ -663,12 +802,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import transform_data_division_exec
 
+    # Directory-wide mode: no program, no --cut -- discover every .cut
+    # file under the test root and run each against its sibling program.
+    # See docs/2026-09-15-cli-ergonomics-design.md.
+    if args.program is None and args.cut is None:
+        return _run_directory(args)
+
     # Input existence is the one check that runs even before anything else:
     # a typo'd path must fail in milliseconds with no traceback.
-    source_path = Path(args.program)
-    cut_path = Path(args.cut)
-    if not _check_input_files("mockymock run", source_path, cut_path):
+    pair = _resolve_program_and_cut("mockymock run", args)
+    if pair is None:
         return 1
+    source_path, cut_path = pair
+
+    _apply_config_to_args(args)
 
     # Asking for the coverage JSON, or a coverage report file, is asking
     # for coverage.
@@ -1116,10 +1263,11 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         )
         return 1
 
-    source_path = Path(args.program)
-    cut_path = Path(args.cut)
-    if not _check_input_files("mockymock debug", source_path, cut_path):
+    pair = _resolve_program_and_cut("mockymock debug", args)
+    if pair is None:
         return 1
+    source_path, cut_path = pair
+    _apply_config_to_args(args)
 
     if len(args.case or []) != 1:
         print(
@@ -1264,10 +1412,11 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
     )
     from mockymock.mutation.runner import run_mutation
 
-    source_path = Path(args.program)
-    cut_path = Path(args.cut)
-    if not _check_input_files("mockymock mutate", source_path, cut_path):
+    pair = _resolve_program_and_cut("mockymock mutate", args)
+    if pair is None:
         return 1
+    source_path, cut_path = pair
+    _apply_config_to_args(args)
 
     if args.list:
         # --list never runs anything, so flags that only mean something
@@ -1358,6 +1507,53 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _lint_directory(args: argparse.Namespace) -> int:
+    """`mockymock lint` with neither a program nor --cut given: discover
+    every .cut file under the test root and lint each against its
+    sibling program. See _run_directory's docstring -- same approach,
+    reusing _cmd_lint's own single-pair path unchanged."""
+    import copy
+
+    from mockymock.cli.discovery import (
+        DiscoveryError,
+        discover_cut_files,
+        resolve_program_path,
+    )
+
+    config = getattr(args, "_config", None)
+    test_root = Path((config.test_root if config else None) or ".")
+    cut_files = discover_cut_files(test_root)
+    if not cut_files:
+        print(f"mockymock lint: no .cut files found under {test_root}")
+        return 1
+
+    exit_code = 0
+    ran = 0
+    unresolved: list[str] = []
+    for cut_path in cut_files:
+        try:
+            program_path = resolve_program_path(None, cut_path)
+        except DiscoveryError as exc:
+            unresolved.append(str(exc))
+            continue
+        ran += 1
+        sub_args = copy.copy(args)
+        sub_args.program = str(program_path)
+        sub_args.cut = str(cut_path)
+        print(f"== {cut_path} ==")
+        exit_code = _cmd_lint(sub_args) or exit_code
+
+    for reason in unresolved:
+        print(f"mockymock lint: {reason}")
+    print(
+        f"mockymock lint: {ran} suite(s) checked, {len(unresolved)} .cut "
+        f"file(s) skipped (no sibling program found)"
+    )
+    if ran == 0:
+        return 1
+    return exit_code
+
+
 def _cmd_lint(args: argparse.Namespace) -> int:
     """Run every static refusal check with zero Docker dependency. This
     function must never import mockymock.runtime.docker_toolchain -- that
@@ -1365,10 +1561,14 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     usable in editors, pre-commit hooks, and CI lanes with no daemon."""
     from mockymock.cli.checks import run_static_checks
 
-    source_path = Path(args.program)
-    cut_path = Path(args.cut)
-    if not _check_input_files("mockymock lint", source_path, cut_path):
+    if args.program is None and args.cut is None:
+        return _lint_directory(args)
+
+    pair = _resolve_program_and_cut("mockymock lint", args)
+    if pair is None:
         return 1
+    source_path, cut_path = pair
+    _apply_config_to_args(args)
     result = run_static_checks(source_path, cut_path, args.copybook_path)
     for note in result.notes:
         print(f"mockymock lint: {note}")
@@ -1414,10 +1614,11 @@ def _cmd_export(args: argparse.Namespace) -> int:
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import transform_data_division_exec
 
-    source_path = Path(args.program)
-    cut_path = Path(args.cut)
-    if not _check_input_files("mockymock export", source_path, cut_path):
+    pair = _resolve_program_and_cut("mockymock export", args)
+    if pair is None:
         return 1
+    source_path, cut_path = pair
+    _apply_config_to_args(args)
 
     checked = run_static_checks(
         source_path,
@@ -1664,13 +1865,60 @@ def _insert_driver_with_origins(
     return result, inserted
 
 
+# argparse has no native notion of subcommand groups, so this is a
+# formatted epilog block rather than a real grouping structure --
+# purely presentational, and updated by hand whenever a subcommand is
+# added or removed. See docs/2026-09-15-cli-ergonomics-design.md.
+_COMMAND_GROUPS_EPILOG = """\
+commands, grouped by how often you'll reach for them:
+
+  Everyday:
+    run        splice, compile, run, and assert a program against a .cut file
+    generate   scaffold a starter .cut file from a COBOL program
+    lint       static checks only, no Docker
+    collect    list a .cut file's suite and test cases
+
+  Diagnosing a failure:
+    debug      interactive Debug Adapter Protocol session
+    analyze    run a cobol-parser analyzer and print its report
+    dashboard  local status page for Docker/GnuCOBOL readiness
+
+  Advanced:
+    mutate     mutation-test a program against its .cut suite
+    export     write mainframe-ready instrumented source
+    fixtures   print a FixtureBundle as JSON for editor integrations
+    skills     manage the packaged Claude Code skill
+    setup      build the GnuCOBOL image and start the toolchain container
+
+Run 'mockymock <command> --help' for a command's own options.
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="mockymock")
+    parser = argparse.ArgumentParser(
+        prog="mockymock",
+        epilog=_COMMAND_GROUPS_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--version", action="version", version=__version__)
     subparsers = parser.add_subparsers(dest="command")
 
     setup_parser = subparsers.add_parser(
-        "setup", help="Build the GnuCOBOL image and start the mockymock-cobc container"
+        "setup",
+        help="Build the GnuCOBOL image and start the mockymock-cobc container",
+        description=(
+            "Build the GnuCOBOL image (from this package's Dockerfile) if "
+            "it isn't already built or is stale, then start the long-lived "
+            "mockymock-cobc container every other command compiles and runs "
+            "against. Safe to re-run: a current image/container is left "
+            "alone. See 'mockymock doctor' to check readiness without "
+            "building or starting anything."
+        ),
+    )
+    setup_parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Force a fresh image build even if a current one is cached",
     )
     setup_parser.set_defaults(func=_cmd_setup)
 
@@ -1790,8 +2038,20 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="Splice, compile, run, and assert a COBOL program against a .cut file",
     )
-    run_parser.add_argument("program")
-    run_parser.add_argument("--cut", required=True)
+    run_parser.add_argument(
+        "program",
+        nargs="?",
+        help=(
+            "COBOL source file. Omit to infer it from --cut's sibling "
+            "file (same directory, same stem); omit both program and "
+            "--cut to discover and run every .cut file under the "
+            "current directory (or the config file's test_root)"
+        ),
+    )
+    run_parser.add_argument(
+        "--cut",
+        help="Test file. Omit to infer it from program's sibling .cut file",
+    )
     run_parser.add_argument("--junit-xml")
     run_parser.add_argument(
         "--json-report",
@@ -1919,8 +2179,12 @@ def build_parser() -> argparse.ArgumentParser:
             "single test case (breakpoints, stepping, variable inspection)"
         ),
     )
-    debug_parser.add_argument("program")
-    debug_parser.add_argument("--cut", required=True)
+    debug_parser.add_argument(
+        "program", nargs="?", help="Omit to infer from --cut's sibling file"
+    )
+    debug_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
     debug_parser.add_argument(
         "--case",
         action="append",
@@ -1945,8 +2209,18 @@ def build_parser() -> argparse.ArgumentParser:
             "without Docker (fast, editor/CI friendly)"
         ),
     )
-    lint_parser.add_argument("program")
-    lint_parser.add_argument("--cut", required=True)
+    lint_parser.add_argument(
+        "program",
+        nargs="?",
+        help=(
+            "Omit to infer from --cut's sibling file; omit both to "
+            "discover and lint every .cut file under the current "
+            "directory (or the config file's test_root)"
+        ),
+    )
+    lint_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
     lint_parser.add_argument(
         "--copybook-path",
         action="append",
@@ -1962,8 +2236,12 @@ def build_parser() -> argparse.ArgumentParser:
             "fail to kill"
         ),
     )
-    mutate_parser.add_argument("program")
-    mutate_parser.add_argument("--cut", required=True)
+    mutate_parser.add_argument(
+        "program", nargs="?", help="Omit to infer from --cut's sibling file"
+    )
+    mutate_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
     mutate_parser.add_argument(
         "--copybook-path",
         action="append",
@@ -2087,8 +2365,12 @@ def build_parser() -> argparse.ArgumentParser:
             "GnuCOBOL-only"
         ),
     )
-    export_parser.add_argument("program")
-    export_parser.add_argument("--cut", required=True)
+    export_parser.add_argument(
+        "program", nargs="?", help="Omit to infer from --cut's sibling file"
+    )
+    export_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
     export_parser.add_argument("-o", "--output")
     export_parser.add_argument(
         "--copybook-path",
@@ -2161,6 +2443,15 @@ def main(argv: list[str] | None = None) -> int:
     if not hasattr(args, "func"):
         parser.print_help()
         return 1
+
+    from mockymock.cli.config import ConfigError, load_config
+
+    try:
+        args._config = load_config()
+    except ConfigError as exc:
+        print(str(exc))
+        return 1
+
     return args.func(args)
 
 
