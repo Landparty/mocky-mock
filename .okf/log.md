@@ -3526,3 +3526,17 @@ of it: `UNSUPPORTED_NESTED_PROGRAM` replaces the misleading `PARSE_WARNING`
 for multi-unit compilation units, and DECLARATIVES detection reads
 cobol-parser's new `is_declarative` section flag before the older
 stray-paragraph / USE-statement signals. See [analysis.md](analysis.md).
+
+
+## 2026-09-15 -- CLI ergonomics: sibling inference, config file, directory discovery
+
+`mockymock/cli/discovery.py` (new) and `mockymock/cli/config.py` (new):
+`run`/`debug`/`lint`/`mutate`/`export` no longer require both `program` and
+`--cut` -- either can be inferred from the other's same-stem sibling file,
+and `run`/`lint` with neither given discover and run/lint every `.cut`
+file under the current directory (or a `mockymock.toml`/`pyproject.toml`
+`[tool.mockymock]` table's `test_root`). The same config file supplies
+`copybook_path`/`seed` project-wide, with an explicit CLI flag always
+winning. `setup --rebuild` forces a fresh, uncached image build. Top-level
+`--help` now groups commands by how often they're reached for. See
+[cli.md](cli.md) and `docs/2026-09-15-cli-ergonomics-design.md`.

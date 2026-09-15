@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-09-04T00:00:00Z
+timestamp: 2026-09-15T00:00:00Z
 ---
 
 # Overview
@@ -35,6 +35,34 @@ mockymock skills    -> skills_cmd (no Docker, no parsing -- a copytree)
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
 `func` attribute).
+
+## Argument resolution (2026-09-15)
+
+Before dispatch, `main()` loads the project config file
+(`mockymock/cli/config.py`'s `load_config()`: `mockymock.toml` or
+`pyproject.toml`'s `[tool.mockymock]` table, searched from cwd upward) and
+stashes it on `args._config`; a malformed file is `ConfigError`, caught in
+`main()` and printed as a clean error (exit 1) rather than reaching any
+`_cmd_*`.
+
+`run`/`debug`/`lint`/`mutate`/`export` no longer require both `program` and
+`--cut`: `_resolve_program_and_cut()` (`cli/main.py`) fills in whichever one
+is missing from its same-stem sibling file via
+`mockymock/cli/discovery.py`'s `resolve_program_path`/`resolve_cut_path`
+(mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). `run`/`lint`
+with *neither* given fall into `_run_directory`/`_lint_directory`:
+`discover_cut_files()` walks the test root (config's `test_root`, default
+`.`) and each command's own single-pair `_cmd_run`/`_cmd_lint` is called
+once per discovered `(program, .cut)` pair via a shallow `copy.copy(args)`
+— not a parallel implementation, so an explicit single-pair invocation is
+byte-for-byte unaffected.
+
+`_apply_config_to_args()` fills `args.copybook_path`/`args.seed` from the
+loaded config when the CLI flag was left at its argparse default; an
+explicit flag always wins. `--timeout` (run/mutate) is deliberately not
+config-overridable — see the docstring on `_apply_config_to_args` for why.
+
+See `docs/2026-09-15-cli-ergonomics-design.md`.
 
 # Subcommands
 
