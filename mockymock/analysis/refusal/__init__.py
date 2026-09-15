@@ -51,12 +51,20 @@ Flow-edge model (fail closed):
   computes it once per run); the same set already narrowed
   find_terminator_plans' hazard sets.
 
-check_whole_program additionally refuses two constructs the flow model
+check_whole_program additionally refuses three constructs the flow model
 deliberately does not attempt to handle, by their mere presence anywhere
 in the program: DECLARATIVES (UNSUPPORTED_DECLARATIVES -- USE procedures
-run on I/O conditions, invisible to any PERFORM/GO TO edge) and ALTER
-(UNSUPPORTED_ALTER -- it rewrites GO TO targets at runtime, so no static
-edge set is sound).
+run on I/O conditions, invisible to any PERFORM/GO TO edge; detected from
+cobol-parser's modelled ``is_declarative`` section flag first, with the
+older stray-paragraph artifact and the USE statement itself as fallbacks),
+ALTER (UNSUPPORTED_ALTER -- it rewrites GO TO targets at runtime, so no
+static edge set is sound), and a multi-unit compilation unit
+(UNSUPPORTED_NESTED_PROGRAM -- nested or stacked PROGRAM-IDs, or an
+object-oriented CLASS-ID with its factory/object/method units: cobol-parser
+parses every unit into ``contained_programs``, but the splicer and the
+reachability BFS only see the outermost one, so a contained unit's
+boundaries would go unmocked. Previously refused as PARSE_WARNING, which
+misdescribed a complete AST as "missing content").
 
 v2 matching model: every reachable mockable BoundarySite must be matched by
 exactly one MockDirective of the test case --
@@ -155,9 +163,10 @@ including ones the owning case never reaches.
 check_whole_program refuses on parse errors (PARSE_ERROR) and — since
 cobolparser's 2026-07-07 silent-drop remediation gave dropped content a
 signal — on every `ParseResult.warnings` entry (PARSE_WARNING): unsupported
-verbs, unparsed clause leftovers, and multi-program compilation units all
-mean the AST is incomplete, so a "clean" splice would silently drop program
-behavior. check_expansion_warnings (EXPANSION_WARNING) does the same for
+verbs and unparsed clause leftovers mean the AST is incomplete, so a
+"clean" splice would silently drop program behavior (the multi-program
+warning is the one exception: it is routed to UNSUPPORTED_NESTED_PROGRAM,
+see above). check_expansion_warnings (EXPANSION_WARNING) does the same for
 lossy-decode copybook-expansion warnings (U+FFFD already substituted into
 the source this run would compile); the advisory lint heuristics sharing
 that channel are deliberately NOT refused (see the marker constant).

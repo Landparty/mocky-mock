@@ -445,3 +445,15 @@ developer's machine.
 - [runtime](runtime.md) -- generated SQLCA, tally fields, and other
   runtime-support scaffolding that mock bodies (like INVUPDT's `READ` tally
   and `SQLCODE` sets) depend on.
+
+
+## Enterprise program-type corpus (2026-09-15)
+
+`tests/fixtures/enterprise/*.cbl` + `copybooks/` mirror cobol-parser's
+`tests/samples/enterprise/` -- keep them identical (cobol-parser is the
+source of truth). `tests/unit/test_enterprise_corpus.py` runs `mockymock
+generate` (in-process `cli.main.main`, no Docker) over every program and
+asserts the outcome table `EXPECTED`: a scaffold with test cases, a
+scaffold with none (no mockable boundary), or a refusal under exactly one
+code. Adding a program type means adding it to both corpora and to that
+table; the matrix is `cobol-parser/docs/enterprise-program-types.md`.

@@ -515,10 +515,16 @@ MULTI_PROGRAM_SOURCE = """\
 
 
 def test_whole_program_check_flags_multi_program_units():
+    """A multi-unit compilation unit (nested/stacked PROGRAM-IDs, an OO
+    class) is refused under its own code: cobol-parser parses every unit
+    (the AST is complete), it is mockymock that only splices and gates the
+    outermost one -- so the reason names *that*, not dropped content."""
     result = parse_cobol(MULTI_PROGRAM_SOURCE, filename="multi.cbl")
     assert result.success, result.errors
     reasons = check_whole_program(result)
-    assert any(r.code == "PARSE_WARNING" for r in reasons)
+    assert [r.code for r in reasons] == ["UNSUPPORTED_NESTED_PROGRAM"]
+    assert "outermost unit" in reasons[0].message
+    assert not any(r.code == "PARSE_WARNING" for r in reasons)
 
 
 COPY_PROGRAM_SOURCE = """\
@@ -1358,15 +1364,23 @@ def test_whole_program_check_refuses_declaratives_via_use_statement_fallback():
     result = parse_cobol(DECLARATIVES_SOURCE, filename="declsamp.cbl")
     assert result.success, result.errors
     procedure = result.ast.get_division("PROCEDURE")
-    renamed = False
+    # Remove every primary signal: the modelled ``declarative`` section flag
+    # (cobol-parser 2026-09-15+) and, on an older parser, the stray
+    # DECLARATIVES paragraph artifact. Only the USE statement remains.
+    removed = False
+    for section in procedure._sections.values():
+        if section.get_metadata("declarative"):
+            section.set_metadata("declarative", False)
+            removed = True
     for paragraph in _all_paragraphs(procedure):
         if paragraph.paragraph_name.upper() == "DECLARATIVES":
             paragraph.paragraph_name = "NOT-DECLARATIVES-ANYMORE"
-            renamed = True
-    assert renamed  # precondition: the artifact was there to remove
+            removed = True
+    assert removed  # precondition: a primary signal was there to remove
     reasons = check_whole_program(result)
     declaratives = [r for r in reasons if r.code == "UNSUPPORTED_DECLARATIVES"]
     assert len(declaratives) == 1
+    assert "USE statement" in declaratives[0].message
 
 
 def test_whole_program_check_refuses_alter():

@@ -3514,3 +3514,15 @@ the AST's paragraph list, with no warning of its own.
   refuses.
 - **[docs]** `.okf/analysis.md`'s DECLARATIVES caveat updated to describe
   the fallback and link back to issue #106.
+
+
+## 2026-09-15 -- Enterprise program-type corpus
+
+`tests/fixtures/enterprise/` (a copy of cobol-parser's
+`tests/samples/enterprise/`: one program per IBM Enterprise COBOL program
+type) and `tests/unit/test_enterprise_corpus.py`, which pins what
+`mockymock generate` does with each program. Two refusal changes came out
+of it: `UNSUPPORTED_NESTED_PROGRAM` replaces the misleading `PARSE_WARNING`
+for multi-unit compilation units, and DECLARATIVES detection reads
+cobol-parser's new `is_declarative` section flag before the older
+stray-paragraph / USE-statement signals. See [analysis.md](analysis.md).

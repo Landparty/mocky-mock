@@ -1,0 +1,4 @@
+       8000-COMMON-ABEND.
+           DISPLAY 'ABENDING ' WS-ERROR-COUNT
+           MOVE 16 TO RETURN-CODE
+           STOP RUN.
