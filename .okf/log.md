@@ -3575,3 +3575,14 @@ names every output-file flag (`--coverage-json`/`--coverage-out`/
 the `.cut`'s path relative to the test root rather than its stem alone, so
 `svc1/PROG.cut` and `svc2/PROG.cut` no longer overwrite one report. See
 [cli.md](cli.md).
+
+
+## 2026-09-15 -- Copybook defaults review follow-up
+
+`generate --with-data` never showed the copybook-not-found hint: it
+resolves the program's fixture bundle through cobol-parser's own
+`ProgramFixtureGenerator` before `expand_copybooks`'s gate runs, and
+cobol-parser wraps the not-found error in a `ProgramLayoutError` rather
+than raising `CopybookNotFoundError` directly. The `except Exception`
+handler around that call now also checks `exc.__cause__` for the wrapped
+error. See [cli.md](cli.md).

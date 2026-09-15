@@ -445,6 +445,12 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             bundle = load_fixture_bundle(cp_bundle.to_dict())
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
+            # cobol-parser wraps the not-found error in a ProgramLayoutError;
+            # the actionable hint applies to the cause just the same.
+            if isinstance(exc, CopybookNotFoundError) or isinstance(
+                exc.__cause__, CopybookNotFoundError
+            ):
+                print(copybook_not_found_hint())
             return 1
 
     if placeholder_pairs:
