@@ -69,3 +69,19 @@ def test_directive_snippet_none_for_unrenderable_site():
         category = None
 
     assert directive_snippet(_FakeSite(), surface) is None
+
+
+def test_directive_snippet_none_for_sites_the_scaffold_itself_skips():
+    """A nested site with no recorded span, or a top-level site the
+    splicer cannot rewrite, is skipped by `_scaffold_placeholder`; the
+    refusal must not suggest a MOCK block the next lint would refuse."""
+    import dataclasses
+
+    surface, _ = _surface()
+    site = next(s for s in surface.boundary_sites if s.category is not None)
+    nested = dataclasses.replace(site, nested=True, span=None)
+    assert directive_snippet(nested, surface) is None
+    unspliceable = dataclasses.replace(
+        site, nested=False, unspliceable_reason="cannot rewrite"
+    )
+    assert directive_snippet(unspliceable, surface) is None

@@ -45,8 +45,18 @@ Before dispatch, `main()` loads the project config file
 (`mockymock/cli/config.py`'s `load_config()`: `mockymock.toml` or
 `pyproject.toml`'s `[tool.mockymock]` table, searched from cwd upward) and
 stashes it on `args._config`; a malformed file is `ConfigError`, caught in
-`main()` and printed as a clean error (exit 1) rather than reaching any
-`_cmd_*`.
+`main()`. Only a subcommand that would read the config (one whose
+subparser defines `copybook_path` or `seed`) fails on it -- printed as a
+clean error, exit 1, as JSON for `collect --json` and on stderr for
+`fixtures` so their machine-readable stdout contracts hold; `collect`
+without `--json`, `setup`, `dashboard`, `explain`, `skills`, `analyze` run
+on with `args._config = None`, and `doctor` reloads the file itself to
+report the error as a `WARN` check. Unknown keys are a `ConfigError` too
+(a typo'd `copybook-path`, or `timeout`, which is deliberately not
+config-overridable); `seed = true` is rejected (bool is an int subclass).
+`test_root` is resolved relative to the config file that declares it, like
+`copybook_path`, so `mockymock run` from a subdirectory scans the same
+suites as from the project root.
 
 `run`/`debug`/`lint`/`mutate`/`export` no longer require both `program` and
 `--cut`: `_resolve_program_and_cut()` (`cli/main.py`) fills in whichever one
@@ -55,8 +65,15 @@ is missing from its same-stem sibling file via
 (mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). `run`/`lint`
 with *neither* given fall into `_run_directory`/`_lint_directory`:
 `discover_cut_files()` walks the test root (config's `test_root`, default
-`.`) and each command's own single-pair `_cmd_run`/`_cmd_lint` is called
+`.`; the exclude list applies to directories *below* the root only, so an
+absolute test root under `build/` is still scanned) and each command's own
+single-pair `_cmd_run`/`_cmd_lint` is called
 once per discovered `(program, .cut)` pair via a shallow `copy.copy(args)`
+(every output-file flag -- `--junit-xml`, `--json-report`,
+`--coverage-json`, `--coverage-out`, `--trace-json` -- gets a per-pair name
+from `_per_pair_report_path`, which folds the `.cut`'s path *relative to the
+test root* into the file name so `svc1/PROG.cut` and `svc2/PROG.cut` never
+share one report)
 — not a parallel implementation, so an explicit single-pair invocation is
 byte-for-byte unaffected.
 
@@ -139,11 +156,21 @@ See `docs/2026-09-15-init-command-design.md`.
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
 
-**`--fill CUT_FILE` (2026-09-15)** is a separate mode, dispatched before any
+**`--fill CUT_FILE` (2026-09-15)** is a separate mode, dispatched (after
+`_apply_config_to_args`, so config-file copybook paths apply) before any
 of the flags below: inserts only the `MOCK ... END-MOCK` blocks `CUT_FILE`'s
 own test cases are missing (per `checks.run_static_checks`'s
-`unmocked_reasons`, the same `check_test_case` analysis `lint` runs), writing
-back to `CUT_FILE` in place. Every existing directive, `EXPECT`/`VERIFY`, and
+`unmocked_reasons`, keyed by the case's index in `suite.test_cases` since
+duplicate TESTCASE names are legal), writing back to `CUT_FILE` in place.
+One block per distinct header per case (two reachable READs of one file
+are one `MOCK READ`, never a duplicate the parser rejects); the anchor
+PERFORM is the case's own, skipping any PERFORM inside a `MOCK ... END-MOCK`
+body; `directive_snippet` declines the sites the scaffold itself skips (a
+nested site with no span, an unspliceable top-level site). Every problem
+`--fill` cannot fix (a flow-mock target that does not exist, an `UNMOCKED_*`
+reason with no mechanical fix) is printed and exits 1, so `--fill` exiting 0
+means the next `lint` exits 0. Reported `file:line` is where each block
+landed in the written file. Every existing directive, `EXPECT`/`VERIFY`, and
 comment is left byte-for-byte untouched — insertion happens at known line
 numbers (found via `dsl.parser._PERFORM_RE` locating each case's own
 `PERFORM` line), never by re-serializing the parsed model, and an existing
@@ -731,12 +758,19 @@ authoritative test discovery; a `CutParseError` yields `{"version": 1,
 "error": "..."}` and exit 1.
 
 **`--boundaries` (2026-09-15)** additionally reports `boundaries: [{category,
-key, keys, label, paragraph, line, matchText}]` -- every site in
+key, keys, directive, label, paragraph, line, matchText}]` -- every site in
 `analysis.mock_surface.analyze(ast).boundary_sites` with `category is not
 None`, whole-program and **not** reachability-filtered by any one
 TESTCASE's PERFORM target (that's what `lint`'s refusal gate is for; this
 feeds editor completion for "every key this program could ever need
-mocked"). `_collect_boundaries()` (`cli/main.py`) parses `program`
+mocked"). `key` is `keys[0]` (a multi-key site such as `OPEN INV-FILE
+RPT-FILE` lists every key in `keys`; consumers must read `keys`), and is
+`null` for SQL/CICS/DLI, whose DSL key is a quoted text prefix: `directive`
+is the exact `MOCK <category> <key>` header `dsl.generator.directive_snippet`
+would scaffold for the site (quoted where the DSL requires it, the
+shortest-unique prefix for SQL/CICS/DLI, `null` when the scaffold skips the
+site), so a consumer inserts what the parser accepts instead of re-deriving
+the quoting rules. `_collect_boundaries()` (`cli/main.py`) parses `program`
 directly (with `--copybook-path` expansion if given) -- it does not go
 through `run_static_checks`, since it needs no `.cut`-specific analysis at
 all. Requires both `--json` and `program` (checked before any parsing);

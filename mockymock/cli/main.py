@@ -390,6 +390,18 @@ def _cmd_init(args: argparse.Namespace) -> int:
         return 1
 
     output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
+    if source_path.suffix.lower() == ".cut" or output_path.resolve() == (
+        source_path.resolve()
+    ):
+        # `mockymock init X.cut` would otherwise be told X.cut "already
+        # exists, pass --force" -- and --force would then parse the .cut
+        # as COBOL and overwrite it with the result.
+        print(
+            f"mockymock init: {source_path} is the .cut file, not the COBOL "
+            f"program -- pass the program (e.g. "
+            f"{source_path.with_suffix('.cbl')})"
+        )
+        return 1
     if output_path.exists() and not args.force:
         print(
             f"mockymock init: {output_path} already exists -- pass --force "
@@ -455,9 +467,18 @@ def _cmd_init(args: argparse.Namespace) -> int:
     run_args = build_parser().parse_args(run_argv)
     run_args._config = config
     run_exit_code = _cmd_run(run_args)
-    print(
-        f"mockymock init: next, run 'mockymock run {source_path} --cut {output_path}'"
-    )
+    if run_exit_code == 0:
+        print(
+            f"mockymock init: next, run 'mockymock run {source_path} "
+            f"--cut {output_path}'"
+        )
+    else:
+        print(
+            f"mockymock init: {output_path} was written, but recording its "
+            f"expected values failed (see above) -- fix that, then run "
+            f"'mockymock run {source_path} --cut {output_path} "
+            f"--record-expectations'"
+        )
     return run_exit_code
 
 
@@ -491,7 +512,12 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
     rather than re-running reachability analysis independently, so
     `--fill` and `lint` can never disagree about what's missing."""
     from mockymock.cli.checks import run_static_checks
-    from mockymock.dsl.parser import _PERFORM_RE
+    from mockymock.dsl.parser import (
+        _END_MOCK_RE,
+        _MOCK_BARE_RE,
+        _MOCK_QUOTED_RE,
+        _PERFORM_RE,
+    )
 
     if not _check_input_files("mockymock generate", cut_path):
         return 1
@@ -523,14 +549,43 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
         later = [ln for ln in case_starts if ln > case_line]
         return (min(later) - 1) if later else len(raw_lines)
 
+    def _perform_line(case_line: int, end_line: int) -> int | None:
+        """The case's own PERFORM line: the first PERFORM in its range
+        that is *not* inside a MOCK ... END-MOCK body (a mock body is
+        verbatim COBOL and may itself PERFORM a paragraph; anchoring on
+        that would splice the new block into the middle of another
+        mock's body)."""
+        in_mock_body = False
+        for line_no in range(max(case_line, 1), end_line + 1):
+            if line_no > len(raw_lines):
+                break
+            text = raw_lines[line_no - 1].strip()
+            if in_mock_body:
+                if _END_MOCK_RE.match(text):
+                    in_mock_body = False
+                continue
+            if _MOCK_QUOTED_RE.match(text) or _MOCK_BARE_RE.match(text):
+                in_mock_body = True
+                continue
+            if _PERFORM_RE.match(text):
+                return line_no
+        return None
+
+    inserted_headers: list[tuple[int, str]] = []
     per_line_inserts: dict[int, list[str]] = {}
     filled_cases = 0
     added_blocks = 0
     warnings: list[str] = []
-    inserted_headers: list[tuple[int, str]] = []
+    # (anchor line, header, block length) per inserted block.
+    inserted_blocks: list[tuple[int, str, int]] = []
+    # Cases whose PERFORM line could not be found, with the headers they
+    # needed: a PROVIDER-expanded case's own range (its ROW line) holds
+    # no PERFORM, but the block inserted for the shared template covers
+    # every row -- so such a case is only a problem when nothing did.
+    unlocated: list[tuple[str, list[str]]] = []
 
-    for case in suite.test_cases:
-        reasons = checked.unmocked_reasons.get(case.name, [])
+    for case_index, case in enumerate(suite.test_cases):
+        reasons = checked.unmocked_reasons.get(case_index, [])
         fixable = [r for r in reasons if r.suggested_fix]
         for r in reasons:
             if not r.suggested_fix:
@@ -538,40 +593,76 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
         if not fixable:
             continue
         end_line = _case_end(case.line) if case.line else len(raw_lines)
-        perform_line_no = None
-        for line_no in range(max(case.line, 1), end_line + 1):
-            if line_no <= len(raw_lines) and _PERFORM_RE.match(
-                raw_lines[line_no - 1].strip()
-            ):
-                perform_line_no = line_no
-                break
+        perform_line_no = _perform_line(case.line, end_line) if case.line else None
         if perform_line_no is None:
-            warnings.append(
-                f"TESTCASE {case.name!r}: could not locate its PERFORM line "
-                f"to insert a fix before -- skipped"
+            unlocated.append(
+                (
+                    case.name,
+                    [
+                        _reindent_snippet(r.suggested_fix, indent)
+                        .splitlines()[0]
+                        .strip()
+                        for r in fixable
+                        if r.suggested_fix is not None
+                    ],
+                )
             )
             continue
         new_lines: list[str] = []
+        # One block per distinct directive, not per site: two reachable
+        # READs of the same file produce two UNMOCKED_READ reasons with
+        # the same header, and the parser rejects a duplicate MOCK.
+        seen_headers: set[str] = {
+            _header_line(raw_lines[ln - 1])
+            for ln in range(max(case.line, 1), end_line + 1)
+            if ln <= len(raw_lines)
+        }
         for r in fixable:
             assert r.suggested_fix is not None  # `fixable` was filtered on this
             snippet = _reindent_snippet(r.suggested_fix, indent)
-            new_lines.extend(snippet.splitlines())
             header = snippet.splitlines()[0].strip()
-            inserted_headers.append((perform_line_no, header))
+            if header in seen_headers:
+                continue
+            seen_headers.add(header)
+            block_lines = snippet.splitlines()
+            new_lines.extend(block_lines)
+            inserted_blocks.append((perform_line_no, header, len(block_lines)))
             added_blocks += 1
+        if not new_lines:
+            continue
         per_line_inserts.setdefault(perform_line_no, []).extend(new_lines)
         filled_cases += 1
 
     if per_line_inserts:
         result_lines: list[str] = []
+        # Report each inserted block at the line it lands on in the
+        # written file, not the pre-insertion line it was anchored to.
+        final_line_of: dict[int, int] = {}
         for line_no, raw in enumerate(raw_lines, start=1):
             if line_no in per_line_inserts:
+                final_line_of[line_no] = len(result_lines) + 1
                 result_lines.extend(per_line_inserts[line_no])
             result_lines.append(raw)
         new_text = newline.join(result_lines)
         if original_text.endswith(("\n", "\r\n")):
             new_text += newline
         cut_path.write_text(new_text, encoding="utf-8")
+        offset_within_anchor: dict[int, int] = {}
+        for anchor, header, block_len in inserted_blocks:
+            start = final_line_of[anchor] + offset_within_anchor.get(anchor, 0)
+            inserted_headers.append((start, header))
+            offset_within_anchor[anchor] = (
+                offset_within_anchor.get(anchor, 0) + block_len
+            )
+
+    covered = {header for _, header, _ in inserted_blocks}
+    for case_name, headers in unlocated:
+        if all(header in covered for header in headers):
+            continue
+        warnings.append(
+            f"TESTCASE {case_name!r}: could not locate its PERFORM line "
+            f"to insert a fix before -- skipped"
+        )
 
     print(
         f"mockymock generate --fill: added {added_blocks} mock block(s) "
@@ -581,7 +672,34 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
         print(f"{cut_path}:{line_no}: {header}")
     for warning in warnings:
         print(f"mockymock generate: {warning}")
+
+    # Everything `lint` would still refuse that no MOCK block can fix
+    # (a flow-mock target that doesn't exist, a terminator layout, an
+    # UNMOCKED_* reason with no mechanical fix): print it and fail, so
+    # `--fill` exiting 0 means the next `lint` exits 0 too.
+    remaining = [
+        problem
+        for problem in checked.problems
+        if not problem.startswith("  ") and not _is_filled_problem(problem)
+    ]
+    for problem in remaining:
+        print(f"mockymock generate: {problem}")
+    if remaining or warnings:
+        return 1
     return 0
+
+
+def _header_line(raw: str) -> str:
+    """A `.cut` line normalized the way `--fill` compares MOCK headers:
+    stripped, so an existing `MOCK READ INV-FILE` (any indentation) is
+    recognized as already present."""
+    return raw.strip()
+
+
+def _is_filled_problem(problem: str) -> bool:
+    """True for the `refused (UNMOCKED_*): ...` lines `--fill` acts on
+    itself; every other problem line is one it cannot fix."""
+    return problem.startswith("refused (UNMOCKED_")
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
@@ -634,6 +752,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 f"the file it read"
             )
             return 1
+        _apply_config_to_args(args, source_path)
         return _fill_cut_file(source_path, Path(args.fill), args)
 
     if not _check_rows_non_negative("generate", args.rows):
@@ -700,6 +819,12 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             bundle = load_fixture_bundle(cp_bundle.to_dict())
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
+            # cobol-parser wraps the not-found error in a ProgramLayoutError;
+            # the actionable hint applies to the cause just the same.
+            if isinstance(exc, CopybookNotFoundError) or isinstance(
+                exc.__cause__, CopybookNotFoundError
+            ):
+                print(copybook_not_found_hint())
             return 1
 
     if placeholder_pairs:
@@ -980,15 +1105,33 @@ def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
             print(f"  - {finding}")
 
 
-def _per_pair_report_path(base: str, cut_path: Path) -> str:
-    """Insert the .cut file's own stem before the extension:
-    'report.xml' + 'ORDRPROC.cut' -> 'report-ORDRPROC.xml'. Used so
-    directory-mode --junit-xml/--json-report don't have every discovered
-    pair overwrite the same single report file."""
+def _per_pair_report_path(base: str, cut_path: Path, test_root: Path) -> str:
+    """Insert the .cut file's path (relative to `test_root`, separators
+    folded to '-') before the extension: 'report.xml' + 'ORDRPROC.cut'
+    -> 'report-ORDRPROC.xml'; 'svc1/ORDRPROC.cut' -> 'report-svc1-
+    ORDRPROC.xml'. Used so directory-mode output files don't have every
+    discovered pair overwrite the same single file -- the relative path,
+    not just the stem, because two suites with the same stem in
+    different directories (a monorepo's svc1/PROG.cut and svc2/PROG.cut)
+    are exactly the case a per-pair name exists to keep apart."""
     base_path = Path(base)
-    return str(
-        base_path.with_name(f"{base_path.stem}-{cut_path.stem}{base_path.suffix}")
-    )
+    try:
+        relative = cut_path.relative_to(test_root)
+    except ValueError:
+        relative = Path(cut_path.name)
+    tag = "-".join(relative.with_suffix("").parts)
+    return str(base_path.with_name(f"{base_path.stem}-{tag}{base_path.suffix}"))
+
+
+# Every `run` flag naming an output file: each gets a per-pair name in
+# directory mode, or the second suite silently overwrites the first's.
+_RUN_OUTPUT_PATH_FLAGS = (
+    "junit_xml",
+    "json_report",
+    "coverage_json",
+    "coverage_out",
+    "trace_json",
+)
 
 
 def _run_directory(args: argparse.Namespace) -> int:
@@ -1028,10 +1171,13 @@ def _run_directory(args: argparse.Namespace) -> int:
         sub_args = copy.copy(args)
         sub_args.program = str(program_path)
         sub_args.cut = str(cut_path)
-        if getattr(args, "junit_xml", None):
-            sub_args.junit_xml = _per_pair_report_path(args.junit_xml, cut_path)
-        if getattr(args, "json_report", None):
-            sub_args.json_report = _per_pair_report_path(args.json_report, cut_path)
+        for flag in _RUN_OUTPUT_PATH_FLAGS:
+            if getattr(args, flag, None):
+                setattr(
+                    sub_args,
+                    flag,
+                    _per_pair_report_path(getattr(args, flag), cut_path, test_root),
+                )
         print(f"== {cut_path} ==")
         exit_code = _cmd_run(sub_args) or exit_code
 
@@ -2039,6 +2185,7 @@ def _collect_boundaries(
     from cobolparser.preprocess import expand_copybooks
 
     from mockymock.analysis.mock_surface import analyze
+    from mockymock.dsl.generator import directive_snippet
 
     raw_source = source_path.read_text(encoding="utf-8")
     if copybook_paths:
@@ -2056,11 +2203,18 @@ def _collect_boundaries(
     for site in surface.boundary_sites:
         if site.category is None:
             continue
+        # `directive` is the exact MOCK header a scaffold would write for
+        # this site (quoted key for CALL/MQ/SQL/CICS/DLI, the shortest
+        # unique text prefix for SQL/CICS/DLI whose `key` is null) -- so
+        # a consumer inserts what the DSL parses rather than re-deriving
+        # the quoting rules. None when the scaffold itself would skip it.
+        snippet = directive_snippet(site, surface)
         boundaries.append(
             {
                 "category": site.category.value,
                 "key": site.keys[0] if site.keys else None,
                 "keys": list(site.keys),
+                "directive": snippet.splitlines()[0].strip() if snippet else None,
                 "label": site.label,
                 "paragraph": site.paragraph_name,
                 "line": site.line,
@@ -2982,8 +3136,27 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args._config = load_config()
     except ConfigError as exc:
-        print(str(exc))
-        return 1
+        args._config = None
+        # Only a subcommand that would actually read the config fails on
+        # a malformed one. `collect`/`setup`/`dashboard`/... run on with
+        # defaults, and `doctor` re-loads it itself to report the error
+        # as a WARN check (that is the situation it exists to explain).
+        consumes_config = (
+            hasattr(args, "copybook_path") or hasattr(args, "seed")
+        ) and args.func is not _cmd_doctor
+        if consumes_config:
+            if args.func is _cmd_collect and getattr(args, "json", False):
+                import json
+
+                # `collect --json` promises machine-readable stdout on
+                # every failure (the VS Code extension parses it).
+                print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
+            elif args.func is _cmd_fixtures:
+                # `fixtures` keeps stdout JSON-only; errors go to stderr.
+                print(str(exc), file=sys.stderr)
+            else:
+                print(str(exc))
+            return 1
 
     return args.func(args)
 

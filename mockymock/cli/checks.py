@@ -56,12 +56,15 @@ class StaticCheckResult:
     # command prefix -- silently proceeding past a warning, or silently
     # editing source a .cut author didn't write, would both be surprises.
     notes: list[str] = field(default_factory=list)
-    # Raw check_test_case() output per TESTCASE name (not just the
-    # pre-formatted strings already folded into `problems`) -- lets a
-    # caller like `generate --fill` act on `RefusalReason.suggested_fix`
-    # directly instead of re-running the same reachability analysis a
-    # second time. Only cases with at least one reason appear as a key.
-    unmocked_reasons: dict[str, list[RefusalReason]] = field(default_factory=dict)
+    # Raw check_test_case() output per TESTCASE, keyed by the case's
+    # index in `suite.test_cases` (not its name: duplicate TESTCASE names
+    # are legal, and a name key would hand the last case's reasons to
+    # every namesake). Not just the pre-formatted strings already folded
+    # into `problems` -- lets a caller like `generate --fill` act on
+    # `RefusalReason.suggested_fix` directly instead of re-running the
+    # same reachability analysis a second time. Only cases with at least
+    # one reason appear as a key.
+    unmocked_reasons: dict[int, list[RefusalReason]] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -416,7 +419,7 @@ def run_static_checks(
     # "GO TO <own-exit-label>" spliced into EXIT PARAGRAPH no longer
     # cascades fall-through reachability past its exit label.
     neutralized_goto = neutralized_goto_targets(parse_result.ast, scope_map, lines)
-    for case in suite.test_cases:
+    for case_index, case in enumerate(suite.test_cases):
         case_reasons = check_test_case(
             surface,
             parse_result.ast,
@@ -432,7 +435,7 @@ def run_static_checks(
                     f"    {line}" for line in r.suggested_fix.splitlines()
                 )
         if case_reasons:
-            out.unmocked_reasons[case.name] = case_reasons
+            out.unmocked_reasons[case_index] = case_reasons
     out.problems.extend(
         f"refused ({r.code}): {r.message}"
         for r in check_flow_mocks(parse_result.ast, suite, lines)

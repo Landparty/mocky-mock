@@ -46,6 +46,8 @@ def test_collect_boundaries_reports_the_call_site(capsys):
     site = payload["boundaries"][0]
     assert site["category"] == "CALL"
     assert site["key"] == "DISCRATE"
+    # The exact header the scaffold would write: a quoted CALL key.
+    assert site["directive"] == 'MOCK CALL "DISCRATE"'
     assert site["paragraph"] == "PROCESS-ORDER"
     assert site["line"] > 0
 

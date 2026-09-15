@@ -144,3 +144,125 @@ def test_generate_fill_preserves_line_endings_and_trailing_newline(tmp_path, cap
     result = cut.read_text()
     assert result.endswith("\n")
     assert "\r\n" not in result
+
+
+_TWO_READS_PROGRAM = (
+    "       IDENTIFICATION DIVISION.\n"
+    "       PROGRAM-ID. P.\n"
+    "       DATA DIVISION.\n"
+    "       WORKING-STORAGE SECTION.\n"
+    "       01 WS-EOF PIC X VALUE 'N'.\n"
+    "       PROCEDURE DIVISION.\n"
+    "       0000-MAIN-PROCESS.\n"
+    "           OPEN INPUT INV-FILE.\n"
+    "           READ INV-FILE\n"
+    "               AT END MOVE 'Y' TO WS-EOF\n"
+    "           END-READ.\n"
+    "           PERFORM 1000-NEXT.\n"
+    "           CLOSE INV-FILE.\n"
+    "           STOP RUN.\n"
+    "       1000-NEXT.\n"
+    "           READ INV-FILE\n"
+    "               AT END MOVE 'Y' TO WS-EOF\n"
+    "           END-READ.\n"
+)
+
+
+def test_generate_fill_inserts_one_block_for_two_sites_sharing_a_key(tmp_path, capsys):
+    """A priming READ plus a READ in a PERFORMed paragraph are two
+    UNMOCKED reasons with one MOCK header; two blocks would be a
+    duplicate the .cut parser rejects."""
+    cbl = tmp_path / "P.cbl"
+    cbl.write_text(_TWO_READS_PROGRAM)
+    cut = tmp_path / "P.cut"
+    cut.write_text(_PARTIALLY_MOCKED_CUT)
+    exit_code = main(["generate", str(cbl), "--fill", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "added 1 mock block(s) across 1 test case(s)" in out
+    assert cut.read_text().count("MOCK READ INV-FILE") == 1
+    assert main(["lint", str(cbl), "--cut", str(cut)]) == 0
+
+
+def test_generate_fill_skips_a_perform_inside_a_mock_body(tmp_path, capsys):
+    """A mock body is verbatim COBOL and may PERFORM a paragraph; the
+    inserted block must land before the case's own PERFORM, never
+    inside another mock's body."""
+    cut_text = (
+        'TESTSUITE "s"\n'
+        "\n"
+        'TESTCASE "opens and closes"\n'
+        "    MOCK OPEN INV-FILE\n"
+        "        PERFORM 1000-NEXT\n"
+        "    END-MOCK\n"
+        "    MOCK CLOSE INV-FILE\n"
+        "    END-MOCK\n"
+        "    PERFORM 0000-MAIN-PROCESS\n"
+    )
+    cbl, cut = _write_pair(tmp_path, cut_text)
+    exit_code = main(["generate", str(cbl), "--fill", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    lines = cut.read_text().splitlines()
+    read_at = lines.index("    MOCK READ INV-FILE")
+    assert lines[read_at - 1] == "    END-MOCK"
+    assert lines[read_at + 2] == "    PERFORM 0000-MAIN-PROCESS"
+    assert main(["lint", str(cbl), "--cut", str(cut)]) == 0
+
+
+def test_generate_fill_keeps_same_named_test_cases_apart(tmp_path, capsys):
+    """Duplicate TESTCASE names are legal; each case must get exactly
+    the blocks it is missing, not the last namesake's."""
+    cut_text = (
+        'TESTSUITE "s"\n'
+        "\n"
+        'TESTCASE "same"\n'
+        "    MOCK OPEN INV-FILE\n"
+        "    END-MOCK\n"
+        "    MOCK CLOSE INV-FILE\n"
+        "    END-MOCK\n"
+        "    MOCK READ INV-FILE\n"
+        "    END-MOCK\n"
+        "    PERFORM 0000-MAIN-PROCESS\n"
+        "\n"
+        'TESTCASE "same"\n'
+        "    MOCK OPEN INV-FILE\n"
+        "    END-MOCK\n"
+        "    MOCK CLOSE INV-FILE\n"
+        "    END-MOCK\n"
+        "    PERFORM 0000-MAIN-PROCESS\n"
+    )
+    cbl, cut = _write_pair(tmp_path, cut_text)
+    exit_code = main(["generate", str(cbl), "--fill", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "added 1 mock block(s) across 1 test case(s)" in out
+    assert cut.read_text().count("MOCK READ INV-FILE") == 2
+    assert main(["lint", str(cbl), "--cut", str(cut)]) == 0
+
+
+def test_generate_fill_reports_problems_it_cannot_fix_and_fails(tmp_path, capsys):
+    """`--fill` exiting 0 must mean the next `lint` exits 0: a problem
+    no MOCK block can fix is printed and fails the command."""
+    cut_text = _FULLY_MOCKED_CUT.replace(
+        "    PERFORM 0000-MAIN-PROCESS\n",
+        "    MOCK PARAGRAPH NO-SUCH-PARA\n"
+        "    END-MOCK\n"
+        "    PERFORM 0000-MAIN-PROCESS\n",
+    )
+    cbl, cut = _write_pair(tmp_path, cut_text)
+    original = cut.read_text()
+    exit_code = main(["generate", str(cbl), "--fill", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "UNRESOLVED_FLOW_MOCK_TARGET" in out
+    assert cut.read_text() == original
+
+
+def test_generate_fill_reports_the_line_each_block_landed_on(tmp_path, capsys):
+    cbl, cut = _write_pair(tmp_path, _PARTIALLY_MOCKED_CUT)
+    main(["generate", str(cbl), "--fill", str(cut)])
+    out = capsys.readouterr().out
+    lines = cut.read_text().splitlines()
+    landed = lines.index("    MOCK READ INV-FILE") + 1
+    assert f"{cut}:{landed}: MOCK READ INV-FILE" in out

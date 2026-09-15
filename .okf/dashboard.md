@@ -17,7 +17,11 @@ already prints as text, minus the side effects.
 equivalent: same `runtime.status.probe()`, no browser or HTTP server, plus
 two checks of its own (cobol-parser importability, which project config
 file this invocation would load). `--json` for scripting; exits 0 when
-ready, 1 otherwise. Never builds or starts anything, same as this page.
+ready, 1 otherwise -- where doctor's `ready` is "no check is `DOWN`" (a
+`WARN` such as a stopped container or a malformed config file still
+exits 0, since `setup`/the next `run` sorts it out; this is looser than
+`probe()`'s own `ready`, which is `all(state == ok)`). Never builds or
+starts anything, same as this page.
 See docs/2026-09-15-doctor-command-design.md.
 
 ```

@@ -152,3 +152,37 @@ def test_doctor_works_when_docker_binary_is_entirely_absent(monkeypatch):
     assert report.ready is False
     daemon_check = next(c for c in report.all_checks() if c.id == "daemon")
     assert daemon_check.state == status.DOWN
+
+
+def test_gather_full_status_warn_only_is_still_ready(monkeypatch):
+    """A stopped container is a WARN `mockymock setup` / the next `run`
+    sorts out on its own -- not a failure (design doc: WARN -> exit 0)."""
+    checks = (
+        status.Check("daemon", "Docker daemon", status.OK, "reachable"),
+        status.Check("container", "Toolchain container", status.WARN, "stopped"),
+    )
+    monkeypatch.setattr(
+        status, "probe", lambda: _fake_toolchain(ready=False, checks=checks)
+    )
+    report = doctor_mod.gather_full_status()
+    assert report.ready is True
+    text = doctor_mod.format_doctor_text(report)
+    assert "ready (with warnings" in text
+    assert "not ready" not in text
+
+
+def test_cli_doctor_reports_a_malformed_config_file_as_warn(
+    tmp_path, monkeypatch, capsys
+):
+    """`doctor` must never die on the environment it exists to explain:
+    a broken config file is a WARN line in the report, not an exit
+    before the report."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mockymock.toml").write_text("seed = [\n")
+    monkeypatch.setattr(status, "probe", lambda: _fake_toolchain(ready=True))
+    exit_code = main(["doctor", "--json"])
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    config_check = next(c for c in payload["checks"] if c["id"] == "config_file")
+    assert config_check["state"] == status.WARN
+    assert exit_code == 0

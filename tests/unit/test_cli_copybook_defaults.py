@@ -102,3 +102,19 @@ def test_lint_missing_copybook_gets_actionable_hint(tmp_path, capsys, monkeypatc
     assert "not found in search paths" in out
     assert "--copybook-path" in out
     assert "[tool.mockymock]" in out
+
+
+def test_generate_with_data_missing_copybook_gets_actionable_hint(
+    tmp_path, capsys, monkeypatch
+):
+    """`--with-data` resolves the program's layout before the expansion
+    gate runs, and cobol-parser wraps the not-found error -- the hint
+    must still be appended there."""
+    monkeypatch.chdir(tmp_path)
+    cbl, cut = _copy_bearing_pair(tmp_path, with_copybook=False)
+    (tmp_path / "copybooks").mkdir()
+    exit_code = main(["generate", str(cbl), "--with-data", "-o", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "not found in search paths" in out
+    assert "--copybook-path" in out

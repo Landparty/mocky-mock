@@ -3613,3 +3613,28 @@ in both directions). Both are the CLI-side dependencies of a planned
 `mocky-mock-vscode` completion/hover feature -- see
 [cli.md](cli.md), [analysis.md](analysis.md), and
 `docs/2026-09-15-cut-editor-intelligence-design.md`.
+
+
+## 2026-09-15 -- Review follow-ups on the CLI PRs (#111-#116)
+
+Cross-PR review fixes, on top of the six PRs merged together. `setup
+--rebuild` now removes the toolchain container after the rebuilt image
+(the tag-string stale check could not tell the new image from the old,
+so every compile stayed in the old toolchain). Config: `test_root` is
+resolved relative to the config file; unknown keys (and `timeout`, which
+is deliberately not config-overridable) and `seed = true` are
+`ConfigError`s; a malformed file only fails the subcommands that read it
+(`collect --json` keeps its JSON error shape, `fixtures` prints to
+stderr, `doctor` reports it as `WARN`). `discover_cut_files` applies the
+exclude list below the root only. Directory-mode `run` names every
+output-file flag per pair, from the `.cut`'s path relative to the test
+root. `generate --fill`: one block per distinct header per case, the
+anchor PERFORM skips mock bodies, reasons keyed by case index (duplicate
+TESTCASE names), unfixable problems printed and exit 1, landed line
+numbers reported; `directive_snippet` declines the sites the scaffold
+skips. `generate --with-data` appends the copybook hint to a wrapped
+`CopybookNotFoundError`. `doctor`: `ready` means no `DOWN` (a `WARN` exits
+0, per the design doc). `init` refuses a `.cut` passed as the program and
+prints the next step only when recording succeeded. `collect
+--boundaries` gains `directive` (the exact scaffold header) for editor
+completion. See [cli.md](cli.md), [dashboard.md](dashboard.md).

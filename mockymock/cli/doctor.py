@@ -108,7 +108,13 @@ def gather_full_status() -> DoctorReport:
 
     toolchain = probe()
     extra = (_check_cobol_parser(), _check_config_file())
-    ready = toolchain.ready and all(c.state != DOWN for c in extra)
+    # Ready means nothing is DOWN. A WARN (a stopped container, a stale
+    # image, a malformed config file) is something `mockymock setup` or
+    # the next `run` sorts out on its own, not a failure the user must
+    # fix first -- see docs/2026-09-15-doctor-command-design.md, "Exit
+    # code": WARN -> 0. `probe()`'s own `ready` is stricter (it also
+    # drops on a stopped container), so it is not reused here.
+    ready = all(c.state != DOWN for c in (*toolchain.checks, *extra))
     return DoctorReport(toolchain=toolchain, extra_checks=extra, ready=ready)
 
 
@@ -134,10 +140,16 @@ def format_doctor_text(report: DoctorReport) -> str:
                 lines.append(f"       -> {fix}")
     lines.append("")
     if report.ready:
-        lines.append("mockymock doctor: ready.")
+        if any(c.state != OK for c in report.all_checks()):
+            lines.append(
+                "mockymock doctor: ready (with warnings -- 'mockymock setup' "
+                "or the next 'mockymock run' sorts the [WARN] check(s) out)."
+            )
+        else:
+            lines.append("mockymock doctor: ready.")
     else:
         lines.append(
-            "mockymock doctor: not ready -- fix the failing check(s) above, "
+            "mockymock doctor: not ready -- fix the [FAIL] check(s) above, "
             "then re-run 'mockymock doctor' or 'mockymock setup'."
         )
     return "\n".join(lines)
