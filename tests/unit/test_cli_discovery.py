@@ -92,6 +92,18 @@ def test_discover_cut_files_skips_excluded_directories(tmp_path):
     assert [p.name for p in result] == ["REAL.cut"]
 
 
+def test_discover_cut_files_only_excludes_directories_below_the_root(tmp_path):
+    # A test root that itself lives under an excluded name (an absolute
+    # test_root in a CI checkout at .../build/tests) must still be scanned.
+    root = tmp_path / "build" / "tests"
+    root.mkdir(parents=True)
+    (root / "REAL.cut").write_text("")
+    (root / "dist").mkdir()
+    (root / "dist" / "VENDORED.cut").write_text("")
+    result = discover_cut_files(root)
+    assert [p.name for p in result] == ["REAL.cut"]
+
+
 def test_discover_cut_files_returns_empty_list_for_missing_directory(tmp_path):
     assert discover_cut_files(tmp_path / "does-not-exist") == []
 

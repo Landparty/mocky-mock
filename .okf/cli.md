@@ -42,8 +42,16 @@ Before dispatch, `main()` loads the project config file
 (`mockymock/cli/config.py`'s `load_config()`: `mockymock.toml` or
 `pyproject.toml`'s `[tool.mockymock]` table, searched from cwd upward) and
 stashes it on `args._config`; a malformed file is `ConfigError`, caught in
-`main()` and printed as a clean error (exit 1) rather than reaching any
-`_cmd_*`.
+`main()`. Only a subcommand that would read the config (one whose subparser
+defines `copybook_path` or `seed`) fails on it -- printed as a clean error,
+exit 1, on stderr for `fixtures` so its machine-readable stdout contract
+holds; `collect` without `--json`, `setup`, `dashboard`, `skills`, `analyze`
+run on with `args._config = None`. Unknown keys are a `ConfigError` too (a
+typo'd `copybook-path`, or `timeout`, which is deliberately not
+config-overridable); `seed = true` is rejected (bool is an int subclass).
+`test_root` is resolved relative to the config file that declares it, like
+`copybook_path`, so `mockymock run` from a subdirectory scans the same
+suites as from the project root.
 
 `run`/`debug`/`lint`/`mutate`/`export` no longer require both `program` and
 `--cut`: `_resolve_program_and_cut()` (`cli/main.py`) fills in whichever one
@@ -52,9 +60,15 @@ is missing from its same-stem sibling file via
 (mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). `run`/`lint`
 with *neither* given fall into `_run_directory`/`_lint_directory`:
 `discover_cut_files()` walks the test root (config's `test_root`, default
-`.`) and each command's own single-pair `_cmd_run`/`_cmd_lint` is called
-once per discovered `(program, .cut)` pair via a shallow `copy.copy(args)`
-— not a parallel implementation, so an explicit single-pair invocation is
+`.`; the exclude list applies to directories *below* the root only, so an
+absolute test root under `build/` is still scanned) and each command's own
+single-pair `_cmd_run`/`_cmd_lint` is called once per discovered
+`(program, .cut)` pair via a shallow `copy.copy(args)` (every output-file
+flag -- `--junit-xml`, `--json-report`, `--coverage-json`, `--coverage-out`,
+`--trace-json` -- gets a per-pair name from `_per_pair_report_path`, which
+folds the `.cut`'s path *relative to the test root* into the file name so
+`svc1/PROG.cut` and `svc2/PROG.cut` never share one report) — not a
+parallel implementation, so an explicit single-pair invocation is
 byte-for-byte unaffected.
 
 `_apply_config_to_args()` fills `args.copybook_path`/`args.seed` from the

@@ -4,6 +4,8 @@ and setup --rebuild. Docker-free -- these exercise `lint` (never touches
 docker_toolchain) and argument-resolution paths that run before any
 splice/compile step."""
 
+from pathlib import Path
+
 from mockymock.cli.main import main
 
 _CLEAN_PROGRAM = (
@@ -197,3 +199,45 @@ def test_top_level_help_groups_commands(capsys):
     assert "Everyday:" in help_text
     assert "Diagnosing a failure:" in help_text
     assert "Advanced:" in help_text
+
+
+def test_per_pair_report_path_keeps_same_stem_suites_apart(tmp_path):
+    from mockymock.cli.main import _per_pair_report_path
+
+    root = tmp_path / "tests"
+    assert _per_pair_report_path("out/report.xml", root / "PROG.cut", root) == str(
+        Path("out/report-PROG.xml")
+    )
+    one = _per_pair_report_path("out/report.xml", root / "svc1" / "PROG.cut", root)
+    two = _per_pair_report_path("out/report.xml", root / "svc2" / "PROG.cut", root)
+    assert one == str(Path("out/report-svc1-PROG.xml"))
+    assert two == str(Path("out/report-svc2-PROG.xml"))
+
+
+def test_malformed_config_file_does_not_break_commands_that_never_read_it(
+    tmp_path, capsys, monkeypatch
+):
+    # `skills install` is pure file-copy -- no Docker, no copybook_path/
+    # seed on its own args -- the same "always available" tier `explain`
+    # (added later, in the cut-editor-intelligence PR) would exercise.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mockymock.toml").write_text("copybook_path = [\n")
+    exit_code = main(["skills", "install", "--project"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "could not parse" not in out
+
+
+def test_malformed_config_file_reported_on_stderr_for_json_only_stdout_commands(
+    tmp_path, capsys, monkeypatch
+):
+    # `fixtures` promises stdout is exactly the JSON document (or nothing,
+    # on a gate failure) -- a config error must go to stderr instead, the
+    # same convention its own "no such file" gate uses.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mockymock.toml").write_text("copybook_path = [\n")
+    exit_code = main(["fixtures", "MISSING.cbl"])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "could not parse" in captured.err

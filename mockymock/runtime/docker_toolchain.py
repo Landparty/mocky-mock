@@ -264,6 +264,20 @@ def ensure_toolchain(force_rebuild: bool = False) -> None:
             raise DockerNotAvailableError(
                 f"failed to build image {IMAGE}:\n{build.stderr.strip()}"
             )
+        if force_rebuild:
+            # `docker build -t IMAGE` re-tags the same content-hash tag
+            # onto the *new* image ID, so the stale-image check below
+            # (which compares tag strings) would keep a container created
+            # from the old image -- and every subsequent compile would
+            # still run in the toolchain the user just asked to replace.
+            # Drop the container unconditionally so it is recreated from
+            # the freshly built image.
+            rm = _docker("rm", "-f", CONTAINER, timeout=60)
+            if rm.returncode != 0 and "no such container" not in rm.stderr.lower():
+                raise DockerNotAvailableError(
+                    f"image {IMAGE} was rebuilt but container {CONTAINER} "
+                    f"could not be removed for recreation:\n{rm.stderr.strip()}"
+                )
 
     found = _inspect_container()
     if found is None:

@@ -23,8 +23,14 @@ from pathlib import Path
 _MAX_WALK_LEVELS = 32
 
 _STRING_LIST_KEY = "copybook_path"
-_INT_KEYS = ("seed", "timeout")
+_INT_KEYS = ("seed",)
 _STRING_KEYS = ("test_root",)
+# Every key a config file may carry. Anything else is rejected rather
+# than ignored: a typo'd `copybook-path` (hyphen) or a `timeout` key
+# (deliberately not config-overridable -- see `_apply_config_to_args` in
+# cli/main.py) that quietly did nothing would be a config the user
+# believes is in effect and isn't.
+_KNOWN_KEYS = frozenset({_STRING_LIST_KEY, *_INT_KEYS, *_STRING_KEYS})
 
 
 class ConfigError(Exception):
@@ -39,7 +45,9 @@ class MockymockConfig:
     source: Path | None = None
     copybook_path: tuple[str, ...] = field(default_factory=tuple)
     seed: int | None = None
-    timeout: int | None = None
+    # Relative to the config file that declared it (like copybook_path),
+    # so `mockymock run` from a subdirectory still finds the same suites
+    # as from the project root. "." with no config file means cwd.
     test_root: str = "."
 
 
@@ -74,18 +82,29 @@ def _normalize_copybook_path(value: object, source: Path) -> tuple[str, ...]:
 
 
 def _build_config(data: dict, source: Path) -> MockymockConfig:
+    unknown = sorted(set(data) - _KNOWN_KEYS)
+    if unknown:
+        raise ConfigError(
+            f"mockymock: {source}: unknown key(s) {', '.join(unknown)} "
+            f"(recognized: {', '.join(sorted(_KNOWN_KEYS))})"
+        )
     for key in _INT_KEYS:
-        if key in data and not isinstance(data[key], int):
+        # bool is an int subclass; `seed = true` is a mistake, not seed 1.
+        if key in data and (
+            isinstance(data[key], bool) or not isinstance(data[key], int)
+        ):
             raise ConfigError(f"mockymock: {source}: '{key}' must be an integer")
     for key in _STRING_KEYS:
         if key in data and not isinstance(data[key], str):
             raise ConfigError(f"mockymock: {source}: '{key}' must be a string")
+    test_root = Path(data.get("test_root", "."))
+    if not test_root.is_absolute():
+        test_root = source.parent / test_root
     return MockymockConfig(
         source=source,
         copybook_path=_normalize_copybook_path(data.get(_STRING_LIST_KEY), source),
         seed=data.get("seed"),
-        timeout=data.get("timeout"),
-        test_root=data.get("test_root", "."),
+        test_root=str(test_root),
     )
 
 
@@ -124,7 +143,7 @@ def resolve(cli_value, config_value, hardcoded_default=None):
     """Precedence helper: an explicit CLI value (not None) always wins,
     then the config file's value (not None), then the hardcoded
     default. Used for every flag that can come from either a CLI flag
-    or the config file (copybook_path, seed, timeout)."""
+    or the config file (copybook_path, seed)."""
     if cli_value is not None:
         return cli_value
     if config_value is not None:

@@ -725,15 +725,33 @@ def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
             print(f"  - {finding}")
 
 
-def _per_pair_report_path(base: str, cut_path: Path) -> str:
-    """Insert the .cut file's own stem before the extension:
-    'report.xml' + 'ORDRPROC.cut' -> 'report-ORDRPROC.xml'. Used so
-    directory-mode --junit-xml/--json-report don't have every discovered
-    pair overwrite the same single report file."""
+def _per_pair_report_path(base: str, cut_path: Path, test_root: Path) -> str:
+    """Insert the .cut file's path (relative to `test_root`, separators
+    folded to '-') before the extension: 'report.xml' + 'ORDRPROC.cut'
+    -> 'report-ORDRPROC.xml'; 'svc1/ORDRPROC.cut' -> 'report-svc1-
+    ORDRPROC.xml'. Used so directory-mode output files don't have every
+    discovered pair overwrite the same single file -- the relative path,
+    not just the stem, because two suites with the same stem in
+    different directories (a monorepo's svc1/PROG.cut and svc2/PROG.cut)
+    are exactly the case a per-pair name exists to keep apart."""
     base_path = Path(base)
-    return str(
-        base_path.with_name(f"{base_path.stem}-{cut_path.stem}{base_path.suffix}")
-    )
+    try:
+        relative = cut_path.relative_to(test_root)
+    except ValueError:
+        relative = Path(cut_path.name)
+    tag = "-".join(relative.with_suffix("").parts)
+    return str(base_path.with_name(f"{base_path.stem}-{tag}{base_path.suffix}"))
+
+
+# Every `run` flag naming an output file: each gets a per-pair name in
+# directory mode, or the second suite silently overwrites the first's.
+_RUN_OUTPUT_PATH_FLAGS = (
+    "junit_xml",
+    "json_report",
+    "coverage_json",
+    "coverage_out",
+    "trace_json",
+)
 
 
 def _run_directory(args: argparse.Namespace) -> int:
@@ -773,10 +791,13 @@ def _run_directory(args: argparse.Namespace) -> int:
         sub_args = copy.copy(args)
         sub_args.program = str(program_path)
         sub_args.cut = str(cut_path)
-        if getattr(args, "junit_xml", None):
-            sub_args.junit_xml = _per_pair_report_path(args.junit_xml, cut_path)
-        if getattr(args, "json_report", None):
-            sub_args.json_report = _per_pair_report_path(args.json_report, cut_path)
+        for flag in _RUN_OUTPUT_PATH_FLAGS:
+            if getattr(args, flag, None):
+                setattr(
+                    sub_args,
+                    flag,
+                    _per_pair_report_path(getattr(args, flag), cut_path, test_root),
+                )
         print(f"== {cut_path} ==")
         exit_code = _cmd_run(sub_args) or exit_code
 
@@ -2481,8 +2502,24 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args._config = load_config()
     except ConfigError as exc:
-        print(str(exc))
-        return 1
+        args._config = None
+        # Only a subcommand that would actually read the config fails on
+        # a malformed one. `collect`/`setup`/`dashboard`/... run on with
+        # defaults.
+        consumes_config = hasattr(args, "copybook_path") or hasattr(args, "seed")
+        if consumes_config:
+            if args.func is _cmd_collect and getattr(args, "json", False):
+                import json
+
+                # `collect --json` promises machine-readable stdout on
+                # every failure (the VS Code extension parses it).
+                print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
+            elif args.func is _cmd_fixtures:
+                # `fixtures` keeps stdout JSON-only; errors go to stderr.
+                print(str(exc), file=sys.stderr)
+            else:
+                print(str(exc))
+            return 1
 
     return args.func(args)
 
