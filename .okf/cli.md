@@ -133,10 +133,25 @@ values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
 
 See `docs/2026-09-15-init-command-design.md`.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE]`
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
+
+**`--fill CUT_FILE` (2026-09-15)** is a separate mode, dispatched before any
+of the flags below: inserts only the `MOCK ... END-MOCK` blocks `CUT_FILE`'s
+own test cases are missing (per `checks.run_static_checks`'s
+`unmocked_reasons`, the same `check_test_case` analysis `lint` runs), writing
+back to `CUT_FILE` in place. Every existing directive, `EXPECT`/`VERIFY`, and
+comment is left byte-for-byte untouched — insertion happens at known line
+numbers (found via `dsl.parser._PERFORM_RE` locating each case's own
+`PERFORM` line), never by re-serializing the parsed model, and an existing
+`MOCK` block is never edited even if empty or wrong. `_reindent_snippet`
+re-renders `dsl.generator.directive_snippet`'s hardcoded-4-space output to
+match the target file's own sniffed indentation. Mutually exclusive with
+`-o`/`--output`, `--with-data`, `--fixtures` (checked at the top of
+`_cmd_generate`, printed as a plain error). See
+docs/2026-09-15-actionable-refusals-and-fill-design.md.
 
 Flow (`_cmd_generate`):
 

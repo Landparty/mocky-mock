@@ -461,6 +461,129 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return run_exit_code
 
 
+def _reindent_snippet(snippet: str, indent_unit: str) -> str:
+    """Re-render a `directive_snippet()` block (always emitted with a
+    hardcoded 4-space unit: MOCK/END-MOCK at 4, body at 8) using
+    `indent_unit` instead, preserving relative depth. Used by `--fill` so
+    an inserted block matches the target file's own indentation rather
+    than always assuming 4 spaces."""
+    out_lines = []
+    for line in snippet.splitlines():
+        stripped = line.lstrip(" ")
+        depth = (len(line) - len(stripped)) // 4
+        out_lines.append(f"{indent_unit * depth}{stripped}")
+    return "\n".join(out_lines)
+
+
+def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) -> int:
+    """`mockymock generate --fill CUT_FILE`: insert only the missing MOCK
+    blocks CUT_FILE's own test cases need (from the same UNMOCKED_*
+    analysis `lint` runs), writing back to CUT_FILE in place. Every
+    existing directive, EXPECT, VERIFY, and comment is preserved
+    byte-for-byte -- this is a text insertion at known line numbers, not
+    a re-serialization of the parsed model (which would risk
+    reformatting hand-written directives). An existing MOCK block is
+    never edited even if its body is empty or wrong -- filling in a gap
+    is safe to automate, rewriting authored logic is not.
+
+    Reuses `checks.run_static_checks`'s own `check_test_case` pass (via
+    its `unmocked_reasons`, docs/2026-09-15-actionable-refusals-and-fill-design.md)
+    rather than re-running reachability analysis independently, so
+    `--fill` and `lint` can never disagree about what's missing."""
+    from mockymock.cli.checks import run_static_checks
+    from mockymock.dsl.parser import _PERFORM_RE
+
+    if not _check_input_files("mockymock generate", cut_path):
+        return 1
+
+    checked = run_static_checks(source_path, cut_path, args.copybook_path)
+    if checked.suite is None:
+        for problem in checked.problems:
+            if problem.startswith("  "):
+                print(problem)
+            else:
+                print(f"mockymock generate: {problem}")
+        return 1
+
+    suite = checked.suite
+    original_text = cut_path.read_text(encoding="utf-8")
+    newline = "\r\n" if "\r\n" in original_text else "\n"
+    raw_lines = original_text.splitlines()
+
+    indent = "    "
+    for raw in raw_lines:
+        stripped = raw.lstrip(" ")
+        if stripped.upper().startswith("MOCK "):
+            indent = raw[: len(raw) - len(stripped)]
+            break
+
+    case_starts = sorted({case.line for case in suite.test_cases if case.line})
+
+    def _case_end(case_line: int) -> int:
+        later = [ln for ln in case_starts if ln > case_line]
+        return (min(later) - 1) if later else len(raw_lines)
+
+    per_line_inserts: dict[int, list[str]] = {}
+    filled_cases = 0
+    added_blocks = 0
+    warnings: list[str] = []
+    inserted_headers: list[tuple[int, str]] = []
+
+    for case in suite.test_cases:
+        reasons = checked.unmocked_reasons.get(case.name, [])
+        fixable = [r for r in reasons if r.suggested_fix]
+        for r in reasons:
+            if not r.suggested_fix:
+                warnings.append(f"TESTCASE {case.name!r}: {r.code}: {r.message}")
+        if not fixable:
+            continue
+        end_line = _case_end(case.line) if case.line else len(raw_lines)
+        perform_line_no = None
+        for line_no in range(max(case.line, 1), end_line + 1):
+            if line_no <= len(raw_lines) and _PERFORM_RE.match(
+                raw_lines[line_no - 1].strip()
+            ):
+                perform_line_no = line_no
+                break
+        if perform_line_no is None:
+            warnings.append(
+                f"TESTCASE {case.name!r}: could not locate its PERFORM line "
+                f"to insert a fix before -- skipped"
+            )
+            continue
+        new_lines: list[str] = []
+        for r in fixable:
+            assert r.suggested_fix is not None  # `fixable` was filtered on this
+            snippet = _reindent_snippet(r.suggested_fix, indent)
+            new_lines.extend(snippet.splitlines())
+            header = snippet.splitlines()[0].strip()
+            inserted_headers.append((perform_line_no, header))
+            added_blocks += 1
+        per_line_inserts.setdefault(perform_line_no, []).extend(new_lines)
+        filled_cases += 1
+
+    if per_line_inserts:
+        result_lines: list[str] = []
+        for line_no, raw in enumerate(raw_lines, start=1):
+            if line_no in per_line_inserts:
+                result_lines.extend(per_line_inserts[line_no])
+            result_lines.append(raw)
+        new_text = newline.join(result_lines)
+        if original_text.endswith(("\n", "\r\n")):
+            new_text += newline
+        cut_path.write_text(new_text, encoding="utf-8")
+
+    print(
+        f"mockymock generate --fill: added {added_blocks} mock block(s) "
+        f"across {filled_cases} test case(s)"
+    )
+    for line_no, header in inserted_headers:
+        print(f"{cut_path}:{line_no}: {header}")
+    for warning in warnings:
+        print(f"mockymock generate: {warning}")
+    return 0
+
+
 def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
@@ -493,6 +616,25 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     source_path = Path(args.program)
     if not _check_input_files("mockymock generate", source_path):
         return 1
+
+    if args.fill is not None:
+        conflicting = [
+            flag
+            for flag, value in (
+                ("-o/--output", args.output),
+                ("--with-data", args.with_data),
+                ("--fixtures", args.fixtures),
+            )
+            if value
+        ]
+        if conflicting:
+            print(
+                f"mockymock generate: --fill is not valid together with "
+                f"{', '.join(conflicting)} -- --fill always writes back to "
+                f"the file it read"
+            )
+            return 1
+        return _fill_cut_file(source_path, Path(args.fill), args)
 
     if not _check_rows_non_negative("generate", args.rows):
         return 1
@@ -2114,6 +2256,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument("program")
     generate_parser.add_argument("-o", "--output")
+    generate_parser.add_argument(
+        "--fill",
+        metavar="CUT_FILE",
+        help=(
+            "Insert only the missing MOCK blocks an existing .cut file's "
+            "test cases need (from the same UNMOCKED_* analysis 'lint' "
+            "runs), writing back to CUT_FILE in place. Every existing "
+            "directive, EXPECT, VERIFY, and comment is left untouched -- "
+            "an existing MOCK block is never edited even if its body is "
+            "empty or wrong. Mutually exclusive with -o/--output, "
+            "--with-data, and --fixtures. See "
+            "docs/2026-09-15-actionable-refusals-and-fill-design.md"
+        ),
+    )
     generate_parser.add_argument(
         "--copybook-path",
         action="append",
