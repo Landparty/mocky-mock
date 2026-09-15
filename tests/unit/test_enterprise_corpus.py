@@ -19,8 +19,27 @@ import re
 from pathlib import Path
 
 import pytest
+from cobolparser.models.program import CobolProgram
 
 from mockymock.cli.main import main
+
+#: The corpus exercises what cobol-parser's 2026-09-15 release added (OO
+#: units, DECLARATIVES modelling, the 6.x data clauses, conditional
+#: compilation by default, ...). On an older release those programs parse
+#: with warnings and every outcome below reads PARSE_WARNING, which says
+#: nothing about mockymock. `CobolProgram.program_attributes` shipped in
+#: that release, so its absence identifies an older pin -- the same
+#: capability-probe pattern test_fixture_bundle_contract.py uses.
+PARSER_COVERS_ENTERPRISE_TYPES = hasattr(CobolProgram, "program_attributes")
+
+pytestmark = pytest.mark.skipif(
+    not PARSER_COVERS_ENTERPRISE_TYPES,
+    reason=(
+        "needs the cobol-parser release that parses every Enterprise program "
+        "type cleanly (CobolProgram.program_attributes present); bump the pin "
+        "in pyproject.toml once it is published"
+    ),
+)
 
 CORPUS = Path(__file__).parent.parent / "fixtures" / "enterprise"
 COPYBOOKS = CORPUS / "copybooks"
