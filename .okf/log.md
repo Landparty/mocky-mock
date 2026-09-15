@@ -3597,3 +3597,19 @@ file (found via each case's `PERFORM` line, using
 VERIFY, and comment untouched. See [cli.md](cli.md), [dsl.md](dsl.md),
 [analysis.md](analysis.md), and
 `docs/2026-09-15-actionable-refusals-and-fill-design.md`.
+
+## 2026-09-15 -- `.cut` editor intelligence, CLI half: collect --boundaries, explain
+
+`mockymock collect [program] --cut PATH --json --boundaries` reports
+every genuinely mockable boundary site in `program` (category, key,
+paragraph, line), whole-program and not reachability-filtered by any
+one TESTCASE -- feeds an editor's `MOCK <category> <key>` completion.
+New `mockymock explain [CODE] [--list] [--json]`: one shared source of
+truth for what a refusal code means, backed by the new
+`analysis/refusal/_explanations.py`'s `REFUSAL_EXPLANATIONS` dict
+(covering all 43 refusal codes the codebase can emit, cross-checked
+against the actual source by `tests/unit/test_refusal_explanations.py`
+in both directions). Both are the CLI-side dependencies of a planned
+`mocky-mock-vscode` completion/hover feature -- see
+[cli.md](cli.md), [analysis.md](analysis.md), and
+`docs/2026-09-15-cut-editor-intelligence-design.md`.

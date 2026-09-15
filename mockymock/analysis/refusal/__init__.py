@@ -251,6 +251,7 @@ into directly for targeted coverage of one BFS step or plan-finding rule.
 
 from __future__ import annotations
 
+from ._explanations import REFUSAL_EXPLANATIONS
 from ._gates import (
     _CANDIDATE_LABEL_RE,
     _CICS_MACRO_CALL_RE,
@@ -344,4 +345,5 @@ __all__ = [
     "check_terminator_layout",
     "_fallthrough_flags",
     "_first_non_fallthrough",
+    "REFUSAL_EXPLANATIONS",
 ]

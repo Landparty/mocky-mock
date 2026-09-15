@@ -1,7 +1,7 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
 timestamp: 2026-09-15T00:00:00Z
 ---
@@ -9,8 +9,8 @@ timestamp: 2026-09-15T00:00:00Z
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines fourteen subcommands —
-`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `dashboard`, `doctor`, `export`, `analyze`, `skills` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines fifteen subcommands —
+`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -27,7 +27,8 @@ mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
 mockymock debug     -> cli.checks (static) -> splicer -> runtime (debug=True) -> debug.adapter (DAP over stdio)
 mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.runner (per-mutant: cli.checks -> splicer -> runtime) -> mutation.report
 mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
-mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed)
+mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed; --boundaries also parses program via analysis.mock_surface)
+mockymock explain   -> analysis.refusal.REFUSAL_EXPLANATIONS only  (no Docker, no parsing at all)
 mockymock dashboard -> web.server (loopback HTTP) -> runtime.status.probe()  (read-only Docker)
 mockymock doctor    -> cli.doctor -> runtime.status.probe() + cobol-parser/config checks  (no Docker mutation, no HTTP)
 mockymock analyze   -> sys.argv monkeypatch -> cobolparser.cli.parse.main() (no Docker, pure pass-through)
@@ -720,7 +721,7 @@ per problem plus a `N problem(s) found.` summary, exit 1; or
 extension publishes these as diagnostics), pre-commit hooks, and CI lanes
 without a daemon.
 
-## `mockymock collect --cut PATH [--json]`
+## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 
 Parses the `.cut` file only (no `.cbl`, no Docker) and lists the suite and
 test cases with 1-based line numbers and tags. `--json` emits the
@@ -728,6 +729,37 @@ machine-readable form (`{"version": 1, "cutFile", "suite": {name, line},
 "cases": [{name, line, tags}]}`) the VS Code extension uses for
 authoritative test discovery; a `CutParseError` yields `{"version": 1,
 "error": "..."}` and exit 1.
+
+**`--boundaries` (2026-09-15)** additionally reports `boundaries: [{category,
+key, keys, label, paragraph, line, matchText}]` -- every site in
+`analysis.mock_surface.analyze(ast).boundary_sites` with `category is not
+None`, whole-program and **not** reachability-filtered by any one
+TESTCASE's PERFORM target (that's what `lint`'s refusal gate is for; this
+feeds editor completion for "every key this program could ever need
+mocked"). `_collect_boundaries()` (`cli/main.py`) parses `program`
+directly (with `--copybook-path` expansion if given) -- it does not go
+through `run_static_checks`, since it needs no `.cut`-specific analysis at
+all. Requires both `--json` and `program` (checked before any parsing);
+requesting it without either is a plain usage error, not a refusal. See
+docs/2026-09-15-cut-editor-intelligence-design.md.
+
+## `mockymock explain [CODE] [--list] [--json]` (2026-09-15)
+
+One shared source of truth for what a refusal code means:
+`analysis.refusal.REFUSAL_EXPLANATIONS` (`_explanations.py`) is a
+hand-written `dict[code, prose]` covering every refusal code string
+actually constructed anywhere in `mockymock/` --
+`tests/unit/test_refusal_explanations.py` cross-checks the dict against a
+regex scan of the whole package in both directions (missing entry fails
+CI; a stale entry for a code nothing emits anymore also fails, so the
+table never drifts from what the codebase can actually produce). Bare
+`explain` or `explain --list` prints every catalogued code; `explain
+<CODE>` (case-insensitive) prints its explanation, or -- if uncatalogued
+-- a `not catalogued` message naming every code that is (never a silent
+empty result, same "partial and reported" posture cobol-parser's
+`le_signatures.py` uses). Backs `mocky-mock-vscode`'s planned
+refusal-code hover via `explain --json`. See
+docs/2026-09-15-cut-editor-intelligence-design.md.
 
 ## `mockymock dashboard [--port N] [--no-browser]`
 

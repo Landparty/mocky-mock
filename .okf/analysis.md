@@ -220,6 +220,15 @@ Paragraph attribution is depth-independent: nested statements stay attributed to
 
 # refusal.py — What Gets Refused, and Why
 
+**Every code below has a prose explanation in `_explanations.py`'s
+`REFUSAL_EXPLANATIONS`** (2026-09-15), backing `mockymock explain <CODE>`
+and, transitively, `mocky-mock-vscode`'s planned refusal-code hover.
+`tests/unit/test_refusal_explanations.py` cross-checks the dict against a
+regex scan of the whole package in both directions, so a code added to a
+gate here without a matching explanation entry fails CI. See
+docs/2026-09-15-cut-editor-intelligence-design.md and `.okf/cli.md`'s
+`mockymock explain` section.
+
 ## Whole-program checks (independent of any test case)
 
 | Check | Code | Trigger |

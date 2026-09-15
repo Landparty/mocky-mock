@@ -2025,17 +2025,131 @@ def _cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _collect_boundaries(
+    source_path: Path, copybook_paths: list[str] | None
+) -> list[dict]:
+    """Every genuinely mockable boundary site in `source_path` (category
+    is not None), whole-program -- NOT reachability-filtered by any one
+    TESTCASE's PERFORM target, since this feeds editor completion for
+    "every key this program could ever need mocked," not one particular
+    test case's own reachable set (that's what `lint`'s refusal gate is
+    for). Sites are returned in source order. See
+    docs/2026-09-15-cut-editor-intelligence-design.md."""
+    from cobolparser import parse_cobol
+    from cobolparser.preprocess import expand_copybooks
+
+    from mockymock.analysis.mock_surface import analyze
+
+    raw_source = source_path.read_text(encoding="utf-8")
+    if copybook_paths:
+        expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
+        raw_source = expansion.expanded_source
+
+    result = parse_cobol(raw_source, filename=source_path.name)
+    if result.errors or result.ast is None:
+        raise ValueError(
+            "; ".join(str(error) for error in result.errors) or "parse failed"
+        )
+
+    surface = analyze(result.ast)
+    boundaries = []
+    for site in surface.boundary_sites:
+        if site.category is None:
+            continue
+        boundaries.append(
+            {
+                "category": site.category.value,
+                "key": site.keys[0] if site.keys else None,
+                "keys": list(site.keys),
+                "label": site.label,
+                "paragraph": site.paragraph_name,
+                "line": site.line,
+                "matchText": site.match_text,
+            }
+        )
+    return sorted(boundaries, key=lambda b: b["line"])
+
+
+def _cmd_explain(args: argparse.Namespace) -> int:
+    """`mockymock explain <CODE>`: print (or list) the catalogued
+    explanation for a refusal code, so `.cut` authors and editor
+    tooltips get one shared source of truth instead of re-deriving what
+    a code means from the message text alone. See
+    docs/2026-09-15-cut-editor-intelligence-design.md."""
+    import json
+
+    from mockymock.analysis.refusal import REFUSAL_EXPLANATIONS
+
+    if args.code is None or args.list:
+        codes = sorted(REFUSAL_EXPLANATIONS)
+        if args.json:
+            print(json.dumps({"version": 1, "codes": codes}, indent=2))
+        else:
+            print(f"{len(codes)} catalogued refusal code(s):")
+            for code in codes:
+                print(f"  {code}")
+        return 0
+
+    code = args.code.upper()
+    explanation = REFUSAL_EXPLANATIONS.get(code)
+    if explanation is None:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "code": code,
+                        "error": "not catalogued",
+                        "knownCodes": sorted(REFUSAL_EXPLANATIONS),
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            print(f"mockymock explain: {code!r} is not a catalogued refusal code.")
+            print("Run 'mockymock explain --list' to see every code this covers.")
+        return 1
+
+    if args.json:
+        print(
+            json.dumps(
+                {"version": 1, "code": code, "explanation": explanation}, indent=2
+            )
+        )
+    else:
+        print(code)
+        print(f"  {explanation}")
+        print("  See .okf/analysis.md's refusal table for the full picture.")
+    return 0
+
+
 def _cmd_collect(args: argparse.Namespace) -> int:
     """Authoritative test discovery for editor integrations: parse a .cut
     file (no .cbl, no Docker, no toolchain) and report its suite/cases with
     line numbers and tags. --json emits the machine-readable form the VS
-    Code extension consumes; the default is a human-readable listing."""
+    Code extension consumes; the default is a human-readable listing.
+
+    --boundaries (2026-09-15) additionally reports every mockable boundary
+    site in the paired program -- see docs/2026-09-15-cut-editor-intelligence-design.md.
+    Requires --json and a program argument (no human-readable form is
+    planned for it)."""
     import json
 
     from mockymock.dsl.parser import CutParseError, parse_cut
 
+    if args.boundaries and not args.json:
+        print("mockymock collect: --boundaries requires --json")
+        return 1
+    if args.boundaries and not args.program:
+        print("mockymock collect: --boundaries requires a program argument")
+        return 1
+
     cut_path = Path(args.cut)
-    if not _check_input_files("mockymock collect", cut_path):
+    check_paths = [cut_path]
+    program_path = Path(args.program) if args.program else None
+    if program_path is not None:
+        check_paths.append(program_path)
+    if not _check_input_files("mockymock collect", *check_paths):
         return 1
     try:
         suite = parse_cut(cut_path.read_text(encoding="utf-8"))
@@ -2045,6 +2159,15 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         else:
             print(f"mockymock collect: invalid .cut file {cut_path}: {exc}")
         return 1
+
+    boundaries = None
+    if args.boundaries:
+        assert program_path is not None  # checked above
+        try:
+            boundaries = _collect_boundaries(program_path, args.copybook_path)
+        except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
+            print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
+            return 1
 
     if args.json:
         payload = {
@@ -2056,6 +2179,8 @@ def _cmd_collect(args: argparse.Namespace) -> int:
                 for case in suite.test_cases
             ],
         }
+        if boundaries is not None:
+            payload["boundaries"] = boundaries
         print(json.dumps(payload, indent=2))
     else:
         print(f"TESTSUITE {suite.name!r} (line {suite.line})")
@@ -2647,13 +2772,55 @@ def build_parser() -> argparse.ArgumentParser:
             "tags) without running anything"
         ),
     )
+    collect_parser.add_argument(
+        "program",
+        nargs="?",
+        help="Required only with --boundaries",
+    )
     collect_parser.add_argument("--cut", required=True)
     collect_parser.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable JSON instead of the human listing",
     )
+    collect_parser.add_argument(
+        "--boundaries",
+        action="store_true",
+        help=(
+            "Also report every mockable boundary site in program "
+            "(category, key, paragraph, line) -- for editor completion. "
+            "Requires --json and program. See "
+            "docs/2026-09-15-cut-editor-intelligence-design.md"
+        ),
+    )
+    collect_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable; --boundaries only)",
+    )
     collect_parser.set_defaults(func=_cmd_collect)
+
+    explain_parser = subparsers.add_parser(
+        "explain",
+        help="Print the catalogued explanation for a refusal code",
+        description=(
+            "One shared source of truth for what a refusal code means, "
+            "backing both this CLI and the mocky-mock-vscode extension's "
+            "hover. See docs/2026-09-15-cut-editor-intelligence-design.md."
+        ),
+    )
+    explain_parser.add_argument(
+        "code", nargs="?", help="A refusal code, e.g. UNSUPPORTED_DECLARATIVES"
+    )
+    explain_parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List every catalogued code instead of explaining one",
+    )
+    explain_parser.add_argument(
+        "--json", action="store_true", help="Machine-readable output"
+    )
+    explain_parser.set_defaults(func=_cmd_explain)
 
     dashboard_parser = subparsers.add_parser(
         "dashboard",
