@@ -3526,3 +3526,115 @@ of it: `UNSUPPORTED_NESTED_PROGRAM` replaces the misleading `PARSE_WARNING`
 for multi-unit compilation units, and DECLARATIVES detection reads
 cobol-parser's new `is_declarative` section flag before the older
 stray-paragraph / USE-statement signals. See [analysis.md](analysis.md).
+
+
+## 2026-09-15 -- CLI ergonomics: sibling inference, config file, directory discovery
+
+`mockymock/cli/discovery.py` (new) and `mockymock/cli/config.py` (new):
+`run`/`debug`/`lint`/`mutate`/`export` no longer require both `program` and
+`--cut` -- either can be inferred from the other's same-stem sibling file,
+and `run`/`lint` with neither given discover and run/lint every `.cut`
+file under the current directory (or a `mockymock.toml`/`pyproject.toml`
+`[tool.mockymock]` table's `test_root`). The same config file supplies
+`copybook_path`/`seed` project-wide, with an explicit CLI flag always
+winning. `setup --rebuild` forces a fresh, uncached image build. Top-level
+`--help` now groups commands by how often they're reached for. See
+[cli.md](cli.md) and `docs/2026-09-15-cli-ergonomics-design.md`.
+
+
+## 2026-09-15 -- mockymock doctor
+
+New `cli/doctor.py`: a terminal-native readiness report reusing
+`runtime.status.probe()` verbatim (the same read-only Docker/GnuCOBOL
+check `dashboard` already serves over HTTP), plus two checks of its own
+-- cobol-parser importability and which project config file (if any)
+would be loaded. `--json` for scripting; exits 0 when ready, 1
+otherwise. Never builds an image, starts a container, or otherwise
+mutates anything. See [dashboard.md](dashboard.md), [cli.md](cli.md),
+and `docs/2026-09-15-doctor-command-design.md`.
+
+
+## 2026-09-15 -- mockymock init
+
+New `mockymock init <program>`: composes `generate --with-data` + `run
+--record-expectations` into one step, reentrant via real argv lists
+parsed by this module's own `build_parser()` (not a refactor of either
+command's internals -- a deliberate, lower-risk departure from the
+design doc's original proposal). Refuses to overwrite an existing
+output `.cut` without `--force` (a guard `init` owns itself; plain
+`generate` still has none). Uses `doctor.gather_full_status()` to skip
+the run attempt entirely, with a clear fallback message, when Docker
+isn't set up. Prints the scenario branch-verification caveat for
+`--scenarios branches|all`. See [cli.md](cli.md) and
+`docs/2026-09-15-init-command-design.md`.
+
+## 2026-09-15 -- Default copybook search directories + actionable hint
+
+`mockymock/cli/discovery.py`'s `effective_copybook_paths()`: once a
+program is resolved, its own `copybooks/` subdirectory is added to the
+copybook search path automatically when it exists (closing the gap that
+made every `examples/real-world/` program require a manually-typed
+`--copybook-path`). `copybook_not_found_hint()` appends a continuation
+line naming `--copybook-path` and the `[tool.mockymock]` config key to
+any `CopybookNotFoundError`. Companion fix in `Landparty/cobol-parser`:
+`suggest_similar_copybooks`'s did-you-mean pool no longer suggests a
+non-copybook file (the referencing program's own `.cbl`, previously).
+See [cli.md](cli.md) and `docs/2026-09-15-copybook-discovery-defaults-design.md`.
+
+## 2026-09-15 -- Actionable refusals (suggested_fix) + generate --fill
+
+`RefusalReason` gains an optional `suggested_fix` field, populated only
+for `UNMOCKED_*` reasons via the new `dsl.generator.directive_snippet()`
+-- the same renderer `generate`'s own scaffold uses, so a refusal's
+suggestion and a fresh scaffold can never disagree. `checks.py`'s shared
+`run_static_checks` appends it as an indented "Add to this TESTCASE:"
+block after the reason (reaching `lint`/`run`/`debug`/`export`/`mutate`
+alike) and exposes the raw per-case reasons as
+`StaticCheckResult.unmocked_reasons`. New `mockymock generate --fill
+CUT_FILE` inserts just the missing `MOCK` blocks into an existing `.cut`
+file (found via each case's `PERFORM` line, using
+`dsl.parser._PERFORM_RE`), leaving every existing directive, EXPECT/
+VERIFY, and comment untouched. See [cli.md](cli.md), [dsl.md](dsl.md),
+[analysis.md](analysis.md), and
+`docs/2026-09-15-actionable-refusals-and-fill-design.md`.
+
+## 2026-09-15 -- `.cut` editor intelligence, CLI half: collect --boundaries, explain
+
+`mockymock collect [program] --cut PATH --json --boundaries` reports
+every genuinely mockable boundary site in `program` (category, key,
+paragraph, line), whole-program and not reachability-filtered by any
+one TESTCASE -- feeds an editor's `MOCK <category> <key>` completion.
+New `mockymock explain [CODE] [--list] [--json]`: one shared source of
+truth for what a refusal code means, backed by the new
+`analysis/refusal/_explanations.py`'s `REFUSAL_EXPLANATIONS` dict
+(covering all 43 refusal codes the codebase can emit, cross-checked
+against the actual source by `tests/unit/test_refusal_explanations.py`
+in both directions). Both are the CLI-side dependencies of a planned
+`mocky-mock-vscode` completion/hover feature -- see
+[cli.md](cli.md), [analysis.md](analysis.md), and
+`docs/2026-09-15-cut-editor-intelligence-design.md`.
+
+
+## 2026-09-15 -- Review follow-ups on the CLI PRs (#111-#116)
+
+Cross-PR review fixes, on top of the six PRs merged together. `setup
+--rebuild` now removes the toolchain container after the rebuilt image
+(the tag-string stale check could not tell the new image from the old,
+so every compile stayed in the old toolchain). Config: `test_root` is
+resolved relative to the config file; unknown keys (and `timeout`, which
+is deliberately not config-overridable) and `seed = true` are
+`ConfigError`s; a malformed file only fails the subcommands that read it
+(`collect --json` keeps its JSON error shape, `fixtures` prints to
+stderr, `doctor` reports it as `WARN`). `discover_cut_files` applies the
+exclude list below the root only. Directory-mode `run` names every
+output-file flag per pair, from the `.cut`'s path relative to the test
+root. `generate --fill`: one block per distinct header per case, the
+anchor PERFORM skips mock bodies, reasons keyed by case index (duplicate
+TESTCASE names), unfixable problems printed and exit 1, landed line
+numbers reported; `directive_snippet` declines the sites the scaffold
+skips. `generate --with-data` appends the copybook hint to a wrapped
+`CopybookNotFoundError`. `doctor`: `ready` means no `DOWN` (a `WARN` exits
+0, per the design doc). `init` refuses a `.cut` passed as the program and
+prints the next step only when recording succeeded. `collect
+--boundaries` gains `directive` (the exact scaffold header) for editor
+completion. See [cli.md](cli.md), [dashboard.md](dashboard.md).

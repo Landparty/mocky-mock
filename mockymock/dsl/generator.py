@@ -569,6 +569,42 @@ def scaffold_cut(
     return _scaffold_with_bundle(suite_name, surface, bundle, placeholder_keys, source)
 
 
+def directive_snippet(site: BoundarySite, surface: MockSurface) -> str | None:
+    """Render the exact `.cut` text a bundle-less scaffold would emit for
+    this one boundary site: a `MOCK ... END-MOCK` block, 4-space-indented
+    header/footer and 8-space-indented body, matching
+    `_scaffold_placeholder`'s own rendering exactly. `None` for a site
+    `_directive_for` itself declines to render (category=None, an
+    unrepresentable key/prefix, an unparsed CALL literal, ...) -- those
+    have no mechanical fix to suggest.
+
+    This is the one place both the refusal gate
+    (`RefusalReason.suggested_fix`, see docs/2026-09-15-actionable-
+    refusals-and-fill-design.md) and `generate --fill` get their fix
+    text from -- neither re-renders a directive independently, so the
+    two can never drift apart, and a scaffold produced by plain
+    `generate` always matches what a refusal message would have
+    suggested for the same site. That includes declining the sites the
+    scaffold itself skips (a nested site with no recorded span, a
+    top-level site the splicer cannot rewrite): suggesting a MOCK the
+    next lint would refuse as UNSUPPORTED_NESTED_MOCK_TARGET /
+    UNSPLICEABLE is not a fix."""
+    if site.category is None:
+        return None
+    if site.nested and site.span is None:
+        return None
+    if not site.nested and site.unspliceable_reason:
+        return None
+    rendered = _directive_for(site, surface)
+    if rendered is None:
+        return None
+    header, body = rendered
+    lines = [f"    {header}"]
+    lines.extend(f"        {body_line}" for body_line in body)
+    lines.append("    END-MOCK")
+    return "\n".join(lines)
+
+
 # --- placeholder scaffold (no bundle) ----------------------------------------
 
 

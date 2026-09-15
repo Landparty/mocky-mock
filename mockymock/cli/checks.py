@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from mockymock.analysis.cics_eib import CicsEibPlan
     from mockymock.analysis.linkage import AddressOfSite, LinkagePlan
     from mockymock.analysis.mock_surface import MockSurface
+    from mockymock.analysis.refusal import RefusalReason
     from mockymock.dsl.model import MockTestSuite
     from mockymock.splicer.captures import CapturePlan
     from mockymock.splicer.source_map import ScopeMap
@@ -55,6 +56,15 @@ class StaticCheckResult:
     # command prefix -- silently proceeding past a warning, or silently
     # editing source a .cut author didn't write, would both be surprises.
     notes: list[str] = field(default_factory=list)
+    # Raw check_test_case() output per TESTCASE, keyed by the case's
+    # index in `suite.test_cases` (not its name: duplicate TESTCASE names
+    # are legal, and a name key would hand the last case's reasons to
+    # every namesake). Not just the pre-formatted strings already folded
+    # into `problems` -- lets a caller like `generate --fill` act on
+    # `RefusalReason.suggested_fix` directly instead of re-running the
+    # same reachability analysis a second time. Only cases with at least
+    # one reason appear as a key.
+    unmocked_reasons: dict[int, list[RefusalReason]] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -155,6 +165,7 @@ def run_static_checks(
     which accumulates across every case before returning."""
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
+        CopybookNotFoundError,
         expand_copybooks,
         normalize_fixed_format,
         strip_compiler_directives,
@@ -178,6 +189,7 @@ def run_static_checks(
         resolve_scoped_refusals,
         union_executed_paragraphs,
     )
+    from mockymock.cli.discovery import copybook_not_found_hint
     from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.splicer.captures import plan_captures
     from mockymock.splicer.linkage import neutralize, redirect_address_of
@@ -199,6 +211,10 @@ def run_static_checks(
         # _cmd_fixtures's existing broad catch for the same call.
         try:
             expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
+        except CopybookNotFoundError as exc:
+            out.problems.append(f"copybook expansion failed: {exc}")
+            out.problems.append(copybook_not_found_hint())
+            return out
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             out.problems.append(f"copybook expansion failed: {exc}")
             return out
@@ -403,17 +419,23 @@ def run_static_checks(
     # "GO TO <own-exit-label>" spliced into EXIT PARAGRAPH no longer
     # cascades fall-through reachability past its exit label.
     neutralized_goto = neutralized_goto_targets(parse_result.ast, scope_map, lines)
-    for case in suite.test_cases:
-        out.problems.extend(
-            f"refused ({r.code}): {r.message}"
-            for r in check_test_case(
-                surface,
-                parse_result.ast,
-                case,
-                out.file_status_fields,
-                neutralized_goto=neutralized_goto,
-            )
+    for case_index, case in enumerate(suite.test_cases):
+        case_reasons = check_test_case(
+            surface,
+            parse_result.ast,
+            case,
+            out.file_status_fields,
+            neutralized_goto=neutralized_goto,
         )
+        for r in case_reasons:
+            out.problems.append(f"refused ({r.code}): {r.message}")
+            if r.suggested_fix:
+                out.problems.append("    Add to this TESTCASE:")
+                out.problems.extend(
+                    f"    {line}" for line in r.suggested_fix.splitlines()
+                )
+        if case_reasons:
+            out.unmocked_reasons[case_index] = case_reasons
     out.problems.extend(
         f"refused ({r.code}): {r.message}"
         for r in check_flow_mocks(parse_result.ast, suite, lines)

@@ -61,6 +61,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     normalize_exec_text,
 )
+from mockymock.dsl.generator import directive_snippet
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
     FLOW_CATEGORIES,
@@ -1409,6 +1410,7 @@ def check_test_case(
                         + f") is reachable from '{case.perform_target}' but "
                         f"no MOCK directive in this test case matches it"
                     ),
+                    suggested_fix=directive_snippet(site, surface),
                 )
             )
         elif len(matches) > 1:

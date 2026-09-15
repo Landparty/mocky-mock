@@ -3,7 +3,7 @@ type: Module
 title: Web Dashboard
 description: mockymock dashboard — a loopback-only static page that polls a read-only Docker toolchain health probe, plus the runtime.status probe behind it.
 tags: [cli, web, docker, runtime]
-timestamp: 2026-08-07T00:00:00Z
+timestamp: 2026-09-15T00:00:00Z
 ---
 
 # Overview
@@ -12,6 +12,17 @@ timestamp: 2026-08-07T00:00:00Z
 answers one question live: **is Docker running, and is the GnuCOBOL
 toolchain ready?** It is the eyes-version of what `mockymock setup`
 already prints as text, minus the side effects.
+
+**`mockymock doctor` (2026-09-15, `cli/doctor.py`)** is the terminal-native
+equivalent: same `runtime.status.probe()`, no browser or HTTP server, plus
+two checks of its own (cobol-parser importability, which project config
+file this invocation would load). `--json` for scripting; exits 0 when
+ready, 1 otherwise -- where doctor's `ready` is "no check is `DOWN`" (a
+`WARN` such as a stopped container or a malformed config file still
+exits 0, since `setup`/the next `run` sorts it out; this is looser than
+`probe()`'s own `ready`, which is `all(state == ok)`). Never builds or
+starts anything, same as this page.
+See docs/2026-09-15-doctor-command-design.md.
 
 ```
 mockymock dashboard [--port N] [--no-browser]

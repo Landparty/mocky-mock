@@ -235,24 +235,49 @@ def _create_container(_recreate_on_stale: bool = True) -> None:
         )
 
 
-def ensure_toolchain() -> None:
+def ensure_toolchain(force_rebuild: bool = False) -> None:
     """Bring the toolchain up: daemon reachable, image built, container
     running *and created from the current image*. Idempotent; called by
     both `mockymock setup` and every `mockymock run` (so the container is
     restarted if it died, and recreated if docker/Dockerfile changed --
     the content-hash tag in IMAGE only helps if a stale container is not
-    silently reused)."""
+    silently reused).
+
+    `force_rebuild` (only ever passed by `mockymock setup --rebuild`,
+    never by the implicit per-run call) rebuilds even when an image
+    already exists for the current content-hash tag, with `--no-cache
+    --pull` so a change in the *base* image (not just this repo's
+    Dockerfile, which the content hash already catches) is picked up
+    too."""
     info = _docker("info", timeout=30)
     if info.returncode != 0:
         raise DockerNotAvailableError(f"{_DAEMON_HINT}\n{info.stderr.strip()}")
 
     image = _docker("image", "inspect", IMAGE, timeout=30)
-    if image.returncode != 0:
-        build = _docker("build", "-t", IMAGE, str(_DOCKER_CONTEXT))
+    if image.returncode != 0 or force_rebuild:
+        build_args = ["build", "-t", IMAGE]
+        if force_rebuild:
+            build_args += ["--no-cache", "--pull"]
+        build_args.append(str(_DOCKER_CONTEXT))
+        build = _docker(*build_args)
         if build.returncode != 0:
             raise DockerNotAvailableError(
                 f"failed to build image {IMAGE}:\n{build.stderr.strip()}"
             )
+        if force_rebuild:
+            # `docker build -t IMAGE` re-tags the same content-hash tag
+            # onto the *new* image ID, so the stale-image check below
+            # (which compares tag strings) would keep a container created
+            # from the old image -- and every subsequent compile would
+            # still run in the toolchain the user just asked to replace.
+            # Drop the container unconditionally so it is recreated from
+            # the freshly built image.
+            rm = _docker("rm", "-f", CONTAINER, timeout=60)
+            if rm.returncode != 0 and "no such container" not in rm.stderr.lower():
+                raise DockerNotAvailableError(
+                    f"image {IMAGE} was rebuilt but container {CONTAINER} "
+                    f"could not be removed for recreation:\n{rm.stderr.strip()}"
+                )
 
     found = _inspect_container()
     if found is None:
