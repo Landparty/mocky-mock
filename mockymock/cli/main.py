@@ -160,6 +160,23 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from mockymock.cli.doctor import (
+        format_doctor_json,
+        format_doctor_text,
+        gather_full_status,
+    )
+
+    report = gather_full_status()
+    if args.json:
+        import json
+
+        print(json.dumps(format_doctor_json(report), indent=2))
+    else:
+        print(format_doctor_text(report))
+    return 0 if report.ready else 1
+
+
 def _check_input_files(command: str, *paths: Path) -> bool:
     """Print a clean error for every input path that doesn't exist. Runs
     before any toolchain/parse work so a typo'd path fails in milliseconds
@@ -1882,6 +1899,7 @@ commands, grouped by how often you'll reach for them:
     debug      interactive Debug Adapter Protocol session
     analyze    run a cobol-parser analyzer and print its report
     dashboard  local status page for Docker/GnuCOBOL readiness
+    doctor     one-shot terminal readiness report
 
   Advanced:
     mutate     mutation-test a program against its .cut suite
@@ -2337,6 +2355,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Don't open a browser window automatically",
     )
     dashboard_parser.set_defaults(func=_cmd_dashboard)
+
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help=(
+            "Terminal-native readiness report (Docker/GnuCOBOL toolchain, "
+            "cobol-parser, config file) -- read-only, never builds or "
+            "starts anything"
+        ),
+        description=(
+            "Reuses the same read-only probe 'mockymock dashboard' serves "
+            "over HTTP, plus two checks of its own: whether cobol-parser "
+            "is importable, and which project config file (if any) this "
+            "invocation would load. Exits 0 when everything checked is "
+            "ready, 1 otherwise. Never mutates anything -- suggests "
+            "'mockymock setup', never runs it."
+        ),
+    )
+    doctor_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Machine-readable output for scripting",
+    )
+    doctor_parser.set_defaults(func=_cmd_doctor)
 
     analyze_parser = subparsers.add_parser(
         "analyze",

@@ -3540,3 +3540,15 @@ file under the current directory (or a `mockymock.toml`/`pyproject.toml`
 winning. `setup --rebuild` forces a fresh, uncached image build. Top-level
 `--help` now groups commands by how often they're reached for. See
 [cli.md](cli.md) and `docs/2026-09-15-cli-ergonomics-design.md`.
+
+
+## 2026-09-15 -- mockymock doctor
+
+New `cli/doctor.py`: a terminal-native readiness report reusing
+`runtime.status.probe()` verbatim (the same read-only Docker/GnuCOBOL
+check `dashboard` already serves over HTTP), plus two checks of its own
+-- cobol-parser importability and which project config file (if any)
+would be loaded. `--json` for scripting; exits 0 when ready, 1
+otherwise. Never builds an image, starts a container, or otherwise
+mutates anything. See [dashboard.md](dashboard.md), [cli.md](cli.md),
+and `docs/2026-09-15-doctor-command-design.md`.
