@@ -3,7 +3,7 @@ type: Runbook
 title: Publishing
 description: mockymock publishes a plain (source-visible) sdist+wheel to PyPI on every release-please release, mirroring cobol-parser's PyPI pipeline; the Nuitka executable path for mocky-mock-vscode is separate and unaffected.
 tags: [ci, release, publishing, pypi]
-timestamp: 2026-08-18T00:00:00Z
+timestamp: 2026-09-15T00:00:00Z
 ---
 
 # Overview
@@ -41,13 +41,27 @@ not consume the PyPI wheel — so the two distribution channels (PyPI wheel
 for `pip install`/library use, Nuitka binary for the VS Code extension)
 coexist without touching each other. See that repo's own `PUBLISHING.md`.
 
-**One-time manual step, not yet done as of this writing:** a PyPI Trusted
-Publisher must be registered for the `mocky-mock` project
-(pypi.org → publishing settings → add a pending publisher, or on the
-existing project's page once it has a first release) pointing at this
-repo's `release-please.yml` workflow, before `publish-pypi` can succeed.
-Same requirement cobol-parser's own publish-pypi job notes for
-`cobol-parser`.
+The PyPI Trusted Publisher registration this file used to list as "not yet
+done" has since happened: releases through 0.8.0 are on PyPI. If
+`publish-pypi` ever starts failing on OIDC, that registration
+(pypi.org → the project's publishing settings → the pending/active
+publisher pointing at this repo's `release-please.yml`) is the first thing
+to re-check — same requirement cobol-parser's own publish-pypi job notes.
+
+**The version-drift bug this pipeline shipped for three releases
+(2026-09-05 audit, finding 1 — fixed in `2a58c6c`).** `e26373b` renamed
+`[project].name` from `mockymock` to `mocky-mock`, which broke
+release-please's path to `mockymock/__init__.py`: from 0.7.0 onward it
+bumped `pyproject.toml` and the tag but silently skipped the
+`__version__` string, so the published 0.8.0 wheel reported `--version`
+as `0.7.0`. The fix is `release-please-config.json`'s explicit
+`packages["."].extra-files` entry (`{"type": "python", "path":
+"mockymock/__init__.py"}`) plus the `package-name: mockymock` key; the
+invariant that the two agree is pinned by `tests/unit/test_smoke.py`,
+which was already there and simply never ran in CI (see
+[testing.md](testing.md)'s CI section for why). Any future rename of the
+distribution or the import package must re-check that `extra-files` path
+in the same commit.
 
 # Gotchas
 
@@ -102,10 +116,14 @@ Same requirement cobol-parser's own publish-pypi job notes for
 
 # See Also
 
-- [cli.md](cli.md) — the 7 subcommands (`setup`/`generate`/`run`/`debug`/`lint`/
-  `mutate`/`collect`) the published binary fully exposes; `cobolparser`'s
-  own separate standalone CLI (`parse`/`tokenize`/`program-flow`/etc.) is
-  not part of this build and stays unavailable to a binary-only user.
+- [cli.md](cli.md) — the 15 subcommands (`setup`/`init`/`generate`/`fixtures`/
+  `run`/`debug`/`lint`/`mutate`/`collect`/`explain`/`dashboard`/`doctor`/
+  `export`/`analyze`/`skills`) the published package exposes. All fifteen
+  work from the Nuitka binary too: `analyze` delegates **in-process**
+  (`from cobolparser.cli.parse import main`, with `sys.argv` patched
+  around the call), so it needs no `cobol-parser` executable on `PATH`.
+  What a binary-only user does not get is that standalone `cobol-parser`
+  command itself for direct use outside `mockymock analyze`.
 - [runtime.md](runtime.md) — the Docker toolchain the binary still depends on at
   runtime.
 - [../PUBLISHING.md](../PUBLISHING.md) — the full narrative (why Nuitka, what "source-free"

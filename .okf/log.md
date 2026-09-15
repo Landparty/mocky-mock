@@ -1,9 +1,259 @@
 # mocky-mock OKF Bundle — Update Log
 
+Newest entry first. Append new entries at the **top**, directly below this
+line -- several 2026-09 entries were once appended at the bottom by
+branch merges and had to be moved back, which is what this note exists to
+prevent.
+
+## 2026-09-15 -- Bundle review: nine staleness fixes, no code changed
+
+Read-only audit of every `.okf/` file against the tree at `9108464`, then
+fixed what had drifted. Docs only; no source, test, or CI file touched.
+
+* **[testing] The CI section described a pipeline that has not run since
+  2026-08-15.** It claimed three jobs with `test` running the full
+  parse->splice->compile tier on every push/PR, plus a sibling
+  `Landparty/cobol-parser` checkout gated on `secrets.COBOL_PARSER_PAT`.
+  Reality: four jobs, `test` and `test-cross-platform` both carry `if:
+  false`, cobol-parser resolves from PyPI (no checkout, no PAT), a
+  nightly `cobol-parser-compat` job is the only one running tests at all,
+  and a green CI run does not mean the suite passed. Rewritten, with the
+  two disabled jobs kept as documentation of what they *would* cover and
+  the 2026-09-05 audit's finding 3/4 cross-referenced. This was the one
+  finding that could actively mislead a contributor into trusting CI.
+  Re-measured while writing it: `tests/unit` is 1,595 passed / 32 skipped
+  in 7.5s against the published cobol-parser, so the "too long" rationale
+  in `ci.yml` is still false by two orders of magnitude. Of those skips,
+  31 are capability probes waiting on the floor bump (22 enterprise
+  corpus, 9 verb-coverage) -- also now recorded.
+* **[testing] Counts and rosters.** 68 unit files -> 93 (against
+  `tests/integration/`'s 36; 1,595 tests, 7.5s). `examples/real-world/` listed 4 programs;
+  there are 17, four of which (`ACCTMNT`, `ACHPROC`, `CHKCLR`, `INTCALC`)
+  the audit found `run`/`lint` still refuses while that README claims 0
+  failing -- now said out loud here. The enterprise-corpus section had
+  been appended *after* `# See Also`; moved above it and extended with
+  the `program_attributes` capability-probe skip (`9151297`) and what it
+  implies: on the declared floor those assertions never execute.
+* **[index] Said "Version 0.1.0" (actual: 0.8.0) and listed 10 of the 15
+  subcommands**, missing `init`, `explain`, `doctor`, `analyze`,
+  `skills`. Last touched 2026-08-18, a month and two feature waves ago.
+  Rewritten, and it now points at where `debug`/`mutate`/`export` are
+  actually written up.
+* **[cli] `doctor` was the only subcommand with no section**, though the
+  overview promised fifteen -- the write-up had landed in
+  [dashboard.md](dashboard.md) alongside the probe they share. Added a
+  section (checks, `ready` = "no DOWN", exit codes) that defers there for
+  detail. `setup` gained its missing `--rebuild`.
+* **[runtime] No trace of `setup --rebuild`.** Added a **Forced rebuild**
+  section: `docker build -t IMAGE` re-tags the same content-hash tag onto
+  the new image ID, so the tag-comparing stale check kept the old
+  container and every later compile ran in the toolchain the user asked
+  to replace -- hence the unconditional `docker rm -f` added 2026-09-15.
+  Also named `runtime/status.py` and `start_gdb_session` in the module
+  inventory, both previously reachable only from other files.
+* **[splicer] `splicer/captures.py` (2026-09-04) was not mentioned.** The
+  `CAPTURE ARG` section read as dispatch-only, so the synthesized-target
+  half -- `UT-CAP-` prefix, `plan_captures`, the working-storage/reset
+  lines all four pipelines share, `UNRESOLVED_CAPTURE_TARGET` -- existed
+  in [dsl.md](dsl.md) but nowhere in the codegen doc. Added, including
+  why the reset is load-bearing in `mutate` specifically.
+* **[publishing] Three stale claims.** "7 subcommands" -> 15 (and the
+  binary-only caveat corrected: `analyze` delegates in-process, so it
+  does ship). The trusted-publisher "not yet done as of this writing"
+  note, contradicted by 0.8.0 being on PyPI. And the version-drift bug
+  itself -- audit finding 1, the `mockymock` -> `mocky-mock` rename that
+  broke release-please's path to `__init__.py` for three releases -- was
+  fixed in `2a58c6c` and recorded nowhere in this bundle; now documented
+  where a future rename would be read.
+* **[analysis] `refusal.py` is a package** (`refusal/`, split 2026-08-30).
+  The file table knew; the frontmatter and the section heading did not.
+  Named the five submodules once and flagged the running prose as
+  shorthand rather than churning ~30 in-body references.
+* **[log] Ordering.** This file is newest-first from the top, but 15
+  entries (2026-09-04 through 2026-09-15) had been appended at the
+  *bottom* by branch merges -- so anyone reading from the top saw the
+  2026-09-05 audit as the latest word and missed every CLI feature that
+  followed. Merged back into date order (content byte-identical, only
+  moved) with a note at the top to stop it recurring.
+* **Verified still open, deliberately not touched:** eight of the
+  2026-09-05 audit's nine findings (only finding 1 is fixed).
+  `--cov-fail-under=83` is still in `addopts`, the `cobol-parser` floor is
+  still `1.7.7` where both `ci.yml` and `pyproject.toml` say in prose it
+  should be 1.8.0, `_superbol/lsp-cache` is still committed and
+  ungitignored, and the reachability `GO TO`/`THRU` regression behind the
+  four refused real-world programs is still live. The seventh-audit entry
+  below stands as written except for finding 1.
+
+## 2026-09-15 -- Review follow-ups on the CLI PRs (#111-#116)
+
+Cross-PR review fixes, on top of the six PRs merged together. `setup
+--rebuild` now removes the toolchain container after the rebuilt image
+(the tag-string stale check could not tell the new image from the old,
+so every compile stayed in the old toolchain). Config: `test_root` is
+resolved relative to the config file; unknown keys (and `timeout`, which
+is deliberately not config-overridable) and `seed = true` are
+`ConfigError`s; a malformed file only fails the subcommands that read it
+(`collect --json` keeps its JSON error shape, `fixtures` prints to
+stderr, `doctor` reports it as `WARN`). `discover_cut_files` applies the
+exclude list below the root only. Directory-mode `run` names every
+output-file flag per pair, from the `.cut`'s path relative to the test
+root. `generate --fill`: one block per distinct header per case, the
+anchor PERFORM skips mock bodies, reasons keyed by case index (duplicate
+TESTCASE names), unfixable problems printed and exit 1, landed line
+numbers reported; `directive_snippet` declines the sites the scaffold
+skips. `generate --with-data` appends the copybook hint to a wrapped
+`CopybookNotFoundError`. `doctor`: `ready` means no `DOWN` (a `WARN` exits
+0, per the design doc). `init` refuses a `.cut` passed as the program and
+prints the next step only when recording succeeded. `collect
+--boundaries` gains `directive` (the exact scaffold header) for editor
+completion. See [cli.md](cli.md), [dashboard.md](dashboard.md).
+## 2026-09-15 -- `.cut` editor intelligence, CLI half: collect --boundaries, explain
+
+`mockymock collect [program] --cut PATH --json --boundaries` reports
+every genuinely mockable boundary site in `program` (category, key,
+paragraph, line), whole-program and not reachability-filtered by any
+one TESTCASE -- feeds an editor's `MOCK <category> <key>` completion.
+New `mockymock explain [CODE] [--list] [--json]`: one shared source of
+truth for what a refusal code means, backed by the new
+`analysis/refusal/_explanations.py`'s `REFUSAL_EXPLANATIONS` dict
+(covering all 43 refusal codes the codebase can emit, cross-checked
+against the actual source by `tests/unit/test_refusal_explanations.py`
+in both directions). Both are the CLI-side dependencies of a planned
+`mocky-mock-vscode` completion/hover feature -- see
+[cli.md](cli.md), [analysis.md](analysis.md), and
+`docs/2026-09-15-cut-editor-intelligence-design.md`.
+
+
+## 2026-09-15 -- Actionable refusals (suggested_fix) + generate --fill
+
+`RefusalReason` gains an optional `suggested_fix` field, populated only
+for `UNMOCKED_*` reasons via the new `dsl.generator.directive_snippet()`
+-- the same renderer `generate`'s own scaffold uses, so a refusal's
+suggestion and a fresh scaffold can never disagree. `checks.py`'s shared
+`run_static_checks` appends it as an indented "Add to this TESTCASE:"
+block after the reason (reaching `lint`/`run`/`debug`/`export`/`mutate`
+alike) and exposes the raw per-case reasons as
+`StaticCheckResult.unmocked_reasons`. New `mockymock generate --fill
+CUT_FILE` inserts just the missing `MOCK` blocks into an existing `.cut`
+file (found via each case's `PERFORM` line, using
+`dsl.parser._PERFORM_RE`), leaving every existing directive, EXPECT/
+VERIFY, and comment untouched. See [cli.md](cli.md), [dsl.md](dsl.md),
+[analysis.md](analysis.md), and
+`docs/2026-09-15-actionable-refusals-and-fill-design.md`.
+
+## 2026-09-15 -- Default copybook search directories + actionable hint
+
+`mockymock/cli/discovery.py`'s `effective_copybook_paths()`: once a
+program is resolved, its own `copybooks/` subdirectory is added to the
+copybook search path automatically when it exists (closing the gap that
+made every `examples/real-world/` program require a manually-typed
+`--copybook-path`). `copybook_not_found_hint()` appends a continuation
+line naming `--copybook-path` and the `[tool.mockymock]` config key to
+any `CopybookNotFoundError`. Companion fix in `Landparty/cobol-parser`:
+`suggest_similar_copybooks`'s did-you-mean pool no longer suggests a
+non-copybook file (the referencing program's own `.cbl`, previously).
+See [cli.md](cli.md) and `docs/2026-09-15-copybook-discovery-defaults-design.md`.
+
+## 2026-09-15 -- mockymock init
+
+New `mockymock init <program>`: composes `generate --with-data` + `run
+--record-expectations` into one step, reentrant via real argv lists
+parsed by this module's own `build_parser()` (not a refactor of either
+command's internals -- a deliberate, lower-risk departure from the
+design doc's original proposal). Refuses to overwrite an existing
+output `.cut` without `--force` (a guard `init` owns itself; plain
+`generate` still has none). Uses `doctor.gather_full_status()` to skip
+the run attempt entirely, with a clear fallback message, when Docker
+isn't set up. Prints the scenario branch-verification caveat for
+`--scenarios branches|all`. See [cli.md](cli.md) and
+`docs/2026-09-15-init-command-design.md`.
+
+## 2026-09-15 -- mockymock doctor
+
+New `cli/doctor.py`: a terminal-native readiness report reusing
+`runtime.status.probe()` verbatim (the same read-only Docker/GnuCOBOL
+check `dashboard` already serves over HTTP), plus two checks of its own
+-- cobol-parser importability and which project config file (if any)
+would be loaded. `--json` for scripting; exits 0 when ready, 1
+otherwise. Never builds an image, starts a container, or otherwise
+mutates anything. See [dashboard.md](dashboard.md), [cli.md](cli.md),
+and `docs/2026-09-15-doctor-command-design.md`.
+
+
+## 2026-09-15 -- CLI ergonomics: sibling inference, config file, directory discovery
+
+`mockymock/cli/discovery.py` (new) and `mockymock/cli/config.py` (new):
+`run`/`debug`/`lint`/`mutate`/`export` no longer require both `program` and
+`--cut` -- either can be inferred from the other's same-stem sibling file,
+and `run`/`lint` with neither given discover and run/lint every `.cut`
+file under the current directory (or a `mockymock.toml`/`pyproject.toml`
+`[tool.mockymock]` table's `test_root`). The same config file supplies
+`copybook_path`/`seed` project-wide, with an explicit CLI flag always
+winning. `setup --rebuild` forces a fresh, uncached image build. Top-level
+`--help` now groups commands by how often they're reached for. See
+[cli.md](cli.md) and `docs/2026-09-15-cli-ergonomics-design.md`.
+
+
+## 2026-09-15 -- Enterprise program-type corpus
+
+`tests/fixtures/enterprise/` (a copy of cobol-parser's
+`tests/samples/enterprise/`: one program per IBM Enterprise COBOL program
+type) and `tests/unit/test_enterprise_corpus.py`, which pins what
+`mockymock generate` does with each program. Two refusal changes came out
+of it: `UNSUPPORTED_NESTED_PROGRAM` replaces the misleading `PARSE_WARNING`
+for multi-unit compilation units, and DECLARATIVES detection reads
+cobol-parser's new `is_declarative` section flag before the older
+stray-paragraph / USE-statement signals. See [analysis.md](analysis.md).
+
+
+## 2026-09-08 — DECLARATIVES refusal no longer trusts one coincidental artifact alone
+
+GH issue #106 reported a real IMS DL/I program (`DECLARATIVES` +
+`USE FOR DEBUGGING ON ALL PROCEDURES`, plus GSAM PCB linkage folding) whose
+"neutralized" report printed clean and whose spliced source then failed to
+compile in GnuCOBOL — meaning `UNSUPPORTED_DECLARATIVES` never fired for it,
+even though every synthetic repro of that exact shape (both the reporter's
+and this fix's own) refuses correctly. Could not reproduce the exact miss
+without the real file, but the mechanism is already documented and
+precedented in this codebase: `_check_unsupported_control_flow`'s only
+signal was a stray paragraph literally named `DECLARATIVES` that
+cobolparser's error-tolerant parsing happens to leave behind (see
+`.okf/analysis.md`'s prior caveat) — exactly the kind of artifact
+`_CANDIDATE_LABEL_RE`'s docstring already warns can be swallowed by error
+recovery resynchronizing after unrelated dropped content and erased from
+the AST's paragraph list, with no warning of its own.
+
+- **[analysis/refusal]** `_check_unsupported_control_flow` now also scans
+  PROCEDURE DIVISION for a bare `UseStatement` node (via the existing
+  `_find_statements_of_type` helper, same idiom as the `AlterStatement`
+  scan beside it) and refuses `UNSUPPORTED_DECLARATIVES` on that alone if
+  no paragraph named `DECLARATIVES` was found first. `USE` is legal
+  nowhere in COBOL except inside a `DECLARATIVES` section, so its mere
+  presence is an independent, structural proof — not another coincidental
+  artifact — that one exists. Deduplicated: only one reason is ever
+  returned, preferring the named-paragraph message (it carries a more
+  precise line number) when both signals are present, which is every case
+  seen so far.
+- **[tests]** `test_whole_program_check_refuses_declaratives_via_use_statement_fallback`
+  simulates the artifact's loss directly (renaming the AST paragraph after
+  a normal parse, since the pinned cobolparser reliably leaves it behind
+  for every shape tried) and asserts the USE-statement path alone still
+  refuses.
+- **[docs]** `.okf/analysis.md`'s DECLARATIVES caveat updated to describe
+  the fallback and link back to issue #106.
+
+
 ## 2026-09-05 — Seventh audit: nine findings, none fixed
 
 Whole-repository audit at `b0d5235`, every finding reproduced rather than
 inferred. Full report: [docs/2026-09-05-project-deep-audit.md](../docs/2026-09-05-project-deep-audit.md).
+
+> **Status as of 2026-09-15:** finding 1 (the `--version` drift) is fixed
+> -- `2a58c6c` re-pointed release-please at `mockymock/__init__.py` via
+> `extra-files` and synced `__version__` to 0.8.0; see
+> [publishing.md](publishing.md). The other eight are still open and
+> re-verified against `9108464`. Everything below is as originally
+> written.
 
 * **Four HIGH findings, all one failure repeated: a correct guard that was
   not running.** (1) The published 0.8.0 wheel reports `--version` as
@@ -304,6 +554,178 @@ Reported from a real `generate --with-data` run against a large program:
   upstream in cobol-parser the same day; the third (an arm reachable only via
   a correlation between two records) is structural and still open.
 
+
+## 2026-09-04 — Merged main's overlapping export/mutation work
+
+`main` landed #100 (mutation stillborn reduction, `--jobs`, coverage gate)
+and #101 (export literal continuation) while this branch was open, both
+touching the same code. Resolved by taking **main's** implementations, which
+are better and — for the literal continuation — empirically verified against
+a real fixed-format GnuCOBOL compile, and re-applying only what was still
+missing:
+
+- **[cli]** main's `_continue_literal` independently found the same
+  fill-to-column-72 rule this branch did, and solves it more completely: it
+  pads *before* the opening delimiter, where extra spaces are only
+  separators, so exact fill is always possible and the refusal cases this
+  branch's own splitter had disappear. That splitter is gone; only
+  `_break_at_whitespace` survives from it, as `fit_within_columns`' third
+  pass, for the one shape main's passes cannot fit — a line with no literal
+  at all.
+- **[cli]** `SourceAttribution` still applies: main's message continues to
+  assert "this typically comes from a `.cut` file's MOCK body text"
+  unconditionally, which is the misattribution the review reported.
+- **[cli]** main's `SuiteRun.phase` ("checks"/"compile") already IS the
+  stillborn classification this branch was computing separately — it was
+  just dropped when the `MutantResult` was built. Carrying it through as
+  `stillborn_reason` replaces this branch's parallel plumbing entirely, and
+  the reported names are now main's (`checks`/`compile`) rather than this
+  branch's invented ones.
+
+## 2026-09-04 — Generated TESTCASEs carry cobol-parser's unverified verdict
+
+**[dsl]** cobol-parser's bundle gained `Scenario.verification`: its own
+answer to "does this scenario's generated data actually satisfy the branch
+it is named for?". mockymock's loader reads it defensively (absent means no
+verdict was recorded, never "unverified" — an older bundle is still a valid
+v1 bundle), and `_verification_comment_lines` renders an `unverified`
+verdict as a `*> UNVERIFIED:` block above the affected TESTCASE, listing
+every non-satisfied field verdict and every path gap. A verified scenario
+gets nothing: a note on every case would be noise and would train readers to
+skip the ones that matter. Before this, the only way to check a scenario's
+own label was `mockymock run --trace`, per case.
+
+## 2026-09-04 — `CAPTURE ARG` targets are synthesized, so `generate` can scaffold them
+
+**[dsl][splicer][cli]** `CAPTURE ARG <n> INTO <target>` could only ever be
+hand-written, because `<target>` had to be an existing data item of a
+compatible type: finding or adding one was a manual step before every
+capture, and `generate` never emitted one (the 2026-08-11 argument-capture
+design lists that as explicitly out of scope). New
+`mockymock/splicer/captures.py`: a target named with the reserved
+`UT-CAP-` prefix is synthesized -- a WORKING-STORAGE item mirroring the
+captured argument's own PICTURE/USAGE, plus a reset line, both threaded
+through `cli.checks.extra_working_storage` / the new
+`extra_reset_lines_for` so `run`/`debug`/`export`/`mutate` stay in step.
+The reset is not optional: the suite compiles to ONE binary, so an unreset
+capture lets a case that never reached its CALL assert against the previous
+case's value.
+
+Fail-closed via a new `UNRESOLVED_CAPTURE_TARGET` refusal (step 9 of
+`run_static_checks`) for an argument naming different items at different
+matching sites, a layout that cannot be mirrored, or a name the program
+already declares. Two subtleties worth knowing: cobol-parser reports a
+GROUP's own `usage` as DISPLAY regardless of its children, so
+`_data_item_index` stamps each group with a computed subtree-DISPLAY flag
+rather than trusting that field; and `generate` applies the same
+mirrorability/agreement checks the refusal does, so a scaffolded `.cut`
+can never trip its own gate.
+
+Refreshed `examples/fixtures/FIXTUREDEMO.cut` (the `--with-data` golden),
+which now carries the scaffolded capture for its `CALL "LOGALERT"`.
+
+Verified end to end without Docker as far as generate -> lint -> export
+(declarations, resets and capture MOVEs all present in the exported
+source); not compiled.
+
+## 2026-09-04 — `generate --with-data`: real AT END arms, and stub expectations that reach the file
+
+Two review findings on the bundle-driven scaffold, both the same shape --
+the analysis knew something the generated `.cut` did not say:
+
+- **[dsl]** A scaffolded `MOCK READ`'s `WHEN OTHER` arm was a `*> TODO`
+  comment whenever `_replicated_at_end_statements` could not prove a
+  statement safe from the AST. Leaving that TODO in does not fail visibly;
+  it hangs for 30 seconds at the executor timeout, because the splicer
+  deleted the program's own `AT END` clause and nothing sets the loop
+  guard. New `_lifted_at_end_lines`/`_extract_at_end_imperative` lift the
+  clause's own source text verbatim instead -- a slice of the program, not
+  a re-render, so it is general over every statement shape. `SourceContext`
+  (normalized lines + `collect_boundaries`' statement starts, the same two
+  inputs the splicer's `statement_span` uses) is threaded from
+  `_cmd_generate` through `scaffold_cut`, which is what keeps the lifted
+  text identical to the deleted text. The TODO survives as the fallback.
+- **[dsl]** Tier-3 boundary-level stub expectations (`"WRITE:RPT-REC"`)
+  were dropped unconditionally as "already covered by that boundary's own
+  call_count VERIFY" -- false for exactly the OUT-direction boundaries that
+  produce them, which have no such VERIFY. They now render as `*> STUB
+  EXPECT <CAT> <KEY>` comments and are dropped only when a live VERIFY for
+  that boundary was actually emitted (`_rendered_call_count_refs`). The
+  two-token form deliberately does not match `stub_expectations._STUB_RE`,
+  so `run --record-expectations` ignores it rather than reading `WRITE` as
+  a data name.
+
+Unit-tested, including a lint gate on the generated `.cut`; no Docker, so
+the hang this closes was not re-reproduced end to end.
+
+## 2026-09-04 — `export` wraps instead of refusing; overflow refusals name their real source
+
+Two review findings on `mockymock export`'s `COLUMN_OVERFLOW`:
+
+- **[cli]** It only ever wrapped mockymock's own generated `DISPLAY` shape;
+  any other over-72 line refused the whole export. New `_wrap_source_line`
+  implements the general fixed-format rules -- break a statement at
+  whitespace between atoms (always legal), continue a too-long literal with
+  the column-7 `-` indicator, keep continuation content in Area B -- and
+  `wrap_long_lines` is the new `export` entry point (comment carve-out ->
+  DISPLAY transform -> general wrap -> refuse). The two overflows that
+  actually occur in practice, a re-indented `.cut` MOCK body statement and
+  the generated `UT-RESET-WORKING-STORAGE`'s `MOVE "<long VALUE>" TO
+  <item>`, both wrap now; the second was unfixable by any `.cut` edit.
+  Load-bearing subtlety: **every continued line must run exactly to column
+  72**, because IBM's continuation rule makes a short line's trailing blanks
+  part of the literal. A randomized round-trip test against a model of that
+  rule caught the bug in the first version of the splitter; 40,000 cases now
+  pass with 0% refusal on realistic literals.
+- **[cli]** The refusal message asserted one cause ("this typically comes
+  from a `.cut` file's MOCK body text") regardless of where the line came
+  from. New `SourceAttribution`, built from `_insert_driver_with_origins`'
+  inserted-line indices plus exact stripped-text lookups in the `.cut` and
+  `.cbl`, names the actual source -- and says "neither file" rather than
+  guessing when the text is in neither. `wrap_long_display_lines` survives
+  as the DISPLAY-only transform's own entry point for the tests that pin its
+  fragment shape; `export` no longer calls it.
+
+Unit-tested; not compiled by a real IBM COBOL compiler (nor GnuCOBOL -- no
+Docker daemon available), which the provenance header now says explicitly
+about the two new wrap shapes.
+
+## 2026-09-04 — Reporting clarity: coverage headline, coverage CI gate, stillborn reasons; unmockable-ACCEPT refusal
+
+Four review findings, all about a tool answer being technically true and
+practically misleading:
+
+- **[coverage]** `run --coverage`'s stdout line reported the *instrumented
+  sandbox copy*'s percentage (inflated by injected harness code) while the
+  meaningful original-`.cbl` number lived only in `--coverage-json`. The
+  console report now leads with the original program's own number and its
+  own uncovered lines; the instrumented figure follows on one labelled
+  line. New `OriginalCoverage`/`summarize_original` in `report/coverage.py`;
+  `_cmd_run` now computes the remap for every `--coverage` run, not only
+  when `--coverage-json` asked for it. `--coverage-json`'s `original` block
+  gained an additive `percentage` key.
+- **[coverage][cli]** New `run --coverage-fail-under PERCENT`, the `run`
+  counterpart of `mutate --fail-under` (coverage could not be CI-gated at
+  all before). Judged against the original number, folded into the final
+  exit-code decision so `--trace` still prints, and failing closed when
+  gcov produced nothing.
+- **[cli]** `mutate`'s stillborn mutants are no longer a black box: the
+  console report groups them by `refused` vs `compile_error` and lists each
+  one, `--json-report` carries `stillbornByReason` plus a per-mutant
+  `stillbornReason`. `_run_suite_once` returns the reason as a fourth
+  element -- classified where the status is decided, never re-derived by
+  pattern-matching `detail`.
+- **[analysis]** `MOCK ACCEPT` aimed at an `ACCEPT ... FROM DATE/TIME/...`
+  refused `UNMATCHED_MOCK` ("does not match any boundary site reachable
+  from ..."), which reads as a reachability bug for a problem that is not
+  about reachability. New `UNMOCKABLE_ACCEPT_SOURCE` code, backed by a new
+  `MockSurface.non_interactive_accepts` list recorded for error quality
+  only (those ACCEPTs are still never spliced and never reported as
+  unsupported boundaries -- `ACCEPT WS-TODAY FROM DATE` is ordinary
+  working COBOL).
+
+Unit-tested throughout; no Docker daemon was available, so none of it is
+runtime-verified against real GnuCOBOL.
 
 ## 2026-09-02 — Every COBOL dependency mockable or refused; sibling-parser bugs
 
@@ -3307,334 +3729,3 @@ docs-only -- no production code changed.
   some of `ACCTMNT.cbl`'s own EXEC SQL UPDATE/INSERT statements from the
   AST, causing a different, harder compile failure upstream of this fix.
 
-## 2026-09-04 — Reporting clarity: coverage headline, coverage CI gate, stillborn reasons; unmockable-ACCEPT refusal
-
-Four review findings, all about a tool answer being technically true and
-practically misleading:
-
-- **[coverage]** `run --coverage`'s stdout line reported the *instrumented
-  sandbox copy*'s percentage (inflated by injected harness code) while the
-  meaningful original-`.cbl` number lived only in `--coverage-json`. The
-  console report now leads with the original program's own number and its
-  own uncovered lines; the instrumented figure follows on one labelled
-  line. New `OriginalCoverage`/`summarize_original` in `report/coverage.py`;
-  `_cmd_run` now computes the remap for every `--coverage` run, not only
-  when `--coverage-json` asked for it. `--coverage-json`'s `original` block
-  gained an additive `percentage` key.
-- **[coverage][cli]** New `run --coverage-fail-under PERCENT`, the `run`
-  counterpart of `mutate --fail-under` (coverage could not be CI-gated at
-  all before). Judged against the original number, folded into the final
-  exit-code decision so `--trace` still prints, and failing closed when
-  gcov produced nothing.
-- **[cli]** `mutate`'s stillborn mutants are no longer a black box: the
-  console report groups them by `refused` vs `compile_error` and lists each
-  one, `--json-report` carries `stillbornByReason` plus a per-mutant
-  `stillbornReason`. `_run_suite_once` returns the reason as a fourth
-  element -- classified where the status is decided, never re-derived by
-  pattern-matching `detail`.
-- **[analysis]** `MOCK ACCEPT` aimed at an `ACCEPT ... FROM DATE/TIME/...`
-  refused `UNMATCHED_MOCK` ("does not match any boundary site reachable
-  from ..."), which reads as a reachability bug for a problem that is not
-  about reachability. New `UNMOCKABLE_ACCEPT_SOURCE` code, backed by a new
-  `MockSurface.non_interactive_accepts` list recorded for error quality
-  only (those ACCEPTs are still never spliced and never reported as
-  unsupported boundaries -- `ACCEPT WS-TODAY FROM DATE` is ordinary
-  working COBOL).
-
-Unit-tested throughout; no Docker daemon was available, so none of it is
-runtime-verified against real GnuCOBOL.
-
-## 2026-09-04 — `export` wraps instead of refusing; overflow refusals name their real source
-
-Two review findings on `mockymock export`'s `COLUMN_OVERFLOW`:
-
-- **[cli]** It only ever wrapped mockymock's own generated `DISPLAY` shape;
-  any other over-72 line refused the whole export. New `_wrap_source_line`
-  implements the general fixed-format rules -- break a statement at
-  whitespace between atoms (always legal), continue a too-long literal with
-  the column-7 `-` indicator, keep continuation content in Area B -- and
-  `wrap_long_lines` is the new `export` entry point (comment carve-out ->
-  DISPLAY transform -> general wrap -> refuse). The two overflows that
-  actually occur in practice, a re-indented `.cut` MOCK body statement and
-  the generated `UT-RESET-WORKING-STORAGE`'s `MOVE "<long VALUE>" TO
-  <item>`, both wrap now; the second was unfixable by any `.cut` edit.
-  Load-bearing subtlety: **every continued line must run exactly to column
-  72**, because IBM's continuation rule makes a short line's trailing blanks
-  part of the literal. A randomized round-trip test against a model of that
-  rule caught the bug in the first version of the splitter; 40,000 cases now
-  pass with 0% refusal on realistic literals.
-- **[cli]** The refusal message asserted one cause ("this typically comes
-  from a `.cut` file's MOCK body text") regardless of where the line came
-  from. New `SourceAttribution`, built from `_insert_driver_with_origins`'
-  inserted-line indices plus exact stripped-text lookups in the `.cut` and
-  `.cbl`, names the actual source -- and says "neither file" rather than
-  guessing when the text is in neither. `wrap_long_display_lines` survives
-  as the DISPLAY-only transform's own entry point for the tests that pin its
-  fragment shape; `export` no longer calls it.
-
-Unit-tested; not compiled by a real IBM COBOL compiler (nor GnuCOBOL -- no
-Docker daemon available), which the provenance header now says explicitly
-about the two new wrap shapes.
-
-## 2026-09-04 — `generate --with-data`: real AT END arms, and stub expectations that reach the file
-
-Two review findings on the bundle-driven scaffold, both the same shape --
-the analysis knew something the generated `.cut` did not say:
-
-- **[dsl]** A scaffolded `MOCK READ`'s `WHEN OTHER` arm was a `*> TODO`
-  comment whenever `_replicated_at_end_statements` could not prove a
-  statement safe from the AST. Leaving that TODO in does not fail visibly;
-  it hangs for 30 seconds at the executor timeout, because the splicer
-  deleted the program's own `AT END` clause and nothing sets the loop
-  guard. New `_lifted_at_end_lines`/`_extract_at_end_imperative` lift the
-  clause's own source text verbatim instead -- a slice of the program, not
-  a re-render, so it is general over every statement shape. `SourceContext`
-  (normalized lines + `collect_boundaries`' statement starts, the same two
-  inputs the splicer's `statement_span` uses) is threaded from
-  `_cmd_generate` through `scaffold_cut`, which is what keeps the lifted
-  text identical to the deleted text. The TODO survives as the fallback.
-- **[dsl]** Tier-3 boundary-level stub expectations (`"WRITE:RPT-REC"`)
-  were dropped unconditionally as "already covered by that boundary's own
-  call_count VERIFY" -- false for exactly the OUT-direction boundaries that
-  produce them, which have no such VERIFY. They now render as `*> STUB
-  EXPECT <CAT> <KEY>` comments and are dropped only when a live VERIFY for
-  that boundary was actually emitted (`_rendered_call_count_refs`). The
-  two-token form deliberately does not match `stub_expectations._STUB_RE`,
-  so `run --record-expectations` ignores it rather than reading `WRITE` as
-  a data name.
-
-Unit-tested, including a lint gate on the generated `.cut`; no Docker, so
-the hang this closes was not re-reproduced end to end.
-
-## 2026-09-04 — `CAPTURE ARG` targets are synthesized, so `generate` can scaffold them
-
-**[dsl][splicer][cli]** `CAPTURE ARG <n> INTO <target>` could only ever be
-hand-written, because `<target>` had to be an existing data item of a
-compatible type: finding or adding one was a manual step before every
-capture, and `generate` never emitted one (the 2026-08-11 argument-capture
-design lists that as explicitly out of scope). New
-`mockymock/splicer/captures.py`: a target named with the reserved
-`UT-CAP-` prefix is synthesized -- a WORKING-STORAGE item mirroring the
-captured argument's own PICTURE/USAGE, plus a reset line, both threaded
-through `cli.checks.extra_working_storage` / the new
-`extra_reset_lines_for` so `run`/`debug`/`export`/`mutate` stay in step.
-The reset is not optional: the suite compiles to ONE binary, so an unreset
-capture lets a case that never reached its CALL assert against the previous
-case's value.
-
-Fail-closed via a new `UNRESOLVED_CAPTURE_TARGET` refusal (step 9 of
-`run_static_checks`) for an argument naming different items at different
-matching sites, a layout that cannot be mirrored, or a name the program
-already declares. Two subtleties worth knowing: cobol-parser reports a
-GROUP's own `usage` as DISPLAY regardless of its children, so
-`_data_item_index` stamps each group with a computed subtree-DISPLAY flag
-rather than trusting that field; and `generate` applies the same
-mirrorability/agreement checks the refusal does, so a scaffolded `.cut`
-can never trip its own gate.
-
-Refreshed `examples/fixtures/FIXTUREDEMO.cut` (the `--with-data` golden),
-which now carries the scaffolded capture for its `CALL "LOGALERT"`.
-
-Verified end to end without Docker as far as generate -> lint -> export
-(declarations, resets and capture MOVEs all present in the exported
-source); not compiled.
-
-## 2026-09-04 — Generated TESTCASEs carry cobol-parser's unverified verdict
-
-**[dsl]** cobol-parser's bundle gained `Scenario.verification`: its own
-answer to "does this scenario's generated data actually satisfy the branch
-it is named for?". mockymock's loader reads it defensively (absent means no
-verdict was recorded, never "unverified" — an older bundle is still a valid
-v1 bundle), and `_verification_comment_lines` renders an `unverified`
-verdict as a `*> UNVERIFIED:` block above the affected TESTCASE, listing
-every non-satisfied field verdict and every path gap. A verified scenario
-gets nothing: a note on every case would be noise and would train readers to
-skip the ones that matter. Before this, the only way to check a scenario's
-own label was `mockymock run --trace`, per case.
-
-## 2026-09-04 — Merged main's overlapping export/mutation work
-
-`main` landed #100 (mutation stillborn reduction, `--jobs`, coverage gate)
-and #101 (export literal continuation) while this branch was open, both
-touching the same code. Resolved by taking **main's** implementations, which
-are better and — for the literal continuation — empirically verified against
-a real fixed-format GnuCOBOL compile, and re-applying only what was still
-missing:
-
-- **[cli]** main's `_continue_literal` independently found the same
-  fill-to-column-72 rule this branch did, and solves it more completely: it
-  pads *before* the opening delimiter, where extra spaces are only
-  separators, so exact fill is always possible and the refusal cases this
-  branch's own splitter had disappear. That splitter is gone; only
-  `_break_at_whitespace` survives from it, as `fit_within_columns`' third
-  pass, for the one shape main's passes cannot fit — a line with no literal
-  at all.
-- **[cli]** `SourceAttribution` still applies: main's message continues to
-  assert "this typically comes from a `.cut` file's MOCK body text"
-  unconditionally, which is the misattribution the review reported.
-- **[cli]** main's `SuiteRun.phase` ("checks"/"compile") already IS the
-  stillborn classification this branch was computing separately — it was
-  just dropped when the `MutantResult` was built. Carrying it through as
-  `stillborn_reason` replaces this branch's parallel plumbing entirely, and
-  the reported names are now main's (`checks`/`compile`) rather than this
-  branch's invented ones.
-
-## 2026-09-08 — DECLARATIVES refusal no longer trusts one coincidental artifact alone
-
-GH issue #106 reported a real IMS DL/I program (`DECLARATIVES` +
-`USE FOR DEBUGGING ON ALL PROCEDURES`, plus GSAM PCB linkage folding) whose
-"neutralized" report printed clean and whose spliced source then failed to
-compile in GnuCOBOL — meaning `UNSUPPORTED_DECLARATIVES` never fired for it,
-even though every synthetic repro of that exact shape (both the reporter's
-and this fix's own) refuses correctly. Could not reproduce the exact miss
-without the real file, but the mechanism is already documented and
-precedented in this codebase: `_check_unsupported_control_flow`'s only
-signal was a stray paragraph literally named `DECLARATIVES` that
-cobolparser's error-tolerant parsing happens to leave behind (see
-`.okf/analysis.md`'s prior caveat) — exactly the kind of artifact
-`_CANDIDATE_LABEL_RE`'s docstring already warns can be swallowed by error
-recovery resynchronizing after unrelated dropped content and erased from
-the AST's paragraph list, with no warning of its own.
-
-- **[analysis/refusal]** `_check_unsupported_control_flow` now also scans
-  PROCEDURE DIVISION for a bare `UseStatement` node (via the existing
-  `_find_statements_of_type` helper, same idiom as the `AlterStatement`
-  scan beside it) and refuses `UNSUPPORTED_DECLARATIVES` on that alone if
-  no paragraph named `DECLARATIVES` was found first. `USE` is legal
-  nowhere in COBOL except inside a `DECLARATIVES` section, so its mere
-  presence is an independent, structural proof — not another coincidental
-  artifact — that one exists. Deduplicated: only one reason is ever
-  returned, preferring the named-paragraph message (it carries a more
-  precise line number) when both signals are present, which is every case
-  seen so far.
-- **[tests]** `test_whole_program_check_refuses_declaratives_via_use_statement_fallback`
-  simulates the artifact's loss directly (renaming the AST paragraph after
-  a normal parse, since the pinned cobolparser reliably leaves it behind
-  for every shape tried) and asserts the USE-statement path alone still
-  refuses.
-- **[docs]** `.okf/analysis.md`'s DECLARATIVES caveat updated to describe
-  the fallback and link back to issue #106.
-
-
-## 2026-09-15 -- Enterprise program-type corpus
-
-`tests/fixtures/enterprise/` (a copy of cobol-parser's
-`tests/samples/enterprise/`: one program per IBM Enterprise COBOL program
-type) and `tests/unit/test_enterprise_corpus.py`, which pins what
-`mockymock generate` does with each program. Two refusal changes came out
-of it: `UNSUPPORTED_NESTED_PROGRAM` replaces the misleading `PARSE_WARNING`
-for multi-unit compilation units, and DECLARATIVES detection reads
-cobol-parser's new `is_declarative` section flag before the older
-stray-paragraph / USE-statement signals. See [analysis.md](analysis.md).
-
-
-## 2026-09-15 -- CLI ergonomics: sibling inference, config file, directory discovery
-
-`mockymock/cli/discovery.py` (new) and `mockymock/cli/config.py` (new):
-`run`/`debug`/`lint`/`mutate`/`export` no longer require both `program` and
-`--cut` -- either can be inferred from the other's same-stem sibling file,
-and `run`/`lint` with neither given discover and run/lint every `.cut`
-file under the current directory (or a `mockymock.toml`/`pyproject.toml`
-`[tool.mockymock]` table's `test_root`). The same config file supplies
-`copybook_path`/`seed` project-wide, with an explicit CLI flag always
-winning. `setup --rebuild` forces a fresh, uncached image build. Top-level
-`--help` now groups commands by how often they're reached for. See
-[cli.md](cli.md) and `docs/2026-09-15-cli-ergonomics-design.md`.
-
-
-## 2026-09-15 -- mockymock doctor
-
-New `cli/doctor.py`: a terminal-native readiness report reusing
-`runtime.status.probe()` verbatim (the same read-only Docker/GnuCOBOL
-check `dashboard` already serves over HTTP), plus two checks of its own
--- cobol-parser importability and which project config file (if any)
-would be loaded. `--json` for scripting; exits 0 when ready, 1
-otherwise. Never builds an image, starts a container, or otherwise
-mutates anything. See [dashboard.md](dashboard.md), [cli.md](cli.md),
-and `docs/2026-09-15-doctor-command-design.md`.
-
-
-## 2026-09-15 -- mockymock init
-
-New `mockymock init <program>`: composes `generate --with-data` + `run
---record-expectations` into one step, reentrant via real argv lists
-parsed by this module's own `build_parser()` (not a refactor of either
-command's internals -- a deliberate, lower-risk departure from the
-design doc's original proposal). Refuses to overwrite an existing
-output `.cut` without `--force` (a guard `init` owns itself; plain
-`generate` still has none). Uses `doctor.gather_full_status()` to skip
-the run attempt entirely, with a clear fallback message, when Docker
-isn't set up. Prints the scenario branch-verification caveat for
-`--scenarios branches|all`. See [cli.md](cli.md) and
-`docs/2026-09-15-init-command-design.md`.
-
-## 2026-09-15 -- Default copybook search directories + actionable hint
-
-`mockymock/cli/discovery.py`'s `effective_copybook_paths()`: once a
-program is resolved, its own `copybooks/` subdirectory is added to the
-copybook search path automatically when it exists (closing the gap that
-made every `examples/real-world/` program require a manually-typed
-`--copybook-path`). `copybook_not_found_hint()` appends a continuation
-line naming `--copybook-path` and the `[tool.mockymock]` config key to
-any `CopybookNotFoundError`. Companion fix in `Landparty/cobol-parser`:
-`suggest_similar_copybooks`'s did-you-mean pool no longer suggests a
-non-copybook file (the referencing program's own `.cbl`, previously).
-See [cli.md](cli.md) and `docs/2026-09-15-copybook-discovery-defaults-design.md`.
-
-## 2026-09-15 -- Actionable refusals (suggested_fix) + generate --fill
-
-`RefusalReason` gains an optional `suggested_fix` field, populated only
-for `UNMOCKED_*` reasons via the new `dsl.generator.directive_snippet()`
--- the same renderer `generate`'s own scaffold uses, so a refusal's
-suggestion and a fresh scaffold can never disagree. `checks.py`'s shared
-`run_static_checks` appends it as an indented "Add to this TESTCASE:"
-block after the reason (reaching `lint`/`run`/`debug`/`export`/`mutate`
-alike) and exposes the raw per-case reasons as
-`StaticCheckResult.unmocked_reasons`. New `mockymock generate --fill
-CUT_FILE` inserts just the missing `MOCK` blocks into an existing `.cut`
-file (found via each case's `PERFORM` line, using
-`dsl.parser._PERFORM_RE`), leaving every existing directive, EXPECT/
-VERIFY, and comment untouched. See [cli.md](cli.md), [dsl.md](dsl.md),
-[analysis.md](analysis.md), and
-`docs/2026-09-15-actionable-refusals-and-fill-design.md`.
-
-## 2026-09-15 -- `.cut` editor intelligence, CLI half: collect --boundaries, explain
-
-`mockymock collect [program] --cut PATH --json --boundaries` reports
-every genuinely mockable boundary site in `program` (category, key,
-paragraph, line), whole-program and not reachability-filtered by any
-one TESTCASE -- feeds an editor's `MOCK <category> <key>` completion.
-New `mockymock explain [CODE] [--list] [--json]`: one shared source of
-truth for what a refusal code means, backed by the new
-`analysis/refusal/_explanations.py`'s `REFUSAL_EXPLANATIONS` dict
-(covering all 43 refusal codes the codebase can emit, cross-checked
-against the actual source by `tests/unit/test_refusal_explanations.py`
-in both directions). Both are the CLI-side dependencies of a planned
-`mocky-mock-vscode` completion/hover feature -- see
-[cli.md](cli.md), [analysis.md](analysis.md), and
-`docs/2026-09-15-cut-editor-intelligence-design.md`.
-
-
-## 2026-09-15 -- Review follow-ups on the CLI PRs (#111-#116)
-
-Cross-PR review fixes, on top of the six PRs merged together. `setup
---rebuild` now removes the toolchain container after the rebuilt image
-(the tag-string stale check could not tell the new image from the old,
-so every compile stayed in the old toolchain). Config: `test_root` is
-resolved relative to the config file; unknown keys (and `timeout`, which
-is deliberately not config-overridable) and `seed = true` are
-`ConfigError`s; a malformed file only fails the subcommands that read it
-(`collect --json` keeps its JSON error shape, `fixtures` prints to
-stderr, `doctor` reports it as `WARN`). `discover_cut_files` applies the
-exclude list below the root only. Directory-mode `run` names every
-output-file flag per pair, from the `.cut`'s path relative to the test
-root. `generate --fill`: one block per distinct header per case, the
-anchor PERFORM skips mock bodies, reasons keyed by case index (duplicate
-TESTCASE names), unfixable problems printed and exit 1, landed line
-numbers reported; `directive_snippet` declines the sites the scaffold
-skips. `generate --with-data` appends the copybook hint to a wrapped
-`CopybookNotFoundError`. `doctor`: `ready` means no `DOWN` (a `WARN` exits
-0, per the design doc). `init` refuses a `.cut` passed as the program and
-prints the next step only when recording succeeded. `collect
---boundaries` gains `directive` (the exact scaffold header) for editor
-completion. See [cli.md](cli.md), [dashboard.md](dashboard.md).

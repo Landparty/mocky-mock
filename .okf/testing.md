@@ -3,7 +3,7 @@ type: Test Suite
 title: Testing
 description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, FLOWMOCK, TAXFILE, STATELKUP, REGNAVG, CPYPROC, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-08-13T00:00:00Z
+timestamp: 2026-09-15T00:00:00Z
 ---
 # Overview
 
@@ -14,7 +14,8 @@ Two-tier split under `tests/`:
 | Unit | `tests/unit/` | DSL parser/generator, splicer, orchestrator, naming, refusal rules, SQLCA, sandbox, source maps, reporting -- all in-process, no compiler | No |
 | Integration | `tests/integration/` | Full pipeline: parse -> splice -> compile with real GnuCOBOL (in Docker) -> run -> assert exit code | Yes (skipped otherwise) |
 
-Unit tests (`tests/unit/`, 68 files) include `test_dsl_parser.py` / `test_dsl_parser_v2.py`,
+Unit tests (`tests/unit/`, 93 `test_*.py` files against
+`tests/integration/`'s 36; 1,595 tests, 7.5s, no Docker) include `test_dsl_parser.py` / `test_dsl_parser_v2.py`,
 `test_dsl_generator.py`, `test_injector.py`, `test_mock_surface.py` / `_v2.py`,
 `test_orchestrator.py`, `test_refusal.py` / `_v2.py`, `test_dynamic_call.py`,
 `test_sqlca.py`, `test_sandbox.py`, `test_source_map.py`, `test_stub_writer.py`,
@@ -99,11 +100,18 @@ end-to-end demos (with READMEs), distinct from the terser
 `tests/integration/fixtures/` corpus, and are also driven by their own
 integration tests. Beyond the eight hand-written ones below (INVUPDT,
 ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, REGNAVG, FIXTUREDEMO),
-`examples/real-world/`
-(ACCTPRG, DEPTIMSM, DEPTMQC, DEPTMQP -- now with its own README) and
+`examples/real-world/` (17 programs as of 2026-09-15:
+ACCTMNT, ACCTPRG, ACHPROC, CHKCLR, CTRRPT, DEPTBMP, DEPTIMSM, DEPTMQC,
+DEPTMQP, DORMACCT, EODPROC, FNDTXFR, GLRECON, INTCALC, LNRECOV, LOANPMT,
+STMTGEN -- with its own README) and
 `examples/nist-cobol85/` (IC101A, IC116M, IC117M, OBIC1A) hold additional
 examples driven from real corpora -- see their own READMEs for provenance
-and what each demonstrates. `examples/flowmock/`, `examples/taxfile/`,
+and what each demonstrates. **Four of the real-world programs (`ACCTMNT`,
+`ACHPROC`, `CHKCLR`, `INTCALC`) are currently refused by `run`/`lint`**
+while that README still claims "238 test cases total, 0 failing" -- the
+2026-09-05 audit's finding 2/MEDIUM, a reachability-gate regression
+bisected to `162f205` and still open; see [log.md](log.md)'s seventh-audit
+entry. `examples/flowmock/`, `examples/taxfile/`,
 `examples/statelkup/` (flow-target mocks, `BEFORE-EACH`/`FILE-STATUS IS`,
 `PROVIDER`), and `examples/cpyproc/` (a PROCEDURE DIVISION copybook -- a
 whole paragraph, not just data -- invoked via `PERFORM` and, in a second
@@ -381,43 +389,84 @@ a stand-in "unsupported verb" line for a mockymock fixture:**
 
 # CI (.github/workflows/ci.yml)
 
-Three jobs: `lint`, `test`, `test-cross-platform`.
+Four jobs: `lint`, `test`, `test-cross-platform`, `cobol-parser-compat`.
+**Two of them are switched off.** Triggers are push/PR to `main`, a nightly
+`schedule` (cron `17 6 * * *`, there for `cobol-parser-compat`), and
+`workflow_dispatch`.
 
-## `test` (Linux, full pipeline)
+**`test` and `test-cross-platform` both carry `if: false`** ("test suite
+removed from CI (too long); run locally"), so neither has run since
+`930b391` (2026-08-15). What actually gates a PR today is `lint` plus
+`cobol-parser-compat`'s unit run -- the Docker compile/run tier is gated
+nowhere, and **a green CI run does not mean the test suite passed**. The
+2026-09-05 audit reproduced the cost of this (finding 3: `main` was red on
+a `test_smoke.py` invariant nothing was running). The "too long" rationale
+does not survive measurement: `tests/unit` is **1,595 passed, 32 skipped
+in 7.5s** (measured 2026-09-15 at `9108464`, published cobol-parser, cold
+venv), and the audit clocked the same tier at 9.07s. Run `python -m pytest
+tests/ -v` locally before pushing; treat the two disabled jobs below as
+documentation of what CI *would* cover if re-enabled.
+
+## `lint` (the one always-on gate)
+
+`ubuntu-latest`, Python 3.13, `pip install ruff black mypy` -- then `ruff
+check .`, `black --check .`, `mypy mockymock/`. It deliberately installs no
+project dependencies: `[tool.mypy]`'s `ignore_missing_imports` covers the
+absent `cobolparser`. That shortcut is itself an audit finding (2026-09-05,
+finding 4): with the real dependency absent, the whole cobolparser seam
+degrades to `Any`, and a clean checkout *with* cobol-parser installed
+reports 4 mypy errors this job calls success.
+
+## `cobol-parser-compat` (on, and the only job running tests)
+
+`ubuntu-latest`, Python 3.13, `pip install -r requirements-dev.txt`, then
+`pytest tests/unit -v`. Added after the 2026-08-26 audit finding that
+`pyproject.toml` pins only a floor (`cobol-parser>=1.7.7,<2`), so any
+install resolves whatever cobol-parser most recently published inside that
+range. This job installs the **published** package -- no sibling checkout,
+no local build, exactly what `pip install mocky-mock` gets -- and runs the
+Docker-free unit tier against it, so parser drift shows up as a red
+scheduled run rather than on a user's first install. Tests that need parser
+behavior newer than the floor skip themselves by capability probe rather
+than fail (see `tests/unit/test_enterprise_corpus.py` and
+`test_fixture_bundle_contract.py`). That is not free: on the declared
+floor, 31 unit tests never execute -- the 22 enterprise-corpus cases plus
+9 in `test_verb_coverage_fail_closed.py` (Report Writer nodes, XML PARSE
+clauses, `ChainStatement`, communication nodes). Bumping the floor is what
+turns them back on.
+
+## `test` (Linux, full pipeline) -- DISABLED (`if: false`)
 
 - Push/PR to `main`, `ubuntu-latest`, Python 3.11/3.12/3.13 matrix.
-- Checks out `mocky-mock` *and* a sibling `Landparty/cobol-parser` checkout
-  (path `cobol-parser`), because `requirements-dev.txt` installs cobolparser
-  as an editable sibling (`-e ../cobol-parser`) -- mockymock is not on PyPI
-  and depends on cobol-parser the same way the LegacyLens backend does.
-- The cobol-parser checkout uses `secrets.COBOL_PARSER_PAT` (falling back to
-  `GITHUB_TOKEN`) since the default token can't check out a different repo;
-  this is a **known, flagged gap** -- if the PAT isn't configured and
-  cobol-parser isn't public, the checkout step fails loudly by design rather
-  than silently skipping the dependency.
+- `pip install -r requirements-dev.txt` only. There is **no** sibling
+  `Landparty/cobol-parser` checkout and no `secrets.COBOL_PARSER_PAT` step
+  any more: cobol-parser resolves from PyPI as an ordinary pinned
+  dependency (see [integration](integration.md) and
+  [publishing](publishing.md)).
 - No GnuCOBOL install step -- the Docker toolchain builds
   `mockymock-gnucobol` on first use inside the job (~1 min cold).
-- Single run step: `python -m pytest tests/ -v` -- unit and integration tests
-  run together; integration tests self-skip if `docker info` fails, but
-  `ubuntu-latest` ships Docker so in practice CI exercises both tiers.
+- Single run step: `python -m pytest tests/ -v` -- unit and integration
+  tests run together; integration tests self-skip if `docker info` fails,
+  but `ubuntu-latest` ships Docker so this job would exercise both tiers.
 
-## `test-cross-platform` (Windows + macOS, unit tier only)
+## `test-cross-platform` (Windows + macOS, unit tier only) -- DISABLED (`if: false`)
 
 Added 2026-07-21 as part of a cross-OS install audit (see
 [log.md](log.md)'s entry of the same date) -- previously CI ran on
 `ubuntu-latest` only, despite the 2026-07-04 Docker-only rewrite's whole
 premise being to fix chronic *Windows* compile failures (see
 [runtime](runtime.md)). Nothing verified that fix held up outside one
-developer's machine.
+developer's machine -- and since this job was switched off, nothing does
+again.
 
 - Matrix of `windows-latest` / `macos-latest`, single Python version
   (3.13) -- this job is about catching OS-specific bugs in the Python/DSL
   layer (paths, encoding, newline handling), not Python-version bugs,
   which the Linux `test` job's 3.11-3.13 matrix already covers.
-- Same sibling `cobol-parser` checkout + `--no-deps -e .` install as
-  `test`, since `mockymock/analysis/`, `mockymock/splicer/`, and
-  `mockymock/cli/` all import `cobolparser` at module level -- even the
-  no-Docker unit tier can't import `mockymock` without it.
+- `pip install -r requirements-dev.txt`, same as `test` -- `mockymock/analysis/`,
+  `mockymock/splicer/`, and `mockymock/cli/` all import `cobolparser` at
+  module level, so even the no-Docker unit tier can't import `mockymock`
+  without it.
 - Runs `pytest tests/unit -v` **only** -- deliberately does not attempt
   the Docker/GnuCOBOL integration tier. `macos-latest` GitHub-hosted
   runners have no reachable Docker daemon (the tier's own
@@ -428,12 +477,31 @@ developer's machine.
   Linux `mockymock-gnucobol` image, which would fail the job loudly
   instead of skipping. Restricting both platforms to `tests/unit`
   sidesteps that asymmetry rather than relying on unverified runner
-  behavior. The Docker-backed compile/run path itself stays covered by
-  `test` (`ubuntu-latest`) only, until a self-hosted or
-  Linux-containers-on-Windows runner is worth the added CI complexity.
-- Verified locally before adding: `tests/unit` (681 tests) passed clean
-  against the editable `-e ../cobol-parser` setup on native Windows
-  Python 3.14.
+  behavior.
+- Verified locally before adding: `tests/unit` (681 tests at the time)
+  passed clean on native Windows Python 3.14.
+
+# Enterprise program-type corpus (2026-09-15)
+
+`tests/fixtures/enterprise/*.cbl` + `copybooks/` mirror cobol-parser's
+`tests/samples/enterprise/` -- keep them identical (cobol-parser is the
+source of truth). `tests/unit/test_enterprise_corpus.py` runs `mockymock
+generate` (in-process `cli.main.main`, no Docker) over every program and
+asserts the outcome table `EXPECTED`: a scaffold with test cases, a
+scaffold with none (no mockable boundary), or a refusal under exactly one
+code. Adding a program type means adding it to both corpora and to that
+table; the matrix is `cobol-parser/docs/enterprise-program-types.md`.
+
+Because that corpus exercises what cobol-parser's 2026-09-15 release added
+(OO units, DECLARATIVES modelling, the 6.x data clauses), the whole module
+skips itself on an older pin -- `pytestmark = skipif(not
+hasattr(CobolProgram, "program_attributes"))`, the same capability-probe
+pattern `test_fixture_bundle_contract.py` uses. On the declared floor
+(`cobol-parser>=1.7.7`) those programs parse with warnings and every
+outcome would read `PARSE_WARNING`, saying nothing about mockymock. The
+skip is a placeholder for a pin bump, not the end state: until
+`pyproject.toml`'s floor moves, `cobol-parser-compat` never runs these
+assertions.
 
 # See Also
 
@@ -445,15 +513,3 @@ developer's machine.
 - [runtime](runtime.md) -- generated SQLCA, tally fields, and other
   runtime-support scaffolding that mock bodies (like INVUPDT's `READ` tally
   and `SQLCODE` sets) depend on.
-
-
-## Enterprise program-type corpus (2026-09-15)
-
-`tests/fixtures/enterprise/*.cbl` + `copybooks/` mirror cobol-parser's
-`tests/samples/enterprise/` -- keep them identical (cobol-parser is the
-source of truth). `tests/unit/test_enterprise_corpus.py` runs `mockymock
-generate` (in-process `cli.main.main`, no Docker) over every program and
-asserts the outcome table `EXPECTED`: a scaffold with test cases, a
-scaffold with none (no mockable boundary), or a refusal under exactly one
-code. Adding a program type means adding it to both corpora and to that
-table; the matrix is `cobol-parser/docs/enterprise-program-types.md`.
