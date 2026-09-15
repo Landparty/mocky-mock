@@ -80,7 +80,14 @@ def discover_cut_files(root: Path) -> list[Path]:
         return []
     results = []
     for path in root.rglob("*.cut"):
-        if any(part in CUT_DISCOVERY_EXCLUDE_DIRS for part in path.parts):
+        # Only the parts *below* `root` are subject to the exclude list:
+        # the root itself may legitimately live under a `build/` or
+        # `dist/` (an absolute test_root, a CI checkout path), and that
+        # must not silently empty the scan.
+        if any(
+            part in CUT_DISCOVERY_EXCLUDE_DIRS
+            for part in path.relative_to(root).parts[:-1]
+        ):
             continue
         results.append(path)
     return sorted(results)

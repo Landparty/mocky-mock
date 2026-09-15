@@ -3540,3 +3540,24 @@ file under the current directory (or a `mockymock.toml`/`pyproject.toml`
 winning. `setup --rebuild` forces a fresh, uncached image build. Top-level
 `--help` now groups commands by how often they're reached for. See
 [cli.md](cli.md) and `docs/2026-09-15-cli-ergonomics-design.md`.
+
+
+## 2026-09-15 -- CLI ergonomics review follow-ups
+
+Fixed 6 findings from a code review of PR #111: `setup --rebuild` left the
+old container running (the rebuilt image keeps the same content-hash tag,
+so the stale-container check never fired) -- the container is now removed
+after a forced rebuild. Config: `test_root` is resolved relative to the
+config file that declares it, not cwd; unknown keys and `seed = true` are
+now `ConfigError`s instead of silently ignored/coerced; `timeout` is no
+longer a config key at all (it was validated and stored but never read --
+`--timeout` stays deliberately CLI-only). A malformed config file now only
+fails a subcommand that would actually read it, on stderr for `fixtures`
+so its JSON-only stdout contract holds. `discover_cut_files`'s exclude list
+now applies only to directories below the scanned root, so an absolute
+test root under `build/`/`dist/` is still scanned. Directory-mode `run`
+names every output-file flag (`--coverage-json`/`--coverage-out`/
+`--trace-json`, not just `--junit-xml`/`--json-report`) per pair, keyed by
+the `.cut`'s path relative to the test root rather than its stem alone, so
+`svc1/PROG.cut` and `svc2/PROG.cut` no longer overwrite one report. See
+[cli.md](cli.md).
