@@ -4,7 +4,10 @@
   "include-component-in-tag": false,
   "packages": {
     ".": {
-      "package-name": "mockymock"
+      "package-name": "mockymock",
+      "extra-files": [
+        { "type": "python", "path": "mockymock/__init__.py" }
+      ]
     }
   }
 }
