@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; refusal.py decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-09-08T00:00:00Z
+timestamp: 2026-09-15T00:00:00Z
 ---
 
 # Overview
@@ -219,6 +219,15 @@ Paragraph attribution is depth-independent: nested statements stay attributed to
 `category` (None for detected-but-unmockable), `label` (message string), `keys` (candidate match tuple), `match_text` (normalized EXEC text), `nested`, `nested_in_boundary`, and two fields **not set by mock_surface.py** — filled in later by the splicer's `source_map.annotate_nested_sites`: `span: tuple[int,int] | None` (validated replacement span, nested sites only) and `unspliceable_reason: str | None`. Since the 2026-07-07 fix, `annotate_nested_sites` stamps `unspliceable_reason` on **top-level** sites too (leaving their `span` at `None` — top-level replacement spans still come from `source_map.statement_span`, not this field) when the statement does not own its source line(s); see [splicer](splicer.md#top-level-own-line-guard).
 
 # refusal.py — What Gets Refused, and Why
+
+**Every code below has a prose explanation in `_explanations.py`'s
+`REFUSAL_EXPLANATIONS`** (2026-09-15), backing `mockymock explain <CODE>`
+and, transitively, `mocky-mock-vscode`'s planned refusal-code hover.
+`tests/unit/test_refusal_explanations.py` cross-checks the dict against a
+regex scan of the whole package in both directions, so a code added to a
+gate here without a matching explanation entry fails CI. See
+docs/2026-09-15-cut-editor-intelligence-design.md and `.okf/cli.md`'s
+`mockymock explain` section.
 
 ## Whole-program checks (independent of any test case)
 
