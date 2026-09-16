@@ -17,6 +17,9 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mockymock.cli.ai_mode import CONFIG_KEY as _AI_MODE_KEY
+from mockymock.cli.ai_mode import MODES as _AI_MODES
+
 # A config file could in principle sit at the root of a deeply nested
 # monorepo checkout; this bounds the walk so a detached or networked
 # filesystem can't turn "no config file" into an unbounded stat loop.
@@ -24,7 +27,7 @@ _MAX_WALK_LEVELS = 32
 
 _STRING_LIST_KEY = "copybook_path"
 _INT_KEYS = ("seed",)
-_STRING_KEYS = ("test_root",)
+_STRING_KEYS = ("test_root", _AI_MODE_KEY)
 # Every key a config file may carry. Anything else is rejected rather
 # than ignored: a typo'd `copybook-path` (hyphen) or a `timeout` key
 # (deliberately not config-overridable -- see `_apply_config_to_args` in
@@ -45,6 +48,12 @@ class MockymockConfig:
     source: Path | None = None
     copybook_path: tuple[str, ...] = field(default_factory=tuple)
     seed: int | None = None
+    # How much the packaged AI assistant checks in while it builds a
+    # suite (mockymock/cli/ai_mode.py). None means "no ai_mode key
+    # anywhere", which is distinct from the default mode being written
+    # out explicitly -- `mockymock skills mode` reports the provenance,
+    # so the two must stay distinguishable.
+    ai_mode: str | None = None
     # Relative to the config file that declared it (like copybook_path),
     # so `mockymock run` from a subdirectory still finds the same suites
     # as from the project root. "." with no config file means cwd.
@@ -97,6 +106,12 @@ def _build_config(data: dict, source: Path) -> MockymockConfig:
     for key in _STRING_KEYS:
         if key in data and not isinstance(data[key], str):
             raise ConfigError(f"mockymock: {source}: '{key}' must be a string")
+    ai_mode = data.get(_AI_MODE_KEY)
+    if ai_mode is not None and ai_mode not in _AI_MODES:
+        raise ConfigError(
+            f"mockymock: {source}: '{_AI_MODE_KEY}' must be one of "
+            f"{', '.join(_AI_MODES)} (got {ai_mode!r})"
+        )
     test_root = Path(data.get("test_root", "."))
     if not test_root.is_absolute():
         test_root = source.parent / test_root
@@ -104,6 +119,7 @@ def _build_config(data: dict, source: Path) -> MockymockConfig:
         source=source,
         copybook_path=_normalize_copybook_path(data.get(_STRING_LIST_KEY), source),
         seed=data.get("seed"),
+        ai_mode=ai_mode,
         test_root=str(test_root),
     )
 

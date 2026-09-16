@@ -4,6 +4,13 @@ The order a mockymock suite gets built in, and what to tell the
 developer at each step. `SKILL.md` has the short version; this is the
 loop in full.
 
+The loop itself is the same whatever mode you're in (`mockymock skills
+mode`); the mode decides how much of it comes back to the developer.
+This file is written in `guided` terms -- the default. In `hands-on`,
+every command below waits for a yes first. In `hands-off`, the
+"stop and say so" steps become written entries in the final report
+instead, and the run continues. `reference/modes.md` has the detail.
+
 ## Why this order
 
 A `TESTCASE` drives exactly one `PERFORM` target. That makes two very
@@ -173,12 +180,17 @@ In order, and say which one you're doing:
    whatever the program produced.
 5. If the developer wants to move on, park it explicitly -- say it's
    parked and why, and keep it on the checklist as red. Never drop it
-   silently.
+   silently. In `hands-off` there's nobody to ask: park it yourself,
+   after the same trace/explain loop, with the expected and actual
+   values written down, and go on to the next paragraph. A parked
+   paragraph is a reported finding, never a quietly relaxed assertion.
 
 ## 4. Graduating to the whole program
 
 Only once every paragraph on the checklist is green (or explicitly
-parked). Say that you're switching passes, and why now.
+parked). Say that you're switching passes, and why now -- and in
+`guided`/`hands-on`, ask before you do; in `hands-off`, just switch and
+note it in the final report.
 
 Write the case by hand and let `--fill` do the mocks:
 

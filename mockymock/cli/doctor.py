@@ -2,9 +2,10 @@
 
 Reuses `mockymock.runtime.status.probe()` verbatim -- the same read-only
 Docker/GnuCOBOL probe `mockymock dashboard` already serves over HTTP --
-and adds two more checks that probe has no reason to own: whether
-`cobol-parser` is importable at all (and roughly current), and which
-project config file (if any) this invocation would load. See
+and adds three more checks that probe has no reason to own: whether
+`cobol-parser` is importable at all (and roughly current), which project
+config file (if any) this invocation would load, and which AI assistant
+mode that config puts the packaged skill in. See
 docs/2026-09-15-doctor-command-design.md.
 
 Never builds an image, starts a container, or otherwise mutates
@@ -97,8 +98,47 @@ def _check_config_file() -> Check:
     )
 
 
+def _check_ai_mode() -> Check:
+    """Which AI assistant mode the packaged skill is operating under here
+    (`mockymock/cli/ai_mode.py`). Always `OK` -- every mode is a valid
+    way to work, so this reports, it doesn't judge, and `ready` is never
+    affected by it. It earns its line because `doctor` is the first
+    command the skill runs against a new program: the mode is a property
+    of the project an assistant has to know, and this is where project
+    properties already get printed.
+
+    Loads the config a second time rather than sharing
+    `_check_config_file`'s: that function's signature is called directly
+    by its own tests, and a one-shot command re-reading one small TOML
+    file is cheaper than the coupling.
+    """
+    from mockymock.cli.ai_mode import DEFAULT_MODE, resolve_mode
+    from mockymock.cli.config import ConfigError, load_config
+
+    try:
+        config = load_config()
+    except ConfigError:
+        # The config-file check above already reports the parse error
+        # itself; here it only means the mode can't be read, and a
+        # mode-less assistant falls back to the default.
+        return Check(
+            id="ai_mode",
+            label="AI assistant mode",
+            state=OK,
+            detail=f"{DEFAULT_MODE} (fallback -- the config file above could not be read)",
+        )
+    resolved = resolve_mode(config)
+    origin = "built-in default" if resolved.source is None else str(resolved.source)
+    return Check(
+        id="ai_mode",
+        label="AI assistant mode",
+        state=OK,
+        detail=f"{resolved.mode} -- {resolved.contract.summary} ({origin})",
+    )
+
+
 def gather_full_status() -> DoctorReport:
-    """The toolchain probe plus doctor's own two checks. Never raises for
+    """The toolchain probe plus doctor's own three checks. Never raises for
     an unreachable daemon or missing cobol-parser -- those show up as
     `DOWN`/`WARN` checks, not exceptions; a `ConfigError` from a
     malformed config file is likewise downgraded to a `WARN` check here
@@ -107,7 +147,7 @@ def gather_full_status() -> DoctorReport:
     from mockymock.runtime.status import probe
 
     toolchain = probe()
-    extra = (_check_cobol_parser(), _check_config_file())
+    extra = (_check_cobol_parser(), _check_config_file(), _check_ai_mode())
     # Ready means nothing is DOWN. A WARN (a stopped container, a stale
     # image, a malformed config file) is something `mockymock setup` or
     # the next `run` sorts out on its own, not a failure the user must

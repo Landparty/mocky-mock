@@ -25,6 +25,7 @@ REFERENCE_FILES = (
     "cli-flags.md",
     "scenario-generation.md",
     "paragraph-first-workflow.md",
+    "modes.md",
 )
 
 
@@ -51,3 +52,37 @@ def test_skill_md_teaches_the_paragraph_first_order():
     assert "one paragraph at a time" in text
     assert "--case" in text  # running that one paragraph's case alone
     assert "Keep the developer in the loop" in text
+
+
+def test_skill_md_teaches_the_three_modes_and_the_floor():
+    """The modes are the skill's other axis: the same workflow, with a
+    different amount of it coming back to the developer. Pin all three
+    names, the command that reads the active one, and the floor -- a
+    rewrite that keeps "hands-off" but drops what it still asks about
+    would turn a delegated run into an unsupervised one."""
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    for mode in ("hands-on", "guided", "hands-off"):
+        assert mode in text
+    assert "mockymock skills mode" in text
+    assert "floor holds in every mode" in text
+
+
+def test_modes_reference_covers_every_mode_and_the_floor():
+    text = (SKILL_DIR / "reference" / "modes.md").read_text(encoding="utf-8")
+    for mode in ("hands-on", "guided", "hands-off"):
+        assert f"### `{mode}`" in text
+    # The four floor items, by the thing each one protects.
+    assert ".cbl` program under test" in text
+    assert "generate --fill" in text
+    assert "passing assertion" in text
+
+
+def test_skill_modes_match_the_cli_vocabulary():
+    """The skill's three modes are the CLI's three modes. A mode added to
+    ai_mode.MODES that the packaged skill never explains would be a
+    setting with no behavior behind it."""
+    from mockymock.cli.ai_mode import MODES
+
+    text = (SKILL_DIR / "reference" / "modes.md").read_text(encoding="utf-8")
+    for mode in MODES:
+        assert f"`{mode}`" in text

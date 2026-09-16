@@ -1,13 +1,14 @@
 ---
 name: mockymock
-description: Use when writing or running .cut test files for mockymock (a COBOL unit-test framework that mocks CALL/file-I-O/EXEC SQL·CICS·DLI/ACCEPT boundaries and runs the real program under GnuCOBOL), or when a mockymock run fails or refuses and the reason needs interpreting.
+description: Use when writing or running .cut test files for mockymock (a COBOL unit-test framework that mocks CALL/file-I-O/EXEC SQL·CICS·DLI/ACCEPT boundaries and runs the real program under GnuCOBOL), when a mockymock run fails or refuses and the reason needs interpreting, or when the developer asks to change how hands-on or hands-off the assistant should be while building a suite.
 ---
 
 <!--
 Maintainer note: this is a curated duplicate of docs/options-reference.md
 in the mocky-mock repo, adapted for agent consumption. A .cut directive or
 CLI flag change should be reflected in reference/cut-dsl.md and
-reference/cli-flags.md here too. A FixtureBundle schema change
+reference/cli-flags.md here too, and an AI-mode change (mockymock/cli/
+ai_mode.py) in reference/modes.md. A FixtureBundle schema change
 (docs/fixture-bundle-schema.md in cobol-parser) should be reflected in
 reference/scenario-generation.md.
 -->
@@ -48,7 +49,43 @@ The full loop -- how to pick the next paragraph, what to do with a
 paragraph that has no boundaries, and when a paragraph is done enough to
 move on -- is in `reference/paragraph-first-workflow.md`.
 
+## Modes: how much to check in while you do it
+
+How closely the developer wants to be involved is a per-project setting,
+not a guess. Read it once at the start of a session, before the first
+command:
+
+```bash
+mockymock skills mode      # also on `mockymock doctor`'s "AI assistant mode" line
+```
+
+| Mode | What it changes |
+|---|---|
+| `hands-on` | Propose first, wait for a yes before each change. Read-only commands (`analyze`, `fixtures`, `collect`, `lint`, `explain`, `doctor`) are free; anything that writes a file or runs the program waits. |
+| `guided` | **(default)** Narrate every step, decide the small things yourself, stop at the checkpoints listed below. |
+| `hands-off` | Run the whole workflow and report once at the end. Decide what `guided` would ask about, write down what you decided, park what won't go green, don't stall. |
+
+The workflow below is the same in all three -- the mode only changes how
+many of its decisions come back to the developer. If the developer says
+"just run the whole thing" mid-session, honor it, and offer `mockymock
+skills mode --set hands-off` to make it stick for next time.
+
+**The floor holds in every mode, `hands-off` included**: never edit the
+`.cbl` under test, never overwrite a `.cut` containing cases you didn't
+write this session, never turn a suspected program bug into a passing
+assertion, never act outside the mockymock loop (git, installs) on the
+developer's behalf. Hands-off means *don't interrupt* -- not *decide
+anything*. An unanswerable question becomes a written open item, not a
+silent assumption.
+
+`reference/modes.md` has each mode in full, with a worked exchange for
+`hands-on` and the shape of a `hands-off` final report.
+
 ## Keep the developer in the loop
+
+This section is the `guided` contract -- the default, and the baseline
+the other two modes adjust (`hands-on` adds a wait before each step;
+`hands-off` folds all of it into one report at the end).
 
 They can't see your reasoning. They may not have written this COBOL, and
 may never have run mockymock. Narrate, in this shape:
@@ -66,7 +103,9 @@ may never have run mockymock. Narrate, in this shape:
 - **Stop and ask** before: overwriting a `.cut` file that already has
   hand-written cases, choosing a `--scenarios` mode, moving from the
   paragraph pass to the whole-program pass, or parking a failing
-  paragraph to come back to later.
+  paragraph to come back to later. In `hands-on`, every command joins
+  that list; in `hands-off`, only the floor above does -- decide the
+  rest, and record each decision in the final report.
 - **On a refusal or failure** -- name the code, say what it means in one
   line (`mockymock explain <CODE>` is the catalogue), and give the
   concrete fix. An `UNMOCKED_*` refusal prints a ready-to-paste
@@ -88,7 +127,8 @@ Paragraph 2 of 5 -- 2000-POST-PAYMENT (inserts the DL/I payment segment)
 ### 0. Check the ground (once per program)
 
 ```bash
-mockymock doctor                                  # Docker, toolchain, config, in one screen
+mockymock skills mode                             # hands-on / guided / hands-off -- how much to check in
+mockymock doctor                                  # Docker, toolchain, config, mode, in one screen
 mockymock analyze program-flow PROGRAM.cbl        # every paragraph, the entry point, who PERFORMs what
 mockymock fixtures PROGRAM.cbl --scenarios all    # what's mockable (no .cut yet)
 mockymock collect PROGRAM.cbl --cut PROGRAM.cut --json --boundaries   # ... or, with a .cut already
@@ -206,6 +246,9 @@ it raw.
 
 ## Full reference
 
+- `reference/modes.md` -- `hands-on` / `guided` / `hands-off` in full:
+  what each one decides for itself, what it always asks about, and how to
+  switch.
 - `reference/paragraph-first-workflow.md` -- the paragraph-at-a-time loop
   and the whole-program pass it graduates into, plus what to report at
   each step.

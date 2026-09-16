@@ -186,3 +186,47 @@ def test_cli_doctor_reports_a_malformed_config_file_as_warn(
     config_check = next(c for c in payload["checks"] if c["id"] == "config_file")
     assert config_check["state"] == status.WARN
     assert exit_code == 0
+
+
+def test_ai_mode_check_reports_the_default_and_never_blocks_readiness(
+    tmp_path, monkeypatch
+):
+    """Every mode is a valid way to work, so this check reports rather
+    than judges: always OK, so `doctor`'s exit code can't turn on it."""
+    monkeypatch.chdir(tmp_path)
+    check = doctor_mod._check_ai_mode()
+    assert check.id == "ai_mode"
+    assert check.state == status.OK
+    assert "guided" in check.detail
+    assert "built-in default" in check.detail
+
+
+def test_ai_mode_check_reports_the_configured_mode_and_its_source(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mockymock.toml").write_text('ai_mode = "hands-off"\n')
+    check = doctor_mod._check_ai_mode()
+    assert check.state == status.OK
+    assert "hands-off" in check.detail
+    assert str(tmp_path / "mockymock.toml") in check.detail
+
+
+def test_ai_mode_check_falls_back_when_the_config_file_is_malformed(
+    tmp_path, monkeypatch
+):
+    """The config-file check above already reports the parse error; this
+    one only says which mode an assistant would actually operate under."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mockymock.toml").write_text("seed = [\n")
+    check = doctor_mod._check_ai_mode()
+    assert check.state == status.OK
+    assert "guided" in check.detail
+
+
+def test_doctor_report_includes_the_ai_mode_check(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(status, "probe", lambda: _fake_toolchain(ready=True))
+    report = doctor_mod.gather_full_status()
+    assert "ai_mode" in {c.id for c in report.all_checks()}
+    assert report.ready is True

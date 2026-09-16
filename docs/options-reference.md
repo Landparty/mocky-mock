@@ -25,6 +25,7 @@ This document only covers *usage*.
   - [`export`](#mockymock-export)
   - [`analyze`](#mockymock-analyze)
   - [`skills install`](#mockymock-skills-install)
+  - [`skills mode`](#mockymock-skills-mode)
 - [The `.cut` file: directives and options](#the-cut-file-directives-and-options)
 - [Environment variables](#environment-variables)
 - [Options quick-reference table](#options-quick-reference-table)
@@ -410,6 +411,37 @@ mockymock skills install
 mockymock skills install --project --force
 ```
 
+### `mockymock skills mode`
+
+```bash
+mockymock skills mode [--set MODE] [--json]
+```
+
+Shows (or sets) the **AI assistant mode**: how much the packaged skill
+checks in with the developer while it builds a suite. Three modes, from
+most to least developer involvement — `hands-on` (propose first, wait for
+a yes before each change), `guided` (the default: narrate every step,
+stop at the checkpoints), `hands-off` (run the whole workflow, report
+once at the end). The mode never changes the floor the assistant always
+asks about: editing the `.cbl` under test, overwriting a `.cut` it didn't
+write, turning a suspected program bug into a passing assertion, or
+acting outside the mockymock loop.
+
+The mode lives in the project config file as `ai_mode`, so it is per-repo
+and survives across sessions. `mockymock doctor` reports the active mode
+too.
+
+| Option | Default | Description |
+|---|---|---|
+| `--set MODE` | — | Persist `ai_mode = "MODE"` to the project's `mockymock.toml`, creating it if there is none. Refuses when the project configures mockymock through `pyproject.toml`'s `[tool.mockymock]` — a `mockymock.toml` written beside it would shadow that table wholesale — and prints the line to add instead. |
+| `--json` | off | Print the active mode, its source, and every mode's contract as JSON. |
+
+```bash
+mockymock skills mode
+mockymock skills mode --set hands-off
+mockymock skills mode --json
+```
+
 ## The `.cut` file: directives and options
 
 The `.cut` file is a small DSL, not YAML/JSON/TOML — it's the other place
@@ -695,3 +727,4 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | `export` | no | `--cut`, `-o`, `--copybook-path`, `--case`, `--tag` |
 | `analyze` | no | *(forwarded to cobol-parser)* |
 | `skills install` | no | `--project`, `--force` |
+| `skills mode` | no | `--set`, `--json` |
