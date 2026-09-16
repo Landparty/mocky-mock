@@ -370,6 +370,27 @@ Claude Code session picks it up. Defaults to `~/.claude/skills/mockymock`
 team can commit it for shared use. Refuses to overwrite an existing
 install unless `--force` is given.
 
+## `mockymock skills mode`
+
+```bash
+mockymock skills mode [--set MODE] [--json]
+```
+
+Shows which AI assistant mode this project puts you in -- `hands-on`,
+`guided` (the default), or `hands-off` -- where that came from (a config
+file, or the built-in default), and the contract for it. Run it once at
+the start of a session; `mockymock doctor` reports the same mode on its
+`AI assistant mode` line.
+
+`--set MODE` persists the mode as `ai_mode` in the project's
+`mockymock.toml`, creating that file if there isn't one. A project
+configured through `pyproject.toml`'s `[tool.mockymock]` gets a refusal
+naming the one line to add there instead -- a `mockymock.toml` written
+beside it would shadow that table wholesale. `--json` prints the active
+mode plus every mode's contract.
+
+`reference/modes.md` is what the modes actually mean.
+
 ## Options quick-reference table
 
 | Subcommand | Needs Docker? | Key options |
@@ -389,3 +410,4 @@ install unless `--force` is given.
 | `export` | no | `--cut`, `-o`, `--copybook-path`, `--case`, `--tag` |
 | `analyze` | no | *(forwarded to cobol-parser)* |
 | `skills install` | no | `--project`, `--force` |
+| `skills mode` | no | `--set`, `--json` |

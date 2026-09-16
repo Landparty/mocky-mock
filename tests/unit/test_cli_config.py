@@ -19,6 +19,9 @@ def test_load_config_returns_all_defaults_when_nothing_found(tmp_path):
     assert config.source is None
     assert config.copybook_path == ()
     assert config.seed is None
+    # No `ai_mode` key anywhere is distinct from one set to the default
+    # mode -- `skills mode`/`doctor` report where the mode came from.
+    assert config.ai_mode is None
 
 
 def test_load_config_finds_mockymock_toml_in_start_dir(tmp_path):

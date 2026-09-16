@@ -2370,6 +2370,55 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_skills_mode(args: argparse.Namespace) -> int:
+    """Read back (or set) the project's AI assistant mode -- how much the
+    packaged skill checks in with the developer while it builds a suite.
+    Loads the config file itself rather than using `args._config`: `skills`
+    is one of the subcommands `main()` deliberately lets run with a
+    malformed config (it defines neither `copybook_path` nor `seed`), and
+    this is the one `skills` leaf that actually reads it, so it reports
+    the parse error itself the same way `doctor` does."""
+    from mockymock.cli.ai_mode import (
+        ModeError,
+        format_mode_json,
+        format_mode_report,
+        resolve_mode,
+        validate,
+        write_mode,
+    )
+    from mockymock.cli.config import ConfigError, load_config
+
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        print(f"mockymock skills mode: {exc}")
+        return 1
+
+    if args.set is not None:
+        try:
+            # Validated before the write so a typo'd mode names the valid
+            # set instead of landing in the file for the next `run` to
+            # reject. `choices=` would do this in argparse, but that needs
+            # MODES imported at parser-build time -- see the deferred-import
+            # rule in .okf/cli.md's Gotchas.
+            validate(args.set)
+            written = write_mode(args.set, config)
+        except ModeError as exc:
+            print(f"mockymock skills mode: {exc}")
+            return 1
+        config = load_config()
+        print(f"mockymock skills mode: {args.set} -> {written}")
+
+    resolved = resolve_mode(config)
+    if args.json:
+        import json
+
+        print(json.dumps(format_mode_json(resolved), indent=2))
+    else:
+        print(format_mode_report(resolved))
+    return 0
+
+
 def _cmd_analyze(args: argparse.Namespace) -> int:
     # cobolparser.cli.parse.main() takes no argv parameter -- unlike this
     # module's own main(), it reads sys.argv[1:] directly. Patching it here
@@ -3117,6 +3166,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overwrite an existing install at the target path",
     )
     skills_install_parser.set_defaults(func=_cmd_skills_install)
+
+    skills_mode_parser = skills_subparsers.add_parser(
+        "mode",
+        help=(
+            "Show (or set) how much the AI assistant checks in while it "
+            "builds a suite"
+        ),
+    )
+    skills_mode_parser.add_argument(
+        "--set",
+        metavar="MODE",
+        default=None,
+        # Not `choices=MODES`: that would need mockymock.cli.ai_mode
+        # imported at parser-build time, and build_parser() runs on every
+        # invocation including --help/--version. The valid set is spelled
+        # out here instead and validated in _cmd_skills_mode;
+        # tests/unit/test_cli_skills.py pins this text against MODES so the
+        # two can't drift.
+        help=(
+            "Persist the mode to mockymock.toml: hands-on (propose first, "
+            "wait for a yes), guided (narrate every step, stop at the "
+            "checkpoints; the default), hands-off (run the whole workflow, "
+            "report once at the end)"
+        ),
+    )
+    skills_mode_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the active mode and every mode's contract as JSON",
+    )
+    skills_mode_parser.set_defaults(func=_cmd_skills_mode)
 
     return parser
 

@@ -5,6 +5,67 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-16 -- AI assistant modes: hands-on / guided / hands-off
+
+The packaged skill prescribed exactly one working style (narrate every
+step, stop at four checkpoints). That is the right default and the wrong
+universal: a developer seeing mockymock for the first time wants more
+supervision than that, and one delegating a suite overnight wants a run
+that doesn't stall on a question nobody is there to answer. Modes are
+that dial, and they are **orthogonal to the workflow** -- paragraph
+pass then whole-program pass is unchanged in all three; only how much of
+it comes back to the developer changes. Full rationale in
+[docs/2026-09-16-ai-assistant-modes-design.md](../docs/2026-09-16-ai-assistant-modes-design.md).
+
+* **[cli] New `mockymock/cli/ai_mode.py`** -- the vocabulary (`MODES`,
+  `DEFAULT_MODE = "guided"`, a four-field `ModeContract` per mode),
+  `ResolvedMode` (value **plus provenance**), both formatters, and the
+  config-file write. Stdlib-only: `cli/config.py` imports `MODES` from it
+  to validate the key, so the dependency may not point the other way.
+* **[cli] `ai_mode` is a project config key** (`mockymock.toml` or
+  `[tool.mockymock]`), so the mode is per-repo, committed, and honored by
+  every session without being restated. An unknown value is a
+  `ConfigError` naming the valid set -- never a silent fall back to the
+  default. `MockymockConfig.ai_mode is None` means *no key anywhere*,
+  deliberately distinct from a file that spells out the default.
+* **[cli] New `mockymock skills mode [--set MODE] [--json]`** -- a leaf
+  under `skills` (already the AI-facing surface) rather than a sixteenth
+  top-level subcommand. Prints the dial with the active notch, that
+  mode's contract, the floor, and how to change it. `--set` edits an
+  existing `mockymock.toml` line-based (comments and key order survive),
+  creates one when there is none, and **refuses** a
+  `pyproject.toml`-sourced config -- a `mockymock.toml` written beside it
+  wins the per-directory search and would shadow that project's other
+  keys wholesale -- printing the line to paste instead.
+* **[cli] `doctor` grows an `AI assistant mode` check**, always `OK`
+  (every mode is valid; readiness never turns on it). It earns its line
+  because `doctor` is already step 0 of the skill's own workflow.
+* **[skill] `SKILL.md` gains a modes section** and relabels its existing
+  narration contract as `guided`'s baseline, with the other two modes'
+  deltas stated at the checkpoints. New `reference/modes.md` has each
+  mode in full: a worked `hands-on` exchange, the shape of a `hands-off`
+  final report (with a parked-paragraph entry), and how to switch.
+  `paragraph-first-workflow.md`/`scenario-generation.md` now state the
+  per-mode delta where they said "ask the developer" -- notably that
+  `hands-off` picks the `--scenarios` mode itself *and records the arm
+  count and reasoning*. "Don't pick silently" survives every mode; "ask
+  first" doesn't.
+* **[invariant] The floor (`ai_mode.ALWAYS_ASK`) holds in every mode.**
+  A mode says how often the assistant checks in, never what it may
+  destroy or quietly decide: never edit the `.cbl` under test, never
+  overwrite a `.cut` containing cases it didn't write this session, never
+  turn a suspected program bug into a passing assertion, never act
+  outside the mockymock loop (git, installs). The third is the one
+  "hands-off" is most likely to be read as licensing and is exactly
+  backwards -- in `hands-off` it becomes a written open item with both
+  values and a red case, not a relaxed assertion.
+* **[gotcha] `--set` doesn't use `choices=MODES`** -- that would need
+  `ai_mode` imported inside `build_parser()`, which runs on every
+  `--help`/`--version`. The set is spelled out in help text and validated
+  in the command body; `tests/unit/test_cli_skills.py` pins the help text
+  against `MODES` and pins in a subprocess that building the parser
+  doesn't import the module.
+
 ## 2026-09-16 -- Packaged skill: paragraph-first workflow + narration contract
 
 The end-user Claude Code skill (`mockymock/cli/skills/mockymock/`, what

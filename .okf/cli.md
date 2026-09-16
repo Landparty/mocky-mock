@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-09-16T00:00:00Z
 ---
 
 # Overview
@@ -30,10 +30,11 @@ mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
 mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed; --boundaries also parses program via analysis.mock_surface)
 mockymock explain   -> analysis.refusal.REFUSAL_EXPLANATIONS only  (no Docker, no parsing at all)
 mockymock dashboard -> web.server (loopback HTTP) -> runtime.status.probe()  (read-only Docker)
-mockymock doctor    -> cli.doctor -> runtime.status.probe() + cobol-parser/config checks  (no Docker mutation, no HTTP)
+mockymock doctor    -> cli.doctor -> runtime.status.probe() + cobol-parser/config/ai_mode checks  (no Docker mutation, no HTTP)
 mockymock analyze   -> sys.argv monkeypatch -> cobolparser.cli.parse.main() (no Docker, pure pass-through)
 mockymock export    -> cli.checks (static) -> splicer -> cli.mainframe_export (no Docker)
-mockymock skills    -> skills_cmd (no Docker, no parsing -- a copytree)
+mockymock skills    -> skills_cmd (install: no Docker, no parsing -- a copytree)
+                       cli.ai_mode (mode: reads/writes the config file's ai_mode key)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -53,7 +54,9 @@ without `--json`, `setup`, `dashboard`, `explain`, `skills`, `analyze` run
 on with `args._config = None`, and `doctor` reloads the file itself to
 report the error as a `WARN` check. Unknown keys are a `ConfigError` too
 (a typo'd `copybook-path`, or `timeout`, which is deliberately not
-config-overridable); `seed = true` is rejected (bool is an int subclass).
+config-overridable); `seed = true` is rejected (bool is an int subclass),
+and an `ai_mode` outside `ai_mode.MODES` is rejected naming the valid set
+rather than falling back to the default.
 `test_root` is resolved relative to the config file that declares it, like
 `copybook_path`, so `mockymock run` from a subdirectory scans the same
 suites as from the project root.
@@ -828,10 +831,14 @@ shell over `cli/doctor.py`'s `gather_full_status()` ->
 `format_doctor_text()` / `format_doctor_json()`.
 
 Its checks are `runtime.status.probe()`'s four (`daemon`, `image`,
-`container`, `cobc`) plus two of its own: whether `cobolparser` imports,
-and which project config file this invocation would load (reported `WARN`
+`container`, `cobc`) plus three of its own: whether `cobolparser` imports,
+which project config file this invocation would load (reported `WARN`
 when that file is malformed, rather than taking the whole report down with
-it).
+it), and (2026-09-16) which AI assistant mode that config puts the
+packaged skill in. The `ai_mode` check is always `OK` — every mode is a
+valid way to work, so it reports rather than judges and `ready` can never
+turn on it; it loads the config a second time rather than sharing
+`_check_config_file`'s, whose signature its own tests call directly.
 
 Exit code is `0 if report.ready else 1`, where doctor's `ready` means **no
 check is `DOWN`** — a `WARN` such as a stopped container or a broken config
@@ -965,11 +972,55 @@ the *order* a suite is built in -- every paragraph green on its own
 `PERFORM` first, driven one at a time with `run --case`, and only then
 whole-program cases through the program's entry paragraph -- plus a
 narration contract for keeping the developer oriented while that
-happens (`reference/paragraph-first-workflow.md`). Both halves are
+happens (`reference/paragraph-first-workflow.md`). Since 2026-09-16 it
+additionally carries the *mode* it operates under (`reference/modes.md`,
+and the section `SKILL.md` opens the narration contract with) — the same
+workflow, with `hands-on`/`guided`/`hands-off` deciding how much of it
+comes back to the developer, and a floor that holds in every mode. All
+three halves are
 pinned by `tests/unit/test_mockymock_skill_content.py`, which also
 requires every `reference/` file to be linked from `SKILL.md`: an added
 reference file that nothing points at is a test failure, not a silent
 orphan.
+
+## `mockymock skills mode [--set MODE] [--json]` (2026-09-16)
+
+Shows (or persists) the **AI assistant mode** — how much the packaged
+skill checks in with the developer while it builds a suite. Three modes
+on one axis, most-supervised first: `hands-on` (propose, wait for a yes
+before each change), `guided` (the default — narrate every step, stop at
+the checkpoints), `hands-off` (run the loop end to end, report once).
+`mockymock/cli/ai_mode.py` owns the vocabulary (`MODES`, `DEFAULT_MODE`,
+a `ModeContract` per mode, `ALWAYS_ASK`), the `ResolvedMode`
+value+provenance pair, both formatters, and the config-file write. Full
+rationale in
+[docs/2026-09-16-ai-assistant-modes-design.md](../docs/2026-09-16-ai-assistant-modes-design.md).
+
+The mode lives in the project config file as `ai_mode` (validated in
+`cli/config.py`, which imports `MODES`/`CONFIG_KEY` from `ai_mode` — the
+dependency may not point the other way, and `ai_mode` is stdlib-only for
+that reason). `MockymockConfig.ai_mode is None` means *no key anywhere*,
+deliberately distinct from a file spelling out the default: `skills mode`
+and `doctor`'s `AI assistant mode` check both report provenance, and a
+mode inherited from a monorepo root two levels up is otherwise a
+surprise.
+
+`--set` has three outcomes: an existing `mockymock.toml` is edited
+line-based (comments and key order survive; `tomllib` is read-only and
+this repo takes no TOML-writing dependency for one key, which is sound
+here only because the file's schema is a flat table); no config file at
+all creates one in cwd; a `pyproject.toml`-sourced config is a
+**refusal** printing the line to add, because a `mockymock.toml` written
+beside it wins the per-directory search and would shadow that project's
+`copybook_path`/`seed`/`test_root` wholesale.
+
+The floor (`ALWAYS_ASK`) is the load-bearing half: a mode changes how
+often the assistant checks in, never what it may destroy or quietly
+decide. Editing the `.cbl`, overwriting a `.cut` it didn't write, turning
+a suspected program bug into a passing assertion, and acting outside the
+mockymock loop stay asked-about in `hands-off` too. Pinned by
+`tests/unit/test_mockymock_skill_content.py` on the packaged skill's side
+and `tests/unit/test_ai_mode.py` on the CLI's.
 
 # Gotchas
 
@@ -981,6 +1032,15 @@ single command. `mockymock dashboard` regressed this once by importing
 `web.server` for a port default;
 `tests/unit/test_cli_dashboard.py::test_building_the_parser_does_not_import_the_docker_toolchain`
 now pins it in a subprocess.
+
+**`mockymock skills mode --set` deliberately doesn't use `choices=MODES`.**
+`argparse`'s `choices` would need `mockymock.cli.ai_mode` imported inside
+`build_parser()`, which the rule above forbids. The valid set is spelled
+out in the flag's help text and validated inside `_cmd_skills_mode`
+instead; `tests/unit/test_cli_skills.py` pins the help text against
+`MODES` and pins (in a subprocess, like the dashboard test above) that
+building the parser doesn't import the module. Any future "cleanup" that
+restores `choices=` also restores the import.
 
 **`transform_data_division_exec` is called twice, and the first call's return value is intentionally thrown away** (`_cmd_run`, step 9 vs 11). The first pass exists purely to surface `EXEC SQL INCLUDE SQLCA` refusal reasons *before* any splicing happens; running the real transform that early would shift line numbers/spans that `splice_program` and the boundary/nested-site analysis depend on. Any future edit that tries to "simplify" this into one call will silently break splice-target alignment.
 

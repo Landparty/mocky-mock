@@ -79,6 +79,28 @@ every COBOL repo you test with mockymock); pass `--project` to install
 into the current repo's `.claude/skills/mockymock` instead, so a team can
 commit it for shared use. See `mockymock skills install --help`.
 
+### How much it checks in with you
+
+The same skill runs in one of three modes, depending on how closely you
+want to be involved while it builds a suite:
+
+```bash
+mockymock skills mode                     # which mode this project is in
+mockymock skills mode --set hands-off     # persist it as ai_mode in mockymock.toml
+```
+
+| Mode | What you get |
+|---|---|
+| `hands-on` | It proposes and waits for a yes before each change. Read-only analysis runs freely; anything that writes a file or runs your program asks first. |
+| `guided` | **Default.** It narrates each step and stops at the decisions that matter — overwriting a test file you wrote, picking a `--scenarios` mode, moving to end-to-end cases, parking a failing paragraph. |
+| `hands-off` | It runs the whole workflow and reports once at the end: every paragraph's verdict, what it decided alone and why, and what it parked. |
+
+A mode only changes how often it checks in. In every mode, including
+`hands-off`, it still never edits the COBOL program under test, never
+overwrites a `.cut` file containing cases it didn't write, and never
+turns a suspected bug in your program into a passing assertion — that
+gets reported with both values, not quietly asserted.
+
 ## Example & usage
 
 A `.cut` file mocks a program's boundaries and asserts on the result:

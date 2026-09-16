@@ -97,7 +97,11 @@ on the inventory call rather than needing a second one):
   own scenario in either mode.
 
 Confirm the mode with the developer before generating -- don't pick
-silently.
+silently. The exception is `hands-off` (`mockymock skills mode`): there,
+pick it yourself from `scenario_coverage.total_arms` by the same
+reasoning, and put the choice *and* the arm count in the final report
+("`branches`: 11 arms, 4 unresolved -- `all` would have produced 60+
+cases"). "Don't pick silently" survives every mode; "ask first" doesn't.
 
 ## 3. Generate
 
@@ -106,8 +110,9 @@ mockymock generate PROGRAM.cbl --with-data --seed 7 --scenarios <confirmed-mode>
 ```
 
 `--scenarios all` was only used for the read-only `fixtures` inventory
-call above; generate with whatever mode was actually confirmed (which
-may be `happy` or `branches`, not `all`).
+call above; generate with whatever mode was actually confirmed -- or, in
+`hands-off`, chosen and recorded (which may be `happy` or `branches`,
+not `all`).
 
 **If a `.cut` file already exists, write to a separate path** (`-o
 scenarios.cut`) and copy across the cases you want. `generate`
