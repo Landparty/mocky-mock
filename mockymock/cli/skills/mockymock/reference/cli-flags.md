@@ -1,25 +1,74 @@
 # mockymock CLI: subcommand and flag reference
 
-`mockymock <subcommand> [options]`. Twelve subcommands: `setup`,
-`generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`,
-`dashboard`, `export`, `analyze`, `skills`. Running `mockymock` with no
-subcommand prints help and exits 1.
+`mockymock <subcommand> [options]`. Fifteen subcommands: `setup`,
+`init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`,
+`collect`, `explain`, `dashboard`, `doctor`, `export`, `analyze`,
+`skills`. Running `mockymock` with no subcommand prints help and exits 1.
 
-Only `run` and `setup` need a running Docker daemon (COBOL is compiled
-and executed inside a GnuCOBOL container). Everything else is pure
-parse-and-analyze.
+Only `setup`, `run`, `init`, `debug`, and `mutate` need a running
+Docker daemon (COBOL is compiled and executed inside a GnuCOBOL
+container).
+Everything else is pure parse-and-analyze -- which is what makes `lint`
+the fast inner loop while writing a `.cut` file.
+
+## Argument inference and the project config file
+
+Most subcommands can work out their own arguments:
+
+- Pass only `--cut PROGRAM.cut` and the program is inferred from the
+  sibling file with the same stem (`.cbl`, `.cob`, `.CBL`, `.COB`, in
+  that order); pass only `PROGRAM.cbl` and `--cut` is inferred the same
+  way. Either explicit path always wins.
+- `run` and `lint` with **neither** argument discover and process every
+  `.cut` file under the current directory (or the config file's
+  `test_root`), skipping `.git`, `node_modules`, `.venv`, `dist`,
+  `build`, and the other usual suspects.
+- A `mockymock.toml`, or a `[tool.mockymock]` table in `pyproject.toml`,
+  found by walking up from the source file, supplies defaults for
+  `copybook_path`, `seed`, and `test_root`. Precedence is always
+  explicit flag > config file > built-in default, and an unrecognized
+  key is an error rather than silently ignored. `mockymock doctor`
+  reports which config file (if any) is in effect.
 
 ## `mockymock setup`
 
 ```bash
-mockymock setup
+mockymock setup [--rebuild]
 ```
 
-No options. Builds the GnuCOBOL Docker image (if needed) and starts the
-`mockymock-cobc` container, then prints the compiler version. Optional in
-normal use -- `mockymock run` does this automatically -- but useful as a
-fast up-front check or CI warm-up so the first real `run` isn't the one
-paying for the image build.
+Builds the GnuCOBOL Docker image (if needed) and starts the
+`mockymock-cobc` container, then prints the compiler version.
+`--rebuild` forces a fresh image build even when a current one is
+cached. Optional in normal use -- `mockymock run` does this
+automatically -- but useful as a fast up-front check or CI warm-up so
+the first real `run` isn't the one paying for the image build.
+
+## `mockymock init`
+
+```bash
+mockymock init <program.cbl> [options]
+```
+
+One command from a COBOL program to a `.cut` file with real, recorded
+assertions: `generate --with-data` followed by `run
+--record-expectations`, so the first scaffold has generated mock data
+and recorded expected values instead of empty bodies. Needs Docker for
+the recording half; without it, degrades to a plain data-driven scaffold
+and prints the next step.
+
+| Option | Default | Description |
+|---|---|---|
+| `program` (positional) | required | The `.cbl` source file. |
+| `-o`, `--output PATH` | `<program>.cut` | Where to write the `.cut` file. |
+| `--seed N` | random | Seed for the fixture bundle's generated data. |
+| `--scenarios {happy,branches,all}` | `happy` | Same meaning as `generate --scenarios`. |
+| `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path`. |
+| `--force` | off | Overwrite the output `.cut` file if it already exists. |
+
+Unlike `generate`, `init` **refuses to overwrite** an existing `.cut`
+without `--force`. Recorded expectations are characterization values
+(what the program does today), not verified intent -- read them back
+before treating them as assertions.
 
 ## `mockymock generate`
 
@@ -33,7 +82,8 @@ each paragraph touches. Never touches Docker.
 | Option | Default | Description |
 |---|---|---|
 | `program` (positional) | required | The `.cbl` source file to scaffold from. |
-| `-o`, `--output PATH` | `<program>.cut` | Where to write the generated `.cut` file. |
+| `-o`, `--output PATH` | `<program>.cut` | Where to write the generated `.cut` file. **Overwritten without asking** -- see `--fill` for an existing file. |
+| `--fill CUT_FILE` | none | Insert only the `MOCK` blocks `CUT_FILE`'s existing test cases are missing (from the same `UNMOCKED_*` analysis `lint` runs), writing back in place. Every existing directive, `EXPECT`, `VERIFY`, and comment is preserved byte for byte; an existing `MOCK` block is never edited, even if its body is empty. Mutually exclusive with `-o/--output`, `--with-data`, and `--fixtures`. |
 | `--copybook-path DIR` (repeatable) | none | A directory to search for `COPY`-referenced copybooks. |
 | `--with-data` | off | Data-driven mode: one `TESTCASE` per scenario, with real generated mock data and `EXPECT`/`VERIFY` assertions, instead of placeholder bodies. |
 | `--fixtures PATH` | none | Use an already-generated fixture bundle JSON file instead of generating one on the fly. Implies `--with-data`. Mutually exclusive with `--rows`. |
@@ -46,6 +96,7 @@ Examples:
 
 ```bash
 mockymock generate ORDRPROC.cbl
+mockymock generate ORDRPROC.cbl --fill ORDRPROC.cut
 mockymock generate ORDRPROC.cbl -o tests/ORDRPROC.cut --copybook-path copybooks/
 mockymock generate ORDRPROC.cbl --with-data --seed 7 --scenarios branches
 mockymock generate ORDRPROC.cbl --with-data --rows 5 --placeholder READ:ORDER-FILE
@@ -93,8 +144,8 @@ Docker, execute, and report pass/fail.
 
 | Option | Default | Description |
 |---|---|---|
-| `program` (positional) | required | The `.cbl` source file. |
-| `--cut PATH` | required | The `.cut` test file to run against `program`. |
+| `program` (positional) | inferred | The `.cbl` source file. Omit to infer it from `--cut`'s sibling; omit both to run every `.cut` under the current directory (or the config file's `test_root`). |
+| `--cut PATH` | inferred | The `.cut` test file to run against `program`. Omit to infer it from the program's sibling `.cut`. |
 | `--junit-xml PATH` | none | Write a JUnit XML report there. |
 | `--json-report PATH` | none | Write a machine-readable run report (per-case status, `.cut` line numbers, expected vs. actual, tags). |
 | `--case NAME` (repeatable) | all cases | Run only the named `TESTCASE`(s). Unions with `--tag`. |
@@ -105,6 +156,8 @@ Docker, execute, and report pass/fail.
 | `--coverage` | off | Compile with `--coverage`/`gcov` and report per-line coverage, remapped onto your original line numbers. |
 | `--coverage-out PATH` | none | Write the full coverage report to a file. Implies `--coverage`. |
 | `--coverage-json PATH` | none | Write machine-readable coverage, mapped onto the original `.cbl`'s line numbers. Implies `--coverage`. |
+| `--coverage-fail-under PCT` | none | Exit nonzero when the original `.cbl`'s line coverage is below this percentage -- `run`'s counterpart to `mutate --fail-under`. Implies `--coverage`. |
+| `--timeout SECONDS` | `30` | Binary execution timeout. A mocked `CALL` that removes a loop's terminating condition would otherwise hang until this kills it. |
 | `--trace` | off | Replay one test case's execution path plus the mock timeline, in order. **Requires exactly one `--case` and no `--tag`.** |
 | `--trace-json PATH` | none | Write a machine-readable execution trace. Implies `--trace`. |
 | `--record-expectations` | off | For every `*> STUB EXPECT <name>` comment, capture the value the program actually produced and rewrite it into a real `EXPECT`, in place. Never overwrites a hand-written `EXPECT`. Never changes the run's exit code. |
@@ -191,15 +244,57 @@ Mock bodies and terminator statements are never mutated.
 
 ```bash
 mockymock collect --cut <program.cut> [options]
+mockymock collect <program.cbl> --cut <program.cut> --json --boundaries
 ```
 
 Lists a suite's test cases with `.cut` line numbers and tags. Parses only
-the `.cut` file -- no `.cbl`, no Docker.
+the `.cut` file -- no `.cbl`, no Docker -- unless `--boundaries` is
+given.
 
 | Option | Default | Description |
 |---|---|---|
 | `--cut PATH` | required | The `.cut` test file. |
 | `--json` | off | Emit machine-readable JSON instead of a human-readable listing. |
+| `program` (positional) | none | Required only with `--boundaries`. |
+| `--boundaries` | off | Also report every mockable boundary site in `program` (category, key, paragraph, line, and the `MOCK` directive that would cover it). Requires `--json` and `program`. |
+| `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path` (`--boundaries` only). |
+
+`--boundaries` is the cheapest way to answer "what can I mock here, and
+what is this suite already covering?" for a program that already has a
+`.cut` file -- no fixture generation, no Docker.
+
+## `mockymock explain`
+
+```bash
+mockymock explain <CODE>
+mockymock explain --list
+```
+
+Prints the catalogued explanation for a refusal code -- one shared
+source of truth for what `UNMOCKED_CALL`, `UNSUPPORTED_DECLARATIVES`,
+`PARSE_WARNING`, and the rest actually mean, instead of re-deriving it
+from the message text.
+
+| Option | Default | Description |
+|---|---|---|
+| `code` (positional) | none | The refusal code, e.g. `UNSUPPORTED_DECLARATIVES`. Case-insensitive. |
+| `--list` | off | List every catalogued code instead of explaining one. |
+| `--json` | off | Machine-readable output. |
+
+Exits 1 on an uncatalogued code (and says so, listing the known ones).
+
+## `mockymock doctor`
+
+```bash
+mockymock doctor [--json]
+```
+
+Terminal-native readiness report: Docker daemon, toolchain image,
+`mockymock-cobc` container, GnuCOBOL compiler, `cobol-parser` import,
+and which config file is in effect -- each `[ OK]`/`[FAIL]`/`[ N/A]`,
+with the fix for anything failing. Read-only; never builds or starts
+anything. Exits nonzero when something is not ready. `--json` for
+scripting.
 
 ## `mockymock dashboard`
 
@@ -279,15 +374,18 @@ install unless `--force` is given.
 
 | Subcommand | Needs Docker? | Key options |
 |---|---|---|
-| `setup` | yes | *(none)* |
-| `generate` | no | `-o`, `--copybook-path`, `--with-data`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder` |
+| `setup` | yes | `--rebuild` |
+| `init` | yes (degrades) | `-o`, `--seed`, `--scenarios`, `--copybook-path`, `--force` |
+| `generate` | no | `-o`, `--fill`, `--copybook-path`, `--with-data`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder` |
 | `fixtures` | no | `--scenarios`, `--seed`, `--rows`, `--copybook-path` |
-| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json]`, `--trace[-json]`, `--record-expectations` |
+| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json\|-fail-under]`, `--trace[-json]`, `--timeout`, `--record-expectations` |
 | `debug` | yes | `--cut`, `--case`, `--copybook-path`, `--dap-stdio` |
 | `lint` | no | `--cut`, `--copybook-path` |
 | `mutate` | yes (unless `--list`) | `--cut`, `--copybook-path`, `--list`, `--timeout`, `--json-report`, `--fail-under` |
-| `collect` | no | `--cut`, `--json` |
+| `collect` | no | `--cut`, `--json`, `--boundaries`, `--copybook-path` |
+| `explain` | no | `--list`, `--json` |
 | `dashboard` | read-only probe | `--port`, `--no-browser` |
+| `doctor` | read-only probe | `--json` |
 | `export` | no | `--cut`, `-o`, `--copybook-path`, `--case`, `--tag` |
 | `analyze` | no | *(forwarded to cobol-parser)* |
 | `skills install` | no | `--project`, `--force` |

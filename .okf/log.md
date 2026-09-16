@@ -5,6 +5,56 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-16 -- Packaged skill: paragraph-first workflow + narration contract
+
+The end-user Claude Code skill (`mockymock/cli/skills/mockymock/`, what
+`mockymock skills install` copies out) told an assistant which commands
+exist but not in what order to build a suite, and not what to tell the
+developer while doing it. Docs/tests only; no CLI, DSL, or runtime
+source touched.
+
+* **[skill] `SKILL.md` now prescribes two passes.** Paragraph pass: one
+  `TESTCASE` per PROCEDURE DIVISION paragraph, driven green **one at a
+  time** via `lint` then `run --case "<that one case>"`, before the next
+  paragraph is started. Whole-program pass: only once each paragraph is
+  green, end-to-end cases through the program's entry paragraph
+  (`entry_points[0]` from `analyze program-flow`), which is where
+  ordering, carried state, and total call counts get checked.
+  `examples/claimseg/CLAIMSEG.cut` is exactly this shape already -- the
+  skill just never said so.
+* **[skill] A "Keep the developer in the loop" section**: what to say
+  before a command, after it, and where things stand (n of m paragraphs
+  green), what to stop and ask about, and how to report a refusal
+  (`mockymock explain <CODE>`, plus the `UNMOCKED_*` family's
+  ready-to-paste `Add to this TESTCASE:` block). With a worked status
+  report, because "narrate more" alone doesn't produce a shape.
+* **[skill] New `reference/paragraph-first-workflow.md`** (the loop in
+  full: building the checklist from `program-flow`'s `nodes`/`edges`/
+  `entry_points`/`unreachable_nodes`, when a paragraph is done, what to
+  do when one won't go green, graduating to end-to-end).
+* **[skill] Two hazards now stated out loud**: plain `generate`
+  overwrites its output path without asking (so: scaffold once, then
+  `generate --fill CUT_FILE` for a file in progress, and `-o
+  scenarios.cut` for data-driven generation next to an existing suite),
+  and a paragraph with no boundary gets no scaffolded case at all, so
+  those paragraphs need hand-written ones.
+* **[skill] `reference/cli-flags.md` resynced with the CLI** -- it still
+  described twelve subcommands. Added `init`, `explain`, `doctor`, a
+  section on sibling-path inference / directory-wide `run`/`lint` /
+  `mockymock.toml`, and the missing flags: `setup --rebuild`, `generate
+  --fill`, `run --coverage-fail-under`/`--timeout`, `collect
+  --boundaries`. Corrected the Docker list (it claimed only `run` and
+  `setup`; `init`, `debug`, and `mutate` need a daemon too).
+* **[testing] `tests/unit/test_mockymock_skill_content.py`** now pins
+  all four `reference/` files (it covered two), requires each to be
+  linked from `SKILL.md`, and pins the paragraph-first order and the
+  narration section as content, not just file shape.
+
+`docs/options-reference.md` -- which `SKILL.md`'s maintainer note calls
+the curated original -- is stale the same way `cli-flags.md` was: no
+`init`/`explain`/`doctor`, no `--fill`, no argument inference. Not
+touched here; it is a user-facing doc, not part of the skill.
+
 ## 2026-09-15 -- Bundle review: nine staleness fixes, no code changed
 
 Read-only audit of every `.okf/` file against the tree at `9108464`, then

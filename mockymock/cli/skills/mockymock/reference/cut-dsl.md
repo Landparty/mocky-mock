@@ -155,6 +155,13 @@ PERFORM MAIN-PROCESS
 PERFORM VALIDATE-INPUT THRU VALIDATE-INPUT-EXIT
 ```
 
+This single line is what decides whether a case is a paragraph test or a
+whole-program test. `PERFORM VALIDATE-INPUT` exercises that paragraph
+alone, so a failure can only come from it; `PERFORM 0000-MAIN` (the
+program's entry paragraph) drives the entire `PERFORM` chain, with every
+boundary reachable through it needing a `MOCK`. Build the paragraph
+cases first -- see `paragraph-first-workflow.md`.
+
 ## `EXPECT <data-name> [NOT] TO BE [<comparison>] <value>`
 
 An assertion checked after `PERFORM` returns:

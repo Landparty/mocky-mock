@@ -956,11 +956,20 @@ along with the already-discovered `mockymock.cli` package the same way
 `mockymock/runtime/docker/` and `mockymock/web/static/` ride along with
 theirs.
 
-As of 2026-08-16, the packaged skill's `SKILL.md` Workflow and its new
-`reference/scenario-generation.md` also teach the agent to inventory
-boundaries and recommend a `--scenarios` mode from a program's own
-`scenario_coverage` before generating -- not just a copytree of static
-reference material.
+The packaged skill is not just a copytree of static reference material:
+its `SKILL.md` prescribes how an assistant works. Since 2026-08-16 it
+teaches the agent to inventory boundaries and recommend a `--scenarios`
+mode from a program's own `scenario_coverage` before generating
+(`reference/scenario-generation.md`). Since 2026-09-16 it also prescribes
+the *order* a suite is built in -- every paragraph green on its own
+`PERFORM` first, driven one at a time with `run --case`, and only then
+whole-program cases through the program's entry paragraph -- plus a
+narration contract for keeping the developer oriented while that
+happens (`reference/paragraph-first-workflow.md`). Both halves are
+pinned by `tests/unit/test_mockymock_skill_content.py`, which also
+requires every `reference/` file to be linked from `SKILL.md`: an added
+reference file that nothing points at is a test failure, not a silent
+orphan.
 
 # Gotchas
 
