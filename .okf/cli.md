@@ -40,12 +40,54 @@ mockymock skills    -> skills_cmd (install: no Docker, no parsing -- a copytree)
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
 `func` attribute).
 
+## The universal `cobol.yml` project config (2026-09-16)
+
+`load_config()` now reads **two** files, layered. Design:
+`docs/2026-09-16-universal-yaml-config-design.md`.
+
+1. **`cobol.yml`** / **`cobol.yaml`** -- the universal project config the
+   whole tool family reads (this CLI, `cobol-parser`, the COBOL Analyzer
+   extension). Its `project:` section supplies the settings shared with every
+   other tool (`copybook_path`, `seed`); its `mockymock:` section supplies
+   this CLI's own (`test_root`, `ai_mode`) and overrides anything `project:`
+   said. Schema reference: `docs/project-config.md` in the cobol-parser repo.
+2. **`mockymock.toml`** / `pyproject.toml`'s `[tool.mockymock]` -- the
+   tool-specific file, unchanged.
+
+Each is found by its **own** upward walk (nearest wins per file), so a
+`cobol.yml` at a repo root and a `mockymock.toml` in a subproject both apply.
+When both exist the tool-specific file **overrides the universal one key by
+key** -- `_validated_values()` returns only the keys a file actually sets,
+which is what makes that merge possible. First-match-wins across the two was
+rejected: a `mockymock.toml` setting only `seed` would silently discard a
+`cobol.yml` that set the other three.
+
+`MockymockConfig.sources` lists every contributing file, base first;
+`.source` stays the one that had the last word (where `skills mode --set`
+would write), and `doctor` reports the whole chain rather than just the
+winner.
+
+The YAML parsing and the `project:` schema are **cobol-parser's**
+(`cobolparser.config.load_project_config`), soft-imported: that module lands
+in cobol-parser 1.10, the dependency floor here is deliberately not raised
+for it, and a project with a `cobol.yml` on an older parser gets a
+`ConfigError` naming the version to install. The discovery walk itself is
+implemented here (`find_universal_config()`) precisely so that case produces
+that message instead of silently skipping the file.
+
+`skills mode --set` **refuses** to rewrite a `cobol.yml`, printing the two
+lines to paste under its `mockymock:` section -- unlike the `pyproject.toml`
+refusal (where a new `mockymock.toml` would shadow the whole table), a new
+file here would layer correctly, but splitting a project's settings across
+two files when the point of the universal one is a single place is not a
+decision to make for the user.
+
 ## Argument resolution (2026-09-15)
 
 Before dispatch, `main()` loads the project config file
-(`mockymock/cli/config.py`'s `load_config()`: `mockymock.toml` or
-`pyproject.toml`'s `[tool.mockymock]` table, searched from cwd upward) and
-stashes it on `args._config`; a malformed file is `ConfigError`, caught in
+(`mockymock/cli/config.py`'s `load_config()`: the `cobol.yml` and
+`mockymock.toml` / `[tool.mockymock]` layers above, searched from cwd upward)
+and stashes it on `args._config`; a malformed file is `ConfigError`, caught in
 `main()`. Only a subcommand that would read the config (one whose
 subparser defines `copybook_path` or `seed`) fails on it -- printed as a
 clean error, exit 1, as JSON for `collect --json` and on stderr for

@@ -1,14 +1,32 @@
-"""Project-level configuration: `mockymock.toml` or `pyproject.toml`'s
-`[tool.mockymock]` table.
+"""Project-level configuration.
 
-See docs/2026-09-15-cli-ergonomics-design.md. Search order, first match
-wins, walking from `start_dir` up through parent directories: a
-`mockymock.toml` in a directory beats a `pyproject.toml` in that same
-directory (both are tried per directory before moving up), mirroring how
-`git` walks up looking for `.git`. Every recognized key is optional;
-precedence at the call site is always explicit CLI flag > config file >
-built-in default -- this module never overrides a flag the user actually
-passed.
+Two files, layered:
+
+1. **`cobol.yml`** (or `cobol.yaml`) -- the *universal* project config the
+   whole COBOL tool family reads: `cobol-parser`, this CLI, and the COBOL
+   Analyzer VS Code extension. Its `project:` section holds the settings
+   every tool shares (copybook paths, seed); its `mockymock:` section holds
+   the ones only this CLI understands. See `docs/project-config.md` in the
+   cobol-parser repo for the full schema.
+2. **`mockymock.toml`**, or `pyproject.toml`'s `[tool.mockymock]` table --
+   the tool-specific file, which predates the universal one and keeps
+   working unchanged.
+
+Both are searched for independently, each walking from `start_dir` up
+through its parents the way `git` walks up looking for `.git`; the nearest
+of each wins its own search. When both exist, the **tool-specific file
+overrides the universal one key by key** -- more specific beats more
+general -- and `MockymockConfig.sources` lists both, base first. The
+alternative, first-match-wins across the two, would mean a `mockymock.toml`
+setting one key silently discarded a `cobol.yml` that set the other three.
+
+Every recognized key is optional; precedence at the call site is always
+explicit CLI flag > config file > built-in default. This module never
+overrides a flag the user actually passed.
+
+See docs/2026-09-15-cli-ergonomics-design.md for the original tool-specific
+design, and docs/2026-09-16-universal-yaml-config-design.md for the
+universal layer.
 """
 
 from __future__ import annotations
@@ -16,7 +34,9 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
+from mockymock.cli.ai_mode import _UNIVERSAL_SECTION as UNIVERSAL_SECTION
 from mockymock.cli.ai_mode import CONFIG_KEY as _AI_MODE_KEY
 from mockymock.cli.ai_mode import MODES as _AI_MODES
 
@@ -24,6 +44,13 @@ from mockymock.cli.ai_mode import MODES as _AI_MODES
 # monorepo checkout; this bounds the walk so a detached or networked
 # filesystem can't turn "no config file" into an unbounded stat loop.
 _MAX_WALK_LEVELS = 32
+
+# The universal config file, tried in this order within each directory.
+UNIVERSAL_FILE_NAMES = ("cobol.yml", "cobol.yaml")
+
+# `UNIVERSAL_SECTION` (imported above) is the section of the universal file
+# this tool owns. Keys there mean the same thing as in `mockymock.toml`, and
+# override anything `project:` said.
 
 _STRING_LIST_KEY = "copybook_path"
 _INT_KEYS = ("seed",)
@@ -45,6 +72,9 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class MockymockConfig:
+    # The file that had the last word. When both a universal and a
+    # tool-specific file are in play this is the tool-specific one, since
+    # that is where `skills mode --set` would write.
     source: Path | None = None
     copybook_path: tuple[str, ...] = field(default_factory=tuple)
     seed: int | None = None
@@ -58,6 +88,10 @@ class MockymockConfig:
     # so `mockymock run` from a subdirectory still finds the same suites
     # as from the project root. "." with no config file means cwd.
     test_root: str = "."
+    # Every file that contributed, base (universal) first. `source` alone
+    # cannot express "a cobol.yml supplied the copybook paths and a
+    # mockymock.toml the seed", which is what `doctor` needs to report.
+    sources: tuple[Path, ...] = field(default_factory=tuple)
 
 
 def _read_toml(path: Path) -> dict:
@@ -90,7 +124,13 @@ def _normalize_copybook_path(value: object, source: Path) -> tuple[str, ...]:
     return tuple(resolved)
 
 
-def _build_config(data: dict, source: Path) -> MockymockConfig:
+def _validated_values(data: dict, source: Path) -> dict[str, Any]:
+    """Validate one config table and return only the keys it actually sets.
+
+    Returning present-keys-only (rather than a fully defaulted config) is
+    what lets the two layers merge without a defaulted key in the
+    tool-specific file silently erasing a real value from the universal one.
+    """
     unknown = sorted(set(data) - _KNOWN_KEYS)
     if unknown:
         raise ConfigError(
@@ -106,34 +146,104 @@ def _build_config(data: dict, source: Path) -> MockymockConfig:
     for key in _STRING_KEYS:
         if key in data and not isinstance(data[key], str):
             raise ConfigError(f"mockymock: {source}: '{key}' must be a string")
-    ai_mode = data.get(_AI_MODE_KEY)
-    if ai_mode is not None and ai_mode not in _AI_MODES:
-        raise ConfigError(
-            f"mockymock: {source}: '{_AI_MODE_KEY}' must be one of "
-            f"{', '.join(_AI_MODES)} (got {ai_mode!r})"
+
+    values: dict[str, Any] = {}
+    if _STRING_LIST_KEY in data:
+        values["copybook_path"] = _normalize_copybook_path(
+            data[_STRING_LIST_KEY], source
         )
-    test_root = Path(data.get("test_root", "."))
-    if not test_root.is_absolute():
-        test_root = source.parent / test_root
-    return MockymockConfig(
-        source=source,
-        copybook_path=_normalize_copybook_path(data.get(_STRING_LIST_KEY), source),
-        seed=data.get("seed"),
-        ai_mode=ai_mode,
-        test_root=str(test_root),
-    )
+    if "seed" in data:
+        values["seed"] = data["seed"]
+    if _AI_MODE_KEY in data:
+        ai_mode = data[_AI_MODE_KEY]
+        if ai_mode not in _AI_MODES:
+            raise ConfigError(
+                f"mockymock: {source}: '{_AI_MODE_KEY}' must be one of "
+                f"{', '.join(_AI_MODES)} (got {ai_mode!r})"
+            )
+        values["ai_mode"] = ai_mode
+    if "test_root" in data:
+        test_root = Path(data["test_root"])
+        if not test_root.is_absolute():
+            test_root = source.parent / test_root
+        values["test_root"] = str(test_root)
+    return values
 
 
-def load_config(start_dir: Path | None = None) -> MockymockConfig:
-    """Search `start_dir` (default: cwd) and its parents for a config
-    file. Returns an all-default `MockymockConfig` (source=None) if none
-    is found anywhere in the walk -- this is the common case and is not
-    an error."""
+# -- the universal cobol.yml layer -------------------------------------------
+
+
+def find_universal_config(start_dir: Path | None = None) -> Path | None:
+    """The nearest `cobol.yml`/`cobol.yaml` at or above `start_dir`.
+
+    Done here rather than delegated to cobolparser so that a project with a
+    `cobol.yml` and a cobol-parser too old to read one gets told exactly
+    that, instead of the file being silently skipped.
+    """
+    directory = (start_dir or Path.cwd()).resolve()
+    for _ in range(_MAX_WALK_LEVELS):
+        for name in UNIVERSAL_FILE_NAMES:
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
+        parent = directory.parent
+        if parent == directory:
+            break
+        directory = parent
+    return None
+
+
+def _universal_values(path: Path) -> dict[str, Any]:
+    """Read a `cobol.yml` into this tool's key set.
+
+    `project:` supplies the settings shared with every other tool;
+    `mockymock:` then overrides them with anything stated specifically for
+    this CLI, so a project can share a seed and still pin a different one
+    for test generation.
+
+    The YAML parsing and `project:` validation are cobol-parser's --
+    duplicating them here would be a second schema to keep in step with the
+    first, and the two drifting is exactly the failure a single universal
+    file exists to prevent.
+    """
+    try:
+        from cobolparser.config import ConfigError as ParserConfigError
+        from cobolparser.config import load_project_config
+    except ImportError as exc:  # pragma: no cover - depends on installed version
+        raise ConfigError(
+            f"mockymock: {path} needs a cobol-parser that can read it "
+            f"(>= 1.10). Upgrade with 'pip install -U cobol-parser', or "
+            f"move these settings into a mockymock.toml."
+        ) from exc
+
+    try:
+        project = load_project_config(path=path)
+    except ParserConfigError as exc:
+        raise ConfigError(f"mockymock: {exc}") from exc
+
+    values: dict[str, Any] = {}
+    if project.copybook_path:
+        values["copybook_path"] = tuple(project.copybook_path)
+    if project.seed is not None:
+        values["seed"] = project.seed
+    values.update(_validated_values(project.tool_section(UNIVERSAL_SECTION), path))
+    return values
+
+
+# -- the tool-specific mockymock.toml layer -----------------------------------
+
+
+def find_tool_config(start_dir: Path | None = None) -> tuple[Path, dict] | None:
+    """The nearest `mockymock.toml`, or `pyproject.toml` `[tool.mockymock]`.
+
+    A `mockymock.toml` in a directory beats a `pyproject.toml` in that same
+    directory (both are tried per directory before moving up).
+    """
     directory = (start_dir or Path.cwd()).resolve()
     for _ in range(_MAX_WALK_LEVELS):
         toml_path = directory / "mockymock.toml"
         if toml_path.is_file():
-            return _build_config(_read_toml(toml_path), toml_path)
+            return toml_path, _read_toml(toml_path)
 
         pyproject_path = directory / "pyproject.toml"
         if pyproject_path.is_file():
@@ -146,13 +256,41 @@ def load_config(start_dir: Path | None = None) -> MockymockConfig:
                         f"mockymock: {pyproject_path}: [tool.mockymock] "
                         f"must be a table"
                     )
-                return _build_config(mm_table, pyproject_path)
+                return pyproject_path, mm_table
 
         parent = directory.parent
         if parent == directory:
             break
         directory = parent
-    return MockymockConfig()
+    return None
+
+
+def load_config(start_dir: Path | None = None) -> MockymockConfig:
+    """Search `start_dir` (default: cwd) and its parents for config files.
+
+    Returns an all-default `MockymockConfig` (source=None) if neither a
+    universal nor a tool-specific file is found anywhere in the walk -- this
+    is the common case and is not an error.
+    """
+    directory = start_dir or Path.cwd()
+
+    values: dict[str, Any] = {}
+    sources: list[Path] = []
+
+    universal_path = find_universal_config(directory)
+    if universal_path is not None:
+        values.update(_universal_values(universal_path))
+        sources.append(universal_path)
+
+    tool_config = find_tool_config(directory)
+    if tool_config is not None:
+        tool_path, tool_data = tool_config
+        values.update(_validated_values(tool_data, tool_path))
+        sources.append(tool_path)
+
+    if not sources:
+        return MockymockConfig()
+    return MockymockConfig(source=sources[-1], sources=tuple(sources), **values)
 
 
 def resolve(cli_value, config_value, hardcoded_default=None):

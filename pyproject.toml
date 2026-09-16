@@ -39,6 +39,13 @@ dependencies = [
     # REPORT SECTION work; on older releases those verbs still warn (and so
     # refuse PARSE_WARNING) and the extra node classes resolve to nothing
     # (mock_surface._optional_statement_types), so the floor stays.
+    #
+    # The universal `cobol.yml` config (cli/config.py) needs
+    # `cobolparser.config`, which lands in cobol-parser 1.10. The floor is
+    # deliberately NOT raised for it: everything else here works on 1.7.7,
+    # and a project that never writes a cobol.yml should not be forced to
+    # upgrade. `_universal_values` soft-imports and, only when a cobol.yml
+    # actually exists, fails with a message naming the version to install.
     "cobol-parser>=1.7.7,<2",
 ]
 

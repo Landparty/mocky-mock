@@ -50,6 +50,62 @@ running Docker daemon — COBOL is compiled and executed inside a GnuCOBOL
 container. Every other subcommand is pure parse-and-analyze and needs
 nothing beyond Python.
 
+## Project config file
+
+Rather than repeat the same flags on every invocation, state them once in a
+config file at the project root. Two are read, layered:
+
+**`cobol.yml`** (or `cobol.yaml`) — the *universal* project config, read by
+`mockymock`, `cobol-parser` and the COBOL Analyzer VS Code extension alike.
+Its `project:` section holds what every tool shares; its `mockymock:` section
+holds this CLI's own keys, and overrides `project:`.
+
+```yaml
+project:
+  copybook_path: [copybooks, shared/copybooks]
+  seed: 42
+
+mockymock:
+  test_root: tests
+  ai_mode: guided
+```
+
+**`mockymock.toml`**, or `pyproject.toml`'s `[tool.mockymock]` table — the
+tool-specific file. Same four keys, TOML spelling:
+
+```toml
+copybook_path = ["copybooks"]
+seed = 42
+test_root = "tests"
+ai_mode = "guided"
+```
+
+| Key | Type | Effect |
+|-----|------|--------|
+| `copybook_path` | string or list | Default for `--copybook-path` |
+| `seed` | integer | Default for `--seed` |
+| `test_root` | string | Where `run`/`lint` with no arguments look for `.cut` files |
+| `ai_mode` | `hands-on` \| `guided` \| `hands-off` | How much the packaged AI skill checks in |
+
+Both files are searched for independently, walking from the current
+directory up through its parents, and the nearest of each wins its own
+search — so a `cobol.yml` at a repo root and a `mockymock.toml` in a
+subproject both apply. When both exist, **`mockymock.toml` overrides
+`cobol.yml` key by key**; a key it does not mention keeps the universal
+file's value. Paths resolve against the file that declared them, not against
+your current directory, so a run from a subdirectory finds the same
+copybooks and the same suites as one from the project root.
+
+Precedence is always **explicit CLI flag > config file > built-in default**.
+An unrecognized key is an error naming the file — including `timeout`, which
+is deliberately not config-overridable. `mockymock doctor` reports every file
+that contributed, in the order they apply.
+
+Reading a `cobol.yml` needs cobol-parser >= 1.10, which owns the schema and
+the YAML reader; on an older one, a project that has such a file is told
+exactly that. Full schema reference: `docs/project-config.md` in the
+cobol-parser repo.
+
 ## CLI subcommands
 
 ### `mockymock setup`
@@ -433,7 +489,7 @@ too.
 
 | Option | Default | Description |
 |---|---|---|
-| `--set MODE` | — | Persist `ai_mode = "MODE"` to the project's `mockymock.toml`, creating it if there is none. Refuses when the project configures mockymock through `pyproject.toml`'s `[tool.mockymock]` — a `mockymock.toml` written beside it would shadow that table wholesale — and prints the line to add instead. |
+| `--set MODE` | — | Persist `ai_mode = "MODE"` to the project's `mockymock.toml`, creating it if there is none. Refuses when the project configures mockymock through `pyproject.toml`'s `[tool.mockymock]` — a `mockymock.toml` written beside it would shadow that table wholesale — or through a `cobol.yml`, which mockymock reads but does not rewrite; prints the lines to add instead. |
 | `--json` | off | Print the active mode, its source, and every mode's contract as JSON. |
 
 ```bash
