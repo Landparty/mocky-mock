@@ -8,6 +8,14 @@ see `cobol-parser`'s `docs/fixture-bundle-schema.md` for the authoritative
 field-by-field schema; this file is a task-oriented walkthrough of the
 same shape.
 
+Where this sits in the workflow (`paragraph-first-workflow.md`): the
+read-only inventory in section 1 belongs at the very start, before any
+scaffolding. The *generation* in section 3 produces whole-program cases
+(each scenario `PERFORM`s the program's entry paragraph), so it belongs
+in the whole-program pass, after each paragraph already has a green case
+of its own. Summarize what you read here in plain language -- never
+paste the bundle itself at the developer.
+
 ## 1. Inventory boundaries (before picking a mode)
 
 ```bash
@@ -100,6 +108,11 @@ mockymock generate PROGRAM.cbl --with-data --seed 7 --scenarios <confirmed-mode>
 `--scenarios all` was only used for the read-only `fixtures` inventory
 call above; generate with whatever mode was actually confirmed (which
 may be `happy` or `branches`, not `all`).
+
+**If a `.cut` file already exists, write to a separate path** (`-o
+scenarios.cut`) and copy across the cases you want. `generate`
+overwrites its output without asking, and the paragraph cases in a file
+you've been editing are exactly what would be lost.
 
 ## 4. Read back the result
 
