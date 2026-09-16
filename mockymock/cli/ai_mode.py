@@ -39,6 +39,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, see module docstring
 
 CONFIG_KEY = "ai_mode"
 
+# The section of the universal `cobol.yml` that carries this tool's keys.
+# Declared here rather than in cli/config.py because that module already
+# imports from this one -- see the module docstring on the import direction.
+_UNIVERSAL_SECTION = "mockymock"
+
 HANDS_ON = "hands-on"
 GUIDED = "guided"
 HANDS_OFF = "hands-off"
@@ -253,16 +258,28 @@ def write_mode(
 
     Three cases: an existing `mockymock.toml` is edited in place; no
     config file at all means a new `mockymock.toml` in `start_dir`
-    (default: cwd); a config that lives in a `pyproject.toml` is a
-    **refusal**, not a silent redirect. Writing a `mockymock.toml`
-    beside a `pyproject.toml` would not merge with it -- `load_config`
-    is first-match-wins per directory and `mockymock.toml` wins, so the
-    new file would shadow that project's `copybook_path`/`seed`/
-    `test_root` wholesale. Naming the two lines to paste is the only
-    non-destructive answer.
+    (default: cwd); a config that lives in a `pyproject.toml` or in the
+    universal `cobol.yml` is a **refusal**, not a silent redirect.
+
+    For `pyproject.toml`, writing a `mockymock.toml` beside it would not
+    merge with it -- `find_tool_config` is first-match-wins per directory
+    and `mockymock.toml` wins, so the new file would shadow that project's
+    `copybook_path`/`seed`/`test_root` wholesale. For `cobol.yml`, a new
+    `mockymock.toml` *would* layer over it correctly, but silently splitting
+    a project's settings across two files when the point of the universal
+    one is to have a single place is not a decision to make on the user's
+    behalf. Naming the lines to paste is the non-destructive answer to both.
     """
     validate(mode)
     source = None if config is None else config.source
+    if source is not None and source.name in ("cobol.yml", "cobol.yaml"):
+        raise ModeError(
+            f"{source} is the universal project config, which mockymock "
+            f"reads but does not rewrite. Add this under its "
+            f"'{_UNIVERSAL_SECTION}:' section instead:\n"
+            f"    {_UNIVERSAL_SECTION}:\n"
+            f"      {CONFIG_KEY}: {mode}"
+        )
     if source is not None and source.name != "mockymock.toml":
         raise ModeError(
             f"{source} configures mockymock via [tool.mockymock], and "

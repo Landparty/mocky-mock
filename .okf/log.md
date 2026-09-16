@@ -5,6 +5,61 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-16 -- Universal `cobol.yml` project config
+
+A shop using all three tools configured the same project three times:
+`--copybook-path` on every CLI invocation (or in `mockymock.toml`), and
+`cobolAnalyzer.copybookPaths` in VS Code. The three drift, and a copybook
+that resolves on the command line stops resolving in the editor. One file
+at the project root now feeds all of them. Full rationale in
+[docs/2026-09-16-universal-yaml-config-design.md](../docs/2026-09-16-universal-yaml-config-design.md).
+
+* **[cli] `load_config()` reads two files, layered.** `cobol.yml`'s
+  `project:` section supplies what every tool shares (`copybook_path`,
+  `seed`); its `mockymock:` section supplies this CLI's own (`test_root`,
+  `ai_mode`) and overrides `project:`. `mockymock.toml` /
+  `[tool.mockymock]` then overrides *that*, **key by key**. Each file gets
+  its own upward walk, so a `cobol.yml` at a repo root and a
+  `mockymock.toml` in a subproject both apply. First-match-wins across the
+  two was rejected: a `mockymock.toml` setting only `seed` would have
+  silently discarded a `cobol.yml` that set the other three. This is why
+  `_validated_values()` now returns only the keys a file actually sets
+  rather than a fully-defaulted config.
+* **[cli] The YAML reader and the `project:` schema are cobol-parser's**
+  (`cobolparser.config`), soft-imported. Duplicating them here would be a
+  second schema to keep in step with the first -- the drift a single
+  universal file exists to prevent. `cobolparser.config` lands in
+  cobol-parser 1.10 and the dependency floor is **deliberately not raised**:
+  everything else works on 1.7.7, so only a project that actually writes a
+  `cobol.yml` is asked to upgrade, by an error naming the version. The
+  discovery walk stayed here (`find_universal_config()`) precisely so that
+  case produces that message rather than the file being skipped in silence.
+* **[cli] `MockymockConfig.sources`** lists every contributing file, base
+  first; `.source` still names the one with the last word (where
+  `skills mode --set` writes). `doctor` reports the whole chain -- naming
+  only the winner would leave the other file invisible, which is the
+  question that check exists to answer.
+* **[cli] `skills mode --set` refuses to rewrite a `cobol.yml`**, printing
+  the two lines to paste. Unlike the `pyproject.toml` refusal (a new
+  `mockymock.toml` would *shadow* that whole table), a new file would layer
+  over a `cobol.yml` correctly -- it is refused anyway, because splitting a
+  project's settings across two files when the point of the universal one
+  is to have a single place is not a call to make for the user.
+* **[tests] `tests/unit/test_cli_universal_config.py`** (21 tests), gated
+  both ways on whether the **installed** cobol-parser has
+  `cobolparser.config` -- the same capability-probe pattern
+  `test_verb_coverage_fail_closed.py` uses for Report Writer and structured
+  XML PARSE nodes. This matters because of the unraised floor: the
+  `cobol-parser-compat` job installs the *published* package, so all 19
+  feature tests failed there on the first push. Skipping them alone would
+  have left that job quiet on the whole feature, and a silently skipped
+  file is indistinguishable from a passing one -- so two tests run only on
+  the *older* parser and assert the degradation itself (the error names
+  1.10 and the mockymock.toml way out; a project without a cobol.yml is
+  untouched). `test_cli_config.py` covers the tool-specific path unchanged,
+  and every one of its existing assertions still holds -- no existing
+  invocation changes behavior.
+
 ## 2026-09-16 -- AI assistant modes: hands-on / guided / hands-off
 
 The packaged skill prescribed exactly one working style (narrate every

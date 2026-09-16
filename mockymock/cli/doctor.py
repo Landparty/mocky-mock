@@ -90,11 +90,15 @@ def _check_config_file() -> Check:
             state=OK,
             detail="none found (using built-in defaults)",
         )
+    # Both files when a cobol.yml and a mockymock.toml are layered, in the
+    # order they apply -- reporting only the winner would leave the other
+    # invisible, which is the question this check exists to answer.
     return Check(
         id="config_file",
         label="config file",
         state=OK,
-        detail=str(config.source),
+        detail=", then ".join(str(path) for path in config.sources)
+        or str(config.source),
     )
 
 
