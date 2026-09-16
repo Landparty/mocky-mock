@@ -45,10 +45,20 @@ at the project root now feeds all of them. Full rationale in
   over a `cobol.yml` correctly -- it is refused anyway, because splitting a
   project's settings across two files when the point of the universal one
   is to have a single place is not a call to make for the user.
-* **[tests] `tests/unit/test_cli_universal_config.py`** (19 tests).
-  `test_cli_config.py` covers the tool-specific path unchanged, and every
-  one of its existing assertions still holds -- no existing invocation
-  changes behavior.
+* **[tests] `tests/unit/test_cli_universal_config.py`** (21 tests), gated
+  both ways on whether the **installed** cobol-parser has
+  `cobolparser.config` -- the same capability-probe pattern
+  `test_verb_coverage_fail_closed.py` uses for Report Writer and structured
+  XML PARSE nodes. This matters because of the unraised floor: the
+  `cobol-parser-compat` job installs the *published* package, so all 19
+  feature tests failed there on the first push. Skipping them alone would
+  have left that job quiet on the whole feature, and a silently skipped
+  file is indistinguishable from a passing one -- so two tests run only on
+  the *older* parser and assert the degradation itself (the error names
+  1.10 and the mockymock.toml way out; a project without a cobol.yml is
+  untouched). `test_cli_config.py` covers the tool-specific path unchanged,
+  and every one of its existing assertions still holds -- no existing
+  invocation changes behavior.
 
 ## 2026-09-16 -- AI assistant modes: hands-on / guided / hands-off
 
