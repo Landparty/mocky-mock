@@ -5,6 +5,55 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-16 -- Eighth project audit (read-only)
+
+Read-only audit of the tree at `f78d7e8`: the nine findings of the
+2026-09-05 audit re-checked one by one, then the ~3,500 lines of CLI
+surface added since (`init`, `doctor`, `explain`, `collect --boundaries`,
+AI modes, copybook discovery, actionable refusals, universal `cobol.yml`).
+Report: [docs/2026-09-16-project-audit.md](../docs/2026-09-16-project-audit.md).
+Nothing was fixed -- the report is the deliverable.
+
+Two of last month's findings are fixed: `--version` reports `0.8.0` (and
+`release-please-config.json` now pins `extra-files` to the file, so the
+distribution-name rename cannot re-break it), and `main` is green again.
+Seven remain open, including the `PERFORM ... THRU` terminus false
+refusal and the lint job's stubbed mypy seam.
+
+Four new findings, all reproduced here:
+
+- **A `cobol.yml` anywhere up the tree makes every command exit 1** (HIGH,
+  live for released users). `cli/config.py::_universal_values` raises when
+  `cobolparser.config` is absent, and that module exists in no published
+  release -- it landed upstream today, after `1.9.0` was cut. The config
+  search walks up, so a `cobol.yml` written for the extension or the
+  `cobol-parser` CLI takes this CLI down from any subdirectory; a valid
+  `mockymock.toml` does not rescue it (the raise happens while building
+  the base layer, before overrides apply); there is no `--no-config`
+  escape hatch; and the remedy the message names (`pip install -U
+  cobol-parser`) cannot be followed, since PyPI's newest is `1.8.4`.
+- **42 of 51 skipped unit tests are gated on unpublished parser releases**
+  (HIGH). `cobol-parser-compat` is the only CI job that runs tests and it
+  installs the *published* parser by design, so those 42 run in no job, on
+  no schedule. The `cobol.yml` layer (19) and the Enterprise program-type
+  refusal pinning (23) are shipped with no automated verification anywhere.
+- **`doctor` reports the wrong parser version** (MEDIUM). It reads
+  `cobolparser.__version__`, and the published `1.8.4` wheel carries
+  `1.8.0` -- an upstream drift fixed on 2026-09-10, after the last
+  publish. Should read `importlib.metadata.version("cobol-parser")`.
+- **cobol-parser `1.9.0` was GitHub-released 2026-09-05 but never reached
+  PyPI** (MEDIUM, root cause upstream). Eight more skips and the
+  `pyproject.toml` floor comments are waiting on it.
+
+Corrections to the 2026-09-05 report, both verified against a worktree at
+`b0d5235`: the example corpus is **33** pairs, not 29, and **five** are
+refused, not four (`IC101A` was missed, and is not a new regression -- it
+refused identically at that commit).
+
+Structural read: the project's most important dependency edge is the one
+thing nothing tests. One CI job running the unit tier against
+cobol-parser `main` would have caught three of the four new findings.
+
 ## 2026-09-16 -- Universal `cobol.yml` project config
 
 A shop using all three tools configured the same project three times:
