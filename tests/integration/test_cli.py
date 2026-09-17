@@ -94,18 +94,17 @@ TESTCASE "PARA-TWO calls DISCRATE"
 """
 
 
-# EXHIBIT has no registered statement parser: cobolparser drops it from the
+# RECOVER has no registered statement parser: cobolparser drops it from the
 # AST with success=True, errors=0, and a ParseResult.warnings entry (its
 # 2026-07-07 silent-drop remediation). A scaffold or splice built from that
 # AST would silently miss program behavior, so both commands refuse.
 #
-# Originally used INVOKE; cobolparser has since registered a real parser
-# for INVOKE (see procedure_recovery.py's UNSUPPORTED_VERBS comment: "...
-# now dispatch through the registry instead of reaching this warn-and-
-# discard path"), so INVOKE no longer reproduces the drop-with-warning
-# behavior these tests exist to pin. Swapped to EXHIBIT -- the sibling
-# example named in that same cobolparser comment, and still listed in
-# UNSUPPORTED_VERBS -- matching the same fix already applied to
+# Originally used INVOKE, then EXHIBIT; cobolparser has since registered a
+# real parser for both (every COBOL verb now has one -- see
+# procedure_recovery.py's UNSUPPORTED_VERBS comment), so neither reproduces
+# the drop-with-warning behavior these tests exist to pin. RECOVER is one of
+# the three verb-shaped reserved words still listed in UNSUPPORTED_VERBS
+# (with EXECUTE and GOTO), matching the same fix already applied to
 # tests/unit/test_refusal.py's UNSUPPORTED_VERB_SOURCE fixture.
 INVOKER_CBL = """\
        IDENTIFICATION DIVISION.
@@ -117,7 +116,7 @@ INVOKER_CBL = """\
 
        PROCEDURE DIVISION.
        MAIN-PARA.
-           EXHIBIT NAMED WS-FIELD.
+           RECOVER WS-FIELD.
            DISPLAY "done".
 """
 
