@@ -9,6 +9,20 @@ from tests.integration._docker import requires_docker
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "copybook_example"
 
 
+def _isolated_copy(tmp_path: Path) -> tuple[Path, Path]:
+    """MAINPGM.cbl/.cut copied into a directory with NO `copybooks/`
+    sibling. Since 2026-09-15 (`discovery.effective_copybook_paths`) a
+    program's own `copybooks/` subdirectory is searched even without
+    `--copybook-path`, so the checked-in fixture no longer reproduces
+    "no copybook path configured anywhere" -- this copy does."""
+    program = tmp_path / "MAINPGM.cbl"
+    cut = tmp_path / "MAINPGM.cut"
+    program.write_text((FIXTURE_DIR / "MAINPGM.cbl").read_text())
+    cut.write_text((FIXTURE_DIR / "MAINPGM.cut").read_text())
+    assert not (tmp_path / "copybooks").exists()
+    return program, cut
+
+
 @requires_docker
 def test_run_expands_copybook_and_passes():
     exit_code = main(
@@ -72,11 +86,13 @@ def test_generate_without_copybook_path_leaves_copy_unresolved(tmp_path: Path, c
     )
     assert working_storage.data_items == []
 
-    output = tmp_path / "MAINPGM.cut"
+    program, _ = _isolated_copy(tmp_path)
+    output = tmp_path / "out" / "MAINPGM.cut"
+    output.parent.mkdir()
     exit_code = main(
         [
             "generate",
-            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            str(program),
             "-o",
             str(output),
         ]
@@ -131,19 +147,20 @@ def test_generate_with_copybook_path_does_not_flag_unresolved_copybook(
     assert "UNRESOLVED_COPYBOOK" not in capsys.readouterr().out
 
 
-def test_run_without_copybook_path_refuses_unresolved_copybook(capsys):
+def test_run_without_copybook_path_refuses_unresolved_copybook(tmp_path: Path, capsys):
     """`run` on the copybook fixture without --copybook-path must refuse
     cleanly with UNRESOLVED_COPYBOOK and exit 1, rather than proceeding to
     splice/compile a program with missing WORKING-STORAGE fields (which
     previously surfaced as a confusing compile crash instead of a clean
     refusal). This must not require GnuCOBOL: the refusal fires before any
     splicing/compilation is attempted."""
+    program, cut = _isolated_copy(tmp_path)
     exit_code = main(
         [
             "run",
-            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            str(program),
             "--cut",
-            str(FIXTURE_DIR / "MAINPGM.cut"),
+            str(cut),
         ]
     )
     assert exit_code == 1
@@ -181,7 +198,7 @@ def _spy_and_capture(argv: list[str]) -> str:
     return captured["source"]
 
 
-def test_run_with_copybook_path_expands_before_parsing():
+def test_run_with_copybook_path_expands_before_parsing(tmp_path: Path):
     """Proves the `--copybook-path` wiring actually does something, rather
     than silently no-op'ing: inspects the literal source text handed to
     `parse_cobol` and checks it contains the expanded PIC clauses (and not
@@ -189,6 +206,10 @@ def test_run_with_copybook_path_expands_before_parsing():
     when it is omitted. Covers both `generate` and `run`, since both
     commands independently gate copybook expansion behind
     `if args.copybook_path:`.
+
+    The "omitted" half runs against an isolated copy: the checked-in
+    fixture sits next to a `copybooks/` directory that discovery now
+    searches by default, so there the flag really is a no-op.
     """
     cut_path = FIXTURE_DIR / "MAINPGM.cut"
 
@@ -205,12 +226,13 @@ def test_run_with_copybook_path_expands_before_parsing():
     assert "PIC 9(5)V99" in with_flag
     assert "COPY ORDREC" not in with_flag
 
+    program, cut = _isolated_copy(tmp_path)
     without_flag = _spy_and_capture(
         [
             "run",
-            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            str(program),
             "--cut",
-            str(cut_path),
+            str(cut),
         ]
     )
     assert "COPY ORDREC" in without_flag
@@ -237,10 +259,11 @@ def test_generate_with_copybook_path_expands_before_parsing(tmp_path: Path):
     assert "PIC 9(5)V99" in with_flag
     assert "COPY ORDREC" not in with_flag
 
+    program, _ = _isolated_copy(tmp_path)
     without_flag = _spy_and_capture(
         [
             "generate",
-            str(FIXTURE_DIR / "MAINPGM.cbl"),
+            str(program),
             "-o",
             str(output),
         ]
