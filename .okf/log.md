@@ -5,6 +5,43 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-21 -- COBOL-testing usability review (read-only)
+
+Read-only review of the first ten minutes a COBOL developer spends with
+the tool, run at `0706c39` against published `cobol-parser 1.8.4` with no
+Docker daemon -- so it covers the on-ramp (`generate`/`init`/`lint`) and
+not a real `run`'s console report. Report:
+[docs/2026-09-21-cobol-testing-usability-design.md](../docs/2026-09-21-cobol-testing-usability-design.md).
+Nothing was fixed -- the report is the deliverable.
+
+Eleven findings, each reproduced. The four that matter most:
+
+- **VS Code's beaker button still runs plain `generate`**
+  (`mocky-mock-vscode/src/newTestSuite/cutTemplate.ts:15`), so the
+  most-used entry point writes the zero-assertion suite `init` exists to
+  replace: 7 `TESTCASE`s, 0 executable `EXPECT`/`VERIFY` on
+  `examples/real-world/LOANPMT`.
+- **`init` and `generate` disagree about granularity.** `generate` gives
+  one case per paragraph with no assertions; `init` gives a single
+  `"happy path"` case over `0000-MAIN-PROCESS` with them. Neither is the
+  suite a user wants, and the fixture bundle is already per-boundary, so
+  combining them is a loop.
+- **Refusal line numbers are post-copybook-expansion.** `ACCTMNT`'s
+  `CLOSE` refusal names line 565 of a 431-line file;
+  `mocky-mock-vscode/src/linting/lintOutput.ts:11-14` documents the drift
+  and therefore cannot anchor the diagnostic to the boundary.
+- **The on-ramp has rotted unguarded.** 5 of the repo's 43 example/fixture
+  pairs now fail `mockymock lint` (`IC101A`, `ACCTMNT`, `ACHPROC`,
+  `CHKCLR`, `INTCALC`); CI still carries `if: false` on both test jobs, so
+  nothing catches it. Four are one shape: a case `PERFORM`s a paragraph
+  that `GO TO`s out of its own range, and the refusal's suggested fix
+  (`MOCK CLOSE ...`) would mock past the fall-through instead of adding
+  the `THRU` the case actually needs.
+
+Structural read: the capability surface is ahead of the artifacts it
+produces. Every finding is in what the tool writes or says, not in what
+it can do.
+
 ## 2026-09-16 -- Eighth project audit (read-only)
 
 Read-only audit of the tree at `f78d7e8`: the nine findings of the
