@@ -3542,6 +3542,20 @@ winning. `setup --rebuild` forces a fresh, uncached image build. Top-level
 [cli.md](cli.md) and `docs/2026-09-15-cli-ergonomics-design.md`.
 
 
+## 2026-09-15 -- Default copybook search directories + actionable hint
+
+`mockymock/cli/discovery.py`'s `effective_copybook_paths()`: once a
+program is resolved, its own `copybooks/` subdirectory is added to the
+copybook search path automatically when it exists (closing the gap that
+made every `examples/real-world/` program require a manually-typed
+`--copybook-path`). `copybook_not_found_hint()` appends a continuation
+line naming `--copybook-path` and the `[tool.mockymock]` config key to
+any `CopybookNotFoundError`. Companion fix in `Landparty/cobol-parser`:
+`suggest_similar_copybooks`'s did-you-mean pool no longer suggests a
+non-copybook file (the referencing program's own `.cbl`, previously).
+See [cli.md](cli.md) and `docs/2026-09-15-copybook-discovery-defaults-design.md`.
+
+
 ## 2026-09-15 -- CLI ergonomics review follow-ups
 
 Fixed 6 findings from a code review of PR #111: `setup --rebuild` left the
@@ -3561,3 +3575,14 @@ names every output-file flag (`--coverage-json`/`--coverage-out`/
 the `.cut`'s path relative to the test root rather than its stem alone, so
 `svc1/PROG.cut` and `svc2/PROG.cut` no longer overwrite one report. See
 [cli.md](cli.md).
+
+
+## 2026-09-15 -- Copybook defaults review follow-up
+
+`generate --with-data` never showed the copybook-not-found hint: it
+resolves the program's fixture bundle through cobol-parser's own
+`ProgramFixtureGenerator` before `expand_copybooks`'s gate runs, and
+cobol-parser wraps the not-found error in a `ProgramLayoutError` rather
+than raising `CopybookNotFoundError` directly. The `except Exception`
+handler around that call now also checks `exc.__cause__` for the wrapped
+error. See [cli.md](cli.md).

@@ -78,6 +78,27 @@ config-overridable — see the docstring on `_apply_config_to_args` for why.
 
 See `docs/2026-09-15-cli-ergonomics-design.md`.
 
+**Default copybook search directories (2026-09-15):** once a
+single-pair `program`/`.cut` is resolved, `_apply_config_to_args(args,
+source_path)` additionally runs `discovery.effective_copybook_paths()`,
+which appends `source_path`'s own `copybooks/` subdirectory to
+`args.copybook_path` when it exists and isn't already present — the
+layout every `examples/real-world/` program uses. This is additive
+after the explicit-flag/config resolution, never a replacement, and a
+program with no `copybooks/` subdirectory pays no cost. Deliberately
+does **not** also default to the program's own directory (that always
+exists trivially and would turn every COPY-bearing program into an
+implicit copybook search even with nothing configured — see the
+docstring on `effective_copybook_paths` for the regression this would
+cause). A `CopybookNotFoundError` raised by `expand_copybooks` (in
+`cli/checks.py`'s shared `run_static_checks`, and in `_cmd_generate`/
+`_cmd_fixtures`'s own separate `expand_copybooks` calls) gets one
+appended continuation line from `discovery.copybook_not_found_hint()`
+naming both remedies (`--copybook-path`, the config file). See
+`docs/2026-09-15-copybook-discovery-defaults-design.md`; the upstream
+half (cobol-parser's `suggest_similar_copybooks` no longer suggesting a
+non-copybook file) is `Landparty/cobol-parser`'s own change.
+
 # Subcommands
 
 ## `mockymock setup`

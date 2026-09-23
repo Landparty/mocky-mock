@@ -44,13 +44,14 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     with UNRESOLVED_COPYBOOK, so the two commands must agree."""
     from cobolparser import parse_cobol
     from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
-    from cobolparser.preprocess import expand_copybooks
+    from cobolparser.preprocess import CopybookNotFoundError, expand_copybooks
 
     from mockymock.analysis.refusal import (
         check_expansion_warnings,
         check_unresolved_copybooks,
         check_whole_program,
     )
+    from mockymock.cli.discovery import copybook_not_found_hint
 
     source_path = Path(args.program)
     if not source_path.is_file():
@@ -60,7 +61,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     if not _check_rows_non_negative("fixtures", args.rows):
         return 1
 
-    _apply_config_to_args(args)
+    _apply_config_to_args(args, source_path)
 
     # Mirrors _cmd_generate's order: expand copybooks (if any --copybook-path
     # was given) before the parse gate below, so the gate sees the same
@@ -74,6 +75,10 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     if args.copybook_path:
         try:
             expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        except CopybookNotFoundError as exc:
+            print(f"mockymock fixtures: {exc}", file=sys.stderr)
+            print(copybook_not_found_hint(), file=sys.stderr)
+            return 1
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             print(f"mockymock fixtures: {exc}", file=sys.stderr)
             return 1
@@ -139,6 +144,10 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
             mode=args.scenarios,
             seed=args.seed,
         )
+    except CopybookNotFoundError as exc:
+        print(f"mockymock fixtures: {exc}", file=sys.stderr)
+        print(copybook_not_found_hint(), file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
         print(f"mockymock fixtures: {exc}", file=sys.stderr)
         return 1
@@ -214,7 +223,9 @@ def _resolve_program_and_cut(
     return source_path, cut_path
 
 
-def _apply_config_to_args(args: argparse.Namespace) -> None:
+def _apply_config_to_args(
+    args: argparse.Namespace, program_path: Path | None = None
+) -> None:
     """Merge the project config file (mockymock.toml or pyproject.toml's
     [tool.mockymock], see mockymock/cli/config.py) into `args` for
     whichever of copybook_path/seed this subcommand's subparser defined.
@@ -223,6 +234,16 @@ def _apply_config_to_args(args: argparse.Namespace) -> None:
     --copybook-path's `action="append"`). Safe to call unconditionally
     from any _cmd_* -- an attribute this command doesn't have is simply
     skipped via hasattr.
+
+    When `program_path` is given, the resolved copybook_path list is
+    further extended with the conventional default directories (the
+    program's own `copybooks/` subdirectory, then its own directory) via
+    `discovery.effective_copybook_paths` -- see
+    docs/2026-09-15-copybook-discovery-defaults-design.md. Every _cmd_*
+    that has both `copybook_path` and a resolved `program_path` passes it
+    here; `_cmd_fixtures`/`_cmd_generate` are the only two with
+    copybook_path but no early single-pair resolution step, so they pass
+    `source_path` explicitly at their own call sites.
 
     --timeout is deliberately not config-overridable: run/mutate each
     give it a real argparse-level default (30/15) that
@@ -236,7 +257,12 @@ def _apply_config_to_args(args: argparse.Namespace) -> None:
 
     config: MockymockConfig = getattr(args, "_config", None) or MockymockConfig()
     if hasattr(args, "copybook_path"):
-        args.copybook_path = resolve_copybook_paths(args.copybook_path, config)
+        resolved = resolve_copybook_paths(args.copybook_path, config)
+        if program_path is not None:
+            from mockymock.cli.discovery import effective_copybook_paths
+
+            resolved = effective_copybook_paths(program_path, resolved)
+        args.copybook_path = resolved
     if hasattr(args, "seed"):
         args.seed = resolve(args.seed, config.seed)
 
@@ -325,6 +351,7 @@ def _write_failure_reports(
 def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
+        CopybookNotFoundError,
         expand_copybooks,
         normalize_fixed_format,
         strip_compiler_directives,
@@ -340,6 +367,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         check_unresolved_copybooks,
         check_whole_program,
     )
+    from mockymock.cli.discovery import copybook_not_found_hint
     from mockymock.dsl.fixture_bundle import (
         FixtureBundle,
         UnsupportedBundleVersionError,
@@ -356,7 +384,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if not _check_rows_non_negative("generate", args.rows):
         return 1
 
-    _apply_config_to_args(args)
+    _apply_config_to_args(args, source_path)
 
     # Flag-only validation -- neither check needs the source file, so both
     # run before any parse/bundle work, same "fail fast on a bad
@@ -417,6 +445,12 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             bundle = load_fixture_bundle(cp_bundle.to_dict())
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
+            # cobol-parser wraps the not-found error in a ProgramLayoutError;
+            # the actionable hint applies to the cause just the same.
+            if isinstance(exc, CopybookNotFoundError) or isinstance(
+                exc.__cause__, CopybookNotFoundError
+            ):
+                print(copybook_not_found_hint())
             return 1
 
     if placeholder_pairs:
@@ -443,6 +477,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         # this can raise on realistic inputs (audit finding F6).
         try:
             expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+        except CopybookNotFoundError as exc:
+            print(f"mockymock generate: {exc}")
+            print(copybook_not_found_hint())
+            return 1
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             print(f"mockymock generate: {exc}")
             return 1
@@ -836,7 +874,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
     source_path, cut_path = pair
 
-    _apply_config_to_args(args)
+    _apply_config_to_args(args, source_path)
 
     # Asking for the coverage JSON, or a coverage report file, is asking
     # for coverage.
@@ -1288,7 +1326,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     if pair is None:
         return 1
     source_path, cut_path = pair
-    _apply_config_to_args(args)
+    _apply_config_to_args(args, source_path)
 
     if len(args.case or []) != 1:
         print(
@@ -1437,7 +1475,7 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
     if pair is None:
         return 1
     source_path, cut_path = pair
-    _apply_config_to_args(args)
+    _apply_config_to_args(args, source_path)
 
     if args.list:
         # --list never runs anything, so flags that only mean something
@@ -1589,7 +1627,7 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     if pair is None:
         return 1
     source_path, cut_path = pair
-    _apply_config_to_args(args)
+    _apply_config_to_args(args, source_path)
     result = run_static_checks(source_path, cut_path, args.copybook_path)
     for note in result.notes:
         print(f"mockymock lint: {note}")
@@ -1639,7 +1677,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     if pair is None:
         return 1
     source_path, cut_path = pair
-    _apply_config_to_args(args)
+    _apply_config_to_args(args, source_path)
 
     checked = run_static_checks(
         source_path,
