@@ -3552,3 +3552,18 @@ would be loaded. `--json` for scripting; exits 0 when ready, 1
 otherwise. Never builds an image, starts a container, or otherwise
 mutates anything. See [dashboard.md](dashboard.md), [cli.md](cli.md),
 and `docs/2026-09-15-doctor-command-design.md`.
+
+
+## 2026-09-15 -- mockymock init
+
+New `mockymock init <program>`: composes `generate --with-data` + `run
+--record-expectations` into one step, reentrant via real argv lists
+parsed by this module's own `build_parser()` (not a refactor of either
+command's internals -- a deliberate, lower-risk departure from the
+design doc's original proposal). Refuses to overwrite an existing
+output `.cut` without `--force` (a guard `init` owns itself; plain
+`generate` still has none). Uses `doctor.gather_full_status()` to skip
+the run attempt entirely, with a clear fallback message, when Docker
+isn't set up. Prints the scenario branch-verification caveat for
+`--scenarios branches|all`. See [cli.md](cli.md) and
+`docs/2026-09-15-init-command-design.md`.

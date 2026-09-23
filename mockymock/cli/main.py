@@ -339,6 +339,102 @@ def _write_failure_reports(
         )
 
 
+def _cmd_init(args: argparse.Namespace) -> int:
+    """`mockymock init PROG.cbl`: compose the existing `generate
+    --with-data` + `run --record-expectations` path into one command, so
+    a first scaffold has real, golden-recorded assertions instead of
+    empty mock bodies -- and degrade honestly (no Docker attempt, a
+    clear next step) when Docker isn't set up yet. See
+    docs/2026-09-15-init-command-design.md.
+
+    Reentrant rather than a deep refactor of `_cmd_generate`/`_cmd_run`'s
+    internals: builds real argv lists and parses them with this same
+    module's own `build_parser()`, so every flag `generate --with-data`/
+    `run --record-expectations` would need gets argparse's own correct
+    default -- never a hand-built Namespace that could silently miss an
+    attribute those large functions read. This is a deliberate departure
+    from the design doc's proposed 'refactor into a plain function
+    returning a result object' approach: lower risk for the same
+    external behavior, since neither _cmd_generate nor _cmd_run's
+    existing code changes at all."""
+    from mockymock.cli.doctor import gather_full_status
+
+    source_path = Path(args.program)
+    if not _check_input_files("mockymock init", source_path):
+        return 1
+
+    output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
+    if output_path.exists() and not args.force:
+        print(
+            f"mockymock init: {output_path} already exists -- pass --force "
+            f"to overwrite it, or --output to write somewhere else"
+        )
+        return 1
+
+    config = getattr(args, "_config", None)
+    copybook_paths = args.copybook_path or []
+
+    generate_argv = [
+        "generate",
+        str(source_path),
+        "--output",
+        str(output_path),
+        "--with-data",
+        "--scenarios",
+        args.scenarios,
+    ]
+    if args.seed is not None:
+        generate_argv += ["--seed", str(args.seed)]
+    for path in copybook_paths:
+        generate_argv += ["--copybook-path", path]
+
+    print(f"mockymock init: scaffolding {output_path} from {source_path} (--with-data)")
+    generate_args = build_parser().parse_args(generate_argv)
+    generate_args._config = config
+    exit_code = _cmd_generate(generate_args)
+    if exit_code != 0:
+        return exit_code
+
+    if args.scenarios != "happy":
+        print(
+            "Note: branch-targeted scenarios are not yet verified to reach "
+            "their named arm -- see "
+            "docs/2026-09-04-scenario-branch-verification.md. Confirm with "
+            "'mockymock run ... --trace' for anything security- or "
+            "correctness-critical."
+        )
+
+    report = gather_full_status()
+    if not report.ready:
+        print(
+            "mockymock init: Docker isn't available, so I generated a "
+            "suite with real test data but could not run it to record "
+            f"expected values. Run 'mockymock run {source_path} --cut "
+            f"{output_path} --record-expectations' once Docker is set up "
+            "(see 'mockymock doctor')."
+        )
+        return 0
+
+    run_argv = [
+        "run",
+        str(source_path),
+        "--cut",
+        str(output_path),
+        "--record-expectations",
+    ]
+    for path in copybook_paths:
+        run_argv += ["--copybook-path", path]
+
+    print(f"mockymock init: running {output_path} to record expected values")
+    run_args = build_parser().parse_args(run_argv)
+    run_args._config = config
+    run_exit_code = _cmd_run(run_args)
+    print(
+        f"mockymock init: next, run 'mockymock run {source_path} --cut {output_path}'"
+    )
+    return run_exit_code
+
+
 def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
@@ -1890,6 +1986,7 @@ _COMMAND_GROUPS_EPILOG = """\
 commands, grouped by how often you'll reach for them:
 
   Everyday:
+    init       one command from a program to a .cut file with real assertions
     run        splice, compile, run, and assert a program against a .cut file
     generate   scaffold a starter .cut file from a COBOL program
     lint       static checks only, no Docker
@@ -1939,6 +2036,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force a fresh image build even if a current one is cached",
     )
     setup_parser.set_defaults(func=_cmd_setup)
+
+    init_parser = subparsers.add_parser(
+        "init",
+        help=(
+            "One command from a COBOL program to a .cut file with real, "
+            "golden-recorded assertions"
+        ),
+        description=(
+            "Composes 'generate --with-data' + 'run --record-expectations' "
+            "into one step, so a first scaffold has real generated data "
+            "and recorded expected values instead of empty mock bodies. "
+            "Degrades to a plain data-driven scaffold (no run attempted) "
+            "with a clear next step when Docker isn't set up yet. See "
+            "docs/2026-09-15-init-command-design.md."
+        ),
+    )
+    init_parser.add_argument("program")
+    init_parser.add_argument(
+        "-o", "--output", help="Where to write the .cut file (default: <program>.cut)"
+    )
+    init_parser.add_argument(
+        "--seed", type=int, help="Seed for the fixture bundle's random data generation"
+    )
+    init_parser.add_argument(
+        "--scenarios",
+        choices=["happy", "branches", "all"],
+        default="happy",
+        help="Scenario strategy for the fixture bundle (default happy)",
+    )
+    init_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    init_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output .cut file if it already exists",
+    )
+    init_parser.set_defaults(func=_cmd_init)
 
     generate_parser = subparsers.add_parser(
         "generate", help="Scaffold a starter .cut file from a COBOL program"
