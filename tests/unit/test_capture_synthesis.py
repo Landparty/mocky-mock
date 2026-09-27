@@ -260,3 +260,50 @@ def test_a_nameless_argument_is_unresolved_not_a_crash():
     assert plans == []
     assert unresolved
     assert all("no resolvable data item" in reason for reason in unresolved)
+
+
+_TWO_SITES = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TWOCALL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-NAME            PIC X(5).
+       01  WS-QTY             PIC 9(3).
+       01  WS-OTHER           PIC 9(3).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUB" USING WS-NAME WS-QTY
+           PERFORM SECOND-PARA
+           GOBACK.
+       SECOND-PARA.
+           CALL "SUB" USING WS-NAME {second}.
+"""
+
+
+def test_a_key_with_several_agreeing_call_sites_is_still_captured():
+    """Two CALLs of one program passing the same items agree, so both
+    arguments are scaffolded. The agreement check used to compare the
+    distinct-name set's size with the number of sites, so every key with
+    two or more CALL sites got no captures at all -- the common shape, since
+    a subprogram is rarely called from exactly one place."""
+    text = _scaffold(_TWO_SITES.format(second="WS-QTY"))
+    assert "CAPTURE ARG 1 INTO UT-CAP-SUB-1" in text
+    assert "CAPTURE ARG 2 INTO UT-CAP-SUB-2" in text
+    program, surface, _ = _context_and_surface(_TWO_SITES.format(second="WS-QTY"))
+    _, unresolved = plan_captures(program, parse_cut(text), surface)
+    assert unresolved == []
+
+
+def test_only_the_argument_the_sites_disagree_on_is_left_uncaptured():
+    text = _scaffold(_TWO_SITES.format(second="WS-OTHER"))
+    assert "CAPTURE ARG 1 INTO UT-CAP-SUB-1" in text
+    assert "CAPTURE ARG 2" not in text
+
+
+def test_an_argument_a_site_does_not_pass_is_left_uncaptured():
+    """A site with fewer arguments would trip CAPTURE_ARG_OUT_OF_RANGE."""
+    text = _scaffold(_TWO_SITES.format(second="").replace(" .", "."))
+    assert "CAPTURE ARG 1 INTO UT-CAP-SUB-1" in text
+    assert "CAPTURE ARG 2" not in text

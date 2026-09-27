@@ -52,6 +52,7 @@ from cobolparser.models.statements.call import CallStatement
 from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
+from mockymock._lines import split_source_lines
 from mockymock.analysis.linkage import address_of_sites, linkage_plan
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
@@ -328,7 +329,7 @@ def _whole_program_reasons(
         )
     program = getattr(parse_result, "ast", None)
     normalized_lines = (
-        normalize_fixed_format(raw_source.splitlines()).splitlines()
+        split_source_lines(normalize_fixed_format(split_source_lines(raw_source)))
         if classify and raw_source is not None
         else None
     )
@@ -677,13 +678,13 @@ def check_unresolved_copybooks_scoped(
     the first (whole-program, refuse-now) list, fail closed. `program` is
     the parsed AST of this same source (pass None to classify
     nothing)."""
-    normalized = normalize_fixed_format(raw_source.splitlines())
+    normalized = normalize_fixed_format(split_source_lines(raw_source))
     lexer = CobolLexer(normalized, free_form=True)
     tokens = lexer.tokenize()
     copy_indices = [i for i, t in enumerate(tokens) if t.type == TokenType.COPY]
     if not copy_indices:
         return [], []
-    normalized_lines = normalized.splitlines()
+    normalized_lines = split_source_lines(normalized)
     whole_lines: set[int] = set()
     scoped: list[ParagraphScopedRefusal] = []
     for index in copy_indices:

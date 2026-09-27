@@ -235,6 +235,10 @@ without the author guessing the value up front. The generator applies the
 same mirrorability and agreement checks the refusal does, so a scaffolded
 `.cut` never trips its own gate: an argument that fails either is simply
 not captured, and the boundary's other arguments still are.
+Agreement means every CALL site sharing the key passes the SAME item at
+that position (and every site passes that many arguments at all); a key
+called from several places whose sites agree is captured like a
+single-site one (before 2026-09-27 any key with 2+ sites got no captures).
 
 See docs/2026-08-11-argument-capture-design.md for the full design and
 rejected alternatives (a dedicated `VERIFY ... WAS CALLED WITH ARG n =

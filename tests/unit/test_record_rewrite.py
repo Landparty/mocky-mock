@@ -105,7 +105,30 @@ def test_pretty_display_text_is_left_as_is_apart_from_the_sign():
 
 
 def test_non_numeric_bytes_in_a_numeric_field_fall_back_to_quoting():
-    assert render_expect_value("   ", "9(3)") == '""'
+    assert render_expect_value("ABC", "9(3)") == '"ABC"'
+
+
+def test_an_all_spaces_value_renders_as_spaces_not_a_zero_length_literal():
+    # `""` is a zero-length literal: GnuCOBOL only warns ("a SPACE will be
+    # assumed"), IBM Enterprise COBOL rejects it outright.
+    assert render_expect_value("   ", "9(3)") == "SPACES"
+    assert render_expect_value("     ", "X(5)") == "SPACES"
+    assert render_expect_value("     ") == "SPACES"
+    assert render_expect_value("") == "SPACES"
+
+
+def test_numeric_looking_text_in_an_alphanumeric_field_is_quoted():
+    # `IF WS-X NOT = -3` / `NOT = 1.5` against a PIC X field holding `-3` /
+    # `1.5` is TRUE under GnuCOBOL -std=mvs (verified in the mockymock-cobc
+    # container), so a bare golden failed on the very next run.
+    assert render_expect_value("-3", "X(5)") == '"-3"'
+    assert render_expect_value("1.5", "X(5)") == '"1.5"'
+    assert render_expect_value("007", "XXX") == '"007"'
+    assert render_expect_value("12", "A(2)") == '"12"'
+    assert render_expect_value("12", "N(2)") == '"12"'
+    # A numeric-edited or unknown PICTURE keeps the text-shape decision.
+    assert render_expect_value("1.5", "Z9.9") == "1.5"
+    assert render_expect_value("1.5") == "1.5"
 
 
 def test_alphanumeric_picture_keeps_text_shape_rendering():

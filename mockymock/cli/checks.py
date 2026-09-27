@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from mockymock._lines import split_source_lines
+
 if TYPE_CHECKING:
     from cobolparser import ParseResult
 
@@ -313,11 +315,15 @@ def run_static_checks(
     # caller (mockymock export) wants them preserved for a real IBM compile
     # instead, which needs them exactly where GnuCOBOL can't tolerate them.
     if preserve_compiler_directives:
-        lines = normalize_fixed_format(raw_source.splitlines()).splitlines()
+        lines = split_source_lines(
+            normalize_fixed_format(split_source_lines(raw_source))
+        )
     else:
-        lines = normalize_fixed_format(
-            strip_compiler_directives(raw_source).splitlines()
-        ).splitlines()
+        lines = split_source_lines(
+            normalize_fixed_format(
+                split_source_lines(strip_compiler_directives(raw_source))
+            )
+        )
 
     # Waived unresolved-COPY statements (step 4b) get commented out here:
     # comment-only, so no line number shifts for anything downstream, same

@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from mockymock._lines import split_source_lines
+
 COLUMN_LIMIT = 72
 
 # Columns 1-6 (sequence area) + column 7 (indicator), both blank: what
@@ -733,7 +735,7 @@ class SourceAttribution:
         self._program_path = program_path
         self._cut_lines = _index_by_content(cut_text)
         self._program_lines = _index_by_content(
-            "\n".join(raw[7:72] for raw in program_text.splitlines())
+            "\n".join(raw[7:72] for raw in split_source_lines(program_text))
         )
 
     def origin(self, index: int, line: str) -> LineOrigin:
@@ -771,7 +773,7 @@ class SourceAttribution:
 
 def _index_by_content(text: str) -> dict[str, list[int]]:
     index: dict[str, list[int]] = {}
-    for number, raw in enumerate(text.splitlines(), start=1):
+    for number, raw in enumerate(split_source_lines(text), start=1):
         stripped = raw.strip()
         if stripped:
             index.setdefault(stripped, []).append(number)

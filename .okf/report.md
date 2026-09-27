@@ -242,6 +242,12 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   the field's `PICTURE` — deliberate, see the design doc's "Value
   formatting" section, including the numeric-edited `PICTURE` caveat this
   does not yet resolve.
+  Two PICTURE-aware exceptions (2026-09-27): a field whose PICTURE is
+  alphanumeric/alphabetic/national (`is_alphanumeric_picture`: an
+  `X`/`A`/`N`/`G` symbol) is always quoted, since `IF F NOT = 1.5` / `-3`
+  against a full-width `PIC X` holding that text is TRUE under GnuCOBOL;
+  and an all-spaces value renders as `SPACES`, never the zero-length
+  `""` IBM Enterprise COBOL rejects.
 - `build_recording_report(scan, suite_result)` — matches every
   `StubExpectation` the scanner found against `suite_result`'s recorded
   values by `f"{case_index:03d}"` (the same case-id convention

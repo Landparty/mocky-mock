@@ -18,6 +18,14 @@ original file — `SourceLocation.line` values from the AST are indexed into
 that normalized text, so splicing the original would corrupt line offsets.
 See [integration](integration.md).
 
+**Line splitting (2026-09-27):** every split of COBOL source text that is
+later indexed by an AST line number goes through
+`mockymock._lines.split_source_lines` (`\n` / `\r\n` / `\r` only, as
+cobolparser counts records), never `str.splitlines()` -- that also breaks on
+form feed / VT / `\x1c`-`\x1e` / NEL / U+2028, so a page-eject `\f` in a
+comment line shifted every later splice one line early (the mock replaced
+the statement before the CALL and the real CALL ran).
+
 ```
 MockSurface (boundary sites)  ─┐
 MockTestSuite (parsed .cut)   ─┼─▶ orchestrator.splice_program ──▶ spliced lines

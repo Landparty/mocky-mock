@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from mockymock import __version__
+from mockymock._lines import split_source_lines
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
@@ -889,9 +890,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     # See mockymock/cli/checks.py::run_static_checks for why PROCESS/CBL
     # precompiler directives must be stripped before normalizing here too.
-    lines = normalize_fixed_format(
-        strip_compiler_directives(raw_source).splitlines()
-    ).splitlines()
+    lines = split_source_lines(
+        normalize_fixed_format(
+            split_source_lines(strip_compiler_directives(raw_source))
+        )
+    )
 
     linkage_reasons = check_linkage_layout(result.ast, lines)
     for reason in linkage_reasons:
@@ -1549,7 +1552,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # as it was when the instrumented number was the only one printed.
     original_coverage = None
     if coverage_report is not None:
-        original_source_lines = source_path.read_text(encoding="utf-8").splitlines()
+        original_source_lines = split_source_lines(
+            source_path.read_text(encoding="utf-8")
+        )
         mapped = map_coverage_to_original(
             coverage_report,
             instrumented,
@@ -1633,7 +1638,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 build_original_line_map(
                     instrumented,
                     normalized_lines,
-                    source_path.read_text(encoding="utf-8").splitlines(),
+                    split_source_lines(source_path.read_text(encoding="utf-8")),
                 ),
                 case_result.mock_hits if case_result is not None else [],
                 selected,
@@ -1792,7 +1797,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     )
     instrumented = _insert_driver(lines, artifact)
 
-    original_lines = source_path.read_text(encoding="utf-8").splitlines()
+    original_lines = split_source_lines(source_path.read_text(encoding="utf-8"))
 
     # The sandbox stays alive for the entire DAP session (a long-lived
     # conversation, unlike run/trace/coverage's "compile, run, collect,
@@ -1876,7 +1881,9 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
                 f"mutation suite, or drop the other flag(s)"
             )
             return 1
-        mutants = generate_mutants(source_path.read_text(encoding="utf-8").splitlines())
+        mutants = generate_mutants(
+            split_source_lines(source_path.read_text(encoding="utf-8"))
+        )
         for mutant in mutants:
             print(f"line {mutant.line} [{mutant.operator}] {mutant.description}")
         print(f"{len(mutants)} mutant(s)")

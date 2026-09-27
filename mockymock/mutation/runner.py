@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from mockymock._lines import split_source_lines
 from mockymock.mutation.operators import Mutant, generate_mutants
 from mockymock.mutation.report import (
     MutantResult,
@@ -226,7 +227,7 @@ def _run_suite_once(
                         parse_gcov(gcov.gcov_text),
                         instrumented,
                         normalized_lines,
-                        source_text.splitlines(),
+                        split_source_lines(source_text),
                     )
                 }
             else:
@@ -383,7 +384,7 @@ def run_mutation(
             all_notes,
         )
 
-    original_lines = original_text.splitlines()
+    original_lines = split_source_lines(original_text)
     mutants = generate_mutants(original_lines)
     if not mutants:
         return (

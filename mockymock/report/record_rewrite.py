@@ -96,10 +96,33 @@ def render_expect_value(raw_value: str, picture: str | None = None) -> str:
         rendered = _render_numeric(raw_value, scale)
         if rendered is not None:
             return rendered
-    if _NUMERIC_RE.match(raw_value):
+    if _NUMERIC_RE.match(raw_value) and not is_alphanumeric_picture(picture):
         return raw_value
-    escaped = raw_value.rstrip().replace('"', '""')
+    trimmed = raw_value.rstrip()
+    if not trimmed:
+        # `""` is a zero-length literal: GnuCOBOL warns and assumes a
+        # space, IBM Enterprise COBOL rejects it. SPACES is the same
+        # comparison and valid everywhere.
+        return "SPACES"
+    escaped = trimmed.replace('"', '""')
     return f'"{escaped}"'
+
+
+def is_alphanumeric_picture(picture: str | None) -> bool:
+    """Whether `picture` is alphanumeric/alphabetic/national/DBCS (it
+    holds an `X`, `A`, `N` or `G` symbol). A value recorded from such a
+    field is compared as text, so it must be rendered quoted even when it
+    looks numeric: `IF WS-X NOT = -3` or `NOT = 1.5` against a `PIC X`
+    field holding `-3` / `1.5` is TRUE under GnuCOBOL (verified against
+    the mockymock-cobc container), so a bare golden fails on the very next
+    run -- and a non-integer or signed literal compared with an
+    alphanumeric item is not even valid COBOL."""
+    if not picture:
+        return False
+    expanded = _PICTURE_REPEAT_RE.sub(
+        lambda m: m.group(1) * int(m.group(2)), picture.upper()
+    )
+    return bool(set(expanded) & {"X", "A", "N", "G"})
 
 
 @dataclass

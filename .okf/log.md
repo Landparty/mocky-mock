@@ -5,6 +5,24 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-27 -- bug hunt round 3: three more fixes
+
+Each reproduced first (against the mockymock-cobc container where it
+compiles), each with a regression test.
+
+- **A form feed (or VT / `\x1c`-`\x1e` / NEL / U+2028) in a source line
+  shifted every later splice by one line** -- `str.splitlines()` counted
+  it as a record break, cobolparser does not. `run` spliced the mock over
+  the statement before a mocked CALL and the real CALL executed; `mutate`,
+  coverage, trace, debug and export line maps were off by one too. New
+  `mockymock._lines.split_source_lines`. See [splicer](splicer.md).
+- **`generate` scaffolded no `CAPTURE ARG` for any CALL key with 2+ call
+  sites**, even when every site passed the same items. See [dsl](dsl.md).
+- **`run --record-expectations` wrote a bare numeric golden for a full-
+  width `PIC X` holding `1.5` / `-3`** (fails next run: "expected WS-X =
+  1.5, got 1.5"), and `""` for an all-spaces field (invalid on IBM
+  Enterprise COBOL); now quoted / `SPACES`. See [report](report.md).
+
 ## 2026-09-27 -- bug hunt round 2: four more fixes
 
 Each reproduced first, each with a regression test.

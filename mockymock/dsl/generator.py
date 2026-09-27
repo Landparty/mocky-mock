@@ -445,13 +445,17 @@ def _capture_lines_by_key(
             continue
         lines: list[str] = []
         for index in range(1, len(argument_lists[0]) + 1):
+            if any(len(arguments) < index for arguments in argument_lists):
+                continue  # a site with fewer arguments: CAPTURE_ARG_OUT_OF_RANGE
             names = {
                 (arguments[index - 1].name or "").upper()
                 for arguments in argument_lists
-                if len(arguments) >= index
             }
-            if len(names) != 1 or len(names) != len(argument_lists):
-                continue  # disagreement (or a site with fewer arguments)
+            # One name across every site, not one site: two CALLs passing
+            # the same item agree. (Comparing the set's size against the
+            # site count dropped every capture of any key with 2+ sites.)
+            if len(names) != 1:
+                continue  # disagreement between sites
             source_name = next(iter(names))
             item = data_items.get(source_name)
             if item is None:
