@@ -862,3 +862,58 @@ def test_duplicate_terminal_is_rejected():
     )
     with pytest.raises(CutParseError, match="duplicate TERMINAL"):
         parse_cut(bad)
+
+
+# --- sentence-terminating periods in MOCK bodies ------------------------------
+# Body text is spliced verbatim into a WHEN branch of the generated
+# EVALUATE UT-CURRENT-CASE: a trailing `.` (the COBOL sentence habit) ended
+# the sentence mid-EVALUATE, so `lint` passed and cobc then failed on
+# generated code ("unexpected END-EVALUATE").
+
+
+def _cut_with_body(body_line: str) -> str:
+    return (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL "SUBX"\n'
+        f"        {body_line}\n"
+        "    END-MOCK\n"
+        "    PERFORM MAIN-PARA\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body_line",
+    [
+        "MOVE 5 TO WS-A.",
+        "MOVE 5 TO WS-A. MOVE 6 TO WS-B",
+        "MOVE 5 TO WS-A .   *> set the return value",
+    ],
+)
+def test_sentence_period_in_mock_body_fails_closed(body_line):
+    with pytest.raises(CutParseError, match="line 4: .* ends a COBOL sentence"):
+        parse_cut(_cut_with_body(body_line))
+
+
+@pytest.mark.parametrize(
+    "body_line",
+    [
+        "MOVE 1.5 TO WS-RATE",
+        'MOVE "DONE. OK." TO WS-MSG',
+        "MOVE 'A.' TO WS-MSG",
+        "MOVE 0 TO RETURN-CODE *> no period needed.",
+        "*> a comment line may end with a period.",
+    ],
+)
+def test_periods_that_do_not_end_a_sentence_are_kept(body_line):
+    suite = parse_cut(_cut_with_body(body_line))
+    assert suite.test_cases[0].mocks[0].body_lines == [body_line]
+
+
+def test_sentence_period_in_a_rows_value_fails_closed():
+    bad = CUT_READ_ROWS.replace(
+        '        TERMINAL ( WS-EOF-FLAG = "Y" )',
+        "        TERMINAL ( WS-EOF-FLAG = 1. )",
+    )
+    with pytest.raises(CutParseError, match="ends a COBOL sentence"):
+        parse_cut(bad)

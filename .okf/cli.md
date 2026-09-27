@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-09-16T00:00:00Z
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # Overview
@@ -459,6 +459,17 @@ Flags beyond the pipeline inputs:
   and with every other flag above. See [analysis](analysis.md),
   [splicer](splicer.md), [report](report.md), and
   docs/2026-08-04-record-expectations-design.md for the full design.
+  Value rendering is PICTURE-aware for plain numeric items (2026-09-27,
+  `report.record_rewrite.field_pictures` / `numeric_scale`): under
+  `-std=mvs` GnuCOBOL DISPLAYs a signed item with a separate sign
+  (`005+`, `00350-`, `+00007` for COMP/COMP-3) and drops an implied
+  decimal point (`00350` for 2.50 in `9(3)V99`). Rendered by text shape
+  alone those became `"005+"` or a bare, 100x-too-large `00350` -- goldens
+  that failed the very next run, so `init`'s scaffold failed out of the box
+  on `invupdt`/`ordrproc`/`raterte`. The PICTURE comes from the program's
+  own data items (subscripts stripped) and, for a synthesized `UT-CAP-`
+  target, from its capture source; anything without one (alphanumeric,
+  numeric-edited, `P`-scaled, unresolved) keeps the old text-shape rule.
 - `--keep-sandbox` — never delete the sandbox directory; its path is
   printed at the start of the run for inspection.
 - `--verbose` — on compile failure, print the path to the instrumented

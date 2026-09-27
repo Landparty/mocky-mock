@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # Overview
@@ -414,6 +414,7 @@ skipped.
 | Elementary, no `PICTURE`, `USAGE INDEX` | *(skipped — no line emitted)* | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; skipping is the only reset that never emits illegal COBOL (documented fidelity limit) |
 | Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE |
 | Group, no `VALUE` clause | `INITIALIZE <name>` | a `MOVE SPACES` over a group would write spaces across numeric children, corrupting them for the next case's arithmetic; `INITIALIZE` zeros numeric children and space-fills alphanumeric ones |
+| Any top-level item with a `REDEFINES` clause | *(skipped — no line emitted)* | it shares the redefined item's storage, which that item's own line already reset/restored; a second reset through the redefining view ran after it and overwrote it (2026-09-27 fix: `01 WS-CODE PIC X(4) VALUE "AB12".` + `01 WS-CODE-NUM REDEFINES WS-CODE PIC 9(4).` left `WS-CODE` = `"0000"` in every case, the first included). Skipping matches program start-up, where GnuCOBOL initializes the storage from the first description |
 
 **Embedded double quotes in a VALUE clause (2026-08-28 fix).** cobolparser
 hands an alphanumeric VALUE clause back double-quote-delimited around the

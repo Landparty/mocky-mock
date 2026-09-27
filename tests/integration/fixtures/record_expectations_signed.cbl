@@ -1,0 +1,18 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RECSIGN.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-QTY             PIC S9(3) VALUE 0.
+       01  WS-HALF            PIC S9(3)V99 VALUE 0.
+       01  WS-REFUND          PIC S9(3)V99 VALUE 0.
+       01  WS-UNSIGNED-HALF   PIC 9(3)V99 VALUE 0.
+       01  WS-BIN             PIC S9(4) COMP VALUE 0.
+
+       PROCEDURE DIVISION.
+       CALC-TOTALS.
+           ADD 5 TO WS-QTY.
+           COMPUTE WS-HALF = WS-QTY / 2.
+           COMPUTE WS-REFUND = 0 - WS-HALF.
+           MOVE WS-HALF TO WS-UNSIGNED-HALF.
+           MOVE WS-QTY TO WS-BIN.

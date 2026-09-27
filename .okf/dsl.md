@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # Overview
@@ -89,7 +89,12 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   `... OR EQUAL 5`) raises `CutParseError` at the line instead of
   splicing leftover words into the generated IF
   (`_EXPECT_DANGLING_PHRASE_RE`, whole-word so `GREATER-VALUE` still
-  parses as an ordinary value). Phrase words are case-sensitive
+  parses as an ordinary value). Likewise an EXPECT value ending in a
+  period outside quotes (`EXPECT WS-X TO BE 5.`, the COBOL sentence habit)
+  raises `CutParseError` (`_reject_sentence_period`, 2026-09-27) --
+  spliced into the generated `IF`, the period ended the sentence mid-IF
+  and `cobc` rejected the driver while `lint` passed; a PROVIDER row
+  substituting such a value is refused at its `ROW` line. Phrase words are case-sensitive
   uppercase like every other keyword.
 - `EXPECT <data-name> TO BE <value>`'s `<data-name>` and `MOVE <value> TO
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
@@ -395,7 +400,15 @@ Key regexes, matched in this order per non-blank line:
 1. If inside a `MOCK` body: look only for `END-MOCK` (any case, optional
    trailing period); anything else is appended verbatim to `body_lines`
    (no further parsing — a mock body's contents are opaque to the DSL
-   parser).
+   parser), with one fail-closed exception: a line holding a COBOL
+   sentence-terminating period (`.` followed by whitespace/end of line,
+   outside quotes and before any `*>`) raises `CutParseError`
+   (`_reject_body_sentence_period`, 2026-09-27). The body is spliced into
+   a `WHEN` of the generated `EVALUATE UT-CURRENT-CASE`, where the period
+   ends the sentence mid-EVALUATE -- `lint` used to pass and `cobc` then
+   failed on generated code (`unexpected END-EVALUATE`). ROWS/`TERMINAL`
+   field values get the same check. A decimal point (`1.5`), a period
+   inside a literal, or one in a comment is untouched.
 2. `*>` comment (only reachable when not inside a mock body).
 3. `TESTSUITE "..."` — errors if a suite is already open (one per file).
 4. `TESTCASE "..."` — requires `suite` already set; resets the per-case

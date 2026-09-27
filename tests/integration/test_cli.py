@@ -529,3 +529,38 @@ def test_splice_preserves_sentence_period_of_replaced_call():
     ]
     assert len(end_evaluates) == 2
     assert all(line.rstrip().endswith("END-EVALUATE.") for line in end_evaluates)
+
+
+@requires_docker
+def test_run_keeps_value_clause_of_an_item_a_later_01_redefines(tmp_path: Path):
+    """UT-RESET-WORKING-STORAGE used to reset a top-level REDEFINES item
+    after the item it redefines, overwriting the restored VALUE: every case
+    saw WS-CODE = "0000" instead of its declared "AB12"."""
+    program = tmp_path / "REDEFVAL.cbl"
+    program.write_text(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. REDEFVAL.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        '       01 WS-CODE        PIC X(4) VALUE "AB12".\n'
+        "       01 WS-CODE-NUM    REDEFINES WS-CODE PIC 9(4).\n"
+        "       01 WS-OUT         PIC X(4).\n"
+        "       PROCEDURE DIVISION.\n"
+        "       MAIN-PARA.\n"
+        "           MOVE WS-CODE TO WS-OUT.\n"
+    )
+    cut = tmp_path / "REDEFVAL.cut"
+    cut.write_text(
+        'TESTSUITE "redefines"\n'
+        'TESTCASE "first case sees the declared VALUE"\n'
+        "    PERFORM MAIN-PARA\n"
+        '    EXPECT WS-OUT TO BE "AB12"\n'
+        'TESTCASE "so does the second, after a reset"\n'
+        "    MOVE 1234 TO WS-CODE-NUM\n"
+        "    PERFORM MAIN-PARA\n"
+        '    EXPECT WS-OUT TO BE "1234"\n'
+        'TESTCASE "and the third is reset back to it"\n'
+        "    PERFORM MAIN-PARA\n"
+        '    EXPECT WS-OUT TO BE "AB12"\n'
+    )
+    assert main(["run", str(program), "--cut", str(cut)]) == 0

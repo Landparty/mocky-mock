@@ -14,7 +14,10 @@ items take `SET ... TO NULL`. Items this module cannot reset legally are
 SKIPPED rather than given illegal COBOL (documented fidelity limits, see
 .okf/splicer.md): USAGE INDEX items, PICTURE-less items of unrecognized
 usage, and OCCURS children with VALUE clauses (restoring those needs
-subscripted MOVEs).
+subscripted MOVEs). Top-level REDEFINES items are skipped on purpose: their
+storage is the redefined item's, which is reset (and its VALUE restored)
+by its own line -- a second reset through the redefining view would
+overwrite it.
 """
 
 from __future__ import annotations
@@ -76,6 +79,15 @@ def reset_lines_for_items(items) -> list[str]:
     for item in items:
         if _is_filler(item):
             continue  # a top-level FILLER cannot be a valid MOVE/INITIALIZE target
+        if getattr(item, "redefines", None):
+            # A REDEFINES item shares the storage of the item it redefines,
+            # which already got its own reset line just above. Resetting it
+            # too overwrote that line's work -- `01 A PIC X(4) VALUE "AB12".
+            # 01 B REDEFINES A PIC 9(4).` left A holding "0000" in every
+            # test case, the first one included. Skipping it leaves the
+            # shared bytes exactly as the program starts with them: GnuCOBOL
+            # initializes storage from the first (redefined) description.
+            continue
         if _is_group(item) and not item.value_clause:
             lines.append(f"INITIALIZE {item.name}")
             lines.extend(_child_value_restores(item))

@@ -5,6 +5,22 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-27 -- bug hunt: four correctness fixes
+
+Each reproduced against the real `mockymock-cobc` container (GnuCOBOL
+3.2) before fixing, each with a regression test.
+
+- **`run --record-expectations` wrote goldens that fail the next run**
+  for signed or implied-decimal numerics (`-std=mvs` DISPLAYs `005+`,
+  `00350-`, `+00007`, and `00350` for 2.50). `record_rewrite` now renders
+  a plain numeric item from its PICTURE (`field_pictures`,
+  `numeric_scale`). `init` inherited the bug. See [cli](cli.md).
+- **Top-level `REDEFINES` items clobbered the redefined item's VALUE** in
+  `UT-RESET-WORKING-STORAGE`; now skipped. See [splicer](splicer.md).
+- **A sentence period in an `EXPECT` value or a `MOCK` body** linted
+  clean and broke the generated driver at compile time; both now raise
+  `CutParseError` at the `.cut` line. See [dsl](dsl.md).
+
 ## 2026-09-21 -- COBOL-testing usability review (read-only)
 
 Read-only review of the first ten minutes a COBOL developer spends with

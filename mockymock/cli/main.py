@@ -1215,6 +1215,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.report.json_report import build_json_report, format_json_report
     from mockymock.report.record_rewrite import (
         build_recording_report,
+        field_pictures,
         rewrite_cut_text,
     )
     from mockymock.report.results import parse_stdout
@@ -1499,7 +1500,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # scanner found ends up in exactly one of recorded/skipped, and the
         # file is only ever touched when at least one stub was recorded.
         recording = build_recording_report(stub_scan, suite_result)
-        rewritten = rewrite_cut_text(cut_text, recording)
+        rewritten = rewrite_cut_text(
+            cut_text, recording, field_pictures(result.ast, checked.captures)
+        )
         if rewritten is not None:
             cut_path.write_text(rewritten, encoding="utf-8", newline="\n")
         print(
