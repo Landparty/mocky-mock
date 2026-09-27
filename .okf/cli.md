@@ -741,7 +741,10 @@ DIVISION` state resets at `END PROGRAM`** so a second program's DATA
 DIVISION is not mutated. Measured over a 542-file corpus: 12.2% of
 generated mutants were defective before this (8.9% verified to compile
 something other than what their report line described, by running each
-through the pipeline's own `normalize_fixed_format`), none after. Still open: `stmt-delete` on a line holding two
+through the pipeline's own `normalize_fixed_format`), none after. **`stmt-delete` reads columns 8-72**
+(the verb check, the follower check, and the rewrite, which keeps
+columns 1-7 verbatim): with a sequence number in columns 1-6 it used to
+generate no deletion mutants at all. Still open: `stmt-delete` on a line holding two
 statements deletes both (over-strong, not stillborn), and `stillborn`
 still lumps refusal-gate rejections in with compile errors.
 

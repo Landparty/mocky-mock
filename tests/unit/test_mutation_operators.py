@@ -369,3 +369,24 @@ def test_a_second_programs_data_division_is_not_mutated():
         ]
     )
     assert sorted({m.line for m in mutants}) == [5]
+
+
+def test_statement_deletion_fires_on_sequence_numbered_lines():
+    """Columns 1-6 of a fixed-format line are a sequence number, which real
+    mainframe sources routinely fill. The deletion check used to match its
+    verb against the whole stripped line, so `000500     MOVE ...` never
+    looked like a MOVE and stmt-delete silently produced nothing for such
+    a file. The rewrite must also keep the sequence area in place."""
+    lines = [
+        "000100 IDENTIFICATION DIVISION.",
+        "000200 PROGRAM-ID. SAMPLE.",
+        "000300 PROCEDURE DIVISION.",
+        "000400 MAIN-PARA.",
+        "000500     MOVE 1 TO WS-A",
+        "000600     ADD 2 TO WS-TOTAL.",
+    ]
+    deletions = [m for m in generate_mutants(lines) if m.operator == "stmt-delete"]
+    assert [(m.line, m.mutated) for m in deletions] == [
+        (5, "000500     CONTINUE"),
+        (6, "000600     CONTINUE."),
+    ]

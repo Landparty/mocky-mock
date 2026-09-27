@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; the refusal/ package decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # Overview
@@ -367,6 +367,10 @@ Two things this scanner deliberately does NOT attempt, each producing a
   from `suite.test_cases` entirely) simply has no match and its stub is
   reported skipped rather than misattributed to whichever case now
   occupies its old index.
+- **A stub inside a `PROVIDER` data block** (among its `HEADER`/`ROW`
+  lines). The parser closes the preceding `TESTCASE` when a `PROVIDER`
+  opens, so a `PROVIDER` line bounds attribution like a `TESTCASE`
+  header does; such a stub used to be credited to the previous case.
 
 A lightweight `MOCK`/`END-MOCK` open/close tracker (not a real parser)
 guards the scan against a stub-shaped comment written *inside* a mock

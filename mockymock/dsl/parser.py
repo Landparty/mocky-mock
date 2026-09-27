@@ -359,6 +359,28 @@ def _split_top_level(text: str, sep: str) -> list[str]:
     return parts
 
 
+def _reject_mock_body_placeholder(
+    line: str, line_no: int, provider: DataProvider, mock: MockDirective
+) -> None:
+    """Refuse a `{Column}` token for one of `provider`'s own columns inside
+    a MOCK body of a provider-bound TESTCASE. Substitution covers only
+    MOVE/EXPECT values (MOCK bodies stay verbatim by design, see
+    docs/2026-07-20-provider-parameterized-test-cases-design.md), so the
+    token used to reach cobc untouched -- lint passed, and the compile
+    failed on `invalid symbol '{'` inside generated code."""
+    if _COMMENT_RE.match(line):
+        return
+    for match in _PLACEHOLDER_RE.finditer(line):
+        if match.group(1) in provider.header:
+            raise CutParseError(
+                f"line {line_no}: placeholder {match.group(0)} inside MOCK "
+                f"{mock.describe()} is not substituted -- PROVIDER "
+                f"{provider.name!r} values are substituted into the test "
+                f"case's MOVE and EXPECT values only; a MOCK body is "
+                f"spliced verbatim, so the token would reach the compiler"
+            )
+
+
 def _substitute(
     text: str, provider: DataProvider, row: list[str], case_name: str, line_no: int
 ) -> str:
@@ -503,6 +525,9 @@ def parse_cut(text: str) -> MockTestSuite:
     providers: dict[str, DataProvider] = {}
     current_provider: DataProvider | None = None
     pending_expansions: list[tuple[MockTestCase, DataProvider]] = []
+    # The PROVIDER the open TESTCASE is bound to (meaningful only while
+    # `case` is not None) -- see the MOCK-body placeholder check below.
+    case_provider: DataProvider | None = None
 
     def _close_provider() -> None:
         nonlocal current_provider
@@ -551,6 +576,8 @@ def parse_cut(text: str) -> MockTestSuite:
             continue
 
         if in_mock is not None:
+            if case is not None and case_provider is not None:
+                _reject_mock_body_placeholder(line, line_no, case_provider, in_mock)
             if _END_MOCK_RE.match(line):
                 if in_mock.rows is not None and not in_mock.rows:
                     raise CutParseError(
@@ -833,8 +860,10 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             case = MockTestCase(name=m.group("name"), line=line_no, tags=tags)
             suite.test_cases.append(case)
+            case_provider = None
             if provider_name is not None:
-                pending_expansions.append((case, providers[provider_name]))
+                case_provider = providers[provider_name]
+                pending_expansions.append((case, case_provider))
             seen_testcase = True
             mock_target = case.mocks
             mock_lines = {}

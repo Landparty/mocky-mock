@@ -479,7 +479,9 @@ def _statement_ends_on_line(lines: list[str], index: int, code: str) -> bool:
             return False
         if _is_comment(follower):
             continue
-        text = follower[:CODE_END_COL].strip()
+        # Columns 8-72 only: a sequence number in columns 1-6 would
+        # otherwise sit in front of the follower's first word.
+        text = follower[TEXT_START_COL - 1 : CODE_END_COL].strip()
         if not text:
             continue
         return bool(_STATEMENT_OPENER.match(text) or _HEADER_LINE.match(text))
@@ -492,7 +494,11 @@ def _statement_deletion_mutant(
     lines: list[str], index: int, code: str, mask: list[bool], line_no: int
 ) -> Mutant | None:
     line = lines[index]
-    stripped = code.strip()
+    # Match on the program-text area (columns 8-72), not the whole line: a
+    # fixed-format source routinely carries a sequence number in columns
+    # 1-6, which would otherwise hide the verb from `_DELETABLE_VERB` --
+    # and, before that was noticed, from the rewrite below too.
+    stripped = code[TEXT_START_COL - 1 :].strip()
     if not _DELETABLE_VERB.match(stripped):
         return None
     if any(
@@ -502,9 +508,11 @@ def _statement_deletion_mutant(
         return None
     if not _statement_ends_on_line(lines, index, code):
         return None
-    indent = line[: len(line) - len(line.lstrip())]
+    # Keep everything before the first program-text character verbatim:
+    # sequence area, indicator column and Area A/B indent.
+    head = line[: _text_start(line)]
     terminator = "." if stripped.rstrip().endswith(".") else ""
-    mutated = f"{indent}CONTINUE{terminator}"
+    mutated = f"{head}CONTINUE{terminator}"
     if len(mutated) > CODE_END_COL:
         return None
     return Mutant(

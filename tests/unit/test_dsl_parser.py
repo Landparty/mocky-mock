@@ -777,7 +777,7 @@ def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
         "    ROW 42, WS-RESULT\n"
         'TESTCASE "verify substitution scope" USING PROVIDER TestData\n'
         '    MOCK CALL "HELPER"\n'
-        "        MOVE {N} TO WS-HELPER-VAL\n"
+        "        MOVE {Other} TO WS-HELPER-VAL\n"
         "    END-MOCK\n"
         "    MOVE {N} TO WS-TARGET\n"
         "    PERFORM DO-SOMETHING\n"
@@ -790,8 +790,10 @@ def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
     # Verify MOVE value is substituted, target is NOT
     assert case.setup_moves == [("42", "WS-TARGET")]
 
-    # Verify MOCK body is NOT substituted (literal {N} remains)
-    assert case.mocks[0].body_lines == ["MOVE {N} TO WS-HELPER-VAL"]
+    # Verify MOCK body is NOT substituted (a non-column token stays literal;
+    # one naming a provider column is refused outright -- see
+    # test_provider_placeholder_inside_mock_body_raises_at_its_line)
+    assert case.mocks[0].body_lines == ["MOVE {Other} TO WS-HELPER-VAL"]
 
     # Verify EXPECT data_name is NOT substituted, expected_value IS
     assert case.expectations[0].data_name == "{Field}"
@@ -917,3 +919,50 @@ def test_sentence_period_in_a_rows_value_fails_closed():
     )
     with pytest.raises(CutParseError, match="ends a COBOL sentence"):
         parse_cut(bad)
+
+
+def test_provider_placeholder_inside_mock_body_raises_at_its_line():
+    """PROVIDER values are substituted into MOVE/EXPECT values only; a MOCK
+    body is spliced verbatim. A `{Column}` token there used to lint clean
+    and then fail cobc with `invalid symbol '{'` in generated code."""
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER AMTS\n"
+        "    HEADER AMT, RES\n"
+        "    ROW 50, 2\n"
+        'TESTCASE "amt {AMT}" USING PROVIDER AMTS\n'
+        '    MOCK CALL "GETAMT"\n'
+        "        MOVE {AMT} TO WS-AMT\n"
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-RES TO BE {RES}\n"
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r'line 7: placeholder \{AMT\} inside MOCK CALL "GETAMT"',
+    ):
+        parse_cut(text)
+
+
+def test_braces_in_mock_body_of_unbound_case_or_comment_still_parse():
+    """Only a token naming the bound PROVIDER's own column is refused: a
+    case with no PROVIDER, or a `*>` comment in the body, is untouched."""
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER AMTS\n"
+        "    HEADER AMT\n"
+        "    ROW 50\n"
+        'TESTCASE "amt {AMT}" USING PROVIDER AMTS\n'
+        '    MOCK CALL "GETAMT"\n'
+        "        *> would like {AMT} here one day\n"
+        '        MOVE "{OTHER}" TO WS-TXT\n'
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+        'TESTCASE "plain"\n'
+        '    MOCK CALL "GETAMT"\n'
+        '        MOVE "{AMT}" TO WS-TXT\n'
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+    )
+    suite = parse_cut(text)
+    assert len(suite.test_cases) == 2

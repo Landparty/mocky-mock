@@ -281,7 +281,11 @@ it replaces a provider-bound `TESTCASE` with one ordinary `MockTestCase`
 per row, substituting `{ColumnName}` tokens (`_PLACEHOLDER_RE`) into that
 case's `MOVE` and `EXPECT` values only -- `MOCK` bodies, `MOVE` targets,
 `EXPECT` data-names, `PERFORM` target/thru, and `VERIFY` stay untouched
-and identical across every row. An unknown `{Foo}` token is a
+and identical across every row. A `{Column}` token naming one of the
+bound provider's own columns inside a `MOCK` body is a `CutParseError`
+at that line (`_reject_mock_body_placeholder`; `*>` comment lines are
+exempt) -- left verbatim it linted clean and failed cobc on
+`invalid symbol '{'`. An unknown `{Foo}` token is a
 `CutParseError` naming the provider's real columns; an undeclared/
 mistyped `USING PROVIDER` reference errors at the `TESTCASE` line.
 

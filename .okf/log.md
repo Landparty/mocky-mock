@@ -5,6 +5,22 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-27 -- bug hunt round 2: four more fixes
+
+Each reproduced first, each with a regression test.
+
+- **`--json-report` misattributed an EXPECT failure** whose runtime value
+  contains `, got ` (it split on the last one, so half the actual value
+  landed in `expected`). It now matches the directive's exact rendered
+  head first. See [report](report.md).
+- **A `*> STUB EXPECT` inside a `PROVIDER` block** was credited to the
+  preceding `TESTCASE`; now reported skipped. See [analysis](analysis.md).
+- **`{Column}` inside a `MOCK` body of a provider-bound case** linted
+  clean and failed cobc; now a `CutParseError` at the line. See
+  [dsl](dsl.md).
+- **`mutate` produced no `stmt-delete` mutants for sequence-numbered
+  sources** (columns 1-6 hid the verb). See [cli](cli.md).
+
 ## 2026-09-27 -- bug hunt: four correctness fixes
 
 Each reproduced against the real `mockymock-cobc` container (GnuCOBOL
