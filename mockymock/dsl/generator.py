@@ -67,7 +67,11 @@ from mockymock.dsl.model import (
     MockTestCase,
     MockTestSuite,
 )
-from mockymock.report.record_rewrite import render_expect_value
+from mockymock.report.record_rewrite import (
+    field_pictures,
+    picture_for,
+    render_expect_value,
+)
 from mockymock.splicer.naming import TallyRegistry
 
 _PLACEHOLDER_BODIES: dict[MockCategory, list[str]] = {
@@ -226,6 +230,11 @@ class ProgramContext:
     capture_lines: dict[tuple[MockCategory, str], list[str]] = field(
         default_factory=dict
     )
+    #: Name (uppercased, unqualified) -> PICTURE for every elementary data
+    #: item (`report.record_rewrite.field_pictures`), so a bundle's
+    #: `field_equals` value is rendered from the field's real type rather
+    #: than from the text's shape -- see `_render_expectation`.
+    pictures: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -234,7 +243,8 @@ class ProgramContext:
         return cls(
             lines=list(lines),
             statement_starts=collect_boundaries(program),
-            capture_lines=_capture_lines_by_key(program, surface),
+            capture_lines=_capture_lines_by_key(program, surface, lines),
+            pictures=field_pictures(program),
         )
 
     def captures_for(self, category: MockCategory, key: str) -> list[str]:
@@ -391,7 +401,7 @@ def _lifted_at_end_lines(
 
 
 def _capture_lines_by_key(
-    program, surface: MockSurface
+    program, surface: MockSurface, lines: list[str] | None = None
 ) -> dict[tuple[MockCategory, str], list[str]]:
     """`CAPTURE ARG <n> INTO <target>` lines for every CALL/DYNCALL boundary
     whose arguments mockymock can safely synthesize storage for.
@@ -415,12 +425,27 @@ def _capture_lines_by_key(
        PICTURE-less COMP-1/POINTER item, not a group holding non-DISPLAY
        data whose bytes an alphanumeric copy would render unreadable).
 
-    An argument failing either check is simply not captured; the rest of
+    A literal argument (`USING "ABC"`, `BY CONTENT 42`) is never captured:
+    its value is fixed by the source, so the capture asserts nothing. It is
+    told apart from a data-name by `splicer.captures._site_argument` -- the
+    splicer's own resolver, given the normalized `lines` -- because
+    cobolparser reports `"ABC"` by its unquoted value. Comparing bare names
+    instead scaffolded a capture of the literal "ABC" whenever an item ABC
+    existed, and, where one site passed the literal and another the item,
+    a capture the splicer then refused as UNRESOLVED_CAPTURE_TARGET.
+
+    An argument failing any check is simply not captured; the rest of
     that boundary's arguments still are.
     """
-    from mockymock.splicer.captures import _declaration_for, capture_target_name
+    from mockymock.splicer.captures import (
+        _declaration_for,
+        _site_argument,
+        capture_target_name,
+    )
+    from mockymock.splicer.source_map import collect_boundaries
 
     data_items = _capture_data_items(program)
+    boundaries = collect_boundaries(program) if lines is not None else []
     by_key: dict[tuple[MockCategory, str], list[BoundarySite]] = {}
     for site in surface.boundary_sites:
         if site.category not in (MockCategory.CALL, MockCategory.DYNCALL):
@@ -443,16 +468,22 @@ def _capture_lines_by_key(
         ]
         if not argument_lists or not argument_lists[0]:
             continue
-        lines: list[str] = []
+        capture_lines: list[str] = []
         for index in range(1, len(argument_lists[0]) + 1):
-            names = {
-                (arguments[index - 1].name or "").upper()
-                for arguments in argument_lists
-                if len(arguments) >= index
+            if any(len(arguments) < index for arguments in argument_lists):
+                continue  # a site with fewer arguments: CAPTURE_ARG_OUT_OF_RANGE
+            resolved = {
+                _site_argument(site, index, lines, boundaries) for site in sites
             }
-            if len(names) != 1 or len(names) != len(argument_lists):
-                continue  # disagreement (or a site with fewer arguments)
-            source_name = next(iter(names))
+            # One argument across every site, not one site: two CALLs
+            # passing the same item agree. (Comparing the set's size against
+            # the site count dropped every capture of any key with 2+ sites.)
+            if len(resolved) != 1:
+                continue  # disagreement between sites
+            argument = next(iter(resolved))
+            if argument is None or argument[0] != "item":
+                continue  # a literal: nothing to observe
+            source_name = argument[1]
             item = data_items.get(source_name)
             if item is None:
                 continue
@@ -465,9 +496,9 @@ def _capture_lines_by_key(
                     suffix += 1
                 target = f"{target}-{suffix}"
             taken.add(target)
-            lines.append(f"CAPTURE ARG {index} INTO {target}")
-        if lines:
-            result[(category, key)] = lines
+            capture_lines.append(f"CAPTURE ARG {index} INTO {target}")
+        if capture_lines:
+            result[(category, key)] = capture_lines
     return result
 
 
@@ -612,12 +643,38 @@ def _scaffold_placeholder(
     suite_name: str, surface: MockSurface, context: ProgramContext | None = None
 ) -> str:
     sites_by_paragraph: dict[str, list[BoundarySite]] = {}
+    unnamed: list[BoundarySite] = []
     for site in surface.boundary_sites:
         if site.category is None or (site.nested and site.span is None):
+            continue
+        if not site.paragraph_name:
+            # A statement between `PROCEDURE DIVISION.` and the first
+            # paragraph header belongs to no paragraph (cobolparser names
+            # the holder ""), and a test case can only enter the program
+            # through `PERFORM <paragraph>`. Scaffolding it emitted a bare
+            # `PERFORM ` line, which the .cut parser rejects -- taking
+            # every other generated test case in the file down with it.
+            unnamed.append(site)
             continue
         sites_by_paragraph.setdefault(site.paragraph_name, []).append(site)
 
     lines = [f'TESTSUITE "{_quote_safe(suite_name)}"', ""]
+    if unnamed:
+        lines.append(
+            "*> Not scaffolded: these boundaries sit before the first "
+            "paragraph header,"
+        )
+        lines.append(
+            "*> where no PERFORM can reach them. Move them into a named "
+            "paragraph to test them."
+        )
+        lines.extend(
+            f"*>   {label} at line {line}"
+            for label, line in dict.fromkeys(
+                (site.label, site.line) for site in unnamed
+            )
+        )
+        lines.append("")
     for paragraph_name, sites in sites_by_paragraph.items():
         directives = _directives_for(sites, surface, context)
         labels = ", ".join(dict.fromkeys(site.label for site in sites))
@@ -1580,6 +1637,7 @@ def _render_expectation(
         dict[tuple[MockCategory, str], CallCountOverride] | None
     ) = None,
     counted_boundaries: set[tuple[MockCategory, str]] | None = None,
+    pictures: dict[str, str] | None = None,
 ) -> list[str]:
     """Tier 1 (`call_count`) -> `VERIFY ... WAS CALLED n TIMES`; tier 2
     (`field_equals`) -> `EXPECT <name> TO BE <value>`; tier 3 (`stub`) ->
@@ -1641,7 +1699,13 @@ def _render_expectation(
         )
         return [f"VERIFY {directive_text} WAS CALLED {value} TIMES"]
     if expectation.kind == "field_equals":
-        rendered = render_expect_value(str(expectation.value))
+        # The PICTURE decides bare vs quoted, exactly as it does for
+        # `run --record-expectations`: a folded "-3" / "1.5" / "007" held in
+        # a PIC X field rendered bare is an EXPECT that fails on the very
+        # first run (GnuCOBOL compares it as text). `A OF B` qualification
+        # is looked up by its first word, the item itself.
+        picture = picture_for(expectation.ref.split()[0], pictures)
+        rendered = render_expect_value(str(expectation.value), picture)
         return [f"EXPECT {expectation.ref} TO BE {rendered}"]
     # kind == "stub"
     note = f" -- {expectation.note}" if expectation.note else ""
@@ -1699,6 +1763,7 @@ def _scaffold_with_bundle(
                     declared_keys,
                     call_count_overrides,
                     counted_boundaries,
+                    source.pictures if source is not None else None,
                 )
             )
         lines.append("")

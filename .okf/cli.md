@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-09-16T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Overview
@@ -459,6 +459,17 @@ Flags beyond the pipeline inputs:
   and with every other flag above. See [analysis](analysis.md),
   [splicer](splicer.md), [report](report.md), and
   docs/2026-08-04-record-expectations-design.md for the full design.
+  Value rendering is PICTURE-aware for plain numeric items (2026-09-27,
+  `report.record_rewrite.field_pictures` / `numeric_scale`): under
+  `-std=mvs` GnuCOBOL DISPLAYs a signed item with a separate sign
+  (`005+`, `00350-`, `+00007` for COMP/COMP-3) and drops an implied
+  decimal point (`00350` for 2.50 in `9(3)V99`). Rendered by text shape
+  alone those became `"005+"` or a bare, 100x-too-large `00350` -- goldens
+  that failed the very next run, so `init`'s scaffold failed out of the box
+  on `invupdt`/`ordrproc`/`raterte`. The PICTURE comes from the program's
+  own data items (subscripts stripped) and, for a synthesized `UT-CAP-`
+  target, from its capture source; anything without one (alphanumeric,
+  numeric-edited, `P`-scaled, unresolved) keeps the old text-shape rule.
 - `--keep-sandbox` — never delete the sandbox directory; its path is
   printed at the start of the run for inspection.
 - `--verbose` — on compile failure, print the path to the instrumented
@@ -659,7 +670,14 @@ captured MI transcripts and end-to-end tested against a live container
   `<name>.c.l.h` comment table (not gdb symbols, which don't exist for
   COBOL names, and not a byte-offset decoder). Decodes packed-decimal
   (COMP-3) and binary (COMP) values via GnuCOBOL's own `cob_field_attr`
-  type/digits/scale, read live via MI. `_unquote_c_string` shares
+  type/digits/scale/flags, read live via MI. Round 6 (2026-09-28, checked
+  against a real `-std=mvs` compile): an even-digit COMP-3 has its pad
+  nibble in FRONT (`S9(4)` 1234 = `01 23 4C`, was shown `0123`); a signed
+  DISPLAY item's sign is overpunched (`-123` = `12s`, was shown `12`) or
+  separate (`SIGN ... SEPARATE`); COMP-5 is host (little-endian) order,
+  told apart from big-endian COMP by `COB_FLAG_BINARY_SWAP` (was `-257`
+  for `-2`). The table keeps the declaration's own spelling, so
+  `evaluate` (hover/watch) falls back to a case-insensitive match. `_unquote_c_string` shares
   `gdb_session.py`'s `decode_c_escape` (see F15 above).
 - `call_stack.py` — synthesizes the COBOL paragraph/section call stack
   from GnuCOBOL's internal `frame_stack`, since gdb's own backtrace is
@@ -709,6 +727,11 @@ helper now covers the arithmetic patterns too** (`_ADD_TO`,
 missed: `\bADD\b` matched inside `GRP-FOR-ADD-CORR-R` and rewrote an
 ordinary `MOVE` into `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...`.
 
+`DIVIDE..INTO -> MULTIPLY..BY` is skipped when the statement (this line
+or a later line of it, `_statement_tail`) has a `REMAINDER` phrase:
+`MULTIPLY ... REMAINDER` is a cobc syntax error, so that mutant was a
+stillborn every time (2026-09-28).
+
 Three further stillborn classes closed on 2026-09-04, all in
 `mutation.operators` (see
 docs/2026-07-29-mutation-testing-design.md's "Column discipline"):
@@ -730,7 +753,10 @@ DIVISION` state resets at `END PROGRAM`** so a second program's DATA
 DIVISION is not mutated. Measured over a 542-file corpus: 12.2% of
 generated mutants were defective before this (8.9% verified to compile
 something other than what their report line described, by running each
-through the pipeline's own `normalize_fixed_format`), none after. Still open: `stmt-delete` on a line holding two
+through the pipeline's own `normalize_fixed_format`), none after. **`stmt-delete` reads columns 8-72**
+(the verb check, the follower check, and the rewrite, which keeps
+columns 1-7 verbatim): with a sequence number in columns 1-6 it used to
+generate no deletion mutants at all. Still open: `stmt-delete` on a line holding two
 statements deletes both (over-strong, not stillborn), and `stillborn`
 still lumps refusal-gate rejections in with compile errors.
 

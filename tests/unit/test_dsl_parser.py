@@ -769,7 +769,13 @@ def test_placeholder_substitution_works_inside_a_larger_literal():
 def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
     """Verify placeholder tokens are substituted ONLY in MOVE values and
     EXPECT expected_values, never in MOVE targets, MOCK bodies, or EXPECT
-    data_names. This pins the invariant from a final code review."""
+    data_names. This pins the invariant from a final code review.
+
+    Changed 2026-09-28: a PROVIDER column token in a NAME position (MOVE
+    target, EXPECT data-name, PERFORM target) is now a parse error instead
+    of being carried through verbatim -- it passed lint and then broke cobc
+    (see test_provider_placeholder_in_a_name_position_raises).
+    A non-column token in a MOCK body still stays literal."""
     text = (
         'TESTSUITE "s"\n'
         "PROVIDER TestData\n"
@@ -777,11 +783,11 @@ def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
         "    ROW 42, WS-RESULT\n"
         'TESTCASE "verify substitution scope" USING PROVIDER TestData\n'
         '    MOCK CALL "HELPER"\n'
-        "        MOVE {N} TO WS-HELPER-VAL\n"
+        "        MOVE {Other} TO WS-HELPER-VAL\n"
         "    END-MOCK\n"
         "    MOVE {N} TO WS-TARGET\n"
         "    PERFORM DO-SOMETHING\n"
-        "    EXPECT {Field} TO BE {N}\n"
+        "    EXPECT WS-RESULT TO BE {N}\n"
     )
     suite = parse_cut(text)
     assert len(suite.test_cases) == 1
@@ -790,12 +796,48 @@ def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
     # Verify MOVE value is substituted, target is NOT
     assert case.setup_moves == [("42", "WS-TARGET")]
 
-    # Verify MOCK body is NOT substituted (literal {N} remains)
-    assert case.mocks[0].body_lines == ["MOVE {N} TO WS-HELPER-VAL"]
+    # Verify MOCK body is NOT substituted (a non-column token stays literal;
+    # one naming a provider column is refused outright -- see
+    # test_provider_placeholder_inside_mock_body_raises_at_its_line)
+    assert case.mocks[0].body_lines == ["MOVE {Other} TO WS-HELPER-VAL"]
 
     # Verify EXPECT data_name is NOT substituted, expected_value IS
-    assert case.expectations[0].data_name == "{Field}"
+    assert case.expectations[0].data_name == "WS-RESULT"
     assert case.expectations[0].expected_value == "42"
+
+
+@pytest.mark.parametrize(
+    "line, where",
+    [
+        ("    MOVE 1 TO {Field}", "MOVE target"),
+        ("    EXPECT {Field} TO BE {N}", "EXPECT data-name"),
+    ],
+)
+def test_provider_placeholder_in_a_name_position_raises(line, where):
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER TestData\n"
+        "    HEADER N, Field\n"
+        "    ROW 42, WS-RESULT\n"
+        'TESTCASE "c" USING PROVIDER TestData\n'
+        "    PERFORM DO-SOMETHING\n"
+        f"{line}\n"
+    )
+    with pytest.raises(CutParseError, match=where):
+        parse_cut(text)
+
+
+def test_provider_placeholder_as_perform_target_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER TestData\n"
+        "    HEADER N, Para\n"
+        "    ROW 42, MAIN-PARA\n"
+        'TESTCASE "c" USING PROVIDER TestData\n'
+        "    PERFORM {Para}\n"
+    )
+    with pytest.raises(CutParseError, match="PERFORM target"):
+        parse_cut(text)
 
 
 # -- ROWS on MOCK READ + TERMINAL group (with-data design 2026-08-04) --------
@@ -862,3 +904,105 @@ def test_duplicate_terminal_is_rejected():
     )
     with pytest.raises(CutParseError, match="duplicate TERMINAL"):
         parse_cut(bad)
+
+
+# --- sentence-terminating periods in MOCK bodies ------------------------------
+# Body text is spliced verbatim into a WHEN branch of the generated
+# EVALUATE UT-CURRENT-CASE: a trailing `.` (the COBOL sentence habit) ended
+# the sentence mid-EVALUATE, so `lint` passed and cobc then failed on
+# generated code ("unexpected END-EVALUATE").
+
+
+def _cut_with_body(body_line: str) -> str:
+    return (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL "SUBX"\n'
+        f"        {body_line}\n"
+        "    END-MOCK\n"
+        "    PERFORM MAIN-PARA\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body_line",
+    [
+        "MOVE 5 TO WS-A.",
+        "MOVE 5 TO WS-A. MOVE 6 TO WS-B",
+        "MOVE 5 TO WS-A .   *> set the return value",
+    ],
+)
+def test_sentence_period_in_mock_body_fails_closed(body_line):
+    with pytest.raises(CutParseError, match="line 4: .* ends a COBOL sentence"):
+        parse_cut(_cut_with_body(body_line))
+
+
+@pytest.mark.parametrize(
+    "body_line",
+    [
+        "MOVE 1.5 TO WS-RATE",
+        'MOVE "DONE. OK." TO WS-MSG',
+        "MOVE 'A.' TO WS-MSG",
+        "MOVE 0 TO RETURN-CODE *> no period needed.",
+        "*> a comment line may end with a period.",
+    ],
+)
+def test_periods_that_do_not_end_a_sentence_are_kept(body_line):
+    suite = parse_cut(_cut_with_body(body_line))
+    assert suite.test_cases[0].mocks[0].body_lines == [body_line]
+
+
+def test_sentence_period_in_a_rows_value_fails_closed():
+    bad = CUT_READ_ROWS.replace(
+        '        TERMINAL ( WS-EOF-FLAG = "Y" )',
+        "        TERMINAL ( WS-EOF-FLAG = 1. )",
+    )
+    with pytest.raises(CutParseError, match="ends a COBOL sentence"):
+        parse_cut(bad)
+
+
+def test_provider_placeholder_inside_mock_body_raises_at_its_line():
+    """PROVIDER values are substituted into MOVE/EXPECT values only; a MOCK
+    body is spliced verbatim. A `{Column}` token there used to lint clean
+    and then fail cobc with `invalid symbol '{'` in generated code."""
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER AMTS\n"
+        "    HEADER AMT, RES\n"
+        "    ROW 50, 2\n"
+        'TESTCASE "amt {AMT}" USING PROVIDER AMTS\n'
+        '    MOCK CALL "GETAMT"\n'
+        "        MOVE {AMT} TO WS-AMT\n"
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-RES TO BE {RES}\n"
+    )
+    with pytest.raises(
+        CutParseError,
+        match=r'line 7: placeholder \{AMT\} inside MOCK CALL "GETAMT"',
+    ):
+        parse_cut(text)
+
+
+def test_braces_in_mock_body_of_unbound_case_or_comment_still_parse():
+    """Only a token naming the bound PROVIDER's own column is refused: a
+    case with no PROVIDER, or a `*>` comment in the body, is untouched."""
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER AMTS\n"
+        "    HEADER AMT\n"
+        "    ROW 50\n"
+        'TESTCASE "amt {AMT}" USING PROVIDER AMTS\n'
+        '    MOCK CALL "GETAMT"\n'
+        "        *> would like {AMT} here one day\n"
+        '        MOVE "{OTHER}" TO WS-TXT\n'
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+        'TESTCASE "plain"\n'
+        '    MOCK CALL "GETAMT"\n'
+        '        MOVE "{AMT}" TO WS-TXT\n'
+        "    END-MOCK\n"
+        "    PERFORM MAIN\n"
+    )
+    suite = parse_cut(text)
+    assert len(suite.test_cases) == 2

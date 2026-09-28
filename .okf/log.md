@@ -5,6 +5,147 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-28 -- bug hunt round 7: EXEC key boundaries, multi-file status, phantom ranges
+
+Each reproduced first and pinned by a regression test; unit tests pass
+under the local cobol-parser and the published 1.8.x wheel.
+
+- **SQL/CICS/DLI keys matched on a character prefix**: `MOCK SQL "FETCH
+  C1"` also mocked `FETCH C10` (served C1's ROWS, VERIFY counted both;
+  mocking both refused AMBIGUOUS_MOCK). Keys now end on a name boundary.
+  See [analysis](analysis.md).
+- **Multi-file OPEN/CLOSE defaulted only the directive's own file's FILE
+  STATUS**: `OPEN INPUT A OUTPUT B` mocked as `OPEN A` left B's status
+  blank. Every named file with a status field is now defaulted to "00".
+  See [splicer](splicer.md).
+- **Phantom `"."` paragraphs disabled the closed PERFORM-range stop**
+  program-wide (two `END-EXEC.` blocks read as a duplicate name). See
+  [analysis](analysis.md).
+- **Dashboard** refuses a non-loopback `Host` header (DNS rebinding). See
+  [dashboard](dashboard.md).
+- **`parse_gcov`** counts gcov's `=====` (exceptional-only, never run) as
+  uncovered instead of dropping it. See [coverage](coverage.md).
+
+## 2026-09-28 -- bug hunt round 6: generate scaffold, debugger values
+
+Each reproduced first and pinned by a regression test; unit tests pass
+under the local cobol-parser and the published 1.8.x wheel.
+
+- **`generate` emitted `PERFORM ` for boundaries before the first
+  paragraph** (a mainline written straight under `PROCEDURE DIVISION.`),
+  so the whole generated `.cut` failed to parse. Now listed in a comment
+  instead. See [dsl](dsl.md).
+- **`generate` scaffolded `CAPTURE ARG` for a quoted literal argument**
+  whenever a same-named item existed -- pointless, and refused as
+  UNRESOLVED_CAPTURE_TARGET when another site passed the item. Now
+  resolved with the splicer's `_site_argument`. See [dsl](dsl.md).
+- **`debug` showed wrong values**: even-digit COMP-3 (`0123` for 1234),
+  signed DISPLAY (`01.2` for -12.3), COMP-5 (`-257` for -2) -- verified
+  through a real DAP session before and after. `evaluate` now matches
+  names case-insensitively. See [cli](cli.md).
+- The copybook-not-found hint now names `cobol.yml`'s `project:` section.
+
+## 2026-09-28 -- bug hunt round 5: four fixes, four stale tests
+
+- **Closed PERFORM THRU ranges no longer cascade the GO TO fall-through
+  walk** (`_closed_perform_ranges`): NIST IC101A refused for an unmocked
+  CLOSE / SECTION-scoped STOP RUN the compiled driver never reaches. See
+  [analysis](analysis.md).
+- **`UT-CAP-` capture of a literal argument mirrored a same-named item**
+  (`"ABC"` into ABC's `PIC 9(2)`, read back `BC`) or refused it. See
+  [splicer](splicer.md).
+- **A PROVIDER `{Column}` as MOVE target / EXPECT data-name / PERFORM
+  target** linted clean and broke cobc; now a `CutParseError`. See
+  [dsl](dsl.md). (`test_placeholder_substitution_scoped_to_move_and_expect_
+  values_only` updated accordingly.)
+- **`run --coverage` labelled the sandbox figure "higher"** even when it was
+  lower (every committed example). See [coverage](coverage.md).
+- `load_fixture_bundle` accepted `bundle_version: true` / `1.0`.
+- Stale tests updated, not skipped: the cursor example's "refuses without
+  --copybook-path" now runs from a copy without the sibling `copybooks/`
+  (auto-searched since abb0392); ACCTPRG/DEPTIMSM coverage pins moved to
+  the original-program line `run --coverage` has led with since 073d4f7;
+  `test_neutralized_shape_runs_clean` no longer asserts which WHEN arm
+  runs, since `-std=mvs` (ecc7dbe) sets `defaultbyte: 0` (LOW-VALUES, not
+  spaces) for VALUE-less storage outside the driver's reset.
+
+## 2026-09-28 -- bug hunt round 4: four more fixes, two stale tests
+
+Each reproduced first (against the mockymock-cobc container where it
+compiles, and under both the local cobol-parser and the published 1.8.4),
+each with a regression test.
+
+- **SQL/CICS/DLI keys matched cobolparser's token spacing, not the SQL.**
+  cobol-parser 1.8.4 renders `BANK.TRANSACTION_HIST` as `BANK.
+  TRANSACTION_HIST`, later releases do not, and both render `(A, B)` as
+  `( A, B )`: a key copied from the source was UNMATCHED_MOCK, and the
+  committed DEPTMQC example failed under the local cobol-parser.
+  `directive_matches_site` now compares `_exec_match_form` of both sides.
+  See [analysis](analysis.md).
+- **`CAPTURE ARG` of a literal argument moved a data item of the same
+  name** (`CALL "X" USING BY CONTENT "ABC"` -> `MOVE ABC TO target`: the
+  WORKING-STORAGE item ABC, or a cobc error). See [splicer](splicer.md).
+- **`generate --with-data` rendered a `field_equals` value by its text
+  shape**: `EXPECT WS-CODE TO BE -3` for a `PIC X` field fails on the first
+  run. Now rendered from the field's PICTURE. See [dsl](dsl.md).
+- **`mutate` swapped `DIVIDE ... REMAINDER` to `MULTIPLY ... REMAINDER`**,
+  a stillborn every time. See [cli](cli.md).
+- Tests: `test_debug_session_breaks_steps_and_reports_variables` expected
+  pre-`-std=mvs` DISPLAY output (`+0001`, `00126.45`; now `+00001`,
+  `0012645`) and hid the failed assertion behind a 15 s wait timeout;
+  `test_run_verbose_only_does_not_leave_sandbox_after_successful_run` diffed
+  the shared work root, flaky under `-n`, and now tracks its own sandboxes.
+
+## 2026-09-27 -- bug hunt round 3: three more fixes
+
+Each reproduced first (against the mockymock-cobc container where it
+compiles), each with a regression test.
+
+- **A form feed (or VT / `\x1c`-`\x1e` / NEL / U+2028) in a source line
+  shifted every later splice by one line** -- `str.splitlines()` counted
+  it as a record break, cobolparser does not. `run` spliced the mock over
+  the statement before a mocked CALL and the real CALL executed; `mutate`,
+  coverage, trace, debug and export line maps were off by one too. New
+  `mockymock._lines.split_source_lines`. See [splicer](splicer.md).
+- **`generate` scaffolded no `CAPTURE ARG` for any CALL key with 2+ call
+  sites**, even when every site passed the same items. See [dsl](dsl.md).
+- **`run --record-expectations` wrote a bare numeric golden for a full-
+  width `PIC X` holding `1.5` / `-3`** (fails next run: "expected WS-X =
+  1.5, got 1.5"), and `""` for an all-spaces field (invalid on IBM
+  Enterprise COBOL); now quoted / `SPACES`. See [report](report.md).
+
+## 2026-09-27 -- bug hunt round 2: four more fixes
+
+Each reproduced first, each with a regression test.
+
+- **`--json-report` misattributed an EXPECT failure** whose runtime value
+  contains `, got ` (it split on the last one, so half the actual value
+  landed in `expected`). It now matches the directive's exact rendered
+  head first. See [report](report.md).
+- **A `*> STUB EXPECT` inside a `PROVIDER` block** was credited to the
+  preceding `TESTCASE`; now reported skipped. See [analysis](analysis.md).
+- **`{Column}` inside a `MOCK` body of a provider-bound case** linted
+  clean and failed cobc; now a `CutParseError` at the line. See
+  [dsl](dsl.md).
+- **`mutate` produced no `stmt-delete` mutants for sequence-numbered
+  sources** (columns 1-6 hid the verb). See [cli](cli.md).
+
+## 2026-09-27 -- bug hunt: four correctness fixes
+
+Each reproduced against the real `mockymock-cobc` container (GnuCOBOL
+3.2) before fixing, each with a regression test.
+
+- **`run --record-expectations` wrote goldens that fail the next run**
+  for signed or implied-decimal numerics (`-std=mvs` DISPLAYs `005+`,
+  `00350-`, `+00007`, and `00350` for 2.50). `record_rewrite` now renders
+  a plain numeric item from its PICTURE (`field_pictures`,
+  `numeric_scale`). `init` inherited the bug. See [cli](cli.md).
+- **Top-level `REDEFINES` items clobbered the redefined item's VALUE** in
+  `UT-RESET-WORKING-STORAGE`; now skipped. See [splicer](splicer.md).
+- **A sentence period in an `EXPECT` value or a `MOCK` body** linted
+  clean and broke the generated driver at compile time; both now raise
+  `CutParseError` at the `.cut` line. See [dsl](dsl.md).
+
 ## 2026-09-21 -- COBOL-testing usability review (read-only)
 
 Read-only review of the first ten minutes a COBOL developer spends with

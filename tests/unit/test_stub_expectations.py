@@ -194,3 +194,30 @@ TESTCASE "second"
     skipped_names = {s.data_name: s.reason for s in result.skipped}
     assert "WS-A" in skipped_names
     assert "not run this time" in skipped_names["WS-A"]
+
+
+def test_stub_inside_provider_block_is_skipped_not_credited_to_previous_case():
+    """A PROVIDER block closes the preceding TESTCASE (the parser resets
+    case state when one opens), so a stub comment inside the PROVIDER's
+    HEADER/ROW lines belongs to no case. It used to be attributed to the
+    nearest preceding TESTCASE header, and --record-expectations would
+    write an EXPECT into a case the author never put it in."""
+    text = """\
+TESTSUITE "S"
+
+TESTCASE "plain"
+    PERFORM MAIN-PARA
+
+PROVIDER AMOUNTS
+    *> STUB EXPECT WS-TOTAL -- about the provider rows
+    HEADER AMT
+    ROW 1
+
+TESTCASE "templated {AMT}" USING PROVIDER AMOUNTS
+    PERFORM MAIN-PARA
+"""
+    result, _ = _scan(text)
+    assert result.stubs == []
+    assert len(result.skipped) == 1
+    assert result.skipped[0].data_name == "WS-TOTAL"
+    assert "PROVIDER block" in result.skipped[0].reason

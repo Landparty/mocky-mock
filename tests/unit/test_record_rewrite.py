@@ -6,6 +6,9 @@ from mockymock.analysis.stub_expectations import scan_stub_expectations
 from mockymock.dsl.parser import parse_cut
 from mockymock.report.record_rewrite import (
     build_recording_report,
+    field_pictures,
+    numeric_scale,
+    picture_for,
     render_expect_value,
     rewrite_cut_text,
 )
@@ -56,6 +59,131 @@ def test_spaces_around_digits_are_not_bare_numeric():
     # (the safe, comparison-preserving direction for a padded alphanumeric
     # field); a leading space is left exactly as DISPLAY rendered it.
     assert render_expect_value("  42") == '"  42"'
+
+
+# --- PICTURE-aware rendering (signed / implied-decimal numerics) -------------
+# GnuCOBOL -std=mvs (mockymock's only compile mode) DISPLAYs a signed
+# USAGE DISPLAY item with a TRAILING separate sign and no decimal point
+# (`005+`, `00350-`), and a signed COMP/COMP-3 item with a LEADING sign
+# (`+00007`) -- verified in the mockymock-cobc container. Rendered by text
+# shape alone these became `"005+"` (never equal to the field) or, for an
+# unsigned `9(3)V99`, the bare 100x-too-large `00350`: goldens that failed
+# on the very next run.
+
+
+def test_numeric_scale_reads_plain_numeric_pictures():
+    assert numeric_scale("9(5)") == 0
+    assert numeric_scale("S9(3)V99") == 2
+    assert numeric_scale("s9v9(4)") == 4
+
+
+def test_numeric_scale_is_none_for_non_plain_numeric_pictures():
+    assert numeric_scale(None) is None
+    assert numeric_scale("X(10)") is None
+    assert numeric_scale("ZZZ9.99") is None
+    assert numeric_scale("9(3)PP") is None
+
+
+def test_signed_display_integer_trailing_sign_renders_bare():
+    assert render_expect_value("005+", "S9(3)") == "005"
+    assert render_expect_value("005-", "S9(3)") == "-005"
+
+
+def test_implied_decimal_gets_its_point_back():
+    assert render_expect_value("00350", "9(3)V99") == "003.50"
+    assert render_expect_value("00350-", "S9(3)V99") == "-003.50"
+    assert render_expect_value("5", "9V99") == "0.05"
+
+
+def test_binary_and_packed_leading_sign_renders_bare():
+    assert render_expect_value("+00007", "S9(4)") == "00007"
+    assert render_expect_value("-01225", "S9(3)V99") == "-012.25"
+
+
+def test_pretty_display_text_is_left_as_is_apart_from_the_sign():
+    assert render_expect_value("+003.50", "S9(3)V99") == "003.50"
+
+
+def test_non_numeric_bytes_in_a_numeric_field_fall_back_to_quoting():
+    assert render_expect_value("ABC", "9(3)") == '"ABC"'
+
+
+def test_an_all_spaces_value_renders_as_spaces_not_a_zero_length_literal():
+    # `""` is a zero-length literal: GnuCOBOL only warns ("a SPACE will be
+    # assumed"), IBM Enterprise COBOL rejects it outright.
+    assert render_expect_value("   ", "9(3)") == "SPACES"
+    assert render_expect_value("     ", "X(5)") == "SPACES"
+    assert render_expect_value("     ") == "SPACES"
+    assert render_expect_value("") == "SPACES"
+
+
+def test_numeric_looking_text_in_an_alphanumeric_field_is_quoted():
+    # `IF WS-X NOT = -3` / `NOT = 1.5` against a PIC X field holding `-3` /
+    # `1.5` is TRUE under GnuCOBOL -std=mvs (verified in the mockymock-cobc
+    # container), so a bare golden failed on the very next run.
+    assert render_expect_value("-3", "X(5)") == '"-3"'
+    assert render_expect_value("1.5", "X(5)") == '"1.5"'
+    assert render_expect_value("007", "XXX") == '"007"'
+    assert render_expect_value("12", "A(2)") == '"12"'
+    assert render_expect_value("12", "N(2)") == '"12"'
+    # A numeric-edited or unknown PICTURE keeps the text-shape decision.
+    assert render_expect_value("1.5", "Z9.9") == "1.5"
+    assert render_expect_value("1.5") == "1.5"
+
+
+def test_alphanumeric_picture_keeps_text_shape_rendering():
+    assert render_expect_value("005+", "X(4)") == '"005+"'
+
+
+def test_picture_for_strips_subscripts_but_not_reference_modification():
+    pictures = {"WS-EL": "S9(3)"}
+    assert picture_for("WS-EL(2)", pictures) == "S9(3)"
+    assert picture_for("ws-el", pictures) == "S9(3)"
+    assert picture_for("WS-EL(1:2)", pictures) is None
+    assert picture_for("WS-OTHER", pictures) is None
+    assert picture_for("WS-EL", None) is None
+
+
+def test_field_pictures_covers_program_items_and_capture_targets():
+    from cobolparser import parse_cobol
+
+    from mockymock.splicer.captures import CapturePlan
+
+    program = parse_cobol(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. P.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01 WS-GRP.\n"
+        "          05 WS-AMT PIC S9(3)V99.\n"
+        "       PROCEDURE DIVISION.\n"
+        "           STOP RUN.\n"
+    ).ast
+    plan = CapturePlan(
+        target="UT-CAP-X-1",
+        source_name="WS-AMT",
+        declaration="01  UT-CAP-X-1  PIC S9(3)V99.",
+        reset_line="MOVE ZERO TO UT-CAP-X-1",
+    )
+    pictures = field_pictures(program, [plan])
+    assert pictures["WS-AMT"] == "S9(3)V99"
+    assert pictures["UT-CAP-X-1"] == "S9(3)V99"
+    assert "WS-GRP" not in pictures
+
+
+def test_rewrite_renders_a_signed_field_from_its_picture():
+    scan = _scan()
+    suite_result = _TestSuiteResult(
+        suite_name="S",
+        results=[
+            _TestResult(
+                case_id="001", case_name="calc", recorded=[("WS-NET-TOTAL", "14550-")]
+            )
+        ],
+    )
+    report = build_recording_report(scan, suite_result)
+    rewritten = rewrite_cut_text(CUT_TEXT, report, {"WS-NET-TOTAL": "S9(5)V99"})
+    assert "EXPECT WS-NET-TOTAL TO BE -145.50" in rewritten
 
 
 # --- build_recording_report --------------------------------------------------

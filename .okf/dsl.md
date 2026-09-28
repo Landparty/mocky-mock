@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Overview
@@ -89,7 +89,12 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   `... OR EQUAL 5`) raises `CutParseError` at the line instead of
   splicing leftover words into the generated IF
   (`_EXPECT_DANGLING_PHRASE_RE`, whole-word so `GREATER-VALUE` still
-  parses as an ordinary value). Phrase words are case-sensitive
+  parses as an ordinary value). Likewise an EXPECT value ending in a
+  period outside quotes (`EXPECT WS-X TO BE 5.`, the COBOL sentence habit)
+  raises `CutParseError` (`_reject_sentence_period`, 2026-09-27) --
+  spliced into the generated `IF`, the period ended the sentence mid-IF
+  and `cobc` rejected the driver while `lint` passed; a PROVIDER row
+  substituting such a value is refused at its `ROW` line. Phrase words are case-sensitive
   uppercase like every other keyword.
 - `EXPECT <data-name> TO BE <value>`'s `<data-name>` and `MOVE <value> TO
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
@@ -230,6 +235,19 @@ without the author guessing the value up front. The generator applies the
 same mirrorability and agreement checks the refusal does, so a scaffolded
 `.cut` never trips its own gate: an argument that fails either is simply
 not captured, and the boundary's other arguments still are.
+Agreement means every CALL site sharing the key passes the SAME item at
+that position (and every site passes that many arguments at all); a key
+called from several places whose sites agree is captured like a
+single-site one (before 2026-09-27 any key with 2+ sites got no captures).
+Arguments are resolved with the splicer's own `captures._site_argument`
+over the normalized lines, so a quoted literal is never captured (its
+value is fixed by the source) -- comparing bare names instead scaffolded a
+capture of `"ABC"` whenever an item ABC existed, and a refused one when one
+site passed the literal and another the item (fixed 2026-09-28, round 6).
+Under cobol-parser 1.8.x a CALL with a numeric literal operand loses it
+from `using_parameters`, the text re-scan then trusts nothing, and a quoted
+literal on that CALL still reads as a data-name -- consistently in both
+the generator and the splicer, so no refusal.
 
 See docs/2026-08-11-argument-capture-design.md for the full design and
 rejected alternatives (a dedicated `VERIFY ... WAS CALLED WITH ARG n =
@@ -276,7 +294,14 @@ it replaces a provider-bound `TESTCASE` with one ordinary `MockTestCase`
 per row, substituting `{ColumnName}` tokens (`_PLACEHOLDER_RE`) into that
 case's `MOVE` and `EXPECT` values only -- `MOCK` bodies, `MOVE` targets,
 `EXPECT` data-names, `PERFORM` target/thru, and `VERIFY` stay untouched
-and identical across every row. An unknown `{Foo}` token is a
+and identical across every row. A `{Column}` token naming one of the
+bound provider's own columns inside a `MOCK` body is a `CutParseError`
+at that line (`_reject_mock_body_placeholder`; `*>` comment lines are
+exempt) -- left verbatim it linted clean and failed cobc on
+`invalid symbol '{'`. The same token in a NAME position -- `MOVE` target,
+`EXPECT` data-name, `PERFORM` target/THRU -- is likewise a `CutParseError`
+(`_reject_name_placeholder`, 2026-09-28; the EXPECT form made cobc abort
+with "Please report this!"). An unknown `{Foo}` token is a
 `CutParseError` naming the provider's real columns; an undeclared/
 mistyped `USING PROVIDER` reference errors at the `TESTCASE` line.
 
@@ -395,7 +420,15 @@ Key regexes, matched in this order per non-blank line:
 1. If inside a `MOCK` body: look only for `END-MOCK` (any case, optional
    trailing period); anything else is appended verbatim to `body_lines`
    (no further parsing — a mock body's contents are opaque to the DSL
-   parser).
+   parser), with one fail-closed exception: a line holding a COBOL
+   sentence-terminating period (`.` followed by whitespace/end of line,
+   outside quotes and before any `*>`) raises `CutParseError`
+   (`_reject_body_sentence_period`, 2026-09-27). The body is spliced into
+   a `WHEN` of the generated `EVALUATE UT-CURRENT-CASE`, where the period
+   ends the sentence mid-EVALUATE -- `lint` used to pass and `cobc` then
+   failed on generated code (`unexpected END-EVALUATE`). ROWS/`TERMINAL`
+   field values get the same check. A decimal point (`1.5`), a period
+   inside a literal, or one in a comment is untouched.
 2. `*>` comment (only reachable when not inside a mock body).
 3. `TESTSUITE "..."` — errors if a suite is already open (one per file).
 4. `TESTCASE "..."` — requires `suite` already set; resets the per-case
@@ -494,6 +527,11 @@ Rules:
   ```
   `labels` are deduped `site.label` values joined with `", "`, used only in
   the human-readable `TESTCASE` name.
+- Boundaries between `PROCEDURE DIVISION.` and the first paragraph header
+  (cobolparser's unnamed `""` paragraph) are not scaffolded: no `PERFORM`
+  can enter there, and emitting one produced a bare `PERFORM ` that made
+  the whole generated file unparseable (fixed 2026-09-28, round 6). They
+  are listed in a `*>` comment block under `TESTSUITE` instead.
 - Suite and TESTCASE names pass through `_quote_safe` (double quotes
   become single quotes): the .cut grammar has no escape syntax for a `"`
   inside a quoted name, so interpolating one raw would make the scaffold
@@ -722,7 +760,10 @@ paragraph-grouped path described above, unchanged. A real
   `VERIFY <cat> <key> WAS CALLED n TIMES`, gated on `declared_keys` as
   above, `n` normally `expectation.value` but see `--placeholder`'s
   `call_count_overrides` below; tier 2 (`field_equals`) → `EXPECT <name>
-  TO BE <value>`; tier 3 (`stub`) → a `*> STUB EXPECT ...` comment. A
+  TO BE <value>`, the value rendered by `render_expect_value` with the
+  field's PICTURE (`ProgramContext.pictures`, from `field_pictures`), so a
+  folded `-3`/`1.5`/`007` in a `PIC X` field is quoted -- rendered bare it
+  failed on the generated suite's first run (2026-09-28); tier 3 (`stub`) → a `*> STUB EXPECT ...` comment. A
   `"CATEGORY:KEY"`-shaped boundary-level `ref` (`_is_boundary_level_ref`
   detects the colon, since COBOL names never contain one) renders as
   `*> STUB EXPECT <CAT> <KEY>` — the way a MOCK/VERIFY for that boundary

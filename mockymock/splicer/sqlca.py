@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import re
 
+from mockymock._lines import split_source_lines
 from mockymock.analysis.refusal import RefusalReason, check_expansion_warnings
 
 SQLCA_FIELDS = [
@@ -173,9 +174,9 @@ def _resolve_include_member(
     if expansion_reasons:
         return None, expansion_reasons
 
-    normalized = normalize_fixed_format(
-        expansion.expanded_source.splitlines()
-    ).splitlines()
+    normalized = split_source_lines(
+        normalize_fixed_format(split_source_lines(expansion.expanded_source))
+    )
     return normalized, []
 
 

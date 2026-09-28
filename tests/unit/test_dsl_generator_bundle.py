@@ -677,6 +677,65 @@ def test_field_equals_expectation_becomes_expect_line():
     assert "EXPECT WS-TOTAL TO BE 1244" in text
 
 
+FIELD_EQUALS_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FE.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CODE            PIC X(5).
+       01  WS-TXT             PIC X(5).
+       01  WS-AMT             PIC S9(3)V99.
+       01  WS-CNT             PIC 9(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE "-3" TO WS-CODE.
+           MOVE "1.5" TO WS-TXT.
+           MOVE -3.5 TO WS-AMT.
+           MOVE 7 TO WS-CNT.
+           DISPLAY WS-CODE WS-TXT WS-AMT WS-CNT.
+"""
+
+
+def test_field_equals_on_an_alphanumeric_field_is_quoted_from_its_picture():
+    # A folded "-3" / "1.5" held in a PIC X field used to render bare
+    # (`EXPECT WS-CODE TO BE -3`), a comparison GnuCOBOL makes as text and
+    # finds unequal: the generated test failed on its very first run.
+    from mockymock.dsl.generator import ProgramContext
+
+    result = parse_cobol(FIELD_EQUALS_SOURCE, filename="fe.cbl")
+    assert result.success, result.errors
+    surface = analyze(result.ast)
+    lines = FIELD_EQUALS_SOURCE.splitlines()
+    bundle = FixtureBundle(
+        bundle_version=1,
+        program_name="FE",
+        seed=1,
+        scenarios=[
+            Scenario(
+                name="happy path",
+                entry="MAIN-PARA",
+                expectations=[
+                    Expectation(kind="field_equals", ref="WS-CODE", value="-3"),
+                    Expectation(kind="field_equals", ref="WS-TXT", value="1.5"),
+                    Expectation(kind="field_equals", ref="WS-AMT", value="-3.50"),
+                    Expectation(kind="field_equals", ref="WS-CNT", value="7"),
+                ],
+            )
+        ],
+    )
+    text = scaffold_cut(
+        "FE",
+        surface,
+        bundle,
+        source=ProgramContext.build(result.ast, lines, surface),
+    )
+    assert 'EXPECT WS-CODE TO BE "-3"' in text
+    assert 'EXPECT WS-TXT TO BE "1.5"' in text
+    assert "EXPECT WS-AMT TO BE -3.50" in text
+    assert "EXPECT WS-CNT TO BE 7" in text
+    parse_cut(text)
+
+
 # --- `--placeholder`: downgrade a matched fixture's body (Task 4 of the
 # unify-with-data reconciliation plan) -----------------------------------
 

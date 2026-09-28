@@ -257,6 +257,27 @@ def test_evaluate_reports_the_decoded_value_for_a_known_variable():
     assert evaluate_response["body"]["variablesReference"] == 0
 
 
+def test_evaluate_matches_a_variable_name_case_insensitively():
+    """COBOL names are case-insensitive, but the variable table keeps the
+    declaration's own spelling (cobc copies it verbatim into the .c.l.h
+    comment). Hovering `ws-customer-id` where the program declared
+    `WS-CUSTOMER-ID` -- or the reverse -- answered "unknown variable"."""
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "evaluate",
+                {"expression": "ws-customer-id", "context": "hover"},
+            ),
+        ]
+    )
+
+    evaluate_response = messages[-1]
+    assert evaluate_response["success"] is True
+    assert evaluate_response["body"]["result"] == "CUST00001 "
+
+
 def test_evaluate_of_unknown_expression_fails_cleanly():
     """v1 only resolves plain COBOL identifiers already in the variable
     table -- no arithmetic/member-access expression evaluation (see

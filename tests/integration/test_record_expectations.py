@@ -105,3 +105,41 @@ def test_record_expectations_leaves_an_excluded_case_untouched(tmp_path: Path):
     # ...but the excluded case's stub comment is completely untouched.
     assert "*> STUB EXPECT WS-NET-TOTAL -- case two" in rewritten
     assert "EXPECT WS-NET-TOTAL TO BE 0014" not in rewritten
+
+
+@requires_docker
+def test_record_expectations_renders_signed_and_implied_decimal_fields(
+    tmp_path: Path,
+):
+    """Under -std=mvs GnuCOBOL DISPLAYs a signed field with a separate
+    sign (`005+`, `00250-`, `+00005` for COMP) and drops an implied
+    decimal point (`00250` for 2.50). Rendered from that text alone the
+    recorded goldens were `"005+"` and a bare `00250` -- EXPECT lines that
+    failed on the very next run. The rewritten file must pass as-is."""
+    program = FIXTURES / "record_expectations_signed.cbl"
+    working = tmp_path / "signed.cut"
+    working.write_text(
+        'TESTSUITE "signed"\n'
+        'TESTCASE "halves five"\n'
+        "    MOVE 0 TO WS-QTY\n"
+        "    PERFORM CALC-TOTALS\n"
+        "    *> STUB EXPECT WS-QTY\n"
+        "    *> STUB EXPECT WS-HALF\n"
+        "    *> STUB EXPECT WS-REFUND\n"
+        "    *> STUB EXPECT WS-UNSIGNED-HALF\n"
+        "    *> STUB EXPECT WS-BIN\n"
+    )
+
+    assert (
+        main(["run", str(program), "--cut", str(working), "--record-expectations"]) == 0
+    )
+    rewritten = working.read_text()
+    assert "EXPECT WS-QTY TO BE 005\n" in rewritten
+    assert "EXPECT WS-HALF TO BE 002.50\n" in rewritten
+    assert "EXPECT WS-REFUND TO BE -002.50\n" in rewritten
+    assert "EXPECT WS-UNSIGNED-HALF TO BE 002.50\n" in rewritten
+    assert "EXPECT WS-BIN TO BE 00005\n" in rewritten
+
+    # The recorded goldens are the program's real values: a plain re-run
+    # of the rewritten file passes.
+    assert main(["run", str(program), "--cut", str(working)]) == 0

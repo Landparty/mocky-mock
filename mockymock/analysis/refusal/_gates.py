@@ -52,6 +52,7 @@ from cobolparser.models.statements.call import CallStatement
 from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
+from mockymock._lines import split_source_lines
 from mockymock.analysis.linkage import address_of_sites, linkage_plan
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
@@ -92,19 +93,64 @@ from ._types import (
     RefusalReason,
 )
 
+#: Punctuation whose surrounding whitespace is token spacing, not SQL.
+_EXEC_PUNCTUATION_SPACING_RE = re.compile(r"\s*([.,():])\s*")
+
+
+def _exec_match_form(text: str) -> str:
+    """`normalize_exec_text` plus the whitespace around `. , ( ) :` removed:
+    the form an SQL/CICS/DLI key and a site's EXEC text are compared in.
+
+    Both sides of that comparison carry token spacing rather than the
+    author's text: the site's comes from cobolparser's `sql_text`, which
+    rejoins tokens with spaces the source never had -- and differently per
+    release (the published 1.8.x renders `BANK.TRANSACTION_HIST` as
+    `BANK. TRANSACTION_HIST`, later releases do not; both render
+    `(A, B)` as `( A, B )` and `INTO :WS-A` as `INTO:WS-A`). Comparing
+    raw, a key copied verbatim from the program's own source failed to
+    match (UNMATCHED_MOCK) and a `.cut` written against one cobol-parser
+    release broke under another."""
+    return _EXEC_PUNCTUATION_SPACING_RE.sub(r"\1", normalize_exec_text(text))
+
+
+#: Characters that continue one SQL/CICS/DLI name (a cursor, table, host
+#: variable, CICS command word): a key may only end where the site's text
+#: does not continue the same name.
+_EXEC_NAME_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_#@$"
+)
+
+
+def _exec_prefix_matches(prefix: str, text: str) -> bool:
+    """`prefix` starts `text` and ends on a name boundary there.
+
+    A bare character prefix let `MOCK SQL "FETCH C1"` also mock
+    `FETCH C10 INTO ...` (and `MOCK CICS "READ"` mock `READQ TS ...`): the
+    other cursor's site was silently served this directive's body and its
+    ROWS tally instead of refusing UNMOCKED_SQL, and a case mocking both
+    cursors refused AMBIGUOUS_MOCK. A key is a prefix of whole names."""
+    if not prefix or not text.startswith(prefix):
+        return False
+    if len(text) == len(prefix):
+        return True
+    return not (
+        prefix[-1] in _EXEC_NAME_CHARS and text[len(prefix)] in _EXEC_NAME_CHARS
+    )
+
 
 def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool:
     """Category must agree; then CALL keys match the call literal exactly,
     file-op/ACCEPT/DYNCALL keys match any of the site's (uppercased) names
     (the identifier a dynamic CALL calls through), and SQL/CICS/DLI keys
-    prefix-match the site's normalized EXEC text. The category identity
+    prefix-match the site's normalized EXEC text on a name boundary. The category identity
     check is what keeps quoted (static) and bare (dynamic) CALL keys from
     ever cross-matching."""
     if site.category is not directive.category:
         return False
     if directive.category in EXEC_CATEGORIES:
-        prefix = normalize_exec_text(directive.key)
-        return bool(prefix) and (site.match_text or "").startswith(prefix)
+        return _exec_prefix_matches(
+            _exec_match_form(directive.key), _exec_match_form(site.match_text or "")
+        )
     if directive.category is MockCategory.CALL:
         return directive.key in site.keys
     return directive.key.upper() in site.keys
@@ -328,7 +374,7 @@ def _whole_program_reasons(
         )
     program = getattr(parse_result, "ast", None)
     normalized_lines = (
-        normalize_fixed_format(raw_source.splitlines()).splitlines()
+        split_source_lines(normalize_fixed_format(split_source_lines(raw_source)))
         if classify and raw_source is not None
         else None
     )
@@ -677,13 +723,13 @@ def check_unresolved_copybooks_scoped(
     the first (whole-program, refuse-now) list, fail closed. `program` is
     the parsed AST of this same source (pass None to classify
     nothing)."""
-    normalized = normalize_fixed_format(raw_source.splitlines())
+    normalized = normalize_fixed_format(split_source_lines(raw_source))
     lexer = CobolLexer(normalized, free_form=True)
     tokens = lexer.tokenize()
     copy_indices = [i for i, t in enumerate(tokens) if t.type == TokenType.COPY]
     if not copy_indices:
         return [], []
-    normalized_lines = normalized.splitlines()
+    normalized_lines = split_source_lines(normalized)
     whole_lines: set[int] = set()
     scoped: list[ParagraphScopedRefusal] = []
     for index in copy_indices:

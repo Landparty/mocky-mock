@@ -331,6 +331,44 @@ def test_group_with_redefines_children_resets_via_single_initialize():
     assert lines == ["INITIALIZE WS-RECORD"]
 
 
+TOP_LEVEL_REDEFINES_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SAMPLE9.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CODE            PIC X(4) VALUE "AB12".
+       01  WS-CODE-NUM        REDEFINES WS-CODE PIC 9(4).
+       01  WS-DATE.
+           05  WS-YYYY        PIC 9(4) VALUE 2026.
+           05  WS-MM          PIC 99   VALUE 9.
+       01  WS-DATE-X          REDEFINES WS-DATE PIC X(6).
+       01  WS-AFTER           PIC X.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_top_level_redefines_item_does_not_clobber_the_redefined_value():
+    """A top-level REDEFINES item shares its storage with the item it
+    redefines. Resetting it too (`MOVE 0 TO WS-CODE-NUM`, `MOVE SPACES TO
+    WS-DATE-X`) ran AFTER the redefined item's own VALUE-restoring line and
+    overwrote it, so every test case -- the first included -- saw "0000"
+    where the program declared VALUE "AB12" (verified end-to-end with
+    GnuCOBOL: `EXPECT WS-OUT TO BE "AB12"` failed with `got 0000`)."""
+    result = parse_cobol(TOP_LEVEL_REDEFINES_SOURCE, filename="sample9.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        'MOVE "AB12" TO WS-CODE',
+        "INITIALIZE WS-DATE",
+        "MOVE 2026 TO WS-YYYY",
+        "MOVE 9 TO WS-MM",
+        "MOVE SPACES TO WS-AFTER",
+    ]
+
+
 # Embedded-quote literals: cobolparser wraps a VALUE clause's DECODED content
 # in double quotes, and versions through 1.8.0 did not re-double an embedded
 # quote when doing so -- CICS's DFHAID copybook declares exactly that shape

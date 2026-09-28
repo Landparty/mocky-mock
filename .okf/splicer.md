@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Overview
@@ -17,6 +17,19 @@ edits is **cobolparser's normalized free-form text**
 original file — `SourceLocation.line` values from the AST are indexed into
 that normalized text, so splicing the original would corrupt line offsets.
 See [integration](integration.md).
+
+**Line splitting (2026-09-27):** every split of COBOL source text that is
+later indexed by an AST line number goes through
+`mockymock._lines.split_source_lines` (`\n` / `\r\n` / `\r` only, as
+cobolparser counts records), never `str.splitlines()` -- that also breaks on
+form feed / VT / `\x1c`-`\x1e` / NEL / U+2028, so a page-eject `\f` in a
+comment line shifted every later splice one line early (the mock replaced
+the statement before the CALL and the real CALL ran). The rule is agreement
+with the *installed* cobolparser: releases without `cobolparser._lines`
+(1.8.x and earlier, allowed by the `>=1.7.7` floor) still number records the
+`str.splitlines()` way, so `split_source_lines` falls back to it there
+(`PARSER_SPLITS_ON_RECORD_DELIMITERS`) -- the `cobol-parser-compat` CI job
+runs against the published wheel and caught the mismatch.
 
 ```
 MockSurface (boundary sites)  ─┐
@@ -221,7 +234,7 @@ code, from the mnemonic table or a quoted literal — see [dsl](dsl.md)), a
 second `MOVE "<code>" TO <field>` is emitted right after the default,
 which therefore wins since it comes later in the same `WHEN` branch —
 same as any hand-written `MOVE` to that field a mock author adds after it.
-A file with no declared `FILE STATUS` field gets neither MOVE: there is no
+A statement naming several files (`OPEN INPUT A OUTPUT B`, `CLOSE A B`) is one site matched by one directive, so the default `MOVE "00"` is emitted for **every** file in `site.keys` that declares a status field, all before the `FILE-STATUS IS` override (which still targets only the directive's own file) -- round 7: defaulting only the directive's file left the other file's status blank, and a program checking both took its failure branch. A file with no declared `FILE STATUS` field gets neither MOVE: there is no
 WORKING-STORAGE target to write into (`refusal.check_test_case`'s
 `UNRESOLVED_FILE_STATUS_TARGET` refuses fail-closed before splicing is
 ever reached if the `.cut` file used `FILE-STATUS IS` sugar against such a
@@ -236,7 +249,22 @@ against *this exact physical site's* own AST node
 (`site.statement`, narrowed via `isinstance(..., CallStatement)` --
 `BoundarySite.statement` already carries the original AST statement for
 every site, so no new analysis-phase field was needed) --
-`site.statement.using_parameters[n - 1].name`. Emitted before
+`site.statement.using_parameters[n - 1].name` -- except that cobolparser
+reports a *literal* argument by its quote-stripped value (`BY CONTENT
+"ABC"` -> `ABC`), indistinguishable from a data-name, so
+`_call_using_literals` re-scans the site's own spliced span
+(`splice_program` now builds the dispatch after computing the span and
+passes it as `statement_text`) and emits the literal token verbatim
+(`MOVE "ABC" TO target`). It trusts the text only when its operand list
+agrees with the parser's operand for operand; otherwise it falls back to
+the name (2026-09-28 -- before, the MOVE silently copied an unrelated item
+named ABC, or failed in cobc). `plan_captures` (given `lines` by
+`cli.checks`) applies the same recognition via `_site_argument`, so a
+`UT-CAP-` target for a literal is declared from the literal itself
+(`_literal_declaration`: `PIC X(len)` for a quoted literal, `PIC [S]9(i)[V9(d)]`
+for a numeric one, refused for X/N/G-prefixed) -- before 2026-09-28 it
+mirrored a same-named item's layout (`"ABC"` into `PIC 9(2)` read back
+`BC`) or refused as "not a uniquely-named data item". Emitted before
 `directive.body_lines`, in declared order. See [dsl](dsl.md)'s `CAPTURE
 ARG` grammar section and docs/2026-08-11-argument-capture-design.md.
 
@@ -414,6 +442,7 @@ skipped.
 | Elementary, no `PICTURE`, `USAGE INDEX` | *(skipped — no line emitted)* | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; skipping is the only reset that never emits illegal COBOL (documented fidelity limit) |
 | Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE |
 | Group, no `VALUE` clause | `INITIALIZE <name>` | a `MOVE SPACES` over a group would write spaces across numeric children, corrupting them for the next case's arithmetic; `INITIALIZE` zeros numeric children and space-fills alphanumeric ones |
+| Any top-level item with a `REDEFINES` clause | *(skipped — no line emitted)* | it shares the redefined item's storage, which that item's own line already reset/restored; a second reset through the redefining view ran after it and overwrote it (2026-09-27 fix: `01 WS-CODE PIC X(4) VALUE "AB12".` + `01 WS-CODE-NUM REDEFINES WS-CODE PIC 9(4).` left `WS-CODE` = `"0000"` in every case, the first included). Skipping matches program start-up, where GnuCOBOL initializes the storage from the first description |
 
 **Embedded double quotes in a VALUE clause (2026-08-28 fix).** cobolparser
 hands an alphanumeric VALUE clause back double-quote-delimited around the

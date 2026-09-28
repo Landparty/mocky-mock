@@ -56,6 +56,8 @@ def test_copybook_not_found_hint_names_both_remedies():
     hint = copybook_not_found_hint()
     assert "--copybook-path" in hint
     assert "[tool.mockymock]" in hint
+    # The universal file every tool in the family reads (config.py).
+    assert "cobol.yml" in hint
     assert hint.startswith("    ")  # continuation-line convention
 
 

@@ -61,6 +61,8 @@ def test_committed_deptimsm_example_reports_coverage(capsys):
     # Extract-then-compare (rather than a bare substring check) so a
     # mismatch's failure message shows the actual coverage line instead
     # of a page of unrelated captured stdout.
-    match = re.search(r"coverage: \d+\.\d+% lines executed \(\d+/\d+\)", out)
+    match = re.search(r"coverage: \d+\.\d+% of \S+ own lines executed \(\d+/\d+\)", out)
     assert match is not None, "no coverage line in output"
-    assert match.group(0) == "coverage: 75.90% lines executed (693/913)"
+    assert match.group(0) == (
+        "coverage: 100.00% of DEPTIMSM.cbl's own lines executed (108/108)"
+    )

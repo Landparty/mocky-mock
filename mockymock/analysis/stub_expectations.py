@@ -26,6 +26,10 @@ from mockymock.dsl.parser import _SUBSCRIPTED_NAME
 
 _TESTCASE_HEADER_RE = re.compile(r'^\s*TESTCASE\s+"')
 _MOCK_OPEN_RE = re.compile(r"^\s*MOCK\s+\S")
+# A PROVIDER block is not part of any TESTCASE (the parser closes the
+# preceding case when one opens), so it bounds attribution just like a
+# TESTCASE header does -- a stub inside it belongs to no case.
+_PROVIDER_HEADER_RE = re.compile(r"^\s*PROVIDER\s+\S")
 _MOCK_CLOSE_RE = re.compile(r"^\s*END-MOCK\.?\s*$", re.IGNORECASE)
 _STUB_RE = re.compile(
     rf"^\s*\*>\s*STUB EXPECT\s+(?P<name>{_SUBSCRIPTED_NAME})\s*"
@@ -87,7 +91,9 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
     """
     raw_lines = cut_text.splitlines()
 
-    headers: list[tuple[int, bool]] = []  # (line, is_provider_templated)
+    # (line, kind): kind is "case", "provider-case" (TESTCASE ... USING
+    # PROVIDER) or "provider-block" (a PROVIDER data block).
+    headers: list[tuple[int, str]] = []
     in_mock = False
     for line_no, text in enumerate(raw_lines, start=1):
         if in_mock:
@@ -98,7 +104,10 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
             in_mock = True
             continue
         if _TESTCASE_HEADER_RE.match(text):
-            headers.append((line_no, "USING PROVIDER" in text))
+            kind = "provider-case" if "USING PROVIDER" in text else "case"
+            headers.append((line_no, kind))
+        elif _PROVIDER_HEADER_RE.match(text):
+            headers.append((line_no, "provider-block"))
 
     case_index_by_line = {
         case.line: index for index, case in enumerate(suite.test_cases, start=1)
@@ -122,17 +131,27 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
         name = m.group("name")
         note = m.group("note") or None
 
-        owning_header: tuple[int, bool] | None = None
-        for header_line, is_provider in headers:
+        owning_header: tuple[int, str] | None = None
+        for header_line, kind in headers:
             if header_line > line_no:
                 break
-            owning_header = (header_line, is_provider)
+            owning_header = (header_line, kind)
 
         if owning_header is None:
             skipped.append(SkippedStub(line_no, name, "not inside any TESTCASE"))
             continue
-        header_line, is_provider = owning_header
-        if is_provider:
+        header_line, kind = owning_header
+        if kind == "provider-block":
+            skipped.append(
+                SkippedStub(
+                    line_no,
+                    name,
+                    f"inside the PROVIDER block at line {header_line}, "
+                    f"not inside any TESTCASE",
+                )
+            )
+            continue
+        if kind == "provider-case":
             skipped.append(
                 SkippedStub(
                     line_no,

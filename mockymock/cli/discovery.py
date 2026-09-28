@@ -116,10 +116,13 @@ def copybook_not_found_hint() -> str:
     already names every path it searched). Formatted as a 4-space
     continuation line, matching how the rest of this CLI already renders
     a multi-line problem (see `_cmd_lint`'s "  " prefix convention)."""
+    # Names cobol.yml first: it is the file the rest of the tool family
+    # (cobol-parser, the COBOL Analyzer extension) reads too, so one entry
+    # there fixes every tool at once -- see `config.py`'s module docstring.
     return (
-        "    Pass its location with --copybook-path <dir> (repeatable), "
-        "or add a [tool.mockymock] copybook_path entry -- see "
-        "docs/2026-09-15-cli-ergonomics-design.md's config file."
+        "    Pass its location with --copybook-path <dir> (repeatable), or "
+        "set copybook_path under project: in cobol.yml (shared with "
+        "cobol-parser) or in mockymock.toml / [tool.mockymock]."
     )
 
 

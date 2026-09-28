@@ -17,9 +17,55 @@ from mockymock.analysis.stub_expectations import (
 from mockymock.report.results import TestSuiteResult
 
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
+# How GnuCOBOL -std=mvs (the only mode mockymock compiles in, see
+# runtime/docker_toolchain.py) DISPLAYs a plain numeric item: its digits
+# with NO decimal point for an implied `V`, and -- for a signed item -- a
+# separate sign, trailing for USAGE DISPLAY (`005+`, `00350-`) and leading
+# for binary/packed (`+00007`). Verified against the mockymock-cobc
+# container (GnuCOBOL 3.2). A decimal point is accepted too, for a runtime
+# configured with pretty-display.
+_RAW_NUMERIC_RE = re.compile(
+    r"^(?P<lead>[+-]?)(?P<int>\d+)(?:\.(?P<frac>\d+))?(?P<trail>[+-]?)$"
+)
+_PICTURE_REPEAT_RE = re.compile(r"(.)\((\d+)\)")
 
 
-def render_expect_value(raw_value: str) -> str:
+def numeric_scale(picture: str | None) -> int | None:
+    """Digits after the implied decimal point for a plain numeric PICTURE
+    (`S9(3)V99` -> 2, `9(5)` -> 0), or None for anything else -- an
+    alphanumeric or numeric-edited PICTURE, or one with `P` scaling, whose
+    DISPLAY text this module does not re-interpret."""
+    if not picture:
+        return None
+    expanded = _PICTURE_REPEAT_RE.sub(
+        lambda m: m.group(1) * int(m.group(2)), picture.upper()
+    )
+    body = expanded[1:] if expanded.startswith("S") else expanded
+    if not body or set(body) - {"9", "V"} or body.count("V") > 1:
+        return None
+    _, _, fraction = body.partition("V")
+    return len(fraction)
+
+
+def _render_numeric(raw_value: str, scale: int) -> str | None:
+    """Rebuild a COBOL numeric literal from a plain numeric item's raw
+    DISPLAY text (see _RAW_NUMERIC_RE), or None if the text is not that
+    shape (e.g. a field left holding non-numeric bytes)."""
+    m = _RAW_NUMERIC_RE.match(raw_value)
+    if m is None or (m.group("lead") and m.group("trail")):
+        return None
+    digits = m.group("int")
+    if m.group("frac") is not None:
+        digits = f"{digits}.{m.group('frac')}"
+    elif scale:
+        if len(digits) <= scale:
+            digits = digits.rjust(scale + 1, "0")
+        digits = f"{digits[:-scale]}.{digits[-scale:]}"
+    negative = "-" in (m.group("lead"), m.group("trail"))
+    return f"-{digits}" if negative else digits
+
+
+def render_expect_value(raw_value: str, picture: str | None = None) -> str:
     """Render one RECORDed field's raw DISPLAY text as `.cut` `EXPECT`
     value text.
 
@@ -37,11 +83,46 @@ def render_expect_value(raw_value: str) -> str:
     PICTURE caveat (`PIC ZZZ9`-style fields render leading spaces/`$`/`,`
     and so fall to the quoted path here, not yet empirically verified
     against a real EXPECT comparison for that PICTURE family).
+
+    `picture`, when the recorded field's PICTURE is known, is what makes a
+    plain numeric item render correctly: under `-std=mvs` DISPLAY drops
+    the implied decimal point and prints a separate sign (`00350-` for
+    -3.50 in a `S9(3)V99`), which the text-shape check alone would turn
+    into a quoted literal (or, for an unsigned `9(3)V99`, the bare but
+    100x-too-large `00350`) -- a golden that fails on the very next run.
     """
-    if _NUMERIC_RE.match(raw_value):
+    scale = numeric_scale(picture)
+    if scale is not None:
+        rendered = _render_numeric(raw_value, scale)
+        if rendered is not None:
+            return rendered
+    if _NUMERIC_RE.match(raw_value) and not is_alphanumeric_picture(picture):
         return raw_value
-    escaped = raw_value.rstrip().replace('"', '""')
+    trimmed = raw_value.rstrip()
+    if not trimmed:
+        # `""` is a zero-length literal: GnuCOBOL warns and assumes a
+        # space, IBM Enterprise COBOL rejects it. SPACES is the same
+        # comparison and valid everywhere.
+        return "SPACES"
+    escaped = trimmed.replace('"', '""')
     return f'"{escaped}"'
+
+
+def is_alphanumeric_picture(picture: str | None) -> bool:
+    """Whether `picture` is alphanumeric/alphabetic/national/DBCS (it
+    holds an `X`, `A`, `N` or `G` symbol). A value recorded from such a
+    field is compared as text, so it must be rendered quoted even when it
+    looks numeric: `IF WS-X NOT = -3` or `NOT = 1.5` against a `PIC X`
+    field holding `-3` / `1.5` is TRUE under GnuCOBOL (verified against
+    the mockymock-cobc container), so a bare golden fails on the very next
+    run -- and a non-integer or signed literal compared with an
+    alphanumeric item is not even valid COBOL."""
+    if not picture:
+        return False
+    expanded = _PICTURE_REPEAT_RE.sub(
+        lambda m: m.group(1) * int(m.group(2)), picture.upper()
+    )
+    return bool(set(expanded) & {"X", "A", "N", "G"})
 
 
 @dataclass
@@ -116,11 +197,57 @@ def build_recording_report(
     return report
 
 
-def rewrite_cut_text(cut_text: str, report: RecordingReport) -> str | None:
+def field_pictures(program, captures=()) -> dict[str, str]:
+    """Name (uppercased, unqualified) -> PICTURE for every elementary data
+    item in `program`, plus every synthesized `UT-CAP-` capture target
+    (`splicer.captures.CapturePlan`, which mirrors its source item's
+    PICTURE) -- the names a `*> STUB EXPECT` can point at. Best-effort: a
+    layout walk that fails leaves the map empty, and rendering falls back
+    to the text-shape check."""
+    from mockymock.splicer.captures import _data_item_index
+
+    try:
+        index = _data_item_index(program)
+    except Exception:  # pragma: no cover - never break a run over this
+        return {}
+    pictures = {
+        name: str(item["picture"])
+        for name, item in index.items()
+        if item.get("picture") and not item.get("is_group")
+    }
+    for plan in captures:
+        source_picture = pictures.get(plan.source_name.upper())
+        if source_picture is not None:
+            pictures[plan.target.upper()] = source_picture
+    return pictures
+
+
+def picture_for(data_name: str, pictures: dict[str, str] | None) -> str | None:
+    """Look a stub's data-name up in a name (uppercased, unqualified) ->
+    PICTURE map, ignoring any subscript/reference-modification group: a
+    table element shares its item's PICTURE. A reference-modified name is
+    alphanumeric by definition, so it gets no PICTURE."""
+    if not pictures:
+        return None
+    base, paren, subscript = data_name.partition("(")
+    if paren and ":" in subscript:
+        return None
+    return pictures.get(base.strip().upper())
+
+
+def rewrite_cut_text(
+    cut_text: str,
+    report: RecordingReport,
+    pictures: dict[str, str] | None = None,
+) -> str | None:
     """Replace each recorded stub's comment line with a real `EXPECT` line,
     preserving that line's own leading whitespace. No line is inserted or
     removed (a stub comment and its replacement are both exactly one line),
     so application order never matters.
+
+    `pictures` (data-name -> PICTURE) lets a plain numeric field's raw
+    DISPLAY text be rendered as the numeric literal it stands for -- see
+    `render_expect_value`.
 
     Returns `None` (write nothing) when nothing was recorded -- a command
     that recorded zero stubs must not touch the file at all.
@@ -132,7 +259,9 @@ def rewrite_cut_text(cut_text: str, report: RecordingReport) -> str | None:
         stub = item.stub
         original = lines[stub.line - 1]
         indent = original[: len(original) - len(original.lstrip())]
-        rendered = render_expect_value(item.value)
+        rendered = render_expect_value(
+            item.value, picture_for(stub.data_name, pictures)
+        )
         lines[stub.line - 1] = f"{indent}EXPECT {stub.data_name} TO BE {rendered}"
     text = "\n".join(lines)
     return text + "\n" if cut_text.endswith("\n") else text

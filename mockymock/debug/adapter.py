@@ -399,6 +399,20 @@ class DapAdapter:
         expression = request["arguments"]["expression"]
         expr = session.variable_table.get(expression)
         if expr is None:
+            # COBOL names are case-insensitive, but the table is keyed by
+            # the spelling of the declaration (cobc keeps it verbatim in
+            # the .c.l.h comment): hovering `WS-BAL` on a line of a program
+            # that declared `ws-bal` found nothing.
+            wanted = expression.strip().upper()
+            expr = next(
+                (
+                    candidate
+                    for name, candidate in session.variable_table.items()
+                    if name.upper() == wanted
+                ),
+                None,
+            )
+        if expr is None:
             self._send_response(
                 request, success=False, message=f"unknown variable: {expression}"
             )

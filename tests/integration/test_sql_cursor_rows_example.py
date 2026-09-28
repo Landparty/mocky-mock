@@ -5,6 +5,7 @@ and a DECLARE CURSOR/OPEN/FETCH-loop/CLOSE is driven entirely by a
 MOCK SQL "FETCH ..." ROWS block, compiled with GnuCOBOL in the
 mockymock-cobc container and executed for real."""
 
+import shutil
 from pathlib import Path
 
 from mockymock.cli.main import main
@@ -51,16 +52,23 @@ def test_cursor_rows_example_fails_when_row_count_expectation_is_wrong(
 
 
 @requires_docker
-def test_cursor_rows_example_refuses_without_copybook_path():
+def test_cursor_rows_example_refuses_without_copybook_path(tmp_path: Path):
     """Without --copybook-path, EXEC SQL INCLUDE CUSTREC cannot resolve --
     proves the refusal fires end-to-end through the CLI, not just in the
-    sqlca.py unit tests."""
+    sqlca.py unit tests.
+
+    Runs from a copy WITHOUT the sibling copybooks/ directory: since
+    abb0392 a `copybooks/` directory next to the program is searched by
+    default (`discovery.effective_copybook_paths`), so running the
+    committed fixture in place resolves CUSTREC and passes."""
+    for name in ("CUSTPROG.cbl", "CUSTPROG.cut"):
+        shutil.copy(FIXTURE_DIR / name, tmp_path / name)
     exit_code = main(
         [
             "run",
-            str(FIXTURE_DIR / "CUSTPROG.cbl"),
+            str(tmp_path / "CUSTPROG.cbl"),
             "--cut",
-            str(FIXTURE_DIR / "CUSTPROG.cut"),
+            str(tmp_path / "CUSTPROG.cut"),
         ]
     )
     assert exit_code == 1

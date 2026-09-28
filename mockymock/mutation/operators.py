@@ -332,7 +332,11 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
             continue
 
         mutants.extend(_relational_mutants(line, code, mask, line_no))
-        mutants.extend(_arithmetic_verb_mutants(line, code, mask, line_no))
+        mutants.extend(
+            _arithmetic_verb_mutants(
+                line, code, mask, line_no, _statement_tail(lines, index, code)
+            )
+        )
         mutants.extend(_move_literal_mutants(line, code, mask, line_no))
         mutants.extend(_boundary_literal_mutants(line, code, mask, line_no))
         deletion = _statement_deletion_mutant(lines, index, code, mask, line_no)
@@ -381,8 +385,45 @@ def _relational_mutants(
     return mutants
 
 
+_REMAINDER = re.compile(_cobol_word("REMAINDER"), re.IGNORECASE)
+
+
+def _statement_tail(lines: list[str], index: int, code: str) -> str:
+    """The text of the statement starting on `lines[index]` from that line
+    on, as far as it provably runs: the line itself, then every following
+    code line until one ends in a period or the next one opens something
+    new (the same follower rule `_statement_ends_on_line` applies). Quoted
+    literals are blanked so a word inside one never counts."""
+    parts: list[str] = []
+    current = code
+    follower_index = index
+    while True:
+        mask = _literal_mask(current)
+        parts.append(
+            "".join(" " if m else c for c, m in zip(current, mask, strict=True))
+        )
+        if current.rstrip().endswith("."):
+            break
+        follower_index += 1
+        while follower_index < len(lines) and (
+            _is_comment(lines[follower_index])
+            or not lines[follower_index][TEXT_START_COL - 1 : CODE_END_COL].strip()
+        ):
+            follower_index += 1
+        if follower_index >= len(lines):
+            break
+        follower = lines[follower_index]
+        text = follower[TEXT_START_COL - 1 : CODE_END_COL].strip()
+        if not _is_continuation(follower) and (
+            _STATEMENT_OPENER.match(text) or _HEADER_LINE.match(text)
+        ):
+            break
+        current = follower[:CODE_END_COL]
+    return " ".join(parts)
+
+
 def _arithmetic_verb_mutants(
-    line: str, code: str, mask: list[bool], line_no: int
+    line: str, code: str, mask: list[bool], line_no: int, statement: str = ""
 ) -> list[Mutant]:
     swaps = [
         (_ADD_TO, "SUBTRACT", "FROM", "ADD..TO -> SUBTRACT..FROM"),
@@ -394,6 +435,12 @@ def _arithmetic_verb_mutants(
     for pattern, verb, preposition, description in swaps:
         match = pattern.search(code)
         if match is None or not _outside_literals(mask, match.start(), match.end()):
+            continue
+        if pattern is _DIVIDE_INTO and _REMAINDER.search(statement or code):
+            # `DIVIDE a INTO b GIVING c REMAINDER d` has no MULTIPLY
+            # counterpart: `MULTIPLY ... REMAINDER` does not compile, so the
+            # swap is a stillborn by construction. The phrase may sit on a
+            # later line of the same statement, hence `statement`.
             continue
         mutated = _rewrite_code(
             line, match.start(), match.end(), verb + match.group("mid") + preposition
@@ -479,7 +526,9 @@ def _statement_ends_on_line(lines: list[str], index: int, code: str) -> bool:
             return False
         if _is_comment(follower):
             continue
-        text = follower[:CODE_END_COL].strip()
+        # Columns 8-72 only: a sequence number in columns 1-6 would
+        # otherwise sit in front of the follower's first word.
+        text = follower[TEXT_START_COL - 1 : CODE_END_COL].strip()
         if not text:
             continue
         return bool(_STATEMENT_OPENER.match(text) or _HEADER_LINE.match(text))
@@ -492,7 +541,11 @@ def _statement_deletion_mutant(
     lines: list[str], index: int, code: str, mask: list[bool], line_no: int
 ) -> Mutant | None:
     line = lines[index]
-    stripped = code.strip()
+    # Match on the program-text area (columns 8-72), not the whole line: a
+    # fixed-format source routinely carries a sequence number in columns
+    # 1-6, which would otherwise hide the verb from `_DELETABLE_VERB` --
+    # and, before that was noticed, from the rewrite below too.
+    stripped = code[TEXT_START_COL - 1 :].strip()
     if not _DELETABLE_VERB.match(stripped):
         return None
     if any(
@@ -502,9 +555,11 @@ def _statement_deletion_mutant(
         return None
     if not _statement_ends_on_line(lines, index, code):
         return None
-    indent = line[: len(line) - len(line.lstrip())]
+    # Keep everything before the first program-text character verbatim:
+    # sequence area, indicator column and Area A/B indent.
+    head = line[: _text_start(line)]
     terminator = "." if stripped.rstrip().endswith(".") else ""
-    mutated = f"{indent}CONTINUE{terminator}"
+    mutated = f"{head}CONTINUE{terminator}"
     if len(mutated) > CODE_END_COL:
         return None
     return Mutant(

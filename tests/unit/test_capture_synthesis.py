@@ -260,3 +260,155 @@ def test_a_nameless_argument_is_unresolved_not_a_crash():
     assert plans == []
     assert unresolved
     assert all("no resolvable data item" in reason for reason in unresolved)
+
+
+_TWO_SITES = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TWOCALL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-NAME            PIC X(5).
+       01  WS-QTY             PIC 9(3).
+       01  WS-OTHER           PIC 9(3).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUB" USING WS-NAME WS-QTY
+           PERFORM SECOND-PARA
+           GOBACK.
+       SECOND-PARA.
+           CALL "SUB" USING WS-NAME {second}.
+"""
+
+
+def test_a_key_with_several_agreeing_call_sites_is_still_captured():
+    """Two CALLs of one program passing the same items agree, so both
+    arguments are scaffolded. The agreement check used to compare the
+    distinct-name set's size with the number of sites, so every key with
+    two or more CALL sites got no captures at all -- the common shape, since
+    a subprogram is rarely called from exactly one place."""
+    text = _scaffold(_TWO_SITES.format(second="WS-QTY"))
+    assert "CAPTURE ARG 1 INTO UT-CAP-SUB-1" in text
+    assert "CAPTURE ARG 2 INTO UT-CAP-SUB-2" in text
+    program, surface, _ = _context_and_surface(_TWO_SITES.format(second="WS-QTY"))
+    _, unresolved = plan_captures(program, parse_cut(text), surface)
+    assert unresolved == []
+
+
+def test_only_the_argument_the_sites_disagree_on_is_left_uncaptured():
+    text = _scaffold(_TWO_SITES.format(second="WS-OTHER"))
+    assert "CAPTURE ARG 1 INTO UT-CAP-SUB-1" in text
+    assert "CAPTURE ARG 2" not in text
+
+
+def test_an_argument_a_site_does_not_pass_is_left_uncaptured():
+    """A site with fewer arguments would trip CAPTURE_ARG_OUT_OF_RANGE."""
+    text = _scaffold(_TWO_SITES.format(second="").replace(" .", "."))
+    assert "CAPTURE ARG 1 INTO UT-CAP-SUB-1" in text
+    assert "CAPTURE ARG 2" not in text
+
+
+LITERAL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CAPL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  ABC                PIC 9(2).
+       01  WS-AMT             PIC 9(3).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUBX" USING BY CONTENT "ABC" 'HELLO'
+               BY REFERENCE WS-AMT.
+"""
+
+LITERAL_CUT = """\
+TESTSUITE "S"
+TESTCASE "literal captures"
+    MOCK CALL "SUBX"
+        CAPTURE ARG 1 INTO UT-CAP-SUBX-1
+        CAPTURE ARG 2 INTO UT-CAP-SUBX-2
+        CAPTURE ARG 3 INTO UT-CAP-SUBX-3
+    END-MOCK
+    PERFORM MAIN-PARA
+"""
+
+
+def test_a_literal_argument_is_mirrored_as_the_literal_not_a_same_named_item():
+    """cobolparser reports `"ABC"` as the bare name ABC. The injector MOVEs
+    the literal (fixed 2026-09-28 round 4), but the synthesized UT-CAP-
+    target used to mirror the unrelated item ABC (PIC 9(2) -- a MOVE of
+    "ABC" into it is not "ABC"), and to refuse a literal with no same-named
+    item ('HELLO') as "not a uniquely-named data item"."""
+    result = parse_cobol(LITERAL_SOURCE, filename="capl.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(LITERAL_SOURCE.splitlines()).splitlines()
+    surface = analyze(result.ast)
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    plans, unresolved = plan_captures(
+        result.ast, parse_cut(LITERAL_CUT), surface, lines
+    )
+    assert unresolved == []
+    declarations = capture_working_storage_lines(plans)
+    assert "01  UT-CAP-SUBX-1  PIC X(3)." in declarations
+    assert "01  UT-CAP-SUBX-2  PIC X(5)." in declarations
+    assert "01  UT-CAP-SUBX-3  PIC 9(3)." in declarations
+
+
+def test_literal_declarations_mirror_the_literal_itself():
+    """Numeric literals are covered here rather than end to end: PyPI
+    cobol-parser 1.8.4 drops a numeric USING operand (and everything after
+    it) from `using_parameters`, which the gate already refuses as
+    CAPTURE_ARG_OUT_OF_RANGE."""
+    from mockymock.splicer.captures import _literal_declaration
+
+    assert _literal_declaration("T", '"ABC"') == (
+        "01  T  PIC X(3).",
+        "MOVE SPACES TO T",
+    )
+    assert _literal_declaration("T", "'D''E'")[0] == "01  T  PIC X(3)."
+    assert _literal_declaration("T", "42") == ("01  T  PIC 9(2).", "MOVE ZERO TO T")
+    assert _literal_declaration("T", "-3.25")[0] == "01  T  PIC S9(1)V9(2)."
+    assert _literal_declaration("T", 'X"C1C2"') is None
+    assert _literal_declaration("T", '""') is None
+
+
+_LITERAL_VS_ITEM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CAPM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  ABC                PIC X(3).
+       01  WS-A               PIC X(5).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUBP" USING {first} WS-A.
+           CALL "SUBP" USING {second} WS-A.
+"""
+
+
+def test_generate_never_scaffolds_a_capture_of_a_literal_argument():
+    """`USING "ABC"` with an item named ABC in the program: the bare names
+    matched ABC, so a capture of a value the source fixes was scaffolded.
+    (No numeric literal here: cobol-parser 1.8.x drops one from
+    `using_parameters`, and the text re-scan then trusts nothing.)"""
+    text = _scaffold(_LITERAL_VS_ITEM.format(first='"ABC"', second='"ABC"'))
+    assert "CAPTURE ARG 1" not in text
+    assert "CAPTURE ARG 2 INTO UT-CAP-SUBP-2" in text
+
+
+def test_generate_does_not_scaffold_a_capture_the_splicer_refuses():
+    """One site passing the literal "ABC", another the item ABC: the
+    generator saw one name, the splicer two different arguments, so the
+    scaffolded .cut was refused as UNRESOLVED_CAPTURE_TARGET."""
+    source = _LITERAL_VS_ITEM.format(first='"ABC"', second="ABC")
+    text = _scaffold(source)
+    assert "CAPTURE ARG 1" not in text
+    assert "CAPTURE ARG 2 INTO UT-CAP-SUBP-2" in text
+    program, surface, context = _context_and_surface(source)
+    _, unresolved = plan_captures(program, parse_cut(text), surface, context.lines)
+    assert unresolved == []

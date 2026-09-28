@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-08-19T00:00:00Z
+timestamp: 2026-09-27T00:00:00Z
 ---
 # Overview
 
@@ -162,8 +162,11 @@ str. Written by `run --json-report`. Adds what the XML cannot carry: per-case
 `.cut` line numbers and tags (from the parsed `MockTestSuite`), per-failure
 attribution (`kind` expect/verify/unknown, the failing directive's `.cut`
 line, `expected`/`actual` split into fields — recovered by re-matching the
-driver's failure-reason strings against the model, splitting on the LAST
-`", got "`), and a synthesized `"not_run"` entry for every selected case the
+driver's failure-reason strings against the model: an EXPECT reason is
+first matched against each directive's exact rendered head
+`expected <name> <op> <value>, got `, since the runtime value after it may
+itself contain `", got "`; only a reason no directive renders to falls
+back to splitting on the LAST `", got "`), and a synthesized `"not_run"` entry for every selected case the
 binary never printed a START marker for. An EXPECT failure head is split
 into name/operator/expected by `_EXPECT_HEAD_RE` (the operator is one of
 `model.EXPECT_OPERATORS`, echoed verbatim by the driver's FAIL line;
@@ -239,6 +242,12 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   the field's `PICTURE` — deliberate, see the design doc's "Value
   formatting" section, including the numeric-edited `PICTURE` caveat this
   does not yet resolve.
+  Two PICTURE-aware exceptions (2026-09-27): a field whose PICTURE is
+  alphanumeric/alphabetic/national (`is_alphanumeric_picture`: an
+  `X`/`A`/`N`/`G` symbol) is always quoted, since `IF F NOT = 1.5` / `-3`
+  against a full-width `PIC X` holding that text is TRUE under GnuCOBOL;
+  and an all-spaces value renders as `SPACES`, never the zero-length
+  `""` IBM Enterprise COBOL rejects.
 - `build_recording_report(scan, suite_result)` — matches every
   `StubExpectation` the scanner found against `suite_result`'s recorded
   values by `f"{case_index:03d}"` (the same case-id convention

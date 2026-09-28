@@ -229,6 +229,67 @@ def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
         )
 
 
+def _has_sentence_period(text: str) -> bool:
+    """True when `text` holds a COBOL sentence-terminating period: a `.`
+    followed by whitespace or end of text, outside any quoted literal and
+    before any `*>` inline comment. A decimal point inside a numeric
+    literal (`1.5`) is followed by a digit, so it never counts."""
+    quote: str | None = None
+    for index, char in enumerate(text):
+        if quote is not None:
+            if char == quote:
+                quote = None
+            continue
+        if char in "'\"":
+            quote = char
+        elif text.startswith("*>", index):
+            return False
+        elif char == "." and (index + 1 == len(text) or text[index + 1].isspace()):
+            return True
+    return False
+
+
+def _reject_body_sentence_period(line: str, line_no: int, directive: str) -> None:
+    """Refuse a MOCK body line (or ROWS/TERMINAL value) carrying a
+    sentence-terminating period (`MOVE 5 TO WS-A.` -- the natural COBOL
+    habit). Body text is spliced verbatim into a `WHEN` branch of the
+    generated `EVALUATE UT-CURRENT-CASE`, where the period ends the
+    sentence mid-EVALUATE: cobc then rejects the instrumented program
+    ("unexpected END-EVALUATE") at a generated line while `lint` reported
+    nothing."""
+    if _has_sentence_period(line):
+        raise CutParseError(
+            f"line {line_no}: {line!r} in MOCK {directive} ends a COBOL "
+            f"sentence with a period -- drop the period (the mock body is "
+            f"spliced into the middle of a generated EVALUATE, which a "
+            f"period would terminate)"
+        )
+
+
+def _reject_sentence_period(value: str, line_no: int) -> None:
+    """Refuse an EXPECT value ending in a period outside any quoted
+    literal (`EXPECT WS-X TO BE 5.` -- the natural COBOL sentence habit).
+    The value is spliced verbatim into the generated `IF <name> NOT =
+    <value>`, where that period ends the sentence mid-IF: cobc then
+    rejects the generated driver ("IF without imperative statement",
+    "unexpected END-IF") while `lint` reported nothing. A COBOL numeric
+    literal cannot end in a decimal point, so the period is never part of
+    a legitimate value."""
+    quote: str | None = None
+    for char in value:
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+    if quote is None and value.rstrip().endswith("."):
+        raise CutParseError(
+            f"line {line_no}: EXPECT value {value!r} ends with a period -- "
+            f"drop it (a .cut EXPECT is not a COBOL sentence, and the "
+            f"period would terminate the generated IF)"
+        )
+
+
 def _resolve_category(cat: str | None, bare_key: bool = False) -> MockCategory:
     if cat is None or cat == "MQ":  # bare VERIFY "X" and MOCK MQ are CALL
         return MockCategory.CALL
@@ -298,6 +359,50 @@ def _split_top_level(text: str, sep: str) -> list[str]:
     return parts
 
 
+def _reject_mock_body_placeholder(
+    line: str, line_no: int, provider: DataProvider, mock: MockDirective
+) -> None:
+    """Refuse a `{Column}` token for one of `provider`'s own columns inside
+    a MOCK body of a provider-bound TESTCASE. Substitution covers only
+    MOVE/EXPECT values (MOCK bodies stay verbatim by design, see
+    docs/2026-07-20-provider-parameterized-test-cases-design.md), so the
+    token used to reach cobc untouched -- lint passed, and the compile
+    failed on `invalid symbol '{'` inside generated code."""
+    if _COMMENT_RE.match(line):
+        return
+    for match in _PLACEHOLDER_RE.finditer(line):
+        if match.group(1) in provider.header:
+            raise CutParseError(
+                f"line {line_no}: placeholder {match.group(0)} inside MOCK "
+                f"{mock.describe()} is not substituted -- PROVIDER "
+                f"{provider.name!r} values are substituted into the test "
+                f"case's MOVE and EXPECT values only; a MOCK body is "
+                f"spliced verbatim, so the token would reach the compiler"
+            )
+
+
+def _reject_name_placeholder(
+    name: str | None, line_no: int, provider: DataProvider, where: str
+) -> None:
+    """Refuse a `{Column}` token for one of `provider`'s own columns in a
+    NAME position (MOVE target, EXPECT data-name, PERFORM target/THRU) of a
+    provider-bound TESTCASE. Only values are substituted, so the token
+    reached the spliced driver verbatim: `lint` passed (nothing resolves
+    EXPECT/MOVE names against the program), and cobc then failed on
+    `invalid symbol '{'` -- for an EXPECT, by aborting outright ("Please
+    report this!"). Same rule as `_reject_mock_body_placeholder`."""
+    if not name:
+        return
+    for match in _PLACEHOLDER_RE.finditer(name):
+        if match.group(1) in provider.header:
+            raise CutParseError(
+                f"line {line_no}: placeholder {match.group(0)} as the "
+                f"{where} is not substituted -- PROVIDER {provider.name!r} "
+                f"values are substituted into the test case's MOVE and "
+                f"EXPECT values only, never into data or paragraph names"
+            )
+
+
 def _substitute(
     text: str, provider: DataProvider, row: list[str], case_name: str, line_no: int
 ) -> str:
@@ -331,6 +436,14 @@ def _instantiate_row(
     case: MockTestCase, provider: DataProvider, row: list[str], row_index: int
 ) -> MockTestCase:
     row_line = provider.row_lines[row_index - 1]
+    for _, target in case.setup_moves:
+        _reject_name_placeholder(target, case.line, provider, "MOVE target")
+    for expectation in case.expectations:
+        _reject_name_placeholder(
+            expectation.data_name, expectation.line, provider, "EXPECT data-name"
+        )
+    _reject_name_placeholder(case.perform_target, case.line, provider, "PERFORM target")
+    _reject_name_placeholder(case.perform_thru, case.line, provider, "PERFORM THRU")
     setup_moves = [
         (_substitute(value, provider, row, case.name, case.line), target)
         for value, target in case.setup_moves
@@ -350,6 +463,10 @@ def _instantiate_row(
         )
         for expectation in case.expectations
     ]
+    # A {Placeholder} substituted from a ROW like `5.` reaches the same
+    # generated IF as a literal one -- checked against the row's own line.
+    for expectation in expectations:
+        _reject_sentence_period(expectation.expected_value, row_line)
     return MockTestCase(
         name=f"{case.name} [row {row_index}: {_display_value(row[0])}]",
         # `list(case.mocks)` copies the list, but not its elements: every
@@ -438,6 +555,9 @@ def parse_cut(text: str) -> MockTestSuite:
     providers: dict[str, DataProvider] = {}
     current_provider: DataProvider | None = None
     pending_expansions: list[tuple[MockTestCase, DataProvider]] = []
+    # The PROVIDER the open TESTCASE is bound to (meaningful only while
+    # `case` is not None) -- see the MOCK-body placeholder check below.
+    case_provider: DataProvider | None = None
 
     def _close_provider() -> None:
         nonlocal current_provider
@@ -486,6 +606,8 @@ def parse_cut(text: str) -> MockTestSuite:
             continue
 
         if in_mock is not None:
+            if case is not None and case_provider is not None:
+                _reject_mock_body_placeholder(line, line_no, case_provider, in_mock)
             if _END_MOCK_RE.match(line):
                 if in_mock.rows is not None and not in_mock.rows:
                     raise CutParseError(
@@ -514,6 +636,11 @@ def parse_cut(text: str) -> MockTestSuite:
                             f"assignment {raw_pair.strip()!r} -- expected "
                             f"FIELD = value"
                         )
+                    _reject_body_sentence_period(
+                        pair_match.group("value").strip(),
+                        line_no,
+                        in_mock.describe(),
+                    )
                     terminal.append(
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
@@ -612,11 +739,17 @@ def parse_cut(text: str) -> MockTestSuite:
                             f"assignment {raw_pair.strip()!r} -- expected "
                             f"FIELD = value"
                         )
+                    _reject_body_sentence_period(
+                        pair_match.group("value").strip(),
+                        line_no,
+                        in_mock.describe(),
+                    )
                     row.append(
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.rows.append(row)
             else:
+                _reject_body_sentence_period(line, line_no, in_mock.describe())
                 in_mock.body_lines.append(line)
             continue
 
@@ -757,8 +890,10 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             case = MockTestCase(name=m.group("name"), line=line_no, tags=tags)
             suite.test_cases.append(case)
+            case_provider = None
             if provider_name is not None:
-                pending_expansions.append((case, providers[provider_name]))
+                case_provider = providers[provider_name]
+                pending_expansions.append((case, case_provider))
             seen_testcase = True
             mock_target = case.mocks
             mock_lines = {}
@@ -915,6 +1050,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"[OR EQUAL TO], or [NOT] TO BE LESS THAN [OR EQUAL TO], "
                     f"followed by the value)"
                 )
+            _reject_sentence_period(m.group("value"), line_no)
             case.expectations.append(
                 ExpectDirective(
                     data_name=m.group("name"),
