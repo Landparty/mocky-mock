@@ -670,7 +670,14 @@ captured MI transcripts and end-to-end tested against a live container
   `<name>.c.l.h` comment table (not gdb symbols, which don't exist for
   COBOL names, and not a byte-offset decoder). Decodes packed-decimal
   (COMP-3) and binary (COMP) values via GnuCOBOL's own `cob_field_attr`
-  type/digits/scale, read live via MI. `_unquote_c_string` shares
+  type/digits/scale/flags, read live via MI. Round 6 (2026-09-28, checked
+  against a real `-std=mvs` compile): an even-digit COMP-3 has its pad
+  nibble in FRONT (`S9(4)` 1234 = `01 23 4C`, was shown `0123`); a signed
+  DISPLAY item's sign is overpunched (`-123` = `12s`, was shown `12`) or
+  separate (`SIGN ... SEPARATE`); COMP-5 is host (little-endian) order,
+  told apart from big-endian COMP by `COB_FLAG_BINARY_SWAP` (was `-257`
+  for `-2`). The table keeps the declaration's own spelling, so
+  `evaluate` (hover/watch) falls back to a case-insensitive match. `_unquote_c_string` shares
   `gdb_session.py`'s `decode_c_escape` (see F15 above).
 - `call_stack.py` — synthesizes the COBOL paragraph/section call stack
   from GnuCOBOL's internal `frame_stack`, since gdb's own backtrace is

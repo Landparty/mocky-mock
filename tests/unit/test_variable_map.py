@@ -171,3 +171,76 @@ def test_unquoted_buffer_decodes_gdbs_octal_byte_escapes():
 
     assert value.kind == "alphanumeric"
     assert value.decoded == "\x01ABC"
+
+
+# --- Round-6 decoding fixes. Byte images and attr flags below are from a
+# real GnuCOBOL 3.2 `cobc -std=mvs` compile in the toolchain image (see
+# the decoder docstrings); the fake session only replays them.
+
+
+def _field_session(expr, type_code, digits, scale, flags, hex_bytes):
+    size = len(hex_bytes) // 2
+    return _FakeSession(
+        {
+            f"-data-evaluate-expression (int)({expr}).attr->type": _done(
+                str(type_code)
+            ),
+            f"-data-evaluate-expression (int)({expr}).attr->digits": _done(str(digits)),
+            f"-data-evaluate-expression (int)({expr}).attr->scale": _done(str(scale)),
+            f"-data-evaluate-expression (int)({expr}).attr->flags": _done(str(flags)),
+            f"-data-evaluate-expression ({expr}).size": _done(str(size)),
+            f"-data-evaluate-expression (long)({expr}).data": _done("4096"),
+            f"-data-evaluate-expression {expr}": _done("{...}"),
+            f"-data-read-memory-bytes 4096 {size}": _done(
+                memory=[{"begin": "0x1000", "contents": hex_bytes}]
+            ),
+        }
+    )
+
+
+def test_read_variable_packed_decimal_with_even_digit_count_skips_pad_nibble():
+    """PIC S9(4) COMP-3 VALUE 1234 is 01 23 4C: the pad nibble is at the
+    front. Reading the first four nibbles showed 0123."""
+    session = _field_session("f_17", 0x12, 4, 0, 0x0001, "01234c")
+
+    assert read_variable(session, "WS-P4", "f_17").decoded == "1234"
+
+
+def test_read_variable_packed_decimal_negative_even_digits():
+    session = _field_session("f_17", 0x12, 4, 2, 0x0001, "01234d")
+
+    assert read_variable(session, "WS-P4", "f_17").decoded == "-12.34"
+
+
+def test_read_variable_signed_display_overpunch_keeps_digit_and_sign():
+    """PIC S9(3)V9 VALUE -12.3 is stored `012s` (0x73 = '3' + 0x40).
+    Keeping only 0-9 bytes read it as 01.2."""
+    session = _field_session("f_22", 0x10, 4, 1, 0x0001, "30313273")
+
+    value = read_variable(session, "WS-N", "f_22")
+
+    assert value.kind == "numeric-display"
+    assert value.decoded == "-012.3"
+
+
+def test_read_variable_signed_display_positive_and_separate_leading():
+    positive = _field_session("f_1", 0x10, 3, 0, 0x0001, "313233")
+    assert read_variable(positive, "WS-P", "f_1").decoded == "123"
+
+    # SIGN LEADING SEPARATE: HAVE_SIGN | SIGN_SEPARATE | SIGN_LEADING
+    separate = _field_session("f_2", 0x10, 3, 0, 0x0007, "2d303435")
+    assert read_variable(separate, "WS-L", "f_2").decoded == "-045"
+
+
+def test_read_variable_comp5_is_host_order_not_big_endian():
+    """PIC S9(4) COMP-5 VALUE -2: flags 0x0041 (no BINARY_SWAP), bytes
+    FE FF. Big-endian decoding read -257."""
+    session = _field_session("f_20", 0x11, 4, 0, 0x0041, "feff")
+
+    assert read_variable(session, "WS-C5", "f_20").decoded == "-2"
+
+
+def test_read_variable_comp_with_binary_swap_stays_big_endian():
+    session = _field_session("f_19", 0x11, 4, 0, 0x0021, "fffe")
+
+    assert read_variable(session, "WS-C", "f_19").decoded == "-2"

@@ -239,6 +239,15 @@ Agreement means every CALL site sharing the key passes the SAME item at
 that position (and every site passes that many arguments at all); a key
 called from several places whose sites agree is captured like a
 single-site one (before 2026-09-27 any key with 2+ sites got no captures).
+Arguments are resolved with the splicer's own `captures._site_argument`
+over the normalized lines, so a quoted literal is never captured (its
+value is fixed by the source) -- comparing bare names instead scaffolded a
+capture of `"ABC"` whenever an item ABC existed, and a refused one when one
+site passed the literal and another the item (fixed 2026-09-28, round 6).
+Under cobol-parser 1.8.x a CALL with a numeric literal operand loses it
+from `using_parameters`, the text re-scan then trusts nothing, and a quoted
+literal on that CALL still reads as a data-name -- consistently in both
+the generator and the splicer, so no refusal.
 
 See docs/2026-08-11-argument-capture-design.md for the full design and
 rejected alternatives (a dedicated `VERIFY ... WAS CALLED WITH ARG n =
@@ -518,6 +527,11 @@ Rules:
   ```
   `labels` are deduped `site.label` values joined with `", "`, used only in
   the human-readable `TESTCASE` name.
+- Boundaries between `PROCEDURE DIVISION.` and the first paragraph header
+  (cobolparser's unnamed `""` paragraph) are not scaffolded: no `PERFORM`
+  can enter there, and emitting one produced a bare `PERFORM ` that made
+  the whole generated file unparseable (fixed 2026-09-28, round 6). They
+  are listed in a `*>` comment block under `TESTSUITE` instead.
 - Suite and TESTCASE names pass through `_quote_safe` (double quotes
   become single quotes): the .cut grammar has no escape syntax for a `"`
   inside a quoted name, so interpolating one raw would make the scaffold

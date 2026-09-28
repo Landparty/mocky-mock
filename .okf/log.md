@@ -5,6 +5,25 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-28 -- bug hunt round 6: generate scaffold, debugger values
+
+Each reproduced first and pinned by a regression test; unit tests pass
+under the local cobol-parser and the published 1.8.x wheel.
+
+- **`generate` emitted `PERFORM ` for boundaries before the first
+  paragraph** (a mainline written straight under `PROCEDURE DIVISION.`),
+  so the whole generated `.cut` failed to parse. Now listed in a comment
+  instead. See [dsl](dsl.md).
+- **`generate` scaffolded `CAPTURE ARG` for a quoted literal argument**
+  whenever a same-named item existed -- pointless, and refused as
+  UNRESOLVED_CAPTURE_TARGET when another site passed the item. Now
+  resolved with the splicer's `_site_argument`. See [dsl](dsl.md).
+- **`debug` showed wrong values**: even-digit COMP-3 (`0123` for 1234),
+  signed DISPLAY (`01.2` for -12.3), COMP-5 (`-257` for -2) -- verified
+  through a real DAP session before and after. `evaluate` now matches
+  names case-insensitively. See [cli](cli.md).
+- The copybook-not-found hint now names `cobol.yml`'s `project:` section.
+
 ## 2026-09-28 -- bug hunt round 5: four fixes, four stale tests
 
 - **Closed PERFORM THRU ranges no longer cascade the GO TO fall-through

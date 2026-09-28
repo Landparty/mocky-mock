@@ -373,3 +373,42 @@ def test_literal_declarations_mirror_the_literal_itself():
     assert _literal_declaration("T", "-3.25")[0] == "01  T  PIC S9(1)V9(2)."
     assert _literal_declaration("T", 'X"C1C2"') is None
     assert _literal_declaration("T", '""') is None
+
+
+_LITERAL_VS_ITEM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CAPM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  ABC                PIC X(3).
+       01  WS-A               PIC X(5).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUBP" USING {first} WS-A.
+           CALL "SUBP" USING {second} WS-A.
+"""
+
+
+def test_generate_never_scaffolds_a_capture_of_a_literal_argument():
+    """`USING "ABC"` with an item named ABC in the program: the bare names
+    matched ABC, so a capture of a value the source fixes was scaffolded.
+    (No numeric literal here: cobol-parser 1.8.x drops one from
+    `using_parameters`, and the text re-scan then trusts nothing.)"""
+    text = _scaffold(_LITERAL_VS_ITEM.format(first='"ABC"', second='"ABC"'))
+    assert "CAPTURE ARG 1" not in text
+    assert "CAPTURE ARG 2 INTO UT-CAP-SUBP-2" in text
+
+
+def test_generate_does_not_scaffold_a_capture_the_splicer_refuses():
+    """One site passing the literal "ABC", another the item ABC: the
+    generator saw one name, the splicer two different arguments, so the
+    scaffolded .cut was refused as UNRESOLVED_CAPTURE_TARGET."""
+    source = _LITERAL_VS_ITEM.format(first='"ABC"', second="ABC")
+    text = _scaffold(source)
+    assert "CAPTURE ARG 1" not in text
+    assert "CAPTURE ARG 2 INTO UT-CAP-SUBP-2" in text
+    program, surface, context = _context_and_surface(source)
+    _, unresolved = plan_captures(program, parse_cut(text), surface, context.lines)
+    assert unresolved == []

@@ -47,6 +47,13 @@ _COB_TYPE_NUMERIC_BINARY = 0x11
 _COB_TYPE_NUMERIC_PACKED = 0x12
 _COB_TYPE_ALPHANUMERIC_FAMILY = {0x20, 0x21, 0x22, 0x23}
 _COB_FLAG_HAVE_SIGN = 0x0001
+_COB_FLAG_SIGN_SEPARATE = 0x0002
+_COB_FLAG_SIGN_LEADING = 0x0004
+# Set on a binary field stored big-endian on a little-endian host (COMP/
+# COMP-4/BINARY under -std=mvs's binary-byteorder: big-endian). COMP-5
+# (flags 0x0041, REAL_BINARY) lacks it: stored in host order.
+_COB_FLAG_BINARY_SWAP = 0x0020
+_COB_FLAG_NO_SIGN_NIBBLE = 0x0100
 
 # Matches a `.c.l.h` declaration line for either a raw buffer (`b_NN`) or a
 # cob_field wrapper (`f_NN`), capturing the generated name and its trailing
@@ -83,34 +90,90 @@ class VariableValue:
     alphanumeric/opaque cases' raw_repr already IS the display value)."""
 
 
-def _decode_packed_decimal(raw: bytes, digits: int, scale: int) -> str:
+def _decode_packed_decimal(raw: bytes, digits: int, scale: int, flags: int = 0) -> str:
     """COMP-3: two BCD digit nibbles per byte, with a sign nibble
-    (0xC/0xF positive, 0xD negative) after the last digit nibble.
+    (0xC/0xF positive, 0xD/0xB negative) after the last digit nibble.
     Confirmed empirically: 123.45 (PIC 9(5)V99 COMP-3, digits=7, scale=2)
     after three ADD 1s reads back as raw bytes 00 12 64 5F -> digit
-    nibbles 0012645, sign nibble F (positive) -> "126.45"."""
+    nibbles 0012645, sign nibble F (positive) -> "126.45".
+
+    An EVEN digit count leaves a pad nibble at the FRONT, not the back:
+    PIC S9(4) COMP-3 VALUE 1234 is 01 23 4C (GnuCOBOL 3.2, -std=mvs).
+    The digits are therefore the LAST `digits` nibbles before the sign --
+    reading the first `digits` showed that field as 0123, taking the
+    final digit for the sign. COMP-6 (NO_SIGN_NIBBLE) has no sign nibble
+    at all."""
     nibbles: list[int] = []
     for byte in raw:
         nibbles.append(byte >> 4)
         nibbles.append(byte & 0x0F)
-    digit_str = "".join(str(n) for n in nibbles[:digits])
-    sign_nibble = nibbles[digits] if len(nibbles) > digits else 0xF
+    if flags & _COB_FLAG_NO_SIGN_NIBBLE or not nibbles:
+        digit_nibbles, sign_nibble = nibbles, 0xF
+    else:
+        digit_nibbles, sign_nibble = nibbles[:-1], nibbles[-1]
+    if digits > 0:
+        digit_nibbles = digit_nibbles[-digits:]
+    digit_str = "".join(str(n) for n in digit_nibbles)
     if scale > 0:
         int_part = digit_str[:-scale] or "0"
         frac_part = digit_str[-scale:]
         value = f"{int_part}.{frac_part}"
     else:
         value = digit_str or "0"
-    return f"-{value}" if sign_nibble == 0xD else value
+    return f"-{value}" if sign_nibble in (0xB, 0xD) else value
 
 
-def _decode_binary(raw: bytes, scale: int, signed: bool) -> str:
+def _decode_numeric_display(raw: bytes, scale: int, flags: int) -> str:
+    """Zoned decimal: one ASCII digit per byte, plus -- for a signed
+    field -- a sign that is either a separate `+`/`-` byte
+    (SIGN ... SEPARATE) or overpunched into the leading/trailing digit.
+
+    GnuCOBOL 3.2 under -std=mvs overpunches a negative digit as
+    digit + 0x40 (`p`..`y`): PIC S9(3) VALUE -123 is stored `12s`, and a
+    positive one as the plain digit. The EBCDIC-style convention
+    (`{`/`A`..`I` positive, `}`/`J`..`R` negative) some configurations
+    use is recognized too. Keeping only the 0-9 bytes, as this used to,
+    dropped the overpunched digit and the sign with it (-123 read "12",
+    -12.3 read "01.2")."""
+    data = bytearray(raw)
+    negative = False
+    if flags & _COB_FLAG_HAVE_SIGN and data:
+        leading = bool(flags & _COB_FLAG_SIGN_LEADING)
+        index = 0 if leading else len(data) - 1
+        if flags & _COB_FLAG_SIGN_SEPARATE:
+            negative = data[index] == ord("-")
+            del data[index]
+        else:
+            byte = data[index]
+            if 0x70 <= byte <= 0x79:
+                negative, data[index] = True, byte - 0x40
+            elif byte == 0x7D:  # '}'
+                negative, data[index] = True, 0x30
+            elif 0x4A <= byte <= 0x52:  # 'J'..'R'
+                negative, data[index] = True, byte - 0x4A + 0x31
+            elif byte == 0x7B:  # '{'
+                data[index] = 0x30
+            elif 0x41 <= byte <= 0x49:  # 'A'..'I'
+                data[index] = byte - 0x41 + 0x31
+    digit_str = "".join(chr(b) for b in data if 0x30 <= b <= 0x39)
+    value = (
+        f"{digit_str[:-scale] or '0'}.{digit_str[-scale:]}" if scale > 0 else digit_str
+    )
+    return f"-{value}" if negative else value
+
+
+def _decode_binary(
+    raw: bytes, scale: int, signed: bool, big_endian: bool = True
+) -> str:
     """COMP: a big-endian integer (confirmed empirically: WS-COUNTER, PIC
-    S9(4) COMP, read back as raw bytes 00 04 -> 4, big-endian). COMP-5
-    (native-endian) is a documented GnuCOBOL distinction not exercised by
-    the spike fixture -- not handled here; see Task 10 of the CLI
-    implementation plan."""
-    value = int.from_bytes(raw, byteorder="big", signed=signed)
+    S9(4) COMP, read back as raw bytes 00 04 -> 4, big-endian). COMP-5 is
+    stored in the container's native order -- little-endian on every
+    architecture the toolchain image runs on (x86_64, aarch64): PIC S9(4)
+    COMP-5 VALUE -2 is FE FF, which big-endian decoding read as -257.
+    `read_variable` tells the two apart by COB_FLAG_BINARY_SWAP."""
+    value = int.from_bytes(
+        raw, byteorder="big" if big_endian else "little", signed=signed
+    )
     if scale > 0:
         text = str(abs(value)).rjust(scale + 1, "0")
         sign = "-" if value < 0 else ""
@@ -164,7 +227,7 @@ def read_variable(session: GdbSession, name: str, expr: str) -> VariableValue:
             name=name,
             kind="packed-decimal",
             raw_repr=raw_repr,
-            decoded=_decode_packed_decimal(raw_bytes, digits, scale),
+            decoded=_decode_packed_decimal(raw_bytes, digits, scale, flags),
         )
     if type_code == _COB_TYPE_NUMERIC_BINARY:
         signed = bool(flags & _COB_FLAG_HAVE_SIGN)
@@ -172,20 +235,19 @@ def read_variable(session: GdbSession, name: str, expr: str) -> VariableValue:
             name=name,
             kind="binary",
             raw_repr=raw_repr,
-            decoded=_decode_binary(raw_bytes, scale, signed),
+            decoded=_decode_binary(
+                raw_bytes,
+                scale,
+                signed,
+                big_endian=bool(flags & _COB_FLAG_BINARY_SWAP),
+            ),
         )
     if type_code == _COB_TYPE_NUMERIC_DISPLAY:
-        # Numeric-display: each byte an ASCII digit. Sign overpunch
-        # encoding (SIGN LEADING/SEPARATE clauses) was not in the spike
-        # fixture -- unsigned/simple case only, flagged for Task 10.
-        digit_str = "".join(chr(b) for b in raw_bytes if 0x30 <= b <= 0x39)
-        decoded = (
-            f"{digit_str[:-scale] or '0'}.{digit_str[-scale:]}"
-            if scale > 0
-            else digit_str
-        )
         return VariableValue(
-            name=name, kind="numeric-display", raw_repr=raw_repr, decoded=decoded
+            name=name,
+            kind="numeric-display",
+            raw_repr=raw_repr,
+            decoded=_decode_numeric_display(raw_bytes, scale, flags),
         )
 
     # An unrecognized/unhandled type code (COMP-5, floating point, edited
