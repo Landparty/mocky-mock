@@ -265,8 +265,8 @@ def test_summarize_original_is_fully_covered_when_nothing_mapped():
 
 def test_format_coverage_console_leads_with_original_and_labels_instrumented():
     """The number a reader acts on comes first and names their own file;
-    the instrumented sandbox copy's higher number is still shown, once,
-    with the reason it is higher. Leading with the instrumented figure --
+    the instrumented sandbox copy's number is still shown, once,
+    with the reason it differs. Leading with the instrumented figure --
     v1's behavior -- put the less meaningful of the two in the more
     prominent position."""
     from mockymock.report.coverage import OriginalCoverage, format_coverage_console
@@ -289,6 +289,34 @@ def test_format_coverage_console_leads_with_original_and_labels_instrumented():
         "instrumented sandbox copy instrumented_PROG.cbl: 72.80%" in instrumented_line
     )
     assert "72.80%" not in first
+    # 72.80% < 83.90%: the label must say LOWER, not assume "higher".
+    assert "-- lower because" in instrumented_line
+    assert "higher" not in instrumented_line
+
+
+def test_format_coverage_console_names_the_actual_direction_of_the_gap():
+    """Regression: the subordinate sandbox line used to say "higher because
+    it counts mockymock's own injected lines" unconditionally, but never-
+    taken mock dispatch branches count as uncovered and routinely pull the
+    sandbox figure BELOW the original's (ACCTPRG: 86.60% vs 80.89%;
+    DEPTIMSM: 100.00% vs 75.31%)."""
+    from mockymock.report.coverage import OriginalCoverage, format_coverage_console
+
+    def last_line(covered: int, orig_covered: int) -> str:
+        text = format_coverage_console(
+            CoverageReport(total_executable=100, total_covered=covered),
+            "instrumented_PROG.cbl",
+            original=OriginalCoverage(
+                total_executable=100, total_covered=orig_covered, uncovered_lines=[]
+            ),
+            program_name="PROG.cbl",
+        )
+        return text.splitlines()[-1]
+
+    assert "-- higher because" in last_line(90, 50)
+    assert "-- lower because" in last_line(50, 90)
+    same = last_line(70, 70)
+    assert "higher" not in same and "lower" not in same
 
 
 def test_format_coverage_console_without_a_remap_keeps_the_v1_shape():

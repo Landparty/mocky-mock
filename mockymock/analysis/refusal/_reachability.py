@@ -364,6 +364,18 @@ def _reachable_paragraphs(
         _fallthrough_safe_sections(program),
         {start} | ({thru} if thru else set()),
     )
+    # PERFORM ranges whose own end stops a walk that starts inside them
+    # (see _closed_perform_ranges). `active_ranges` only ever shrinks: a
+    # walk from OUTSIDE a range that falls into its first paragraph means
+    # control can be inside it with no marker for it active, so the range
+    # is dropped and every walk redone.
+    active_ranges = _closed_perform_ranges(
+        program,
+        ordered,
+        section_members,
+        driver_range=(start, thru or start) if start in by_name else None,
+        exclude_seeds={start} | ({thru} if thru else set()),
+    )
     while True:
         while stack:
             name = stack.pop()
@@ -518,6 +530,12 @@ def _reachable_paragraphs(
             break
         anchor_failed = False
         additions: list[str] = []
+        range_of = {
+            member: members[-1]
+            for members in active_ranges.values()
+            for member in members
+        }
+        exposed: set[tuple[str, str]] = set()
         for name in sorted(hazard_sources):
             reached = _walk_fallthrough_from(
                 name,
@@ -526,7 +544,14 @@ def _reachable_paragraphs(
                 section_members,
                 paragraph_safe_section,
                 falls=falls,
+                range_of=range_of,
             )
+            if reached:
+                exposed.update(
+                    key
+                    for key, members in active_ranges.items()
+                    if members[0] in reached and name not in members
+                )
             if reached is None:
                 # A GO TO target the walk cannot anchor (e.g. an empty
                 # section): the closure is incomplete, fail closed.
@@ -545,7 +570,16 @@ def _reachable_paragraphs(
             for fallen in reached:
                 if fallen not in seen and fallen not in additions:
                     additions.append(fallen)
-        if anchor_failed or not additions:
+        if anchor_failed:
+            break
+        if exposed:
+            # Walks stopped at an exposed range's end are no longer
+            # trustworthy: drop it and walk everything again.
+            for key in exposed:
+                del active_ranges[key]
+            stack.extend(additions)
+            continue
+        if not additions:
             break
         stack.extend(additions)
     return seen, reasons
@@ -806,6 +840,143 @@ def _paragraph_safe_section_map(
     }
 
 
+def _closed_perform_ranges(
+    program,
+    ordered: list | None,
+    section_members: dict[str, list[str]],
+    driver_range: tuple[str, str] | None = None,
+    exclude_seeds: frozenset[str] | set[str] = frozenset(),
+) -> dict[tuple[str, str], list[str]]:
+    """PERFORM ranges `(A, B)` whose end B a GO TO fall-through walk
+    starting INSIDE the range may treat as a hard stop (see
+    `_walk_fallthrough_from`'s `range_of`), mapped to their source-order
+    member names.
+
+    The CCVS / "PERFORM X THRU X-EXIT" idiom: `PERFORM BAIL-OUT THRU
+    BAIL-OUT-EX` whose body does `GO TO BAIL-OUT-WRITE`, a member that
+    falls through into BAIL-OUT-EX. At runtime GnuCOBOL's return marker
+    for that PERFORM fires at the end of BAIL-OUT-EX, so continuing the
+    walk past it into whatever physically follows (in NIST IC101A: the
+    rest of the program, all the way to CLOSE-FILES / STOP RUN) demanded
+    mocks for boundaries the compiled program never reaches -- the same
+    false cascade `_fallthrough_safe_sections` removed for sections.
+
+    A candidate is every paragraph-to-paragraph PERFORM in the program
+    (`PERFORM A THRU B`, or plain `PERFORM A` as the range `(A, A)`) plus
+    this call's own driver-side `driver_range`, if any. It is closed --
+    i.e. control can only be inside it while a PERFORM of exactly that
+    range is active -- when, anywhere in the program:
+
+    * every PERFORM naming a member (target or THRU end, any nesting
+      depth) is exactly `PERFORM A THRU B` (plain `PERFORM A` for `(A,
+      A)`), and every SORT/MERGE/XML PARSE procedure names no member;
+    * every GO TO naming a member sits in a member paragraph;
+    * no PERFORM/GO TO/procedure clause names a SECTION holding a member
+      (GO TO <section> would enter mid-range with no marker);
+    * no `exclude_seeds` entry (a .cut entry point, invisible to this
+      AST scan) names a member, unless the range IS `driver_range`.
+
+    Entering the range by plain fall-through from the paragraph before
+    A is the one route this scan cannot rule out; `_reachable_paragraphs`
+    closes it dynamically (a walk from OUTSIDE a range that enters A
+    drops that range and re-walks). Any flow reference this scan cannot
+    read (a GO TO without captured targets, an XML PARSE procedure the
+    parser keeps only as text) disables the optimization entirely --
+    fail closed. Ranges are disjoint by construction (each one's own
+    PERFORM names a member of any range overlapping it)."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None or ordered is None:
+        return {}
+    names = [p.paragraph_name for p in ordered]
+    if len(set(names)) != len(names):
+        return {}
+    section_of: dict[str, str] = {}
+    for section_name, members in section_members.items():
+        for member in members:
+            section_of[member] = section_name
+
+    performs: list[tuple[str, str]] = []
+    procedure_names: set[str] = set()
+    go_tos: list[tuple[str, str]] = []  # (target, enclosing paragraph)
+    for paragraph in _all_paragraphs(procedure):
+        for statement in _find_statements_of_type(
+            paragraph.statements, PerformStatement
+        ):
+            if statement.target_paragraph:
+                performs.append(
+                    (
+                        statement.target_paragraph,
+                        statement.thru_paragraph or statement.target_paragraph,
+                    )
+                )
+            elif statement.thru_paragraph:
+                return {}
+        for statement in _find_statements_of_type(paragraph.statements, GoStatement):
+            targets = list(statement.target_paragraphs)
+            if not targets and statement.target_paragraph:
+                targets = [statement.target_paragraph]
+            if not targets:
+                return {}
+            go_tos.extend((t, paragraph.paragraph_name) for t in targets)
+        for statement in _find_sort_merge_statements(paragraph.statements):
+            for attr in (
+                "input_procedure",
+                "input_procedure_thru",
+                "output_procedure",
+                "output_procedure_thru",
+            ):
+                value = getattr(statement, attr, None)
+                if value:
+                    procedure_names.add(value)
+        for statement in _find_xml_parse_statements(paragraph.statements):
+            target = getattr(statement, "processing_procedure", None)
+            if target is None:
+                if XML_PROCESSING_PROCEDURE_RE.search(
+                    getattr(statement, "clause_text", None) or ""
+                ):
+                    return {}
+                continue
+            procedure_names.add(target)
+            thru = getattr(statement, "processing_procedure_thru", None)
+            if thru:
+                procedure_names.add(thru)
+
+    referenced_sections = (
+        {a for a, _ in performs}
+        | {b for _, b in performs}
+        | {t for t, _ in go_tos}
+        | procedure_names
+    ) & set(section_members)
+
+    candidates = set(performs)
+    if driver_range is not None:
+        candidates.add(driver_range)
+    closed: dict[tuple[str, str], list[str]] = {}
+    for start, end in sorted(candidates):
+        if start not in names or end not in names:
+            continue
+        i, j = names.index(start), names.index(end)
+        if j < i:
+            continue
+        members = names[i : j + 1]
+        member_set = set(members)
+        if any(section_of.get(m) in referenced_sections for m in members):
+            continue
+        if any(
+            (a in member_set or b in member_set) and (a, b) != (start, end)
+            for a, b in performs
+        ):
+            continue
+        if member_set & procedure_names:
+            continue
+        if any(t in member_set and where not in member_set for t, where in go_tos):
+            continue
+        if (start, end) != driver_range and member_set & set(exclude_seeds):
+            continue
+        closed[(start, end)] = members
+    return closed
+
+
 def _walk_fallthrough_from(
     name: str,
     ordered: list,
@@ -813,6 +984,7 @@ def _walk_fallthrough_from(
     section_members: dict[str, list[str]],
     paragraph_safe_section: dict[str, str],
     falls: list[bool] | None = None,
+    range_of: dict[str, str] | None = None,
 ) -> list[str] | None:
     """Every paragraph name reached, in source order, by walking forward
     from GO-TO-target `name` (a paragraph or section name) via
@@ -834,7 +1006,12 @@ def _walk_fallthrough_from(
     `falls` is `_fallthrough_flags(ordered)`; callers that walk repeatedly
     (both of this function's own call sites run inside a fixpoint loop)
     should compute it once and pass it in rather than pay for it per
-    walk. Omitting it is equivalent, just slower."""
+    walk. Omitting it is equivalent, just slower.
+
+    `range_of` maps each member of a closed PERFORM range
+    (`_closed_perform_ranges`) to that range's end paragraph: a walk whose
+    origin is a member also stops at that end, where the PERFORM's own
+    return marker fires."""
     if falls is None:
         falls = _fallthrough_flags(ordered)
     start = index_by_name.get(name)
@@ -853,10 +1030,12 @@ def _walk_fallthrough_from(
         section_paragraphs = section_members.get(origin_section)
         if section_paragraphs:
             stop_before = section_paragraphs[-1]
+    range_end = (range_of or {}).get(anchor_name)
     reached: list[str] = []
     cursor = start
     while falls[cursor] and cursor + 1 < len(ordered):
-        if stop_before is not None and ordered[cursor].paragraph_name == stop_before:
+        here = ordered[cursor].paragraph_name
+        if here in (stop_before, range_end):
             break
         cursor += 1
         reached.append(ordered[cursor].paragraph_name)

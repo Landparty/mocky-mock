@@ -381,6 +381,28 @@ def _reject_mock_body_placeholder(
             )
 
 
+def _reject_name_placeholder(
+    name: str | None, line_no: int, provider: DataProvider, where: str
+) -> None:
+    """Refuse a `{Column}` token for one of `provider`'s own columns in a
+    NAME position (MOVE target, EXPECT data-name, PERFORM target/THRU) of a
+    provider-bound TESTCASE. Only values are substituted, so the token
+    reached the spliced driver verbatim: `lint` passed (nothing resolves
+    EXPECT/MOVE names against the program), and cobc then failed on
+    `invalid symbol '{'` -- for an EXPECT, by aborting outright ("Please
+    report this!"). Same rule as `_reject_mock_body_placeholder`."""
+    if not name:
+        return
+    for match in _PLACEHOLDER_RE.finditer(name):
+        if match.group(1) in provider.header:
+            raise CutParseError(
+                f"line {line_no}: placeholder {match.group(0)} as the "
+                f"{where} is not substituted -- PROVIDER {provider.name!r} "
+                f"values are substituted into the test case's MOVE and "
+                f"EXPECT values only, never into data or paragraph names"
+            )
+
+
 def _substitute(
     text: str, provider: DataProvider, row: list[str], case_name: str, line_no: int
 ) -> str:
@@ -414,6 +436,14 @@ def _instantiate_row(
     case: MockTestCase, provider: DataProvider, row: list[str], row_index: int
 ) -> MockTestCase:
     row_line = provider.row_lines[row_index - 1]
+    for _, target in case.setup_moves:
+        _reject_name_placeholder(target, case.line, provider, "MOVE target")
+    for expectation in case.expectations:
+        _reject_name_placeholder(
+            expectation.data_name, expectation.line, provider, "EXPECT data-name"
+        )
+    _reject_name_placeholder(case.perform_target, case.line, provider, "PERFORM target")
+    _reject_name_placeholder(case.perform_thru, case.line, provider, "PERFORM THRU")
     setup_moves = [
         (_substitute(value, provider, row, case.name, case.line), target)
         for value, target in case.setup_moves

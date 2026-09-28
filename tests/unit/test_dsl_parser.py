@@ -769,7 +769,13 @@ def test_placeholder_substitution_works_inside_a_larger_literal():
 def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
     """Verify placeholder tokens are substituted ONLY in MOVE values and
     EXPECT expected_values, never in MOVE targets, MOCK bodies, or EXPECT
-    data_names. This pins the invariant from a final code review."""
+    data_names. This pins the invariant from a final code review.
+
+    Changed 2026-09-28: a PROVIDER column token in a NAME position (MOVE
+    target, EXPECT data-name, PERFORM target) is now a parse error instead
+    of being carried through verbatim -- it passed lint and then broke cobc
+    (see test_provider_placeholder_in_a_name_position_raises).
+    A non-column token in a MOCK body still stays literal."""
     text = (
         'TESTSUITE "s"\n'
         "PROVIDER TestData\n"
@@ -781,7 +787,7 @@ def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
         "    END-MOCK\n"
         "    MOVE {N} TO WS-TARGET\n"
         "    PERFORM DO-SOMETHING\n"
-        "    EXPECT {Field} TO BE {N}\n"
+        "    EXPECT WS-RESULT TO BE {N}\n"
     )
     suite = parse_cut(text)
     assert len(suite.test_cases) == 1
@@ -796,8 +802,42 @@ def test_placeholder_substitution_scoped_to_move_and_expect_values_only():
     assert case.mocks[0].body_lines == ["MOVE {Other} TO WS-HELPER-VAL"]
 
     # Verify EXPECT data_name is NOT substituted, expected_value IS
-    assert case.expectations[0].data_name == "{Field}"
+    assert case.expectations[0].data_name == "WS-RESULT"
     assert case.expectations[0].expected_value == "42"
+
+
+@pytest.mark.parametrize(
+    "line, where",
+    [
+        ("    MOVE 1 TO {Field}", "MOVE target"),
+        ("    EXPECT {Field} TO BE {N}", "EXPECT data-name"),
+    ],
+)
+def test_provider_placeholder_in_a_name_position_raises(line, where):
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER TestData\n"
+        "    HEADER N, Field\n"
+        "    ROW 42, WS-RESULT\n"
+        'TESTCASE "c" USING PROVIDER TestData\n'
+        "    PERFORM DO-SOMETHING\n"
+        f"{line}\n"
+    )
+    with pytest.raises(CutParseError, match=where):
+        parse_cut(text)
+
+
+def test_provider_placeholder_as_perform_target_raises():
+    text = (
+        'TESTSUITE "s"\n'
+        "PROVIDER TestData\n"
+        "    HEADER N, Para\n"
+        "    ROW 42, MAIN-PARA\n"
+        'TESTCASE "c" USING PROVIDER TestData\n'
+        "    PERFORM {Para}\n"
+    )
+    with pytest.raises(CutParseError, match="PERFORM target"):
+        parse_cut(text)
 
 
 # -- ROWS on MOCK READ + TERMINAL group (with-data design 2026-08-04) --------

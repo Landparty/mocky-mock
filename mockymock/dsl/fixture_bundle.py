@@ -191,7 +191,11 @@ def load_fixture_bundle(data: dict[str, Any]) -> FixtureBundle:
             f"fixture bundle must be a JSON object, got {type(data).__name__}"
         )
     version = data.get("bundle_version")
-    if version != SUPPORTED_BUNDLE_VERSION:
+    # `type(...) is int`, not `==` alone: JSON `true` and `1.0` both
+    # compare equal to 1 in Python, so a bundle declaring either used to
+    # be accepted as version 1 -- and then carried `True`/`1.0` into
+    # `FixtureBundle.bundle_version`.
+    if type(version) is not int or version != SUPPORTED_BUNDLE_VERSION:
         raise UnsupportedBundleVersionError(
             f"unsupported fixture bundle_version {version!r} -- this "
             f"mockymock only understands {SUPPORTED_BUNDLE_VERSION!r}. "

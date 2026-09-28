@@ -63,12 +63,8 @@ def test_committed_acctprg_example_reports_coverage(capsys):
     """--coverage composing with a suite nobody wrote with coverage in
     mind (ACCTPRG's suite predates this feature entirely) -- not a suite
     change, a sanity check that the tool works against pre-existing
-    suites, not only purpose-built ones. Verified empirically while
-    writing this test: gcov originally reported exactly 459/561
-    executable lines covered (81.82%); re-pinned to 460/567 when the
-    driver's FAIL lines gained actual values (5 uncovered
-    MOVE-to-UT-TALLY-EDITED lines, one per VERIFY, plus the field's
-    covered initialization)."""
+    suites, not only purpose-built ones. Pins the original program's
+    own-line figure (see the comment on the assertion below)."""
     exit_code = main(
         [
             "run",
@@ -85,15 +81,13 @@ def test_committed_acctprg_example_reports_coverage(capsys):
     # Extract-then-compare (rather than a bare substring check) so a
     # mismatch's failure message shows the actual coverage line instead
     # of a page of unrelated captured stdout.
-    match = re.search(r"coverage: \d+\.\d+% lines executed \(\d+/\d+\)", out)
+    match = re.search(r"coverage: \d+\.\d+% of \S+ own lines executed \(\d+/\d+\)", out)
     assert match is not None, "no coverage line in output"
-    # Pinned against real Docker/GnuCOBOL 2026-07-21. Includes the 8
-    # implicit `MOVE "00" TO WS-PURGEIN-STATUS` lines that
-    # build_site_dispatch (mockymock/splicer/injector.py) injects into the
-    # OPEN/READ/CLOSE dispatch branches for PURGEIN, whose FILE STATUS IS
-    # WS-PURGEIN-STATUS is mocked via plain MOCK OPEN/READ/CLOSE PURGEIN
-    # (no override) in ACCTPRG.cut -- see
-    # docs/2026-07-20-before-blocks-and-file-status-design.md. Any codegen
-    # change that adds/removes injected executable lines will legitimately
-    # shift this number.
-    assert match.group(0) == "coverage: 81.39% lines executed (468/575)"
+    # Re-pinned against real Docker/GnuCOBOL 2026-09-28 to the ORIGINAL
+    # program's own-line figure, which `run --coverage` has led with since
+    # 073d4f7 (the instrumented sandbox number, which moves with every
+    # codegen change to injected dispatch lines, is now only a subordinate
+    # line). This figure moves only when ACCTPRG.cbl or its suite changes.
+    assert match.group(0) == (
+        "coverage: 86.60% of ACCTPRG.cbl's own lines executed (84/97)"
+    )

@@ -5,6 +5,30 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-28 -- bug hunt round 5: four fixes, four stale tests
+
+- **Closed PERFORM THRU ranges no longer cascade the GO TO fall-through
+  walk** (`_closed_perform_ranges`): NIST IC101A refused for an unmocked
+  CLOSE / SECTION-scoped STOP RUN the compiled driver never reaches. See
+  [analysis](analysis.md).
+- **`UT-CAP-` capture of a literal argument mirrored a same-named item**
+  (`"ABC"` into ABC's `PIC 9(2)`, read back `BC`) or refused it. See
+  [splicer](splicer.md).
+- **A PROVIDER `{Column}` as MOVE target / EXPECT data-name / PERFORM
+  target** linted clean and broke cobc; now a `CutParseError`. See
+  [dsl](dsl.md). (`test_placeholder_substitution_scoped_to_move_and_expect_
+  values_only` updated accordingly.)
+- **`run --coverage` labelled the sandbox figure "higher"** even when it was
+  lower (every committed example). See [coverage](coverage.md).
+- `load_fixture_bundle` accepted `bundle_version: true` / `1.0`.
+- Stale tests updated, not skipped: the cursor example's "refuses without
+  --copybook-path" now runs from a copy without the sibling `copybooks/`
+  (auto-searched since abb0392); ACCTPRG/DEPTIMSM coverage pins moved to
+  the original-program line `run --coverage` has led with since 073d4f7;
+  `test_neutralized_shape_runs_clean` no longer asserts which WHEN arm
+  runs, since `-std=mvs` (ecc7dbe) sets `defaultbyte: 0` (LOW-VALUES, not
+  spaces) for VALUE-less storage outside the driver's reset.
+
 ## 2026-09-28 -- bug hunt round 4: four more fixes, two stale tests
 
 Each reproduced first (against the mockymock-cobc container where it

@@ -258,7 +258,13 @@ passes it as `statement_text`) and emits the literal token verbatim
 (`MOVE "ABC" TO target`). It trusts the text only when its operand list
 agrees with the parser's operand for operand; otherwise it falls back to
 the name (2026-09-28 -- before, the MOVE silently copied an unrelated item
-named ABC, or failed in cobc). Emitted before
+named ABC, or failed in cobc). `plan_captures` (given `lines` by
+`cli.checks`) applies the same recognition via `_site_argument`, so a
+`UT-CAP-` target for a literal is declared from the literal itself
+(`_literal_declaration`: `PIC X(len)` for a quoted literal, `PIC [S]9(i)[V9(d)]`
+for a numeric one, refused for X/N/G-prefixed) -- before 2026-09-28 it
+mirrored a same-named item's layout (`"ABC"` into `PIC 9(2)` read back
+`BC`) or refused as "not a uniquely-named data item". Emitted before
 `directive.body_lines`, in declared order. See [dsl](dsl.md)'s `CAPTURE
 ARG` grammar section and docs/2026-08-11-argument-capture-design.md.
 

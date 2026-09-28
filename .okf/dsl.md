@@ -289,7 +289,10 @@ and identical across every row. A `{Column}` token naming one of the
 bound provider's own columns inside a `MOCK` body is a `CutParseError`
 at that line (`_reject_mock_body_placeholder`; `*>` comment lines are
 exempt) -- left verbatim it linted clean and failed cobc on
-`invalid symbol '{'`. An unknown `{Foo}` token is a
+`invalid symbol '{'`. The same token in a NAME position -- `MOVE` target,
+`EXPECT` data-name, `PERFORM` target/THRU -- is likewise a `CutParseError`
+(`_reject_name_placeholder`, 2026-09-28; the EXPECT form made cobc abort
+with "Please report this!"). An unknown `{Foo}` token is a
 `CutParseError` naming the provider's real columns; an undeclared/
 mistyped `USING PROVIDER` reference errors at the `TESTCASE` line.
 

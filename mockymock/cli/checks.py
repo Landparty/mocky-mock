@@ -456,7 +456,9 @@ def run_static_checks(
     # cannot be mirrored exactly would otherwise reach the compiler as a
     # missing declaration, or (worse) as a field whose type silently
     # disagrees with the value moved into it.
-    out.captures, capture_problems = plan_captures(parse_result.ast, suite, surface)
+    out.captures, capture_problems = plan_captures(
+        parse_result.ast, suite, surface, lines
+    )
     out.problems.extend(
         f"refused (UNRESOLVED_CAPTURE_TARGET): {problem}"
         for problem in capture_problems

@@ -324,8 +324,9 @@ def format_coverage_console(
     invocation does), the ORIGINAL .cbl's own numbers lead and its own
     uncovered lines are what get listed -- that is the number a reader can
     act on. The instrumented sandbox copy's number is still printed, once,
-    on a clearly subordinate line labelled with WHY it is higher: it counts
-    the splicer's injected dispatch/driver lines as program lines. Leading
+    on a clearly subordinate line labelled with WHY it differs: it counts
+    the splicer's injected dispatch/driver lines as program lines (which
+    can push it either way -- the label names the actual direction). Leading
     with the instrumented number (v1's behavior, kept as the `original is
     None` fallback for callers that have no remap available) meant the more
     prominent of the two figures was the less meaningful one.
@@ -354,11 +355,22 @@ def format_coverage_console(
         lines.append(f"mockymock run: coverage: uncovered lines in {shown_program}:")
         for uncovered in original.uncovered_lines:
             lines.append(f"  {uncovered.line_number}: {uncovered.text}")
+    # The injected lines can pull the sandbox figure either way: driver
+    # lines always run (pushing it up), but every never-taken mock
+    # dispatch branch counts as uncovered (pulling it down) -- on the
+    # committed ACCTPRG/DEPTIMSM examples it is the LOWER of the two. So
+    # the label states the actual direction instead of assuming "higher".
+    if report.percentage > original.percentage:
+        direction = "higher"
+    elif report.percentage < original.percentage:
+        direction = "lower"
+    else:
+        direction = "different in composition"
     lines.append(
         f"mockymock run: coverage: (instrumented sandbox copy {source_name}: "
         f"{report.percentage:.2f}%, {report.total_covered}/"
-        f"{report.total_executable} -- higher because it counts mockymock's "
-        f"own injected dispatch/driver lines; the figure above is the one "
-        f"about your program)"
+        f"{report.total_executable} -- {direction} because it also counts "
+        f"mockymock's own injected dispatch/driver lines; the figure above "
+        f"is the one about your program)"
     )
     return "\n".join(lines)
