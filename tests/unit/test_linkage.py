@@ -345,5 +345,9 @@ def test_check_linkage_layout_allows_cics_address_and_dli_uib_call():
         "           CALL 'CBLTDLI' USING WS-PTR\n"
         "                ADDRESS OF LKPCB-CLP100MA\n",
     )
-    program, lines = _parse(source)
-    assert check_linkage_layout(program, lines) == []
+    # cobolparser 1.8.x warns on (and drops) `USING ... ADDRESS OF X`; the
+    # gate under test is textual, so only a clean parse error-wise matters.
+    result = parse_cobol(source, filename="SAMP.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    assert check_linkage_layout(result.ast, lines) == []

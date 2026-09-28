@@ -331,7 +331,14 @@ CICS_DLI_SOURCE = """\
 
 
 def test_exec_operands_and_call_arguments_are_neither_sites_nor_problems():
-    _, _, sites, problems = _address_of(CICS_DLI_SOURCE)
+    # cobolparser 1.8.x warns on (and drops) `USING ... ADDRESS OF X`; the
+    # scan under test is textual, so only a clean parse error-wise matters.
+    result = parse_cobol(CICS_DLI_SOURCE, filename="HY1130IC.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(CICS_DLI_SOURCE.splitlines()).splitlines()
+    plan = linkage_plan(result.ast)
+    assert plan is not None
+    sites, problems = address_of_sites(lines, plan)
     assert sites == []
     assert problems == []
 
