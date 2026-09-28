@@ -103,10 +103,13 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "split the nested unit into its own compilation unit."
     ),
     "UNSUPPORTED_CICS_MACRO": (
-        "A CICS EIB field or DFHRESP/DFHVALUE macro call is used in a "
-        "shape mockymock's CICS EIB synthesis does not recognize. See the "
-        "message for the specific construct; simplifying the CICS macro "
-        "usage at that line is usually the fix."
+        "A DFHVALUE(...) macro call, or a DFHRESP(...) call mockymock "
+        "could not expand, sits in ordinary COBOL (outside any EXEC block). "
+        "DFHRESP(<condition>) on one line is expanded to its EIBRESP number "
+        "automatically; what refuses is DFHVALUE (no built-in CVDA table), "
+        "a condition name not in the table, or a call split across lines. "
+        "Putting the call on one line, or replacing DFHVALUE(X) with its "
+        "numeric CVDA value, is usually the fix."
     ),
     "UNSUPPORTED_CICS_DFHCOMMAREA": (
         "DFHCOMMAREA is referenced in the program's text but has no "

@@ -1116,9 +1116,16 @@ def _cics_eib_reasons(
     scoped: list[ParagraphScopedRefusal] = []
     text = "\n".join(lines)
 
-    detected = _DFHRESP_MACRO_RE.findall(text)
+    # A macro call inside `EXEC ... END-EXEC` (`DATATYPE(DFHVALUE(CHAR))`,
+    # `RESP(...)` compared in an INQUIRE) never reaches cobc: the splicer
+    # replaces every EXEC block wholesale with its mock or a trap stub, and
+    # refuses one it cannot replace (NESTED_EXEC / UNSPLICEABLE_EXEC). Only
+    # calls in ordinary COBOL need expanding, so only those are looked at
+    # (string literals are blanked too: text, not a call).
+    macro_lines = _mask_exec_blocks(lines)
+    detected = _DFHRESP_MACRO_RE.findall("\n".join(macro_lines))
     if detected:
-        located = _classify_cics_macro_calls(program, lines) if classify else []
+        located = _classify_cics_macro_calls(program, macro_lines) if classify else []
         if len(located) != len(detected):
             # Either classification is off (generate/fixtures), or at least
             # one detected call could not be pinned to a paragraph body and
@@ -1160,6 +1167,31 @@ def _cics_eib_reasons(
             )
 
     return reasons, scoped
+
+
+# String literals are matched first (and blanked too) so that
+# `DISPLAY 'EXEC FAILED'` cannot
+# open a "block" running on to some later, real END-EXEC and hide the code in
+# between (a missed macro would then reach cobc unexpanded).
+_EXEC_BLOCK_RE = re.compile(
+    r"""(?P<string>"(?:[^"\n]|"")*"?|'(?:[^'\n]|'')*'?)"""
+    r"|(?P<exec>(?<![A-Za-z0-9-])EXEC(?![A-Za-z0-9-]).*?"
+    r"(?<![A-Za-z0-9-])END-EXEC(?![A-Za-z0-9-]))",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _mask_exec_blocks(lines: list[str]) -> list[str]:
+    """`lines` with every `EXEC ... END-EXEC` block and every string literal
+    (text, not a macro call: `DISPLAY 'DFHRESP(NORMAL)'` compiles as is)
+    blanked to spaces --
+    same line count, same line widths, so every line/column found in the
+    result indexes the original text unchanged."""
+
+    def blank(match: re.Match[str]) -> str:
+        return "".join(c if c == "\n" else " " for c in match.group())
+
+    return _EXEC_BLOCK_RE.sub(blank, "\n".join(lines)).split("\n")
 
 
 def _classify_cics_macro_calls(

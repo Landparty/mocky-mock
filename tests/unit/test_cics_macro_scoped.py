@@ -12,6 +12,10 @@ with a note -- plus a width-preserving rewrite of the call itself, since
 cobc has no CICS translator and could not compile the unexpanded macro
 even in code that never runs.
 
+Since 2026-09-28 `DFHRESP(<condition>)` is expanded to its EIBRESP number
+before this gate runs (see tests/unit/test_cics_resp.py), so what reaches
+it -- and what these tests exercise -- is `DFHVALUE(...)`.
+
 `UNSUPPORTED_CICS_DFHCOMMAREA` deliberately does NOT get this treatment:
 it reports a missing declaration, not unsupported code, so reachability
 cannot make it irrelevant.
@@ -28,7 +32,7 @@ from mockymock.analysis.refusal import (
 from mockymock.cli.checks import run_static_checks
 from mockymock.splicer.stub_writer import replace_columns
 
-# 2000-MAIN performs only 2100-WORK; 2900-LIRE-ECRAN (the DFHRESP holder)
+# 2000-MAIN performs only 2100-WORK; 2900-LIRE-ECRAN (the DFHVALUE holder)
 # is reachable from nothing -- the shape of the real CICS program this
 # narrowing was written for, where the macro sits in a screen-handling
 # paragraph none of the tested validation paragraphs reaches.
@@ -50,7 +54,7 @@ UNREACHED_MACRO_CBL = """\
            MOVE "Y" TO WS-FLAG.
 
        2900-LIRE-ECRAN.
-           IF WS-RESP = DFHRESP(MAPFAIL)
+           IF WS-RESP = DFHVALUE(MAPFAIL)
                MOVE "M" TO WS-FLAG
            END-IF.
 """
@@ -76,14 +80,14 @@ DATA_DIVISION_MACRO_CBL = """\
 
        DATA DIVISION.
        WORKING-STORAGE SECTION.
-       01  WS-NOTE             PIC X(30) VALUE "DFHRESP(NORMAL)".
+       01  WS-TYPE             PIC S9(8) COMP VALUE DFHVALUE(CHAR).
 
        PROCEDURE DIVISION.
        2000-MAIN.
-           DISPLAY WS-NOTE.
+           DISPLAY WS-TYPE.
 """
 
-# `DFHRESP` and its argument split across two lines: the detector still
+# `DFHVALUE` and its argument split across two lines: the detector still
 # fires (the joined text matches), but no single-line span covers the
 # call, so it must stay a whole-program refusal.
 CONTINUED_MACRO_CBL = """\
@@ -100,7 +104,7 @@ CONTINUED_MACRO_CBL = """\
            MOVE "Y" TO WS-FLAG.
 
        2900-LIRE-ECRAN.
-           IF WS-RESP = DFHRESP
+           IF WS-RESP = DFHVALUE
               (MAPFAIL)
                MOVE "M" TO WS-FLAG
            END-IF.
@@ -147,7 +151,7 @@ def test_scoped_holds_back_a_paragraph_local_macro_call():
     assert item.reason.code == "UNSUPPORTED_CICS_MACRO"
     assert item.neutralize_span is not None
     macro_line, start, end = item.neutralize_span
-    assert lines[macro_line - 1][start:end] == "DFHRESP(MAPFAIL)"
+    assert lines[macro_line - 1][start:end] == "DFHVALUE(MAPFAIL)"
 
 
 def test_the_held_back_span_rewrites_without_moving_anything():
@@ -157,7 +161,7 @@ def test_the_held_back_span_rewrites_without_moving_anything():
     rewritten = replace_columns(lines, macro_line, start, end, CICS_MACRO_PLACEHOLDER)
     assert len(rewritten) == len(lines)
     assert len(rewritten[macro_line - 1]) == len(lines[macro_line - 1])
-    assert "DFHRESP" not in rewritten[macro_line - 1]
+    assert "DFHVALUE" not in rewritten[macro_line - 1]
     assert CICS_MACRO_PLACEHOLDER in rewritten[macro_line - 1]
     # Nothing but the macro's own columns changed.
     assert rewritten[macro_line - 1][:start] == lines[macro_line - 1][:start]
@@ -226,7 +230,7 @@ def test_run_static_checks_waives_an_unreached_macro(tmp_path):
     # The waived call is gone from the lines the splicer/compiler see, and
     # the line it was on is exactly as long as it was.
     assert result.lines is not None
-    assert not any("DFHRESP" in line for line in result.lines)
+    assert not any("DFHVALUE" in line for line in result.lines)
     original = normalize_fixed_format(UNREACHED_MACRO_CBL.splitlines()).splitlines()
     assert len(result.lines) == len(original)
     assert [len(line) for line in result.lines] == [len(line) for line in original]
