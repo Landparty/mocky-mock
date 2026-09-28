@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Overview
@@ -249,7 +249,16 @@ against *this exact physical site's* own AST node
 (`site.statement`, narrowed via `isinstance(..., CallStatement)` --
 `BoundarySite.statement` already carries the original AST statement for
 every site, so no new analysis-phase field was needed) --
-`site.statement.using_parameters[n - 1].name`. Emitted before
+`site.statement.using_parameters[n - 1].name` -- except that cobolparser
+reports a *literal* argument by its quote-stripped value (`BY CONTENT
+"ABC"` -> `ABC`), indistinguishable from a data-name, so
+`_call_using_literals` re-scans the site's own spliced span
+(`splice_program` now builds the dispatch after computing the span and
+passes it as `statement_text`) and emits the literal token verbatim
+(`MOVE "ABC" TO target`). It trusts the text only when its operand list
+agrees with the parser's operand for operand; otherwise it falls back to
+the name (2026-09-28 -- before, the MOVE silently copied an unrelated item
+named ABC, or failed in cobc). Emitted before
 `directive.body_lines`, in declared order. See [dsl](dsl.md)'s `CAPTURE
 ARG` grammar section and docs/2026-08-11-argument-capture-design.md.
 

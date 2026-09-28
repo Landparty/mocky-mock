@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; the refusal/ package decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Overview
@@ -298,7 +298,7 @@ After the site loop: any directive in `case.mocks` never matched → `UNMATCHED_
 
 `directive_matches_site` matching rules:
 1. `site.category is not directive.category` → never matches (this is what keeps a quoted static-CALL directive from ever cross-matching a dynamic-CALL site, and vice versa — category identity alone does the work).
-2. `EXEC_CATEGORIES` (SQL/CICS/DLI): normalized-prefix match against `site.match_text`.
+2. `EXEC_CATEGORIES` (SQL/CICS/DLI): normalized-prefix match against `site.match_text`, both sides passed through `_exec_match_form` (normalize + drop the whitespace around `. , ( ) :`). The site text is cobolparser's `sql_text`, which rejoins tokens with spacing the source never had and that differs by release (published 1.8.x: `BANK. TRANSACTION_HIST`; later: `BANK.TRANSACTION_HIST`; both: `( A, B )`, `INTO:WS-A`) -- comparing raw made a key copied from the source UNMATCHED_MOCK and a `.cut` break across cobol-parser releases (2026-09-28). `match_text` itself is unchanged (it is still what messages and `generate` show).
 3. `MockCategory.CALL`: exact match, `directive.key in site.keys`.
 4. Everything else (file ops, ACCEPT, DYNCALL): `directive.key.upper() in site.keys`.
 

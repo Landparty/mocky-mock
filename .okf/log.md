@@ -5,6 +5,33 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-28 -- bug hunt round 4: four more fixes, two stale tests
+
+Each reproduced first (against the mockymock-cobc container where it
+compiles, and under both the local cobol-parser and the published 1.8.4),
+each with a regression test.
+
+- **SQL/CICS/DLI keys matched cobolparser's token spacing, not the SQL.**
+  cobol-parser 1.8.4 renders `BANK.TRANSACTION_HIST` as `BANK.
+  TRANSACTION_HIST`, later releases do not, and both render `(A, B)` as
+  `( A, B )`: a key copied from the source was UNMATCHED_MOCK, and the
+  committed DEPTMQC example failed under the local cobol-parser.
+  `directive_matches_site` now compares `_exec_match_form` of both sides.
+  See [analysis](analysis.md).
+- **`CAPTURE ARG` of a literal argument moved a data item of the same
+  name** (`CALL "X" USING BY CONTENT "ABC"` -> `MOVE ABC TO target`: the
+  WORKING-STORAGE item ABC, or a cobc error). See [splicer](splicer.md).
+- **`generate --with-data` rendered a `field_equals` value by its text
+  shape**: `EXPECT WS-CODE TO BE -3` for a `PIC X` field fails on the first
+  run. Now rendered from the field's PICTURE. See [dsl](dsl.md).
+- **`mutate` swapped `DIVIDE ... REMAINDER` to `MULTIPLY ... REMAINDER`**,
+  a stillborn every time. See [cli](cli.md).
+- Tests: `test_debug_session_breaks_steps_and_reports_variables` expected
+  pre-`-std=mvs` DISPLAY output (`+0001`, `00126.45`; now `+00001`,
+  `0012645`) and hid the failed assertion behind a 15 s wait timeout;
+  `test_run_verbose_only_does_not_leave_sandbox_after_successful_run` diffed
+  the shared work root, flaky under `-n`, and now tracks its own sandboxes.
+
 ## 2026-09-27 -- bug hunt round 3: three more fixes
 
 Each reproduced first (against the mockymock-cobc container where it

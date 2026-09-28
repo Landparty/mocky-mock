@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Overview
@@ -743,7 +743,10 @@ paragraph-grouped path described above, unchanged. A real
   `VERIFY <cat> <key> WAS CALLED n TIMES`, gated on `declared_keys` as
   above, `n` normally `expectation.value` but see `--placeholder`'s
   `call_count_overrides` below; tier 2 (`field_equals`) → `EXPECT <name>
-  TO BE <value>`; tier 3 (`stub`) → a `*> STUB EXPECT ...` comment. A
+  TO BE <value>`, the value rendered by `render_expect_value` with the
+  field's PICTURE (`ProgramContext.pictures`, from `field_pictures`), so a
+  folded `-3`/`1.5`/`007` in a `PIC X` field is quoted -- rendered bare it
+  failed on the generated suite's first run (2026-09-28); tier 3 (`stub`) → a `*> STUB EXPECT ...` comment. A
   `"CATEGORY:KEY"`-shaped boundary-level `ref` (`_is_boundary_level_ref`
   detects the colon, since COBOL names never contain one) renders as
   `*> STUB EXPECT <CAT> <KEY>` — the way a MOCK/VERIFY for that boundary

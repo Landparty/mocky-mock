@@ -93,6 +93,25 @@ from ._types import (
     RefusalReason,
 )
 
+#: Punctuation whose surrounding whitespace is token spacing, not SQL.
+_EXEC_PUNCTUATION_SPACING_RE = re.compile(r"\s*([.,():])\s*")
+
+
+def _exec_match_form(text: str) -> str:
+    """`normalize_exec_text` plus the whitespace around `. , ( ) :` removed:
+    the form an SQL/CICS/DLI key and a site's EXEC text are compared in.
+
+    Both sides of that comparison carry token spacing rather than the
+    author's text: the site's comes from cobolparser's `sql_text`, which
+    rejoins tokens with spaces the source never had -- and differently per
+    release (the published 1.8.x renders `BANK.TRANSACTION_HIST` as
+    `BANK. TRANSACTION_HIST`, later releases do not; both render
+    `(A, B)` as `( A, B )` and `INTO :WS-A` as `INTO:WS-A`). Comparing
+    raw, a key copied verbatim from the program's own source failed to
+    match (UNMATCHED_MOCK) and a `.cut` written against one cobol-parser
+    release broke under another."""
+    return _EXEC_PUNCTUATION_SPACING_RE.sub(r"\1", normalize_exec_text(text))
+
 
 def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool:
     """Category must agree; then CALL keys match the call literal exactly,
@@ -104,8 +123,10 @@ def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool
     if site.category is not directive.category:
         return False
     if directive.category in EXEC_CATEGORIES:
-        prefix = normalize_exec_text(directive.key)
-        return bool(prefix) and (site.match_text or "").startswith(prefix)
+        prefix = _exec_match_form(directive.key)
+        return bool(prefix) and _exec_match_form(site.match_text or "").startswith(
+            prefix
+        )
     if directive.category is MockCategory.CALL:
         return directive.key in site.keys
     return directive.key.upper() in site.keys

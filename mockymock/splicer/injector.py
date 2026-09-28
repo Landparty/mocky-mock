@@ -17,12 +17,102 @@ trap records a failure instead of silently doing nothing.
 
 from __future__ import annotations
 
+import re
+
 from cobolparser.models.statements.call import CallStatement
 
 from mockymock.analysis.mock_surface import BoundarySite
 from mockymock.analysis.refusal import directive_matches_site
 from mockymock.dsl.model import FILE_STATUS_CATEGORIES, MockCategory, MockTestSuite
 from mockymock.splicer.naming import TallyRegistry
+
+#: One token of a CALL statement's text: a (possibly X/N/G/Z/NX/U-prefixed)
+#: quoted literal with doubled quotes inside, a parenthesis, a period, or a
+#: word/numeric literal.
+_CALL_TOKEN_RE = re.compile(
+    r"""(?P<lit>(?:NX|[XNGZU])?(?:"(?:[^"]|"")*"|'(?:[^']|'')*'))"""
+    r"|(?P<punct>[().,;])"
+    r"|(?P<word>[^\s().,;\"']+)",
+    re.IGNORECASE,
+)
+_USING_END_WORDS = frozenset(
+    {"RETURNING", "GIVING", "ON", "NOT", "EXCEPTION", "OVERFLOW", "END-CALL"}
+)
+_PASSING_WORDS = frozenset({"BY", "REFERENCE", "CONTENT", "VALUE"})
+_QUALIFIERS = frozenset({"OF", "IN"})
+_ADDRESS_WORDS = frozenset({"ADDRESS", "LENGTH"})
+
+
+def _literal_inner(token: str) -> str:
+    """The value cobolparser reports for a quoted literal token: prefix and
+    quotes removed, doubled quotes collapsed."""
+    start = token.index(token[-1])
+    quote = token[-1]
+    return token[start + 1 : -1].replace(quote * 2, quote)
+
+
+def _call_using_literals(statement_text: str, names: list[str]) -> list[str | None]:
+    """Per USING operand of the CALL in `statement_text`, the operand's own
+    literal token verbatim (quotes, prefix and all) when it is a quoted
+    literal, else None.
+
+    cobolparser reports a literal argument by its value with the quotes
+    stripped (`CALL "X" USING BY CONTENT "ABC"` -> name `ABC`), which is
+    indistinguishable from a data-name -- so a `CAPTURE ARG` of it emitted
+    `MOVE ABC TO target`: a compile error, or worse a silent MOVE of an
+    unrelated item that happens to be called ABC. The text is re-scanned
+    here and trusted only when it agrees with the parser operand for
+    operand (`names`); any disagreement yields all-None, i.e. today's
+    behavior, never a guess."""
+    none: list[str | None] = [None] * len(names)
+    tokens = list(_CALL_TOKEN_RE.finditer(statement_text))
+    words = [m.group(0) for m in tokens]
+    upper = [w.upper() for w in words]
+    if "USING" not in upper:
+        return none
+    i = upper.index("USING") + 1
+    operands: list[tuple[str, bool]] = []  # (text, is_literal)
+    while i < len(tokens):
+        tok, word = tokens[i], upper[i]
+        if tok.group("punct") in (".", ";", ","):
+            if tok.group("punct") == ".":
+                break
+            i += 1
+            continue
+        if tok.group("punct"):
+            return none  # a subscript/parenthesis this scan does not model
+        if word in _USING_END_WORDS:
+            break
+        if word in _PASSING_WORDS:
+            i += 1
+            continue
+        if tok.group("lit"):
+            operands.append((words[i], True))
+            i += 1
+            continue
+        text = words[i]
+        if word in _ADDRESS_WORDS and i + 2 < len(tokens) and upper[i + 1] == "OF":
+            text = f"{words[i]} OF {words[i + 2]}"
+            i += 3
+        else:
+            i += 1
+        while i + 1 < len(tokens) and upper[i] in _QUALIFIERS:
+            text = f"{text} {words[i]} {words[i + 1]}"
+            i += 2
+        operands.append((text, False))
+    if len(operands) != len(names):
+        return none
+    result: list[str | None] = []
+    for (text, is_literal), name in zip(operands, names, strict=True):
+        if is_literal:
+            if _literal_inner(text) != name:
+                return none
+            result.append(text)
+        else:
+            if " ".join(text.upper().split()) != " ".join(name.upper().split()):
+                return none
+            result.append(None)
+    return result
 
 
 def build_rows_block(
@@ -65,6 +155,7 @@ def build_site_dispatch(
     registry: TallyRegistry,
     file_status_fields: dict[str, str] | None = None,
     trace: bool = False,
+    statement_text: str = "",
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
 
@@ -158,6 +249,13 @@ def build_site_dispatch(
                     f"(CAPTURE_ARG_OUT_OF_RANGE)"
                 )
             using = site.statement.using_parameters
+            # A literal argument must be moved as that literal, not as the
+            # quote-stripped name cobolparser reports -- see
+            # `_call_using_literals`. `statement_text` is the site's own
+            # spliced span.
+            literals = _call_using_literals(
+                statement_text, [str(param.name) for param in using]
+            )
             for capture_index, target in directive.captures:
                 if capture_index > len(using):
                     raise ValueError(
@@ -167,10 +265,8 @@ def build_site_dispatch(
                         f"gate should have caught this "
                         f"(CAPTURE_ARG_OUT_OF_RANGE)"
                     )
-                lines.append(
-                    f"                   MOVE {using[capture_index - 1].name} "
-                    f"TO {target}"
-                )
+                source = literals[capture_index - 1] or using[capture_index - 1].name
+                lines.append(f"                   MOVE {source} TO {target}")
         if directive.rows is not None and directive.category in (
             MockCategory.READ,
             MockCategory.RETURN,

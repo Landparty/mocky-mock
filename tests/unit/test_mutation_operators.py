@@ -63,6 +63,25 @@ def test_arith_verb_swap_rewrites_preposition():
     assert [m.mutated for m in swaps] == ["           SUBTRACT 2 FROM WS-TOTAL"]
 
 
+def test_divide_with_remainder_is_not_swapped_to_multiply():
+    # `MULTIPLY 3 BY WS-A GIVING WS-B REMAINDER WS-C` is a GnuCOBOL syntax
+    # error ("unexpected REMAINDER"): the swap was a stillborn every time,
+    # whether the phrase sat on the DIVIDE line or on a later one.
+    mutants = generate_mutants(
+        _procedure(
+            "           DIVIDE 3 INTO WS-A GIVING WS-B REMAINDER WS-C.",
+            "           DIVIDE 3 INTO WS-A GIVING WS-B",
+            "               REMAINDER WS-C",
+            "           DIVIDE 3 INTO WS-A GIVING WS-B.",
+            '           DISPLAY "REMAINDER".',
+        )
+    )
+    swaps = [m for m in mutants if m.operator == "arith-verb-swap"]
+    assert [(m.line, m.mutated) for m in swaps] == [
+        (8, "           MULTIPLY 3 BY WS-A GIVING WS-B.")
+    ]
+
+
 def test_move_integer_literal_is_incremented():
     mutants = generate_mutants(_procedure("           MOVE 0 TO WS-TOTAL."))
     moves = [m for m in mutants if m.operator == "move-literal"]

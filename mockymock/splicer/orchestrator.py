@@ -84,10 +84,9 @@ def splice_program(
             for case in suite.test_cases
             for directive in case.mocks
         )
+        replacement: list[str] | None
         if mocked:
-            replacement = build_site_dispatch(
-                site, suite, registry, file_status_fields, trace=trace
-            )
+            replacement = None  # built once the site's span is known
         elif site.category in EXEC_CATEGORIES:
             # Unmocked EXEC still has to go: cobc cannot compile it. The
             # refusal gate refuses any test case that can reach it (PERFORM
@@ -122,6 +121,15 @@ def splice_program(
                     f"sibling code sharing its line"
                 )
             start, end = statement_span(site.statement, boundaries, last_line, lines)
+        if replacement is None:
+            replacement = build_site_dispatch(
+                site,
+                suite,
+                registry,
+                file_status_fields,
+                trace=trace,
+                statement_text=" ".join(lines[start - 1 : end]),
+            )
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /
         # paragraph), the replacement block must terminate the sentence too

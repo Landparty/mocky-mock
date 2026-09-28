@@ -67,7 +67,11 @@ from mockymock.dsl.model import (
     MockTestCase,
     MockTestSuite,
 )
-from mockymock.report.record_rewrite import render_expect_value
+from mockymock.report.record_rewrite import (
+    field_pictures,
+    picture_for,
+    render_expect_value,
+)
 from mockymock.splicer.naming import TallyRegistry
 
 _PLACEHOLDER_BODIES: dict[MockCategory, list[str]] = {
@@ -226,6 +230,11 @@ class ProgramContext:
     capture_lines: dict[tuple[MockCategory, str], list[str]] = field(
         default_factory=dict
     )
+    #: Name (uppercased, unqualified) -> PICTURE for every elementary data
+    #: item (`report.record_rewrite.field_pictures`), so a bundle's
+    #: `field_equals` value is rendered from the field's real type rather
+    #: than from the text's shape -- see `_render_expectation`.
+    pictures: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -235,6 +244,7 @@ class ProgramContext:
             lines=list(lines),
             statement_starts=collect_boundaries(program),
             capture_lines=_capture_lines_by_key(program, surface),
+            pictures=field_pictures(program),
         )
 
     def captures_for(self, category: MockCategory, key: str) -> list[str]:
@@ -1584,6 +1594,7 @@ def _render_expectation(
         dict[tuple[MockCategory, str], CallCountOverride] | None
     ) = None,
     counted_boundaries: set[tuple[MockCategory, str]] | None = None,
+    pictures: dict[str, str] | None = None,
 ) -> list[str]:
     """Tier 1 (`call_count`) -> `VERIFY ... WAS CALLED n TIMES`; tier 2
     (`field_equals`) -> `EXPECT <name> TO BE <value>`; tier 3 (`stub`) ->
@@ -1645,7 +1656,13 @@ def _render_expectation(
         )
         return [f"VERIFY {directive_text} WAS CALLED {value} TIMES"]
     if expectation.kind == "field_equals":
-        rendered = render_expect_value(str(expectation.value))
+        # The PICTURE decides bare vs quoted, exactly as it does for
+        # `run --record-expectations`: a folded "-3" / "1.5" / "007" held in
+        # a PIC X field rendered bare is an EXPECT that fails on the very
+        # first run (GnuCOBOL compares it as text). `A OF B` qualification
+        # is looked up by its first word, the item itself.
+        picture = picture_for(expectation.ref.split()[0], pictures)
+        rendered = render_expect_value(str(expectation.value), picture)
         return [f"EXPECT {expectation.ref} TO BE {rendered}"]
     # kind == "stub"
     note = f" -- {expectation.note}" if expectation.note else ""
@@ -1703,6 +1720,7 @@ def _scaffold_with_bundle(
                     declared_keys,
                     call_count_overrides,
                     counted_boundaries,
+                    source.pictures if source is not None else None,
                 )
             )
         lines.append("")

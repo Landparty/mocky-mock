@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Overview
@@ -719,6 +719,11 @@ helper now covers the arithmetic patterns too** (`_ADD_TO`,
 `_SUBTRACT_FROM`, `_MULTIPLY_BY`, `_DIVIDE_INTO`, `_MOVE_INT`), which F8
 missed: `\bADD\b` matched inside `GRP-FOR-ADD-CORR-R` and rewrote an
 ordinary `MOVE` into `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...`.
+
+`DIVIDE..INTO -> MULTIPLY..BY` is skipped when the statement (this line
+or a later line of it, `_statement_tail`) has a `REMAINDER` phrase:
+`MULTIPLY ... REMAINDER` is a cobc syntax error, so that mutant was a
+stillborn every time (2026-09-28).
 
 Three further stillborn classes closed on 2026-09-04, all in
 `mutation.operators` (see
