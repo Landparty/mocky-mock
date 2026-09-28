@@ -194,6 +194,7 @@ def run_static_checks(
     from mockymock.cli.discovery import copybook_not_found_hint
     from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.splicer.captures import plan_captures
+    from mockymock.splicer.cics_resp import expand_dfhresp, expansion_note
     from mockymock.splicer.linkage import neutralize, redirect_address_of
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
     from mockymock.splicer.sqlca import transform_data_division_exec
@@ -364,6 +365,13 @@ def run_static_checks(
     # reachability union step 4b uses; when waived it is rewritten in
     # place (width-preserving), because cobc has no CICS translator and
     # could not compile the unexpanded macro even in dead code.
+    # DFHRESP(<condition>) is expanded to its EIBRESP number first, exactly
+    # as the CICS translator would (width-preserving, so nothing moves);
+    # only what that leaves behind -- DFHVALUE, an unknown condition, a
+    # call split across lines -- reaches the macro guardrail below.
+    lines, resp_expansions = expand_dfhresp(lines)
+    if resp_expansions:
+        out.notes.append(expansion_note(resp_expansions))
     cics_eib_reasons, cics_macro_scoped = check_cics_eib_layout_scoped(
         parse_result.ast, lines
     )

@@ -641,6 +641,26 @@ Verified end to end against real GnuCOBOL 4.0: the rewritten program
 compiles, runs and passes its test case; the un-rewritten one does not
 compile at all.
 
+# DFHRESP Expansion (cics_resp.py, 2026-09-28)
+
+`expand_dfhresp(lines)` does what the CICS translator does to
+`DFHRESP(<condition>)`: replaces it with the condition's EIBRESP number
+(`DFHRESP(NORMAL)` -> `0`, `DFHRESP(MAPFAIL)` -> `36`). Unlike DFHVALUE's
+hundreds of CVDAs, the DFHRESP table is small and IBM only ever appends to
+it, so `DFHRESP_VALUES` reproduces it exactly -- restricted to values two
+independent sources agree on (IBM's "Response codes of EXEC CICS commands"
+and the full EIBRESP list); a missing entry refuses, a wrong one would
+silently flip a branch.
+
+- **Width-preserving** via `stub_writer.replace_columns`, like
+  `redirect_address_of`: no line or column moves, so it runs in step 5b of
+  `run_static_checks` (and in `generate`) without disturbing any
+  `SourceLocation`.
+- **Runs before `check_cics_eib_layout[_scoped]`**, so the gate only ever
+  sees what was not expanded: DFHVALUE, an unknown condition name, a call
+  split across lines. A call inside a string literal is left alone (text).
+- One note per run lists every condition expanded and its value.
+
 # CICS EIB Field Synthesis (cics_eib.py)
 
 Fixes a compile-time gap, not a runtime one: a real CICS translator inserts

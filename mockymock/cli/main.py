@@ -730,6 +730,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         load_fixture_bundle_file,
     )
     from mockymock.dsl.generator import ProgramContext, scaffold_cut
+    from mockymock.splicer.cics_resp import expand_dfhresp, expansion_note
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
     source_path = Path(args.program)
@@ -908,6 +909,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             "generate", linkage, applied=False, address_of=preview_address_of
         )
 
+    # Same translator-exact DFHRESP expansion `run_static_checks` applies.
+    lines, resp_expansions = expand_dfhresp(lines)
+    if resp_expansions:
+        print(f"mockymock generate: {expansion_note(resp_expansions)}")
     cics_eib_reasons = check_cics_eib_layout(result.ast, lines)
     for reason in cics_eib_reasons:
         print(f"mockymock generate: refused ({reason.code}): {reason.message}")

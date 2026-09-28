@@ -5,6 +5,18 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-28 -- DFHRESP expanded like the CICS translator; EXEC-block macros no longer refuse
+
+A real CICS-DL/I program (HY1130IC) moved on from the LINKAGE fix to
+`UNSUPPORTED_CICS_MACRO` over the ordinary `DFHRESP(NORMAL)` idiom.
+`splicer.cics_resp.expand_dfhresp` now substitutes each single-line
+`DFHRESP(<condition>)` with its EIBRESP number before the gate runs, and the
+gate blanks `EXEC ... END-EXEC` blocks and string literals before looking
+(`DATATYPE(DFHVALUE(CHAR))` inside EXEC CICS never reaches cobc). The
+enterprise corpus's CICSONLN and CICSCHNL now scaffold instead of refusing.
+DFHVALUE in ordinary COBOL still refuses (no verified CVDA table). See
+[splicer](splicer.md#dfhresp-expansion-cics_resppy-2026-09-28).
+
 ## 2026-09-28 -- UNSUPPORTED_LINKAGE_ADDRESSING false positives on CICS-DL/I programs
 
 A real CICS-DL/I program refused on three occurrences, none of them a
