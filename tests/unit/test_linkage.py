@@ -331,3 +331,19 @@ def test_check_linkage_layout_allows_a_rewritable_address_of():
         )
     )
     assert check_linkage_layout(program, lines) == []
+
+
+def test_check_linkage_layout_allows_cics_address_and_dli_uib_call():
+    """`EXEC CICS ADDRESS TCTUA(ADDRESS OF TCTUA)` split over two lines, and
+    `CALL 'CBLTDLI' USING ... ADDRESS OF DLIUIB` with the operand on its own
+    line: neither rebinds a folded item, so neither refuses."""
+    source = ADDRESS_OF_CONTINUED_SOURCE.replace(
+        "           SET ADDRESS OF\n               LKPCB-CLP100MA TO WS-PTR\n",
+        "           EXEC CICS ADDRESS\n"
+        "                     TCTUA (ADDRESS OF LKPCB-CLP100MA)\n"
+        "           END-EXEC\n"
+        "           CALL 'CBLTDLI' USING WS-PTR\n"
+        "                ADDRESS OF LKPCB-CLP100MA\n",
+    )
+    program, lines = _parse(source)
+    assert check_linkage_layout(program, lines) == []

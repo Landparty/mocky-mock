@@ -296,3 +296,70 @@ def test_address_of_continued_onto_the_next_line_is_reported_not_guessed():
     )
     assert sites == []
     assert any("continued onto the next line" in problem for problem in problems)
+
+
+# The two shapes a real CICS-DL/I program (HY1130IC) was refused for, with
+# neither being a `SET` rebind: an `EXEC CICS ADDRESS` operand (the whole
+# block is replaced by a mock/trap stub, so it never reaches cobc) and the
+# UIB-returning `CALL 'CBLTDLI' USING ... ADDRESS OF DLIUIB` argument, split
+# from its CALL across lines (legal on a WORKING-STORAGE item -- verified
+# against GnuCOBOL 3.1.2).
+CICS_DLI_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. HY1130IC.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  PCB-FUNC PIC X(4) VALUE 'PCB '.
+       01  PSB-NAME PIC X(8) VALUE 'HY1130  '.
+
+       LINKAGE SECTION.
+       01  DLIUIB.
+           05  UIBPCBAL POINTER.
+       01  TCTUA.
+           05  TCTUA-DATA PIC X(10).
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           EXEC CICS ADDRESS
+                     TCTUA (ADDRESS OF TCTUA)
+           END-EXEC.
+           CALL 'CBLTDLI' USING PCB-FUNC PSB-NAME
+                ADDRESS OF DLIUIB.
+           STOP RUN.
+"""
+
+
+def test_exec_operands_and_call_arguments_are_neither_sites_nor_problems():
+    _, _, sites, problems = _address_of(CICS_DLI_SOURCE)
+    assert sites == []
+    assert problems == []
+
+
+def test_a_set_target_list_continued_onto_the_next_line_is_still_rewritten():
+    """The SET keyword need not share a line with the receiving operand: only
+    the `ADDRESS OF <item>` span itself has to fit on one line."""
+    lines, _, sites, problems = _address_of(
+        ADDRESS_OF_SOURCE.replace(
+            "SET ADDRESS OF LKPCB-CLP100MA TO LK-DIB-PTR(2)",
+            "SET WS-SAVE-PTR\n               ADDRESS OF LKPCB-CLP100MA "
+            "TO LK-DIB-PTR(2)",
+        )
+    )
+    assert problems == []
+    assert [site.item_name for site in sites] == ["LKPCB-CLP100MA"]
+    text = lines[sites[0].line - 1]
+    assert text[sites[0].start_column : sites[0].end_column] == (
+        "ADDRESS OF LKPCB-CLP100MA"
+    )
+
+
+def test_a_value_side_address_of_continued_onto_the_next_line_is_legal():
+    _, _, sites, problems = _address_of(
+        ADDRESS_OF_SOURCE.replace(
+            "SET WS-SAVE-PTR TO ADDRESS OF LKPCB-CLP100MA.",
+            "SET WS-SAVE-PTR TO\n               ADDRESS OF LKPCB-CLP100MA.",
+        )
+    )
+    assert problems == []
+    assert [site.item_name for site in sites] == ["LKPCB-CLP100MA"]  # line 1 only

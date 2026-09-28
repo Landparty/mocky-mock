@@ -5,6 +5,18 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-28 -- UNSUPPORTED_LINKAGE_ADDRESSING false positives on CICS-DL/I programs
+
+A real CICS-DL/I program refused on three occurrences, none of them a
+`SET` rebind: `EXEC CICS ADDRESS` / `TCTUA (ADDRESS OF TCTUA)` (the CICS
+keyword `ADDRESS` at end of line read as a dangling `ADDRESS OF`; the
+operand line has no `SET`), and `CALL 'CBLTDLI' USING ... ` / `ADDRESS OF
+DLIUIB` (no `SET` on the line). `analysis.linkage.address_of_sites` now
+classifies per statement over a token stream instead of per line, so only a
+split receiving span still refuses, and a SET target list continued onto a
+new line is rewritten. Verified end to end with GnuCOBOL 3.1.2. See
+[splicer](splicer.md#set-address-of-on-a-folded-item-2026-08-28-fix).
+
 ## 2026-09-28 -- bug hunt round 7: EXEC key boundaries, multi-file status, phantom ranges
 
 Each reproduced first and pinned by a regression test; unit tests pass

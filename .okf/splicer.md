@@ -608,9 +608,24 @@ transform exists to prevent (the pointer would come from a mocked
   pipelines stay in step. It needs no reset line: nothing ever reads it.
 - **Value-side occurrences are deliberately left alone.**
   `SET <ptr> TO ADDRESS OF <folded item>` is legal COBOL and stays correct
-  after the fold -- only *rebinding* the item becomes illegal. Sites are
-  classified per line: the nearest preceding `SET` wins, and an intervening
-  `TO` marks the occurrence as a value operand.
+  after the fold -- only *rebinding* the item becomes illegal. So are a
+  `CALL ... USING ... ADDRESS OF <folded item>` argument (the CICS-DL/I
+  `CALL 'CBLTDLI' USING PCB-FUNC PSB-NAME ADDRESS OF DLIUIB` idiom -- legal
+  on a WORKING-STORAGE item, verified against GnuCOBOL 3.1.2) and anything
+  inside `EXEC ... END-EXEC` (`EXEC CICS ADDRESS TCTUA(ADDRESS OF TCTUA)`),
+  which the splicer replaces wholesale with a mock or a trap stub.
+- **Classified per statement, not per line (2026-09-28 fix).** Sites used to
+  be classified per line (nearest `SET` on the same line), which refused
+  every multi-line shape above -- and even the bare `EXEC CICS ADDRESS`
+  line, whose trailing `ADDRESS` keyword read as a dangling `ADDRESS OF`.
+  `address_of_sites` now tokenizes the whole text (string literals and `*>`
+  comments skipped) and walks back from each `ADDRESS OF <folded item>`:
+  a SET receiving operand can only be preceded by `SET`, other receiving
+  operands (names, `OF`/`IN`, subscripts, commas). The first token outside
+  that vocabulary decides -- `SET` means receiving; `TO`/`BY` (every SET
+  form reaches one before its sending side), `USING`, a verb, an unmatched
+  `(`, `EXEC`, a sentence period mean it is left alone. A receiving operand
+  on a later line than its `SET` is now rewritten, not refused.
 - **Detection is textual, not AST-driven**, because cobolparser's
   `SetStatement` drops the target-side `ADDRESS OF` entirely -- `SET ADDRESS
   OF X TO Y` and `SET X TO Y` both arrive as `targets=["X"]`, so the AST
@@ -618,9 +633,9 @@ transform exists to prevent (the pointer would come from a mocked
   *value* side carries a flag (`value_is_address_of`).
 - **Anything unclassifiable refuses** rather than being guessed at:
   `refusal.check_linkage_layout` turns each problem `address_of_sites`
-  reports into `UNSUPPORTED_LINKAGE_ADDRESSING` -- an `ADDRESS OF` continued
-  onto the next line (no single-line span to rewrite), or one with no `SET`
-  before it on its own line.
+  reports into `UNSUPPORTED_LINKAGE_ADDRESSING` -- since 2026-09-28 only a
+  receiving `ADDRESS OF <item>` whose own span is split across lines
+  (`SET ADDRESS OF` / `LK-ITEM TO P`): no single-line span to rewrite.
 
 Verified end to end against real GnuCOBOL 4.0: the rewritten program
 compiles, runs and passes its test case; the un-rewritten one does not
