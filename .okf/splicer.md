@@ -24,7 +24,12 @@ later indexed by an AST line number goes through
 cobolparser counts records), never `str.splitlines()` -- that also breaks on
 form feed / VT / `\x1c`-`\x1e` / NEL / U+2028, so a page-eject `\f` in a
 comment line shifted every later splice one line early (the mock replaced
-the statement before the CALL and the real CALL ran).
+the statement before the CALL and the real CALL ran). The rule is agreement
+with the *installed* cobolparser: releases without `cobolparser._lines`
+(1.8.x and earlier, allowed by the `>=1.7.7` floor) still number records the
+`str.splitlines()` way, so `split_source_lines` falls back to it there
+(`PARSER_SPLITS_ON_RECORD_DELIMITERS`) -- the `cobol-parser-compat` CI job
+runs against the published wheel and caught the mismatch.
 
 ```
 MockSurface (boundary sites)  ─┐
