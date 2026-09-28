@@ -129,3 +129,39 @@ def test_a_driver_seed_naming_a_member_disqualifies_a_program_range():
         "           IF WS-A = 'Z' GO TO BAIL-OUT.\n",
     )
     assert "DOWNSTREAM" in _reach(source, "BAIL-OUT-WRITE")
+
+
+# Two EXEC blocks ending in "END-EXEC." give the AST two phantom "."
+# paragraphs -- which used to read as a duplicated paragraph name and
+# switch the closed-range stop off for the whole program (the committed
+# ACCTMNT example refused its 2000-PROCESS-PARM-CARDS cases for it).
+WITH_EXEC_PHANTOMS = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PHANTOM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           EXEC SQL INCLUDE SQLCA END-EXEC.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM FEE-POST THRU FEE-DONE.
+       RATE-CHANGE.
+           EXEC SQL COMMIT END-EXEC.
+       FEE-POST.
+           EXEC SQL OPEN C1 END-EXEC.
+           IF SQLCODE NOT = 0
+               GO TO FEE-DONE
+           END-IF.
+       FEE-DONE.
+           EXEC SQL CLOSE C1 END-EXEC.
+       FINALIZE.
+           CALL "REALPGM".
+"""
+
+
+def test_phantom_exec_paragraphs_do_not_disable_the_range_stop():
+    result = parse_cobol(WITH_EXEC_PHANTOMS, filename="PHANTOM.cbl")
+    assert result.success, result.errors
+    reachable, reasons = _reachable_paragraphs(result.ast, "MAIN-PARA")
+    assert reasons == []
+    assert {"FEE-POST", "FEE-DONE"} <= reachable
+    assert "FINALIZE" not in reachable

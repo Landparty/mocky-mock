@@ -888,7 +888,12 @@ def _closed_perform_ranges(
     if procedure is None or ordered is None:
         return {}
     names = [p.paragraph_name for p in ordered]
-    if len(set(names)) != len(names):
+    # Phantom "." paragraphs (cobolparser's node for the period line after
+    # an END-EXEC) are empty artifacts no PERFORM/GO TO can name, so they
+    # never make a range endpoint ambiguous. Counting them disabled the
+    # whole optimization for any program with two EXEC blocks.
+    real_names = [n for n in names if n.strip(".")]
+    if len(set(real_names)) != len(real_names):
         return {}
     section_of: dict[str, str] = {}
     for section_name, members in section_members.items():

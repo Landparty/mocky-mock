@@ -9,7 +9,8 @@ with one line per source line, in the format
 `<count-or-dash-or-hashes>:<line-number>:<source text>`:
 
 - `-` means the line is not executable (declarations, comments, blanks).
-- `#####` means the line is executable but was never hit.
+- `#####` means the line is executable but was never hit; `=====` is the
+  same for a line reachable only along an exceptional path.
 - a number is the hit count; gcov suffixes it with `*` when the line maps
   to more than one basic block with differing counts (not itself a sign
   the line is uncovered -- only that `gcov -a` would show a per-block
@@ -73,7 +74,7 @@ def parse_gcov(gcov_text: str) -> CoverageReport:
             continue  # header lines: Source:/Graph:/Data:/Runs:
         if count_field == "-":
             continue  # not executable
-        if count_field == "#####":
+        if count_field in ("#####", "====="):
             total_executable += 1
             uncovered.append(UncoveredLine(line_number=line_number, text=text))
             continue

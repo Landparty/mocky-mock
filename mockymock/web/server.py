@@ -11,7 +11,10 @@ Two deliberate constraints:
   reports the state of *this* machine's Docker toolchain and has no
   authentication; exposing it on `0.0.0.0` would hand that out to the
   network for nothing. No CORS headers are sent either, so the browser's
-  same-origin policy keeps other sites from reading it.
+  same-origin policy keeps other sites from reading it -- and a request
+  whose `Host` header is not `127.0.0.1`/`localhost` is refused, which
+  closes the DNS-rebinding route around that policy
+  (`host_header_allowed`).
 * **Read-only.** `/api/status` calls `runtime.status.probe()`, never
   `ensure_toolchain()` -- see that module's docstring for why a polling
   page must not be able to trigger image builds.
@@ -94,6 +97,28 @@ def resolve_static(url_path: str) -> Path | None:
     return candidate
 
 
+_LOOPBACK_HOST_NAMES = frozenset({HOST, "localhost"})
+
+
+def host_header_allowed(host_header: str | None, port: int) -> bool:
+    """True when a request's `Host` header names this loopback server.
+
+    Binding to 127.0.0.1 keeps other machines out but not other *sites*: a
+    page on an attacker's domain whose DNS name is re-pointed at 127.0.0.1
+    (DNS rebinding) is same-origin with its own name, so the browser lets
+    it read `/api/status` -- the browser still sends that attacker name in
+    `Host`, which is the one thing it cannot forge. Only `127.0.0.1` and
+    `localhost`, on this server's own port (or with no port), are served."""
+    if not host_header:
+        return False
+    name, sep, host_port = host_header.strip().rpartition(":")
+    if not sep:
+        name, host_port = host_header.strip(), ""
+    if name.lower() not in _LOOPBACK_HOST_NAMES:
+        return False
+    return host_port in ("", str(port))
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "mockymock-dashboard"
     # Every response below sets Content-Length, which is what HTTP/1.1
@@ -101,6 +126,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's API
+        address = self.server.server_address
+        port = int(address[1]) if isinstance(address, tuple) else -1
+        if not host_header_allowed(self.headers.get("Host"), port):
+            self._send(
+                HTTPStatus.MISDIRECTED_REQUEST,
+                b"unexpected Host header",
+                "text/plain; charset=utf-8",
+            )
+            return
         path = urlparse(self.path).path
         if path == "/api/status":
             self._send_json(_cached_probe())

@@ -31,6 +31,7 @@ runtime/docker_toolchain.py
 
 report/coverage.py
   parse_gcov(gcov_text) -> CoverageReport   -- per-line hit counts -> totals + uncovered lines
+                                               (`#####` and `=====` both count as executable, never hit)
   map_coverage_to_original(...)             -- instrumented lines -> ORIGINAL .cbl lines
   summarize_original(mapped, original)      -> OriginalCoverage (totals + uncovered, with text)
   format_coverage_console(report, name, original=, program_name=)

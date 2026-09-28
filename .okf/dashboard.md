@@ -3,7 +3,7 @@ type: Module
 title: Web Dashboard
 description: mockymock dashboard — a loopback-only static page that polls a read-only Docker toolchain health probe, plus the runtime.status probe behind it.
 tags: [cli, web, docker, runtime]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Overview
@@ -57,7 +57,7 @@ pins this.
 **The bind address is 127.0.0.1 and is not configurable.** The endpoint
 has no authentication and reports local Docker state; `0.0.0.0` would hand
 that to the network for nothing. No CORS headers are sent, so the browser's
-same-origin policy also keeps other pages from reading it. `--port` is
+same-origin policy also keeps other pages from reading it -- and every request whose `Host` header is not `127.0.0.1`/`localhost` (on the server's own port, or none) gets `421`, which closes the DNS-rebinding route around that policy (`host_header_allowed`, round 7). `--port` is
 configurable (`0` picks a free one, which is what the tests use); the host
 is not.
 

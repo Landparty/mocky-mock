@@ -113,19 +113,43 @@ def _exec_match_form(text: str) -> str:
     return _EXEC_PUNCTUATION_SPACING_RE.sub(r"\1", normalize_exec_text(text))
 
 
+#: Characters that continue one SQL/CICS/DLI name (a cursor, table, host
+#: variable, CICS command word): a key may only end where the site's text
+#: does not continue the same name.
+_EXEC_NAME_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_#@$"
+)
+
+
+def _exec_prefix_matches(prefix: str, text: str) -> bool:
+    """`prefix` starts `text` and ends on a name boundary there.
+
+    A bare character prefix let `MOCK SQL "FETCH C1"` also mock
+    `FETCH C10 INTO ...` (and `MOCK CICS "READ"` mock `READQ TS ...`): the
+    other cursor's site was silently served this directive's body and its
+    ROWS tally instead of refusing UNMOCKED_SQL, and a case mocking both
+    cursors refused AMBIGUOUS_MOCK. A key is a prefix of whole names."""
+    if not prefix or not text.startswith(prefix):
+        return False
+    if len(text) == len(prefix):
+        return True
+    return not (
+        prefix[-1] in _EXEC_NAME_CHARS and text[len(prefix)] in _EXEC_NAME_CHARS
+    )
+
+
 def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool:
     """Category must agree; then CALL keys match the call literal exactly,
     file-op/ACCEPT/DYNCALL keys match any of the site's (uppercased) names
     (the identifier a dynamic CALL calls through), and SQL/CICS/DLI keys
-    prefix-match the site's normalized EXEC text. The category identity
+    prefix-match the site's normalized EXEC text on a name boundary. The category identity
     check is what keeps quoted (static) and bare (dynamic) CALL keys from
     ever cross-matching."""
     if site.category is not directive.category:
         return False
     if directive.category in EXEC_CATEGORIES:
-        prefix = _exec_match_form(directive.key)
-        return bool(prefix) and _exec_match_form(site.match_text or "").startswith(
-            prefix
+        return _exec_prefix_matches(
+            _exec_match_form(directive.key), _exec_match_form(site.match_text or "")
         )
     if directive.category is MockCategory.CALL:
         return directive.key in site.keys

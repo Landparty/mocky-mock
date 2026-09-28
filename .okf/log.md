@@ -5,6 +5,27 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-28 -- bug hunt round 7: EXEC key boundaries, multi-file status, phantom ranges
+
+Each reproduced first and pinned by a regression test; unit tests pass
+under the local cobol-parser and the published 1.8.x wheel.
+
+- **SQL/CICS/DLI keys matched on a character prefix**: `MOCK SQL "FETCH
+  C1"` also mocked `FETCH C10` (served C1's ROWS, VERIFY counted both;
+  mocking both refused AMBIGUOUS_MOCK). Keys now end on a name boundary.
+  See [analysis](analysis.md).
+- **Multi-file OPEN/CLOSE defaulted only the directive's own file's FILE
+  STATUS**: `OPEN INPUT A OUTPUT B` mocked as `OPEN A` left B's status
+  blank. Every named file with a status field is now defaulted to "00".
+  See [splicer](splicer.md).
+- **Phantom `"."` paragraphs disabled the closed PERFORM-range stop**
+  program-wide (two `END-EXEC.` blocks read as a duplicate name). See
+  [analysis](analysis.md).
+- **Dashboard** refuses a non-loopback `Host` header (DNS rebinding). See
+  [dashboard](dashboard.md).
+- **`parse_gcov`** counts gcov's `=====` (exceptional-only, never run) as
+  uncovered instead of dropping it. See [coverage](coverage.md).
+
 ## 2026-09-28 -- bug hunt round 6: generate scaffold, debugger values
 
 Each reproduced first and pinned by a regression test; unit tests pass

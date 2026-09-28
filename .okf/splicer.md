@@ -234,7 +234,7 @@ code, from the mnemonic table or a quoted literal — see [dsl](dsl.md)), a
 second `MOVE "<code>" TO <field>` is emitted right after the default,
 which therefore wins since it comes later in the same `WHEN` branch —
 same as any hand-written `MOVE` to that field a mock author adds after it.
-A file with no declared `FILE STATUS` field gets neither MOVE: there is no
+A statement naming several files (`OPEN INPUT A OUTPUT B`, `CLOSE A B`) is one site matched by one directive, so the default `MOVE "00"` is emitted for **every** file in `site.keys` that declares a status field, all before the `FILE-STATUS IS` override (which still targets only the directive's own file) -- round 7: defaulting only the directive's file left the other file's status blank, and a program checking both took its failure branch. A file with no declared `FILE STATUS` field gets neither MOVE: there is no
 WORKING-STORAGE target to write into (`refusal.check_test_case`'s
 `UNRESOLVED_FILE_STATUS_TARGET` refuses fail-closed before splicing is
 ever reached if the `.cut` file used `FILE-STATUS IS` sugar against such a

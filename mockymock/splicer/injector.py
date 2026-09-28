@@ -232,14 +232,28 @@ def build_site_dispatch(
                 f'{site.label} {directive.key}"'
             )
         if directive.category in FILE_STATUS_CATEGORIES:
+            # A statement naming several files (`OPEN INPUT A OUTPUT B`,
+            # `CLOSE A B`) is one site matched by ONE directive (a second
+            # would be AMBIGUOUS_MOCK), so the default success must cover
+            # every file it names -- defaulting only the directive's own
+            # file left the other file's status at its reset value, and a
+            # program checking both statuses took its failure branch.
+            default_fields = dict.fromkeys(
+                field
+                for field in (
+                    file_status_fields.get(key.upper())
+                    for key in [directive.key, *site.keys]
+                )
+                if field
+            )
+            for default_field in default_fields:
+                lines.append(f'                   MOVE "00" TO {default_field}')
             status_field = file_status_fields.get(directive.key.upper())
-            if status_field:
-                lines.append(f'                   MOVE "00" TO {status_field}')
-                if directive.file_status is not None:
-                    lines.append(
-                        f'                   MOVE "{directive.file_status}" '
-                        f"TO {status_field}"
-                    )
+            if status_field and directive.file_status is not None:
+                lines.append(
+                    f'                   MOVE "{directive.file_status}" '
+                    f"TO {status_field}"
+                )
         if directive.captures:
             if not isinstance(site.statement, CallStatement):
                 raise ValueError(

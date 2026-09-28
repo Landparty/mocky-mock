@@ -72,6 +72,16 @@ def test_parse_gcov_strips_star_suffix_from_multi_block_line_counts():
     assert report.uncovered_lines == []
 
 
+def test_parse_gcov_counts_exceptional_only_lines_as_uncovered():
+    """gcov marks a never-executed line reachable only along an
+    exceptional path `=====` rather than `#####`; it used to fail int
+    parsing and vanish from the executable total."""
+    report = parse_gcov("    =====:    5:    DISPLAY 'ONLY ON ERROR'\n")
+    assert report.total_executable == 1
+    assert report.total_covered == 0
+    assert [u.line_number for u in report.uncovered_lines] == [5]
+
+
 def test_parse_gcov_ignores_header_lines_with_line_number_zero():
     report = parse_gcov("        -:    0:Source:PROG.cbl\n")
     assert report.total_executable == 0
