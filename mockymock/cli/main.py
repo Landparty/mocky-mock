@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -2482,17 +2483,59 @@ def _insert_driver_with_origins(
             inserted.add(len(result))
             result.append(new_line)
 
+    ws_lines = [f"       {ws_line}" for ws_line in artifact.working_storage_lines]
+    # A program with no WORKING-STORAGE SECTION of its own (a subprogram
+    # with only a LINKAGE or LOCAL-STORAGE SECTION, or no DATA DIVISION at
+    # all) still needs the driver's fields declared -- without them every
+    # UT-CURRENT-CASE / UT-FAIL-COUNT / tally reference is undefined and
+    # the instrumented program cannot compile. Such a section is then
+    # synthesized where WORKING-STORAGE belongs: before the first section
+    # that must follow it, or before the PROCEDURE DIVISION.
+    has_ws = any(
+        _WS_HEADER_RE.match(line) for line in lines[: _first_procedure_index(lines)]
+    )
+    seen_data_division = False
+
     for line in lines:
-        result.append(line)
         upper = line.strip().upper()
+        if not inserted_ws and not has_ws:
+            if upper.startswith("DATA DIVISION"):
+                seen_data_division = True
+            elif (
+                seen_data_division and _AFTER_WS_SECTION_RE.match(line)
+            ) or upper.startswith("PROCEDURE DIVISION"):
+                if not seen_data_division:
+                    extend(["       DATA DIVISION."])
+                extend(["       WORKING-STORAGE SECTION."])
+                extend(ws_lines)
+                inserted_ws = True
+        result.append(line)
         if not inserted_ws and upper.startswith("WORKING-STORAGE SECTION"):
-            extend(f"       {ws_line}" for ws_line in artifact.working_storage_lines)
+            extend(ws_lines)
             inserted_ws = True
         if not inserted_proc and upper.startswith("PROCEDURE DIVISION"):
             extend([""])
             extend(artifact.procedure_lines)
             inserted_proc = True
     return result, inserted
+
+
+_WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\b", re.IGNORECASE)
+#: DATA DIVISION sections that must come AFTER WORKING-STORAGE -- including a
+#: LINKAGE SECTION header `splicer.linkage.neutralize` commented out, whose
+#: items then belong to whatever section precedes them.
+_AFTER_WS_SECTION_RE = re.compile(
+    r"^\s*(?:\*>\s*)?(?:LOCAL-STORAGE|LINKAGE|COMMUNICATION|REPORT|SCREEN)"
+    r"\s+SECTION\b",
+    re.IGNORECASE,
+)
+
+
+def _first_procedure_index(lines: list[str]) -> int:
+    for index, line in enumerate(lines):
+        if line.strip().upper().startswith("PROCEDURE DIVISION"):
+            return index
+    return len(lines)
 
 
 # argparse has no native notion of subcommand groups, so this is a
