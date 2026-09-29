@@ -816,7 +816,14 @@ def _classify_statement(
 
     if isinstance(statement, IOAcceptStatement):
         target = (statement.target or "").upper()
-        if statement.from_source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
+        # cobolparser keeps a date-format qualifier in `from_source`
+        # (`ACCEPT X FROM DATE YYYYMMDD` -> "DATE YYYYMMDD", `FROM DAY
+        # YYYYDDD` -> "DAY YYYYDDD"), so the source is its first word --
+        # compared whole, that very common idiom read as console input and
+        # refused UNMOCKED_CONSOLE_ACCEPT.
+        source_words = str(statement.from_source or "").upper().split()
+        source = source_words[0] if source_words else None
+        if source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
             surface.console_accept_paragraphs.add(paragraph_name)
             add_site(MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ())
         elif target:

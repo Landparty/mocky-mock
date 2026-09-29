@@ -62,6 +62,8 @@ def format_console(suite: TestSuiteResult, crash_detail: str | None = None) -> s
     if crashed_count:
         summary += f", {crashed_count} crashed"
     lines.append(summary)
+    if crash_detail and not suite.results:
+        lines.append(f"  process exited before any test case started: {crash_detail}")
     if suite.orphan_failures:
         lines.append("ORPHANED FAILURES (unknown case id):")
         for case_id, reason in suite.orphan_failures:
@@ -93,8 +95,16 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
     # reports as a bare, unexplained crash, so it gets folded in here too.
     failed_cases = sum(1 for r in suite.results if r.failure_reasons and not r.crashed)
     crashed_cases = sum(1 for r in suite.results if r.crashed)
+    # The binary died before any CASE START printed (crash_detail carries
+    # the nonzero exit / timeout): with no <testcase> to hang it on, the
+    # report used to read tests="0" failures="0" errors="0" -- a clean
+    # empty suite to every CI collector, while the run itself failed.
+    died_before_first_case = crash_detail is not None and not suite.results
     error_count = (
-        crashed_cases + len(suite.orphan_failures) + len(suite.duplicate_case_starts)
+        crashed_cases
+        + len(suite.orphan_failures)
+        + len(suite.duplicate_case_starts)
+        + int(died_before_first_case)
     )
     # Same fallback as format_console: suite.tests_run is 0 when a mid-suite
     # crash ate the SUMMARY line, but JUnit consumers expect tests="..." to
@@ -107,6 +117,7 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
         (suite.tests_run or len(suite.results))
         + len(suite.orphan_failures)
         + len(suite.duplicate_case_starts)
+        + int(died_before_first_case)
     )
     testsuite_el = Element(
         "testsuite",
@@ -183,6 +194,18 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
             classname=suite_classname,
         )
         error_el = SubElement(dup_el, "error", message=message)
+        error_el.text = message
+    if died_before_first_case:
+        message = _xml_safe(
+            f"process exited before any test case started ({crash_detail})"
+        )
+        run_el = SubElement(
+            testsuite_el,
+            "testcase",
+            name="(test binary)",
+            classname=suite_classname,
+        )
+        error_el = SubElement(run_el, "error", message=message)
         error_el.text = message
     rough = tostring(testsuite_el, encoding="unicode")
     return minidom.parseString(rough).toprettyxml(indent="  ")

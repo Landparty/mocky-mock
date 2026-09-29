@@ -28,6 +28,9 @@ _RAW_NUMERIC_RE = re.compile(
     r"^(?P<lead>[+-]?)(?P<int>\d+)(?:\.(?P<frac>\d+))?(?P<trail>[+-]?)$"
 )
 _PICTURE_REPEAT_RE = re.compile(r"(.)\((\d+)\)")
+# C0/C1 controls, DEL and the Unicode line/paragraph separators: none can
+# be written raw into a quoted `.cut` literal (see render_expect_value).
+_CONTROL_CHAR_RE = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def numeric_scale(picture: str | None) -> int | None:
@@ -104,6 +107,14 @@ def render_expect_value(raw_value: str, picture: str | None = None) -> str:
         # space, IBM Enterprise COBOL rejects it. SPACES is the same
         # comparison and valid everywhere.
         return "SPACES"
+    if _CONTROL_CHAR_RE.search(trimmed) and "\ufffd" not in trimmed:
+        # A control byte (X'0C' and friends are ordinary field data) cannot
+        # sit raw inside a quoted golden: the .cut is split into lines on
+        # form feed / VT / NEL too, so the EXPECT line itself broke apart
+        # and the rewritten file no longer parsed. A hexadecimal literal
+        # carries the same bytes and compares the same way (alphanumeric,
+        # space-padded).
+        return f'X"{trimmed.encode("utf-8").hex().upper()}"'
     escaped = trimmed.replace('"', '""')
     return f'"{escaped}"'
 

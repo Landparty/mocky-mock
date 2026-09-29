@@ -121,7 +121,15 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
     suite = TestSuiteResult(suite_name="")
     by_id: dict[str, TestResult] = {}
 
-    for line in stdout.splitlines():
+    # Split on LF only (dropping a CRLF's CR), never `str.splitlines()`:
+    # that also breaks on form feed, VT, \x1c-\x1e, NEL and U+2028 -- bytes
+    # a PIC X field can legitimately hold (X'0C' is common in data), and a
+    # DISPLAY writes them raw. A FAIL/RECORD marker carrying one was cut
+    # there and the rest silently dropped: a truncated failure reason, and
+    # a --record-expectations golden that fails the very next run.
+    for line in stdout.split("\n"):
+        if line.endswith("\r"):
+            line = line[:-1]
         if (m := _TESTSUITE_RE.match(line)) is not None:
             suite.suite_name = m.group("name")
         elif (m := _CASE_START_RE.match(line)) is not None:

@@ -274,15 +274,23 @@ def _reject_sentence_period(value: str, line_no: int) -> None:
     rejects the generated driver ("IF without imperative statement",
     "unexpected END-IF") while `lint` reported nothing. A COBOL numeric
     literal cannot end in a decimal point, so the period is never part of
-    a legitimate value."""
+    a legitimate value.
+
+    A trailing `*>` inline comment is not part of the value: the generated
+    `IF` line keeps it as a comment, so `5. *> note` still ends the
+    sentence there (and a period inside the comment is harmless)."""
     quote: str | None = None
-    for char in value:
+    code_end = len(value)
+    for index, char in enumerate(value):
         if quote is not None:
             if char == quote:
                 quote = None
         elif char in "'\"":
             quote = char
-    if quote is None and value.rstrip().endswith("."):
+        elif value.startswith("*>", index):
+            code_end = index
+            break
+    if quote is None and value[:code_end].rstrip().endswith("."):
         raise CutParseError(
             f"line {line_no}: EXPECT value {value!r} ends with a period -- "
             f"drop it (a .cut EXPECT is not a COBOL sentence, and the "
@@ -336,10 +344,15 @@ def _validate_expectation(expectation: str, line_no: int) -> None:
 def _split_top_level(text: str, sep: str) -> list[str]:
     """Split `text` on `sep`, ignoring any occurrence inside a '...' or
     "..." span -- so a ROWS row value like EMP-NAME = "SMITH, JR." isn't
-    cut at the comma inside the quoted literal."""
+    cut at the comma inside the quoted literal -- or inside a `(...)`
+    group, so a subscripted value like `WS-TAB(1, 2)` (the comma-separated
+    subscript form MOVE/EXPECT already accept) or `FUNCTION MAX(A, B)`
+    stays one value instead of being refused as a malformed assignment or
+    a column-count mismatch."""
     parts: list[str] = []
     current: list[str] = []
     quote: str | None = None
+    depth = 0
     for char in text:
         if quote is not None:
             current.append(char)
@@ -348,6 +361,13 @@ def _split_top_level(text: str, sep: str) -> list[str]:
             continue
         if char in "'\"":
             quote = char
+            current.append(char)
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif char == sep and depth:
             current.append(char)
             continue
         if char == sep:
