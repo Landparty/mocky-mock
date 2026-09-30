@@ -314,7 +314,7 @@ def test_run_binary_decodes_non_utf8_stdout_without_newline_translation(tmp_path
 # --- lossy copybook decode refusal is still live -------------------------------
 
 
-def test_cp1252_copybook_is_decoded_losslessly_and_not_refused(tmp_path):
+def test_cp1252_copybook_refuses_only_when_the_decode_is_lossy(tmp_path):
     """The round-10 finding: cobol-parser now decodes a non-UTF-8 byte near
     the top of a copybook as cp1252 (lossless), so no EXPANSION_WARNING
     must fire for it; the refusal stays pinned by
@@ -329,5 +329,14 @@ def test_cp1252_copybook_is_decoded_losslessly_and_not_refused(tmp_path):
         b"       01  BAD-FIELD PIC X(5) VALUE 'ab\xffcd'.\n"
     )
     expansion = expand_copybooks(COPY_PROGRAM_SOURCE, copybook_paths=[str(tmp_path)])
-    assert "abÿcd" in expansion.expanded_source
-    assert check_expansion_warnings(expansion) == []
+    refusals = check_expansion_warnings(expansion)
+    if "abÿcd" in expansion.expanded_source:
+        # cobol-parser releases that detect cp1252 decode the byte
+        # losslessly: nothing to refuse.
+        assert refusals == []
+    else:
+        # Older published releases still decode it lossily (U+FFFD) and
+        # warn; that warning must still refuse. The compat CI job runs
+        # the published wheel, so both branches are exercised.
+        assert "\ufffd" in expansion.expanded_source
+        assert refusals
