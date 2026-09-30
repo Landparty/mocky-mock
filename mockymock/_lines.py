@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from importlib.util import find_spec
+from pathlib import Path
 
 _LINE_BREAK_RE = re.compile(r"\r\n|\r|\n")
 
@@ -48,3 +49,38 @@ def split_source_lines(text: str) -> list[str]:
     if parts[-1] == "":
         parts.pop()
     return parts
+
+
+class SourceEncodingError(ValueError):
+    """A `.cbl` / `.cut` input that is not valid UTF-8.
+
+    mockymock refuses rather than guessing a legacy code page: the spliced
+    copy is written back as UTF-8 and compiled, so a cp1252 `é` inside a
+    `PIC X` literal would silently become two bytes and change the field's
+    length (the copybook path refuses a lossy decode the same way, as
+    EXPANSION_WARNING). The message names the file, the byte offset and
+    the conversion to run, so the CLI can print it instead of a traceback.
+    """
+
+    def __init__(self, path: object, exc: UnicodeDecodeError) -> None:
+        self.path = path
+        self.offset = exc.start
+        super().__init__(
+            f"{path} is not valid UTF-8 (byte 0x{exc.object[exc.start]:02x} at "
+            f"offset {exc.start}); mockymock reads COBOL sources and .cut "
+            f"files as UTF-8 -- convert the file first, e.g. "
+            f"`iconv -f cp1252 -t utf-8 {path}` for a Windows code-page source"
+        )
+
+
+def read_utf8_source(path: Path, *, keep_newlines: bool = False) -> str:
+    """`path.read_text(encoding="utf-8")`, raising `SourceEncodingError`
+    (not a bare UnicodeDecodeError) when the file is not UTF-8.
+    `keep_newlines=True` skips universal-newline translation, so a caller
+    that rewrites the file in place can see (and keep) its CRLFs."""
+    try:
+        if keep_newlines:
+            return path.read_bytes().decode("utf-8")
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise SourceEncodingError(path, exc) from exc

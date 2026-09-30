@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from mockymock import __version__
-from mockymock._lines import split_source_lines
+from mockymock._lines import read_utf8_source, split_source_lines
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
@@ -73,7 +73,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     # FAIL_FAST) instead of being refused here. generate_with_scenarios_from_file
     # still re-expands and re-parses internally; that duplicate work is the
     # price of a correctness gate rather than one that just happens to work.
-    raw_source = source_path.read_text(encoding="utf-8")
+    raw_source = read_utf8_source(source_path)
     if args.copybook_path:
         try:
             expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
@@ -534,7 +534,11 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
         return 1
 
     suite = checked.suite
-    original_text = cut_path.read_text(encoding="utf-8")
+    # Untranslated newlines: read_text() turns CRLF into LF, which made the
+    # CRLF check below dead and rewrote a CRLF .cut as LF on POSIX; the
+    # write below uses newline="" so Windows does not turn "\r\n" into
+    # "\r\r\n" (or an LF file into CRLF) either.
+    original_text = read_utf8_source(cut_path, keep_newlines=True)
     newline = "\r\n" if "\r\n" in original_text else "\n"
     raw_lines = original_text.splitlines()
 
@@ -648,7 +652,7 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
         new_text = newline.join(result_lines)
         if original_text.endswith(("\n", "\r\n")):
             new_text += newline
-        cut_path.write_text(new_text, encoding="utf-8")
+        cut_path.write_text(new_text, encoding="utf-8", newline="")
         offset_within_anchor: dict[int, int] = {}
         for anchor, header, block_len in inserted_blocks:
             start = final_line_of[anchor] + offset_within_anchor.get(anchor, 0)
@@ -848,7 +852,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
 
-    raw_source = source_path.read_text(encoding="utf-8")
+    raw_source = read_utf8_source(source_path)
     if args.copybook_path:
         # See _cmd_fixtures's identical guard on the same call for why
         # this can raise on realistic inputs (audit finding F6).
@@ -1386,7 +1390,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # run_static_checks) so a stub's case_index always means what
     # build_driver means by it. See
     # docs/2026-08-04-record-expectations-design.md.
-    cut_text = cut_path.read_text(encoding="utf-8")
+    cut_text = read_utf8_source(cut_path)
     stub_scan = (
         scan_stub_expectations(cut_text, suite) if args.record_expectations else None
     )
@@ -1558,9 +1562,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # as it was when the instrumented number was the only one printed.
     original_coverage = None
     if coverage_report is not None:
-        original_source_lines = split_source_lines(
-            source_path.read_text(encoding="utf-8")
-        )
+        original_source_lines = split_source_lines(read_utf8_source(source_path))
         mapped = map_coverage_to_original(
             coverage_report,
             instrumented,
@@ -1644,7 +1646,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 build_original_line_map(
                     instrumented,
                     normalized_lines,
-                    split_source_lines(source_path.read_text(encoding="utf-8")),
+                    split_source_lines(read_utf8_source(source_path)),
                 ),
                 case_result.mock_hits if case_result is not None else [],
                 selected,
@@ -1803,7 +1805,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     )
     instrumented = _insert_driver(lines, artifact)
 
-    original_lines = split_source_lines(source_path.read_text(encoding="utf-8"))
+    original_lines = split_source_lines(read_utf8_source(source_path))
 
     # The sandbox stays alive for the entire DAP session (a long-lived
     # conversation, unlike run/trace/coverage's "compile, run, collect,
@@ -1887,9 +1889,7 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
                 f"mutation suite, or drop the other flag(s)"
             )
             return 1
-        mutants = generate_mutants(
-            split_source_lines(source_path.read_text(encoding="utf-8"))
-        )
+        mutants = generate_mutants(split_source_lines(read_utf8_source(source_path)))
         for mutant in mutants:
             print(f"line {mutant.line} [{mutant.operator}] {mutant.description}")
         print(f"{len(mutants)} mutant(s)")
@@ -2203,10 +2203,20 @@ def _collect_boundaries(
     from mockymock.analysis.mock_surface import analyze
     from mockymock.dsl.generator import directive_snippet
 
-    raw_source = source_path.read_text(encoding="utf-8")
+    raw_source = read_utf8_source(source_path)
+    # `line` is shown against the .cbl the user has open, but sites are
+    # numbered in the EXPANDED source: every COPY above a site shifted it
+    # by the copybook's length (a 4-line WORKING-STORAGE copybook put a
+    # line-9 CALL at "line 12"). Map back through cobol-parser's source map
+    # where the installed release fills one in (1.8.x returns it empty,
+    # and the expanded numbering is then kept as before).
+    origin_line: dict[int, int] = {}
     if copybook_paths:
-        expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
+        expansion = expand_copybooks(
+            raw_source, copybook_paths=copybook_paths, preserve_source_locations=True
+        )
         raw_source = expansion.expanded_source
+        origin_line = _main_file_lines(expansion.source_location_map or {})
 
     result = parse_cobol(raw_source, filename=source_path.name)
     if result.errors or result.ast is None:
@@ -2233,11 +2243,29 @@ def _collect_boundaries(
                 "directive": snippet.splitlines()[0].strip() if snippet else None,
                 "label": site.label,
                 "paragraph": site.paragraph_name,
-                "line": site.line,
+                "line": origin_line.get(site.line, site.line),
                 "matchText": site.match_text,
             }
         )
     return sorted(boundaries, key=lambda b: b["line"])
+
+
+def _main_file_lines(source_map: dict[int, tuple[str, int]]) -> dict[int, int]:
+    """Expanded line -> line of the program file itself, from a
+    `CopybookExpansion.source_location_map` (`<main>` entries are the
+    program's own lines). A line that came from a copybook maps to the
+    COPY statement that pulled it in: the first program line after the
+    last one emitted before it."""
+    mapping: dict[int, int] = {}
+    last_main = 0
+    for expanded in sorted(source_map):
+        origin_file, origin = source_map[expanded]
+        if origin_file == "<main>":
+            last_main = origin
+            mapping[expanded] = origin
+        else:
+            mapping[expanded] = last_main + 1
+    return mapping
 
 
 def _cmd_explain(args: argparse.Namespace) -> int:
@@ -2322,7 +2350,7 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     if not _check_input_files("mockymock collect", *check_paths):
         return 1
     try:
-        suite = parse_cut(cut_path.read_text(encoding="utf-8"))
+        suite = parse_cut(read_utf8_source(cut_path))
     except CutParseError as exc:
         if args.json:
             print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
@@ -3296,7 +3324,30 @@ def main(argv: list[str] | None = None) -> int:
                 print(str(exc))
             return 1
 
-    return args.func(args)
+    from mockymock._lines import SourceEncodingError
+
+    try:
+        return args.func(args)
+    except SourceEncodingError as exc:
+        # A non-UTF-8 .cbl/.cut: one clean line in each command's own
+        # error convention instead of a UnicodeDecodeError traceback.
+        _print_command_error(args, str(exc))
+        return 1
+
+
+def _print_command_error(args: argparse.Namespace, message: str) -> None:
+    """Print a fatal error the way `main`'s config-error path does:
+    `collect --json` as a JSON error object on stdout (the VS Code
+    extension parses it), `fixtures` on stderr (its stdout is JSON-only),
+    everything else as a plain `mockymock <command>:` line on stdout."""
+    if args.func is _cmd_collect and getattr(args, "json", False):
+        import json
+
+        print(json.dumps({"version": 1, "error": message}, indent=2))
+    elif args.func is _cmd_fixtures:
+        print(f"mockymock fixtures: {message}", file=sys.stderr)
+    else:
+        print(f"mockymock {args.command}: {message}")
 
 
 if __name__ == "__main__":

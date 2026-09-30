@@ -92,6 +92,10 @@ class MockymockConfig:
     # cannot express "a cobol.yml supplied the copybook paths and a
     # mockymock.toml the seed", which is what `doctor` needs to report.
     sources: tuple[Path, ...] = field(default_factory=tuple)
+    # The file whose `ai_mode` is in effect -- not necessarily `source`: a
+    # cobol.yml's `mockymock: ai_mode:` under a mockymock.toml that only
+    # sets a seed was reported as coming from the mockymock.toml.
+    ai_mode_source: Path | None = None
 
 
 def _read_toml(path: Path) -> dict:
@@ -279,14 +283,20 @@ def load_config(start_dir: Path | None = None) -> MockymockConfig:
 
     universal_path = find_universal_config(directory)
     if universal_path is not None:
-        values.update(_universal_values(universal_path))
+        universal = _universal_values(universal_path)
+        values.update(universal)
         sources.append(universal_path)
+        if "ai_mode" in universal:
+            values["ai_mode_source"] = universal_path
 
     tool_config = find_tool_config(directory)
     if tool_config is not None:
         tool_path, tool_data = tool_config
-        values.update(_validated_values(tool_data, tool_path))
+        tool_values = _validated_values(tool_data, tool_path)
+        values.update(tool_values)
         sources.append(tool_path)
+        if "ai_mode" in tool_values:
+            values["ai_mode_source"] = tool_path
 
     if not sources:
         return MockymockConfig()

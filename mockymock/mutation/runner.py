@@ -31,7 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from mockymock._lines import split_source_lines
+from mockymock._lines import read_utf8_source, split_source_lines
 from mockymock.mutation.operators import Mutant, generate_mutants
 from mockymock.mutation.report import (
     MutantResult,
@@ -340,7 +340,7 @@ def run_mutation(
             if note not in all_notes:
                 all_notes.append(note)
 
-    original_text = source_path.read_text(encoding="utf-8")
+    original_text = read_utf8_source(source_path)
     baseline = _run_suite_once(
         original_text,
         source_path.name,

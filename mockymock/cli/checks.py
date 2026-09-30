@@ -13,7 +13,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from mockymock._lines import split_source_lines
+from mockymock._lines import (
+    SourceEncodingError,
+    read_utf8_source,
+    split_source_lines,
+)
 
 if TYPE_CHECKING:
     from cobolparser import ParseResult
@@ -203,7 +207,11 @@ def run_static_checks(
     out = StaticCheckResult()
 
     # 1. Read source; expand copybooks and check expansion warnings.
-    raw_source = source_path.read_text(encoding="utf-8")
+    try:
+        raw_source = read_utf8_source(source_path)
+    except SourceEncodingError as exc:
+        out.problems.append(str(exc))
+        return out
     if copybook_paths:
         # cobolparser genuinely raises for realistic inputs (a copybook
         # that COPYs itself, an oversized/deeply-nested chain, a
@@ -262,9 +270,12 @@ def run_static_checks(
     # 4. Parse the .cut file; apply any --case/--tag selection immediately so
     # every later per-case check sees only the cases that will actually run.
     try:
-        suite = parse_cut(cut_path.read_text(encoding="utf-8"))
+        suite = parse_cut(read_utf8_source(cut_path))
     except CutParseError as exc:
         out.problems.append(f"invalid .cut file {cut_path}: {exc}")
+        return out
+    except SourceEncodingError as exc:
+        out.problems.append(str(exc))
         return out
     selection_problems = filter_suite_cases(suite, case_names, tag_names)
     if selection_problems:

@@ -169,6 +169,19 @@ def _resolve_include_member(
                 ),
             )
         ]
+    except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal
+        # A member that COPYs itself, an over-deep/oversized chain, ...:
+        # cobolparser raises (CircularReferenceError, NestingDepthError,
+        # ...). The program's own COPY expansion already reports these
+        # (checks.py); cobol-parser releases that do not expand EXEC SQL
+        # INCLUDE themselves (1.8.x) only ever reach them here, where the
+        # traceback escaped `lint`/`run`/`export`.
+        return None, [
+            RefusalReason(
+                code="UNRESOLVED_COPYBOOK",
+                message=f"EXEC SQL INCLUDE {member} could not be expanded: {exc}",
+            )
+        ]
 
     expansion_reasons = check_expansion_warnings(expansion)
     if expansion_reasons:
