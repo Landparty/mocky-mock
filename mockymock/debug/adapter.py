@@ -305,6 +305,12 @@ class DapAdapter:
 
         breakpoints = []
         inserted_numbers: list[int] = []
+        # Registered before inserting, not after: when gdb refuses one
+        # location part-way through (a GdbCommandError fails the whole
+        # request), the breakpoints already inserted for the earlier lines
+        # must still be tracked, or no later setBreakpoints can ever delete
+        # them and the program keeps stopping where the editor shows none.
+        self._breakpoint_numbers[source_path] = inserted_numbers
         for source_bp in arguments.get("breakpoints", []):
             original_line = source_bp["line"]
             reason = session.line_map.reject_reason(original_line)
@@ -321,8 +327,8 @@ class DapAdapter:
             number = int(bkpt["number"])
             inserted_numbers.append(number)
             breakpoints.append({"verified": True, "line": original_line, "id": number})
-        if inserted_numbers:
-            self._breakpoint_numbers[source_path] = inserted_numbers
+        if not inserted_numbers:
+            del self._breakpoint_numbers[source_path]
         self._breakpoint_original_file = source_path
         self._send_response(request, success=True, body={"breakpoints": breakpoints})
 

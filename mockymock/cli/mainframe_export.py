@@ -105,6 +105,24 @@ def insert_provenance_header(lines: list[str], header: list[str]) -> list[str]:
 
 
 _DISPLAY_RE = re.compile(r"^(?P<indent>\s*)DISPLAY\s+(?P<rest>.+)$", re.IGNORECASE)
+# The `UPON <device>` clause of a DISPLAY's trailing expression. Every
+# fragment a wrapped DISPLAY is split into must carry it: a fragment
+# without it writes to the default device (stdout) while only the last
+# one goes to, say, SYSERR -- the one message lands split across two
+# streams.
+_UPON_RE = re.compile(r"(?<![A-Z0-9-])UPON\s+[A-Z0-9-]+(?![A-Z0-9-])", re.IGNORECASE)
+
+
+def _upon_clause(trailing_expr: str) -> str:
+    """` UPON <device>` from `trailing_expr` (outside quoted literals), or
+    '' when it names none."""
+    blanked = re.sub(
+        r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'', lambda m: " " * len(m[0]), trailing_expr
+    )
+    match = _UPON_RE.search(blanked)
+    if match is None:
+        return ""
+    return " " + " ".join(trailing_expr[match.start() : match.end()].split())
 
 
 def _parse_display_args(rest: str) -> tuple[str, str] | None:
@@ -324,7 +342,8 @@ def wrap_long_display_lines(
             new_lines.append(line)
             continue
 
-        mid_overhead = len(indent) + len('DISPLAY "') + len('" WITH NO ADVANCING')
+        upon = _upon_clause(trailing_expr)
+        mid_overhead = len(indent) + len(f'DISPLAY ""{upon} WITH NO ADVANCING')
         mid_budget = max_col - mid_overhead
         if mid_budget <= 0:
             problems.append(
@@ -351,7 +370,7 @@ def wrap_long_display_lines(
         tail = "".join(tail_units)
 
         fragments = [
-            f'{indent}DISPLAY "{chunk}" WITH NO ADVANCING'
+            f'{indent}DISPLAY "{chunk}"{upon} WITH NO ADVANCING'
             for chunk in _chunk_units(head_units, mid_budget)
         ]
         fragments.append(f'{indent}DISPLAY "{tail}"{final_suffix}')
@@ -816,6 +835,49 @@ def _reset_move_target(stripped: str) -> str | None:
     return None
 
 
+def _split_inline_comment(line: str) -> tuple[str, str] | None:
+    """(code, comment) around a floating `*>` comment that follows code on
+    `line` (outside any quoted literal), or None when there is none."""
+    quote: str | None = None
+    for index, char in enumerate(line):
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in ('"', "'"):
+            quote = char
+        elif line.startswith("*>", index):
+            code = line[:index].rstrip()
+            return (code, line[index:]) if code.strip() else None
+    return None
+
+
+def _fitting_candidates(lines: list[str], max_col: int):
+    """(index into `lines`, line) for every line the first two fitting
+    passes produce, run ONE INPUT LINE AT A TIME so each produced line
+    keeps the index of the instrumented line it came from. Run over the
+    whole list, a DISPLAY split into fragments shifted every later index,
+    and `SourceAttribution.origin` (keyed on instrumented indices) then
+    blamed a later line on the wrong source.
+
+    An over-long line carrying a trailing `*>` comment has the comment
+    moved onto its own line first. A comment runs to the end of its line
+    only: broken at a space (`_break_at_whitespace`) its words landed on
+    the next line as code, and a quote inside it was "continued" as if it
+    were a literal."""
+    for index, original in enumerate(lines):
+        pieces = [original]
+        if len(original) > max_col and not original.lstrip().startswith("*>"):
+            split = _split_inline_comment(original)
+            if split is not None:
+                code, comment = split
+                indent = code[: len(code) - len(code.lstrip(" "))]
+                pieces = [indent + comment, code]
+        pieces, _ = wrap_long_display_lines(pieces, max_col)
+        pieces, _ = wrap_long_literal_lines(pieces, max_col)
+        for piece in pieces:
+            yield index, piece
+
+
 def fit_within_columns(
     lines: list[str],
     max_col: int = COLUMN_LIMIT,
@@ -846,12 +908,9 @@ def fit_within_columns(
     `.cbl`, or none of them. The message used to assert one of those
     unconditionally, which sent readers to the wrong file whenever it
     guessed wrong -- see `SourceAttribution`."""
-    wrapped, _ = wrap_long_display_lines(lines, max_col)
-    wrapped, _ = wrap_long_literal_lines(wrapped, max_col)
-
     fitted: list[str] = []
     problems: list[str] = []
-    for index, line in enumerate(wrapped):
+    for index, line in _fitting_candidates(lines, max_col):
         if len(line) <= max_col or line.lstrip().startswith("*>"):
             fitted.append(line)
             continue

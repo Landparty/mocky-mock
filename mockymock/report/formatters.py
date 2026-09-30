@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import re
-from xml.dom import minidom
-from xml.etree.ElementTree import Element, SubElement, tostring
+from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
 from mockymock.report.results import TestSuiteResult
 
@@ -207,5 +206,11 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
         )
         error_el = SubElement(run_el, "error", message=message)
         error_el.text = message
-    rough = tostring(testsuite_el, encoding="unicode")
-    return minidom.parseString(rough).toprettyxml(indent="  ")
+    # ElementTree, not minidom's toprettyxml: minidom writes a tab, LF or
+    # CR inside an attribute value raw, and an XML reader's attribute-value
+    # normalization then turns each into a space -- a failure message's
+    # line structure (and any tab in a compared value) silently lost.
+    # ElementTree escapes them as `&#09;` / `&#10;` / `&#13;`.
+    indent(testsuite_el, space="  ")
+    body = tostring(testsuite_el, encoding="unicode")
+    return f'<?xml version="1.0" ?>\n{body}\n'
