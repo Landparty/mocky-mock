@@ -454,6 +454,21 @@ def _find_single_literal(line: str) -> tuple[str, str, str, str] | None:
     return line[:start], delimiter, "".join(body), suffix
 
 
+#: The type-prefix letters a COBOL literal may carry right before its opening
+#: delimiter (hex, national, DBCS, null-terminated, UTF-8, national hex),
+#: when they are not the tail of a longer word.
+_LITERAL_PREFIX_RE = re.compile(r"(?<![A-Z0-9-])(?:NX|BX|[XNGZUB])$", re.IGNORECASE)
+
+
+def _split_literal_prefix(prefix: str) -> tuple[str, str]:
+    """Split the text before a literal's opening delimiter into (what comes
+    before the literal, the literal's own type prefix -- '' for none)."""
+    match = _LITERAL_PREFIX_RE.search(prefix)
+    if match is None:
+        return prefix, ""
+    return prefix[: match.start()], match.group(0)
+
+
 def _continue_literal(line: str, max_col: int) -> list[str] | None:
     """Rewrite one over-`max_col` line as a continued line plus one or
     more fixed-format continuation lines, splitting its single quoted
@@ -511,7 +526,14 @@ def _continue_literal(line: str, max_col: int) -> list[str] | None:
             return None  # no progress possible: fail closed, caller reports
 
         padding = " " * (continued_budget - taken_len)
-        out.append(f"{current_prefix}{padding}{delimiter}{''.join(remaining[:taken])}")
+        # The padding must go before the literal's own prefix letters (the
+        # `X` of `X"4142"`, the `NX` of `NX"..."`), never between them and
+        # the opening delimiter: `X      "41"` is the identifier X followed
+        # by an alphanumeric literal, not a hex literal.
+        lead, literal_prefix = _split_literal_prefix(current_prefix)
+        out.append(
+            f"{lead}{padding}{literal_prefix}{delimiter}{''.join(remaining[:taken])}"
+        )
         pos += taken
         current_prefix = _CONTINUATION_PREFIX
 
@@ -545,11 +567,16 @@ AREA_B_START = 12
 
 
 def _split_atoms(text: str) -> list[str] | None:
-    """Split statement text into atoms separable at whitespace: each quoted
-    literal is ONE atom (its own internal spaces are content), every other
-    whitespace-delimited run is one atom. `None` for text this cannot
-    tokenize safely -- an unterminated literal -- so the caller refuses
-    rather than emitting a break that could change what the compiler reads.
+    """Split statement text into atoms separable at whitespace: a maximal
+    run of non-blank text, where a quoted literal's own internal spaces are
+    content and never end the run. Text that touches a literal with no
+    blank between them stays in the same atom -- the `X` of a hex literal
+    `X"00"` (likewise `N"..."`, `Z"..."`, ...), or the `.`/`)` right after
+    a closing quote -- because the caller rejoins atoms with a blank, and
+    `X "00"` is the identifier X followed by the alphanumeric literal
+    "00", not a hex literal. `None` for text this cannot tokenize safely --
+    an unterminated literal -- so the caller refuses rather than emitting a
+    break that could change what the compiler reads.
     """
     atoms: list[str] = []
     pos = 0
@@ -558,9 +585,12 @@ def _split_atoms(text: str) -> list[str] | None:
         if text[pos] == " ":
             pos += 1
             continue
-        if text[pos] in ('"', "'"):
+        start = pos
+        while pos < length and text[pos] != " ":
+            if text[pos] not in ('"', "'"):
+                pos += 1
+                continue
             delimiter = text[pos]
-            start = pos
             pos += 1
             while True:
                 if pos >= length:
@@ -572,13 +602,6 @@ def _split_atoms(text: str) -> list[str] | None:
                     pos += 1
                     break
                 pos += 1
-            atoms.append(text[start:pos])
-            continue
-        start = pos
-        while pos < length and text[pos] != " " and text[pos] not in ('"', "'"):
-            pos += 1
-        if pos == start:  # defensive: a delimiter immediately after a word
-            pos += 1
         atoms.append(text[start:pos])
     return atoms
 

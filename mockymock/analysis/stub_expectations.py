@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 
 from mockymock.dsl.model import MockTestSuite
-from mockymock.dsl.parser import _SUBSCRIPTED_NAME
+from mockymock.dsl.parser import _SUBSCRIPTED_NAME, _TESTCASE_RE
 
 _TESTCASE_HEADER_RE = re.compile(r'^\s*TESTCASE\s+"')
 _MOCK_OPEN_RE = re.compile(r"^\s*MOCK\s+\S")
@@ -104,7 +104,14 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
             in_mock = True
             continue
         if _TESTCASE_HEADER_RE.match(text):
-            kind = "provider-case" if "USING PROVIDER" in text else "case"
+            # Classified with the parser's own TESTCASE grammar, not a
+            # substring test: "USING PROVIDER" inside the quoted case NAME
+            # misread an ordinary case as provider-templated (its stubs
+            # skipped), and `USING  PROVIDER` with extra spaces -- which
+            # the parser accepts -- misread a templated one as ordinary.
+            header = _TESTCASE_RE.match(text.strip())
+            is_provider = header is not None and header.group("provider") is not None
+            kind = "provider-case" if is_provider else "case"
             headers.append((line_no, kind))
         elif _PROVIDER_HEADER_RE.match(text):
             headers.append((line_no, "provider-block"))

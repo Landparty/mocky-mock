@@ -132,7 +132,10 @@ def _declaration_for(target: str, item: dict) -> tuple[str, str] | None:
         return None  # COMP-1/COMP-2/POINTER/INDEX: nothing to mirror
     suffix = "" if usage in _DISPLAY_USAGES else f" USAGE {usage}"
     declaration = f"01  {target}  PIC {picture}{suffix}."
-    numeric = any(char in picture.upper() for char in "9VPZ*$+-")
+    # Repeat counts are not symbols: `X(9)` is alphanumeric, and treating
+    # its `9` as a digit reset the capture to "000000000", not spaces.
+    symbols = re.sub(r"\(\d+\)", "", picture.upper())
+    numeric = any(char in symbols for char in "9VPZ*$+-")
     reset = f"MOVE {'ZERO' if numeric else 'SPACES'} TO {target}"
     return declaration, reset
 
@@ -159,7 +162,10 @@ def _literal_declaration(target: str, source: str) -> tuple[str, str] | None:
     if len(source) < 2 or source[0] not in "\"'" or source[-1] != source[0]:
         return None  # X"..", N"..", G"..", Z"..": no PIC X mirror to guess
     quote = source[0]
-    length = len(source[1:-1].replace(quote * 2, quote))
+    # PIC X(n) counts bytes, and the source is compiled as UTF-8: a literal
+    # holding a non-ASCII character ("ÉCOLE" is 6 bytes, not 5) sized by
+    # its character count truncated the captured value.
+    length = len(source[1:-1].replace(quote * 2, quote).encode("utf-8"))
     if length == 0:
         return None
     return f"01  {target}  PIC X({length}).", f"MOVE SPACES TO {target}"

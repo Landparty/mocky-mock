@@ -5,6 +5,27 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-29 -- bug hunt round 10: ACCEPT FROM DATE fmt, control bytes, inline-comment periods, driver WORKING-STORAGE
+
+Each reproduced first and pinned by `tests/unit/test_bug_hunt_r10_*.py`.
+
+- [analysis](analysis.md): `ACCEPT X FROM DATE YYYYMMDD` / `DAY YYYYDDD` is
+  classified on the source's first word (it read as console input and
+  refused `UNMOCKED_CONSOLE_ACCEPT`); the stub scanner classifies TESTCASE
+  headers with the parser's own `_TESTCASE_RE`.
+- [dsl](dsl.md): the EXPECT period check ignores a trailing `*>` comment;
+  `_split_top_level` does not split inside `(...)` (`WS-TAB(1, 2)`).
+- [report](report.md): stdout is split on LF only (a form feed in a PIC X
+  value cut FAIL/RECORD markers short); a recorded golden holding a control
+  byte is written as `X"..."`; a binary that dies before its first CASE
+  START yields a `(test binary)` JUnit error instead of a clean empty suite.
+- [splicer](splicer.md): a sentence period before an inline `*>` comment is
+  kept in the replacement; `UT-CAP-` literal captures are sized in UTF-8
+  bytes; `PIC X(9)` captures reset to spaces, not zeros.
+- [cli](cli.md): the driver's fields get a synthesized WORKING-STORAGE
+  SECTION when the program has none; `export` keeps a hex/national literal
+  prefix attached to its quote when breaking and continuing lines.
+
 ## 2026-09-28 -- DFHRESP expanded like the CICS translator; EXEC-block macros no longer refuse
 
 A real CICS-DL/I program (HY1130IC) moved on from the LINKAGE fix to

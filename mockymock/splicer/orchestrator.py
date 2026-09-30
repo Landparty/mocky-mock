@@ -57,6 +57,37 @@ from mockymock.splicer.source_map import statement_span
 from mockymock.splicer.stub_writer import comment_and_replace, insert_lines_after
 
 
+def _code_text(line: str) -> str:
+    """`line` with any `*>` comment (outside a quoted literal) cut off:
+    what the compiler actually reads on it."""
+    quote: str | None = None
+    for index, char in enumerate(line):
+        if quote is not None:
+            if char == quote:
+                quote = None  # a doubled quote just re-enters on the next char
+        elif char in "'\"":
+            quote = char
+        elif line.startswith("*>", index):
+            return line[:index]
+    return line
+
+
+def _span_ends_sentence(lines: list[str], start: int, end: int) -> bool:
+    """True when the last code on lines [start, end] (1-indexed, inclusive)
+    ends with a period, i.e. the replaced statement closed its sentence.
+
+    Judged on code only: `CALL "X". *> note` ends its sentence even though
+    the line ends in comment text, and a trailing full-line `*>` comment
+    inside the span is not the statement's last line. Reading the raw line
+    instead dropped the period from the replacement, leaving an
+    unterminated sentence that ran into the next paragraph header."""
+    for index in range(end, start - 1, -1):
+        code = _code_text(lines[index - 1]).rstrip()
+        if code.strip():
+            return code.endswith(".")
+    return False
+
+
 def splice_program(
     lines: list[str],
     boundaries: list[int],
@@ -135,11 +166,7 @@ def splice_program(
         # paragraph), the replacement block must terminate the sentence too
         # -- otherwise the unterminated sentence runs into the next
         # paragraph header and cobc rejects it.
-        last_span_line = next(
-            (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
-            "",
-        )
-        if last_span_line.rstrip().endswith("."):
+        if _span_ends_sentence(lines, start, end):
             replacement = replacement[:-1] + [replacement[-1] + "."]
         spans.append((start, end, replacement))
 
@@ -171,11 +198,7 @@ def splice_program(
                     f"should have refused it"
                 )
             start, end = statement_span(site.statement, boundaries, last_line, lines)
-        last_span_line = next(
-            (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
-            "",
-        )
-        if last_span_line.rstrip().endswith("."):
+        if _span_ends_sentence(lines, start, end):
             replacement = replacement[:-1] + [replacement[-1] + "."]
         spans.append((start, end, replacement))
 
@@ -202,11 +225,7 @@ def splice_program(
             )
         start, end = goto_plan.span
         replacement = build_goto_exit_replacement(goto_plan.exit_kind)
-        last_span_line = next(
-            (lines[i - 1] for i in range(end, start - 1, -1) if lines[i - 1].strip()),
-            "",
-        )
-        if last_span_line.rstrip().endswith("."):
+        if _span_ends_sentence(lines, start, end):
             replacement = replacement[:-1] + [replacement[-1] + "."]
         spans.append((start, end, replacement))
 
@@ -253,15 +272,7 @@ def splice_program(
             # original PERFORM line, so there's no period to "move" here --
             # the PERFORM's own sentence is already correctly terminated;
             # only the newly-inserted block needs one of its own.
-            last_span_line = next(
-                (
-                    lines[i - 1]
-                    for i in range(end, start - 1, -1)
-                    if lines[i - 1].strip()
-                ),
-                "",
-            )
-            if last_span_line.rstrip().endswith("."):
+            if _span_ends_sentence(lines, start, end):
                 chain_check = chain_check[:-1] + [chain_check[-1] + "."]
             insertions.append((end, chain_check))
 
