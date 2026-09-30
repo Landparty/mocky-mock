@@ -5,6 +5,28 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-30 -- bug hunt round 11: mutation boundaries, debugger MI parsing, raw stdout bytes, export attribution
+
+Each reproduced first and pinned by `tests/unit/test_bug_hunt_r11.py`.
+
+- mutation: `_REL_INT` ends on a COBOL word boundary (`100-LIMIT` is never
+  mutated); `>>` compiler-directive lines are never mutated.
+- [dsl](dsl.md): `EXPECT ... TO BE NOT x`, a ROWS/TERMINAL line with two
+  groups, and a PERFORM target ending in `.` are CutParseErrors;
+  `fixture_bundle` rows/status must be JSON objects (`MalformedBundleError`).
+- [report](report.md): JUnit is written with ElementTree `indent`, so tabs /
+  newlines in attributes survive as character references.
+- [runtime](runtime.md): `run_binary` captures bytes and decodes UTF-8 with
+  `errors="replace"` (a HIGH-VALUES DISPLAY raised UnicodeDecodeError; a lone
+  CR split markers).
+- [cli](cli.md): debugger -- program output that merely starts like an MI
+  record is program output; exit codes are octal; breakpoints are tracked
+  before insertion. export -- `UPON` kept on every wrapped DISPLAY fragment,
+  a trailing `*>` comment moves to its own line before breaking, and
+  attribution keeps each line's instrumented index.
+- tests: the lossy-copybook refusal fixtures put >64 KiB of ASCII before the
+  bad byte (cobol-parser now decodes a lone early `\xff` as cp1252).
+
 ## 2026-09-29 -- bug hunt round 10: ACCEPT FROM DATE fmt, control bytes, inline-comment periods, driver WORKING-STORAGE
 
 Each reproduced first and pinned by `tests/unit/test_bug_hunt_r10_*.py`.
