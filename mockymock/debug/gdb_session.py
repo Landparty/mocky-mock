@@ -327,6 +327,12 @@ def _parse_result_or_async(marker: str, line: str) -> MIRecord | None:
                 i += 1
                 continue
             break
+    # A real record ends where its payload does. Program output that only
+    # starts like one -- a DISPLAY of "*stopped by operator" or "^done with
+    # the batch" -- otherwise parsed as a `*stopped` (ending a continue/step
+    # with a frameless stop) or as the in-flight command's result record.
+    if i != len(line):
+        return None
     if marker == "^":
         return ResultRecord(class_name, payload)
     return AsyncRecord(class_name, payload)
@@ -362,7 +368,11 @@ def _stop_event_from_payload(payload: dict) -> StopEvent:
         exit_code = payload.get("exit-code")
         return StopEvent(
             reason="exited",
-            exit_code=int(exit_code, 0) if exit_code is not None else 0,
+            # gdb prints the exit status as C octal, always with a leading
+            # zero (`"0%o"`: exit status 1 is "01", 8 is "010"). `int(_, 0)`
+            # rejected every one of those as a malformed decimal literal
+            # and raised out of the stop handling.
+            exit_code=int(exit_code, 8) if exit_code is not None else 0,
         )
     frame = payload.get("frame", {})
     line = frame.get("line")

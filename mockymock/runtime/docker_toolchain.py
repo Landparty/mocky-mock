@@ -472,8 +472,14 @@ def run_binary(
                 str(timeout_seconds),
                 container_binary,
             ],
+            # Bytes, decoded below -- not text=True. Text mode decodes
+            # strictly, so one DISPLAY of a field holding a non-UTF-8 byte
+            # (HIGH-VALUES, a COMP field, an EBCDIC-ish literal) raised
+            # UnicodeDecodeError out of the whole run; and its universal
+            # newlines turned a lone CR inside a DISPLAYed value into LF,
+            # cutting a __MOCKYMOCK__ FAIL/RECORD marker in two before
+            # parse_stdout's LF-only split ever saw it.
             capture_output=True,
-            text=True,
             timeout=timeout_seconds + 15,
             check=False,
         )
@@ -494,7 +500,7 @@ def run_binary(
             stdout="",
             stderr=f"mockymock: could not run docker exec: {exc}\n",
         )
-    stderr = result.stderr
+    stderr = _coerce_output(result.stderr)
     if result.returncode == TIMEOUT_EXIT_CODE:
         stderr += (
             f"mockymock: binary timed out after {timeout_seconds}s "
@@ -502,7 +508,9 @@ def run_binary(
             f"condition, producing an infinite loop)\n"
         )
     return ExecutionResult(
-        exit_code=result.returncode, stdout=result.stdout, stderr=stderr
+        exit_code=result.returncode,
+        stdout=_coerce_output(result.stdout),
+        stderr=stderr,
     )
 
 

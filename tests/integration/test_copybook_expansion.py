@@ -108,8 +108,15 @@ def test_generate_refuses_lossy_copybook_decode(tmp_path: Path, capsys):
     must refuse (EXPANSION_WARNING), not scaffold."""
     copybook_dir = tmp_path / "copybooks"
     copybook_dir.mkdir()
+    # The bad byte must lie past cobol-parser's 64 KiB encoding-detection
+    # sample: a lone \xff near the top is now detected as cp1252 and
+    # decoded losslessly (see test_refusal.py's
+    # test_expansion_warnings_refuse_lossy_copybook_decode).
+    padding = b"".join(
+        b"      * PADDING %05d" % i + b" " * 50 + b"\n" for i in range(1200)
+    )
     (copybook_dir / "ORDREC.CPY").write_bytes(
-        b"       01  ORD-AMOUNT PIC X(5) VALUE 'ab\xffcd'.\n"
+        padding + b"       01  ORD-AMOUNT PIC X(5) VALUE 'ab\xffcd'.\n"
     )
     output = tmp_path / "MAINPGM.cut"
     exit_code = main(

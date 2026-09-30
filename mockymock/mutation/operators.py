@@ -160,8 +160,10 @@ _MOVE_INT = re.compile(
     _cobol_word("MOVE") + r"\s+(?P<value>\d+)\s+" + _cobol_word("TO"), re.IGNORECASE
 )
 # An integer directly following a relational symbol in a condition line --
-# the loop/branch boundary itself.
-_REL_INT = re.compile(r"([><]=?|=)\s*(\d+)\b")
+# the loop/branch boundary itself. The integer must end on a COBOL word
+# boundary: `\b` treats `-` as one, so `= 100-LIMIT` (a data name) would
+# otherwise mutate into `= 101-LIMIT`.
+_REL_INT = re.compile(r"([><]=?|=)\s*(\d+)(?![A-Za-z0-9-])")
 
 _SPACE_RUN = re.compile(r"  +")
 
@@ -206,6 +208,15 @@ def _is_comment(line: str) -> bool:
         return True
     # Fixed-format indicator column: column 7 (index 6) '*' or '/'.
     return len(line) > 6 and line[6] in "*/"
+
+
+def _is_compiler_directive(line: str) -> bool:
+    """A `>>IF` / `>>DEFINE` / `>>EVALUATE` ... compiler-directing line.
+    Its relational symbols and `IF` belong to the directive, not to the
+    program's logic: `>>IF DEBUG > 1` must never become `>=>IF` (or
+    `>>IF DEBUG >= 1`, which flips conditional compilation, not a
+    branch)."""
+    return line.lstrip().startswith(">>") or line[6:].lstrip().startswith(">>")
 
 
 def _is_continuation(line: str) -> bool:
@@ -302,6 +313,8 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
     for index, line in enumerate(lines):
         line_no = index + 1
         if _is_comment(line) or _is_continuation(line):
+            continue
+        if _is_compiler_directive(line):
             continue
         if not in_procedure:
             if _PROCEDURE_DIVISION.search(line):

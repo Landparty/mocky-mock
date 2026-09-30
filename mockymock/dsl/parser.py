@@ -141,7 +141,9 @@ _EXPECT_RE = re.compile(
 # as a cobc compile error pointing at generated code. Fail closed at the
 # .cut line instead. The trailing (?:\s|$) keeps a legitimate hyphenated
 # identifier like OR-FLAG or GREATER-VALUE parsing as an ordinary value.
-_EXPECT_DANGLING_PHRASE_RE = re.compile(r"^(?:GREATER|LESS|THAN|OR|EQUAL)(?:\s|$)")
+# NOT belongs here too: `TO BE NOT 5` (NOT after TO BE rather than before
+# it) otherwise parsed as the value `NOT 5` and generated `IF X NOT = NOT 5`.
+_EXPECT_DANGLING_PHRASE_RE = re.compile(r"^(?:GREATER|LESS|THAN|OR|EQUAL|NOT)(?:\s|$)")
 _VERIFY_QUOTED_RE = re.compile(
     rf'^VERIFY\s+(?:(?P<cat>{_QUOTED_CATS})\s+)?"(?P<key>[^"]*)"'
     rf"\s+WAS\s+(?:CALLED|PERFORMED)\s+(?P<expectation>.+)$"
@@ -339,6 +341,29 @@ def _validate_expectation(expectation: str, line_no: int) -> None:
         f"line {line_no}: unrecognized VERIFY expectation {expectation!r} "
         f"(expected ONCE, NEVER, AT LEAST ONCE, or <n> TIMES)"
     )
+
+
+def _balanced_parens(text: str) -> bool:
+    """True when every `(` in `text` outside a quoted literal closes, and
+    no `)` closes a group that was never opened. A ROWS/TERMINAL line's
+    inner text failing this means the line was not ONE `( ... )` group --
+    `( A = 1 ) ( B = 2 )` otherwise parsed as the single pair `A = 1 ) (
+    B = 2`."""
+    quote: str | None = None
+    depth = 0
+    for char in text:
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
 
 
 def _split_top_level(text: str, sep: str) -> list[str]:
@@ -647,6 +672,11 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 if in_mock.terminal_row is not None:
                     raise CutParseError(f"line {line_no}: duplicate TERMINAL group")
+                if not _balanced_parens(term_match.group("pairs")):
+                    raise CutParseError(
+                        f"line {line_no}: malformed TERMINAL group {line!r} -- "
+                        f"expected one TERMINAL ( FIELD = value, ... ) group"
+                    )
                 terminal: list[tuple[str, str]] = []
                 for raw_pair in _split_top_level(term_match.group("pairs"), ","):
                     pair_match = _ROW_PAIR_RE.match(raw_pair.strip())
@@ -745,7 +775,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             elif in_mock.rows is not None:
                 row_match = _ROW_RE.match(line)
-                if row_match is None:
+                if row_match is None or not _balanced_parens(row_match.group("pairs")):
                     raise CutParseError(
                         f"line {line_no}: malformed ROWS row {line!r} -- "
                         f"expected ( FIELD = value, FIELD = value, ... )"
@@ -1052,6 +1082,13 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"PERFORM target {case.perform_target!r}; one PERFORM "
                     f"per test case"
                 )
+            for name in (m.group("target"), m.group("thru")):
+                if name is not None and name.endswith("."):
+                    raise CutParseError(
+                        f"line {line_no}: PERFORM {name!r} ends with a "
+                        f"period -- drop it (a .cut PERFORM names a "
+                        f"paragraph; it is not a COBOL sentence)"
+                    )
             case.perform_target = m.group("target")
             case.perform_thru = m.group("thru")
         elif (m := _EXPECT_RE.match(line)) is not None:
