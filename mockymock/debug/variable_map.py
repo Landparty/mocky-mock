@@ -35,9 +35,11 @@ from typing import Literal
 from mockymock.debug.gdb_session import (
     GdbCommandError,
     GdbSession,
+    MalformedMIRecordError,
     ResultRecord,
-    decode_c_escape,
+    decode_gdb_bytes,
     evaluate,
+    unescape_c_bytes,
 )
 
 # GnuCOBOL's authoritative field-type constants
@@ -59,21 +61,37 @@ _COB_FLAG_NO_SIGN_NIBBLE = 0x0100
 # cob_field wrapper (`f_NN`), capturing the generated name and its trailing
 # `/* COBOL-NAME */` comment. Not a general C parser -- only ever needs to
 # match this compiler's own generated declaration shape.
+# The name class is GnuCOBOL's own word pattern (cobc/scanner.l:
+# `[A-Z0-9\x80-\xFF]([_A-Z0-9\x80-\xFF-]*...)`): `WS_TOTAL` and non-ASCII
+# names are valid COBOL words there, and were silently left out.
 _DECL_RE = re.compile(
-    r"\b(?P<expr>[bf]_\d+)\b[^/\n]*/\*\s*(?P<name>[A-Za-z0-9-]+)\s*\*/"
+    r"\b(?P<expr>(?P<kind>[bf])_(?P<id>\d+))\b[^/\n]*/\*\s*(?P<name>[\w-]+)\s*\*/"
 )
 
 
 def parse_local_header(text: str) -> dict[str, str]:
     """COBOL name -> gdb expression, from a `<compiled-name>.c.l.h` file's
     text. `f_NN` (cob_field wrapper) is preferred over `b_NN` (raw buffer)
-    when both exist for the same name -- the field wrapper always appears
-    after its buffer in the generated file (see module docstring's
-    example), so scanning in file order and letting a later match
-    overwrite an earlier one for the same name gets this for free."""
-    table: dict[str, str] = {}
+    of the SAME item -- cobc numbers both from the item's own field id
+    (`static cob_field f_18 = {4, b_18, ...}`, cobc/codegen.c).
+
+    The comment is cobc's bare `f->name`, never qualified, so two items
+    that share a name (`WS-NAME OF GRP-A` / `WS-NAME OF GRP-B`) arrive as
+    two different ids under one name. Keying on the name alone let the
+    later one silently replace the earlier (the Variables pane showed one
+    item's value under the other's declaration and hid the second). The
+    first item keeps the bare name; each further one is listed as
+    `NAME (2)`, `NAME (3)`, ... in declaration order."""
+    by_name: dict[str, dict[str, str]] = {}
     for match in _DECL_RE.finditer(text):
-        table[match.group("name")] = match.group("expr")
+        items = by_name.setdefault(match.group("name"), {})
+        item_id = match.group("id")
+        if match.group("kind") == "f" or item_id not in items:
+            items[item_id] = match.group("expr")
+    table: dict[str, str] = {}
+    for name, items in by_name.items():
+        for index, expr in enumerate(items.values(), start=1):
+            table[name if index == 1 else f"{name} ({index})"] = expr
     return table
 
 
@@ -219,7 +237,9 @@ def read_variable(session: GdbSession, name: str, expr: str) -> VariableValue:
             name=name,
             kind="alphanumeric",
             raw_repr=raw_repr,
-            decoded=raw_bytes.decode("ascii", errors="replace"),
+            # UTF-8, not ASCII: a PIC X holding `Café` (the .cbl is read
+            # and compiled as UTF-8) showed as `Caf\ufffd\ufffd`.
+            decoded=raw_bytes.decode("utf-8", errors="replace"),
         )
 
     if type_code == _COB_TYPE_NUMERIC_PACKED:
@@ -256,23 +276,56 @@ def read_variable(session: GdbSession, name: str, expr: str) -> VariableValue:
     return VariableValue(name=name, kind="opaque", raw_repr=raw_repr)
 
 
+_REPEATS_RE = re.compile(r" <repeats (\d+) times>")
+
+
 def _unquote_c_string(text: str) -> str | None:
     """If `text` is gdb's own quoted-and-escaped C-string printing (e.g.
     `"CUST00001 "`), return the unescaped content; otherwise None (it's
-    some other kind of gdb value printing this module doesn't decode)."""
-    if len(text) < 2 or text[0] != '"' or text[-1] != '"':
-        return None
-    body = text[1:-1]
-    out: list[str] = []
+    some other kind of gdb value printing this module doesn't decode).
+
+    gdb collapses a run of 10+ identical elements into a repeat block
+    (`"JANE SMITH", ' ' <repeats 20 times>` for a `PIC X(30)`; an all-
+    spaces field is only `' ' <repeats 30 times>`), so a value is a
+    comma-separated list of quoted strings and repeated character
+    literals -- verified against gdb's MI output. A value gdb truncated
+    (`...`, past `print elements`) is not decoded. Escapes are gathered
+    as bytes and decoded together (see `decode_gdb_bytes`)."""
+    raw = bytearray()
     i = 0
-    while i < len(body):
-        if body[i] == "\\" and i + 1 < len(body):
-            decoded, i = decode_c_escape(body, i + 1)
-            out.append(decoded)
-        else:
-            out.append(body[i])
-            i += 1
-    return "".join(out)
+    try:
+        while True:
+            if text[i : i + 1] == '"':
+                chunk, i = unescape_c_bytes(text, i + 1, '"')
+                if i >= len(text):
+                    return None
+                i += 1
+                raw += chunk
+            elif text[i : i + 1] == "'" and len(text) > i + 2:
+                if text[i + 1] == "\\":
+                    chunk, j = unescape_c_bytes(text, i + 1, "'")
+                    # only the one escape: `'\\000'`, `'\\\\'`
+                    if j >= len(text):
+                        return None
+                else:
+                    chunk, j = text[i + 1].encode("utf-8"), i + 2
+                    if text[j : j + 1] != "'":
+                        return None
+                i = j + 1
+                repeats = _REPEATS_RE.match(text, i)
+                if repeats is not None:
+                    chunk *= int(repeats.group(1))
+                    i = repeats.end()
+                raw += chunk
+            else:
+                return None
+            if i == len(text):
+                return decode_gdb_bytes(bytes(raw))
+            if not text.startswith(", ", i):
+                return None
+            i += 2
+    except MalformedMIRecordError:
+        return None
 
 
 def _read_raw_memory(session: GdbSession, address: int, size: int) -> bytes:

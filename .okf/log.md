@@ -5,6 +5,24 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-09-30 -- bug hunt round 12: non-UTF-8 sources, CRLF fill, debugger text, copybook line numbers
+
+Each reproduced first and pinned by `tests/unit/test_bug_hunt_r12.py`
+(passes against both cobol-parser main and the published 1.8.4).
+
+- [cli](cli.md): a non-UTF-8 `.cbl`/`.cut` is refused with a clean
+  `SourceEncodingError` (`_lines.read_utf8_source`; JSON error for `collect
+  --json`, a lint/run problem in directory mode) instead of a traceback --
+  refused, not guessed, since the spliced copy compiles as UTF-8.
+  `generate --fill` keeps CRLF line endings. `ai_mode` provenance names the
+  file that actually set it. `collect --boundaries` lines are program lines
+  (mapped through cobol-parser's source map; unchanged on 1.8.4).
+- debugger: octal-escaped UTF-8 decodes as text, gdb `<repeats N times>`
+  blocks decode, field memory decodes as UTF-8; same-named items are listed
+  per item id (`NAME (2)`), and `_` names are mapped.
+- [splicer](splicer.md): any expansion error on an `EXEC SQL INCLUDE`
+  member refuses `UNRESOLVED_COPYBOOK` (a circular member raised).
+
 ## 2026-09-30 -- bug hunt round 11: mutation boundaries, debugger MI parsing, raw stdout bytes, export attribution
 
 Each reproduced first and pinned by `tests/unit/test_bug_hunt_r11.py`.

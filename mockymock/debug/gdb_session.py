@@ -173,21 +173,62 @@ def decode_c_escape(text: str, i: int) -> tuple[str, int]:
     return _NAMED_ESCAPES.get(text[i], text[i]), i + 1
 
 
-def _parse_c_string(text: str, i: int) -> tuple[str, int]:
-    _require(i < len(text) and text[i] == '"', "expected opening quote")
-    i += 1
+def decode_gdb_bytes(raw: bytes) -> str:
+    """Decode the bytes an escaped gdb string stands for. gdb octal-escapes
+    every byte it considers non-printable -- including each byte of a
+    UTF-8 sequence under the container's C locale (`Café` arrives as
+    `Caf\\303\\251`) -- so the escapes are gathered as BYTES and decoded
+    as UTF-8 together; turning each one into its own character showed
+    mojibake (`CafÃ©`). A byte that is not part of valid UTF-8 (a
+    HIGH-VALUES `\\377`) still becomes the one character with that code,
+    as before."""
     out: list[str] = []
-    while i < len(text) and text[i] != '"':
+    while raw:
+        try:
+            out.append(raw.decode("utf-8"))
+            break
+        except UnicodeDecodeError as exc:
+            out.append(raw[: exc.start].decode("utf-8"))
+            out.append(chr(raw[exc.start]))
+            raw = raw[exc.start + 1 :]
+    return "".join(out)
+
+
+def unescape_c_bytes(
+    text: str, i: int, terminator: str | None = '"'
+) -> tuple[bytes, int]:
+    """Unescape `text[i:]` up to (not including) `terminator` -- or to the
+    end when it is None -- into the bytes it stands for; returns them and
+    the terminator's index. Octal escapes are raw bytes, everything else
+    is its UTF-8 encoding. See `decode_gdb_bytes`."""
+    buf = bytearray()
+    while i < len(text) and text[i] != terminator:
         if text[i] == "\\":
             i += 1
             _require(i < len(text), "dangling escape in MI string")
+            if text[i] in _OCTAL_DIGITS:
+                start = i
+                while i < len(text) and i - start < 3 and text[i] in _OCTAL_DIGITS:
+                    i += 1
+                value = int(text[start:i], 8)
+                if value <= 0xFF:
+                    buf.append(value)
+                else:
+                    buf += chr(value).encode("utf-8")
+                continue
             decoded, i = decode_c_escape(text, i)
-            out.append(decoded)
+            buf += decoded.encode("utf-8")
         else:
-            out.append(text[i])
+            buf += text[i].encode("utf-8", errors="surrogatepass")
             i += 1
+    return bytes(buf), i
+
+
+def _parse_c_string(text: str, i: int) -> tuple[str, int]:
+    _require(i < len(text) and text[i] == '"', "expected opening quote")
+    raw, i = unescape_c_bytes(text, i + 1)
     _require(i < len(text), "unterminated MI string")
-    return "".join(out), i + 1
+    return decode_gdb_bytes(raw), i + 1
 
 
 def _parse_ident(text: str, i: int) -> tuple[str, int]:

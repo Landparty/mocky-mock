@@ -213,7 +213,11 @@ def resolve_mode(config: MockymockConfig | None) -> ResolvedMode:
     reports that itself."""
     if config is None or config.ai_mode is None:
         return ResolvedMode(mode=DEFAULT_MODE, source=None)
-    return ResolvedMode(mode=validate(config.ai_mode), source=config.source)
+    # The file that actually set `ai_mode`, not merely the last-loaded
+    # one (see MockymockConfig.ai_mode_source); a config built by hand
+    # without it falls back to `source` as before.
+    source = getattr(config, "ai_mode_source", None) or config.source
+    return ResolvedMode(mode=validate(config.ai_mode), source=source)
 
 
 def _assignment_line(mode: str) -> str:
