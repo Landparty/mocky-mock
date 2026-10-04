@@ -386,10 +386,23 @@ Serves a local, read-only status page (loopback-only — always
 toolchain are up. It never builds or starts anything itself; it only
 reports status. Runs until you press Ctrl-C.
 
+Two more panels sit below the toolchain status:
+
+- **Test results** lists every `mockymock report` page (`*.report.html`)
+  under the reports directory, newest first, and shows the selected one
+  inline (or in its own tab).
+- **Claude Code plugin** verifies the cobol-testing skills (`mockymock`,
+  `cobol-analysis`, `cobol-test`) in `~/.claude/skills/`: each is `ok`
+  only when every file is byte-identical to this mockymock's copy. Its
+  **Install plugin** button does what `mockymock skills install` does;
+  an installed copy that differs is replaced only after you confirm.
+  This button is the only thing the dashboard ever writes.
+
 | Option | Default | Description |
 |---|---|---|
 | `--port N` | `8765` | TCP port to serve on. Pass `0` to let the OS pick a free port. |
 | `--no-browser` | off | Don't automatically open a browser window on start. |
+| `--reports-dir DIR` | current directory | Where to look for `*.report.html` test reports (hidden, `node_modules`, build folders skipped; six levels deep). |
 
 ```bash
 mockymock dashboard
@@ -858,7 +871,7 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | `lint` | no | `--cut`, `--copybook-path` |
 | `mutate` | yes (unless `--list`) | `--cut`, `--copybook-path`, `--list`, `--timeout`, `--json-report`, `--fail-under` |
 | `collect` | no | `--cut`, `--json` |
-| `dashboard` | read-only probe | `--port`, `--no-browser` |
+| `dashboard` | read-only probe | `--port`, `--no-browser`, `--reports-dir` |
 | `export` | no | `--cut`, `-o`, `--copybook-path`, `--case`, `--tag` |
 | `analyze` | no | *(forwarded to cobol-parser)* |
 | `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |

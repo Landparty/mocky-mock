@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>mockymock — toolchain status</title>
+  <title>mockymock — dashboard</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -50,10 +50,41 @@
         <div><dt>Last checked</dt><dd id="meta-checked">—</dd></div>
       </dl>
     </section>
+
+    <!-- `mockymock report` pages found under the reports root. -->
+    <section class="panel" id="reports-panel">
+      <div class="panel-head">
+        <h2>Test results</h2>
+        <span class="panel-note" id="reports-root"></span>
+      </div>
+      <ul class="report-list" id="reports">
+        <li class="empty">Looking for reports…</li>
+      </ul>
+      <div class="viewer" id="viewer" hidden>
+        <div class="viewer-bar">
+          <span class="viewer-title" id="viewer-title"></span>
+          <a id="viewer-open" target="_blank" rel="noopener">Open in a new tab</a>
+        </div>
+        <!-- No allow-same-origin: the report runs its own small script
+             but cannot reach this dashboard's API. -->
+        <iframe id="viewer-frame" title="Test report" sandbox="allow-scripts"></iframe>
+      </div>
+    </section>
+
+    <!-- The cobol-testing Claude Code skills: verify, and install. -->
+    <section class="panel" id="plugin-panel">
+      <div class="panel-head">
+        <h2>Claude Code plugin · cobol-testing</h2>
+        <button type="button" class="action" id="plugin-install" hidden>Install plugin</button>
+      </div>
+      <p class="plugin-verdict" id="plugin-verdict">Checking…</p>
+      <ul class="checks" id="plugin-skills"></ul>
+      <p class="plugin-message" id="plugin-message" role="status" hidden></p>
+    </section>
   </main>
 
   <footer>
-    <span>Read-only view — this page never builds, starts, or removes anything.</span>
+    <span>The toolchain view is read-only: this page never builds, starts, or removes anything. The only thing it writes is the plugin, when you press Install.</span>
     <code>mockymock setup</code>
   </footer>
 

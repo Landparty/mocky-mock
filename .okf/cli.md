@@ -878,14 +878,16 @@ empty result, same "partial and reported" posture cobol-parser's
 refusal-code hover via `explain --json`. See
 docs/2026-09-15-cut-editor-intelligence-design.md.
 
-## `mockymock dashboard [--port N] [--no-browser]`
+## `mockymock dashboard [--port N] [--no-browser] [--reports-dir DIR]`
 
 Serves the static status page on `127.0.0.1` (host not configurable) until
 Ctrl-C, opening a browser unless `--no-browser`. Unlike `setup`, it is
 **read-only** — it calls `runtime.status.probe()`, never
 `ensure_toolchain()`, so a polling page can't trigger image builds. A taken
-port yields `mockymock dashboard: could not serve on ...` and exit 1. Full
-details in [dashboard](dashboard.md).
+port yields `mockymock dashboard: could not serve on ...` and exit 1.
+`--reports-dir` (default: cwd) is where the test-results panel looks for
+`*.report.html`; it is passed to `serve(reports_root=...)` as a `Path`, or
+`None`. Full details in [dashboard](dashboard.md).
 
 `--port`'s default is stored as `None` and resolved to
 `web.server.DEFAULT_PORT` inside `_cmd_dashboard`, deliberately: reading

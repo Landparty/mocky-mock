@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-04 -- dashboard: test results panel and plugin install/verify
+
+`mockymock dashboard` gains `--reports-dir` and two panels: the `mockymock
+report` pages under it (`web/reports.py`, `/api/reports`, `/reports/<path>`
+served with `CSP: sandbox allow-scripts`) and the cobol-testing skills
+check with an Install button (`web/plugin.py`, `/api/plugin`, `POST
+/api/plugin/install` guarded by `post_allowed`). Updated
+[dashboard](dashboard.md), [cli](cli.md).
+
 ## 2026-10-04 -- `mockymock skills plugin` (local plugin install)
 
 New `skills plugin [DIRECTORY] [--force]` leaf writing the cobol-testing

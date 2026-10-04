@@ -1,9 +1,9 @@
 ---
 type: Module
 title: Web Dashboard
-description: mockymock dashboard — a loopback-only static page that polls a read-only Docker toolchain health probe, plus the runtime.status probe behind it.
+description: mockymock dashboard — a loopback-only static page that polls a read-only Docker toolchain health probe, lists and shows mockymock report HTML pages, and verifies/installs the cobol-testing skills; plus the runtime.status probe behind it.
 tags: [cli, web, docker, runtime]
-timestamp: 2026-09-28T00:00:00Z
+timestamp: 2026-10-04T00:00:00Z
 ---
 
 # Overview
@@ -40,6 +40,46 @@ The page polls `/api/status` every 5s and renders a verdict banner, one
 row per check, and the image/container/compiler details. It holds no state
 of its own — every render is a function of the last payload — so a future
 panel is a new render function plus a new key in the payload.
+
+# Test results and plugin panels (2026-10-04)
+
+```
+GET  /api/reports           -> web/reports.py reports_payload(root)
+GET  /reports/<path>        -> one *.report.html under root (CSP sandbox)
+GET  /api/plugin            -> web/plugin.py verify()
+POST /api/plugin/install    -> web/plugin.py install(force)
+```
+
+**Test results.** `reports_root` (set on the server object by `serve()`;
+`--reports-dir`, default cwd; a bare `ThreadingHTTPServer` in tests falls
+back to cwd) is walked for `*.report.html`, skipping hidden dirs,
+`node_modules`/`__pycache__`/`venv`/`build`/`dist`/`htmlcov`, at most
+`MAX_DEPTH` 6 levels and `MAX_REPORTS` 200 hits (`truncated` says so).
+`/reports/<path>` serves only files ending `.report.html` and contained
+in the root after `resolve()` -- the dashboard must not become a reader
+for any file under the directory it was started in. The report is shown
+in an `<iframe sandbox="allow-scripts">` and served with
+`Content-Security-Policy: sandbox allow-scripts`, so its own filter script
+runs but with an opaque origin that cannot call the API. The page walks
+the tree every third status poll (15s), not every poll.
+
+**Plugin.** The cobol-testing plugin is installed the `skills install`
+way (copy to `~/.claude/skills/<name>`), not via `/plugin`, which is not
+available in every Claude Code setup. `verify()` grades each skill `ok`
+(every packaged file byte-identical, nothing extra), `outdated` (lists up
+to 10 changed/missing/extra paths), `missing`, or `broken` (a file or
+dangling symlink in its place). `install(force)` writes only `missing`
+skills unless `force`, then replaces every non-`ok` one; an `ok` skill is
+never touched, and a lock serializes concurrent installs. The page asks
+for confirmation before sending `force`.
+
+**The one write, and its CSRF guard.** Host-header checking stops DNS
+rebinding but not a cross-site form/`fetch` to `127.0.0.1:<port>` (the
+browser sends the real loopback Host). `post_allowed` therefore requires
+`Origin: http://127.0.0.1|localhost:<this port>` and `Content-Type:
+application/json` -- a cross-origin JSON POST needs a CORS preflight this
+server never grants. The body is read before any refusal (keep-alive) and
+capped at 4 KB.
 
 # Two constraints that shaped it
 
