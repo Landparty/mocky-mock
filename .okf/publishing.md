@@ -123,9 +123,9 @@ in the same commit.
 
 # See Also
 
-- [cli.md](cli.md) — the 15 subcommands (`setup`/`init`/`generate`/`fixtures`/
+- [cli.md](cli.md) — the 17 subcommands (`setup`/`init`/`generate`/`fixtures`/
   `run`/`debug`/`lint`/`mutate`/`collect`/`explain`/`dashboard`/`doctor`/
-  `export`/`analyze`/`skills`) the published package exposes. All fifteen
+  `export`/`analyze`/`skills`/`report`/`journal`) the published package exposes. All seventeen
   work from the Nuitka binary too: `analyze` delegates **in-process**
   (`from cobolparser.cli.parse import main`, with `sys.argv` patched
   around the call), so it needs no `cobol-parser` executable on `PATH`.

@@ -24,6 +24,8 @@ This document only covers *usage*.
   - [`dashboard`](#mockymock-dashboard)
   - [`export`](#mockymock-export)
   - [`analyze`](#mockymock-analyze)
+  - [`report`](#mockymock-report)
+  - [`journal`](#mockymock-journal)
   - [`skills install`](#mockymock-skills-install)
   - [`skills mode`](#mockymock-skills-mode)
 - [The `.cut` file: directives and options](#the-cut-file-directives-and-options)
@@ -447,20 +449,67 @@ mockymock analyze program-flow ORDRPROC.cbl
 Those flags belong to cobol-parser, not mockymock — see cobol-parser's own
 CLI documentation for the full list.
 
-### `mockymock skills install`
+### `mockymock report`
 
 ```bash
-mockymock skills install [--project] [--force]
+mockymock report [PROGRAM.cbl] [--cut PROGRAM.cut] [-o PROGRAM.report.html]
+    [--json PATH] [--execute] [--mutate]
+    [--run-json PATH] [--coverage-json PATH] [--mutation-json PATH]
+    [--journal PATH] [--scenarios happy|branches|all|none] [--seed N]
+    [--timeout S] [--mutation-threshold PCT] [--copybook-path DIR ...]
 ```
 
-Installs the packaged Claude Code skill (`SKILL.md` plus `reference/`
-files teaching an AI assistant to scaffold, edit, and run `.cut` files)
-so a Claude Code session can use it.
+One self-contained HTML page (plus JSON with `--json`) for a program and
+its suite: eleven steps (environment, understand, rules, inventory, lint,
+scenarios, run, coverage, mutation, dialect, verdict), a verification
+level per test case (L0 static, L1 executed, L2 strong, L3
+dialect-checked), assertion labels (INTENT / CHARACTERIZATION /
+unlabelled), and findings ranked by severity.
 
 | Option | Default | Description |
 |---|---|---|
-| `--project` | off | Install into `./.claude/skills/mockymock` instead of `~/.claude/skills/mockymock`. |
-| `--force` | off | Overwrite an existing install at the target path. Without it, an existing target refuses the install so local edits are never silently clobbered. |
+| `-o`, `--output` | `<program>.report.html` | HTML path. |
+| `--json` | none | Also write the report as JSON. |
+| `--execute` | off | Run the suite with coverage now (Docker). |
+| `--mutate` | off | Run mutation testing now (Docker, slower). |
+| `--run-json` / `--coverage-json` / `--mutation-json` | none | Reuse results an earlier `run --json-report` / `run --coverage-json` / `mutate --json-report` wrote, instead of re-running. |
+| `--journal` | `<cut>.journal.jsonl` if present | The assistant's step journal (see `mockymock journal`). |
+| `--scenarios` | `branches` | How to measure reachable branch arms; `none` skips the fixture step. |
+| `--seed` | none | Seed for that fixture generation. |
+| `--timeout` | `run`'s own | Per-run timeout passed to `run`. |
+| `--mutation-threshold` | `80` | Mutation score (percent) a suite needs for its cases to reach L2. |
+| `--copybook-path` | config / defaults | As everywhere else. |
+
+Exits 1 when a test failed or the suite is refused by the static gate,
+else 0. Without `--execute`/`--run-json`, nothing is claimed beyond L0.
+
+### `mockymock journal`
+
+```bash
+mockymock journal (--cut PROGRAM.cut | --file PATH) --step NAME --summary TEXT
+    [--status ok|warn|fail|skipped|info] [--command TEXT] [--decision TEXT]
+```
+
+Appends one JSON line to the suite's journal (`<cut stem>.journal.jsonl`
+next to the `.cut`, or `--file`), which `mockymock report` shows as a
+timeline: what the assistant did at each step and why.
+
+### `mockymock skills install`
+
+```bash
+mockymock skills install [--project] [--force] [--skill NAME ...]
+```
+
+Installs the packaged Claude Code skills so a Claude Code session can
+use them: `mockymock` (scaffold, edit and run `.cut` files), `cobol-test`
+(the whole job from understanding a program to the HTML report) and
+`cobol-analysis` (which cobol-parser subcommand answers which question).
+
+| Option | Default | Description |
+|---|---|---|
+| `--project` | off | Install into `./.claude/skills/<name>` instead of `~/.claude/skills/<name>`. |
+| `--force` | off | Overwrite existing installs. Without it, any existing target refuses the whole install (nothing is written) so local edits are never silently clobbered. |
+| `--skill` | all three | Install only this skill (repeatable): `mockymock`, `cobol-analysis`, `cobol-test`. |
 
 ```bash
 mockymock skills install
@@ -782,5 +831,7 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | `dashboard` | read-only probe | `--port`, `--no-browser` |
 | `export` | no | `--cut`, `-o`, `--copybook-path`, `--case`, `--tag` |
 | `analyze` | no | *(forwarded to cobol-parser)* |
-| `skills install` | no | `--project`, `--force` |
+| `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
+| `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
+| `skills install` | no | `--project`, `--force`, `--skill` |
 | `skills mode` | no | `--set`, `--json` |

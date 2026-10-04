@@ -1,8 +1,10 @@
-"""Copies the packaged end-user Claude Code skill to a target directory.
+"""Copies the packaged end-user Claude Code skills to a target directory.
 
-mockymock ships mockymock/cli/skills/mockymock/ (a SKILL.md plus
-reference/ files teaching an AI assistant how to scaffold and run .cut
-tests) as package data under mockymock.cli -- setuptools only applies
+mockymock ships three skills under mockymock/cli/skills/ as package data:
+`mockymock` (a SKILL.md plus reference/ files teaching an AI assistant how
+to scaffold and run .cut tests), `cobol-test` (the end-to-end job:
+understand, plan, intent assertions, report) and `cobol-analysis` (a copy
+of cobol-parser's analysis skill). They ride along under mockymock.cli -- setuptools only applies
 package-data globs under an already-discovered package, and this
 directory has no __init__.py of its own, so it rides along with
 mockymock.cli the same way mockymock/runtime/docker/ and
@@ -17,7 +19,12 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-SOURCE_DIR = Path(__file__).resolve().parent / "skills" / "mockymock"
+SKILLS_ROOT = Path(__file__).resolve().parent / "skills"
+SOURCE_DIR = SKILLS_ROOT / "mockymock"
+# Install order: the orchestrator's two dependencies first, so a partial
+# install (an unexpected copy error) never leaves cobol-test pointing at
+# skills that are not there.
+SKILL_NAMES = ("mockymock", "cobol-analysis", "cobol-test")
 
 
 class SkillTargetExistsError(Exception):
@@ -28,18 +35,20 @@ class SkillTargetExistsError(Exception):
         super().__init__(f"{target} already exists; use --force to overwrite")
 
 
-def resolve_target(project: bool) -> Path:
+def resolve_target(project: bool, name: str = "mockymock") -> Path:
     """Where `mockymock skills install` writes to: the current directory's
     .claude/skills/mockymock for --project, else the user's home
     directory's -- the skill's content isn't project-specific, so a
     global install is the default and works across every COBOL repo
     tested with mockymock."""
     base = Path.cwd() if project else Path.home()
-    return base / ".claude" / "skills" / "mockymock"
+    return base / ".claude" / "skills" / name
 
 
-def install_skill(target: Path, *, force: bool = False) -> None:
-    """Copy the packaged skill directory to `target`.
+def install_skill(
+    target: Path, *, force: bool = False, name: str = "mockymock"
+) -> None:
+    """Copy the packaged skill directory `name` to `target`.
 
     Fail-closed: refuses (raises SkillTargetExistsError, leaving `target`
     untouched) if it already exists and `force` is False, so a user's
@@ -62,4 +71,4 @@ def install_skill(target: Path, *, force: bool = False) -> None:
             shutil.rmtree(target)
         else:
             target.unlink()
-    shutil.copytree(SOURCE_DIR, target)
+    shutil.copytree(SKILLS_ROOT / name, target)

@@ -261,6 +261,12 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   indentation), returning `None` when nothing was recorded so the CLI
   never touches the file for a no-op run. No line is ever inserted or
   removed, so there's no splice-ordering hazard to manage.
+  Since 2026-10-04 (`label=True`, the default) it also inserts
+  `assertion_labels.RECORDED_LABEL` above each run of recorded lines, and
+  a closer (a copy of the original covering label, or a blank line) when
+  the next line is a hand-written EXPECT/VERIFY, so recorded values never
+  inherit an INTENT label. Inserts happen bottom-up so earlier indexes
+  stay valid.
 
 This is also where the "never overwrite a hand-edited `EXPECT`" guarantee
 actually holds: `rewrite_cut_text` only ever replaces a line the scanner
@@ -268,6 +274,48 @@ found by matching the `*> STUB EXPECT` pattern — once a stub becomes a
 real `EXPECT` line (by this feature or by hand), it structurally cannot
 match that pattern again, so a second `--record-expectations` run finds
 nothing left to touch there. No provenance tracking needed.
+
+## Test report (`report/test_report.py`, `report/html_report.py`, `report/journal.py`) (2026-10-04)
+
+Backs `mockymock report` and `mockymock journal` (see [cli](cli.md)) and
+the `cobol-test` skill's hand-over.
+
+- `build_report(ReportOptions) -> dict` runs eleven steps, each a dict
+  `{id, title, status (ok|warn|fail|skipped), summary, details, command?}`:
+  environment (`runtime.status.probe`, skippable with
+  `probe_toolchain=False`), understand (`ProgramFlowAnalyzer`, plus
+  `ComplexityAnalyzer` when importable), rules (`BusinessRuleExtractor`,
+  soft import -- absent from cobol-parser <= 1.8.4, so `rulesAvailable`
+  false and the step `skipped`), inventory (the `.cut` via `dsl.parser`
+  + `assertion_labels.scan_assertion_labels`), lint
+  (`cli.checks.run_static_checks`), scenarios
+  (`ProgramFixtureGenerator.generate_with_scenarios_from_file`'s
+  `scenario_coverage`), run, coverage, mutation, dialect
+  (`analysis.dialect_risk.find_dialect_risks`), verdict.
+- Case reach: each case's PERFORM target(s) closed over flow edges except
+  `FALL_THROUGH`/`CALL`, intersected with paragraphs; synthetic nodes
+  (`X__IF_1`) are dropped. Copybook-expanded programs map lines back via
+  `coverage._matching_index_map`.
+- Mutation `score` in mutate's JSON is a 0..1 fraction; the report stores
+  `scorePercent`. A mutate run that wrote no report (no mutable
+  statements) is a `skipped` step carrying mutate's last output line.
+- Verification level per case: L0 static, L1 executed and passed, L2 also
+  has at least one assertion and suite mutation >= threshold (default
+  80%), L3 also no high/medium dialect risk inside its reach. L4
+  (mainframe) is never computed -- shown as a reminder only.
+- `_findings` categories (severity-ordered): refused, test-failure,
+  suspected-bug (a failed INTENT assertion), no-assertion,
+  missing-assertion (surviving mutant), dead-code, untested-paragraph,
+  rule-without-intent, unlabelled, dialect, coverage, scenario-gap. The
+  `cobol-test` skill's `reference/report.md` lists the same set, pinned by
+  `tests/unit/test_cobol_testing_plugin.py`.
+- `render_html(report, standalone=True)` is a single file with no network
+  access (inline CSS/JS, light/dark tokens incl. `[data-theme]`).
+  `standalone=False` emits a fragment starting with `<title>` for hosts
+  that wrap the document themselves.
+- `journal.py`: append-only JSONL, `STATUSES`, `default_journal_path`,
+  `read_journal` returns `(entries, problems)` -- a malformed line is a
+  reported problem, never silently dropped.
 
 # Gotchas
 

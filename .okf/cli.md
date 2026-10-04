@@ -1,7 +1,7 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
 timestamp: 2026-10-04T00:00:00Z
 ---
@@ -9,8 +9,8 @@ timestamp: 2026-10-04T00:00:00Z
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines fifteen subcommands —
-`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines seventeen subcommands —
+`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -35,6 +35,8 @@ mockymock analyze   -> sys.argv monkeypatch -> cobolparser.cli.parse.main() (no 
 mockymock export    -> cli.checks (static) -> splicer -> cli.mainframe_export (no Docker)
 mockymock skills    -> skills_cmd (install: no Docker, no parsing -- a copytree)
                        cli.ai_mode (mode: reads/writes the config file's ai_mode key)
+mockymock report    -> report.test_report.build_report (parse + cobolparser analyzers + cli.checks; --execute/--mutate re-invoke run/mutate as subprocesses) -> report.html_report
+mockymock journal   -> report.journal.append_entry only  (no Docker, no parsing)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -1010,19 +1012,22 @@ mockymock-generated instrumentation rather than blamed on either.
 Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
 [docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).
 
-## `mockymock skills install [--project] [--force]`
+## `mockymock skills install [--project] [--force] [--skill NAME ...]`
 
-Copies the packaged Claude Code skill
-(`mockymock/cli/skills/mockymock/`) to
-`~/.claude/skills/mockymock` (default) or `./.claude/skills/mockymock`
-(`--project`). Implementation lives in `mockymock/cli/skills_cmd.py`,
+Copies the packaged Claude Code skills (`SKILL_NAMES`: `mockymock`,
+`cobol-analysis`, `cobol-test`, each under `mockymock/cli/skills/<name>/`)
+to `~/.claude/skills/<name>` (default) or `./.claude/skills/<name>`
+(`--project`). `--skill` (repeatable) narrows the set; without it all
+three are installed. Fail-closed as a set (2026-10-04): every target is
+checked before anything is copied, so one existing directory without
+`--force` installs none of them. Implementation lives in `mockymock/cli/skills_cmd.py`,
 imported lazily inside `_cmd_skills_install` for the same deferred-import
 reason every other subcommand uses, even though nothing here is actually
 heavy (`shutil`/`pathlib` only) -- consistency with the rest of this
 module.
 
-`resolve_target(project: bool) -> Path` picks the base directory
-(`Path.cwd()` or `Path.home()`); `install_skill(target, force=False)`
+`resolve_target(project: bool, name="mockymock") -> Path` picks the base directory
+(`Path.cwd()` or `Path.home()`); `install_skill(target, force=False, name="mockymock")`
 refuses (`SkillTargetExistsError`, fail-closed) if `target` already
 exists and `force` is `False`, so a user's local edits to a previously
 installed copy are never silently clobbered. The skill content itself is
@@ -1051,6 +1056,39 @@ pinned by `tests/unit/test_mockymock_skill_content.py`, which also
 requires every `reference/` file to be linked from `SKILL.md`: an added
 reference file that nothing points at is a test failure, not a silent
 orphan.
+
+## `mockymock report <program> [--cut PATH] [-o/--output PATH] [--json PATH] [--copybook-path DIR ...] [--execute] [--mutate] [--run-json PATH] [--coverage-json PATH] [--mutation-json PATH] [--journal PATH] [--scenarios happy|branches|all|none] [--seed N] [--timeout S] [--mutation-threshold PCT]` (2026-10-04)
+
+One self-contained HTML page (default `<program stem>.report.html`;
+`--json` also writes the underlying dict) of every step of testing a
+program and what each test proves. Backs the `cobol-test` skill's final
+step. Builder is `report/test_report.py` (`ReportOptions` ->
+`build_report() -> dict`), renderer `report/html_report.py`; see
+[report](report.md). Prints one line per step; exit 1 when a case failed
+or the suite was refused, else 0.
+
+`--execute` / `--mutate` re-invoke `python -m mockymock.cli.main run`
+(`--json-report --coverage-json`) and `mutate --json-report` as
+subprocesses into a temp dir rather than calling `_cmd_run` in-process,
+so a toolchain failure is one step's `fail`, not a crashed report.
+Passing `--run-json` / `--coverage-json` / `--mutation-json` reuses
+reports from an earlier run instead. Without any of them the report is
+static: lint (`cli.checks.run_static_checks`), flow, rules, scenarios,
+dialect risks, and a verification level no higher than L0.
+
+`--cut` defaults to `<program stem>.cut`; `--journal` to
+`<cut stem>.journal.jsonl` (`report.journal.default_journal_path`).
+`--scenarios none` skips the cobol-parser `ProgramFixtureGenerator`
+step (slow on large programs).
+
+## `mockymock journal --step NAME --summary TEXT [--cut PATH | --file PATH] [--status ok|warn|fail|skipped|info] [--command TEXT] [--decision TEXT]` (2026-10-04)
+
+Appends one JSON line to the assistant's step journal
+(`report/journal.py`): what the `cobol-test` skill did, why, and what came
+of it -- the half of the story `report` cannot recompute. `--file` wins
+over `--cut`'s default path. `--command` is stored as `command` (argparse
+dest `command_text`, since `command` is the subparser dest). Unknown
+status or empty step/summary -> exit 2 with a message, nothing written.
 
 ## `mockymock skills mode [--set MODE] [--json]` (2026-09-16)
 

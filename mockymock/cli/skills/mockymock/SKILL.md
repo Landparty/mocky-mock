@@ -233,6 +233,12 @@ mockymock mutate PROGRAM.cbl --cut PROGRAM.cut            # which changes it wou
 A surviving mutant is a missing assertion -- report it as such ("nothing
 fails if the discount rate is never applied"), and offer to fix it.
 
+To hand the result over, `mockymock report PROGRAM.cbl --cut PROGRAM.cut
+--execute --mutate` runs both and writes one HTML page of every step,
+finding and test case. For testing a whole program end to end (plan from
+business rules, INTENT vs CHARACTERIZATION assertions, verification
+levels), follow the `cobol-test` skill, which drives this one.
+
 ### 5. When a run fails or refuses
 
 Read the printed reason literally: mockymock is deliberately fail-closed,
@@ -257,7 +263,8 @@ it raw.
   `BEFORE-ALL`/`BEFORE-EACH`, `PROVIDER`/`HEADER`/`ROW`, `*> STUB EXPECT`.
 - `reference/cli-flags.md` -- every subcommand and flag: `setup`, `init`,
   `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`,
-  `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`.
+  `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`,
+  `report`, `journal`.
 - `reference/scenario-generation.md` -- how to read a `mockymock
   fixtures` bundle (boundary inventory, branch-arm coverage, unresolved
   gaps), how to recommend a `--scenarios` mode, and how to phrase a

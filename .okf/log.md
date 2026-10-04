@@ -5,6 +5,19 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-04 -- `cobol-testing` plugin, `cobol-test` skill, `mockymock report`
+
+New subcommands `report` and `journal` (17 total) and the
+`.claude-plugin/` manifest + marketplace (plugin `cobol-testing`, skills
+`mockymock`, `cobol-analysis`, `cobol-test`; version kept in step by
+release-please `extra-files`). `skills install` installs all three,
+fail-closed as a set, `--skill` to narrow. New modules
+`analysis/assertion_labels.py`, `analysis/dialect_risk.py`,
+`report/test_report.py`, `report/html_report.py`, `report/journal.py`;
+`record_rewrite` now labels recorded EXPECTs CHARACTERIZATION. Updated
+[cli](cli.md), [report](report.md), [analysis](analysis.md),
+[publishing](publishing.md), [index](index.md).
+
 ## 2026-10-04 -- relicensed AGPL-3.0-or-later
 
 `LICENSE` replaced (EULA -> GNU AGPL v3 text), `pyproject.toml` `license =
