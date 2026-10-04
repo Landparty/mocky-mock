@@ -16,7 +16,9 @@ def test_dashboard_defaults_to_the_servers_default_port():
 
     with mock.patch.object(server, "serve") as serve:
         assert main(["dashboard"]) == 0
-    serve.assert_called_once_with(port=server.DEFAULT_PORT, open_browser=True)
+    serve.assert_called_once_with(
+        port=server.DEFAULT_PORT, open_browser=True, reports_root=None
+    )
 
 
 def test_port_help_text_matches_the_actual_default(capsys):
@@ -30,7 +32,7 @@ def test_port_help_text_matches_the_actual_default(capsys):
 def test_explicit_port_and_no_browser_are_passed_through():
     with mock.patch.object(server, "serve") as serve:
         assert main(["dashboard", "--port", "0", "--no-browser"]) == 0
-    serve.assert_called_once_with(port=0, open_browser=False)
+    serve.assert_called_once_with(port=0, open_browser=False, reports_root=None)
 
 
 def test_port_in_use_reports_cleanly_instead_of_raising(capsys):
@@ -55,3 +57,9 @@ def test_building_the_parser_does_not_import_the_docker_toolchain():
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
     assert result.stdout.strip() == "False"
+
+
+def test_reports_dir_is_passed_through(tmp_path):
+    with mock.patch.object(server, "serve") as serve:
+        assert main(["dashboard", "--reports-dir", str(tmp_path)]) == 0
+    assert serve.call_args.kwargs["reports_root"] == tmp_path

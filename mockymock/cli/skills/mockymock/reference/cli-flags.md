@@ -304,12 +304,16 @@ mockymock dashboard [options]
 
 Serves a local, read-only, loopback-only status page showing whether
 Docker and the GnuCOBOL toolchain are up. Never builds or starts
-anything; runs until Ctrl-C.
+anything; runs until Ctrl-C. Also lists the `mockymock report` HTML pages
+under `--reports-dir` and shows one inline, and verifies the cobol-testing
+skills in `~/.claude/skills/` with an Install button (the same copy as
+`skills install`; the only write the dashboard makes).
 
 | Option | Default | Description |
 |---|---|---|
 | `--port N` | `8765` | TCP port to serve on; `0` picks a free one. |
 | `--no-browser` | off | Don't automatically open a browser window. |
+| `--reports-dir DIR` | current directory | Where to look for `*.report.html` reports. |
 
 ## `mockymock export`
 
@@ -465,7 +469,7 @@ mode plus every mode's contract.
 | `mutate` | yes (unless `--list`) | `--cut`, `--copybook-path`, `--list`, `--timeout`, `--json-report`, `--fail-under` |
 | `collect` | no | `--cut`, `--json`, `--boundaries`, `--copybook-path` |
 | `explain` | no | `--list`, `--json` |
-| `dashboard` | read-only probe | `--port`, `--no-browser` |
+| `dashboard` | read-only probe | `--port`, `--no-browser`, `--reports-dir` |
 | `doctor` | read-only probe | `--json` |
 | `export` | no | `--cut`, `-o`, `--copybook-path`, `--case`, `--tag` |
 | `analyze` | no | *(forwarded to cobol-parser)* |

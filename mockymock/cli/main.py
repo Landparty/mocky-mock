@@ -162,7 +162,13 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
 
     port = server.DEFAULT_PORT if args.port is None else args.port
     try:
-        server.serve(port=port, open_browser=not args.no_browser)
+        server.serve(
+            port=port,
+            open_browser=not args.no_browser,
+            reports_root=(
+                Path(args.reports_dir).expanduser() if args.reports_dir else None
+            ),
+        )
     except OSError as exc:
         # Almost always "address already in use" -- a second dashboard, or
         # something else on the port. Actionable message, not a traceback.
@@ -3271,7 +3277,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Serve a local web page showing whether Docker and the "
             "GnuCOBOL toolchain are up (read-only; does not build or start "
-            "anything)"
+            "anything), the 'mockymock report' test results found under "
+            "the current directory, and whether the cobol-testing Claude "
+            "Code skills are installed (with a button to install them)"
         ),
     )
     dashboard_parser.add_argument(
@@ -3289,6 +3297,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-browser",
         action="store_true",
         help="Don't open a browser window automatically",
+    )
+    dashboard_parser.add_argument(
+        "--reports-dir",
+        default=None,
+        help=(
+            "Where to look for 'mockymock report' HTML pages "
+            "(*.report.html; default: the current directory)"
+        ),
     )
     dashboard_parser.set_defaults(func=_cmd_dashboard)
 
