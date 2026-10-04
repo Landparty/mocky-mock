@@ -1016,6 +1016,16 @@ def _findings(  # noqa: C901
     if mutation:
         for mutant in mutation.get("survivors") or []:
             line = mutant.get("line")
+            if mutant.get("hint"):
+                add(
+                    "medium",
+                    "untestable-mutant",
+                    f"The test data cannot expose a change at line {line}",
+                    f"{mutant.get('description') or mutant.get('operator')}: "
+                    f"{mutant['hint']}",
+                    line=line,
+                )
+                continue
             add(
                 "medium",
                 "missing-assertion",

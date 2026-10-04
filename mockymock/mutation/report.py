@@ -53,6 +53,10 @@ class MutantResult:
     #: every other status -- and never inferred from `detail` text, which is
     #: a raw compiler/gate line and not a classification.
     stillborn_reason: StillbornReason | None = None
+    #: Set only on a survivor the suite probably cannot kill from the test
+    #: data it uses (see `mutation.zero_baseline`): why, and what to change.
+    #: Still scored as a survivor -- seeding the field is what kills it.
+    hint: str = ""
 
 
 @dataclass
@@ -136,6 +140,8 @@ def format_console(outcome: MutationOutcome) -> str:
             lines.append(f"  line {m.line} [{m.operator}] {m.description}")
             lines.append(f"    - {m.original.strip()}")
             lines.append(f"    + {m.mutated.strip()}")
+            if result.hint:
+                lines.append(f"    ! {result.hint}")
     # Stillborn mutants are excluded from the score, so without this
     # breakdown they are invisible: a line whose every mutant was stillborn
     # looks identical to a line with no mutants at all, and a real coverage
@@ -166,6 +172,13 @@ def format_console(outcome: MutationOutcome) -> str:
         f"({outcome.killed} killed, {outcome.timeouts} timed out, "
         f"{outcome.survived} survived, {outcome.stillborn} stillborn)"
     )
+    hinted = sum(1 for r in survivors if r.hint)
+    if hinted:
+        lines.append(
+            f"{hinted} of those survivors cannot be killed from the test data "
+            "as written (see the ! lines) -- change the starting values, not "
+            "the assertions"
+        )
     if outcome.not_compiled:
         lines.append(
             f"{outcome.not_compiled} of those survivors sit on lines the suite "
@@ -207,6 +220,7 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
                 "detail": r.detail,
                 "ran": r.ran,
                 "stillbornReason": r.stillborn_reason,
+                "hint": r.hint,
             }
             for r in outcome.results
         ],

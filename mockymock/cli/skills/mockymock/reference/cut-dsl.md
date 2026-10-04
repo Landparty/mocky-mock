@@ -113,6 +113,51 @@ END-MOCK
 - `ROWS` is only valid on `SQL` and `READ`; using it elsewhere is a parse
   error.
 
+### A mock replaces the whole statement, clauses included
+
+A `MOCK` on a statement replaces that statement *and every clause it
+owns*, not just the I/O. For `READ` that means the entire
+`READ ... AT END ... NOT AT END ... END-READ`: the program's own
+statements inside `AT END` and `NOT AT END` are commented out and never
+run, even when they are business logic rather than I/O handling. The
+same holds for `INVALID KEY` / `NOT INVALID KEY` on `READ`, `WRITE`,
+`REWRITE`, `DELETE` and `START`, and for `ON EXCEPTION` /
+`NOT ON EXCEPTION` on `CALL`.
+
+So a mock that sets only the record field leaves anything the program
+derives from it inside the clause unset:
+
+```
+       READ PURGE-PARM-FILE
+           AT END
+               MOVE "Y" TO WS-EOF
+           NOT AT END
+               MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE
+       END-READ
+```
+
+```
+MOCK READ PURGE-PARM-FILE
+    MOVE "20260101" TO PURG-CUTOFF-DATE    *> WS-CUTOFF-DATE stays unset
+END-MOCK
+```
+
+Set the field the rest of the program actually reads, doing in the mock
+body what the deleted clause would have done:
+
+```
+MOCK READ PURGE-PARM-FILE
+    MOVE "20260101" TO PURG-CUTOFF-DATE
+    MOVE "20260101" TO WS-CUTOFF-DATE      *> the NOT AT END's own MOVE
+END-MOCK
+```
+
+With `ROWS`, put those fields in each row group, and the `AT END`
+clause's own statements in `TERMINAL` (see above). `mockymock fixtures`
+and scaffolding copy the `AT END` clause's literal `MOVE`/`SET`
+statements into `TERMINAL` for you; nothing copies `NOT AT END`, because
+its statements usually read the record and depend on runtime values.
+
 ### `CAPTURE ARG <n> INTO <target>` -- argument capture (`CALL`/dynamic `CALL` only)
 
 Captures the real value a mocked `CALL` was passed, so you can assert on

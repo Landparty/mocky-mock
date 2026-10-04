@@ -305,7 +305,7 @@ the `cobol-test` skill's hand-over.
   (mainframe) is never computed -- shown as a reminder only.
 - `_findings` categories (severity-ordered): refused, test-failure,
   suspected-bug (a failed INTENT assertion), no-assertion,
-  missing-assertion (surviving mutant), dead-code, untested-paragraph,
+  missing-assertion (surviving mutant), untestable-mutant (a survivor `mutate` hinted is a zero-start test-data gap), dead-code, untested-paragraph,
   rule-without-intent, unlabelled, dialect, coverage, scenario-gap. The
   `cobol-test` skill's `reference/report.md` lists the same set, pinned by
   `tests/unit/test_cobol_testing_plugin.py`.
