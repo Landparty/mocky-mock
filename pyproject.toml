@@ -9,7 +9,7 @@ description = "Mock COBOL CALL statements, compile with GnuCOBOL, run, and asser
 authors = [
     {name = "Samuel Dion"}
 ]
-license = "LicenseRef-Proprietary"
+license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,8 +25,8 @@ classifiers = [
 ]
 keywords = ["cobol", "mainframe", "testing", "gnucobol", "mocking"]
 dependencies = [
-    # cobol-parser now publishes closed-source wheels to PyPI (see
-    # .okf/integration.md), so it resolves as a normal versioned dependency
+    # cobol-parser is published to PyPI (AGPL-3.0-or-later, like this
+    # project; see .okf/integration.md), so it resolves as a normal versioned dependency
     # instead of a pinned sibling-checkout/git install. 1.7.7 is the first
     # published version and carries every fix this project previously
     # tracked via git SHA (DIVIDE/MULTIPLY GIVING ROUNDED, the gen-fixtures

@@ -1,16 +1,18 @@
 ---
 type: Runbook
 title: Publishing
-description: mockymock (proprietary EULA) publishes a plain (source-visible) sdist+wheel to PyPI on every release-please release, mirroring cobol-parser's PyPI pipeline; the Nuitka executable path for mocky-mock-vscode is separate and unaffected.
+description: mockymock (AGPL-3.0-or-later) publishes a plain (source-visible) sdist+wheel to PyPI on every release-please release, mirroring cobol-parser's PyPI pipeline; the Nuitka executable path for mocky-mock-vscode is separate and unaffected.
 tags: [ci, release, publishing, pypi]
 timestamp: 2026-10-04T00:00:00Z
 ---
 
 # Overview
 
-`mockymock` is proprietary: `LICENSE` is an end-user license agreement
-and `pyproject.toml` declares `license = "LicenseRef-Proprietary"` (README's closing
-paragraph summarizes the terms). As of 2026-08-18 its package is
+`mockymock` is free software under **AGPL-3.0-or-later**: `LICENSE` is
+the GNU AGPL v3 text and `pyproject.toml` declares
+`license = "AGPL-3.0-or-later"` (PEP 639 SPDX form, `license-files =
+["LICENSE"]`). It was relicensed from a proprietary EULA on 2026-10-04 to
+match `cobol-parser`, which it depends on. As of 2026-08-18 its package is
 published to PyPI as `mocky-mock` — reversing the 2026-08-14
 "no longer independently distributed" decision this concept used to
 describe. `cobol-parser` was published to PyPI first, originally as

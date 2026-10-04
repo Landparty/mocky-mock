@@ -5,6 +5,12 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-04 -- relicensed AGPL-3.0-or-later
+
+`LICENSE` replaced (EULA -> GNU AGPL v3 text), `pyproject.toml` `license =
+"AGPL-3.0-or-later"`, README licence paragraph and `publishing.md` overview
+updated, root `PUBLISHING.md` marked superseded. Matches `cobol-parser`.
+
 ## 2026-10-04 -- audit: bundle checked against current code
 
 Every backticked path/symbol, the argparse tree (15 subcommands, every flag
