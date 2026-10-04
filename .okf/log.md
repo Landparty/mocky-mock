@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-04 -- skills for GitHub Copilot (`skills install --target`)
+
+`skills install --target claude|copilot|all`; Copilot paths are
+`~/.copilot/skills` and, with `--project`, `./.github/skills`. The
+dashboard's plugin panel verifies and installs per assistant
+(`/api/plugin` now returns `targets`). New
+`tests/unit/test_agent_skills_format.py` checks the Agent Skills
+frontmatter rules. Updated [cli](cli.md), [dashboard](dashboard.md).
+
 ## 2026-10-04 -- dashboard: test results panel and plugin install/verify
 
 `mockymock dashboard` gains `--reports-dir` and two panels: the `mockymock

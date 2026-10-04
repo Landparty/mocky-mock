@@ -106,7 +106,14 @@ for a single session instead.) Or copy the skills with the CLI:
 mockymock skills install            # all three, into ~/.claude/skills/
 mockymock skills install --project  # into ./.claude/skills/ for the team
 mockymock skills install --skill cobol-test
+mockymock skills install --target copilot  # GitHub Copilot: ~/.copilot/skills/
+mockymock skills install --target copilot --project  # ./.github/skills/
 ```
+
+The skills are standard [Agent Skills](https://github.com/agentskills/agentskills),
+so GitHub Copilot (CLI, cloud agent, and agent mode in VS Code and
+JetBrains) uses the same files as Claude Code. `mockymock dashboard`
+verifies and installs them for either assistant.
 
 Then ask the assistant to "test ORDRPROC.cbl". It finishes with:
 
@@ -216,7 +223,7 @@ rest each add one distinctive feature.
 - `mockymock run --record-expectations` — golden/characterization mode: run the suite and turn every `*> STUB EXPECT <name>` comment in the `.cut` file into a real `EXPECT` line, filled in with the value the program actually produced ([design](docs/2026-08-04-record-expectations-design.md))
 - `mockymock debug --dap-stdio` — a real [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) session: breakpoints, stepping, and variable inspection on your original `.cbl` ([design](docs/2026-07-22-dap-debugger-design.md))
 - `mockymock collect --cut ORDRPROC.cut [--json]` — list a suite's cases with line numbers and tags, no Docker needed
-- `mockymock dashboard` — a local page (loopback only) showing at a glance whether Docker and the GnuCOBOL toolchain are up (read-only, it never builds or starts anything), the `mockymock report` HTML test results under the current directory (or `--reports-dir`), and whether the cobol-testing Claude Code skills are installed, with a button that installs and verifies them ([details](.okf/dashboard.md))
+- `mockymock dashboard` — a local page (loopback only) showing at a glance whether Docker and the GnuCOBOL toolchain are up (read-only, it never builds or starts anything), the `mockymock report` HTML test results under the current directory (or `--reports-dir`), and whether the cobol-testing skills are installed for Claude Code and GitHub Copilot, with a button per assistant that installs and verifies them ([details](.okf/dashboard.md))
 - `mockymock export` — write the instrumented source to a file, adjusted for a real fixed-format (z/OS) COBOL compile instead of GnuCOBOL-only; validates the computational core against a real IBM compiler, not real I/O ([details](docs/2026-08-03-mainframe-export-command-design.md))
 
 ## Design goals
