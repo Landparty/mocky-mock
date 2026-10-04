@@ -739,7 +739,7 @@ paragraph-grouped path described above, unchanged. A real
   re-render limited to the shapes an AST walk knows about, which is what
   makes it general enough to cover identifier-sourced MOVEs, `ADD`, `IF`,
   `PERFORM`, and everything else a real `AT END` clause holds.
-  `SourceContext` (the normalized lines plus
+  `ProgramContext` (the normalized lines plus
   `splicer.source_map.collect_boundaries`' statement starts — the SAME two
   inputs the splicer's own `statement_span` uses, so the lifted text cannot
   drift from the deleted text) is threaded from `_cmd_generate` through
@@ -752,7 +752,7 @@ paragraph-grouped path described above, unchanged. A real
   literal's decimal point from being read as one). A lifted line carries a
   `*>` provenance comment naming the source line, since a generated file a
   human reads should not silently contain code that did not come from the
-  fixture data. The `*> TODO` remains the fallback when no `SourceContext`
+  fixture data. The `*> TODO` remains the fallback when no `ProgramContext`
   was supplied or the clause could not be located.
 - **Expectations** render via `_render_expectation(expectation,
   declared_keys, call_count_overrides=None, counted_boundaries=None)`:

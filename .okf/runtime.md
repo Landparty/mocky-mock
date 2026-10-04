@@ -3,7 +3,7 @@ type: Module
 title: Docker Runtime
 description: mockymock-cobc container lifecycle, docker exec-based compile/run, and the Docker-only sandbox model that replaced the local cobc toolchain.
 tags: [runtime, docker, gnucobol]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-10-04T00:00:00Z
 ---
 
 # Overview
@@ -260,6 +260,13 @@ re-mounted per run. Consequences:
   container. `-k 5` escalates to SIGKILL five seconds after the SIGTERM,
   so a binary that ignores SIGTERM cannot keep burning CPU as an orphan
   inside the persistent container.
+- **Output is captured as bytes**, then decoded UTF-8 with
+  `errors="replace"` and no newline translation (2026-09-30, bug hunt round
+  11). `text=True` decoded strictly, so one DISPLAY of a non-UTF-8 byte
+  (HIGH-VALUES, a COMP field) raised `UnicodeDecodeError` out of the whole
+  run, and its universal newlines turned a lone CR inside a DISPLAYed value
+  into LF, splitting a `__MOCKYMOCK__` marker before `parse_stdout`'s
+  LF-only split saw it.
 - **Two layered timeouts**: coreutils `timeout` enforces the limit
   container-side and exits `124` on expiry (`TIMEOUT_EXIT_CODE`, defined in
   `runtime/executor.py` and shared with the report layer's `parse_stdout`);

@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-09-28T00:00:00Z
+timestamp: 2026-10-04T00:00:00Z
 ---
 
 # Overview
@@ -69,7 +69,8 @@ winner.
 
 The YAML parsing and the `project:` schema are **cobol-parser's**
 (`cobolparser.config.load_project_config`), soft-imported: that module lands
-in cobol-parser 1.10, the dependency floor here is deliberately not raised
+in cobol-parser 1.10 (on its `main`; no tagged release through v1.9.0
+carries it as of 2026-10-04), the dependency floor here is deliberately not raised
 for it, and a project with a `cobol.yml` on an older parser gets a
 `ConfigError` naming the version to install. The discovery walk itself is
 implemented here (`find_universal_config()`) precisely so that case produces
@@ -1109,6 +1110,8 @@ instead; `tests/unit/test_cli_skills.py` pins the help text against
 `MODES` and pins (in a subprocess, like the dashboard test above) that
 building the parser doesn't import the module. Any future "cleanup" that
 restores `choices=` also restores the import.
+
+**Every `.cbl`/`.cut` read goes through `_lines.read_utf8_source` (2026-09-30, bug hunt round 12).** A non-UTF-8 source (cp1252 etc.) raises `SourceEncodingError` (a `ValueError` naming the file, the byte offset and an `iconv` fix) instead of a `UnicodeDecodeError` traceback; `run_static_checks` reports it as a problem and `main()` prints it in each command's own error convention (JSON for `collect --json`, stderr otherwise). Policy is refuse, never guess a code page: the spliced copy is compiled as UTF-8, so a guessed cp1252 `PIC X` literal would silently change length. `keep_newlines=True` (used by `generate --fill`, which writes back with `newline=""`) skips universal-newline translation so a CRLF `.cut` stays CRLF. New file reads should use it, not `Path.read_text()`.
 
 **`transform_data_division_exec` is called twice, and the first call's return value is intentionally thrown away** (`_cmd_run`, step 9 vs 11). The first pass exists purely to surface `EXEC SQL INCLUDE SQLCA` refusal reasons *before* any splicing happens; running the real transform that early would shift line numbers/spans that `splice_program` and the boundary/nested-site analysis depend on. Any future edit that tries to "simplify" this into one call will silently break splice-target alignment.
 
