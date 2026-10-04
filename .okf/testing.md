@@ -3,7 +3,7 @@ type: Test Suite
 title: Testing
 description: Unit vs. integration split, the Docker-availability skip guard, the fixtures/ corpus, and the worked GnuCOBOL examples (INVUPDT, ORDRPROC, CUSTINQ, RATERTE, CUSTPROG, CLAIMSEG, FLOWMOCK, TAXFILE, STATELKUP, REGNAVG, CPYPROC, plus the real-world/ and nist-cobol85/ example sets covered by their own READMEs).
 tags: [testing, ci, examples, fixtures]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-10-04T00:00:00Z
 ---
 # Overview
 
@@ -353,6 +353,13 @@ directory by hand, then reinstall editable; confirm with
 `python -c "import cobolparser; print(cobolparser.__file__)"` -- it must
 print a path inside the sibling `cobol-parser` checkout, not
 `site-packages`.
+
+*(Historical, from the git-SHA-pin era: since cobol-parser moved to PyPI,
+`pyproject.toml` declares a version floor (`cobol-parser>=1.7.7,<2`) and
+`requirements-dev.txt` is just `-e .[dev]`, so a fresh dev install resolves
+the newest published release, not a sibling checkout. The same lesson
+holds with "the floor" in place of "the pin": to check behaviour at the
+floor, `pip install "cobol-parser==1.7.7"` into a throwaway venv.)*
 
 **Fixing the above isn't the same as verifying against the pin.** After
 the fix, `import cobolparser` resolves to the *editable sibling

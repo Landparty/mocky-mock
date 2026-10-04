@@ -329,7 +329,7 @@ Matching is **per-identifier, not per-target-program**: two dynamic sites callin
 | endpoint name count > 1 | `UNSUPPORTED_PERFORM_THRU` | ambiguous — could silently cover the wrong slice |
 | `thru` index < `start` index | `UNSUPPORTED_PERFORM_THRU` | backwards range, runtime behavior is implementation-defined |
 
-`_reachable_paragraphs` seeds the BFS stack with the test case's own `perform_target`/`perform_thru` range (missing driver-side endpoints are the `.cut` author's typo → `UNKNOWN_PARAGRAPH`), then for every reachable paragraph's `PerformStatement`s with a `thru_paragraph`, expands and pushes that range too (`_expand_thru_range` reused, default `missing_code="UNSUPPORTED_PERFORM_THRU"` since these are in-program). `_find_performs` recursively collects `PerformStatement`s from nested bodies too, reusing `mock_surface._nested_statement_lists` rather than reimplementing nested traversal.
+`_reachable_paragraphs` seeds the BFS stack with the test case's own `perform_target`/`perform_thru` range (missing driver-side endpoints are the `.cut` author's typo → `UNKNOWN_PARAGRAPH`), then for every reachable paragraph's `PerformStatement`s with a `thru_paragraph`, expands and pushes that range too (`_expand_thru_range` reused, default `missing_code="UNSUPPORTED_PERFORM_THRU"` since these are in-program). `_find_flow_statements` (formerly `_find_performs`) recursively collects `PerformStatement`s (and `GoStatement`s) from nested bodies too, reusing `mock_surface._nested_statement_lists` rather than reimplementing nested traversal.
 
 A THRU range covering a paragraph with an unspliceable nested site just makes that site reachable — `UNSUPPORTED_NESTED_MOCK_TARGET` fires through the ordinary per-site path, no special casing needed.
 

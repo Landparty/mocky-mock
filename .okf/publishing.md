@@ -1,26 +1,30 @@
 ---
 type: Runbook
 title: Publishing
-description: mockymock publishes a plain (source-visible) sdist+wheel to PyPI on every release-please release, mirroring cobol-parser's PyPI pipeline; the Nuitka executable path for mocky-mock-vscode is separate and unaffected.
+description: mockymock (AGPL-3.0-or-later) publishes a plain (source-visible) sdist+wheel to PyPI on every release-please release, mirroring cobol-parser's PyPI pipeline; the Nuitka executable path for mocky-mock-vscode is separate and unaffected.
 tags: [ci, release, publishing, pypi]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-10-04T00:00:00Z
 ---
 
 # Overview
 
-`mockymock` and its `cobolparser` dependency are both private *repos* (see
-`LICENSE`, `PUBLISHING.md`), but as of 2026-08-18 mockymock's package is
+`mockymock` is free software under **AGPL-3.0-or-later**: `LICENSE` is
+the GNU AGPL v3 text and `pyproject.toml` declares
+`license = "AGPL-3.0-or-later"` (PEP 639 SPDX form, `license-files =
+["LICENSE"]`). It was relicensed from a proprietary EULA on 2026-10-04 to
+match `cobol-parser`, which it depends on. As of 2026-08-18 its package is
 published to PyPI as `mocky-mock` — reversing the 2026-08-14
 "no longer independently distributed" decision this concept used to
-describe. `cobol-parser` was published to PyPI first (as closed-source
-Cython wheels — see that repo's own `.github/workflows/release-please.yml`
-and `docs/superpowers/specs/2026-08-14-pypi-closed-source-release-design.md`);
-mockymock's own release pipeline now mirrors that shape, with one
-deliberate difference: **mockymock ships a plain wheel, source visible**.
-It's pure Python with no compiled extension (no `.pyx`/`build_ext` anywhere
-in this repo), so matching cobol-parser's closed-source cibuildwheel matrix
-would mean introducing a whole new Cython build system, not just copying
-CI — that was explicitly scoped out when this reversal was decided.
+describe. `cobol-parser` was published to PyPI first, originally as
+closed-source Cython wheels (that repo's
+`docs/superpowers/specs/2026-08-14-pypi-closed-source-release-design.md`,
+which that repo's `CLAUDE.md` now lists as superseded); on 2026-10-03 it was relicensed
+**AGPL-3.0-or-later**, and its wheels now ship every module as plain `.py`
+with only three hot-path accelerators compiled. mockymock's own release
+pipeline mirrors that repo's release-please → PyPI shape, minus the
+cibuildwheel matrix: mockymock is pure Python with no compiled extension
+(no `.pyx`/`build_ext` anywhere in this repo), so one `py3-none-any` wheel
+plus an sdist is the whole build.
 
 `release-please.yml`'s jobs, in order:
 - `release-please` — cuts the version-bump PR / GitHub Release (unchanged).
@@ -77,8 +81,8 @@ in the same commit.
   payload at that path doesn't match what's expected, so a stale dir left
   by a different build is not silently reused. Caveat: `mockymock`'s own
   version string does not change when `build-and-release.yml`'s
-  "Force-install cobol-parser's latest release" step overrides the pinned
-  `cobolparser` commit — two builds a day apart can share the same
+  "Force-install cobol-parser's latest release" step overrides whatever
+  `cobol-parser` the `>=1.7.7,<2` floor resolved — two builds a day apart can share the same
   `{VERSION}` path. That's still safe (the hash check catches it), just
   worth knowing if you're ever debugging why a "same version" binary
   behaves differently than expected on a machine with a stale cache dir —
@@ -105,7 +109,10 @@ in the same commit.
   a genuine one-off override (e.g. to skip a version) belongs in a commit's
   `Release-As: X.Y.Z` trailer instead, which `release-please` only applies
   once, to that commit's own version proposal.
-- `build-executables.yml`'s `run:` steps default to `pwsh` on
+- (Retired here: `build-executables.yml` was deleted with the old
+  in-repo Nuitka release jobs -- see `PUBLISHING.md`; the lesson applies to
+  any Windows CI step, now chiefly mocky-mock-vscode's
+  `build-and-release.yml`.) `build-executables.yml`'s `run:` steps defaulted to `pwsh` on
   `windows-latest`; only `bash`/`sh`-family shells expand `${TOKEN}`-style
   env vars the way Linux/macOS's default `bash` does. Any step that builds
   a shell string from a secret needs an explicit `shell: bash` on every OS,

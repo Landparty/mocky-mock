@@ -221,8 +221,6 @@ It's built on:
 - The [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) —
   the wire protocol behind the interactive debugger.
 
-mockymock is proprietary software: free to use for personal, educational,
-or internal business purposes and free to share as-is, but it may not be
-sold, sublicensed, or bundled into any product or service that is sold.
-See the [LICENSE](LICENSE) (an end-user license agreement, not an OSI
-open-source license) for the full terms.
+mockymock is free software, licensed under the GNU Affero General Public
+License v3.0 or later (AGPL-3.0-or-later), the same license as its
+`cobolparser` dependency. See [LICENSE](LICENSE) for the full terms.

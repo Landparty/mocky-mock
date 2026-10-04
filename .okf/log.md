@@ -5,6 +5,41 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-04 -- relicensed AGPL-3.0-or-later
+
+`LICENSE` replaced (EULA -> GNU AGPL v3 text), `pyproject.toml` `license =
+"AGPL-3.0-or-later"`, README licence paragraph and `publishing.md` overview
+updated, root `PUBLISHING.md` marked superseded. Matches `cobol-parser`.
+
+## 2026-10-04 -- audit: bundle checked against current code
+
+Every backticked path/symbol, the argparse tree (15 subcommands, every flag
+in its `cli.md` heading), version (0.8.0 in both places), CI and
+release-please workflows checked. Fixed:
+
+- [publishing](publishing.md): mockymock's license stated (proprietary
+  EULA, `LicenseRef-Proprietary`); cobol-parser is no longer described as
+  closed-source (relicensed AGPL-3.0-or-later 2026-10-03, source-visible
+  wheels); the `build-executables.yml` gotcha marked as about a deleted
+  workflow; "pinned `cobolparser` commit" -> the `>=1.7.7,<2` floor.
+- [integration](integration.md) + `interface-contract.md`: dropped the
+  claim that mockymock uses `DynamicCallAnalyzer` / `parse_cobol_with_expansion`
+  (nothing imports either); added the imports neither listed
+  (`strip_compiler_directives`, `CopybookNotFoundError`,
+  `collect_declared_items`, `compute_program_data_items`,
+  `ProgramFixtureGenerator`/`DataGeneratorOptions`, `cobolparser.config`,
+  `cobolparser.cli.parse.main`); `ExecCicsStatement`/`ExecImsStatement` are
+  `CobolStatement` subclasses in current cobol-parser, not bare `ASTNode`s.
+- [cli](cli.md): new gotcha for `_lines.read_utf8_source` /
+  `SourceEncodingError` (round 12 had reached only this log);
+  `cobolparser.config` is in no tagged cobol-parser release yet (v1.9.0).
+- [runtime](runtime.md): `run_binary` captures bytes (round 11).
+- [report](report.md): JUnit is ElementTree `indent`/`tostring`, not minidom.
+- [dsl](dsl.md): `SourceContext` -> `ProgramContext`.
+- [analysis](analysis.md): `_find_performs` -> `_find_flow_statements`.
+- [testing](testing.md): the "verify against the pin" gotcha marked as
+  git-SHA-era history; `requirements-dev.txt` now resolves PyPI.
+
 ## 2026-09-30 -- bug hunt round 12: non-UTF-8 sources, CRLF fill, debugger text, copybook line numbers
 
 Each reproduced first and pinned by `tests/unit/test_bug_hunt_r12.py`
