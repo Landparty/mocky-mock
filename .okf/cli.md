@@ -1090,6 +1090,24 @@ over `--cut`'s default path. `--command` is stored as `command` (argparse
 dest `command_text`, since `command` is the subparser dest). Unknown
 status or empty step/summary -> exit 2 with a message, nothing written.
 
+## `mockymock skills plugin [DIRECTORY] [--force]` (2026-10-04)
+
+Writes the `cobol-testing` plugin as a self-contained **local
+marketplace** (`skills_cmd.export_plugin`), default
+`~/.mockymock/claude-plugin`: `.claude-plugin/marketplace.json` (name
+`LOCAL_MARKETPLACE_NAME` = `mocky-mock-local`, so it never collides with
+the GitHub/clone marketplace `mocky-mock`) plus `cobol-testing/` holding
+`.claude-plugin/plugin.json` and `skills/<SKILL_NAMES>`. Exists because a
+wheel carries only `mockymock/cli/skills/`, not the repo-root
+`.claude-plugin/`. The exported manifest is `PLUGIN_MANIFEST` with
+`version = mockymock.__version__` and no `skills` key (the default
+`skills/` folder is used); `tests/unit/test_cobol_testing_plugin.py`
+pins `PLUGIN_MANIFEST` to the repo manifest minus `skills`/`version`.
+Fail-closed: a non-empty directory is replaced only with `--force` AND
+only when its marketplace.json names `mocky-mock-local` -- a mistyped path
+is never `rmtree`d. From a clone, `/plugin marketplace add <repo>` works
+directly off the repo-root manifests.
+
 ## `mockymock skills mode [--set MODE] [--json]` (2026-09-16)
 
 Shows (or persists) the **AI assistant mode** — how much the packaged

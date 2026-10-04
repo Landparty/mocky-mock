@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-04 -- `mockymock skills plugin` (local plugin install)
+
+New `skills plugin [DIRECTORY] [--force]` leaf writing the cobol-testing
+plugin as a local marketplace (`mocky-mock-local`) for pip installs with
+no clone. [cli](cli.md) section added; README documents GitHub, clone and
+pip install routes.
+
 ## 2026-10-04 -- `cobol-testing` plugin, `cobol-test` skill, `mockymock report`
 
 New subcommands `report` and `journal` (17 total) and the

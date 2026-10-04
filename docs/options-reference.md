@@ -27,6 +27,7 @@ This document only covers *usage*.
   - [`report`](#mockymock-report)
   - [`journal`](#mockymock-journal)
   - [`skills install`](#mockymock-skills-install)
+  - [`skills plugin`](#mockymock-skills-plugin)
   - [`skills mode`](#mockymock-skills-mode)
 - [The `.cut` file: directives and options](#the-cut-file-directives-and-options)
 - [Environment variables](#environment-variables)
@@ -516,6 +517,35 @@ mockymock skills install
 mockymock skills install --project --force
 ```
 
+### `mockymock skills plugin`
+
+```bash
+mockymock skills plugin [DIRECTORY] [--force]
+```
+
+Writes the `cobol-testing` Claude Code plugin as a local marketplace, so
+it installs from disk with no clone and no network:
+
+```
+<DIRECTORY>/.claude-plugin/marketplace.json      (marketplace "mocky-mock-local")
+<DIRECTORY>/cobol-testing/.claude-plugin/plugin.json
+<DIRECTORY>/cobol-testing/skills/{mockymock,cobol-analysis,cobol-test}/
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `DIRECTORY` | `~/.mockymock/claude-plugin` | Where to write it. An empty or missing directory is fine. |
+| `--force` | off | Replace an earlier export there (re-run after upgrading mockymock). A non-empty directory that is not an earlier export is refused even with `--force`. |
+
+Then, in Claude Code:
+
+```
+/plugin marketplace add ~/.mockymock/claude-plugin
+/plugin install cobol-testing@mocky-mock-local
+```
+
+or, for one session only, `claude --plugin-dir ~/.mockymock/claude-plugin/cobol-testing`.
+
 ### `mockymock skills mode`
 
 ```bash
@@ -834,4 +864,5 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
 | `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
 | `skills install` | no | `--project`, `--force`, `--skill` |
+| `skills plugin` | no | `--force` |
 | `skills mode` | no | `--set`, `--json` |

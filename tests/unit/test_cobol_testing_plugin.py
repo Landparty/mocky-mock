@@ -149,3 +149,13 @@ def test_every_cli_flag_is_in_the_skill_reference():
         "mockymock/cli/skills/mockymock/reference/cli-flags.md does not mention: "
         + ", ".join(missing)
     )
+
+
+def test_exported_manifest_matches_the_repository_manifest():
+    from mockymock.cli.skills_cmd import PLUGIN_MANIFEST
+
+    manifest = json.loads(
+        (REPO / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
+    expected = {k: v for k, v in manifest.items() if k not in ("skills", "version")}
+    assert PLUGIN_MANIFEST == expected
