@@ -2390,26 +2390,47 @@ def _cmd_collect(args: argparse.Namespace) -> int:
 
 
 def _cmd_skills_install(args: argparse.Namespace) -> int:
-    """Copy the packaged Claude Code skill to ~/.claude/skills/mockymock
-    (or ./.claude/skills/mockymock with --project). Pure file copy -- no
-    Docker, no parsing -- so it's always available, same tier as
-    lint/collect."""
+    """Copy the packaged Claude Code skills (mockymock, cobol-analysis,
+    cobol-test) to ~/.claude/skills/<name> (or ./.claude/skills/<name>
+    with --project). Pure file copy -- no Docker, no config. Fail-closed
+    across the set: if any target exists and --force is absent, nothing is
+    written, so a half-installed set never mixes old and new copies."""
     from mockymock.cli.skills_cmd import (
+        SKILL_NAMES,
         SkillTargetExistsError,
         install_skill,
         resolve_target,
     )
 
-    target = resolve_target(args.project)
-    try:
-        install_skill(target, force=args.force)
-    except SkillTargetExistsError as exc:
-        print(f"mockymock skills install: {exc}")
+    names = args.skill or list(SKILL_NAMES)
+    unknown = [n for n in names if n not in SKILL_NAMES]
+    if unknown:
+        print(
+            f"mockymock skills install: unknown skill(s) {', '.join(unknown)} "
+            f"(expected: {', '.join(SKILL_NAMES)})"
+        )
         return 1
-    print(f"mockymock skills install: installed -> {target}")
+    targets = [(name, resolve_target(args.project, name)) for name in names]
+    if not args.force:
+        occupied = [t for _, t in targets if t.exists() or t.is_symlink()]
+        if occupied:
+            for target in occupied:
+                print(
+                    f"mockymock skills install: {target} already exists; "
+                    f"use --force to overwrite"
+                )
+            return 1
+    for name, target in targets:
+        try:
+            install_skill(target, force=args.force, name=name)
+        except SkillTargetExistsError as exc:
+            print(f"mockymock skills install: {exc}")
+            return 1
+        print(f"mockymock skills install: installed -> {target}")
     print(
         "mockymock skills install: restart Claude Code (or start a new "
-        "session) to pick it up"
+        "session) to pick up the skills; ask it to test a COBOL program "
+        "to start with cobol-test."
     )
     return 0
 
@@ -2460,6 +2481,102 @@ def _cmd_skills_mode(args: argparse.Namespace) -> int:
         print(json.dumps(format_mode_json(resolved), indent=2))
     else:
         print(format_mode_report(resolved))
+    return 0
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    """Join every check mockymock and cobol-parser can make on one
+    program/.cut pair into a single report -- the steps taken, a
+    verification level per test case, and the findings -- written as JSON
+    and/or a self-contained HTML page. See report/test_report.py."""
+    import json
+
+    from mockymock.report.html_report import render_html
+    from mockymock.report.journal import default_journal_path
+    from mockymock.report.test_report import ReportOptions, build_report
+
+    pair = _resolve_program_and_cut("mockymock report", args)
+    if pair is None:
+        return 1
+    source_path, cut_path = pair
+    _apply_config_to_args(args, source_path)
+    if args.mutation_threshold < 0 or args.mutation_threshold > 100:
+        print("mockymock report: --mutation-threshold must be between 0 and 100")
+        return 1
+    journal = Path(args.journal) if args.journal else default_journal_path(cut_path)
+    options = ReportOptions(
+        program=source_path,
+        cut=cut_path,
+        copybook_paths=list(args.copybook_path or []),
+        run_json=Path(args.run_json) if args.run_json else None,
+        coverage_json=Path(args.coverage_json) if args.coverage_json else None,
+        mutation_json=Path(args.mutation_json) if args.mutation_json else None,
+        journal=journal,
+        execute=args.execute,
+        mutate=args.mutate,
+        scenarios=args.scenarios,
+        seed=args.seed,
+        timeout=args.timeout,
+        mutation_threshold=args.mutation_threshold,
+    )
+    report = build_report(options)
+    html_path = (
+        Path(args.output)
+        if args.output
+        else source_path.with_name(f"{source_path.stem}.report.html")
+    )
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.write_text(render_html(report), encoding="utf-8")
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(
+            json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+    for step in report["steps"]:
+        print(
+            f"mockymock report: [{step['status']:>7}] {step['title']}: {step['summary']}"
+        )
+    summary = report["summary"]
+    findings = summary["findings"]
+    print(
+        f"mockymock report: {findings['high']} high, {findings['medium']} medium, "
+        f"{findings['low']} low finding(s)"
+    )
+    print(f"mockymock report: wrote {html_path}")
+    if args.json:
+        print(f"mockymock report: wrote {args.json}")
+    return 1 if summary["failed"] or summary["levels"].get("none") else 0
+
+
+def _cmd_journal(args: argparse.Namespace) -> int:
+    """Append one entry to a suite's assistant journal (report/journal.py),
+    which `mockymock report` shows as a timeline."""
+    from mockymock.report.journal import (
+        JournalError,
+        append_entry,
+        default_journal_path,
+    )
+
+    if args.file:
+        path = Path(args.file)
+    elif args.cut:
+        path = default_journal_path(Path(args.cut))
+    else:
+        print("mockymock journal: pass --cut (journal next to it) or --file")
+        return 1
+    try:
+        append_entry(
+            path,
+            step=args.step,
+            summary=args.summary,
+            status=args.status,
+            command=args.command_text,
+            decision=args.decision,
+        )
+    except JournalError as exc:
+        print(f"mockymock journal: {exc}")
+        return 1
+    print(f"mockymock journal: appended to {path}")
     return 0
 
 
@@ -2586,11 +2703,15 @@ commands, grouped by how often you'll reach for them:
     dashboard  local status page for Docker/GnuCOBOL readiness
     doctor     one-shot terminal readiness report
 
+  Reporting:
+    report     one HTML/JSON report: every step, a proof level per test
+    journal    record an assistant's step for the report's timeline
+
   Advanced:
     mutate     mutation-test a program against its .cut suite
     export     write mainframe-ready instrumented source
     fixtures   print a FixtureBundle as JSON for editor integrations
-    skills     manage the packaged Claude Code skill
+    skills     manage the packaged Claude Code skills
     setup      build the GnuCOBOL image and start the toolchain container
 
 Run 'mockymock <command> --help' for a command's own options.
@@ -3160,6 +3281,97 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor_parser.set_defaults(func=_cmd_doctor)
 
+    report_parser = subparsers.add_parser(
+        "report",
+        help=(
+            "Write one HTML (and optional JSON) report for a program and its "
+            ".cut suite: every analysis step, a verification level per test "
+            "case, and the findings"
+        ),
+    )
+    report_parser.add_argument(
+        "program", nargs="?", help="Omit to infer from --cut's sibling file"
+    )
+    report_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
+    report_parser.add_argument(
+        "-o",
+        "--output",
+        help="HTML report path (default: <program>.report.html next to the program)",
+    )
+    report_parser.add_argument("--json", help="Also write the report as JSON here")
+    report_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    report_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Run the suite (with coverage) now; needs Docker",
+    )
+    report_parser.add_argument(
+        "--mutate",
+        action="store_true",
+        help="Run mutation testing now; needs Docker and takes longer",
+    )
+    report_parser.add_argument(
+        "--run-json", help="Read results from an earlier 'run --json-report'"
+    )
+    report_parser.add_argument(
+        "--coverage-json", help="Read coverage from an earlier 'run --coverage-json'"
+    )
+    report_parser.add_argument(
+        "--mutation-json", help="Read an earlier 'mutate --json-report'"
+    )
+    report_parser.add_argument(
+        "--journal",
+        help="Assistant journal to include (default: <cut>.journal.jsonl if present)",
+    )
+    report_parser.add_argument(
+        "--scenarios",
+        default="branches",
+        choices=["happy", "branches", "all", "none"],
+        help="happy, branches, all, or none: how to measure reachable branch arms (default: branches)",
+    )
+    report_parser.add_argument("--seed", type=int, help="Seed for fixture generation")
+    report_parser.add_argument(
+        "--timeout", type=int, help="Per-run timeout in seconds passed to 'run'"
+    )
+    report_parser.add_argument(
+        "--mutation-threshold",
+        type=float,
+        default=80.0,
+        help="Mutation score (percent) a suite needs for its cases to reach L2 (default: 80)",
+    )
+    report_parser.set_defaults(func=_cmd_report)
+
+    journal_parser = subparsers.add_parser(
+        "journal",
+        help="Append one assistant step to a suite's journal for 'mockymock report'",
+    )
+    journal_parser.add_argument(
+        "--cut", help="The suite; the journal is <cut>.journal.jsonl next to it"
+    )
+    journal_parser.add_argument("--file", help="Explicit journal path instead")
+    journal_parser.add_argument("--step", required=True, help="Step name, e.g. plan")
+    journal_parser.add_argument(
+        "--summary", required=True, help="What was done and what came of it"
+    )
+    journal_parser.add_argument(
+        "--status",
+        default="ok",
+        help="ok, warn, fail, skipped, or info (default: ok)",
+    )
+    journal_parser.add_argument(
+        "--command",
+        dest="command_text",
+        help="The command that was run, if any",
+    )
+    journal_parser.add_argument("--decision", help="A decision taken, and why")
+    journal_parser.set_defaults(func=_cmd_journal)
+
     analyze_parser = subparsers.add_parser(
         "analyze",
         help=(
@@ -3218,7 +3430,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.set_defaults(func=_cmd_export)
 
     skills_parser = subparsers.add_parser(
-        "skills", help="Manage the packaged Claude Code skill for mockymock"
+        "skills", help="Manage the packaged Claude Code skills for mockymock"
     )
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command")
 
@@ -3234,22 +3446,29 @@ def build_parser() -> argparse.ArgumentParser:
     skills_install_parser = skills_subparsers.add_parser(
         "install",
         help=(
-            "Install the mockymock Claude Code skill (SKILL.md + "
-            "reference/ files) so a Claude Code session can use it"
+            "Install the packaged Claude Code skills (mockymock, "
+            "cobol-analysis, cobol-test) so a Claude Code session can use them"
         ),
     )
     skills_install_parser.add_argument(
         "--project",
         action="store_true",
         help=(
-            "Install into ./.claude/skills/mockymock instead of "
-            "~/.claude/skills/mockymock"
+            "Install into ./.claude/skills/<name> instead of " "~/.claude/skills/<name>"
         ),
     )
     skills_install_parser.add_argument(
         "--force",
         action="store_true",
         help="Overwrite an existing install at the target path",
+    )
+    skills_install_parser.add_argument(
+        "--skill",
+        action="append",
+        help=(
+            "Install only this skill (repeatable): mockymock, cobol-analysis "
+            "or cobol-test. Default: all three"
+        ),
     )
     skills_install_parser.set_defaults(func=_cmd_skills_install)
 

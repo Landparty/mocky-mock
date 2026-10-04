@@ -18,10 +18,33 @@ def test_skills_install_writes_to_home_by_default(monkeypatch, tmp_path, capsys)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     exit_code = main(["skills", "install"])
     assert exit_code == 0
-    target = tmp_path / ".claude" / "skills" / "mockymock"
-    assert (target / "SKILL.md").is_file()
     out = capsys.readouterr().out
-    assert f"installed -> {target}" in out
+    for name in ("mockymock", "cobol-analysis", "cobol-test"):
+        target = tmp_path / ".claude" / "skills" / name
+        assert (target / "SKILL.md").is_file()
+        assert f"installed -> {target}" in out
+
+
+def test_skills_install_skill_flag_installs_only_the_named_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert main(["skills", "install", "--skill", "cobol-test"]) == 0
+    skills = tmp_path / ".claude" / "skills"
+    assert (skills / "cobol-test" / "reference" / "report.md").is_file()
+    assert not (skills / "mockymock").exists()
+
+
+def test_skills_install_rejects_an_unknown_skill(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert main(["skills", "install", "--skill", "nope"]) == 1
+    assert "unknown skill" in capsys.readouterr().out
+    assert not (tmp_path / ".claude").exists()
+
+
+def test_skills_install_writes_nothing_when_any_target_exists(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".claude" / "skills" / "cobol-test").mkdir(parents=True)
+    assert main(["skills", "install"]) == 1
+    assert not (tmp_path / ".claude" / "skills" / "mockymock").exists()
 
 
 def test_skills_install_project_flag_writes_to_cwd(monkeypatch, tmp_path):

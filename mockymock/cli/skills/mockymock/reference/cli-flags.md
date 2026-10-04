@@ -357,18 +357,64 @@ mockymock analyze dead-code ORDRPROC.cbl --compact
 mockymock analyze program-flow ORDRPROC.cbl
 ```
 
+## `mockymock report`
+
+```bash
+mockymock report [PROGRAM.cbl] [--cut PROGRAM.cut] [-o PROGRAM.report.html]
+    [--json PATH] [--execute] [--mutate]
+    [--run-json PATH] [--coverage-json PATH] [--mutation-json PATH]
+    [--journal PATH] [--scenarios happy|branches|all|none] [--seed N]
+    [--timeout S] [--mutation-threshold PCT] [--copybook-path DIR ...]
+```
+
+One self-contained HTML page (plus JSON with `--json`) for a program and
+its suite: eleven steps (environment, understand, rules, inventory, lint,
+scenarios, run, coverage, mutation, dialect, verdict), a verification
+level per test case (L0 static, L1 executed, L2 strong, L3
+dialect-checked), assertion labels (INTENT / CHARACTERIZATION /
+unlabelled), and findings ranked by severity.
+
+| Option | Default | Description |
+|---|---|---|
+| `-o`, `--output` | `<program>.report.html` | HTML path. |
+| `--json` | none | Also write the report as JSON. |
+| `--execute` | off | Run the suite with coverage now (Docker). |
+| `--mutate` | off | Run mutation testing now (Docker, slower). |
+| `--run-json` / `--coverage-json` / `--mutation-json` | none | Reuse results an earlier `run --json-report` / `run --coverage-json` / `mutate --json-report` wrote, instead of re-running. |
+| `--journal` | `<cut>.journal.jsonl` if present | The assistant's step journal (see `mockymock journal`). |
+| `--scenarios` | `branches` | How to measure reachable branch arms; `none` skips the fixture step. |
+| `--seed` | none | Seed for that fixture generation. |
+| `--timeout` | `run`'s own | Per-run timeout passed to `run`. |
+| `--mutation-threshold` | `80` | Mutation score (percent) a suite needs for its cases to reach L2. |
+| `--copybook-path` | config / defaults | As everywhere else. |
+
+Exits 1 when a test failed or the suite is refused by the static gate,
+else 0. Without `--execute`/`--run-json`, nothing is claimed beyond L0.
+
+## `mockymock journal`
+
+```bash
+mockymock journal (--cut PROGRAM.cut | --file PATH) --step NAME --summary TEXT
+    [--status ok|warn|fail|skipped|info] [--command TEXT] [--decision TEXT]
+```
+
+Appends one JSON line to the suite's journal (`<cut stem>.journal.jsonl`
+next to the `.cut`, or `--file`), which `mockymock report` shows as a
+timeline: what the assistant did at each step and why.
+
 ## `mockymock skills install`
 
 ```bash
-mockymock skills install [--project] [--force]
+mockymock skills install [--project] [--force] [--skill NAME ...]
 ```
 
-Installs this skill's own files (`SKILL.md` plus `reference/`) so a
-Claude Code session picks it up. Defaults to `~/.claude/skills/mockymock`
-(global -- works across every COBOL repo tested with mockymock); pass
-`--project` to install into `./.claude/skills/mockymock` instead, so a
-team can commit it for shared use. Refuses to overwrite an existing
-install unless `--force` is given.
+Installs the packaged skills -- this one, `cobol-analysis` and
+`cobol-test` -- so a Claude Code session picks them up. Defaults to
+`~/.claude/skills/<name>` (global -- works across every COBOL repo tested
+with mockymock); pass `--project` to install into `./.claude/skills/<name>`
+instead, so a team can commit them for shared use. `--skill NAME`
+(repeatable) installs only the named ones. Refuses to overwrite any
+existing install (writing nothing) unless `--force` is given.
 
 ## `mockymock skills mode`
 
@@ -409,5 +455,7 @@ mode plus every mode's contract.
 | `doctor` | read-only probe | `--json` |
 | `export` | no | `--cut`, `-o`, `--copybook-path`, `--case`, `--tag` |
 | `analyze` | no | *(forwarded to cobol-parser)* |
-| `skills install` | no | `--project`, `--force` |
+| `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
+| `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
+| `skills install` | no | `--project`, `--force`, `--skill` |
 | `skills mode` | no | `--set`, `--json` |

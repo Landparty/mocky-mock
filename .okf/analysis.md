@@ -441,6 +441,26 @@ against the naive scan it replaced.
 
 SECTION-scoped enclosing paragraphs are declined, not supported: an independent code review (same day, before Docker verification) found the first shipped version applied `EXIT SECTION` unsoundly — skipping a cleanup paragraph that followed the exit-only paragraph inside the same section, and applying the splice even in `find_terminator_plans`' own unverified "shape 3" (a `.cut` `perform_target` naming the section's first paragraph directly). The same review found the adjacency requirement above was undocumented-only in the first version, not enforced — a `PERFORM ... THRU <exit-paragraph>` range covering a real intermediate paragraph got a clean plan and a silently changed early-exit path. See [splicer](splicer.md#go-to-to-exit-paragraph-simplification) for the span-computation subtlety this feature's first implementation also got wrong (a nested GO TO needs `nested_statement_span`, not `statement_span`, or it silently swallows the enclosing `END-IF`) and `docs/2026-08-17-goto-exit-paragraph-simplification-design.md`'s two Revision notes for the full account and current verification status.
 
+## Assertion labels and dialect risk (2026-10-04)
+
+Two small modules feeding `mockymock report` (see [report](report.md)),
+neither part of the refusal gate:
+
+- `assertion_labels.py` -- `scan_assertion_labels(cut_text)` attaches the
+  nearest `*> INTENT: ...` / `*> CHARACTERIZATION: ...` comment above each
+  EXPECT/VERIFY line. A label covers lines until a blank line, the next
+  label, a TESTCASE, or any other directive; `BR-\d+` ids in the note
+  become `rule_ids`. `RECORDED_LABEL` is what `record_rewrite` inserts.
+- `dialect_risk.py` -- `find_dialect_risks(ast, original_lines,
+  line_map=None)` lists statements whose result can differ between
+  GnuCOBOL and IBM Enterprise COBOL: HEX_LITERAL (high, a source scan of
+  PROCEDURE DIVISION lines); EBCDIC/SORT/SEARCH ALL collation, sign
+  overpunch, intermediate precision (COMPUTE with division/exponent),
+  clock-dependent (medium); binary truncation, numeric-edited, intrinsic
+  FUNCTIONs (low). `BLOCKING_SEVERITIES` (high, medium) is what keeps a
+  case from L3. Heuristic by design: a finding is a place to look, not a
+  proven divergence.
+
 # See Also
 
 - [splicer](splicer.md) — consumes `BoundarySite`/`CallSite` to compute and validate replacement spans (`annotate_nested_sites` fills in `span`/`unspliceable_reason`), then emits the EVALUATE dispatch blocks; `build_driver`'s `record_targets` param and the `RECORD` marker codegen `stub_expectations.py` feeds.

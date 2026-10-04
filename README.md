@@ -64,20 +64,43 @@ python -m pytest tests/unit -v
 `tests/integration/` additionally needs the Docker daemon reachable and
 is skipped automatically if it isn't.
 
-## AI assistant skill
+## AI assistant skills
 
-mockymock ships a [Claude Code](https://claude.com/claude-code) skill
-teaching an AI assistant how to scaffold, edit, and run `.cut` test
-files. Install it once:
+mockymock ships three [Claude Code](https://claude.com/claude-code) skills,
+also packaged as the `cobol-testing` plugin:
 
-```bash
-mockymock skills install
+| Skill | What it teaches the assistant |
+|---|---|
+| `cobol-test` | The whole job: understand the program, plan one test per business-rule arm, write assertions labelled `INTENT` (from a rule) or `CHARACTERIZATION` (from a run), run and mutation-test the suite, and hand over an HTML report. Start here. |
+| `mockymock` | The `.cut` DSL, every CLI flag, the paragraph-first loop. |
+| `cobol-analysis` | Which cobol-parser analyzer answers which question. |
+
+Install as a plugin (Claude Code):
+
+```
+/plugin marketplace add Landparty/mocky-mock
+/plugin install cobol-testing@mocky-mock
 ```
 
-This writes to `~/.claude/skills/mockymock` by default (works across
-every COBOL repo you test with mockymock); pass `--project` to install
-into the current repo's `.claude/skills/mockymock` instead, so a team can
-commit it for shared use. See `mockymock skills install --help`.
+or copy the skills with the CLI:
+
+```bash
+mockymock skills install            # all three, into ~/.claude/skills/
+mockymock skills install --project  # into ./.claude/skills/ for the team
+mockymock skills install --skill cobol-test
+```
+
+Then ask the assistant to "test ORDRPROC.cbl". It finishes with:
+
+```bash
+mockymock report ORDRPROC.cbl --cut ORDRPROC.cut --execute --mutate
+```
+
+which writes `ORDRPROC.report.html`: a summary, what needs attention
+(suspected bugs, missing assertions, untested paragraphs, GnuCOBOL vs IBM
+dialect risks), every test case with its verification level (L0 static to
+L3 dialect-checked), and a numbered account of every step, including the
+assistant's own decisions recorded with `mockymock journal`.
 
 ### How much it checks in with you
 

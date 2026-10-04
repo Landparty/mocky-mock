@@ -250,22 +250,39 @@ def rewrite_cut_text(
     cut_text: str,
     report: RecordingReport,
     pictures: dict[str, str] | None = None,
+    *,
+    label: bool = True,
 ) -> str | None:
     """Replace each recorded stub's comment line with a real `EXPECT` line,
-    preserving that line's own leading whitespace. No line is inserted or
-    removed (a stub comment and its replacement are both exactly one line),
-    so application order never matters.
+    preserving that line's own leading whitespace.
 
     `pictures` (data-name -> PICTURE) lets a plain numeric field's raw
     DISPLAY text be rendered as the numeric literal it stands for -- see
     `render_expect_value`.
+
+    With `label` (the default) each run of consecutive recorded lines also
+    gets a `*> CHARACTERIZATION: recorded by ...` comment above it (see
+    analysis/assertion_labels.py), so a recorded value can never pass for
+    one somebody derived from the program's intent. A recorded value pins
+    what the program did, not what it should do. Should the line right
+    after the run be a hand-written EXPECT/VERIFY, the label is closed off
+    again (by a copy of the label that covered that line, or a blank line
+    when none did) so the CHARACTERIZATION label never spreads onto it.
+    Labels are inserted bottom-up, so every stub's original line number
+    stays valid while the earlier ones are rewritten.
 
     Returns `None` (write nothing) when nothing was recorded -- a command
     that recorded zero stubs must not touch the file at all.
     """
     if not report.recorded:
         return None
+    from mockymock.analysis.assertion_labels import (
+        RECORDED_LABEL,
+        scan_assertion_labels,
+    )
+
     lines = cut_text.splitlines()
+    recorded_lines: set[int] = set()
     for item in report.recorded:
         stub = item.stub
         original = lines[stub.line - 1]
@@ -274,5 +291,33 @@ def rewrite_cut_text(
             item.value, picture_for(stub.data_name, pictures)
         )
         lines[stub.line - 1] = f"{indent}EXPECT {stub.data_name} TO BE {rendered}"
+        recorded_lines.add(stub.line)
+
+    if label:
+        original_lines = cut_text.splitlines()
+        covering = {
+            a.line: a.label_line
+            for a in scan_assertion_labels(cut_text)
+            if a.label_line is not None
+        }
+        runs: list[tuple[int, int]] = []
+        for line_no in sorted(recorded_lines):
+            if runs and runs[-1][1] == line_no - 1:
+                runs[-1] = (runs[-1][0], line_no)
+            else:
+                runs.append((line_no, line_no))
+        for first, last in reversed(runs):
+            after = last + 1
+            if after <= len(lines) and re.match(
+                r"^\s*(EXPECT|VERIFY)\b", lines[after - 1], re.IGNORECASE
+            ):
+                label_line = covering.get(after)
+                closer = original_lines[label_line - 1] if label_line else ""
+                lines.insert(last, closer)
+            above = lines[first - 2].strip() if first >= 2 else ""
+            if above != RECORDED_LABEL:
+                indent_text = lines[first - 1]
+                indent = indent_text[: len(indent_text) - len(indent_text.lstrip())]
+                lines.insert(first - 1, f"{indent}{RECORDED_LABEL}")
     text = "\n".join(lines)
     return text + "\n" if cut_text.endswith("\n") else text
