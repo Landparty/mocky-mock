@@ -2435,6 +2435,40 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_skills_plugin(args: argparse.Namespace) -> int:
+    """Write the cobol-testing Claude Code plugin as a local marketplace
+    (no clone, no network), for `/plugin marketplace add <dir>`."""
+    from mockymock import __version__
+    from mockymock.cli.skills_cmd import (
+        LOCAL_MARKETPLACE_NAME,
+        PLUGIN_NAME,
+        PluginTargetError,
+        default_plugin_dir,
+        export_plugin,
+    )
+
+    target = (
+        Path(args.directory).expanduser() if args.directory else default_plugin_dir()
+    )
+    target = target.resolve()
+    try:
+        plugin_dir = export_plugin(target, version=__version__, force=args.force)
+    except PluginTargetError as exc:
+        print(f"mockymock skills plugin: {exc}")
+        return 1
+    print(f"mockymock skills plugin: wrote {PLUGIN_NAME} {__version__} -> {target}")
+    print("mockymock skills plugin: in Claude Code, run:")
+    print(f"  /plugin marketplace add {target}")
+    print(f"  /plugin install {PLUGIN_NAME}@{LOCAL_MARKETPLACE_NAME}")
+    print(
+        "mockymock skills plugin: or load it for one session with "
+        f"`claude --plugin-dir {plugin_dir}`. Re-run with --force after "
+        "upgrading mockymock, then `/plugin marketplace update "
+        f"{LOCAL_MARKETPLACE_NAME}`."
+    )
+    return 0
+
+
 def _cmd_skills_mode(args: argparse.Namespace) -> int:
     """Read back (or set) the project's AI assistant mode -- how much the
     packaged skill checks in with the developer while it builds a suite.
@@ -3471,6 +3505,25 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     skills_install_parser.set_defaults(func=_cmd_skills_install)
+
+    skills_plugin_parser = skills_subparsers.add_parser(
+        "plugin",
+        help=(
+            "Write the cobol-testing Claude Code plugin as a local "
+            "marketplace, for `/plugin marketplace add <dir>` without GitHub"
+        ),
+    )
+    skills_plugin_parser.add_argument(
+        "directory",
+        nargs="?",
+        help="Where to write it (default: ~/.mockymock/claude-plugin)",
+    )
+    skills_plugin_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an earlier export in that directory",
+    )
+    skills_plugin_parser.set_defaults(func=_cmd_skills_plugin)
 
     skills_mode_parser = skills_subparsers.add_parser(
         "mode",

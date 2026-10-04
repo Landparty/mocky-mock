@@ -16,8 +16,10 @@ defer-import it like every other subcommand's dependencies.
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 SKILLS_ROOT = Path(__file__).resolve().parent / "skills"
 SOURCE_DIR = SKILLS_ROOT / "mockymock"
@@ -72,3 +74,113 @@ def install_skill(
         else:
             target.unlink()
     shutil.copytree(SKILLS_ROOT / name, target)
+
+
+# --- Local plugin export (`mockymock skills plugin`) ----------------------
+#
+# The repository root is itself a plugin marketplace (.claude-plugin/), but
+# a pip install has no repository: the wheel only carries the skills. This
+# writes a self-contained local marketplace from the packaged copy, so
+# `/plugin marketplace add <dir>` works with no clone and no network.
+
+PLUGIN_NAME = "cobol-testing"
+LOCAL_MARKETPLACE_NAME = "mocky-mock-local"
+# The same fields as the repository's .claude-plugin/plugin.json, minus
+# `skills` (the export puts them in the plugin's default skills/ folder)
+# and `version` (taken from the installed package).
+# tests/unit/test_cobol_testing_plugin.py keeps the two in step.
+PLUGIN_MANIFEST: dict[str, Any] = {
+    "name": PLUGIN_NAME,
+    "description": (
+        "Test COBOL programs with AI: understand a program with cobol-parser, "
+        "build and run a mockymock suite under GnuCOBOL with assertions "
+        "grounded in its business rules, and get an HTML report of every "
+        "step and what each test proves."
+    ),
+    "author": {"name": "Samuel Dion"},
+    "homepage": "https://github.com/Landparty/mocky-mock",
+    "license": "AGPL-3.0-or-later",
+    "keywords": ["cobol", "mainframe", "testing", "gnucobol", "mocking"],
+}
+
+
+MARKETPLACE_DESCRIPTION = (
+    "mocky-mock's Claude Code plugins: AI-assisted COBOL testing with "
+    "cobol-parser and GnuCOBOL."
+)
+
+
+class PluginTargetError(Exception):
+    """The export directory exists and may not be replaced."""
+
+
+def default_plugin_dir() -> Path:
+    return Path.home() / ".mockymock" / "claude-plugin"
+
+
+def _is_previous_export(target: Path) -> bool:
+    manifest = target / ".claude-plugin" / "marketplace.json"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("name") == LOCAL_MARKETPLACE_NAME
+
+
+def export_plugin(target: Path, *, version: str, force: bool = False) -> Path:
+    """Write a local marketplace holding the cobol-testing plugin to `target`
+    and return the plugin's own directory.
+
+    Layout::
+
+        target/.claude-plugin/marketplace.json
+        target/cobol-testing/.claude-plugin/plugin.json
+        target/cobol-testing/skills/<each of SKILL_NAMES>/
+
+    Fail-closed: an existing `target` is replaced only with `force`, and
+    only when it is an earlier export (its marketplace.json names
+    LOCAL_MARKETPLACE_NAME). An empty directory is fine. Anything else is
+    refused even with `force`, so a mistyped path never deletes a
+    user's directory.
+    """
+    if target.exists() and not target.is_dir():
+        raise PluginTargetError(f"{target} exists and is not a directory")
+    occupied = target.is_symlink() or (target.exists() and any(target.iterdir()))
+    if occupied:
+        if not _is_previous_export(target):
+            raise PluginTargetError(
+                f"{target} is not empty and is not an earlier mockymock plugin "
+                "export; choose another directory"
+            )
+        if not force:
+            raise PluginTargetError(
+                f"{target} already holds a plugin export; use --force to replace it"
+            )
+        shutil.rmtree(target)
+
+    plugin_dir = target / PLUGIN_NAME
+    (target / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (plugin_dir / ".claude-plugin").mkdir(parents=True)
+    for name in SKILL_NAMES:
+        shutil.copytree(SKILLS_ROOT / name, plugin_dir / "skills" / name)
+    manifest = {**PLUGIN_MANIFEST, "version": version}
+    (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    marketplace = {
+        "name": LOCAL_MARKETPLACE_NAME,
+        "owner": PLUGIN_MANIFEST["author"],
+        "metadata": {"description": MARKETPLACE_DESCRIPTION},
+        "plugins": [
+            {
+                "name": PLUGIN_NAME,
+                "source": f"./{PLUGIN_NAME}",
+                "description": PLUGIN_MANIFEST["description"],
+                "version": version,
+            }
+        ],
+    }
+    (target / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps(marketplace, indent=2) + "\n", encoding="utf-8"
+    )
+    return plugin_dir

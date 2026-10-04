@@ -75,14 +75,32 @@ also packaged as the `cobol-testing` plugin:
 | `mockymock` | The `.cut` DSL, every CLI flag, the paragraph-first loop. |
 | `cobol-analysis` | Which cobol-parser analyzer answers which question. |
 
-Install as a plugin (Claude Code):
+Install as a plugin (Claude Code), from GitHub:
 
 ```
 /plugin marketplace add Landparty/mocky-mock
 /plugin install cobol-testing@mocky-mock
 ```
 
-or copy the skills with the CLI:
+from a local clone of this repository (no network needed):
+
+```
+/plugin marketplace add /path/to/mocky-mock
+/plugin install cobol-testing@mocky-mock
+```
+
+or from a pip install, with no clone at all:
+
+```bash
+mockymock skills plugin            # writes ~/.mockymock/claude-plugin
+```
+```
+/plugin marketplace add ~/.mockymock/claude-plugin
+/plugin install cobol-testing@mocky-mock-local
+```
+
+(`claude --plugin-dir ~/.mockymock/claude-plugin/cobol-testing` loads it
+for a single session instead.) Or copy the skills with the CLI:
 
 ```bash
 mockymock skills install            # all three, into ~/.claude/skills/

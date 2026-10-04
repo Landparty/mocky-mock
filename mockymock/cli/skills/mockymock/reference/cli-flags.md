@@ -416,6 +416,20 @@ instead, so a team can commit them for shared use. `--skill NAME`
 (repeatable) installs only the named ones. Refuses to overwrite any
 existing install (writing nothing) unless `--force` is given.
 
+## `mockymock skills plugin`
+
+```bash
+mockymock skills plugin [DIRECTORY] [--force]
+```
+
+Writes the `cobol-testing` plugin (all three skills) as a local plugin
+marketplace, default `~/.mockymock/claude-plugin`, and prints the two
+Claude Code commands that install it (`/plugin marketplace add <dir>`,
+`/plugin install cobol-testing@mocky-mock-local`). For a pip install with
+no clone and no GitHub access. `--force` replaces an earlier export
+(re-run it after upgrading mockymock); a non-empty directory that is not
+an earlier export is always refused.
+
 ## `mockymock skills mode`
 
 ```bash
@@ -458,4 +472,5 @@ mode plus every mode's contract.
 | `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
 | `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
 | `skills install` | no | `--project`, `--force`, `--skill` |
+| `skills plugin` | no | `--force` |
 | `skills mode` | no | `--set`, `--json` |

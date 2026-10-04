@@ -1,6 +1,11 @@
 {
   "name": "mocky-mock",
-  "owner": { "name": "Samuel Dion" },
+  "owner": {
+    "name": "Samuel Dion"
+  },
+  "metadata": {
+    "description": "mocky-mock's Claude Code plugins: AI-assisted COBOL testing with cobol-parser and GnuCOBOL."
+  },
   "plugins": [
     {
       "name": "cobol-testing",
