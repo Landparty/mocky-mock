@@ -820,9 +820,12 @@ def test_provider_placeholder_in_a_name_position_raises(line, where):
         "    HEADER N, Field\n"
         "    ROW 42, WS-RESULT\n"
         'TESTCASE "c" USING PROVIDER TestData\n'
-        "    PERFORM DO-SOMETHING\n"
-        f"{line}\n"
     )
+    # A setup MOVE goes above the PERFORM, an EXPECT below it (issue #150).
+    if line.strip().startswith("MOVE"):
+        text += f"{line}\n    PERFORM DO-SOMETHING\n"
+    else:
+        text += f"    PERFORM DO-SOMETHING\n{line}\n"
     with pytest.raises(CutParseError, match=where):
         parse_cut(text)
 

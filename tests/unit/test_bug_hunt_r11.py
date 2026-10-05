@@ -123,7 +123,7 @@ def test_expect_not_after_to_be_is_refused():
     with pytest.raises(CutParseError, match="malformed EXPECT comparison"):
         _parse_case("EXPECT WS-X TO BE NOT 5\n")
     # A value that merely starts with NOT- is still an ordinary value.
-    suite = _parse_case("EXPECT WS-X TO BE NOT-FOUND\n")
+    suite = _parse_case("PERFORM P\nEXPECT WS-X TO BE NOT-FOUND\n")
     assert suite.test_cases[0].expectations[0].expected_value == "NOT-FOUND"
 
 

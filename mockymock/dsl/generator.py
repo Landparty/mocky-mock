@@ -53,7 +53,11 @@ import sys
 from dataclasses import dataclass, field
 
 from mockymock.analysis.loops import looped_paragraphs_and_statements, site_in_loop
-from mockymock.analysis.mock_surface import BoundarySite, MockSurface
+from mockymock.analysis.mock_surface import (
+    BoundarySite,
+    MockSurface,
+    _all_paragraphs,
+)
 from mockymock.dsl.fixture_bundle import (
     BoundaryFixture,
     Expectation,
@@ -1079,9 +1083,34 @@ def _warn_on_key_mismatch(
             print(f"    {category} {key}", file=sys.stderr)
 
 
+def _first_paragraph(program) -> str | None:
+    """The first named PROCEDURE DIVISION paragraph, by source line.
+
+    The fallback entry for a scenario cobol-parser left without one: an IMS
+    program opening with `ENTRY 'DLITCBL' USING ...` comes back with
+    `entry=''` because the ENTRY statement sits in an unnamed leading
+    paragraph (issue #150)."""
+    procedure = program.get_division("PROCEDURE") if program is not None else None
+    if procedure is None:
+        return None
+    named = [
+        paragraph
+        for paragraph in _all_paragraphs(procedure)
+        if getattr(paragraph, "paragraph_name", "")
+    ]
+    if not named:
+        return None
+    first = min(
+        named,
+        key=lambda paragraph: getattr(getattr(paragraph, "location", None), "line", 0),
+    )
+    return str(first.paragraph_name)
+
+
 def _build_shadow_tally_registry(
     bundle: FixtureBundle,
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
+    fallback_entry: str | None = None,
 ) -> TallyRegistry:
     """A `TallyRegistry` built over every (category, key) that will
     actually get a MOCK directive in the generated file, in the same
@@ -1095,7 +1124,7 @@ def _build_shadow_tally_registry(
     case = MockTestCase(name="_shadow", perform_target="_SHADOW")
     seen: set[tuple[MockCategory, str]] = set()
     for scenario in bundle.scenarios:
-        if not scenario.entry:
+        if not (scenario.entry or fallback_entry):
             continue
         for fixture in scenario.fixtures:
             try:
@@ -2045,12 +2074,14 @@ def _scaffold_with_bundle(
 ) -> str:
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(mockymock_keys, _bundle_boundary_keys(bundle))
-    registry = _build_shadow_tally_registry(bundle, mockymock_keys)
+    fallback_entry = _first_paragraph(source.program) if source is not None else None
+    registry = _build_shadow_tally_registry(bundle, mockymock_keys, fallback_entry)
 
     lines = [f'TESTSUITE "{_quote_safe(suite_name)}"', ""]
     skipped_scenarios = 0
     for scenario in bundle.scenarios:
-        if not scenario.entry:
+        entry = scenario.entry or fallback_entry
+        if not entry:
             # Nothing to PERFORM -- can't scaffold a TESTCASE for this
             # scenario at all. Should not happen for a real program with a
             # non-empty PROCEDURE DIVISION; reported below, not per-scenario.
@@ -2063,9 +2094,7 @@ def _scaffold_with_bundle(
         # CICS HANDLE) is UNMATCHED_MOCK to the very lint this file has to
         # pass (issue #143). Its VERIFY goes with it -- `_render_expectation`
         # drops counts for keys that got no MOCK directive.
-        reachable = (
-            source.reachable_from(scenario.entry) if source is not None else None
-        )
+        reachable = source.reachable_from(entry) if source is not None else None
         scenario_keys = (
             mockymock_keys
             if reachable is None
@@ -2079,7 +2108,7 @@ def _scaffold_with_bundle(
             scenario, surface, scenario_keys, registry, placeholder_keys, source
         )
         lines.extend(f"    {line}" for line in directive_lines)
-        lines.append(f"    PERFORM {scenario.entry}")
+        lines.append(f"    PERFORM {entry}")
         lines.extend(
             f"    {line}"
             for line in _capture_stub_lines(_capture_targets(directive_lines))

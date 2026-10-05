@@ -660,3 +660,63 @@ def test_149_write_from_moves_the_source_into_the_record(tmp_path) -> None:
         ),
     )
     assert "MOVE WS-LINE TO OUT-REC" in exported
+
+
+def test_150_an_expect_or_verify_above_the_perform_is_refused() -> None:
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    head = 'TESTSUITE "s"\nTESTCASE "c"\n'
+    for body in (
+        "EXPECT WS-A TO BE 3\nPERFORM MAIN-PARA\n",
+        'VERIFY CALL "X" WAS CALLED ONCE\nPERFORM MAIN-PARA\n',
+    ):
+        with pytest.raises(CutParseError, match="before the PERFORM"):
+            parse_cut(head + body)
+
+
+def test_150_a_setup_move_below_the_perform_is_refused() -> None:
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    with pytest.raises(CutParseError, match="MOVE after the PERFORM"):
+        parse_cut('TESTSUITE "s"\nTESTCASE "c"\nPERFORM MAIN-PARA\nMOVE 4 TO WS-A\n')
+
+
+DLITCBL_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DLIENT.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  DLI-GU     PIC X(4) VALUE "GU  ".
+       01  WS-SEG     PIC X(10).
+       LINKAGE SECTION.
+       01  CUST-PCB.
+           05  PCB-DBD     PIC X(8).
+           05  PCB-LEVEL   PIC XX.
+           05  PCB-STATUS  PIC XX.
+       PROCEDURE DIVISION.
+       ENTRY 'DLITCBL' USING CUST-PCB.
+       MAIN-PARA.
+           CALL 'CBLTDLI' USING DLI-GU CUST-PCB WS-SEG
+           GOBACK.
+"""
+
+
+def test_150_an_ims_dlitcbl_program_falls_back_to_its_first_paragraph(
+    tmp_path,
+) -> None:
+    cut = _generate(tmp_path, "DLIENT", DLITCBL_CBL, "--seed", "1")
+    assert "TESTCASE" in cut
+    assert "PERFORM MAIN-PARA" in cut
+
+
+def test_150_generate_fails_when_no_scenario_becomes_a_case(
+    tmp_path, monkeypatch
+) -> None:
+    from mockymock.cli.main import main
+    from mockymock.dsl import generator
+
+    monkeypatch.setattr(generator, "_first_paragraph", lambda program: None)
+    source = tmp_path / "DLIENT.cbl"
+    source.write_text(DLITCBL_CBL)
+    out = tmp_path / "DLIENT.cut"
+    assert main(["generate", str(source), "--with-data", "-o", str(out)]) == 1

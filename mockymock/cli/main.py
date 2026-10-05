@@ -971,6 +971,18 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
     case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
+    if case_count == 0 and bundle is not None:
+        # The bundle had scenarios (zero is refused above) yet none became
+        # a TESTCASE; the empty suite would run as "0 run, 0 failed" and
+        # exit 1, so report it here, where it was made (issue #150). A
+        # plain `generate` on a program with no boundary to mock writes
+        # an empty suite on purpose and still exits 0.
+        print(
+            "mockymock generate: no scenario could be scaffolded as a test "
+            "case -- the file holds an empty TESTSUITE",
+            file=sys.stderr,
+        )
+        return 1
     if bundle is not None:
         print(
             f"mockymock generate: data-driven from a fixture bundle "
