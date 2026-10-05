@@ -787,6 +787,23 @@ clean-looking number. The two names are `SuiteRun.phase`'s own values,
 carried straight onto `MutantResult.stillborn_reason` rather than
 re-derived afterwards by pattern-matching the raw `detail` line.
 
+**Zero-baseline hints (2026-10-04).** An `ADD..TO <-> SUBTRACT..FROM`
+swap on an unsigned numeric field that every case starts at zero is
+indistinguishable from the original (0 + n and 0 - n both store n), so it
+survives however good the assertions are. After the kill loop,
+`runner._attach_zero_baseline_hints` re-runs `run_static_checks` once and
+`mutation.zero_baseline.zero_baseline_hint` sets `MutantResult.hint` on
+each *built* survivor where every receiving name on the mutated line is an
+unsigned, non-edited, non-OCCURS WORKING-STORAGE/LOCAL-STORAGE item whose
+reset value is zero (VALUE zero, or no VALUE -- `splicer/reset.py`'s
+default) and no test case writes it (setup MOVE, mock ROWS/TERMINAL, `TO
+<name>` in a mock body). GIVING forms are skipped. The verdict and score
+are unchanged -- seeding the field is how the author kills it -- but the
+console prints a `!` line under the diff plus a count, `--json-report`
+carries a per-mutant `hint`, and `mockymock report` files it as
+`untestable-mutant` instead of `missing-assertion`. Coverage-gated
+survivors never get one (no test reaches them).
+
 **Two cost levers, both added 2026-09-04, neither changing a verdict.**
 `--jobs N` (default 1) spreads the per-mutant pipeline over N worker
 *processes* -- processes, because the dominant Docker-free cost,

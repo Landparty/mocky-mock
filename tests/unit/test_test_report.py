@@ -135,6 +135,7 @@ def test_static_only_report_runs_every_step_and_claims_only_l0(ordrproc):
         "environment",
         "understand",
         "rules",
+        "analysis",
         "inventory",
         "lint",
         "scenarios",
@@ -197,6 +198,19 @@ def test_weak_mutation_score_caps_cases_at_l1(ordrproc):
     assert [c["level"] for c in report["cases"]] == ["L1", "L1"]
     categories = {f["category"] for f in report["findings"]}
     assert "missing-assertion" in categories
+
+
+def test_hinted_survivor_is_an_untestable_mutant_not_a_missing_assertion(ordrproc):
+    path = _mutation_json(ordrproc, score=0.5, survivors=(14,))
+    data = json.loads(path.read_text())
+    data["mutants"][0]["hint"] = "probably untestable from WS-X's starting value"
+    path.write_text(json.dumps(data))
+    report = build_report(
+        _options(ordrproc, run_json=_run_json(ordrproc), mutation_json=path)
+    )
+    findings = [f for f in report["findings"] if f.get("line") == 14]
+    assert [f["category"] for f in findings] == ["untestable-mutant"]
+    assert "WS-X's starting value" in findings[0]["detail"]
 
 
 def test_failed_intent_assertion_is_a_suspected_bug(ordrproc):

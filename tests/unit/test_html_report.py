@@ -34,6 +34,7 @@ def test_standalone_page_is_a_full_document_with_every_section(tmp_path):
         "Assistant journal",
         "Paragraphs",
         "Business rules",
+        "Program analysis",
         "GnuCOBOL vs IBM COBOL risks",
         "Verification levels",
     ):

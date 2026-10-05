@@ -22,19 +22,28 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 ## What the page shows, top to bottom
 
 1. **Verdict line and summary tiles** -- tests passing, cases at L2+,
-   share of INTENT assertions, line coverage, mutation score, findings.
+   share of INTENT assertions, line coverage, mutation score, findings,
+   program health grade.
 2. **Findings**, most severe first (table below).
 3. **Test cases** -- level, result, why it stopped at that level, failures
    with line numbers, assertion label counts, dialect risks reached.
    Filter by result or level.
-4. **How the verdict was reached** -- the eleven steps in order
-   (environment, understand, rules, inventory, lint, scenarios, run,
+4. **How the verdict was reached** -- the twelve steps in order
+   (environment, understand, rules, analysis, inventory, lint, scenarios, run,
    coverage, mutation, dialect, verdict), each with the equivalent command,
    its summary, details and timing.
 5. **Assistant journal** -- your `mockymock journal` entries.
 6. **Paragraphs** -- line, size, complexity, which tests reach it.
 7. **Business rules** -- condition/formula, arms, which tests cite it.
-8. **GnuCOBOL vs IBM COBOL risks** and the level definitions.
+8. **Program analysis** -- cobol-parser's view of the program itself: health
+   score (A-F), a call graph coloured by which paragraphs a test reaches,
+   per-paragraph complexity, every lint rule's findings, data flow (where
+   each field is written and read), the interface (calling signature,
+   touchpoints to mock, CRUD, SQL/CICS checks), dead code and duplicates.
+   Sections an older cobol-parser cannot produce are named in a note at the
+   top, not silently left out. Cite it when picking what to test next:
+   an untested high-complexity paragraph is the obvious first target.
+9. **GnuCOBOL vs IBM COBOL risks** and the level definitions.
 
 ## Finding categories and what to do
 
@@ -44,6 +53,7 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 | `suspected-bug` | high | An INTENT assertion failed. Trace it; if the setup is right, report it. Never relabel it to get green. |
 | `test-failure` | high | A non-intent assertion failed or a case crashed. Usually the test; trace it. |
 | `missing-assertion` | medium | A mutant survived: add the assertion that would notice that line changing. |
+| `untestable-mutant` | medium | An ADD/SUBTRACT swap survived on an unsigned field every case starts at zero, where both store the same magnitude. Seed the field to a non-zero value (`MOVE 5 TO WS-COUNT`) in a case; a new assertion will not help. |
 | `untested-paragraph` | medium | Add a case that PERFORMs it. |
 | `no-assertion` | medium | A passing case asserts nothing; add EXPECT/VERIFY. |
 | `dialect` | high/medium | Note it in the hand-over; the case is GnuCOBOL-proven only. |
@@ -51,7 +61,8 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 | `unlabelled` | low | Label each assertion INTENT or CHARACTERIZATION. |
 | `dead-code` | low | Report it; do not test it. |
 | `coverage` | low | Lines never executed; usually a branch without a case. |
-| `scenario-gap` | info | The fixture generator cannot build data for that arm; write the inputs by hand. |
+| `scenario-gap` | info | Neither the automatic fixture generator nor any test in the suite reaches that arm; write the inputs by hand. |
+| `scenario-gap-covered-by-hand` | info | The automatic generator can't build data for that arm, but a hand-written case already reaches it (checked against line coverage) -- nothing to do. |
 
 ## Journal entries
 
