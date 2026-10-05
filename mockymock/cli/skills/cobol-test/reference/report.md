@@ -36,7 +36,11 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 4. **Test cases** -- level, result, why it stopped at that level, failures
    with line numbers, where each check's expected value came from, dialect
    risks reached. Filter by result or level.
-5. **Program analysis** -- cobol-parser's view of the program itself: health
+5. **Boundaries** -- one row per CALL, file operation, SQL, CICS, DL/I and
+   console ACCEPT statement: what it touches, its paragraph and line, and
+   the tests that MOCK it ("reached but not mocked" and "no test reaches
+   it" are the rows to act on).
+6. **Program analysis** -- cobol-parser's view of the program itself: health
    score (A-F), a call graph coloured by which paragraphs a test reaches,
    per-paragraph complexity, every lint rule's findings, data flow (where
    each field is written and read), the interface (calling signature,
@@ -45,15 +49,15 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
    cobol-parser cannot produce are named in a note at the top, not silently
    left out. Cite it when picking what to test next: an untested
    high-complexity paragraph is the obvious first target.
-6. **Business rules** -- condition/formula, arms, which tests cite it.
-7. **Paragraphs** -- line, size, complexity, which tests reach it.
-8. **GnuCOBOL vs IBM COBOL risks**.
-9. **How the verdict was reached** -- the twelve steps in order
+7. **Business rules** -- condition/formula, arms, which tests cite it.
+8. **Paragraphs** -- line, size, complexity, which tests reach it.
+9. **GnuCOBOL vs IBM COBOL risks**.
+10. **How the verdict was reached** -- the twelve steps in order
    (environment, understand, rules, analysis, inventory, lint, scenarios, run,
    coverage, mutation, dialect, verdict), each with the equivalent command,
    its summary, details and timing.
-10. **Assistant journal** -- your `mockymock journal` entries.
-11. **Verification levels** and a **glossary** of the words the page uses.
+11. **Assistant journal** -- your `mockymock journal` entries.
+12. **Verification levels** and a **glossary** of the words the page uses.
 
 ## Finding categories and what to do
 

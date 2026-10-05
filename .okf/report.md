@@ -349,9 +349,15 @@ the `cobol-test` skill's hand-over.
   (high kinds, then the run command when run/mutation were skipped and the
   suite is not refused, then medium, then low; at most five). `_grouped`
   folds findings sharing (severity, category, title) into one card. The
-  page order is: next steps, findings, test cases, program analysis, rules,
+  page order is: next steps, findings, test cases, boundaries, program analysis, rules,
   paragraphs, dialect risks, steps, journal, levels, glossary, with a
   `nav.toc` of anchors in the header.
+- `boundaries` (report dict, 2026-10-05): `test_report._boundaries` lists
+  mockymock's own `mock_surface.analyze` sites (STOP RUN/GOBACK dropped),
+  each with `mockedBy` from `refusal._gates.directive_matches_site` -- the
+  rule `run` splices by -- and `reachedUnmockedBy` from case reach. Rendered
+  as the "Boundaries" section after Test cases. Older report dicts without
+  the key render a note.
 - `scenario-gap` / `scenario-gap-covered-by-hand` findings carry `items`
   (one line per branch). `test_report._plain_arm_reason` strips the
   `EVALUATE@405/WHEN#1:` prefix and rewrites the generator's known reasons

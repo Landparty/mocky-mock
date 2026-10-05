@@ -35,6 +35,7 @@ def test_standalone_page_is_a_full_document_with_every_section(tmp_path):
         "Paragraphs",
         "Business rules",
         "Program analysis",
+        "Boundaries",
         "GnuCOBOL vs IBM COBOL risks",
         "Verification levels",
     ):
@@ -138,3 +139,45 @@ def test_identical_findings_fold_into_one_card(tmp_path):
     assert "(2 reasons)" in findings
     assert "<li>unmocked CALL A</li>" in findings
     assert "<li>unmocked CALL B</li>" in findings
+
+
+def test_boundaries_section_lists_each_boundary_and_its_tests(tmp_path):
+    report = _report(tmp_path)
+    report["boundaries"] = [
+        {
+            "kind": "CALL",
+            "category": "CALL",
+            "target": "RATECALC",
+            "paragraph": "2000-PRICE",
+            "line": 40,
+            "mockable": True,
+            "mq": False,
+            "mockedBy": ["prices a claim"],
+            "reachedUnmockedBy": [],
+        },
+        {
+            "kind": "READ",
+            "category": "READ",
+            "target": "CLAIM-FILE",
+            "paragraph": "3000-LOAD",
+            "line": 55,
+            "mockable": True,
+            "mq": False,
+            "mockedBy": [],
+            "reachedUnmockedBy": [],
+        },
+    ]
+    page = render_html(report)
+    assert 'id="h-boundaries"' in page
+    assert "Calls program <code>RATECALC</code>" in page
+    assert "mocked by 1 test" in page
+    assert "<li>prices a claim</li>" in page
+    assert "Reads from <code>CLAIM-FILE</code>" in page
+    assert "no test reaches it" in page
+    assert "1 of 2 boundaries mocked" in page
+
+
+def test_report_without_boundaries_key_still_renders(tmp_path):
+    report = _report(tmp_path)
+    report.pop("boundaries", None)
+    assert "written before boundaries were listed" in render_html(report)

@@ -172,6 +172,16 @@ def test_paragraphs_record_which_cases_reach_them(ordrproc):
     assert paragraph["line"] == 12
 
 
+def test_boundaries_name_the_cases_that_mock_them(ordrproc):
+    report = build_report(_options(ordrproc))
+    (call,) = [b for b in report["boundaries"] if b["kind"] == "CALL"]
+    assert call["target"] == "DISCRATE"
+    assert call["paragraph"] == "PROCESS-ORDER"
+    assert call["mockable"] is True
+    assert len(call["mockedBy"]) == 2
+    assert call["reachedUnmockedBy"] == []
+
+
 def test_passing_run_with_strong_mutation_reaches_l3(ordrproc):
     report = build_report(
         _options(

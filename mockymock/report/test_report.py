@@ -201,6 +201,56 @@ def _orig(program: _Program, line: int | None) -> int | None:
     return program.line_map.get(line)
 
 
+#: cobol-parser rejoins EXEC tokens with spaces the source never had:
+#: `SEGMENT ( CLAIM-SEG )` reads back as `SEGMENT (CLAIM-SEG)`.
+_EXEC_PAREN_SPACING_RE = re.compile(r"(?<=\()\s+|\s+(?=\))")
+
+
+def _boundaries(
+    program: _Program, test_cases: list[Any], cases: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Every boundary statement mockymock's splicer knows (one row per
+    statement, in source order), with the cases whose MOCKs match it and
+    the cases whose PERFORM reaches its paragraph without mocking it.
+    Matching is `directive_matches_site`, the rule `run` itself uses, so a
+    row's "mocked by" is exactly what a run would splice."""
+    from mockymock.analysis.mock_surface import _TERMINATOR_LABELS, analyze
+    from mockymock.analysis.refusal._gates import directive_matches_site
+
+    surface = analyze(program.ast)
+    mocks = {tc.name: tc.mocks for tc in test_cases}
+    rows = []
+    for site in sorted(surface.boundary_sites, key=lambda s: s.line):
+        if site.category is None and site.label in _TERMINATOR_LABELS:
+            continue
+        mocked_by = [
+            c["name"]
+            for c in cases
+            if any(directive_matches_site(m, site) for m in mocks.get(c["name"], []))
+        ]
+        reached_by = [
+            c["name"]
+            for c in cases
+            if site.paragraph_name in c["reach"] and c["name"] not in mocked_by
+        ]
+        rows.append(
+            {
+                "kind": site.label,
+                "category": site.category.keyword if site.category else None,
+                "target": _EXEC_PAREN_SPACING_RE.sub(
+                    "", (site.match_text or ", ".join(site.keys)).strip()
+                ),
+                "paragraph": site.paragraph_name,
+                "line": _orig(program, site.line),
+                "mockable": site.category is not None,
+                "mq": site.is_mq,
+                "mockedBy": mocked_by,
+                "reachedUnmockedBy": reached_by,
+            }
+        )
+    return rows
+
+
 def _paragraph_of(node: str) -> str:
     """Program-flow synthesizes branch nodes like `1000-X__IF_1`; they belong
     to the paragraph they sit in."""
@@ -543,6 +593,11 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         for name in reach:
             if name in by_name and case["name"] not in by_name[name]["reachedBy"]:
                 by_name[name]["reachedBy"].append(case["name"])
+    boundaries = (
+        _boundaries(program, suite.test_cases if suite else [], cases)
+        if program is not None
+        else []
+    )
     for node in (analysis.get("callGraph") or {}).get("nodes") or []:
         paragraph = by_name.get(node["name"])
         if paragraph is not None:
@@ -954,6 +1009,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         "rules": rules,
         "rulesAvailable": rules_available,
         "analysis": analysis,
+        "boundaries": boundaries,
         "cases": cases,
         "assertions": assertions,
         "dialectRisks": risks,

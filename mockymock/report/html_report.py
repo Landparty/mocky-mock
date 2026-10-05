@@ -134,6 +134,8 @@ ol.next li { counter-increment: next; display: grid; grid-template-columns: 2em 
 ol.next li::before { content: counter(next); grid-row: span 2; font: 700 18px/1.2 var(--font-mono); color: var(--accent); }
 ol.next li span { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 .next.ok { background: var(--ok-soft); color: var(--fg); border-radius: 8px; padding: 12px 14px; }
+ul.names { margin: 0; padding-left: 1.1em; font-size: 13px; }
+.muted { color: var(--muted); }
 .finding ul.detail { margin: 2px 0; padding-left: 18px; }
 .finding .todo { font-size: 14px; }
 td.nowrap { white-space: nowrap; }
@@ -323,6 +325,10 @@ _GLOSSARY = (
     (
         "Recorded (characterization)",
         "A check whose expected value was copied from what the program did on a run (`*> CHARACTERIZATION:`). It pins today's behaviour; it does not prove it right.",
+    ),
+    (
+        "Boundary",
+        "A statement where the program reaches outside itself: a CALL, a file operation, SQL, CICS, IMS DL/I or console ACCEPT. Each one a test reaches needs a MOCK.",
     ),
     (
         "Mock",
@@ -767,6 +773,83 @@ def _paragraphs(report: dict[str, Any]) -> str:
         '<div class="table-wrap"><table><thead><tr><th>Paragraph</th><th class="num">Line</th>'
         '<th class="num">Statements</th><th class="num">Complexity</th><th>Tested</th>'
         f'<th class="num">Dialect risks</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+    )
+
+
+#: What a boundary statement does, in words, by its mock_surface label.
+_BOUNDARY_VERB = {
+    "CALL": "Calls program",
+    "dynamic CALL": "Calls the program named in",
+    "OPEN": "Opens file",
+    "CLOSE": "Closes file",
+    "READ": "Reads from",
+    "WRITE": "Writes to",
+    "REWRITE": "Rewrites a record in",
+    "DELETE": "Deletes a record from",
+    "START": "Positions",
+    "UNLOCK": "Unlocks",
+    "SORT": "Sorts",
+    "MERGE": "Merges",
+    "RELEASE": "Releases a record to the sort",
+    "RETURN": "Returns a record from the sort",
+    "SQL": "Runs SQL",
+    "CICS": "Runs CICS",
+    "DLI": "Calls IMS DL/I",
+    "ACCEPT": "Reads console input into",
+}
+
+
+def _names(names: list[str]) -> str:
+    shown = "".join(f"<li>{_e(n)}</li>" for n in names[:8])
+    if len(names) > 8:
+        shown += f"<li>… and {len(names) - 8} more</li>"
+    return f'<ul class="names">{shown}</ul>'
+
+
+def _boundaries(report: dict[str, Any]) -> str:
+    """One row per boundary statement: what it touches, where, and which
+    tests mock it. A report written before boundaries were listed has no
+    `boundaries` key and gets a note instead of an empty table."""
+    if "boundaries" not in report:
+        return '<p class="empty">This report was written before boundaries were listed.</p>'
+    boundaries = report["boundaries"]
+    if not boundaries:
+        if not report["paragraphs"]:
+            return '<p class="empty">The program did not parse, so no boundaries are listed.</p>'
+        return (
+            '<p class="empty">The program touches nothing outside itself: no CALL, '
+            "file, SQL, CICS, IMS or console input. Its tests need no MOCK.</p>"
+        )
+    rows = []
+    for b in boundaries:
+        verb = _BOUNDARY_VERB.get(b["kind"], b["kind"])
+        if b.get("mq"):
+            verb = "Calls MQ"
+        target = f" <code>{_e(b['target'])}</code>" if b["target"] else ""
+        if not b["mockable"]:
+            state = _pill("warn", "cannot be mocked")
+            who = '<span class="muted">mockymock cannot stand in for this statement</span>'
+        elif b["mockedBy"]:
+            state = _pill("ok", f"mocked by {_plural(len(b['mockedBy']), 'test')}")
+            who = _names(b["mockedBy"])
+        elif b["reachedUnmockedBy"]:
+            state = _pill("bad", "reached but not mocked")
+            who = _names(b["reachedUnmockedBy"])
+        else:
+            state = _pill("warn", "no test reaches it")
+            who = '<span class="muted">—</span>'
+        rows.append(
+            f"<tr><td>{_e(verb)}{target}</td>"
+            f"<td><code>{_e(b['paragraph'])}</code></td>{_num(b['line'])}"
+            f"<td>{state}</td><td>{who}</td></tr>"
+        )
+    mocked = sum(1 for b in boundaries if b["mockedBy"])
+    summary = (
+        f'<p class="note">{mocked} of {_plural(len(boundaries), "boundary", "boundaries")} '
+        "mocked by at least one test.</p>"
+    )
+    return summary + _table(
+        ["What it does", "Paragraph", "Line", "Status", "Tests"], rows, frozenset({2})
     )
 
 
@@ -1465,6 +1548,15 @@ def render_html(report: dict[str, Any], *, standalone: bool = True) -> str:
             _findings(report),
         ),
         ("h-cases", "Test cases", "", _cases(report)),
+        (
+            "h-boundaries",
+            "Boundaries",
+            "Every statement where the program talks to something outside "
+            "itself: another program, a file, SQL, CICS, IMS or console input. "
+            "A test must MOCK each one it reaches; the last column names the "
+            "tests that do.",
+            _boundaries(report),
+        ),
         (
             "h-analysis",
             "Program analysis",
