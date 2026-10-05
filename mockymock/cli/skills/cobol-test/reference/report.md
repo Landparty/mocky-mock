@@ -51,7 +51,8 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 | `unlabelled` | low | Label each assertion INTENT or CHARACTERIZATION. |
 | `dead-code` | low | Report it; do not test it. |
 | `coverage` | low | Lines never executed; usually a branch without a case. |
-| `scenario-gap` | info | The fixture generator cannot build data for that arm; write the inputs by hand. |
+| `scenario-gap` | info | Neither the automatic fixture generator nor any test in the suite reaches that arm; write the inputs by hand. |
+| `scenario-gap-covered-by-hand` | info | The automatic generator can't build data for that arm, but a hand-written case already reaches it (checked against line coverage) -- nothing to do. |
 
 ## Journal entries
 

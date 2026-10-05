@@ -309,6 +309,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             understand.summary = f"Could not parse {program_rel}: {reason}"
         else:
             from cobolparser import ProgramFlowAnalyzer
+            from cobolparser.analysis.program_flow import LEADING_SENTENCES_NODE
 
             flow = ProgramFlowAnalyzer().analyze(program.ast).to_dict()
             complexity: dict[str, dict[str, Any]] = {}
@@ -335,6 +336,13 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                         ),
                         "statements": node.get("statement_count"),
                         "entry": bool(node.get("is_entry_point")),
+                        # The holder for any sentences written before the
+                        # PROCEDURE DIVISION's first paragraph name (an ENTRY
+                        # statement, typically) -- not a real paragraph, so
+                        # no TESTCASE can ever PERFORM it. Flagging it
+                        # "untested" would be a permanent false positive for
+                        # every program shaped this way.
+                        "isLeadingSentences": name == LEADING_SENTENCES_NODE,
                         "unreachable": name in unreachable,
                         "complexity": c.get("cyclomatic_complexity"),
                         "rating": c.get("rating"),
@@ -536,9 +544,16 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
     steps.append(lint)
 
     # 6. Scenario coverage ------------------------------------------------
+    # This step asks the *automatic* data generator (ProgramFixtureGenerator)
+    # whether it alone can construct boundary data that selects each branch
+    # arm -- it says nothing about whether the test suite itself reaches
+    # that arm. A case written by hand (a MOVE before the PERFORM, or a mock
+    # body) routinely covers an arm this step calls "missed"; see the
+    # "generated-data gap" finding below and the "Measure line coverage"
+    # step for what the suite actually ran.
     scenarios = Step(
         "scenarios",
-        "Measure reachable branch arms",
+        "Check which branch arms the automatic generator alone can reach",
         command=f"mockymock fixtures {program_rel} --scenarios {options.scenarios}{cb}",
     )
     scenario_coverage: dict[str, Any] | None = None
@@ -570,8 +585,10 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                     total = scenario_coverage.get("total_arms", 0)
                     missed = scenario_coverage.get("missed", 0)
                     scenarios.summary = (
-                        f"{total - missed} of {total} branch arm(s) have generated "
-                        f"data that reaches them; {missed} missed (each with a reason)."
+                        f"The automatic generator alone can reach {total - missed} "
+                        f"of {total} branch arm(s); {missed} need a hand-written "
+                        "case instead (each with a reason) -- this is not the "
+                        "suite's own coverage, see 'Measure line coverage' for that."
                     )
                     if missed:
                         scenarios.status = "warn"
@@ -1036,7 +1053,7 @@ def _findings(  # noqa: C901
                 "No test is needed; it is likely dead code worth removing.",
                 line=p["line"],
             )
-        elif not p["reachedBy"] and cases:
+        elif not p["reachedBy"] and cases and not p.get("isLeadingSentences"):
             add(
                 "medium",
                 "untested-paragraph",
@@ -1088,27 +1105,59 @@ def _findings(  # noqa: C901
         )
 
     if scenario_coverage:
-        # One finding for the whole suite: each missed arm is one line of
+        # "missed" here means the *automatic* generator alone could not
+        # construct data for the arm -- not that no test reaches it. Cross
+        # check each arm's real line against the suite's own line coverage
+        # (when available) before calling it a gap: a hand-written case
+        # (a MOVE before the PERFORM, or a mock body) routinely reaches an
+        # arm this generator cannot drive on its own, and that is not
+        # something to flag as unfinished.
+        uncovered_lines = set((coverage or {}).get("uncoveredLines") or [])
+        still_gap: list[dict[str, Any]] = []
+        hand_covered: list[dict[str, Any]] = []
+        for arm in scenario_coverage.get("details") or []:
+            if arm.get("status") != "missed":
+                continue
+            origin = arm.get("origin") or {}
+            arm_line = origin.get("line")
+            if arm_line is None:
+                # No copybook expansion happened, so the arm_key's own line
+                # already counts lines in this file -- see stamp_arm_origins.
+                match = re.match(r".*@(\d+):", arm.get("arm_key") or "")
+                arm_line = int(match.group(1)) if match else None
+            if coverage and arm_line is not None and arm_line not in uncovered_lines:
+                hand_covered.append(arm)
+            else:
+                still_gap.append(arm)
+
+        # One finding for the whole suite: each listed arm is one line of
         # its detail, so a program with dozens of unreachable arms does
         # not bury the findings that need action.
-        missed = [
-            arm
-            for arm in scenario_coverage.get("details") or []
-            if arm.get("status") == "missed"
-        ]
-        if missed:
-            total = scenario_coverage.get("total_arms") or len(missed)
+        if still_gap:
+            total = scenario_coverage.get("total_arms") or len(still_gap)
             shown = "; ".join(
                 f"{arm.get('arm_key')}: {arm.get('reason') or 'no reason given'}"
-                for arm in missed[:8]
+                for arm in still_gap[:8]
             )
-            more = f"; and {len(missed) - 8} more" if len(missed) > 8 else ""
+            more = f"; and {len(still_gap) - 8} more" if len(still_gap) > 8 else ""
             add(
                 "info",
                 "scenario-gap",
-                f"Generated data cannot reach {len(missed)} of {total} branch arm(s)",
+                f"The automatic generator cannot reach {len(still_gap)} of "
+                f"{total} branch arm(s), and no test in the suite does either",
                 f"{shown}{more}. Set these arms up by hand in the test case "
                 "(MOVE before the PERFORM, or a mock body).",
+            )
+        if hand_covered and coverage:
+            shown = "; ".join(arm.get("arm_key") or "" for arm in hand_covered[:8])
+            more = f"; and {len(hand_covered) - 8} more" if len(hand_covered) > 8 else ""
+            add(
+                "info",
+                "scenario-gap-covered-by-hand",
+                f"{len(hand_covered)} branch arm(s) the automatic generator "
+                "can't reach are covered by hand-written cases already",
+                f"{shown}{more}. Nothing to do here -- listed so the count "
+                "above doesn't read as unfinished work.",
             )
 
     findings.sort(key=lambda f: (_SEVERITY_RANK[f["severity"]], f.get("line") or 0))

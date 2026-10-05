@@ -384,6 +384,8 @@ def _paragraphs(report: dict[str, Any]) -> str:
             state = _pill("ok", f"tested directly ×{len(p['testedBy'])}")
         elif p["reachedBy"]:
             state = _pill("ok", "reached by a test")
+        elif p.get("isLeadingSentences"):
+            state = _pill("info", "not a PERFORM target (leading sentences)")
         else:
             state = _pill("warn", "no test reaches it")
         entry = ' <span class="why">entry</span>' if p["entry"] else ""
