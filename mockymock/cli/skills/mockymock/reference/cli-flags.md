@@ -306,8 +306,9 @@ Serves a local, read-only, loopback-only status page showing whether
 Docker and the GnuCOBOL toolchain are up. Never builds or starts
 anything; runs until Ctrl-C. Also lists the `mockymock report` HTML pages
 under `--reports-dir` and shows one inline, and verifies the cobol-testing
-skills in `~/.claude/skills/` with an Install button (the same copy as
-`skills install`; the only write the dashboard makes).
+skills for Claude Code (`~/.claude/skills/`) and GitHub Copilot
+(`~/.copilot/skills/`), with an Install button for each (the same copy as
+`skills install --target`; the only write the dashboard makes).
 
 | Option | Default | Description |
 |---|---|---|
@@ -411,14 +412,18 @@ timeline: what the assistant did at each step and why.
 ## `mockymock skills install`
 
 ```bash
-mockymock skills install [--project] [--force] [--skill NAME ...]
+mockymock skills install [--project] [--force] [--skill NAME ...] [--target claude|copilot|all]
 ```
 
 Installs the packaged skills -- this one, `cobol-analysis` and
-`cobol-test` -- so a Claude Code session picks them up. Defaults to
-`~/.claude/skills/<name>` (global -- works across every COBOL repo tested
-with mockymock); pass `--project` to install into `./.claude/skills/<name>`
-instead, so a team can commit them for shared use. `--skill NAME`
+`cobol-test` -- so a Claude Code or GitHub Copilot session picks them up.
+They are plain Agent Skills, so the files are the same for both; only the
+directory differs. `--target claude` (default) writes
+`~/.claude/skills/<name>`; `--target copilot` writes
+`~/.copilot/skills/<name>`; `--target all` writes both. Pass `--project`
+to install into the current directory instead (`./.claude/skills/<name>`,
+or `./.github/skills/<name>` for Copilot), so a team can commit them for
+shared use. `--skill NAME`
 (repeatable) installs only the named ones. Refuses to overwrite any
 existing install (writing nothing) unless `--force` is given.
 

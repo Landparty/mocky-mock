@@ -37,14 +37,44 @@ class SkillTargetExistsError(Exception):
         super().__init__(f"{target} already exists; use --force to overwrite")
 
 
-def resolve_target(project: bool, name: str = "mockymock") -> Path:
-    """Where `mockymock skills install` writes to: the current directory's
-    .claude/skills/mockymock for --project, else the user's home
-    directory's -- the skill's content isn't project-specific, so a
-    global install is the default and works across every COBOL repo
-    tested with mockymock."""
-    base = Path.cwd() if project else Path.home()
-    return base / ".claude" / "skills" / name
+# Which assistant a skill install is for. The skills are plain Agent Skills
+# (a directory holding SKILL.md with `name`/`description` frontmatter plus
+# reference files -- the open format at github.com/agentskills/agentskills),
+# so the same files serve both; only the directory each assistant scans
+# differs. GitHub Copilot (cloud agent, CLI, VS Code and JetBrains agent
+# mode) reads personal skills from ~/.copilot/skills and project skills
+# from .github/skills, .claude/skills or .agents/skills (GitHub Docs,
+# "About agent skills", checked 2026-10-04).
+CLAUDE = "claude"
+COPILOT = "copilot"
+TARGETS = (CLAUDE, COPILOT)
+TARGET_LABELS = {CLAUDE: "Claude Code", COPILOT: "GitHub Copilot"}
+# (user-level directory under ~, project-level directory under cwd)
+_TARGET_DIRS = {
+    CLAUDE: (".claude", ".claude"),
+    COPILOT: (".copilot", ".github"),
+}
+
+
+def skills_dir(project: bool, target: str = CLAUDE) -> Path:
+    """The directory `target` scans for skills: under the home directory,
+    or under the current directory for --project."""
+    user_dir, project_dir = _TARGET_DIRS[target]
+    if project:
+        return Path.cwd() / project_dir / "skills"
+    return Path.home() / user_dir / "skills"
+
+
+def resolve_target(
+    project: bool, name: str = "mockymock", target: str = CLAUDE
+) -> Path:
+    """Where `mockymock skills install` writes skill `name` to: the user's
+    home directory by default (the skill's content isn't project-specific,
+    so a global install works across every COBOL repo tested with
+    mockymock), the current directory with --project. `target` picks the
+    assistant: ~/.claude/skills (./.claude/skills) for Claude Code,
+    ~/.copilot/skills (./.github/skills) for GitHub Copilot."""
+    return skills_dir(project, target) / name
 
 
 def install_skill(

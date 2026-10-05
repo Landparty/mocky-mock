@@ -3,8 +3,8 @@
    later means adding a render function and calling it from render().
    Two more panels sit beside it: the `mockymock report` pages found under
    the reports root (/api/reports, refreshed on a slower timer since it
-   walks a directory tree), and the cobol-testing plugin's install check
-   (/api/plugin) with its Install button (POST /api/plugin/install). */
+   walks a directory tree), and the cobol-testing skills' install check for
+   Claude Code and GitHub Copilot (/api/plugin) with an Install button each (POST /api/plugin/install). */
 
 (function () {
   "use strict";
@@ -31,16 +31,13 @@
     viewerTitle: document.getElementById("viewer-title"),
     viewerOpen: document.getElementById("viewer-open"),
     viewerFrame: document.getElementById("viewer-frame"),
-    pluginVerdict: document.getElementById("plugin-verdict"),
-    pluginSkills: document.getElementById("plugin-skills"),
-    pluginInstall: document.getElementById("plugin-install"),
+    pluginTargets: document.getElementById("plugin-targets"),
     pluginMessage: document.getElementById("plugin-message")
   };
 
   var timer = null;
   var polls = 0;
   var selectedReport = null;
-  var lastPlugin = null;
 
   function byId(checks, id) {
     for (var i = 0; i < checks.length; i++) {
@@ -240,60 +237,98 @@
   }
 
   // --- plugin -----------------------------------------------------------
+  // One block per assistant (Claude Code, GitHub Copilot): the same three
+  // skills, each verified in that assistant's own skills directory.
 
   var SKILL_TONE = { ok: "ok", outdated: "warn", missing: "down", broken: "down" };
 
-  function renderPlugin(payload) {
-    lastPlugin = payload;
-    var states = payload.skills.map(function (s) { return s.state; });
-    var needsForce = states.some(function (s) { return s === "outdated" || s === "broken"; });
+  function needsForce(target) {
+    return target.skills.some(function (s) {
+      return s.state === "outdated" || s.state === "broken";
+    });
+  }
+
+  function renderSkill(skill) {
+    var item = document.createElement("li");
+    item.className = "check check--" + (SKILL_TONE[skill.state] || "unknown");
+    var dot = document.createElement("span");
+    dot.className = "check-dot";
+    var copy = document.createElement("div");
+    copy.className = "check-copy";
+    var label = document.createElement("span");
+    label.className = "check-label";
+    label.textContent = skill.name + " — " + skill.state;
+    var detail = document.createElement("span");
+    detail.className = "check-detail";
+    detail.textContent = skill.detail + " · " + skill.path;
+    copy.append(label, detail);
+    if (skill.differing && skill.differing.length) {
+      var files = document.createElement("ul");
+      files.className = "check-files";
+      skill.differing.forEach(function (line) {
+        var li = document.createElement("li");
+        li.textContent = line;
+        files.append(li);
+      });
+      copy.append(files);
+    }
+    item.append(dot, copy);
+    return item;
+  }
+
+  function renderTarget(target) {
+    var block = document.createElement("div");
+    block.className = "plugin-target";
+    block.dataset.target = target.id;
+
+    var head = document.createElement("div");
+    head.className = "plugin-target-head";
+    var title = document.createElement("h3");
+    title.textContent = target.label;
+    head.append(title);
+
+    var states = target.skills.map(function (s) { return s.state; });
+    var force = needsForce(target);
     var tone, verdict;
-    if (payload.installed) {
+    if (target.installed) {
       tone = "ok";
-      verdict = "Installed and verified: all " + payload.skills.length +
-        " skills match this mockymock, in " + payload.location + ".";
+      verdict = "Installed and verified: all " + target.skills.length +
+        " skills match this mockymock, in " + target.location + ".";
     } else if (states.every(function (s) { return s === "missing"; })) {
       tone = "down";
-      verdict = "Not installed. Install copies the skills to " + payload.location +
-        " (the same as `mockymock skills install`).";
+      verdict = "Not installed. Install copies the skills to " + target.location +
+        " (the same as `mockymock skills install --target " + target.id + "`).";
     } else {
-      tone = needsForce ? "warn" : "down";
+      tone = force ? "warn" : "down";
       verdict = "Not fully installed: see the skills below.";
     }
-    el.pluginVerdict.className = "plugin-verdict " + tone;
-    el.pluginVerdict.textContent = verdict;
 
-    el.pluginSkills.replaceChildren();
-    payload.skills.forEach(function (skill) {
-      var item = document.createElement("li");
-      item.className = "check check--" + (SKILL_TONE[skill.state] || "unknown");
-      var dot = document.createElement("span");
-      dot.className = "check-dot";
-      var copy = document.createElement("div");
-      copy.className = "check-copy";
-      var label = document.createElement("span");
-      label.className = "check-label";
-      label.textContent = skill.name + " — " + skill.state;
-      var detail = document.createElement("span");
-      detail.className = "check-detail";
-      detail.textContent = skill.detail + " · " + skill.path;
-      copy.append(label, detail);
-      if (skill.differing && skill.differing.length) {
-        var files = document.createElement("ul");
-        files.className = "check-files";
-        skill.differing.forEach(function (line) {
-          var li = document.createElement("li");
-          li.textContent = line;
-          files.append(li);
-        });
-        copy.append(files);
-      }
-      item.append(dot, copy);
-      el.pluginSkills.append(item);
+    if (!target.installed) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "action";
+      button.textContent = (force ? "Reinstall for " : "Install for ") + target.label;
+      button.addEventListener("click", function () { installPlugin(target, button); });
+      head.append(button);
+    }
+
+    var p = document.createElement("p");
+    p.className = "plugin-verdict " + tone;
+    p.textContent = verdict;
+
+    var list = document.createElement("ul");
+    list.className = "checks";
+    target.skills.forEach(function (skill) { list.append(renderSkill(skill)); });
+
+    block.append(head, p, list);
+    return block;
+  }
+
+  function renderPlugin(payload) {
+    el.pluginTargets.replaceChildren();
+    payload.targets.forEach(function (target) {
+      el.pluginTargets.append(renderTarget(target));
     });
-
-    el.pluginInstall.hidden = payload.installed;
-    el.pluginInstall.textContent = needsForce ? "Reinstall plugin" : "Install plugin";
   }
 
   function loadPlugin() {
@@ -304,8 +339,10 @@
       })
       .then(renderPlugin)
       .catch(function (error) {
-        el.pluginVerdict.className = "plugin-verdict down";
-        el.pluginVerdict.textContent = "Could not check the plugin (" + error.message + ").";
+        var p = document.createElement("p");
+        p.className = "plugin-verdict down";
+        p.textContent = "Could not check the plugin (" + error.message + ").";
+        el.pluginTargets.replaceChildren(p);
       });
   }
 
@@ -314,27 +351,25 @@
     el.pluginMessage.textContent = text || "";
   }
 
-  function installPlugin() {
+  function installPlugin(target, button) {
     var force = false;
-    if (lastPlugin) {
-      var replaced = lastPlugin.skills.filter(function (s) {
-        return s.state === "outdated" || s.state === "broken";
-      });
-      if (replaced.length) {
-        var names = replaced.map(function (s) { return s.name; }).join(", ");
-        if (!window.confirm(
-          "Replace the installed " + names + " with this mockymock's copy? " +
-          "Any local edits to those skills will be lost.")) return;
-        force = true;
-      }
+    var replaced = target.skills.filter(function (s) {
+      return s.state === "outdated" || s.state === "broken";
+    });
+    if (replaced.length) {
+      var names = replaced.map(function (s) { return s.name; }).join(", ");
+      if (!window.confirm(
+        "Replace the installed " + names + " for " + target.label +
+        " with this mockymock's copy? Any local edits to those skills will be lost.")) return;
+      force = true;
     }
-    el.pluginInstall.disabled = true;
-    showPluginMessage("Installing…");
+    button.disabled = true;
+    showPluginMessage("Installing for " + target.label + "…");
     fetch("/api/plugin/install", {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ force: force })
+      body: JSON.stringify({ target: target.id, force: force })
     })
       .then(function (response) {
         if (!response.ok) throw new Error("HTTP " + response.status);
@@ -342,20 +377,21 @@
       })
       .then(function (result) {
         renderPlugin(result);
+        var after = result.targets.filter(function (t) { return t.id === result.target; })[0];
         var parts = [];
-        if (result.written.length) parts.push("Installed " + result.written.join(", ") + ".");
+        if (result.written.length) {
+          parts.push("Installed " + result.written.join(", ") + " for " + target.label + ".");
+        }
         result.skipped.forEach(function (s) { parts.push(s.name + " left alone: " + s.reason + "."); });
         result.errors.forEach(function (e) { parts.push(e.name + " failed: " + e.error); });
-        if (result.installed) {
-          parts.push("Verified. Start a new Claude Code session to pick up the skills.");
+        if (after && after.installed) {
+          parts.push("Verified. Start a new " + target.label + " session to pick up the skills.");
         }
         showPluginMessage(parts.join(" "));
       })
       .catch(function (error) {
+        button.disabled = false;
         showPluginMessage("Install failed (" + error.message + ").");
-      })
-      .finally(function () {
-        el.pluginInstall.disabled = false;
       });
   }
 
@@ -396,7 +432,6 @@
   });
 
   el.refresh.addEventListener("click", refreshAll);
-  el.pluginInstall.addEventListener("click", installPlugin);
 
   refreshAll();
   startPolling();

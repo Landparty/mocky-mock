@@ -64,14 +64,19 @@ runs but with an opaque origin that cannot call the API. The page walks
 the tree every third status poll (15s), not every poll.
 
 **Plugin.** The cobol-testing plugin is installed the `skills install`
-way (copy to `~/.claude/skills/<name>`), not via `/plugin`, which is not
-available in every Claude Code setup. `verify()` grades each skill `ok`
-(every packaged file byte-identical, nothing extra), `outdated` (lists up
-to 10 changed/missing/extra paths), `missing`, or `broken` (a file or
-dangling symlink in its place). `install(force)` writes only `missing`
-skills unless `force`, then replaces every non-`ok` one; an `ok` skill is
-never touched, and a lock serializes concurrent installs. The page asks
-for confirmation before sending `force`.
+way (copy to the assistant's skills directory), not via `/plugin`, which
+is not available in every Claude Code setup. Two targets
+(`skills_cmd.TARGETS`): Claude Code (`~/.claude/skills`) and GitHub
+Copilot (`~/.copilot/skills`); the files are the same Agent Skills.
+`/api/plugin` returns `{"plugin", "targets": [{id, label, location,
+installed, skills}]}`, one block per target. `verify_target()` grades each
+skill `ok` (every packaged file byte-identical, nothing extra), `outdated`
+(lists up to 10 changed/missing/extra paths), `missing`, or `broken` (a
+file or dangling symlink in its place). `install(target, force)` (POST
+body `{"target", "force"}`; an unknown target is 400) writes only
+`missing` skills unless `force`, then replaces every non-`ok` one; an `ok`
+skill is never touched, and a lock serializes concurrent installs. The
+page asks for confirmation before sending `force`.
 
 **The one write, and its CSRF guard.** Host-header checking stops DNS
 rebinding but not a cross-site form/`fetch` to `127.0.0.1:<port>` (the

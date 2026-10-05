@@ -1,9 +1,11 @@
 """Verify and install the cobol-testing skills from the dashboard.
 
-The cobol-testing plugin is three Claude Code skills (`skills_cmd.SKILL_NAMES`).
-The dashboard installs them the way `mockymock skills install` does -- a
-copy of the packaged skills into `~/.claude/skills/<name>` -- because that
-route needs no `/plugin` command and works in every Claude Code setup.
+The cobol-testing plugin is three agent skills (`skills_cmd.SKILL_NAMES`)
+in the open Agent Skills format, which both Claude Code and GitHub Copilot
+read. The dashboard installs them the way `mockymock skills install
+--target <claude|copilot>` does -- a copy of the packaged skills into
+`~/.claude/skills/<name>` or `~/.copilot/skills/<name>` -- because that
+route needs no `/plugin` command and works in every setup of either tool.
 
 **Verified means byte-identical.** A skill is `ok` only when every packaged
 file exists in the installed copy with the same bytes and the installed
@@ -25,11 +27,15 @@ from pathlib import Path
 from typing import Any
 
 from mockymock.cli.skills_cmd import (
+    CLAUDE,
     PLUGIN_NAME,
     SKILL_NAMES,
     SKILLS_ROOT,
+    TARGET_LABELS,
+    TARGETS,
     install_skill,
     resolve_target,
+    skills_dir,
 )
 
 OK = "ok"
@@ -122,31 +128,44 @@ def check_skill(name: str, target: Path) -> SkillCheck:
     )
 
 
-def verify() -> dict[str, Any]:
-    """`/api/plugin`: one check per skill at the user-level install path."""
-    checks = [check_skill(name, resolve_target(False, name)) for name in SKILL_NAMES]
+def verify_target(target: str) -> dict[str, Any]:
+    """One assistant's skills directory: one check per skill."""
+    checks = [
+        check_skill(name, resolve_target(False, name, target)) for name in SKILL_NAMES
+    ]
     return {
-        "plugin": PLUGIN_NAME,
-        "location": str(resolve_target(False, SKILL_NAMES[0]).parent),
+        "id": target,
+        "label": TARGET_LABELS[target],
+        "location": str(skills_dir(False, target)),
         "installed": all(check.state == OK for check in checks),
         "skills": [check.to_dict() for check in checks],
     }
 
 
-def install(force: bool = False) -> dict[str, Any]:
-    """`POST /api/plugin/install`: write the skills that need it, then
+def verify() -> dict[str, Any]:
+    """`/api/plugin`: every assistant's user-level skills directory."""
+    return {
+        "plugin": PLUGIN_NAME,
+        "targets": [verify_target(target) for target in TARGETS],
+    }
+
+
+def install(target: str = CLAUDE, force: bool = False) -> dict[str, Any]:
+    """`POST /api/plugin/install`: write the skills `target` needs, then
     re-verify. Returns the verification plus what was written and what was
-    left alone (and why)."""
+    left alone (and why). Raises ValueError for an unknown target."""
+    if target not in TARGETS:
+        raise ValueError(f"unknown target {target!r}")
     with _install_lock:
-        return _install(force)
+        return _install(target, force)
 
 
-def _install(force: bool) -> dict[str, Any]:
+def _install(assistant: str, force: bool) -> dict[str, Any]:
     installed: list[str] = []
     skipped: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
     for name in SKILL_NAMES:
-        target = resolve_target(False, name)
+        target = resolve_target(False, name, assistant)
         state = check_skill(name, target).state
         if state == OK:
             continue
@@ -164,6 +183,7 @@ def _install(force: bool) -> dict[str, Any]:
         installed.append(name)
     return {
         **verify(),
+        "target": assistant,
         "written": installed,
         "skipped": skipped,
         "errors": errors,

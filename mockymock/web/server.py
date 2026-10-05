@@ -8,7 +8,8 @@ own. It serves those assets plus:
 * `GET /api/reports` and `GET /reports/<path>` -- the `mockymock report`
   HTML pages found under the dashboard's reports root (web/reports.py).
 * `GET /api/plugin` and `POST /api/plugin/install` -- verify, and install,
-  the cobol-testing Claude Code skills (web/plugin.py). The install is the
+  the cobol-testing skills for Claude Code and GitHub Copilot
+  (web/plugin.py). The install is the
   one thing this server ever writes, and only on an explicit button press.
 
 Two deliberate constraints:
@@ -265,7 +266,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "text/plain; charset=utf-8",
             )
             return
-        self._send_json(plugin.install(force=options.get("force") is True))
+        target = options.get("target", "claude")
+        if target not in plugin.TARGETS:
+            self._send(
+                HTTPStatus.BAD_REQUEST,
+                b"unknown target",
+                "text/plain; charset=utf-8",
+            )
+            return
+        self._send_json(plugin.install(target, force=options.get("force") is True))
 
     def _send_json(self, payload: dict[str, Any]) -> None:
         self._send(

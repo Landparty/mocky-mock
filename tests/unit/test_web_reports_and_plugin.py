@@ -127,22 +127,47 @@ def test_report_route_serves_only_report_pages(dashboard, path):
 # --- plugin verification -------------------------------------------------
 
 
+def _target(result, target_id):
+    return next(t for t in result["targets"] if t["id"] == target_id)
+
+
 def test_verify_reports_every_skill_missing_on_a_clean_home(home):
     result = plugin.verify()
-    assert result["installed"] is False
-    assert [s["name"] for s in result["skills"]] == list(SKILL_NAMES)
-    assert {s["state"] for s in result["skills"]} == {plugin.MISSING}
-    assert result["location"] == str(home / ".claude" / "skills")
+    assert [t["id"] for t in result["targets"]] == ["claude", "copilot"]
+    for target_id, location in (
+        ("claude", home / ".claude" / "skills"),
+        ("copilot", home / ".copilot" / "skills"),
+    ):
+        target = _target(result, target_id)
+        assert target["installed"] is False
+        assert [s["name"] for s in target["skills"]] == list(SKILL_NAMES)
+        assert {s["state"] for s in target["skills"]} == {plugin.MISSING}
+        assert target["location"] == str(location)
 
 
-def test_install_then_verify_is_byte_identical(home):
-    result = plugin.install()
-    assert result["installed"] is True
+@pytest.mark.parametrize(
+    ("target_id", "user_dir"), [("claude", ".claude"), ("copilot", ".copilot")]
+)
+def test_install_then_verify_is_byte_identical(home, target_id, user_dir):
+    result = plugin.install(target_id)
+    assert _target(result, target_id)["installed"] is True
     assert result["written"] == list(SKILL_NAMES)
     for name in SKILL_NAMES:
         packaged = SKILLS_ROOT / name / "SKILL.md"
-        installed = home / ".claude" / "skills" / name / "SKILL.md"
+        installed = home / user_dir / "skills" / name / "SKILL.md"
         assert installed.read_bytes() == packaged.read_bytes()
+
+
+def test_installing_for_one_assistant_leaves_the_other_alone(home):
+    result = plugin.install("copilot")
+    assert _target(result, "copilot")["installed"] is True
+    assert _target(result, "claude")["installed"] is False
+    assert not (home / ".claude").exists()
+
+
+def test_install_rejects_an_unknown_target(home):
+    with pytest.raises(ValueError):
+        plugin.install("cursor")
 
 
 def test_an_edited_copy_is_outdated_and_left_alone_without_force(home):
@@ -151,7 +176,8 @@ def test_an_edited_copy_is_outdated_and_left_alone_without_force(home):
     edited.write_text("my own edits")
     (edited.parent / "notes.txt").write_text("extra")
 
-    check = next(s for s in plugin.verify()["skills"] if s["name"] == "cobol-test")
+    skills = _target(plugin.verify(), "claude")["skills"]
+    check = next(s for s in skills if s["name"] == "cobol-test")
     assert check["state"] == plugin.OUTDATED
     assert "changed: SKILL.md" in check["differing"]
     assert "extra: notes.txt" in check["differing"]
@@ -163,7 +189,7 @@ def test_an_edited_copy_is_outdated_and_left_alone_without_force(home):
 
     result = plugin.install(force=True)
     assert result["written"] == ["cobol-test"]
-    assert result["installed"] is True
+    assert _target(result, "claude")["installed"] is True
 
 
 def test_a_file_in_place_of_a_skill_is_broken(home):
@@ -179,12 +205,31 @@ def test_a_file_in_place_of_a_skill_is_broken(home):
 
 def test_api_plugin_and_install_round_trip(dashboard, home):
     _, _, body = _get(f"{dashboard}/api/plugin")
-    assert json.loads(body)["installed"] is False
+    assert _target(json.loads(body), "claude")["installed"] is False
 
     code, result = _post(f"{dashboard}/api/plugin/install", origin=dashboard)
     assert code == 200
-    assert result["installed"] is True
+    assert _target(result, "claude")["installed"] is True
     assert (home / ".claude" / "skills" / "cobol-test" / "SKILL.md").is_file()
+
+    code, result = _post(
+        f"{dashboard}/api/plugin/install",
+        body=b'{"target": "copilot"}',
+        origin=dashboard,
+    )
+    assert code == 200
+    assert _target(result, "copilot")["installed"] is True
+    assert (home / ".copilot" / "skills" / "cobol-test" / "SKILL.md").is_file()
+
+
+def test_install_endpoint_rejects_an_unknown_target(dashboard, home):
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _post(
+            f"{dashboard}/api/plugin/install",
+            body=b'{"target": "../../etc"}',
+            origin=dashboard,
+        )
+    assert excinfo.value.code == 400
 
 
 @pytest.mark.parametrize(

@@ -391,10 +391,12 @@ Two more panels sit below the toolchain status:
 - **Test results** lists every `mockymock report` page (`*.report.html`)
   under the reports directory, newest first, and shows the selected one
   inline (or in its own tab).
-- **Claude Code plugin** verifies the cobol-testing skills (`mockymock`,
-  `cobol-analysis`, `cobol-test`) in `~/.claude/skills/`: each is `ok`
-  only when every file is byte-identical to this mockymock's copy. Its
-  **Install plugin** button does what `mockymock skills install` does;
+- **Plugin · cobol-testing** verifies the cobol-testing skills
+  (`mockymock`, `cobol-analysis`, `cobol-test`) for Claude Code
+  (`~/.claude/skills/`) and GitHub Copilot (`~/.copilot/skills/`): each
+  is `ok` only when every file is byte-identical to this mockymock's copy.
+  Each assistant's **Install** button does what
+  `mockymock skills install --target claude|copilot` does;
   an installed copy that differs is replaced only after you confirm.
   This button is the only thing the dashboard ever writes.
 
@@ -511,23 +513,25 @@ timeline: what the assistant did at each step and why.
 ### `mockymock skills install`
 
 ```bash
-mockymock skills install [--project] [--force] [--skill NAME ...]
+mockymock skills install [--project] [--force] [--skill NAME ...] [--target claude|copilot|all]
 ```
 
-Installs the packaged Claude Code skills so a Claude Code session can
-use them: `mockymock` (scaffold, edit and run `.cut` files), `cobol-test`
+Installs the packaged agent skills so a Claude Code or GitHub Copilot
+session can use them: `mockymock` (scaffold, edit and run `.cut` files), `cobol-test`
 (the whole job from understanding a program to the HTML report) and
 `cobol-analysis` (which cobol-parser subcommand answers which question).
 
 | Option | Default | Description |
 |---|---|---|
-| `--project` | off | Install into `./.claude/skills/<name>` instead of `~/.claude/skills/<name>`. |
+| `--project` | off | Install into the current directory instead of the home directory: `./.claude/skills/<name>`, or `./.github/skills/<name>` for Copilot. |
+| `--target` | `claude` | Which assistant: `claude` (`~/.claude/skills/`), `copilot` (GitHub Copilot: `~/.copilot/skills/`, read by the Copilot CLI, cloud agent and VS Code / JetBrains agent mode) or `all`. The skill files are identical; they are standard Agent Skills. |
 | `--force` | off | Overwrite existing installs. Without it, any existing target refuses the whole install (nothing is written) so local edits are never silently clobbered. |
 | `--skill` | all three | Install only this skill (repeatable): `mockymock`, `cobol-analysis`, `cobol-test`. |
 
 ```bash
 mockymock skills install
 mockymock skills install --project --force
+mockymock skills install --target copilot
 ```
 
 ### `mockymock skills plugin`
@@ -876,6 +880,6 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | `analyze` | no | *(forwarded to cobol-parser)* |
 | `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
 | `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
-| `skills install` | no | `--project`, `--force`, `--skill` |
+| `skills install` | no | `--project`, `--force`, `--skill`, `--target` |
 | `skills plugin` | no | `--force` |
 | `skills mode` | no | `--set`, `--json` |

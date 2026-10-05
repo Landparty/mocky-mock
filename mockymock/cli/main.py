@@ -2396,13 +2396,16 @@ def _cmd_collect(args: argparse.Namespace) -> int:
 
 
 def _cmd_skills_install(args: argparse.Namespace) -> int:
-    """Copy the packaged Claude Code skills (mockymock, cobol-analysis,
-    cobol-test) to ~/.claude/skills/<name> (or ./.claude/skills/<name>
-    with --project). Pure file copy -- no Docker, no config. Fail-closed
+    """Copy the packaged agent skills (mockymock, cobol-analysis,
+    cobol-test) into the skills directory of Claude Code and/or GitHub
+    Copilot (--target; skills_cmd.resolve_target names the directories),
+    under the home directory or, with --project, the current one. Pure file copy -- no Docker, no config. Fail-closed
     across the set: if any target exists and --force is absent, nothing is
     written, so a half-installed set never mixes old and new copies."""
     from mockymock.cli.skills_cmd import (
         SKILL_NAMES,
+        TARGET_LABELS,
+        TARGETS,
         SkillTargetExistsError,
         install_skill,
         resolve_target,
@@ -2416,7 +2419,12 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
             f"(expected: {', '.join(SKILL_NAMES)})"
         )
         return 1
-    targets = [(name, resolve_target(args.project, name)) for name in names]
+    assistants = list(TARGETS) if args.target == "all" else [args.target]
+    targets = [
+        (name, resolve_target(args.project, name, assistant))
+        for assistant in assistants
+        for name in names
+    ]
     if not args.force:
         occupied = [t for _, t in targets if t.exists() or t.is_symlink()]
         if occupied:
@@ -2433,10 +2441,10 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
             print(f"mockymock skills install: {exc}")
             return 1
         print(f"mockymock skills install: installed -> {target}")
+    tools = " / ".join(TARGET_LABELS[a] for a in assistants)
     print(
-        "mockymock skills install: restart Claude Code (or start a new "
-        "session) to pick up the skills; ask it to test a COBOL program "
-        "to start with cobol-test."
+        f"mockymock skills install: start a new {tools} session to pick up "
+        "the skills; ask it to test a COBOL program to start with cobol-test."
     )
     return 0
 
@@ -2751,7 +2759,7 @@ commands, grouped by how often you'll reach for them:
     mutate     mutation-test a program against its .cut suite
     export     write mainframe-ready instrumented source
     fixtures   print a FixtureBundle as JSON for editor integrations
-    skills     manage the packaged Claude Code skills
+    skills     manage the packaged agent skills (Claude Code, GitHub Copilot)
     setup      build the GnuCOBOL image and start the toolchain container
 
 Run 'mockymock <command> --help' for a command's own options.
@@ -3278,8 +3286,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Serve a local web page showing whether Docker and the "
             "GnuCOBOL toolchain are up (read-only; does not build or start "
             "anything), the 'mockymock report' test results found under "
-            "the current directory, and whether the cobol-testing Claude "
-            "Code skills are installed (with a button to install them)"
+            "the current directory, and whether the cobol-testing skills "
+            "are installed for Claude Code and GitHub Copilot (with a button to install them)"
         ),
     )
     dashboard_parser.add_argument(
@@ -3480,7 +3488,8 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.set_defaults(func=_cmd_export)
 
     skills_parser = subparsers.add_parser(
-        "skills", help="Manage the packaged Claude Code skills for mockymock"
+        "skills",
+        help="Manage the packaged agent skills (Claude Code, GitHub Copilot)",
     )
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command")
 
@@ -3496,15 +3505,28 @@ def build_parser() -> argparse.ArgumentParser:
     skills_install_parser = skills_subparsers.add_parser(
         "install",
         help=(
-            "Install the packaged Claude Code skills (mockymock, "
-            "cobol-analysis, cobol-test) so a Claude Code session can use them"
+            "Install the packaged agent skills (mockymock, cobol-analysis, "
+            "cobol-test) so a Claude Code or GitHub Copilot session can use them"
         ),
     )
     skills_install_parser.add_argument(
         "--project",
         action="store_true",
         help=(
-            "Install into ./.claude/skills/<name> instead of " "~/.claude/skills/<name>"
+            "Install into the current directory (./.claude/skills/<name>, "
+            "or ./.github/skills/<name> for copilot) instead of the home "
+            "directory"
+        ),
+    )
+    skills_install_parser.add_argument(
+        "--target",
+        default="claude",
+        # Literal rather than skills_cmd.TARGETS: see the deferred-import
+        # rule; test_cli_skills.py pins the two together.
+        choices=["claude", "copilot", "all"],
+        help=(
+            "Which assistant to install for: claude (~/.claude/skills, the "
+            "default), copilot (GitHub Copilot: ~/.copilot/skills) or all"
         ),
     )
     skills_install_parser.add_argument(

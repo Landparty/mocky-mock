@@ -47,6 +47,47 @@ def test_skills_install_writes_nothing_when_any_target_exists(monkeypatch, tmp_p
     assert not (tmp_path / ".claude" / "skills" / "mockymock").exists()
 
 
+def test_skills_install_target_copilot_writes_to_copilot_home(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert main(["skills", "install", "--target", "copilot"]) == 0
+    for name in ("mockymock", "cobol-analysis", "cobol-test"):
+        assert (tmp_path / ".copilot" / "skills" / name / "SKILL.md").is_file()
+    assert not (tmp_path / ".claude").exists()
+    assert "GitHub Copilot session" in capsys.readouterr().out
+
+
+def test_skills_install_target_all_writes_both(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert main(["skills", "install", "--target", "all"]) == 0
+    for base in (".claude", ".copilot"):
+        assert (tmp_path / base / "skills" / "cobol-test" / "SKILL.md").is_file()
+
+
+def test_skills_install_target_copilot_project_writes_to_github_dir(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    assert main(["skills", "install", "--project", "--target", "copilot"]) == 0
+    assert (tmp_path / ".github" / "skills" / "mockymock" / "SKILL.md").is_file()
+
+
+def test_skills_install_target_choices_match_skills_cmd():
+    """--target's choices are a literal (deferred-import rule); pin them."""
+    from mockymock.cli.skills_cmd import TARGETS
+
+    parser = build_parser()
+    skills = next(
+        a
+        for a in parser._subparsers._group_actions[0].choices["skills"]._actions
+        if a.dest == "skills_command"
+    )
+    install = skills.choices["install"]
+    target = next(a for a in install._actions if a.dest == "target")
+    assert target.choices == [*TARGETS, "all"]
+
+
 def test_skills_install_project_flag_writes_to_cwd(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     exit_code = main(["skills", "install", "--project"])

@@ -1031,13 +1031,19 @@ mockymock-generated instrumentation rather than blamed on either.
 Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
 [docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).
 
-## `mockymock skills install [--project] [--force] [--skill NAME ...]`
+## `mockymock skills install [--project] [--force] [--skill NAME ...] [--target claude|copilot|all]`
 
-Copies the packaged Claude Code skills (`SKILL_NAMES`: `mockymock`,
+Copies the packaged agent skills (`SKILL_NAMES`: `mockymock`,
 `cobol-analysis`, `cobol-test`, each under `mockymock/cli/skills/<name>/`)
 to `~/.claude/skills/<name>` (default) or `./.claude/skills/<name>`
 (`--project`). `--skill` (repeatable) narrows the set; without it all
-three are installed. Fail-closed as a set (2026-10-04): every target is
+three are installed. `--target` (2026-10-04) picks the assistant:
+`claude` (default, paths above), `copilot` (`~/.copilot/skills/<name>`,
+`--project`: `./.github/skills/<name>`, the directories GitHub Docs'
+"About agent skills" lists for personal/project skills) or `all`. The
+skills are standard Agent Skills, so the files are identical per target;
+`tests/unit/test_agent_skills_format.py` pins the spec's frontmatter rules
+(name = directory, lowercase-hyphen, <= 64; description <= 1024). Fail-closed as a set (2026-10-04): every target is
 checked before anything is copied, so one existing directory without
 `--force` installs none of them. Implementation lives in `mockymock/cli/skills_cmd.py`,
 imported lazily inside `_cmd_skills_install` for the same deferred-import
@@ -1045,8 +1051,8 @@ reason every other subcommand uses, even though nothing here is actually
 heavy (`shutil`/`pathlib` only) -- consistency with the rest of this
 module.
 
-`resolve_target(project: bool, name="mockymock") -> Path` picks the base directory
-(`Path.cwd()` or `Path.home()`); `install_skill(target, force=False, name="mockymock")`
+`resolve_target(project: bool, name="mockymock", target="claude") -> Path` picks the base directory
+(`Path.cwd()` or `Path.home()`) and, via `skills_dir`, the assistant's directory; `install_skill(target, force=False, name="mockymock")`
 refuses (`SkillTargetExistsError`, fail-closed) if `target` already
 exists and `force` is `False`, so a user's local edits to a previously
 installed copy are never silently clobbered. The skill content itself is
