@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-05T00:00:00Z
+timestamp: 2026-10-05T12:00:00Z
 ---
 
 # Overview
@@ -265,6 +265,16 @@ is case-insensitive and accepts an optional trailing period** (`END-MOCK.`,
 exists because a missed END-MOCK doesn't fail at its own line; it silently
 swallows the rest of the file into the mock body. Bare keys are upper-cased
 by the parser; quoted keys are preserved exactly (see below).
+
+### Statement order inside a TESTCASE (2026-10-05, #150)
+
+Setup `MOVE`s always run before the `PERFORM` and `EXPECT`/`VERIFY` always
+after it, whatever their position in the file. So the parser refuses the
+two orders that would mean something else: an `EXPECT`/`VERIFY` above the
+`PERFORM` (`EXPECT before the PERFORM`) and a `MOVE` below it (`MOVE after
+the PERFORM`). `MOCK` directives may sit anywhere. Data names containing a
+`.` (`IN-REC.CUST-ID`) are refused too (#144) -- COBOL qualifies with
+`CUST-ID OF IN-REC`.
 
 ## `PROVIDER` parameterized test cases
 
@@ -829,6 +839,35 @@ paragraph-grouped path described above, unchanged. A real
   `--scenarios` modes (happy/branches/all) and asserts `mockymock lint`
   (via `cli.checks.run_static_checks`, Docker-free) finds zero problems —
   "a generator that emits a refusable `.cut` is worse than none."
+
+#### Scaffold corrections from the 2026-10-05 bug hunt (#141-#145, #148, #150)
+
+All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
+`program`, `neutralized_goto` and `name_counts`.
+
+- **Reachability per scenario (#143).** Only boundaries reachable from the
+  scenario's entry (`ProgramContext.reachable_from`, the same walk lint
+  uses) get a `MOCK`; anything else was an `UNMATCHED_MOCK`.
+- **Loops (#141).** `analysis/loops.py` finds sites inside a looping
+  PERFORM (UNTIL/VARYING/TIMES, inline or via its target). A looped cursor
+  `FETCH` is mocked with `ROWS` and verified `rows + 1` times; a `READ`
+  outside any loop is verified once per site.
+- **Summed counts (#142).** One key called from several sites gets one
+  `VERIFY` with the summed count; if any of those sites is nested in an
+  IF/EVALUATE/loop the count is demoted to a `*> VERIFY ... <count not
+  exact by construction -- reason>` comment.
+- **Field names (#144).** Fixture fields arrive as `RECORD.FIELD`; rows and
+  bodies use the leaf (or `FIELD OF RECORD` when the leaf is ambiguous) and
+  an `EXPECT` whose leaf is ambiguous becomes a stub comment.
+- **DL/I get-next loops (#145).** A looped `GN`/`GHN`/`GNP`/`GHNP` mock
+  sets `DIBSTAT` to `GB`/`GE` after its first call, so the scan ends.
+- **SQL status-only bodies (#148).** OPEN/CLOSE/COMMIT-style bodies set
+  `SQLCODE` to 0 when the fixture names no SQLCODE.
+- **No entry (#150).** A scenario with `entry=''` (IMS `ENTRY 'DLITCBL'`
+  programs) falls back to the first named PROCEDURE DIVISION paragraph
+  (`_first_paragraph`); `generate --with-data` exits 1 when no scenario
+  became a TESTCASE. A `CALL 'CBLTDLI'` GN loop still gets an empty mock
+  body, so such a case can time out until its body sets the PCB status.
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 

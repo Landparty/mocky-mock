@@ -33,6 +33,9 @@ Rules that matter in practice:
 
 - Exactly one `TESTSUITE` per file, at most one `BEFORE-ALL` and one
   `BEFORE-EACH`, exactly one `PERFORM` per `TESTCASE`.
+- Setup `MOVE`s go above the `PERFORM`, `EXPECT`/`VERIFY` below it; the
+  other order is a parse error (they would silently run on the wrong side
+  of it). `MOCK` directives can go anywhere in the case.
 - Every keyword is case-sensitive uppercase, **except** `END-MOCK`/
   `END-BEFORE` (case-insensitive, optional trailing period -- `end-mock.`
   is fine).
