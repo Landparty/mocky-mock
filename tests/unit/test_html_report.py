@@ -35,6 +35,7 @@ def test_standalone_page_is_a_full_document_with_every_section(tmp_path):
         "Paragraphs",
         "Business rules",
         "Program analysis",
+        "Boundaries",
         "GnuCOBOL vs IBM COBOL risks",
         "Verification levels",
     ):
@@ -67,3 +68,116 @@ def test_values_from_the_cut_file_are_escaped(tmp_path):
 def test_not_run_suite_says_so_in_the_verdict(tmp_path):
     page = render_html(_report(tmp_path))
     assert "has not been run here" in page
+
+
+def test_next_steps_lead_with_running_the_suite_when_it_was_not_run(tmp_path):
+    page = render_html(_report(tmp_path))
+    assert ">What to do next</h2>" in page
+    next_box = page.split('id="h-next"', 1)[1].split("</section>", 1)[0]
+    assert "Run the tests to prove them" in next_box
+    assert "--execute --mutate" in next_box
+
+
+def test_findings_use_plain_labels_and_say_what_to_do(tmp_path):
+    report = _report(tmp_path)
+    report["findings"] = [
+        {
+            "severity": "medium",
+            "category": "untested-paragraph",
+            "title": "No test reaches X",
+            "detail": "",
+            "line": 9,
+        }
+    ]
+    page = render_html(report)
+    findings = page.split('id="h-findings"', 1)[1].split("</section>", 1)[0]
+    assert "Should fix" in findings
+    assert "Paragraph no test reaches" in findings
+    assert 'title="untested-paragraph"' in findings  # machine name kept
+    assert "What to do: Add a TESTCASE that PERFORMs it." in findings
+
+
+def test_finding_items_render_as_a_list(tmp_path):
+    report = _report(tmp_path)
+    report["findings"] = [
+        {
+            "severity": "info",
+            "category": "scenario-gap",
+            "title": "Branches",
+            "detail": "a; b",
+            "items": ["A line 3 (ELSE branch): x", "<b>"],
+        }
+    ]
+    page = render_html(report)
+    assert "<li>A line 3 (ELSE branch): x</li>" in page
+    assert "<li>&lt;b&gt;</li>" in page
+
+
+def test_page_has_a_section_nav_and_a_glossary(tmp_path):
+    page = render_html(_report(tmp_path))
+    assert '<nav class="toc"' in page
+    assert 'href="#h-findings"' in page
+    assert ">Words used in this report</h2>" in page
+    assert "<dt>Mutation score</dt>" in page
+
+
+def test_identical_findings_fold_into_one_card(tmp_path):
+    report = _report(tmp_path)
+    same = {
+        "severity": "high",
+        "category": "refused",
+        "title": "The suite is refused before it can run",
+    }
+    report["findings"] = [
+        {**same, "detail": "unmocked CALL A"},
+        {**same, "detail": "unmocked CALL B"},
+        {**same, "detail": "unmocked CALL A"},
+    ]
+    page = render_html(report)
+    findings = page.split('id="h-findings"', 1)[1].split("</section>", 1)[0]
+    assert findings.count('<article class="finding') == 1
+    assert "(2 reasons)" in findings
+    assert "<li>unmocked CALL A</li>" in findings
+    assert "<li>unmocked CALL B</li>" in findings
+
+
+def test_boundaries_section_lists_each_boundary_and_its_tests(tmp_path):
+    report = _report(tmp_path)
+    report["boundaries"] = [
+        {
+            "kind": "CALL",
+            "category": "CALL",
+            "target": "RATECALC",
+            "paragraph": "2000-PRICE",
+            "line": 40,
+            "mockable": True,
+            "mq": False,
+            "mockedBy": ["prices a claim"],
+            "reachedUnmockedBy": [],
+        },
+        {
+            "kind": "READ",
+            "category": "READ",
+            "target": "CLAIM-FILE",
+            "paragraph": "3000-LOAD",
+            "line": 55,
+            "mockable": True,
+            "mq": False,
+            "mockedBy": [],
+            "reachedUnmockedBy": [],
+        },
+    ]
+    page = render_html(report)
+    assert 'id="h-boundaries"' in page
+    assert "Calls program <code>RATECALC</code>" in page
+    assert "mocked by 1 test" in page
+    assert "<li>prices a claim</li>" in page
+    assert "Reads from <code>CLAIM-FILE</code>" in page
+    assert "no test reaches it" in page
+    assert "1 of 2 boundaries mocked" in page
+
+
+def test_report_without_boundaries_key_still_renders(tmp_path):
+    report = _report(tmp_path)
+    report.pop("boundaries", None)
+    assert "written before boundaries were listed" in render_html(report)

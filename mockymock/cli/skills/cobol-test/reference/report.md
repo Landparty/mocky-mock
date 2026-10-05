@@ -21,29 +21,43 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 
 ## What the page shows, top to bottom
 
-1. **Verdict line and summary tiles** -- tests passing, cases at L2+,
-   share of INTENT assertions, line coverage, mutation score, findings,
-   program health grade.
-2. **Findings**, most severe first (table below).
-3. **Test cases** -- level, result, why it stopped at that level, failures
-   with line numbers, assertion label counts, dialect risks reached.
-   Filter by result or level.
-4. **How the verdict was reached** -- the twelve steps in order
-   (environment, understand, rules, analysis, inventory, lint, scenarios, run,
-   coverage, mutation, dialect, verdict), each with the equivalent command,
-   its summary, details and timing.
-5. **Assistant journal** -- your `mockymock journal` entries.
-6. **Paragraphs** -- line, size, complexity, which tests reach it.
-7. **Business rules** -- condition/formula, arms, which tests cite it.
-8. **Program analysis** -- cobol-parser's view of the program itself: health
+1. **Verdict line, section links and summary tiles** -- tests passing,
+   strongly verified (L2+), checks with a reason (INTENT/CHARACTERIZATION
+   share), code run by tests, planted bugs caught, issues to fix, code
+   health grade. Every tile says in words what its number means.
+2. **What to do next** -- up to five actions, most important first: each
+   high-severity finding kind, then "Run the tests to prove them" (with the
+   exact `--execute --mutate` command) when the suite was not run, then the
+   medium and low kinds. "Nothing urgent" when the list is empty.
+3. **Findings**, most severe first (table below), with plain labels
+   ("Fix first", "Should fix", "Worth a look", "For information"), the
+   category's machine name on hover, and a "What to do" line. Identical
+   findings fold into one card; scenario gaps list one branch per line.
+4. **Test cases** -- level, result, why it stopped at that level, failures
+   with line numbers, where each check's expected value came from, dialect
+   risks reached. Filter by result or level.
+5. **Boundaries** -- one row per CALL, file operation, SQL, CICS, DL/I and
+   console ACCEPT statement: what it touches, its paragraph and line, and
+   the tests that MOCK it ("reached but not mocked" and "no test reaches
+   it" are the rows to act on).
+6. **Program analysis** -- cobol-parser's view of the program itself: health
    score (A-F), a call graph coloured by which paragraphs a test reaches,
    per-paragraph complexity, every lint rule's findings, data flow (where
    each field is written and read), the interface (calling signature,
    touchpoints to mock, CRUD, SQL/CICS checks), dead code and duplicates.
-   Sections an older cobol-parser cannot produce are named in a note at the
-   top, not silently left out. Cite it when picking what to test next:
-   an untested high-complexity paragraph is the obvious first target.
-9. **GnuCOBOL vs IBM COBOL risks** and the level definitions.
+   Each panel opens with a sentence saying what it shows. Sections an older
+   cobol-parser cannot produce are named in a note at the top, not silently
+   left out. Cite it when picking what to test next: an untested
+   high-complexity paragraph is the obvious first target.
+7. **Business rules** -- condition/formula, arms, which tests cite it.
+8. **Paragraphs** -- line, size, complexity, which tests reach it.
+9. **GnuCOBOL vs IBM COBOL risks**.
+10. **How the verdict was reached** -- the twelve steps in order
+   (environment, understand, rules, analysis, inventory, lint, scenarios, run,
+   coverage, mutation, dialect, verdict), each with the equivalent command,
+   its summary, details and timing.
+11. **Assistant journal** -- your `mockymock journal` entries.
+12. **Verification levels** and a **glossary** of the words the page uses.
 
 ## Finding categories and what to do
 

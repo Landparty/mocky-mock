@@ -201,6 +201,56 @@ def _orig(program: _Program, line: int | None) -> int | None:
     return program.line_map.get(line)
 
 
+#: cobol-parser rejoins EXEC tokens with spaces the source never had:
+#: `SEGMENT ( CLAIM-SEG )` reads back as `SEGMENT (CLAIM-SEG)`.
+_EXEC_PAREN_SPACING_RE = re.compile(r"(?<=\()\s+|\s+(?=\))")
+
+
+def _boundaries(
+    program: _Program, test_cases: list[Any], cases: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Every boundary statement mockymock's splicer knows (one row per
+    statement, in source order), with the cases whose MOCKs match it and
+    the cases whose PERFORM reaches its paragraph without mocking it.
+    Matching is `directive_matches_site`, the rule `run` itself uses, so a
+    row's "mocked by" is exactly what a run would splice."""
+    from mockymock.analysis.mock_surface import _TERMINATOR_LABELS, analyze
+    from mockymock.analysis.refusal._gates import directive_matches_site
+
+    surface = analyze(program.ast)
+    mocks = {tc.name: tc.mocks for tc in test_cases}
+    rows = []
+    for site in sorted(surface.boundary_sites, key=lambda s: s.line):
+        if site.category is None and site.label in _TERMINATOR_LABELS:
+            continue
+        mocked_by = [
+            c["name"]
+            for c in cases
+            if any(directive_matches_site(m, site) for m in mocks.get(c["name"], []))
+        ]
+        reached_by = [
+            c["name"]
+            for c in cases
+            if site.paragraph_name in c["reach"] and c["name"] not in mocked_by
+        ]
+        rows.append(
+            {
+                "kind": site.label,
+                "category": site.category.keyword if site.category else None,
+                "target": _EXEC_PAREN_SPACING_RE.sub(
+                    "", (site.match_text or ", ".join(site.keys)).strip()
+                ),
+                "paragraph": site.paragraph_name,
+                "line": _orig(program, site.line),
+                "mockable": site.category is not None,
+                "mq": site.is_mq,
+                "mockedBy": mocked_by,
+                "reachedUnmockedBy": reached_by,
+            }
+        )
+    return rows
+
+
 def _paragraph_of(node: str) -> str:
     """Program-flow synthesizes branch nodes like `1000-X__IF_1`; they belong
     to the paragraph they sit in."""
@@ -543,6 +593,11 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         for name in reach:
             if name in by_name and case["name"] not in by_name[name]["reachedBy"]:
                 by_name[name]["reachedBy"].append(case["name"])
+    boundaries = (
+        _boundaries(program, suite.test_cases if suite else [], cases)
+        if program is not None
+        else []
+    )
     for node in (analysis.get("callGraph") or {}).get("nodes") or []:
         paragraph = by_name.get(node["name"])
         if paragraph is not None:
@@ -954,6 +1009,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         "rules": rules,
         "rulesAvailable": rules_available,
         "analysis": analysis,
+        "boundaries": boundaries,
         "cases": cases,
         "assertions": assertions,
         "dialectRisks": risks,
@@ -987,6 +1043,51 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             },
         },
     }
+
+
+def _count(n: int, noun: str) -> str:
+    """`1 branch`, `3 branches` -- instead of `branch(es)`."""
+    if n == 1:
+        return f"1 {noun}"
+    plural = noun + ("es" if noun.endswith(("s", "sh", "ch", "x")) else "s")
+    return f"{n} {plural}"
+
+
+_ARM_PREFIX_RE = re.compile(r"^[A-Z-]+@\d+(?::\d+)?(?:/[A-Z0-9_#-]+)?:\s*")
+# The scenario planner's miss reasons, as (pattern, plain sentence).
+_ARM_REASONS = (
+    (
+        re.compile(r"field not boundary-fed:\s*(.+)$"),
+        "it tests {0}, which no mocked file, call or database read sets",
+    ),
+    (
+        re.compile(r"unresolvable EVALUATE subject:\s*(.+)$"),
+        "it evaluates {0}, which the generator cannot set",
+    ),
+    (
+        re.compile(r"unresolvable operand\(s\) in comparison:\s*(.+?)\s*/\s*(.+)$"),
+        "it compares {0} with {1}, which the generator cannot set",
+    ),
+    (
+        re.compile(
+            r"comparison between two resolved fields not supported[^:]*:\s*(.+?)\s+vs\s+(.+)$"
+        ),
+        "it compares two fields ({0} and {1}), which the generator cannot pair up",
+    ),
+)
+
+
+def _plain_arm_reason(reason: str | None) -> str:
+    """The scenario planner's miss reason, minus its internal arm key
+    (`IF@24/ELSE: `), with its one cryptic phrase spelled out."""
+    if not reason:
+        return "no reason given"
+    text = _ARM_PREFIX_RE.sub("", reason)
+    for pattern, sentence in _ARM_REASONS:
+        match = pattern.match(text)
+        if match:
+            return sentence.format(*match.groups())
+    return text
 
 
 def _findings(  # noqa: C901
@@ -1130,7 +1231,11 @@ def _findings(  # noqa: C901
         add(
             "low",
             "unlabelled",
-            f"{len(unlabelled)} assertion(s) do not say where their value came from",
+            (
+                f"{_count(len(unlabelled), 'check')} "
+                f"{'does' if len(unlabelled) == 1 else 'do'} not say where "
+                "the expected value came from"
+            ),
             "Label each with `*> INTENT: ...` (derived from a rule or the "
             "developer) or `*> CHARACTERIZATION: ...` (recorded from a run).",
         )
@@ -1178,7 +1283,7 @@ def _findings(  # noqa: C901
             # bookkeeping syntax, not something to read off a line.
             arm_id = (arm.get("arm_key") or "").rsplit("/", 1)[-1] or "?"
             where = f"line {line}" if line is not None else "an unknown line"
-            return f"{arm.get('parent_proc') or '?'} {where} ({arm_id} arm)"
+            return f"{arm.get('parent_proc') or '?'} {where} ({arm_id} branch)"
 
         uncovered_lines = set((coverage or {}).get("uncoveredLines") or [])
         still_gap: list[tuple[dict[str, Any], int | None]] = []
@@ -1197,33 +1302,48 @@ def _findings(  # noqa: C901
         # not bury the findings that need action.
         if still_gap:
             total = scenario_coverage.get("total_arms") or len(still_gap)
-            shown = "; ".join(
-                f"{_describe_arm(arm, line)}: {arm.get('reason') or 'no reason given'}"
-                for arm, line in still_gap[:8]
-            )
+            items = [
+                f"{_describe_arm(arm, line)}: {_plain_arm_reason(arm.get('reason'))}"
+                for arm, line in still_gap
+            ]
+            shown = "; ".join(items[:8])
             more = f"; and {len(still_gap) - 8} more" if len(still_gap) > 8 else ""
+            if coverage:
+                title = (
+                    f"{_count(len(still_gap), 'branch')} of {total} never ran: "
+                    "no test reaches them and the automatic generator cannot either"
+                )
+            else:
+                # Without a coverage run there is no telling whether the
+                # suite's own cases reach these arms -- say so instead of
+                # claiming they are untested.
+                title = (
+                    f"The automatic generator cannot reach "
+                    f"{_count(len(still_gap), 'branch')} of {total}; "
+                    "run with coverage to see whether your tests do"
+                )
             add(
                 "info",
                 "scenario-gap",
-                f"The automatic generator cannot reach {len(still_gap)} of "
-                f"{total} branch arm(s), and no test in the suite does either",
-                f"{shown}{more}. Set these arms up by hand in the test case "
+                title,
+                f"{shown}{more}. Set these branches up by hand in the test case "
                 "(MOVE before the PERFORM, or a mock body).",
+                items=items,
             )
         if hand_covered and coverage:
-            shown = "; ".join(
-                _describe_arm(arm, line) for arm, line in hand_covered[:8]
-            )
+            items = [_describe_arm(arm, line) for arm, line in hand_covered]
+            shown = "; ".join(items[:8])
             more = (
                 f"; and {len(hand_covered) - 8} more" if len(hand_covered) > 8 else ""
             )
             add(
                 "info",
                 "scenario-gap-covered-by-hand",
-                f"{len(hand_covered)} branch arm(s) the automatic generator "
-                "can't reach are covered by hand-written cases already",
+                f"{_count(len(hand_covered), 'branch')} the automatic generator "
+                "can't reach are covered by your own test cases",
                 f"{shown}{more}. Nothing to do here -- listed so the count "
                 "above doesn't read as unfinished work.",
+                items=items,
             )
 
     findings.sort(key=lambda f: (_SEVERITY_RANK[f["severity"]], f.get("line") or 0))

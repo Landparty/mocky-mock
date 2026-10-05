@@ -172,6 +172,16 @@ def test_paragraphs_record_which_cases_reach_them(ordrproc):
     assert paragraph["line"] == 12
 
 
+def test_boundaries_name_the_cases_that_mock_them(ordrproc):
+    report = build_report(_options(ordrproc))
+    (call,) = [b for b in report["boundaries"] if b["kind"] == "CALL"]
+    assert call["target"] == "DISCRATE"
+    assert call["paragraph"] == "PROCESS-ORDER"
+    assert call["mockable"] is True
+    assert len(call["mockedBy"]) == 2
+    assert call["reachedUnmockedBy"] == []
+
+
 def test_passing_run_with_strong_mutation_reaches_l3(ordrproc):
     report = build_report(
         _options(
@@ -308,3 +318,39 @@ def test_copybook_program_maps_lines_back_to_the_original_source(tmp_path):
     for paragraph in report["paragraphs"]:
         if paragraph["line"] is not None:
             assert paragraph["name"] in original[paragraph["line"] - 1]
+
+
+def test_scenario_gap_without_coverage_does_not_claim_no_test_reaches_it():
+    from mockymock.report.test_report import _findings
+
+    arm = {
+        "status": "missed",
+        "arm_key": "P@24:5/ELSE",
+        "parent_proc": "P",
+        "reason": "IF@24/ELSE: field not boundary-fed: WS-STATUS",
+    }
+    kwargs = {
+        "cases": [],
+        "assertions": [],
+        "paragraphs": [],
+        "rules": [],
+        "rules_available": False,
+        "lint_problems": [],
+        "risks": [],
+        "mutation": None,
+        "scenario_coverage": {"total_arms": 2, "details": [arm]},
+        "program_lines": [],
+    }
+    (gap,) = _findings(coverage=None, **kwargs)
+    assert "run with coverage" in gap["title"]
+    assert "no test reaches" not in gap["title"]
+    assert gap["items"] == [
+        "P line 24 (ELSE branch): it tests WS-STATUS, which no mocked file, "
+        "call or database read sets"
+    ]
+    (gap,) = [
+        f
+        for f in _findings(coverage={"uncoveredLines": [24]}, **kwargs)
+        if f["category"] == "scenario-gap"
+    ]
+    assert gap["title"].startswith("1 branch of 2 never ran")
