@@ -124,6 +124,34 @@ pre { margin: 0; padding: 10px 12px; background: var(--raised); border-radius: 6
 .levels-note { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; font-size: 13px; color: var(--muted); }
 .levels-note div { display: grid; gap: 4px; }
 footer { color: var(--muted); font-size: 12px; }
+h3 { margin: 18px 0 8px; font-size: 15px; }
+.inner h3 { margin: 8px 0 6px; }
+.analysis { display: grid; gap: 8px; }
+details.sub > summary { grid-template-columns: 1fr auto; }
+details.sub > summary h3 { display: inline; margin: 0; font-size: 15px; }
+details.sub > summary::after { content: "▸"; color: var(--muted); }
+details.sub[open] > summary::after { content: "▾"; }
+.note { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+.grade { display: inline-flex; align-items: center; justify-content: center; width: 1.6em; height: 1.6em; border-radius: 6px; font-weight: 700; color: var(--bg); }
+.grade.A, .grade.B { background: var(--ok); }
+.grade.C { background: var(--warn); }
+.grade.D, .grade.F { background: var(--bad); }
+.health { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px; }
+.bar { height: 6px; border-radius: 3px; background: var(--raised); overflow: hidden; }
+.bar span { display: block; height: 100%; background: var(--warn); }
+.graph { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.graph svg { display: block; font: 12px var(--font-mono); }
+.graph .n rect { fill: var(--raised); stroke: var(--line); stroke-width: 1.5; }
+.graph .n.ok rect { stroke: var(--ok); }
+.graph .n.untested rect { stroke: var(--warn); }
+.graph .n.dead rect { stroke: var(--muted); stroke-dasharray: 4 3; }
+.graph .n.ext rect { fill: var(--accent-soft); stroke: var(--accent); }
+.graph .n.entry rect { stroke-width: 3; }
+.graph .n text { fill: var(--fg); }
+.graph path { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+.graph path.goto { stroke: var(--bad); stroke-dasharray: 5 3; }
+.graph path.call { stroke: var(--accent); }
+.graph marker path { fill: var(--muted); stroke: none; }
 @media (max-width: 560px) {
   h1 { font-size: 24px; }
   .entry { grid-template-columns: 1fr; gap: 4px; }
@@ -208,6 +236,23 @@ def _summary_strip(report: dict[str, Any]) -> str:
     mutation = "—" if s["mutationScore"] is None else f"{s['mutationScore']:.0f}%"
     intent = "—" if s["intentShare"] is None else f"{s['intentShare']:.0f}%"
     f = s["findings"]
+    health_tile = ""
+    analysis = report.get("analysis") or {}
+    health = analysis.get("health") if analysis.get("available") else None
+    if health:
+        complexity = (analysis.get("complexity") or {}).get("summary") or {}
+        health_tile = _tile(
+            "Program health",
+            f'<span class="grade {_e(health["grade"])}">{_e(health["grade"])}</span>',
+            _e(
+                f"debt {health['score']:g}/100"
+                + (
+                    f" · max complexity {complexity['max_complexity']}"
+                    if complexity.get("max_complexity") is not None
+                    else ""
+                )
+            ),
+        )
     return (
         '<section class="strip" aria-label="Summary">'
         + _tile("Tests passing", f"{s['passed']}/{cases}", _e(passed_sub))
@@ -229,6 +274,7 @@ def _summary_strip(report: dict[str, Any]) -> str:
             str(f["high"] + f["medium"]),
             f"high/medium · {f['low']} low · {f['info']} info",
         )
+        + health_tile
         + "</section>"
     )
 
@@ -455,6 +501,531 @@ def _risks(report: dict[str, Any]) -> str:
     )
 
 
+def _table(
+    head: list[str], rows: list[str], numeric: frozenset[int] = frozenset()
+) -> str:
+    cells = "".join(
+        f'<th class="num">{_e(h)}</th>' if i in numeric else f"<th>{_e(h)}</th>"
+        for i, h in enumerate(head)
+    )
+    return (
+        f'<div class="table-wrap"><table><thead><tr>{cells}</tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+    )
+
+
+def _num(value: Any) -> str:
+    return f'<td class="num">{_e("—" if value is None else value)}</td>'
+
+
+def _call_graph_svg(graph: dict[str, Any]) -> str:
+    """A left-to-right layered drawing of the paragraph graph: one column
+    per PERFORM depth from the entry point, external CALL targets in a last
+    column. Border colour says whether a test reaches the paragraph."""
+    nodes = graph["nodes"]
+    if not nodes:
+        return ""
+    names = [n["name"] for n in nodes]
+    out_edges: dict[str, list[str]] = {}
+    for edge in graph["edges"]:
+        out_edges.setdefault(edge["source"], []).append(edge["target"])
+    depth: dict[str, int] = {}
+    queue = [n["name"] for n in nodes if n["entry"]] or names[:1]
+    for name in queue:
+        depth[name] = 0
+    while queue:
+        current = queue.pop(0)
+        for target in out_edges.get(current, []):
+            if target not in depth:
+                depth[target] = depth[current] + 1
+                queue.append(target)
+    last = max(depth.values(), default=0)
+    for name in names:
+        depth.setdefault(name, last + 1)  # never reached from an entry point
+    externals: list[str] = []
+    for call in graph["externalCalls"]:
+        label = f"CALL {call['program']}"
+        if label not in externals:
+            externals.append(label)
+    ext_col = max(depth.values()) + 1
+    columns: dict[int, list[str]] = {}
+    for name in names:
+        columns.setdefault(depth[name], []).append(name)
+    if externals:
+        columns[ext_col] = externals
+    box_w, box_h, col_w, row_h, pad = 200, 32, 250, 48, 12
+    pos: dict[str, tuple[int, int]] = {}
+    for col, members in columns.items():
+        for row, name in enumerate(members):
+            pos[name] = (pad + col * col_w, pad + row * row_h)
+    width = pad * 2 + (max(columns) * col_w) + box_w
+    height = pad * 2 + max(len(m) for m in columns.values()) * row_h - (row_h - box_h)
+
+    def curve(a: str, b: str, cls: str) -> str:
+        (x1, y1), (x2, y2) = pos[a], pos[b]
+        sx, sy, ty = x1 + box_w, y1 + box_h / 2, y2 + box_h / 2
+        if x2 <= x1:  # same column or backwards: loop around the right side
+            tx: float = x2 + box_w
+            mid: float = max(x1, x2) + box_w + 30
+        else:
+            tx = x2
+            mid = (sx + tx) / 2
+        return (
+            f'<path class="{cls}" d="M{sx},{sy} C{mid},{sy} {mid},{ty} {tx},{ty}" '
+            'marker-end="url(#mm-arrow)"/>'
+        )
+
+    paths = [
+        curve(e["source"], e["target"], "goto" if "GO" in e["type"] else "perform")
+        for e in graph["edges"]
+        if e["source"] in pos and e["target"] in pos
+    ]
+    seen_calls: set[tuple[str, str]] = set()
+    for call in graph["externalCalls"]:
+        key = (call["from"], f"CALL {call['program']}")
+        if call["from"] in pos and key not in seen_calls:
+            seen_calls.add(key)
+            paths.append(curve(key[0], key[1], "call"))
+    by_name = {n["name"]: n for n in nodes}
+    boxes = []
+    for name, (x, y) in pos.items():
+        node = by_name.get(name)
+        if node is None:
+            cls, tip = "ext", f"{name} (external program)"
+        else:
+            if node["unreachable"]:
+                cls, state = "dead", "never performed"
+            elif node["testedBy"]:
+                cls, state = "ok", f"reached by {len(node['testedBy'])} test(s)"
+            else:
+                cls, state = "untested", "no test reaches it"
+            if node["entry"]:
+                cls += " entry"
+            tip = f"{name} (line {node['line'] or '?'}): {state}"
+        text = name if len(name) <= 24 else name[:23] + "…"
+        boxes.append(
+            f'<g class="n {cls}"><title>{_e(tip)}</title>'
+            f'<rect x="{x}" y="{y}" width="{box_w}" height="{box_h}" rx="6"/>'
+            f'<text x="{x + 10}" y="{y + box_h / 2 + 4}">{_e(text)}</text></g>'
+        )
+    return (
+        f'<div class="graph"><svg role="img" aria-label="Paragraph call graph" '
+        f'width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+        '<defs><marker id="mm-arrow" viewBox="0 0 10 10" refX="9" refY="5" '
+        'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+        '<path d="M0,0 L10,5 L0,10 z"/></marker></defs>'
+        f'{"".join(paths)}{"".join(boxes)}</svg></div>'
+        '<div class="legend" style="margin-top:6px">'
+        '<span><i style="background:var(--ok)"></i>reached by a test</span>'
+        '<span><i style="background:var(--warn)"></i>no test reaches it</span>'
+        '<span><i style="background:var(--muted)"></i>never performed</span>'
+        '<span><i style="background:var(--accent)"></i>external CALL</span>'
+        '<span><i style="background:var(--bad)"></i>GO TO</span>'
+        "<span>thick border: entry point</span></div>"
+    )
+
+
+def _analysis_health(health: dict[str, Any]) -> str:
+    tiles = []
+    for c in health["components"]:
+        score = c.get("score") or 0
+        findings = "".join(
+            f'<div class="why">{_e(f)}</div>' for f in c.get("findings") or []
+        )
+        tiles.append(
+            f'<div class="tile"><span class="label">{_e(str(c["name"]).replace("_", " "))}</span>'
+            f'<span class="sub">{score:g}/100 debt · weight {_e(c.get("weight"))}</span>'
+            f'<div class="bar"><span style="width:{min(100.0, float(score)):.0f}%"></span></div>'
+            f"{findings}</div>"
+        )
+    offenders = ""
+    if health["topOffenders"]:
+        offenders = "<h3>Worst paragraphs</h3>" + _table(
+            ["Paragraph", "Line", "Severity", "Why"],
+            [
+                f"<tr><td><code>{_e(o['name'])}</code></td>{_num(o['line'])}"
+                f"{_num(o['severity'])}<td>{_e('; '.join(o['reasons']))}</td></tr>"
+                for o in health["topOffenders"]
+            ],
+            frozenset({1, 2}),
+        )
+    return (
+        f'<p><span class="grade {_e(health["grade"])}">{_e(health["grade"])}</span> '
+        f"Technical-debt score <strong>{health['score']:g}</strong>/100 (0 is best), "
+        "weighted across the components below.</p>"
+        f'<div class="health">{"".join(tiles)}</div>{offenders}'
+    )
+
+
+def _analysis_complexity(complexity: dict[str, Any]) -> str:
+    t = complexity.get("thresholds") or {}
+    s = complexity.get("summary") or {}
+    rating_pill = {"LOW": "ok", "MODERATE": "warn", "HIGH": "fail"}
+    rows = [
+        f"<tr><td><code>{_e(p['name'])}</code></td>{_num(p['line'])}"
+        f"{_num(p['cyclomatic'])}{_num(p['extended'])}{_num(p['nesting'])}"
+        f"{_num(p['statements'])}{_num(p['fanIn'])}{_num(p['fanOut'])}{_num(p['gotos'])}"
+        f"<td>{_pill(rating_pill.get(str(p['rating']), 'info'), str(p['rating'] or '—').lower())}</td></tr>"
+        for p in complexity["procedures"]
+    ]
+    return (
+        _table(
+            [
+                "Paragraph",
+                "Line",
+                "Cyclomatic",
+                "Extended",
+                "Nesting",
+                "Statements",
+                "Fan-in",
+                "Fan-out",
+                "GO TO",
+                "Rating",
+            ],
+            rows,
+            frozenset(range(1, 9)),
+        )
+        + f'<p class="note">Total {_e(s.get("total_complexity"))}, mean '
+        f'{_e(s.get("mean_complexity"))}, max {_e(s.get("max_complexity"))}. '
+        f'Moderate from {_e(t.get("moderate"))}, high from {_e(t.get("high"))}. '
+        "Extended complexity also counts each AND/OR in a condition.</p>"
+    )
+
+
+def _analysis_lint(lint: dict[str, Any]) -> str:
+    s = lint.get("summary") or {}
+    severity_pill = {"error": "fail", "warning": "warn", "info": "info"}
+    head = (
+        f'<p class="note">{_e(s.get("total", 0))} finding(s): {_e(s.get("error", 0))} error, '
+        f'{_e(s.get("warning", 0))} warning, {_e(s.get("info", 0))} info. Rules run: '
+        f'{_e(", ".join(lint["rulesRun"]) or "none")}.</p>'
+    )
+    extra = "".join(
+        f'<p class="note">Could not check: {_e(c)}</p>' for c in lint["caveats"]
+    ) + "".join(
+        f'<p class="note">Rule {_e(r)} failed, so its findings are missing.</p>'
+        for r in lint["failedRules"]
+    )
+    if not lint["findings"]:
+        return head + extra
+    rows = [
+        f"<tr><td>{_pill(severity_pill.get(str(f['severity']), 'info'), str(f['severity']))}</td>"
+        f"<td><code>{_e(f['rule'])}</code></td>{_num(f['line'])}"
+        f"<td>{_e(f['message'])}</td></tr>"
+        for f in lint["findings"]
+    ]
+    more = (
+        f'<p class="note">Showing the first {len(lint["findings"])}; run '
+        "<code>cobol-parser lint</code> for the rest.</p>"
+        if lint["truncated"]
+        else ""
+    )
+    return (
+        head
+        + _table(["Severity", "Rule", "Line", "Message"], rows, frozenset({2}))
+        + more
+        + extra
+    )
+
+
+def _analysis_data(data: dict[str, Any]) -> str:
+    if not data["items"]:
+        return '<p class="empty">No data items.</p>'
+
+    def paras(names: list[str]) -> str:
+        shown = ", ".join(names[:4]) + (f" +{len(names) - 4}" if len(names) > 4 else "")
+        return f"<td><code>{_e(shown)}</code></td>" if names else "<td>—</td>"
+
+    rows = [
+        f"<tr><td><code>{_e(i['name'])}</code></td><td>{_e(i['section'] or '')}</td>"
+        f"{_num(i['level'])}{_num(i['line'])}{_num(i['writes'])}{paras(i['writtenIn'])}"
+        f"{_num(i['reads'])}{paras(i['readIn'])}</tr>"
+        for i in data["items"]
+    ]
+    note = (
+        f'<p class="note">{data["total"]} data item(s), {data["unreferenced"]} never '
+        "referenced in the PROCEDURE DIVISION. Reads include conditions, subscripts, "
+        "CALL arguments and SQL host variables."
+        + (
+            f" Showing the {len(data['items'])} most-referenced."
+            if data["truncated"]
+            else ""
+        )
+        + "</p>"
+    )
+    return (
+        _table(
+            [
+                "Data item",
+                "Section",
+                "Level",
+                "Line",
+                "Writes",
+                "Written in",
+                "Reads",
+                "Read in",
+            ],
+            rows,
+            frozenset({2, 3, 4, 6}),
+        )
+        + note
+    )
+
+
+def _analysis_interface(analysis: dict[str, Any]) -> str:
+    parts = []
+    signature = analysis.get("signature")
+    if signature is not None:
+        for entry in signature["entryPoints"]:
+            parts.append(
+                f'<p class="note">Entry <code>{_e(entry["name"])}</code> ({_e(entry["kind"])})'
+                + (
+                    f", RETURNING <code>{_e(entry['returning'])}</code>"
+                    if entry.get("returning")
+                    else ""
+                )
+                + "</p>"
+            )
+            if entry.get("callExample"):
+                parts.append(f"<pre>{_e(entry['callExample'])}</pre>")
+            if entry["parameters"]:
+                parts.append(
+                    _table(
+                        ["#", "Parameter", "Direction", "By", "Declaration", "Bytes"],
+                        [
+                            f"<tr>{_num(p['position'])}<td><code>{_e(p['name'])}</code></td>"
+                            f"<td>{_e(p['direction'])}</td><td>{_e(p['by'])}</td>"
+                            f"<td><code>{_e(p['declaration'])}</code></td>{_num(p['bytes'])}</tr>"
+                            for p in entry["parameters"]
+                        ],
+                        frozenset({0, 5}),
+                    )
+                )
+        for note in signature["unchecked"]:
+            parts.append(f'<p class="note">{_e(note)}</p>')
+    boundaries = analysis.get("boundaries")
+    if boundaries:
+        parts.append(
+            "<h3>External touchpoints (what a test must mock)</h3>"
+            + _table(
+                ["Kind", "Target", "Paragraph", "Line", "Direction", "Records"],
+                [
+                    f"<tr><td>{_e(b['category'])}</td><td><code>{_e(b['key'])}</code></td>"
+                    f"<td><code>{_e(b['paragraph'])}</code></td>{_num(b['line'])}"
+                    f"<td>{_e(str(b['direction'] or '').lower())}</td>"
+                    f"<td><code>{_e(', '.join(b['records']))}</code></td></tr>"
+                    for b in boundaries
+                ],
+                frozenset({3}),
+            )
+        )
+    crud = analysis.get("crud")
+    if crud:
+        mark = {True: "✓", False: "·"}
+        parts.append(
+            "<h3>Files and tables (CRUD)</h3>"
+            + _table(
+                ["Kind", "Name", "Create", "Read", "Update", "Delete", "Opened"],
+                [
+                    f"<tr><td>{_e(r['kind'])}</td><td><code>{_e(r['name'])}</code></td>"
+                    f"<td>{mark[r['create']]}</td><td>{mark[r['read']]}</td>"
+                    f"<td>{mark[r['update']]}</td><td>{mark[r['delete']]}</td>"
+                    f"<td>{_e(', '.join(r['openModes']))}</td></tr>"
+                    for r in crud
+                ],
+            )
+        )
+    sql = analysis.get("sqlCics")
+    if sql is not None and (sql["sqlStatements"] or sql["cicsStatements"]):
+        parts.append(
+            f'<h3>SQL / CICS checks</h3><p class="note">{_e(sql["sqlStatements"])} SQL and '
+            f'{_e(sql["cicsStatements"])} CICS statement(s), {len(sql["violations"])} problem(s).</p>'
+        )
+        if sql["violations"]:
+            parts.append(
+                _table(
+                    ["Severity", "Check", "Line", "Message"],
+                    [
+                        f"<tr><td>{_pill(str(v['severity'] or 'info'))}</td><td><code>{_e(v['kind'])}</code></td>"
+                        f"{_num(v['line'])}<td>{_e(v['message'])}</td></tr>"
+                        for v in sql["violations"]
+                    ],
+                    frozenset({2}),
+                )
+            )
+        for note in sql["unchecked"]:
+            parts.append(f'<p class="note">Not checked: {_e(note)}</p>')
+    return "".join(parts) or '<p class="empty">No external interface found.</p>'
+
+
+def _members(members: list[dict[str, Any]]) -> str:
+    return ", ".join(f"{m['name']} ({m['line']})" for m in members)
+
+
+def _panel(title: str, summary: str, body: str, *, open_: bool = False) -> str:
+    """One collapsible analysis block: the heading and a one-line summary
+    stay visible, the (possibly long) table opens on demand."""
+    return (
+        f'<details class="sub"{" open" if open_ else ""}><summary>'
+        f'<span><h3>{_e(title)}</h3><span class="s-sum">{_e(summary)}</span></span>'
+        f'</summary><div class="inner">{body}</div></details>'
+    )
+
+
+def _external_calls(graph: dict[str, Any]) -> str:
+    if not graph["externalCalls"]:
+        return ""
+    return _table(
+        ["Calls", "From", "Line", "Static / dynamic"],
+        [
+            f"<tr><td><code>{_e(c['program'])}</code></td><td><code>{_e(c['from'])}</code></td>"
+            f"{_num(c['line'])}<td>{'dynamic' if c['dynamic'] else 'static'}"
+            + (
+                f'<div class="why">may be {_e(", ".join(c["possibleValues"]))}</div>'
+                if c["possibleValues"]
+                else ""
+            )
+            + "</td></tr>"
+            for c in graph["externalCalls"]
+        ],
+        frozenset({2}),
+    )
+
+
+def _analysis(report: dict[str, Any]) -> str:
+    analysis = report.get("analysis")
+    if not analysis:
+        return '<p class="empty">This report was written before program analysis was added.</p>'
+    if not analysis.get("available"):
+        return f'<p class="empty">No program analysis: {_e(analysis.get("reason"))}</p>'
+    parts: list[str] = []
+    missing = [*analysis.get("unavailable", []), *analysis.get("failed", [])]
+    if missing:
+        parts.append(
+            '<p class="note">'
+            + _e(
+                "Not shown: "
+                + "; ".join(f"{m['title']} ({m['reason']})" for m in missing)
+                + ". Upgrade cobol-parser (pip install -U cobol-parser) for the full analysis."
+            )
+            + "</p>"
+        )
+    health = analysis.get("health")
+    if health:
+        parts.append(
+            _panel(
+                "Health score",
+                f"Grade {health['grade']}, technical debt {health['score']:g}/100.",
+                _analysis_health(health),
+                open_=True,
+            )
+        )
+    graph = analysis["callGraph"]
+    untested = sum(
+        1 for n in graph["nodes"] if not n["testedBy"] and not n["unreachable"]
+    )
+    if graph["drawn"]:
+        drawing = _call_graph_svg(graph)
+    else:
+        drawing = (
+            f'<p class="note">{len(graph["nodes"])} paragraphs is too many to draw '
+            "legibly here; <code>cobol-parser program-flow --format mermaid</code> "
+            "draws the whole graph.</p>"
+        )
+    cycles = "".join(
+        f'<p class="note">Cycle ({_e(c["kind"] or "loop")}): '
+        f'<code>{_e(" → ".join(c["nodes"]))}</code></p>'
+        for c in graph["cycles"]
+    )
+    parts.append(
+        _panel(
+            "Call graph",
+            f"{len(graph['nodes'])} paragraph(s), {len(graph['edges'])} PERFORM/GO TO "
+            f"edge(s), {len(graph['externalCalls'])} external CALL(s); "
+            f"{untested} paragraph(s) no test reaches.",
+            drawing + _external_calls(graph) + cycles,
+            open_=True,
+        )
+    )
+    complexity = analysis.get("complexity")
+    if complexity:
+        cs = complexity.get("summary") or {}
+        parts.append(
+            _panel(
+                "Complexity",
+                f"Max cyclomatic {cs.get('max_complexity')}, mean "
+                f"{cs.get('mean_complexity')}; {cs.get('moderate_count', 0)} moderate, "
+                f"{cs.get('high_count', 0)} high.",
+                _analysis_complexity(complexity),
+            )
+        )
+    lint = analysis.get("lint")
+    if lint:
+        ls = lint.get("summary") or {}
+        by_rule = ls.get("by_rule") or {}
+        top = ", ".join(f"{rule} {n}" for rule, n in list(by_rule.items())[:4])
+        parts.append(
+            _panel(
+                "Lint",
+                f"{ls.get('total', 0)} finding(s): {ls.get('error', 0)} error, "
+                f"{ls.get('warning', 0)} warning, {ls.get('info', 0)} info"
+                + (f" ({top})." if top else "."),
+                _analysis_lint(lint),
+            )
+        )
+    data = analysis.get("dataItems")
+    if data:
+        parts.append(
+            _panel(
+                "Data flow",
+                f"{data['total']} data item(s), {data['unreferenced']} never referenced.",
+                _analysis_data(data),
+            )
+        )
+    if any(
+        analysis.get(k) is not None
+        for k in ("signature", "boundaries", "crud", "sqlCics")
+    ):
+        boundaries = analysis.get("boundaries") or []
+        crud = analysis.get("crud") or []
+        parts.append(
+            _panel(
+                "Interface",
+                f"{len(boundaries)} external touchpoint(s) to mock, "
+                f"{len(crud)} file(s)/table(s).",
+                _analysis_interface(analysis),
+            )
+        )
+    redundancy = analysis.get("redundancy")
+    if redundancy is not None:
+        s = redundancy.get("summary") or {}
+        groups = redundancy["cloneGroups"]
+        clones = (
+            _table(
+                ["Clone type", "Statements", "Paragraphs"],
+                [
+                    f"<tr><td>{_e(str(g['type'] or '').replace('_', '-').lower())}</td>{_num(g['statements'])}"
+                    f"<td><code>{_e(_members(g['members']))}</code></td></tr>"
+                    for g in groups
+                ],
+                frozenset({1}),
+            )
+            if groups
+            else '<p class="empty">No duplicate paragraphs.</p>'
+        )
+        parts.append(
+            _panel(
+                "Dead code and duplicates",
+                f"{s.get('dead_procedure_count', 0)} of {s.get('total_procedures', 0)} "
+                f"paragraph(s) dead, {s.get('unused_variable_count', 0)} of "
+                f"{s.get('total_variables', 0)} variable(s) unused, "
+                f"{len(groups)} duplicate group(s).",
+                clones,
+            )
+        )
+    return f'<div class="analysis">{"".join(parts)}</div>'
+
+
 def _journal(report: dict[str, Any]) -> str:
     entries = report["journal"]
     problems = report.get("journalProblems") or []
@@ -531,6 +1102,7 @@ def render_html(report: dict[str, Any], *, standalone: bool = True) -> str:
 <section aria-labelledby="h-journal"><h2 id="h-journal">Assistant journal</h2>{_journal(report)}</section>
 <section aria-labelledby="h-paragraphs"><h2 id="h-paragraphs">Paragraphs</h2>{_paragraphs(report)}</section>
 <section aria-labelledby="h-rules"><h2 id="h-rules">Business rules</h2>{_rules(report)}</section>
+<section aria-labelledby="h-analysis"><h2 id="h-analysis">Program analysis</h2>{_analysis(report)}</section>
 <section aria-labelledby="h-risks"><h2 id="h-risks">GnuCOBOL vs IBM COBOL risks</h2>{_risks(report)}</section>
 <section aria-labelledby="h-levels"><h2 id="h-levels">Verification levels</h2>{_levels_note()}</section>
 <footer>Every number on this page comes from a mockymock or cobol-parser command run against this program; the step list above names each one.</footer>

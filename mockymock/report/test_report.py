@@ -8,6 +8,9 @@ step, ending in a verdict per test case:
 1. environment   -- toolchain, versions, AI assistant mode
 2. understand    -- paragraphs, entry points, dead code, complexity
 3. rules         -- business rules (cobol-parser's BusinessRuleExtractor)
+3b. analysis     -- every other cobol-parser analyzer: health, complexity,
+                    call graph, lint, duplicates, interface, data xref
+                    (report/program_analysis.py)
 4. inventory     -- test cases, their PERFORM targets, assertion labels
 5. lint          -- the static refusal gate (`mockymock lint`)
 6. scenarios     -- branch-arm coverage the fixture generator can reach
@@ -62,7 +65,9 @@ LEVEL_TITLES = {
     "L4": "Mainframe-confirmed",
 }
 DEFAULT_MUTATION_THRESHOLD = 80.0
-_NON_FLOW_EDGES = frozenset({"FALL_THROUGH", "CALL", "DYNAMIC_CALL", "CANCEL"})
+_NON_FLOW_EDGES = frozenset(
+    {"FALL_THROUGH", "CALL", "CALL_DYNAMIC", "DYNAMIC_CALL", "CANCEL"}
+)
 _SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
 
@@ -309,7 +314,11 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             understand.summary = f"Could not parse {program_rel}: {reason}"
         else:
             from cobolparser import ProgramFlowAnalyzer
-            from cobolparser.analysis.program_flow import LEADING_SENTENCES_NODE
+
+            try:
+                from cobolparser.analysis.program_flow import LEADING_SENTENCES_NODE
+            except ImportError:  # cobol-parser < 1.9.0: same node, not exported
+                LEADING_SENTENCES_NODE = "PROCEDURE DIVISION"
 
             flow = ProgramFlowAnalyzer().analyze(program.ast).to_dict()
             complexity: dict[str, dict[str, Any]] = {}
@@ -431,6 +440,33 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 }
     steps.append(rules_step)
 
+    # 3b. Program analysis ------------------------------------------------
+    analysis_step = Step(
+        "analysis",
+        "Analyze the program",
+        command=f"cobol-parser health {program_rel}; cobol-parser lint {program_rel}",
+    )
+    with _Timer(analysis_step):
+        from mockymock.report import program_analysis
+
+        if program is None:
+            analysis = program_analysis.unavailable("the program did not parse.")
+            analysis_step.status = "skipped"
+        else:
+            parsed = program
+            analysis = program_analysis.analyze_program(
+                parsed.ast, flow, lambda line: _orig(parsed, line)
+            )
+            if analysis["unavailable"] or analysis["failed"]:
+                analysis_step.status = "warn"
+            analysis_step.details = {
+                "ran": list(analysis["ran"]),
+                "unavailable": list(analysis["unavailable"]),
+                "failed": list(analysis["failed"]),
+            }
+        analysis_step.summary = program_analysis.summarize(analysis)
+    steps.append(analysis_step)
+
     # 4. Inventory --------------------------------------------------------
     inventory = Step("inventory", "Inventory the test suite")
     cut_text = ""
@@ -507,6 +543,10 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         for name in reach:
             if name in by_name and case["name"] not in by_name[name]["reachedBy"]:
                 by_name[name]["reachedBy"].append(case["name"])
+    for node in (analysis.get("callGraph") or {}).get("nodes") or []:
+        paragraph = by_name.get(node["name"])
+        if paragraph is not None:
+            node["testedBy"] = list(paragraph["reachedBy"])
     rules_by_id = {r["id"].upper(): r for r in rules if r.get("id")}
     for a in assertions:
         if a["label"] != "intent":
@@ -913,6 +953,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         "paragraphs": paragraphs,
         "rules": rules,
         "rulesAvailable": rules_available,
+        "analysis": analysis,
         "cases": cases,
         "assertions": assertions,
         "dialectRisks": risks,
@@ -1160,8 +1201,12 @@ def _findings(  # noqa: C901
                 "(MOVE before the PERFORM, or a mock body).",
             )
         if hand_covered and coverage:
-            shown = "; ".join(_describe_arm(arm, line) for arm, line in hand_covered[:8])
-            more = f"; and {len(hand_covered) - 8} more" if len(hand_covered) > 8 else ""
+            shown = "; ".join(
+                _describe_arm(arm, line) for arm, line in hand_covered[:8]
+            )
+            more = (
+                f"; and {len(hand_covered) - 8} more" if len(hand_covered) > 8 else ""
+            )
             add(
                 "info",
                 "scenario-gap-covered-by-hand",

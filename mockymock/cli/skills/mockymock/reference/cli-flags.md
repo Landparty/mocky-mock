@@ -372,8 +372,10 @@ mockymock report [PROGRAM.cbl] [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 ```
 
 One self-contained HTML page (plus JSON with `--json`) for a program and
-its suite: eleven steps (environment, understand, rules, inventory, lint,
-scenarios, run, coverage, mutation, dialect, verdict), a verification
+its suite: twelve steps (environment, understand, rules, analysis,
+inventory, lint, scenarios, run, coverage, mutation, dialect, verdict), a
+program-analysis section (health score, call graph, complexity, lint, data
+flow, interface, dead code and duplicates, from cobol-parser), a verification
 level per test case (L0 static, L1 executed, L2 strong, L3
 dialect-checked), assertion labels (INTENT / CHARACTERIZATION /
 unlabelled), and findings ranked by severity.

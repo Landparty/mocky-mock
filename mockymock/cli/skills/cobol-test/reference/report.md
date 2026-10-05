@@ -22,19 +22,28 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 ## What the page shows, top to bottom
 
 1. **Verdict line and summary tiles** -- tests passing, cases at L2+,
-   share of INTENT assertions, line coverage, mutation score, findings.
+   share of INTENT assertions, line coverage, mutation score, findings,
+   program health grade.
 2. **Findings**, most severe first (table below).
 3. **Test cases** -- level, result, why it stopped at that level, failures
    with line numbers, assertion label counts, dialect risks reached.
    Filter by result or level.
-4. **How the verdict was reached** -- the eleven steps in order
-   (environment, understand, rules, inventory, lint, scenarios, run,
+4. **How the verdict was reached** -- the twelve steps in order
+   (environment, understand, rules, analysis, inventory, lint, scenarios, run,
    coverage, mutation, dialect, verdict), each with the equivalent command,
    its summary, details and timing.
 5. **Assistant journal** -- your `mockymock journal` entries.
 6. **Paragraphs** -- line, size, complexity, which tests reach it.
 7. **Business rules** -- condition/formula, arms, which tests cite it.
-8. **GnuCOBOL vs IBM COBOL risks** and the level definitions.
+8. **Program analysis** -- cobol-parser's view of the program itself: health
+   score (A-F), a call graph coloured by which paragraphs a test reaches,
+   per-paragraph complexity, every lint rule's findings, data flow (where
+   each field is written and read), the interface (calling signature,
+   touchpoints to mock, CRUD, SQL/CICS checks), dead code and duplicates.
+   Sections an older cobol-parser cannot produce are named in a note at the
+   top, not silently left out. Cite it when picking what to test next:
+   an untested high-complexity paragraph is the obvious first target.
+9. **GnuCOBOL vs IBM COBOL risks** and the level definitions.
 
 ## Finding categories and what to do
 
