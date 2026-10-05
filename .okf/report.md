@@ -305,10 +305,24 @@ the `cobol-test` skill's hand-over.
   (mainframe) is never computed -- shown as a reminder only.
 - `_findings` categories (severity-ordered): refused, test-failure,
   suspected-bug (a failed INTENT assertion), no-assertion,
-  missing-assertion (surviving mutant), untestable-mutant (a survivor `mutate` hinted is a zero-start test-data gap), dead-code, untested-paragraph,
-  rule-without-intent, unlabelled, dialect, coverage, scenario-gap. The
-  `cobol-test` skill's `reference/report.md` lists the same set, pinned by
+  missing-assertion (surviving mutant), dead-code, untested-paragraph,
+  rule-without-intent, unlabelled, dialect, coverage, scenario-gap,
+  scenario-gap-covered-by-hand. The `cobol-test` skill's
+  `reference/report.md` lists the same set, pinned by
   `tests/unit/test_cobol_testing_plugin.py`.
+- `scenario-gap` vs `scenario-gap-covered-by-hand`: the "scenarios" step
+  (`ProgramFixtureGenerator.generate_with_scenarios_from_file`) answers
+  "can the *automatic* generator alone build data for this branch arm" --
+  it knows nothing about what the suite's own hand-written cases do. Before
+  calling a "missed" arm a gap, `_findings` cross-checks its real source
+  line (via `ArmOutcome.origin`, from `stamp_arm_origins` in
+  `cobolparser.generators.scenarios` -- needed because `arm_key`'s line
+  counts lines in the copybook-*expanded* source once copybooks are
+  expanded, not the file on disk) against the suite's own
+  `coverage["uncoveredLines"]`. Covered by hand -> `scenario-gap-covered-
+  by-hand` (info, nothing to do); still uncovered -> `scenario-gap` (info,
+  write the case). Without `--execute`/`--run-json` there is no coverage
+  to check against, so every "missed" arm falls back to `scenario-gap`.
 - `render_html(report, standalone=True)` is a single file with no network
   access (inline CSS/JS, light/dark tokens incl. `[data-theme]`).
   `standalone=False` emits a fragment starting with `<title>` for hosts
