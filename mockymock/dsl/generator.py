@@ -51,6 +51,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 
+from mockymock.analysis.loops import looped_paragraphs_and_statements, site_in_loop
 from mockymock.analysis.mock_surface import BoundarySite, MockSurface
 from mockymock.dsl.fixture_bundle import (
     BoundaryFixture,
@@ -235,6 +236,10 @@ class ProgramContext:
     #: `field_equals` value is rendered from the field's real type rather
     #: than from the text's shape -- see `_render_expectation`.
     pictures: dict[str, str] = field(default_factory=dict)
+    #: `analysis.loops.looped_paragraphs_and_statements` for the program:
+    #: which boundary sites can run more than once per PERFORM (a cursor
+    #: FETCH in a `PERFORM ... UNTIL SQLCODE = 100` loop, issue #141).
+    looped: tuple[set[str], set[int]] = field(default_factory=lambda: (set(), set()))
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -245,6 +250,7 @@ class ProgramContext:
             statement_starts=collect_boundaries(program),
             capture_lines=_capture_lines_by_key(program, surface, lines),
             pictures=field_pictures(program),
+            looped=looped_paragraphs_and_statements(program),
         )
 
     def captures_for(self, category: MockCategory, key: str) -> list[str]:
@@ -1173,7 +1179,23 @@ def _read_body(
     return body
 
 
-def _sql_wants_rows(fixture: BoundaryFixture) -> bool:
+def _is_looped_fetch(
+    fixture: BoundaryFixture, site: BoundarySite, source: ProgramContext | None
+) -> bool:
+    """A cursor FETCH that runs inside a looping PERFORM (issue #141). Its
+    mock must report SQLCODE 100 once the generated rows run out -- a
+    single-row body reporting success on every call never ends the loop
+    -- and it is called once more than it has rows: the exhausting call.
+    Other SQL in a loop (a per-record SELECT INTO) is left alone: making
+    its second call "not found" would change what the program does."""
+    if source is None or not fixture.sequence:
+        return False
+    if not fixture.key.upper().startswith("FETCH"):
+        return False
+    return site_in_loop(site, source.looped)
+
+
+def _sql_wants_rows(fixture: BoundaryFixture, looped_fetch: bool = False) -> bool:
     """`ROWS (...)` sugar hardcodes SQLCODE 0-on-match/100-on-exhaustion --
     not in `splicer/injector.build_rows_block` itself (generalized to a
     `row_suffix_moves`/`exhausted_moves` parameter pair so it can also
@@ -1183,7 +1205,7 @@ def _sql_wants_rows(fixture: BoundaryFixture) -> bool:
     an error-status override, so a scenario pinning one (an "error status"
     fixed-family scenario, or a branch witness on SQLCODE) must fall back
     to a plain body with an explicit MOVE instead."""
-    return len(fixture.sequence) > 1 and all(
+    return (len(fixture.sequence) > 1 or looped_fetch) and all(
         code in _DEFAULT_SUCCESS_CODES for code in fixture.status.values()
     )
 
@@ -1250,6 +1272,10 @@ class CallCountOverride:
 
     count: int | None = None
     demote_reason: str | None = None
+    #: False when the override comes from a looped FETCH's own exhausting
+    #: call (issue #141) rather than a --placeholder downgrade; only the
+    #: wording of the cascade demotion below depends on it.
+    from_placeholder: bool = True
 
 
 def _bundle_directive_for(
@@ -1329,6 +1355,9 @@ def _bundle_directive_for(
         return None
 
     call_count_override: CallCountOverride | None = None
+    looped_fetch = category is MockCategory.SQL and _is_looped_fetch(
+        fixture, site, source
+    )
     if (fixture.category, fixture.key) in placeholder_keys:
         if category is MockCategory.READ:
             at_end = getattr(site.statement, "at_end_clause", None) or []
@@ -1349,7 +1378,7 @@ def _bundle_directive_for(
                         "known by construction"
                     )
                 )
-        elif category is MockCategory.SQL and _sql_wants_rows(fixture):
+        elif category is MockCategory.SQL and _sql_wants_rows(fixture, looped_fetch):
             body = list(_SQL_ROWS_EXHAUSTED_BODY)
             call_count_override = CallCountOverride(count=1)
         else:
@@ -1358,8 +1387,15 @@ def _bundle_directive_for(
         body = _status_only_body(fixture)
     elif category is MockCategory.READ:
         body = _read_body(fixture, registry, category, site, source)
-    elif category is MockCategory.SQL and _sql_wants_rows(fixture):
-        return _sql_rows_directive(category, fixture.key, fixture), None
+    elif category is MockCategory.SQL and _sql_wants_rows(fixture, looped_fetch):
+        # A looped FETCH runs once per row plus the call that finds the
+        # cursor exhausted; the bundle counts only the rows.
+        override = (
+            CallCountOverride(count=len(fixture.sequence) + 1, from_placeholder=False)
+            if looped_fetch
+            else None
+        )
+        return _sql_rows_directive(category, fixture.key, fixture), override
     else:
         body = _single_row_body(fixture)
 
@@ -1542,7 +1578,7 @@ def _bundle_mock_directives(
     # PERFORM from inside that paragraph still isn't caught. Demoting
     # reuses the same `*>` comment `CallCountOverride.demote_reason`
     # already renders for a downgraded boundary's own unknowable count.
-    for loop_category, loop_key in list(call_count_overrides.keys()):
+    for (loop_category, loop_key), loop_override in list(call_count_overrides.items()):
         loop_site = mockymock_keys.get((loop_category, loop_key))
         if loop_site is None:
             continue
@@ -1556,13 +1592,19 @@ def _bundle_mock_directives(
                 continue
             if other_site.paragraph_name != loop_site.paragraph_name:
                 continue
+            why = (
+                "downgraded by --placeholder -- how many times that loop "
+                "actually executes changed"
+                if loop_override.from_placeholder
+                else "a cursor loop that runs once more than it has rows"
+            )
             call_count_overrides[other_key_pair] = CallCountOverride(
                 demote_reason=(
                     f"in the same paragraph as {loop_category.value}:"
-                    f"{loop_key}, downgraded by --placeholder -- how many "
-                    f"times that loop actually executes changed, so this "
-                    f"call count is no longer known by construction"
-                )
+                    f"{loop_key}, {why}, so this call count is no longer "
+                    f"known by construction"
+                ),
+                from_placeholder=loop_override.from_placeholder,
             )
     return lines, declared_keys, call_count_overrides
 
@@ -1689,8 +1731,9 @@ def _render_expectation(
         if override is not None and override.demote_reason is not None:
             return [
                 f"*> VERIFY {directive_text} WAS CALLED <count not exact "
-                f"by construction after --placeholder downgrade -- "
-                f"{override.demote_reason}>"
+                f"by construction"
+                f"{' after --placeholder downgrade' if override.from_placeholder else ''}"
+                f" -- {override.demote_reason}>"
             ]
         value = (
             override.count

@@ -96,3 +96,23 @@ def test_140_return_code_does_not_leak_and_an_all_pass_suite_exits_0(
     exit_code = _run(tmp_path, "RC", RC_CBL, RC_CUT, "--case", "bad sets rc 8")
     out = capsys.readouterr().out
     assert exit_code == 0, out
+
+
+def _generate_and_run(tmp_path: Path, name: str, cbl: str, *gen: str) -> int:
+    source = tmp_path / f"{name}.cbl"
+    source.write_text(cbl)
+    cut = tmp_path / f"{name}.cut"
+    assert main(["generate", str(source), "--with-data", "-o", str(cut), *gen]) == 0
+    return main(["run", str(source), "--timeout", "60"])
+
+
+@requires_docker
+def test_141_generated_suite_for_a_looped_one_row_fetch_terminates_and_passes(
+    tmp_path: Path, capsys
+) -> None:
+    from tests.unit.test_bug_hunt_m1_fixes import FETCH_CBL
+
+    exit_code = _generate_and_run(tmp_path, "FETCH", FETCH_CBL, "--seed", "1")
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "1 run, 0 failed" in out
