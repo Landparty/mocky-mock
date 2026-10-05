@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from mockymock.dsl.parser import _SUBSCRIPTED_NAME
 
+_MARKER = "__MOCKYMOCK__ "
 _TESTSUITE_RE = re.compile(r"^__MOCKYMOCK__ TESTSUITE: (?P<name>.+)$")
 _CASE_START_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) START: (?P<name>.+)$")
 _CASE_FAIL_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) FAIL: (?P<reason>.+)$")
@@ -130,6 +131,16 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
     for line in stdout.split("\n"):
         if line.endswith("\r"):
             line = line[:-1]
+        # A marker need not start its physical line: a program's own
+        # DISPLAY ... WITH NO ADVANCING leaves its text pending, and the
+        # driver's next marker is appended to it ("PROGRESS...__MOCKYMOCK__
+        # CASE 001 FAIL: ..."). Anchoring at column 1 dropped that marker --
+        # a failing case reported PASS, a passing one CRASH (issue #139) --
+        # so parse from the first marker on the line; whatever precedes it
+        # is the program's output.
+        marker_at = line.find(_MARKER)
+        if marker_at > 0:
+            line = line[marker_at:]
         if (m := _TESTSUITE_RE.match(line)) is not None:
             suite.suite_name = m.group("name")
         elif (m := _CASE_START_RE.match(line)) is not None:
