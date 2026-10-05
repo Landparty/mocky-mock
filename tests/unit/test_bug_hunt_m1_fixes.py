@@ -445,3 +445,27 @@ def test_145_looped_get_next_dli_mock_reports_end_of_segments(tmp_path) -> None:
     cut = _generate(tmp_path, "SCAN", SCAN_CBL, "--seed", "1")
     assert 'MOVE "GE" TO DIBSTAT' in cut
     assert "-TALLY > 1" in cut
+
+
+def test_146_a_value_decoded_with_replacement_chars_is_skipped_not_recorded() -> None:
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
+    from mockymock.dsl.parser import parse_cut
+    from mockymock.report.record_rewrite import build_recording_report
+
+    text = (
+        'TESTSUITE "rec"\nTESTCASE "c"\nPERFORM MAIN-PARA\n'
+        "*> STUB EXPECT WS-HIGH\n*> STUB EXPECT WS-NAME\n"
+    )
+    scan = scan_stub_expectations(text, parse_cut(text))
+    result = parse_stdout(
+        "__MOCKYMOCK__ TESTSUITE: rec\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ RECORD 001 WS-HIGH: ��\n"
+        "__MOCKYMOCK__ RECORD 001 WS-NAME: SAM  \n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    report = build_recording_report(scan, result)
+    assert [r.stub.data_name for r in report.recorded] == ["WS-NAME"]
+    assert report.skipped[0].data_name == "WS-HIGH"
+    assert "HIGH-VALUES" in report.skipped[0].reason

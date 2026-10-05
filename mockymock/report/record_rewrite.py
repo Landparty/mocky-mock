@@ -204,7 +204,25 @@ def build_recording_report(
                 reason = "case crashed before reaching the record point"
             report.skipped.append(SkippedStub(stub.line, stub.data_name, reason))
             continue
-        report.recorded.append(RecordedExpectation(stub=stub, value=queue.pop(0)))
+        value = queue.pop(0)
+        if "\ufffd" in value:
+            # The run's stdout is decoded with errors="replace", so a byte
+            # that is not UTF-8 (HIGH-VALUES' X'FF', packed data) arrives
+            # as U+FFFD and the real bytes are gone. Quoting the
+            # replacement text wrote a golden that failed the next run
+            # (issue #146): skip it, and say why.
+            report.skipped.append(
+                SkippedStub(
+                    stub.line,
+                    stub.data_name,
+                    "its value holds bytes that are not text (HIGH-VALUES, "
+                    "binary or packed data) and the run's output could not "
+                    "carry them -- write this EXPECT by hand (e.g. TO BE "
+                    "HIGH-VALUES)",
+                )
+            )
+            continue
+        report.recorded.append(RecordedExpectation(stub=stub, value=value))
     return report
 
 

@@ -171,3 +171,37 @@ def test_145_generated_suite_for_a_looped_get_next_terminates(
     exit_code = _generate_and_run(tmp_path, "SCAN", SCAN_CBL, "--seed", "1")
     out = capsys.readouterr().out
     assert exit_code == 0, out
+
+
+REC_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. REC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-HIGH PIC X(2).
+       01  WS-NAME PIC X(5).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE HIGH-VALUES TO WS-HIGH
+           MOVE "SAM" TO WS-NAME
+           GOBACK.
+"""
+
+REC_CUT = """\
+TESTSUITE "rec"
+TESTCASE "c"
+PERFORM MAIN-PARA
+*> STUB EXPECT WS-HIGH
+*> STUB EXPECT WS-NAME
+"""
+
+
+@requires_docker
+def test_146_recorded_goldens_pass_on_the_next_run(tmp_path: Path, capsys) -> None:
+    assert _run(tmp_path, "REC", REC_CBL, REC_CUT, "--record-expectations") == 0
+    rewritten = (tmp_path / "REC.cut").read_text()
+    assert "�" not in rewritten
+    assert 'EXPECT WS-NAME TO BE "SAM"' in rewritten
+    capsys.readouterr()
+    exit_code = main(["run", str(tmp_path / "REC.cbl")])
+    assert exit_code == 0, capsys.readouterr().out
