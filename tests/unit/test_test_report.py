@@ -135,6 +135,7 @@ def test_static_only_report_runs_every_step_and_claims_only_l0(ordrproc):
         "environment",
         "understand",
         "rules",
+        "analysis",
         "inventory",
         "lint",
         "scenarios",

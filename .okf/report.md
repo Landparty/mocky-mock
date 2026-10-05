@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-10-05T00:00:00Z
 ---
 # Overview
 
@@ -280,13 +280,14 @@ nothing left to touch there. No provenance tracking needed.
 Backs `mockymock report` and `mockymock journal` (see [cli](cli.md)) and
 the `cobol-test` skill's hand-over.
 
-- `build_report(ReportOptions) -> dict` runs eleven steps, each a dict
+- `build_report(ReportOptions) -> dict` runs twelve steps, each a dict
   `{id, title, status (ok|warn|fail|skipped), summary, details, command?}`:
   environment (`runtime.status.probe`, skippable with
   `probe_toolchain=False`), understand (`ProgramFlowAnalyzer`, plus
   `ComplexityAnalyzer` when importable), rules (`BusinessRuleExtractor`,
   soft import -- absent from cobol-parser <= 1.8.4, so `rulesAvailable`
-  false and the step `skipped`), inventory (the `.cut` via `dsl.parser`
+  false and the step `skipped`), analysis (`program_analysis.py`, below),
+  inventory (the `.cut` via `dsl.parser`
   + `assertion_labels.scan_assertion_labels`), lint
   (`cli.checks.run_static_checks`), scenarios
   (`ProgramFixtureGenerator.generate_with_scenarios_from_file`'s
@@ -323,6 +324,26 @@ the `cobol-test` skill's hand-over.
   by-hand` (info, nothing to do); still uncovered -> `scenario-gap` (info,
   write the case). Without `--execute`/`--run-json` there is no coverage
   to check against, so every "missed" arm falls back to `scenario-gap`.
+- `program_analysis.analyze_program` (2026-10-05) fills the report's
+  `analysis` block from the same AST: health (`TechnicalDebtAnalyzer`),
+  complexity, lint (`LintAnalyzer`), redundancy, signature
+  (`ProgramSignatureExtractor`), boundaries, CRUD, SQL/CICS and xref (data
+  flow), plus a paragraph call graph built from the flow dict already
+  computed. Each analyzer is soft-imported by `_load`: missing (lint, xref,
+  signature and SQL/CICS need cobol-parser >= 1.9.0) lands in
+  `unavailable`, raising lands in `failed`, and that section is `None` --
+  never an empty list that reads as "nothing found"; the step is `warn`.
+  Lines go through `_orig` like every other step. Lists that grow with the
+  program are capped (`MAX_DATA_ITEMS`, `MAX_LINT_FINDINGS`, `MAX_EDGES`)
+  with `truncated`; above `MAX_GRAPH_NODES` the SVG is not drawn. Call-graph
+  nodes' `testedBy` is filled after the inventory step (case reach). The
+  HTML renders each block as a collapsible `details.sub` panel (health and
+  call graph open) and the call graph as an inline layered SVG -- no
+  Mermaid, since the page may make no network fetches. A report dict
+  without `analysis` (written before it existed) still renders.
+- `LEADING_SENTENCES_NODE` is imported with a fallback to its value
+  (`"PROCEDURE DIVISION"`): cobol-parser 1.8.4 does not export it, and the
+  bare import broke every report on the published package.
 - `render_html(report, standalone=True)` is a single file with no network
   access (inline CSS/JS, light/dark tokens incl. `[data-theme]`).
   `standalone=False` emits a fragment starting with `<title>` for hosts

@@ -150,13 +150,17 @@ mockymock report PROGRAM.cbl --cut PROGRAM.cut --execute --mutate \
 
 `--execute` runs the suite with coverage, `--mutate` runs mutation testing
 (slower; skip it while iterating and pass it for the final report). Without
-Docker, pass neither: the report still covers steps 1-6 and 10 and says
-what it could not run. If you already ran them, pass `--run-json`,
+Docker, pass neither: the report still covers every static step (including
+the program analysis) and says what it could not run. If you already ran them, pass `--run-json`,
 `--coverage-json`, `--mutation-json` instead of re-running.
 
 Act on what it finds before you hand over, within the mode's limits:
 a surviving mutant is a missing assertion (add it), "no test reaches X" is
 a missing case, a rule without an intent assertion is a gap in step 5.
+The report's Program analysis section (health grade, call graph coloured
+by test reach, complexity, lint, data flow) says where to look next: an
+untested paragraph with high complexity is the next case to write, and a
+lint error in a paragraph a test reaches is worth an assertion.
 Re-run the report after fixing. `reference/report.md` explains each
 section and finding category.
 
@@ -170,6 +174,7 @@ COMPUTE with division, which IBM COBOL may round differently).
 Suspected bug: BR-004 says orders over 1000.00 get 5% off; the program
 gives it from 1000.00 (line 212 uses >=). Assertion left failing.
 Mutation score 91% (1 survivor at line 230: nothing checks the audit count).
+Program health B (debt 18/100); 3000-RECONCILE has complexity 14 and no test.
 Report: ORDRPROC.report.html
 ```
 
