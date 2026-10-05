@@ -56,6 +56,7 @@ from mockymock.analysis.mock_surface import BoundarySite, MockSurface
 from mockymock.dsl.fixture_bundle import (
     BoundaryFixture,
     Expectation,
+    FieldSpec,
     FixtureBundle,
     Scenario,
 )
@@ -203,6 +204,34 @@ def _replicated_at_end_statements(statement: object) -> list[str]:
 # --- Lifting a READ's own AT END imperative verbatim -------------------------
 
 
+def _data_name_counts(program) -> dict[str, int]:
+    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+
+    try:
+        items = compute_program_data_items(program).get("items", [])
+    except Exception:  # pragma: no cover - never break generate over this
+        return {}
+    counts: dict[str, int] = {}
+    for item in items:
+        name = str(item.get("name") or "").upper()
+        if name and name != "FILLER":
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _qualified_reference(qualified_name: str, column: str, leaf: str) -> str:
+    """`IN-REC.CUST-ID` -> `CUST-ID OF IN-REC`, keeping any subscript the
+    bundle's column carries (`CUST-ID(2)` -> `CUST-ID OF IN-REC (2)`): the
+    bundle's dotted form is not COBOL, and a bare leaf declared under two
+    records is "ambiguous" to cobc (issue #144)."""
+    parts = [part for part in qualified_name.split(".") if part]
+    if len(parts) < 2:
+        return column
+    reference = " OF ".join(reversed(parts))
+    subscript = column[len(leaf) :] if column.upper().startswith(leaf.upper()) else ""
+    return f"{reference} {subscript.strip()}" if subscript.strip() else reference
+
+
 @dataclass(frozen=True)
 class ProgramContext:
     """Facts about the program under test that the scaffold needs beyond
@@ -245,6 +274,10 @@ class ProgramContext:
     #: `reachable_from` agrees with what lint will check (issue #143).
     program: object = None
     neutralized_goto: frozenset[str] = frozenset()
+    #: Name (uppercased, unqualified) -> how many data items declare it,
+    #: so a bundle's `RECORD.FIELD` name is rendered as a bare leaf only
+    #: when the leaf is unique (issue #144).
+    name_counts: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -261,7 +294,14 @@ class ProgramContext:
             neutralized_goto=neutralized_goto_targets(
                 program, collect_scope_map(program, lines), lines
             ),
+            name_counts=_data_name_counts(program),
         )
+
+    def is_unique_name(self, name: str) -> bool:
+        """True unless `name` is known to be declared more than once. An
+        empty map (no program, or a layout walk that failed) keeps the old
+        behavior: every name is treated as unique."""
+        return self.name_counts.get(name.upper(), 1) <= 1
 
     def reachable_from(self, entry: str) -> set[str] | None:
         """Paragraph/section names a `PERFORM entry` can execute, or None
@@ -1041,10 +1081,20 @@ def _bundle_rendered_value(raw_value: str, field_category: str) -> str:
     return f'"{escaped}"'
 
 
-def _row_move_lines(row: dict[str, str], fixture: BoundaryFixture) -> list[str]:
+def _row_target(spec: FieldSpec, source: ProgramContext | None) -> str:
+    if source is None or source.is_unique_name(spec.name):
+        return spec.column
+    return _qualified_reference(spec.qualified_name, spec.column, spec.name)
+
+
+def _row_move_lines(
+    row: dict[str, str],
+    fixture: BoundaryFixture,
+    source: ProgramContext | None = None,
+) -> list[str]:
     return [
         f"MOVE {_bundle_rendered_value(row.get(spec.column, ''), spec.category)} "
-        f"TO {spec.column}"
+        f"TO {_row_target(spec, source)}"
         for spec in fixture.layout
     ]
 
@@ -1061,7 +1111,9 @@ def _status_only_body(fixture: BoundaryFixture) -> list[str]:
     return []
 
 
-def _single_row_body(fixture: BoundaryFixture) -> list[str]:
+def _single_row_body(
+    fixture: BoundaryFixture, source: ProgramContext | None = None
+) -> list[str]:
     """ACCEPT / CALL / DYNCALL / CICS / DLI (always single-invocation), and
     SQL's own single-row/status-override fallback (see `_sql_wants_rows`).
     MOVEs every field the fixture generated, then -- SQL only -- an
@@ -1070,7 +1122,7 @@ def _single_row_body(fixture: BoundaryFixture) -> list[str]:
     sets SQLCODE itself, always)."""
     body: list[str] = []
     if fixture.sequence:
-        body.extend(_row_move_lines(fixture.sequence[0], fixture))
+        body.extend(_row_move_lines(fixture.sequence[0], fixture, source))
     is_sql = fixture.category == "SQL"
     for field_name, code in fixture.status.items():
         rendered = code if is_sql else f'"{code}"'
@@ -1188,13 +1240,13 @@ def _read_body(
         return _read_exhaustion_lines(fixture, replicated, at_end, lifted)
 
     if len(sequence) == 1 and not needs_exhaustion_branch:
-        return _row_move_lines(sequence[0], fixture)
+        return _row_move_lines(sequence[0], fixture, source)
 
     tally = registry.name(category, fixture.key)
     body = ["EVALUATE TRUE"]
     for index, row in enumerate(sequence, start=1):
         body.append(f"    WHEN {tally} = {index}")
-        body.extend(f"        {line}" for line in _row_move_lines(row, fixture))
+        body.extend(f"        {line}" for line in _row_move_lines(row, fixture, source))
     if needs_exhaustion_branch:
         body.append("    WHEN OTHER")
         body.extend(
@@ -1423,7 +1475,7 @@ def _bundle_directive_for(
         )
         return _sql_rows_directive(category, fixture.key, fixture), override
     else:
-        body = _single_row_body(fixture)
+        body = _single_row_body(fixture, source)
 
     body = _with_captures(category, fixture.key, body, source)
     lines = [_directive_header(category, fixture.key, site)]
@@ -1706,6 +1758,7 @@ def _render_expectation(
     ) = None,
     counted_boundaries: set[tuple[MockCategory, str]] | None = None,
     pictures: dict[str, str] | None = None,
+    source: ProgramContext | None = None,
 ) -> list[str]:
     """Tier 1 (`call_count`) -> `VERIFY ... WAS CALLED n TIMES`; tier 2
     (`field_equals`) -> `EXPECT <name> TO BE <value>`; tier 3 (`stub`) ->
@@ -1768,6 +1821,19 @@ def _render_expectation(
         )
         return [f"VERIFY {directive_text} WAS CALLED {value} TIMES"]
     if expectation.kind == "field_equals":
+        ref = _expect_name(expectation.ref, source)
+        if ref is None:
+            return [
+                f"*> STUB EXPECT {expectation.ref} -- the program folds it to "
+                f"{expectation.value}, but its name is declared under more "
+                f"than one record and EXPECT takes no OF qualification"
+            ]
+        expectation = Expectation(
+            kind=expectation.kind,
+            ref=ref,
+            value=expectation.value,
+            note=expectation.note,
+        )
         # The PICTURE decides bare vs quoted, exactly as it does for
         # `run --record-expectations`: a folded "-3" / "1.5" / "007" held in
         # a PIC X field rendered bare is an EXPECT that fails on the very
@@ -1787,7 +1853,23 @@ def _render_expectation(
         if pair is not None and pair in (counted_boundaries or set()):
             return []  # already asserted by this case's own VERIFY ... WAS CALLED
         return [f"*> STUB EXPECT {_describe_boundary_ref(expectation.ref)}{note}"]
-    return [f"*> STUB EXPECT {expectation.ref}{note}"]
+    return [
+        f"*> STUB EXPECT {_expect_name(expectation.ref, source) or expectation.ref}{note}"
+    ]
+
+
+def _expect_name(ref: str, source: ProgramContext | None) -> str | None:
+    """A bundle names a field `RECORD.FIELD` (its schema's qualified form),
+    which spliced into an EXPECT is a cobc syntax error (issue #144). The
+    leaf is the COBOL name when it is unique; None when it is declared
+    under more than one record -- the DSL has no `OF`."""
+    base, paren, rest = ref.partition("(")
+    if "." not in base:
+        return ref
+    leaf = base.rsplit(".", 1)[-1].strip()
+    if source is not None and not source.is_unique_name(leaf):
+        return None
+    return leaf + paren + rest
 
 
 def _merged_call_counts(expectations: list[Expectation]) -> list[Expectation]:
@@ -1933,6 +2015,7 @@ def _scaffold_with_bundle(
                     call_count_overrides,
                     counted_boundaries,
                     source.pictures if source is not None else None,
+                    source,
                 )
             )
         lines.append("")

@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 
 from mockymock.dsl.model import MockTestSuite
-from mockymock.dsl.parser import _SUBSCRIPTED_NAME, _TESTCASE_RE
+from mockymock.dsl.parser import _DOTTED_NAME_RE, _SUBSCRIPTED_NAME, _TESTCASE_RE
 
 _TESTCASE_HEADER_RE = re.compile(r'^\s*TESTCASE\s+"')
 _MOCK_OPEN_RE = re.compile(r"^\s*MOCK\s+\S")
@@ -137,6 +137,18 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
             continue
         name = m.group("name")
         note = m.group("note") or None
+        if _DOTTED_NAME_RE.search(name.partition("(")[0]):
+            # `RECORD.FIELD`, left by generate --with-data when the leaf
+            # is ambiguous: not a COBOL name, so not recordable (#144).
+            skipped.append(
+                SkippedStub(
+                    line_no,
+                    name,
+                    "a dotted RECORD.FIELD name is not COBOL -- write the "
+                    "EXPECT by hand for this field",
+                )
+            )
+            continue
 
         owning_header: tuple[int, str] | None = None
         for header_line, kind in headers:

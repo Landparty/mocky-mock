@@ -224,6 +224,9 @@ _CAPTURE_PREFIX_RE = re.compile(r"^CAPTURE\b")
 _BALANCED_SUBSCRIPT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\s*\([^()]*\)$")
 
 
+_DOTTED_NAME_RE = re.compile(r"[A-Za-z0-9-]\.[A-Za-z0-9]")
+
+
 class CutParseError(ValueError):
     """Raised when a .cut file doesn't match the grammar."""
 
@@ -236,6 +239,15 @@ def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
             f"line {line_no}: unbalanced parenthesis in data-name "
             f"{token!r} -- a subscript must be one closed (...) group, "
             f"e.g. WS-TABLE(1, 2)"
+        )
+    # `RECORD.FIELD` is how a fixture bundle writes a qualified name, not
+    # COBOL: spliced verbatim it is a cobc "incomplete expression" (issue
+    # #144), so refuse it here, at the .cut line.
+    if _DOTTED_NAME_RE.search(token.partition("(")[0]):
+        raise CutParseError(
+            f"line {line_no}: data-name {token!r} contains a '.' -- COBOL "
+            f"names have none; name the elementary item itself (e.g. "
+            f"{token.partition('(')[0].rsplit('.', 1)[-1]!r})"
         )
 
 

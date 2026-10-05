@@ -200,3 +200,109 @@ def test_143_no_generated_enterprise_cut_has_an_unmatched_mock(
     capsys.readouterr()
     main(["lint", str(source), *copybooks])
     assert "UNMATCHED_MOCK" not in capsys.readouterr().out
+
+
+QUAL_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. QUAL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-REC.
+           05  WS-QTY PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 42 TO WS-QTY
+           DISPLAY WS-QTY
+           GOBACK.
+"""
+
+DUPF_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DUPF.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT IN-FILE ASSIGN TO "IN.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL
+               FILE STATUS IS WS-IN-STATUS.
+           SELECT OUT-FILE ASSIGN TO "OUT.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  IN-FILE.
+       01  IN-REC.
+           05  CUST-ID   PIC X(5).
+           05  CUST-AMT  PIC 9(5).
+       FD  OUT-FILE.
+       01  OUT-REC.
+           05  CUST-ID   PIC X(5).
+           05  CUST-AMT  PIC 9(5).
+       WORKING-STORAGE SECTION.
+       01  WS-IN-STATUS PIC XX.
+       01  WS-EOF       PIC X VALUE "N".
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           OPEN INPUT IN-FILE
+           OPEN OUTPUT OUT-FILE
+           PERFORM READ-PARA UNTIL WS-EOF = "Y"
+           CLOSE IN-FILE
+           CLOSE OUT-FILE
+           GOBACK.
+       READ-PARA.
+           READ IN-FILE
+               AT END MOVE "Y" TO WS-EOF
+           END-READ
+           IF WS-EOF = "N"
+               MOVE CUST-ID OF IN-REC TO CUST-ID OF OUT-REC
+               MOVE CUST-AMT OF IN-REC TO CUST-AMT OF OUT-REC
+               WRITE OUT-REC
+           END-IF.
+"""
+
+
+def test_144_expect_uses_the_cobol_leaf_name_not_record_dot_field(tmp_path) -> None:
+    cut = _generate(tmp_path, "QUAL", QUAL_CBL, "--seed", "1")
+    assert "EXPECT WS-QTY TO BE 42" in cut
+    assert "WS-REC.WS-QTY" not in cut
+
+
+def test_144_ambiguous_read_fields_are_qualified_with_their_record(tmp_path) -> None:
+    cut = _generate(tmp_path, "DUPF", DUPF_CBL, "--seed", "1", "--rows", "2")
+    assert "TO CUST-ID OF IN-REC" in cut
+    assert "TO CUST-ID\n" not in cut
+
+
+def test_144_parser_refuses_a_dotted_data_name() -> None:
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    with pytest.raises(CutParseError, match="contains a '.'"):
+        parse_cut(
+            'TESTSUITE "Q"\nTESTCASE "c"\nPERFORM MAIN-PARA\n'
+            "EXPECT WS-REC.WS-QTY TO BE 42\n"
+        )
+
+
+def test_144_ambiguous_folded_field_becomes_a_stub_not_a_dotted_expect() -> None:
+    from mockymock.dsl.fixture_bundle import Expectation
+    from mockymock.dsl.generator import ProgramContext, _render_expectation
+
+    source = ProgramContext(lines=[], statement_starts=[], name_counts={"QTY": 2})
+    lines = _render_expectation(
+        Expectation(kind="field_equals", ref="A-REC.QTY", value="5"),
+        set(),
+        source=source,
+    )
+    assert lines[0].startswith("*> STUB EXPECT A-REC.QTY")
+
+
+def test_144_dotted_stub_is_not_recorded() -> None:
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
+    from mockymock.dsl.parser import parse_cut
+
+    text = (
+        'TESTSUITE "Q"\nTESTCASE "c"\nPERFORM MAIN-PARA\n'
+        "*> STUB EXPECT A-REC.QTY -- x\n"
+    )
+    result = scan_stub_expectations(text, parse_cut(text))
+    assert not result.stubs
+    assert result.skipped[0].data_name == "A-REC.QTY"
