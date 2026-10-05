@@ -23,3 +23,30 @@ def test_139_marker_after_no_advancing_output_is_still_parsed() -> None:
     assert one.ended and not one.passed
     assert two.passed
     assert not suite.all_passed
+
+
+def _one_case_suite():
+    from mockymock.dsl.model import ExpectDirective, MockTestCase, MockTestSuite
+
+    case = MockTestCase(
+        name="rc",
+        perform_target="MAIN-PARA",
+        expectations=[ExpectDirective("RETURN-CODE", "0")],
+    )
+    return MockTestSuite(name="rc", test_cases=[case])
+
+
+def test_140_each_case_and_the_final_stop_run_reset_return_code() -> None:
+    from mockymock.splicer.driver import build_driver
+    from mockymock.splicer.naming import TallyRegistry
+
+    suite = _one_case_suite()
+    lines = [
+        line.strip()
+        for line in build_driver(suite, [], TallyRegistry(suite)).procedure_lines
+    ]
+    stop = lines.index("STOP RUN.")
+    assert lines[stop - 1] == "MOVE 0 TO RETURN-CODE"
+    case_start = lines.index("UT-TESTCASE-001.")
+    perform = lines.index("PERFORM MAIN-PARA")
+    assert "MOVE 0 TO RETURN-CODE" in lines[case_start:perform]
