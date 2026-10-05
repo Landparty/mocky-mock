@@ -306,3 +306,38 @@ def test_144_dotted_stub_is_not_recorded() -> None:
     result = scan_stub_expectations(text, parse_cut(text))
     assert not result.stubs
     assert result.skipped[0].data_name == "A-REC.QTY"
+
+
+PARM_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PARM.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT PARM-FILE ASSIGN TO "PARM.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  PARM-FILE.
+       01  PARM-REC.
+           05  PARM-DAYS  PIC 9(3).
+       WORKING-STORAGE SECTION.
+       01  WS-DAYS PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           OPEN INPUT PARM-FILE
+           READ PARM-FILE
+           MOVE PARM-DAYS TO WS-DAYS
+           CLOSE PARM-FILE
+           GOBACK.
+"""
+
+
+def test_read_outside_any_loop_is_verified_once_whatever_the_row_count(
+    tmp_path,
+) -> None:
+    """Found while checking #144 against the legacy corpus (DORMACCT): a
+    parameter-card READ got `VERIFY ... 10 TIMES` from the bundle's row
+    count."""
+    cut = _generate(tmp_path, "PARM", PARM_CBL, "--seed", "1", "--rows", "5")
+    assert "VERIFY READ PARM-FILE WAS CALLED 1 TIMES" in cut

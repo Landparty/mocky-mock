@@ -1942,6 +1942,30 @@ def _conditional_call_count_keys(
     return keys
 
 
+def _unlooped_read_counts(
+    expectations: list[Expectation],
+    surface: MockSurface,
+    reachable: set[str] | None,
+    source: ProgramContext,
+) -> dict[tuple[MockCategory, str], int]:
+    """A READ outside any loop (a run-parameter card read once at start-up)
+    runs once per site, whatever number of rows the bundle generated for
+    it; the bundle counts the rows (DORMACCT: "10 TIMES, got 1")."""
+    counts: dict[tuple[MockCategory, str], int] = {}
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        if category_str != MockCategory.READ.value:
+            continue
+        sites = _sites_for_key(MockCategory.READ, key, surface, reachable)
+        if sites and not any(
+            site.nested or site_in_loop(site, source.looped) for site in sites
+        ):
+            counts[(MockCategory.READ, key)] = len(sites)
+    return counts
+
+
 def _scaffold_with_bundle(
     suite_name: str,
     surface: MockSurface,
@@ -2003,6 +2027,13 @@ def _scaffold_with_bundle(
                     from_placeholder=False,
                 ),
             )
+        if source is not None:
+            for key_pair, count in _unlooped_read_counts(
+                expectations, surface, reachable, source
+            ).items():
+                call_count_overrides.setdefault(
+                    key_pair, CallCountOverride(count=count, from_placeholder=False)
+                )
         counted_boundaries = _rendered_call_count_refs(
             expectations, declared_keys, call_count_overrides
         )

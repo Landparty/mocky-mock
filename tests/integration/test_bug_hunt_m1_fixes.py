@@ -139,3 +139,14 @@ def test_144_generated_names_compile_and_the_suite_passes(
         exit_code = _generate_and_run(tmp_path, name, cbl, "--seed", "1", "--rows", "2")
         out = capsys.readouterr().out
         assert exit_code == 0, out
+
+
+@requires_docker
+def test_read_outside_any_loop_generated_suite_passes(tmp_path: Path, capsys) -> None:
+    from tests.unit.test_bug_hunt_m1_fixes import PARM_CBL
+
+    exit_code = _generate_and_run(
+        tmp_path, "PARM", PARM_CBL, "--seed", "1", "--rows", "5"
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
