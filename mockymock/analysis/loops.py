@@ -18,10 +18,6 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     _nested_statement_lists,
 )
-from mockymock.analysis.refusal._reachability import (
-    _find_flow_statements,
-    _reachable_paragraphs,
-)
 
 
 def _walk(statements: list):
@@ -38,6 +34,12 @@ def _is_loop(statement: PerformStatement) -> bool:
 def looped_paragraphs_and_statements(program) -> tuple[set[str], set[int]]:
     """(paragraph/section names reachable from a looping PERFORM's target,
     ids of statements nested inside a looping inline PERFORM's body)."""
+    # Imported here: refusal imports the generator, which imports this.
+    from mockymock.analysis.refusal._reachability import (
+        _find_flow_statements,
+        _reachable_paragraphs,
+    )
+
     procedure = program.get_division("PROCEDURE") if program is not None else None
     if procedure is None:
         return set(), set()

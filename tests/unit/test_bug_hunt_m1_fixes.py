@@ -341,3 +341,107 @@ def test_read_outside_any_loop_is_verified_once_whatever_the_row_count(
     count."""
     cut = _generate(tmp_path, "PARM", PARM_CBL, "--seed", "1", "--rows", "5")
     assert "VERIFY READ PARM-FILE WAS CALLED 1 TIMES" in cut
+
+
+DIB_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DIB.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-SEG    PIC X(20).
+       01  WS-FOUND  PIC X VALUE "N".
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           EXEC DLI GU SEGMENT(CLAIM) INTO(WS-SEG) END-EXEC
+           IF DIBSTAT = SPACES
+               MOVE "Y" TO WS-FOUND
+           ELSE
+               MOVE "N" TO WS-FOUND
+           END-IF
+           GOBACK.
+"""
+
+DIB_CUT = """\
+TESTSUITE "dib"
+TESTCASE "found"
+MOCK DLI "GU"
+    MOVE "CLAIM-1" TO WS-SEG
+END-MOCK
+PERFORM MAIN-PARA
+EXPECT WS-FOUND TO BE "Y"
+TESTCASE "not found"
+MOCK DLI "GU"
+    MOVE "GE" TO DIBSTAT
+END-MOCK
+PERFORM MAIN-PARA
+EXPECT WS-FOUND TO BE "N"
+TESTCASE "found again after a GE"
+MOCK DLI "GU"
+    MOVE "CLAIM-2" TO WS-SEG
+END-MOCK
+PERFORM MAIN-PARA
+EXPECT WS-FOUND TO BE "Y"
+"""
+
+
+def _parsed(cbl: str):
+    from cobolparser import parse_cobol
+    from cobolparser.preprocess import normalize_fixed_format
+
+    return parse_cobol(cbl).ast, normalize_fixed_format(cbl.splitlines()).splitlines()
+
+
+def test_145_dibstat_reference_plans_a_dlidib_block() -> None:
+    from mockymock.analysis.cics_eib import cics_eib_plan
+    from mockymock.splicer import cics_eib
+
+    program, lines = _parsed(DIB_CBL)
+    plan = cics_eib_plan(program, lines)
+    assert plan is not None
+    assert plan.referenced_names == []
+    assert plan.dib_names == ["DIBSTAT"]
+    storage = cics_eib.working_storage_lines(plan)
+    assert storage[0] == "01  DLIDIB."
+    assert any("DIBSTAT" in line for line in storage)
+    assert not any("DFHEIBLK" in line for line in storage)
+    assert cics_eib.reset_lines(plan) == ["INITIALIZE DLIDIB"]
+
+
+def test_145_a_declared_dib_is_left_alone() -> None:
+    from mockymock.analysis.cics_eib import cics_eib_plan
+
+    cbl = DIB_CBL.replace(
+        "       01  WS-SEG    PIC X(20).",
+        "       01  DLIDIB.\n           05  DIBSTAT PIC XX.\n"
+        "       01  WS-SEG    PIC X(20).",
+    )
+    program, lines = _parsed(cbl)
+    assert cics_eib_plan(program, lines) is None
+
+
+SCAN_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SCAN.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-SEG    PIC X(20).
+       01  WS-COUNT  PIC 9(3) VALUE 0.
+       01  WS-DONE   PIC X VALUE "N".
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM UNTIL WS-DONE = "Y"
+               EXEC DLI GNP SEGMENT(ACCT) INTO(WS-SEG) END-EXEC
+               IF DIBSTAT = SPACES
+                   ADD 1 TO WS-COUNT
+               ELSE
+                   MOVE "Y" TO WS-DONE
+               END-IF
+           END-PERFORM
+           GOBACK.
+"""
+
+
+def test_145_looped_get_next_dli_mock_reports_end_of_segments(tmp_path) -> None:
+    cut = _generate(tmp_path, "SCAN", SCAN_CBL, "--seed", "1")
+    assert 'MOVE "GE" TO DIBSTAT' in cut
+    assert "-TALLY > 1" in cut

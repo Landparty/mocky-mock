@@ -1042,21 +1042,32 @@ def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:
     `check_cics_eib_layout`'s job) and adds WORKING-STORAGE a `.cut` author
     didn't write, so say so rather than silently changing behavior. See
     docs/2026-08-27-cics-eib-linkage-support-design.md."""
-    names = ", ".join(plan.referenced_names)
-    if applied:
-        action = (
-            f"synthesized a 01 DFHEIBLK WORKING-STORAGE group (referenced: {names})"
+    blocks = [
+        (block, kind, names)
+        for block, kind, names in (
+            ("DFHEIBLK", "CICS", plan.referenced_names),
+            ("DLIDIB", "DL/I", getattr(plan, "dib_names", [])),
         )
-    else:
-        action = (
-            f"a later `run` will synthesize a 01 DFHEIBLK WORKING-STORAGE "
-            f"group (referenced: {names})"
+        if names
+    ]
+    for block, kind, names in blocks:
+        listed = ", ".join(names)
+        if applied:
+            action = (
+                f"synthesized a 01 {block} WORKING-STORAGE group "
+                f"(referenced: {listed})"
+            )
+        else:
+            action = (
+                f"a later `run` will synthesize a 01 {block} WORKING-STORAGE "
+                f"group (referenced: {listed})"
+            )
+        field_kind = "EIB" if block == "DFHEIBLK" else "DIB"
+        print(
+            f"mockymock {command}: {action} -- no {kind} translator runs in "
+            f"this pipeline, so this program's undeclared {field_kind} field "
+            f"references get real, addressable storage instead"
         )
-    print(
-        f"mockymock {command}: {action} -- no CICS translator runs in this "
-        f"pipeline, so this program's undeclared EIB field references get "
-        f"real, addressable storage instead"
-    )
 
 
 def _report_unsupported_boundaries(surface, command: str = "generate") -> None:

@@ -150,3 +150,24 @@ def test_read_outside_any_loop_generated_suite_passes(tmp_path: Path, capsys) ->
     )
     out = capsys.readouterr().out
     assert exit_code == 0, out
+
+
+@requires_docker
+def test_145_dibstat_program_compiles_and_runs(tmp_path: Path, capsys) -> None:
+    from tests.unit.test_bug_hunt_m1_fixes import DIB_CBL, DIB_CUT
+
+    exit_code = _run(tmp_path, "DIB", DIB_CBL, DIB_CUT)
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "3 run, 0 failed" in out
+
+
+@requires_docker
+def test_145_generated_suite_for_a_looped_get_next_terminates(
+    tmp_path: Path, capsys
+) -> None:
+    from tests.unit.test_bug_hunt_m1_fixes import SCAN_CBL
+
+    exit_code = _generate_and_run(tmp_path, "SCAN", SCAN_CBL, "--seed", "1")
+    out = capsys.readouterr().out
+    assert exit_code == 0, out

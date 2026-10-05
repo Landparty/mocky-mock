@@ -48,6 +48,7 @@ gets its own TESTCASE, even near-duplicates.
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass, field
 
@@ -296,6 +297,13 @@ class ProgramContext:
             ),
             name_counts=_data_name_counts(program),
         )
+
+    def references(self, name: str) -> bool:
+        """True when `name` appears as a whole COBOL word in the program."""
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9-]){re.escape(name)}(?![A-Za-z0-9-])", re.IGNORECASE
+        )
+        return any(pattern.search(line) for line in self.lines)
 
     def is_unique_name(self, name: str) -> bool:
         """True unless `name` is known to be declared more than once. An
@@ -879,7 +887,41 @@ def _directive_for(
         # EXEC statement whose unique prefix runs into a string literal
         # containing a double quote cannot be written as a quoted key.
         return None
-    return f'MOCK {category.value} "{prefix}"', _placeholder_body_for(category, prefix)
+    body = _placeholder_body_for(category, prefix)
+    if category is MockCategory.DLI:
+        body = body + _dli_loop_end_lines(site, context, None)
+    return f'MOCK {category.value} "{prefix}"', body
+
+
+#: DL/I get-next calls and the DIBSTAT each returns once nothing is left:
+#: GB (end of database) for GN/GHN, GE (no more under this parent) for the
+#: within-parent forms.
+_DLI_GET_NEXT_END = {"GN": "GB", "GHN": "GB", "GNP": "GE", "GHNP": "GE"}
+
+
+def _dli_loop_end_lines(
+    site: BoundarySite,
+    context: ProgramContext | None,
+    tally: str | None,
+) -> list[str]:
+    """A get-next DL/I call in a loop, in a program that tests DIBSTAT:
+    an empty mock body leaves DIBSTAT blank ("found") on every call, so a
+    `PERFORM UNTIL` scan never ends (EXECDLI, found with #145). Report the
+    end status after the first call -- with a tally, so one segment is
+    still returned -- or on the first call when no tally name is known."""
+    if context is None or not context.references("DIBSTAT"):
+        return []
+    words = (site.match_text or "").split()
+    end_status = _DLI_GET_NEXT_END.get(words[0].upper()) if words else None
+    if end_status is None or not site_in_loop(site, context.looped):
+        return []
+    if tally is None:
+        return [f'MOVE "{end_status}" TO DIBSTAT']
+    return [
+        f"IF {tally} > 1",
+        f'    MOVE "{end_status}" TO DIBSTAT',
+        "END-IF",
+    ]
 
 
 def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
@@ -1064,6 +1106,12 @@ def _build_shadow_tally_registry(
             if pair in mockymock_keys and pair not in seen:
                 seen.add(pair)
                 case.mocks.append(MockDirective(category, fixture.key))
+    # Then the placeholder-mocked keys, in the order their directives are
+    # written: a looped DL/I get-next placeholder body needs its tally too.
+    for pair in mockymock_keys:
+        if pair not in seen:
+            seen.add(pair)
+            case.mocks.append(MockDirective(*pair))
     suite = MockTestSuite(name="_shadow", test_cases=[case])
     return TallyRegistry(suite)
 
@@ -1476,6 +1524,10 @@ def _bundle_directive_for(
         return _sql_rows_directive(category, fixture.key, fixture), override
     else:
         body = _single_row_body(fixture, source)
+        if category is MockCategory.DLI and registry.known(category, fixture.key):
+            body = body + _dli_loop_end_lines(
+                site, source, registry.name(category, fixture.key)
+            )
 
     body = _with_captures(category, fixture.key, body, source)
     lines = [_directive_header(category, fixture.key, site)]
@@ -1636,6 +1688,10 @@ def _bundle_mock_directives(
         if placeholder is None:
             continue
         directive_line, body = placeholder
+        if category is MockCategory.DLI and registry.known(category, key):
+            body = body + _dli_loop_end_lines(
+                site, source, registry.name(category, key)
+            )
         lines.append(directive_line)
         lines.extend(f"    {line}" for line in body)
         lines.append("END-MOCK")
