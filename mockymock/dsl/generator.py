@@ -1152,11 +1152,24 @@ def _status_only_body(fixture: BoundaryFixture) -> list[str]:
     code. The implicit default-success MOVE (injector.build_site_dispatch)
     already covers "00"/"0" -- only a non-default status needs the
     `FILE-STATUS IS` sugar (always usable as a quoted 2-char literal, no
-    need to map to a mnemonic name)."""
+    need to map to a mnemonic name).
+
+    SQL (OPEN/CLOSE/COMMIT of a cursor or unit of work) has no implicit
+    default: its body always sets SQLCODE, or the value a previous call or
+    case left there leaks into this one (issue #148)."""
+    if fixture.category == "SQL":
+        return _sql_status_lines(fixture)
     for code in fixture.status.values():
         if code not in _DEFAULT_SUCCESS_CODES:
             return [f'FILE-STATUS IS "{code}"']
     return []
+
+
+def _sql_status_lines(fixture: BoundaryFixture) -> list[str]:
+    lines = [f"MOVE {code} TO {name}" for name, code in fixture.status.items()]
+    if not any(name.upper() == "SQLCODE" for name in fixture.status):
+        lines.append("MOVE 0 TO SQLCODE")
+    return lines
 
 
 def _single_row_body(
@@ -1171,10 +1184,11 @@ def _single_row_body(
     body: list[str] = []
     if fixture.sequence:
         body.extend(_row_move_lines(fixture.sequence[0], fixture, source))
-    is_sql = fixture.category == "SQL"
+    if fixture.category == "SQL":
+        body.extend(_sql_status_lines(fixture))
+        return body
     for field_name, code in fixture.status.items():
-        rendered = code if is_sql else f'"{code}"'
-        body.append(f"MOVE {rendered} TO {field_name}")
+        body.append(f'MOVE "{code}" TO {field_name}')
     return body
 
 

@@ -530,3 +530,19 @@ def test_147_local_storage_and_the_first_fd_record_are_reset() -> None:
     assert "MOVE 0 TO LS-COUNT" in lines
     assert "INITIALIZE LS-GRP" in lines
     assert 'MOVE "AB" TO LS-A' in lines
+
+
+def test_148_generated_sql_open_and_close_bodies_set_sqlcode(tmp_path) -> None:
+    cut = _generate(tmp_path, "FETCH", FETCH_CBL, "--seed", "1")
+    for key in ("OPEN", "CLOSE"):
+        block = cut.split(f'MOCK SQL "{key}"', 1)[1].split("END-MOCK", 1)[0]
+        assert "MOVE 0 TO SQLCODE" in block
+
+
+def test_148_the_generated_sqlca_is_reset_between_cases() -> None:
+    from mockymock.splicer.sqlca import SQLCA_FIELDS, sqlca_reset_lines
+
+    assert sqlca_reset_lines(["       " + line for line in SQLCA_FIELDS])[0] == (
+        "INITIALIZE SQLCA"
+    )
+    assert sqlca_reset_lines(["       01  WS-X PIC X."]) == []

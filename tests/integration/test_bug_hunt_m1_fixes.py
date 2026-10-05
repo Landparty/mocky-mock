@@ -214,3 +214,46 @@ def test_147_cases_pass_in_the_suite_not_just_alone(tmp_path: Path, capsys) -> N
     exit_code = _run(tmp_path, "LS", LS_CBL, LS_CUT)
     out = capsys.readouterr().out
     assert exit_code == 0, out
+
+
+SQLL_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SQLL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           EXEC SQL INCLUDE SQLCA END-EXEC.
+       01  HV-NAME   PIC X(10).
+       01  WS-FOUND  PIC X VALUE "N".
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           EXEC SQL SELECT NAME INTO :HV-NAME FROM CUST END-EXEC
+           IF SQLCODE = 0
+               MOVE "Y" TO WS-FOUND
+           ELSE
+               MOVE "N" TO WS-FOUND
+           END-IF
+           GOBACK.
+"""
+
+SQLL_CUT = """\
+TESTSUITE "sqll"
+TESTCASE "not found"
+MOCK SQL "SELECT"
+    MOVE 100 TO SQLCODE
+END-MOCK
+PERFORM MAIN-PARA
+EXPECT WS-FOUND TO BE "N"
+TESTCASE "found, mock leaves SQLCODE alone"
+MOCK SQL "SELECT"
+    MOVE "SAM" TO HV-NAME
+END-MOCK
+PERFORM MAIN-PARA
+EXPECT WS-FOUND TO BE "Y"
+"""
+
+
+@requires_docker
+def test_148_sqlcode_does_not_leak_into_the_next_case(tmp_path: Path, capsys) -> None:
+    exit_code = _run(tmp_path, "SQLL", SQLL_CBL, SQLL_CUT)
+    out = capsys.readouterr().out
+    assert exit_code == 0, out

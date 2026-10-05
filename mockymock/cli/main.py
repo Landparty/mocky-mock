@@ -1264,7 +1264,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     # Directory-wide mode: no program, no --cut -- discover every .cut
     # file under the test root and run each against its sibling program.
@@ -1390,7 +1390,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
-    reset_lines = reset_move_lines(result.ast)
+    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
     if linkage is not None:
         # LINKAGE items `neutralize` folded into WORKING-STORAGE live under
         # the LINKAGE section in `result.ast` still (the transform edited
@@ -1715,7 +1715,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     # Unlike --trace's plain-text mode, there is no useful human-facing
     # equivalent of a DAP session at a terminal -- refuse rather than
@@ -1808,7 +1808,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
-    reset_lines = reset_move_lines(result.ast)
+    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
     if linkage is not None:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
@@ -2078,7 +2078,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     pair = _resolve_program_and_cut("mockymock export", args)
     if pair is None:
@@ -2156,7 +2156,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
-    reset_lines = reset_move_lines(result.ast)
+    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
     if linkage is not None:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
