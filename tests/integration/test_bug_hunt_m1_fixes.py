@@ -205,3 +205,12 @@ def test_146_recorded_goldens_pass_on_the_next_run(tmp_path: Path, capsys) -> No
     capsys.readouterr()
     exit_code = main(["run", str(tmp_path / "REC.cbl")])
     assert exit_code == 0, capsys.readouterr().out
+
+
+@requires_docker
+def test_147_cases_pass_in_the_suite_not_just_alone(tmp_path: Path, capsys) -> None:
+    from tests.unit.test_bug_hunt_m1_fixes import LS_CBL, LS_CUT
+
+    exit_code = _run(tmp_path, "LS", LS_CBL, LS_CUT)
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
