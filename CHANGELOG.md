@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **`MOCK CALL "X" ROWS ( ... ) TERMINAL ( ... )` -- one response per call.** A plain `MOCK CALL` answers every call of its key the same way, so a program calling one routine for several purposes (IMS `CBLTDLI` as priming GHN, DLET and loop GHN; `MQGET` loops; a DB2 access module) could only be driven end to end down its empty-input path. `ROWS` now works on `MOCK CALL` (static and dynamic), `MOCK MQ` and `MOCK DLI`, with the same grammar `READ` already has: row N answers that key's Nth call within the test case (counted across every call site), and `TERMINAL` answers every call after the last row. `TERMINAL` is required for these categories, since a CALL has no implicit end-of-data value and the last answer would otherwise repeat until `run --timeout` kills the loop. A `MOCK CALL` without `ROWS` splices exactly as before. `examples/real-world/ACCTPRG` gains two whole-program cases that run real purge-loop iterations.
+
 ### Changed
 
 - **`UNSUPPORTED_NESTED_PROGRAM`**: a multi-unit compilation unit (nested or stacked `PROGRAM-ID`s, or an object-oriented `CLASS-ID` with its FACTORY/OBJECT/METHOD-ID units, which cobol-parser now parses) is refused under its own code. It used to be refused as `PARSE_WARNING` -- "the AST is missing content" -- which was wrong: cobol-parser parses every unit into `contained_programs`; what is missing is mockymock's support, since the splicer and the reachability BFS only see the outermost unit, so a contained unit's boundaries would go unmocked. The message now says that.

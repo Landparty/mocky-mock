@@ -3076,8 +3076,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Binary execution timeout in seconds (default 30); a mocked "
             "CALL that removes a loop's terminating condition can "
-            "otherwise hang until this limit kills it (mirrors mutate's "
-            "own --timeout)"
+            "otherwise hang until this limit kills it -- give a "
+            'retrieve-and-loop CALL a sequence instead, MOCK CALL "X" '
+            "ROWS ( ... ) TERMINAL ( ... ), so later calls end the loop "
+            "(mirrors mutate's own --timeout)"
         ),
     )
     run_parser.add_argument(

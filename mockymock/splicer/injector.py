@@ -23,7 +23,12 @@ from cobolparser.models.statements.call import CallStatement
 
 from mockymock.analysis.mock_surface import BoundarySite
 from mockymock.analysis.refusal import directive_matches_site
-from mockymock.dsl.model import FILE_STATUS_CATEGORIES, MockCategory, MockTestSuite
+from mockymock.dsl.model import (
+    FILE_STATUS_CATEGORIES,
+    SEQUENCED_CALL_CATEGORIES,
+    MockCategory,
+    MockTestSuite,
+)
 from mockymock.splicer.naming import TallyRegistry
 
 #: One token of a CALL statement's text: a (possibly X/N/G/Z/NX/U-prefixed)
@@ -134,7 +139,8 @@ def build_rows_block(
     the resolved end-of-data signal -- either the mock's own TERMINAL
     group or, for READ only, a default `MOVE "10" TO <status field>` --
     RETURN is never in FILE_STATUS_CATEGORIES, so its TERMINAL group is
-    the only source)."""
+    the only source; CALL/DYNCALL/DLI: their mandatory TERMINAL group,
+    with `[]` row suffixes)."""
     lines = ["EVALUATE TRUE"]
     for index, row in enumerate(rows, start=1):
         lines.append(f"    WHEN {tally_name} = {index}")
@@ -314,6 +320,32 @@ def build_site_dispatch(
                     directive.rows,
                     row_suffix_moves=[],
                     exhausted_moves=exhausted_moves,
+                )
+            )
+        elif (
+            directive.rows is not None
+            and directive.category in SEQUENCED_CALL_CATEGORIES
+        ):
+            # Per-invocation sequencing: row N answers this key's Nth call
+            # in the case (the tally counts every site the key matches),
+            # TERMINAL answers every call after the last row. There is no
+            # implicit end-of-data value to default to, so the parser makes
+            # TERMINAL mandatory -- reaching here without one is a bug.
+            if directive.terminal_row is None:
+                raise ValueError(
+                    f"MOCK {directive.describe()} ROWS has no TERMINAL "
+                    f"group -- the parser should have rejected it"
+                )
+            lines.extend(
+                f"                   {body}"
+                for body in build_rows_block(
+                    tally_name,
+                    directive.rows,
+                    row_suffix_moves=[],
+                    exhausted_moves=[
+                        f"MOVE {value} TO {field}"
+                        for field, value in directive.terminal_row
+                    ],
                 )
             )
         elif directive.rows is not None:

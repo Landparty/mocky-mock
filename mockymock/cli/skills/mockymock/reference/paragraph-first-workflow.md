@@ -29,6 +29,15 @@ pass is where ordering, carried state, and total call counts get
 *checked*. Running the second pass first means debugging the program and
 your own mocks simultaneously, with nothing proven to stand on.
 
+A whole-program case usually runs a loop, and the loop usually calls the
+same routine more than once for different reasons (IMS `CBLTDLI` for a
+priming GHN, a DLET and the next GHN; `MQGET`; a DB2 access module).
+Don't settle for the empty-input path because one `MOCK CALL` body can
+only give one answer: use `MOCK CALL "X" ROWS ( ... ) TERMINAL ( ... )`
+(see `cut-dsl.md`), one row per call in order, so the case runs one or
+two real iterations and `TERMINAL` ends the loop. Pair it with `VERIFY
+CALL "X" WAS CALLED <n> TIMES`.
+
 ## 1. Build the checklist
 
 ```bash

@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-09-28T00:00:00Z
+timestamp: 2026-10-05T00:00:00Z
 ---
 
 # Overview
@@ -293,7 +293,7 @@ argument `n` names different items) fails closed as
 not compile or would compare against raw binary. Full grammar and
 `generate` behavior in [dsl](dsl.md)'s "Synthesized targets" section.
 
-**`ROWS` dispatch (`MOCK SQL ... ROWS` and `MOCK READ ... ROWS`, see
+**`ROWS` dispatch (`MOCK SQL/READ/RETURN/CALL/MQ/DLI ... ROWS`, see
 [dsl](dsl.md)).** `build_rows_block(tally_name, rows, *, row_suffix_moves,
 exhausted_moves)` is category-generic: it builds an `EVALUATE TRUE` /
 `WHEN <tally> = N` chain where row N's field `MOVE`s are followed by
@@ -303,6 +303,12 @@ contain, `build_rows_block` itself has no category knowledge. Both call
 sites live in `build_site_dispatch`, one per `directive.rows is not None`
 category:
 
+- **CALL / DYNCALL / DLI** (`SEQUENCED_CALL_CATEGORIES`, 2026-10-05):
+  `row_suffix_moves=[]`, `exhausted_moves` = the directive's own
+  (mandatory) `TERMINAL` group's MOVEs -- there is no implicit default for
+  a CALL. A hand-built directive without one raises `ValueError`; the
+  parser rejects it first. Row N fires on the key's Nth call in the case,
+  counted across every site the key matches (one shared tally).
 - **SQL**: `row_suffix_moves=["MOVE 0 TO SQLCODE"]`,
   `exhausted_moves=["MOVE 100 TO SQLCODE"]` -- fixed in v1, matching the
   pre-generalization (single-purpose SQL-only) behavior exactly.

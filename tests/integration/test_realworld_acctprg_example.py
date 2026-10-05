@@ -88,6 +88,10 @@ def test_committed_acctprg_example_reports_coverage(capsys):
     # 073d4f7 (the instrumented sandbox number, which moves with every
     # codegen change to injected dispatch lines, is now only a subordinate
     # line). This figure moves only when ACCTPRG.cbl or its suite changes.
+    # Re-pinned 2026-10-05 (GnuCOBOL 3.2.0): 84/97 -> 86/97 when the suite
+    # gained its two MOCK CALL ... ROWS whole-program cases, which drive
+    # real 0000-MAIN-PROCESS loop iterations instead of only the
+    # empty-database path.
     assert match.group(0) == (
-        "coverage: 86.60% of ACCTPRG.cbl's own lines executed (84/97)"
+        "coverage: 88.66% of ACCTPRG.cbl's own lines executed (86/97)"
     )

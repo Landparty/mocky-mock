@@ -5,6 +5,18 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-05 -- `MOCK CALL ... ROWS`: one response per call
+
+`ROWS ( ... ) TERMINAL ( ... )` now works on `MOCK CALL "X"`, `MOCK MQ`,
+dynamic `MOCK CALL WS-PGM` and `MOCK DLI` (`model.SEQUENCED_CALL_CATEGORIES`,
+`ROWS_CATEGORIES`, `TERMINAL_CATEGORIES`): row N answers the key's Nth
+call in the case, `TERMINAL` (mandatory for these) every call after.
+Plain `MOCK CALL` splices byte-identically. ACCTPRG gained two
+whole-program cases that run real purge-loop iterations (coverage pin
+84/97 -> 86/97). `run --timeout` help points at the new form. Updated
+[dsl](dsl.md), [splicer](splicer.md), [cli](cli.md), and the bundled
+`mockymock` skill (`cut-dsl.md`, `paragraph-first-workflow.md`).
+
 ## 2026-10-04 -- skills for GitHub Copilot (`skills install --target`)
 
 `skills install --target claude|copilot|all`; Copilot paths are

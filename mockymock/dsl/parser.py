@@ -54,6 +54,9 @@ import re
 from mockymock.dsl.model import (
     CAPTURE_CATEGORIES,
     FILE_STATUS_CATEGORIES,
+    ROWS_CATEGORIES,
+    SEQUENCED_CALL_CATEGORIES,
+    TERMINAL_CATEGORIES,
     DataProvider,
     ExpectDirective,
     MockCategory,
@@ -81,6 +84,11 @@ _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
 _BARE_CATS = (
     "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
     "|SORT|MERGE|RELEASE|RETURN|INITIATE|GENERATE|TERMINATE|PARAGRAPH|SECTION"
+)
+
+_ROWS_SUPPORTED = (
+    "ROWS is only supported for MOCK SQL, MOCK READ, MOCK RETURN, "
+    "MOCK CALL (static or dynamic), MOCK MQ, and MOCK DLI"
 )
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
@@ -660,15 +668,29 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"block has no rows -- give at least one row or "
                         f"drop ROWS entirely"
                     )
+                if (
+                    in_mock.rows is not None
+                    and in_mock.category in SEQUENCED_CALL_CATEGORIES
+                    and in_mock.terminal_row is None
+                ):
+                    raise CutParseError(
+                        f"line {line_no}: MOCK {in_mock.describe()} ROWS "
+                        f"needs a TERMINAL ( FIELD = value, ... ) group -- "
+                        f"it is what every call after the last row returns, "
+                        f"and without it a retrieve-and-loop program never "
+                        f"sees its end condition"
+                    )
                 in_mock = None
             elif (
                 in_mock.rows is not None
                 and (term_match := _TERMINAL_RE.match(line)) is not None
             ):
-                if in_mock.category not in (MockCategory.READ, MockCategory.RETURN):
+                if in_mock.category not in TERMINAL_CATEGORIES:
                     raise CutParseError(
                         f"line {line_no}: TERMINAL is only supported for "
-                        f"MOCK READ ... ROWS and MOCK RETURN ... ROWS"
+                        f"MOCK READ/RETURN/CALL/MQ/DLI ... ROWS, not MOCK "
+                        f"{in_mock.category.keyword} ... ROWS (SQL rows "
+                        f"always end with SQLCODE 100)"
                     )
                 if in_mock.terminal_row is not None:
                     raise CutParseError(f"line {line_no}: duplicate TERMINAL group")
@@ -1013,10 +1035,9 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"the quoted key must name what to mock"
                 )
             category = _resolve_category(m.group("cat"))
-            if m.group("rows") and category is not MockCategory.SQL:
+            if m.group("rows") and category not in ROWS_CATEGORIES:
                 raise CutParseError(
-                    f"line {line_no}: ROWS is only supported for MOCK SQL "
-                    f'and MOCK READ, not MOCK {m.group("cat")}'
+                    f"line {line_no}: {_ROWS_SUPPORTED}, not MOCK " f'{m.group("cat")}'
                 )
             in_mock = _open_mock(
                 MockDirective(
@@ -1033,13 +1054,9 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/" f"BEFORE-ALL"
                 )
             category = _resolve_category(m.group("cat"), bare_key=True)
-            if m.group("rows") and category not in (
-                MockCategory.READ,
-                MockCategory.RETURN,
-            ):
+            if m.group("rows") and category not in ROWS_CATEGORIES:
                 raise CutParseError(
-                    f"line {line_no}: ROWS is only supported for MOCK SQL, "
-                    f'MOCK READ, and MOCK RETURN, not MOCK {m.group("cat")}'
+                    f"line {line_no}: {_ROWS_SUPPORTED}, not MOCK " f'{m.group("cat")}'
                 )
             in_mock = _open_mock(
                 MockDirective(

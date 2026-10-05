@@ -133,6 +133,30 @@ FILE_STATUS_CATEGORIES = frozenset(
 # appears here as its own category.
 CAPTURE_CATEGORIES = frozenset({MockCategory.CALL, MockCategory.DYNCALL})
 
+# Per-invocation sequencing (`MOCK CALL "X" ROWS ( ... ) TERMINAL ( ... )`,
+# 2026-10-05): row N answers the Nth call of the mocked key within one
+# test case, counted by the key's own tally across every site it matches.
+# These categories have no implicit end-of-data value (no SQLCODE, no FILE
+# STATUS), so their TERMINAL group is mandatory -- without it the last
+# row's response would repeat forever and a retrieve-and-loop program
+# would spin until `run --timeout`. MQ is CALL at parse time.
+SEQUENCED_CALL_CATEGORIES = frozenset(
+    {MockCategory.CALL, MockCategory.DYNCALL, MockCategory.DLI}
+)
+
+# Every category ROWS is valid on. SQL ends with SQLCODE 100 (no TERMINAL),
+# READ/RETURN end with a status/TERMINAL group, the sequenced-call
+# categories end with their mandatory TERMINAL group.
+ROWS_CATEGORIES = frozenset(
+    {MockCategory.SQL, MockCategory.READ, MockCategory.RETURN}
+    | SEQUENCED_CALL_CATEGORIES
+)
+
+# Categories whose ROWS block takes a TERMINAL ( ... ) group.
+TERMINAL_CATEGORIES = frozenset(
+    {MockCategory.READ, MockCategory.RETURN} | SEQUENCED_CALL_CATEGORIES
+)
+
 
 @dataclass
 class MockDirective:
@@ -140,11 +164,11 @@ class MockDirective:
     key: str
     body_lines: list[str] = field(default_factory=list)
     rows: list[list[tuple[str, str]]] | None = None
-    """Structured rows for `MOCK SQL "..." ROWS (...) (...) END-MOCK` or
-    `MOCK READ <file> ROWS (...) (...) END-MOCK`. `None` for an ordinary
-    mock (its body lives in `body_lines` instead); populated only for
-    SQL- and READ-category ROWS mocks, mutually exclusive with
-    `body_lines`."""
+    """Structured rows for a `MOCK <cat> <key> ROWS (...) (...) END-MOCK`
+    directive (SQL, READ, RETURN, and the SEQUENCED_CALL_CATEGORIES
+    CALL/DYNCALL/DLI). `None` for an ordinary mock (its body lives in
+    `body_lines` instead); populated only for ROWS_CATEGORIES, mutually
+    exclusive with `body_lines`."""
     file_status: str | None = None
     """Resolved two-character status code from `FILE-STATUS IS
     <mnemonic-or-code>` inside this mock's body -- only ever set for
@@ -154,9 +178,10 @@ class MockDirective:
     injector.build_site_dispatch)."""
     terminal_row: list[tuple[str, str]] | None = None
     """Field assignments for the WHEN OTHER (rows-exhausted) branch of a
-    `MOCK READ ... ROWS` block, from its optional `TERMINAL ( F = v, ... )`
-    line. Always `None` for SQL rows (SQLCODE 100 is fixed) and for
-    non-ROWS mocks."""
+    READ/RETURN/CALL/DYNCALL/DLI `... ROWS` block, from its
+    `TERMINAL ( F = v, ... )` line (optional for READ, mandatory for the
+    SEQUENCED_CALL_CATEGORIES, refused-without for RETURN). Always `None`
+    for SQL rows (SQLCODE 100 is fixed) and for non-ROWS mocks."""
     captures: list[tuple[int, str]] = field(default_factory=list)
     """CAPTURE ARG <n> INTO <target> lines from this mock's body: (n, target)
     pairs, n a 1-based USING-parameter position, in declaration order.
