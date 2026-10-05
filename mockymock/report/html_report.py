@@ -57,7 +57,7 @@ h2 { margin: 0 0 12px; font-size: 19px; text-wrap: balance; }
 .lede { margin: 4px 0 0; color: var(--muted); max-width: 72ch; }
 code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 13px; }
-.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 12px; }
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); gap: 12px; }
 .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 4px; align-content: start; }
 .tile .label { font-size: 12px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
 .tile .value { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; }
@@ -124,6 +124,25 @@ pre { margin: 0; padding: 10px 12px; background: var(--raised); border-radius: 6
 .levels-note { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; font-size: 13px; color: var(--muted); }
 .levels-note div { display: grid; gap: 4px; }
 footer { color: var(--muted); font-size: 12px; }
+.intro { margin: -4px 0 12px; color: var(--muted); font-size: 14px; max-width: 80ch; }
+.intro a, .toc a { color: var(--accent); }
+.toc { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 13px; }
+.toc a { text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+ol.next { margin: 0; padding: 0; list-style: none; counter-reset: next; display: grid; gap: 8px; }
+ol.next li { counter-increment: next; display: grid; grid-template-columns: 2em 1fr; column-gap: 10px; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: 10px 14px; }
+ol.next li::before { content: counter(next); grid-row: span 2; font: 700 18px/1.2 var(--font-mono); color: var(--accent); }
+ol.next li span { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.next.ok { background: var(--ok-soft); color: var(--fg); border-radius: 8px; padding: 12px 14px; }
+.finding ul.detail { margin: 2px 0; padding-left: 18px; }
+.finding .todo { font-size: 14px; }
+td.nowrap { white-space: nowrap; }
+.warn-text { color: var(--warn); font-weight: 600; }
+.bad-text { color: var(--bad); }
+dl.glossary { display: grid; grid-template-columns: minmax(10em, max-content) 1fr; gap: 6px 18px; margin: 0; font-size: 14px; }
+dl.glossary dt { font-weight: 600; }
+dl.glossary dd { margin: 0; color: var(--muted); }
+@media (max-width: 560px) { dl.glossary { grid-template-columns: 1fr; } dl.glossary dd { margin-bottom: 6px; } }
 h3 { margin: 18px 0 8px; font-size: 15px; }
 .inner h3 { margin: 8px 0 6px; }
 .analysis { display: grid; gap: 8px; }
@@ -207,14 +226,142 @@ def _level(level: str | None) -> str:
     return f'<span class="level {_e(level)}" title="{_e(LEVEL_TITLES[level])}">{_e(level)}</span>'
 
 
-def _tile(label: str, value: str, sub: str = "", extra: str = "") -> str:
+def _tile(
+    label: str, value: str, sub: str = "", extra: str = "", title: str = ""
+) -> str:
+    tip = f' title="{_e(title)}"' if title else ""
     return (
-        f'<div class="tile"><span class="label">{_e(label)}</span>'
+        f'<div class="tile"{tip}><span class="label">{_e(label)}</span>'
         f'<span class="value">{value}</span>'
         + (f'<span class="sub">{sub}</span>' if sub else "")
         + extra
         + "</div>"
     )
+
+
+_SEVERITY_LABEL = {
+    "high": "Fix first",
+    "medium": "Should fix",
+    "low": "Worth a look",
+    "info": "For information",
+}
+
+# The finding categories in plain words. The machine name stays in the
+# JSON and in the tag's tooltip; the reader sees this.
+_CATEGORY_LABEL = {
+    "refused": "Suite refused",
+    "test-failure": "Failing test",
+    "suspected-bug": "Possible program bug",
+    "no-assertion": "Test checks nothing",
+    "missing-assertion": "Change no test notices",
+    "untestable-mutant": "Change the test data hides",
+    "dead-code": "Code never run",
+    "untested-paragraph": "Paragraph no test reaches",
+    "rule-without-intent": "Rule no test checks",
+    "unlabelled": "Checks without a stated reason",
+    "dialect": "Mainframe difference",
+    "coverage": "Lines never run",
+    "scenario-gap": "Branches to set up by hand",
+    "scenario-gap-covered-by-hand": "Branches your tests already cover",
+}
+
+# What to do about each category, in one imperative sentence. Shown in the
+# "What to do next" box, so the reader does not have to work it out from
+# the finding's detail.
+_ADVICE = {
+    "refused": "Mock the boundary it names, then run `mockymock lint` again.",
+    "test-failure": "Open the test case and compare the expected and actual values.",
+    "suspected-bug": (
+        "Check the program against the business rule: the test follows the "
+        "rule, so the program is the likelier culprit."
+    ),
+    "no-assertion": "Add an EXPECT on a field the paragraph writes.",
+    "missing-assertion": "Add an EXPECT that would fail if that line changed.",
+    "untestable-mutant": "Start a test case with a non-zero value in that field.",
+    "dead-code": "Confirm nothing calls it, then consider removing it.",
+    "untested-paragraph": "Add a TESTCASE that PERFORMs it.",
+    "rule-without-intent": (
+        "Put an `*> INTENT: BR-nnn ...` label above the EXPECT that checks the rule."
+    ),
+    "unlabelled": (
+        "Put `*> INTENT: ...` (from a rule or the developer) or "
+        "`*> CHARACTERIZATION: ...` (recorded from a run) above each check."
+    ),
+    "dialect": "Re-run this test on z/OS before trusting it there.",
+    "coverage": "Add test cases that reach those lines.",
+    "scenario-gap": (
+        "Write a test case that MOVEs the tested value before its PERFORM, "
+        "or sets it in a mock body."
+    ),
+}
+
+_EVIDENCE_DETAIL = frozenset(
+    {
+        "test-failure",
+        "suspected-bug",
+        "missing-assertion",
+        "untestable-mutant",
+        "dialect",
+        "coverage",
+        "refused",
+    }
+)
+
+_GLOSSARY = (
+    (
+        "Test case",
+        "One TESTCASE in the .cut file: it PERFORMs a paragraph with mocked inputs and checks the result.",
+    ),
+    (
+        "Check (EXPECT / VERIFY)",
+        "EXPECT compares a field with a value; VERIFY counts how often a mocked CALL, file or database statement ran.",
+    ),
+    (
+        "Intent",
+        "A check whose expected value comes from a business rule or the developer (`*> INTENT:`). If it fails, the program is probably wrong.",
+    ),
+    (
+        "Recorded (characterization)",
+        "A check whose expected value was copied from what the program did on a run (`*> CHARACTERIZATION:`). It pins today's behaviour; it does not prove it right.",
+    ),
+    (
+        "Mock",
+        "A stand-in for a CALL, file, SQL, CICS or DL/I statement, so the test runs without the real system.",
+    ),
+    (
+        "Line coverage",
+        "The share of the program's executable lines that ran during the tests.",
+    ),
+    (
+        "Mutation score",
+        "mockymock changes the program one small way at a time (a + becomes -, a MOVE is removed) and re-runs the tests. The score is the share of those changes a test noticed.",
+    ),
+    (
+        "Verification level",
+        "L0 to L4: how much a test case proves, from 'passes the static checks' to 'confirmed on the mainframe'. See Verification levels.",
+    ),
+    (
+        "Mainframe difference",
+        "Something GnuCOBOL (where these tests run) may do differently from IBM Enterprise COBOL, such as rounding or comparing mixed data.",
+    ),
+    ("Branch", "One way through an IF or EVALUATE (its THEN, its ELSE, each WHEN)."),
+    (
+        "Cyclomatic complexity",
+        "The number of independent paths through a paragraph. Each path needs its own test case; above 10 is hard to test fully.",
+    ),
+    (
+        "Technical debt",
+        "cobol-parser's 0 to 100 estimate of how hard the program is to change safely (0 is best), from complexity, duplicates, dead code, GO TO use and size.",
+    ),
+    (
+        "Lint",
+        "Automatic checks for common COBOL problems: unused fields, unreachable code, risky MOVEs, unchecked SQLCODEs and more.",
+    ),
+)
+
+
+def _plural(n: int, noun: str, plural: str | None = None) -> str:
+    return f"{n} {noun if n == 1 else (plural or noun + 's')}"
 
 
 def _summary_strip(report: dict[str, Any]) -> str:
@@ -231,48 +378,63 @@ def _summary_strip(report: dict[str, Any]) -> str:
         f'<span><i style="background:var(--{level.lower()})"></i>{level} {levels.get(level, 0)}</span>'
         for level in LEVELS
     )
-    passed_sub = f"{s['failed']} failed, {s['notRun']} not run"
-    coverage = "—" if s["coverage"] is None else f"{s['coverage']:.1f}%"
+    if s["notRun"] == cases and cases:
+        passed_sub = "not run yet"
+    else:
+        passed_sub = f"{s['failed']} failed, {s['notRun']} not run"
+    coverage = "—" if s["coverage"] is None else f"{s['coverage']:.0f}%"
     mutation = "—" if s["mutationScore"] is None else f"{s['mutationScore']:.0f}%"
     intent = "—" if s["intentShare"] is None else f"{s['intentShare']:.0f}%"
     f = s["findings"]
+    urgent = f["high"] + f["medium"]
     health_tile = ""
     analysis = report.get("analysis") or {}
     health = analysis.get("health") if analysis.get("available") else None
     if health:
-        complexity = (analysis.get("complexity") or {}).get("summary") or {}
         health_tile = _tile(
-            "Program health",
+            "Code health",
             f'<span class="grade {_e(health["grade"])}">{_e(health["grade"])}</span>',
-            _e(
-                f"debt {health['score']:g}/100"
-                + (
-                    f" · max complexity {complexity['max_complexity']}"
-                    if complexity.get("max_complexity") is not None
-                    else ""
-                )
-            ),
+            "A is easy to change safely, F is hard",
+            title="cobol-parser's technical-debt grade for the program itself",
         )
     return (
         '<section class="strip" aria-label="Summary">'
-        + _tile("Tests passing", f"{s['passed']}/{cases}", _e(passed_sub))
         + _tile(
-            "Verification",
+            "Tests passing",
+            f"{s['passed']}/{cases}",
+            _e(passed_sub),
+            title="Test cases that passed in a real GnuCOBOL run",
+        )
+        + _tile(
+            "Strongly verified",
             f"{levels.get('L3', 0) + levels.get('L2', 0)}/{cases}",
-            "at L2 or higher",
+            "pass, check something, and catch planted bugs (level L2+)",
             f'<div class="ladder">{ladder}</div><div class="legend">{legend}</div>',
+            title="Test cases at verification level L2 or L3",
         )
         + _tile(
-            "Intent assertions",
+            "Checks with a reason",
             intent,
-            f"of {s['assertions']} assertions cite a rule or the developer",
+            f"of {_plural(s['assertions'], 'check')} cite a rule or the developer",
+            title="Share of EXPECT/VERIFY lines labelled INTENT",
         )
-        + _tile("Line coverage", coverage, "of the original .cbl")
-        + _tile("Mutation score", mutation, f"threshold {s['mutationThreshold']:.0f}%")
         + _tile(
-            "Findings",
-            str(f["high"] + f["medium"]),
-            f"high/medium · {f['low']} low · {f['info']} info",
+            "Code run by tests",
+            coverage,
+            "of the program's executable lines",
+            title="Line coverage of the original .cbl",
+        )
+        + _tile(
+            "Planted bugs caught",
+            mutation,
+            f"aim for {s['mutationThreshold']:.0f}% or more",
+            title="Mutation score: small deliberate changes a test noticed",
+        )
+        + _tile(
+            "Issues to fix",
+            str(urgent),
+            f"{f['low']} worth a look · {f['info']} for information",
+            title="Findings marked 'Fix first' or 'Should fix'",
         )
         + health_tile
         + "</section>"
@@ -282,16 +444,19 @@ def _summary_strip(report: dict[str, Any]) -> str:
 def _verdict_sentence(report: dict[str, Any]) -> str:
     s = report["summary"]
     if s["levels"].get("none"):
-        return "The suite is refused by the static gate, so nothing it asserts has been checked yet."
+        return (
+            "The suite is refused by the static checks, so none of its tests can "
+            "run yet. Fix the issues marked “Fix first” below."
+        )
     if s["notRun"] == s["cases"]:
         return (
-            "The suite passes the static checks but has not been run here, so no "
-            "test is proven by execution yet."
+            f"The {_plural(s['cases'], 'test')} pass the static checks but "
+            "the suite has not been run here, so no test is proven by execution yet."
         )
     parts = [f"{s['passed']} of {s['cases']} tests pass under GnuCOBOL"]
     high = s["findings"]["high"]
     if high:
-        parts.append(f"{high} high-severity finding(s) need a look first")
+        parts.append(f"{_plural(high, 'issue')} need fixing first")
     top = max((lvl for lvl in LEVELS if s["levels"].get(lvl)), default=None)
     if top:
         parts.append(
@@ -300,31 +465,181 @@ def _verdict_sentence(report: dict[str, Any]) -> str:
     return "; ".join(parts) + "."
 
 
+def _next_steps(report: dict[str, Any]) -> str:
+    """At most five actions, most important first: the unrun steps that
+    would unlock stronger proof, then one line per kind of urgent finding."""
+    steps: list[tuple[str, str]] = []
+    program = report["program"]["file"]
+    cut = report["cut"]["file"]
+    by_id = {s["id"]: s for s in report["steps"]}
+    seen: set[str] = set()
+    for finding in report["findings"]:
+        category = finding["category"]
+        if finding["severity"] != "high" or category in seen:
+            continue
+        seen.add(category)
+        steps.append(
+            (finding["title"], _ADVICE.get(category, finding.get("detail", "")))
+        )
+    refused = bool(report["summary"]["levels"].get("none"))
+    run_skipped = by_id.get("run", {}).get("status") == "skipped" and not refused
+    mutation_skipped = (
+        by_id.get("mutation", {}).get("status") == "skipped" and not refused
+    )
+    if run_skipped or mutation_skipped:
+        flags = " ".join(
+            flag
+            for flag, wanted in (
+                ("--execute", run_skipped),
+                ("--mutate", mutation_skipped),
+            )
+            if wanted
+        )
+        steps.append(
+            (
+                "Run the tests to prove them",
+                f"`mockymock report {program} --cut {cut} {flags}` compiles and runs "
+                "the suite under GnuCOBOL (needs Docker). Until then every test "
+                "stays at L0.",
+            )
+        )
+    for finding in report["findings"]:
+        category = finding["category"]
+        if finding["severity"] != "medium" or category in seen:
+            continue
+        seen.add(category)
+        count = sum(1 for f in report["findings"] if f["category"] == category)
+        title = (
+            finding["title"]
+            if count == 1
+            else (f"{_CATEGORY_LABEL.get(category, category)} ({count})")
+        )
+        steps.append((title, _ADVICE.get(category, finding.get("detail", ""))))
+    for finding in report["findings"]:
+        category = finding["category"]
+        if finding["severity"] != "low" or category in seen or len(steps) >= 5:
+            continue
+        seen.add(category)
+        steps.append(
+            (finding["title"], _ADVICE.get(category, finding.get("detail", "")))
+        )
+    if not steps:
+        return (
+            '<div class="next ok"><strong>Nothing urgent.</strong> The suite runs, '
+            "checks what it should and catches planted bugs. The remaining step "
+            "is running the same tests on z/OS (level L4, <code>mockymock export</code>).</div>"
+        )
+    items = "".join(
+        f"<li><strong>{_e(title)}</strong><span>{_md_code(advice)}</span></li>"
+        for title, advice in steps[:5]
+    )
+    return f'<ol class="next">{items}</ol>'
+
+
+def _md_code(text: str) -> str:
+    """Escape `text`, then turn `backtick` spans into <code>."""
+    parts = _e(text).split("`")
+    return "".join(
+        f"<code>{part}</code>" if i % 2 else part for i, part in enumerate(parts)
+    )
+
+
+def _grouped(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold findings that share a severity, category and title into one
+    card listing each distinct detail -- the static gate reports the same
+    unmocked statement once per test case that reaches it, and fourteen
+    identical cards bury everything after them."""
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for f in findings:
+        groups.setdefault((f["severity"], f["category"], f["title"]), []).append(f)
+    out = []
+    for members in groups.values():
+        if len(members) == 1:
+            out.append(members[0])
+            continue
+        details: list[str] = []
+        for m in members:
+            for text in m.get("items") or [m.get("detail") or ""]:
+                if text and text not in details:
+                    details.append(text)
+        merged = dict(members[0])
+        merged.pop("line", None)
+        merged.pop("case", None)
+        merged["items"] = details
+        if len(details) > 1:
+            merged["title"] = f"{merged['title']} ({len(details)} reasons)"
+        elif details:
+            merged["items"] = []
+            merged["detail"] = details[0]
+        out.append(merged)
+    return out
+
+
 def _findings(report: dict[str, Any]) -> str:
     items = report["findings"]
     if not items:
-        return '<p class="empty">No findings.</p>'
+        return '<p class="empty">No issues found.</p>'
     out = []
-    for f in items:
-        tags = [_pill(f["severity"]), f'<code class="tag">{_e(f["category"])}</code>']
+    for f in _grouped(items):
+        category = f["category"]
+        tags = [
+            _pill(f["severity"], _SEVERITY_LABEL.get(f["severity"], f["severity"])),
+            f'<span class="tag" title="{_e(category)}">'
+            f"{_e(_CATEGORY_LABEL.get(category, category))}</span>",
+        ]
         # The title already says "at line N" for every category that sets
         # one (missing-assertion, dialect) -- repeating it as a bare tag
         # reads as a second, disconnected fact instead of the same one.
         if f.get("line") and f"line {f['line']}" not in f.get("title", ""):
             tags.append(f'<span class="tag">line {_e(f["line"])}</span>')
         if f.get("case"):
-            tags.append(f'<span class="tag">case “{_e(f["case"])}”</span>')
+            tags.append(f'<span class="tag">test “{_e(f["case"])}”</span>')
+        if f.get("items"):
+            shown = f["items"][:12]
+            more = (
+                f"<li>… and {len(f['items']) - 12} more</li>"
+                if len(f["items"]) > 12
+                else ""
+            )
+            body = (
+                '<ul class="detail">'
+                + "".join(f"<li>{_e(item)}</li>" for item in shown)
+                + more
+                + "</ul>"
+            )
+        elif f.get("detail"):
+            body = f'<div class="detail">{_md_code(f["detail"])}</div>'
+        else:
+            body = ""
+        # Some details already end in the advice; only add a "What to do"
+        # line where the detail is evidence (values, a mutant, a risk).
+        advice = (
+            _ADVICE.get(category)
+            if category in _EVIDENCE_DETAIL or not f.get("detail")
+            else None
+        )
+        if f["severity"] == "info":
+            advice = None
+        todo = (
+            f'<div class="todo">What to do: {_md_code(advice)}</div>' if advice else ""
+        )
         out.append(
             f'<article class="finding {_e(f["severity"])}"><div class="stripe"></div>'
             f'<div class="body"><div class="title">{_e(f["title"])}</div>'
-            + (
-                f'<div class="detail">{_e(f["detail"])}</div>'
-                if f.get("detail")
-                else ""
-            )
-            + f'<div class="tags">{"".join(tags)}</div></div></article>'
+            f'{body}{todo}<div class="tags">{"".join(tags)}</div></div></article>'
         )
     return f'<div class="findings">{"".join(out)}</div>'
+
+
+def _checks(a: dict[str, int]) -> str:
+    if not a["total"]:
+        return '<span class="warn-text">none</span>'
+    parts = [
+        f"{a['intent']} from rules" if a["intent"] else "",
+        f"{a['characterization']} recorded" if a["characterization"] else "",
+        f"{a['unlabelled']} no reason" if a["unlabelled"] else "",
+    ]
+    return _e(" · ".join(p for p in parts if p))
 
 
 def _cases(report: dict[str, Any]) -> str:
@@ -346,10 +661,9 @@ def _cases(report: dict[str, Any]) -> str:
             )
     rows = []
     for c in cases:
-        a = c["assertions"]
         risks = [r for r in c["risks"] if r["severity"] in ("high", "medium")]
         failures = "".join(
-            f'<div class="why">✗ line {_e(fl.get("line"))}: {_e(fl.get("message"))}</div>'
+            f'<div class="why bad-text">✗ line {_e(fl.get("line"))}: {_e(fl.get("message"))}</div>'
             for fl in c["failures"]
         )
         target = c["perform"] + (
@@ -362,16 +676,17 @@ def _cases(report: dict[str, Any]) -> str:
             f'<div class="why">{_e(c["levelReason"])}</div>{failures}</td>'
             f"<td>{_pill(c['status'])}</td>"
             f"<td><code>{_e(target)}</code></td>"
-            f'<td class="num">{a["intent"]}</td><td class="num">{a["characterization"]}</td>'
-            f'<td class="num">{a["unlabelled"]}</td>'
-            f'<td class="num">{len(risks)}</td></tr>'
+            f'<td class="nowrap">{_checks(c["assertions"])}</td>'
+            f'<td class="num">{len(risks) or "—"}</td></tr>'
         )
     return (
+        '<p class="intro">Each row is one TESTCASE. The level says how much it proves '
+        '(<a href="#h-levels">what the levels mean</a>); the line under its name says '
+        "why it stopped there.</p>"
         f'<div class="filters" role="group" aria-label="Filter test cases">{"".join(filters)}</div>'
         '<div class="table-wrap"><table id="cases"><thead><tr>'
-        "<th>Level</th><th>Test case</th><th>Result</th><th>Performs</th>"
-        '<th class="num">Intent</th><th class="num">Recorded</th><th class="num">Unlabelled</th>'
-        '<th class="num">Dialect risks</th>'
+        "<th>Level</th><th>Test case</th><th>Result</th><th>Runs paragraph</th>"
+        '<th>Checks</th><th class="num" title="High or medium GnuCOBOL vs IBM COBOL differences this test reaches">Mainframe risks</th>'
         f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
     )
 
@@ -596,7 +911,10 @@ def _call_graph_svg(graph: dict[str, Any]) -> str:
             if node["unreachable"]:
                 cls, state = "dead", "never performed"
             elif node["testedBy"]:
-                cls, state = "ok", f"reached by {len(node['testedBy'])} test(s)"
+                cls, state = (
+                    "ok",
+                    f"reached by {_plural(len(node['testedBy']), 'test')}",
+                )
             else:
                 cls, state = "untested", "no test reaches it"
             if node["entry"]:
@@ -625,6 +943,21 @@ def _call_graph_svg(graph: dict[str, Any]) -> str:
     )
 
 
+_GRADE_TEXT = {
+    "A": "Easy to change safely.",
+    "B": "Mostly easy to change; a few spots need care.",
+    "C": "Changes need care: some paragraphs are complex or duplicated.",
+    "D": "Risky to change: plan extra tests before touching it.",
+    "F": "Very risky to change: test thoroughly before any edit.",
+}
+_HEALTH_HELP = {
+    "complexity": "Paragraphs with many paths through them are hard to test fully.",
+    "redundancy": "Dead code, unused fields and copy-pasted paragraphs.",
+    "control flow": "GO TO, ALTER, recursion and unreachable code.",
+    "size": "Very long paragraphs.",
+}
+
+
 def _analysis_health(health: dict[str, Any]) -> str:
     tiles = []
     for c in health["components"]:
@@ -632,16 +965,21 @@ def _analysis_health(health: dict[str, Any]) -> str:
         findings = "".join(
             f'<div class="why">{_e(f)}</div>' for f in c.get("findings") or []
         )
+        name = str(c["name"]).replace("_", " ")
+        state = "No problems" if not score else f"{score:g} / 100"
+        weight = c.get("weight")
+        share = f" · counts for {weight:g}%" if isinstance(weight, (int, float)) else ""
         tiles.append(
-            f'<div class="tile"><span class="label">{_e(str(c["name"]).replace("_", " "))}</span>'
-            f'<span class="sub">{score:g}/100 debt · weight {_e(c.get("weight"))}</span>'
+            f'<div class="tile" title="{_e(_HEALTH_HELP.get(name, ""))}">'
+            f'<span class="label">{_e(name)}</span>'
+            f'<span class="sub"><strong>{_e(state)}</strong>{_e(share)}</span>'
             f'<div class="bar"><span style="width:{min(100.0, float(score)):.0f}%"></span></div>'
             f"{findings}</div>"
         )
     offenders = ""
     if health["topOffenders"]:
-        offenders = "<h3>Worst paragraphs</h3>" + _table(
-            ["Paragraph", "Line", "Severity", "Why"],
+        offenders = "<h3>Paragraphs that cost the most</h3>" + _table(
+            ["Paragraph", "Line", "Cost", "Why"],
             [
                 f"<tr><td><code>{_e(o['name'])}</code></td>{_num(o['line'])}"
                 f"{_num(o['severity'])}<td>{_e('; '.join(o['reasons']))}</td></tr>"
@@ -651,8 +989,9 @@ def _analysis_health(health: dict[str, Any]) -> str:
         )
     return (
         f'<p><span class="grade {_e(health["grade"])}">{_e(health["grade"])}</span> '
-        f"Technical-debt score <strong>{health['score']:g}</strong>/100 (0 is best), "
-        "weighted across the components below.</p>"
+        f"{_e(_GRADE_TEXT.get(str(health['grade']), ''))} Technical-debt score "
+        f"<strong>{health['score']:g}</strong> out of 100, where 0 is best; the "
+        "four areas below add up to it.</p>"
         f'<div class="health">{"".join(tiles)}</div>{offenders}'
     )
 
@@ -696,7 +1035,7 @@ def _analysis_lint(lint: dict[str, Any]) -> str:
     s = lint.get("summary") or {}
     severity_pill = {"error": "fail", "warning": "warn", "info": "info"}
     head = (
-        f'<p class="note">{_e(s.get("total", 0))} finding(s): {_e(s.get("error", 0))} error, '
+        f'<p class="note">{_e(_plural(s.get("total", 0), "finding"))}: {_e(s.get("error", 0))} error, '
         f'{_e(s.get("warning", 0))} warning, {_e(s.get("info", 0))} info. Rules run: '
         f'{_e(", ".join(lint["rulesRun"]) or "none")}.</p>'
     )
@@ -743,7 +1082,7 @@ def _analysis_data(data: dict[str, Any]) -> str:
         for i in data["items"]
     ]
     note = (
-        f'<p class="note">{data["total"]} data item(s), {data["unreferenced"]} never '
+        f'<p class="note">{_plural(data["total"], "data item")}, {data["unreferenced"]} never '
         "referenced in the PROCEDURE DIVISION. Reads include conditions, subscripts, "
         "CALL arguments and SQL host variables."
         + (
@@ -839,7 +1178,7 @@ def _analysis_interface(analysis: dict[str, Any]) -> str:
     if sql is not None and (sql["sqlStatements"] or sql["cicsStatements"]):
         parts.append(
             f'<h3>SQL / CICS checks</h3><p class="note">{_e(sql["sqlStatements"])} SQL and '
-            f'{_e(sql["cicsStatements"])} CICS statement(s), {len(sql["violations"])} problem(s).</p>'
+            f'{_e(_plural(sql["cicsStatements"], "CICS statement"))}, {_plural(len(sql["violations"]), "problem")}.</p>'
         )
         if sql["violations"]:
             parts.append(
@@ -940,10 +1279,16 @@ def _analysis(report: dict[str, Any]) -> str:
     parts.append(
         _panel(
             "Call graph",
-            f"{len(graph['nodes'])} paragraph(s), {len(graph['edges'])} PERFORM/GO TO "
-            f"edge(s), {len(graph['externalCalls'])} external CALL(s); "
-            f"{untested} paragraph(s) no test reaches.",
-            drawing + _external_calls(graph) + cycles,
+            f"{_plural(len(graph['nodes']), 'paragraph')}, "
+            f"{_plural(len(graph['externalCalls']), 'external CALL')}; "
+            + (
+                f"{_plural(untested, 'paragraph')} no test reaches."
+                if untested
+                else "every paragraph is reached by a test."
+            ),
+            '<p class="intro">Arrows are PERFORMs (grey) and GO TOs (red); blue '
+            "boxes are other programs it CALLs. Hover a box for its line and "
+            "the tests that reach it.</p>" + drawing + _external_calls(graph) + cycles,
             open_=True,
         )
     )
@@ -956,7 +1301,11 @@ def _analysis(report: dict[str, Any]) -> str:
                 f"Max cyclomatic {cs.get('max_complexity')}, mean "
                 f"{cs.get('mean_complexity')}; {cs.get('moderate_count', 0)} moderate, "
                 f"{cs.get('high_count', 0)} high.",
-                _analysis_complexity(complexity),
+                '<p class="intro">Cyclomatic complexity counts the separate paths '
+                "through a paragraph: each needs its own test case. Up to 10 is "
+                "fine; above 20 is hard to test fully. Fan-in is how many "
+                "paragraphs PERFORM this one, fan-out how many it PERFORMs.</p>"
+                + _analysis_complexity(complexity),
             )
         )
     lint = analysis.get("lint")
@@ -967,10 +1316,12 @@ def _analysis(report: dict[str, Any]) -> str:
         parts.append(
             _panel(
                 "Lint",
-                f"{ls.get('total', 0)} finding(s): {ls.get('error', 0)} error, "
+                f"{_plural(ls.get('total', 0), 'finding')}: {ls.get('error', 0)} error, "
                 f"{ls.get('warning', 0)} warning, {ls.get('info', 0)} info"
                 + (f" ({top})." if top else "."),
-                _analysis_lint(lint),
+                '<p class="intro">Automatic checks for common COBOL problems. '
+                "Warnings are worth reading; info lines are notes.</p>"
+                + _analysis_lint(lint),
             )
         )
     data = analysis.get("dataItems")
@@ -978,8 +1329,10 @@ def _analysis(report: dict[str, Any]) -> str:
         parts.append(
             _panel(
                 "Data flow",
-                f"{data['total']} data item(s), {data['unreferenced']} never referenced.",
-                _analysis_data(data),
+                f"{_plural(data['total'], 'data item')}, {data['unreferenced']} never referenced.",
+                '<p class="intro">For each field: the paragraphs that change it and '
+                "the paragraphs that use it. A field a paragraph writes is a good "
+                "EXPECT for a test of that paragraph.</p>" + _analysis_data(data),
             )
         )
     if any(
@@ -991,9 +1344,11 @@ def _analysis(report: dict[str, Any]) -> str:
         parts.append(
             _panel(
                 "Interface",
-                f"{len(boundaries)} external touchpoint(s) to mock, "
-                f"{len(crud)} file(s)/table(s).",
-                _analysis_interface(analysis),
+                f"{_plural(len(boundaries), 'statement')} a test must mock, "
+                f"{_plural(len(crud), 'file or table', 'files or tables')}.",
+                '<p class="intro">How the program talks to the outside world: what a '
+                "caller passes it, and the CALLs, files, SQL, CICS and DL/I "
+                "statements a test has to mock.</p>" + _analysis_interface(analysis),
             )
         )
     redundancy = analysis.get("redundancy")
@@ -1017,9 +1372,9 @@ def _analysis(report: dict[str, Any]) -> str:
             _panel(
                 "Dead code and duplicates",
                 f"{s.get('dead_procedure_count', 0)} of {s.get('total_procedures', 0)} "
-                f"paragraph(s) dead, {s.get('unused_variable_count', 0)} of "
-                f"{s.get('total_variables', 0)} variable(s) unused, "
-                f"{len(groups)} duplicate group(s).",
+                f"paragraphs never run, {s.get('unused_variable_count', 0)} of "
+                f"{s.get('total_variables', 0)} fields unused, "
+                f"{_plural(len(groups), 'set')} of copy-pasted paragraphs.",
                 clones,
             )
         )
@@ -1067,6 +1422,16 @@ def _levels_note() -> str:
     )
 
 
+def _glossary() -> str:
+    return (
+        '<dl class="glossary">'
+        + "".join(
+            f"<dt>{_e(term)}</dt><dd>{_md_code(text)}</dd>" for term, text in _GLOSSARY
+        )
+        + "</dl>"
+    )
+
+
 def render_html(report: dict[str, Any], *, standalone: bool = True) -> str:
     """The report as HTML. `standalone` wraps it in a full document (what
     `mockymock report -o` writes); without it the result is the title,
@@ -1086,6 +1451,81 @@ def render_html(report: dict[str, Any], *, standalone: bool = True) -> str:
         meta.append(
             f"<span>mockymock {_e(d.get('mockymock'))} · cobol-parser {_e(d.get('cobolParser'))}</span>"
         )
+    sections = [
+        (
+            "h-next",
+            "What to do next",
+            "The most useful actions, most important first.",
+            _next_steps(report),
+        ),
+        (
+            "h-findings",
+            "Findings",
+            "Everything the checks turned up, most serious first.",
+            _findings(report),
+        ),
+        ("h-cases", "Test cases", "", _cases(report)),
+        (
+            "h-analysis",
+            "Program analysis",
+            "What cobol-parser found about the program itself, independent of "
+            "the tests: how risky it is to change, how it is wired together, and "
+            "what it touches. Click a panel to open it.",
+            _analysis(report),
+        ),
+        (
+            "h-rules",
+            "Business rules",
+            "Decisions and calculations found in the code. A rule is “cited” "
+            "when a test's INTENT label names it, which is what proves the test "
+            "checks the rule rather than whatever the program happens to do.",
+            _rules(report),
+        ),
+        (
+            "h-paragraphs",
+            "Paragraphs",
+            "Every paragraph and whether a test reaches it.",
+            _paragraphs(report),
+        ),
+        (
+            "h-risks",
+            "GnuCOBOL vs IBM COBOL risks",
+            "These tests run on GnuCOBOL. Lines listed here may behave "
+            "differently on the mainframe's IBM Enterprise COBOL.",
+            _risks(report),
+        ),
+        (
+            "h-steps",
+            "How the verdict was reached",
+            "Each check that produced the numbers above, with the command that "
+            "repeats it. Click a step for its details.",
+            _steps(report),
+        ),
+        (
+            "h-journal",
+            "Assistant journal",
+            "Decisions the AI assistant recorded while writing the tests.",
+            _journal(report),
+        ),
+        ("h-levels", "Verification levels", "", _levels_note()),
+        (
+            "h-glossary",
+            "Words used in this report",
+            "",
+            _glossary(),
+        ),
+    ]
+    nav = "".join(
+        f'<a href="#{anchor}">{_e(heading)}</a>'
+        for anchor, heading, _, _ in sections
+        if anchor not in ("h-next", "h-levels", "h-glossary")
+    )
+    content = "\n".join(
+        f'<section aria-labelledby="{anchor}"><h2 id="{anchor}">{_e(heading)}</h2>'
+        + (f'<p class="intro">{_e(intro)}</p>' if intro else "")
+        + f"{html_}</section>"
+        for anchor, heading, intro, html_ in sections
+    )
     body = f"""<title>{_e(title)}</title>
 <style>{_CSS}</style>
 <div class="wrap">
@@ -1094,18 +1534,11 @@ def render_html(report: dict[str, Any], *, standalone: bool = True) -> str:
   <h1><code>{_e(program['name'])}</code> test report</h1>
   <p class="lede">{_e(_verdict_sentence(report))}</p>
   <div class="meta">{''.join(meta)}</div>
+  <nav class="toc" aria-label="Sections">{nav}<a href="#h-glossary">Glossary</a></nav>
 </header>
 {_summary_strip(report)}
-<section aria-labelledby="h-findings"><h2 id="h-findings">Findings</h2>{_findings(report)}</section>
-<section aria-labelledby="h-cases"><h2 id="h-cases">Test cases</h2>{_cases(report)}</section>
-<section aria-labelledby="h-steps"><h2 id="h-steps">How the verdict was reached</h2>{_steps(report)}</section>
-<section aria-labelledby="h-journal"><h2 id="h-journal">Assistant journal</h2>{_journal(report)}</section>
-<section aria-labelledby="h-paragraphs"><h2 id="h-paragraphs">Paragraphs</h2>{_paragraphs(report)}</section>
-<section aria-labelledby="h-rules"><h2 id="h-rules">Business rules</h2>{_rules(report)}</section>
-<section aria-labelledby="h-analysis"><h2 id="h-analysis">Program analysis</h2>{_analysis(report)}</section>
-<section aria-labelledby="h-risks"><h2 id="h-risks">GnuCOBOL vs IBM COBOL risks</h2>{_risks(report)}</section>
-<section aria-labelledby="h-levels"><h2 id="h-levels">Verification levels</h2>{_levels_note()}</section>
-<footer>Every number on this page comes from a mockymock or cobol-parser command run against this program; the step list above names each one.</footer>
+{content}
+<footer>Every number on this page comes from a mockymock or cobol-parser command run against this program; “How the verdict was reached” names each one.</footer>
 </div>
 <script>{_JS}</script>
 """

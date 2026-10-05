@@ -341,6 +341,22 @@ the `cobol-test` skill's hand-over.
   call graph open) and the call graph as an inline layered SVG -- no
   Mermaid, since the page may make no network fetches. A report dict
   without `analysis` (written before it existed) still renders.
+- Readability layer (2026-10-05, `html_report.py`): plain labels live in
+  `_SEVERITY_LABEL` / `_CATEGORY_LABEL`, one advice sentence per category in
+  `_ADVICE` (shown as "What to do" only when the category is in
+  `_EVIDENCE_DETAIL` or the detail is empty, never for info), and the
+  glossary in `_GLOSSARY`. `_next_steps` builds the "What to do next" list
+  (high kinds, then the run command when run/mutation were skipped and the
+  suite is not refused, then medium, then low; at most five). `_grouped`
+  folds findings sharing (severity, category, title) into one card. The
+  page order is: next steps, findings, test cases, program analysis, rules,
+  paragraphs, dialect risks, steps, journal, levels, glossary, with a
+  `nav.toc` of anchors in the header.
+- `scenario-gap` / `scenario-gap-covered-by-hand` findings carry `items`
+  (one line per branch). `test_report._plain_arm_reason` strips the
+  `EVALUATE@405/WHEN#1:` prefix and rewrites the generator's known reasons
+  (`_ARM_REASONS`) into a sentence; an unknown reason passes through.
+  Without coverage, the title does not claim no test reaches the branch.
 - `LEADING_SENTENCES_NODE` is imported with a fallback to its value
   (`"PROCEDURE DIVISION"`): cobol-parser 1.8.4 does not export it, and the
   bare import broke every report on the published package.

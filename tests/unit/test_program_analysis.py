@@ -214,7 +214,7 @@ def test_page_draws_the_call_graph_and_every_analysis_heading(ordrproc):
     assert '<svg role="img" aria-label="Paragraph call graph"' in page
     assert ">CALL DISCRATE</text>" in page
     assert ">PROCESS-ORDER</text>" in page
-    assert "Program health" in page  # summary tile
+    assert "Code health" in page  # summary tile
 
 
 def test_a_report_written_before_the_analysis_existed_still_renders(ordrproc):
