@@ -1764,6 +1764,74 @@ def _render_expectation(
     return [f"*> STUB EXPECT {expectation.ref}{note}"]
 
 
+def _merged_call_counts(expectations: list[Expectation]) -> list[Expectation]:
+    """The bundle carries one `call_count` per call SITE, but a VERIFY (and
+    the splicer's tally) counts per (category, key): two `CALL "FMT"`
+    statements rendered as two `VERIFY ... 1 TIMES` lines that both failed
+    with "got 2" (issue #142). Sum them into one expectation per ref, kept
+    at the first one's position."""
+    merged: list[Expectation] = []
+    by_ref: dict[str, Expectation] = {}
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            merged.append(expectation)
+            continue
+        existing = by_ref.get(expectation.ref)
+        if existing is None:
+            copy = Expectation(
+                kind=expectation.kind,
+                ref=expectation.ref,
+                value=expectation.value,
+                note=expectation.note,
+            )
+            by_ref[expectation.ref] = copy
+            merged.append(copy)
+        elif isinstance(existing.value, int) and isinstance(expectation.value, int):
+            existing.value += expectation.value
+    return merged
+
+
+def _sites_for_key(
+    category: MockCategory,
+    key: str,
+    surface: MockSurface,
+) -> list[BoundarySite]:
+    if category in EXEC_CATEGORIES:
+        return [
+            site
+            for site in surface.boundary_sites
+            if site.category is category and _unique_prefix(site, surface) == key
+        ]
+    return [
+        site
+        for site in surface.boundary_sites
+        if site.category is category and key in site.keys
+    ]
+
+
+def _conditional_call_count_keys(
+    expectations: list[Expectation],
+    surface: MockSurface,
+) -> list[tuple[MockCategory, str]]:
+    """Keys whose summed count (`_merged_call_counts`) is not exact: more
+    than one site, at least one of them nested in an IF/EVALUATE/loop. The
+    bundle counts every site once per scenario whether or not its branch
+    runs (STMTGEN's page-break CALL), so the sum would overshoot."""
+    keys: list[tuple[MockCategory, str]] = []
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        try:
+            category = MockCategory(category_str)
+        except ValueError:
+            continue
+        sites = _sites_for_key(category, key, surface)
+        if len(sites) > 1 and any(site.nested for site in sites):
+            keys.append((category, key))
+    return keys
+
+
 def _scaffold_with_bundle(
     suite_name: str,
     surface: MockSurface,
@@ -1795,10 +1863,23 @@ def _scaffold_with_bundle(
             f"    {line}"
             for line in _capture_stub_lines(_capture_targets(directive_lines))
         )
+        expectations = _merged_call_counts(scenario.expectations)
+        for key_pair in _conditional_call_count_keys(expectations, surface):
+            call_count_overrides.setdefault(
+                key_pair,
+                CallCountOverride(
+                    demote_reason=(
+                        "called from several sites, some inside an IF/"
+                        "EVALUATE/loop, so how many of them this case "
+                        "reaches is not known"
+                    ),
+                    from_placeholder=False,
+                ),
+            )
         counted_boundaries = _rendered_call_count_refs(
-            scenario.expectations, declared_keys, call_count_overrides
+            expectations, declared_keys, call_count_overrides
         )
-        for expectation in scenario.expectations:
+        for expectation in expectations:
             lines.extend(
                 f"    {line}"
                 for line in _render_expectation(

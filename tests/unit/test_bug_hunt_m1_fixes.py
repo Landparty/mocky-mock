@@ -100,3 +100,34 @@ def test_141_fetch_outside_a_loop_keeps_its_single_row_body(tmp_path) -> None:
     cut = _generate(tmp_path, "FETCH", cbl, "--seed", "1")
     assert 'MOCK SQL "FETCH" ROWS' not in cut
     assert 'VERIFY SQL "FETCH" WAS CALLED 1 TIMES' in cut
+
+
+TWO_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TWO.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "FMT" USING WS-N
+           CALL "FMT" USING WS-N
+           GOBACK.
+"""
+
+
+def test_142_two_call_sites_of_one_key_render_one_summed_verify(tmp_path) -> None:
+    cut = _generate(tmp_path, "TWO", TWO_CBL, "--seed", "1")
+    assert cut.count('VERIFY CALL "FMT"') == 1
+    assert 'VERIFY CALL "FMT" WAS CALLED 2 TIMES' in cut
+
+
+def test_142_a_conditional_extra_site_demotes_the_summed_count(tmp_path) -> None:
+    cbl = TWO_CBL.replace(
+        '           CALL "FMT" USING WS-N\n           GOBACK.',
+        '           IF WS-N > 5\n               CALL "FMT" USING WS-N\n'
+        "           END-IF\n           GOBACK.",
+    )
+    cut = _generate(tmp_path, "TWO", cbl, "--seed", "1")
+    assert 'VERIFY CALL "FMT" WAS CALLED 2 TIMES' not in cut
+    assert '*> VERIFY CALL "FMT" WAS CALLED <count not exact' in cut

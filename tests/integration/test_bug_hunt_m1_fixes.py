@@ -116,3 +116,14 @@ def test_141_generated_suite_for_a_looped_one_row_fetch_terminates_and_passes(
     out = capsys.readouterr().out
     assert exit_code == 0, out
     assert "1 run, 0 failed" in out
+
+
+@requires_docker
+def test_142_generated_verify_for_a_duplicated_call_passes(
+    tmp_path: Path, capsys
+) -> None:
+    from tests.unit.test_bug_hunt_m1_fixes import TWO_CBL
+
+    exit_code = _generate_and_run(tmp_path, "TWO", TWO_CBL, "--seed", "1")
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
