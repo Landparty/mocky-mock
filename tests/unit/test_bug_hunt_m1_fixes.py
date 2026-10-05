@@ -4,6 +4,11 @@ tests/integration/test_bug_hunt_m1_fixes.py."""
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
+import pytest
+
 from mockymock.report.results import parse_stdout
 
 
@@ -131,3 +136,67 @@ def test_142_a_conditional_extra_site_demotes_the_summed_count(tmp_path) -> None
     cut = _generate(tmp_path, "TWO", cbl, "--seed", "1")
     assert 'VERIFY CALL "FMT" WAS CALLED 2 TIMES' not in cut
     assert '*> VERIFY CALL "FMT" WAS CALLED <count not exact' in cut
+
+
+UNR_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. UNR.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUBA" USING WS-N
+           GOBACK.
+       DEAD-PARA.
+           CALL "SUBB" USING WS-N.
+"""
+
+
+def test_143_generate_does_not_mock_a_boundary_the_case_cannot_reach(
+    tmp_path, capsys
+) -> None:
+    from mockymock.cli.main import main
+
+    cut = _generate(tmp_path, "UNR", UNR_CBL, "--seed", "1")
+    assert 'MOCK CALL "SUBA"' in cut
+    assert '"SUBB"' not in cut
+    capsys.readouterr()
+    assert main(["lint", str(tmp_path / "UNR.cbl")]) == 0, capsys.readouterr().out
+
+
+_ENTERPRISE = Path(__file__).resolve().parents[1] / "fixtures" / "enterprise"
+
+
+@pytest.mark.parametrize(
+    "program", sorted(p.stem for p in _ENTERPRISE.glob("*.cbl")), ids=str
+)
+def test_143_no_generated_enterprise_cut_has_an_unmatched_mock(
+    tmp_path, capsys, program
+) -> None:
+    from mockymock.cli.main import main
+
+    source = tmp_path / f"{program}.cbl"
+    shutil.copy(_ENTERPRISE / f"{program}.cbl", source)
+    shutil.copytree(_ENTERPRISE / "copybooks", tmp_path / "copybooks")
+    copybooks = ["--copybook-path", str(tmp_path / "copybooks")]
+    out = tmp_path / f"{program}.cut"
+    if (
+        main(
+            [
+                "generate",
+                str(source),
+                "--with-data",
+                "--seed",
+                "1",
+                "-o",
+                str(out),
+                *copybooks,
+            ]
+        )
+        != 0
+    ):
+        pytest.skip("generate --with-data does not support this program")
+    capsys.readouterr()
+    main(["lint", str(source), *copybooks])
+    assert "UNMATCHED_MOCK" not in capsys.readouterr().out

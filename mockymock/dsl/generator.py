@@ -240,10 +240,16 @@ class ProgramContext:
     #: which boundary sites can run more than once per PERFORM (a cursor
     #: FETCH in a `PERFORM ... UNTIL SQLCODE = 100` loop, issue #141).
     looped: tuple[set[str], set[int]] = field(default_factory=lambda: (set(), set()))
+    #: The parsed program and the GO TO targets the splicer turns into EXIT
+    #: PARAGRAPH -- the same two inputs `lint`'s reachability walk uses, so
+    #: `reachable_from` agrees with what lint will check (issue #143).
+    program: object = None
+    neutralized_goto: frozenset[str] = frozenset()
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
-        from mockymock.splicer.source_map import collect_boundaries
+        from mockymock.analysis.refusal import neutralized_goto_targets
+        from mockymock.splicer.source_map import collect_boundaries, collect_scope_map
 
         return cls(
             lines=list(lines),
@@ -251,7 +257,27 @@ class ProgramContext:
             capture_lines=_capture_lines_by_key(program, surface, lines),
             pictures=field_pictures(program),
             looped=looped_paragraphs_and_statements(program),
+            program=program,
+            neutralized_goto=neutralized_goto_targets(
+                program, collect_scope_map(program, lines), lines
+            ),
         )
+
+    def reachable_from(self, entry: str) -> set[str] | None:
+        """Paragraph/section names a `PERFORM entry` can execute, or None
+        when that can't be established (no program, unknown entry, or a
+        flow the reachability model itself refuses) -- callers then keep
+        every site, as before."""
+        if self.program is None:
+            return None
+        from mockymock.analysis.refusal._reachability import _reachable_paragraphs
+
+        reached, reasons = _reachable_paragraphs(
+            self.program, entry, neutralized_goto=self.neutralized_goto
+        )
+        if reasons or entry not in reached:
+            return None
+        return reached
 
     def captures_for(self, category: MockCategory, key: str) -> list[str]:
         return self.capture_lines.get((category, key), [])
@@ -1795,23 +1821,25 @@ def _sites_for_key(
     category: MockCategory,
     key: str,
     surface: MockSurface,
+    reachable: set[str] | None = None,
 ) -> list[BoundarySite]:
-    if category in EXEC_CATEGORIES:
-        return [
-            site
-            for site in surface.boundary_sites
-            if site.category is category and _unique_prefix(site, surface) == key
-        ]
     return [
         site
         for site in surface.boundary_sites
-        if site.category is category and key in site.keys
+        if site.category is category
+        and (reachable is None or site.paragraph_name in reachable)
+        and (
+            _unique_prefix(site, surface) == key
+            if category in EXEC_CATEGORIES
+            else key in site.keys
+        )
     ]
 
 
 def _conditional_call_count_keys(
     expectations: list[Expectation],
     surface: MockSurface,
+    reachable: set[str] | None = None,
 ) -> list[tuple[MockCategory, str]]:
     """Keys whose summed count (`_merged_call_counts`) is not exact: more
     than one site, at least one of them nested in an IF/EVALUATE/loop. The
@@ -1826,7 +1854,7 @@ def _conditional_call_count_keys(
             category = MockCategory(category_str)
         except ValueError:
             continue
-        sites = _sites_for_key(category, key, surface)
+        sites = _sites_for_key(category, key, surface, reachable)
         if len(sites) > 1 and any(site.nested for site in sites):
             keys.append((category, key))
     return keys
@@ -1854,8 +1882,25 @@ def _scaffold_with_bundle(
             continue
         lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
         lines.extend(f"    {line}" for line in _verification_comment_lines(scenario))
+        # Only the sites this case can reach: a mock for a boundary in a
+        # paragraph nothing PERFORMs from the entry (or reached only via a
+        # CICS HANDLE) is UNMATCHED_MOCK to the very lint this file has to
+        # pass (issue #143). Its VERIFY goes with it -- `_render_expectation`
+        # drops counts for keys that got no MOCK directive.
+        reachable = (
+            source.reachable_from(scenario.entry) if source is not None else None
+        )
+        scenario_keys = (
+            mockymock_keys
+            if reachable is None
+            else {
+                pair: site
+                for pair, site in mockymock_keys.items()
+                if site.paragraph_name in reachable
+            }
+        )
         directive_lines, declared_keys, call_count_overrides = _bundle_mock_directives(
-            scenario, surface, mockymock_keys, registry, placeholder_keys, source
+            scenario, surface, scenario_keys, registry, placeholder_keys, source
         )
         lines.extend(f"    {line}" for line in directive_lines)
         lines.append(f"    PERFORM {scenario.entry}")
@@ -1864,7 +1909,7 @@ def _scaffold_with_bundle(
             for line in _capture_stub_lines(_capture_targets(directive_lines))
         )
         expectations = _merged_call_counts(scenario.expectations)
-        for key_pair in _conditional_call_count_keys(expectations, surface):
+        for key_pair in _conditional_call_count_keys(expectations, surface, reachable):
             call_count_overrides.setdefault(
                 key_pair,
                 CallCountOverride(
