@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-04 -- READ mock scope documented; zero-baseline mutant hints
+
+`cut-dsl.md` now says outright that a mock replaces the whole statement,
+clause bodies included (a mocked `READ` never runs its own `NOT AT END`
+business logic), with a worked example; pinned by
+`tests/unit/test_read_mock_replaces_clauses.py`. `mutate` attaches a hint
+to ADD/SUBTRACT swap survivors on unsigned zero-start fields
+(`mutation/zero_baseline.py`); see [cli](cli.md) and the
+`untestable-mutant` report finding.
+
 ## 2026-10-04 -- dashboard: test results panel and plugin install/verify
 
 `mockymock dashboard` gains `--reports-dir` and two panels: the `mockymock

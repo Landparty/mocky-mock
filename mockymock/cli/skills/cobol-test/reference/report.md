@@ -44,6 +44,7 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 | `suspected-bug` | high | An INTENT assertion failed. Trace it; if the setup is right, report it. Never relabel it to get green. |
 | `test-failure` | high | A non-intent assertion failed or a case crashed. Usually the test; trace it. |
 | `missing-assertion` | medium | A mutant survived: add the assertion that would notice that line changing. |
+| `untestable-mutant` | medium | An ADD/SUBTRACT swap survived on an unsigned field every case starts at zero, where both store the same magnitude. Seed the field to a non-zero value (`MOVE 5 TO WS-COUNT`) in a case; a new assertion will not help. |
 | `untested-paragraph` | medium | Add a case that PERFORMs it. |
 | `no-assertion` | medium | A passing case asserts nothing; add EXPECT/VERIFY. |
 | `dialect` | high/medium | Note it in the hand-over; the case is GnuCOBOL-proven only. |

@@ -436,11 +436,46 @@ def run_mutation(
     for (index, _), (result, notes) in zip(to_run, ran, strict=True):
         by_index[index] = result
         _merge_notes(notes)
+    _attach_zero_baseline_hints(
+        [r for r in by_index.values() if r.status == "survived" and r.ran],
+        source_path,
+        cut_path,
+        copybook_paths,
+    )
     for index in range(len(mutants)):
         outcome.results.append(by_index[index])
         if on_progress is not None:
             on_progress(outcome.results[-1])
     return [], outcome, all_notes
+
+
+def _attach_zero_baseline_hints(
+    survivors: list[MutantResult],
+    source_path: Path,
+    cut_path: Path,
+    copybook_paths: list[str] | None,
+) -> None:
+    """Set `hint` on each survivor `zero_baseline_hint` explains. Survivors
+    the baseline's coverage decided are left alone: they sit on lines no
+    test reaches, and seeding a field would not change that. Best effort:
+    a static-check pass that fails here just means no hints, never a
+    different verdict."""
+    candidates = [r for r in survivors if r.mutant.operator == "arith-verb-swap"]
+    if not candidates:
+        return
+    from mockymock.cli.checks import run_static_checks
+    from mockymock.mutation.zero_baseline import zero_baseline_hint
+
+    try:
+        checked = run_static_checks(source_path, cut_path, copybook_paths)
+    except Exception:  # noqa: BLE001 -- hints are advisory
+        return
+    if checked.parse_result is None or checked.suite is None:
+        return
+    for result in candidates:
+        result.hint = zero_baseline_hint(
+            result.mutant, checked.parse_result.ast, checked.suite
+        )
 
 
 def _run_mutants(
