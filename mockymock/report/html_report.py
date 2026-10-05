@@ -76,6 +76,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
 .finding .title { font-weight: 600; }
 .finding .detail { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 .finding .tags { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); }
+.finding .tags .tag { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 5px; background: var(--raised); border: 1px solid var(--line); white-space: nowrap; }
+.finding .tags code.tag { font-family: var(--font-mono); }
 .pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .pill.ok { background: var(--ok-soft); color: var(--ok); }
 .pill.warn { background: var(--warn-soft); color: var(--warn); }
@@ -258,11 +260,14 @@ def _findings(report: dict[str, Any]) -> str:
         return '<p class="empty">No findings.</p>'
     out = []
     for f in items:
-        tags = [_pill(f["severity"]), f"<span>{_e(f['category'])}</span>"]
-        if f.get("line"):
-            tags.append(f"<span>line {_e(f['line'])}</span>")
+        tags = [_pill(f["severity"]), f'<code class="tag">{_e(f["category"])}</code>']
+        # The title already says "at line N" for every category that sets
+        # one (missing-assertion, dialect) -- repeating it as a bare tag
+        # reads as a second, disconnected fact instead of the same one.
+        if f.get("line") and f"line {f['line']}" not in f.get("title", ""):
+            tags.append(f'<span class="tag">line {_e(f["line"])}</span>')
         if f.get("case"):
-            tags.append(f"<span>case “{_e(f['case'])}”</span>")
+            tags.append(f'<span class="tag">case “{_e(f["case"])}”</span>')
         out.append(
             f'<article class="finding {_e(f["severity"])}"><div class="stripe"></div>'
             f'<div class="body"><div class="title">{_e(f["title"])}</div>'

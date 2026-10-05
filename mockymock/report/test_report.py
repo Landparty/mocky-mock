@@ -1112,23 +1112,34 @@ def _findings(  # noqa: C901
         # (a MOVE before the PERFORM, or a mock body) routinely reaches an
         # arm this generator cannot drive on its own, and that is not
         # something to flag as unfinished.
+        def _arm_line(arm: dict[str, Any]) -> int | None:
+            origin = arm.get("origin") or {}
+            if origin.get("line") is not None:
+                return origin["line"]
+            # No copybook expansion happened, so the arm_key's own line
+            # already counts lines in this file -- see stamp_arm_origins.
+            match = re.match(r".*@(\d+):", arm.get("arm_key") or "")
+            return int(match.group(1)) if match else None
+
+        def _describe_arm(arm: dict[str, Any], line: int | None) -> str:
+            # "<PARAGRAPH> line N (ELSE arm)" instead of the raw
+            # "PARAGRAPH@expanded-line:col/ARM" key, which is internal
+            # bookkeeping syntax, not something to read off a line.
+            arm_id = (arm.get("arm_key") or "").rsplit("/", 1)[-1] or "?"
+            where = f"line {line}" if line is not None else "an unknown line"
+            return f"{arm.get('parent_proc') or '?'} {where} ({arm_id} arm)"
+
         uncovered_lines = set((coverage or {}).get("uncoveredLines") or [])
-        still_gap: list[dict[str, Any]] = []
-        hand_covered: list[dict[str, Any]] = []
+        still_gap: list[tuple[dict[str, Any], int | None]] = []
+        hand_covered: list[tuple[dict[str, Any], int | None]] = []
         for arm in scenario_coverage.get("details") or []:
             if arm.get("status") != "missed":
                 continue
-            origin = arm.get("origin") or {}
-            arm_line = origin.get("line")
-            if arm_line is None:
-                # No copybook expansion happened, so the arm_key's own line
-                # already counts lines in this file -- see stamp_arm_origins.
-                match = re.match(r".*@(\d+):", arm.get("arm_key") or "")
-                arm_line = int(match.group(1)) if match else None
+            arm_line = _arm_line(arm)
             if coverage and arm_line is not None and arm_line not in uncovered_lines:
-                hand_covered.append(arm)
+                hand_covered.append((arm, arm_line))
             else:
-                still_gap.append(arm)
+                still_gap.append((arm, arm_line))
 
         # One finding for the whole suite: each listed arm is one line of
         # its detail, so a program with dozens of unreachable arms does
@@ -1136,8 +1147,8 @@ def _findings(  # noqa: C901
         if still_gap:
             total = scenario_coverage.get("total_arms") or len(still_gap)
             shown = "; ".join(
-                f"{arm.get('arm_key')}: {arm.get('reason') or 'no reason given'}"
-                for arm in still_gap[:8]
+                f"{_describe_arm(arm, line)}: {arm.get('reason') or 'no reason given'}"
+                for arm, line in still_gap[:8]
             )
             more = f"; and {len(still_gap) - 8} more" if len(still_gap) > 8 else ""
             add(
@@ -1149,7 +1160,7 @@ def _findings(  # noqa: C901
                 "(MOVE before the PERFORM, or a mock body).",
             )
         if hand_covered and coverage:
-            shown = "; ".join(arm.get("arm_key") or "" for arm in hand_covered[:8])
+            shown = "; ".join(_describe_arm(arm, line) for arm, line in hand_covered[:8])
             more = f"; and {len(hand_covered) - 8} more" if len(hand_covered) > 8 else ""
             add(
                 "info",
