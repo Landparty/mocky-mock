@@ -102,10 +102,9 @@ TESTCASE "0000-MAIN-PROCESS runs end-to-end via its real entry point when CBLTDL
     *> 2000-SCAN-AND-PURGE, 3000-FINALIZE), now neutralized instead of
     *> killing the suite -- see docs/2026-07-08-goback-stop-run-support-design.md.
     *> An empty-database CBLTDLI response makes WS-EOF true before the
-    *> PERFORM ... UNTIL loop's first check, so its body never runs --
-    *> driving multiple loop iterations with per-call mock sequencing is
-    *> a separate, out-of-scope capability (see that design doc's "Out of
-    *> scope" section).
+    *> PERFORM ... UNTIL loop's first check, so its body never runs. The
+    *> two cases after this one drive real loop iterations with
+    *> MOCK CALL ... ROWS (one response per call, in order).
     MOCK OPEN PURGEIN
     END-MOCK
     MOCK OPEN PURGRPT
@@ -129,3 +128,65 @@ TESTCASE "0000-MAIN-PROCESS runs end-to-end via its real entry point when CBLTDL
     EXPECT WS-SEGS-PURGED TO BE 0
     EXPECT RETURN-CODE TO BE 0
     VERIFY CALL "CBLTDLI" WAS CALLED ONCE
+
+TESTCASE "0000-MAIN-PROCESS purges one stale closed account, then stops at GB"
+    *> CBLTDLI serves three purposes here, answered in call order:
+    *> call 1 = priming GHN (finds a stale closed segment), call 2 = DLET
+    *> (succeeds), call 3 = loop GHN (TERMINAL: GB ends the loop).
+    MOCK OPEN PURGEIN
+    END-MOCK
+    MOCK OPEN PURGRPT
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ PURGEIN
+        MOVE "20260101" TO WS-CUTOFF-DATE
+        MOVE "CL" TO WS-TARGET-STATUS
+    END-MOCK
+    MOCK CALL "CBLTDLI" ROWS
+        ( CUST-STATUS = SPACES, CUST-IO-CIF = "C000000001", CUST-IO-STATUS = "CL", CUST-IO-LAST-ACT = "20250101" )
+        ( CUST-STATUS = SPACES )
+        TERMINAL ( CUST-STATUS = "GB" )
+    END-MOCK
+    MOCK CLOSE PURGEIN
+    END-MOCK
+    MOCK CLOSE PURGRPT
+    END-MOCK
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-EOF-FLAG TO BE "Y"
+    EXPECT WS-SEGS-SCANNED TO BE 1
+    EXPECT WS-SEGS-PURGED TO BE 1
+    EXPECT WS-SEGS-SKIPPED TO BE 0
+    EXPECT WS-PURGE-ERRORS TO BE 0
+    EXPECT WS-DET-ACTION TO BE "PURGED"
+    EXPECT RETURN-CODE TO BE 0
+    VERIFY CALL "CBLTDLI" WAS CALLED 3 TIMES
+
+TESTCASE "0000-MAIN-PROCESS skips an active account, then stops at GB"
+    *> call 1 = priming GHN (an active segment: not eligible, no DLET),
+    *> call 2 = loop GHN (TERMINAL: GB ends the loop).
+    MOCK OPEN PURGEIN
+    END-MOCK
+    MOCK OPEN PURGRPT
+    END-MOCK
+    MOCK WRITE RPT-RECORD
+    END-MOCK
+    MOCK READ PURGEIN
+        MOVE "20260101" TO WS-CUTOFF-DATE
+        MOVE "CL" TO WS-TARGET-STATUS
+    END-MOCK
+    MOCK CALL "CBLTDLI" ROWS
+        ( CUST-STATUS = SPACES, CUST-IO-CIF = "C000000002", CUST-IO-STATUS = "AC", CUST-IO-LAST-ACT = "20250101" )
+        TERMINAL ( CUST-STATUS = "GB" )
+    END-MOCK
+    MOCK CLOSE PURGEIN
+    END-MOCK
+    MOCK CLOSE PURGRPT
+    END-MOCK
+    PERFORM 0000-MAIN-PROCESS
+    EXPECT WS-EOF-FLAG TO BE "Y"
+    EXPECT WS-SEGS-SCANNED TO BE 1
+    EXPECT WS-SEGS-PURGED TO BE 0
+    EXPECT WS-SEGS-SKIPPED TO BE 1
+    EXPECT WS-DET-ACTION TO BE "SKIPPED"
+    VERIFY CALL "CBLTDLI" WAS CALLED 2 TIMES

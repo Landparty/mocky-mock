@@ -259,7 +259,7 @@ it raw.
   and the whole-program pass it graduates into, plus what to report at
   each step.
 - `reference/cut-dsl.md` -- every `.cut` directive: `MOCK`/`END-MOCK`
-  categories, `ROWS` cursor sugar, `EXPECT`, `VERIFY`, `FILE-STATUS IS`,
+  categories, `ROWS` (one response per call: SQL/READ/RETURN/CALL/MQ/DLI), `EXPECT`, `VERIFY`, `FILE-STATUS IS`,
   `BEFORE-ALL`/`BEFORE-EACH`, `PROVIDER`/`HEADER`/`ROW`, `*> STUB EXPECT`.
 - `reference/cli-flags.md` -- every subcommand and flag: `setup`, `init`,
   `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`,

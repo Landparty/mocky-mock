@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-09-28T00:00:00Z
+timestamp: 2026-10-05T00:00:00Z
 ---
 
 # Overview
@@ -537,16 +537,20 @@ Rules:
   inside a quoted name, so interpolating one raw would make the scaffold
   unparseable.
 
-### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`)
+### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`)
 
 `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
 END-MOCK`, `MOCK READ <file> ROWS ( FIELD = value, ... ) ( ... )
 [TERMINAL ( FIELD = value, ... )] END-MOCK`, and `MOCK RETURN <sd-file>
 ROWS ( FIELD = value, ... ) ( ... ) TERMINAL ( FIELD = value, ... )
-END-MOCK` are the only three categories `ROWS` is valid on (RETURN joined
-2026-08-17, SORT/MERGE mocking) — any other category raises
-`CutParseError` at parse time (`"ROWS is only supported for MOCK SQL,
-MOCK READ, and MOCK RETURN, not MOCK <cat>"`). All three store structured
+END-MOCK` were the first three categories `ROWS` was valid on (RETURN
+joined 2026-08-17, SORT/MERGE mocking); `CALL` (quoted static key, and
+`MOCK MQ`, which is CALL), `DYNCALL` (bare `MOCK CALL WS-PGM`) and `DLI`
+joined 2026-10-05 -- see "Per-call sequencing" below. The set is
+`model.ROWS_CATEGORIES`; any other category raises `CutParseError` at
+parse time (`"ROWS is only supported for MOCK SQL, MOCK READ, MOCK
+RETURN, MOCK CALL (static or dynamic), MOCK MQ, and MOCK DLI, not MOCK
+<cat>"`). All three store structured
 rows on `MockDirective.rows` instead of free-form `body_lines` — the two
 are mutually exclusive by construction (the parser routes lines to one or
 the other based on whether `ROWS` appeared on the opening line). Row
@@ -584,6 +588,32 @@ whole READ statement, `AT END` clause included, so without an explicit
 the loop never stops — the implicit default (`MOVE "10" TO <status field>`
 when omitted) only satisfies a FILE-STATUS-driven loop, not a flag-driven
 one.
+
+**Per-call sequencing: `MOCK CALL "X" ROWS ( ... ) TERMINAL ( ... )`
+(2026-10-05).** A plain `MOCK CALL` body answers every call of its key the
+same way, which capped a whole-program case on any program that calls one
+routine for several purposes in a loop (IMS `CBLTDLI` as priming GHN,
+DLET and loop GHN; `MQGET`; a DB2 access module) at its empty-input path.
+`ROWS` on `SEQUENCED_CALL_CATEGORIES` (`CALL`/`DYNCALL`/`DLI`, in
+`model.py`) gives one row per call, in order: row N fires when the key's
+own tally reaches N. That tally is per `(category, key)`, so it counts
+calls across **every** site the key matches (a DLI tally is per quoted
+prefix key, since that is the directive's key), and `driver.py` zeroes it
+at the start of each case, so every case restarts at row 1. These
+categories have no implicit end-of-data value (no SQLCODE, no FILE
+STATUS), so **`TERMINAL` is mandatory** -- the parser raises
+`CutParseError` ("needs a TERMINAL ...") at `END-MOCK` when it is
+missing, rather than splice a sequence whose last answer repeats forever
+and hangs the loop until `run --timeout`. `TERMINAL` validity is
+`model.TERMINAL_CATEGORIES` (READ/RETURN plus these three); SQL still
+rejects it. `CAPTURE ARG` inside a `CALL ... ROWS` body is still parsed
+(its branch precedes the row branch) and its MOVEs are emitted before the
+rows block; "last call wins" still applies. Rows only `MOVE`; a response
+needing `SET`/`IF` stays a plain body. Splice: `build_site_dispatch`'s
+SEQUENCED branch calls `build_rows_block(tally, rows, row_suffix_moves=[],
+exhausted_moves=<TERMINAL MOVEs>)`. Worked example:
+`examples/real-world/ACCTPRG/ACCTPRG.cut`'s two "then stops at GB" cases;
+tests: `tests/unit/test_call_sequencing.py`.
 
 **This grammar is hand-authoring only.** It exists for a human (or an
 editor integration) writing a `.cut` file by hand against `mockymock

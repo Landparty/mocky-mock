@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-04T00:00:00Z
+timestamp: 2026-10-05T00:00:00Z
 ---
 
 # Overview
@@ -412,7 +412,9 @@ Flags beyond the pipeline inputs:
   `--junit-xml` above applies here too.
 - `--timeout S` (default 30) — `run_binary`'s execution timeout in
   seconds, mirroring `mutate`'s own `--timeout`; previously only `mutate`
-  could shorten or lengthen the bound a hung mocked CALL is killed by.
+  could shorten or lengthen the bound a hung mocked CALL is killed by. The
+  help text now points at the fix for that hang: `MOCK CALL "X" ROWS (
+  ... ) TERMINAL ( ... )`, so the calls after the last row end the loop.
 - `--case NAME` (repeatable) / `--tag TAG` (repeatable) — run only the named
   or tagged TESTCASEs (union when both given). Selection happens in
   `run_static_checks` before any per-case refusal check, so a refused

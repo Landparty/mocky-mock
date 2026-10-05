@@ -187,8 +187,8 @@ mockymock lint ORDRPROC.cbl --cut ORDRPROC.cut     # static checks only, no Dock
 ```
 
 The full DSL — `MOCK CALL`/`PARAGRAPH`/`SECTION`, `VERIFY`, `PROVIDER`
-data tables, `BEFORE-EACH`, `FILE-STATUS IS`, the SQL `ROWS` cursor
-sugar — is documented in [`.okf/dsl.md`](.okf/dsl.md).
+data tables, `BEFORE-EACH`, `FILE-STATUS IS`, `ROWS` (one response per
+call for `SQL`/`READ`/`RETURN`/`CALL`/`MQ`/`DLI`) — is documented in [`.okf/dsl.md`](.okf/dsl.md).
 
 For a complete, example-driven walkthrough of every CLI flag and every
 `.cut` directive in one place, see the
