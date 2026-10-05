@@ -971,6 +971,18 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
     case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
+    if case_count == 0 and bundle is not None:
+        # The bundle had scenarios (zero is refused above) yet none became
+        # a TESTCASE; the empty suite would run as "0 run, 0 failed" and
+        # exit 1, so report it here, where it was made (issue #150). A
+        # plain `generate` on a program with no boundary to mock writes
+        # an empty suite on purpose and still exits 0.
+        print(
+            "mockymock generate: no scenario could be scaffolded as a test "
+            "case -- the file holds an empty TESTSUITE",
+            file=sys.stderr,
+        )
+        return 1
     if bundle is not None:
         print(
             f"mockymock generate: data-driven from a fixture bundle "
@@ -1042,21 +1054,32 @@ def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:
     `check_cics_eib_layout`'s job) and adds WORKING-STORAGE a `.cut` author
     didn't write, so say so rather than silently changing behavior. See
     docs/2026-08-27-cics-eib-linkage-support-design.md."""
-    names = ", ".join(plan.referenced_names)
-    if applied:
-        action = (
-            f"synthesized a 01 DFHEIBLK WORKING-STORAGE group (referenced: {names})"
+    blocks = [
+        (block, kind, names)
+        for block, kind, names in (
+            ("DFHEIBLK", "CICS", plan.referenced_names),
+            ("DLIDIB", "DL/I", getattr(plan, "dib_names", [])),
         )
-    else:
-        action = (
-            f"a later `run` will synthesize a 01 DFHEIBLK WORKING-STORAGE "
-            f"group (referenced: {names})"
+        if names
+    ]
+    for block, kind, names in blocks:
+        listed = ", ".join(names)
+        if applied:
+            action = (
+                f"synthesized a 01 {block} WORKING-STORAGE group "
+                f"(referenced: {listed})"
+            )
+        else:
+            action = (
+                f"a later `run` will synthesize a 01 {block} WORKING-STORAGE "
+                f"group (referenced: {listed})"
+            )
+        field_kind = "EIB" if block == "DFHEIBLK" else "DIB"
+        print(
+            f"mockymock {command}: {action} -- no {kind} translator runs in "
+            f"this pipeline, so this program's undeclared {field_kind} field "
+            f"references get real, addressable storage instead"
         )
-    print(
-        f"mockymock {command}: {action} -- no CICS translator runs in this "
-        f"pipeline, so this program's undeclared EIB field references get "
-        f"real, addressable storage instead"
-    )
 
 
 def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
@@ -1231,7 +1254,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         summarize_original,
     )
     from mockymock.report.formatters import format_console, format_junit_xml
-    from mockymock.report.json_report import build_json_report, format_json_report
+    from mockymock.report.json_report import (
+        build_json_report,
+        format_json_report,
+        not_run_case_names,
+    )
     from mockymock.report.record_rewrite import (
         build_recording_report,
         field_pictures,
@@ -1253,7 +1280,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     # Directory-wide mode: no program, no --cut -- discover every .cut
     # file under the test root and run each against its sibling program.
@@ -1379,7 +1406,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
-    reset_lines = reset_move_lines(result.ast)
+    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
     if linkage is not None:
         # LINKAGE items `neutralize` folded into WORKING-STORAGE live under
         # the LINKAGE section in `result.ast` still (the transform edited
@@ -1507,7 +1534,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         crash_detail = f"binary exited with code {executed.exit_code}"
     else:
         crash_detail = None
-    print(format_console(suite_result, crash_detail=crash_detail))
+    not_run = not_run_case_names(suite_result, suite)
+    print(format_console(suite_result, crash_detail=crash_detail, not_run=not_run))
     if executed.stderr:
         print("mockymock run: binary stderr:")
         print(executed.stderr.rstrip("\n"))
@@ -1543,7 +1571,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "run",
             "--junit-xml",
             args.junit_xml,
-            format_junit_xml(suite_result, crash_detail=crash_detail),
+            format_junit_xml(suite_result, crash_detail=crash_detail, not_run=not_run),
         )
 
     if args.json_report:
@@ -1704,7 +1732,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     # Unlike --trace's plain-text mode, there is no useful human-facing
     # equivalent of a DAP session at a terminal -- refuse rather than
@@ -1797,7 +1825,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
-    reset_lines = reset_move_lines(result.ast)
+    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
     if linkage is not None:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
@@ -2067,7 +2095,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     pair = _resolve_program_and_cut("mockymock export", args)
     if pair is None:
@@ -2145,7 +2173,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
-    reset_lines = reset_move_lines(result.ast)
+    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
     if linkage is not None:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:

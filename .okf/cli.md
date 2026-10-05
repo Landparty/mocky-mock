@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-05T00:00:00Z
+timestamp: 2026-10-05T12:00:00Z
 ---
 
 # Overview
@@ -335,6 +335,11 @@ time — the scaffold is emitted regardless — but it documents exactly which
 test cases `run` will later refuse if a case's PERFORM reaches one of these
 sites. Comment in the source explicitly frames this as "so the scaffold is
 never mistaken for complete coverage of the program's outputs."
+
+**Empty scaffold (2026-10-05, #150).** `generate --with-data` exits 1
+when the bundle had scenarios but none became a TESTCASE. A plain
+`generate` on a program with nothing to mock still writes an empty suite
+and exits 0.
 
 ## `mockymock fixtures <program> [--scenarios happy|branches|all] [--seed N] [--rows N] [--copybook-path DIR ...]`
 

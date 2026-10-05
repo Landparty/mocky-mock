@@ -106,12 +106,15 @@ DEPTMQP, DORMACCT, EODPROC, FNDTXFR, GLRECON, INTCALC, LNRECOV, LOANPMT,
 STMTGEN -- with its own README) and
 `examples/nist-cobol85/` (IC101A, IC116M, IC117M, OBIC1A) hold additional
 examples driven from real corpora -- see their own READMEs for provenance
-and what each demonstrates. **Four of the real-world programs (`ACCTMNT`,
-`ACHPROC`, `CHKCLR`, `INTCALC`) are currently refused by `run`/`lint`**
-while that README still claims "238 test cases total, 0 failing" -- the
-2026-09-05 audit's finding 2/MEDIUM, a reachability-gate regression
-bisected to `162f205` and still open; see [log.md](log.md)'s seventh-audit
-entry. `examples/flowmock/`, `examples/taxfile/`,
+and what each demonstrates. As of 2026-10-05 all 17 real-world suites
+pass (241 cases, 0 failing, GnuCOBOL 3.2): issue #150 refreshed the stale
+`.cut` files -- DORMACCT/LOANPMT SQL keys rewritten to the program's own
+quoted literals, ACCTMNT/INTCALC driven `PERFORM ... THRU` their exit
+paragraph like the real call sites (a bare PERFORM reached `3000-FINALIZE`
+through the GO TO), and CHKCLR's `FUNCTION CURRENT-DATE` business date
+asserted as `NOT TO BE SPACES` rather than a fixed literal. Nothing in CI
+runs these suites; re-check them by hand after a reachability or key
+change. `examples/flowmock/`, `examples/taxfile/`,
 `examples/statelkup/` (flow-target mocks, `BEFORE-EACH`/`FILE-STATUS IS`,
 `PROVIDER`), and `examples/cpyproc/` (a PROCEDURE DIVISION copybook -- a
 whole paragraph, not just data -- invoked via `PERFORM` and, in a second

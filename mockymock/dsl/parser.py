@@ -224,8 +224,22 @@ _CAPTURE_PREFIX_RE = re.compile(r"^CAPTURE\b")
 _BALANCED_SUBSCRIPT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\s*\([^()]*\)$")
 
 
+_DOTTED_NAME_RE = re.compile(r"[A-Za-z0-9-]\.[A-Za-z0-9]")
+
+
 class CutParseError(ValueError):
     """Raised when a .cut file doesn't match the grammar."""
+
+
+def _reject_before_perform(case, keyword: str, line_no: int) -> None:
+    """EXPECT/VERIFY are checked after the PERFORM whatever their position,
+    so one written above it would silently assert on the post-PERFORM
+    state (issue #150)."""
+    if not case.perform_target:
+        raise CutParseError(
+            f"line {line_no}: {keyword} before the PERFORM -- assertions are "
+            f"checked after it runs, so write them below the PERFORM"
+        )
 
 
 def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
@@ -236,6 +250,15 @@ def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
             f"line {line_no}: unbalanced parenthesis in data-name "
             f"{token!r} -- a subscript must be one closed (...) group, "
             f"e.g. WS-TABLE(1, 2)"
+        )
+    # `RECORD.FIELD` is how a fixture bundle writes a qualified name, not
+    # COBOL: spliced verbatim it is a cobc "incomplete expression" (issue
+    # #144), so refuse it here, at the .cut line.
+    if _DOTTED_NAME_RE.search(token.partition("(")[0]):
+        raise CutParseError(
+            f"line {line_no}: data-name {token!r} contains a '.' -- COBOL "
+            f"names have none; name the elementary item itself (e.g. "
+            f"{token.partition('(')[0].rsplit('.', 1)[-1]!r})"
         )
 
 
@@ -1084,6 +1107,14 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 raise CutParseError(f"line {line_no}: MOVE outside TESTCASE")
             _reject_unbalanced_subscript(m.group("target"), line_no)
+            if case.perform_target:
+                # Every setup MOVE runs before the PERFORM whatever its
+                # position, so a MOVE written after it would silently run
+                # first (issue #150).
+                raise CutParseError(
+                    f"line {line_no}: MOVE after the PERFORM -- setup MOVEs "
+                    f"run before it, so write them above the PERFORM"
+                )
             case.setup_moves.append((m.group("value"), m.group("target")))
         elif (m := _PERFORM_RE.match(line)) is not None:
             if case is None:
@@ -1125,6 +1156,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"followed by the value)"
                 )
             _reject_sentence_period(m.group("value"), line_no)
+            _reject_before_perform(case, "EXPECT", line_no)
             case.expectations.append(
                 ExpectDirective(
                     data_name=m.group("name"),
@@ -1144,6 +1176,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             _validate_expectation(m.group("expectation"), line_no)
+            _reject_before_perform(case, "VERIFY", line_no)
             case.verifications.append(
                 VerifyDirective(
                     category=_resolve_category(m.group("cat")),
@@ -1161,6 +1194,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             _validate_expectation(m.group("expectation"), line_no)
+            _reject_before_perform(case, "VERIFY", line_no)
             case.verifications.append(
                 VerifyDirective(
                     category=_resolve_category(m.group("cat"), bare_key=True),

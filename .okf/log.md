@@ -5,6 +5,21 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-05 -- executed bug hunt fixes (#139-#150)
+
+Twelve findings from running real programs under GnuCOBOL 3.2, one commit
+each with a regression test in `tests/unit/test_bug_hunt_m1_fixes.py`
+and an executed counterpart in `tests/integration/test_bug_hunt_m1_fixes.py`:
+mid-line markers (#139), RETURN-CODE reset (#140), looped FETCH/READ counts
+(#141), summed per-key counts (#142), per-scenario reachability (#143),
+`RECORD.FIELD` names (#144), DLIDIB and DL/I get-next loop ends (#145),
+U+FFFD goldens (#146), FILE/LOCAL-STORAGE reset (#147), SQLCA reset and
+SQL status bodies (#148), READ INTO / WRITE FROM moves (#149), and the
+#150 bundle (.cut statement order, DLITCBL entry fallback, not-run cases
+in console/JUnit, real-world examples back to 241 passing cases). Updated
+[dsl](dsl.md), [splicer](splicer.md), [report](report.md),
+[analysis](analysis.md), [cli](cli.md), [testing](testing.md).
+
 ## 2026-10-05 -- `MOCK CALL ... ROWS`: one response per call
 
 `ROWS ( ... ) TERMINAL ( ... )` now works on `MOCK CALL "X"`, `MOCK MQ`,

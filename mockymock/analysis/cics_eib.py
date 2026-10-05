@@ -25,7 +25,7 @@ macro calls, an undeclared `DFHCOMMAREA`) -- that is
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from cobolparser.analysis.unused_variables import collect_declared_items
 
@@ -95,6 +95,30 @@ _EIB_NAME_RE = re.compile(
 )
 
 
+# The EXEC DLI interface block (DIB). Like the EIB, the DL/I translator
+# normally supplies it, so a program testing DIBSTAT after an EXEC DLI call
+# did not compile under mockymock -- behind a clean lint (issue #145).
+DLIDIB_NAME = "DLIDIB"
+DIB_FIELD_NAMES: frozenset[str] = frozenset(
+    {
+        "DIBVER",
+        "DIBSTAT",
+        "DIBSEGM",
+        "DIBSEGLV",
+        "DIBKFBL",
+        "DIBDBDNM",
+        "DIBDBORG",
+    }
+)
+_DIB_NAMES = DIB_FIELD_NAMES | {DLIDIB_NAME}
+_DIB_NAME_RE = re.compile(
+    "(?<![A-Za-z0-9-])(?:"
+    + "|".join(sorted((re.escape(n) for n in _DIB_NAMES), key=len, reverse=True))
+    + ")(?![A-Za-z0-9-])",
+    re.IGNORECASE,
+)
+
+
 @dataclass
 class CicsEibPlan:
     """Everything `splicer.cics_eib`'s synthesis functions need.
@@ -106,6 +130,10 @@ class CicsEibPlan:
     """
 
     referenced_names: list[str]
+    #: DL/I interface block names referenced and undeclared (issue #145);
+    #: empty when the program needs no DIB. Synthesized the same way, as a
+    #: `01 DLIDIB.` group.
+    dib_names: list[str] = field(default_factory=list)
 
 
 def cics_eib_plan(program, lines: list[str]) -> CicsEibPlan | None:
@@ -118,11 +146,16 @@ def cics_eib_plan(program, lines: list[str]) -> CicsEibPlan | None:
     """
     text = "\n".join(lines)
     referenced = sorted({m.group(0).upper() for m in _EIB_NAME_RE.finditer(text)})
-    if not referenced:
+    dib = sorted({m.group(0).upper() for m in _DIB_NAME_RE.finditer(text)})
+    if not referenced and not dib:
         return None
 
     declared = {item.name.upper() for item in collect_declared_items(program)}
     if declared & set(referenced):
+        referenced = []
+    if declared & _DIB_NAMES:
+        dib = []
+    if not referenced and not dib:
         return None
 
-    return CicsEibPlan(referenced_names=referenced)
+    return CicsEibPlan(referenced_names=referenced, dib_names=dib)

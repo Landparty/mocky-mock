@@ -122,7 +122,7 @@ def _run_suite_once(
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     with sandbox_dir_maybe_kept(root=docker_toolchain.WORK_ROOT, keep=False) as tmp:
         source_path = tmp / source_name
@@ -170,7 +170,7 @@ def _run_suite_once(
         )
         lines, _ = transform_data_division_exec(lines, copybook_paths=copybook_paths)
 
-        reset_lines = reset_move_lines(result.ast)
+        reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
         if checked.linkage is not None:
             reset_lines = reset_lines + extra_reset_lines(checked.linkage)
         if checked.cics_eib is not None:

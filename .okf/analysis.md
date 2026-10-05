@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; the refusal/ package decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-09-28T00:00:00Z
+timestamp: 2026-10-05T12:00:00Z
 ---
 
 # Overview
@@ -440,6 +440,15 @@ against the naive scan it replaced.
 **`immediately_follows` didn't tolerate a phantom `"."` paragraph between enclosing and target (2026-08-27).** cobolparser inserts an empty-artifact paragraph literally named `"."` for a bare `.` line sitting on its own between a paragraph's last statement and the next paragraph's header (a stray period, not a real code line) — `_expand_thru_range` already tolerates this ("phantom '.' members ride along; they are empty artifacts"), but `find_goto_exit_plans`'s own `immediately_follows(enclosing_name, target_name)` required `target_idx == enclosing_idx + 1` exactly, so a phantom sitting between an otherwise-adjacent `GO TO`'s enclosing paragraph and its exit-only target (e.g. `2212-VALIDER-MNT-CAPITAL` / phantom `.` / `2212-EXIT`) broke the adjacency check and cascaded into declining that target and every paragraph transitively chained after it (the 2026-08-26 fixpoint loop above narrows `_go_to_targets` only by targets it actually confirms). Fixed: `immediately_follows` now accepts any run of ONLY phantom `"."` paragraphs strictly between `enclosing_idx` and `target_idx`, not just a literal `+ 1` gap. Pinned by `tests/unit/test_goto_exit.py::test_find_goto_exit_plans_tolerates_a_phantom_paragraph_before_the_target`.
 
 SECTION-scoped enclosing paragraphs are declined, not supported: an independent code review (same day, before Docker verification) found the first shipped version applied `EXIT SECTION` unsoundly — skipping a cleanup paragraph that followed the exit-only paragraph inside the same section, and applying the splice even in `find_terminator_plans`' own unverified "shape 3" (a `.cut` `perform_target` naming the section's first paragraph directly). The same review found the adjacency requirement above was undocumented-only in the first version, not enforced — a `PERFORM ... THRU <exit-paragraph>` range covering a real intermediate paragraph got a clean plan and a silently changed early-exit path. See [splicer](splicer.md#go-to-to-exit-paragraph-simplification) for the span-computation subtlety this feature's first implementation also got wrong (a nested GO TO needs `nested_statement_span`, not `statement_span`, or it silently swallows the enclosing `END-IF`) and `docs/2026-08-17-goto-exit-paragraph-simplification-design.md`'s two Revision notes for the full account and current verification status.
+
+## Looped sites (`analysis/loops.py`, 2026-10-05)
+
+`looped_paragraphs_and_statements(program)` returns the paragraphs
+reachable from a looping PERFORM's target (UNTIL/VARYING/TIMES) and the
+ids of statements inside a looping inline PERFORM body; `site_in_loop`
+tests one `BoundarySite`. Used by the bundle scaffold (#141, #142, #145)
+to decide when a call count is exact. It imports the refusal package's
+`_reachability` lazily (refusal imports the generator, which imports this).
 
 ## Assertion labels and dialect risk (2026-10-04)
 

@@ -48,13 +48,20 @@ gets its own TESTCASE, even near-duplicates.
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass, field
 
-from mockymock.analysis.mock_surface import BoundarySite, MockSurface
+from mockymock.analysis.loops import looped_paragraphs_and_statements, site_in_loop
+from mockymock.analysis.mock_surface import (
+    BoundarySite,
+    MockSurface,
+    _all_paragraphs,
+)
 from mockymock.dsl.fixture_bundle import (
     BoundaryFixture,
     Expectation,
+    FieldSpec,
     FixtureBundle,
     Scenario,
 )
@@ -202,6 +209,34 @@ def _replicated_at_end_statements(statement: object) -> list[str]:
 # --- Lifting a READ's own AT END imperative verbatim -------------------------
 
 
+def _data_name_counts(program) -> dict[str, int]:
+    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+
+    try:
+        items = compute_program_data_items(program).get("items", [])
+    except Exception:  # pragma: no cover - never break generate over this
+        return {}
+    counts: dict[str, int] = {}
+    for item in items:
+        name = str(item.get("name") or "").upper()
+        if name and name != "FILLER":
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _qualified_reference(qualified_name: str, column: str, leaf: str) -> str:
+    """`IN-REC.CUST-ID` -> `CUST-ID OF IN-REC`, keeping any subscript the
+    bundle's column carries (`CUST-ID(2)` -> `CUST-ID OF IN-REC (2)`): the
+    bundle's dotted form is not COBOL, and a bare leaf declared under two
+    records is "ambiguous" to cobc (issue #144)."""
+    parts = [part for part in qualified_name.split(".") if part]
+    if len(parts) < 2:
+        return column
+    reference = " OF ".join(reversed(parts))
+    subscript = column[len(leaf) :] if column.upper().startswith(leaf.upper()) else ""
+    return f"{reference} {subscript.strip()}" if subscript.strip() else reference
+
+
 @dataclass(frozen=True)
 class ProgramContext:
     """Facts about the program under test that the scaffold needs beyond
@@ -235,17 +270,66 @@ class ProgramContext:
     #: `field_equals` value is rendered from the field's real type rather
     #: than from the text's shape -- see `_render_expectation`.
     pictures: dict[str, str] = field(default_factory=dict)
+    #: `analysis.loops.looped_paragraphs_and_statements` for the program:
+    #: which boundary sites can run more than once per PERFORM (a cursor
+    #: FETCH in a `PERFORM ... UNTIL SQLCODE = 100` loop, issue #141).
+    looped: tuple[set[str], set[int]] = field(default_factory=lambda: (set(), set()))
+    #: The parsed program and the GO TO targets the splicer turns into EXIT
+    #: PARAGRAPH -- the same two inputs `lint`'s reachability walk uses, so
+    #: `reachable_from` agrees with what lint will check (issue #143).
+    program: object = None
+    neutralized_goto: frozenset[str] = frozenset()
+    #: Name (uppercased, unqualified) -> how many data items declare it,
+    #: so a bundle's `RECORD.FIELD` name is rendered as a bare leaf only
+    #: when the leaf is unique (issue #144).
+    name_counts: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
-        from mockymock.splicer.source_map import collect_boundaries
+        from mockymock.analysis.refusal import neutralized_goto_targets
+        from mockymock.splicer.source_map import collect_boundaries, collect_scope_map
 
         return cls(
             lines=list(lines),
             statement_starts=collect_boundaries(program),
             capture_lines=_capture_lines_by_key(program, surface, lines),
             pictures=field_pictures(program),
+            looped=looped_paragraphs_and_statements(program),
+            program=program,
+            neutralized_goto=neutralized_goto_targets(
+                program, collect_scope_map(program, lines), lines
+            ),
+            name_counts=_data_name_counts(program),
         )
+
+    def references(self, name: str) -> bool:
+        """True when `name` appears as a whole COBOL word in the program."""
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9-]){re.escape(name)}(?![A-Za-z0-9-])", re.IGNORECASE
+        )
+        return any(pattern.search(line) for line in self.lines)
+
+    def is_unique_name(self, name: str) -> bool:
+        """True unless `name` is known to be declared more than once. An
+        empty map (no program, or a layout walk that failed) keeps the old
+        behavior: every name is treated as unique."""
+        return self.name_counts.get(name.upper(), 1) <= 1
+
+    def reachable_from(self, entry: str) -> set[str] | None:
+        """Paragraph/section names a `PERFORM entry` can execute, or None
+        when that can't be established (no program, unknown entry, or a
+        flow the reachability model itself refuses) -- callers then keep
+        every site, as before."""
+        if self.program is None:
+            return None
+        from mockymock.analysis.refusal._reachability import _reachable_paragraphs
+
+        reached, reasons = _reachable_paragraphs(
+            self.program, entry, neutralized_goto=self.neutralized_goto
+        )
+        if reasons or entry not in reached:
+            return None
+        return reached
 
     def captures_for(self, category: MockCategory, key: str) -> list[str]:
         return self.capture_lines.get((category, key), [])
@@ -807,7 +891,41 @@ def _directive_for(
         # EXEC statement whose unique prefix runs into a string literal
         # containing a double quote cannot be written as a quoted key.
         return None
-    return f'MOCK {category.value} "{prefix}"', _placeholder_body_for(category, prefix)
+    body = _placeholder_body_for(category, prefix)
+    if category is MockCategory.DLI:
+        body = body + _dli_loop_end_lines(site, context, None)
+    return f'MOCK {category.value} "{prefix}"', body
+
+
+#: DL/I get-next calls and the DIBSTAT each returns once nothing is left:
+#: GB (end of database) for GN/GHN, GE (no more under this parent) for the
+#: within-parent forms.
+_DLI_GET_NEXT_END = {"GN": "GB", "GHN": "GB", "GNP": "GE", "GHNP": "GE"}
+
+
+def _dli_loop_end_lines(
+    site: BoundarySite,
+    context: ProgramContext | None,
+    tally: str | None,
+) -> list[str]:
+    """A get-next DL/I call in a loop, in a program that tests DIBSTAT:
+    an empty mock body leaves DIBSTAT blank ("found") on every call, so a
+    `PERFORM UNTIL` scan never ends (EXECDLI, found with #145). Report the
+    end status after the first call -- with a tally, so one segment is
+    still returned -- or on the first call when no tally name is known."""
+    if context is None or not context.references("DIBSTAT"):
+        return []
+    words = (site.match_text or "").split()
+    end_status = _DLI_GET_NEXT_END.get(words[0].upper()) if words else None
+    if end_status is None or not site_in_loop(site, context.looped):
+        return []
+    if tally is None:
+        return [f'MOVE "{end_status}" TO DIBSTAT']
+    return [
+        f"IF {tally} > 1",
+        f'    MOVE "{end_status}" TO DIBSTAT',
+        "END-IF",
+    ]
 
 
 def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
@@ -965,9 +1083,34 @@ def _warn_on_key_mismatch(
             print(f"    {category} {key}", file=sys.stderr)
 
 
+def _first_paragraph(program) -> str | None:
+    """The first named PROCEDURE DIVISION paragraph, by source line.
+
+    The fallback entry for a scenario cobol-parser left without one: an IMS
+    program opening with `ENTRY 'DLITCBL' USING ...` comes back with
+    `entry=''` because the ENTRY statement sits in an unnamed leading
+    paragraph (issue #150)."""
+    procedure = program.get_division("PROCEDURE") if program is not None else None
+    if procedure is None:
+        return None
+    named = [
+        paragraph
+        for paragraph in _all_paragraphs(procedure)
+        if getattr(paragraph, "paragraph_name", "")
+    ]
+    if not named:
+        return None
+    first = min(
+        named,
+        key=lambda paragraph: getattr(getattr(paragraph, "location", None), "line", 0),
+    )
+    return str(first.paragraph_name)
+
+
 def _build_shadow_tally_registry(
     bundle: FixtureBundle,
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
+    fallback_entry: str | None = None,
 ) -> TallyRegistry:
     """A `TallyRegistry` built over every (category, key) that will
     actually get a MOCK directive in the generated file, in the same
@@ -981,7 +1124,7 @@ def _build_shadow_tally_registry(
     case = MockTestCase(name="_shadow", perform_target="_SHADOW")
     seen: set[tuple[MockCategory, str]] = set()
     for scenario in bundle.scenarios:
-        if not scenario.entry:
+        if not (scenario.entry or fallback_entry):
             continue
         for fixture in scenario.fixtures:
             try:
@@ -992,6 +1135,12 @@ def _build_shadow_tally_registry(
             if pair in mockymock_keys and pair not in seen:
                 seen.add(pair)
                 case.mocks.append(MockDirective(category, fixture.key))
+    # Then the placeholder-mocked keys, in the order their directives are
+    # written: a looped DL/I get-next placeholder body needs its tally too.
+    for pair in mockymock_keys:
+        if pair not in seen:
+            seen.add(pair)
+            case.mocks.append(MockDirective(*pair))
     suite = MockTestSuite(name="_shadow", test_cases=[case])
     return TallyRegistry(suite)
 
@@ -1009,10 +1158,20 @@ def _bundle_rendered_value(raw_value: str, field_category: str) -> str:
     return f'"{escaped}"'
 
 
-def _row_move_lines(row: dict[str, str], fixture: BoundaryFixture) -> list[str]:
+def _row_target(spec: FieldSpec, source: ProgramContext | None) -> str:
+    if source is None or source.is_unique_name(spec.name):
+        return spec.column
+    return _qualified_reference(spec.qualified_name, spec.column, spec.name)
+
+
+def _row_move_lines(
+    row: dict[str, str],
+    fixture: BoundaryFixture,
+    source: ProgramContext | None = None,
+) -> list[str]:
     return [
         f"MOVE {_bundle_rendered_value(row.get(spec.column, ''), spec.category)} "
-        f"TO {spec.column}"
+        f"TO {_row_target(spec, source)}"
         for spec in fixture.layout
     ]
 
@@ -1022,14 +1181,29 @@ def _status_only_body(fixture: BoundaryFixture) -> list[str]:
     code. The implicit default-success MOVE (injector.build_site_dispatch)
     already covers "00"/"0" -- only a non-default status needs the
     `FILE-STATUS IS` sugar (always usable as a quoted 2-char literal, no
-    need to map to a mnemonic name)."""
+    need to map to a mnemonic name).
+
+    SQL (OPEN/CLOSE/COMMIT of a cursor or unit of work) has no implicit
+    default: its body always sets SQLCODE, or the value a previous call or
+    case left there leaks into this one (issue #148)."""
+    if fixture.category == "SQL":
+        return _sql_status_lines(fixture)
     for code in fixture.status.values():
         if code not in _DEFAULT_SUCCESS_CODES:
             return [f'FILE-STATUS IS "{code}"']
     return []
 
 
-def _single_row_body(fixture: BoundaryFixture) -> list[str]:
+def _sql_status_lines(fixture: BoundaryFixture) -> list[str]:
+    lines = [f"MOVE {code} TO {name}" for name, code in fixture.status.items()]
+    if not any(name.upper() == "SQLCODE" for name in fixture.status):
+        lines.append("MOVE 0 TO SQLCODE")
+    return lines
+
+
+def _single_row_body(
+    fixture: BoundaryFixture, source: ProgramContext | None = None
+) -> list[str]:
     """ACCEPT / CALL / DYNCALL / CICS / DLI (always single-invocation), and
     SQL's own single-row/status-override fallback (see `_sql_wants_rows`).
     MOVEs every field the fixture generated, then -- SQL only -- an
@@ -1038,11 +1212,12 @@ def _single_row_body(fixture: BoundaryFixture) -> list[str]:
     sets SQLCODE itself, always)."""
     body: list[str] = []
     if fixture.sequence:
-        body.extend(_row_move_lines(fixture.sequence[0], fixture))
-    is_sql = fixture.category == "SQL"
+        body.extend(_row_move_lines(fixture.sequence[0], fixture, source))
+    if fixture.category == "SQL":
+        body.extend(_sql_status_lines(fixture))
+        return body
     for field_name, code in fixture.status.items():
-        rendered = code if is_sql else f'"{code}"'
-        body.append(f"MOVE {rendered} TO {field_name}")
+        body.append(f'MOVE "{code}" TO {field_name}')
     return body
 
 
@@ -1156,13 +1331,13 @@ def _read_body(
         return _read_exhaustion_lines(fixture, replicated, at_end, lifted)
 
     if len(sequence) == 1 and not needs_exhaustion_branch:
-        return _row_move_lines(sequence[0], fixture)
+        return _row_move_lines(sequence[0], fixture, source)
 
     tally = registry.name(category, fixture.key)
     body = ["EVALUATE TRUE"]
     for index, row in enumerate(sequence, start=1):
         body.append(f"    WHEN {tally} = {index}")
-        body.extend(f"        {line}" for line in _row_move_lines(row, fixture))
+        body.extend(f"        {line}" for line in _row_move_lines(row, fixture, source))
     if needs_exhaustion_branch:
         body.append("    WHEN OTHER")
         body.extend(
@@ -1173,7 +1348,23 @@ def _read_body(
     return body
 
 
-def _sql_wants_rows(fixture: BoundaryFixture) -> bool:
+def _is_looped_fetch(
+    fixture: BoundaryFixture, site: BoundarySite, source: ProgramContext | None
+) -> bool:
+    """A cursor FETCH that runs inside a looping PERFORM (issue #141). Its
+    mock must report SQLCODE 100 once the generated rows run out -- a
+    single-row body reporting success on every call never ends the loop
+    -- and it is called once more than it has rows: the exhausting call.
+    Other SQL in a loop (a per-record SELECT INTO) is left alone: making
+    its second call "not found" would change what the program does."""
+    if source is None or not fixture.sequence:
+        return False
+    if not fixture.key.upper().startswith("FETCH"):
+        return False
+    return site_in_loop(site, source.looped)
+
+
+def _sql_wants_rows(fixture: BoundaryFixture, looped_fetch: bool = False) -> bool:
     """`ROWS (...)` sugar hardcodes SQLCODE 0-on-match/100-on-exhaustion --
     not in `splicer/injector.build_rows_block` itself (generalized to a
     `row_suffix_moves`/`exhausted_moves` parameter pair so it can also
@@ -1183,7 +1374,7 @@ def _sql_wants_rows(fixture: BoundaryFixture) -> bool:
     an error-status override, so a scenario pinning one (an "error status"
     fixed-family scenario, or a branch witness on SQLCODE) must fall back
     to a plain body with an explicit MOVE instead."""
-    return len(fixture.sequence) > 1 and all(
+    return (len(fixture.sequence) > 1 or looped_fetch) and all(
         code in _DEFAULT_SUCCESS_CODES for code in fixture.status.values()
     )
 
@@ -1250,6 +1441,10 @@ class CallCountOverride:
 
     count: int | None = None
     demote_reason: str | None = None
+    #: False when the override comes from a looped FETCH's own exhausting
+    #: call (issue #141) rather than a --placeholder downgrade; only the
+    #: wording of the cascade demotion below depends on it.
+    from_placeholder: bool = True
 
 
 def _bundle_directive_for(
@@ -1329,6 +1524,9 @@ def _bundle_directive_for(
         return None
 
     call_count_override: CallCountOverride | None = None
+    looped_fetch = category is MockCategory.SQL and _is_looped_fetch(
+        fixture, site, source
+    )
     if (fixture.category, fixture.key) in placeholder_keys:
         if category is MockCategory.READ:
             at_end = getattr(site.statement, "at_end_clause", None) or []
@@ -1349,7 +1547,7 @@ def _bundle_directive_for(
                         "known by construction"
                     )
                 )
-        elif category is MockCategory.SQL and _sql_wants_rows(fixture):
+        elif category is MockCategory.SQL and _sql_wants_rows(fixture, looped_fetch):
             body = list(_SQL_ROWS_EXHAUSTED_BODY)
             call_count_override = CallCountOverride(count=1)
         else:
@@ -1358,10 +1556,21 @@ def _bundle_directive_for(
         body = _status_only_body(fixture)
     elif category is MockCategory.READ:
         body = _read_body(fixture, registry, category, site, source)
-    elif category is MockCategory.SQL and _sql_wants_rows(fixture):
-        return _sql_rows_directive(category, fixture.key, fixture), None
+    elif category is MockCategory.SQL and _sql_wants_rows(fixture, looped_fetch):
+        # A looped FETCH runs once per row plus the call that finds the
+        # cursor exhausted; the bundle counts only the rows.
+        override = (
+            CallCountOverride(count=len(fixture.sequence) + 1, from_placeholder=False)
+            if looped_fetch
+            else None
+        )
+        return _sql_rows_directive(category, fixture.key, fixture), override
     else:
-        body = _single_row_body(fixture)
+        body = _single_row_body(fixture, source)
+        if category is MockCategory.DLI and registry.known(category, fixture.key):
+            body = body + _dli_loop_end_lines(
+                site, source, registry.name(category, fixture.key)
+            )
 
     body = _with_captures(category, fixture.key, body, source)
     lines = [_directive_header(category, fixture.key, site)]
@@ -1522,6 +1731,10 @@ def _bundle_mock_directives(
         if placeholder is None:
             continue
         directive_line, body = placeholder
+        if category is MockCategory.DLI and registry.known(category, key):
+            body = body + _dli_loop_end_lines(
+                site, source, registry.name(category, key)
+            )
         lines.append(directive_line)
         lines.extend(f"    {line}" for line in body)
         lines.append("END-MOCK")
@@ -1542,7 +1755,7 @@ def _bundle_mock_directives(
     # PERFORM from inside that paragraph still isn't caught. Demoting
     # reuses the same `*>` comment `CallCountOverride.demote_reason`
     # already renders for a downgraded boundary's own unknowable count.
-    for loop_category, loop_key in list(call_count_overrides.keys()):
+    for (loop_category, loop_key), loop_override in list(call_count_overrides.items()):
         loop_site = mockymock_keys.get((loop_category, loop_key))
         if loop_site is None:
             continue
@@ -1556,13 +1769,19 @@ def _bundle_mock_directives(
                 continue
             if other_site.paragraph_name != loop_site.paragraph_name:
                 continue
+            why = (
+                "downgraded by --placeholder -- how many times that loop "
+                "actually executes changed"
+                if loop_override.from_placeholder
+                else "a cursor loop that runs once more than it has rows"
+            )
             call_count_overrides[other_key_pair] = CallCountOverride(
                 demote_reason=(
                     f"in the same paragraph as {loop_category.value}:"
-                    f"{loop_key}, downgraded by --placeholder -- how many "
-                    f"times that loop actually executes changed, so this "
-                    f"call count is no longer known by construction"
-                )
+                    f"{loop_key}, {why}, so this call count is no longer "
+                    f"known by construction"
+                ),
+                from_placeholder=loop_override.from_placeholder,
             )
     return lines, declared_keys, call_count_overrides
 
@@ -1638,6 +1857,7 @@ def _render_expectation(
     ) = None,
     counted_boundaries: set[tuple[MockCategory, str]] | None = None,
     pictures: dict[str, str] | None = None,
+    source: ProgramContext | None = None,
 ) -> list[str]:
     """Tier 1 (`call_count`) -> `VERIFY ... WAS CALLED n TIMES`; tier 2
     (`field_equals`) -> `EXPECT <name> TO BE <value>`; tier 3 (`stub`) ->
@@ -1689,8 +1909,9 @@ def _render_expectation(
         if override is not None and override.demote_reason is not None:
             return [
                 f"*> VERIFY {directive_text} WAS CALLED <count not exact "
-                f"by construction after --placeholder downgrade -- "
-                f"{override.demote_reason}>"
+                f"by construction"
+                f"{' after --placeholder downgrade' if override.from_placeholder else ''}"
+                f" -- {override.demote_reason}>"
             ]
         value = (
             override.count
@@ -1699,6 +1920,19 @@ def _render_expectation(
         )
         return [f"VERIFY {directive_text} WAS CALLED {value} TIMES"]
     if expectation.kind == "field_equals":
+        ref = _expect_name(expectation.ref, source)
+        if ref is None:
+            return [
+                f"*> STUB EXPECT {expectation.ref} -- the program folds it to "
+                f"{expectation.value}, but its name is declared under more "
+                f"than one record and EXPECT takes no OF qualification"
+            ]
+        expectation = Expectation(
+            kind=expectation.kind,
+            ref=ref,
+            value=expectation.value,
+            note=expectation.note,
+        )
         # The PICTURE decides bare vs quoted, exactly as it does for
         # `run --record-expectations`: a folded "-3" / "1.5" / "007" held in
         # a PIC X field rendered bare is an EXPECT that fails on the very
@@ -1718,7 +1952,117 @@ def _render_expectation(
         if pair is not None and pair in (counted_boundaries or set()):
             return []  # already asserted by this case's own VERIFY ... WAS CALLED
         return [f"*> STUB EXPECT {_describe_boundary_ref(expectation.ref)}{note}"]
-    return [f"*> STUB EXPECT {expectation.ref}{note}"]
+    return [
+        f"*> STUB EXPECT {_expect_name(expectation.ref, source) or expectation.ref}{note}"
+    ]
+
+
+def _expect_name(ref: str, source: ProgramContext | None) -> str | None:
+    """A bundle names a field `RECORD.FIELD` (its schema's qualified form),
+    which spliced into an EXPECT is a cobc syntax error (issue #144). The
+    leaf is the COBOL name when it is unique; None when it is declared
+    under more than one record -- the DSL has no `OF`."""
+    base, paren, rest = ref.partition("(")
+    if "." not in base:
+        return ref
+    leaf = base.rsplit(".", 1)[-1].strip()
+    if source is not None and not source.is_unique_name(leaf):
+        return None
+    return leaf + paren + rest
+
+
+def _merged_call_counts(expectations: list[Expectation]) -> list[Expectation]:
+    """The bundle carries one `call_count` per call SITE, but a VERIFY (and
+    the splicer's tally) counts per (category, key): two `CALL "FMT"`
+    statements rendered as two `VERIFY ... 1 TIMES` lines that both failed
+    with "got 2" (issue #142). Sum them into one expectation per ref, kept
+    at the first one's position."""
+    merged: list[Expectation] = []
+    by_ref: dict[str, Expectation] = {}
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            merged.append(expectation)
+            continue
+        existing = by_ref.get(expectation.ref)
+        if existing is None:
+            copy = Expectation(
+                kind=expectation.kind,
+                ref=expectation.ref,
+                value=expectation.value,
+                note=expectation.note,
+            )
+            by_ref[expectation.ref] = copy
+            merged.append(copy)
+        elif isinstance(existing.value, int) and isinstance(expectation.value, int):
+            existing.value += expectation.value
+    return merged
+
+
+def _sites_for_key(
+    category: MockCategory,
+    key: str,
+    surface: MockSurface,
+    reachable: set[str] | None = None,
+) -> list[BoundarySite]:
+    return [
+        site
+        for site in surface.boundary_sites
+        if site.category is category
+        and (reachable is None or site.paragraph_name in reachable)
+        and (
+            _unique_prefix(site, surface) == key
+            if category in EXEC_CATEGORIES
+            else key in site.keys
+        )
+    ]
+
+
+def _conditional_call_count_keys(
+    expectations: list[Expectation],
+    surface: MockSurface,
+    reachable: set[str] | None = None,
+) -> list[tuple[MockCategory, str]]:
+    """Keys whose summed count (`_merged_call_counts`) is not exact: more
+    than one site, at least one of them nested in an IF/EVALUATE/loop. The
+    bundle counts every site once per scenario whether or not its branch
+    runs (STMTGEN's page-break CALL), so the sum would overshoot."""
+    keys: list[tuple[MockCategory, str]] = []
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        try:
+            category = MockCategory(category_str)
+        except ValueError:
+            continue
+        sites = _sites_for_key(category, key, surface, reachable)
+        if len(sites) > 1 and any(site.nested for site in sites):
+            keys.append((category, key))
+    return keys
+
+
+def _unlooped_read_counts(
+    expectations: list[Expectation],
+    surface: MockSurface,
+    reachable: set[str] | None,
+    source: ProgramContext,
+) -> dict[tuple[MockCategory, str], int]:
+    """A READ outside any loop (a run-parameter card read once at start-up)
+    runs once per site, whatever number of rows the bundle generated for
+    it; the bundle counts the rows (DORMACCT: "10 TIMES, got 1")."""
+    counts: dict[tuple[MockCategory, str], int] = {}
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        if category_str != MockCategory.READ.value:
+            continue
+        sites = _sites_for_key(MockCategory.READ, key, surface, reachable)
+        if sites and not any(
+            site.nested or site_in_loop(site, source.looped) for site in sites
+        ):
+            counts[(MockCategory.READ, key)] = len(sites)
+    return counts
 
 
 def _scaffold_with_bundle(
@@ -1730,12 +2074,14 @@ def _scaffold_with_bundle(
 ) -> str:
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(mockymock_keys, _bundle_boundary_keys(bundle))
-    registry = _build_shadow_tally_registry(bundle, mockymock_keys)
+    fallback_entry = _first_paragraph(source.program) if source is not None else None
+    registry = _build_shadow_tally_registry(bundle, mockymock_keys, fallback_entry)
 
     lines = [f'TESTSUITE "{_quote_safe(suite_name)}"', ""]
     skipped_scenarios = 0
     for scenario in bundle.scenarios:
-        if not scenario.entry:
+        entry = scenario.entry or fallback_entry
+        if not entry:
             # Nothing to PERFORM -- can't scaffold a TESTCASE for this
             # scenario at all. Should not happen for a real program with a
             # non-empty PROCEDURE DIVISION; reported below, not per-scenario.
@@ -1743,19 +2089,54 @@ def _scaffold_with_bundle(
             continue
         lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
         lines.extend(f"    {line}" for line in _verification_comment_lines(scenario))
+        # Only the sites this case can reach: a mock for a boundary in a
+        # paragraph nothing PERFORMs from the entry (or reached only via a
+        # CICS HANDLE) is UNMATCHED_MOCK to the very lint this file has to
+        # pass (issue #143). Its VERIFY goes with it -- `_render_expectation`
+        # drops counts for keys that got no MOCK directive.
+        reachable = source.reachable_from(entry) if source is not None else None
+        scenario_keys = (
+            mockymock_keys
+            if reachable is None
+            else {
+                pair: site
+                for pair, site in mockymock_keys.items()
+                if site.paragraph_name in reachable
+            }
+        )
         directive_lines, declared_keys, call_count_overrides = _bundle_mock_directives(
-            scenario, surface, mockymock_keys, registry, placeholder_keys, source
+            scenario, surface, scenario_keys, registry, placeholder_keys, source
         )
         lines.extend(f"    {line}" for line in directive_lines)
-        lines.append(f"    PERFORM {scenario.entry}")
+        lines.append(f"    PERFORM {entry}")
         lines.extend(
             f"    {line}"
             for line in _capture_stub_lines(_capture_targets(directive_lines))
         )
+        expectations = _merged_call_counts(scenario.expectations)
+        for key_pair in _conditional_call_count_keys(expectations, surface, reachable):
+            call_count_overrides.setdefault(
+                key_pair,
+                CallCountOverride(
+                    demote_reason=(
+                        "called from several sites, some inside an IF/"
+                        "EVALUATE/loop, so how many of them this case "
+                        "reaches is not known"
+                    ),
+                    from_placeholder=False,
+                ),
+            )
+        if source is not None:
+            for key_pair, count in _unlooped_read_counts(
+                expectations, surface, reachable, source
+            ).items():
+                call_count_overrides.setdefault(
+                    key_pair, CallCountOverride(count=count, from_placeholder=False)
+                )
         counted_boundaries = _rendered_call_count_refs(
-            scenario.expectations, declared_keys, call_count_overrides
+            expectations, declared_keys, call_count_overrides
         )
-        for expectation in scenario.expectations:
+        for expectation in expectations:
             lines.extend(
                 f"    {line}"
                 for line in _render_expectation(
@@ -1764,6 +2145,7 @@ def _scaffold_with_bundle(
                     call_count_overrides,
                     counted_boundaries,
                     source.pictures if source is not None else None,
+                    source,
                 )
             )
         lines.append("")

@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-10-05T00:00:00Z
+timestamp: 2026-10-05T12:00:00Z
 ---
 # Overview
 
@@ -153,6 +153,19 @@ reached `STOP RUN` does) do they fall back to the
 Do not re-hardcode that hypothesis into the message: it was previously
 shown even for timeouts and aborts whose stderr evidence had been
 discarded (audit 2026-07-07, findings 4.2/5.1).
+
+## Bug-hunt corrections (2026-10-05)
+
+- **Mid-line markers (#139).** `parse_stdout` finds `__MOCKYMOCK__ ` after
+  leading text, so a program's `DISPLAY ... WITH NO ADVANCING` no longer
+  hides the next marker (it used to drop a FAIL line and report a pass).
+- **Not-run cases (#150).** `json_report.not_run_case_names` lists the
+  selected cases that never printed START; `format_console` shows each as
+  `[NOT RUN]` (and `N not run` in the summary) and `format_junit_xml` adds
+  a `<testcase>` with an `<error>` for each, counted in `tests=`/`errors=`.
+- **Record rewrite (#146).** `build_recording_report` skips a value
+  containing U+FFFD (bytes such as HIGH-VALUES that stdout could not
+  carry) instead of writing a golden that can never match.
 
 ## JSON run report (`report/json_report.py`)
 

@@ -14,7 +14,7 @@ The first four (`ACCTPRG`, `DEPTIMSM`, `DEPTMQC`, `DEPTMQP`) are
 hand-written; the other thirteen are sourced from the sibling
 `legacy-application` corpus (`../legacy-application/cobol/`) — see
 "Provenance" below. Together all 17 give the corpus's entire COBOL
-program set a real, passing `mockymock run` suite (238 test cases total,
+program set a real, passing `mockymock run` suite (241 test cases total,
 0 failing), not just a clean `mockymock generate` static pass — see
 `docs/corpus-sweep-report.md` for the standing parse/generate sweep
 across the same 17 programs.

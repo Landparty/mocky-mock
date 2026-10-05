@@ -28,8 +28,8 @@ that live in the DATA DIVISION, so before compiling:
 
 The generated SQLCA is intentionally *not* part of the parsed AST (it is
 spliced in after parsing), so `reset.py`'s working-storage reset never
-touches it -- mock bodies are expected to set SQLCODE explicitly in every
-case, which the scaffold generator's placeholder bodies do.
+touches it; `sqlca_reset_lines` supplies its reset instead, so a SQLCODE
+one case's mock set does not leak into the next (issue #148).
 """
 
 from __future__ import annotations
@@ -191,6 +191,24 @@ def _resolve_include_member(
         normalize_fixed_format(split_source_lines(expansion.expanded_source))
     )
     return normalized, []
+
+
+def sqlca_reset_lines(lines: list[str]) -> list[str]:
+    """Reset lines for the generated SQLCA, when `lines` (the output of
+    `transform_data_division_exec`) carry it. It is spliced in after
+    parsing, so `reset.py` never sees it, and a SQLCODE one case's mock
+    left behind leaked into the next case (issue #148)."""
+    stripped = {line.strip() for line in lines}
+    if (
+        not {SQLCA_FIELDS[0], SQLCA_FIELDS[1].strip(), SQLCA_FIELDS[2].strip()}
+        <= stripped
+    ):
+        return []
+    return [
+        "INITIALIZE SQLCA",
+        'MOVE "SQLCA   " TO SQLCAID',
+        "MOVE 136 TO SQLCABC",
+    ]
 
 
 def transform_data_division_exec(

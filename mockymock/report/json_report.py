@@ -169,6 +169,22 @@ def _case_index(case_id: str) -> int | None:
         return None
 
 
+def not_run_case_names(
+    suite_result: TestSuiteResult, cut_suite: MockTestSuite | None
+) -> list[str]:
+    """Names of the selected .cut cases the binary never printed a START
+    marker for -- the same position match `build_json_report` uses for its
+    "not_run" entries, for the console and JUnit formatters (issue #150)."""
+    if cut_suite is None:
+        return []
+    seen = {_case_index(result.case_id) for result in suite_result.results}
+    return [
+        case.name
+        for position, case in enumerate(cut_suite.test_cases, start=1)
+        if position not in seen
+    ]
+
+
 def build_json_report(
     suite_result: TestSuiteResult,
     cut_suite: MockTestSuite | None = None,

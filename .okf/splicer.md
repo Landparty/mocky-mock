@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-05T00:00:00Z
+timestamp: 2026-10-05T12:00:00Z
 ---
 
 # Overview
@@ -1030,6 +1030,28 @@ A `verifications` entry whose `(category, key)` isn't in the test case's
 own declared mock set raises `ValueError` at codegen time — this is a
 defensive check; the refusal gate is expected to have already refused
 `VERIFY_WITHOUT_MOCK` before codegen is reached.
+
+## Per-case state, implicit moves and DIB synthesis (2026-10-05 bug hunt)
+
+- **RETURN-CODE (#140).** `build_driver` emits `MOVE 0 TO RETURN-CODE`
+  at the start of every case and before the final `STOP RUN`: pass/fail
+  travels in the markers, not the exit status.
+- **Reset coverage (#147).** `reset.reset_move_lines` now covers FILE
+  SECTION (the first record of each FD -- the others share its storage),
+  WORKING-STORAGE and LOCAL-STORAGE.
+- **SQLCA (#148).** `sqlca.sqlca_reset_lines` adds `INITIALIZE SQLCA` plus
+  the SQLCAID/SQLCABC eye-catchers to the reset when mockymock generated
+  the SQLCA, so one case's SQLCODE no longer leaks into the next.
+- **READ ... INTO / WRITE ... FROM (#149).** `splicer/io_copy.py`: the
+  dispatch block moves the FROM item to the record before the body, and
+  the record to the INTO item after each `ROWS` row or after the body --
+  skipped when the mock body or rows already name the INTO item or
+  anything under it (how bodies written earlier set it). `MockSurface.
+  data_layout` carries the FD-record and subtree map it needs.
+- **DLIDIB (#145).** `analysis/cics_eib.py` also detects references to
+  `DIBSTAT` and the other DIB fields in an `EXEC DLI` program that does not
+  declare them; `splicer/cics_eib.py` then emits an `01 DLIDIB` layout
+  (reset with `INITIALIZE DLIDIB`).
 
 ## `record_targets` — `mockymock run --record-expectations` (2026-08-04)
 

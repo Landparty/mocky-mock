@@ -205,9 +205,9 @@ TESTCASE "2100-PROCESS-RATE-CHANGE rolls back and counts an error when DB2 rejec
 
 *> 2200-PROCESS-FEE-POSTING happy path: the fetched account's balance is
 *> below its minimum and it carries a monthly fee, so 2220/2230 post a
-*> DR transaction and debit both balances by the fee amount. NOTE: the
-*> cursor is deliberately NEVER expected to close here -- see the bug
-*> note further down for why.
+*> DR transaction and debit both balances by the fee amount. Driven
+*> THRU 2290-FEE-DONE like the upstream call site (see the bug note
+*> further down), so the cursor closes once after the loop.
 TESTCASE "2200-PROCESS-FEE-POSTING posts a monthly fee when the balance is below the minimum"
     MOCK SQL "OPEN"
         MOVE 0 TO SQLCODE
@@ -227,7 +227,7 @@ TESTCASE "2200-PROCESS-FEE-POSTING posts a monthly fee when the balance is below
     END-MOCK
     MOCK WRITE RPT-RECORD
     END-MOCK
-    PERFORM 2200-PROCESS-FEE-POSTING
+    PERFORM 2200-PROCESS-FEE-POSTING THRU 2290-FEE-DONE
     EXPECT WS-ACCTS-READ TO BE 1
     EXPECT WS-FEES-POSTED TO BE 1
     EXPECT WS-ERRORS TO BE 0
@@ -239,7 +239,7 @@ TESTCASE "2200-PROCESS-FEE-POSTING posts a monthly fee when the balance is below
     VERIFY SQL "UPDATE BANK. ACCOUNT SET CURRENT_BALANCE" WAS CALLED ONCE
     VERIFY WRITE RPT-RECORD WAS CALLED ONCE
     VERIFY SQL "COMMIT" WAS CALLED NEVER
-    VERIFY SQL "CLOSE" WAS CALLED NEVER
+    VERIFY SQL "CLOSE" WAS CALLED ONCE
 
 *> Edge path: the fetched account's balance is at/above its minimum, so
 *> the fee-posting guard (2220) must skip both the INSERT and the
@@ -261,7 +261,7 @@ TESTCASE "2200-PROCESS-FEE-POSTING skips the fee when the balance is not below t
     END-MOCK
     MOCK WRITE RPT-RECORD
     END-MOCK
-    PERFORM 2200-PROCESS-FEE-POSTING
+    PERFORM 2200-PROCESS-FEE-POSTING THRU 2290-FEE-DONE
     EXPECT WS-ACCTS-READ TO BE 1
     EXPECT WS-FEES-POSTED TO BE 0
     EXPECT HV-CURRENT-BALANCE TO BE 5000.00
@@ -291,13 +291,13 @@ TESTCASE "2200-PROCESS-FEE-POSTING counts a fetch error and stops the loop"
     END-MOCK
     MOCK WRITE RPT-RECORD
     END-MOCK
-    PERFORM 2200-PROCESS-FEE-POSTING
+    PERFORM 2200-PROCESS-FEE-POSTING THRU 2290-FEE-DONE
     EXPECT WS-ERRORS TO BE 1
     EXPECT WS-ACCTS-READ TO BE 0
     EXPECT WS-FEES-POSTED TO BE 0
     VERIFY SQL "FETCH" WAS CALLED ONCE
     VERIFY SQL "INSERT" WAS CALLED NEVER
-    VERIFY SQL "CLOSE" WAS CALLED NEVER
+    VERIFY SQL "CLOSE" WAS CALLED ONCE
 
 *> FIXED BUG: when the cursor OPEN fails, 2200-PROCESS-FEE-POSTING does
 *> "GO TO 2290-FEE-DONE" to close the cursor. 2290-FEE-DONE is a separate
