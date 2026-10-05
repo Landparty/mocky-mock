@@ -304,3 +304,38 @@ EXPECT OUT-REC TO BE "HELLO"
         "write from",
     ):
         assert f"[PASS] {name}" in out, out
+
+
+GOTO1_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTO1.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 1 TO WS-A
+           GO TO LAST-PARA.
+       LAST-PARA.
+           MOVE 2 TO WS-A.
+"""
+
+GOTO1_CUT = """\
+TESTSUITE "goto"
+TESTCASE "one"
+PERFORM MAIN-PARA
+EXPECT WS-A TO BE 2
+TESTCASE "two"
+PERFORM MAIN-PARA
+EXPECT WS-A TO BE 2
+"""
+
+
+@requires_docker
+def test_150_a_case_the_run_never_reached_is_reported(tmp_path: Path, capsys) -> None:
+    junit = tmp_path / "junit.xml"
+    exit_code = _run(tmp_path, "GOTO1", GOTO1_CBL, GOTO1_CUT, "--junit-xml", str(junit))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert "[NOT RUN] two" in out
+    assert 'tests="2"' in junit.read_text()

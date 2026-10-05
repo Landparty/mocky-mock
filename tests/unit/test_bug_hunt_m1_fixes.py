@@ -720,3 +720,31 @@ def test_150_generate_fails_when_no_scenario_becomes_a_case(
     source.write_text(DLITCBL_CBL)
     out = tmp_path / "DLIENT.cut"
     assert main(["generate", str(source), "--with-data", "-o", str(out)]) == 1
+
+
+def test_150_cases_that_never_started_are_listed_in_console_and_junit() -> None:
+    from xml.etree.ElementTree import fromstring
+
+    from mockymock.dsl.parser import parse_cut
+    from mockymock.report.formatters import format_console, format_junit_xml
+    from mockymock.report.json_report import not_run_case_names
+
+    cut = parse_cut(
+        'TESTSUITE "goto"\nTESTCASE "one"\nPERFORM MAIN-PARA\n'
+        'TESTCASE "two"\nPERFORM MAIN-PARA\n'
+    )
+    suite = parse_stdout(
+        "__MOCKYMOCK__ TESTSUITE: goto\n__MOCKYMOCK__ CASE 001 START: one\n"
+    )
+    not_run = not_run_case_names(suite, cut)
+    assert not_run == ["two"]
+
+    console = format_console(suite, not_run=not_run)
+    assert "[NOT RUN] two" in console
+    assert "1 not run" in console
+
+    root = fromstring(format_junit_xml(suite, not_run=not_run).split("\n", 1)[1])
+    assert root.get("tests") == "2"
+    assert root.get("errors") == "2"
+    names = [case.get("name") for case in root.iter("testcase")]
+    assert names == ["one", "two"]

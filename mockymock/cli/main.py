@@ -1254,7 +1254,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         summarize_original,
     )
     from mockymock.report.formatters import format_console, format_junit_xml
-    from mockymock.report.json_report import build_json_report, format_json_report
+    from mockymock.report.json_report import (
+        build_json_report,
+        format_json_report,
+        not_run_case_names,
+    )
     from mockymock.report.record_rewrite import (
         build_recording_report,
         field_pictures,
@@ -1530,7 +1534,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         crash_detail = f"binary exited with code {executed.exit_code}"
     else:
         crash_detail = None
-    print(format_console(suite_result, crash_detail=crash_detail))
+    not_run = not_run_case_names(suite_result, suite)
+    print(format_console(suite_result, crash_detail=crash_detail, not_run=not_run))
     if executed.stderr:
         print("mockymock run: binary stderr:")
         print(executed.stderr.rstrip("\n"))
@@ -1566,7 +1571,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "run",
             "--junit-xml",
             args.junit_xml,
-            format_junit_xml(suite_result, crash_detail=crash_detail),
+            format_junit_xml(suite_result, crash_detail=crash_detail, not_run=not_run),
         )
 
     if args.json_report:
