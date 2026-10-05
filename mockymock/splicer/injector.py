@@ -29,6 +29,7 @@ from mockymock.dsl.model import (
     MockCategory,
     MockTestSuite,
 )
+from mockymock.splicer.io_copy import DataLayout, from_move, into_move
 from mockymock.splicer.naming import TallyRegistry
 
 #: One token of a CALL statement's text: a (possibly X/N/G/Z/NX/U-prefixed)
@@ -162,8 +163,15 @@ def build_site_dispatch(
     file_status_fields: dict[str, str] | None = None,
     trace: bool = False,
     statement_text: str = "",
+    layout: DataLayout | None = None,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    `READ ... INTO` / `RETURN ... INTO` and `WRITE`/`REWRITE`/`RELEASE ...
+    FROM` keep their implicit MOVE (`splicer.io_copy`, issue #149): the FROM
+    item is moved to the record before the body runs, and the record to
+    the INTO item after each row (or after the body) -- unless the mock
+    writes the INTO item itself.
 
     For a file-op directive in FILE_STATUS_CATEGORIES whose file declares
     a FILE STATUS field (`file_status_fields`), the branch always starts
@@ -287,6 +295,18 @@ def build_site_dispatch(
                     )
                 source = literals[capture_index - 1] or using[capture_index - 1].name
                 lines.append(f"                   MOVE {source} TO {target}")
+        copy_from = from_move(site.statement)
+        if copy_from is not None:
+            lines.append(f"                   {copy_from}")
+        copy_into = into_move(
+            site.statement,
+            layout,
+            [
+                *directive.body_lines,
+                *(name for row in directive.rows or [] for name, _ in row),
+                *(name for name, _ in directive.terminal_row or []),
+            ],
+        )
         if directive.rows is not None and directive.category in (
             MockCategory.READ,
             MockCategory.RETURN,
@@ -318,7 +338,7 @@ def build_site_dispatch(
                 for body in build_rows_block(
                     tally_name,
                     directive.rows,
-                    row_suffix_moves=[],
+                    row_suffix_moves=[copy_into] if copy_into else [],
                     exhausted_moves=exhausted_moves,
                 )
             )
@@ -360,6 +380,8 @@ def build_site_dispatch(
             )
         else:
             lines.extend(f"                   {body}" for body in directive.body_lines)
+            if copy_into is not None:
+                lines.append(f"                   {copy_into}")
 
     lines.append("               WHEN OTHER")
     lines.append(

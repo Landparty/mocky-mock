@@ -160,6 +160,7 @@ def splice_program(
                 file_status_fields,
                 trace=trace,
                 statement_text=" ".join(lines[start - 1 : end]),
+                layout=surface.data_layout,
             )
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /

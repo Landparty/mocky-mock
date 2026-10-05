@@ -257,3 +257,50 @@ def test_148_sqlcode_does_not_leak_into_the_next_case(tmp_path: Path, capsys) ->
     exit_code = _run(tmp_path, "SQLL", SQLL_CBL, SQLL_CUT)
     out = capsys.readouterr().out
     assert exit_code == 0, out
+
+
+@requires_docker
+def test_149_read_into_and_write_from_keep_their_implicit_move(
+    tmp_path: Path, capsys
+) -> None:
+    from tests.unit.test_bug_hunt_m1_fixes import RINTO_CBL
+
+    cut = """\
+TESTSUITE "into"
+TESTCASE "read into"
+MOCK READ IN-FILE ROWS
+    ( IN-AMT = 5 )
+    ( IN-AMT = 7 )
+    TERMINAL ( WS-EOF = "Y" )
+END-MOCK
+PERFORM MAIN-PARA
+EXPECT WS-TOTAL TO BE 12
+TESTCASE "read into, body"
+MOCK READ IN-FILE
+    MOVE 9 TO IN-AMT
+    MOVE "Y" TO WS-EOF
+END-MOCK
+PERFORM READ-PARA
+EXPECT WS-AMT TO BE 9
+TESTCASE "legacy body sets the INTO field"
+MOCK READ IN-FILE
+    MOVE 4 TO WS-AMT
+END-MOCK
+PERFORM READ-PARA
+EXPECT WS-TOTAL TO BE 4
+TESTCASE "write from"
+MOCK WRITE OUT-REC
+END-MOCK
+PERFORM WRITE-PARA
+EXPECT OUT-REC TO BE "HELLO"
+"""
+    exit_code = _run(tmp_path, "RINTO", RINTO_CBL, cut)
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    for name in (
+        "read into",
+        "read into, body",
+        "legacy body sets the INTO field",
+        "write from",
+    ):
+        assert f"[PASS] {name}" in out, out
