@@ -16,6 +16,13 @@ between-case reset value is zero (its VALUE clause, or the zero default
 `splicer/reset.py` gives a numeric item without one), and no test case
 may seed it. A program statement that changes the field before the
 arithmetic runs is not modelled, which is why the hint says "probably".
+
+Seeding only helps if something the suite can see depends on the field:
+an EXPECT on it (or on a group holding it), or a program statement that
+reads it -- a MOVE, a condition, a CALL argument -- other than its own
+ADD/SUBTRACT updates and DISPLAY, which no assertion observes. When no
+target is observed that way the survivor is a missing assertion first,
+and gets no hint: seeding alone would leave it alive.
 """
 
 from __future__ import annotations
@@ -63,6 +70,8 @@ def zero_baseline_hint(mutant: Mutant, ast: object, suite: object) -> str:
             return ""
         if name.upper() in seeded:
             return ""
+    if not any(_is_observed(name, items, ast, suite) for name in targets):
+        return ""
     names = ", ".join(targets)
     first = targets[0]
     return (
@@ -145,6 +154,72 @@ def _is_zero_value(value: object) -> bool:
         return Decimal(text) == 0
     except InvalidOperation:
         return False
+
+
+# Statements that only print a field: nothing an EXPECT or VERIFY
+# can see depends on them.
+_UNOBSERVED_STATEMENTS = frozenset({"DisplayStatement"})
+
+
+def _is_observed(
+    name: str, items: dict[str, list[object]], ast: object, suite: object
+) -> bool:
+    """Whether a test could notice `name`'s value once it is seeded: an
+    EXPECT names it or a group holding it, or the program reads it (or a
+    group holding it) somewhere other than its own `ADD .. TO` /
+    `SUBTRACT .. FROM` updates and a DISPLAY. Anything the cross-reference
+    cannot settle counts as observed -- the hint stays, as before."""
+    names = {name.upper()}
+    for item in items.get(name.upper(), []):
+        parent = getattr(item, "parent", None)
+        while parent is not None and getattr(parent, "name", None):
+            names.add(str(parent.name).upper())
+            parent = getattr(parent, "parent", None)
+    if names & _expected_names(suite):
+        return True
+    try:
+        return _read_by_program(names, ast)
+    except Exception:  # noqa: BLE001 -- no cross-reference: assume observed
+        return True
+
+
+def _read_by_program(names: set[str], ast: object) -> bool:
+    """Whether any of `names` is referenced by a statement other than its
+    own update or a DISPLAY. `cobolparser.analysis.xref` is new in
+    cobol-parser 1.10 (the floor is older); without it the ImportError
+    reaches `_is_observed`, which then keeps the hint."""
+    from cobolparser.analysis.xref import XrefAnalyzer
+
+    report = XrefAnalyzer().analyze(ast)
+    for wanted in names:
+        entry = report.entry_for(wanted)
+        if entry is None:
+            continue
+        updates = {
+            (ref.location.line, ref.statement)
+            for ref in entry.references
+            if ref.role == "write"
+        }
+        for ref in entry.references:
+            if ref.role == "write" or ref.statement in _UNOBSERVED_STATEMENTS:
+                continue
+            if ref.role == "read" and (ref.location.line, ref.statement) in updates:
+                continue  # the target of its own ADD/SUBTRACT
+            return True
+    return False
+
+
+def _expected_names(suite: object) -> set[str]:
+    """Every data name an EXPECT asserts, bare: subscripts and OF/IN
+    qualifiers dropped."""
+    names: set[str] = set()
+    for case in getattr(suite, "test_cases", []) or []:
+        for expect in getattr(case, "expectations", []) or []:
+            text = _SUBSCRIPT.sub(" ", str(getattr(expect, "data_name", "")))
+            words = text.split()
+            if words:
+                names.add(words[0].upper())
+    return names
 
 
 def _seeded_names(suite: object) -> set[str]:

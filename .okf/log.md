@@ -5,6 +5,14 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-09 -- zero-baseline hint needs an observed field
+
+`mutation.zero_baseline` no longer hints "untestable" on an ADD/SUBTRACT
+swap whose target nothing observes (no EXPECT on it or its group, no read
+by the program other than its own update or a DISPLAY): that survivor is a
+missing assertion, and seeding alone would not kill it. Updated
+[cli](cli.md).
+
 ## 2026-10-05 -- executed bug hunt fixes (#139-#150)
 
 Twelve findings from running real programs under GnuCOBOL 3.2, one commit
