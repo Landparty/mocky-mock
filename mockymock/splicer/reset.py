@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import re
 
+from mockymock.splicer.io_copy import longest_record_per_file
+
 _REPEAT_GROUP_RE = re.compile(r"\(\d+\)")
 
 # A cobolparser `value_clause` for an alphanumeric literal, with the optional
@@ -71,7 +73,9 @@ def reset_move_lines(program) -> list[str]:
     # other 01 under the same FD is an implicit redefinition of it.
     lines: list[str] = []
     for section in _sections(data_division, "FILE"):
-        lines.extend(reset_lines_for_items(_first_record_per_file(section)))
+        lines.extend(
+            reset_lines_for_items(longest_record_per_file(_top_level_items(section)))
+        )
     for section_name in ("WORKING-STORAGE", "LOCAL-STORAGE"):
         for section in _sections(data_division, section_name):
             lines.extend(reset_lines_for_items(_top_level_items(section)))
@@ -87,19 +91,6 @@ def _sections(data_division, wanted: str) -> list:
         if name and name.upper().replace(" SECTION", "").strip() == wanted:
             out.append(section)
     return out
-
-
-def _first_record_per_file(section) -> list:
-    seen: set[str] = set()
-    records = []
-    for item in _top_level_items(section):
-        metadata = getattr(item, "_metadata", None) or {}
-        file_name = str(metadata.get("fd_file_name") or "").upper()
-        if not file_name or file_name in seen:
-            continue
-        seen.add(file_name)
-        records.append(item)
-    return records
 
 
 def reset_lines_for_items(items) -> list[str]:

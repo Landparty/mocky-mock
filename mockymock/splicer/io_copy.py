@@ -11,6 +11,11 @@ Mock bodies written before this fix set the INTO item's own fields
 directly (`MOCK READ PARMFILE  MOVE 7 TO WS-PARM-DAYS`); copying the empty
 record over them afterwards would undo that. So the INTO copy is emitted
 only when the mock never names the INTO item or anything inside it.
+
+A READ that fails moves nothing (the INTO item keeps its value), so when
+the file has a FILE STATUS field the copy only runs on a successful status.
+Every 01 under one FD shares one record area, so the copy (and the reset
+in `splicer.reset`) uses the FD's longest record, not its first one.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
 
 @dataclass
 class DataLayout:
-    #: Uppercased FD/SD file name -> its first record's name.
+    #: Uppercased FD/SD file name -> its longest record's name.
     file_records: dict[str, str] = field(default_factory=dict)
     #: Uppercased data-name -> the names of it and everything under it.
     subtrees: dict[str, frozenset[str]] = field(default_factory=dict)
@@ -42,16 +47,45 @@ def data_layout(program) -> DataLayout:
     if data is None:
         return layout
     for section in getattr(data, "sections", data.children):
-        for item in getattr(section, "children", []):
-            if getattr(item, "level", None) not in (1, 77):
-                continue
+        items = [
+            item
+            for item in getattr(section, "children", [])
+            if getattr(item, "level", None) in (1, 77)
+        ]
+        for item in longest_record_per_file(items):
             metadata = getattr(item, "_metadata", None) or {}
             file_name = str(metadata.get("fd_file_name") or "").upper()
             name = str(getattr(item, "name", "") or "").upper()
-            if file_name and name and file_name not in layout.file_records:
+            if name and file_name not in layout.file_records:
                 layout.file_records[file_name] = name
+        for item in items:
             _collect_subtree(item, layout.subtrees)
     return layout
+
+
+def record_length(item) -> int:
+    """Bytes the 01 record *item* occupies, 0 when it cannot be laid out."""
+    from cobolparser.generators.data.layout_offsets import compute_record_layout
+
+    try:
+        return compute_record_layout(item)[0].byte_length
+    except Exception:  # noqa: BLE001 -- an unlayable record never wins
+        return 0
+
+
+def longest_record_per_file(items) -> list:
+    """The longest FD/SD record of each file among *items* (01-level items),
+    in the order their files first appear; ties keep the first record."""
+    best: dict[str, tuple[int, object]] = {}
+    for item in items:
+        metadata = getattr(item, "_metadata", None) or {}
+        file_name = str(metadata.get("fd_file_name") or "").upper()
+        if not file_name:
+            continue
+        length = record_length(item)
+        if file_name not in best or length > best[file_name][0]:
+            best[file_name] = (length, item)
+    return [item for _, item in best.values()]
 
 
 def _collect_subtree(item, subtrees: dict[str, frozenset[str]]) -> frozenset[str]:
@@ -87,11 +121,16 @@ def from_move(statement) -> str | None:
 
 
 def into_move(
-    statement, layout: DataLayout | None, mentioned_text: list[str]
+    statement,
+    layout: DataLayout | None,
+    mentioned_text: list[str],
+    status_field: str | None = None,
 ) -> str | None:
     """`MOVE <record> TO <into>` for a READ/RETURN ... INTO, or None when
     there is nothing to copy -- including when the mock already writes the
-    INTO item itself (`mentioned_text`: its body lines and ROWS fields)."""
+    INTO item itself (`mentioned_text`: its body lines and ROWS fields).
+    With a `status_field`, the MOVE only runs when the status is a success
+    ("0x"), as a failed READ leaves the INTO item alone."""
     if layout is None or not isinstance(statement, (IOReadStatement, ReturnStatement)):
         return None
     target = getattr(statement, "into_target", None)
@@ -102,6 +141,27 @@ def into_move(
     base = _base_name(target)
     inside = layout.subtrees.get(base, frozenset({base}))
     for text in mentioned_text:
-        if {word.upper() for word in _WORD_RE.findall(text)} & inside:
+        if _names_any(text, inside):
             return None
-    return f"MOVE {record} TO {target}"
+    move = f"MOVE {record} TO {target}"
+    if status_field:
+        return f'IF {status_field}(1:1) = "0" {move} END-IF'
+    return move
+
+
+def _names_any(text: str, names: frozenset[str]) -> bool:
+    """Whether *text* refers to one of *names*. A word qualified by a name
+    outside them (`R-AMT OF IN-REC` when the INTO item is WS-REC, sharing
+    the copybook's field names) refers to something else."""
+    words = [word.upper() for word in _WORD_RE.findall(text)]
+    for i, word in enumerate(words):
+        if word not in names:
+            continue
+        if (
+            i + 2 < len(words)
+            and words[i + 1] in ("OF", "IN")
+            and words[i + 2] not in names
+        ):
+            continue
+        return True
+    return False
