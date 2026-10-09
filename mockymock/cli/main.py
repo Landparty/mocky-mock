@@ -1873,6 +1873,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
                 generated_c_lines=generated_c_lines,
                 paragraph_index=paragraph_index,
                 instrumented_file=instrumented_path.name,
+                original_file=str(source_path),
             )
 
         adapter = DapAdapter(sys.stdin.buffer, sys.stdout.buffer, launch_session)

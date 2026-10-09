@@ -717,6 +717,16 @@ captured MI transcripts and end-to-end tested against a live container
   `ValueError` (audit finding F17); `run()` catches it, fires
   `_on_output`, and shuts down cleanly, rather than crashing the whole
   adapter process on one malformed frame.
+  `setBreakpoints` is matched by source path (2026-10-09):
+  `DebugSession.original_file` (set by `_cmd_debug` to the program path)
+  is the only file `line_map` covers, so a request for any other source —
+  a copybook, a same-named file elsewhere — answers every breakpoint
+  `verified: false` with a message and inserts nothing in gdb.
+  `_is_same_source` compares resolved absolute paths, or a relative
+  client path against the program path's trailing components. Before,
+  line N of a copybook became a live breakpoint on line N of the
+  program. `stackTrace` frames fall back to `original_file` when no
+  breakpoint has been set in the program.
 
 Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper

@@ -13,6 +13,13 @@ by the program other than its own update or a DISPLAY): that survivor is a
 missing assertion, and seeding alone would not kill it. Updated
 [cli](cli.md).
 
+## 2026-10-09 -- DAP breakpoints matched by source path
+
+`setBreakpoints` for a copybook or any source other than the program
+under test now comes back `verified: false` instead of landing on the
+same line number of the program (`DebugSession.original_file`,
+`adapter._is_same_source`). Updated [cli](cli.md).
+
 ## 2026-10-05 -- executed bug hunt fixes (#139-#150)
 
 Twelve findings from running real programs under GnuCOBOL 3.2, one commit
