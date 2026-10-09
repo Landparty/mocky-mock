@@ -210,6 +210,16 @@ def _is_comment(line: str) -> bool:
     return len(line) > 6 and line[6] in "*/"
 
 
+_DEBUGGING_MODE = re.compile(r"\bWITH\s+DEBUGGING\s+MODE\b", re.IGNORECASE)
+
+
+def _is_debug_line(line: str) -> bool:
+    """A `D` in the fixed-format indicator column: compiled only when the
+    program declares WITH DEBUGGING MODE, a comment otherwise -- so a mutant
+    on it can never be killed."""
+    return len(line) > 6 and line[6] in "Dd"
+
+
 def _is_compiler_directive(line: str) -> bool:
     """A `>>IF` / `>>DEFINE` / `>>EVALUATE` ... compiler-directing line.
     Its relational symbols and `IF` belong to the directive, not to the
@@ -309,10 +319,13 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
     line order. Pure and deterministic; safe without Docker."""
     mutants: list[Mutant] = []
     in_procedure = False
+    debugging_mode = any(_DEBUGGING_MODE.search(line) for line in lines)
 
     for index, line in enumerate(lines):
         line_no = index + 1
         if _is_comment(line) or _is_continuation(line):
+            continue
+        if _is_debug_line(line) and not debugging_mode:
             continue
         if _is_compiler_directive(line):
             continue

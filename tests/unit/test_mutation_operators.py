@@ -409,3 +409,28 @@ def test_statement_deletion_fires_on_sequence_numbered_lines():
         (5, "000500     CONTINUE"),
         (6, "000600     CONTINUE."),
     ]
+
+
+def test_debug_lines_are_not_mutated():
+    """A `D` in column 7 is a debugging line: cobc (like the IBM compiler)
+    treats it as a comment unless the program declares WITH DEBUGGING MODE,
+    so a mutant there can never be killed and only lowers the score."""
+    lines = _procedure(
+        "      D    ADD 3 TO WS-C.",
+        "      d    IF WS-A > 6 DISPLAY WS-A END-IF.",
+    )
+    assert generate_mutants(lines) == []
+
+
+def test_debug_lines_are_mutated_in_debugging_mode():
+    lines = [
+        "       IDENTIFICATION DIVISION.",
+        "       PROGRAM-ID. SAMPLE.",
+        "       ENVIRONMENT DIVISION.",
+        "       CONFIGURATION SECTION.",
+        "       SOURCE-COMPUTER. IBM-370 WITH DEBUGGING MODE.",
+        "       PROCEDURE DIVISION.",
+        "       MAIN-PARA.",
+        "      D    ADD 3 TO WS-C.",
+    ]
+    assert generate_mutants(lines) != []
