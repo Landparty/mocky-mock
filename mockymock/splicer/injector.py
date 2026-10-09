@@ -306,6 +306,7 @@ def build_site_dispatch(
                 *(name for row in directive.rows or [] for name, _ in row),
                 *(name for name, _ in directive.terminal_row or []),
             ],
+            file_status_fields.get(directive.key.upper()),
         )
         if directive.rows is not None and directive.category in (
             MockCategory.READ,
