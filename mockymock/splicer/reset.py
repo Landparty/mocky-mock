@@ -69,8 +69,9 @@ def reset_move_lines(program) -> list[str]:
     # like WORKING-STORAGE does -- one binary runs every case -- so a case
     # passed alone and failed in the suite (issue #147). LOCAL-STORAGE
     # gets the same VALUE-restoring treatment; a FILE SECTION record has
-    # no VALUE clauses, and only an FD's first record is reset: every
-    # other 01 under the same FD is an implicit redefinition of it.
+    # no VALUE clauses, and only an FD's longest record is reset: every
+    # other 01 under the same FD is an implicit redefinition of it, and
+    # resetting a shorter one left the rest of the area dirty.
     lines: list[str] = []
     for section in _sections(data_division, "FILE"):
         lines.extend(
