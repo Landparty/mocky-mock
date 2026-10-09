@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-09 -- DAP breakpoints matched by source path
+
+`setBreakpoints` for a copybook or any source other than the program
+under test now comes back `verified: false` instead of landing on the
+same line number of the program (`DebugSession.original_file`,
+`adapter._is_same_source`). Updated [cli](cli.md).
+
 ## 2026-10-05 -- executed bug hunt fixes (#139-#150)
 
 Twelve findings from running real programs under GnuCOBOL 3.2, one commit
