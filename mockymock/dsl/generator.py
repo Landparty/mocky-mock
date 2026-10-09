@@ -1620,8 +1620,14 @@ def _bundle_directive_for_group(
     primary) must still trigger the downgrade -- that key genuinely has a
     fixture, so silently no-op'ing on it would be exactly the
     matched-nothing case the CLI's own unmatched-placeholder warning
-    exists to catch, made worse by staying silent instead."""
-    if len(fixtures) == 1:
+    exists to catch, made worse by staying silent instead.
+
+    A group holding any non-STATUS_ONLY fixture is not a multi-file
+    statement: it is several statements on one file that mockymock mocks
+    as one site (a priming READ plus the READ inside the loop). Those
+    render from the first fixture alone, whose rows end the loop; merging
+    them as status-only left the READ mock empty and the loop endless."""
+    if len(fixtures) == 1 or any(f.direction != "STATUS_ONLY" for f in fixtures):
         return _bundle_directive_for(
             fixtures[0], mockymock_keys, registry, placeholder_keys, source
         )
@@ -1976,7 +1982,9 @@ def _merged_call_counts(expectations: list[Expectation]) -> list[Expectation]:
     the splicer's tally) counts per (category, key): two `CALL "FMT"`
     statements rendered as two `VERIFY ... 1 TIMES` lines that both failed
     with "got 2" (issue #142). Sum them into one expectation per ref, kept
-    at the first one's position."""
+    at the first one's position. READ and RETURN are the exception: every
+    site of one file consumes the same sequential stream, so each site's
+    count already covers the whole stream and the largest one is kept."""
     merged: list[Expectation] = []
     by_ref: dict[str, Expectation] = {}
     for expectation in expectations:
@@ -1994,7 +2002,10 @@ def _merged_call_counts(expectations: list[Expectation]) -> list[Expectation]:
             by_ref[expectation.ref] = copy
             merged.append(copy)
         elif isinstance(existing.value, int) and isinstance(expectation.value, int):
-            existing.value += expectation.value
+            if expectation.ref.partition(":")[0] in ("READ", "RETURN"):
+                existing.value = max(existing.value, expectation.value)
+            else:
+                existing.value += expectation.value
     return merged
 
 
