@@ -111,6 +111,12 @@ _STATEMENT_OPENER = re.compile(
 )
 # `NAME.` / `NAME SECTION.` / `<x> DIVISION` / `END PROGRAM <name>.` --
 # the other shapes that cannot be the tail of the previous statement.
+# Area A is columns 8-11: a paragraph/section header starts there. A bare
+# `NAME.` further right is a statement's last operand (`MOVE 1 TO WS-A` /
+# `WS-B.`), not a header.
+_AREA_B_COL = 12
+# `END-IF.` is a scope terminator, not an operand, wherever it sits.
+_BARE_NAME_LINE = re.compile(r"^(?!END-)[A-Z0-9][A-Z0-9-]*\s*\.", re.IGNORECASE)
 _HEADER_LINE = re.compile(
     r"^(?:[A-Z0-9][A-Z0-9-]*(?:\s+SECTION)?\s*\."
     r"|[A-Z]+\s+DIVISION\b"
@@ -414,6 +420,21 @@ def _relational_mutants(
 _REMAINDER = re.compile(_cobol_word("REMAINDER"), re.IGNORECASE)
 
 
+def _opens_something_new(follower: str) -> bool:
+    """Whether the code-bearing line `follower` starts a new statement, an
+    unrelated scope terminator, a paragraph or a header -- rather than
+    carrying on the statement above it."""
+    area = follower[TEXT_START_COL - 1 : CODE_END_COL]
+    text = area.strip()
+    if _STATEMENT_OPENER.match(text):
+        return True
+    if not _HEADER_LINE.match(text):
+        return False
+    indent = len(area) - len(area.lstrip())
+    in_area_b = TEXT_START_COL + indent >= _AREA_B_COL
+    return not (in_area_b and _BARE_NAME_LINE.match(text))
+
+
 def _statement_tail(lines: list[str], index: int, code: str) -> str:
     """The text of the statement starting on `lines[index]` from that line
     on, as far as it provably runs: the line itself, then every following
@@ -439,10 +460,7 @@ def _statement_tail(lines: list[str], index: int, code: str) -> str:
         if follower_index >= len(lines):
             break
         follower = lines[follower_index]
-        text = follower[TEXT_START_COL - 1 : CODE_END_COL].strip()
-        if not _is_continuation(follower) and (
-            _STATEMENT_OPENER.match(text) or _HEADER_LINE.match(text)
-        ):
+        if not _is_continuation(follower) and _opens_something_new(follower):
             break
         current = follower[:CODE_END_COL]
     return " ".join(parts)
@@ -557,7 +575,7 @@ def _statement_ends_on_line(lines: list[str], index: int, code: str) -> bool:
         text = follower[TEXT_START_COL - 1 : CODE_END_COL].strip()
         if not text:
             continue
-        return bool(_STATEMENT_OPENER.match(text) or _HEADER_LINE.match(text))
+        return _opens_something_new(follower)
     # Nothing follows at all: there is no continuation for the deletion to
     # strand, whatever the source's own missing period says about it.
     return True

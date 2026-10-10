@@ -434,3 +434,29 @@ def test_debug_lines_are_mutated_in_debugging_mode():
         "      D    ADD 3 TO WS-C.",
     ]
     assert generate_mutants(lines) != []
+
+
+def test_multi_receiver_move_ending_the_sentence_is_never_deleted():
+    """`WS-B.` in Area B is the MOVE's last receiver, not a paragraph
+    header: deleting `MOVE 1 TO WS-A` left `CONTINUE` / `WS-B.`, which
+    GnuCOBOL rejects -- a stillborn mutant every time."""
+    mutants = generate_mutants(
+        _procedure(
+            "           MOVE 1 TO WS-A",
+            "                     WS-B.",
+            "           GOBACK.",
+        )
+    )
+    assert [m for m in mutants if m.operator == "stmt-delete"] == []
+
+
+def test_deletion_allowed_before_a_paragraph_header_in_area_a():
+    mutants = generate_mutants(
+        _procedure(
+            "           MOVE 0 TO WS-TOTAL",
+            "       NEXT-PARA.",
+            "           GOBACK.",
+        )
+    )
+    deletions = [m for m in mutants if m.operator == "stmt-delete"]
+    assert [m.mutated for m in deletions] == ["           CONTINUE"]

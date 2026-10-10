@@ -776,7 +776,13 @@ something other than what their report line described, by running each
 through the pipeline's own `normalize_fixed_format`), none after. **`stmt-delete` reads columns 8-72**
 (the verb check, the follower check, and the rewrite, which keeps
 columns 1-7 verbatim): with a sequence number in columns 1-6 it used to
-generate no deletion mutants at all. Still open: `stmt-delete` on a line holding two
+generate no deletion mutants at all. A bare `NAME.` follower counts as a
+paragraph header only in Area A (columns 8-11): in Area B it is the
+statement's last operand (`MOVE 1 TO WS-A` / `WS-B.`), and deleting the
+head used to strand it -- a compile stillborn (2026-10-10). A compile
+stillborn's detail is cobc's first `error:` message
+(`runner._compile_error_detail`), not its `<path>: in paragraph 'X':`
+context line. Still open: `stmt-delete` on a line holding two
 statements deletes both (over-strong, not stillborn), and `stillborn`
 still lumps refusal-gate rejections in with compile errors.
 
@@ -814,7 +820,16 @@ each *built* survivor where every receiving name on the mutated line is an
 unsigned, non-edited, non-OCCURS WORKING-STORAGE/LOCAL-STORAGE item whose
 reset value is zero (VALUE zero, or no VALUE -- `splicer/reset.py`'s
 default) and no test case writes it (setup MOVE, mock ROWS/TERMINAL, `TO
-<name>` in a mock body). GIVING forms are skipped. The verdict and score
+<name>` in a mock body). GIVING forms are skipped. Since 2026-10-09 at
+least one receiving name must also be *observed* (`_is_observed`): an
+EXPECT names it or a group holding it, or `cobolparser.analysis.xref`
+finds it read by a statement other than its own ADD/SUBTRACT update and
+DISPLAY (MOVE, condition, CALL argument, ...). A counter that is only
+incremented and DISPLAYed is a missing assertion first -- seeding alone
+would not kill it -- so it gets no hint and `mockymock report` files it as
+`missing-assertion`; it used to be labelled untestable. xref is new in
+cobol-parser 1.10 (floor 1.7.7): without it, or on any xref error, the
+field counts as observed and the hint stays. The verdict and score
 are unchanged -- seeding the field is how the author kills it -- but the
 console prints a `!` line under the diff plus a count, `--json-report`
 carries a per-mutant `hint`, and `mockymock report` files it as

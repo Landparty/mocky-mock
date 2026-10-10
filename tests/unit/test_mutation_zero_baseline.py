@@ -166,3 +166,72 @@ def test_run_mutation_attaches_hints_to_built_survivors_only(monkeypatch, tmp_pa
     assert "WS-PURGED" in by_line[built.line].hint
     assert by_line[gated.line].ran is False
     assert by_line[gated.line].hint == ""
+
+
+UNASSERTED_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CNTPROG2.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-READ-COUNT    PIC 9(5) COMP-3 VALUE ZERO.
+       01  WS-FLOWS         PIC 9(5) COMP-3 VALUE ZERO.
+       01  WS-OUT           PIC 9(5) VALUE ZERO.
+       01  WS-TOTALS.
+           05  WS-IN-GROUP  PIC 9(5) COMP-3 VALUE ZERO.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           ADD 1 TO WS-READ-COUNT
+           ADD 1 TO WS-READ-COUNT
+           ADD 1 TO WS-FLOWS
+           ADD 1 TO WS-IN-GROUP
+           MOVE WS-FLOWS TO WS-OUT
+           DISPLAY "RECORDS READ: " WS-READ-COUNT
+           GOBACK.
+"""
+
+UNASSERTED_CUT = """\
+TESTSUITE "CNTPROG2"
+
+TESTCASE "runs"
+    PERFORM MAIN-PARA
+    EXPECT WS-OUT TO BE 1
+    EXPECT WS-TOTALS TO BE "00001"
+"""
+
+
+def _swap_in(program: str, text: str) -> Mutant:
+    for mutant in generate_mutants(program.splitlines()):
+        if mutant.operator == "arith-verb-swap" and text in mutant.original:
+            return mutant
+    raise AssertionError(f"no arith-verb-swap mutant on a line containing {text!r}")
+
+
+@pytest.fixture(scope="module")
+def unasserted_ast():
+    result = parse_cobol(UNASSERTED_PROGRAM, filename="CNTPROG2.cbl")
+    assert result.success, result.errors
+    return result.ast
+
+
+def test_no_hint_when_nothing_observes_the_field(unasserted_ast):
+    """WS-READ-COUNT is only ever incremented and DISPLAYed: no EXPECT
+    names it and nothing the suite can see reads it. Seeding it would not
+    kill the swap either -- the survivor is a missing assertion, and a
+    hint calling it untestable (filed as `untestable-mutant` instead of
+    `missing-assertion` by `mockymock report`) sends the author to the
+    wrong fix."""
+    mutant = _swap_in(UNASSERTED_PROGRAM, "ADD 1 TO WS-READ-COUNT")
+    assert zero_baseline_hint(mutant, unasserted_ast, parse_cut(UNASSERTED_CUT)) == ""
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "ADD 1 TO WS-FLOWS",  # MOVEd into WS-OUT, which a case asserts
+        "ADD 1 TO WS-IN-GROUP",  # its group WS-TOTALS is asserted
+    ],
+)
+def test_hint_kept_when_the_field_is_observed(unasserted_ast, line):
+    mutant = _swap_in(UNASSERTED_PROGRAM, line)
+    hint = zero_baseline_hint(mutant, unasserted_ast, parse_cut(UNASSERTED_CUT))
+    assert "untestable" in hint
