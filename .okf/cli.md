@@ -903,7 +903,11 @@ actually constructed anywhere in `mockymock/` --
 `tests/unit/test_refusal_explanations.py` cross-checks the dict against a
 regex scan of the whole package in both directions (missing entry fails
 CI; a stale entry for a code nothing emits anymore also fails, so the
-table never drifts from what the codebase can actually produce). Bare
+table never drifts from what the codebase can actually produce). The scan
+reads `code="X"`, flow_mocks.py's positional `_refusal("X", ...)` and a
+printed `refused (X)` problem string; before 2026-10-10 it read only the
+first, so `UNRESOLVED_FLOW_MOCK_TARGET`, `UNRESOLVED_CAPTURE_TARGET` and
+`COLUMN_OVERFLOW` were emitted but `explain` called them uncatalogued. Bare
 `explain` or `explain --list` prints every catalogued code; `explain
 <CODE>` (case-insensitive) prints its explanation, or -- if uncatalogued
 -- a `not catalogued` message naming every code that is (never a silent

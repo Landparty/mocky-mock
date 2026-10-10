@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-10 -- explain covers three more refusal codes
+
+`UNRESOLVED_FLOW_MOCK_TARGET`, `UNRESOLVED_CAPTURE_TARGET` and
+`COLUMN_OVERFLOW` were emitted (`_refusal("X", ...)` / `refused (X)`
+shapes) but missing from `REFUSAL_EXPLANATIONS`; the cross-check test now
+scans those shapes too. Updated [cli](cli.md).
+
 ## 2026-10-10 -- record-expectations skips a stub above the PERFORM
 
 A `*> STUB EXPECT` written above its TESTCASE's `PERFORM` is reported
