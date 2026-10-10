@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-10 -- record-expectations skips a stub above the PERFORM
+
+A `*> STUB EXPECT` written above its TESTCASE's `PERFORM` is reported
+skipped instead of being recorded into an `EXPECT` above the `PERFORM`,
+which the parser refuses -- `run --record-expectations` used to leave a
+`.cut` that no longer ran. Updated [analysis](analysis.md).
+
 ## 2026-10-09 -- DAP breakpoints matched by source path
 
 `setBreakpoints` for a copybook or any source other than the program

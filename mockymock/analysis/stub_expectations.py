@@ -31,6 +31,9 @@ _MOCK_OPEN_RE = re.compile(r"^\s*MOCK\s+\S")
 # TESTCASE header does -- a stub inside it belongs to no case.
 _PROVIDER_HEADER_RE = re.compile(r"^\s*PROVIDER\s+\S")
 _MOCK_CLOSE_RE = re.compile(r"^\s*END-MOCK\.?\s*$", re.IGNORECASE)
+# A TESTCASE's PERFORM line: its RECORD point is after it, and the parser
+# refuses an EXPECT above it (issue #150).
+_PERFORM_LINE_RE = re.compile(r"^\s*PERFORM\s")
 _STUB_RE = re.compile(
     rf"^\s*\*>\s*STUB EXPECT\s+(?P<name>{_SUBSCRIPTED_NAME})\s*"
     rf"(?:--\s*(?P<note>.*?)\s*)?$"
@@ -94,6 +97,8 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
     # (line, kind): kind is "case", "provider-case" (TESTCASE ... USING
     # PROVIDER) or "provider-block" (a PROVIDER data block).
     headers: list[tuple[int, str]] = []
+    # TESTCASE header line -> line of that case's PERFORM.
+    perform_line_by_header: dict[int, int] = {}
     in_mock = False
     for line_no, text in enumerate(raw_lines, start=1):
         if in_mock:
@@ -115,6 +120,8 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
             headers.append((line_no, kind))
         elif _PROVIDER_HEADER_RE.match(text):
             headers.append((line_no, "provider-block"))
+        elif _PERFORM_LINE_RE.match(text) and headers:
+            perform_line_by_header.setdefault(headers[-1][0], line_no)
 
     case_index_by_line = {
         case.line: index for index, case in enumerate(suite.test_cases, start=1)
@@ -176,6 +183,22 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
                     line_no,
                     name,
                     "inside a PROVIDER-templated TESTCASE, unsupported in v1",
+                )
+            )
+            continue
+        perform_line = perform_line_by_header.get(header_line)
+        if perform_line is None or line_no < perform_line:
+            # The recorded value is the post-PERFORM state and the rewrite
+            # replaces the stub line in place: an EXPECT above the PERFORM
+            # is refused by the parser (issue #150), so recording it would
+            # leave a .cut that no longer runs.
+            skipped.append(
+                SkippedStub(
+                    line_no,
+                    name,
+                    "above the PERFORM of its TESTCASE -- assertions are "
+                    "checked after the PERFORM, so move the stub below it "
+                    "to record it",
                 )
             )
             continue

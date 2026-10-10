@@ -371,6 +371,11 @@ Two things this scanner deliberately does NOT attempt, each producing a
   lines). The parser closes the preceding `TESTCASE` when a `PROVIDER`
   opens, so a `PROVIDER` line bounds attribution like a `TESTCASE`
   header does; such a stub used to be credited to the previous case.
+- **A stub above its `TESTCASE`'s `PERFORM`** (or in a case with no
+  `PERFORM`). The recorded value is the post-`PERFORM` state and the
+  rewrite replaces the stub line in place, so it became an `EXPECT` above
+  the `PERFORM`, which the parser refuses (issue #150): the rewritten
+  `.cut` no longer ran. The skip reason says to move the stub below it.
 
 A lightweight `MOCK`/`END-MOCK` open/close tracker (not a real parser)
 guards the scan against a stub-shaped comment written *inside* a mock
