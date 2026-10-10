@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-05T12:00:00Z
+timestamp: 2026-10-10T12:00:00Z
 ---
 
 # Overview
@@ -429,6 +429,33 @@ convention (still 3-digit-padded for small suites, but no longer
 truncating past 999) and the injector's `WHEN "{index:03d}"` literals in
 `injector.build_site_dispatch`, which must stay in sync with this field's
 width.
+
+# BEFORE-ALL state snapshot (snapshot.py)
+
+2026-10-10, suite hooks (`docs/2026-10-10-suite-hooks-design.md`). When
+a `.cut` has `BEFORE-ALL` steps, every case must start from the state
+they leave, not from the reset. `plan_snapshot(program, linkage_items)`
+covers exactly the items `reset.py` covers (top-level WORKING-STORAGE /
+LOCAL-STORAGE, each FD's longest record, neutralized LINKAGE items; no
+top-level REDEFINES or FILLER) and returns `UT-SNAP-nnn` declarations
+plus `UT-SAVE-STATE` / `UT-RESTORE-STATE` bodies, and one problem per
+item it can't copy exactly (`cli.checks` step 10 turns them into
+`UNSAVABLE_BEFORE_ALL_STATE`). The driver runs reset, BEFORE-ALL steps,
+save once; each case runs reset then restore -- the reset still handles
+harness fields, captures and the EIB.
+
+| Item | Snapshot field | Copy |
+|---|---|---|
+| Group | `01 UT-SNAP-nnn.` + `05 FILLER PIC X(n)`, n an upper bound (`_max_bytes`: REDEFINES children summed, every elementary at least 16 bytes, national x4) | `MOVE` (group move = byte copy; restore copies back exactly the group's own bytes) |
+| Elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
+| POINTER family, INDEX | same USAGE | `SET` |
+| Group holding OCCURS ... DEPENDING ON, unreadable OCCURS bound, irreproducible description | -- | refused |
+
+The size is an upper bound, not cobol-parser's `calculate_size`, on
+purpose: releases before 2026-09-10 undercounted some usages (COMP-1 as
+0, POINTER as 4), and an undercount would truncate the copy.
+Not compiled in CI (the integration job is off); the shapes are pinned by
+`tests/unit/test_suite_hooks.py`.
 
 # WORKING-STORAGE Reset (reset.py)
 

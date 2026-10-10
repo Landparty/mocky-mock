@@ -26,6 +26,7 @@ from mockymock.analysis.refusal import directive_matches_site
 from mockymock.dsl.model import (
     FILE_STATUS_CATEGORIES,
     SEQUENCED_CALL_CATEGORIES,
+    SUITE_PHASE_ID,
     MockCategory,
     MockTestSuite,
 )
@@ -156,6 +157,20 @@ def build_rows_block(
     return lines
 
 
+def dispatch_entries(suite: MockTestSuite) -> list[tuple[str, list]]:
+    """(UT-CURRENT-CASE value, mocks in force) for every WHEN branch a
+    dispatch block may need: one per test case, plus the suite phase
+    (BEFORE-ALL/AFTER-ALL steps, answered by BEFORE-ALL's mocks) when the
+    suite has one -- see docs/2026-10-10-suite-hooks-design.md."""
+    entries: list[tuple[str, list]] = [
+        (f"{index:03d}", case.mocks)
+        for index, case in enumerate(suite.test_cases, start=1)
+    ]
+    if suite.has_suite_phase:
+        entries.append((SUITE_PHASE_ID, suite.before_all_mocks))
+    return entries
+
+
 def build_site_dispatch(
     site: BoundarySite,
     suite: MockTestSuite,
@@ -213,19 +228,19 @@ def build_site_dispatch(
     file_status_fields = file_status_fields or {}
     lines = ["           EVALUATE UT-CURRENT-CASE"]
 
-    for index, case in enumerate(suite.test_cases, start=1):
-        matches = [d for d in case.mocks if directive_matches_site(d, site)]
+    for case_id, mocks in dispatch_entries(suite):
+        matches = [d for d in mocks if directive_matches_site(d, site)]
         if len(matches) > 1:
             raise ValueError(
                 f"site at line {site.line} matched by multiple directives of "
-                f"test case {index} -- refusal gate should have caught this "
+                f"test case {case_id} -- refusal gate should have caught this "
                 f"(AMBIGUOUS_MOCK)"
             )
         if not matches:
             continue
         directive = matches[0]
         tally_name = registry.name(directive.category, directive.key)
-        lines.append(f'               WHEN "{index:03d}"')
+        lines.append(f'               WHEN "{case_id}"')
         lines.append(f"                   ADD 1 TO {tally_name}")
         if trace:
             # Mock firing ORDER cannot be recovered from the GnuCOBOL trace
@@ -414,15 +429,15 @@ def build_flow_dispatch(
         f"       {plan.key}{suffix}.",
         "           EVALUATE UT-CURRENT-CASE",
     ]
-    for index, case in enumerate(suite.test_cases, start=1):
+    for case_id, mocks in dispatch_entries(suite):
         matches = [
-            d for d in case.mocks if d.category is plan.category and d.key == plan.key
+            d for d in mocks if d.category is plan.category and d.key == plan.key
         ]
         if not matches:
             continue
         directive = matches[0]
         tally_name = registry.name(directive.category, directive.key)
-        lines.append(f'               WHEN "{index:03d}"')
+        lines.append(f'               WHEN "{case_id}"')
         lines.append(f"                   ADD 1 TO {tally_name}")
         if trace:
             # A MOCK PARAGRAPH/SECTION is a mock the author declared, so it

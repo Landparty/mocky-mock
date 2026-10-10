@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from mockymock.analysis.refusal import RefusalReason
     from mockymock.dsl.model import MockTestSuite
     from mockymock.splicer.captures import CapturePlan
+    from mockymock.splicer.snapshot import StateSnapshot
     from mockymock.splicer.source_map import ScopeMap
 
 
@@ -71,6 +72,10 @@ class StaticCheckResult:
     # same reachability analysis a second time. Only cases with at least
     # one reason appear as a key.
     unmocked_reasons: dict[int, list[RefusalReason]] = field(default_factory=dict)
+    # Save/restore of the state BEFORE-ALL leaves behind (splicer.snapshot);
+    # None unless the suite has BEFORE-ALL steps. Every splice-and-compile
+    # pipeline passes it to build_driver.
+    snapshot: StateSnapshot | None = None
 
     @property
     def ok(self) -> bool:
@@ -444,6 +449,12 @@ def run_static_checks(
     # "GO TO <own-exit-label>" spliced into EXIT PARAGRAPH no longer
     # cascades fall-through reachability past its exit label.
     neutralized_goto = neutralized_goto_targets(parse_result.ast, scope_map, lines)
+    # BEFORE-ALL/BEFORE-EACH mocks are defaults shared by every case: each
+    # needs to be reached by SOME test case or hook step, not by all of
+    # them (refused after the loops below).
+    shared_mocks = suite.before_each_mocks + suite.before_all_mocks
+    shared_ids = frozenset(id(d) for d in shared_mocks)
+    matched_ids: set[int] = set()
     for case_index, case in enumerate(suite.test_cases):
         case_reasons = check_test_case(
             surface,
@@ -451,6 +462,8 @@ def run_static_checks(
             case,
             out.file_status_fields,
             neutralized_goto=neutralized_goto,
+            shared=shared_ids,
+            matched_out=matched_ids,
         )
         for r in case_reasons:
             out.problems.append(f"refused ({r.code}): {r.message}")
@@ -461,6 +474,51 @@ def run_static_checks(
                 )
         if case_reasons:
             out.unmocked_reasons[case_index] = case_reasons
+    # A hook PERFORM enters the program exactly like a TESTCASE's own
+    # PERFORM, so it is gated the same way -- with the mocks in force while
+    # it runs (docs/2026-10-10-suite-hooks-design.md). An EACH hook is
+    # checked once per test case; identical problems are reported once.
+    seen_hook_problems: set[str] = set()
+    for check in suite.hook_checks():
+        for r in check_test_case(
+            surface,
+            parse_result.ast,
+            check.case,
+            out.file_status_fields,
+            neutralized_goto=neutralized_goto,
+            shared=shared_ids,
+            matched_out=matched_ids,
+        ):
+            where = (
+                check.hook
+                if check.for_case is None
+                else (f"{check.hook} (TESTCASE {check.for_case.name!r})")
+            )
+            problem = (
+                f"refused ({r.code}): {where} PERFORM {check.step.target}: {r.message}"
+            )
+            key = f"{check.hook}|{check.step.line}|{r.code}|{r.suggested_fix}"
+            if key in seen_hook_problems:
+                continue
+            seen_hook_problems.add(key)
+            out.problems.append(problem)
+            if r.suggested_fix:
+                block = "BEFORE-ALL" if check.for_case is None else "BEFORE-EACH"
+                out.problems.append(f"    Add to {block}:")
+                out.problems.extend(
+                    f"    {line}" for line in r.suggested_fix.splitlines()
+                )
+    for directive in shared_mocks:
+        if id(directive) not in matched_ids:
+            block = (
+                "BEFORE-EACH"
+                if any(directive is d for d in suite.before_each_mocks)
+                else "BEFORE-ALL"
+            )
+            out.problems.append(
+                f"refused (UNMATCHED_MOCK): {block} MOCK {directive.describe()} "
+                f"is not reached by any test case or hook step"
+            )
     out.problems.extend(
         f"refused ({r.code}): {r.message}"
         for r in check_flow_mocks(parse_result.ast, suite, lines)
@@ -482,4 +540,18 @@ def run_static_checks(
         f"refused (UNRESOLVED_CAPTURE_TARGET): {problem}"
         for problem in capture_problems
     )
+    # 10. BEFORE-ALL state handover: every item it may change must be
+    # restorable exactly at the start of each test case, or the suite is
+    # refused -- a partially restored state is a silently wrong test.
+    if suite.before_all_steps:
+        from mockymock.splicer.snapshot import plan_snapshot
+
+        out.snapshot, snapshot_problems = plan_snapshot(
+            parse_result.ast,
+            out.linkage.linkage_items if out.linkage is not None else None,
+        )
+        out.problems.extend(
+            f"refused (UNSAVABLE_BEFORE_ALL_STATE): {problem}"
+            for problem in snapshot_problems
+        )
     return out

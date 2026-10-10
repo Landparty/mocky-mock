@@ -292,6 +292,18 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "program, or one target is captured from arguments of different "
         "layouts. Capture into a WORKING-STORAGE item of your own instead."
     ),
+    "UNSAVABLE_BEFORE_ALL_STATE": (
+        "The .cut has BEFORE-ALL steps, so every test case must start from "
+        "the state those steps leave behind -- mockymock saves each "
+        "WORKING-STORAGE, LOCAL-STORAGE and record item right after "
+        "BEFORE-ALL and restores it before each case. The named item "
+        "cannot be saved exactly: a group holding an OCCURS ... DEPENDING "
+        "ON table (its size at restore time depends on a counter the "
+        "restore overwrites), a table whose bound cannot be read, or an "
+        "item whose description cannot be reproduced. Move the steps to "
+        "BEFORE-EACH, which runs before every case and needs no saved "
+        "state."
+    ),
     "COLUMN_OVERFLOW": (
         "mockymock export could not fit an instrumented line within "
         "column 72, the fixed-format limit a mainframe compiler enforces "

@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-05T12:00:00Z
+timestamp: 2026-10-10T12:00:00Z
 ---
 
 # Overview
@@ -108,18 +108,49 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   deliberately never substituted) keep parsing verbatim. `PERFORM`'s target
   stays plain `\S+`: a paragraph/section name is never subscripted.
 
-### `BEFORE-EACH` / `BEFORE-ALL`
+### Suite hooks: `BEFORE-ALL` / `BEFORE-EACH` / `AFTER-EACH` / `AFTER-ALL`
 
-At most one of each per `TESTSUITE`, appearing after the `TESTSUITE`
-header and before the first `TESTCASE`. Bodies hold `MOCK` directives
-only. Desugared at parse time into every `TESTCASE`'s own `mocks` list;
+At most one of each per `TESTSUITE`, all after the `TESTSUITE` header and
+before the first `TESTCASE`. `BEFORE-*` close with `END-BEFORE`, `AFTER-*`
+with `END-AFTER` (the wrong one is a parse error naming the right one).
+Design: `docs/2026-10-10-suite-hooks-design.md`.
+
+**Steps** (2026-10-10): `MOVE <value> TO <target>` and `PERFORM <para>
+[THRU <para>]` lines in any of the four blocks become `HookStep`s, in
+order, on `MockTestSuite.before_all_steps` / `before_each_steps` /
+`after_each_steps` / `after_all_steps`. The driver runs them at JUnit's
+points: BEFORE-ALL once before the first case, then `UT-SAVE-STATE`;
+each case `UT-RESET-WORKING-STORAGE` + `UT-RESTORE-STATE` (only when
+BEFORE-ALL has steps), BEFORE-EACH steps before the case's own `MOVE`s,
+AFTER-EACH steps after its `EXPECT`/`VERIFY`; AFTER-ALL once after the
+last case. BEFORE-ALL/AFTER-ALL run with `UT-CURRENT-CASE` =
+`SUITE_PHASE_ID` (`"SUITE"`), answered by `before_all_mocks`
+(`injector.dispatch_entries`); EACH steps run inside the case with its
+mocks. When BEFORE-EACH has a `PERFORM`, the case's tallies are zeroed
+again after it, so `VERIFY` counts only the case's own `PERFORM`.
+`EXPECT`/`VERIFY` stay TESTCASE-only. See [splicer](splicer.md)'s
+"BEFORE-ALL state snapshot".
+
+**Static checks**: `MockTestSuite.hook_checks()` turns each hook
+`PERFORM` into a synthetic `MockTestCase` (EACH hooks once per test
+case), and `analysis_cases()` = test cases + those. `cli.checks` runs
+`check_test_case` on each (problems prefixed `BEFORE-ALL PERFORM X:`,
+deduplicated across cases, fix hint `Add to BEFORE-ALL:`/`BEFORE-EACH:`);
+`union_executed_paragraphs`, `find_terminator_plans` and `flow_mocks`
+iterate `analysis_cases()` so hook entry points count everywhere a case
+entry point does.
+
+**Mocks**: bodies of `BEFORE-*` may also hold `MOCK` directives (not
+`AFTER-*` -- a parse error that says where to declare it). They are
+desugared at parse time into every `TESTCASE`'s own `mocks` list;
 precedence on a `(category, key)` collision is `TESTCASE` >
-`BEFORE-EACH` > `BEFORE-ALL`, silently. The xUnit-style names suggest an
-execution-timing difference; there isn't one -- `BEFORE-ALL` and
-`BEFORE-EACH` differ **only** in override precedence. Both desugar into
-every test case identically at parse time; no code path ever runs a
-`BEFORE-ALL`/`BEFORE-EACH` body separately from, or before, the test
-case's own spliced mocks. See
+`BEFORE-EACH` > `BEFORE-ALL`, silently. The same directive objects stay
+on `suite.before_all_mocks` / `before_each_mocks`. A shared mock is a
+default: `check_test_case(shared=..., matched_out=...)` no longer
+refuses one a given case doesn't reach; `cli.checks` refuses it
+(`UNMATCHED_MOCK`, "not reached by any test case or hook step") only
+when nothing reaches it (2026-10-10; before, every case had to reach
+every shared mock). See
 `docs/2026-07-20-before-blocks-and-file-status-design.md`.
 
 ### `FILE-STATUS IS <mnemonic-or-code>`

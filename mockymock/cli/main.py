@@ -1438,6 +1438,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         registry,
         record_targets=record_targets,
         extra_working_storage_lines=extra_working_storage(checked),
+        snapshot=checked.snapshot,
     )
 
     instrumented = _insert_driver(lines, artifact)
@@ -1836,6 +1837,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         reset_lines,
         registry,
         extra_working_storage_lines=extra_working_storage(checked),
+        snapshot=checked.snapshot,
     )
     instrumented = _insert_driver(lines, artifact)
 
@@ -2185,6 +2187,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         reset_lines,
         registry,
         extra_working_storage_lines=extra_working_storage(checked),
+        snapshot=checked.snapshot,
     )
     instrumented, driver_line_indices = _insert_driver_with_origins(lines, artifact)
 

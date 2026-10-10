@@ -861,7 +861,9 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
     if ordered is None:
         return None
     union: set[str] = set()
-    for case in suite.test_cases:
+    # Hook PERFORM steps are entry points too (suite hooks).
+    entry_cases = suite.analysis_cases()
+    for case in entry_cases:
         seen, flow_reasons = _reachable_paragraphs(
             program, case.perform_target, case.perform_thru
         )
@@ -887,7 +889,7 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
     # selected case's PERFORM target/thru names one of its member
     # paragraphs directly -- see _paragraph_safe_section_map's docstring.
     case_seeds: set[str] = set()
-    for case in suite.test_cases:
+    for case in entry_cases:
         case_seeds.add(case.perform_target)
         if case.perform_thru:
             case_seeds.add(case.perform_thru)
@@ -1277,8 +1279,17 @@ def check_test_case(
     case: MockTestCase,
     file_status_fields: dict[str, str] | None = None,
     neutralized_goto: frozenset[str] | set[str] = frozenset(),
+    shared: frozenset[int] | set[int] = frozenset(),
+    matched_out: set[int] | None = None,
 ) -> list[RefusalReason]:
-    """`neutralized_goto` must be `neutralized_goto_targets(...)` computed
+    """`shared` holds the ids of BEFORE-ALL/BEFORE-EACH directives (aliased
+    into every case by the parser): one of them that this case never
+    reaches is NOT refused here, because a shared mock is a default -- it
+    is refused only when no test case and no hook step reaches it, which
+    the caller decides from the ids collected in `matched_out` (see
+    cli.checks, docs/2026-10-10-suite-hooks-design.md).
+
+    `neutralized_goto` must be `neutralized_goto_targets(...)` computed
     over the same (program, scope_map, lines) the splicer will use --
     passing it makes this gate's reachable set agree with the program
     that actually compiles (each covered GO TO becomes EXIT PARAGRAPH,
@@ -1615,8 +1626,15 @@ def check_test_case(
                 )
             )
 
+    if matched_out is not None:
+        matched_out.update(matched_directives)
     for directive in case.mocks:
         if id(directive) in matched_directives:
+            continue
+        if (
+            id(directive) in shared
+            and _unmockable_accept_for(directive, surface) is None
+        ):
             continue
         if directive.category in FLOW_CATEGORIES:
             if directive.key not in mocked_flow_names:

@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-10 -- suite hooks: BEFORE-ALL/BEFORE-EACH/AFTER-EACH/AFTER-ALL
+
+JUnit-style setup/teardown. `MOVE`/`PERFORM` steps in BEFORE-ALL and
+BEFORE-EACH, new AFTER-EACH/AFTER-ALL blocks (`END-AFTER`). BEFORE-ALL
+runs once and every case starts from the state it left (new
+`splicer/snapshot.py`, `UNSAVABLE_BEFORE_ALL_STATE`); hook PERFORMs go
+through every static gate as synthetic cases; shared BEFORE-* mocks only
+need to be reached by some case or hook step. Updated [dsl](dsl.md),
+[splicer](splicer.md).
+
 ## 2026-10-10 -- explain covers three more refusal codes
 
 `UNRESOLVED_FLOW_MOCK_TARGET`, `UNRESOLVED_CAPTURE_TARGET` and
