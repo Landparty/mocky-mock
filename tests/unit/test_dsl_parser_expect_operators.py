@@ -120,3 +120,41 @@ def test_provider_expansion_preserves_the_operator():
         "10",
         "20",
     ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "EXPECT WS-X TO BE 5.",
+        'EXPECT WS-X TO BE "OK".',
+        "EXPECT WS-X NOT TO BE GREATER THAN 10 .",
+    ],
+)
+def test_trailing_sentence_period_on_expect_value_fails_closed(line):
+    """`EXPECT WS-X TO BE 5.` (the COBOL sentence habit) used to lint
+    clean and splice `IF WS-X NOT = 5.` into the driver, where the period
+    ends the sentence mid-IF and cobc rejects the generated code."""
+    with pytest.raises(
+        CutParseError, match="line 4: EXPECT value .* ends with a period"
+    ):
+        parse_cut(_cut(line))
+
+
+def test_period_inside_a_quoted_expect_value_is_kept():
+    suite = parse_cut(_cut('EXPECT WS-X TO BE "DONE."'))
+    assert suite.test_cases[0].expectations[0].expected_value == '"DONE."'
+
+
+def test_trailing_period_substituted_from_a_provider_row_fails_closed():
+    text = (
+        'TESTSUITE "ops"\n'
+        "PROVIDER LIMITS\n"
+        "    HEADER Limit\n"
+        "    ROW 5\n"
+        "    ROW 7.\n"
+        'TESTCASE "case" USING PROVIDER LIMITS\n'
+        "    PERFORM MAIN\n"
+        "    EXPECT WS-X TO BE {Limit}\n"
+    )
+    with pytest.raises(CutParseError, match="line 5: EXPECT value '7.'"):
+        parse_cut(text)

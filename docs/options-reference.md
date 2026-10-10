@@ -24,7 +24,11 @@ This document only covers *usage*.
   - [`dashboard`](#mockymock-dashboard)
   - [`export`](#mockymock-export)
   - [`analyze`](#mockymock-analyze)
+  - [`report`](#mockymock-report)
+  - [`journal`](#mockymock-journal)
   - [`skills install`](#mockymock-skills-install)
+  - [`skills plugin`](#mockymock-skills-plugin)
+  - [`skills mode`](#mockymock-skills-mode)
 - [The `.cut` file: directives and options](#the-cut-file-directives-and-options)
 - [Environment variables](#environment-variables)
 - [Options quick-reference table](#options-quick-reference-table)
@@ -48,6 +52,62 @@ once: `--copybook-path a/ --copybook-path b/` searches both directories.
 running Docker daemon — COBOL is compiled and executed inside a GnuCOBOL
 container. Every other subcommand is pure parse-and-analyze and needs
 nothing beyond Python.
+
+## Project config file
+
+Rather than repeat the same flags on every invocation, state them once in a
+config file at the project root. Two are read, layered:
+
+**`cobol.yml`** (or `cobol.yaml`) — the *universal* project config, read by
+`mockymock`, `cobol-parser` and the COBOL Analyzer VS Code extension alike.
+Its `project:` section holds what every tool shares; its `mockymock:` section
+holds this CLI's own keys, and overrides `project:`.
+
+```yaml
+project:
+  copybook_path: [copybooks, shared/copybooks]
+  seed: 42
+
+mockymock:
+  test_root: tests
+  ai_mode: guided
+```
+
+**`mockymock.toml`**, or `pyproject.toml`'s `[tool.mockymock]` table — the
+tool-specific file. Same four keys, TOML spelling:
+
+```toml
+copybook_path = ["copybooks"]
+seed = 42
+test_root = "tests"
+ai_mode = "guided"
+```
+
+| Key | Type | Effect |
+|-----|------|--------|
+| `copybook_path` | string or list | Default for `--copybook-path` |
+| `seed` | integer | Default for `--seed` |
+| `test_root` | string | Where `run`/`lint` with no arguments look for `.cut` files |
+| `ai_mode` | `hands-on` \| `guided` \| `hands-off` | How much the packaged AI skill checks in |
+
+Both files are searched for independently, walking from the current
+directory up through its parents, and the nearest of each wins its own
+search — so a `cobol.yml` at a repo root and a `mockymock.toml` in a
+subproject both apply. When both exist, **`mockymock.toml` overrides
+`cobol.yml` key by key**; a key it does not mention keeps the universal
+file's value. Paths resolve against the file that declared them, not against
+your current directory, so a run from a subdirectory finds the same
+copybooks and the same suites as one from the project root.
+
+Precedence is always **explicit CLI flag > config file > built-in default**.
+An unrecognized key is an error naming the file — including `timeout`, which
+is deliberately not config-overridable. `mockymock doctor` reports every file
+that contributed, in the order they apply.
+
+Reading a `cobol.yml` needs cobol-parser >= 1.10, which owns the schema and
+the YAML reader; on an older one, a project that has such a file is told
+exactly that. Full schema reference: `docs/project-config.md` in the
+cobol-parser repo.
 
 ## CLI subcommands
 
@@ -326,10 +386,25 @@ Serves a local, read-only status page (loopback-only — always
 toolchain are up. It never builds or starts anything itself; it only
 reports status. Runs until you press Ctrl-C.
 
+Two more panels sit below the toolchain status:
+
+- **Test results** lists every `mockymock report` page (`*.report.html`)
+  under the reports directory, newest first, and shows the selected one
+  inline (or in its own tab).
+- **Plugin · cobol-testing** verifies the cobol-testing skills
+  (`mockymock`, `cobol-analysis`, `cobol-test`) for Claude Code
+  (`~/.claude/skills/`) and GitHub Copilot (`~/.copilot/skills/`): each
+  is `ok` only when every file is byte-identical to this mockymock's copy.
+  Each assistant's **Install** button does what
+  `mockymock skills install --target claude|copilot` does;
+  an installed copy that differs is replaced only after you confirm.
+  This button is the only thing the dashboard ever writes.
+
 | Option | Default | Description |
 |---|---|---|
 | `--port N` | `8765` | TCP port to serve on. Pass `0` to let the OS pick a free port. |
 | `--no-browser` | off | Don't automatically open a browser window on start. |
+| `--reports-dir DIR` | current directory | Where to look for `*.report.html` test reports (hidden, `node_modules`, build folders skipped; six levels deep). |
 
 ```bash
 mockymock dashboard
@@ -390,24 +465,133 @@ mockymock analyze program-flow ORDRPROC.cbl
 Those flags belong to cobol-parser, not mockymock — see cobol-parser's own
 CLI documentation for the full list.
 
-### `mockymock skills install`
+### `mockymock report`
 
 ```bash
-mockymock skills install [--project] [--force]
+mockymock report [PROGRAM.cbl] [--cut PROGRAM.cut] [-o PROGRAM.report.html]
+    [--json PATH] [--execute] [--mutate]
+    [--run-json PATH] [--coverage-json PATH] [--mutation-json PATH]
+    [--journal PATH] [--scenarios happy|branches|all|none] [--seed N]
+    [--timeout S] [--mutation-threshold PCT] [--copybook-path DIR ...]
 ```
 
-Installs the packaged Claude Code skill (`SKILL.md` plus `reference/`
-files teaching an AI assistant to scaffold, edit, and run `.cut` files)
-so a Claude Code session can use it.
+One self-contained HTML page (plus JSON with `--json`) for a program and
+its suite: eleven steps (environment, understand, rules, inventory, lint,
+scenarios, run, coverage, mutation, dialect, verdict), a verification
+level per test case (L0 static, L1 executed, L2 strong, L3
+dialect-checked), assertion labels (INTENT / CHARACTERIZATION /
+unlabelled), and findings ranked by severity.
 
 | Option | Default | Description |
 |---|---|---|
-| `--project` | off | Install into `./.claude/skills/mockymock` instead of `~/.claude/skills/mockymock`. |
-| `--force` | off | Overwrite an existing install at the target path. Without it, an existing target refuses the install so local edits are never silently clobbered. |
+| `-o`, `--output` | `<program>.report.html` | HTML path. |
+| `--json` | none | Also write the report as JSON. |
+| `--execute` | off | Run the suite with coverage now (Docker). |
+| `--mutate` | off | Run mutation testing now (Docker, slower). |
+| `--run-json` / `--coverage-json` / `--mutation-json` | none | Reuse results an earlier `run --json-report` / `run --coverage-json` / `mutate --json-report` wrote, instead of re-running. |
+| `--journal` | `<cut>.journal.jsonl` if present | The assistant's step journal (see `mockymock journal`). |
+| `--scenarios` | `branches` | How to measure reachable branch arms; `none` skips the fixture step. |
+| `--seed` | none | Seed for that fixture generation. |
+| `--timeout` | `run`'s own | Per-run timeout passed to `run`. |
+| `--mutation-threshold` | `80` | Mutation score (percent) a suite needs for its cases to reach L2. |
+| `--copybook-path` | config / defaults | As everywhere else. |
+
+Exits 1 when a test failed or the suite is refused by the static gate,
+else 0. Without `--execute`/`--run-json`, nothing is claimed beyond L0.
+
+### `mockymock journal`
+
+```bash
+mockymock journal (--cut PROGRAM.cut | --file PATH) --step NAME --summary TEXT
+    [--status ok|warn|fail|skipped|info] [--command TEXT] [--decision TEXT]
+```
+
+Appends one JSON line to the suite's journal (`<cut stem>.journal.jsonl`
+next to the `.cut`, or `--file`), which `mockymock report` shows as a
+timeline: what the assistant did at each step and why.
+
+### `mockymock skills install`
+
+```bash
+mockymock skills install [--project] [--force] [--skill NAME ...] [--target claude|copilot|all]
+```
+
+Installs the packaged agent skills so a Claude Code or GitHub Copilot
+session can use them: `mockymock` (scaffold, edit and run `.cut` files), `cobol-test`
+(the whole job from understanding a program to the HTML report) and
+`cobol-analysis` (which cobol-parser subcommand answers which question).
+
+| Option | Default | Description |
+|---|---|---|
+| `--project` | off | Install into the current directory instead of the home directory: `./.claude/skills/<name>`, or `./.github/skills/<name>` for Copilot. |
+| `--target` | `claude` | Which assistant: `claude` (`~/.claude/skills/`), `copilot` (GitHub Copilot: `~/.copilot/skills/`, read by the Copilot CLI, cloud agent and VS Code / JetBrains agent mode) or `all`. The skill files are identical; they are standard Agent Skills. |
+| `--force` | off | Overwrite existing installs. Without it, any existing target refuses the whole install (nothing is written) so local edits are never silently clobbered. |
+| `--skill` | all three | Install only this skill (repeatable): `mockymock`, `cobol-analysis`, `cobol-test`. |
 
 ```bash
 mockymock skills install
 mockymock skills install --project --force
+mockymock skills install --target copilot
+```
+
+### `mockymock skills plugin`
+
+```bash
+mockymock skills plugin [DIRECTORY] [--force]
+```
+
+Writes the `cobol-testing` Claude Code plugin as a local marketplace, so
+it installs from disk with no clone and no network:
+
+```
+<DIRECTORY>/.claude-plugin/marketplace.json      (marketplace "mocky-mock-local")
+<DIRECTORY>/cobol-testing/.claude-plugin/plugin.json
+<DIRECTORY>/cobol-testing/skills/{mockymock,cobol-analysis,cobol-test}/
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `DIRECTORY` | `~/.mockymock/claude-plugin` | Where to write it. An empty or missing directory is fine. |
+| `--force` | off | Replace an earlier export there (re-run after upgrading mockymock). A non-empty directory that is not an earlier export is refused even with `--force`. |
+
+Then, in Claude Code:
+
+```
+/plugin marketplace add ~/.mockymock/claude-plugin
+/plugin install cobol-testing@mocky-mock-local
+```
+
+or, for one session only, `claude --plugin-dir ~/.mockymock/claude-plugin/cobol-testing`.
+
+### `mockymock skills mode`
+
+```bash
+mockymock skills mode [--set MODE] [--json]
+```
+
+Shows (or sets) the **AI assistant mode**: how much the packaged skill
+checks in with the developer while it builds a suite. Three modes, from
+most to least developer involvement — `hands-on` (propose first, wait for
+a yes before each change), `guided` (the default: narrate every step,
+stop at the checkpoints), `hands-off` (run the whole workflow, report
+once at the end). The mode never changes the floor the assistant always
+asks about: editing the `.cbl` under test, overwriting a `.cut` it didn't
+write, turning a suspected program bug into a passing assertion, or
+acting outside the mockymock loop.
+
+The mode lives in the project config file as `ai_mode`, so it is per-repo
+and survives across sessions. `mockymock doctor` reports the active mode
+too.
+
+| Option | Default | Description |
+|---|---|---|
+| `--set MODE` | — | Persist `ai_mode = "MODE"` to the project's `mockymock.toml`, creating it if there is none. Refuses when the project configures mockymock through `pyproject.toml`'s `[tool.mockymock]` — a `mockymock.toml` written beside it would shadow that table wholesale — or through a `cobol.yml`, which mockymock reads but does not rewrite; prints the lines to add instead. |
+| `--json` | off | Print the active mode, its source, and every mode's contract as JSON. |
+
+```bash
+mockymock skills mode
+mockymock skills mode --set hands-off
+mockymock skills mode --json
 ```
 
 ## The `.cut` file: directives and options
@@ -691,7 +875,11 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | `lint` | no | `--cut`, `--copybook-path` |
 | `mutate` | yes (unless `--list`) | `--cut`, `--copybook-path`, `--list`, `--timeout`, `--json-report`, `--fail-under` |
 | `collect` | no | `--cut`, `--json` |
-| `dashboard` | read-only probe | `--port`, `--no-browser` |
+| `dashboard` | read-only probe | `--port`, `--no-browser`, `--reports-dir` |
 | `export` | no | `--cut`, `-o`, `--copybook-path`, `--case`, `--tag` |
 | `analyze` | no | *(forwarded to cobol-parser)* |
-| `skills install` | no | `--project`, `--force` |
+| `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
+| `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
+| `skills install` | no | `--project`, `--force`, `--skill`, `--target` |
+| `skills plugin` | no | `--force` |
+| `skills mode` | no | `--set`, `--json` |

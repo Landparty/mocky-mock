@@ -14,7 +14,7 @@ The first four (`ACCTPRG`, `DEPTIMSM`, `DEPTMQC`, `DEPTMQP`) are
 hand-written; the other thirteen are sourced from the sibling
 `legacy-application` corpus (`../legacy-application/cobol/`) — see
 "Provenance" below. Together all 17 give the corpus's entire COBOL
-program set a real, passing `mockymock run` suite (238 test cases total,
+program set a real, passing `mockymock run` suite (241 test cases total,
 0 failing), not just a clean `mockymock generate` static pass — see
 `docs/corpus-sweep-report.md` for the standing parse/generate sweep
 across the same 17 programs.
@@ -35,8 +35,11 @@ Scans every `CUSTSEG` segment in `CUSTDB` via `CALL 'CBLTDLI'` (`GHN`/
 batch idiom: a bare `ENTRY 'DLITCBL'` with a `LINKAGE SECTION` PCB mask
 (`CUST-PCB-LNK`) that mockymock neutralizes into real, addressable
 WORKING-STORAGE — a `MOCK CALL "CBLTDLI"` body can `MOVE` straight into
-`CUST-STATUS` to simulate a DL/I response code. The last test case drives
-`0000-MAIN-PROCESS`, the program's real entry point, to `GOBACK`.
+`CUST-STATUS` to simulate a DL/I response code. The last three test cases
+drive `0000-MAIN-PROCESS`, the program's real entry point, to `GOBACK`: one
+down the empty-database path, and two through real purge-loop iterations
+using `MOCK CALL "CBLTDLI" ROWS ( ... ) TERMINAL ( ... )`, which answers
+the priming GHN, the DLET and the loop GHN in call order.
 
 ```bash
 mockymock run examples/real-world/ACCTPRG/ACCTPRG.cbl \

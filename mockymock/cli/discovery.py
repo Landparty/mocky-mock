@@ -72,6 +72,60 @@ def resolve_cut_path(explicit: str | None, program_path: Path) -> Path:
     )
 
 
+def effective_copybook_paths(
+    program_path: Path, resolved_paths: list[str]
+) -> list[str]:
+    """Append `program_path`'s own `copybooks/` subdirectory -- the
+    layout every example under `examples/real-world/` uses -- to
+    `resolved_paths` (already resolved from an explicit `--copybook-path`
+    flag or the project config file, see `config.resolve_copybook_paths`),
+    when it exists and isn't already present. Never reorders or removes
+    anything the caller already resolved -- this is an additive fallback,
+    tried after everything explicit, so a program with copybooks
+    somewhere else entirely is unaffected and a program with none at all
+    pays no cost. See docs/2026-09-15-copybook-discovery-defaults-design.md.
+
+    Deliberately does NOT also default to `program_path`'s own directory
+    (the design doc's original second fallback): that directory always
+    exists trivially, so adding it unconditionally would turn every
+    COPY-bearing program into an implicit copybook search even when none
+    was ever configured -- observed in practice as
+    test_fixtures_copy_bearing_program_without_copybook_path_refuses
+    breaking, because a program with an unresolvable COPY and truly no
+    copybook path configured is supposed to fall through unexpanded and
+    be caught by the structural UNRESOLVED_COPYBOOK gate, not attempt
+    (and fail) expansion against its own source directory."""
+    result = list(resolved_paths)
+    seen: set[Path] = set()
+    for entry in result:
+        try:
+            seen.add(Path(entry).resolve())
+        except OSError:  # pragma: no cover - unresolvable path, leave as-is
+            continue
+    default_dir = program_path.parent / "copybooks"
+    if default_dir.is_dir():
+        resolved_default = default_dir.resolve()
+        if resolved_default not in seen:
+            result.append(str(default_dir))
+    return result
+
+
+def copybook_not_found_hint() -> str:
+    """The actionable follow-up line appended after a
+    cobolparser.preprocess.CopybookNotFoundError's own message (which
+    already names every path it searched). Formatted as a 4-space
+    continuation line, matching how the rest of this CLI already renders
+    a multi-line problem (see `_cmd_lint`'s "  " prefix convention)."""
+    # Names cobol.yml first: it is the file the rest of the tool family
+    # (cobol-parser, the COBOL Analyzer extension) reads too, so one entry
+    # there fixes every tool at once -- see `config.py`'s module docstring.
+    return (
+        "    Pass its location with --copybook-path <dir> (repeatable), or "
+        "set copybook_path under project: in cobol.yml (shared with "
+        "cobol-parser) or in mockymock.toml / [tool.mockymock]."
+    )
+
+
 def discover_cut_files(root: Path) -> list[Path]:
     """Every `.cut` file under `root`, sorted for deterministic output,
     skipping `CUT_DISCOVERY_EXCLUDE_DIRS`. Returns an empty list (never
@@ -80,7 +134,14 @@ def discover_cut_files(root: Path) -> list[Path]:
         return []
     results = []
     for path in root.rglob("*.cut"):
-        if any(part in CUT_DISCOVERY_EXCLUDE_DIRS for part in path.parts):
+        # Only the parts *below* `root` are subject to the exclude list:
+        # the root itself may legitimately live under a `build/` or
+        # `dist/` (an absolute test_root, a CI checkout path), and that
+        # must not silently empty the scan.
+        if any(
+            part in CUT_DISCOVERY_EXCLUDE_DIRS
+            for part in path.relative_to(root).parts[:-1]
+        ):
             continue
         results.append(path)
     return sorted(results)

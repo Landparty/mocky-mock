@@ -158,3 +158,14 @@ def test_init_stops_before_run_when_generate_fails(tmp_path, monkeypatch, capsys
     exit_code = main(["init", str(_ORDRPROC_CBL), "-o", str(out_cut)])
     assert exit_code == 1
     assert run_calls == []
+
+
+def test_init_refuses_a_cut_file_passed_as_the_program(tmp_path, capsys):
+    cut = tmp_path / "P.cut"
+    cut.write_text('TESTSUITE "s"\n')
+    exit_code = main(["init", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "is the .cut file, not the COBOL program" in out
+    assert "--force" not in out
+    assert cut.read_text() == 'TESTSUITE "s"\n'

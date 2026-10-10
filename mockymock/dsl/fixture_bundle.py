@@ -130,6 +130,19 @@ def _load_field_spec(data: dict[str, Any]) -> FieldSpec:
     )
 
 
+def _object(value: Any, what: str) -> dict[str, Any]:
+    """`dict(value)` for a JSON object only. `dict()` of anything else
+    either raised a raw ValueError (`"abc"`) that escaped the typed
+    MalformedBundleError, or silently built a garbage mapping from a list
+    of two-character strings (`["AB"]` -> `{"A": "B"}`)."""
+    if not isinstance(value, dict):
+        raise MalformedBundleError(
+            f"fixture bundle {what} must be a JSON object, got "
+            f"{type(value).__name__}"
+        )
+    return dict(value)
+
+
 def _load_fixture(data: dict[str, Any]) -> BoundaryFixture:
     return BoundaryFixture(
         category=data["category"],
@@ -138,9 +151,9 @@ def _load_fixture(data: dict[str, Any]) -> BoundaryFixture:
         line=data.get("line"),
         direction=data["direction"],
         layout=[_load_field_spec(f) for f in data.get("layout") or []],
-        sequence=[dict(row) for row in data.get("sequence") or []],
+        sequence=[_object(row, "sequence row") for row in data.get("sequence") or []],
         terminal=data.get("terminal"),
-        status=dict(data.get("status") or {}),
+        status=_object(data.get("status") or {}, "fixture status"),
         provenance=data.get("provenance", "picture-random"),
         unresolved=list(data.get("unresolved") or []),
     )
@@ -191,7 +204,11 @@ def load_fixture_bundle(data: dict[str, Any]) -> FixtureBundle:
             f"fixture bundle must be a JSON object, got {type(data).__name__}"
         )
     version = data.get("bundle_version")
-    if version != SUPPORTED_BUNDLE_VERSION:
+    # `type(...) is int`, not `==` alone: JSON `true` and `1.0` both
+    # compare equal to 1 in Python, so a bundle declaring either used to
+    # be accepted as version 1 -- and then carried `True`/`1.0` into
+    # `FixtureBundle.bundle_version`.
+    if type(version) is not int or version != SUPPORTED_BUNDLE_VERSION:
         raise UnsupportedBundleVersionError(
             f"unsupported fixture bundle_version {version!r} -- this "
             f"mockymock only understands {SUPPORTED_BUNDLE_VERSION!r}. "

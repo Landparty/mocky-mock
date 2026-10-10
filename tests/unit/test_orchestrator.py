@@ -720,3 +720,54 @@ def test_section_scoped_terminator_is_replaced_with_exit_section():
     # only the terminator's own replacement uses EXIT SECTION
     assert 'IF UT-EARLY-EXIT = "Y"' in joined
     assert "EXIT PARAGRAPH" in joined
+
+
+LITERAL_ARG_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CAPL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  ABC                PIC X(3) VALUE "ZZZ".
+       01  WS-AMT             PIC 9(3).
+       01  WS-T1              PIC X(3).
+       01  WS-T2              PIC X(3).
+       01  WS-T3              PIC 9(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUBX" USING BY CONTENT "ABC" 'D''E'
+               BY REFERENCE WS-AMT.
+"""
+
+
+def test_capture_of_a_literal_argument_moves_the_literal_not_a_same_named_item():
+    # cobolparser reports `"ABC"` by its value with the quotes stripped, so
+    # the capture used to emit `MOVE ABC TO WS-T1` -- which silently moved
+    # the unrelated WORKING-STORAGE item ABC ("ZZZ"), or failed in cobc
+    # when no such item existed.
+    case = MockTestCase(
+        name="literal capture",
+        mocks=[
+            MockDirective(
+                MockCategory.CALL,
+                "SUBX",
+                captures=[(1, "WS-T1"), (2, "WS-T2"), (3, "WS-T3")],
+            )
+        ],
+        perform_target="MAIN-PARA",
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    result = parse_cobol(LITERAL_ARG_SOURCE, filename="capl.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(LITERAL_ARG_SOURCE.splitlines()).splitlines()
+    spliced = splice_program(
+        lines,
+        collect_boundaries(result.ast),
+        analyze(result.ast),
+        suite,
+        TallyRegistry(suite),
+    )
+    moves = [ln.strip() for ln in spliced if ln.strip().startswith("MOVE ")]
+    assert 'MOVE "ABC" TO WS-T1' in moves
+    assert "MOVE 'D''E' TO WS-T2" in moves
+    assert "MOVE WS-AMT TO WS-T3" in moves
+    assert "MOVE ABC TO WS-T1" not in moves

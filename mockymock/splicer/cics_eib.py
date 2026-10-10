@@ -70,20 +70,38 @@ _DFHEIBLK_LINES = [
 ]
 
 
+# IBM's EXEC DLI interface block for COBOL (DLIDIB), as the DL/I
+# translator inserts it. INITIALIZE leaves DIBSTAT blank -- "call
+# succeeded" -- so an unmocked-status case reads as a normal return.
+_DLIDIB_LINES = [
+    "01  DLIDIB.",
+    "    05  DIBVER       PIC X(2).",
+    "    05  DIBSTAT      PIC X(2).",
+    "    05  DIBSEGM      PIC X(8).",
+    "    05  FILLER       PIC X(1).",
+    "    05  FILLER       PIC X(1).",
+    "    05  DIBSEGLV     PIC X(2).",
+    "    05  DIBKFBL      PIC S9(4) COMP.",
+    "    05  DIBDBDNM     PIC X(8).",
+    "    05  DIBDBORG     PIC X(8).",
+    "    05  FILLER       PIC X(6).",
+]
+
+
 def working_storage_lines(plan: CicsEibPlan) -> list[str]:
     """The `01 DFHEIBLK.` group's WORKING-STORAGE text, unindented (callers
     add whatever column-position prefix their own insertion point needs --
     matching how `driver.build_driver`'s own bookkeeping fields are
     generated and later prefixed by `cli.main._insert_driver`).
 
-    `plan` is accepted, not just a bare no-arg call, so a future revision
-    that emits a narrower subset based on `plan.referenced_names` stays a
-    signature-compatible change -- today's synthesis is always the full
-    fixed layout regardless of which fields were referenced (see module
-    docstring).
+    The full fixed `DFHEIBLK` layout when any EIB name is referenced, and
+    the `DLIDIB` block when any DIB name is (issue #145) -- each whole,
+    whichever of its fields matched, as a real translator would insert it.
     """
-    del plan  # unused today; see docstring
-    return list(_DFHEIBLK_LINES)
+    lines = list(_DFHEIBLK_LINES) if plan.referenced_names else []
+    if plan.dib_names:
+        lines.extend(_DLIDIB_LINES)
+    return lines
 
 
 def reset_lines(plan: CicsEibPlan) -> list[str]:
@@ -94,5 +112,7 @@ def reset_lines(plan: CicsEibPlan) -> list[str]:
     rule for a VALUE-less group applies (zero COMP/COMP-3 fields, space-fill
     alphanumeric ones) -- which happens to already be the realistic
     "no COMMAREA passed, first invocation" default (`EIBCALEN = 0`)."""
-    del plan  # unused today; see docstring
-    return ["INITIALIZE DFHEIBLK"]
+    lines = ["INITIALIZE DFHEIBLK"] if plan.referenced_names else []
+    if plan.dib_names:
+        lines.append("INITIALIZE DLIDIB")
+    return lines

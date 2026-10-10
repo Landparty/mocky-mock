@@ -33,6 +33,9 @@ Rules that matter in practice:
 
 - Exactly one `TESTSUITE` per file, at most one `BEFORE-ALL` and one
   `BEFORE-EACH`, exactly one `PERFORM` per `TESTCASE`.
+- Setup `MOVE`s go above the `PERFORM`, `EXPECT`/`VERIFY` below it; the
+  other order is a parse error (they would silently run on the wrong side
+  of it). `MOCK` directives can go anywhere in the case.
 - Every keyword is case-sensitive uppercase, **except** `END-MOCK`/
   `END-BEFORE` (case-insensitive, optional trailing period -- `end-mock.`
   is fine).
@@ -82,7 +85,7 @@ END-MOCK
 `PARAGRAPH`/`SECTION` mocks replace the whole body of that paragraph or
 section, letting you isolate a caller from its own collaborators.
 
-### `ROWS` -- multi-row cursor sugar (`SQL` and `READ` only)
+### `ROWS` -- one response per call (`SQL`, `READ`, `RETURN`, `CALL`, `MQ`, `DLI`)
 
 For a `SQL` cursor `FETCH` loop or a sequential `READ` loop that should
 return a fixed sequence of rows and then signal exhaustion:
@@ -102,16 +105,83 @@ MOCK READ INV-FILE ROWS
 END-MOCK
 ```
 
+A plain `MOCK CALL` body answers every call of that key the same way. When
+one routine is called for different purposes in one run -- IMS `CBLTDLI`
+used for a priming GHN, a DLET and the loop's next GHN, an `MQGET` loop, a
+DB2 access module called in a loop -- give it `ROWS` instead, one row per
+call in the order the program makes them:
+
+```
+MOCK CALL "CBLTDLI" ROWS
+    ( CUST-STATUS = SPACES, CUST-IO-CIF = "C000000001", CUST-IO-STATUS = "CL" )
+    ( CUST-STATUS = SPACES )
+    TERMINAL ( CUST-STATUS = "GB" )
+END-MOCK
+```
+
 - Each `( FIELD = value, ... )` group is one row, returned in order on
-  successive calls.
-- `TERMINAL ( FIELD = value, ... )` (`READ` only, optional, at most one)
-  sets the fields for the rows-exhausted branch. If your loop guard is a
-  flag set by the program's own `AT END` clause (not the file status),
-  put that flag's `MOVE` here too, or the loop will never terminate.
+  successive calls. Rows only `MOVE` values; anything else (a `SET`, an
+  `IF`) needs a plain mock body.
+- For `CALL`/`MQ`/dynamic `CALL`/`DLI`, rows count the calls of that key
+  across **every** call site in the test case (row 2 is the second
+  `CBLTDLI` call wherever it happens), restarting at row 1 in each test
+  case. `run --trace` prints the order mocks fired in, if you need to
+  check it.
+- `TERMINAL ( FIELD = value, ... )` answers every call after the last
+  row. It is **required** for `CALL`/`MQ`/`DLI` (give the end-of-data
+  response, e.g. `GB`, or the loop never ends), optional for `READ`, and
+  needed for `RETURN`. If a `READ` loop guard is a flag set by the
+  program's own `AT END` clause (not the file status), put that flag's
+  `MOVE` here too.
 - `SQL`'s exhausted branch is fixed (`SQLCODE = 100`, DB2's "not found"
-  code) and needs no `TERMINAL` group.
-- `ROWS` is only valid on `SQL` and `READ`; using it elsewhere is a parse
-  error.
+  code) and takes no `TERMINAL` group.
+- `CAPTURE ARG` still works inside a `CALL ... ROWS` body.
+- `ROWS` on any other category is a parse error.
+
+### A mock replaces the whole statement, clauses included
+
+A `MOCK` on a statement replaces that statement *and every clause it
+owns*, not just the I/O. For `READ` that means the entire
+`READ ... AT END ... NOT AT END ... END-READ`: the program's own
+statements inside `AT END` and `NOT AT END` are commented out and never
+run, even when they are business logic rather than I/O handling. The
+same holds for `INVALID KEY` / `NOT INVALID KEY` on `READ`, `WRITE`,
+`REWRITE`, `DELETE` and `START`, and for `ON EXCEPTION` /
+`NOT ON EXCEPTION` on `CALL`.
+
+So a mock that sets only the record field leaves anything the program
+derives from it inside the clause unset:
+
+```
+       READ PURGE-PARM-FILE
+           AT END
+               MOVE "Y" TO WS-EOF
+           NOT AT END
+               MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE
+       END-READ
+```
+
+```
+MOCK READ PURGE-PARM-FILE
+    MOVE "20260101" TO PURG-CUTOFF-DATE    *> WS-CUTOFF-DATE stays unset
+END-MOCK
+```
+
+Set the field the rest of the program actually reads, doing in the mock
+body what the deleted clause would have done:
+
+```
+MOCK READ PURGE-PARM-FILE
+    MOVE "20260101" TO PURG-CUTOFF-DATE
+    MOVE "20260101" TO WS-CUTOFF-DATE      *> the NOT AT END's own MOVE
+END-MOCK
+```
+
+With `ROWS`, put those fields in each row group, and the `AT END`
+clause's own statements in `TERMINAL` (see above). `mockymock fixtures`
+and scaffolding copy the `AT END` clause's literal `MOVE`/`SET`
+statements into `TERMINAL` for you; nothing copies `NOT AT END`, because
+its statements usually read the record and depend on runtime values.
 
 ### `CAPTURE ARG <n> INTO <target>` -- argument capture (`CALL`/dynamic `CALL` only)
 
@@ -154,6 +224,13 @@ The entry point for the test case -- exactly one per `TESTCASE`:
 PERFORM MAIN-PROCESS
 PERFORM VALIDATE-INPUT THRU VALIDATE-INPUT-EXIT
 ```
+
+This single line is what decides whether a case is a paragraph test or a
+whole-program test. `PERFORM VALIDATE-INPUT` exercises that paragraph
+alone, so a failure can only come from it; `PERFORM 0000-MAIN` (the
+program's entry paragraph) drives the entire `PERFORM` chain, with every
+boundary reachable through it needing a `MOCK`. Build the paragraph
+cases first -- see `paragraph-first-workflow.md`.
 
 ## `EXPECT <data-name> [NOT] TO BE [<comparison>] <value>`
 

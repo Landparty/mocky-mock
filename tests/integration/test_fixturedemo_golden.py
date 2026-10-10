@@ -24,7 +24,7 @@ from mockymock.analysis.mock_surface import analyze
 from mockymock.cli.checks import run_static_checks
 from mockymock.cli.main import main
 from mockymock.dsl.fixture_bundle import load_fixture_bundle_file
-from mockymock.dsl.generator import scaffold_cut
+from mockymock.dsl.generator import ProgramContext, scaffold_cut
 from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 from tests.integration._docker import requires_docker
 
@@ -45,7 +45,16 @@ def _generate_cut_text() -> str:
     surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
 
-    return scaffold_cut(result.ast.program_name, surface, bundle)
+    # The same ProgramContext `_cmd_generate` passes: without it the scaffold
+    # emits no CAPTURE ARG lines (and no `*> STUB EXPECT` for them), so the
+    # text would silently diverge from what `mockymock generate --fixtures`
+    # actually writes -- which is what this golden pins.
+    return scaffold_cut(
+        result.ast.program_name,
+        surface,
+        bundle,
+        source=ProgramContext.build(result.ast, lines, surface),
+    )
 
 
 def test_fixturedemo_cut_matches_checked_in_golden():

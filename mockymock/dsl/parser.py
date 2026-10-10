@@ -54,6 +54,9 @@ import re
 from mockymock.dsl.model import (
     CAPTURE_CATEGORIES,
     FILE_STATUS_CATEGORIES,
+    ROWS_CATEGORIES,
+    SEQUENCED_CALL_CATEGORIES,
+    TERMINAL_CATEGORIES,
     DataProvider,
     ExpectDirective,
     MockCategory,
@@ -81,6 +84,11 @@ _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
 _BARE_CATS = (
     "CALL|OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK|ACCEPT"
     "|SORT|MERGE|RELEASE|RETURN|INITIATE|GENERATE|TERMINATE|PARAGRAPH|SECTION"
+)
+
+_ROWS_SUPPORTED = (
+    "ROWS is only supported for MOCK SQL, MOCK READ, MOCK RETURN, "
+    "MOCK CALL (static or dynamic), MOCK MQ, and MOCK DLI"
 )
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
@@ -141,7 +149,9 @@ _EXPECT_RE = re.compile(
 # as a cobc compile error pointing at generated code. Fail closed at the
 # .cut line instead. The trailing (?:\s|$) keeps a legitimate hyphenated
 # identifier like OR-FLAG or GREATER-VALUE parsing as an ordinary value.
-_EXPECT_DANGLING_PHRASE_RE = re.compile(r"^(?:GREATER|LESS|THAN|OR|EQUAL)(?:\s|$)")
+# NOT belongs here too: `TO BE NOT 5` (NOT after TO BE rather than before
+# it) otherwise parsed as the value `NOT 5` and generated `IF X NOT = NOT 5`.
+_EXPECT_DANGLING_PHRASE_RE = re.compile(r"^(?:GREATER|LESS|THAN|OR|EQUAL|NOT)(?:\s|$)")
 _VERIFY_QUOTED_RE = re.compile(
     rf'^VERIFY\s+(?:(?P<cat>{_QUOTED_CATS})\s+)?"(?P<key>[^"]*)"'
     rf"\s+WAS\s+(?:CALLED|PERFORMED)\s+(?P<expectation>.+)$"
@@ -214,8 +224,22 @@ _CAPTURE_PREFIX_RE = re.compile(r"^CAPTURE\b")
 _BALANCED_SUBSCRIPT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\s*\([^()]*\)$")
 
 
+_DOTTED_NAME_RE = re.compile(r"[A-Za-z0-9-]\.[A-Za-z0-9]")
+
+
 class CutParseError(ValueError):
     """Raised when a .cut file doesn't match the grammar."""
+
+
+def _reject_before_perform(case, keyword: str, line_no: int) -> None:
+    """EXPECT/VERIFY are checked after the PERFORM whatever their position,
+    so one written above it would silently assert on the post-PERFORM
+    state (issue #150)."""
+    if not case.perform_target:
+        raise CutParseError(
+            f"line {line_no}: {keyword} before the PERFORM -- assertions are "
+            f"checked after it runs, so write them below the PERFORM"
+        )
 
 
 def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
@@ -226,6 +250,84 @@ def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
             f"line {line_no}: unbalanced parenthesis in data-name "
             f"{token!r} -- a subscript must be one closed (...) group, "
             f"e.g. WS-TABLE(1, 2)"
+        )
+    # `RECORD.FIELD` is how a fixture bundle writes a qualified name, not
+    # COBOL: spliced verbatim it is a cobc "incomplete expression" (issue
+    # #144), so refuse it here, at the .cut line.
+    if _DOTTED_NAME_RE.search(token.partition("(")[0]):
+        raise CutParseError(
+            f"line {line_no}: data-name {token!r} contains a '.' -- COBOL "
+            f"names have none; name the elementary item itself (e.g. "
+            f"{token.partition('(')[0].rsplit('.', 1)[-1]!r})"
+        )
+
+
+def _has_sentence_period(text: str) -> bool:
+    """True when `text` holds a COBOL sentence-terminating period: a `.`
+    followed by whitespace or end of text, outside any quoted literal and
+    before any `*>` inline comment. A decimal point inside a numeric
+    literal (`1.5`) is followed by a digit, so it never counts."""
+    quote: str | None = None
+    for index, char in enumerate(text):
+        if quote is not None:
+            if char == quote:
+                quote = None
+            continue
+        if char in "'\"":
+            quote = char
+        elif text.startswith("*>", index):
+            return False
+        elif char == "." and (index + 1 == len(text) or text[index + 1].isspace()):
+            return True
+    return False
+
+
+def _reject_body_sentence_period(line: str, line_no: int, directive: str) -> None:
+    """Refuse a MOCK body line (or ROWS/TERMINAL value) carrying a
+    sentence-terminating period (`MOVE 5 TO WS-A.` -- the natural COBOL
+    habit). Body text is spliced verbatim into a `WHEN` branch of the
+    generated `EVALUATE UT-CURRENT-CASE`, where the period ends the
+    sentence mid-EVALUATE: cobc then rejects the instrumented program
+    ("unexpected END-EVALUATE") at a generated line while `lint` reported
+    nothing."""
+    if _has_sentence_period(line):
+        raise CutParseError(
+            f"line {line_no}: {line!r} in MOCK {directive} ends a COBOL "
+            f"sentence with a period -- drop the period (the mock body is "
+            f"spliced into the middle of a generated EVALUATE, which a "
+            f"period would terminate)"
+        )
+
+
+def _reject_sentence_period(value: str, line_no: int) -> None:
+    """Refuse an EXPECT value ending in a period outside any quoted
+    literal (`EXPECT WS-X TO BE 5.` -- the natural COBOL sentence habit).
+    The value is spliced verbatim into the generated `IF <name> NOT =
+    <value>`, where that period ends the sentence mid-IF: cobc then
+    rejects the generated driver ("IF without imperative statement",
+    "unexpected END-IF") while `lint` reported nothing. A COBOL numeric
+    literal cannot end in a decimal point, so the period is never part of
+    a legitimate value.
+
+    A trailing `*>` inline comment is not part of the value: the generated
+    `IF` line keeps it as a comment, so `5. *> note` still ends the
+    sentence there (and a period inside the comment is harmless)."""
+    quote: str | None = None
+    code_end = len(value)
+    for index, char in enumerate(value):
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif value.startswith("*>", index):
+            code_end = index
+            break
+    if quote is None and value[:code_end].rstrip().endswith("."):
+        raise CutParseError(
+            f"line {line_no}: EXPECT value {value!r} ends with a period -- "
+            f"drop it (a .cut EXPECT is not a COBOL sentence, and the "
+            f"period would terminate the generated IF)"
         )
 
 
@@ -272,13 +374,41 @@ def _validate_expectation(expectation: str, line_no: int) -> None:
     )
 
 
+def _balanced_parens(text: str) -> bool:
+    """True when every `(` in `text` outside a quoted literal closes, and
+    no `)` closes a group that was never opened. A ROWS/TERMINAL line's
+    inner text failing this means the line was not ONE `( ... )` group --
+    `( A = 1 ) ( B = 2 )` otherwise parsed as the single pair `A = 1 ) (
+    B = 2`."""
+    quote: str | None = None
+    depth = 0
+    for char in text:
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
 def _split_top_level(text: str, sep: str) -> list[str]:
     """Split `text` on `sep`, ignoring any occurrence inside a '...' or
     "..." span -- so a ROWS row value like EMP-NAME = "SMITH, JR." isn't
-    cut at the comma inside the quoted literal."""
+    cut at the comma inside the quoted literal -- or inside a `(...)`
+    group, so a subscripted value like `WS-TAB(1, 2)` (the comma-separated
+    subscript form MOVE/EXPECT already accept) or `FUNCTION MAX(A, B)`
+    stays one value instead of being refused as a malformed assignment or
+    a column-count mismatch."""
     parts: list[str] = []
     current: list[str] = []
     quote: str | None = None
+    depth = 0
     for char in text:
         if quote is not None:
             current.append(char)
@@ -289,6 +419,13 @@ def _split_top_level(text: str, sep: str) -> list[str]:
             quote = char
             current.append(char)
             continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif char == sep and depth:
+            current.append(char)
+            continue
         if char == sep:
             parts.append("".join(current))
             current = []
@@ -296,6 +433,50 @@ def _split_top_level(text: str, sep: str) -> list[str]:
         current.append(char)
     parts.append("".join(current))
     return parts
+
+
+def _reject_mock_body_placeholder(
+    line: str, line_no: int, provider: DataProvider, mock: MockDirective
+) -> None:
+    """Refuse a `{Column}` token for one of `provider`'s own columns inside
+    a MOCK body of a provider-bound TESTCASE. Substitution covers only
+    MOVE/EXPECT values (MOCK bodies stay verbatim by design, see
+    docs/2026-07-20-provider-parameterized-test-cases-design.md), so the
+    token used to reach cobc untouched -- lint passed, and the compile
+    failed on `invalid symbol '{'` inside generated code."""
+    if _COMMENT_RE.match(line):
+        return
+    for match in _PLACEHOLDER_RE.finditer(line):
+        if match.group(1) in provider.header:
+            raise CutParseError(
+                f"line {line_no}: placeholder {match.group(0)} inside MOCK "
+                f"{mock.describe()} is not substituted -- PROVIDER "
+                f"{provider.name!r} values are substituted into the test "
+                f"case's MOVE and EXPECT values only; a MOCK body is "
+                f"spliced verbatim, so the token would reach the compiler"
+            )
+
+
+def _reject_name_placeholder(
+    name: str | None, line_no: int, provider: DataProvider, where: str
+) -> None:
+    """Refuse a `{Column}` token for one of `provider`'s own columns in a
+    NAME position (MOVE target, EXPECT data-name, PERFORM target/THRU) of a
+    provider-bound TESTCASE. Only values are substituted, so the token
+    reached the spliced driver verbatim: `lint` passed (nothing resolves
+    EXPECT/MOVE names against the program), and cobc then failed on
+    `invalid symbol '{'` -- for an EXPECT, by aborting outright ("Please
+    report this!"). Same rule as `_reject_mock_body_placeholder`."""
+    if not name:
+        return
+    for match in _PLACEHOLDER_RE.finditer(name):
+        if match.group(1) in provider.header:
+            raise CutParseError(
+                f"line {line_no}: placeholder {match.group(0)} as the "
+                f"{where} is not substituted -- PROVIDER {provider.name!r} "
+                f"values are substituted into the test case's MOVE and "
+                f"EXPECT values only, never into data or paragraph names"
+            )
 
 
 def _substitute(
@@ -331,6 +512,14 @@ def _instantiate_row(
     case: MockTestCase, provider: DataProvider, row: list[str], row_index: int
 ) -> MockTestCase:
     row_line = provider.row_lines[row_index - 1]
+    for _, target in case.setup_moves:
+        _reject_name_placeholder(target, case.line, provider, "MOVE target")
+    for expectation in case.expectations:
+        _reject_name_placeholder(
+            expectation.data_name, expectation.line, provider, "EXPECT data-name"
+        )
+    _reject_name_placeholder(case.perform_target, case.line, provider, "PERFORM target")
+    _reject_name_placeholder(case.perform_thru, case.line, provider, "PERFORM THRU")
     setup_moves = [
         (_substitute(value, provider, row, case.name, case.line), target)
         for value, target in case.setup_moves
@@ -350,6 +539,10 @@ def _instantiate_row(
         )
         for expectation in case.expectations
     ]
+    # A {Placeholder} substituted from a ROW like `5.` reaches the same
+    # generated IF as a literal one -- checked against the row's own line.
+    for expectation in expectations:
+        _reject_sentence_period(expectation.expected_value, row_line)
     return MockTestCase(
         name=f"{case.name} [row {row_index}: {_display_value(row[0])}]",
         # `list(case.mocks)` copies the list, but not its elements: every
@@ -438,6 +631,9 @@ def parse_cut(text: str) -> MockTestSuite:
     providers: dict[str, DataProvider] = {}
     current_provider: DataProvider | None = None
     pending_expansions: list[tuple[MockTestCase, DataProvider]] = []
+    # The PROVIDER the open TESTCASE is bound to (meaningful only while
+    # `case` is not None) -- see the MOCK-body placeholder check below.
+    case_provider: DataProvider | None = None
 
     def _close_provider() -> None:
         nonlocal current_provider
@@ -486,6 +682,8 @@ def parse_cut(text: str) -> MockTestSuite:
             continue
 
         if in_mock is not None:
+            if case is not None and case_provider is not None:
+                _reject_mock_body_placeholder(line, line_no, case_provider, in_mock)
             if _END_MOCK_RE.match(line):
                 if in_mock.rows is not None and not in_mock.rows:
                     raise CutParseError(
@@ -493,18 +691,37 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"block has no rows -- give at least one row or "
                         f"drop ROWS entirely"
                     )
+                if (
+                    in_mock.rows is not None
+                    and in_mock.category in SEQUENCED_CALL_CATEGORIES
+                    and in_mock.terminal_row is None
+                ):
+                    raise CutParseError(
+                        f"line {line_no}: MOCK {in_mock.describe()} ROWS "
+                        f"needs a TERMINAL ( FIELD = value, ... ) group -- "
+                        f"it is what every call after the last row returns, "
+                        f"and without it a retrieve-and-loop program never "
+                        f"sees its end condition"
+                    )
                 in_mock = None
             elif (
                 in_mock.rows is not None
                 and (term_match := _TERMINAL_RE.match(line)) is not None
             ):
-                if in_mock.category not in (MockCategory.READ, MockCategory.RETURN):
+                if in_mock.category not in TERMINAL_CATEGORIES:
                     raise CutParseError(
                         f"line {line_no}: TERMINAL is only supported for "
-                        f"MOCK READ ... ROWS and MOCK RETURN ... ROWS"
+                        f"MOCK READ/RETURN/CALL/MQ/DLI ... ROWS, not MOCK "
+                        f"{in_mock.category.keyword} ... ROWS (SQL rows "
+                        f"always end with SQLCODE 100)"
                     )
                 if in_mock.terminal_row is not None:
                     raise CutParseError(f"line {line_no}: duplicate TERMINAL group")
+                if not _balanced_parens(term_match.group("pairs")):
+                    raise CutParseError(
+                        f"line {line_no}: malformed TERMINAL group {line!r} -- "
+                        f"expected one TERMINAL ( FIELD = value, ... ) group"
+                    )
                 terminal: list[tuple[str, str]] = []
                 for raw_pair in _split_top_level(term_match.group("pairs"), ","):
                     pair_match = _ROW_PAIR_RE.match(raw_pair.strip())
@@ -514,6 +731,11 @@ def parse_cut(text: str) -> MockTestSuite:
                             f"assignment {raw_pair.strip()!r} -- expected "
                             f"FIELD = value"
                         )
+                    _reject_body_sentence_period(
+                        pair_match.group("value").strip(),
+                        line_no,
+                        in_mock.describe(),
+                    )
                     terminal.append(
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
@@ -598,7 +820,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             elif in_mock.rows is not None:
                 row_match = _ROW_RE.match(line)
-                if row_match is None:
+                if row_match is None or not _balanced_parens(row_match.group("pairs")):
                     raise CutParseError(
                         f"line {line_no}: malformed ROWS row {line!r} -- "
                         f"expected ( FIELD = value, FIELD = value, ... )"
@@ -612,11 +834,17 @@ def parse_cut(text: str) -> MockTestSuite:
                             f"assignment {raw_pair.strip()!r} -- expected "
                             f"FIELD = value"
                         )
+                    _reject_body_sentence_period(
+                        pair_match.group("value").strip(),
+                        line_no,
+                        in_mock.describe(),
+                    )
                     row.append(
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.rows.append(row)
             else:
+                _reject_body_sentence_period(line, line_no, in_mock.describe())
                 in_mock.body_lines.append(line)
             continue
 
@@ -757,8 +985,10 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             case = MockTestCase(name=m.group("name"), line=line_no, tags=tags)
             suite.test_cases.append(case)
+            case_provider = None
             if provider_name is not None:
-                pending_expansions.append((case, providers[provider_name]))
+                case_provider = providers[provider_name]
+                pending_expansions.append((case, case_provider))
             seen_testcase = True
             mock_target = case.mocks
             mock_lines = {}
@@ -828,10 +1058,9 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"the quoted key must name what to mock"
                 )
             category = _resolve_category(m.group("cat"))
-            if m.group("rows") and category is not MockCategory.SQL:
+            if m.group("rows") and category not in ROWS_CATEGORIES:
                 raise CutParseError(
-                    f"line {line_no}: ROWS is only supported for MOCK SQL "
-                    f'and MOCK READ, not MOCK {m.group("cat")}'
+                    f"line {line_no}: {_ROWS_SUPPORTED}, not MOCK " f'{m.group("cat")}'
                 )
             in_mock = _open_mock(
                 MockDirective(
@@ -848,13 +1077,9 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/" f"BEFORE-ALL"
                 )
             category = _resolve_category(m.group("cat"), bare_key=True)
-            if m.group("rows") and category not in (
-                MockCategory.READ,
-                MockCategory.RETURN,
-            ):
+            if m.group("rows") and category not in ROWS_CATEGORIES:
                 raise CutParseError(
-                    f"line {line_no}: ROWS is only supported for MOCK SQL, "
-                    f'MOCK READ, and MOCK RETURN, not MOCK {m.group("cat")}'
+                    f"line {line_no}: {_ROWS_SUPPORTED}, not MOCK " f'{m.group("cat")}'
                 )
             in_mock = _open_mock(
                 MockDirective(
@@ -882,6 +1107,14 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 raise CutParseError(f"line {line_no}: MOVE outside TESTCASE")
             _reject_unbalanced_subscript(m.group("target"), line_no)
+            if case.perform_target:
+                # Every setup MOVE runs before the PERFORM whatever its
+                # position, so a MOVE written after it would silently run
+                # first (issue #150).
+                raise CutParseError(
+                    f"line {line_no}: MOVE after the PERFORM -- setup MOVEs "
+                    f"run before it, so write them above the PERFORM"
+                )
             case.setup_moves.append((m.group("value"), m.group("target")))
         elif (m := _PERFORM_RE.match(line)) is not None:
             if case is None:
@@ -897,6 +1130,13 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"PERFORM target {case.perform_target!r}; one PERFORM "
                     f"per test case"
                 )
+            for name in (m.group("target"), m.group("thru")):
+                if name is not None and name.endswith("."):
+                    raise CutParseError(
+                        f"line {line_no}: PERFORM {name!r} ends with a "
+                        f"period -- drop it (a .cut PERFORM names a "
+                        f"paragraph; it is not a COBOL sentence)"
+                    )
             case.perform_target = m.group("target")
             case.perform_thru = m.group("thru")
         elif (m := _EXPECT_RE.match(line)) is not None:
@@ -915,6 +1155,8 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"[OR EQUAL TO], or [NOT] TO BE LESS THAN [OR EQUAL TO], "
                     f"followed by the value)"
                 )
+            _reject_sentence_period(m.group("value"), line_no)
+            _reject_before_perform(case, "EXPECT", line_no)
             case.expectations.append(
                 ExpectDirective(
                     data_name=m.group("name"),
@@ -934,6 +1176,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             _validate_expectation(m.group("expectation"), line_no)
+            _reject_before_perform(case, "VERIFY", line_no)
             case.verifications.append(
                 VerifyDirective(
                     category=_resolve_category(m.group("cat")),
@@ -951,6 +1194,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             _validate_expectation(m.group("expectation"), line_no)
+            _reject_before_perform(case, "VERIFY", line_no)
             case.verifications.append(
                 VerifyDirective(
                     category=_resolve_category(m.group("cat"), bare_key=True),

@@ -19,14 +19,49 @@ def test_load_config_returns_all_defaults_when_nothing_found(tmp_path):
     assert config.source is None
     assert config.copybook_path == ()
     assert config.seed is None
+    # No `ai_mode` key anywhere is distinct from one set to the default
+    # mode -- `skills mode`/`doctor` report where the mode came from.
+    assert config.ai_mode is None
 
 
 def test_load_config_finds_mockymock_toml_in_start_dir(tmp_path):
     (tmp_path / "mockymock.toml").write_text('seed = 7\ntest_root = "tests"\n')
     config = load_config(tmp_path)
     assert config.seed == 7
-    assert config.test_root == "tests"
+    # Anchored to the config file, not to whatever cwd happens to be.
+    assert config.test_root == str(tmp_path / "tests")
     assert config.source == tmp_path / "mockymock.toml"
+
+
+def test_load_config_test_root_resolved_relative_to_config_file(tmp_path):
+    (tmp_path / "mockymock.toml").write_text('test_root = "tests"\n')
+    nested = tmp_path / "src" / "deep"
+    nested.mkdir(parents=True)
+    config = load_config(nested)
+    assert config.test_root == str(tmp_path / "tests")
+
+
+def test_load_config_absolute_test_root_left_as_is(tmp_path):
+    absolute = tmp_path / "elsewhere"
+    (tmp_path / "mockymock.toml").write_text(f'test_root = "{absolute.as_posix()}"\n')
+    config = load_config(tmp_path)
+    assert config.test_root == str(absolute)
+
+
+def test_load_config_unknown_key_raises_config_error(tmp_path):
+    # `timeout` is deliberately not config-overridable, and a typo'd key
+    # must not be silently ignored either -- both name the file.
+    (tmp_path / "mockymock.toml").write_text("timeout = 120\ncopybook-path = []\n")
+    with pytest.raises(ConfigError, match="unknown key") as exc_info:
+        load_config(tmp_path)
+    assert "timeout" in str(exc_info.value)
+    assert "copybook-path" in str(exc_info.value)
+
+
+def test_load_config_bool_seed_raises_config_error(tmp_path):
+    (tmp_path / "mockymock.toml").write_text("seed = true\n")
+    with pytest.raises(ConfigError, match="seed"):
+        load_config(tmp_path)
 
 
 def test_load_config_finds_pyproject_tool_mockymock_table(tmp_path):

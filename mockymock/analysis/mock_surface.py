@@ -84,6 +84,7 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
 )
 
 from mockymock.dsl.model import MockCategory
+from mockymock.splicer.io_copy import DataLayout, data_layout
 
 
 def _optional_statement_types(module: str, *names: str) -> tuple[type, ...]:
@@ -327,6 +328,9 @@ class MockSurface:
     #: `ACCEPT WS-TODAY FROM DATE` is ordinary, working COBOL that needs no
     #: mock; listing it as a gap would be noise on almost every program).
     non_interactive_accepts: list[NonInteractiveAccept] = field(default_factory=list)
+    #: FD records and data-item subtrees, for the implicit INTO/FROM MOVE a
+    #: mocked READ ... INTO / WRITE ... FROM keeps (`splicer.io_copy`).
+    data_layout: DataLayout | None = None
 
     def static_call_sites(self) -> list[CallSite]:
         return [c for c in self.call_sites if c.kind is CallKind.STATIC]
@@ -816,7 +820,14 @@ def _classify_statement(
 
     if isinstance(statement, IOAcceptStatement):
         target = (statement.target or "").upper()
-        if statement.from_source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
+        # cobolparser keeps a date-format qualifier in `from_source`
+        # (`ACCEPT X FROM DATE YYYYMMDD` -> "DATE YYYYMMDD", `FROM DAY
+        # YYYYDDD` -> "DAY YYYYDDD"), so the source is its first word --
+        # compared whole, that very common idiom read as console input and
+        # refused UNMOCKED_CONSOLE_ACCEPT.
+        source_words = str(statement.from_source or "").upper().split()
+        source = source_words[0] if source_words else None
+        if source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
             surface.console_accept_paragraphs.add(paragraph_name)
             add_site(MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ())
         elif target:
@@ -884,7 +895,7 @@ def analyze(program: CobolProgram) -> MockSurface:
     PERFORM, IO AT END/INVALID KEY clauses, CALL exception handlers) so that
     e.g. a CALL hidden inside an IF is not missed.
     """
-    surface = MockSurface()
+    surface = MockSurface(data_layout=data_layout(program))
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return surface

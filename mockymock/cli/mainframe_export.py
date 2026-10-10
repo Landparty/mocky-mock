@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from mockymock._lines import split_source_lines
+
 COLUMN_LIMIT = 72
 
 # Columns 1-6 (sequence area) + column 7 (indicator), both blank: what
@@ -103,6 +105,24 @@ def insert_provenance_header(lines: list[str], header: list[str]) -> list[str]:
 
 
 _DISPLAY_RE = re.compile(r"^(?P<indent>\s*)DISPLAY\s+(?P<rest>.+)$", re.IGNORECASE)
+# The `UPON <device>` clause of a DISPLAY's trailing expression. Every
+# fragment a wrapped DISPLAY is split into must carry it: a fragment
+# without it writes to the default device (stdout) while only the last
+# one goes to, say, SYSERR -- the one message lands split across two
+# streams.
+_UPON_RE = re.compile(r"(?<![A-Z0-9-])UPON\s+[A-Z0-9-]+(?![A-Z0-9-])", re.IGNORECASE)
+
+
+def _upon_clause(trailing_expr: str) -> str:
+    """` UPON <device>` from `trailing_expr` (outside quoted literals), or
+    '' when it names none."""
+    blanked = re.sub(
+        r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'', lambda m: " " * len(m[0]), trailing_expr
+    )
+    match = _UPON_RE.search(blanked)
+    if match is None:
+        return ""
+    return " " + " ".join(trailing_expr[match.start() : match.end()].split())
 
 
 def _parse_display_args(rest: str) -> tuple[str, str] | None:
@@ -322,7 +342,8 @@ def wrap_long_display_lines(
             new_lines.append(line)
             continue
 
-        mid_overhead = len(indent) + len('DISPLAY "') + len('" WITH NO ADVANCING')
+        upon = _upon_clause(trailing_expr)
+        mid_overhead = len(indent) + len(f'DISPLAY ""{upon} WITH NO ADVANCING')
         mid_budget = max_col - mid_overhead
         if mid_budget <= 0:
             problems.append(
@@ -349,7 +370,7 @@ def wrap_long_display_lines(
         tail = "".join(tail_units)
 
         fragments = [
-            f'{indent}DISPLAY "{chunk}" WITH NO ADVANCING'
+            f'{indent}DISPLAY "{chunk}"{upon} WITH NO ADVANCING'
             for chunk in _chunk_units(head_units, mid_budget)
         ]
         fragments.append(f'{indent}DISPLAY "{tail}"{final_suffix}')
@@ -452,6 +473,21 @@ def _find_single_literal(line: str) -> tuple[str, str, str, str] | None:
     return line[:start], delimiter, "".join(body), suffix
 
 
+#: The type-prefix letters a COBOL literal may carry right before its opening
+#: delimiter (hex, national, DBCS, null-terminated, UTF-8, national hex),
+#: when they are not the tail of a longer word.
+_LITERAL_PREFIX_RE = re.compile(r"(?<![A-Z0-9-])(?:NX|BX|[XNGZUB])$", re.IGNORECASE)
+
+
+def _split_literal_prefix(prefix: str) -> tuple[str, str]:
+    """Split the text before a literal's opening delimiter into (what comes
+    before the literal, the literal's own type prefix -- '' for none)."""
+    match = _LITERAL_PREFIX_RE.search(prefix)
+    if match is None:
+        return prefix, ""
+    return prefix[: match.start()], match.group(0)
+
+
 def _continue_literal(line: str, max_col: int) -> list[str] | None:
     """Rewrite one over-`max_col` line as a continued line plus one or
     more fixed-format continuation lines, splitting its single quoted
@@ -509,7 +545,14 @@ def _continue_literal(line: str, max_col: int) -> list[str] | None:
             return None  # no progress possible: fail closed, caller reports
 
         padding = " " * (continued_budget - taken_len)
-        out.append(f"{current_prefix}{padding}{delimiter}{''.join(remaining[:taken])}")
+        # The padding must go before the literal's own prefix letters (the
+        # `X` of `X"4142"`, the `NX` of `NX"..."`), never between them and
+        # the opening delimiter: `X      "41"` is the identifier X followed
+        # by an alphanumeric literal, not a hex literal.
+        lead, literal_prefix = _split_literal_prefix(current_prefix)
+        out.append(
+            f"{lead}{padding}{literal_prefix}{delimiter}{''.join(remaining[:taken])}"
+        )
         pos += taken
         current_prefix = _CONTINUATION_PREFIX
 
@@ -543,11 +586,16 @@ AREA_B_START = 12
 
 
 def _split_atoms(text: str) -> list[str] | None:
-    """Split statement text into atoms separable at whitespace: each quoted
-    literal is ONE atom (its own internal spaces are content), every other
-    whitespace-delimited run is one atom. `None` for text this cannot
-    tokenize safely -- an unterminated literal -- so the caller refuses
-    rather than emitting a break that could change what the compiler reads.
+    """Split statement text into atoms separable at whitespace: a maximal
+    run of non-blank text, where a quoted literal's own internal spaces are
+    content and never end the run. Text that touches a literal with no
+    blank between them stays in the same atom -- the `X` of a hex literal
+    `X"00"` (likewise `N"..."`, `Z"..."`, ...), or the `.`/`)` right after
+    a closing quote -- because the caller rejoins atoms with a blank, and
+    `X "00"` is the identifier X followed by the alphanumeric literal
+    "00", not a hex literal. `None` for text this cannot tokenize safely --
+    an unterminated literal -- so the caller refuses rather than emitting a
+    break that could change what the compiler reads.
     """
     atoms: list[str] = []
     pos = 0
@@ -556,9 +604,12 @@ def _split_atoms(text: str) -> list[str] | None:
         if text[pos] == " ":
             pos += 1
             continue
-        if text[pos] in ('"', "'"):
+        start = pos
+        while pos < length and text[pos] != " ":
+            if text[pos] not in ('"', "'"):
+                pos += 1
+                continue
             delimiter = text[pos]
-            start = pos
             pos += 1
             while True:
                 if pos >= length:
@@ -570,13 +621,6 @@ def _split_atoms(text: str) -> list[str] | None:
                     pos += 1
                     break
                 pos += 1
-            atoms.append(text[start:pos])
-            continue
-        start = pos
-        while pos < length and text[pos] != " " and text[pos] not in ('"', "'"):
-            pos += 1
-        if pos == start:  # defensive: a delimiter immediately after a word
-            pos += 1
         atoms.append(text[start:pos])
     return atoms
 
@@ -733,7 +777,7 @@ class SourceAttribution:
         self._program_path = program_path
         self._cut_lines = _index_by_content(cut_text)
         self._program_lines = _index_by_content(
-            "\n".join(raw[7:72] for raw in program_text.splitlines())
+            "\n".join(raw[7:72] for raw in split_source_lines(program_text))
         )
 
     def origin(self, index: int, line: str) -> LineOrigin:
@@ -771,7 +815,7 @@ class SourceAttribution:
 
 def _index_by_content(text: str) -> dict[str, list[int]]:
     index: dict[str, list[int]] = {}
-    for number, raw in enumerate(text.splitlines(), start=1):
+    for number, raw in enumerate(split_source_lines(text), start=1):
         stripped = raw.strip()
         if stripped:
             index.setdefault(stripped, []).append(number)
@@ -789,6 +833,49 @@ def _reset_move_target(stripped: str) -> str | None:
         if match is not None:
             return match.group(1).rstrip(".")
     return None
+
+
+def _split_inline_comment(line: str) -> tuple[str, str] | None:
+    """(code, comment) around a floating `*>` comment that follows code on
+    `line` (outside any quoted literal), or None when there is none."""
+    quote: str | None = None
+    for index, char in enumerate(line):
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in ('"', "'"):
+            quote = char
+        elif line.startswith("*>", index):
+            code = line[:index].rstrip()
+            return (code, line[index:]) if code.strip() else None
+    return None
+
+
+def _fitting_candidates(lines: list[str], max_col: int):
+    """(index into `lines`, line) for every line the first two fitting
+    passes produce, run ONE INPUT LINE AT A TIME so each produced line
+    keeps the index of the instrumented line it came from. Run over the
+    whole list, a DISPLAY split into fragments shifted every later index,
+    and `SourceAttribution.origin` (keyed on instrumented indices) then
+    blamed a later line on the wrong source.
+
+    An over-long line carrying a trailing `*>` comment has the comment
+    moved onto its own line first. A comment runs to the end of its line
+    only: broken at a space (`_break_at_whitespace`) its words landed on
+    the next line as code, and a quote inside it was "continued" as if it
+    were a literal."""
+    for index, original in enumerate(lines):
+        pieces = [original]
+        if len(original) > max_col and not original.lstrip().startswith("*>"):
+            split = _split_inline_comment(original)
+            if split is not None:
+                code, comment = split
+                indent = code[: len(code) - len(code.lstrip(" "))]
+                pieces = [indent + comment, code]
+        pieces, _ = wrap_long_display_lines(pieces, max_col)
+        pieces, _ = wrap_long_literal_lines(pieces, max_col)
+        for piece in pieces:
+            yield index, piece
 
 
 def fit_within_columns(
@@ -821,12 +908,9 @@ def fit_within_columns(
     `.cbl`, or none of them. The message used to assert one of those
     unconditionally, which sent readers to the wrong file whenever it
     guessed wrong -- see `SourceAttribution`."""
-    wrapped, _ = wrap_long_display_lines(lines, max_col)
-    wrapped, _ = wrap_long_literal_lines(wrapped, max_col)
-
     fitted: list[str] = []
     problems: list[str] = []
-    for index, line in enumerate(wrapped):
+    for index, line in _fitting_candidates(lines, max_col):
         if len(line) <= max_col or line.lstrip().startswith("*>"):
             fitted.append(line)
             continue

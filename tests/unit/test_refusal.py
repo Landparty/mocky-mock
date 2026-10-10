@@ -541,6 +541,13 @@ COPY_PROGRAM_SOURCE = """\
 """
 
 
+# > 64 KiB of plain-ASCII comment lines: pushes a following bad byte past
+# cobol-parser's encoding-detection sample (`_DETECT_PREFIX_BYTES`).
+LOSSY_COPYBOOK_PADDING = b"".join(
+    b"      * PADDING %05d" % i + b" " * 50 + b"\n" for i in range(1200)
+)
+
+
 def test_expansion_warnings_refuse_lossy_copybook_decode(tmp_path):
     """A copybook whose bytes cannot be decoded losslessly is expanded with
     U+FFFD replacement characters and the loss is reported only via
@@ -548,8 +555,14 @@ def test_expansion_warnings_refuse_lossy_copybook_decode(tmp_path):
     still splice and compile, with corrupted PIC/VALUE content. Fail closed."""
     from cobolparser.preprocess import expand_copybooks
 
+    # cobol-parser detects a copybook's encoding from its first 64 KiB, and
+    # now decodes non-UTF-8 ASCII-shaped text as cp1252/latin-1 (lossless),
+    # so a lone \xff near the top is no longer a lossy decode at all. The
+    # loss still happens when the sampled prefix is valid UTF-8 and the bad
+    # byte lies past it: the whole file is then decoded as UTF-8 with
+    # replacement -- exactly the silent corruption this gate exists for.
     (tmp_path / "BADREC.CPY").write_bytes(
-        b"       01  BAD-FIELD PIC X(5) VALUE 'ab\xffcd'.\n"
+        LOSSY_COPYBOOK_PADDING + b"       01  BAD-FIELD PIC X(5) VALUE 'ab\xffcd'.\n"
     )
     expansion = expand_copybooks(COPY_PROGRAM_SOURCE, copybook_paths=[str(tmp_path)])
     assert expansion.statistics.warnings  # precondition: the loss is warned

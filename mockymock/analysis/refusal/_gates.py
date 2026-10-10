@@ -52,6 +52,7 @@ from cobolparser.models.statements.call import CallStatement
 from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
+from mockymock._lines import split_source_lines
 from mockymock.analysis.linkage import address_of_sites, linkage_plan
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
@@ -61,6 +62,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     normalize_exec_text,
 )
+from mockymock.dsl.generator import directive_snippet
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
     FLOW_CATEGORIES,
@@ -91,19 +93,64 @@ from ._types import (
     RefusalReason,
 )
 
+#: Punctuation whose surrounding whitespace is token spacing, not SQL.
+_EXEC_PUNCTUATION_SPACING_RE = re.compile(r"\s*([.,():])\s*")
+
+
+def _exec_match_form(text: str) -> str:
+    """`normalize_exec_text` plus the whitespace around `. , ( ) :` removed:
+    the form an SQL/CICS/DLI key and a site's EXEC text are compared in.
+
+    Both sides of that comparison carry token spacing rather than the
+    author's text: the site's comes from cobolparser's `sql_text`, which
+    rejoins tokens with spaces the source never had -- and differently per
+    release (the published 1.8.x renders `BANK.TRANSACTION_HIST` as
+    `BANK. TRANSACTION_HIST`, later releases do not; both render
+    `(A, B)` as `( A, B )` and `INTO :WS-A` as `INTO:WS-A`). Comparing
+    raw, a key copied verbatim from the program's own source failed to
+    match (UNMATCHED_MOCK) and a `.cut` written against one cobol-parser
+    release broke under another."""
+    return _EXEC_PUNCTUATION_SPACING_RE.sub(r"\1", normalize_exec_text(text))
+
+
+#: Characters that continue one SQL/CICS/DLI name (a cursor, table, host
+#: variable, CICS command word): a key may only end where the site's text
+#: does not continue the same name.
+_EXEC_NAME_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_#@$"
+)
+
+
+def _exec_prefix_matches(prefix: str, text: str) -> bool:
+    """`prefix` starts `text` and ends on a name boundary there.
+
+    A bare character prefix let `MOCK SQL "FETCH C1"` also mock
+    `FETCH C10 INTO ...` (and `MOCK CICS "READ"` mock `READQ TS ...`): the
+    other cursor's site was silently served this directive's body and its
+    ROWS tally instead of refusing UNMOCKED_SQL, and a case mocking both
+    cursors refused AMBIGUOUS_MOCK. A key is a prefix of whole names."""
+    if not prefix or not text.startswith(prefix):
+        return False
+    if len(text) == len(prefix):
+        return True
+    return not (
+        prefix[-1] in _EXEC_NAME_CHARS and text[len(prefix)] in _EXEC_NAME_CHARS
+    )
+
 
 def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool:
     """Category must agree; then CALL keys match the call literal exactly,
     file-op/ACCEPT/DYNCALL keys match any of the site's (uppercased) names
     (the identifier a dynamic CALL calls through), and SQL/CICS/DLI keys
-    prefix-match the site's normalized EXEC text. The category identity
+    prefix-match the site's normalized EXEC text on a name boundary. The category identity
     check is what keeps quoted (static) and bare (dynamic) CALL keys from
     ever cross-matching."""
     if site.category is not directive.category:
         return False
     if directive.category in EXEC_CATEGORIES:
-        prefix = normalize_exec_text(directive.key)
-        return bool(prefix) and (site.match_text or "").startswith(prefix)
+        return _exec_prefix_matches(
+            _exec_match_form(directive.key), _exec_match_form(site.match_text or "")
+        )
     if directive.category is MockCategory.CALL:
         return directive.key in site.keys
     return directive.key.upper() in site.keys
@@ -327,7 +374,7 @@ def _whole_program_reasons(
         )
     program = getattr(parse_result, "ast", None)
     normalized_lines = (
-        normalize_fixed_format(raw_source.splitlines()).splitlines()
+        split_source_lines(normalize_fixed_format(split_source_lines(raw_source)))
         if classify and raw_source is not None
         else None
     )
@@ -676,13 +723,13 @@ def check_unresolved_copybooks_scoped(
     the first (whole-program, refuse-now) list, fail closed. `program` is
     the parsed AST of this same source (pass None to classify
     nothing)."""
-    normalized = normalize_fixed_format(raw_source.splitlines())
+    normalized = normalize_fixed_format(split_source_lines(raw_source))
     lexer = CobolLexer(normalized, free_form=True)
     tokens = lexer.tokenize()
     copy_indices = [i for i, t in enumerate(tokens) if t.type == TokenType.COPY]
     if not copy_indices:
         return [], []
-    normalized_lines = normalized.splitlines()
+    normalized_lines = split_source_lines(normalized)
     whole_lines: set[int] = set()
     scoped: list[ParagraphScopedRefusal] = []
     for index in copy_indices:
@@ -1069,9 +1116,16 @@ def _cics_eib_reasons(
     scoped: list[ParagraphScopedRefusal] = []
     text = "\n".join(lines)
 
-    detected = _DFHRESP_MACRO_RE.findall(text)
+    # A macro call inside `EXEC ... END-EXEC` (`DATATYPE(DFHVALUE(CHAR))`,
+    # `RESP(...)` compared in an INQUIRE) never reaches cobc: the splicer
+    # replaces every EXEC block wholesale with its mock or a trap stub, and
+    # refuses one it cannot replace (NESTED_EXEC / UNSPLICEABLE_EXEC). Only
+    # calls in ordinary COBOL need expanding, so only those are looked at
+    # (string literals are blanked too: text, not a call).
+    macro_lines = _mask_exec_blocks(lines)
+    detected = _DFHRESP_MACRO_RE.findall("\n".join(macro_lines))
     if detected:
-        located = _classify_cics_macro_calls(program, lines) if classify else []
+        located = _classify_cics_macro_calls(program, macro_lines) if classify else []
         if len(located) != len(detected):
             # Either classification is off (generate/fixtures), or at least
             # one detected call could not be pinned to a paragraph body and
@@ -1113,6 +1167,31 @@ def _cics_eib_reasons(
             )
 
     return reasons, scoped
+
+
+# String literals are matched first (and blanked too) so that
+# `DISPLAY 'EXEC FAILED'` cannot
+# open a "block" running on to some later, real END-EXEC and hide the code in
+# between (a missed macro would then reach cobc unexpanded).
+_EXEC_BLOCK_RE = re.compile(
+    r"""(?P<string>"(?:[^"\n]|"")*"?|'(?:[^'\n]|'')*'?)"""
+    r"|(?P<exec>(?<![A-Za-z0-9-])EXEC(?![A-Za-z0-9-]).*?"
+    r"(?<![A-Za-z0-9-])END-EXEC(?![A-Za-z0-9-]))",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _mask_exec_blocks(lines: list[str]) -> list[str]:
+    """`lines` with every `EXEC ... END-EXEC` block and every string literal
+    (text, not a macro call: `DISPLAY 'DFHRESP(NORMAL)'` compiles as is)
+    blanked to spaces --
+    same line count, same line widths, so every line/column found in the
+    result indexes the original text unchanged."""
+
+    def blank(match: re.Match[str]) -> str:
+        return "".join(c if c == "\n" else " " for c in match.group())
+
+    return _EXEC_BLOCK_RE.sub(blank, "\n".join(lines)).split("\n")
 
 
 def _classify_cics_macro_calls(
@@ -1409,6 +1488,7 @@ def check_test_case(
                         + f") is reachable from '{case.perform_target}' but "
                         f"no MOCK directive in this test case matches it"
                     ),
+                    suggested_fix=directive_snippet(site, surface),
                 )
             )
         elif len(matches) > 1:

@@ -156,6 +156,17 @@ def test_unsupported_bundle_version_raises():
         load_fixture_bundle(bad)
 
 
+@pytest.mark.parametrize("version", [True, 1.0, "1"])
+def test_bundle_version_equal_to_one_but_not_the_integer_1_raises(version):
+    """JSON `true` and `1.0` compare equal to 1 in Python; the loader used
+    to accept both (and carry `True`/`1.0` into `bundle_version`)."""
+    bad = dict(MINIMAL_BUNDLE, bundle_version=version)
+    with pytest.raises(UnsupportedBundleVersionError):
+        load_fixture_bundle(bad)
+    with pytest.raises(UnsupportedBundleVersionError):
+        parse_fixture_bundle(json.dumps(bad))
+
+
 def test_missing_bundle_version_raises():
     bad = dict(MINIMAL_BUNDLE)
     del bad["bundle_version"]

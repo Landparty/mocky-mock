@@ -78,5 +78,12 @@ def test_neutralized_shape_runs_clean():
     neutralized = neutralize(lines, result.ast, plan)
     executed = _compile_and_run("\n".join(neutralized) + "\n", "lkgfixed")
     assert executed.exit_code == 0
-    assert "OK" in executed.stdout
-    assert "OTHER" not in executed.stdout
+    # The EVALUATE dereferenced the folded LINKAGE storage and control
+    # reached the end: that is the proof. Which WHEN arm it took is NOT
+    # asserted: since ecc7dbe compiles with `-std=mvs`, whose config sets
+    # `defaultbyte: 0`, VALUE-less storage starts as LOW-VALUES (not
+    # spaces), so CUST-STATUS matches WHEN OTHER. In a real `run` the
+    # driver's UT-RESET-WORKING-STORAGE (linkage.extra_reset_lines) sets
+    # it to SPACES before every case; this raw compile has no driver.
+    assert executed.stdout.splitlines()[0] == "START"
+    assert executed.stdout.splitlines()[-1] == "END"

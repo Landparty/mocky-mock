@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-09-04T00:00:00Z
+timestamp: 2026-10-05T12:00:00Z
 ---
 
 # Overview
@@ -89,7 +89,12 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   `... OR EQUAL 5`) raises `CutParseError` at the line instead of
   splicing leftover words into the generated IF
   (`_EXPECT_DANGLING_PHRASE_RE`, whole-word so `GREATER-VALUE` still
-  parses as an ordinary value). Phrase words are case-sensitive
+  parses as an ordinary value). Likewise an EXPECT value ending in a
+  period outside quotes (`EXPECT WS-X TO BE 5.`, the COBOL sentence habit)
+  raises `CutParseError` (`_reject_sentence_period`, 2026-09-27) --
+  spliced into the generated `IF`, the period ended the sentence mid-IF
+  and `cobc` rejected the driver while `lint` passed; a PROVIDER row
+  substituting such a value is refused at its `ROW` line. Phrase words are case-sensitive
   uppercase like every other keyword.
 - `EXPECT <data-name> TO BE <value>`'s `<data-name>` and `MOVE <value> TO
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
@@ -230,6 +235,19 @@ without the author guessing the value up front. The generator applies the
 same mirrorability and agreement checks the refusal does, so a scaffolded
 `.cut` never trips its own gate: an argument that fails either is simply
 not captured, and the boundary's other arguments still are.
+Agreement means every CALL site sharing the key passes the SAME item at
+that position (and every site passes that many arguments at all); a key
+called from several places whose sites agree is captured like a
+single-site one (before 2026-09-27 any key with 2+ sites got no captures).
+Arguments are resolved with the splicer's own `captures._site_argument`
+over the normalized lines, so a quoted literal is never captured (its
+value is fixed by the source) -- comparing bare names instead scaffolded a
+capture of `"ABC"` whenever an item ABC existed, and a refused one when one
+site passed the literal and another the item (fixed 2026-09-28, round 6).
+Under cobol-parser 1.8.x a CALL with a numeric literal operand loses it
+from `using_parameters`, the text re-scan then trusts nothing, and a quoted
+literal on that CALL still reads as a data-name -- consistently in both
+the generator and the splicer, so no refusal.
 
 See docs/2026-08-11-argument-capture-design.md for the full design and
 rejected alternatives (a dedicated `VERIFY ... WAS CALLED WITH ARG n =
@@ -247,6 +265,16 @@ is case-insensitive and accepts an optional trailing period** (`END-MOCK.`,
 exists because a missed END-MOCK doesn't fail at its own line; it silently
 swallows the rest of the file into the mock body. Bare keys are upper-cased
 by the parser; quoted keys are preserved exactly (see below).
+
+### Statement order inside a TESTCASE (2026-10-05, #150)
+
+Setup `MOVE`s always run before the `PERFORM` and `EXPECT`/`VERIFY` always
+after it, whatever their position in the file. So the parser refuses the
+two orders that would mean something else: an `EXPECT`/`VERIFY` above the
+`PERFORM` (`EXPECT before the PERFORM`) and a `MOVE` below it (`MOVE after
+the PERFORM`). `MOCK` directives may sit anywhere. Data names containing a
+`.` (`IN-REC.CUST-ID`) are refused too (#144) -- COBOL qualifies with
+`CUST-ID OF IN-REC`.
 
 ## `PROVIDER` parameterized test cases
 
@@ -276,7 +304,14 @@ it replaces a provider-bound `TESTCASE` with one ordinary `MockTestCase`
 per row, substituting `{ColumnName}` tokens (`_PLACEHOLDER_RE`) into that
 case's `MOVE` and `EXPECT` values only -- `MOCK` bodies, `MOVE` targets,
 `EXPECT` data-names, `PERFORM` target/thru, and `VERIFY` stay untouched
-and identical across every row. An unknown `{Foo}` token is a
+and identical across every row. A `{Column}` token naming one of the
+bound provider's own columns inside a `MOCK` body is a `CutParseError`
+at that line (`_reject_mock_body_placeholder`; `*>` comment lines are
+exempt) -- left verbatim it linted clean and failed cobc on
+`invalid symbol '{'`. The same token in a NAME position -- `MOVE` target,
+`EXPECT` data-name, `PERFORM` target/THRU -- is likewise a `CutParseError`
+(`_reject_name_placeholder`, 2026-09-28; the EXPECT form made cobc abort
+with "Please report this!"). An unknown `{Foo}` token is a
 `CutParseError` naming the provider's real columns; an undeclared/
 mistyped `USING PROVIDER` reference errors at the `TESTCASE` line.
 
@@ -395,7 +430,15 @@ Key regexes, matched in this order per non-blank line:
 1. If inside a `MOCK` body: look only for `END-MOCK` (any case, optional
    trailing period); anything else is appended verbatim to `body_lines`
    (no further parsing — a mock body's contents are opaque to the DSL
-   parser).
+   parser), with one fail-closed exception: a line holding a COBOL
+   sentence-terminating period (`.` followed by whitespace/end of line,
+   outside quotes and before any `*>`) raises `CutParseError`
+   (`_reject_body_sentence_period`, 2026-09-27). The body is spliced into
+   a `WHEN` of the generated `EVALUATE UT-CURRENT-CASE`, where the period
+   ends the sentence mid-EVALUATE -- `lint` used to pass and `cobc` then
+   failed on generated code (`unexpected END-EVALUATE`). ROWS/`TERMINAL`
+   field values get the same check. A decimal point (`1.5`), a period
+   inside a literal, or one in a comment is untouched.
 2. `*>` comment (only reachable when not inside a mock body).
 3. `TESTSUITE "..."` — errors if a suite is already open (one per file).
 4. `TESTCASE "..."` — requires `suite` already set; resets the per-case
@@ -473,6 +516,16 @@ Rules:
     generator itself never emits an `AMBIGUOUS_MOCK` pair that the splicer
     would later reject. Falls back to the full text if no proper prefix is
     unique.
+- **`directive_snippet(site, surface) -> str | None` (2026-09-15)** wraps
+  `_directive_for` to render one site's full `MOCK ... END-MOCK` block as a
+  single string (4-space header/footer, 8-space body — exactly what
+  `_scaffold_placeholder` itself emits). `None` whenever `_directive_for`
+  is. This is the one place `RefusalReason.suggested_fix`
+  (`analysis/refusal/_gates.py`) and `generate --fill`
+  (`cli/main.py`'s `_fill_cut_file`) both get their fix text from, so a
+  refusal's suggestion and a fresh scaffold can never disagree about what
+  a site's directive looks like. See
+  docs/2026-09-15-actionable-refusals-and-fill-design.md.
 - Output shape per paragraph:
   ```
   TESTCASE "<paragraph> boundaries: <label1>, <label2>"
@@ -484,21 +537,30 @@ Rules:
   ```
   `labels` are deduped `site.label` values joined with `", "`, used only in
   the human-readable `TESTCASE` name.
+- Boundaries between `PROCEDURE DIVISION.` and the first paragraph header
+  (cobolparser's unnamed `""` paragraph) are not scaffolded: no `PERFORM`
+  can enter there, and emitting one produced a bare `PERFORM ` that made
+  the whole generated file unparseable (fixed 2026-09-28, round 6). They
+  are listed in a `*>` comment block under `TESTSUITE` instead.
 - Suite and TESTCASE names pass through `_quote_safe` (double quotes
   become single quotes): the .cut grammar has no escape syntax for a `"`
   inside a quoted name, so interpolating one raw would make the scaffold
   unparseable.
 
-### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`)
+### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`)
 
 `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
 END-MOCK`, `MOCK READ <file> ROWS ( FIELD = value, ... ) ( ... )
 [TERMINAL ( FIELD = value, ... )] END-MOCK`, and `MOCK RETURN <sd-file>
 ROWS ( FIELD = value, ... ) ( ... ) TERMINAL ( FIELD = value, ... )
-END-MOCK` are the only three categories `ROWS` is valid on (RETURN joined
-2026-08-17, SORT/MERGE mocking) — any other category raises
-`CutParseError` at parse time (`"ROWS is only supported for MOCK SQL,
-MOCK READ, and MOCK RETURN, not MOCK <cat>"`). All three store structured
+END-MOCK` were the first three categories `ROWS` was valid on (RETURN
+joined 2026-08-17, SORT/MERGE mocking); `CALL` (quoted static key, and
+`MOCK MQ`, which is CALL), `DYNCALL` (bare `MOCK CALL WS-PGM`) and `DLI`
+joined 2026-10-05 -- see "Per-call sequencing" below. The set is
+`model.ROWS_CATEGORIES`; any other category raises `CutParseError` at
+parse time (`"ROWS is only supported for MOCK SQL, MOCK READ, MOCK
+RETURN, MOCK CALL (static or dynamic), MOCK MQ, and MOCK DLI, not MOCK
+<cat>"`). All three store structured
 rows on `MockDirective.rows` instead of free-form `body_lines` — the two
 are mutually exclusive by construction (the parser routes lines to one or
 the other based on whether `ROWS` appeared on the opening line). Row
@@ -536,6 +598,32 @@ whole READ statement, `AT END` clause included, so without an explicit
 the loop never stops — the implicit default (`MOVE "10" TO <status field>`
 when omitted) only satisfies a FILE-STATUS-driven loop, not a flag-driven
 one.
+
+**Per-call sequencing: `MOCK CALL "X" ROWS ( ... ) TERMINAL ( ... )`
+(2026-10-05).** A plain `MOCK CALL` body answers every call of its key the
+same way, which capped a whole-program case on any program that calls one
+routine for several purposes in a loop (IMS `CBLTDLI` as priming GHN,
+DLET and loop GHN; `MQGET`; a DB2 access module) at its empty-input path.
+`ROWS` on `SEQUENCED_CALL_CATEGORIES` (`CALL`/`DYNCALL`/`DLI`, in
+`model.py`) gives one row per call, in order: row N fires when the key's
+own tally reaches N. That tally is per `(category, key)`, so it counts
+calls across **every** site the key matches (a DLI tally is per quoted
+prefix key, since that is the directive's key), and `driver.py` zeroes it
+at the start of each case, so every case restarts at row 1. These
+categories have no implicit end-of-data value (no SQLCODE, no FILE
+STATUS), so **`TERMINAL` is mandatory** -- the parser raises
+`CutParseError` ("needs a TERMINAL ...") at `END-MOCK` when it is
+missing, rather than splice a sequence whose last answer repeats forever
+and hangs the loop until `run --timeout`. `TERMINAL` validity is
+`model.TERMINAL_CATEGORIES` (READ/RETURN plus these three); SQL still
+rejects it. `CAPTURE ARG` inside a `CALL ... ROWS` body is still parsed
+(its branch precedes the row branch) and its MOVEs are emitted before the
+rows block; "last call wins" still applies. Rows only `MOVE`; a response
+needing `SET`/`IF` stays a plain body. Splice: `build_site_dispatch`'s
+SEQUENCED branch calls `build_rows_block(tally, rows, row_suffix_moves=[],
+exhausted_moves=<TERMINAL MOVEs>)`. Worked example:
+`examples/real-world/ACCTPRG/ACCTPRG.cut`'s two "then stops at GB" cases;
+tests: `tests/unit/test_call_sequencing.py`.
 
 **This grammar is hand-authoring only.** It exists for a human (or an
 editor integration) writing a `.cut` file by hand against `mockymock
@@ -691,7 +779,7 @@ paragraph-grouped path described above, unchanged. A real
   re-render limited to the shapes an AST walk knows about, which is what
   makes it general enough to cover identifier-sourced MOVEs, `ADD`, `IF`,
   `PERFORM`, and everything else a real `AT END` clause holds.
-  `SourceContext` (the normalized lines plus
+  `ProgramContext` (the normalized lines plus
   `splicer.source_map.collect_boundaries`' statement starts — the SAME two
   inputs the splicer's own `statement_span` uses, so the lifted text cannot
   drift from the deleted text) is threaded from `_cmd_generate` through
@@ -704,7 +792,7 @@ paragraph-grouped path described above, unchanged. A real
   literal's decimal point from being read as one). A lifted line carries a
   `*>` provenance comment naming the source line, since a generated file a
   human reads should not silently contain code that did not come from the
-  fixture data. The `*> TODO` remains the fallback when no `SourceContext`
+  fixture data. The `*> TODO` remains the fallback when no `ProgramContext`
   was supplied or the clause could not be located.
 - **Expectations** render via `_render_expectation(expectation,
   declared_keys, call_count_overrides=None, counted_boundaries=None)`:
@@ -712,7 +800,10 @@ paragraph-grouped path described above, unchanged. A real
   `VERIFY <cat> <key> WAS CALLED n TIMES`, gated on `declared_keys` as
   above, `n` normally `expectation.value` but see `--placeholder`'s
   `call_count_overrides` below; tier 2 (`field_equals`) → `EXPECT <name>
-  TO BE <value>`; tier 3 (`stub`) → a `*> STUB EXPECT ...` comment. A
+  TO BE <value>`, the value rendered by `render_expect_value` with the
+  field's PICTURE (`ProgramContext.pictures`, from `field_pictures`), so a
+  folded `-3`/`1.5`/`007` in a `PIC X` field is quoted -- rendered bare it
+  failed on the generated suite's first run (2026-09-28); tier 3 (`stub`) → a `*> STUB EXPECT ...` comment. A
   `"CATEGORY:KEY"`-shaped boundary-level `ref` (`_is_boundary_level_ref`
   detects the colon, since COBOL names never contain one) renders as
   `*> STUB EXPECT <CAT> <KEY>` — the way a MOCK/VERIFY for that boundary
@@ -748,6 +839,35 @@ paragraph-grouped path described above, unchanged. A real
   `--scenarios` modes (happy/branches/all) and asserts `mockymock lint`
   (via `cli.checks.run_static_checks`, Docker-free) finds zero problems —
   "a generator that emits a refusable `.cut` is worse than none."
+
+#### Scaffold corrections from the 2026-10-05 bug hunt (#141-#145, #148, #150)
+
+All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
+`program`, `neutralized_goto` and `name_counts`.
+
+- **Reachability per scenario (#143).** Only boundaries reachable from the
+  scenario's entry (`ProgramContext.reachable_from`, the same walk lint
+  uses) get a `MOCK`; anything else was an `UNMATCHED_MOCK`.
+- **Loops (#141).** `analysis/loops.py` finds sites inside a looping
+  PERFORM (UNTIL/VARYING/TIMES, inline or via its target). A looped cursor
+  `FETCH` is mocked with `ROWS` and verified `rows + 1` times; a `READ`
+  outside any loop is verified once per site.
+- **Summed counts (#142).** One key called from several sites gets one
+  `VERIFY` with the summed count; if any of those sites is nested in an
+  IF/EVALUATE/loop the count is demoted to a `*> VERIFY ... <count not
+  exact by construction -- reason>` comment.
+- **Field names (#144).** Fixture fields arrive as `RECORD.FIELD`; rows and
+  bodies use the leaf (or `FIELD OF RECORD` when the leaf is ambiguous) and
+  an `EXPECT` whose leaf is ambiguous becomes a stub comment.
+- **DL/I get-next loops (#145).** A looped `GN`/`GHN`/`GNP`/`GHNP` mock
+  sets `DIBSTAT` to `GB`/`GE` after its first call, so the scan ends.
+- **SQL status-only bodies (#148).** OPEN/CLOSE/COMMIT-style bodies set
+  `SQLCODE` to 0 when the fixture names no SQLCODE.
+- **No entry (#150).** A scenario with `entry=''` (IMS `ENTRY 'DLITCBL'`
+  programs) falls back to the first named PROCEDURE DIVISION paragraph
+  (`_first_paragraph`); `generate --with-data` exits 1 when no scenario
+  became a TESTCASE. A `CALL 'CBLTDLI'` GN loop still gets an empty mock
+  body, so such a case can time out until its body sets the PCB status.
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 

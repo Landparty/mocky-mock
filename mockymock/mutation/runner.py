@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from mockymock._lines import read_utf8_source, split_source_lines
 from mockymock.mutation.operators import Mutant, generate_mutants
 from mockymock.mutation.report import (
     MutantResult,
@@ -121,7 +122,7 @@ def _run_suite_once(
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     with sandbox_dir_maybe_kept(root=docker_toolchain.WORK_ROOT, keep=False) as tmp:
         source_path = tmp / source_name
@@ -169,7 +170,7 @@ def _run_suite_once(
         )
         lines, _ = transform_data_division_exec(lines, copybook_paths=copybook_paths)
 
-        reset_lines = reset_move_lines(result.ast)
+        reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
         if checked.linkage is not None:
             reset_lines = reset_lines + extra_reset_lines(checked.linkage)
         if checked.cics_eib is not None:
@@ -226,7 +227,7 @@ def _run_suite_once(
                         parse_gcov(gcov.gcov_text),
                         instrumented,
                         normalized_lines,
-                        source_text.splitlines(),
+                        split_source_lines(source_text),
                     )
                 }
             else:
@@ -339,7 +340,7 @@ def run_mutation(
             if note not in all_notes:
                 all_notes.append(note)
 
-    original_text = source_path.read_text(encoding="utf-8")
+    original_text = read_utf8_source(source_path)
     baseline = _run_suite_once(
         original_text,
         source_path.name,
@@ -383,7 +384,7 @@ def run_mutation(
             all_notes,
         )
 
-    original_lines = original_text.splitlines()
+    original_lines = split_source_lines(original_text)
     mutants = generate_mutants(original_lines)
     if not mutants:
         return (
@@ -435,11 +436,46 @@ def run_mutation(
     for (index, _), (result, notes) in zip(to_run, ran, strict=True):
         by_index[index] = result
         _merge_notes(notes)
+    _attach_zero_baseline_hints(
+        [r for r in by_index.values() if r.status == "survived" and r.ran],
+        source_path,
+        cut_path,
+        copybook_paths,
+    )
     for index in range(len(mutants)):
         outcome.results.append(by_index[index])
         if on_progress is not None:
             on_progress(outcome.results[-1])
     return [], outcome, all_notes
+
+
+def _attach_zero_baseline_hints(
+    survivors: list[MutantResult],
+    source_path: Path,
+    cut_path: Path,
+    copybook_paths: list[str] | None,
+) -> None:
+    """Set `hint` on each survivor `zero_baseline_hint` explains. Survivors
+    the baseline's coverage decided are left alone: they sit on lines no
+    test reaches, and seeding a field would not change that. Best effort:
+    a static-check pass that fails here just means no hints, never a
+    different verdict."""
+    candidates = [r for r in survivors if r.mutant.operator == "arith-verb-swap"]
+    if not candidates:
+        return
+    from mockymock.cli.checks import run_static_checks
+    from mockymock.mutation.zero_baseline import zero_baseline_hint
+
+    try:
+        checked = run_static_checks(source_path, cut_path, copybook_paths)
+    except Exception:  # noqa: BLE001 -- hints are advisory
+        return
+    if checked.parse_result is None or checked.suite is None:
+        return
+    for result in candidates:
+        result.hint = zero_baseline_hint(
+            result.mutant, checked.parse_result.ast, checked.suite
+        )
 
 
 def _run_mutants(

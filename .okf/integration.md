@@ -3,16 +3,18 @@ type: Contract
 title: cobolparser Interface Contract
 description: The exact cobolparser AST surface (ParseResult, statement node fields, node_type quirks) that mockymock depends on.
 tags: [integration, cobolparser, contract]
-timestamp: 2026-09-02T22:00:00Z
+timestamp: 2026-10-04T00:00:00Z
 ---
 
 # Overview
 
 mockymock is a one-way consumer of `cobolparser`: mockymock depends on cobolparser,
 cobolparser has zero knowledge of mockymock. Since cobol-parser started
-publishing closed-source wheels to PyPI (see [publishing.md](publishing.md)),
+publishing to PyPI as `cobol-parser` (see [publishing.md](publishing.md);
+first as closed-source wheels, source-visible since its 2026-10-03
+relicense to AGPL-3.0-or-later),
 `cobolparser` resolves as an ordinary versioned PyPI dependency
-(`pyproject.toml`'s `dependencies`: `cobol-parser>=X,<Y`) — no sibling
+(`pyproject.toml`'s `dependencies`: currently `cobol-parser>=1.7.7,<2`) — no sibling
 checkout, no separate CI cross-repo checkout step, one place to bump. That
 pin is a floor, not a substitute for the interface contract below — any
 change to a symbol below is still a breaking change for this repo even
@@ -60,7 +62,8 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 |---|---|
 | `cobolparser.parse_cobol(source, filename) -> ParseResult` | entry point; `.ast`, `.success`, `.errors`, `.warnings` (PARSE_WARNING refusal per entry — see Gotchas) |
 | `CopybookExpansion.statistics.warnings: list[str]` | lossy-decode entries (`"Lossy decode of"`) gate the EXPANSION_WARNING refusal; advisory lint entries in the same list are ignored |
-| `cobolparser.expand_copybooks` / `parse_cobol_with_expansion` | copybook-expanded parse path |
+| `cobolparser.preprocess.expand_copybooks` (+ `CopybookNotFoundError`) | copybook-expanded parse path (mockymock expands, then calls `parse_cobol` itself; it never calls `parse_cobol_with_expansion`) |
+| `cobolparser.preprocess.strip_compiler_directives(raw_source)` | `run_static_checks` / `generate` strip leading `PROCESS`/`CBL` compiler-option cards (line numbers preserved) before splitting source lines |
 | `cobolparser.preprocess.normalize_fixed_format(lines) -> str` | **splicer input** — see Gotchas |
 | `CobolProgram.get_division(name)` → `CobolDivision` | division lookup |
 | `CobolDivision.paragraphs` / `._sections: dict[str, CobolSection]` | paragraph enumeration (sections also have `.paragraphs`) |
@@ -80,7 +83,11 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 | `CobolDataItem.name`, `.level`, `.picture_clause`, `.value_clause`, `.usage`, `.children` | `reset.py` VALUE-clause resets |
 | `PictureClause.pattern` | reset default-value derivation |
 | `CobolLexer(text, free_form=True)` + `TokenType.COPY` | `refusal.py` re-lexes raw source to catch unresolved COPY (invisible to the AST) |
-| `DynamicCallAnalyzer().analyze(ast)` | dynamic-call resolution feeding refusal/mock analysis |
+| `cobolparser.analysis.unused_variables.collect_declared_items(program)` | declared-name set for the CICS EIB check (`analysis/cics_eib.py`) and the matching gate in `refusal/_gates.py` |
+| `cobolparser.generators.data.layout_offsets.compute_program_data_items(program)` | per-item layout facts (usage, length) behind `CAPTURE` source checks and `UT-CAP-` target sizing (`splicer/captures.py`) |
+| `cobolparser.generators.ProgramFixtureGenerator`, `DataGeneratorOptions` | `generate --with-data` / `fixtures` (serialized `FixtureBundle` JSON only -- see Overview) |
+| `cobolparser.config.load_project_config`, `ConfigError` | the universal `cobol.yml` (soft-imported in `cli/config.py`; absent from every tagged release up to v1.9.0 -- see [cli](cli.md)) |
+| `cobolparser.cli.parse.main` | `mockymock analyze` delegates in-process, `sys.argv` patched around the call |
 | (v2) `IOOpenStatement.file_names` / `IOCloseStatement.file_names` | multi-file OPEN/CLOSE mock key matching |
 | (v2) `IOReadStatement.file_name`, `IODeleteStatement.file_name`, `IOStartStatement.file_name`, `IOUnlockStatement.file_name` | file-keyed mock matching |
 | (v2) `IOWriteStatement.record_name`, `IORewriteStatement.record_name` | record-keyed mock matching (mirrors COBOL's own WRITE/REWRITE syntax) |
@@ -95,7 +102,7 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 
 **Splicer operates on `normalize_fixed_format`'s OUTPUT, not the original file.** Every `SourceLocation.line` (and thus every splice point mockymock computes) refers to line numbers in the *normalized free-form text* cobolparser produces, not the programmer's original source file. Any code path that maps a splice back to disk must go through the same normalization, never re-derive offsets from the raw file. See [splicer](splicer.md).
 
-**`ExecSQLStatement` is not detectable via `node_type`.** `node_type` is hardcoded to `"Statement"` on the `CobolStatement` base class, and the `"EXEC-SQL"` string lands in `.statement_type` instead. Detection must be `isinstance(statement, ExecSQLStatement)`. By contrast `ExecCicsStatement` (`node_type == "EXEC_CICS"`) and `ExecImsStatement` (`node_type == "EXEC_IMS"`, covering *both* EXEC IMS and EXEC DLI — there is no separate `"EXEC_DLI"` node type) extend `ASTNode` directly rather than `CobolStatement`, so their `node_type` check does work. Three EXEC dialects, three different detection idioms — see [analysis](analysis.md) / `mock_surface.py`.
+**`ExecSQLStatement` is not detectable via `node_type`.** `node_type` is hardcoded to `"Statement"` on the `CobolStatement` base class, and the `"EXEC-SQL"` string lands in `.statement_type` instead. Detection must be `isinstance(statement, ExecSQLStatement)`. By contrast `ExecCicsStatement` (`node_type == "EXEC_CICS"`) and `ExecImsStatement` (`node_type == "EXEC_IMS"`, covering *both* EXEC IMS and EXEC DLI — there is no separate `"EXEC_DLI"` node type) keep their own `node_type`, so that check does work. (They extended `ASTNode` directly in older releases; current cobol-parser makes them `CobolStatement` subclasses with the same `node_type`, so `get_all_statements()` returns them too. mockymock uses `isinstance` for all three, which works either way.) Three EXEC dialects, three different detection idioms — see [analysis](analysis.md) / `mock_surface.py`.
 
 **`IOLogger` was considered and rejected.** `mock_surface.py` uses direct `isinstance` checks against the `IOOpenStatement`/`IOCloseStatement`/etc. classes instead of `cobolparser.IOLogger`, because `IOLogger` doesn't detect EXEC CICS/DLI at all — it structurally could not have satisfied mockymock's IO-boundary requirements.
 

@@ -13,12 +13,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from mockymock._lines import (
+    SourceEncodingError,
+    read_utf8_source,
+    split_source_lines,
+)
+
 if TYPE_CHECKING:
     from cobolparser import ParseResult
 
     from mockymock.analysis.cics_eib import CicsEibPlan
     from mockymock.analysis.linkage import AddressOfSite, LinkagePlan
     from mockymock.analysis.mock_surface import MockSurface
+    from mockymock.analysis.refusal import RefusalReason
     from mockymock.dsl.model import MockTestSuite
     from mockymock.splicer.captures import CapturePlan
     from mockymock.splicer.source_map import ScopeMap
@@ -55,6 +62,15 @@ class StaticCheckResult:
     # command prefix -- silently proceeding past a warning, or silently
     # editing source a .cut author didn't write, would both be surprises.
     notes: list[str] = field(default_factory=list)
+    # Raw check_test_case() output per TESTCASE, keyed by the case's
+    # index in `suite.test_cases` (not its name: duplicate TESTCASE names
+    # are legal, and a name key would hand the last case's reasons to
+    # every namesake). Not just the pre-formatted strings already folded
+    # into `problems` -- lets a caller like `generate --fill` act on
+    # `RefusalReason.suggested_fix` directly instead of re-running the
+    # same reachability analysis a second time. Only cases with at least
+    # one reason appear as a key.
+    unmocked_reasons: dict[int, list[RefusalReason]] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -155,6 +171,7 @@ def run_static_checks(
     which accumulates across every case before returning."""
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
+        CopybookNotFoundError,
         expand_copybooks,
         normalize_fixed_format,
         strip_compiler_directives,
@@ -178,8 +195,10 @@ def run_static_checks(
         resolve_scoped_refusals,
         union_executed_paragraphs,
     )
+    from mockymock.cli.discovery import copybook_not_found_hint
     from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.splicer.captures import plan_captures
+    from mockymock.splicer.cics_resp import expand_dfhresp, expansion_note
     from mockymock.splicer.linkage import neutralize, redirect_address_of
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
     from mockymock.splicer.sqlca import transform_data_division_exec
@@ -188,7 +207,11 @@ def run_static_checks(
     out = StaticCheckResult()
 
     # 1. Read source; expand copybooks and check expansion warnings.
-    raw_source = source_path.read_text(encoding="utf-8")
+    try:
+        raw_source = read_utf8_source(source_path)
+    except SourceEncodingError as exc:
+        out.problems.append(str(exc))
+        return out
     if copybook_paths:
         # cobolparser genuinely raises for realistic inputs (a copybook
         # that COPYs itself, an oversized/deeply-nested chain, a
@@ -199,6 +222,10 @@ def run_static_checks(
         # _cmd_fixtures's existing broad catch for the same call.
         try:
             expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
+        except CopybookNotFoundError as exc:
+            out.problems.append(f"copybook expansion failed: {exc}")
+            out.problems.append(copybook_not_found_hint())
+            return out
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             out.problems.append(f"copybook expansion failed: {exc}")
             return out
@@ -243,9 +270,12 @@ def run_static_checks(
     # 4. Parse the .cut file; apply any --case/--tag selection immediately so
     # every later per-case check sees only the cases that will actually run.
     try:
-        suite = parse_cut(cut_path.read_text(encoding="utf-8"))
+        suite = parse_cut(read_utf8_source(cut_path))
     except CutParseError as exc:
         out.problems.append(f"invalid .cut file {cut_path}: {exc}")
+        return out
+    except SourceEncodingError as exc:
+        out.problems.append(str(exc))
         return out
     selection_problems = filter_suite_cases(suite, case_names, tag_names)
     if selection_problems:
@@ -297,11 +327,15 @@ def run_static_checks(
     # caller (mockymock export) wants them preserved for a real IBM compile
     # instead, which needs them exactly where GnuCOBOL can't tolerate them.
     if preserve_compiler_directives:
-        lines = normalize_fixed_format(raw_source.splitlines()).splitlines()
+        lines = split_source_lines(
+            normalize_fixed_format(split_source_lines(raw_source))
+        )
     else:
-        lines = normalize_fixed_format(
-            strip_compiler_directives(raw_source).splitlines()
-        ).splitlines()
+        lines = split_source_lines(
+            normalize_fixed_format(
+                split_source_lines(strip_compiler_directives(raw_source))
+            )
+        )
 
     # Waived unresolved-COPY statements (step 4b) get commented out here:
     # comment-only, so no line number shifts for anything downstream, same
@@ -342,6 +376,13 @@ def run_static_checks(
     # reachability union step 4b uses; when waived it is rewritten in
     # place (width-preserving), because cobc has no CICS translator and
     # could not compile the unexpanded macro even in dead code.
+    # DFHRESP(<condition>) is expanded to its EIBRESP number first, exactly
+    # as the CICS translator would (width-preserving, so nothing moves);
+    # only what that leaves behind -- DFHVALUE, an unknown condition, a
+    # call split across lines -- reaches the macro guardrail below.
+    lines, resp_expansions = expand_dfhresp(lines)
+    if resp_expansions:
+        out.notes.append(expansion_note(resp_expansions))
     cics_eib_reasons, cics_macro_scoped = check_cics_eib_layout_scoped(
         parse_result.ast, lines
     )
@@ -403,17 +444,23 @@ def run_static_checks(
     # "GO TO <own-exit-label>" spliced into EXIT PARAGRAPH no longer
     # cascades fall-through reachability past its exit label.
     neutralized_goto = neutralized_goto_targets(parse_result.ast, scope_map, lines)
-    for case in suite.test_cases:
-        out.problems.extend(
-            f"refused ({r.code}): {r.message}"
-            for r in check_test_case(
-                surface,
-                parse_result.ast,
-                case,
-                out.file_status_fields,
-                neutralized_goto=neutralized_goto,
-            )
+    for case_index, case in enumerate(suite.test_cases):
+        case_reasons = check_test_case(
+            surface,
+            parse_result.ast,
+            case,
+            out.file_status_fields,
+            neutralized_goto=neutralized_goto,
         )
+        for r in case_reasons:
+            out.problems.append(f"refused ({r.code}): {r.message}")
+            if r.suggested_fix:
+                out.problems.append("    Add to this TESTCASE:")
+                out.problems.extend(
+                    f"    {line}" for line in r.suggested_fix.splitlines()
+                )
+        if case_reasons:
+            out.unmocked_reasons[case_index] = case_reasons
     out.problems.extend(
         f"refused ({r.code}): {r.message}"
         for r in check_flow_mocks(parse_result.ast, suite, lines)
@@ -428,7 +475,9 @@ def run_static_checks(
     # cannot be mirrored exactly would otherwise reach the compiler as a
     # missing declaration, or (worse) as a field whose type silently
     # disagrees with the value moved into it.
-    out.captures, capture_problems = plan_captures(parse_result.ast, suite, surface)
+    out.captures, capture_problems = plan_captures(
+        parse_result.ast, suite, surface, lines
+    )
     out.problems.extend(
         f"refused (UNRESOLVED_CAPTURE_TARGET): {problem}"
         for problem in capture_problems

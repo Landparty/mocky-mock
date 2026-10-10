@@ -104,6 +104,7 @@ def test_debug_session_breaks_steps_and_reports_variables():
         stderr=subprocess.PIPE,
     )
     client = _DapClient(process)
+    completed = False
     try:
         client.send("initialize", {})
         client.read_until(lambda m: m.get("event") == "initialized")
@@ -134,8 +135,10 @@ def test_debug_session_breaks_steps_and_reports_variables():
             m["body"]["output"] for m in run_messages if m.get("event") == "output"
         )
         assert "__MOCKYMOCK__ TESTSUITE: debug spike" in output_text
-        assert "LOOP ITER +0001" in output_text
-        assert "LOOP ITER +0003" in output_text
+        # `-std=mvs` (pretty-display: no) DISPLAYs a binary item at its
+        # storage width: a 2-byte S9(4) COMP prints 5 digits, not 4.
+        assert "LOOP ITER +00001" in output_text
+        assert "LOOP ITER +00003" in output_text
 
         client.send("stackTrace", {"threadId": 1})
         stack_responses = client.read_until(lambda m: m.get("command") == "stackTrace")
@@ -172,11 +175,21 @@ def test_debug_session_breaks_steps_and_reports_variables():
         step_output = "".join(
             m["body"]["output"] for m in step_messages if m.get("event") == "output"
         )
-        assert "FINAL BALANCE 00126.45" in step_output
+        # `-std=mvs` DISPLAYs a numeric item without its implied decimal
+        # point (the variables view above decodes it with one).
+        assert "FINAL BALANCE 0012645" in step_output
 
         client.send("disconnect", {})
         client.read_until(lambda m: m.get("command") == "disconnect")
+        completed = True
     finally:
-        process.wait(timeout=15)
+        if completed:
+            process.wait(timeout=15)
+        else:
+            # An assertion above left the adapter waiting for requests that
+            # will never come: kill it rather than let a 15s wait's
+            # TimeoutExpired replace the assertion that actually failed.
+            process.kill()
+            process.wait()
 
     assert process.returncode == 0

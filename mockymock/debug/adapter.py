@@ -18,6 +18,9 @@ plumbing testable with a fake session, independent of Docker/gdb.
 from __future__ import annotations
 
 import json
+import ntpath
+import os
+import posixpath
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import IO
@@ -50,6 +53,12 @@ class DebugSession:
     instrumented_file: str
     """The file path gdb itself knows about (the spliced/instrumented
     source cobc actually compiled)."""
+    original_file: str | None = None
+    """The program source the user debugs (the raw `.cbl` `line_map`'s
+    original lines come from). `line_map` covers this one file only, so a
+    `setBreakpoints` for any other source -- a copybook, another program --
+    cannot be placed and is reported unverified. None (a session that does
+    not know its source) accepts every path, as before."""
 
 
 LaunchSession = Callable[..., DebugSession]
@@ -303,8 +312,34 @@ class DapAdapter:
         for number in self._breakpoint_numbers.pop(source_path, []):
             session.gdb.delete_breakpoint(number)
 
+        if not _is_same_source(source_path, session.original_file):
+            # The line map only knows the program's own lines: line N of a
+            # copybook (or of another program) is not line N of this one,
+            # so it must not become a gdb breakpoint there.
+            refusal = (
+                f"breakpoints can only be set in the program under test "
+                f"({session.original_file}), not in {source_path}"
+            )
+            self._send_response(
+                request,
+                success=True,
+                body={
+                    "breakpoints": [
+                        {"verified": False, "line": bp["line"], "message": refusal}
+                        for bp in arguments.get("breakpoints", [])
+                    ]
+                },
+            )
+            return
+
         breakpoints = []
         inserted_numbers: list[int] = []
+        # Registered before inserting, not after: when gdb refuses one
+        # location part-way through (a GdbCommandError fails the whole
+        # request), the breakpoints already inserted for the earlier lines
+        # must still be tracked, or no later setBreakpoints can ever delete
+        # them and the program keeps stopping where the editor shows none.
+        self._breakpoint_numbers[source_path] = inserted_numbers
         for source_bp in arguments.get("breakpoints", []):
             original_line = source_bp["line"]
             reason = session.line_map.reject_reason(original_line)
@@ -321,8 +356,8 @@ class DapAdapter:
             number = int(bkpt["number"])
             inserted_numbers.append(number)
             breakpoints.append({"verified": True, "line": original_line, "id": number})
-        if inserted_numbers:
-            self._breakpoint_numbers[source_path] = inserted_numbers
+        if not inserted_numbers:
+            del self._breakpoint_numbers[source_path]
         self._breakpoint_original_file = source_path
         self._send_response(request, success=True, body={"breakpoints": breakpoints})
 
@@ -352,7 +387,11 @@ class DapAdapter:
                     "name": frame.paragraph or "(unknown)",
                     "line": frame.original_line,
                     "column": 1,
-                    "source": {"path": self._breakpoint_original_file},
+                    "source": {
+                        "path": self._breakpoint_original_file
+                        or session.original_file
+                        or ""
+                    },
                 }
                 for index, frame in enumerate(frames)
             ],
@@ -398,6 +437,20 @@ class DapAdapter:
             return
         expression = request["arguments"]["expression"]
         expr = session.variable_table.get(expression)
+        if expr is None:
+            # COBOL names are case-insensitive, but the table is keyed by
+            # the spelling of the declaration (cobc keeps it verbatim in
+            # the .c.l.h comment): hovering `WS-BAL` on a line of a program
+            # that declared `ws-bal` found nothing.
+            wanted = expression.strip().upper()
+            expr = next(
+                (
+                    candidate
+                    for name, candidate in session.variable_table.items()
+                    if name.upper() == wanted
+                ),
+                None,
+            )
         if expr is None:
             self._send_response(
                 request, success=False, message=f"unknown variable: {expression}"
@@ -499,6 +552,26 @@ class DapAdapter:
         if self._session is not None:
             self._session.gdb.close()
             self._session = None
+
+
+def _is_same_source(client_path: str, original_file: str | None) -> bool:
+    """Whether a DAP client's source path names the program under test.
+    An absolute path must resolve to the same file; a relative one (no
+    cwd to resolve it against) must equal the program path's trailing
+    components. Case-insensitive on Windows, where clients send paths."""
+    if original_file is None:
+        return True
+    pathmod = ntpath if os.name == "nt" else posixpath
+
+    def parts(path: str) -> list[str]:
+        normalized = pathmod.normcase(pathmod.normpath(path))
+        return [p for p in normalized.replace("\\", "/").split("/") if p]
+
+    original = parts(os.path.realpath(original_file))
+    if pathmod.isabs(client_path):
+        return parts(os.path.realpath(client_path)) == original
+    client = parts(client_path)
+    return bool(client) and original[-len(client) :] == client
 
 
 def _display_value(value: VariableValue) -> str:

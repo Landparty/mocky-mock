@@ -1,0 +1,335 @@
+"""Prose explanations for every refusal code this package can emit.
+
+Backs `mockymock explain <CODE>` (see
+docs/2026-09-15-cut-editor-intelligence-design.md) and, transitively, the
+`mocky-mock-vscode` extension's refusal-code hover (which shells out to
+`explain --json`). Kept in one place so the explanation text a user reads
+from the CLI and the one an editor tooltip shows can never drift apart.
+
+Coverage is partial *and reported*, the same posture
+`dialects/le_signatures.py` uses in the sibling cobol-parser repo: a code
+this dict has no entry for is a real gap, surfaced by `explain` naming it
+as "not catalogued" rather than silently returning nothing that looks the
+same as "this code doesn't exist." `_UNCATALOGUED_CODES_ARE_A_BUG` in
+tests/unit/test_refusal_explanations.py cross-checks this dict against
+every literal refusal code string actually constructed anywhere in
+`mockymock/`, so a new code added to a gate without a matching entry here
+fails CI rather than shipping silently unexplained.
+"""
+
+from __future__ import annotations
+
+REFUSAL_EXPLANATIONS: dict[str, str] = {
+    # --- UNMOCKED_*: a boundary is reachable but no MOCK directive matches
+    # it. Every one of these has a mechanical fix -- see
+    # RefusalReason.suggested_fix / `generate --fill`.
+    "UNMOCKED_CALL": (
+        "A static or dynamic CALL is reachable from this test case's "
+        "PERFORM target, but no MOCK CALL/MOCK MQ directive names it -- "
+        "the call has nowhere to link inside the sandbox. Add a MOCK CALL "
+        '"<name>" (or MOCK CALL <identifier> for a dynamic call) block.'
+    ),
+    "UNMOCKED_FILE_OP": (
+        "A file operation (OPEN/CLOSE/READ/WRITE/REWRITE/DELETE/START/"
+        "UNLOCK, or a plain-file-form SORT/MERGE/RELEASE/RETURN) is "
+        "reachable but no MOCK directive names the file -- it would hit a "
+        "file that does not exist in the sandbox. Add a MOCK <VERB> "
+        "<file-name> block."
+    ),
+    "UNMOCKED_SQL": (
+        "An EXEC SQL statement is reachable but no MOCK SQL directive "
+        "matches its text -- there is no DB2 instance in the sandbox, so "
+        "an unmocked EXEC SQL cannot compile/run. Add a MOCK SQL "
+        '"<prefix>" block (the prefix is the shortest unique word-run of '
+        "the statement's own text)."
+    ),
+    "UNMOCKED_CICS": (
+        "An EXEC CICS command is reachable but no MOCK CICS directive "
+        "matches it -- there is no CICS region in the sandbox. Add a MOCK "
+        'CICS "<prefix>" block.'
+    ),
+    "UNMOCKED_DLI": (
+        "An EXEC DLI (or CBLTDLI) call is reachable but no MOCK DLI "
+        "directive matches it -- there is no IMS DL/I database in the "
+        'sandbox. Add a MOCK DLI "<prefix>" block.'
+    ),
+    "UNMOCKED_CONSOLE_ACCEPT": (
+        "An interactive ACCEPT (no FROM clause, or FROM CONSOLE/SYSIN) is "
+        "reachable but nothing mocks it -- under a test runner it would "
+        "read whatever stdin happens to be attached, or block. Add a MOCK "
+        "ACCEPT <target> block."
+    ),
+    "UNMOCKED_REPORT_WRITER": (
+        "An INITIATE/GENERATE/TERMINATE Report Writer statement is "
+        "reachable but no MOCK directive names its report -- the RD/FD "
+        "stay declared but the report file is never touched by a real "
+        'run. Add a MOCK INITIATE/GENERATE/TERMINATE "<report-name>" '
+        "block."
+    ),
+    # --- Structural / whole-program refusals: no mock category exists for
+    # these constructs at all.
+    "UNSUPPORTED_DECLARATIVES": (
+        "The program contains a DECLARATIVES block. USE procedures run on "
+        "I/O conditions outside any PERFORM/GO TO edge, so mockymock's "
+        "reachability analysis structurally cannot see the boundary "
+        "statements inside them -- refused for the whole program, "
+        "unconditionally, same posture as SORT/MERGE below. There is no "
+        "workaround short of removing the DECLARATIVES section from the "
+        "copy under test."
+    ),
+    "UNSUPPORTED_ALTER": (
+        "The program contains an ALTER statement, which rewrites a GO "
+        "TO's target at runtime. mockymock's reachability analysis is "
+        "static and cannot model a control-flow edge that changes while "
+        "the program runs -- refused unconditionally. There is no "
+        "workaround short of removing the ALTER."
+    ),
+    "UNSUPPORTED_SORT_MERGE": (
+        "A mixed-form SORT/MERGE: a USING/GIVING file paired with a "
+        "procedure clause on the other side. It touches a physical file "
+        "mockymock cannot seed/read AND runs a procedure whose other "
+        "logic a whole-statement mock would silently skip -- neither "
+        "mocking strategy is safe, so it's refused. A plain-file-form "
+        "SORT/MERGE (USING ... GIVING ..., no procedure clause) is "
+        "mockable via MOCK SORT/MOCK MERGE instead."
+    ),
+    "UNSUPPORTED_NESTED_PROGRAM": (
+        "The parse carries cobol-parser's multi-unit signal: nested or "
+        "stacked PROGRAM-IDs, or an object-oriented CLASS-ID with its "
+        "FACTORY/OBJECT/METHOD-ID units. cobol-parser's AST is complete "
+        "(every unit is in contained_programs) -- what's missing is "
+        "mockymock's own support, since the splicer and reachability BFS "
+        "only see the outermost unit. Test the outermost program only, or "
+        "split the nested unit into its own compilation unit."
+    ),
+    "UNSUPPORTED_CICS_MACRO": (
+        "A DFHVALUE(...) macro call, or a DFHRESP(...) call mockymock "
+        "could not expand, sits in ordinary COBOL (outside any EXEC block). "
+        "DFHRESP(<condition>) on one line is expanded to its EIBRESP number "
+        "automatically; what refuses is DFHVALUE (no built-in CVDA table), "
+        "a condition name not in the table, or a call split across lines. "
+        "Putting the call on one line, or replacing DFHVALUE(X) with its "
+        "numeric CVDA value, is usually the fix."
+    ),
+    "UNSUPPORTED_CICS_DFHCOMMAREA": (
+        "DFHCOMMAREA is referenced in the program's text but has no "
+        "matching LINKAGE SECTION declaration mockymock can find -- its "
+        "size/layout is unknowable, so no storage can be synthesized for "
+        "it, however unreachable its references are. Declare DFHCOMMAREA "
+        "properly in the LINKAGE SECTION."
+    ),
+    "UNSUPPORTED_LINKAGE_LAYOUT": (
+        "A LINKAGE SECTION item mockymock needs to synthesize storage for "
+        "(to satisfy a CALL/ENTRY parameter) has a layout mockymock's "
+        "linkage plan cannot resolve. See the message for the specific "
+        "item and layout problem."
+    ),
+    "UNSUPPORTED_LINKAGE_ADDRESSING": (
+        "A SET ADDRESS OF statement targets a LINKAGE SECTION item in a "
+        "shape mockymock's address-of redirection cannot rewrite safely. "
+        "See the message for the specific statement."
+    ),
+    "UNSUPPORTED_PERFORM_THRU": (
+        "A PERFORM ... THRU range (in the test case's own PERFORM line, "
+        "or inside the program itself) could not be safely expanded: the "
+        "endpoint names 0 or more than 1 paragraph/section, or the range "
+        "runs backwards. mockymock refuses rather than guess which slice "
+        "of the PROCEDURE DIVISION is meant."
+    ),
+    "UNSUPPORTED_TERMINATOR_LAYOUT": (
+        "A STOP RUN or GOBACK sits in a shape mockymock's terminator "
+        "neutralization cannot safely rewrite (so the suite's later test "
+        "cases would never run). One narrow SECTION-scoped shape (a "
+        "section's first paragraph, entered exclusively via PERFORM "
+        "<section-name>) is supported instead of refused -- see "
+        "docs/2026-07-10-section-scoped-terminator-support-design.md."
+    ),
+    "UNSUPPORTED_NESTED_MOCK_TARGET": (
+        "A MOCK directive matches a statement nested inside an IF/"
+        "EVALUATE/inline PERFORM body that mockymock cannot safely "
+        "splice (no validated replacement span exists for it) -- "
+        "splicing it could swallow a block terminator and corrupt "
+        "control flow. Move the statement to the top level of its "
+        "paragraph, or mock the whole paragraph/section instead (MOCK "
+        "PARAGRAPH/MOCK SECTION)."
+    ),
+    "UNSUPPORTED_MOCK_TARGET_LAYOUT": (
+        "A MOCK directive matches a top-level statement that shares a "
+        "source line with other code (sibling code before it, a one-line "
+        "paragraph header, or another statement after it) -- splicing it "
+        "would comment out that sibling code along with it. Put the "
+        "statement on its own line(s)."
+    ),
+    "UNSUPPORTED_FLOW_MOCK_TARGET": (
+        "A MOCK PARAGRAPH/MOCK SECTION names this test case's own PERFORM "
+        "entry point. Mocking the entry point would replace the very "
+        "code the test performs, leaving nothing to test. PERFORM a "
+        "caller of it instead, and mock the target from there."
+    ),
+    "UNSUPPORTED_INVOKE": (
+        "An INVOKE method call on an object reference is an external "
+        "dependency mockymock has no mock category for (object-oriented "
+        "COBOL is outside the GnuCOBOL toolchain mockymock compiles "
+        "with). Isolate the paragraph with MOCK PARAGRAPH, or PERFORM a "
+        "caller whose flow never reaches it."
+    ),
+    "UNSUPPORTED_CHAIN": (
+        "CHAIN transfers control to another program without returning (a "
+        "Micro Focus extension). mockymock cannot mock it the way it "
+        "mocks CALL, since nothing after it in the test case would run. "
+        "Isolate the paragraph with MOCK PARAGRAPH, or PERFORM a caller "
+        "whose flow never reaches it."
+    ),
+    "UNSUPPORTED_COMMUNICATION": (
+        "SEND/RECEIVE/ENABLE/DISABLE/PURGE go through the COBOL-85 "
+        "Communication Module's message control system -- an external "
+        "message queue mockymock has no mock category for. Isolate the "
+        "paragraph with MOCK PARAGRAPH, or PERFORM a caller whose flow "
+        "never reaches it."
+    ),
+    "UNSUPPORTED_STOP_LITERAL": (
+        "STOP <literal> displays the literal and waits for the operator "
+        "on the console before continuing -- a console read like an "
+        "unmocked ACCEPT. Replace it with DISPLAY, or isolate the "
+        "paragraph with MOCK PARAGRAPH."
+    ),
+    "UNSUPPORTED_STATEMENT": (
+        "mockymock does not model this statement at all: it is neither a "
+        "known pass-through (touches nothing outside the program) nor a "
+        "mockable boundary, so its effects cannot be verified or mocked -- "
+        "fail closed rather than assume it is side-effect free. Isolate "
+        "the paragraph with MOCK PARAGRAPH, or PERFORM a caller whose "
+        "flow never reaches it."
+    ),
+    "UNSUPPORTED_PHANTOM_PARAGRAPH": (
+        "A paragraph is named exactly END-ADD/END-SUBTRACT/END-MULTIPLY/"
+        "END-DIVIDE/END-COMPUTE -- reserved arithmetic scope-terminator "
+        "words the pinned cobol-parser version fails to consume as their "
+        "statement's own scope terminator when written alone on a line, "
+        "instead parsing them as paragraph names and silently reparenting "
+        "every following statement. This is a defense-in-depth guard for "
+        "an upstream cobol-parser limitation, not something to work "
+        "around in the .cut file -- rename the paragraph if it is "
+        "genuinely meant as one, or wait for the upstream fix."
+    ),
+    "UNSUPPORTED_DATA_DIVISION_EXEC": (
+        "A DATA DIVISION EXEC SQL construct (typically a second, live "
+        "EXEC SQL INCLUDE found while re-scanning already-spliced "
+        "content, or an unrecognized DATA DIVISION EXEC SQL like "
+        "WHENEVER) is in a shape mockymock's SQLCA synthesis does not "
+        "support, or shares a source line with sibling content that "
+        "splicing it would delete."
+    ),
+    # --- Per-directive / per-test-case authoring mistakes.
+    "AMBIGUOUS_MOCK": (
+        "Two or more MOCK directives in this test case match the same "
+        "physical boundary site. mockymock fails closed rather than "
+        "guess which one you meant -- make the directives' keys "
+        "unambiguous (a more specific file/CALL name, or a longer SQL/"
+        "CICS/DLI text prefix)."
+    ),
+    "UNMATCHED_MOCK": (
+        "A MOCK (or VERIFY) directive in this test case doesn't match "
+        "any boundary site actually reachable from its PERFORM target -- "
+        "typically a typo'd key, or a mock written for a paragraph this "
+        "test case doesn't reach. Check the key spelling and the "
+        "PERFORM target."
+    ),
+    "VERIFY_WITHOUT_MOCK": (
+        "A VERIFY directive names a (category, key) this test case has "
+        "no matching MOCK directive for -- its tally counter would be "
+        "undeclared or stale. Add the matching MOCK block, or fix the "
+        "VERIFY's own key."
+    ),
+    "UNMOCKABLE_ACCEPT_SOURCE": (
+        "A MOCK ACCEPT directive targets an ACCEPT ... FROM <system "
+        "source> (DATE, TIME, DAY, COMMAND-LINE, ...) that GnuCOBOL "
+        "resolves internally rather than reading a console -- there is "
+        "nothing for a mock to intercept. These are deliberately not "
+        "boundary sites; remove the MOCK ACCEPT for this target."
+    ),
+    "UNRESOLVED_FILE_STATUS_TARGET": (
+        "A MOCK directive uses FILE-STATUS IS, but the named file has no "
+        "FILE STATUS IS <field> clause in its SELECT entry -- there is "
+        "no WORKING-STORAGE field to move the status into. Add a FILE "
+        "STATUS clause to the file's SELECT entry, or drop FILE-STATUS IS "
+        "from the mock."
+    ),
+    "CAPTURE_ARG_OUT_OF_RANGE": (
+        "A CAPTURE ARG <n> INTO ... names an argument position the real "
+        "CALL statement doesn't have that many USING parameters for -- "
+        "checked against every matching site program-wide (not just "
+        "reachable ones), so it refuses even if only one of several "
+        "sites sharing the mocked key is too narrow. Fix the argument "
+        "number."
+    ),
+    "UNKNOWN_PARAGRAPH": (
+        "A test case's own PERFORM target (or a driver-side PERFORM ... "
+        "THRU endpoint) does not name a real paragraph or section in the "
+        "PROCEDURE DIVISION -- almost always a typo. Check the spelling "
+        "against the program's own paragraph names."
+    ),
+    "UNRESOLVED_FLOW_TARGET": (
+        "A PERFORM/GO TO target, or an XML PARSE PROCESSING PROCEDURE, "
+        "names something the reachability analysis cannot resolve to a "
+        "real paragraph or section (an unparsed target, or a construct "
+        "the pinned cobol-parser release only keeps as text). Fails "
+        "closed rather than guess the control-flow edge."
+    ),
+    # --- Whole-program parse/expansion gates (not per-test-case).
+    "PARSE_ERROR": (
+        "cobol-parser reported one or more hard parse errors on the "
+        "program -- the AST could not be built at all. Fix the reported "
+        "syntax errors in the COBOL source; mockymock cannot analyze or "
+        "test a program that doesn't parse."
+    ),
+    "PARSE_WARNING": (
+        "The parse succeeded but cobol-parser's own ParseResult.warnings "
+        "reports dropped statements -- the AST is missing content, so "
+        "any scaffold or reachability analysis built from it would "
+        "silently miss boundaries. Usually caused by an unresolved COPY "
+        "or an unsupported construct upstream in cobol-parser."
+    ),
+    "EXPANSION_WARNING": (
+        "Copybook expansion produced a lossy decode (an encoding warning "
+        "on one of the expanded members) -- the expanded text may be "
+        "corrupted. Refused before the corrupted text is ever parsed. "
+        "Check the copybook's actual encoding against what "
+        "--copybook-path / the auto-detector assumed."
+    ),
+    "UNRESOLVED_COPYBOOK": (
+        "A COPY statement (or EXEC SQL INCLUDE) could not be resolved "
+        "against the given --copybook-path directories -- without "
+        "expansion the referenced fields don't exist, so a scaffold or "
+        "test run built from the unexpanded source would be silently "
+        "wrong. Pass the copybook's real location with --copybook-path."
+    ),
+    "DYNAMIC_CALL": (
+        "A dynamic CALL's target identifier could not be determined by "
+        "cobol-parser's static analysis (it could not resolve what value "
+        "the identifier holds) -- dynamic CALLs are only mockable "
+        "through their identifier (MOCK CALL <identifier>), and without "
+        "a captured identifier there's no key to mock."
+    ),
+    "UNMOCKED_CANCEL": (
+        "A CANCEL is reachable, but the same program name isn't covered "
+        "by a MOCK CALL/MOCK CALL <identifier> in this test case. CANCEL "
+        "is only a safe no-op when every CALL for the same program is "
+        "mocked (the module is then never really loaded) -- add the "
+        "matching MOCK CALL for the CANCELed program name(s)."
+    ),
+    "NESTED_EXEC": (
+        "An EXEC SQL/CICS/DLI block sits nested inside a conditional/"
+        "loop body and cannot be stubbed out safely there -- every EXEC "
+        "block must be stubbed for GnuCOBOL to compile the program at "
+        "all (it has no SQL/CICS/DLI precompiler), and no validated "
+        "replacement span exists for this nested one. Move it to the "
+        "top level of its paragraph."
+    ),
+    "UNSPLICEABLE_EXEC": (
+        "An EXEC SQL/CICS/DLI block shares a source line with sibling "
+        "code -- stubbing it out (required for GnuCOBOL to compile, "
+        "since it has no precompiler) would comment out that sibling "
+        "code too. Put the EXEC block on its own line(s)."
+    ),
+}

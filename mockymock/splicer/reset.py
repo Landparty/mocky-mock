@@ -14,12 +14,17 @@ items take `SET ... TO NULL`. Items this module cannot reset legally are
 SKIPPED rather than given illegal COBOL (documented fidelity limits, see
 .okf/splicer.md): USAGE INDEX items, PICTURE-less items of unrecognized
 usage, and OCCURS children with VALUE clauses (restoring those needs
-subscripted MOVEs).
+subscripted MOVEs). Top-level REDEFINES items are skipped on purpose: their
+storage is the redefined item's, which is reset (and its VALUE restored)
+by its own line -- a second reset through the redefining view would
+overwrite it.
 """
 
 from __future__ import annotations
 
 import re
+
+from mockymock.splicer.io_copy import longest_record_per_file
 
 _REPEAT_GROUP_RE = re.compile(r"\(\d+\)")
 
@@ -43,7 +48,8 @@ _POINTER_USAGES = frozenset(
 
 
 def reset_move_lines(program) -> list[str]:
-    """One reset line per top-level (01 or 77) WORKING-STORAGE item.
+    """One reset line per top-level (01 or 77) WORKING-STORAGE and
+    LOCAL-STORAGE item, plus each FILE SECTION FD/SD's first record.
 
     Elementary items get `MOVE <value> TO <name>` (declared VALUE clause, or
     the type default). Group items without a VALUE clause get
@@ -55,15 +61,37 @@ def reset_move_lines(program) -> list[str]:
     every (recursively nested) child that declared its own VALUE clause --
     see `_child_value_restores`.
     """
-    working_storage = program.get_division("DATA")
-    if working_storage is None:
+    data_division = program.get_division("DATA")
+    if data_division is None:
         return []
 
-    section = _find_working_storage_section(working_storage)
-    if section is None:
-        return []
+    # LOCAL-STORAGE and FILE SECTION records leak between cases exactly
+    # like WORKING-STORAGE does -- one binary runs every case -- so a case
+    # passed alone and failed in the suite (issue #147). LOCAL-STORAGE
+    # gets the same VALUE-restoring treatment; a FILE SECTION record has
+    # no VALUE clauses, and only an FD's longest record is reset: every
+    # other 01 under the same FD is an implicit redefinition of it, and
+    # resetting a shorter one left the rest of the area dirty.
+    lines: list[str] = []
+    for section in _sections(data_division, "FILE"):
+        lines.extend(
+            reset_lines_for_items(longest_record_per_file(_top_level_items(section)))
+        )
+    for section_name in ("WORKING-STORAGE", "LOCAL-STORAGE"):
+        for section in _sections(data_division, section_name):
+            lines.extend(reset_lines_for_items(_top_level_items(section)))
+    return lines
 
-    return reset_lines_for_items(_top_level_items(section))
+
+def _sections(data_division, wanted: str) -> list:
+    out = []
+    for section in getattr(data_division, "sections", data_division.children):
+        name = getattr(section, "_own_section_name", None) or getattr(
+            section, "section_name", None
+        )
+        if name and name.upper().replace(" SECTION", "").strip() == wanted:
+            out.append(section)
+    return out
 
 
 def reset_lines_for_items(items) -> list[str]:
@@ -76,6 +104,15 @@ def reset_lines_for_items(items) -> list[str]:
     for item in items:
         if _is_filler(item):
             continue  # a top-level FILLER cannot be a valid MOVE/INITIALIZE target
+        if getattr(item, "redefines", None):
+            # A REDEFINES item shares the storage of the item it redefines,
+            # which already got its own reset line just above. Resetting it
+            # too overwrote that line's work -- `01 A PIC X(4) VALUE "AB12".
+            # 01 B REDEFINES A PIC 9(4).` left A holding "0000" in every
+            # test case, the first one included. Skipping it leaves the
+            # shared bytes exactly as the program starts with them: GnuCOBOL
+            # initializes storage from the first (redefined) description.
+            continue
         if _is_group(item) and not item.value_clause:
             lines.append(f"INITIALIZE {item.name}")
             lines.extend(_child_value_restores(item))
@@ -130,16 +167,6 @@ def _double_quote_run(match: re.Match[str]) -> str:
     what makes `cobol_literal` idempotent."""
     run = len(match.group(0))
     return QUOTE * (run + run % 2)
-
-
-def _find_working_storage_section(data_division):
-    for section in getattr(data_division, "sections", data_division.children):
-        name = getattr(section, "_own_section_name", None) or getattr(
-            section, "section_name", None
-        )
-        if name and "WORKING-STORAGE" in name.upper():
-            return section
-    return None
 
 
 def _top_level_items(section):

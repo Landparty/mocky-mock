@@ -132,13 +132,83 @@ def _declaration_for(target: str, item: dict) -> tuple[str, str] | None:
         return None  # COMP-1/COMP-2/POINTER/INDEX: nothing to mirror
     suffix = "" if usage in _DISPLAY_USAGES else f" USAGE {usage}"
     declaration = f"01  {target}  PIC {picture}{suffix}."
-    numeric = any(char in picture.upper() for char in "9VPZ*$+-")
+    # Repeat counts are not symbols: `X(9)` is alphanumeric, and treating
+    # its `9` as a digit reset the capture to "000000000", not spaces.
+    symbols = re.sub(r"\(\d+\)", "", picture.upper())
+    numeric = any(char in symbols for char in "9VPZ*$+-")
     reset = f"MOVE {'ZERO' if numeric else 'SPACES'} TO {target}"
     return declaration, reset
 
 
+#: An unsigned/signed integer or decimal numeric literal as cobolparser
+#: reports it. A COBOL data-name must contain a letter, so a USING operand
+#: whose name matches this can only ever be a literal.
+_NUMERIC_LITERAL_RE = re.compile(r"[+-]?(\d+)(?:\.(\d+))?")
+
+
+def _literal_declaration(target: str, source: str) -> tuple[str, str] | None:
+    """`(declaration, reset_line)` for a capture whose argument is the
+    literal `source` -- a quoted token verbatim (`"ABC"`, `'D''E'`) or a
+    numeric literal (`42`, `-3.5`) -- or None for a shape this module will
+    not guess at (a hex/national/prefixed literal, an empty one)."""
+    numeric = _NUMERIC_LITERAL_RE.fullmatch(source)
+    if numeric is not None:
+        integer, fraction = numeric.group(1), numeric.group(2) or ""
+        sign = "S" if source[0] in "+-" else ""
+        picture = f"{sign}9({len(integer)})" + (
+            f"V9({len(fraction)})" if fraction else ""
+        )
+        return f"01  {target}  PIC {picture}.", f"MOVE ZERO TO {target}"
+    if len(source) < 2 or source[0] not in "\"'" or source[-1] != source[0]:
+        return None  # X"..", N"..", G"..", Z"..": no PIC X mirror to guess
+    quote = source[0]
+    # PIC X(n) counts bytes, and the source is compiled as UTF-8: a literal
+    # holding a non-ASCII character ("ÉCOLE" is 6 bytes, not 5) sized by
+    # its character count truncated the captured value.
+    length = len(source[1:-1].replace(quote * 2, quote).encode("utf-8"))
+    if length == 0:
+        return None
+    return f"01  {target}  PIC X({length}).", f"MOVE SPACES TO {target}"
+
+
+def _site_argument(site, arg_index: int, lines, boundaries) -> tuple[str, str] | None:
+    """`("item", NAME)` or `("literal", token)` for USING operand
+    `arg_index` of the CALL at `site` -- the same operand
+    `injector.build_site_dispatch` MOVEs from -- or None when the site has
+    no such operand.
+
+    cobolparser reports a quoted literal by its value with the quotes
+    stripped, indistinguishable from a data-name: without the CALL's own
+    text (`lines`), `CALL "X" USING "ABC"` looked like an argument named
+    ABC, so a `UT-CAP-` target mirrored an unrelated item ABC's layout
+    (while the injector MOVEd the literal "ABC" into it), or refused
+    because no item ABC exists."""
+    using = getattr(site.statement, "using_parameters", None)
+    if not using or len(using) < arg_index:
+        return None
+    name = using[arg_index - 1].name
+    if not name:
+        return None
+    if _NUMERIC_LITERAL_RE.fullmatch(name):
+        return ("literal", name)
+    if lines is not None:
+        from mockymock.splicer.injector import _call_using_literals
+        from mockymock.splicer.source_map import statement_span
+
+        if site.nested and site.span is not None:
+            start, end = site.span
+        else:
+            start, end = statement_span(site.statement, boundaries, len(lines), lines)
+        literals = _call_using_literals(
+            " ".join(lines[start - 1 : end]), [str(param.name) for param in using]
+        )
+        if literals[arg_index - 1] is not None:
+            return ("literal", str(literals[arg_index - 1]))
+    return ("item", name.upper())
+
+
 def plan_captures(
-    program, suite: MockTestSuite, surface
+    program, suite: MockTestSuite, surface, lines: list[str] | None = None
 ) -> tuple[list[CapturePlan], list[str]]:
     """Every synthesized capture target the suite asks for, plus a reason
     for each one that could not be synthesized.
@@ -153,12 +223,18 @@ def plan_captures(
     names DIFFERENT items is unresolved, not guessed: one synthesized field
     cannot mirror two layouts, and picking either silently would make the
     capture wrong at one of the sites.
+
+    `lines` (the normalized source the splicer edits) lets a quoted
+    literal argument be told apart from a data-name -- see
+    `_site_argument`; without it, only numeric literals are recognized.
     """
     from mockymock.analysis.refusal import directive_matches_site
+    from mockymock.splicer.source_map import collect_boundaries
 
     plans: dict[str, CapturePlan] = {}
     unresolved: list[str] = []
     index = _data_item_index(program)
+    boundaries = collect_boundaries(program) if lines is not None else []
 
     for case in suite.test_cases:
         for directive in case.mocks:
@@ -168,37 +244,32 @@ def plan_captures(
                 if not target.upper().startswith(CAPTURE_TARGET_PREFIX):
                     continue  # an author-declared target: not ours to make
                 target = target.upper()
-                # `.name` is a `str` by the CallStatement contract and the
-                # parser substitutes "OMITTED" rather than emitting an empty
-                # one -- but this set comprehension is the only place a
-                # violation of that would surface, and it would surface as
-                # an AttributeError out of the static-check pass rather
-                # than as the UNRESOLVED_CAPTURE_TARGET refusal this
-                # function exists to produce. Filter instead: a nameless
-                # argument then falls through to the "names no resolvable
-                # data item" branch below, which is what it is.
-                source_names = {
-                    site.statement.using_parameters[arg_index - 1].name.upper()
+                # A nameless argument (never produced by the CallStatement
+                # contract, which substitutes "OMITTED") yields None and
+                # falls through to the "names no resolvable data item"
+                # branch below rather than raising out of the check pass.
+                arguments = {
+                    argument
                     for site in surface.boundary_sites
                     if directive_matches_site(directive, site)
-                    and getattr(site.statement, "using_parameters", None)
-                    and len(site.statement.using_parameters) >= arg_index
-                    and site.statement.using_parameters[arg_index - 1].name
+                    for argument in [_site_argument(site, arg_index, lines, boundaries)]
+                    if argument is not None
                 }
-                if len(source_names) != 1:
+                source_names = {text for _, text in arguments}
+                if len(arguments) != 1:
                     unresolved.append(
                         f"CAPTURE ARG {arg_index} INTO {target} in MOCK "
                         f"{directive.describe()}: argument {arg_index} "
                         + (
                             "names no resolvable data item at any matching " "CALL site"
-                            if not source_names
+                            if not arguments
                             else f"names different items at different call "
                             f"sites ({', '.join(sorted(source_names))}), so "
                             f"one synthesized field cannot mirror them all"
                         )
                     )
                     continue
-                source_name = next(iter(source_names))
+                kind, source_name = next(iter(arguments))
                 if target in index:
                     unresolved.append(
                         f"CAPTURE ARG {arg_index} INTO {target} in MOCK "
@@ -207,6 +278,34 @@ def plan_captures(
                         f"cannot synthesize it -- rename the target, or "
                         f"drop the {CAPTURE_TARGET_PREFIX} prefix to "
                         f"capture into the program's own field deliberately"
+                    )
+                    continue
+                if kind == "literal":
+                    built = _literal_declaration(target, source_name)
+                    if built is None:
+                        unresolved.append(
+                            f"CAPTURE ARG {arg_index} INTO {target} in MOCK "
+                            f"{directive.describe()}: argument {arg_index} is "
+                            f"the literal {source_name}, whose type a "
+                            f"synthesized field cannot mirror -- declare a "
+                            f"target of your own and CAPTURE into that"
+                        )
+                        continue
+                    declaration, reset_line = built
+                    existing = plans.get(target)
+                    if existing is not None:
+                        if existing.declaration != declaration:
+                            unresolved.append(
+                                f"{target} is captured from both "
+                                f"{existing.source_name} and {source_name}, "
+                                f"whose layouts differ"
+                            )
+                        continue
+                    plans[target] = CapturePlan(
+                        target=target,
+                        source_name=source_name,
+                        declaration=declaration,
+                        reset_line=reset_line,
                     )
                     continue
                 item = index.get(source_name)

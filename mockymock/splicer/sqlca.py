@@ -28,14 +28,15 @@ that live in the DATA DIVISION, so before compiling:
 
 The generated SQLCA is intentionally *not* part of the parsed AST (it is
 spliced in after parsing), so `reset.py`'s working-storage reset never
-touches it -- mock bodies are expected to set SQLCODE explicitly in every
-case, which the scaffold generator's placeholder bodies do.
+touches it; `sqlca_reset_lines` supplies its reset instead, so a SQLCODE
+one case's mock set does not leak into the next (issue #148).
 """
 
 from __future__ import annotations
 
 import re
 
+from mockymock._lines import split_source_lines
 from mockymock.analysis.refusal import RefusalReason, check_expansion_warnings
 
 SQLCA_FIELDS = [
@@ -168,15 +169,46 @@ def _resolve_include_member(
                 ),
             )
         ]
+    except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal
+        # A member that COPYs itself, an over-deep/oversized chain, ...:
+        # cobolparser raises (CircularReferenceError, NestingDepthError,
+        # ...). The program's own COPY expansion already reports these
+        # (checks.py); cobol-parser releases that do not expand EXEC SQL
+        # INCLUDE themselves (1.8.x) only ever reach them here, where the
+        # traceback escaped `lint`/`run`/`export`.
+        return None, [
+            RefusalReason(
+                code="UNRESOLVED_COPYBOOK",
+                message=f"EXEC SQL INCLUDE {member} could not be expanded: {exc}",
+            )
+        ]
 
     expansion_reasons = check_expansion_warnings(expansion)
     if expansion_reasons:
         return None, expansion_reasons
 
-    normalized = normalize_fixed_format(
-        expansion.expanded_source.splitlines()
-    ).splitlines()
+    normalized = split_source_lines(
+        normalize_fixed_format(split_source_lines(expansion.expanded_source))
+    )
     return normalized, []
+
+
+def sqlca_reset_lines(lines: list[str]) -> list[str]:
+    """Reset lines for the generated SQLCA, when `lines` (the output of
+    `transform_data_division_exec`) carry it. It is spliced in after
+    parsing, so `reset.py` never sees it, and a SQLCODE one case's mock
+    left behind leaked into the next case (issue #148)."""
+    stripped = {line.strip() for line in lines}
+    if (
+        not {SQLCA_FIELDS[0], SQLCA_FIELDS[1].strip(), SQLCA_FIELDS[2].strip()}
+        <= stripped
+    ):
+        return []
+    return [
+        "INITIALIZE SQLCA",
+        'MOVE "SQLCA   " TO SQLCAID',
+        "MOVE 136 TO SQLCABC",
+    ]
 
 
 def transform_data_division_exec(

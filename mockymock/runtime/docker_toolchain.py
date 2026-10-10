@@ -264,6 +264,20 @@ def ensure_toolchain(force_rebuild: bool = False) -> None:
             raise DockerNotAvailableError(
                 f"failed to build image {IMAGE}:\n{build.stderr.strip()}"
             )
+        if force_rebuild:
+            # `docker build -t IMAGE` re-tags the same content-hash tag
+            # onto the *new* image ID, so the stale-image check below
+            # (which compares tag strings) would keep a container created
+            # from the old image -- and every subsequent compile would
+            # still run in the toolchain the user just asked to replace.
+            # Drop the container unconditionally so it is recreated from
+            # the freshly built image.
+            rm = _docker("rm", "-f", CONTAINER, timeout=60)
+            if rm.returncode != 0 and "no such container" not in rm.stderr.lower():
+                raise DockerNotAvailableError(
+                    f"image {IMAGE} was rebuilt but container {CONTAINER} "
+                    f"could not be removed for recreation:\n{rm.stderr.strip()}"
+                )
 
     found = _inspect_container()
     if found is None:
@@ -458,8 +472,14 @@ def run_binary(
                 str(timeout_seconds),
                 container_binary,
             ],
+            # Bytes, decoded below -- not text=True. Text mode decodes
+            # strictly, so one DISPLAY of a field holding a non-UTF-8 byte
+            # (HIGH-VALUES, a COMP field, an EBCDIC-ish literal) raised
+            # UnicodeDecodeError out of the whole run; and its universal
+            # newlines turned a lone CR inside a DISPLAYed value into LF,
+            # cutting a __MOCKYMOCK__ FAIL/RECORD marker in two before
+            # parse_stdout's LF-only split ever saw it.
             capture_output=True,
-            text=True,
             timeout=timeout_seconds + 15,
             check=False,
         )
@@ -480,7 +500,7 @@ def run_binary(
             stdout="",
             stderr=f"mockymock: could not run docker exec: {exc}\n",
         )
-    stderr = result.stderr
+    stderr = _coerce_output(result.stderr)
     if result.returncode == TIMEOUT_EXIT_CODE:
         stderr += (
             f"mockymock: binary timed out after {timeout_seconds}s "
@@ -488,7 +508,9 @@ def run_binary(
             f"condition, producing an infinite loop)\n"
         )
     return ExecutionResult(
-        exit_code=result.returncode, stdout=result.stdout, stderr=stderr
+        exit_code=result.returncode,
+        stdout=_coerce_output(result.stdout),
+        stderr=stderr,
     )
 
 
