@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-10 -- mutate: multi-receiver MOVE deletion, compile detail
+
+`stmt-delete` no longer deletes `MOVE 1 TO WS-A` when the next line is its
+last receiver `WS-B.` (an Area-B `NAME.` is an operand, not a paragraph
+header), and a compile stillborn reports cobc's `error:` message instead
+of its `in paragraph` context line. Updated [cli](cli.md).
+
 ## 2026-10-10 -- record-expectations skips a stub above the PERFORM
 
 A `*> STUB EXPECT` written above its TESTCASE's `PERFORM` is reported

@@ -104,3 +104,28 @@ def test_nonzero_exit_with_no_other_explanation_still_cites_the_exit_code():
     status, detail = _classify_execution(execution, suite_result)
     assert status == "failed"
     assert detail == "binary exited 139"
+
+
+def test_compile_stillborn_detail_is_the_error_not_the_paragraph_context():
+    """cobc's first stderr line is `<sandbox path>: in paragraph 'X':`,
+    which says nothing about why the mutant did not compile."""
+    from mockymock.mutation.runner import _compile_error_detail
+
+    stderr = (
+        "/root/.mockymock/work/mockymock-x/instrumented_M.cbl: "
+        "in paragraph 'MAIN-PARA':\n"
+        "/root/.mockymock/work/mockymock-x/instrumented_M.cbl:12: error: "
+        "syntax error, unexpected Identifier\n"
+    )
+    assert _compile_error_detail(stderr) == (
+        "error: syntax error, unexpected Identifier"
+    )
+
+
+def test_compile_stillborn_detail_falls_back_to_first_line_then_default():
+    from mockymock.mutation.runner import _compile_error_detail
+
+    assert _compile_error_detail("cobc: something odd\nmore\n") == (
+        "cobc: something odd"
+    )
+    assert _compile_error_detail("  \n") == "compile failed"
