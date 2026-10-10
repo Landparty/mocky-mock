@@ -1,8 +1,9 @@
 from cobolparser import parse_cobol
 from cobolparser.preprocess import normalize_fixed_format
 
-from mockymock.analysis.linkage import linkage_plan
+from mockymock.analysis.linkage import linkage_plan, procedure_header_clause_spans
 from mockymock.analysis.refusal import check_linkage_layout
+from mockymock.splicer.linkage import neutralize
 
 # Mirrors ACCTPRG's real shape: bare default entry (no USING), a separate
 # named ENTRY 'DLITCBL' USING a LINKAGE group, LINKAGE SECTION last.
@@ -183,11 +184,57 @@ def test_check_linkage_layout_clean_with_comment_block_before_first_item():
     assert check_linkage_layout(program, lines) == []
 
 
-def test_check_linkage_layout_refuses_default_entry_using():
+def test_default_entry_using_is_neutralized_not_refused():
+    # 2026-10-10 (entry parameters): the USING clause is blanked out of the
+    # instrumented copy, the parameters folded into WORKING-STORAGE like
+    # every other LINKAGE item, for a .cut to MOVE into.
     program, lines = _parse(DEFAULT_ENTRY_USING_SOURCE)
+    assert check_linkage_layout(program, lines) == []
+    plan = linkage_plan(program)
+    assert plan is not None
+    out = neutralize(list(lines), program, plan)
+    header = next(line for line in out if "PROCEDURE DIVISION" in line)
+    assert header.split() == ["PROCEDURE", "DIVISION", "."]
+    assert len(header) == len(
+        next(line for line in lines if "PROCEDURE DIVISION" in line)
+    ), "the edit must keep the line's width"
+    assert any(line.lstrip().startswith("*> ENTRY 'ALTENTRY'") for line in out)
+
+
+def test_wrapped_using_and_returning_are_blanked_up_to_the_period():
+    source = DEFAULT_ENTRY_USING_SOURCE.replace(
+        "       01  LNK-ITEM PIC X(08).\n",
+        "       01  LNK-ITEM PIC X(08).\n       01  LNK-RET PIC 9(4).\n",
+    ).replace(
+        "       PROCEDURE DIVISION USING LNK-ITEM.\n",
+        "       PROCEDURE DIVISION USING BY REFERENCE LNK-ITEM\n"
+        "                          RETURNING LNK-RET.\n",
+    )
+    program, lines = _parse(source)
+    spans = procedure_header_clause_spans(lines, program)
+    assert spans is not None and len(spans) == 2
+    out = neutralize(list(lines), program, linkage_plan(program))
+    first = spans[0][0] - 1
+    assert out[first].split() == ["PROCEDURE", "DIVISION"]
+    assert out[first + 1].strip() == "."
+
+
+def test_chaining_header_is_still_refused():
+    source = DEFAULT_ENTRY_USING_SOURCE.replace(
+        "PROCEDURE DIVISION USING LNK-ITEM.", "PROCEDURE DIVISION CHAINING LNK-ITEM."
+    )
+    program, lines = _parse(source)
+    assert procedure_header_clause_spans(lines, program) is None
     reasons = check_linkage_layout(program, lines)
-    assert any(r.code == "UNSUPPORTED_LINKAGE_LAYOUT" for r in reasons)
-    assert any("default entry" in r.message for r in reasons)
+    assert any(
+        r.code == "UNSUPPORTED_LINKAGE_LAYOUT" and "CHAINING" in r.message
+        for r in reasons
+    )
+
+
+def test_header_without_a_clause_has_no_spans():
+    program, lines = _parse(ORDINARY_SOURCE)
+    assert procedure_header_clause_spans(lines, program) == []
 
 
 class _FakeLocation:

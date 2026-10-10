@@ -363,6 +363,28 @@ A hook `PERFORM` is checked like a test case's own: a boundary it reaches
 needs a `MOCK` (in `BEFORE-ALL` for the `-ALL` hooks, in `BEFORE-EACH` or
 the test case for the `-EACH` ones), and the refusal says where to add it.
 
+### Entry parameters (`PROCEDURE DIVISION USING`)
+
+A subprogram's parameters (`PROCEDURE DIVISION USING ...`, `ENTRY ...
+USING ...`, `RETURNING ...`) are ordinary fields in a test: mockymock never
+CALLs the program, so it turns the LINKAGE SECTION into storage the test
+owns. Set entry values with `MOVE` (in the `TESTCASE`, `BEFORE-EACH` or
+`BEFORE-ALL`) and check what the program wrote back with `EXPECT`. They
+are reset before every test case like WORKING-STORAGE, and saved after
+`BEFORE-ALL` like it too.
+
+```
+BEFORE-EACH
+    MOVE "CUST0001" TO LS-CUST-ID
+    MOVE 500.00 TO LS-LIMIT
+END-BEFORE
+
+TESTCASE "over the limit"
+    MOVE 600.00 TO LS-AMOUNT(1)
+    PERFORM 1000-CHECK
+    EXPECT LS-RC TO BE 8
+```
+
 ### Shared mocks
 
 `MOCK` blocks in `BEFORE-ALL`/`BEFORE-EACH` are also defaults for every

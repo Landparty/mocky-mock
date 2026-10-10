@@ -91,6 +91,27 @@ refused in every case.
 Both the boundary dispatch and the MOCK PARAGRAPH/SECTION dispatch use
 it.
 
+## Entry parameters (LINKAGE)
+
+Hooks most often set up a subprogram's entry values, so LINKAGE has to
+take part in the reset and the snapshot. Folded LINKAGE items already
+did (`linkage.extra_reset_lines`, and `plan_snapshot` takes
+`linkage_items`), but a default entry with its own `PROCEDURE DIVISION
+USING` was refused outright (`UNSUPPORTED_LINKAGE_LAYOUT`, the deferred
+"Milestone B" CALL-driving case), which is the shape of most called
+subprograms. The driver PERFORMs paragraphs and never CALLs the program,
+so nothing binds those parameters short of a CALL-based driver; folding
+them into WORKING-STORAGE, as the named-ENTRY shape already is, reuses
+the proven transform. `neutralize` now blanks the `USING`/`RETURNING`
+clause (width-preserving, across wrapped lines up to the closing
+period); `CHAINING` or an undelimitable header stays refused. A `.cut`
+sets entry values with `MOVE` and asserts output parameters with
+`EXPECT`; they are reset per case and saved after BEFORE-ALL. Three
+enterprise-corpus programs (CICSLINK, IMSMPP, DB2SP) move from refused
+to scaffolded. Not modeled: `BY VALUE` isolation (a callee's change to a
+BY VALUE parameter stays visible to the test, where a caller would not
+see it) -- harmless for a test that only reads the field.
+
 ## Not done
 
 - Integration tests: the integration tier (real GnuCOBOL) is not run in
@@ -100,3 +121,7 @@ it.
   tests/integration` locally before relying on it.
 - Restoring OCCURS ... DEPENDING ON groups.
 - Hook steps in `mockymock generate --fill` (fill only edits TESTCASEs).
+- `generate`'s placeholder scaffold mocks only the boundaries in each
+  entry paragraph itself, not ones it reaches through PERFORM (DB2SP's
+  `0000-MAIN` case then fails lint). Pre-existing; the old LINKAGE
+  refusal hid it for these programs.

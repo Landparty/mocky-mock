@@ -287,3 +287,69 @@ def test_dispatch_gives_the_suite_phase_before_all_mocks():
 def test_dispatch_has_no_suite_phase_without_all_hooks():
     suite = parse_cut('TESTSUITE "s"\nTESTCASE "a"\n    PERFORM P\n')
     assert [case_id for case_id, _ in dispatch_entries(suite)] == ["001"]
+
+
+SUBPROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SUBPGM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CALLS         PIC 9(4) VALUE 0.
+       LINKAGE SECTION.
+       01  LS-REQUEST.
+           05 LS-CUST-ID    PIC X(8).
+           05 LS-AMOUNTS    OCCURS 3 TIMES PIC S9(5)V99 COMP-3.
+           05 LS-RC         PIC 9(2).
+       01  LS-LIMIT         PIC S9(7)V99 COMP-3.
+       PROCEDURE DIVISION USING LS-REQUEST LS-LIMIT.
+       0000-MAIN.
+           PERFORM 1000-CHECK
+           GOBACK.
+       0100-INIT.
+           MOVE "CUST0001" TO LS-CUST-ID
+           MOVE 500.00 TO LS-LIMIT.
+       1000-CHECK.
+           ADD 1 TO WS-CALLS
+           IF LS-AMOUNTS(1) > LS-LIMIT
+               MOVE 8 TO LS-RC
+           ELSE
+               MOVE 0 TO LS-RC
+           END-IF.
+"""
+
+SUBPROGRAM_CUT = """\
+TESTSUITE "entry parameters"
+BEFORE-ALL
+    PERFORM 0100-INIT
+END-BEFORE
+BEFORE-EACH
+    MOVE 0 TO LS-RC
+END-BEFORE
+TESTCASE "over the limit BEFORE-ALL set"
+    MOVE 600.00 TO LS-AMOUNTS(1)
+    PERFORM 1000-CHECK
+    EXPECT LS-RC TO BE 8
+TESTCASE "the previous case's amount is gone"
+    PERFORM 1000-CHECK
+    EXPECT LS-LIMIT TO BE 500.00
+"""
+
+
+def test_entry_parameters_are_reset_and_saved_like_working_storage(files):
+    """PROCEDURE DIVISION USING parameters: folded into WORKING-STORAGE (the
+    USING clause blanked), reset before every case, and part of the state
+    BEFORE-ALL hands to every case."""
+    from mockymock.splicer.linkage import extra_reset_lines
+
+    result = run_static_checks(*files(SUBPROGRAM_CUT, SUBPROGRAM), None)
+    assert result.problems == []
+    header = next(line for line in result.lines if "PROCEDURE DIVISION" in line)
+    assert header.split() == ["PROCEDURE", "DIVISION", "."]
+    assert result.linkage is not None
+    assert extra_reset_lines(result.linkage) == [
+        "INITIALIZE LS-REQUEST",
+        "MOVE 0 TO LS-LIMIT",
+    ]
+    assert result.snapshot is not None
+    assert "MOVE LS-REQUEST TO UT-SNAP-002" in result.snapshot.save_lines
+    assert "MOVE UT-SNAP-003 TO LS-LIMIT" in result.snapshot.restore_lines

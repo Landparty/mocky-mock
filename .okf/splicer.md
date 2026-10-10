@@ -572,11 +572,26 @@ storage is unbound regardless of `ENTRY`'s presence -- see
 docs/2026-08-27-cics-eib-linkage-support-design.md Part 1).
 `refusal.check_linkage_layout(program, lines)` gates it
 with three guardrails, refusing `UNSUPPORTED_LINKAGE_LAYOUT` rather than
-guessing when any fails: the default entry must have no `USING` of its own
-(the general CALL-driving case, Milestone B, is untested and out of scope
-here); LINKAGE SECTION must be the last DATA DIVISION section (nothing
-after it that would wrongly get absorbed too); and the computed header line
-must textually verify as `LINKAGE SECTION` before ever being commented.
+guessing when any fails: the default entry's header must be delimitable
+(`analysis.linkage.procedure_header_clause_spans`: no `CHAINING`, and a
+closing period within 50 lines of a `USING`/`RETURNING` list); LINKAGE
+SECTION must be the last DATA DIVISION section (nothing after it that
+would wrongly get absorbed too); and the computed header line must
+textually verify as `LINKAGE SECTION` before ever being commented.
+
+**Entry parameters (2026-10-10).** A default entry with its own
+`PROCEDURE DIVISION USING ... [RETURNING ...]` -- the ordinary CALLed
+subprogram, a translated CICS LINK server, an IMS MPP's PCB list, a DB2
+stored procedure -- used to be refused (the "Milestone B" CALL-driving
+case). The driver PERFORMs paragraphs and never CALLs the program, so
+nothing would bind those parameters anyway: `neutralize` now also blanks
+the clause (width-preserving `replace_columns`, every wrapped line up to
+the closing period) and the parameters fold into WORKING-STORAGE with the
+rest of the LINKAGE SECTION. A `.cut` sets entry values with `MOVE`
+(TESTCASE, BEFORE-EACH, BEFORE-ALL) and asserts output parameters with
+`EXPECT`; `extra_reset_lines` resets them before every case and
+`splicer.snapshot` saves them after BEFORE-ALL. The enterprise corpus's
+CICSLINK, IMSMPP and DB2SP now scaffold instead of refusing.
 
 `neutralize(lines, program, plan)` — verified empirically to compile and
 run clean — comments out every `ENTRY` statement's span (`statement_span`,

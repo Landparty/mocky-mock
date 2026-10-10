@@ -53,7 +53,11 @@ from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock._lines import split_source_lines
-from mockymock.analysis.linkage import address_of_sites, linkage_plan
+from mockymock.analysis.linkage import (
+    address_of_sites,
+    linkage_plan,
+    procedure_header_clause_spans,
+)
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
     BoundarySite,
@@ -994,20 +998,23 @@ def check_linkage_layout(program, lines: list[str]) -> list[RefusalReason]:
             )
         )
 
-    procedure = program.get_division("PROCEDURE")
-    proc_idx = procedure.location.line - 1 if procedure is not None else -1
-    proc_line = lines[proc_idx] if 0 <= proc_idx < len(lines) else ""
-    if re.search(r"\bUSING\b", proc_line, re.IGNORECASE):
+    # A default-entry `PROCEDURE DIVISION USING ...` is blanked out of the
+    # instrumented copy (`splicer.linkage.neutralize`), its parameters
+    # becoming ordinary folded storage a `.cut` MOVEs into -- refused only
+    # when the clause can't be delimited (2026-10-10, entry parameters).
+    if procedure_header_clause_spans(lines, program) is None:
+        procedure = program.get_division("PROCEDURE")
+        proc_idx = procedure.location.line - 1 if procedure is not None else -1
+        proc_line = lines[proc_idx] if 0 <= proc_idx < len(lines) else ""
         reasons.append(
             RefusalReason(
                 code="UNSUPPORTED_LINKAGE_LAYOUT",
                 message=(
-                    "the program's default entry declares its own USING "
-                    f"clause ({proc_line.strip()!r}) -- this feature only "
-                    "neutralizes a LINKAGE SECTION bound solely through a "
-                    "separate named ENTRY statement; a default entry that "
-                    "itself needs bound parameters is the general "
-                    "CALL-driving case (Milestone B), not yet supported"
+                    "the program's default entry header "
+                    f"({proc_line.strip()!r}) uses CHAINING, or its USING "
+                    "clause has no closing period mockymock can find -- "
+                    "its parameters cannot be turned into storage a test "
+                    "sets with MOVE"
                 ),
             )
         )

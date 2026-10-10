@@ -12,8 +12,11 @@ BEFORE-EACH, new AFTER-EACH/AFTER-ALL blocks (`END-AFTER`). BEFORE-ALL
 runs once and every case starts from the state it left (new
 `splicer/snapshot.py`, `UNSAVABLE_BEFORE_ALL_STATE`); hook PERFORMs go
 through every static gate as synthetic cases; shared BEFORE-* mocks only
-need to be reached by some case or hook step. Updated [dsl](dsl.md),
-[splicer](splicer.md).
+need to be reached by some case or hook step. Entry parameters: a
+default entry's `PROCEDURE DIVISION USING`/`RETURNING` is now blanked and
+its parameters folded into WORKING-STORAGE (reset per case, saved after
+BEFORE-ALL) instead of refused. Updated [dsl](dsl.md), [splicer](splicer.md),
+[analysis](analysis.md).
 
 ## 2026-10-10 -- explain covers three more refusal codes
 
