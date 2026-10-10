@@ -198,10 +198,9 @@ def _run_suite_once(
             instrumented_path, coverage=collect_coverage
         )
         if not compiled.success:
-            first_error = (compiled.stderr or compiled.stdout).strip().splitlines()
             return SuiteRun(
                 "stillborn",
-                first_error[0] if first_error else "compile failed",
+                _compile_error_detail(compiled.stderr or compiled.stdout),
                 notes,
                 phase="compile",
             )
@@ -237,6 +236,20 @@ def _run_suite_once(
                     "every mutant will be compiled and run"
                 )
         return SuiteRun(status, detail, notes, coverage)
+
+
+def _compile_error_detail(output: str | None) -> str:
+    """The line of cobc's output that says why a mutant did not compile.
+    cobc opens with a `<sandbox path>: in paragraph 'X':` context line,
+    which says nothing; the first `error:` line does, and its line number
+    is the instrumented copy's, so only the message from `error:` on is
+    kept."""
+    lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+    for line in lines:
+        _, marker, message = line.partition(" error: ")
+        if marker:
+            return f"error: {message}"
+    return lines[0] if lines else "compile failed"
 
 
 def _classify_execution(execution, suite_result) -> tuple[str, str]:

@@ -776,7 +776,13 @@ something other than what their report line described, by running each
 through the pipeline's own `normalize_fixed_format`), none after. **`stmt-delete` reads columns 8-72**
 (the verb check, the follower check, and the rewrite, which keeps
 columns 1-7 verbatim): with a sequence number in columns 1-6 it used to
-generate no deletion mutants at all. Still open: `stmt-delete` on a line holding two
+generate no deletion mutants at all. A bare `NAME.` follower counts as a
+paragraph header only in Area A (columns 8-11): in Area B it is the
+statement's last operand (`MOVE 1 TO WS-A` / `WS-B.`), and deleting the
+head used to strand it -- a compile stillborn (2026-10-10). A compile
+stillborn's detail is cobc's first `error:` message
+(`runner._compile_error_detail`), not its `<path>: in paragraph 'X':`
+context line. Still open: `stmt-delete` on a line holding two
 statements deletes both (over-strong, not stillborn), and `stillborn`
 still lumps refusal-gate rejections in with compile errors.
 
