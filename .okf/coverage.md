@@ -3,16 +3,18 @@ type: Module
 title: Coverage Reporting
 description: GnuCOBOL --coverage/gcov instrumentation wired into `mockymock run`, reporting per-line coverage of the ORIGINAL .cbl (with the instrumented copy as a labelled secondary figure) and gating CI on it via --coverage-fail-under.
 tags: [coverage, gcov, cli, runtime]
-timestamp: 2026-09-04T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 # Overview
 
 `mockymock run --coverage` proves which lines of the program actually ran
 during a suite. Two numbers exist and only one of them is worth reading:
 the ORIGINAL `.cbl`'s own coverage (via `map_coverage_to_original`) is what
-the report leads with, and the instrumented sandbox copy's number -- always
-higher, because it counts mockymock's own injected dispatch/driver lines --
-is printed once below it with the reason it differs. Until 2026-09-04 the
+the report leads with, and the instrumented sandbox copy's number -- which differs because it counts
+mockymock's own injected dispatch/driver lines, and is often LOWER, since
+every never-taken mock dispatch branch counts as uncovered (ACCTPRG 86.60%
+vs 80.89%) -- is printed once below it, labelled with the actual direction
+(until 2026-09-28 it always said "higher"). Until 2026-09-04 the
 console line reported only the instrumented figure while the meaningful one
 existed solely inside `--coverage-json`, so the number most people read was
 the less useful one. It adds no new instrumentation
@@ -29,6 +31,7 @@ runtime/docker_toolchain.py
 
 report/coverage.py
   parse_gcov(gcov_text) -> CoverageReport   -- per-line hit counts -> totals + uncovered lines
+                                               (`#####` and `=====` both count as executable, never hit)
   map_coverage_to_original(...)             -- instrumented lines -> ORIGINAL .cbl lines
   summarize_original(mapped, original)      -> OriginalCoverage (totals + uncovered, with text)
   format_coverage_console(report, name, original=, program_name=)

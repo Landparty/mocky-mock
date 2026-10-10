@@ -93,6 +93,11 @@ def build_driver(
         f'           DISPLAY "__MOCKYMOCK__ SUMMARY: RUN={len(suite.test_cases)} '
         f'FAILURES=" UT-FAIL-COUNT'
     )
+    # RETURN-CODE is whatever the last case's program left there, and STOP
+    # RUN hands it to the OS: an all-pass suite whose last case set RC 8
+    # exited 8, which `run` and `mutate` read as a failed binary (issue
+    # #140). Pass/fail travels in the markers, not the exit status.
+    procedure.append("           MOVE 0 TO RETURN-CODE")
     procedure.append("           STOP RUN.")
     procedure.append("")
 
@@ -134,6 +139,10 @@ def _build_testcase_paragraph(
     if has_reset:
         lines.append("           PERFORM UT-RESET-WORKING-STORAGE")
     lines.append(f'           MOVE "{case_id}" TO UT-CURRENT-CASE')
+    # Each case starts from RETURN-CODE 0, like a fresh run would: a
+    # previous case's MOVE 8 TO RETURN-CODE otherwise leaked into this
+    # case's EXPECT RETURN-CODE (issue #140).
+    lines.append("           MOVE 0 TO RETURN-CODE")
     lines.append('           MOVE "N" TO UT-EARLY-EXIT')
     for category, key in dict.fromkeys((m.category, m.key) for m in case.mocks):
         lines.append(f"           MOVE 0 TO {registry.name(category, key)}")

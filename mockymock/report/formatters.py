@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import re
-from xml.dom import minidom
-from xml.etree.ElementTree import Element, SubElement, tostring
+from collections.abc import Sequence
+from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
 from mockymock.report.results import TestSuiteResult
 
@@ -32,7 +32,14 @@ def _xml_safe(text: str) -> str:
     return _XML_ILLEGAL_RE.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
 
 
-def format_console(suite: TestSuiteResult, crash_detail: str | None = None) -> str:
+def format_console(
+    suite: TestSuiteResult,
+    crash_detail: str | None = None,
+    not_run: Sequence[str] = (),
+) -> str:
+    """`not_run`: the selected cases that never printed a START marker
+    (`json_report.not_run_case_names`) -- a GO TO or STOP RUN that ended
+    the binary early used to make them vanish from this listing."""
     lines = [f"TESTSUITE: {suite.suite_name}"]
     crashed_count = 0
     for result in suite.results:
@@ -48,6 +55,8 @@ def format_console(suite: TestSuiteResult, crash_detail: str | None = None) -> s
             lines.append(f"         {crash_detail}")
         for reason in result.failure_reasons:
             lines.append(f"         {reason}")
+    for name in not_run:
+        lines.append(f"  [NOT RUN] {name}")
     # suite.tests_run/suite.failures are 0 whenever the SUMMARY line never
     # printed (a mid-suite crash prevents it), even though case lines were
     # clearly seen and rendered above -- fall back to counts reconstructed
@@ -61,7 +70,11 @@ def format_console(suite: TestSuiteResult, crash_detail: str | None = None) -> s
     summary = f"{run_count} run, {failed_count} failed"
     if crashed_count:
         summary += f", {crashed_count} crashed"
+    if not_run:
+        summary += f", {len(not_run)} not run"
     lines.append(summary)
+    if crash_detail and not suite.results:
+        lines.append(f"  process exited before any test case started: {crash_detail}")
     if suite.orphan_failures:
         lines.append("ORPHANED FAILURES (unknown case id):")
         for case_id, reason in suite.orphan_failures:
@@ -73,7 +86,14 @@ def format_console(suite: TestSuiteResult, crash_detail: str | None = None) -> s
     return "\n".join(lines)
 
 
-def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) -> str:
+def format_junit_xml(
+    suite: TestSuiteResult,
+    crash_detail: str | None = None,
+    not_run: Sequence[str] = (),
+) -> str:
+    # `not_run` cases (never STARTed) each get a <testcase> with an <error>,
+    # counted in tests= and errors=: dropping them read as a smaller, clean
+    # suite to CI (issue #150).
     # suite.failures is the SUMMARY line's count of failed CHECKS (a case
     # with 2 failure reasons contributes 2 to that number), but standard CI
     # tooling (Jenkins, GitHub Actions, GitLab) interprets the <testsuite
@@ -93,8 +113,17 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
     # reports as a bare, unexplained crash, so it gets folded in here too.
     failed_cases = sum(1 for r in suite.results if r.failure_reasons and not r.crashed)
     crashed_cases = sum(1 for r in suite.results if r.crashed)
+    # The binary died before any CASE START printed (crash_detail carries
+    # the nonzero exit / timeout): with no <testcase> to hang it on, the
+    # report used to read tests="0" failures="0" errors="0" -- a clean
+    # empty suite to every CI collector, while the run itself failed.
+    died_before_first_case = crash_detail is not None and not suite.results
     error_count = (
-        crashed_cases + len(suite.orphan_failures) + len(suite.duplicate_case_starts)
+        crashed_cases
+        + len(suite.orphan_failures)
+        + len(suite.duplicate_case_starts)
+        + int(died_before_first_case)
+        + len(not_run)
     )
     # Same fallback as format_console: suite.tests_run is 0 when a mid-suite
     # crash ate the SUMMARY line, but JUnit consumers expect tests="..." to
@@ -107,6 +136,8 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
         (suite.tests_run or len(suite.results))
         + len(suite.orphan_failures)
         + len(suite.duplicate_case_starts)
+        + int(died_before_first_case)
+        + len(not_run)
     )
     testsuite_el = Element(
         "testsuite",
@@ -154,6 +185,19 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
                 safe_reason = _xml_safe(reason)
                 failure_el = SubElement(testcase_el, "failure", message=safe_reason)
                 failure_el.text = safe_reason
+    for name in not_run:
+        message = _xml_safe(
+            "never started -- the binary ended before this case's START "
+            f"marker printed ({crash_detail or 'an earlier case ended the run'})"
+        )
+        not_run_el = SubElement(
+            testsuite_el,
+            "testcase",
+            name=_xml_safe(name),
+            classname=suite_classname,
+        )
+        error_el = SubElement(not_run_el, "error", message=message)
+        error_el.text = message
     for case_id, reason in suite.orphan_failures:
         orphan_el = SubElement(
             testsuite_el,
@@ -184,5 +228,23 @@ def format_junit_xml(suite: TestSuiteResult, crash_detail: str | None = None) ->
         )
         error_el = SubElement(dup_el, "error", message=message)
         error_el.text = message
-    rough = tostring(testsuite_el, encoding="unicode")
-    return minidom.parseString(rough).toprettyxml(indent="  ")
+    if died_before_first_case:
+        message = _xml_safe(
+            f"process exited before any test case started ({crash_detail})"
+        )
+        run_el = SubElement(
+            testsuite_el,
+            "testcase",
+            name="(test binary)",
+            classname=suite_classname,
+        )
+        error_el = SubElement(run_el, "error", message=message)
+        error_el.text = message
+    # ElementTree, not minidom's toprettyxml: minidom writes a tab, LF or
+    # CR inside an attribute value raw, and an XML reader's attribute-value
+    # normalization then turns each into a space -- a failure message's
+    # line structure (and any tab in a compared value) silently lost.
+    # ElementTree escapes them as `&#09;` / `&#10;` / `&#13;`.
+    indent(testsuite_el, space="  ")
+    body = tostring(testsuite_el, encoding="unicode")
+    return f'<?xml version="1.0" ?>\n{body}\n'

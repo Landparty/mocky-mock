@@ -85,21 +85,144 @@ def linkage_plan(program) -> LinkagePlan | None:
 # `SET ADDRESS OF X TO Y` and `SET X TO Y` both arrive as `targets=["X"]`, so
 # the AST cannot tell the two apart. Verified against cobolparser 1.8.0.
 #
+# Every OTHER use of `ADDRESS OF <folded item>` stays legal after the fold
+# (verified against GnuCOBOL 3.1.2): `SET <ptr> TO ADDRESS OF X`,
+# `CALL 'CBLTDLI' USING ... ADDRESS OF DLIUIB` (the CICS-DL/I UIB idiom),
+# `IF ADDRESS OF X = NULL`. And an occurrence inside `EXEC ... END-EXEC`
+# (`EXEC CICS ADDRESS TCTUA(ADDRESS OF TCTUA) END-EXEC`) never reaches cobc
+# at all: the splicer replaces every EXEC block with a mock or a trap stub.
+#
+# Classification is therefore per STATEMENT, not per line, over a token
+# stream spanning the whole text: walking back from `ADDRESS`, a receiving
+# operand can only be preceded by `SET`, other receiving operands (names,
+# `OF`/`IN` qualifiers, subscripts, commas, other `ADDRESS OF`s). Every SET
+# form carries `TO` or `UP`/`DOWN BY` before any sending operand, so the
+# first keyword outside that vocabulary decides: `SET` means receiving,
+# anything else (`TO`, `BY`, `USING`, a verb, an unmatched `(`, `EXEC`, a
+# sentence period) means the occurrence is not a rebind and is left alone.
+#
 # Not a plain `\b`: COBOL identifiers may contain hyphens, which are not `\w`
 # characters, so `\bLK-DIB\b` would false-match inside `WS-LK-DIB-SAVE` (same
 # reasoning as `analysis.cics_eib`'s name matching).
-_NAME_CHARS = r"A-Za-z0-9$@#-"
-_ADDRESS_OF_RE = re.compile(
-    rf"(?<![{_NAME_CHARS}])ADDRESS\s+OF\s+([{_NAME_CHARS}]+)", re.IGNORECASE
+_NAME_CHARS = r"A-Za-z0-9$@#_-"
+_TOKEN_RE = re.compile(
+    rf"""(?P<string>"(?:[^"]|"")*"?|'(?:[^']|'')*'?)"""
+    rf"|(?P<comment>\*>.*)"
+    rf"|(?P<word>[{_NAME_CHARS}]+)"
+    rf"|(?P<punct>\S)"
 )
-# An `ADDRESS OF` whose operand is not on the same line: the span this feature
-# rewrites would cross a line boundary, which `stub_writer.replace_columns`
-# cannot express. Fail closed rather than leave an illegal statement behind.
-_DANGLING_ADDRESS_OF_RE = re.compile(
-    rf"(?<![{_NAME_CHARS}])ADDRESS(\s+OF)?\s*$", re.IGNORECASE
+# Tokens that can sit between `SET` and one of its receiving operands.
+_TARGET_LIST_WORDS = frozenset({"ADDRESS", "OF", "IN", ",", ";"})
+
+
+# Words that end the backward walk as "not a receiving operand". Only `TO`,
+# `BY` and the sentence period are load-bearing (every SET form reaches one of
+# them before its sending side); the rest just stop the walk early and
+# document the shapes seen in real programs.
+_STOP_WORDS = frozenset(
+    {
+        "TO",
+        "BY",
+        "UP",
+        "DOWN",
+        "USING",
+        "RETURNING",
+        "REFERENCE",
+        "CONTENT",
+        "VALUE",
+        "CALL",
+        "EXEC",
+        "EXECUTE",
+        "END-EXEC",
+        "IF",
+        "WHEN",
+        "ELSE",
+        "THEN",
+        "AND",
+        "OR",
+        "NOT",
+        "UNTIL",
+        "VARYING",
+        "FROM",
+        "INTO",
+        "GIVING",
+        "MOVE",
+        "DISPLAY",
+        "PERFORM",
+        "EVALUATE",
+        "COMPUTE",
+        "INVOKE",
+        "ENTRY",
+        "END-CALL",
+        "END-IF",
+        "END-EVALUATE",
+        "END-PERFORM",
+        "NULL",
+        "NULLS",
+        "TRUE",
+        "FALSE",
+        "=",
+        "<",
+        ">",
+        ".",
+    }
 )
-_SET_RE = re.compile(rf"(?<![{_NAME_CHARS}])SET(?![{_NAME_CHARS}])", re.IGNORECASE)
-_TO_RE = re.compile(rf"(?<![{_NAME_CHARS}])TO(?![{_NAME_CHARS}])", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class _Token:
+    text: str  # upper-cased for words/punctuation; string literals as "'"
+    line: int  # 1-indexed
+    start: int  # 0-based, half-open
+    end: int
+    is_word: bool
+
+
+def _tokenize(lines: list[str]) -> list[_Token]:
+    tokens: list[_Token] = []
+    for index, text in enumerate(lines, start=1):
+        for match in _TOKEN_RE.finditer(text):
+            kind = match.lastgroup
+            if kind == "comment":
+                break
+            if kind == "string":
+                tokens.append(_Token("'", index, match.start(), match.end(), False))
+                continue
+            tokens.append(
+                _Token(
+                    match.group().upper(),
+                    index,
+                    match.start(),
+                    match.end(),
+                    kind == "word",
+                )
+            )
+    return tokens
+
+
+def _is_set_receiving(tokens: list[_Token], position: int) -> bool:
+    """True when the `ADDRESS` token at `position` is a receiving operand of
+    a SET statement (see the module-level comment above for the rule)."""
+    depth = 0
+    for token in reversed(tokens[:position]):
+        if token.text == ")":
+            depth += 1
+            continue
+        if token.text == "(":
+            if depth == 0:
+                return False  # an operand in parentheses: EXEC CICS, a function
+            depth -= 1
+            continue
+        if depth:
+            continue  # inside a subscript/reference modifier
+        if token.text == "SET":
+            return True
+        if token.text in _TARGET_LIST_WORDS:
+            continue
+        if token.is_word and not token.text.isdigit() and token.text not in _STOP_WORDS:
+            continue  # a data name in the target list (or an unknown word)
+        return False
+    return False
 
 
 @dataclass(frozen=True)
@@ -122,52 +245,48 @@ def address_of_sites(
     lines: list[str], plan: LinkagePlan
 ) -> tuple[list[AddressOfSite], list[str]]:
     """Every `SET ADDRESS OF <folded item>` receiving-side occurrence, plus a
-    list of human-readable reasons for any occurrence this cannot classify.
+    list of human-readable reasons for any occurrence this cannot rewrite.
 
-    Value-side occurrences (`SET <ptr> TO ADDRESS OF <folded item>`) are
-    deliberately NOT returned: taking the address of a WORKING-STORAGE item is
-    legal COBOL and stays correct after the fold. Only the receiving side --
+    Value-side occurrences (`SET <ptr> TO ADDRESS OF <folded item>`), CALL
+    arguments and EXEC operands are deliberately NOT returned: they stay legal
+    after the fold (or never reach cobc). Only the receiving side of a SET --
     which asks the runtime to *rebind* the item's storage -- becomes illegal.
 
-    Classification is per line: for each match, the nearest preceding `SET`
-    keyword on that line wins, and an intervening `TO` means the occurrence is
-    on the value side. An occurrence with no `SET` before it on its own line
-    (a continued target list) is reported as a problem rather than guessed at.
+    A receiving occurrence may sit on a later line than its `SET` (a continued
+    target list); it is still rewritten, since the span replaced is only
+    `ADDRESS OF <item>`. The one shape reported as a problem is a receiving
+    `ADDRESS OF <item>` that is itself split across lines: that span cannot be
+    expressed as a single-line column edit.
     """
     folded = {
         item.name.upper() for item in plan.linkage_items if getattr(item, "name", None)
     }
+    tokens = _tokenize(lines)
     sites: list[AddressOfSite] = []
     problems: list[str] = []
-    for index, text in enumerate(lines, start=1):
-        for match in _ADDRESS_OF_RE.finditer(text):
-            name = match.group(1)
-            if name.upper() not in folded:
-                continue
-            prefix = text[: match.start()]
-            set_positions = [m.start() for m in _SET_RE.finditer(prefix)]
-            if not set_positions:
-                problems.append(
-                    f"line {index}: `ADDRESS OF {name}` has no SET keyword on "
-                    f"its own line ({text.strip()!r}), so it cannot be "
-                    "classified as a receiving or a value operand"
-                )
-                continue
-            to_positions = [m.start() for m in _TO_RE.finditer(prefix)]
-            if to_positions and to_positions[-1] > set_positions[-1]:
-                continue  # value side: `SET <ptr> TO ADDRESS OF <item>`, legal
-            sites.append(
-                AddressOfSite(
-                    line=index,
-                    start_column=match.start(),
-                    end_column=match.end(),
-                    item_name=name,
-                )
-            )
-        if _DANGLING_ADDRESS_OF_RE.search(text):
+    for position, token in enumerate(tokens):
+        if token.text != "ADDRESS" or position + 2 >= len(tokens):
+            continue
+        of_token, name_token = tokens[position + 1], tokens[position + 2]
+        if of_token.text != "OF" or not name_token.is_word:
+            continue
+        if name_token.text not in folded:
+            continue
+        if not _is_set_receiving(tokens, position):
+            continue
+        if not token.line == of_token.line == name_token.line:
             problems.append(
-                f"line {index}: `ADDRESS OF` is continued onto the next line "
-                f"({text.strip()!r}) -- its operand cannot be rewritten "
-                "within one line"
+                f"line {token.line}: `SET ADDRESS OF {name_token.text}` is "
+                f"continued onto the next line ({lines[token.line - 1].strip()!r}) "
+                "-- its operand cannot be rewritten within one line"
             )
+            continue
+        sites.append(
+            AddressOfSite(
+                line=token.line,
+                start_column=token.start,
+                end_column=name_token.end,
+                item_name=lines[name_token.line - 1][name_token.start : name_token.end],
+            )
+        )
     return sites, problems

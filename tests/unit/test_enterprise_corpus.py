@@ -59,6 +59,10 @@ EXPECTED: dict[str, tuple[str, str | None]] = {
     "MQBATCH": ("scaffold", None),
     "LESERV": ("scaffold", None),
     "COPYREPL": ("scaffold", None),
+    # DFHRESP(...) expanded to EIBRESP numbers as the CICS translator would;
+    # CICSCHNL's only DFHVALUE sits inside an EXEC block the splicer replaces
+    "CICSONLN": ("scaffold", None),
+    "CICSCHNL": ("scaffold", None),
     # -- scaffolds with nothing to mock -------------------------------------
     # no CALL / file I/O / EXEC / console ACCEPT boundary at all: pure
     # computation (COMPDIR, MODERN63), XML/JSON handling (XMLJSON) and
@@ -68,10 +72,6 @@ EXPECTED: dict[str, tuple[str, str | None]] = {
     "XMLJSON": ("empty", None),
     "OOCLIENT": ("empty", None),
     # -- refusals -------------------------------------------------------------
-    # DFHRESP(...) / DFHVALUE(...) expand through the CICS translator's
-    # condition table
-    "CICSONLN": ("refused", "UNSUPPORTED_CICS_MACRO"),
-    "CICSCHNL": ("refused", "UNSUPPORTED_CICS_MACRO"),
     # a default entry with its own PROCEDURE DIVISION USING (the translated
     # CICS form, an IMS MPP's PCB list, a DB2 stored procedure's parameter
     # list) is the general CALL-driving case mockymock does not drive yet

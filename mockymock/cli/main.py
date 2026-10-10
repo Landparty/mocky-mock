@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from pathlib import Path
 
 from mockymock import __version__
+from mockymock._lines import read_utf8_source, split_source_lines
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
@@ -71,7 +73,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     # FAIL_FAST) instead of being refused here. generate_with_scenarios_from_file
     # still re-expands and re-parses internally; that duplicate work is the
     # price of a correctness gate rather than one that just happens to work.
-    raw_source = source_path.read_text(encoding="utf-8")
+    raw_source = read_utf8_source(source_path)
     if args.copybook_path:
         try:
             expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
@@ -160,13 +162,36 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
 
     port = server.DEFAULT_PORT if args.port is None else args.port
     try:
-        server.serve(port=port, open_browser=not args.no_browser)
+        server.serve(
+            port=port,
+            open_browser=not args.no_browser,
+            reports_root=(
+                Path(args.reports_dir).expanduser() if args.reports_dir else None
+            ),
+        )
     except OSError as exc:
         # Almost always "address already in use" -- a second dashboard, or
         # something else on the port. Actionable message, not a traceback.
         print(f"mockymock dashboard: could not serve on {server.HOST}:{port}: {exc}")
         return 1
     return 0
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from mockymock.cli.doctor import (
+        format_doctor_json,
+        format_doctor_text,
+        gather_full_status,
+    )
+
+    report = gather_full_status()
+    if args.json:
+        import json
+
+        print(json.dumps(format_doctor_json(report), indent=2))
+    else:
+        print(format_doctor_text(report))
+    return 0 if report.ready else 1
 
 
 def _check_input_files(command: str, *paths: Path) -> bool:
@@ -348,6 +373,347 @@ def _write_failure_reports(
         )
 
 
+def _cmd_init(args: argparse.Namespace) -> int:
+    """`mockymock init PROG.cbl`: compose the existing `generate
+    --with-data` + `run --record-expectations` path into one command, so
+    a first scaffold has real, golden-recorded assertions instead of
+    empty mock bodies -- and degrade honestly (no Docker attempt, a
+    clear next step) when Docker isn't set up yet. See
+    docs/2026-09-15-init-command-design.md.
+
+    Reentrant rather than a deep refactor of `_cmd_generate`/`_cmd_run`'s
+    internals: builds real argv lists and parses them with this same
+    module's own `build_parser()`, so every flag `generate --with-data`/
+    `run --record-expectations` would need gets argparse's own correct
+    default -- never a hand-built Namespace that could silently miss an
+    attribute those large functions read. This is a deliberate departure
+    from the design doc's proposed 'refactor into a plain function
+    returning a result object' approach: lower risk for the same
+    external behavior, since neither _cmd_generate nor _cmd_run's
+    existing code changes at all."""
+    from mockymock.cli.doctor import gather_full_status
+
+    source_path = Path(args.program)
+    if not _check_input_files("mockymock init", source_path):
+        return 1
+
+    output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
+    if source_path.suffix.lower() == ".cut" or output_path.resolve() == (
+        source_path.resolve()
+    ):
+        # `mockymock init X.cut` would otherwise be told X.cut "already
+        # exists, pass --force" -- and --force would then parse the .cut
+        # as COBOL and overwrite it with the result.
+        print(
+            f"mockymock init: {source_path} is the .cut file, not the COBOL "
+            f"program -- pass the program (e.g. "
+            f"{source_path.with_suffix('.cbl')})"
+        )
+        return 1
+    if output_path.exists() and not args.force:
+        print(
+            f"mockymock init: {output_path} already exists -- pass --force "
+            f"to overwrite it, or --output to write somewhere else"
+        )
+        return 1
+
+    config = getattr(args, "_config", None)
+    copybook_paths = args.copybook_path or []
+
+    generate_argv = [
+        "generate",
+        str(source_path),
+        "--output",
+        str(output_path),
+        "--with-data",
+        "--scenarios",
+        args.scenarios,
+    ]
+    if args.seed is not None:
+        generate_argv += ["--seed", str(args.seed)]
+    for path in copybook_paths:
+        generate_argv += ["--copybook-path", path]
+
+    print(f"mockymock init: scaffolding {output_path} from {source_path} (--with-data)")
+    generate_args = build_parser().parse_args(generate_argv)
+    generate_args._config = config
+    exit_code = _cmd_generate(generate_args)
+    if exit_code != 0:
+        return exit_code
+
+    if args.scenarios != "happy":
+        print(
+            "Note: branch-targeted scenarios are not yet verified to reach "
+            "their named arm -- see "
+            "docs/2026-09-04-scenario-branch-verification.md. Confirm with "
+            "'mockymock run ... --trace' for anything security- or "
+            "correctness-critical."
+        )
+
+    report = gather_full_status()
+    if not report.ready:
+        print(
+            "mockymock init: Docker isn't available, so I generated a "
+            "suite with real test data but could not run it to record "
+            f"expected values. Run 'mockymock run {source_path} --cut "
+            f"{output_path} --record-expectations' once Docker is set up "
+            "(see 'mockymock doctor')."
+        )
+        return 0
+
+    run_argv = [
+        "run",
+        str(source_path),
+        "--cut",
+        str(output_path),
+        "--record-expectations",
+    ]
+    for path in copybook_paths:
+        run_argv += ["--copybook-path", path]
+
+    print(f"mockymock init: running {output_path} to record expected values")
+    run_args = build_parser().parse_args(run_argv)
+    run_args._config = config
+    run_exit_code = _cmd_run(run_args)
+    if run_exit_code == 0:
+        print(
+            f"mockymock init: next, run 'mockymock run {source_path} "
+            f"--cut {output_path}'"
+        )
+    else:
+        print(
+            f"mockymock init: {output_path} was written, but recording its "
+            f"expected values failed (see above) -- fix that, then run "
+            f"'mockymock run {source_path} --cut {output_path} "
+            f"--record-expectations'"
+        )
+    return run_exit_code
+
+
+def _reindent_snippet(snippet: str, indent_unit: str) -> str:
+    """Re-render a `directive_snippet()` block (always emitted with a
+    hardcoded 4-space unit: MOCK/END-MOCK at 4, body at 8) using
+    `indent_unit` instead, preserving relative depth. Used by `--fill` so
+    an inserted block matches the target file's own indentation rather
+    than always assuming 4 spaces."""
+    out_lines = []
+    for line in snippet.splitlines():
+        stripped = line.lstrip(" ")
+        depth = (len(line) - len(stripped)) // 4
+        out_lines.append(f"{indent_unit * depth}{stripped}")
+    return "\n".join(out_lines)
+
+
+def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) -> int:
+    """`mockymock generate --fill CUT_FILE`: insert only the missing MOCK
+    blocks CUT_FILE's own test cases need (from the same UNMOCKED_*
+    analysis `lint` runs), writing back to CUT_FILE in place. Every
+    existing directive, EXPECT, VERIFY, and comment is preserved
+    byte-for-byte -- this is a text insertion at known line numbers, not
+    a re-serialization of the parsed model (which would risk
+    reformatting hand-written directives). An existing MOCK block is
+    never edited even if its body is empty or wrong -- filling in a gap
+    is safe to automate, rewriting authored logic is not.
+
+    Reuses `checks.run_static_checks`'s own `check_test_case` pass (via
+    its `unmocked_reasons`, docs/2026-09-15-actionable-refusals-and-fill-design.md)
+    rather than re-running reachability analysis independently, so
+    `--fill` and `lint` can never disagree about what's missing."""
+    from mockymock.cli.checks import run_static_checks
+    from mockymock.dsl.parser import (
+        _END_MOCK_RE,
+        _MOCK_BARE_RE,
+        _MOCK_QUOTED_RE,
+        _PERFORM_RE,
+    )
+
+    if not _check_input_files("mockymock generate", cut_path):
+        return 1
+
+    checked = run_static_checks(source_path, cut_path, args.copybook_path)
+    if checked.suite is None:
+        for problem in checked.problems:
+            if problem.startswith("  "):
+                print(problem)
+            else:
+                print(f"mockymock generate: {problem}")
+        return 1
+
+    suite = checked.suite
+    # Untranslated newlines: read_text() turns CRLF into LF, which made the
+    # CRLF check below dead and rewrote a CRLF .cut as LF on POSIX; the
+    # write below uses newline="" so Windows does not turn "\r\n" into
+    # "\r\r\n" (or an LF file into CRLF) either.
+    original_text = read_utf8_source(cut_path, keep_newlines=True)
+    newline = "\r\n" if "\r\n" in original_text else "\n"
+    raw_lines = original_text.splitlines()
+
+    indent = "    "
+    for raw in raw_lines:
+        stripped = raw.lstrip(" ")
+        if stripped.upper().startswith("MOCK "):
+            indent = raw[: len(raw) - len(stripped)]
+            break
+
+    case_starts = sorted({case.line for case in suite.test_cases if case.line})
+
+    def _case_end(case_line: int) -> int:
+        later = [ln for ln in case_starts if ln > case_line]
+        return (min(later) - 1) if later else len(raw_lines)
+
+    def _perform_line(case_line: int, end_line: int) -> int | None:
+        """The case's own PERFORM line: the first PERFORM in its range
+        that is *not* inside a MOCK ... END-MOCK body (a mock body is
+        verbatim COBOL and may itself PERFORM a paragraph; anchoring on
+        that would splice the new block into the middle of another
+        mock's body)."""
+        in_mock_body = False
+        for line_no in range(max(case_line, 1), end_line + 1):
+            if line_no > len(raw_lines):
+                break
+            text = raw_lines[line_no - 1].strip()
+            if in_mock_body:
+                if _END_MOCK_RE.match(text):
+                    in_mock_body = False
+                continue
+            if _MOCK_QUOTED_RE.match(text) or _MOCK_BARE_RE.match(text):
+                in_mock_body = True
+                continue
+            if _PERFORM_RE.match(text):
+                return line_no
+        return None
+
+    inserted_headers: list[tuple[int, str]] = []
+    per_line_inserts: dict[int, list[str]] = {}
+    filled_cases = 0
+    added_blocks = 0
+    warnings: list[str] = []
+    # (anchor line, header, block length) per inserted block.
+    inserted_blocks: list[tuple[int, str, int]] = []
+    # Cases whose PERFORM line could not be found, with the headers they
+    # needed: a PROVIDER-expanded case's own range (its ROW line) holds
+    # no PERFORM, but the block inserted for the shared template covers
+    # every row -- so such a case is only a problem when nothing did.
+    unlocated: list[tuple[str, list[str]]] = []
+
+    for case_index, case in enumerate(suite.test_cases):
+        reasons = checked.unmocked_reasons.get(case_index, [])
+        fixable = [r for r in reasons if r.suggested_fix]
+        for r in reasons:
+            if not r.suggested_fix:
+                warnings.append(f"TESTCASE {case.name!r}: {r.code}: {r.message}")
+        if not fixable:
+            continue
+        end_line = _case_end(case.line) if case.line else len(raw_lines)
+        perform_line_no = _perform_line(case.line, end_line) if case.line else None
+        if perform_line_no is None:
+            unlocated.append(
+                (
+                    case.name,
+                    [
+                        _reindent_snippet(r.suggested_fix, indent)
+                        .splitlines()[0]
+                        .strip()
+                        for r in fixable
+                        if r.suggested_fix is not None
+                    ],
+                )
+            )
+            continue
+        new_lines: list[str] = []
+        # One block per distinct directive, not per site: two reachable
+        # READs of the same file produce two UNMOCKED_READ reasons with
+        # the same header, and the parser rejects a duplicate MOCK.
+        seen_headers: set[str] = {
+            _header_line(raw_lines[ln - 1])
+            for ln in range(max(case.line, 1), end_line + 1)
+            if ln <= len(raw_lines)
+        }
+        for r in fixable:
+            assert r.suggested_fix is not None  # `fixable` was filtered on this
+            snippet = _reindent_snippet(r.suggested_fix, indent)
+            header = snippet.splitlines()[0].strip()
+            if header in seen_headers:
+                continue
+            seen_headers.add(header)
+            block_lines = snippet.splitlines()
+            new_lines.extend(block_lines)
+            inserted_blocks.append((perform_line_no, header, len(block_lines)))
+            added_blocks += 1
+        if not new_lines:
+            continue
+        per_line_inserts.setdefault(perform_line_no, []).extend(new_lines)
+        filled_cases += 1
+
+    if per_line_inserts:
+        result_lines: list[str] = []
+        # Report each inserted block at the line it lands on in the
+        # written file, not the pre-insertion line it was anchored to.
+        final_line_of: dict[int, int] = {}
+        for line_no, raw in enumerate(raw_lines, start=1):
+            if line_no in per_line_inserts:
+                final_line_of[line_no] = len(result_lines) + 1
+                result_lines.extend(per_line_inserts[line_no])
+            result_lines.append(raw)
+        new_text = newline.join(result_lines)
+        if original_text.endswith(("\n", "\r\n")):
+            new_text += newline
+        cut_path.write_text(new_text, encoding="utf-8", newline="")
+        offset_within_anchor: dict[int, int] = {}
+        for anchor, header, block_len in inserted_blocks:
+            start = final_line_of[anchor] + offset_within_anchor.get(anchor, 0)
+            inserted_headers.append((start, header))
+            offset_within_anchor[anchor] = (
+                offset_within_anchor.get(anchor, 0) + block_len
+            )
+
+    covered = {header for _, header, _ in inserted_blocks}
+    for case_name, headers in unlocated:
+        if all(header in covered for header in headers):
+            continue
+        warnings.append(
+            f"TESTCASE {case_name!r}: could not locate its PERFORM line "
+            f"to insert a fix before -- skipped"
+        )
+
+    print(
+        f"mockymock generate --fill: added {added_blocks} mock block(s) "
+        f"across {filled_cases} test case(s)"
+    )
+    for line_no, header in inserted_headers:
+        print(f"{cut_path}:{line_no}: {header}")
+    for warning in warnings:
+        print(f"mockymock generate: {warning}")
+
+    # Everything `lint` would still refuse that no MOCK block can fix
+    # (a flow-mock target that doesn't exist, a terminator layout, an
+    # UNMOCKED_* reason with no mechanical fix): print it and fail, so
+    # `--fill` exiting 0 means the next `lint` exits 0 too.
+    remaining = [
+        problem
+        for problem in checked.problems
+        if not problem.startswith("  ") and not _is_filled_problem(problem)
+    ]
+    for problem in remaining:
+        print(f"mockymock generate: {problem}")
+    if remaining or warnings:
+        return 1
+    return 0
+
+
+def _header_line(raw: str) -> str:
+    """A `.cut` line normalized the way `--fill` compares MOCK headers:
+    stripped, so an existing `MOCK READ INV-FILE` (any indentation) is
+    recognized as already present."""
+    return raw.strip()
+
+
+def _is_filled_problem(problem: str) -> bool:
+    """True for the `refused (UNMOCKED_*): ...` lines `--fill` acts on
+    itself; every other problem line is one it cannot fix."""
+    return problem.startswith("refused (UNMOCKED_")
+
+
 def _cmd_generate(args: argparse.Namespace) -> int:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
@@ -375,11 +741,32 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         load_fixture_bundle_file,
     )
     from mockymock.dsl.generator import ProgramContext, scaffold_cut
+    from mockymock.splicer.cics_resp import expand_dfhresp, expansion_note
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
     source_path = Path(args.program)
     if not _check_input_files("mockymock generate", source_path):
         return 1
+
+    if args.fill is not None:
+        conflicting = [
+            flag
+            for flag, value in (
+                ("-o/--output", args.output),
+                ("--with-data", args.with_data),
+                ("--fixtures", args.fixtures),
+            )
+            if value
+        ]
+        if conflicting:
+            print(
+                f"mockymock generate: --fill is not valid together with "
+                f"{', '.join(conflicting)} -- --fill always writes back to "
+                f"the file it read"
+            )
+            return 1
+        _apply_config_to_args(args, source_path)
+        return _fill_cut_file(source_path, Path(args.fill), args)
 
     if not _check_rows_non_negative("generate", args.rows):
         return 1
@@ -471,7 +858,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
 
-    raw_source = source_path.read_text(encoding="utf-8")
+    raw_source = read_utf8_source(source_path)
     if args.copybook_path:
         # See _cmd_fixtures's identical guard on the same call for why
         # this can raise on realistic inputs (audit finding F6).
@@ -515,9 +902,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     # See mockymock/cli/checks.py::run_static_checks for why PROCESS/CBL
     # precompiler directives must be stripped before normalizing here too.
-    lines = normalize_fixed_format(
-        strip_compiler_directives(raw_source).splitlines()
-    ).splitlines()
+    lines = split_source_lines(
+        normalize_fixed_format(
+            split_source_lines(strip_compiler_directives(raw_source))
+        )
+    )
 
     linkage_reasons = check_linkage_layout(result.ast, lines)
     for reason in linkage_reasons:
@@ -531,6 +920,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             "generate", linkage, applied=False, address_of=preview_address_of
         )
 
+    # Same translator-exact DFHRESP expansion `run_static_checks` applies.
+    lines, resp_expansions = expand_dfhresp(lines)
+    if resp_expansions:
+        print(f"mockymock generate: {expansion_note(resp_expansions)}")
     cics_eib_reasons = check_cics_eib_layout(result.ast, lines)
     for reason in cics_eib_reasons:
         print(f"mockymock generate: refused ({reason.code}): {reason.message}")
@@ -578,6 +971,18 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
     case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
+    if case_count == 0 and bundle is not None:
+        # The bundle had scenarios (zero is refused above) yet none became
+        # a TESTCASE; the empty suite would run as "0 run, 0 failed" and
+        # exit 1, so report it here, where it was made (issue #150). A
+        # plain `generate` on a program with no boundary to mock writes
+        # an empty suite on purpose and still exits 0.
+        print(
+            "mockymock generate: no scenario could be scaffolded as a test "
+            "case -- the file holds an empty TESTSUITE",
+            file=sys.stderr,
+        )
+        return 1
     if bundle is not None:
         print(
             f"mockymock generate: data-driven from a fixture bundle "
@@ -649,21 +1054,32 @@ def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:
     `check_cics_eib_layout`'s job) and adds WORKING-STORAGE a `.cut` author
     didn't write, so say so rather than silently changing behavior. See
     docs/2026-08-27-cics-eib-linkage-support-design.md."""
-    names = ", ".join(plan.referenced_names)
-    if applied:
-        action = (
-            f"synthesized a 01 DFHEIBLK WORKING-STORAGE group (referenced: {names})"
+    blocks = [
+        (block, kind, names)
+        for block, kind, names in (
+            ("DFHEIBLK", "CICS", plan.referenced_names),
+            ("DLIDIB", "DL/I", getattr(plan, "dib_names", [])),
         )
-    else:
-        action = (
-            f"a later `run` will synthesize a 01 DFHEIBLK WORKING-STORAGE "
-            f"group (referenced: {names})"
+        if names
+    ]
+    for block, kind, names in blocks:
+        listed = ", ".join(names)
+        if applied:
+            action = (
+                f"synthesized a 01 {block} WORKING-STORAGE group "
+                f"(referenced: {listed})"
+            )
+        else:
+            action = (
+                f"a later `run` will synthesize a 01 {block} WORKING-STORAGE "
+                f"group (referenced: {listed})"
+            )
+        field_kind = "EIB" if block == "DFHEIBLK" else "DIB"
+        print(
+            f"mockymock {command}: {action} -- no {kind} translator runs in "
+            f"this pipeline, so this program's undeclared {field_kind} field "
+            f"references get real, addressable storage instead"
         )
-    print(
-        f"mockymock {command}: {action} -- no CICS translator runs in this "
-        f"pipeline, so this program's undeclared EIB field references get "
-        f"real, addressable storage instead"
-    )
 
 
 def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
@@ -838,9 +1254,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         summarize_original,
     )
     from mockymock.report.formatters import format_console, format_junit_xml
-    from mockymock.report.json_report import build_json_report, format_json_report
+    from mockymock.report.json_report import (
+        build_json_report,
+        format_json_report,
+        not_run_case_names,
+    )
     from mockymock.report.record_rewrite import (
         build_recording_report,
+        field_pictures,
         rewrite_cut_text,
     )
     from mockymock.report.results import parse_stdout
@@ -859,7 +1280,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     # Directory-wide mode: no program, no --cut -- discover every .cut
     # file under the test root and run each against its sibling program.
@@ -985,7 +1406,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
-    reset_lines = reset_move_lines(result.ast)
+    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
     if linkage is not None:
         # LINKAGE items `neutralize` folded into WORKING-STORAGE live under
         # the LINKAGE section in `result.ast` still (the transform edited
@@ -1002,7 +1423,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # run_static_checks) so a stub's case_index always means what
     # build_driver means by it. See
     # docs/2026-08-04-record-expectations-design.md.
-    cut_text = cut_path.read_text(encoding="utf-8")
+    cut_text = read_utf8_source(cut_path)
     stub_scan = (
         scan_stub_expectations(cut_text, suite) if args.record_expectations else None
     )
@@ -1113,7 +1534,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         crash_detail = f"binary exited with code {executed.exit_code}"
     else:
         crash_detail = None
-    print(format_console(suite_result, crash_detail=crash_detail))
+    not_run = not_run_case_names(suite_result, suite)
+    print(format_console(suite_result, crash_detail=crash_detail, not_run=not_run))
     if executed.stderr:
         print("mockymock run: binary stderr:")
         print(executed.stderr.rstrip("\n"))
@@ -1125,7 +1547,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # scanner found ends up in exactly one of recorded/skipped, and the
         # file is only ever touched when at least one stub was recorded.
         recording = build_recording_report(stub_scan, suite_result)
-        rewritten = rewrite_cut_text(cut_text, recording)
+        rewritten = rewrite_cut_text(
+            cut_text, recording, field_pictures(result.ast, checked.captures)
+        )
         if rewritten is not None:
             cut_path.write_text(rewritten, encoding="utf-8", newline="\n")
         print(
@@ -1147,7 +1571,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "run",
             "--junit-xml",
             args.junit_xml,
-            format_junit_xml(suite_result, crash_detail=crash_detail),
+            format_junit_xml(suite_result, crash_detail=crash_detail, not_run=not_run),
         )
 
     if args.json_report:
@@ -1172,7 +1596,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # as it was when the instrumented number was the only one printed.
     original_coverage = None
     if coverage_report is not None:
-        original_source_lines = source_path.read_text(encoding="utf-8").splitlines()
+        original_source_lines = split_source_lines(read_utf8_source(source_path))
         mapped = map_coverage_to_original(
             coverage_report,
             instrumented,
@@ -1256,7 +1680,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 build_original_line_map(
                     instrumented,
                     normalized_lines,
-                    source_path.read_text(encoding="utf-8").splitlines(),
+                    split_source_lines(read_utf8_source(source_path)),
                 ),
                 case_result.mock_hits if case_result is not None else [],
                 selected,
@@ -1308,7 +1732,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     # Unlike --trace's plain-text mode, there is no useful human-facing
     # equivalent of a DAP session at a terminal -- refuse rather than
@@ -1401,7 +1825,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
-    reset_lines = reset_move_lines(result.ast)
+    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
     if linkage is not None:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
@@ -1415,7 +1839,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     )
     instrumented = _insert_driver(lines, artifact)
 
-    original_lines = source_path.read_text(encoding="utf-8").splitlines()
+    original_lines = split_source_lines(read_utf8_source(source_path))
 
     # The sandbox stays alive for the entire DAP session (a long-lived
     # conversation, unlike run/trace/coverage's "compile, run, collect,
@@ -1449,6 +1873,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
                 generated_c_lines=generated_c_lines,
                 paragraph_index=paragraph_index,
                 instrumented_file=instrumented_path.name,
+                original_file=str(source_path),
             )
 
         adapter = DapAdapter(sys.stdin.buffer, sys.stdout.buffer, launch_session)
@@ -1499,7 +1924,7 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
                 f"mutation suite, or drop the other flag(s)"
             )
             return 1
-        mutants = generate_mutants(source_path.read_text(encoding="utf-8").splitlines())
+        mutants = generate_mutants(split_source_lines(read_utf8_source(source_path)))
         for mutant in mutants:
             print(f"line {mutant.line} [{mutant.operator}] {mutant.description}")
         print(f"{len(mutants)} mutant(s)")
@@ -1671,7 +2096,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     from mockymock.splicer.orchestrator import splice_program
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import transform_data_division_exec
+    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     pair = _resolve_program_and_cut("mockymock export", args)
     if pair is None:
@@ -1749,7 +2174,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
-    reset_lines = reset_move_lines(result.ast)
+    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
     if linkage is not None:
         reset_lines = reset_lines + extra_reset_lines(linkage)
     if cics_eib_plan_ is not None:
@@ -1797,26 +2222,185 @@ def _cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _collect_boundaries(
+    source_path: Path, copybook_paths: list[str] | None
+) -> list[dict]:
+    """Every genuinely mockable boundary site in `source_path` (category
+    is not None), whole-program -- NOT reachability-filtered by any one
+    TESTCASE's PERFORM target, since this feeds editor completion for
+    "every key this program could ever need mocked," not one particular
+    test case's own reachable set (that's what `lint`'s refusal gate is
+    for). Sites are returned in source order. See
+    docs/2026-09-15-cut-editor-intelligence-design.md."""
+    from cobolparser import parse_cobol
+    from cobolparser.preprocess import expand_copybooks
+
+    from mockymock.analysis.mock_surface import analyze
+    from mockymock.dsl.generator import directive_snippet
+
+    raw_source = read_utf8_source(source_path)
+    # `line` is shown against the .cbl the user has open, but sites are
+    # numbered in the EXPANDED source: every COPY above a site shifted it
+    # by the copybook's length (a 4-line WORKING-STORAGE copybook put a
+    # line-9 CALL at "line 12"). Map back through cobol-parser's source map
+    # where the installed release fills one in (1.8.x returns it empty,
+    # and the expanded numbering is then kept as before).
+    origin_line: dict[int, int] = {}
+    if copybook_paths:
+        expansion = expand_copybooks(
+            raw_source, copybook_paths=copybook_paths, preserve_source_locations=True
+        )
+        raw_source = expansion.expanded_source
+        origin_line = _main_file_lines(expansion.source_location_map or {})
+
+    result = parse_cobol(raw_source, filename=source_path.name)
+    if result.errors or result.ast is None:
+        raise ValueError(
+            "; ".join(str(error) for error in result.errors) or "parse failed"
+        )
+
+    surface = analyze(result.ast)
+    boundaries = []
+    for site in surface.boundary_sites:
+        if site.category is None:
+            continue
+        # `directive` is the exact MOCK header a scaffold would write for
+        # this site (quoted key for CALL/MQ/SQL/CICS/DLI, the shortest
+        # unique text prefix for SQL/CICS/DLI whose `key` is null) -- so
+        # a consumer inserts what the DSL parses rather than re-deriving
+        # the quoting rules. None when the scaffold itself would skip it.
+        snippet = directive_snippet(site, surface)
+        boundaries.append(
+            {
+                "category": site.category.value,
+                "key": site.keys[0] if site.keys else None,
+                "keys": list(site.keys),
+                "directive": snippet.splitlines()[0].strip() if snippet else None,
+                "label": site.label,
+                "paragraph": site.paragraph_name,
+                "line": origin_line.get(site.line, site.line),
+                "matchText": site.match_text,
+            }
+        )
+    return sorted(boundaries, key=lambda b: b["line"])
+
+
+def _main_file_lines(source_map: dict[int, tuple[str, int]]) -> dict[int, int]:
+    """Expanded line -> line of the program file itself, from a
+    `CopybookExpansion.source_location_map` (`<main>` entries are the
+    program's own lines). A line that came from a copybook maps to the
+    COPY statement that pulled it in: the first program line after the
+    last one emitted before it."""
+    mapping: dict[int, int] = {}
+    last_main = 0
+    for expanded in sorted(source_map):
+        origin_file, origin = source_map[expanded]
+        if origin_file == "<main>":
+            last_main = origin
+            mapping[expanded] = origin
+        else:
+            mapping[expanded] = last_main + 1
+    return mapping
+
+
+def _cmd_explain(args: argparse.Namespace) -> int:
+    """`mockymock explain <CODE>`: print (or list) the catalogued
+    explanation for a refusal code, so `.cut` authors and editor
+    tooltips get one shared source of truth instead of re-deriving what
+    a code means from the message text alone. See
+    docs/2026-09-15-cut-editor-intelligence-design.md."""
+    import json
+
+    from mockymock.analysis.refusal import REFUSAL_EXPLANATIONS
+
+    if args.code is None or args.list:
+        codes = sorted(REFUSAL_EXPLANATIONS)
+        if args.json:
+            print(json.dumps({"version": 1, "codes": codes}, indent=2))
+        else:
+            print(f"{len(codes)} catalogued refusal code(s):")
+            for code in codes:
+                print(f"  {code}")
+        return 0
+
+    code = args.code.upper()
+    explanation = REFUSAL_EXPLANATIONS.get(code)
+    if explanation is None:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "code": code,
+                        "error": "not catalogued",
+                        "knownCodes": sorted(REFUSAL_EXPLANATIONS),
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            print(f"mockymock explain: {code!r} is not a catalogued refusal code.")
+            print("Run 'mockymock explain --list' to see every code this covers.")
+        return 1
+
+    if args.json:
+        print(
+            json.dumps(
+                {"version": 1, "code": code, "explanation": explanation}, indent=2
+            )
+        )
+    else:
+        print(code)
+        print(f"  {explanation}")
+        print("  See .okf/analysis.md's refusal table for the full picture.")
+    return 0
+
+
 def _cmd_collect(args: argparse.Namespace) -> int:
     """Authoritative test discovery for editor integrations: parse a .cut
     file (no .cbl, no Docker, no toolchain) and report its suite/cases with
     line numbers and tags. --json emits the machine-readable form the VS
-    Code extension consumes; the default is a human-readable listing."""
+    Code extension consumes; the default is a human-readable listing.
+
+    --boundaries (2026-09-15) additionally reports every mockable boundary
+    site in the paired program -- see docs/2026-09-15-cut-editor-intelligence-design.md.
+    Requires --json and a program argument (no human-readable form is
+    planned for it)."""
     import json
 
     from mockymock.dsl.parser import CutParseError, parse_cut
 
+    if args.boundaries and not args.json:
+        print("mockymock collect: --boundaries requires --json")
+        return 1
+    if args.boundaries and not args.program:
+        print("mockymock collect: --boundaries requires a program argument")
+        return 1
+
     cut_path = Path(args.cut)
-    if not _check_input_files("mockymock collect", cut_path):
+    check_paths = [cut_path]
+    program_path = Path(args.program) if args.program else None
+    if program_path is not None:
+        check_paths.append(program_path)
+    if not _check_input_files("mockymock collect", *check_paths):
         return 1
     try:
-        suite = parse_cut(cut_path.read_text(encoding="utf-8"))
+        suite = parse_cut(read_utf8_source(cut_path))
     except CutParseError as exc:
         if args.json:
             print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
         else:
             print(f"mockymock collect: invalid .cut file {cut_path}: {exc}")
         return 1
+
+    boundaries = None
+    if args.boundaries:
+        assert program_path is not None  # checked above
+        try:
+            boundaries = _collect_boundaries(program_path, args.copybook_path)
+        except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
+            print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
+            return 1
 
     if args.json:
         payload = {
@@ -1828,6 +2412,8 @@ def _cmd_collect(args: argparse.Namespace) -> int:
                 for case in suite.test_cases
             ],
         }
+        if boundaries is not None:
+            payload["boundaries"] = boundaries
         print(json.dumps(payload, indent=2))
     else:
         print(f"TESTSUITE {suite.name!r} (line {suite.line})")
@@ -1839,27 +2425,235 @@ def _cmd_collect(args: argparse.Namespace) -> int:
 
 
 def _cmd_skills_install(args: argparse.Namespace) -> int:
-    """Copy the packaged Claude Code skill to ~/.claude/skills/mockymock
-    (or ./.claude/skills/mockymock with --project). Pure file copy -- no
-    Docker, no parsing -- so it's always available, same tier as
-    lint/collect."""
+    """Copy the packaged agent skills (mockymock, cobol-analysis,
+    cobol-test) into the skills directory of Claude Code and/or GitHub
+    Copilot (--target; skills_cmd.resolve_target names the directories),
+    under the home directory or, with --project, the current one. Pure file copy -- no Docker, no config. Fail-closed
+    across the set: if any target exists and --force is absent, nothing is
+    written, so a half-installed set never mixes old and new copies."""
     from mockymock.cli.skills_cmd import (
+        SKILL_NAMES,
+        TARGET_LABELS,
+        TARGETS,
         SkillTargetExistsError,
         install_skill,
         resolve_target,
     )
 
-    target = resolve_target(args.project)
-    try:
-        install_skill(target, force=args.force)
-    except SkillTargetExistsError as exc:
-        print(f"mockymock skills install: {exc}")
+    names = args.skill or list(SKILL_NAMES)
+    unknown = [n for n in names if n not in SKILL_NAMES]
+    if unknown:
+        print(
+            f"mockymock skills install: unknown skill(s) {', '.join(unknown)} "
+            f"(expected: {', '.join(SKILL_NAMES)})"
+        )
         return 1
-    print(f"mockymock skills install: installed -> {target}")
+    assistants = list(TARGETS) if args.target == "all" else [args.target]
+    targets = [
+        (name, resolve_target(args.project, name, assistant))
+        for assistant in assistants
+        for name in names
+    ]
+    if not args.force:
+        occupied = [t for _, t in targets if t.exists() or t.is_symlink()]
+        if occupied:
+            for target in occupied:
+                print(
+                    f"mockymock skills install: {target} already exists; "
+                    f"use --force to overwrite"
+                )
+            return 1
+    for name, target in targets:
+        try:
+            install_skill(target, force=args.force, name=name)
+        except SkillTargetExistsError as exc:
+            print(f"mockymock skills install: {exc}")
+            return 1
+        print(f"mockymock skills install: installed -> {target}")
+    tools = " / ".join(TARGET_LABELS[a] for a in assistants)
     print(
-        "mockymock skills install: restart Claude Code (or start a new "
-        "session) to pick it up"
+        f"mockymock skills install: start a new {tools} session to pick up "
+        "the skills; ask it to test a COBOL program to start with cobol-test."
     )
+    return 0
+
+
+def _cmd_skills_plugin(args: argparse.Namespace) -> int:
+    """Write the cobol-testing Claude Code plugin as a local marketplace
+    (no clone, no network), for `/plugin marketplace add <dir>`."""
+    from mockymock import __version__
+    from mockymock.cli.skills_cmd import (
+        LOCAL_MARKETPLACE_NAME,
+        PLUGIN_NAME,
+        PluginTargetError,
+        default_plugin_dir,
+        export_plugin,
+    )
+
+    target = (
+        Path(args.directory).expanduser() if args.directory else default_plugin_dir()
+    )
+    target = target.resolve()
+    try:
+        plugin_dir = export_plugin(target, version=__version__, force=args.force)
+    except PluginTargetError as exc:
+        print(f"mockymock skills plugin: {exc}")
+        return 1
+    print(f"mockymock skills plugin: wrote {PLUGIN_NAME} {__version__} -> {target}")
+    print("mockymock skills plugin: in Claude Code, run:")
+    print(f"  /plugin marketplace add {target}")
+    print(f"  /plugin install {PLUGIN_NAME}@{LOCAL_MARKETPLACE_NAME}")
+    print(
+        "mockymock skills plugin: or load it for one session with "
+        f"`claude --plugin-dir {plugin_dir}`. Re-run with --force after "
+        "upgrading mockymock, then `/plugin marketplace update "
+        f"{LOCAL_MARKETPLACE_NAME}`."
+    )
+    return 0
+
+
+def _cmd_skills_mode(args: argparse.Namespace) -> int:
+    """Read back (or set) the project's AI assistant mode -- how much the
+    packaged skill checks in with the developer while it builds a suite.
+    Loads the config file itself rather than using `args._config`: `skills`
+    is one of the subcommands `main()` deliberately lets run with a
+    malformed config (it defines neither `copybook_path` nor `seed`), and
+    this is the one `skills` leaf that actually reads it, so it reports
+    the parse error itself the same way `doctor` does."""
+    from mockymock.cli.ai_mode import (
+        ModeError,
+        format_mode_json,
+        format_mode_report,
+        resolve_mode,
+        validate,
+        write_mode,
+    )
+    from mockymock.cli.config import ConfigError, load_config
+
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        print(f"mockymock skills mode: {exc}")
+        return 1
+
+    if args.set is not None:
+        try:
+            # Validated before the write so a typo'd mode names the valid
+            # set instead of landing in the file for the next `run` to
+            # reject. `choices=` would do this in argparse, but that needs
+            # MODES imported at parser-build time -- see the deferred-import
+            # rule in .okf/cli.md's Gotchas.
+            validate(args.set)
+            written = write_mode(args.set, config)
+        except ModeError as exc:
+            print(f"mockymock skills mode: {exc}")
+            return 1
+        config = load_config()
+        print(f"mockymock skills mode: {args.set} -> {written}")
+
+    resolved = resolve_mode(config)
+    if args.json:
+        import json
+
+        print(json.dumps(format_mode_json(resolved), indent=2))
+    else:
+        print(format_mode_report(resolved))
+    return 0
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    """Join every check mockymock and cobol-parser can make on one
+    program/.cut pair into a single report -- the steps taken, a
+    verification level per test case, and the findings -- written as JSON
+    and/or a self-contained HTML page. See report/test_report.py."""
+    import json
+
+    from mockymock.report.html_report import render_html
+    from mockymock.report.journal import default_journal_path
+    from mockymock.report.test_report import ReportOptions, build_report
+
+    pair = _resolve_program_and_cut("mockymock report", args)
+    if pair is None:
+        return 1
+    source_path, cut_path = pair
+    _apply_config_to_args(args, source_path)
+    if args.mutation_threshold < 0 or args.mutation_threshold > 100:
+        print("mockymock report: --mutation-threshold must be between 0 and 100")
+        return 1
+    journal = Path(args.journal) if args.journal else default_journal_path(cut_path)
+    options = ReportOptions(
+        program=source_path,
+        cut=cut_path,
+        copybook_paths=list(args.copybook_path or []),
+        run_json=Path(args.run_json) if args.run_json else None,
+        coverage_json=Path(args.coverage_json) if args.coverage_json else None,
+        mutation_json=Path(args.mutation_json) if args.mutation_json else None,
+        journal=journal,
+        execute=args.execute,
+        mutate=args.mutate,
+        scenarios=args.scenarios,
+        seed=args.seed,
+        timeout=args.timeout,
+        mutation_threshold=args.mutation_threshold,
+    )
+    report = build_report(options)
+    html_path = (
+        Path(args.output)
+        if args.output
+        else source_path.with_name(f"{source_path.stem}.report.html")
+    )
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.write_text(render_html(report), encoding="utf-8")
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(
+            json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+    for step in report["steps"]:
+        print(
+            f"mockymock report: [{step['status']:>7}] {step['title']}: {step['summary']}"
+        )
+    summary = report["summary"]
+    findings = summary["findings"]
+    print(
+        f"mockymock report: {findings['high']} high, {findings['medium']} medium, "
+        f"{findings['low']} low finding(s)"
+    )
+    print(f"mockymock report: wrote {html_path}")
+    if args.json:
+        print(f"mockymock report: wrote {args.json}")
+    return 1 if summary["failed"] or summary["levels"].get("none") else 0
+
+
+def _cmd_journal(args: argparse.Namespace) -> int:
+    """Append one entry to a suite's assistant journal (report/journal.py),
+    which `mockymock report` shows as a timeline."""
+    from mockymock.report.journal import (
+        JournalError,
+        append_entry,
+        default_journal_path,
+    )
+
+    if args.file:
+        path = Path(args.file)
+    elif args.cut:
+        path = default_journal_path(Path(args.cut))
+    else:
+        print("mockymock journal: pass --cut (journal next to it) or --file")
+        return 1
+    try:
+        append_entry(
+            path,
+            step=args.step,
+            summary=args.summary,
+            status=args.status,
+            command=args.command_text,
+            decision=args.decision,
+        )
+    except JournalError as exc:
+        print(f"mockymock journal: {exc}")
+        return 1
+    print(f"mockymock journal: appended to {path}")
     return 0
 
 
@@ -1911,17 +2705,59 @@ def _insert_driver_with_origins(
             inserted.add(len(result))
             result.append(new_line)
 
+    ws_lines = [f"       {ws_line}" for ws_line in artifact.working_storage_lines]
+    # A program with no WORKING-STORAGE SECTION of its own (a subprogram
+    # with only a LINKAGE or LOCAL-STORAGE SECTION, or no DATA DIVISION at
+    # all) still needs the driver's fields declared -- without them every
+    # UT-CURRENT-CASE / UT-FAIL-COUNT / tally reference is undefined and
+    # the instrumented program cannot compile. Such a section is then
+    # synthesized where WORKING-STORAGE belongs: before the first section
+    # that must follow it, or before the PROCEDURE DIVISION.
+    has_ws = any(
+        _WS_HEADER_RE.match(line) for line in lines[: _first_procedure_index(lines)]
+    )
+    seen_data_division = False
+
     for line in lines:
-        result.append(line)
         upper = line.strip().upper()
+        if not inserted_ws and not has_ws:
+            if upper.startswith("DATA DIVISION"):
+                seen_data_division = True
+            elif (
+                seen_data_division and _AFTER_WS_SECTION_RE.match(line)
+            ) or upper.startswith("PROCEDURE DIVISION"):
+                if not seen_data_division:
+                    extend(["       DATA DIVISION."])
+                extend(["       WORKING-STORAGE SECTION."])
+                extend(ws_lines)
+                inserted_ws = True
+        result.append(line)
         if not inserted_ws and upper.startswith("WORKING-STORAGE SECTION"):
-            extend(f"       {ws_line}" for ws_line in artifact.working_storage_lines)
+            extend(ws_lines)
             inserted_ws = True
         if not inserted_proc and upper.startswith("PROCEDURE DIVISION"):
             extend([""])
             extend(artifact.procedure_lines)
             inserted_proc = True
     return result, inserted
+
+
+_WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\b", re.IGNORECASE)
+#: DATA DIVISION sections that must come AFTER WORKING-STORAGE -- including a
+#: LINKAGE SECTION header `splicer.linkage.neutralize` commented out, whose
+#: items then belong to whatever section precedes them.
+_AFTER_WS_SECTION_RE = re.compile(
+    r"^\s*(?:\*>\s*)?(?:LOCAL-STORAGE|LINKAGE|COMMUNICATION|REPORT|SCREEN)"
+    r"\s+SECTION\b",
+    re.IGNORECASE,
+)
+
+
+def _first_procedure_index(lines: list[str]) -> int:
+    for index, line in enumerate(lines):
+        if line.strip().upper().startswith("PROCEDURE DIVISION"):
+            return index
+    return len(lines)
 
 
 # argparse has no native notion of subcommand groups, so this is a
@@ -1932,6 +2768,7 @@ _COMMAND_GROUPS_EPILOG = """\
 commands, grouped by how often you'll reach for them:
 
   Everyday:
+    init       one command from a program to a .cut file with real assertions
     run        splice, compile, run, and assert a program against a .cut file
     generate   scaffold a starter .cut file from a COBOL program
     lint       static checks only, no Docker
@@ -1941,12 +2778,17 @@ commands, grouped by how often you'll reach for them:
     debug      interactive Debug Adapter Protocol session
     analyze    run a cobol-parser analyzer and print its report
     dashboard  local status page for Docker/GnuCOBOL readiness
+    doctor     one-shot terminal readiness report
+
+  Reporting:
+    report     one HTML/JSON report: every step, a proof level per test
+    journal    record an assistant's step for the report's timeline
 
   Advanced:
     mutate     mutation-test a program against its .cut suite
     export     write mainframe-ready instrumented source
     fixtures   print a FixtureBundle as JSON for editor integrations
-    skills     manage the packaged Claude Code skill
+    skills     manage the packaged agent skills (Claude Code, GitHub Copilot)
     setup      build the GnuCOBOL image and start the toolchain container
 
 Run 'mockymock <command> --help' for a command's own options.
@@ -1981,11 +2823,65 @@ def build_parser() -> argparse.ArgumentParser:
     )
     setup_parser.set_defaults(func=_cmd_setup)
 
+    init_parser = subparsers.add_parser(
+        "init",
+        help=(
+            "One command from a COBOL program to a .cut file with real, "
+            "golden-recorded assertions"
+        ),
+        description=(
+            "Composes 'generate --with-data' + 'run --record-expectations' "
+            "into one step, so a first scaffold has real generated data "
+            "and recorded expected values instead of empty mock bodies. "
+            "Degrades to a plain data-driven scaffold (no run attempted) "
+            "with a clear next step when Docker isn't set up yet. See "
+            "docs/2026-09-15-init-command-design.md."
+        ),
+    )
+    init_parser.add_argument("program")
+    init_parser.add_argument(
+        "-o", "--output", help="Where to write the .cut file (default: <program>.cut)"
+    )
+    init_parser.add_argument(
+        "--seed", type=int, help="Seed for the fixture bundle's random data generation"
+    )
+    init_parser.add_argument(
+        "--scenarios",
+        choices=["happy", "branches", "all"],
+        default="happy",
+        help="Scenario strategy for the fixture bundle (default happy)",
+    )
+    init_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    init_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output .cut file if it already exists",
+    )
+    init_parser.set_defaults(func=_cmd_init)
+
     generate_parser = subparsers.add_parser(
         "generate", help="Scaffold a starter .cut file from a COBOL program"
     )
     generate_parser.add_argument("program")
     generate_parser.add_argument("-o", "--output")
+    generate_parser.add_argument(
+        "--fill",
+        metavar="CUT_FILE",
+        help=(
+            "Insert only the missing MOCK blocks an existing .cut file's "
+            "test cases need (from the same UNMOCKED_* analysis 'lint' "
+            "runs), writing back to CUT_FILE in place. Every existing "
+            "directive, EXPECT, VERIFY, and comment is left untouched -- "
+            "an existing MOCK block is never edited even if its body is "
+            "empty or wrong. Mutually exclusive with -o/--output, "
+            "--with-data, and --fixtures. See "
+            "docs/2026-09-15-actionable-refusals-and-fill-design.md"
+        ),
+    )
     generate_parser.add_argument(
         "--copybook-path",
         action="append",
@@ -2209,8 +3105,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Binary execution timeout in seconds (default 30); a mocked "
             "CALL that removes a loop's terminating condition can "
-            "otherwise hang until this limit kills it (mirrors mutate's "
-            "own --timeout)"
+            "otherwise hang until this limit kills it -- give a "
+            'retrieve-and-loop CALL a sequence instead, MOCK CALL "X" '
+            "ROWS ( ... ) TERMINAL ( ... ), so later calls end the loop "
+            "(mirrors mutate's own --timeout)"
         ),
     )
     run_parser.add_argument(
@@ -2363,20 +3261,64 @@ def build_parser() -> argparse.ArgumentParser:
             "tags) without running anything"
         ),
     )
+    collect_parser.add_argument(
+        "program",
+        nargs="?",
+        help="Required only with --boundaries",
+    )
     collect_parser.add_argument("--cut", required=True)
     collect_parser.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable JSON instead of the human listing",
     )
+    collect_parser.add_argument(
+        "--boundaries",
+        action="store_true",
+        help=(
+            "Also report every mockable boundary site in program "
+            "(category, key, paragraph, line) -- for editor completion. "
+            "Requires --json and program. See "
+            "docs/2026-09-15-cut-editor-intelligence-design.md"
+        ),
+    )
+    collect_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable; --boundaries only)",
+    )
     collect_parser.set_defaults(func=_cmd_collect)
+
+    explain_parser = subparsers.add_parser(
+        "explain",
+        help="Print the catalogued explanation for a refusal code",
+        description=(
+            "One shared source of truth for what a refusal code means, "
+            "backing both this CLI and the mocky-mock-vscode extension's "
+            "hover. See docs/2026-09-15-cut-editor-intelligence-design.md."
+        ),
+    )
+    explain_parser.add_argument(
+        "code", nargs="?", help="A refusal code, e.g. UNSUPPORTED_DECLARATIVES"
+    )
+    explain_parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List every catalogued code instead of explaining one",
+    )
+    explain_parser.add_argument(
+        "--json", action="store_true", help="Machine-readable output"
+    )
+    explain_parser.set_defaults(func=_cmd_explain)
 
     dashboard_parser = subparsers.add_parser(
         "dashboard",
         help=(
             "Serve a local web page showing whether Docker and the "
             "GnuCOBOL toolchain are up (read-only; does not build or start "
-            "anything)"
+            "anything), the 'mockymock report' test results found under "
+            "the current directory, and whether the cobol-testing skills "
+            "are installed for Claude Code and GitHub Copilot (with a button to install them)"
         ),
     )
     dashboard_parser.add_argument(
@@ -2395,7 +3337,129 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Don't open a browser window automatically",
     )
+    dashboard_parser.add_argument(
+        "--reports-dir",
+        default=None,
+        help=(
+            "Where to look for 'mockymock report' HTML pages "
+            "(*.report.html; default: the current directory)"
+        ),
+    )
     dashboard_parser.set_defaults(func=_cmd_dashboard)
+
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help=(
+            "Terminal-native readiness report (Docker/GnuCOBOL toolchain, "
+            "cobol-parser, config file) -- read-only, never builds or "
+            "starts anything"
+        ),
+        description=(
+            "Reuses the same read-only probe 'mockymock dashboard' serves "
+            "over HTTP, plus two checks of its own: whether cobol-parser "
+            "is importable, and which project config file (if any) this "
+            "invocation would load. Exits 0 when everything checked is "
+            "ready, 1 otherwise. Never mutates anything -- suggests "
+            "'mockymock setup', never runs it."
+        ),
+    )
+    doctor_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Machine-readable output for scripting",
+    )
+    doctor_parser.set_defaults(func=_cmd_doctor)
+
+    report_parser = subparsers.add_parser(
+        "report",
+        help=(
+            "Write one HTML (and optional JSON) report for a program and its "
+            ".cut suite: every analysis step, a verification level per test "
+            "case, and the findings"
+        ),
+    )
+    report_parser.add_argument(
+        "program", nargs="?", help="Omit to infer from --cut's sibling file"
+    )
+    report_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
+    report_parser.add_argument(
+        "-o",
+        "--output",
+        help="HTML report path (default: <program>.report.html next to the program)",
+    )
+    report_parser.add_argument("--json", help="Also write the report as JSON here")
+    report_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    report_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Run the suite (with coverage) now; needs Docker",
+    )
+    report_parser.add_argument(
+        "--mutate",
+        action="store_true",
+        help="Run mutation testing now; needs Docker and takes longer",
+    )
+    report_parser.add_argument(
+        "--run-json", help="Read results from an earlier 'run --json-report'"
+    )
+    report_parser.add_argument(
+        "--coverage-json", help="Read coverage from an earlier 'run --coverage-json'"
+    )
+    report_parser.add_argument(
+        "--mutation-json", help="Read an earlier 'mutate --json-report'"
+    )
+    report_parser.add_argument(
+        "--journal",
+        help="Assistant journal to include (default: <cut>.journal.jsonl if present)",
+    )
+    report_parser.add_argument(
+        "--scenarios",
+        default="branches",
+        choices=["happy", "branches", "all", "none"],
+        help="happy, branches, all, or none: how to measure reachable branch arms (default: branches)",
+    )
+    report_parser.add_argument("--seed", type=int, help="Seed for fixture generation")
+    report_parser.add_argument(
+        "--timeout", type=int, help="Per-run timeout in seconds passed to 'run'"
+    )
+    report_parser.add_argument(
+        "--mutation-threshold",
+        type=float,
+        default=80.0,
+        help="Mutation score (percent) a suite needs for its cases to reach L2 (default: 80)",
+    )
+    report_parser.set_defaults(func=_cmd_report)
+
+    journal_parser = subparsers.add_parser(
+        "journal",
+        help="Append one assistant step to a suite's journal for 'mockymock report'",
+    )
+    journal_parser.add_argument(
+        "--cut", help="The suite; the journal is <cut>.journal.jsonl next to it"
+    )
+    journal_parser.add_argument("--file", help="Explicit journal path instead")
+    journal_parser.add_argument("--step", required=True, help="Step name, e.g. plan")
+    journal_parser.add_argument(
+        "--summary", required=True, help="What was done and what came of it"
+    )
+    journal_parser.add_argument(
+        "--status",
+        default="ok",
+        help="ok, warn, fail, skipped, or info (default: ok)",
+    )
+    journal_parser.add_argument(
+        "--command",
+        dest="command_text",
+        help="The command that was run, if any",
+    )
+    journal_parser.add_argument("--decision", help="A decision taken, and why")
+    journal_parser.set_defaults(func=_cmd_journal)
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -2455,7 +3519,8 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.set_defaults(func=_cmd_export)
 
     skills_parser = subparsers.add_parser(
-        "skills", help="Manage the packaged Claude Code skill for mockymock"
+        "skills",
+        help="Manage the packaged agent skills (Claude Code, GitHub Copilot)",
     )
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command")
 
@@ -2471,16 +3536,28 @@ def build_parser() -> argparse.ArgumentParser:
     skills_install_parser = skills_subparsers.add_parser(
         "install",
         help=(
-            "Install the mockymock Claude Code skill (SKILL.md + "
-            "reference/ files) so a Claude Code session can use it"
+            "Install the packaged agent skills (mockymock, cobol-analysis, "
+            "cobol-test) so a Claude Code or GitHub Copilot session can use them"
         ),
     )
     skills_install_parser.add_argument(
         "--project",
         action="store_true",
         help=(
-            "Install into ./.claude/skills/mockymock instead of "
-            "~/.claude/skills/mockymock"
+            "Install into the current directory (./.claude/skills/<name>, "
+            "or ./.github/skills/<name> for copilot) instead of the home "
+            "directory"
+        ),
+    )
+    skills_install_parser.add_argument(
+        "--target",
+        default="claude",
+        # Literal rather than skills_cmd.TARGETS: see the deferred-import
+        # rule; test_cli_skills.py pins the two together.
+        choices=["claude", "copilot", "all"],
+        help=(
+            "Which assistant to install for: claude (~/.claude/skills, the "
+            "default), copilot (GitHub Copilot: ~/.copilot/skills) or all"
         ),
     )
     skills_install_parser.add_argument(
@@ -2488,7 +3565,65 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Overwrite an existing install at the target path",
     )
+    skills_install_parser.add_argument(
+        "--skill",
+        action="append",
+        help=(
+            "Install only this skill (repeatable): mockymock, cobol-analysis "
+            "or cobol-test. Default: all three"
+        ),
+    )
     skills_install_parser.set_defaults(func=_cmd_skills_install)
+
+    skills_plugin_parser = skills_subparsers.add_parser(
+        "plugin",
+        help=(
+            "Write the cobol-testing Claude Code plugin as a local "
+            "marketplace, for `/plugin marketplace add <dir>` without GitHub"
+        ),
+    )
+    skills_plugin_parser.add_argument(
+        "directory",
+        nargs="?",
+        help="Where to write it (default: ~/.mockymock/claude-plugin)",
+    )
+    skills_plugin_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an earlier export in that directory",
+    )
+    skills_plugin_parser.set_defaults(func=_cmd_skills_plugin)
+
+    skills_mode_parser = skills_subparsers.add_parser(
+        "mode",
+        help=(
+            "Show (or set) how much the AI assistant checks in while it "
+            "builds a suite"
+        ),
+    )
+    skills_mode_parser.add_argument(
+        "--set",
+        metavar="MODE",
+        default=None,
+        # Not `choices=MODES`: that would need mockymock.cli.ai_mode
+        # imported at parser-build time, and build_parser() runs on every
+        # invocation including --help/--version. The valid set is spelled
+        # out here instead and validated in _cmd_skills_mode;
+        # tests/unit/test_cli_skills.py pins this text against MODES so the
+        # two can't drift.
+        help=(
+            "Persist the mode to mockymock.toml: hands-on (propose first, "
+            "wait for a yes), guided (narrate every step, stop at the "
+            "checkpoints; the default), hands-off (run the whole workflow, "
+            "report once at the end)"
+        ),
+    )
+    skills_mode_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the active mode and every mode's contract as JSON",
+    )
+    skills_mode_parser.set_defaults(func=_cmd_skills_mode)
 
     return parser
 
@@ -2511,8 +3646,11 @@ def main(argv: list[str] | None = None) -> int:
         args._config = None
         # Only a subcommand that would actually read the config fails on
         # a malformed one. `collect`/`setup`/`dashboard`/... run on with
-        # defaults.
-        consumes_config = hasattr(args, "copybook_path") or hasattr(args, "seed")
+        # defaults, and `doctor` re-loads it itself to report the error
+        # as a WARN check (that is the situation it exists to explain).
+        consumes_config = (
+            hasattr(args, "copybook_path") or hasattr(args, "seed")
+        ) and args.func is not _cmd_doctor
         if consumes_config:
             if args.func is _cmd_collect and getattr(args, "json", False):
                 import json
@@ -2527,7 +3665,30 @@ def main(argv: list[str] | None = None) -> int:
                 print(str(exc))
             return 1
 
-    return args.func(args)
+    from mockymock._lines import SourceEncodingError
+
+    try:
+        return args.func(args)
+    except SourceEncodingError as exc:
+        # A non-UTF-8 .cbl/.cut: one clean line in each command's own
+        # error convention instead of a UnicodeDecodeError traceback.
+        _print_command_error(args, str(exc))
+        return 1
+
+
+def _print_command_error(args: argparse.Namespace, message: str) -> None:
+    """Print a fatal error the way `main`'s config-error path does:
+    `collect --json` as a JSON error object on stdout (the VS Code
+    extension parses it), `fixtures` on stderr (its stdout is JSON-only),
+    everything else as a plain `mockymock <command>:` line on stdout."""
+    if args.func is _cmd_collect and getattr(args, "json", False):
+        import json
+
+        print(json.dumps({"version": 1, "error": message}, indent=2))
+    elif args.func is _cmd_fixtures:
+        print(f"mockymock fixtures: {message}", file=sys.stderr)
+    else:
+        print(f"mockymock {args.command}: {message}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,16 @@
+{
+  "name": "mocky-mock",
+  "owner": {
+    "name": "Samuel Dion"
+  },
+  "metadata": {
+    "description": "mocky-mock's Claude Code plugins: AI-assisted COBOL testing with cobol-parser and GnuCOBOL."
+  },
+  "plugins": [
+    {
+      "name": "cobol-testing",
+      "source": "./",
+      "description": "COBOL testing skills: cobol-test (end to end), mockymock (.cut suites), cobol-analysis (cobol-parser analyzers)."
+    }
+  ]
+}

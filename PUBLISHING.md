@@ -1,5 +1,11 @@
 # Publishing executables without publishing source
 
+> **Superseded (2026-10-04).** mockymock and `cobolparser` are both free
+> software under AGPL-3.0-or-later and both publish their source to PyPI,
+> so the premise below (private, proprietary repos whose source must stay
+> hidden) no longer holds. The rest of this file is kept as history of the
+> retired Nuitka pipeline.
+
 mockymock and its `cobolparser` dependency are both private, proprietary
 repos (see `LICENSE`). Today, *installing* mockymock at all — even just to
 run it, never mind reading it — requires GitHub read access to both: the

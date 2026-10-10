@@ -22,11 +22,18 @@ import re
 from dataclasses import dataclass
 
 from mockymock.dsl.model import MockTestSuite
-from mockymock.dsl.parser import _SUBSCRIPTED_NAME
+from mockymock.dsl.parser import _DOTTED_NAME_RE, _SUBSCRIPTED_NAME, _TESTCASE_RE
 
 _TESTCASE_HEADER_RE = re.compile(r'^\s*TESTCASE\s+"')
 _MOCK_OPEN_RE = re.compile(r"^\s*MOCK\s+\S")
+# A PROVIDER block is not part of any TESTCASE (the parser closes the
+# preceding case when one opens), so it bounds attribution just like a
+# TESTCASE header does -- a stub inside it belongs to no case.
+_PROVIDER_HEADER_RE = re.compile(r"^\s*PROVIDER\s+\S")
 _MOCK_CLOSE_RE = re.compile(r"^\s*END-MOCK\.?\s*$", re.IGNORECASE)
+# A TESTCASE's PERFORM line: its RECORD point is after it, and the parser
+# refuses an EXPECT above it (issue #150).
+_PERFORM_LINE_RE = re.compile(r"^\s*PERFORM\s")
 _STUB_RE = re.compile(
     rf"^\s*\*>\s*STUB EXPECT\s+(?P<name>{_SUBSCRIPTED_NAME})\s*"
     rf"(?:--\s*(?P<note>.*?)\s*)?$"
@@ -87,7 +94,11 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
     """
     raw_lines = cut_text.splitlines()
 
-    headers: list[tuple[int, bool]] = []  # (line, is_provider_templated)
+    # (line, kind): kind is "case", "provider-case" (TESTCASE ... USING
+    # PROVIDER) or "provider-block" (a PROVIDER data block).
+    headers: list[tuple[int, str]] = []
+    # TESTCASE header line -> line of that case's PERFORM.
+    perform_line_by_header: dict[int, int] = {}
     in_mock = False
     for line_no, text in enumerate(raw_lines, start=1):
         if in_mock:
@@ -98,7 +109,19 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
             in_mock = True
             continue
         if _TESTCASE_HEADER_RE.match(text):
-            headers.append((line_no, "USING PROVIDER" in text))
+            # Classified with the parser's own TESTCASE grammar, not a
+            # substring test: "USING PROVIDER" inside the quoted case NAME
+            # misread an ordinary case as provider-templated (its stubs
+            # skipped), and `USING  PROVIDER` with extra spaces -- which
+            # the parser accepts -- misread a templated one as ordinary.
+            header = _TESTCASE_RE.match(text.strip())
+            is_provider = header is not None and header.group("provider") is not None
+            kind = "provider-case" if is_provider else "case"
+            headers.append((line_no, kind))
+        elif _PROVIDER_HEADER_RE.match(text):
+            headers.append((line_no, "provider-block"))
+        elif _PERFORM_LINE_RE.match(text) and headers:
+            perform_line_by_header.setdefault(headers[-1][0], line_no)
 
     case_index_by_line = {
         case.line: index for index, case in enumerate(suite.test_cases, start=1)
@@ -121,23 +144,61 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
             continue
         name = m.group("name")
         note = m.group("note") or None
+        if _DOTTED_NAME_RE.search(name.partition("(")[0]):
+            # `RECORD.FIELD`, left by generate --with-data when the leaf
+            # is ambiguous: not a COBOL name, so not recordable (#144).
+            skipped.append(
+                SkippedStub(
+                    line_no,
+                    name,
+                    "a dotted RECORD.FIELD name is not COBOL -- write the "
+                    "EXPECT by hand for this field",
+                )
+            )
+            continue
 
-        owning_header: tuple[int, bool] | None = None
-        for header_line, is_provider in headers:
+        owning_header: tuple[int, str] | None = None
+        for header_line, kind in headers:
             if header_line > line_no:
                 break
-            owning_header = (header_line, is_provider)
+            owning_header = (header_line, kind)
 
         if owning_header is None:
             skipped.append(SkippedStub(line_no, name, "not inside any TESTCASE"))
             continue
-        header_line, is_provider = owning_header
-        if is_provider:
+        header_line, kind = owning_header
+        if kind == "provider-block":
+            skipped.append(
+                SkippedStub(
+                    line_no,
+                    name,
+                    f"inside the PROVIDER block at line {header_line}, "
+                    f"not inside any TESTCASE",
+                )
+            )
+            continue
+        if kind == "provider-case":
             skipped.append(
                 SkippedStub(
                     line_no,
                     name,
                     "inside a PROVIDER-templated TESTCASE, unsupported in v1",
+                )
+            )
+            continue
+        perform_line = perform_line_by_header.get(header_line)
+        if perform_line is None or line_no < perform_line:
+            # The recorded value is the post-PERFORM state and the rewrite
+            # replaces the stub line in place: an EXPECT above the PERFORM
+            # is refused by the parser (issue #150), so recording it would
+            # leave a .cut that no longer runs.
+            skipped.append(
+                SkippedStub(
+                    line_no,
+                    name,
+                    "above the PERFORM of its TESTCASE -- assertions are "
+                    "checked after the PERFORM, so move the stub below it "
+                    "to record it",
                 )
             )
             continue

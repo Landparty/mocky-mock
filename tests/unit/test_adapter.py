@@ -257,6 +257,27 @@ def test_evaluate_reports_the_decoded_value_for_a_known_variable():
     assert evaluate_response["body"]["variablesReference"] == 0
 
 
+def test_evaluate_matches_a_variable_name_case_insensitively():
+    """COBOL names are case-insensitive, but the variable table keeps the
+    declaration's own spelling (cobc copies it verbatim into the .c.l.h
+    comment). Hovering `ws-customer-id` where the program declared
+    `WS-CUSTOMER-ID` -- or the reverse -- answered "unknown variable"."""
+    messages = _run_adapter(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "evaluate",
+                {"expression": "ws-customer-id", "context": "hover"},
+            ),
+        ]
+    )
+
+    evaluate_response = messages[-1]
+    assert evaluate_response["success"] is True
+    assert evaluate_response["body"]["result"] == "CUST00001 "
+
+
 def test_evaluate_of_unknown_expression_fails_cleanly():
     """v1 only resolves plain COBOL identifiers already in the variable
     table -- no arithmetic/member-access expression evaluation (see
@@ -637,3 +658,125 @@ def test_resume_session_death_shuts_down_the_gdb_session():
     )
     assert any(m.get("event") == "terminated" for m in messages)
     assert session.gdb.closed is True
+
+
+def _launch_with_original_file(arguments: dict) -> DebugSession:
+    session = _fake_launch_session(arguments)
+    session.original_file = "/proj/cobol/PROG.cbl"
+    return session
+
+
+def test_set_breakpoints_in_another_source_is_unverified_not_set_in_the_program():
+    """A breakpoint in a copybook (or any source other than the program
+    under test) used to be keyed only by line number and inserted at that
+    line of the instrumented main program -- line 14 of CUSTREC.cpy became
+    a live gdb breakpoint at line 14 of PROG.cbl. The line map only covers
+    the program's own source, so every other source must come back
+    unverified with nothing inserted in gdb."""
+    messages, session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {
+                    "source": {"path": "/proj/copybook/CUSTREC.cpy"},
+                    "breakpoints": [{"line": 14}],
+                },
+            ),
+        ],
+        launch=_launch_with_original_file,
+    )
+
+    response = messages[-1]
+    assert response["success"] is True
+    [bp] = response["body"]["breakpoints"]
+    assert bp["verified"] is False
+    assert bp["line"] == 14
+    assert "CUSTREC.cpy" in bp["message"]
+    assert session.gdb.breakpoints == {}
+
+
+def test_set_breakpoints_in_a_same_named_file_elsewhere_is_unverified():
+    messages, session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {
+                    "source": {"path": "/other/checkout/PROG.cbl"},
+                    "breakpoints": [{"line": 14}],
+                },
+            ),
+        ],
+        launch=_launch_with_original_file,
+    )
+
+    assert messages[-1]["body"]["breakpoints"][0]["verified"] is False
+    assert session.gdb.breakpoints == {}
+
+
+def test_set_breakpoints_in_the_program_source_still_resolves():
+    messages, session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {
+                    "source": {"path": "/proj/cobol/../cobol/PROG.cbl"},
+                    "breakpoints": [{"line": 14}],
+                },
+            ),
+            # A relative path (as tests/integration/test_debug.py sends)
+            # matches by trailing path components.
+            _request(
+                3,
+                "setBreakpoints",
+                {"source": {"path": "PROG.cbl"}, "breakpoints": [{"line": 20}]},
+            ),
+        ],
+        launch=_launch_with_original_file,
+    )
+
+    responses = [m for m in messages if m.get("command") == "setBreakpoints"]
+    assert responses[0]["body"]["breakpoints"] == [
+        {"verified": True, "line": 14, "id": 1}
+    ]
+    assert responses[1]["body"]["breakpoints"] == [
+        {"verified": True, "line": 20, "id": 2}
+    ]
+
+
+def test_stack_trace_source_is_the_program_not_the_last_breakpoint_source():
+    """Setting (rejected) breakpoints in a copybook after the program's own
+    must not relabel every stack frame as being in that copybook."""
+    messages, _session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {
+                    "source": {"path": "/proj/cobol/PROG.cbl"},
+                    "breakpoints": [{"line": 20}],
+                },
+            ),
+            _request(
+                3,
+                "setBreakpoints",
+                {
+                    "source": {"path": "/proj/copybook/CUSTREC.cpy"},
+                    "breakpoints": [{"line": 5}],
+                },
+            ),
+            _request(4, "configurationDone", {}),
+            _request(5, "stackTrace", {"threadId": 1}),
+        ],
+        launch=_launch_with_original_file,
+    )
+
+    stack_response = next(m for m in messages if m.get("command") == "stackTrace")
+    frames = stack_response["body"]["stackFrames"]
+    assert frames[0]["source"]["path"] == "/proj/cobol/PROG.cbl"

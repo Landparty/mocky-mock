@@ -1,16 +1,16 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, generate, fixtures, run, debug, lint, mutate, collect, dashboard, export, analyze, skills) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-09-15T00:00:00Z
+timestamp: 2026-10-05T12:00:00Z
 ---
 
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines twelve subcommands —
-`setup`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `dashboard`, `export`, `analyze`, `skills` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines seventeen subcommands —
+`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -20,35 +20,88 @@ parser install to resolve.
 
 ```
 mockymock setup     -> runtime.docker_toolchain only (build image, start container)
+mockymock init      -> _cmd_generate(--with-data) then _cmd_run(--record-expectations), reentrant  (Docker iff doctor reports ready)
 mockymock generate  -> parse -> analysis.mock_surface -> dsl.generator  (no Docker)
 mockymock fixtures  -> parse -> cobolparser.ProgramFixtureGenerator -> JSON on stdout  (no Docker, no mockymock analysis at all)
 mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
 mockymock debug     -> cli.checks (static) -> splicer -> runtime (debug=True) -> debug.adapter (DAP over stdio)
 mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.runner (per-mutant: cli.checks -> splicer -> runtime) -> mutation.report
 mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
-mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed)
+mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed; --boundaries also parses program via analysis.mock_surface)
+mockymock explain   -> analysis.refusal.REFUSAL_EXPLANATIONS only  (no Docker, no parsing at all)
 mockymock dashboard -> web.server (loopback HTTP) -> runtime.status.probe()  (read-only Docker)
+mockymock doctor    -> cli.doctor -> runtime.status.probe() + cobol-parser/config/ai_mode checks  (no Docker mutation, no HTTP)
 mockymock analyze   -> sys.argv monkeypatch -> cobolparser.cli.parse.main() (no Docker, pure pass-through)
 mockymock export    -> cli.checks (static) -> splicer -> cli.mainframe_export (no Docker)
-mockymock skills    -> skills_cmd (no Docker, no parsing -- a copytree)
+mockymock skills    -> skills_cmd (install: no Docker, no parsing -- a copytree)
+                       cli.ai_mode (mode: reads/writes the config file's ai_mode key)
+mockymock report    -> report.test_report.build_report (parse + cobolparser analyzers + cli.checks; --execute/--mutate re-invoke run/mutate as subprocesses) -> report.html_report
+mockymock journal   -> report.journal.append_entry only  (no Docker, no parsing)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
 `func` attribute).
 
+## The universal `cobol.yml` project config (2026-09-16)
+
+`load_config()` now reads **two** files, layered. Design:
+`docs/2026-09-16-universal-yaml-config-design.md`.
+
+1. **`cobol.yml`** / **`cobol.yaml`** -- the universal project config the
+   whole tool family reads (this CLI, `cobol-parser`, the COBOL Analyzer
+   extension). Its `project:` section supplies the settings shared with every
+   other tool (`copybook_path`, `seed`); its `mockymock:` section supplies
+   this CLI's own (`test_root`, `ai_mode`) and overrides anything `project:`
+   said. Schema reference: `docs/project-config.md` in the cobol-parser repo.
+2. **`mockymock.toml`** / `pyproject.toml`'s `[tool.mockymock]` -- the
+   tool-specific file, unchanged.
+
+Each is found by its **own** upward walk (nearest wins per file), so a
+`cobol.yml` at a repo root and a `mockymock.toml` in a subproject both apply.
+When both exist the tool-specific file **overrides the universal one key by
+key** -- `_validated_values()` returns only the keys a file actually sets,
+which is what makes that merge possible. First-match-wins across the two was
+rejected: a `mockymock.toml` setting only `seed` would silently discard a
+`cobol.yml` that set the other three.
+
+`MockymockConfig.sources` lists every contributing file, base first;
+`.source` stays the one that had the last word (where `skills mode --set`
+would write), and `doctor` reports the whole chain rather than just the
+winner.
+
+The YAML parsing and the `project:` schema are **cobol-parser's**
+(`cobolparser.config.load_project_config`), soft-imported: that module lands
+in cobol-parser 1.10 (on its `main`; no tagged release through v1.9.0
+carries it as of 2026-10-04), the dependency floor here is deliberately not raised
+for it, and a project with a `cobol.yml` on an older parser gets a
+`ConfigError` naming the version to install. The discovery walk itself is
+implemented here (`find_universal_config()`) precisely so that case produces
+that message instead of silently skipping the file.
+
+`skills mode --set` **refuses** to rewrite a `cobol.yml`, printing the two
+lines to paste under its `mockymock:` section -- unlike the `pyproject.toml`
+refusal (where a new `mockymock.toml` would shadow the whole table), a new
+file here would layer correctly, but splitting a project's settings across
+two files when the point of the universal one is a single place is not a
+decision to make for the user.
+
 ## Argument resolution (2026-09-15)
 
 Before dispatch, `main()` loads the project config file
-(`mockymock/cli/config.py`'s `load_config()`: `mockymock.toml` or
-`pyproject.toml`'s `[tool.mockymock]` table, searched from cwd upward) and
-stashes it on `args._config`; a malformed file is `ConfigError`, caught in
-`main()`. Only a subcommand that would read the config (one whose subparser
-defines `copybook_path` or `seed`) fails on it -- printed as a clean error,
-exit 1, on stderr for `fixtures` so its machine-readable stdout contract
-holds; `collect` without `--json`, `setup`, `dashboard`, `skills`, `analyze`
-run on with `args._config = None`. Unknown keys are a `ConfigError` too (a
-typo'd `copybook-path`, or `timeout`, which is deliberately not
-config-overridable); `seed = true` is rejected (bool is an int subclass).
+(`mockymock/cli/config.py`'s `load_config()`: the `cobol.yml` and
+`mockymock.toml` / `[tool.mockymock]` layers above, searched from cwd upward)
+and stashes it on `args._config`; a malformed file is `ConfigError`, caught in
+`main()`. Only a subcommand that would read the config (one whose
+subparser defines `copybook_path` or `seed`) fails on it -- printed as a
+clean error, exit 1, as JSON for `collect --json` and on stderr for
+`fixtures` so their machine-readable stdout contracts hold; `collect`
+without `--json`, `setup`, `dashboard`, `explain`, `skills`, `analyze` run
+on with `args._config = None`, and `doctor` reloads the file itself to
+report the error as a `WARN` check. Unknown keys are a `ConfigError` too
+(a typo'd `copybook-path`, or `timeout`, which is deliberately not
+config-overridable); `seed = true` is rejected (bool is an int subclass),
+and an `ai_mode` outside `ai_mode.MODES` is rejected naming the valid set
+rather than falling back to the default.
 `test_root` is resolved relative to the config file that declares it, like
 `copybook_path`, so `mockymock run` from a subdirectory scans the same
 suites as from the project root.
@@ -62,13 +115,14 @@ with *neither* given fall into `_run_directory`/`_lint_directory`:
 `discover_cut_files()` walks the test root (config's `test_root`, default
 `.`; the exclude list applies to directories *below* the root only, so an
 absolute test root under `build/` is still scanned) and each command's own
-single-pair `_cmd_run`/`_cmd_lint` is called once per discovered
-`(program, .cut)` pair via a shallow `copy.copy(args)` (every output-file
-flag -- `--junit-xml`, `--json-report`, `--coverage-json`, `--coverage-out`,
-`--trace-json` -- gets a per-pair name from `_per_pair_report_path`, which
-folds the `.cut`'s path *relative to the test root* into the file name so
-`svc1/PROG.cut` and `svc2/PROG.cut` never share one report) — not a
-parallel implementation, so an explicit single-pair invocation is
+single-pair `_cmd_run`/`_cmd_lint` is called
+once per discovered `(program, .cut)` pair via a shallow `copy.copy(args)`
+(every output-file flag -- `--junit-xml`, `--json-report`,
+`--coverage-json`, `--coverage-out`, `--trace-json` -- gets a per-pair name
+from `_per_pair_report_path`, which folds the `.cut`'s path *relative to the
+test root* into the file name so `svc1/PROG.cut` and `svc2/PROG.cut` never
+share one report)
+— not a parallel implementation, so an explicit single-pair invocation is
 byte-for-byte unaffected.
 
 `_apply_config_to_args()` fills `args.copybook_path`/`args.seed` from the
@@ -101,22 +155,88 @@ non-copybook file) is `Landparty/cobol-parser`'s own change.
 
 # Subcommands
 
-## `mockymock setup`
+## `mockymock setup [--rebuild]`
 
-No arguments. Orchestrates only `mockymock.runtime.docker_toolchain`:
+Orchestrates only `mockymock.runtime.docker_toolchain`:
 
-1. `docker_toolchain.ensure_toolchain()` — builds the GnuCOBOL image and starts
-   the `mockymock-cobc` container if not already running.
+1. `docker_toolchain.ensure_toolchain(force_rebuild=args.rebuild)` — builds the
+   GnuCOBOL image and starts the `mockymock-cobc` container if not already
+   running.
 2. `docker_toolchain.cobc_version()` — printed for confirmation.
 
 On `DockerNotAvailableError`, prints `mockymock setup: <exc>` and exits 1.
 Optional in normal workflows: `mockymock run` calls `ensure_toolchain()` itself,
 so `setup` exists mainly for a fast up-front check / CI warm-up.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...]`
+`--rebuild` is the only way to force a fresh image build when the
+content-hash tag hasn't changed (an edited base image, a poisoned layer
+cache). It also recreates the container, because the rebuilt image re-uses
+the same tag and the stale-container check compares tags — see
+[runtime](runtime.md)'s **Forced rebuild** section for why skipping that
+removal left every later compile in the old toolchain. To *inspect*
+readiness without building or starting anything, use `doctor` instead.
+
+## `mockymock init <program> [-o/--output PATH] [--seed N] [--scenarios happy|branches|all] [--copybook-path DIR ...] [--force]` (2026-09-15)
+
+Composes `generate --with-data` + `run --record-expectations` into one
+step, so a first scaffold has real generated data and recorded expected
+values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
+
+1. `_check_input_files` on `program`; refuses if the resolved output
+   `.cut` path already exists and `--force` wasn't given (a check `init`
+   owns itself -- plain `generate` has no such guard at all, and adding
+   one there was out of scope for this design).
+2. Builds a real `generate --with-data --scenarios <...> [--seed <...>]
+   [--copybook-path <...>]*` argv list and parses it with this module's
+   own `build_parser()`, then calls `_cmd_generate` on the result --
+   reentrant rather than a refactor of `_cmd_generate`'s internals (a
+   deliberate departure from the original design doc's proposed
+   plain-function-returning-a-result-object refactor: lower risk for the
+   same external behavior). Stops here, propagating the exit code, if
+   `generate` itself failed (e.g. a zero-scenario bundle).
+3. `--scenarios branches|all` prints the scenario branch-verification
+   caveat (`docs/2026-09-04-scenario-branch-verification.md`) -- a
+   scenario named for an arm is not yet verified to reach it.
+4. `doctor.gather_full_status()` (read-only, mutates nothing) decides
+   whether to attempt a run at all. Not ready: prints a fallback message
+   naming the exact `run --cut ... --record-expectations` command to run
+   later, and returns 0 (the scaffold with real data is still a
+   strictly better outcome than plain `generate`, even unrecorded).
+   Ready: builds a `run --cut <output> --record-expectations
+   [--copybook-path <...>]*` argv the same way and calls `_cmd_run` on
+   it, returning its own exit code.
+
+See `docs/2026-09-15-init-command-design.md`.
+
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE]`
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
+
+**`--fill CUT_FILE` (2026-09-15)** is a separate mode, dispatched (after
+`_apply_config_to_args`, so config-file copybook paths apply) before any
+of the flags below: inserts only the `MOCK ... END-MOCK` blocks `CUT_FILE`'s
+own test cases are missing (per `checks.run_static_checks`'s
+`unmocked_reasons`, keyed by the case's index in `suite.test_cases` since
+duplicate TESTCASE names are legal), writing back to `CUT_FILE` in place.
+One block per distinct header per case (two reachable READs of one file
+are one `MOCK READ`, never a duplicate the parser rejects); the anchor
+PERFORM is the case's own, skipping any PERFORM inside a `MOCK ... END-MOCK`
+body; `directive_snippet` declines the sites the scaffold itself skips (a
+nested site with no span, an unspliceable top-level site). Every problem
+`--fill` cannot fix (a flow-mock target that does not exist, an `UNMOCKED_*`
+reason with no mechanical fix) is printed and exits 1, so `--fill` exiting 0
+means the next `lint` exits 0. Reported `file:line` is where each block
+landed in the written file. Every existing directive, `EXPECT`/`VERIFY`, and
+comment is left byte-for-byte untouched — insertion happens at known line
+numbers (found via `dsl.parser._PERFORM_RE` locating each case's own
+`PERFORM` line), never by re-serializing the parsed model, and an existing
+`MOCK` block is never edited even if empty or wrong. `_reindent_snippet`
+re-renders `dsl.generator.directive_snippet`'s hardcoded-4-space output to
+match the target file's own sniffed indentation. Mutually exclusive with
+`-o`/`--output`, `--with-data`, `--fixtures` (checked at the top of
+`_cmd_generate`, printed as a plain error). See
+docs/2026-09-15-actionable-refusals-and-fill-design.md.
 
 Flow (`_cmd_generate`):
 
@@ -216,6 +336,11 @@ test cases `run` will later refuse if a case's PERFORM reaches one of these
 sites. Comment in the source explicitly frames this as "so the scaffold is
 never mistaken for complete coverage of the program's outputs."
 
+**Empty scaffold (2026-10-05, #150).** `generate --with-data` exits 1
+when the bundle had scenarios but none became a TESTCASE. A plain
+`generate` on a program with nothing to mock still writes an empty suite
+and exits 0.
+
 ## `mockymock fixtures <program> [--scenarios happy|branches|all] [--seed N] [--rows N] [--copybook-path DIR ...]`
 
 Prints a cobol-parser `FixtureBundle` (scenarios, generated mock data,
@@ -292,7 +417,9 @@ Flags beyond the pipeline inputs:
   `--junit-xml` above applies here too.
 - `--timeout S` (default 30) — `run_binary`'s execution timeout in
   seconds, mirroring `mutate`'s own `--timeout`; previously only `mutate`
-  could shorten or lengthen the bound a hung mocked CALL is killed by.
+  could shorten or lengthen the bound a hung mocked CALL is killed by. The
+  help text now points at the fix for that hang: `MOCK CALL "X" ROWS (
+  ... ) TERMINAL ( ... )`, so the calls after the last row end the loop.
 - `--case NAME` (repeatable) / `--tag TAG` (repeatable) — run only the named
   or tagged TESTCASEs (union when both given). Selection happens in
   `run_static_checks` before any per-case refusal check, so a refused
@@ -342,6 +469,17 @@ Flags beyond the pipeline inputs:
   and with every other flag above. See [analysis](analysis.md),
   [splicer](splicer.md), [report](report.md), and
   docs/2026-08-04-record-expectations-design.md for the full design.
+  Value rendering is PICTURE-aware for plain numeric items (2026-09-27,
+  `report.record_rewrite.field_pictures` / `numeric_scale`): under
+  `-std=mvs` GnuCOBOL DISPLAYs a signed item with a separate sign
+  (`005+`, `00350-`, `+00007` for COMP/COMP-3) and drops an implied
+  decimal point (`00350` for 2.50 in `9(3)V99`). Rendered by text shape
+  alone those became `"005+"` or a bare, 100x-too-large `00350` -- goldens
+  that failed the very next run, so `init`'s scaffold failed out of the box
+  on `invupdt`/`ordrproc`/`raterte`. The PICTURE comes from the program's
+  own data items (subscripts stripped) and, for a synthesized `UT-CAP-`
+  target, from its capture source; anything without one (alphanumeric,
+  numeric-edited, `P`-scaled, unresolved) keeps the old text-shape rule.
 - `--keep-sandbox` — never delete the sandbox directory; its path is
   printed at the start of the run for inspection.
 - `--verbose` — on compile failure, print the path to the instrumented
@@ -542,7 +680,14 @@ captured MI transcripts and end-to-end tested against a live container
   `<name>.c.l.h` comment table (not gdb symbols, which don't exist for
   COBOL names, and not a byte-offset decoder). Decodes packed-decimal
   (COMP-3) and binary (COMP) values via GnuCOBOL's own `cob_field_attr`
-  type/digits/scale, read live via MI. `_unquote_c_string` shares
+  type/digits/scale/flags, read live via MI. Round 6 (2026-09-28, checked
+  against a real `-std=mvs` compile): an even-digit COMP-3 has its pad
+  nibble in FRONT (`S9(4)` 1234 = `01 23 4C`, was shown `0123`); a signed
+  DISPLAY item's sign is overpunched (`-123` = `12s`, was shown `12`) or
+  separate (`SIGN ... SEPARATE`); COMP-5 is host (little-endian) order,
+  told apart from big-endian COMP by `COB_FLAG_BINARY_SWAP` (was `-257`
+  for `-2`). The table keeps the declaration's own spelling, so
+  `evaluate` (hover/watch) falls back to a case-insensitive match. `_unquote_c_string` shares
   `gdb_session.py`'s `decode_c_escape` (see F15 above).
 - `call_stack.py` — synthesizes the COBOL paragraph/section call stack
   from GnuCOBOL's internal `frame_stack`, since gdb's own backtrace is
@@ -572,6 +717,16 @@ captured MI transcripts and end-to-end tested against a live container
   `ValueError` (audit finding F17); `run()` catches it, fires
   `_on_output`, and shuts down cleanly, rather than crashing the whole
   adapter process on one malformed frame.
+  `setBreakpoints` is matched by source path (2026-10-09):
+  `DebugSession.original_file` (set by `_cmd_debug` to the program path)
+  is the only file `line_map` covers, so a request for any other source —
+  a copybook, a same-named file elsewhere — answers every breakpoint
+  `verified: false` with a message and inserts nothing in gdb.
+  `_is_same_source` compares resolved absolute paths, or a relative
+  client path against the program path's trailing components. Before,
+  line N of a copybook became a live breakpoint on line N of the
+  program. `stackTrace` frames fall back to `original_file` when no
+  breakpoint has been set in the program.
 
 Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
@@ -591,6 +746,11 @@ helper now covers the arithmetic patterns too** (`_ADD_TO`,
 `_SUBTRACT_FROM`, `_MULTIPLY_BY`, `_DIVIDE_INTO`, `_MOVE_INT`), which F8
 missed: `\bADD\b` matched inside `GRP-FOR-ADD-CORR-R` and rewrote an
 ordinary `MOVE` into `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...`.
+
+`DIVIDE..INTO -> MULTIPLY..BY` is skipped when the statement (this line
+or a later line of it, `_statement_tail`) has a `REMAINDER` phrase:
+`MULTIPLY ... REMAINDER` is a cobc syntax error, so that mutant was a
+stillborn every time (2026-09-28).
 
 Three further stillborn classes closed on 2026-09-04, all in
 `mutation.operators` (see
@@ -613,7 +773,10 @@ DIVISION` state resets at `END PROGRAM`** so a second program's DATA
 DIVISION is not mutated. Measured over a 542-file corpus: 12.2% of
 generated mutants were defective before this (8.9% verified to compile
 something other than what their report line described, by running each
-through the pipeline's own `normalize_fixed_format`), none after. Still open: `stmt-delete` on a line holding two
+through the pipeline's own `normalize_fixed_format`), none after. **`stmt-delete` reads columns 8-72**
+(the verb check, the follower check, and the rewrite, which keeps
+columns 1-7 verbatim): with a sequence number in columns 1-6 it used to
+generate no deletion mutants at all. Still open: `stmt-delete` on a line holding two
 statements deletes both (over-strong, not stillborn), and `stillborn`
 still lumps refusal-gate rejections in with compile errors.
 
@@ -640,6 +803,23 @@ no mutants, and a real gap the engine could not probe hides behind a
 clean-looking number. The two names are `SuiteRun.phase`'s own values,
 carried straight onto `MutantResult.stillborn_reason` rather than
 re-derived afterwards by pattern-matching the raw `detail` line.
+
+**Zero-baseline hints (2026-10-04).** An `ADD..TO <-> SUBTRACT..FROM`
+swap on an unsigned numeric field that every case starts at zero is
+indistinguishable from the original (0 + n and 0 - n both store n), so it
+survives however good the assertions are. After the kill loop,
+`runner._attach_zero_baseline_hints` re-runs `run_static_checks` once and
+`mutation.zero_baseline.zero_baseline_hint` sets `MutantResult.hint` on
+each *built* survivor where every receiving name on the mutated line is an
+unsigned, non-edited, non-OCCURS WORKING-STORAGE/LOCAL-STORAGE item whose
+reset value is zero (VALUE zero, or no VALUE -- `splicer/reset.py`'s
+default) and no test case writes it (setup MOVE, mock ROWS/TERMINAL, `TO
+<name>` in a mock body). GIVING forms are skipped. The verdict and score
+are unchanged -- seeding the field is how the author kills it -- but the
+console prints a `!` line under the diff plus a count, `--json-report`
+carries a per-mutant `hint`, and `mockymock report` files it as
+`untestable-mutant` instead of `missing-assertion`. Coverage-gated
+survivors never get one (no test reaches them).
 
 **Two cost levers, both added 2026-09-04, neither changing a verdict.**
 `--jobs N` (default 1) spreads the per-mutant pipeline over N worker
@@ -685,7 +865,7 @@ per problem plus a `N problem(s) found.` summary, exit 1; or
 extension publishes these as diagnostics), pre-commit hooks, and CI lanes
 without a daemon.
 
-## `mockymock collect --cut PATH [--json]`
+## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 
 Parses the `.cut` file only (no `.cbl`, no Docker) and lists the suite and
 test cases with 1-based line numbers and tags. `--json` emits the
@@ -694,14 +874,54 @@ machine-readable form (`{"version": 1, "cutFile", "suite": {name, line},
 authoritative test discovery; a `CutParseError` yields `{"version": 1,
 "error": "..."}` and exit 1.
 
-## `mockymock dashboard [--port N] [--no-browser]`
+**`--boundaries` (2026-09-15)** additionally reports `boundaries: [{category,
+key, keys, directive, label, paragraph, line, matchText}]` -- every site in
+`analysis.mock_surface.analyze(ast).boundary_sites` with `category is not
+None`, whole-program and **not** reachability-filtered by any one
+TESTCASE's PERFORM target (that's what `lint`'s refusal gate is for; this
+feeds editor completion for "every key this program could ever need
+mocked"). `key` is `keys[0]` (a multi-key site such as `OPEN INV-FILE
+RPT-FILE` lists every key in `keys`; consumers must read `keys`), and is
+`null` for SQL/CICS/DLI, whose DSL key is a quoted text prefix: `directive`
+is the exact `MOCK <category> <key>` header `dsl.generator.directive_snippet`
+would scaffold for the site (quoted where the DSL requires it, the
+shortest-unique prefix for SQL/CICS/DLI, `null` when the scaffold skips the
+site), so a consumer inserts what the parser accepts instead of re-deriving
+the quoting rules. `_collect_boundaries()` (`cli/main.py`) parses `program`
+directly (with `--copybook-path` expansion if given) -- it does not go
+through `run_static_checks`, since it needs no `.cut`-specific analysis at
+all. Requires both `--json` and `program` (checked before any parsing);
+requesting it without either is a plain usage error, not a refusal. See
+docs/2026-09-15-cut-editor-intelligence-design.md.
+
+## `mockymock explain [CODE] [--list] [--json]` (2026-09-15)
+
+One shared source of truth for what a refusal code means:
+`analysis.refusal.REFUSAL_EXPLANATIONS` (`_explanations.py`) is a
+hand-written `dict[code, prose]` covering every refusal code string
+actually constructed anywhere in `mockymock/` --
+`tests/unit/test_refusal_explanations.py` cross-checks the dict against a
+regex scan of the whole package in both directions (missing entry fails
+CI; a stale entry for a code nothing emits anymore also fails, so the
+table never drifts from what the codebase can actually produce). Bare
+`explain` or `explain --list` prints every catalogued code; `explain
+<CODE>` (case-insensitive) prints its explanation, or -- if uncatalogued
+-- a `not catalogued` message naming every code that is (never a silent
+empty result, same "partial and reported" posture cobol-parser's
+`le_signatures.py` uses). Backs `mocky-mock-vscode`'s planned
+refusal-code hover via `explain --json`. See
+docs/2026-09-15-cut-editor-intelligence-design.md.
+
+## `mockymock dashboard [--port N] [--no-browser] [--reports-dir DIR]`
 
 Serves the static status page on `127.0.0.1` (host not configurable) until
 Ctrl-C, opening a browser unless `--no-browser`. Unlike `setup`, it is
 **read-only** — it calls `runtime.status.probe()`, never
 `ensure_toolchain()`, so a polling page can't trigger image builds. A taken
-port yields `mockymock dashboard: could not serve on ...` and exit 1. Full
-details in [dashboard](dashboard.md).
+port yields `mockymock dashboard: could not serve on ...` and exit 1.
+`--reports-dir` (default: cwd) is where the test-results panel looks for
+`*.report.html`; it is passed to `serve(reports_root=...)` as a `Path`, or
+`None`. Full details in [dashboard](dashboard.md).
 
 `--port`'s default is stored as `None` and resolved to
 `web.server.DEFAULT_PORT` inside `_cmd_dashboard`, deliberately: reading
@@ -709,6 +929,31 @@ the constant at parser-build time would import `web.server` ->
 `runtime.status` -> `runtime.docker_toolchain` (which reads the Dockerfile
 at import to compute `IMAGE`) on every `mockymock --help`. See the Gotchas
 below.
+
+## `mockymock doctor [--json]` (2026-09-15)
+
+The terminal-native counterpart to `dashboard`: one readiness report, no
+browser, no HTTP server, no toolchain mutation. `_cmd_doctor` is a thin
+shell over `cli/doctor.py`'s `gather_full_status()` ->
+`format_doctor_text()` / `format_doctor_json()`.
+
+Its checks are `runtime.status.probe()`'s four (`daemon`, `image`,
+`container`, `cobc`) plus three of its own: whether `cobolparser` imports,
+which project config file this invocation would load (reported `WARN`
+when that file is malformed, rather than taking the whole report down with
+it), and (2026-09-16) which AI assistant mode that config puts the
+packaged skill in. The `ai_mode` check is always `OK` — every mode is a
+valid way to work, so it reports rather than judges and `ready` can never
+turn on it; it loads the config a second time rather than sharing
+`_check_config_file`'s, whose signature its own tests call directly.
+
+Exit code is `0 if report.ready else 1`, where doctor's `ready` means **no
+check is `DOWN`** — a `WARN` such as a stopped container or a broken config
+file still exits 0, because `setup` or the next `run` resolves it. That is
+deliberately looser than `probe()`'s own `ready`, which requires every
+check to be `ok`. Full write-up, including the check-state table it shares
+with the dashboard, lives in [dashboard](dashboard.md); the design doc is
+docs/2026-09-15-doctor-command-design.md.
 
 ## `mockymock analyze [cobolparser-args...]`
 
@@ -803,19 +1048,28 @@ mockymock-generated instrumentation rather than blamed on either.
 Full design, including empirical validation of the wrapping algorithm and the three adjustments, lives in
 [docs/2026-08-03-mainframe-export-command-design.md](../docs/2026-08-03-mainframe-export-command-design.md).
 
-## `mockymock skills install [--project] [--force]`
+## `mockymock skills install [--project] [--force] [--skill NAME ...] [--target claude|copilot|all]`
 
-Copies the packaged Claude Code skill
-(`mockymock/cli/skills/mockymock/`) to
-`~/.claude/skills/mockymock` (default) or `./.claude/skills/mockymock`
-(`--project`). Implementation lives in `mockymock/cli/skills_cmd.py`,
+Copies the packaged agent skills (`SKILL_NAMES`: `mockymock`,
+`cobol-analysis`, `cobol-test`, each under `mockymock/cli/skills/<name>/`)
+to `~/.claude/skills/<name>` (default) or `./.claude/skills/<name>`
+(`--project`). `--skill` (repeatable) narrows the set; without it all
+three are installed. `--target` (2026-10-04) picks the assistant:
+`claude` (default, paths above), `copilot` (`~/.copilot/skills/<name>`,
+`--project`: `./.github/skills/<name>`, the directories GitHub Docs'
+"About agent skills" lists for personal/project skills) or `all`. The
+skills are standard Agent Skills, so the files are identical per target;
+`tests/unit/test_agent_skills_format.py` pins the spec's frontmatter rules
+(name = directory, lowercase-hyphen, <= 64; description <= 1024). Fail-closed as a set (2026-10-04): every target is
+checked before anything is copied, so one existing directory without
+`--force` installs none of them. Implementation lives in `mockymock/cli/skills_cmd.py`,
 imported lazily inside `_cmd_skills_install` for the same deferred-import
 reason every other subcommand uses, even though nothing here is actually
 heavy (`shutil`/`pathlib` only) -- consistency with the rest of this
 module.
 
-`resolve_target(project: bool) -> Path` picks the base directory
-(`Path.cwd()` or `Path.home()`); `install_skill(target, force=False)`
+`resolve_target(project: bool, name="mockymock", target="claude") -> Path` picks the base directory
+(`Path.cwd()` or `Path.home()`) and, via `skills_dir`, the assistant's directory; `install_skill(target, force=False, name="mockymock")`
 refuses (`SkillTargetExistsError`, fail-closed) if `target` already
 exists and `force` is `False`, so a user's local edits to a previously
 installed copy are never silently clobbered. The skill content itself is
@@ -825,11 +1079,115 @@ along with the already-discovered `mockymock.cli` package the same way
 `mockymock/runtime/docker/` and `mockymock/web/static/` ride along with
 theirs.
 
-As of 2026-08-16, the packaged skill's `SKILL.md` Workflow and its new
-`reference/scenario-generation.md` also teach the agent to inventory
-boundaries and recommend a `--scenarios` mode from a program's own
-`scenario_coverage` before generating -- not just a copytree of static
-reference material.
+The packaged skill is not just a copytree of static reference material:
+its `SKILL.md` prescribes how an assistant works. Since 2026-08-16 it
+teaches the agent to inventory boundaries and recommend a `--scenarios`
+mode from a program's own `scenario_coverage` before generating
+(`reference/scenario-generation.md`). Since 2026-09-16 it also prescribes
+the *order* a suite is built in -- every paragraph green on its own
+`PERFORM` first, driven one at a time with `run --case`, and only then
+whole-program cases through the program's entry paragraph -- plus a
+narration contract for keeping the developer oriented while that
+happens (`reference/paragraph-first-workflow.md`). Since 2026-09-16 it
+additionally carries the *mode* it operates under (`reference/modes.md`,
+and the section `SKILL.md` opens the narration contract with) — the same
+workflow, with `hands-on`/`guided`/`hands-off` deciding how much of it
+comes back to the developer, and a floor that holds in every mode. All
+three halves are
+pinned by `tests/unit/test_mockymock_skill_content.py`, which also
+requires every `reference/` file to be linked from `SKILL.md`: an added
+reference file that nothing points at is a test failure, not a silent
+orphan.
+
+## `mockymock report <program> [--cut PATH] [-o/--output PATH] [--json PATH] [--copybook-path DIR ...] [--execute] [--mutate] [--run-json PATH] [--coverage-json PATH] [--mutation-json PATH] [--journal PATH] [--scenarios happy|branches|all|none] [--seed N] [--timeout S] [--mutation-threshold PCT]` (2026-10-04)
+
+One self-contained HTML page (default `<program stem>.report.html`;
+`--json` also writes the underlying dict) of every step of testing a
+program and what each test proves. Backs the `cobol-test` skill's final
+step. Builder is `report/test_report.py` (`ReportOptions` ->
+`build_report() -> dict`), renderer `report/html_report.py`; see
+[report](report.md). Prints one line per step; exit 1 when a case failed
+or the suite was refused, else 0.
+
+`--execute` / `--mutate` re-invoke `python -m mockymock.cli.main run`
+(`--json-report --coverage-json`) and `mutate --json-report` as
+subprocesses into a temp dir rather than calling `_cmd_run` in-process,
+so a toolchain failure is one step's `fail`, not a crashed report.
+Passing `--run-json` / `--coverage-json` / `--mutation-json` reuses
+reports from an earlier run instead. Without any of them the report is
+static: lint (`cli.checks.run_static_checks`), flow, rules, scenarios,
+dialect risks, and a verification level no higher than L0.
+
+`--cut` defaults to `<program stem>.cut`; `--journal` to
+`<cut stem>.journal.jsonl` (`report.journal.default_journal_path`).
+`--scenarios none` skips the cobol-parser `ProgramFixtureGenerator`
+step (slow on large programs).
+
+## `mockymock journal --step NAME --summary TEXT [--cut PATH | --file PATH] [--status ok|warn|fail|skipped|info] [--command TEXT] [--decision TEXT]` (2026-10-04)
+
+Appends one JSON line to the assistant's step journal
+(`report/journal.py`): what the `cobol-test` skill did, why, and what came
+of it -- the half of the story `report` cannot recompute. `--file` wins
+over `--cut`'s default path. `--command` is stored as `command` (argparse
+dest `command_text`, since `command` is the subparser dest). Unknown
+status or empty step/summary -> exit 2 with a message, nothing written.
+
+## `mockymock skills plugin [DIRECTORY] [--force]` (2026-10-04)
+
+Writes the `cobol-testing` plugin as a self-contained **local
+marketplace** (`skills_cmd.export_plugin`), default
+`~/.mockymock/claude-plugin`: `.claude-plugin/marketplace.json` (name
+`LOCAL_MARKETPLACE_NAME` = `mocky-mock-local`, so it never collides with
+the GitHub/clone marketplace `mocky-mock`) plus `cobol-testing/` holding
+`.claude-plugin/plugin.json` and `skills/<SKILL_NAMES>`. Exists because a
+wheel carries only `mockymock/cli/skills/`, not the repo-root
+`.claude-plugin/`. The exported manifest is `PLUGIN_MANIFEST` with
+`version = mockymock.__version__` and no `skills` key (the default
+`skills/` folder is used); `tests/unit/test_cobol_testing_plugin.py`
+pins `PLUGIN_MANIFEST` to the repo manifest minus `skills`/`version`.
+Fail-closed: a non-empty directory is replaced only with `--force` AND
+only when its marketplace.json names `mocky-mock-local` -- a mistyped path
+is never `rmtree`d. From a clone, `/plugin marketplace add <repo>` works
+directly off the repo-root manifests.
+
+## `mockymock skills mode [--set MODE] [--json]` (2026-09-16)
+
+Shows (or persists) the **AI assistant mode** — how much the packaged
+skill checks in with the developer while it builds a suite. Three modes
+on one axis, most-supervised first: `hands-on` (propose, wait for a yes
+before each change), `guided` (the default — narrate every step, stop at
+the checkpoints), `hands-off` (run the loop end to end, report once).
+`mockymock/cli/ai_mode.py` owns the vocabulary (`MODES`, `DEFAULT_MODE`,
+a `ModeContract` per mode, `ALWAYS_ASK`), the `ResolvedMode`
+value+provenance pair, both formatters, and the config-file write. Full
+rationale in
+[docs/2026-09-16-ai-assistant-modes-design.md](../docs/2026-09-16-ai-assistant-modes-design.md).
+
+The mode lives in the project config file as `ai_mode` (validated in
+`cli/config.py`, which imports `MODES`/`CONFIG_KEY` from `ai_mode` — the
+dependency may not point the other way, and `ai_mode` is stdlib-only for
+that reason). `MockymockConfig.ai_mode is None` means *no key anywhere*,
+deliberately distinct from a file spelling out the default: `skills mode`
+and `doctor`'s `AI assistant mode` check both report provenance, and a
+mode inherited from a monorepo root two levels up is otherwise a
+surprise.
+
+`--set` has three outcomes: an existing `mockymock.toml` is edited
+line-based (comments and key order survive; `tomllib` is read-only and
+this repo takes no TOML-writing dependency for one key, which is sound
+here only because the file's schema is a flat table); no config file at
+all creates one in cwd; a `pyproject.toml`-sourced config is a
+**refusal** printing the line to add, because a `mockymock.toml` written
+beside it wins the per-directory search and would shadow that project's
+`copybook_path`/`seed`/`test_root` wholesale.
+
+The floor (`ALWAYS_ASK`) is the load-bearing half: a mode changes how
+often the assistant checks in, never what it may destroy or quietly
+decide. Editing the `.cbl`, overwriting a `.cut` it didn't write, turning
+a suspected program bug into a passing assertion, and acting outside the
+mockymock loop stay asked-about in `hands-off` too. Pinned by
+`tests/unit/test_mockymock_skill_content.py` on the packaged skill's side
+and `tests/unit/test_ai_mode.py` on the CLI's.
 
 # Gotchas
 
@@ -841,6 +1199,17 @@ single command. `mockymock dashboard` regressed this once by importing
 `web.server` for a port default;
 `tests/unit/test_cli_dashboard.py::test_building_the_parser_does_not_import_the_docker_toolchain`
 now pins it in a subprocess.
+
+**`mockymock skills mode --set` deliberately doesn't use `choices=MODES`.**
+`argparse`'s `choices` would need `mockymock.cli.ai_mode` imported inside
+`build_parser()`, which the rule above forbids. The valid set is spelled
+out in the flag's help text and validated inside `_cmd_skills_mode`
+instead; `tests/unit/test_cli_skills.py` pins the help text against
+`MODES` and pins (in a subprocess, like the dashboard test above) that
+building the parser doesn't import the module. Any future "cleanup" that
+restores `choices=` also restores the import.
+
+**Every `.cbl`/`.cut` read goes through `_lines.read_utf8_source` (2026-09-30, bug hunt round 12).** A non-UTF-8 source (cp1252 etc.) raises `SourceEncodingError` (a `ValueError` naming the file, the byte offset and an `iconv` fix) instead of a `UnicodeDecodeError` traceback; `run_static_checks` reports it as a problem and `main()` prints it in each command's own error convention (JSON for `collect --json`, stderr otherwise). Policy is refuse, never guess a code page: the spliced copy is compiled as UTF-8, so a guessed cp1252 `PIC X` literal would silently change length. `keep_newlines=True` (used by `generate --fill`, which writes back with `newline=""`) skips universal-newline translation so a CRLF `.cut` stays CRLF. New file reads should use it, not `Path.read_text()`.
 
 **`transform_data_division_exec` is called twice, and the first call's return value is intentionally thrown away** (`_cmd_run`, step 9 vs 11). The first pass exists purely to surface `EXEC SQL INCLUDE SQLCA` refusal reasons *before* any splicing happens; running the real transform that early would shift line numbers/spans that `splice_program` and the boundary/nested-site analysis depend on. Any future edit that tries to "simplify" this into one call will silently break splice-target alignment.
 

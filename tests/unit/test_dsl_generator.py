@@ -269,3 +269,32 @@ def test_scaffold_skips_a_call_key_containing_a_double_quote():
     keys = [m.key for case in suite.test_cases for m in case.mocks]
     assert "DISCRATE" in keys
     assert not any('"' in key for key in keys)
+
+
+def test_scaffold_skips_boundaries_before_the_first_paragraph():
+    """Statements between `PROCEDURE DIVISION.` and the first paragraph
+    header sit in cobolparser's unnamed ("") paragraph. Scaffolding them
+    emitted `TESTCASE " boundaries: CALL"` with a bare `PERFORM ` line,
+    which the .cut parser rejects -- so the whole generated file failed to
+    lint, the good test cases included."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LEAD.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-A PIC X(5).
+       PROCEDURE DIVISION.
+           CALL "SUBA" USING WS-A.
+           PERFORM WORK-PARA.
+           GOBACK.
+       WORK-PARA.
+           CALL "SUBB" USING WS-A.
+"""
+    result = parse_cobol(source, filename="lead.cbl")
+    assert result.success, result.errors
+    text = scaffold_cut("LEAD", analyze(result.ast))
+
+    suite = parse_cut(text)  # used to raise: unrecognized statement 'PERFORM'
+    assert [case.perform_target for case in suite.test_cases] == ["WORK-PARA"]
+    assert 'MOCK CALL "SUBA"' not in text
+    assert "*>   CALL at line 7" in text

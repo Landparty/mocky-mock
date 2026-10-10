@@ -8,6 +8,14 @@ see `cobol-parser`'s `docs/fixture-bundle-schema.md` for the authoritative
 field-by-field schema; this file is a task-oriented walkthrough of the
 same shape.
 
+Where this sits in the workflow (`paragraph-first-workflow.md`): the
+read-only inventory in section 1 belongs at the very start, before any
+scaffolding. The *generation* in section 3 produces whole-program cases
+(each scenario `PERFORM`s the program's entry paragraph), so it belongs
+in the whole-program pass, after each paragraph already has a green case
+of its own. Summarize what you read here in plain language -- never
+paste the bundle itself at the developer.
+
 ## 1. Inventory boundaries (before picking a mode)
 
 ```bash
@@ -89,7 +97,11 @@ on the inventory call rather than needing a second one):
   own scenario in either mode.
 
 Confirm the mode with the developer before generating -- don't pick
-silently.
+silently. The exception is `hands-off` (`mockymock skills mode`): there,
+pick it yourself from `scenario_coverage.total_arms` by the same
+reasoning, and put the choice *and* the arm count in the final report
+("`branches`: 11 arms, 4 unresolved -- `all` would have produced 60+
+cases"). "Don't pick silently" survives every mode; "ask first" doesn't.
 
 ## 3. Generate
 
@@ -98,8 +110,14 @@ mockymock generate PROGRAM.cbl --with-data --seed 7 --scenarios <confirmed-mode>
 ```
 
 `--scenarios all` was only used for the read-only `fixtures` inventory
-call above; generate with whatever mode was actually confirmed (which
-may be `happy` or `branches`, not `all`).
+call above; generate with whatever mode was actually confirmed -- or, in
+`hands-off`, chosen and recorded (which may be `happy` or `branches`,
+not `all`).
+
+**If a `.cut` file already exists, write to a separate path** (`-o
+scenarios.cut`) and copy across the cases you want. `generate`
+overwrites its output without asking, and the paragraph cases in a file
+you've been editing are exactly what would be lost.
 
 ## 4. Read back the result
 

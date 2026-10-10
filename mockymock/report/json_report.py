@@ -25,9 +25,12 @@ from mockymock.report.results import TestResult, TestSuiteResult
 JSON_REPORT_VERSION = 1
 
 # The two failure-reason shapes _emit_case in splicer/driver.py can print.
-# The ", got " separator also appears in the message tail (`, got " WS-X`),
-# and the expected value itself may legally contain ", got " -- so parsing
-# splits on the LAST occurrence, which is always the codegen's own.
+# The ", got " separator can occur on BOTH sides of the codegen's own: the
+# expected value may legally contain it, and so may the runtime value the
+# driver DISPLAYs after it (a message field). No split point is safe for
+# both, so _attribute_failure first matches the directive's exact rendered
+# head; the LAST-occurrence split is only the fallback for a reason no
+# parsed directive renders to.
 _EXPECT_PREFIX = "expected "
 _VERIFY_PREFIX = "VERIFY "
 _GOT_SEPARATOR = ", got "
@@ -74,6 +77,29 @@ def _attribute_failure(reason: str, case: MockTestCase | None) -> AttributedFail
     only arise when the same field/key is asserted twice in one case -- in
     which case the first line is still a correct place to point the editor.
     """
+    # Exact match first: the driver renders each EXPECT's FAIL head
+    # verbatim from the directive, so when the parsed case is at hand the
+    # head is known byte-for-byte and everything after it is the runtime
+    # value -- which may itself contain ", got " (a message field). The
+    # rsplit heuristic below would split inside that value instead.
+    if case is not None and reason.startswith(_EXPECT_PREFIX):
+        for expectation in case.expectations:
+            prefix = (
+                f"{_EXPECT_PREFIX}{expectation.data_name} {expectation.operator} "
+                f"{expectation.expected_value}{_GOT_SEPARATOR}"
+            )
+            if reason.startswith(prefix):
+                return AttributedFailure(
+                    message=reason,
+                    kind="expect",
+                    line=expectation.line or None,
+                    expected=(
+                        expectation.expected_value
+                        if expectation.operator == "="
+                        else f"{expectation.operator} {expectation.expected_value}"
+                    ),
+                    actual=reason[len(prefix) :].strip(),
+                )
     if _GOT_SEPARATOR in reason:
         head, actual = reason.rsplit(_GOT_SEPARATOR, 1)
         actual = actual.strip()
@@ -141,6 +167,22 @@ def _case_index(case_id: str) -> int | None:
         return int(case_id)
     except ValueError:
         return None
+
+
+def not_run_case_names(
+    suite_result: TestSuiteResult, cut_suite: MockTestSuite | None
+) -> list[str]:
+    """Names of the selected .cut cases the binary never printed a START
+    marker for -- the same position match `build_json_report` uses for its
+    "not_run" entries, for the console and JUnit formatters (issue #150)."""
+    if cut_suite is None:
+        return []
+    seen = {_case_index(result.case_id) for result in suite_result.results}
+    return [
+        case.name
+        for position, case in enumerate(cut_suite.test_cases, start=1)
+        if position not in seen
+    ]
 
 
 def build_json_report(

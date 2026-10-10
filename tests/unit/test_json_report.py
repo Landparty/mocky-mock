@@ -357,3 +357,35 @@ def test_report_without_cut_suite_still_works():
     assert report["cases"][0]["line"] is None
     assert report["cases"][0]["tags"] == []
     assert report["summary"]["casesNotRun"] == 0
+
+
+def test_expect_failure_whose_actual_value_contains_got_separator():
+    """The runtime value DISPLAYed after the codegen's `, got ` may itself
+    contain `, got ` (a message field). Attribution must split at the
+    directive's own rendered head, not at the last separator, or the
+    report puts half the actual value into `expected`."""
+    cut_text = (
+        'TESTSUITE "s"\n\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN\n"
+        '    EXPECT WS-MSG TO BE "OK"\n'
+    )
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        '__MOCKYMOCK__ CASE 001 FAIL: expected WS-MSG = "OK", got BAD, got 7\n'
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=1\n"
+    )
+    report = build_json_report(
+        parse_stdout(stdout),
+        cut_suite=parse_cut(cut_text),
+        crash_detail=None,
+        cut_file="PROG.cut",
+        program_file="PROG.cbl",
+    )
+    failure = report["cases"][0]["failures"][0]
+    assert failure["kind"] == "expect"
+    assert failure["expected"] == '"OK"'
+    assert failure["actual"] == "BAD, got 7"
+    assert failure["line"] == 5

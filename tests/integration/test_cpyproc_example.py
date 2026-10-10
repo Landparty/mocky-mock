@@ -54,17 +54,26 @@ def test_cpyproc_fails_when_flow_mock_verify_count_is_wrong(tmp_path: Path):
     assert exit_code == 1
 
 
-def test_run_without_copybook_path_refuses_unresolved_copybook(capsys):
+def test_run_without_copybook_path_refuses_unresolved_copybook(tmp_path: Path, capsys):
     """This must not require GnuCOBOL: the refusal fires before any
     splicing/compilation is attempted -- same fail-closed guarantee as
     tests/integration/fixtures/copybook_example, now checked against a
-    copybook that supplies procedure logic instead of data."""
+    copybook that supplies procedure logic instead of data.
+
+    Runs against a copy of the pair with no `copybooks/` sibling: the
+    example's own `copybooks/` directory is searched by default since
+    2026-09-15 (`discovery.effective_copybook_paths`), which is exactly
+    why the checked-in example runs without the flag at all."""
+    program = tmp_path / "CPYPROC.cbl"
+    cut = tmp_path / "CPYPROC.cut"
+    program.write_text((EXAMPLE_DIR / "CPYPROC.cbl").read_text())
+    cut.write_text((EXAMPLE_DIR / "CPYPROC.cut").read_text())
     exit_code = main(
         [
             "run",
-            str(EXAMPLE_DIR / "CPYPROC.cbl"),
+            str(program),
             "--cut",
-            str(EXAMPLE_DIR / "CPYPROC.cut"),
+            str(cut),
         ]
     )
     assert exit_code == 1

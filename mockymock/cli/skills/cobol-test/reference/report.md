@@ -1,0 +1,92 @@
+# `mockymock report` and `mockymock journal`
+
+## Writing the report
+
+```bash
+mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
+    [--json PROGRAM.report.json]
+    [--execute] [--mutate]                      # run now (Docker)
+    [--run-json R] [--coverage-json C] [--mutation-json M]   # or reuse results
+    [--journal FILE] [--scenarios happy|branches|all|none] [--seed N]
+    [--timeout S] [--mutation-threshold PCT] [--copybook-path DIR ...]
+```
+
+- Writes one self-contained HTML page (no network needed to open it) and,
+  with `--json`, the same data as JSON.
+- Exit code 1 when a test failed or the suite is refused, else 0, so it
+  can gate CI.
+- The journal defaults to `<cut stem>.journal.jsonl` next to the `.cut`.
+- Without `--execute`/`--run-json`, the run, coverage and verdict steps say
+  "not run" instead of guessing; every case stays at L0.
+
+## What the page shows, top to bottom
+
+1. **Verdict line, section links and summary tiles** -- tests passing,
+   strongly verified (L2+), checks with a reason (INTENT/CHARACTERIZATION
+   share), code run by tests, planted bugs caught, issues to fix, code
+   health grade. Every tile says in words what its number means.
+2. **What to do next** -- up to five actions, most important first: each
+   high-severity finding kind, then "Run the tests to prove them" (with the
+   exact `--execute --mutate` command) when the suite was not run, then the
+   medium and low kinds. "Nothing urgent" when the list is empty.
+3. **Findings**, most severe first (table below), with plain labels
+   ("Fix first", "Should fix", "Worth a look", "For information"), the
+   category's machine name on hover, and a "What to do" line. Identical
+   findings fold into one card; scenario gaps list one branch per line.
+4. **Test cases** -- level, result, why it stopped at that level, failures
+   with line numbers, where each check's expected value came from, dialect
+   risks reached. Filter by result or level.
+5. **Boundaries** -- one row per CALL, file operation, SQL, CICS, DL/I and
+   console ACCEPT statement: what it touches, its paragraph and line, and
+   the tests that MOCK it ("reached but not mocked" and "no test reaches
+   it" are the rows to act on).
+6. **Program analysis** -- cobol-parser's view of the program itself: health
+   score (A-F), a call graph coloured by which paragraphs a test reaches,
+   per-paragraph complexity, every lint rule's findings, data flow (where
+   each field is written and read), the interface (calling signature,
+   touchpoints to mock, CRUD, SQL/CICS checks), dead code and duplicates.
+   Each panel opens with a sentence saying what it shows. Sections an older
+   cobol-parser cannot produce are named in a note at the top, not silently
+   left out. Cite it when picking what to test next: an untested
+   high-complexity paragraph is the obvious first target.
+7. **Business rules** -- condition/formula, arms, which tests cite it.
+8. **Paragraphs** -- line, size, complexity, which tests reach it.
+9. **GnuCOBOL vs IBM COBOL risks**.
+10. **How the verdict was reached** -- the twelve steps in order
+   (environment, understand, rules, analysis, inventory, lint, scenarios, run,
+   coverage, mutation, dialect, verdict), each with the equivalent command,
+   its summary, details and timing.
+11. **Assistant journal** -- your `mockymock journal` entries.
+12. **Verification levels** and a **glossary** of the words the page uses.
+
+## Finding categories and what to do
+
+| Category | Severity | Do this |
+|---|---|---|
+| `refused` | high | Fix the lint problem; nothing else is trustworthy until then. |
+| `suspected-bug` | high | An INTENT assertion failed. Trace it; if the setup is right, report it. Never relabel it to get green. |
+| `test-failure` | high | A non-intent assertion failed or a case crashed. Usually the test; trace it. |
+| `missing-assertion` | medium | A mutant survived: add the assertion that would notice that line changing. |
+| `untestable-mutant` | medium | An ADD/SUBTRACT swap survived on an unsigned field every case starts at zero, where both store the same magnitude. Seed the field to a non-zero value (`MOVE 5 TO WS-COUNT`) in a case; a new assertion will not help. |
+| `untested-paragraph` | medium | Add a case that PERFORMs it. |
+| `no-assertion` | medium | A passing case asserts nothing; add EXPECT/VERIFY. |
+| `dialect` | high/medium | Note it in the hand-over; the case is GnuCOBOL-proven only. |
+| `rule-without-intent` | low | Add an INTENT case for that rule (or say why not). |
+| `unlabelled` | low | Label each assertion INTENT or CHARACTERIZATION. |
+| `dead-code` | low | Report it; do not test it. |
+| `coverage` | low | Lines never executed; usually a branch without a case. |
+| `scenario-gap` | info | Neither the automatic fixture generator nor any test in the suite reaches that arm; write the inputs by hand. |
+| `scenario-gap-covered-by-hand` | info | The automatic generator can't build data for that arm, but a hand-written case already reaches it (checked against line coverage) -- nothing to do. |
+
+## Journal entries
+
+```bash
+mockymock journal --cut PROGRAM.cut --step <name> --summary "<what and result>" \
+    [--status ok|warn|fail|skipped|info] [--command "<cmd>"] [--decision "<why>"]
+```
+
+Suggested step names, matching this skill's workflow: `ground-check`,
+`understand`, `plan`, `scaffold`, `intent-cases`, `paragraph:<NAME>`,
+`whole-program`, `prove`, `hand-over`. One entry per decision a reviewer
+would ask about: what you skipped, what you parked, which rule a case
+covers, why you accepted a level below L3.

@@ -3,7 +3,7 @@ type: Module
 title: Docker Runtime
 description: mockymock-cobc container lifecycle, docker exec-based compile/run, and the Docker-only sandbox model that replaced the local cobc toolchain.
 tags: [runtime, docker, gnucobol]
-timestamp: 2026-08-10T00:00:00Z
+timestamp: 2026-10-04T00:00:00Z
 ---
 
 # Overview
@@ -60,10 +60,15 @@ would otherwise spin up ~40 containers.
 
 # Container lifecycle
 
-`ensure_toolchain()` in `mockymock/runtime/docker_toolchain.py` is idempotent
-and is called at the start of **both** `mockymock setup` and every
-`mockymock run` (so a container that died between runs is restarted
-automatically; `setup` is therefore optional).
+`ensure_toolchain(force_rebuild: bool = False)` in
+`mockymock/runtime/docker_toolchain.py` is idempotent and is called at the
+start of **both** `mockymock setup` and every `mockymock run` (so a
+container that died between runs is restarted automatically; `setup` is
+therefore optional). `force_rebuild=True` is passed only by `mockymock
+setup --rebuild` — see **Forced rebuild** below. Nothing else in the CLI
+mutates the toolchain: `dashboard` and `doctor` go through
+`runtime/status.py`'s read-only `probe()` instead (see
+[dashboard](dashboard.md)).
 
 | Step | Check | Action if missing/stopped/stale |
 |------|-------|---------------------------------|
@@ -78,6 +83,24 @@ fed `IMAGE`, so an edit to the flags alone left a running container's
 hardening silently stale): editing either one changes `IMAGE`, so step 3 sees
 the old container's image `!= IMAGE` and rm+recreates it with the current
 flags. No manual "bump the Dockerfile" step is needed for a flags-only change.
+
+## Forced rebuild (`setup --rebuild`)
+
+`force_rebuild=True` makes step 2 run `docker build` unconditionally, and
+then — since 2026-09-15 — also `docker rm -f <CONTAINER>` before step 3.
+The removal is not belt-and-braces: `docker build -t IMAGE` re-tags the
+**same content-hash tag** onto the newly built image ID, so step 3's
+stale-image check (which compares tag strings, not image IDs) sees no
+difference and keeps the container created from the *old* image. Without
+the removal, `--rebuild` rebuilt the image and every subsequent compile
+still ran in exactly the toolchain the user asked to replace. An `rm -f`
+that fails for any reason other than *"no such container"* raises
+`DockerNotAvailableError` naming both the image and the container, rather
+than silently continuing into the same stale state.
+
+Note the asymmetry with the ordinary stale path below: there the tag
+really did change, so comparing tags is sufficient; only a forced rebuild
+can produce a new image under an unchanged tag.
 
 `_create_container()` also absorbs the concurrent-first-run race: if
 `docker run --name` fails with *"name already in use"* (another invocation
@@ -237,6 +260,13 @@ re-mounted per run. Consequences:
   container. `-k 5` escalates to SIGKILL five seconds after the SIGTERM,
   so a binary that ignores SIGTERM cannot keep burning CPU as an orphan
   inside the persistent container.
+- **Output is captured as bytes**, then decoded UTF-8 with
+  `errors="replace"` and no newline translation (2026-09-30, bug hunt round
+  11). `text=True` decoded strictly, so one DISPLAY of a non-UTF-8 byte
+  (HIGH-VALUES, a COMP field) raised `UnicodeDecodeError` out of the whole
+  run, and its universal newlines turned a lone CR inside a DISPLAYed value
+  into LF, splitting a `__MOCKYMOCK__` marker before `parse_stdout`'s
+  LF-only split saw it.
 - **Two layered timeouts**: coreutils `timeout` enforces the limit
   container-side and exits `124` on expiry (`TIMEOUT_EXIT_CODE`, defined in
   `runtime/executor.py` and shared with the report layer's `parse_stdout`);
@@ -268,6 +298,7 @@ implementations that used to live there were deleted wholesale, not adapted:
 |--------|---------------|
 | `runtime/compiler.py` | `CompileResult` dataclass: `success: bool`, `binary_path: Path \| None`, `stdout: str`, `stderr: str` |
 | `runtime/executor.py` | `ExecutionResult` dataclass, `TIMEOUT_EXIT_CODE = 124`, `NOT_FOUND_EXIT_CODE = 127`, `_coerce_output()` |
+| `runtime/status.py` | The read-only counterpart: `probe() -> ToolchainStatus` (four `Check` records — `daemon`, `image`, `container`, `cobc`) mirroring the lifecycle table above using pure reads only. Documented in [dashboard](dashboard.md), not here, because both its consumers (`dashboard`, `doctor`) live there. |
 
 These shapes are a stable contract consumed by `cli/main.py` and
 `report/results.py` — the Docker rewrite deliberately left them unchanged so
@@ -277,7 +308,9 @@ nothing downstream of compile/run needed to change.
 
 | Command | Behavior |
 |---------|----------|
-| `mockymock setup` | Calls `ensure_toolchain()` then `cobc_version()` (first line of in-container `cobc --version`). Prints `container mockymock-cobc ready (<version>)` and exits 0, or prints the `DockerNotAvailableError` message and exits 1. Optional — `run` brings the container up on its own. |
+| `mockymock setup [--rebuild]` | Calls `ensure_toolchain(force_rebuild=args.rebuild)` then `cobc_version()` (first line of in-container `cobc --version`). Prints `container mockymock-cobc ready (<version>)` and exits 0, or prints the `DockerNotAvailableError` message and exits 1. Optional — `run` brings the container up on its own. `--rebuild` forces a fresh image build *and* container recreation (see **Forced rebuild** above). |
+| `mockymock doctor` / `mockymock dashboard` | Never call `ensure_toolchain()` at all — they report what it *would* find, via `runtime/status.py`'s `probe()`. See [dashboard](dashboard.md). |
+| `mockymock debug` | Adds `start_gdb_session(binary_path)`: a long-lived `docker exec -i ... gdb` process the DAP adapter drives over stdin/stdout. Same container, same `/work` mount; see [cli](cli.md)'s `debug` section. |
 | `mockymock run <program.cbl> --cut <file.cut>` | Validates that the program and .cut paths exist (cheap, clean per-file error), then calls `ensure_toolchain()` before any parsing or sandbox creation — a down daemon fails fast with just the actionable message, no wasted parse work, and a typo'd path never pays for an image build. Then creates a sandbox under `WORK_ROOT`, writes the instrumented source with `newline="\n"`, and calls `docker_toolchain.compile_source()` / `docker_toolchain.run_binary()`. The binary's stderr and exit code are surfaced: nonzero exit fails the run even if all case markers passed. |
 
 `cobc_version()` itself runs `docker exec mockymock-cobc cobc --version` and
@@ -340,3 +373,5 @@ code alone when debugging a timeout report.
   `compile_source`, and `run_binary`.
 - [coverage](coverage.md) — `compile_source(..., coverage=True)` and `run_gcov`
   build on this module's existing Docker toolchain.
+- [dashboard](dashboard.md) — `runtime/status.py`'s read-only `probe()`, the
+  one place that inspects this toolchain without mutating it.

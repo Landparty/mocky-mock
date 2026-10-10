@@ -154,7 +154,15 @@ mockymock too.
   line reference simply stays a whole-program PARSE_WARNING refusal.
   `tests/unit/test_scoped_refusals.py` pins the format so an upstream change
   fails loudly instead of silently disabling the narrowing.
-- `cobolparser.analysis.DynamicCallAnalyzer().analyze(ast)`
+- (`cobolparser.analysis.DynamicCallAnalyzer` was listed here historically;
+  no mockymock module imports it -- dynamic CALLs are keyed directly on
+  `CallStatement.called_program` / `.is_dynamic`.)
+- Other imports, outside the AST walk: `cobolparser.preprocess.strip_compiler_directives`
+  and `CopybookNotFoundError`; `cobolparser.analysis.unused_variables.collect_declared_items`
+  (CICS EIB declared-name check); `cobolparser.generators.data.layout_offsets.compute_program_data_items`
+  (`CAPTURE` layout facts, `UT-CAP-` sizing); `cobolparser.generators.DataGeneratorOptions`;
+  `cobolparser.config.load_project_config` / `ConfigError` (soft-imported, `cobol.yml`);
+  `cobolparser.cli.parse.main` (`mockymock analyze`, in-process).
 - `cobolparser.models.program.CobolProgram.get_entry_statements() -> list[EntryStatement]`
   — every `ENTRY` statement in the program; each has `.entry_name: str | None`
   and `.location.line`. Used by `analysis.linkage.linkage_plan` to detect the

@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-08-28T12:00:00Z
+timestamp: 2026-10-05T12:00:00Z
 ---
 
 # Overview
@@ -17,6 +17,19 @@ edits is **cobolparser's normalized free-form text**
 original file — `SourceLocation.line` values from the AST are indexed into
 that normalized text, so splicing the original would corrupt line offsets.
 See [integration](integration.md).
+
+**Line splitting (2026-09-27):** every split of COBOL source text that is
+later indexed by an AST line number goes through
+`mockymock._lines.split_source_lines` (`\n` / `\r\n` / `\r` only, as
+cobolparser counts records), never `str.splitlines()` -- that also breaks on
+form feed / VT / `\x1c`-`\x1e` / NEL / U+2028, so a page-eject `\f` in a
+comment line shifted every later splice one line early (the mock replaced
+the statement before the CALL and the real CALL ran). The rule is agreement
+with the *installed* cobolparser: releases without `cobolparser._lines`
+(1.8.x and earlier, allowed by the `>=1.7.7` floor) still number records the
+`str.splitlines()` way, so `split_source_lines` falls back to it there
+(`PARSER_SPLITS_ON_RECORD_DELIMITERS`) -- the `cobol-parser-compat` CI job
+runs against the published wheel and caught the mismatch.
 
 ```
 MockSurface (boundary sites)  ─┐
@@ -221,7 +234,7 @@ code, from the mnemonic table or a quoted literal — see [dsl](dsl.md)), a
 second `MOVE "<code>" TO <field>` is emitted right after the default,
 which therefore wins since it comes later in the same `WHEN` branch —
 same as any hand-written `MOVE` to that field a mock author adds after it.
-A file with no declared `FILE STATUS` field gets neither MOVE: there is no
+A statement naming several files (`OPEN INPUT A OUTPUT B`, `CLOSE A B`) is one site matched by one directive, so the default `MOVE "00"` is emitted for **every** file in `site.keys` that declares a status field, all before the `FILE-STATUS IS` override (which still targets only the directive's own file) -- round 7: defaulting only the directive's file left the other file's status blank, and a program checking both took its failure branch. A file with no declared `FILE STATUS` field gets neither MOVE: there is no
 WORKING-STORAGE target to write into (`refusal.check_test_case`'s
 `UNRESOLVED_FILE_STATUS_TARGET` refuses fail-closed before splicing is
 ever reached if the `.cut` file used `FILE-STATUS IS` sugar against such a
@@ -236,11 +249,51 @@ against *this exact physical site's* own AST node
 (`site.statement`, narrowed via `isinstance(..., CallStatement)` --
 `BoundarySite.statement` already carries the original AST statement for
 every site, so no new analysis-phase field was needed) --
-`site.statement.using_parameters[n - 1].name`. Emitted before
+`site.statement.using_parameters[n - 1].name` -- except that cobolparser
+reports a *literal* argument by its quote-stripped value (`BY CONTENT
+"ABC"` -> `ABC`), indistinguishable from a data-name, so
+`_call_using_literals` re-scans the site's own spliced span
+(`splice_program` now builds the dispatch after computing the span and
+passes it as `statement_text`) and emits the literal token verbatim
+(`MOVE "ABC" TO target`). It trusts the text only when its operand list
+agrees with the parser's operand for operand; otherwise it falls back to
+the name (2026-09-28 -- before, the MOVE silently copied an unrelated item
+named ABC, or failed in cobc). `plan_captures` (given `lines` by
+`cli.checks`) applies the same recognition via `_site_argument`, so a
+`UT-CAP-` target for a literal is declared from the literal itself
+(`_literal_declaration`: `PIC X(len)` for a quoted literal, `PIC [S]9(i)[V9(d)]`
+for a numeric one, refused for X/N/G-prefixed) -- before 2026-09-28 it
+mirrored a same-named item's layout (`"ABC"` into `PIC 9(2)` read back
+`BC`) or refused as "not a uniquely-named data item". Emitted before
 `directive.body_lines`, in declared order. See [dsl](dsl.md)'s `CAPTURE
 ARG` grammar section and docs/2026-08-11-argument-capture-design.md.
 
-**`ROWS` dispatch (`MOCK SQL ... ROWS` and `MOCK READ ... ROWS`, see
+The *target* half of the same feature lives in its own module,
+`splicer/captures.py` (2026-09-04), because it runs at static-check time
+rather than splice time. A target whose name starts with
+`CAPTURE_TARGET_PREFIX` (`UT-CAP-`) is mockymock's to declare:
+`plan_captures(program, suite, surface)` resolves each one against the
+matching CALL site's own `using_parameters` — the identical resolution
+`build_site_dispatch` does above, so the synthesized declaration always
+mirrors the item the generated `MOVE` will read — and returns
+`CapturePlan`s plus a reason per target it could not mirror.
+`capture_working_storage_lines` / `capture_reset_lines` then feed
+`driver.build_driver` through `cli.checks.extra_working_storage` /
+`extra_reset_lines_for`, the same route `cics_eib` and `UT-ADDR-SINK`
+take, so all four splice-and-compile pipelines (`run`, `debug`, `export`,
+`mutate`) declare and reset them identically. The reset half is
+load-bearing and was briefly lost in `mutate` (2026-09-04): one binary
+serves the whole suite, so an unreset capture lets a case that never
+reached its CALL assert against the previous case's value — and in
+`mutate` that stale value can "kill" a mutant, inflating the score.
+Anything unmirrorable (a table, a PICTURE-less `COMP-1`/`POINTER`, a group
+holding non-DISPLAY bytes, or one directive matching two sites whose
+argument `n` names different items) fails closed as
+`UNRESOLVED_CAPTURE_TARGET` rather than emitting a declaration that would
+not compile or would compare against raw binary. Full grammar and
+`generate` behavior in [dsl](dsl.md)'s "Synthesized targets" section.
+
+**`ROWS` dispatch (`MOCK SQL/READ/RETURN/CALL/MQ/DLI ... ROWS`, see
 [dsl](dsl.md)).** `build_rows_block(tally_name, rows, *, row_suffix_moves,
 exhausted_moves)` is category-generic: it builds an `EVALUATE TRUE` /
 `WHEN <tally> = N` chain where row N's field `MOVE`s are followed by
@@ -250,6 +303,12 @@ contain, `build_rows_block` itself has no category knowledge. Both call
 sites live in `build_site_dispatch`, one per `directive.rows is not None`
 category:
 
+- **CALL / DYNCALL / DLI** (`SEQUENCED_CALL_CATEGORIES`, 2026-10-05):
+  `row_suffix_moves=[]`, `exhausted_moves` = the directive's own
+  (mandatory) `TERMINAL` group's MOVEs -- there is no implicit default for
+  a CALL. A hand-built directive without one raises `ValueError`; the
+  parser rejects it first. Row N fires on the key's Nth call in the case,
+  counted across every site the key matches (one shared tally).
 - **SQL**: `row_suffix_moves=["MOVE 0 TO SQLCODE"]`,
   `exhausted_moves=["MOVE 100 TO SQLCODE"]` -- fixed in v1, matching the
   pre-generalization (single-purpose SQL-only) behavior exactly.
@@ -389,6 +448,7 @@ skipped.
 | Elementary, no `PICTURE`, `USAGE INDEX` | *(skipped — no line emitted)* | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; skipping is the only reset that never emits illegal COBOL (documented fidelity limit) |
 | Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE |
 | Group, no `VALUE` clause | `INITIALIZE <name>` | a `MOVE SPACES` over a group would write spaces across numeric children, corrupting them for the next case's arithmetic; `INITIALIZE` zeros numeric children and space-fills alphanumeric ones |
+| Any top-level item with a `REDEFINES` clause | *(skipped — no line emitted)* | it shares the redefined item's storage, which that item's own line already reset/restored; a second reset through the redefining view ran after it and overwrote it (2026-09-27 fix: `01 WS-CODE PIC X(4) VALUE "AB12".` + `01 WS-CODE-NUM REDEFINES WS-CODE PIC 9(4).` left `WS-CODE` = `"0000"` in every case, the first included). Skipping matches program start-up, where GnuCOBOL initializes the storage from the first description |
 
 **Embedded double quotes in a VALUE clause (2026-08-28 fix).** cobolparser
 hands an alphanumeric VALUE clause back double-quote-delimited around the
@@ -554,9 +614,24 @@ transform exists to prevent (the pointer would come from a mocked
   pipelines stay in step. It needs no reset line: nothing ever reads it.
 - **Value-side occurrences are deliberately left alone.**
   `SET <ptr> TO ADDRESS OF <folded item>` is legal COBOL and stays correct
-  after the fold -- only *rebinding* the item becomes illegal. Sites are
-  classified per line: the nearest preceding `SET` wins, and an intervening
-  `TO` marks the occurrence as a value operand.
+  after the fold -- only *rebinding* the item becomes illegal. So are a
+  `CALL ... USING ... ADDRESS OF <folded item>` argument (the CICS-DL/I
+  `CALL 'CBLTDLI' USING PCB-FUNC PSB-NAME ADDRESS OF DLIUIB` idiom -- legal
+  on a WORKING-STORAGE item, verified against GnuCOBOL 3.1.2) and anything
+  inside `EXEC ... END-EXEC` (`EXEC CICS ADDRESS TCTUA(ADDRESS OF TCTUA)`),
+  which the splicer replaces wholesale with a mock or a trap stub.
+- **Classified per statement, not per line (2026-09-28 fix).** Sites used to
+  be classified per line (nearest `SET` on the same line), which refused
+  every multi-line shape above -- and even the bare `EXEC CICS ADDRESS`
+  line, whose trailing `ADDRESS` keyword read as a dangling `ADDRESS OF`.
+  `address_of_sites` now tokenizes the whole text (string literals and `*>`
+  comments skipped) and walks back from each `ADDRESS OF <folded item>`:
+  a SET receiving operand can only be preceded by `SET`, other receiving
+  operands (names, `OF`/`IN`, subscripts, commas). The first token outside
+  that vocabulary decides -- `SET` means receiving; `TO`/`BY` (every SET
+  form reaches one before its sending side), `USING`, a verb, an unmatched
+  `(`, `EXEC`, a sentence period mean it is left alone. A receiving operand
+  on a later line than its `SET` is now rewritten, not refused.
 - **Detection is textual, not AST-driven**, because cobolparser's
   `SetStatement` drops the target-side `ADDRESS OF` entirely -- `SET ADDRESS
   OF X TO Y` and `SET X TO Y` both arrive as `targets=["X"]`, so the AST
@@ -564,13 +639,33 @@ transform exists to prevent (the pointer would come from a mocked
   *value* side carries a flag (`value_is_address_of`).
 - **Anything unclassifiable refuses** rather than being guessed at:
   `refusal.check_linkage_layout` turns each problem `address_of_sites`
-  reports into `UNSUPPORTED_LINKAGE_ADDRESSING` -- an `ADDRESS OF` continued
-  onto the next line (no single-line span to rewrite), or one with no `SET`
-  before it on its own line.
+  reports into `UNSUPPORTED_LINKAGE_ADDRESSING` -- since 2026-09-28 only a
+  receiving `ADDRESS OF <item>` whose own span is split across lines
+  (`SET ADDRESS OF` / `LK-ITEM TO P`): no single-line span to rewrite.
 
 Verified end to end against real GnuCOBOL 4.0: the rewritten program
 compiles, runs and passes its test case; the un-rewritten one does not
 compile at all.
+
+# DFHRESP Expansion (cics_resp.py, 2026-09-28)
+
+`expand_dfhresp(lines)` does what the CICS translator does to
+`DFHRESP(<condition>)`: replaces it with the condition's EIBRESP number
+(`DFHRESP(NORMAL)` -> `0`, `DFHRESP(MAPFAIL)` -> `36`). Unlike DFHVALUE's
+hundreds of CVDAs, the DFHRESP table is small and IBM only ever appends to
+it, so `DFHRESP_VALUES` reproduces it exactly -- restricted to values two
+independent sources agree on (IBM's "Response codes of EXEC CICS commands"
+and the full EIBRESP list); a missing entry refuses, a wrong one would
+silently flip a branch.
+
+- **Width-preserving** via `stub_writer.replace_columns`, like
+  `redirect_address_of`: no line or column moves, so it runs in step 5b of
+  `run_static_checks` (and in `generate`) without disturbing any
+  `SourceLocation`.
+- **Runs before `check_cics_eib_layout[_scoped]`**, so the gate only ever
+  sees what was not expanded: DFHVALUE, an unknown condition name, a call
+  split across lines. A call inside a string literal is left alone (text).
+- One note per run lists every condition expanded and its value.
 
 # CICS EIB Field Synthesis (cics_eib.py)
 
@@ -935,6 +1030,28 @@ A `verifications` entry whose `(category, key)` isn't in the test case's
 own declared mock set raises `ValueError` at codegen time — this is a
 defensive check; the refusal gate is expected to have already refused
 `VERIFY_WITHOUT_MOCK` before codegen is reached.
+
+## Per-case state, implicit moves and DIB synthesis (2026-10-05 bug hunt)
+
+- **RETURN-CODE (#140).** `build_driver` emits `MOVE 0 TO RETURN-CODE`
+  at the start of every case and before the final `STOP RUN`: pass/fail
+  travels in the markers, not the exit status.
+- **Reset coverage (#147).** `reset.reset_move_lines` now covers FILE
+  SECTION (the first record of each FD -- the others share its storage),
+  WORKING-STORAGE and LOCAL-STORAGE.
+- **SQLCA (#148).** `sqlca.sqlca_reset_lines` adds `INITIALIZE SQLCA` plus
+  the SQLCAID/SQLCABC eye-catchers to the reset when mockymock generated
+  the SQLCA, so one case's SQLCODE no longer leaks into the next.
+- **READ ... INTO / WRITE ... FROM (#149).** `splicer/io_copy.py`: the
+  dispatch block moves the FROM item to the record before the body, and
+  the record to the INTO item after each `ROWS` row or after the body --
+  skipped when the mock body or rows already name the INTO item or
+  anything under it (how bodies written earlier set it). `MockSurface.
+  data_layout` carries the FD-record and subtree map it needs.
+- **DLIDIB (#145).** `analysis/cics_eib.py` also detects references to
+  `DIBSTAT` and the other DIB fields in an `EXEC DLI` program that does not
+  declare them; `splicer/cics_eib.py` then emits an `01 DLIDIB` layout
+  (reset with `INITIALIZE DLIDIB`).
 
 ## `record_targets` — `mockymock run --record-expectations` (2026-08-04)
 

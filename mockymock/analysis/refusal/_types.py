@@ -88,6 +88,18 @@ _UNSUPPORTED_SITE_CODES: dict[str, tuple[str, str]] = {
 class RefusalReason:
     code: str
     message: str
+    # Literal .cut text that would resolve this reason -- only ever set
+    # for UNMOCKED_* codes (a boundary is reachable but no MOCK directive
+    # in the test case matches it), where the fix is entirely mechanical:
+    # `dsl.generator.directive_snippet` renders it, the same renderer
+    # `generate`'s own scaffold uses, so the two can never disagree.
+    # None for every other reason -- an UNSUPPORTED_* refusal, a
+    # structural gate like DECLARATIVES/ALTER, AMBIGUOUS_MOCK, or any
+    # site directive_snippet itself declines to render (an unparsed CALL
+    # literal, an unrepresentable quote in a key/prefix) -- has no
+    # mechanical fix. See
+    # docs/2026-09-15-actionable-refusals-and-fill-design.md.
+    suggested_fix: str | None = None
 
 
 @dataclass

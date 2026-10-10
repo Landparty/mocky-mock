@@ -320,3 +320,35 @@ def test_serve_binds_loopback_only():
     """The endpoint has no auth and reports local Docker state; the bind
     address is deliberately not user-configurable."""
     assert server.HOST == "127.0.0.1"
+
+
+def test_a_rebound_foreign_host_header_is_refused(dashboard):
+    """DNS rebinding: a foreign site's name re-pointed at 127.0.0.1 is
+    same-origin with itself, so the browser would let its page read
+    /api/status. The Host header still names that site -- refuse it."""
+    port = dashboard.rsplit(":", 1)[1]
+    for host in ("attacker.example", f"attacker.example:{port}", "127.0.0.1:1"):
+        request = urllib.request.Request(
+            f"{dashboard}/api/status", headers={"Host": host}
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request, timeout=10)
+        assert excinfo.value.code == 421
+
+
+@pytest.mark.parametrize(
+    ("host", "allowed"),
+    [
+        ("127.0.0.1:8765", True),
+        ("localhost:8765", True),
+        ("LOCALHOST", True),
+        ("127.0.0.1", True),
+        ("127.0.0.1:9999", False),
+        ("evil.example:8765", False),
+        ("[::1]:8765", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_host_header_allowed(host, allowed):
+    assert server.host_header_allowed(host, 8765) is allowed

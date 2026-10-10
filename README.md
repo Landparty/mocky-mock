@@ -64,20 +64,90 @@ python -m pytest tests/unit -v
 `tests/integration/` additionally needs the Docker daemon reachable and
 is skipped automatically if it isn't.
 
-## AI assistant skill
+## AI assistant skills
 
-mockymock ships a [Claude Code](https://claude.com/claude-code) skill
-teaching an AI assistant how to scaffold, edit, and run `.cut` test
-files. Install it once:
+mockymock ships three [Claude Code](https://claude.com/claude-code) skills,
+also packaged as the `cobol-testing` plugin:
 
-```bash
-mockymock skills install
+| Skill | What it teaches the assistant |
+|---|---|
+| `cobol-test` | The whole job: understand the program, plan one test per business-rule arm, write assertions labelled `INTENT` (from a rule) or `CHARACTERIZATION` (from a run), run and mutation-test the suite, and hand over an HTML report. Start here. |
+| `mockymock` | The `.cut` DSL, every CLI flag, the paragraph-first loop. |
+| `cobol-analysis` | Which cobol-parser analyzer answers which question. |
+
+Install as a plugin (Claude Code), from GitHub:
+
+```
+/plugin marketplace add Landparty/mocky-mock
+/plugin install cobol-testing@mocky-mock
 ```
 
-This writes to `~/.claude/skills/mockymock` by default (works across
-every COBOL repo you test with mockymock); pass `--project` to install
-into the current repo's `.claude/skills/mockymock` instead, so a team can
-commit it for shared use. See `mockymock skills install --help`.
+from a local clone of this repository (no network needed):
+
+```
+/plugin marketplace add /path/to/mocky-mock
+/plugin install cobol-testing@mocky-mock
+```
+
+or from a pip install, with no clone at all:
+
+```bash
+mockymock skills plugin            # writes ~/.mockymock/claude-plugin
+```
+```
+/plugin marketplace add ~/.mockymock/claude-plugin
+/plugin install cobol-testing@mocky-mock-local
+```
+
+(`claude --plugin-dir ~/.mockymock/claude-plugin/cobol-testing` loads it
+for a single session instead.) Or copy the skills with the CLI:
+
+```bash
+mockymock skills install            # all three, into ~/.claude/skills/
+mockymock skills install --project  # into ./.claude/skills/ for the team
+mockymock skills install --skill cobol-test
+mockymock skills install --target copilot  # GitHub Copilot: ~/.copilot/skills/
+mockymock skills install --target copilot --project  # ./.github/skills/
+```
+
+The skills are standard [Agent Skills](https://github.com/agentskills/agentskills),
+so GitHub Copilot (CLI, cloud agent, and agent mode in VS Code and
+JetBrains) uses the same files as Claude Code. `mockymock dashboard`
+verifies and installs them for either assistant.
+
+Then ask the assistant to "test ORDRPROC.cbl". It finishes with:
+
+```bash
+mockymock report ORDRPROC.cbl --cut ORDRPROC.cut --execute --mutate
+```
+
+which writes `ORDRPROC.report.html`: a summary, what needs attention
+(suspected bugs, missing assertions, untested paragraphs, GnuCOBOL vs IBM
+dialect risks), every test case with its verification level (L0 static to
+L3 dialect-checked), and a numbered account of every step, including the
+assistant's own decisions recorded with `mockymock journal`.
+
+### How much it checks in with you
+
+The same skill runs in one of three modes, depending on how closely you
+want to be involved while it builds a suite:
+
+```bash
+mockymock skills mode                     # which mode this project is in
+mockymock skills mode --set hands-off     # persist it as ai_mode in mockymock.toml
+```
+
+| Mode | What you get |
+|---|---|
+| `hands-on` | It proposes and waits for a yes before each change. Read-only analysis runs freely; anything that writes a file or runs your program asks first. |
+| `guided` | **Default.** It narrates each step and stops at the decisions that matter — overwriting a test file you wrote, picking a `--scenarios` mode, moving to end-to-end cases, parking a failing paragraph. |
+| `hands-off` | It runs the whole workflow and reports once at the end: every paragraph's verdict, what it decided alone and why, and what it parked. |
+
+A mode only changes how often it checks in. In every mode, including
+`hands-off`, it still never edits the COBOL program under test, never
+overwrites a `.cut` file containing cases it didn't write, and never
+turns a suspected bug in your program into a passing assertion — that
+gets reported with both values, not quietly asserted.
 
 ## Example & usage
 
@@ -117,8 +187,8 @@ mockymock lint ORDRPROC.cbl --cut ORDRPROC.cut     # static checks only, no Dock
 ```
 
 The full DSL — `MOCK CALL`/`PARAGRAPH`/`SECTION`, `VERIFY`, `PROVIDER`
-data tables, `BEFORE-EACH`, `FILE-STATUS IS`, the SQL `ROWS` cursor
-sugar — is documented in [`.okf/dsl.md`](.okf/dsl.md).
+data tables, `BEFORE-EACH`, `FILE-STATUS IS`, `ROWS` (one response per
+call for `SQL`/`READ`/`RETURN`/`CALL`/`MQ`/`DLI`) — is documented in [`.okf/dsl.md`](.okf/dsl.md).
 
 For a complete, example-driven walkthrough of every CLI flag and every
 `.cut` directive in one place, see the
@@ -153,7 +223,7 @@ rest each add one distinctive feature.
 - `mockymock run --record-expectations` — golden/characterization mode: run the suite and turn every `*> STUB EXPECT <name>` comment in the `.cut` file into a real `EXPECT` line, filled in with the value the program actually produced ([design](docs/2026-08-04-record-expectations-design.md))
 - `mockymock debug --dap-stdio` — a real [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) session: breakpoints, stepping, and variable inspection on your original `.cbl` ([design](docs/2026-07-22-dap-debugger-design.md))
 - `mockymock collect --cut ORDRPROC.cut [--json]` — list a suite's cases with line numbers and tags, no Docker needed
-- `mockymock dashboard` — a local status page (loopback only) showing at a glance whether Docker and the GnuCOBOL toolchain are up; read-only, it never builds or starts anything ([details](.okf/dashboard.md))
+- `mockymock dashboard` — a local page (loopback only) showing at a glance whether Docker and the GnuCOBOL toolchain are up (read-only, it never builds or starts anything), the `mockymock report` HTML test results under the current directory (or `--reports-dir`), and whether the cobol-testing skills are installed for Claude Code and GitHub Copilot, with a button per assistant that installs and verifies them ([details](.okf/dashboard.md))
 - `mockymock export` — write the instrumented source to a file, adjusted for a real fixed-format (z/OS) COBOL compile instead of GnuCOBOL-only; validates the computational core against a real IBM compiler, not real I/O ([details](docs/2026-08-03-mainframe-export-command-design.md))
 
 ## Design goals
@@ -199,8 +269,6 @@ It's built on:
 - The [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) —
   the wire protocol behind the interactive debugger.
 
-mockymock is proprietary software: free to use for personal, educational,
-or internal business purposes and free to share as-is, but it may not be
-sold, sublicensed, or bundled into any product or service that is sold.
-See the [LICENSE](LICENSE) (an end-user license agreement, not an OSI
-open-source license) for the full terms.
+mockymock is free software, licensed under the GNU Affero General Public
+License v3.0 or later (AGPL-3.0-or-later), the same license as its
+`cobolparser` dependency. See [LICENSE](LICENSE) for the full terms.

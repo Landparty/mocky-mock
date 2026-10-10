@@ -468,6 +468,35 @@ def test_explicit_file_status_follows_the_default():
     assert override_idx == default_idx + 1
 
 
+def test_default_success_covers_every_file_a_multi_file_open_names():
+    """`OPEN INPUT IN-FILE OUTPUT OUT-FILE` is one site one directive
+    matches (a second is AMBIGUOUS_MOCK); defaulting only the directive's
+    own file left OUT-FILE's status blank and a program checking both
+    statuses took its failure branch. The explicit FILE-STATUS IS still
+    lands on the directive's own file only, after every default."""
+    case = MockTestCase(name="c")
+    directive = MockDirective(MockCategory.OPEN, "IN-FILE")
+    directive.file_status = "35"
+    case.mocks.append(directive)
+    suite = MockTestSuite(name="S", test_cases=[case])
+    site = _site(category=MockCategory.OPEN, label="OPEN", keys=("IN-FILE", "OUT-FILE"))
+    lines = [
+        line.strip()
+        for line in build_site_dispatch(
+            site,
+            suite,
+            TallyRegistry(suite),
+            {"IN-FILE": "WS-IN-FS", "OUT-FILE": "WS-OUT-FS", "OTHER": "WS-X"},
+        )
+    ]
+    moves = [line for line in lines if line.startswith("MOVE")]
+    assert moves == [
+        'MOVE "00" TO WS-IN-FS',
+        'MOVE "00" TO WS-OUT-FS',
+        'MOVE "35" TO WS-IN-FS',
+    ]
+
+
 def test_no_status_move_when_file_has_no_declared_field():
     case = MockTestCase(name="c")
     case.mocks.append(MockDirective(MockCategory.OPEN, "INFILE"))

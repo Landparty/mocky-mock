@@ -173,21 +173,62 @@ def decode_c_escape(text: str, i: int) -> tuple[str, int]:
     return _NAMED_ESCAPES.get(text[i], text[i]), i + 1
 
 
-def _parse_c_string(text: str, i: int) -> tuple[str, int]:
-    _require(i < len(text) and text[i] == '"', "expected opening quote")
-    i += 1
+def decode_gdb_bytes(raw: bytes) -> str:
+    """Decode the bytes an escaped gdb string stands for. gdb octal-escapes
+    every byte it considers non-printable -- including each byte of a
+    UTF-8 sequence under the container's C locale (`Café` arrives as
+    `Caf\\303\\251`) -- so the escapes are gathered as BYTES and decoded
+    as UTF-8 together; turning each one into its own character showed
+    mojibake (`CafÃ©`). A byte that is not part of valid UTF-8 (a
+    HIGH-VALUES `\\377`) still becomes the one character with that code,
+    as before."""
     out: list[str] = []
-    while i < len(text) and text[i] != '"':
+    while raw:
+        try:
+            out.append(raw.decode("utf-8"))
+            break
+        except UnicodeDecodeError as exc:
+            out.append(raw[: exc.start].decode("utf-8"))
+            out.append(chr(raw[exc.start]))
+            raw = raw[exc.start + 1 :]
+    return "".join(out)
+
+
+def unescape_c_bytes(
+    text: str, i: int, terminator: str | None = '"'
+) -> tuple[bytes, int]:
+    """Unescape `text[i:]` up to (not including) `terminator` -- or to the
+    end when it is None -- into the bytes it stands for; returns them and
+    the terminator's index. Octal escapes are raw bytes, everything else
+    is its UTF-8 encoding. See `decode_gdb_bytes`."""
+    buf = bytearray()
+    while i < len(text) and text[i] != terminator:
         if text[i] == "\\":
             i += 1
             _require(i < len(text), "dangling escape in MI string")
+            if text[i] in _OCTAL_DIGITS:
+                start = i
+                while i < len(text) and i - start < 3 and text[i] in _OCTAL_DIGITS:
+                    i += 1
+                value = int(text[start:i], 8)
+                if value <= 0xFF:
+                    buf.append(value)
+                else:
+                    buf += chr(value).encode("utf-8")
+                continue
             decoded, i = decode_c_escape(text, i)
-            out.append(decoded)
+            buf += decoded.encode("utf-8")
         else:
-            out.append(text[i])
+            buf += text[i].encode("utf-8", errors="surrogatepass")
             i += 1
+    return bytes(buf), i
+
+
+def _parse_c_string(text: str, i: int) -> tuple[str, int]:
+    _require(i < len(text) and text[i] == '"', "expected opening quote")
+    raw, i = unescape_c_bytes(text, i + 1)
     _require(i < len(text), "unterminated MI string")
-    return "".join(out), i + 1
+    return decode_gdb_bytes(raw), i + 1
 
 
 def _parse_ident(text: str, i: int) -> tuple[str, int]:
@@ -327,6 +368,12 @@ def _parse_result_or_async(marker: str, line: str) -> MIRecord | None:
                 i += 1
                 continue
             break
+    # A real record ends where its payload does. Program output that only
+    # starts like one -- a DISPLAY of "*stopped by operator" or "^done with
+    # the batch" -- otherwise parsed as a `*stopped` (ending a continue/step
+    # with a frameless stop) or as the in-flight command's result record.
+    if i != len(line):
+        return None
     if marker == "^":
         return ResultRecord(class_name, payload)
     return AsyncRecord(class_name, payload)
@@ -362,7 +409,11 @@ def _stop_event_from_payload(payload: dict) -> StopEvent:
         exit_code = payload.get("exit-code")
         return StopEvent(
             reason="exited",
-            exit_code=int(exit_code, 0) if exit_code is not None else 0,
+            # gdb prints the exit status as C octal, always with a leading
+            # zero (`"0%o"`: exit status 1 is "01", 8 is "010"). `int(_, 0)`
+            # rejected every one of those as a malformed decimal literal
+            # and raised out of the stop handling.
+            exit_code=int(exit_code, 8) if exit_code is not None else 0,
         )
     frame = payload.get("frame", {})
     line = frame.get("line")

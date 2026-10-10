@@ -17,12 +17,108 @@ trap records a failure instead of silently doing nothing.
 
 from __future__ import annotations
 
+import re
+
 from cobolparser.models.statements.call import CallStatement
 
 from mockymock.analysis.mock_surface import BoundarySite
 from mockymock.analysis.refusal import directive_matches_site
-from mockymock.dsl.model import FILE_STATUS_CATEGORIES, MockCategory, MockTestSuite
+from mockymock.dsl.model import (
+    FILE_STATUS_CATEGORIES,
+    SEQUENCED_CALL_CATEGORIES,
+    MockCategory,
+    MockTestSuite,
+)
+from mockymock.splicer.io_copy import DataLayout, from_move, into_move
 from mockymock.splicer.naming import TallyRegistry
+
+#: One token of a CALL statement's text: a (possibly X/N/G/Z/NX/U-prefixed)
+#: quoted literal with doubled quotes inside, a parenthesis, a period, or a
+#: word/numeric literal.
+_CALL_TOKEN_RE = re.compile(
+    r"""(?P<lit>(?:NX|[XNGZU])?(?:"(?:[^"]|"")*"|'(?:[^']|'')*'))"""
+    r"|(?P<punct>[().,;])"
+    r"|(?P<word>[^\s().,;\"']+)",
+    re.IGNORECASE,
+)
+_USING_END_WORDS = frozenset(
+    {"RETURNING", "GIVING", "ON", "NOT", "EXCEPTION", "OVERFLOW", "END-CALL"}
+)
+_PASSING_WORDS = frozenset({"BY", "REFERENCE", "CONTENT", "VALUE"})
+_QUALIFIERS = frozenset({"OF", "IN"})
+_ADDRESS_WORDS = frozenset({"ADDRESS", "LENGTH"})
+
+
+def _literal_inner(token: str) -> str:
+    """The value cobolparser reports for a quoted literal token: prefix and
+    quotes removed, doubled quotes collapsed."""
+    start = token.index(token[-1])
+    quote = token[-1]
+    return token[start + 1 : -1].replace(quote * 2, quote)
+
+
+def _call_using_literals(statement_text: str, names: list[str]) -> list[str | None]:
+    """Per USING operand of the CALL in `statement_text`, the operand's own
+    literal token verbatim (quotes, prefix and all) when it is a quoted
+    literal, else None.
+
+    cobolparser reports a literal argument by its value with the quotes
+    stripped (`CALL "X" USING BY CONTENT "ABC"` -> name `ABC`), which is
+    indistinguishable from a data-name -- so a `CAPTURE ARG` of it emitted
+    `MOVE ABC TO target`: a compile error, or worse a silent MOVE of an
+    unrelated item that happens to be called ABC. The text is re-scanned
+    here and trusted only when it agrees with the parser operand for
+    operand (`names`); any disagreement yields all-None, i.e. today's
+    behavior, never a guess."""
+    none: list[str | None] = [None] * len(names)
+    tokens = list(_CALL_TOKEN_RE.finditer(statement_text))
+    words = [m.group(0) for m in tokens]
+    upper = [w.upper() for w in words]
+    if "USING" not in upper:
+        return none
+    i = upper.index("USING") + 1
+    operands: list[tuple[str, bool]] = []  # (text, is_literal)
+    while i < len(tokens):
+        tok, word = tokens[i], upper[i]
+        if tok.group("punct") in (".", ";", ","):
+            if tok.group("punct") == ".":
+                break
+            i += 1
+            continue
+        if tok.group("punct"):
+            return none  # a subscript/parenthesis this scan does not model
+        if word in _USING_END_WORDS:
+            break
+        if word in _PASSING_WORDS:
+            i += 1
+            continue
+        if tok.group("lit"):
+            operands.append((words[i], True))
+            i += 1
+            continue
+        text = words[i]
+        if word in _ADDRESS_WORDS and i + 2 < len(tokens) and upper[i + 1] == "OF":
+            text = f"{words[i]} OF {words[i + 2]}"
+            i += 3
+        else:
+            i += 1
+        while i + 1 < len(tokens) and upper[i] in _QUALIFIERS:
+            text = f"{text} {words[i]} {words[i + 1]}"
+            i += 2
+        operands.append((text, False))
+    if len(operands) != len(names):
+        return none
+    result: list[str | None] = []
+    for (text, is_literal), name in zip(operands, names, strict=True):
+        if is_literal:
+            if _literal_inner(text) != name:
+                return none
+            result.append(text)
+        else:
+            if " ".join(text.upper().split()) != " ".join(name.upper().split()):
+                return none
+            result.append(None)
+    return result
 
 
 def build_rows_block(
@@ -44,7 +140,8 @@ def build_rows_block(
     the resolved end-of-data signal -- either the mock's own TERMINAL
     group or, for READ only, a default `MOVE "10" TO <status field>` --
     RETURN is never in FILE_STATUS_CATEGORIES, so its TERMINAL group is
-    the only source)."""
+    the only source; CALL/DYNCALL/DLI: their mandatory TERMINAL group,
+    with `[]` row suffixes)."""
     lines = ["EVALUATE TRUE"]
     for index, row in enumerate(rows, start=1):
         lines.append(f"    WHEN {tally_name} = {index}")
@@ -65,8 +162,16 @@ def build_site_dispatch(
     registry: TallyRegistry,
     file_status_fields: dict[str, str] | None = None,
     trace: bool = False,
+    statement_text: str = "",
+    layout: DataLayout | None = None,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    `READ ... INTO` / `RETURN ... INTO` and `WRITE`/`REWRITE`/`RELEASE ...
+    FROM` keep their implicit MOVE (`splicer.io_copy`, issue #149): the FROM
+    item is moved to the record before the body runs, and the record to
+    the INTO item after each row (or after the body) -- unless the mock
+    writes the INTO item itself.
 
     For a file-op directive in FILE_STATUS_CATEGORIES whose file declares
     a FILE STATUS field (`file_status_fields`), the branch always starts
@@ -141,14 +246,28 @@ def build_site_dispatch(
                 f'{site.label} {directive.key}"'
             )
         if directive.category in FILE_STATUS_CATEGORIES:
+            # A statement naming several files (`OPEN INPUT A OUTPUT B`,
+            # `CLOSE A B`) is one site matched by ONE directive (a second
+            # would be AMBIGUOUS_MOCK), so the default success must cover
+            # every file it names -- defaulting only the directive's own
+            # file left the other file's status at its reset value, and a
+            # program checking both statuses took its failure branch.
+            default_fields = dict.fromkeys(
+                field
+                for field in (
+                    file_status_fields.get(key.upper())
+                    for key in [directive.key, *site.keys]
+                )
+                if field
+            )
+            for default_field in default_fields:
+                lines.append(f'                   MOVE "00" TO {default_field}')
             status_field = file_status_fields.get(directive.key.upper())
-            if status_field:
-                lines.append(f'                   MOVE "00" TO {status_field}')
-                if directive.file_status is not None:
-                    lines.append(
-                        f'                   MOVE "{directive.file_status}" '
-                        f"TO {status_field}"
-                    )
+            if status_field and directive.file_status is not None:
+                lines.append(
+                    f'                   MOVE "{directive.file_status}" '
+                    f"TO {status_field}"
+                )
         if directive.captures:
             if not isinstance(site.statement, CallStatement):
                 raise ValueError(
@@ -158,6 +277,13 @@ def build_site_dispatch(
                     f"(CAPTURE_ARG_OUT_OF_RANGE)"
                 )
             using = site.statement.using_parameters
+            # A literal argument must be moved as that literal, not as the
+            # quote-stripped name cobolparser reports -- see
+            # `_call_using_literals`. `statement_text` is the site's own
+            # spliced span.
+            literals = _call_using_literals(
+                statement_text, [str(param.name) for param in using]
+            )
             for capture_index, target in directive.captures:
                 if capture_index > len(using):
                     raise ValueError(
@@ -167,10 +293,21 @@ def build_site_dispatch(
                         f"gate should have caught this "
                         f"(CAPTURE_ARG_OUT_OF_RANGE)"
                     )
-                lines.append(
-                    f"                   MOVE {using[capture_index - 1].name} "
-                    f"TO {target}"
-                )
+                source = literals[capture_index - 1] or using[capture_index - 1].name
+                lines.append(f"                   MOVE {source} TO {target}")
+        copy_from = from_move(site.statement)
+        if copy_from is not None:
+            lines.append(f"                   {copy_from}")
+        copy_into = into_move(
+            site.statement,
+            layout,
+            [
+                *directive.body_lines,
+                *(name for row in directive.rows or [] for name, _ in row),
+                *(name for name, _ in directive.terminal_row or []),
+            ],
+            file_status_fields.get(directive.key.upper()),
+        )
         if directive.rows is not None and directive.category in (
             MockCategory.READ,
             MockCategory.RETURN,
@@ -202,8 +339,34 @@ def build_site_dispatch(
                 for body in build_rows_block(
                     tally_name,
                     directive.rows,
-                    row_suffix_moves=[],
+                    row_suffix_moves=[copy_into] if copy_into else [],
                     exhausted_moves=exhausted_moves,
+                )
+            )
+        elif (
+            directive.rows is not None
+            and directive.category in SEQUENCED_CALL_CATEGORIES
+        ):
+            # Per-invocation sequencing: row N answers this key's Nth call
+            # in the case (the tally counts every site the key matches),
+            # TERMINAL answers every call after the last row. There is no
+            # implicit end-of-data value to default to, so the parser makes
+            # TERMINAL mandatory -- reaching here without one is a bug.
+            if directive.terminal_row is None:
+                raise ValueError(
+                    f"MOCK {directive.describe()} ROWS has no TERMINAL "
+                    f"group -- the parser should have rejected it"
+                )
+            lines.extend(
+                f"                   {body}"
+                for body in build_rows_block(
+                    tally_name,
+                    directive.rows,
+                    row_suffix_moves=[],
+                    exhausted_moves=[
+                        f"MOVE {value} TO {field}"
+                        for field, value in directive.terminal_row
+                    ],
                 )
             )
         elif directive.rows is not None:
@@ -218,6 +381,8 @@ def build_site_dispatch(
             )
         else:
             lines.extend(f"                   {body}" for body in directive.body_lines)
+            if copy_into is not None:
+                lines.append(f"                   {copy_into}")
 
     lines.append("               WHEN OTHER")
     lines.append(

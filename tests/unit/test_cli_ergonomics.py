@@ -217,15 +217,26 @@ def test_per_pair_report_path_keeps_same_stem_suites_apart(tmp_path):
 def test_malformed_config_file_does_not_break_commands_that_never_read_it(
     tmp_path, capsys, monkeypatch
 ):
-    # `skills install` is pure file-copy -- no Docker, no copybook_path/
-    # seed on its own args -- the same "always available" tier `explain`
-    # (added later, in the cut-editor-intelligence PR) would exercise.
     monkeypatch.chdir(tmp_path)
     (tmp_path / "mockymock.toml").write_text("copybook_path = [\n")
-    exit_code = main(["skills", "install", "--project"])
+    exit_code = main(["explain", "UNRESOLVED_COPYBOOK"])
     out = capsys.readouterr().out
     assert exit_code == 0
     assert "could not parse" not in out
+
+
+def test_malformed_config_file_keeps_collect_json_machine_readable(
+    tmp_path, capsys, monkeypatch
+):
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    _, cut = _write_pair(tmp_path)
+    (tmp_path / "mockymock.toml").write_text("copybook_path = [\n")
+    exit_code = main(["collect", "--cut", str(cut), "--json"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "could not parse" in json.loads(out)["error"]
 
 
 def test_malformed_config_file_reported_on_stderr_for_json_only_stdout_commands(

@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-08-19T00:00:00Z
+timestamp: 2026-10-05T12:00:00Z
 ---
 # Overview
 
@@ -140,7 +140,7 @@ purely from absence of a FAIL marker.
 | Function | Output | Notes |
 |---|---|---|
 | `format_console(suite, crash_detail=None)` | Plain text | `TESTSUITE: <name>` header, one `[PASS]`/`[FAIL]`/`[CRASH]` line per case (indented, failure reasons indented further below), trailing `<run> run, <failures> failed[, <n> crashed]` summary line (`<failures>` is the raw SUMMARY check-count as-is; `<run>` falls back to `len(suite.results)` when `suite.tests_run` is 0 -- see Gotchas; the `, <n> crashed` segment only appears when `<n> > 0`) |
-| `format_junit_xml(suite, crash_detail=None)` | Pretty-printed JUnit XML via `xml.etree` + `minidom` | `<testsuite name tests failures errors>` with one `<testcase>` per result; failing cases get a `<failure message>` child per failure reason, crashed cases get a single `<error message>` child instead (JUnit's own failure-vs-error distinction); orphan failures each get their own `<testcase name="orphan-<id>">` with an `<error>` child and are counted into `errors=` and `tests=`; `tests` uses the same `len(suite.results)` fallback as the console `<run>` count. All names/reasons/messages pass through `_xml_safe` first (see Gotchas) |
+| `format_junit_xml(suite, crash_detail=None)` | Pretty-printed JUnit XML via `xml.etree.ElementTree` (`indent` + `tostring`; since 2026-09-30 no `minidom` -- `toprettyxml` wrote tab/LF/CR inside attribute values raw, which readers normalize to spaces; ElementTree escapes them as `&#09;`/`&#10;`/`&#13;`) | `<testsuite name tests failures errors>` with one `<testcase>` per result; failing cases get a `<failure message>` child per failure reason, crashed cases get a single `<error message>` child instead (JUnit's own failure-vs-error distinction); orphan failures each get their own `<testcase name="orphan-<id>">` with an `<error>` child and are counted into `errors=` and `tests=`; `tests` uses the same `len(suite.results)` fallback as the console `<run>` count. All names/reasons/messages pass through `_xml_safe` first (see Gotchas) |
 
 Both formatters take an optional `crash_detail: str | None`. The CLI passes
 the *real* crash evidence when it has any -- `"binary timed out (exit 124);
@@ -154,6 +154,19 @@ Do not re-hardcode that hypothesis into the message: it was previously
 shown even for timeouts and aborts whose stderr evidence had been
 discarded (audit 2026-07-07, findings 4.2/5.1).
 
+## Bug-hunt corrections (2026-10-05)
+
+- **Mid-line markers (#139).** `parse_stdout` finds `__MOCKYMOCK__ ` after
+  leading text, so a program's `DISPLAY ... WITH NO ADVANCING` no longer
+  hides the next marker (it used to drop a FAIL line and report a pass).
+- **Not-run cases (#150).** `json_report.not_run_case_names` lists the
+  selected cases that never printed START; `format_console` shows each as
+  `[NOT RUN]` (and `N not run` in the summary) and `format_junit_xml` adds
+  a `<testcase>` with an `<error>` for each, counted in `tests=`/`errors=`.
+- **Record rewrite (#146).** `build_recording_report` skips a value
+  containing U+FFFD (bytes such as HIGH-VALUES that stdout could not
+  carry) instead of writing a golden that can never match.
+
 ## JSON run report (`report/json_report.py`)
 
 `build_json_report(suite_result, cut_suite=None, crash_detail=None,
@@ -162,8 +175,11 @@ str. Written by `run --json-report`. Adds what the XML cannot carry: per-case
 `.cut` line numbers and tags (from the parsed `MockTestSuite`), per-failure
 attribution (`kind` expect/verify/unknown, the failing directive's `.cut`
 line, `expected`/`actual` split into fields — recovered by re-matching the
-driver's failure-reason strings against the model, splitting on the LAST
-`", got "`), and a synthesized `"not_run"` entry for every selected case the
+driver's failure-reason strings against the model: an EXPECT reason is
+first matched against each directive's exact rendered head
+`expected <name> <op> <value>, got `, since the runtime value after it may
+itself contain `", got "`; only a reason no directive renders to falls
+back to splitting on the LAST `", got "`), and a synthesized `"not_run"` entry for every selected case the
 binary never printed a START marker for. An EXPECT failure head is split
 into name/operator/expected by `_EXPECT_HEAD_RE` (the operator is one of
 `model.EXPECT_OPERATORS`, echoed verbatim by the driver's FAIL line;
@@ -239,6 +255,12 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   the field's `PICTURE` — deliberate, see the design doc's "Value
   formatting" section, including the numeric-edited `PICTURE` caveat this
   does not yet resolve.
+  Two PICTURE-aware exceptions (2026-09-27): a field whose PICTURE is
+  alphanumeric/alphabetic/national (`is_alphanumeric_picture`: an
+  `X`/`A`/`N`/`G` symbol) is always quoted, since `IF F NOT = 1.5` / `-3`
+  against a full-width `PIC X` holding that text is TRUE under GnuCOBOL;
+  and an all-spaces value renders as `SPACES`, never the zero-length
+  `""` IBM Enterprise COBOL rejects.
 - `build_recording_report(scan, suite_result)` — matches every
   `StubExpectation` the scanner found against `suite_result`'s recorded
   values by `f"{case_index:03d}"` (the same case-id convention
@@ -252,6 +274,12 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   indentation), returning `None` when nothing was recorded so the CLI
   never touches the file for a no-op run. No line is ever inserted or
   removed, so there's no splice-ordering hazard to manage.
+  Since 2026-10-04 (`label=True`, the default) it also inserts
+  `assertion_labels.RECORDED_LABEL` above each run of recorded lines, and
+  a closer (a copy of the original covering label, or a blank line) when
+  the next line is a hand-written EXPECT/VERIFY, so recorded values never
+  inherit an INTENT label. Inserts happen bottom-up so earlier indexes
+  stay valid.
 
 This is also where the "never overwrite a hand-edited `EXPECT`" guarantee
 actually holds: `rewrite_cut_text` only ever replaces a line the scanner
@@ -259,6 +287,105 @@ found by matching the `*> STUB EXPECT` pattern — once a stub becomes a
 real `EXPECT` line (by this feature or by hand), it structurally cannot
 match that pattern again, so a second `--record-expectations` run finds
 nothing left to touch there. No provenance tracking needed.
+
+## Test report (`report/test_report.py`, `report/html_report.py`, `report/journal.py`) (2026-10-04)
+
+Backs `mockymock report` and `mockymock journal` (see [cli](cli.md)) and
+the `cobol-test` skill's hand-over.
+
+- `build_report(ReportOptions) -> dict` runs twelve steps, each a dict
+  `{id, title, status (ok|warn|fail|skipped), summary, details, command?}`:
+  environment (`runtime.status.probe`, skippable with
+  `probe_toolchain=False`), understand (`ProgramFlowAnalyzer`, plus
+  `ComplexityAnalyzer` when importable), rules (`BusinessRuleExtractor`,
+  soft import -- absent from cobol-parser <= 1.8.4, so `rulesAvailable`
+  false and the step `skipped`), analysis (`program_analysis.py`, below),
+  inventory (the `.cut` via `dsl.parser`
+  + `assertion_labels.scan_assertion_labels`), lint
+  (`cli.checks.run_static_checks`), scenarios
+  (`ProgramFixtureGenerator.generate_with_scenarios_from_file`'s
+  `scenario_coverage`), run, coverage, mutation, dialect
+  (`analysis.dialect_risk.find_dialect_risks`), verdict.
+- Case reach: each case's PERFORM target(s) closed over flow edges except
+  `FALL_THROUGH`/`CALL`, intersected with paragraphs; synthetic nodes
+  (`X__IF_1`) are dropped. Copybook-expanded programs map lines back via
+  `coverage._matching_index_map`.
+- Mutation `score` in mutate's JSON is a 0..1 fraction; the report stores
+  `scorePercent`. A mutate run that wrote no report (no mutable
+  statements) is a `skipped` step carrying mutate's last output line.
+- Verification level per case: L0 static, L1 executed and passed, L2 also
+  has at least one assertion and suite mutation >= threshold (default
+  80%), L3 also no high/medium dialect risk inside its reach. L4
+  (mainframe) is never computed -- shown as a reminder only.
+- `_findings` categories (severity-ordered): refused, test-failure,
+  suspected-bug (a failed INTENT assertion), no-assertion,
+  missing-assertion (surviving mutant), dead-code, untested-paragraph,
+  rule-without-intent, unlabelled, dialect, coverage, scenario-gap,
+  scenario-gap-covered-by-hand. The `cobol-test` skill's
+  `reference/report.md` lists the same set, pinned by
+  `tests/unit/test_cobol_testing_plugin.py`.
+- `scenario-gap` vs `scenario-gap-covered-by-hand`: the "scenarios" step
+  (`ProgramFixtureGenerator.generate_with_scenarios_from_file`) answers
+  "can the *automatic* generator alone build data for this branch arm" --
+  it knows nothing about what the suite's own hand-written cases do. Before
+  calling a "missed" arm a gap, `_findings` cross-checks its real source
+  line (via `ArmOutcome.origin`, from `stamp_arm_origins` in
+  `cobolparser.generators.scenarios` -- needed because `arm_key`'s line
+  counts lines in the copybook-*expanded* source once copybooks are
+  expanded, not the file on disk) against the suite's own
+  `coverage["uncoveredLines"]`. Covered by hand -> `scenario-gap-covered-
+  by-hand` (info, nothing to do); still uncovered -> `scenario-gap` (info,
+  write the case). Without `--execute`/`--run-json` there is no coverage
+  to check against, so every "missed" arm falls back to `scenario-gap`.
+- `program_analysis.analyze_program` (2026-10-05) fills the report's
+  `analysis` block from the same AST: health (`TechnicalDebtAnalyzer`),
+  complexity, lint (`LintAnalyzer`), redundancy, signature
+  (`ProgramSignatureExtractor`), boundaries, CRUD, SQL/CICS and xref (data
+  flow), plus a paragraph call graph built from the flow dict already
+  computed. Each analyzer is soft-imported by `_load`: missing (lint, xref,
+  signature and SQL/CICS need cobol-parser >= 1.9.0) lands in
+  `unavailable`, raising lands in `failed`, and that section is `None` --
+  never an empty list that reads as "nothing found"; the step is `warn`.
+  Lines go through `_orig` like every other step. Lists that grow with the
+  program are capped (`MAX_DATA_ITEMS`, `MAX_LINT_FINDINGS`, `MAX_EDGES`)
+  with `truncated`; above `MAX_GRAPH_NODES` the SVG is not drawn. Call-graph
+  nodes' `testedBy` is filled after the inventory step (case reach). The
+  HTML renders each block as a collapsible `details.sub` panel (health and
+  call graph open) and the call graph as an inline layered SVG -- no
+  Mermaid, since the page may make no network fetches. A report dict
+  without `analysis` (written before it existed) still renders.
+- Readability layer (2026-10-05, `html_report.py`): plain labels live in
+  `_SEVERITY_LABEL` / `_CATEGORY_LABEL`, one advice sentence per category in
+  `_ADVICE` (shown as "What to do" only when the category is in
+  `_EVIDENCE_DETAIL` or the detail is empty, never for info), and the
+  glossary in `_GLOSSARY`. `_next_steps` builds the "What to do next" list
+  (high kinds, then the run command when run/mutation were skipped and the
+  suite is not refused, then medium, then low; at most five). `_grouped`
+  folds findings sharing (severity, category, title) into one card. The
+  page order is: next steps, findings, test cases, boundaries, program analysis, rules,
+  paragraphs, dialect risks, steps, journal, levels, glossary, with a
+  `nav.toc` of anchors in the header.
+- `boundaries` (report dict, 2026-10-05): `test_report._boundaries` lists
+  mockymock's own `mock_surface.analyze` sites (STOP RUN/GOBACK dropped),
+  each with `mockedBy` from `refusal._gates.directive_matches_site` -- the
+  rule `run` splices by -- and `reachedUnmockedBy` from case reach. Rendered
+  as the "Boundaries" section after Test cases. Older report dicts without
+  the key render a note.
+- `scenario-gap` / `scenario-gap-covered-by-hand` findings carry `items`
+  (one line per branch). `test_report._plain_arm_reason` strips the
+  `EVALUATE@405/WHEN#1:` prefix and rewrites the generator's known reasons
+  (`_ARM_REASONS`) into a sentence; an unknown reason passes through.
+  Without coverage, the title does not claim no test reaches the branch.
+- `LEADING_SENTENCES_NODE` is imported with a fallback to its value
+  (`"PROCEDURE DIVISION"`): cobol-parser 1.8.4 does not export it, and the
+  bare import broke every report on the published package.
+- `render_html(report, standalone=True)` is a single file with no network
+  access (inline CSS/JS, light/dark tokens incl. `[data-theme]`).
+  `standalone=False` emits a fragment starting with `<title>` for hosts
+  that wrap the document themselves.
+- `journal.py`: append-only JSONL, `STATUSES`, `default_journal_path`,
+  `read_journal` returns `(entries, problems)` -- a malformed line is a
+  reported problem, never silently dropped.
 
 # Gotchas
 
