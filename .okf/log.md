@@ -12,6 +12,14 @@ skipped instead of being recorded into an `EXPECT` above the `PERFORM`,
 which the parser refuses -- `run --record-expectations` used to leave a
 `.cut` that no longer ran. Updated [analysis](analysis.md).
 
+## 2026-10-09 -- zero-baseline hint needs an observed field
+
+`mutation.zero_baseline` no longer hints "untestable" on an ADD/SUBTRACT
+swap whose target nothing observes (no EXPECT on it or its group, no read
+by the program other than its own update or a DISPLAY): that survivor is a
+missing assertion, and seeding alone would not kill it. Updated
+[cli](cli.md).
+
 ## 2026-10-09 -- DAP breakpoints matched by source path
 
 `setBreakpoints` for a copybook or any source other than the program
