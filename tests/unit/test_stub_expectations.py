@@ -221,3 +221,41 @@ TESTCASE "templated {AMT}" USING PROVIDER AMOUNTS
     assert len(result.skipped) == 1
     assert result.skipped[0].data_name == "WS-TOTAL"
     assert "PROVIDER block" in result.skipped[0].reason
+
+
+def test_stub_above_the_perform_is_skipped_not_recorded_there():
+    """A RECORD value is the post-PERFORM state, and the rewrite replaces
+    the stub line in place. A stub above the PERFORM was recorded and
+    rewritten as an EXPECT above the PERFORM -- which the parser refuses
+    (issue #150), so the rewritten .cut no longer ran at all."""
+    text = """\
+TESTSUITE "S"
+
+TESTCASE "calc"
+    MOVE 20 TO WS-QTY
+    *> STUB EXPECT WS-NET-TOTAL -- above the PERFORM
+    PERFORM CALC-TOTALS
+    *> STUB EXPECT WS-DISCOUNT-CODE -- below it
+"""
+    result, _ = _scan(text)
+    assert [s.data_name for s in result.stubs] == ["WS-DISCOUNT-CODE"]
+    assert len(result.skipped) == 1
+    skipped = result.skipped[0]
+    assert (skipped.line, skipped.data_name) == (5, "WS-NET-TOTAL")
+    assert "above the PERFORM" in skipped.reason
+
+
+def test_stub_in_a_case_with_no_perform_is_skipped():
+    """No PERFORM means no record point, and an EXPECT there would not
+    parse either."""
+    text = """\
+TESTSUITE "S"
+
+TESTCASE "setup only"
+    MOVE 20 TO WS-QTY
+    *> STUB EXPECT WS-NET-TOTAL
+"""
+    result, _ = _scan(text)
+    assert result.stubs == []
+    assert len(result.skipped) == 1
+    assert "above the PERFORM" in result.skipped[0].reason
