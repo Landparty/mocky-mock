@@ -276,6 +276,29 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "the pinned cobol-parser release only keeps as text). Fails "
         "closed rather than guess the control-flow edge."
     ),
+    "UNRESOLVED_FLOW_MOCK_TARGET": (
+        "A MOCK PARAGRAPH/MOCK SECTION names no paragraph or section in "
+        "the PROCEDURE DIVISION, names more than one (an ambiguous name), "
+        "or names the other kind (MOCK PARAGRAPH on a SECTION, or the "
+        "reverse). Check the spelling, and use the keyword that matches "
+        "how the program declares it."
+    ),
+    "UNRESOLVED_CAPTURE_TARGET": (
+        "A CAPTURE ARG <n> INTO UT-CAP-... target cannot be declared for "
+        "you: the argument's layout cannot be mirrored exactly by a "
+        "synthesized field (a table, a PICTURE-less COMP-1/POINTER item, "
+        "a group holding binary data), the argument is a literal or not a "
+        "uniquely named item, the name is already declared by the "
+        "program, or one target is captured from arguments of different "
+        "layouts. Capture into a WORKING-STORAGE item of your own instead."
+    ),
+    "COLUMN_OVERFLOW": (
+        "mockymock export could not fit an instrumented line within "
+        "column 72, the fixed-format limit a mainframe compiler enforces "
+        "-- most often a MOCK body statement, which is re-indented when "
+        "it is spliced in. Shorten that statement in the .cut (split it, "
+        "or use shorter identifiers) and export again."
+    ),
     # --- Whole-program parse/expansion gates (not per-test-case).
     "PARSE_ERROR": (
         "cobol-parser reported one or more hard parse errors on the "

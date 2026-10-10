@@ -16,6 +16,12 @@ _MOCKYMOCK_ROOT = Path(__file__).resolve().parents[2] / "mockymock"
 # ever appearing as `code="..."` at its own construction site.
 _CODE_KWARG_RE = re.compile(r'code="([A-Z_]+)"')
 _QUOTED_CODE_RE = re.compile(r'"([A-Z]+(?:_[A-Z]+)+)"')
+# The two other shapes a code is emitted in: flow_mocks.py's positional
+# `_refusal("CODE", ...)` helper, and a problem string printed as
+# `refused (CODE): ...` (checks.py's capture gate, export's column gate).
+# Both used to slip past the scan, so `explain` called them uncatalogued.
+_REFUSAL_HELPER_RE = re.compile(r'_refusal\(\s*"([A-Z]+(?:_[A-Z]+)+)"')
+_REFUSED_TEXT_RE = re.compile(r"refused \(([A-Z]+(?:_[A-Z]+)+)\)")
 
 # Not actual refusal codes, even though they match the all-caps pattern
 # (label constants, dict keys that are prose not codes, etc.) -- explicit
@@ -29,6 +35,8 @@ _NOT_CODES = {
 def _codes_referenced_in(path: Path) -> set[str]:
     text = path.read_text(encoding="utf-8")
     found = set(_CODE_KWARG_RE.findall(text))
+    found |= set(_REFUSAL_HELPER_RE.findall(text))
+    found |= set(_REFUSED_TEXT_RE.findall(text))
     if path.name in ("_types.py",):
         found |= set(_QUOTED_CODE_RE.findall(text))
     return found - _NOT_CODES
