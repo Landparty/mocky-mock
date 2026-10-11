@@ -15,7 +15,9 @@ through every static gate as synthetic cases; shared BEFORE-* mocks only
 need to be reached by some case or hook step. Entry parameters: a
 default entry's `PROCEDURE DIVISION USING`/`RETURNING` is now blanked and
 its parameters folded into WORKING-STORAGE (reset per case, saved after
-BEFORE-ALL) instead of refused. Updated [dsl](dsl.md), [splicer](splicer.md),
+BEFORE-ALL) instead of refused. Plain `generate` scaffolds now mock every
+boundary a paragraph reaches, not just its own (18 to 27 of 34 corpus and
+example scaffolds lint-clean). Updated [dsl](dsl.md), [splicer](splicer.md),
 [analysis](analysis.md).
 
 ## 2026-10-10 -- explain covers three more refusal codes

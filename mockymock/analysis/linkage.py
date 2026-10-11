@@ -317,8 +317,11 @@ def procedure_header_clause_spans(
     """Column spans `(line_number, start_column, end_column)` (1-based line,
     0-based half-open columns, as `stub_writer.replace_columns` takes them)
     holding the default entry's `USING` / `RETURNING` clause, from the
-    keyword up to -- not including -- the header's closing period, across
-    as many lines as the list wraps. `[]` when the header has no such
+    keyword through the header's closing period, across as many lines as
+    the list wraps. `splicer.linkage.neutralize` writes the period back at
+    the start of the first span, so the header always ends on its first
+    line: the driver is inserted right after that line, and a period left
+    on a later line put the driver inside the header (cobc: syntax error). `[]` when the header has no such
     clause. None when it cannot be blanked safely: a `CHAINING` clause (a
     different mechanism, never neutralized) or no closing period within
     `_HEADER_MAX_LINES` lines."""
@@ -345,7 +348,7 @@ def procedure_header_clause_spans(
         ):
             return None
         period = _PERIOD_RE.search(text, start)
-        end = period.start() if period else len(text.rstrip())
+        end = period.end() if period else len(text.rstrip())
         if end > start:
             spans.append((idx + 1, start, end))
         if period:

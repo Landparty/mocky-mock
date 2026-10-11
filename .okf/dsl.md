@@ -568,6 +568,15 @@ Rules:
   ```
   `labels` are deduped `site.label` values joined with `", "`, used only in
   the human-readable `TESTCASE` name.
+- **Reached boundaries (2026-10-10).** A paragraph's case mocks every
+  boundary its `PERFORM` can reach (`_reachable_sites`: its own sites, then
+  those of every paragraph `ProgramContext.reachable_from` reaches, in
+  source order), not just its own -- the same walk lint gates on. Before,
+  a paragraph that PERFORMed another touching a boundary got a scaffold
+  its own lint refused (UNMOCKED_*); across `examples/` and the enterprise
+  corpus that took lint-clean plain scaffolds from 18 to 27 of 34. Falls
+  back to the paragraph's own sites when reachability can't be
+  established, as the bundle path's #143 filter does.
 - Boundaries between `PROCEDURE DIVISION.` and the first paragraph header
   (cobolparser's unnamed `""` paragraph) are not scaffolded: no `PERFORM`
   can enter there, and emitting one produced a bare `PERFORM ` that made

@@ -215,8 +215,11 @@ def test_wrapped_using_and_returning_are_blanked_up_to_the_period():
     assert spans is not None and len(spans) == 2
     out = neutralize(list(lines), program, linkage_plan(program))
     first = spans[0][0] - 1
-    assert out[first].split() == ["PROCEDURE", "DIVISION"]
-    assert out[first + 1].strip() == "."
+    # The header must end on its first line: the driver is inserted right
+    # after it, so a period left on the continuation line would put the
+    # driver inside the header.
+    assert out[first].split() == ["PROCEDURE", "DIVISION", "."]
+    assert out[first + 1].strip() == ""
 
 
 def test_chaining_header_is_still_refused():

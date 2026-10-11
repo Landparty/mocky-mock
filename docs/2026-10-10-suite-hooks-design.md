@@ -112,6 +112,30 @@ to scaffolded. Not modeled: `BY VALUE` isolation (a callee's change to a
 BY VALUE parameter stays visible to the test, where a caller would not
 see it) -- harmless for a test that only reads the field.
 
+## Scaffolding the newly supported programs
+
+Unrefusing them exposed a `generate` gap the refusal had hidden: the
+placeholder scaffold mocked only each entry paragraph's own boundaries,
+so DB2SP's `0000-MAIN` case (which reaches its cursor `OPEN` through a
+`PERFORM` inside an `EVALUATE`) failed lint. It now mocks every boundary
+the paragraph reaches (`generator._reachable_sites`), which also fixed
+nine other scaffolds across `examples/` and the corpus (18 to 27 of 34
+lint-clean, none worse).
+
+Wrapped `PROCEDURE DIVISION USING` lists: the driver is inserted right
+after the header's first line, so `neutralize` writes the closing period
+there and blanks the original one; leaving it on a continuation line put
+the driver inside the header (found compiling DB2SP).
+
+## Verification with GnuCOBOL
+
+Run against GnuCOBOL 3.2 (conda-forge build inside the
+`mockymock-gnucobol` image): the hook and LINKAGE samples pass, a
+deliberately wrong EXPECT fails, AFTER-ALL output lands after the last
+case, the snapshot program in `tests/unit/test_suite_hooks.py` (COMP-3,
+SIGN SEPARATE, group with OCCURS, POINTER, COMP-2) passes, CICSLINK and
+DB2SP plain scaffolds run green.
+
 ## Not done
 
 - Integration tests: the integration tier (real GnuCOBOL) is not run in
@@ -121,7 +145,7 @@ see it) -- harmless for a test that only reads the field.
   tests/integration` locally before relying on it.
 - Restoring OCCURS ... DEPENDING ON groups.
 - Hook steps in `mockymock generate --fill` (fill only edits TESTCASEs).
-- `generate`'s placeholder scaffold mocks only the boundaries in each
-  entry paragraph itself, not ones it reaches through PERFORM (DB2SP's
-  `0000-MAIN` case then fails lint). Pre-existing; the old LINKAGE
-  refusal hid it for these programs.
+- IMSMPP's plain (placeholder) scaffold times out under `run`: its
+  `CBLTDLI` mock never returns the `QC` status that ends the message
+  loop, the known limit of placeholder bodies. `generate --with-data`
+  scaffolds all three newly supported programs green.

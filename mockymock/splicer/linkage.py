@@ -53,8 +53,13 @@ def neutralize(lines: list[str], program, plan: LinkagePlan) -> list[str]:
     # in WORKING-STORAGE, which cobc rejects ("not in LINKAGE SECTION"):
     # blank it, width-preserving like every edit here. The gate already
     # refused a header whose clause cannot be delimited.
-    for line_number, start, end in procedure_header_clause_spans(lines, program) or []:
-        lines = replace_columns(lines, line_number, start, end, "")
+    spans = procedure_header_clause_spans(lines, program) or []
+    for index, (line_number, start, end) in enumerate(spans):
+        # The closing period moves to where the clause began, so the header
+        # is complete on its first line (see procedure_header_clause_spans).
+        lines = replace_columns(
+            lines, line_number, start, end, "." if index == 0 else ""
+        )
     return lines
 
 

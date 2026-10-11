@@ -298,3 +298,44 @@ def test_scaffold_skips_boundaries_before_the_first_paragraph():
     assert [case.perform_target for case in suite.test_cases] == ["WORK-PARA"]
     assert 'MOCK CALL "SUBA"' not in text
     assert "*>   CALL at line 7" in text
+
+
+REACHED_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. REACHED.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RC PIC 9(4).
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           CALL "FIRST" USING WS-RC
+           EVALUATE WS-RC
+               WHEN 0
+                   PERFORM 1000-NEXT
+           END-EVALUATE
+           GOBACK.
+       1000-NEXT.
+           CALL "SECOND" USING WS-RC.
+"""
+
+
+def test_scaffold_mocks_boundaries_in_paragraphs_the_entry_reaches():
+    """A paragraph's case mocks every boundary its PERFORM can reach, not
+    only its own -- otherwise the scaffold fails its own lint (UNMOCKED_CALL;
+    the enterprise corpus's DB2SP reaches its cursor OPEN through a PERFORM
+    inside an EVALUATE)."""
+    from cobolparser.preprocess import normalize_fixed_format
+
+    from mockymock.dsl.generator import ProgramContext
+
+    result = parse_cobol(REACHED_SOURCE)
+    surface = analyze(result.ast)
+    lines = normalize_fixed_format(REACHED_SOURCE.splitlines()).splitlines()
+    context = ProgramContext.build(result.ast, lines, surface)
+    suite = parse_cut(scaffold_cut("REACHED", surface, source=context))
+    by_entry = {
+        case.perform_target: [m.key for m in case.mocks] for case in suite.test_cases
+    }
+    assert by_entry == {"0000-MAIN": ["FIRST", "SECOND"], "1000-NEXT": ["SECOND"]}
+    for case in suite.test_cases:
+        assert check_test_case(surface, result.ast, case) == []
