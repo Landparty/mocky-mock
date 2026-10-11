@@ -134,7 +134,11 @@ Run against GnuCOBOL 3.2 (conda-forge build inside the
 deliberately wrong EXPECT fails, AFTER-ALL output lands after the last
 case, the snapshot program in `tests/unit/test_suite_hooks.py` (COMP-3,
 SIGN SEPARATE, group with OCCURS, POINTER, COMP-2) passes, CICSLINK and
-DB2SP plain scaffolds run green.
+DB2SP plain scaffolds run green. `python -m pytest tests/integration`:
+158 passed; the 5 failures fail identically on `main` and come from the
+substitute image (conda-forge's GnuCOBOL has no `gcov` on PATH and no
+indexed-file support), and `test_debug.py` (gdb) was not run -- it hung
+in that image. Re-run both on the real Debian image before merging.
 
 ## Not done
 
