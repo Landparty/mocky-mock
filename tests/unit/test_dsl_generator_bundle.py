@@ -1316,3 +1316,48 @@ def test_the_unverified_note_does_not_break_parsing_or_linting():
     suite = parse_cut(text)
     for case in suite.test_cases:
         assert check_test_case(surface, result.ast, case) == [], case.name
+
+
+def test_with_data_never_moves_into_a_pointer_or_index_argument(tmp_path):
+    """A CALL argument declared USAGE PROCEDURE-POINTER / POINTER / INDEX
+    came back from the bundle as a numeric field holding "0", and the mock
+    body said `MOVE 0 TO WS-PROC-PTR` -- which cobc rejects ("invalid MOVE
+    statement"), so the generated suite never compiled (LESERV's
+    CEEHDLR handler registration). A pointer is reset with SET ... TO NULL
+    (as the WORKING-STORAGE reset does); an INDEX item gets no line."""
+    from mockymock.cli.main import main
+
+    source = tmp_path / "PTRPGM.cbl"
+    source.write_text(
+        """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PTRPGM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-PROC-PTR   USAGE PROCEDURE-POINTER.
+       01 WS-DATA-PTR   USAGE POINTER.
+       01 WS-IDX        USAGE INDEX.
+       01 WS-RC         PIC S9(4) COMP VALUE 0.
+       01 WS-OUT        PIC X(10) VALUE SPACES.
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           SET WS-DATA-PTR TO ADDRESS OF WS-OUT
+           CALL "REGPGM" USING WS-PROC-PTR WS-DATA-PTR WS-IDX WS-RC
+           IF WS-RC = 0
+              MOVE "OK" TO WS-OUT
+           END-IF
+           GOBACK.
+""",
+        encoding="utf-8",
+    )
+    out = tmp_path / "PTRPGM.cut"
+    assert (
+        main(["generate", str(source), "--with-data", "--seed", "1", "-o", str(out)])
+        == 0
+    )
+    text = out.read_text(encoding="utf-8")
+    assert "MOVE 0 TO WS-PROC-PTR" not in text
+    assert "MOVE 0 TO WS-IDX" not in text
+    assert "TO WS-IDX" not in text
+    assert "SET WS-PROC-PTR TO NULL" in text
+    assert "MOVE 0 TO WS-RC" in text

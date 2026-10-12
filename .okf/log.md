@@ -5,6 +5,14 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-12 -- pointer and INDEX fields in generated and recorded tests
+
+`generate --with-data` no longer writes `MOVE 0 TO <pointer>` (a compile
+error) for a POINTER-family CALL argument: it writes `SET ... TO NULL`, and
+nothing for an INDEX item. `run --record-expectations` skips a stub on such
+an item instead of recording an address into an EXPECT that does not
+compile. Updated [dsl](dsl.md), [report](report.md).
+
 ## 2026-10-10 -- explain covers three more refusal codes
 
 `UNRESOLVED_FLOW_MOCK_TARGET`, `UNRESOLVED_CAPTURE_TARGET` and

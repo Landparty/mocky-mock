@@ -1164,16 +1164,34 @@ def _row_target(spec: FieldSpec, source: ProgramContext | None) -> str:
     return _qualified_reference(spec.qualified_name, spec.column, spec.name)
 
 
+#: USAGEs a mock body cannot MOVE a generated value into: POINTER-family
+#: items take only SET (NULL is their only data-free value), and an INDEX
+#: item's content is implementation-defined. cobol-parser's bundle lays
+#: them out as numeric fields holding "0", and `MOVE 0 TO <pointer>` is a
+#: compile error ("invalid MOVE statement").
+_POINTER_USAGES = frozenset(
+    {"POINTER", "PROCEDURE-POINTER", "FUNCTION-POINTER", "PROGRAM-POINTER"}
+)
+
+
+def _row_move_line(row: dict[str, str], spec: FieldSpec, target: str) -> str | None:
+    usage = (spec.usage or "").upper()
+    if usage in _POINTER_USAGES:
+        return f"SET {target} TO NULL"
+    if usage == "INDEX":
+        return None
+    return f"MOVE {_bundle_rendered_value(row.get(spec.column, ''), spec.category)} TO {target}"
+
+
 def _row_move_lines(
     row: dict[str, str],
     fixture: BoundaryFixture,
     source: ProgramContext | None = None,
 ) -> list[str]:
-    return [
-        f"MOVE {_bundle_rendered_value(row.get(spec.column, ''), spec.category)} "
-        f"TO {_row_target(spec, source)}"
-        for spec in fixture.layout
-    ]
+    lines = (
+        _row_move_line(row, spec, _row_target(spec, source)) for spec in fixture.layout
+    )
+    return [line for line in lines if line is not None]
 
 
 def _status_only_body(fixture: BoundaryFixture) -> list[str]:

@@ -736,6 +736,10 @@ paragraph-grouped path described above, unchanged. A real
   via `_sql_rows_directive` (`_sql_wants_rows` decides single vs. multi).
   Values render through `_bundle_rendered_value`: numeric-family
   `FieldSpec` categories render bare, everything else quoted and escaped.
+  A POINTER-family field gets `SET <field> TO NULL` and an INDEX field no
+  line at all (`_row_move_line`, 2026-10-12): the bundle lays both out as
+  numeric fields holding `0`, and `MOVE 0 TO <pointer>` is a cobc compile
+  error (LESERV's `CALL 'CEEHDLR' USING HANDLER-ROUTINE ...`).
 - **`_read_body`'s `WHEN OTHER` branch also replicates the source `AT END`
   clause's own constant-valued statements**, not just the FILE STATUS
   field (`_replicated_at_end_statements`, via `_is_safe_literal_source`
