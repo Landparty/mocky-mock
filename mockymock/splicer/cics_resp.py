@@ -190,6 +190,39 @@ def expand_dfhresp(lines: list[str]) -> tuple[list[str], list[RespExpansion]]:
     return lines, expansions
 
 
+def expand_dfhresp_text(text: str) -> tuple[str, list[str]]:
+    """The `.cut` counterpart of `expand_dfhresp`, for one line of suite
+    text (mock bodies, ROWS/TERMINAL values, setup MOVEs, EXPECT values):
+    every `DFHRESP(<known condition>)` outside a string literal and before
+    an inline `*>` comment, replaced by its EIBRESP number. Not
+    width-preserving -- .cut text has no column contract. Returns the new
+    text and every condition name that is not in `DFHRESP_VALUES` (left
+    unexpanded; the caller refuses them, since the compile error they would
+    otherwise become names no .cut line)."""
+    strings = [(m.start(), m.end()) for m in _STRING_RE.finditer(text)]
+
+    def in_string(pos: int) -> bool:
+        return any(start <= pos < end for start, end in strings)
+
+    comment = next(
+        (m.start() for m in re.finditer(r"\*>", text) if not in_string(m.start())),
+        len(text),
+    )
+    unknown: list[str] = []
+
+    def repl(call: re.Match[str]) -> str:
+        if call.start() >= comment or in_string(call.start()):
+            return call.group(0)
+        condition = call.group(1).upper()
+        value = DFHRESP_VALUES.get(condition)
+        if value is None:
+            unknown.append(condition)
+            return call.group(0)
+        return str(value)
+
+    return _DFHRESP_CALL_RE.sub(repl, text), unknown
+
+
 def expansion_note(expansions: list[RespExpansion]) -> str:
     """One transparency line naming every condition expanded (callers add
     their own `mockymock <command>:` prefix, as for every other note)."""

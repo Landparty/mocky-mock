@@ -222,8 +222,8 @@ def test_rows_on_non_sql_category_is_rejected():
     cut = """\
 TESTSUITE "bad rows"
 
-TESTCASE "cics rows"
-    MOCK CICS "READ" ROWS
+TESTCASE "open rows"
+    MOCK OPEN F ROWS
         ( X = 1 )
     END-MOCK
     PERFORM MAIN-PARA

@@ -139,9 +139,11 @@ CAPTURE_CATEGORIES = frozenset({MockCategory.CALL, MockCategory.DYNCALL})
 # These categories have no implicit end-of-data value (no SQLCODE, no FILE
 # STATUS), so their TERMINAL group is mandatory -- without it the last
 # row's response would repeat forever and a retrieve-and-loop program
-# would spin until `run --timeout`. MQ is CALL at parse time.
+# would spin until `run --timeout`. MQ is CALL at parse time. CICS
+# (2026-10-13, #169) is the STARTBR/READNEXT browse loop's case: EXEC CICS
+# reports its end through RESP, which only the TERMINAL group can set.
 SEQUENCED_CALL_CATEGORIES = frozenset(
-    {MockCategory.CALL, MockCategory.DYNCALL, MockCategory.DLI}
+    {MockCategory.CALL, MockCategory.DYNCALL, MockCategory.DLI, MockCategory.CICS}
 )
 
 # Every category ROWS is valid on. SQL ends with SQLCODE 100 (no TERMINAL),
@@ -166,7 +168,7 @@ class MockDirective:
     rows: list[list[tuple[str, str]]] | None = None
     """Structured rows for a `MOCK <cat> <key> ROWS (...) (...) END-MOCK`
     directive (SQL, READ, RETURN, and the SEQUENCED_CALL_CATEGORIES
-    CALL/DYNCALL/DLI). `None` for an ordinary mock (its body lives in
+    CALL/DYNCALL/DLI/CICS). `None` for an ordinary mock (its body lives in
     `body_lines` instead); populated only for ROWS_CATEGORIES, mutually
     exclusive with `body_lines`."""
     file_status: str | None = None
@@ -178,7 +180,7 @@ class MockDirective:
     injector.build_site_dispatch)."""
     terminal_row: list[tuple[str, str]] | None = None
     """Field assignments for the WHEN OTHER (rows-exhausted) branch of a
-    READ/RETURN/CALL/DYNCALL/DLI `... ROWS` block, from its
+    READ/RETURN/CALL/DYNCALL/DLI/CICS `... ROWS` block, from its
     `TERMINAL ( F = v, ... )` line (optional for READ, mandatory for the
     SEQUENCED_CALL_CATEGORIES, refused-without for RETURN). Always `None`
     for SQL rows (SQLCODE 100 is fixed) and for non-ROWS mocks."""

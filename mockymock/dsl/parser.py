@@ -65,6 +65,7 @@ from mockymock.dsl.model import (
     MockTestSuite,
     VerifyDirective,
 )
+from mockymock.splicer.cics_resp import expand_dfhresp_text
 
 _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
 # CALL also appears here: the bare-key form is the dynamic-CALL mock.
@@ -88,7 +89,7 @@ _BARE_CATS = (
 
 _ROWS_SUPPORTED = (
     "ROWS is only supported for MOCK SQL, MOCK READ, MOCK RETURN, "
-    "MOCK CALL (static or dynamic), MOCK MQ, and MOCK DLI"
+    "MOCK CALL (static or dynamic), MOCK MQ, MOCK DLI, and MOCK CICS"
 )
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
@@ -680,6 +681,19 @@ def parse_cut(text: str) -> MockTestSuite:
         line = raw_line.strip()
         if not line:
             continue
+        if not _COMMENT_RE.match(line):
+            # DFHRESP(...) in suite text expands exactly as it does in
+            # program lines (splicer.cics_resp): GnuCOBOL has no CICS
+            # translator, so a spliced-in `MOVE DFHRESP(NOTFND) TO WS-RESP`
+            # would otherwise be a raw cobc error naming no .cut line.
+            line, unknown_resp = expand_dfhresp_text(line)
+            if unknown_resp:
+                raise CutParseError(
+                    f"line {line_no}: DFHRESP({unknown_resp[0]}) is not a "
+                    f"CICS response condition mockymock knows -- use a "
+                    f"condition name from the EIBRESP table (NORMAL, "
+                    f"NOTFND, ENDFILE, ...) or the numeric RESP value"
+                )
 
         if in_mock is not None:
             if case is not None and case_provider is not None:
@@ -711,7 +725,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 if in_mock.category not in TERMINAL_CATEGORIES:
                     raise CutParseError(
                         f"line {line_no}: TERMINAL is only supported for "
-                        f"MOCK READ/RETURN/CALL/MQ/DLI ... ROWS, not MOCK "
+                        f"MOCK READ/RETURN/CALL/MQ/DLI/CICS ... ROWS, not MOCK "
                         f"{in_mock.category.keyword} ... ROWS (SQL rows "
                         f"always end with SQLCODE 100)"
                     )

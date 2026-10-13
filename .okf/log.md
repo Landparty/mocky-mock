@@ -5,6 +5,14 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-13 -- MOCK CICS takes ROWS/TERMINAL; DFHRESP(...) expands in .cut text
+
+#169. `MOCK CICS "READNEXT" ROWS ( ... ) TERMINAL ( ... )` was rejected, so a
+STARTBR/READNEXT browse loop had no way to end; CICS is now in
+`SEQUENCED_CALL_CATEGORIES` (mandatory TERMINAL, like CALL/DLI). And
+`DFHRESP(NOTFND)` in a mock body reached cobc unexpanded; `parse_cut` now
+expands it in every .cut line and refuses unknown condition names. Updated
+[dsl](dsl.md), [splicer](splicer.md).
 ## 2026-10-13 -- CAPTURE ARG of an OMITTED argument is refused
 
 `CALL "X" USING OMITTED B` with `CAPTURE ARG 1` linted clean and then

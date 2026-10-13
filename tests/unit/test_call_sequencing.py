@@ -189,7 +189,7 @@ TESTCASE "c"
         parse_cut(bad)
 
 
-@pytest.mark.parametrize("opening", ['MOCK CICS "READ" ROWS', "MOCK OPEN F ROWS"])
+@pytest.mark.parametrize("opening", ["MOCK OPEN F ROWS", "MOCK WRITE F ROWS"])
 def test_rows_still_rejected_on_other_categories(opening):
     bad = f"""\
 TESTSUITE "s"
