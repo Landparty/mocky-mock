@@ -166,6 +166,7 @@ def _parse_program(options: ReportOptions) -> tuple[_Program | None, str | None]
     from cobolparser import parse_cobol
 
     from mockymock._lines import read_utf8_source, split_source_lines
+    from mockymock.analysis.flow_targets import normalize_flow_targets
     from mockymock.report.coverage import _matching_index_map
 
     raw = read_utf8_source(options.program)
@@ -183,6 +184,7 @@ def _parse_program(options: ReportOptions) -> tuple[_Program | None, str | None]
         except Exception as exc:  # noqa: BLE001 -- reported as the step's reason
             return None, f"copybook expansion failed: {exc}"
     result = parse_cobol(source, filename=options.program.name)
+    normalize_flow_targets(result.ast)
     if result.ast is None or not result.success:
         errors = "; ".join(str(e) for e in result.errors[:3])
         return None, f"parse failed: {errors or 'no AST'}"

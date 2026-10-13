@@ -6,6 +6,7 @@ from mockymock.analysis.assertion_labels import scan_assertion_labels
 from mockymock.analysis.stub_expectations import scan_stub_expectations
 from mockymock.dsl.parser import parse_cut
 from mockymock.report.record_rewrite import (
+    address_fields,
     build_recording_report,
     field_pictures,
     numeric_scale,
@@ -531,3 +532,64 @@ TESTCASE "calc"
     labels = {a.text: a for a in scan_assertion_labels(rewritten)}
     assert labels["EXPECT WS-TOTAL TO BE 10"].label is None
     parse_cut(rewritten)
+
+
+# --- POINTER-family / INDEX items -------------------------------------------
+# DISPLAY of a pointer prints an address (`0x000055947aac91a0`), of an
+# INDEX an implementation-defined number. Recorded, they became `EXPECT
+# WS-PTR TO BE "0x..."`, which cobc refuses to compile (a pointer is not
+# comparable with an alphanumeric literal) -- the next run failed to build.
+
+_POINTER_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PTRPGM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-PROC-PTR   USAGE PROCEDURE-POINTER.
+       01 WS-DATA-PTR   USAGE POINTER.
+       01 WS-IDX        USAGE INDEX.
+       01 WS-RC         PIC S9(4) COMP VALUE 0.
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           GOBACK.
+"""
+
+
+def test_address_fields_names_pointer_and_index_items():
+    from cobolparser import parse_cobol
+
+    program = parse_cobol(_POINTER_PROGRAM).ast
+    assert address_fields(program) == {"WS-PROC-PTR", "WS-DATA-PTR", "WS-IDX"}
+
+
+def test_stub_on_a_pointer_or_index_item_is_skipped_not_recorded():
+    text = """\
+TESTSUITE "S"
+
+TESTCASE "calc"
+    PERFORM 0000-MAIN
+    *> STUB EXPECT WS-PROC-PTR
+    *> STUB EXPECT WS-IDX
+    *> STUB EXPECT WS-RC
+"""
+    scan = _scan(text)
+    suite_result = _TestSuiteResult(
+        suite_name="S",
+        results=[
+            _TestResult(
+                case_id="001",
+                case_name="calc",
+                recorded=[
+                    ("WS-PROC-PTR", "0x0000000000000000"),
+                    ("WS-IDX", "+000000000"),
+                    ("WS-RC", "+00000"),
+                ],
+            )
+        ],
+    )
+    report = build_recording_report(
+        scan, suite_result, address_items={"WS-PROC-PTR", "WS-IDX"}
+    )
+    assert [r.stub.data_name for r in report.recorded] == ["WS-RC"]
+    assert [s.data_name for s in report.skipped] == ["WS-PROC-PTR", "WS-IDX"]
+    assert all("POINTER" in s.reason for s in report.skipped)

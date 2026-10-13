@@ -261,6 +261,9 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   against a full-width `PIC X` holding that text is TRUE under GnuCOBOL;
   and an all-spaces value renders as `SPACES`, never the zero-length
   `""` IBM Enterprise COBOL rejects.
+  A stub on a POINTER-family or INDEX item is skipped, not recorded
+  (`address_fields`, passed to `build_recording_report`, 2026-10-12): its
+  DISPLAY text is an address, and `EXPECT P TO BE "0x..."` does not compile.
 - `build_recording_report(scan, suite_result)` — matches every
   `StubExpectation` the scanner found against `suite_result`'s recorded
   values by `f"{case_index:03d}"` (the same case-id convention
