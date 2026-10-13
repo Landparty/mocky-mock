@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-13 -- MOCK CICS takes ROWS/TERMINAL; DFHRESP(...) expands in .cut text
+
+#169. `MOCK CICS "READNEXT" ROWS ( ... ) TERMINAL ( ... )` was rejected, so a
+STARTBR/READNEXT browse loop had no way to end; CICS is now in
+`SEQUENCED_CALL_CATEGORIES` (mandatory TERMINAL, like CALL/DLI). And
+`DFHRESP(NOTFND)` in a mock body reached cobc unexpanded; `parse_cut` now
+expands it in every .cut line and refuses unknown condition names. Updated
+[dsl](dsl.md), [splicer](splicer.md).
+
 ## 2026-10-13 -- generate --with-data stops counting calls that may not run
 
 A single site under an IF (LOANPMT's ROLLBACK), or a top-level site in a

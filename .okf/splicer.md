@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-10T12:00:00Z
+timestamp: 2026-10-13T22:00:00Z
 ---
 
 # Overview
@@ -709,6 +709,10 @@ silently flip a branch.
   sees what was not expanded: DFHVALUE, an unknown condition name, a call
   split across lines. A call inside a string literal is left alone (text).
 - One note per run lists every condition expanded and its value.
+- **`.cut` text too** (2026-10-13, #169): `expand_dfhresp_text(line)` is
+  the parser-side counterpart (not width-preserving; skips strings and
+  inline `*>` comments) and returns unknown condition names, which
+  `parse_cut` refuses -- see [dsl](dsl.md).
 
 # CICS EIB Field Synthesis (cics_eib.py)
 

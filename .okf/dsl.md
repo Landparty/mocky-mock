@@ -595,7 +595,7 @@ Rules:
   inside a quoted name, so interpolating one raw would make the scaffold
   unparseable.
 
-### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`)
+### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`, `CICS`)
 
 `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
 END-MOCK`, `MOCK READ <file> ROWS ( FIELD = value, ... ) ( ... )
@@ -604,11 +604,13 @@ ROWS ( FIELD = value, ... ) ( ... ) TERMINAL ( FIELD = value, ... )
 END-MOCK` were the first three categories `ROWS` was valid on (RETURN
 joined 2026-08-17, SORT/MERGE mocking); `CALL` (quoted static key, and
 `MOCK MQ`, which is CALL), `DYNCALL` (bare `MOCK CALL WS-PGM`) and `DLI`
-joined 2026-10-05 -- see "Per-call sequencing" below. The set is
+joined 2026-10-05 -- see "Per-call sequencing" below -- and `CICS` joined
+2026-10-13 (#169) on the same terms, for the STARTBR/READNEXT browse loop
+whose end only a RESP set by `TERMINAL` can signal. The set is
 `model.ROWS_CATEGORIES`; any other category raises `CutParseError` at
 parse time (`"ROWS is only supported for MOCK SQL, MOCK READ, MOCK
-RETURN, MOCK CALL (static or dynamic), MOCK MQ, and MOCK DLI, not MOCK
-<cat>"`). All three store structured
+RETURN, MOCK CALL (static or dynamic), MOCK MQ, MOCK DLI, and MOCK CICS,
+not MOCK <cat>"`). All three store structured
 rows on `MockDirective.rows` instead of free-form `body_lines` — the two
 are mutually exclusive by construction (the parser routes lines to one or
 the other based on whether `ROWS` appeared on the opening line). Row
@@ -1098,3 +1100,14 @@ deliberately overrides it.
 - [cli](cli.md) — `mockymock generate` calls `scaffold_cut`; `mockymock run` calls `parse_cut`
 - [analysis](analysis.md) — `stub_expectations.py`'s raw-text scan for `*> STUB EXPECT` comments
 - [report](report.md) — `record_rewrite.py`, which rewrites a stub comment into a real `EXPECT` line
+
+### `DFHRESP(...)` in .cut text (2026-10-13, #169)
+
+`parse_cut` runs `splicer.cics_resp.expand_dfhresp_text` over every
+non-comment line before matching it, so `DFHRESP(<condition>)` in a mock
+body, a ROWS/TERMINAL value, a setup MOVE or an EXPECT value becomes its
+EIBRESP number exactly as it does in program lines (GnuCOBOL has no CICS
+translator, so an unexpanded one in spliced mock code was a raw cobc error
+naming no .cut line). Calls inside a string literal or after an inline `*>`
+stay text. A condition name not in `DFHRESP_VALUES` is a `CutParseError`,
+so `lint` reports it.
