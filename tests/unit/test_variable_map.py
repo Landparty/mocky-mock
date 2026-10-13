@@ -7,8 +7,10 @@ implementation plan's Task 4) -- not hand-invented values."""
 from mockymock.debug.gdb_session import ResultRecord
 from mockymock.debug.variable_map import (
     buffer_layouts,
+    declared_data_names,
     parse_local_header,
     read_variable,
+    unavailable_names,
 )
 
 # Verbatim from a real `cobc -g` compile of the spike fixture.
@@ -348,3 +350,31 @@ def test_field_wrapper_ignores_layout():
     """An `f_NN` wrapper still decodes from its own attr, not the AST."""
     session = _field_session("f_19", 0x11, 4, 0, 0x0021, "fffe")
     assert read_variable(session, "WS-C5", "f_19", _layouts()["WS-C5"]).decoded == "-2"
+
+
+def test_unavailable_names_are_declared_items_missing_from_the_table():
+    """Issue #156: cobc gives an item no C local when nothing generates
+    code against it, so the debugger has to name it rather than drop it."""
+    table = {"WS-USED": "f_8", "ws-grp": "b_10"}
+    declared = ["WS-USED", "WS-UNUSED", "WS-GRP", "WS-A", "WS-UNUSED"]
+    assert unavailable_names(declared, table) == ["WS-UNUSED", "WS-A"]
+
+
+def test_declared_data_names_skip_filler_and_condition_names():
+    from cobolparser import parse_cobol
+
+    result = parse_cobol(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. DECL.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  WS-GRP.\n"
+        "           05  WS-A    PIC X.\n"
+        "               88  WS-A-ON VALUE 'Y'.\n"
+        "           05  FILLER  PIC X.\n"
+        "       01  WS-B        PIC 9.\n"
+        "       PROCEDURE DIVISION.\n"
+        "           STOP RUN.\n",
+        filename="decl.cbl",
+    )
+    assert declared_data_names(result.ast) == ["WS-GRP", "WS-A", "WS-B"]

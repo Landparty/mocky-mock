@@ -95,6 +95,46 @@ def parse_local_header(text: str) -> dict[str, str]:
     return table
 
 
+#: What the Variables view shows for a declared item cobc gave no C local
+#: (issue #156): an absent row read as "this program has no such item".
+UNAVAILABLE_VALUE = "<unavailable: not materialized by cobc>"
+
+
+def declared_data_names(program) -> list[str]:
+    """Every addressable data item the program declares, in declaration
+    order: FILLER, condition names (88) and RENAMES (66) have no storage
+    of their own to show."""
+    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+
+    try:
+        items = compute_program_data_items(program).get("items", [])
+    except Exception:  # a layout walk must never break a debug session
+        return []
+    return [
+        str(item["name"])
+        for item in items
+        if item.get("name")
+        and str(item["name"]).upper() != "FILLER"
+        and item.get("level") not in (66, 88)
+    ]
+
+
+def unavailable_names(declared: list[str], table: dict[str, str]) -> list[str]:
+    """The declared data names (in order, first spelling kept) that the
+    variable table has no entry for. cobc only declares a C local for an
+    item it generates code against, so an item no statement references --
+    or one it optimized away -- has none, and gdb cannot read it."""
+    known = {name.upper() for name in table}
+    missing: list[str] = []
+    for name in declared:
+        upper = name.upper()
+        if upper in known:
+            continue
+        known.add(upper)
+        missing.append(name)
+    return missing
+
+
 @dataclass(frozen=True)
 class BufferLayout:
     """What cobc would have put in a `cob_field`'s attr for an item it

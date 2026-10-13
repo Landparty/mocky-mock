@@ -38,7 +38,12 @@ from mockymock.debug.gdb_session import (
     StopEvent,
 )
 from mockymock.debug.line_map import LineMap
-from mockymock.debug.variable_map import BufferLayout, VariableValue, read_variable
+from mockymock.debug.variable_map import (
+    UNAVAILABLE_VALUE,
+    BufferLayout,
+    VariableValue,
+    read_variable,
+)
 
 # The DAP capability surface this adapter actually implements. Everything
 # else (conditional breakpoints, setVariable, multiple threads, ...) is
@@ -72,6 +77,10 @@ class DebugSession:
     buffer_layouts: dict[str, BufferLayout] = field(default_factory=dict)
     """Upper-cased COBOL name -> PICTURE/USAGE layout, for decoding items
     cobc only declared as a bare `b_NN` buffer (see `BufferLayout`)."""
+    unavailable: tuple[str, ...] = ()
+    """Declared data items with no `variable_table` entry (cobc gave them
+    no C local). Listed after the readable ones with `UNAVAILABLE_VALUE`,
+    so a missing item is visibly missing rather than silently absent."""
 
 
 LaunchSession = Callable[..., DebugSession]
@@ -439,6 +448,15 @@ class DapAdapter:
             variables.append(
                 {"name": name, "value": _display_value(value), "variablesReference": 0}
             )
+        for name in session.unavailable:
+            variables.append(
+                {
+                    "name": name,
+                    "value": UNAVAILABLE_VALUE,
+                    "variablesReference": 0,
+                    "presentationHint": {"attributes": ["readOnly"]},
+                }
+            )
         self._send_response(request, success=True, body={"variables": variables})
 
     def _handle_evaluate(self, request: dict) -> None:
@@ -467,6 +485,14 @@ class DapAdapter:
                 None,
             )
         if expr is None:
+            wanted = expression.strip().upper()
+            if any(name.upper() == wanted for name in session.unavailable):
+                self._send_response(
+                    request,
+                    success=True,
+                    body={"result": UNAVAILABLE_VALUE, "variablesReference": 0},
+                )
+                return
             self._send_response(
                 request, success=False, message=f"unknown variable: {expression}"
             )

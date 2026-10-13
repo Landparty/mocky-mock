@@ -517,18 +517,17 @@ every child of a `VALUE`-less group recursively and emitted a `MOVE
 specifically because `INITIALIZE` does not restore them. The real,
 still-current fidelity limit is narrower and is documented next.
 
-**Current fidelity limit: OCCURS-with-VALUE children are skipped, not
-restored (audit finding 2.4).** `_child_value_restores` now checks
-`getattr(child, "occurs_clause", None) is not None` and skips that child
-(and its subtree) entirely — before this fix, a child like
-`05 WS-CELL PIC 9 OCCURS 5 TIMES VALUE 7` produced `MOVE 7 TO WS-CELL`,
-which is illegal COBOL (an OCCURS item needs a subscript on every
-reference) and cobc rejected the whole program. A sound fix needs
-subscripted MOVEs in a loop over the table's bounds; that's out of scope
-for this pass, so such a child is left at `INITIALIZE`'s type default
-(zero/spaces) instead of its declared `VALUE` — strictly better than not
-compiling at all, but not full fidelity. Non-OCCURS siblings of a skipped
-child are unaffected and still get their own restore line.
+**OCCURS-with-VALUE children (audit finding 2.4, issue #156).** An
+unsubscripted `MOVE 7 TO WS-CELL` against an OCCURS child is illegal COBOL,
+so `_child_value_restores` still skips OCCURS children. A VALUE-less group
+with a VALUE anywhere inside a table (`_has_occurs_value`: an OCCURS item
+with a VALUE, or a VALUE under an OCCURS group) is instead reset with
+`INITIALIZE <group> ALL TO VALUE THEN TO DEFAULT`, which restores every
+occurrence's VALUE and every other child's VALUE in one statement and
+zero/space-fills the rest (checked against GnuCOBOL 3.1's cobc). Before
+#156 those occurrences were left at INITIALIZE's zero/space default, so a
+test saw different starting data from the real program. Groups with no
+VALUE inside a table keep the plain INITIALIZE plus per-child restores.
 
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.

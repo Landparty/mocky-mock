@@ -13,8 +13,9 @@ illegal `MOVE SPACES`: COMP-1/COMP-2 floats take `MOVE 0`, POINTER-family
 items take `SET ... TO NULL`. Items this module cannot reset legally are
 SKIPPED rather than given illegal COBOL (documented fidelity limits, see
 .okf/splicer.md): USAGE INDEX items, PICTURE-less items of unrecognized
-usage, and OCCURS children with VALUE clauses (restoring those needs
-subscripted MOVEs). Top-level REDEFINES items are skipped on purpose: their
+usage. A group with a VALUE clause inside a table (an OCCURS item) is
+reset with `INITIALIZE <group> ALL TO VALUE THEN TO DEFAULT`, which
+restores every occurrence's VALUE without subscripted MOVEs. Top-level REDEFINES items are skipped on purpose: their
 storage is the redefined item's, which is reset (and its VALUE restored)
 by its own line -- a second reset through the redefining view would
 overwrite it.
@@ -114,6 +115,13 @@ def reset_lines_for_items(items) -> list[str]:
             # initializes storage from the first (redefined) description.
             continue
         if _is_group(item) and not item.value_clause:
+            if _has_occurs_value(item):
+                # A table element's VALUE needs a subscripted MOVE per
+                # occurrence; INITIALIZE's ALL TO VALUE phrase restores
+                # every occurrence (and every other child's VALUE) in one
+                # statement, then zero/space-fills the rest (issue #156).
+                lines.append(f"INITIALIZE {item.name} ALL TO VALUE THEN TO DEFAULT")
+                continue
             lines.append(f"INITIALIZE {item.name}")
             lines.extend(_child_value_restores(item))
         else:
@@ -194,15 +202,33 @@ def _is_group(item) -> bool:
     )
 
 
+def _has_occurs_value(group) -> bool:
+    """True when some OCCURS item under `group` (or a child of one) declares
+    a VALUE clause -- the case `_child_value_restores` cannot restore."""
+
+    def walk(item, in_table: bool) -> bool:
+        for child in getattr(item, "children", []):
+            if getattr(child, "level", None) is None:
+                continue
+            table = in_table or getattr(child, "occurs_clause", None) is not None
+            if table and getattr(child, "value_clause", None):
+                return True
+            if walk(child, table):
+                return True
+        return False
+
+    return walk(group, False)
+
+
 def _child_value_restores(group) -> list[str]:
     """After INITIALIZE zeroes/space-fills a group, restore any child that
     declared its own VALUE clause (INITIALIZE does not honor those).
 
     Children carrying an OCCURS clause are skipped entirely (subtree
     included): an unsubscripted `MOVE 7 TO WS-CELL` against an OCCURS item
-    is illegal COBOL and cobc rejects it, and a subscripted expansion would
-    need the table bounds -- a documented fidelity limit (such children are
-    left at INITIALIZE's type defaults, not their declared VALUE)."""
+    is illegal COBOL and cobc rejects it. A group with a VALUE somewhere
+    inside a table never gets here: `reset_lines_for_items` resets it with
+    `INITIALIZE ... ALL TO VALUE` instead (see `_has_occurs_value`)."""
     out: list[str] = []
     for child in getattr(group, "children", []):
         if getattr(child, "level", None) is None:
@@ -210,7 +236,7 @@ def _child_value_restores(group) -> list[str]:
         if _is_filler(child):
             continue  # FILLER is unaddressable; its VALUE already survives INITIALIZE
         if getattr(child, "occurs_clause", None) is not None:
-            continue  # OCCURS needs subscripted MOVEs -- skip, fidelity limit
+            continue  # unsubscripted MOVE is illegal; see _has_occurs_value
         if _is_group(child):
             out.extend(_child_value_restores(child))
         elif getattr(child, "value_clause", None):

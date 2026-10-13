@@ -1730,7 +1730,12 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     from mockymock.debug.call_stack import ParagraphIndex, build_generated_c_line_map
     from mockymock.debug.gdb_session import GdbSession
     from mockymock.debug.line_map import LineMap
-    from mockymock.debug.variable_map import buffer_layouts, parse_local_header
+    from mockymock.debug.variable_map import (
+        buffer_layouts,
+        declared_data_names,
+        parse_local_header,
+        unavailable_names,
+    )
     from mockymock.runtime import docker_toolchain
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.splicer import cics_eib
@@ -1884,6 +1889,9 @@ def _cmd_debug(args: argparse.Namespace) -> int:
                 instrumented_file=instrumented_path.name,
                 original_file=str(source_path),
                 buffer_layouts=buffer_layouts(result.ast),
+                unavailable=tuple(
+                    unavailable_names(declared_data_names(result.ast), variable_table)
+                ),
             )
 
         adapter = DapAdapter(sys.stdin.buffer, sys.stdout.buffer, launch_session)
