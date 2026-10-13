@@ -1124,7 +1124,7 @@ def _bundle_boundary_keys(bundle: FixtureBundle) -> set[tuple[str, str]]:
     return keys
 
 
-def _unmockable_nested_keys(surface: MockSurface) -> set[tuple[str, str]]:
+def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
     """(category, key) pairs whose only sites are nested inside a clause
     body with no span -- the shape mockymock already reports as "not
     mockable" and `_mockymock_boundary_keys` skips. cobol-parser's bundle
@@ -2239,7 +2239,7 @@ def _scaffold_with_bundle(
     _warn_on_key_mismatch(
         mockymock_keys,
         _bundle_boundary_keys(bundle),
-        _unmockable_nested_keys(surface),
+        _known_unmockable_keys(surface),
     )
     fallback_entry = _first_paragraph(source.program) if source is not None else None
     registry = _build_shadow_tally_registry(bundle, mockymock_keys, fallback_entry)
