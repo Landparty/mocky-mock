@@ -225,6 +225,9 @@ def _build_testcase_paragraph(
         # PERFORM made are not the code under test.
         if any(step.kind == "PERFORM" for step in before_each):
             lines.extend(_tally_zero_lines(case.mocks, registry))
+            # A terminator a BEFORE-EACH PERFORM reached must not cut the
+            # case's own PERFORM short.
+            lines.append('           MOVE "N" TO UT-EARLY-EXIT')
 
     for value, target in case.setup_moves:
         lines.append(f"           MOVE {value} TO {target}")
@@ -283,6 +286,10 @@ def _build_testcase_paragraph(
             f'           DISPLAY "__MOCKYMOCK__ RECORD {case_id} {name}: " {name}'
         )
 
+    if any(step.kind == "PERFORM" for step in after_each):
+        # Nor may one the case's PERFORM reached cut AFTER-EACH short: a
+        # hook paragraph on a terminator chain checks this flag too.
+        lines.append('           MOVE "N" TO UT-EARLY-EXIT')
     lines.extend(_step_lines(after_each))
     lines.append(f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} END".')
     return lines

@@ -154,6 +154,45 @@ TESTCASE "b"
     assert "    Add to BEFORE-EACH:" in result.problems
 
 
+def test_each_hook_perform_does_not_refuse_a_test_cases_own_mock(files):
+    # AUDIT is the case's own mock, reached by its own PERFORM 1000-CALC;
+    # BEFORE-EACH's PERFORM 0200-CLEAR never reaches it, and must not have to.
+    cut = """\
+TESTSUITE "own mock"
+BEFORE-EACH
+    PERFORM 0200-CLEAR
+END-BEFORE
+AFTER-EACH
+    PERFORM 9000-CLOSE
+END-AFTER
+TESTCASE "own mock"
+    MOCK CALL "AUDIT"
+    END-MOCK
+    PERFORM 1000-CALC
+    EXPECT WS-COUNT TO BE 1
+"""
+    result = run_static_checks(*files(cut), None)
+    assert result.problems == []
+
+
+def test_case_own_mock_its_perform_never_reaches_is_still_refused(files):
+    cut = """\
+TESTSUITE "own mock"
+BEFORE-EACH
+    PERFORM 1000-CALC
+END-BEFORE
+TESTCASE "unreached"
+    MOCK CALL "AUDIT"
+    END-MOCK
+    PERFORM 0200-CLEAR
+"""
+    result = run_static_checks(*files(cut), None)
+    assert any(
+        p.startswith("refused (UNMATCHED_MOCK)") and "AUDIT" in p
+        for p in result.problems
+    )
+
+
 def test_odo_group_refuses_before_all_but_not_a_suite_without_it(files):
     program = PROGRAM.replace(
         "           05 WS-AMOUNTS    OCCURS 3 TIMES PIC 9(5)V99 COMP-3.\n",
@@ -265,6 +304,30 @@ def test_driver_case_order_restore_before_each_case_body_after_each():
     # Second case: its own MOVE runs after BEFORE-EACH, so it wins.
     second = proc[proc.index("UT-TESTCASE-002.") :]
     assert second.index("MOVE 5 TO WS-COUNT") > second.index("PERFORM 0200-CLEAR")
+
+
+def test_driver_clears_the_early_exit_flag_around_each_hook_performs():
+    _, _, artifact = _driver(
+        CUT.replace("    MOVE SPACES TO WS-MSG\n", "    PERFORM 9000-CLOSE\n")
+    )
+    proc = _stripped(artifact.procedure_lines)
+    body = proc[proc.index("UT-TESTCASE-001.") :]
+    body = body[: body.index('DISPLAY "__MOCKYMOCK__ CASE 001 END".')]
+    reset = 'MOVE "N" TO UT-EARLY-EXIT'
+    clear = body.index("PERFORM 0200-CLEAR")
+    # A terminator BEFORE-EACH reached must not cut the case's PERFORM short.
+    assert reset in body[clear : body.index("PERFORM 1000-CALC")]
+    # Nor may one the case reached cut AFTER-EACH short.
+    assert body[-2:] == [reset, "PERFORM 9000-CLOSE"]
+
+
+def test_driver_leaves_move_only_each_hooks_untouched():
+    _, _, artifact = _driver()
+    proc = _stripped(artifact.procedure_lines)
+    body = proc[proc.index("UT-TESTCASE-001.") :]
+    body = body[: body.index('DISPLAY "__MOCKYMOCK__ CASE 001 END".')]
+    # AFTER-EACH is MOVE-only here: no flag reset ahead of it.
+    assert body[-2] != 'MOVE "N" TO UT-EARLY-EXIT'
 
 
 def test_driver_without_before_all_never_saves_or_restores():

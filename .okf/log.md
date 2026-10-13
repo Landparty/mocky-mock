@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-13 -- suite hooks: review fixes
+
+An EACH-hook `PERFORM` no longer refuses a test case's own mock as
+`UNMATCHED_MOCK` when the hook doesn't reach it. `UT-EARLY-EXIT` is reset
+after BEFORE-EACH and before AFTER-EACH steps that `PERFORM`, so a
+terminator on one side no longer skips the rest of the other. The
+mutation zero-baseline hint counts BEFORE-ALL/BEFORE-EACH `MOVE`s as
+seeding. Updated [dsl](dsl.md).
+
 ## 2026-10-10 -- suite hooks: BEFORE-ALL/BEFORE-EACH/AFTER-EACH/AFTER-ALL
 
 JUnit-style setup/teardown. `MOVE`/`PERFORM` steps in BEFORE-ALL and

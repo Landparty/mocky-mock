@@ -486,7 +486,11 @@ def run_static_checks(
             check.case,
             out.file_status_fields,
             neutralized_goto=neutralized_goto,
-            shared=shared_ids,
+            # Every mock in force is a default here, the case's own
+            # included: whether a case's mock is unmatched is decided by
+            # that case's own check above, and a shared one by the sweep
+            # below -- a hook PERFORM that doesn't reach it proves nothing.
+            shared=shared_ids | {id(d) for d in check.case.mocks},
             matched_out=matched_ids,
         ):
             where = (

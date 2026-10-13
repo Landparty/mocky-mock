@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-10T12:00:00Z
+timestamp: 2026-10-13T12:00:00Z
 ---
 
 # Overview
@@ -128,6 +128,10 @@ last case. BEFORE-ALL/AFTER-ALL run with `UT-CURRENT-CASE` =
 (`injector.dispatch_entries`); EACH steps run inside the case with its
 mocks. When BEFORE-EACH has a `PERFORM`, the case's tallies are zeroed
 again after it, so `VERIFY` counts only the case's own `PERFORM`.
+`UT-EARLY-EXIT` is reset to `"N"` after BEFORE-EACH's steps and before
+AFTER-EACH's whenever that block has a `PERFORM`: a terminator reached
+on one side must not cut the other short (hook paragraphs on a
+terminator chain check the flag too).
 `EXPECT`/`VERIFY` stay TESTCASE-only. See [splicer](splicer.md)'s
 "BEFORE-ALL state snapshot".
 
@@ -135,7 +139,9 @@ again after it, so `VERIFY` counts only the case's own `PERFORM`.
 `PERFORM` into a synthetic `MockTestCase` (EACH hooks once per test
 case), and `analysis_cases()` = test cases + those. `cli.checks` runs
 `check_test_case` on each (problems prefixed `BEFORE-ALL PERFORM X:`,
-deduplicated across cases, fix hint `Add to BEFORE-ALL:`/`BEFORE-EACH:`);
+deduplicated across cases, fix hint `Add to BEFORE-ALL:`/`BEFORE-EACH:`;
+every mock in force counts as `shared` there, the case's own included,
+since only the case's own check decides whether its mock is unmatched);
 `union_executed_paragraphs`, `find_terminator_plans` and `flow_mocks`
 iterate `analysis_cases()` so hook entry points count everywhere a case
 entry point does.
