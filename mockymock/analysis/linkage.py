@@ -290,3 +290,68 @@ def address_of_sites(
             )
         )
     return sites, problems
+
+
+# `PROCEDURE DIVISION [USING ...] [RETURNING ...].` on the default entry.
+# Since 2026-10-10 (docs/2026-10-10-suite-hooks-design.md, "Entry
+# parameters") the clause is blanked out of the instrumented copy instead of
+# refused: the driver PERFORMs paragraphs and never CALLs the program, so
+# nothing binds those parameters anyway -- with the LINKAGE SECTION folded
+# into WORKING-STORAGE they become ordinary storage a `.cut` sets with MOVE
+# (BEFORE-ALL / BEFORE-EACH / TESTCASE) and reads back with EXPECT, reset
+# between cases like every other folded item.
+_DIVISION_RE = re.compile(r"\bPROCEDURE\s+DIVISION\b", re.IGNORECASE)
+_HEADER_CLAUSE_RE = re.compile(
+    r"(?<![A-Za-z0-9-])(USING|RETURNING|CHAINING)(?![A-Za-z0-9-])", re.IGNORECASE
+)
+# A sentence-ending period: followed by whitespace or the end of the line,
+# so a decimal point never counts (none can appear here, but stay strict).
+_PERIOD_RE = re.compile(r"\.(?=\s|$)")
+# How far a USING list may wrap before we stop looking for its period.
+_HEADER_MAX_LINES = 50
+
+
+def procedure_header_clause_spans(
+    lines: list[str], program
+) -> list[tuple[int, int, int]] | None:
+    """Column spans `(line_number, start_column, end_column)` (1-based line,
+    0-based half-open columns, as `stub_writer.replace_columns` takes them)
+    holding the default entry's `USING` / `RETURNING` clause, from the
+    keyword through the header's closing period, across as many lines as
+    the list wraps. `splicer.linkage.neutralize` writes the period back at
+    the start of the first span, so the header always ends on its first
+    line: the driver is inserted right after that line, and a period left
+    on a later line put the driver inside the header (cobc: syntax error). `[]` when the header has no such
+    clause. None when it cannot be blanked safely: a `CHAINING` clause (a
+    different mechanism, never neutralized) or no closing period within
+    `_HEADER_MAX_LINES` lines."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None or procedure.location is None:
+        return []
+    first = procedure.location.line - 1
+    if not 0 <= first < len(lines):
+        return []
+    division = _DIVISION_RE.search(lines[first])
+    if division is None:
+        return []
+    clause = _HEADER_CLAUSE_RE.search(lines[first], division.end())
+    if clause is None:
+        return []
+    spans: list[tuple[int, int, int]] = []
+    start = clause.start()
+    for idx in range(first, min(first + _HEADER_MAX_LINES, len(lines))):
+        text = lines[idx]
+        segment = text[start:]
+        if any(
+            m.group(1).upper() == "CHAINING"
+            for m in _HEADER_CLAUSE_RE.finditer(segment)
+        ):
+            return None
+        period = _PERIOD_RE.search(text, start)
+        end = period.end() if period else len(text.rstrip())
+        if end > start:
+            spans.append((idx + 1, start, end))
+        if period:
+            return spans
+        start = 0
+    return None

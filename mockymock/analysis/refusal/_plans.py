@@ -515,7 +515,9 @@ def find_terminator_plans(
 
     from mockymock.analysis.flow_mocks import resolved_flow_targets
 
-    for case in suite.test_cases:
+    # Hook PERFORM steps reach terminators exactly like a test case's own
+    # PERFORM does (suite hooks), so they need plans/refusals too.
+    for case in suite.analysis_cases():
         # A terminator inside a paragraph/section this case flow-mocks
         # (MOCK PARAGRAPH/SECTION) is unreachable for this case -- the mock
         # dispatch replaces the body -- so it must not demand a plan or a

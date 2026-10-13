@@ -228,6 +228,12 @@ def _seeded_names(suite: object) -> set[str]:
     Any write counts -- a MOVE of zero would not help, but telling the two
     apart would mean evaluating the test author's intent."""
     names: set[str] = set()
+    # BEFORE-ALL/BEFORE-EACH MOVEs run before every case's own PERFORM, so
+    # they seed exactly like a case's MOVE (AFTER-* steps run too late).
+    for attr in ("before_all_steps", "before_each_steps"):
+        for step in getattr(suite, attr, []) or []:
+            if step.kind == "MOVE":
+                names.add(str(step.target).upper())
     for case in getattr(suite, "test_cases", []) or []:
         for _value, target in getattr(case, "setup_moves", []) or []:
             names.add(str(target).upper())

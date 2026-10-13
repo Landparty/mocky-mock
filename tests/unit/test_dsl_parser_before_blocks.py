@@ -205,12 +205,14 @@ TESTCASE "one" USING PROVIDER P
         parse_cut(cut)
 
 
-def test_move_inside_before_each_is_rejected():
+def test_expect_inside_before_each_is_rejected():
+    # MOVE and PERFORM became hook steps (2026-10-10, suite hooks); an
+    # assertion still belongs to a TESTCASE.
     cut = """\
-TESTSUITE "no-move"
+TESTSUITE "no-expect"
 
 BEFORE-EACH
-    MOVE 1 TO WS-FIELD
+    EXPECT WS-FIELD TO BE 1
 END-BEFORE
 
 TESTCASE "one"
