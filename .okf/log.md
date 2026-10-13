@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-13 -- a SQL ROWS row may set SQLCODE
+
+`MOCK SQL ... ROWS ( ..., SQLCODE = -305 )` answered that FETCH with
+SQLCODE 0: the implicit `MOVE 0 TO SQLCODE` followed the row's own MOVEs.
+`build_rows_block` takes `row_prefix_moves` and SQL puts the default
+there. Updated [dsl](dsl.md), [splicer](splicer.md).
+
 ## 2026-10-10 -- explain covers three more refusal codes
 
 `UNRESOLVED_FLOW_MOCK_TARGET`, `UNRESOLVED_CAPTURE_TARGET` and
