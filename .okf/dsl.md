@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-05T12:00:00Z
+timestamp: 2026-10-13T12:00:00Z
 ---
 
 # Overview
@@ -646,9 +646,11 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
 `exhausted_moves` verbatim. The two call sites in
 `splicer/injector.build_site_dispatch` supply category-specific values:
 
-- **SQL**: `row_suffix_moves=["MOVE 0 TO SQLCODE"]`,
+- **SQL**: `row_prefix_moves=["MOVE 0 TO SQLCODE"]` (before the row's own
+  MOVEs, so a row giving `SQLCODE = -305` keeps it -- as a suffix it was
+  silently overwritten until 2026-10-13), `row_suffix_moves=[]`,
   `exhausted_moves=["MOVE 100 TO SQLCODE"]` (DB2's "not found" code) —
-  fixed in v1, matching the pre-generalization behavior exactly.
+  fixed in v1.
 - **READ**: `row_suffix_moves=[]` (a file-op category's implicit
   default-success `MOVE "00"` already precedes the whole dispatch block
   when the file declares a `FILE STATUS` field — see the `FILE-STATUS IS`
@@ -736,6 +738,10 @@ paragraph-grouped path described above, unchanged. A real
   via `_sql_rows_directive` (`_sql_wants_rows` decides single vs. multi).
   Values render through `_bundle_rendered_value`: numeric-family
   `FieldSpec` categories render bare, everything else quoted and escaped.
+  A POINTER-family field gets `SET <field> TO NULL` and an INDEX field no
+  line at all (`_row_move_line`, 2026-10-12): the bundle lays both out as
+  numeric fields holding `0`, and `MOVE 0 TO <pointer>` is a cobc compile
+  error (LESERV's `CALL 'CEEHDLR' USING HANDLER-ROUTINE ...`).
 - **`_read_body`'s `WHEN OTHER` branch also replicates the source `AT END`
   clause's own constant-valued statements**, not just the FILE STATUS
   field (`_replicated_at_end_statements`, via `_is_safe_literal_source`
@@ -769,6 +775,21 @@ paragraph-grouped path described above, unchanged. A real
   string/numeric literal or figurative constant is replicated from the AST
   — never a bare identifier, whose value in the mock's own splice-time
   context isn't the real program's runtime state.
+- **A READ with no `AT END` clause whose loop ends on its FILE STATUS
+  alone** (`PERFORM UNTIL WS-FS = "10"`, 2026-10-13) gets an end-of-file
+  branch too: cobol-parser sets `fixture.terminal` only when the READ has
+  an `AT END` handler, so this shape used to get rows and no `WHEN OTHER`
+  -- the implicit `MOVE "00"` reported success forever and the generated
+  suite hung. `ProgramContext.status_read_eof` (`_status_driven_reads`)
+  names every file whose READs are all plain sequential reads (no `AT
+  END`, no `INVALID KEY`, no `KEY IS`, and `READ ... NEXT` or a
+  SEQUENTIAL-access SELECT) and that declares a FILE STATUS field;
+  `_bundle_directive_for` gives such a fixture `terminal = {<status>:
+  "10"}`, and when one of its READ sites runs in a loop it counts the
+  end-of-file read (`CallCountOverride(count=rows + 1, cascades=False)` --
+  the loop body still runs once per row, so the other boundaries in its
+  paragraph keep their counts). A keyed/random READ is left alone: out of
+  rows it would answer "23", not "10".
 - **When the AST-driven replication comes up empty, the clause's own source
   text is lifted verbatim instead** (`_lifted_at_end_lines`, 2026-09-04).
   The `*> TODO` comment that used to be emitted there is not a visible gap

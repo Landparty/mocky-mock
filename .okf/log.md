@@ -10,6 +10,34 @@ prevent.
 `CALL "X" USING OMITTED B` with `CAPTURE ARG 1` linted clean and then
 failed cobc on the spliced `MOVE OMITTED TO <target>`. `check_test_case`
 now refuses it as `CAPTURE_ARG_OUT_OF_RANGE`. Updated [analysis](analysis.md).
+## 2026-10-13 -- generate --with-data ends a FILE-STATUS-driven READ loop
+
+A sequential READ with no `AT END` clause, looped until its FILE STATUS is
+"10", got its rows and no end-of-file branch (cobol-parser only sets a
+terminal for an `AT END` handler), so the generated suite hung at the
+executor timeout. It now gets `WHEN OTHER MOVE "10" TO <status>` and a
+VERIFY count that includes the end-of-file read. Updated [dsl](dsl.md).
+## 2026-10-11 -- lowercase PERFORM / GO TO targets resolve
+
+cobolparser keeps a PERFORM / GO TO target as written but upper-cases
+paragraph and section names, so a program written in lowercase was refused
+outright (UNRESOLVED_FLOW_TARGET, UNMATCHED_MOCK,
+UNSUPPORTED_TERMINATOR_LAYOUT): all 17 real-world suites, lowercased, were
+refused. `normalize_flow_targets` upper-cases the targets right after every
+`parse_cobol`. Updated [analysis](analysis.md).
+## 2026-10-12 -- pointer and INDEX fields in generated and recorded tests
+
+`generate --with-data` no longer writes `MOVE 0 TO <pointer>` (a compile
+error) for a POINTER-family CALL argument: it writes `SET ... TO NULL`, and
+nothing for an INDEX item. `run --record-expectations` skips a stub on such
+an item instead of recording an address into an EXPECT that does not
+compile. Updated [dsl](dsl.md), [report](report.md).
+## 2026-10-13 -- a SQL ROWS row may set SQLCODE
+
+`MOCK SQL ... ROWS ( ..., SQLCODE = -305 )` answered that FETCH with
+SQLCODE 0: the implicit `MOVE 0 TO SQLCODE` followed the row's own MOVEs.
+`build_rows_block` takes `row_prefix_moves` and SQL puts the default
+there. Updated [dsl](dsl.md), [splicer](splicer.md).
 
 ## 2026-10-10 -- explain covers three more refusal codes
 

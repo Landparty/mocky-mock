@@ -104,6 +104,8 @@ splicer's top-level "owns its line" guard (`UNSUPPORTED_MOCK_TARGET_LAYOUT`
 are splicer-side companions to this remediation — see
 [splicer](splicer.md).
 
+**Name case (2026-10-11).** cobolparser upper-cases paragraph and section names but keeps a `PERFORM`/`GO TO` target as written, so a lowercase program (`perform read-one`) had every edge refused `UNRESOLVED_FLOW_TARGET`. Every parse site (`run_static_checks`, `generate`, `fixtures`, `_collect_boundaries`, `report`) calls `analysis/flow_targets.normalize_flow_targets(ast)` right after `parse_cobol`, which upper-cases `target_paragraph`, `thru_paragraph` and `target_paragraphs` in place; every name lookup downstream stays an exact comparison. A new parse site must call it too.
+
 Both modules depend only on the small set of cobolparser attributes pinned in [integration](integration.md) — not on cobolparser's own `ProgramFlowAnalyzer` or `DynamicCallAnalyzer` for the reachability/classification paths, specifically so this module's correctness stays checkable against attributes mockymock has independently verified (see Gotchas).
 
 # mock_surface.py — What Counts as a Boundary

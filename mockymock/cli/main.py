@@ -48,6 +48,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
     from cobolparser.preprocess import CopybookNotFoundError, expand_copybooks
 
+    from mockymock.analysis.flow_targets import normalize_flow_targets
     from mockymock.analysis.refusal import (
         check_expansion_warnings,
         check_unresolved_copybooks,
@@ -103,6 +104,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     # Parse the (possibly copybook-expanded) source once up front so that
     # case is refused like every other command.
     result = parse_cobol(raw_source, filename=source_path.name)
+    normalize_flow_targets(result.ast)
     if not result.success:
         print(
             f"mockymock fixtures: {len(result.errors)} parse error(s):", file=sys.stderr
@@ -724,6 +726,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     )
 
     from mockymock.analysis.cics_eib import cics_eib_plan
+    from mockymock.analysis.flow_targets import normalize_flow_targets
     from mockymock.analysis.linkage import address_of_sites, linkage_plan
     from mockymock.analysis.mock_surface import analyze
     from mockymock.analysis.refusal import (
@@ -878,6 +881,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             return 1
         raw_source = expansion.expanded_source
     result = parse_cobol(raw_source, filename=source_path.name)
+    normalize_flow_targets(result.ast)
     if not result.success:
         print(f"mockymock generate: {len(result.errors)} parse error(s):")
         for error in result.errors:
@@ -1260,6 +1264,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         not_run_case_names,
     )
     from mockymock.report.record_rewrite import (
+        address_fields,
         build_recording_report,
         field_pictures,
         rewrite_cut_text,
@@ -1546,7 +1551,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # "Never overwrite a hand-edited EXPECT" sections): every stub the
         # scanner found ends up in exactly one of recorded/skipped, and the
         # file is only ever touched when at least one stub was recorded.
-        recording = build_recording_report(stub_scan, suite_result)
+        recording = build_recording_report(
+            stub_scan, suite_result, address_fields(result.ast)
+        )
         rewritten = rewrite_cut_text(
             cut_text, recording, field_pictures(result.ast, checked.captures)
         )
@@ -2235,6 +2242,7 @@ def _collect_boundaries(
     from cobolparser import parse_cobol
     from cobolparser.preprocess import expand_copybooks
 
+    from mockymock.analysis.flow_targets import normalize_flow_targets
     from mockymock.analysis.mock_surface import analyze
     from mockymock.dsl.generator import directive_snippet
 
@@ -2254,6 +2262,7 @@ def _collect_boundaries(
         origin_line = _main_file_lines(expansion.source_location_map or {})
 
     result = parse_cobol(raw_source, filename=source_path.name)
+    normalize_flow_targets(result.ast)
     if result.errors or result.ast is None:
         raise ValueError(
             "; ".join(str(error) for error in result.errors) or "parse failed"
