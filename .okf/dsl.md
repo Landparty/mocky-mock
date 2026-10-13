@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-05T12:00:00Z
+timestamp: 2026-10-13T12:00:00Z
 ---
 
 # Overview
@@ -775,6 +775,21 @@ paragraph-grouped path described above, unchanged. A real
   string/numeric literal or figurative constant is replicated from the AST
   — never a bare identifier, whose value in the mock's own splice-time
   context isn't the real program's runtime state.
+- **A READ with no `AT END` clause whose loop ends on its FILE STATUS
+  alone** (`PERFORM UNTIL WS-FS = "10"`, 2026-10-13) gets an end-of-file
+  branch too: cobol-parser sets `fixture.terminal` only when the READ has
+  an `AT END` handler, so this shape used to get rows and no `WHEN OTHER`
+  -- the implicit `MOVE "00"` reported success forever and the generated
+  suite hung. `ProgramContext.status_read_eof` (`_status_driven_reads`)
+  names every file whose READs are all plain sequential reads (no `AT
+  END`, no `INVALID KEY`, no `KEY IS`, and `READ ... NEXT` or a
+  SEQUENTIAL-access SELECT) and that declares a FILE STATUS field;
+  `_bundle_directive_for` gives such a fixture `terminal = {<status>:
+  "10"}`, and when one of its READ sites runs in a loop it counts the
+  end-of-file read (`CallCountOverride(count=rows + 1, cascades=False)` --
+  the loop body still runs once per row, so the other boundaries in its
+  paragraph keep their counts). A keyed/random READ is left alone: out of
+  rows it would answer "23", not "10".
 - **When the AST-driven replication comes up empty, the clause's own source
   text is lifted verbatim instead** (`_lifted_at_end_lines`, 2026-09-04).
   The `*> TODO` comment that used to be emitted there is not a visible gap

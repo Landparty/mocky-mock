@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-13 -- generate --with-data ends a FILE-STATUS-driven READ loop
+
+A sequential READ with no `AT END` clause, looped until its FILE STATUS is
+"10", got its rows and no end-of-file branch (cobol-parser only sets a
+terminal for an `AT END` handler), so the generated suite hung at the
+executor timeout. It now gets `WHEN OTHER MOVE "10" TO <status>` and a
+VERIFY count that includes the end-of-file read. Updated [dsl](dsl.md).
 ## 2026-10-11 -- lowercase PERFORM / GO TO targets resolve
 
 cobolparser keeps a PERFORM / GO TO target as written but upper-cases
