@@ -21,6 +21,8 @@ statements after it are still treated as running.
 
 from __future__ import annotations
 
+from typing import Any
+
 from cobolparser.models.statements.control import (
     GoStatement,
     PerformStatement,
@@ -101,7 +103,7 @@ def exact_count_scope(
     if procedure is None:
         return None
     ordered = _source_ordered_paragraphs(procedure)
-    by_name: dict[str, object] = {}
+    by_name: dict[str, Any] = {}
     for paragraph in _all_paragraphs(procedure):
         by_name.setdefault(paragraph.paragraph_name, paragraph)
     section_members: dict[str, list[str]] = {
