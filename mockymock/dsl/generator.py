@@ -850,7 +850,8 @@ def _scaffold_placeholder(
             )
         )
         lines.append("")
-    for paragraph_name, sites in sites_by_paragraph.items():
+    for paragraph_name, own_sites in sites_by_paragraph.items():
+        sites = _reachable_sites(paragraph_name, own_sites, sites_by_paragraph, context)
         directives = _directives_for(sites, surface, context)
         labels = ", ".join(dict.fromkeys(site.label for site in sites))
         lines.append(
@@ -866,6 +867,31 @@ def _scaffold_placeholder(
         lines.extend(f"    {line}" for line in _capture_stub_lines(captured))
         lines.append("")
     return "\n".join(lines)
+
+
+def _reachable_sites(
+    entry: str,
+    own_sites: list[BoundarySite],
+    sites_by_paragraph: dict[str, list[BoundarySite]],
+    context: ProgramContext | None,
+) -> list[BoundarySite]:
+    """Every boundary site a `PERFORM entry` can reach: the paragraph's own
+    sites first, then those of every paragraph it reaches (PERFORM, GO TO,
+    fall-through), in source order. A scaffold that mocked only the entry
+    paragraph's own sites failed the very lint it has to pass whenever the
+    paragraph PERFORMs another that touches a boundary (UNMOCKED_*; the
+    enterprise corpus's DB2SP, whose 0000-MAIN PERFORMs the paragraph that
+    opens its result-set cursor). Falls back to the own sites when
+    reachability can't be established, as the bundle-driven scaffold does
+    (issue #143)."""
+    reachable = context.reachable_from(entry) if context is not None else None
+    if reachable is None:
+        return own_sites
+    sites = list(own_sites)
+    for paragraph_name, paragraph_sites in sites_by_paragraph.items():
+        if paragraph_name != entry and paragraph_name in reachable:
+            sites.extend(paragraph_sites)
+    return sites
 
 
 def _directives_for(

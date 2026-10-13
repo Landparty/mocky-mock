@@ -1018,6 +1018,9 @@ def test_perform_names_are_upper_cased_but_placeholders_kept_verbatim():
     placeholder refusal still names it exactly."""
     suite = parse_cut(
         'TESTSUITE "s"\n'
+        "BEFORE-EACH\n"
+        "    PERFORM init-para\n"
+        "END-BEFORE\n"
         'TESTCASE "lower"\n'
         "    PERFORM read-one THRU Read-One-Exit\n"
         'TESTCASE "placeholder"\n'
@@ -1027,3 +1030,4 @@ def test_perform_names_are_upper_cased_but_placeholders_kept_verbatim():
     assert suite.test_cases[0].perform_target == "READ-ONE"
     assert suite.test_cases[0].perform_thru == "READ-ONE-EXIT"
     assert suite.test_cases[1].perform_target == "{Para}"
+    assert suite.before_each_steps[0].target == "INIT-PARA"
