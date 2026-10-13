@@ -160,3 +160,49 @@ TESTCASE "c"
 """
     reasons = _reasons_for(cut)
     assert not any(r.code == "CAPTURE_ARG_OUT_OF_RANGE" for r in reasons)
+
+
+# `USING OMITTED WS-B`: the first position passes nothing at all.
+# cobolparser reports it as a parameter named OMITTED, so the splice used to
+# emit `MOVE OMITTED TO WS-CAPTURED` -- lint-clean, a cobc syntax error.
+OMITTED_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CAPOMIT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-B            PIC 9(5).
+       01  WS-CAPTURED     PIC 9(5).
+
+       PROCEDURE DIVISION.
+       OMIT-SITE.
+           CALL "VALIDATE" USING OMITTED WS-B.
+"""
+
+
+def test_capture_of_an_omitted_argument_refuses():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK CALL "VALIDATE"
+        CAPTURE ARG 1 INTO WS-CAPTURED
+    END-MOCK
+    PERFORM OMIT-SITE
+"""
+    reasons = _reasons_for(cut, OMITTED_SOURCE)
+    refused = [r for r in reasons if r.code == "CAPTURE_ARG_OUT_OF_RANGE"]
+    assert len(refused) == 1
+    assert "is OMITTED" in refused[0].message
+
+
+def test_capture_of_the_argument_after_an_omitted_one_does_not_refuse():
+    cut = """\
+TESTSUITE "s"
+TESTCASE "c"
+    MOCK CALL "VALIDATE"
+        CAPTURE ARG 2 INTO WS-CAPTURED
+    END-MOCK
+    PERFORM OMIT-SITE
+"""
+    reasons = _reasons_for(cut, OMITTED_SOURCE)
+    assert not any(r.code == "CAPTURE_ARG_OUT_OF_RANGE" for r in reasons)

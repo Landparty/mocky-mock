@@ -5,7 +5,7 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
-## 2026-10-13 -- suite hooks: review fixes
+rrrrrrrrrrrrrrr## 2026-10-13 -- suite hooks: review fixes
 
 An EACH-hook `PERFORM` no longer refuses a test case's own mock as
 `UNMATCHED_MOCK` when the hook doesn't reach it. `UT-EARLY-EXIT` is reset
@@ -29,6 +29,18 @@ nothing for an INDEX item. `run --record-expectations` skips a stub on such
 an item instead of recording an address into an EXPECT that does not
 compile. Updated [dsl](dsl.md), [report](report.md).
 
+## 2026-10-13 -- CAPTURE ARG of an OMITTED argument is refused
+
+`CALL "X" USING OMITTED B` with `CAPTURE ARG 1` linted clean and then
+failed cobc on the spliced `MOVE OMITTED TO <target>`. `check_test_case`
+now refuses it as `CAPTURE_ARG_OUT_OF_RANGE`. Updated [analysis](analysis.md).
+## 2026-10-13 -- generate --with-data ends a FILE-STATUS-driven READ loop
+
+A sequential READ with no `AT END` clause, looped until its FILE STATUS is
+"10", got its rows and no end-of-file branch (cobol-parser only sets a
+terminal for an `AT END` handler), so the generated suite hung at the
+executor timeout. It now gets `WHEN OTHER MOVE "10" TO <status>` and a
+VERIFY count that includes the end-of-file read. Updated [dsl](dsl.md).
 ## 2026-10-11 -- lowercase PERFORM / GO TO targets resolve
 
 cobolparser keeps a PERFORM / GO TO target as written but upper-cases

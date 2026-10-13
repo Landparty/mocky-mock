@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from mockymock.analysis.loops import looped_paragraphs_and_statements, site_in_loop
 from mockymock.analysis.mock_surface import (
@@ -225,6 +225,88 @@ def _data_name_counts(program) -> dict[str, int]:
     return counts
 
 
+def _select_access_modes(program) -> dict[str, str]:
+    """Uppercased file name -> its SELECT's ACCESS MODE (uppercased, '' when
+    the clause is omitted, which means SEQUENTIAL)."""
+    environment = program.get_division("ENVIRONMENT") if program else None
+    io_section = (
+        environment.get_section_by_name("INPUT-OUTPUT") if environment else None
+    )
+    file_control = (
+        io_section.get_paragraph_by_name("FILE-CONTROL")
+        if io_section is not None and hasattr(io_section, "get_paragraph_by_name")
+        else None
+    )
+    modes: dict[str, str] = {}
+    for statement in getattr(file_control, "statements", None) or []:
+        name = getattr(statement, "file_name", None)
+        if name:
+            modes[name.upper()] = (
+                getattr(statement, "access_mode", None) or ""
+            ).upper()
+    return modes
+
+
+def _status_driven_reads(
+    program, surface: MockSurface, looped: tuple[set[str], set[int]]
+) -> dict[str, tuple[str, bool]]:
+    """`ProgramContext.status_read_eof`: every file whose READs end their
+    loop through the FILE STATUS field alone. cobol-parser's bundle only
+    gives a READ fixture a `terminal` when the statement has an `AT END`
+    clause, so a `READ IN-FILE` with no clause, looped `UNTIL WS-FS =
+    "10"`, got rows and no end-of-file branch: the implicit `MOVE "00"`
+    reported success forever and the generated suite hung. Only plain
+    sequential reads qualify -- a random/keyed READ (a `KEY IS` phrase, an
+    `INVALID KEY` clause, or a READ without NEXT on a file not accessed
+    sequentially) answers "23", not "10", once its rows run out."""
+    from mockymock.analysis.mock_surface import analyze_file_status_fields
+
+    status_fields = analyze_file_status_fields(program)
+    access = _select_access_modes(program)
+    plain: dict[str, bool] = {}
+    excluded: set[str] = set()
+    for site in surface.boundary_sites:
+        if site.category is not MockCategory.READ or not site.keys:
+            continue
+        key = site.keys[0].upper()
+        statement = site.statement
+        sequential = (
+            not getattr(statement, "at_end_clause", None)
+            and not getattr(statement, "invalid_key_clause", None)
+            and not getattr(statement, "key_name", None)
+            and (
+                (getattr(statement, "access_mode", None) or "").upper() == "NEXT"
+                or access.get(key, "") in ("", "SEQUENTIAL")
+            )
+        )
+        if not sequential or key not in status_fields:
+            excluded.add(key)
+            continue
+        plain[key] = plain.get(key, False) or site_in_loop(site, looped)
+    return {
+        key: (status_fields[key], is_looped)
+        for key, is_looped in plain.items()
+        if key not in excluded
+    }
+
+
+def _status_read_eof(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> tuple[BoundaryFixture, bool]:
+    """`fixture` with an end-of-file `terminal` (`{<status field>: "10"}`)
+    when the bundle gave it none and the file's READs are status-driven
+    (`ProgramContext.status_read_eof`), plus whether that READ runs in a
+    loop -- such a loop calls it once more than it has rows, the call that
+    finds the end of the file. `(fixture, False)` otherwise."""
+    if fixture.terminal or source is None:
+        return fixture, False
+    entry = source.status_read_eof.get(fixture.key.upper())
+    if entry is None:
+        return fixture, False
+    status_field, looped = entry
+    return replace(fixture, terminal={status_field: "10"}), looped
+
+
 def _qualified_reference(qualified_name: str, column: str, leaf: str) -> str:
     """`IN-REC.CUST-ID` -> `CUST-ID OF IN-REC`, keeping any subscript the
     bundle's column carries (`CUST-ID(2)` -> `CUST-ID OF IN-REC (2)`): the
@@ -284,6 +366,11 @@ class ProgramContext:
     #: so a bundle's `RECORD.FIELD` name is rendered as a bare leaf only
     #: when the leaf is unique (issue #144).
     name_counts: dict[str, int] = field(default_factory=dict)
+    #: READ key (file name, uppercased) -> (its FILE STATUS field, whether
+    #: any of its READ sites runs in a loop), for a file every READ of which
+    #: is a plain sequential read with no AT END / INVALID KEY clause -- the
+    #: `PERFORM UNTIL <status> = "10"` idiom. See `_status_read_eof`.
+    status_read_eof: dict[str, tuple[str, bool]] = field(default_factory=dict)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -301,6 +388,9 @@ class ProgramContext:
                 program, collect_scope_map(program, lines), lines
             ),
             name_counts=_data_name_counts(program),
+            status_read_eof=_status_driven_reads(
+                program, surface, looped_paragraphs_and_statements(program)
+            ),
         )
 
     def references(self, name: str) -> bool:
@@ -1485,6 +1575,12 @@ class CallCountOverride:
     #: call (issue #141) rather than a --placeholder downgrade; only the
     #: wording of the cascade demotion below depends on it.
     from_placeholder: bool = True
+    #: Whether `_bundle_mock_directives` demotes the counts of the other
+    #: boundaries in this one's paragraph. False for a status-driven READ
+    #: loop's own end-of-file call (`_status_read_eof`): the loop body still
+    #: runs once per row, exactly as the bundle counted it -- the same as
+    #: for a READ whose AT END clause the bundle already counted.
+    cascades: bool = True
 
 
 def _bundle_directive_for(
@@ -1564,6 +1660,9 @@ def _bundle_directive_for(
         return None
 
     call_count_override: CallCountOverride | None = None
+    status_eof_loop = False
+    if category is MockCategory.READ:
+        fixture, status_eof_loop = _status_read_eof(fixture, source)
     looped_fetch = category is MockCategory.SQL and _is_looped_fetch(
         fixture, site, source
     )
@@ -1596,6 +1695,12 @@ def _bundle_directive_for(
         body = _status_only_body(fixture)
     elif category is MockCategory.READ:
         body = _read_body(fixture, registry, category, site, source)
+        if status_eof_loop:
+            call_count_override = CallCountOverride(
+                count=len(fixture.sequence) + 1,
+                from_placeholder=False,
+                cascades=False,
+            )
     elif category is MockCategory.SQL and _sql_wants_rows(fixture, looped_fetch):
         # A looped FETCH runs once per row plus the call that finds the
         # cursor exhausted; the bundle counts only the rows.
@@ -1802,6 +1907,8 @@ def _bundle_mock_directives(
     # reuses the same `*>` comment `CallCountOverride.demote_reason`
     # already renders for a downgraded boundary's own unknowable count.
     for (loop_category, loop_key), loop_override in list(call_count_overrides.items()):
+        if not loop_override.cascades:
+            continue
         loop_site = mockymock_keys.get((loop_category, loop_key))
         if loop_site is None:
             continue

@@ -260,7 +260,9 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "CALL statement doesn't have that many USING parameters for -- "
         "checked against every matching site program-wide (not just "
         "reachable ones), so it refuses even if only one of several "
-        "sites sharing the mocked key is too narrow. Fix the argument "
+        "sites sharing the mocked key is too narrow. Also refused when "
+        "that position is OMITTED at any matching site (`USING OMITTED "
+        "B`): nothing is passed there to capture. Fix the argument "
         "number."
     ),
     "UNKNOWN_PARAGRAPH": (

@@ -1798,8 +1798,30 @@ def check_test_case(
                             ),
                         )
                     )
+                elif _is_omitted_argument(site.statement.using_parameters[index - 1]):
+                    # `CALL "X" USING OMITTED B`: nothing is passed in that
+                    # position, so the splice's `MOVE OMITTED TO <target>`
+                    # is a cobc syntax error that lint never saw.
+                    reasons.append(
+                        RefusalReason(
+                            code="CAPTURE_ARG_OUT_OF_RANGE",
+                            message=(
+                                f"MOCK {directive.describe()} CAPTURE ARG "
+                                f"{index} INTO {target} -- argument {index} "
+                                f"of the CALL at line {site.line} (paragraph "
+                                f"'{site.paragraph_name}') is OMITTED, so "
+                                f"there is no value to capture"
+                            ),
+                        )
+                    )
 
     return reasons
+
+
+def _is_omitted_argument(parameter: object) -> bool:
+    """True for a `USING OMITTED` placeholder: cobolparser reports it as a
+    CallParameter named OMITTED (a reserved word, never a data name)."""
+    return str(getattr(parameter, "name", "")).strip().upper() == "OMITTED"
 
 
 def check_terminator_layout(
