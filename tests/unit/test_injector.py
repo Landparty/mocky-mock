@@ -272,6 +272,34 @@ def test_dispatch_splices_rows_block_using_resolved_tally_name():
     assert "MOVE 100 TO SQLCODE" in joined
 
 
+def test_sql_rows_row_that_sets_sqlcode_keeps_its_own_value():
+    """A row may answer a FETCH with an error (`SQLCODE = -305`, a null
+    indicator missing). The implicit `MOVE 0 TO SQLCODE` used to follow
+    the row's own MOVEs and overwrite it, so the error row read as one
+    more ordinary row. The default goes first now; the row's own MOVE
+    wins, as an explicit MOVE does everywhere else in a mock."""
+    site = _site(MockCategory.SQL, "SQL", keys=(), match_text="FETCH C1")
+    case = MockTestCase(
+        name="cursor",
+        mocks=[
+            MockDirective(
+                MockCategory.SQL,
+                "FETCH C1",
+                rows=[[("WS-ID", "10")], [("WS-ID", "0"), ("SQLCODE", "-305")]],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lines = [line.strip() for line in _dispatch(suite, site)]
+    second = lines.index("WHEN UT-SQL-FETCH-C1-TALLY = 2")
+    branch = lines[second + 1 : lines.index("WHEN OTHER", second)]
+    assert branch == [
+        "MOVE 0 TO SQLCODE",
+        "MOVE 0 TO WS-ID",
+        "MOVE -305 TO SQLCODE",
+    ]
+
+
 def test_dispatch_splices_read_rows_block_using_default_status_terminal():
     """No TERMINAL group, but the file declares a FILE STATUS field: the
     exhaustion branch defaults to MOVE "10" TO <field> and never touches
