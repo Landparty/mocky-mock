@@ -1264,6 +1264,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         not_run_case_names,
     )
     from mockymock.report.record_rewrite import (
+        address_fields,
         build_recording_report,
         field_pictures,
         rewrite_cut_text,
@@ -1550,7 +1551,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # "Never overwrite a hand-edited EXPECT" sections): every stub the
         # scanner found ends up in exactly one of recorded/skipped, and the
         # file is only ever touched when at least one stub was recorded.
-        recording = build_recording_report(stub_scan, suite_result)
+        recording = build_recording_report(
+            stub_scan, suite_result, address_fields(result.ast)
+        )
         rewritten = rewrite_cut_text(
             cut_text, recording, field_pictures(result.ast, checked.captures)
         )

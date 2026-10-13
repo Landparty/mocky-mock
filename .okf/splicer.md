@@ -309,9 +309,10 @@ category:
   a CALL. A hand-built directive without one raises `ValueError`; the
   parser rejects it first. Row N fires on the key's Nth call in the case,
   counted across every site the key matches (one shared tally).
-- **SQL**: `row_suffix_moves=["MOVE 0 TO SQLCODE"]`,
-  `exhausted_moves=["MOVE 100 TO SQLCODE"]` -- fixed in v1, matching the
-  pre-generalization (single-purpose SQL-only) behavior exactly.
+- **SQL**: `row_prefix_moves=["MOVE 0 TO SQLCODE"]`, ahead of the row's
+  own MOVEs so a row that sets `SQLCODE` (an error mid-cursor) wins (as a
+  suffix it overwrote it, until 2026-10-13); `row_suffix_moves=[]`;
+  `exhausted_moves=["MOVE 100 TO SQLCODE"]` -- fixed in v1.
 - **READ**: `row_suffix_moves=[]` (the ordinary FILE-STATUS
   default-success `MOVE "00"` above already covers every row when the
   file declares a status field, so there is nothing left to append per

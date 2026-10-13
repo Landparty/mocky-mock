@@ -127,12 +127,13 @@ def build_rows_block(
     *,
     row_suffix_moves: list[str],
     exhausted_moves: list[str],
+    row_prefix_moves: list[str] | None = None,
 ) -> list[str]:
     """EVALUATE block for a MOCK SQL/READ/RETURN ... ROWS directive: row
     N's MOVEs fire once `tally_name` (already incremented by the caller
     before this runs, so the first call sees tally == 1) reaches N,
     followed by `row_suffix_moves` (already-formed MOVE lines appended
-    after every row -- `["MOVE 0 TO SQLCODE"]` for SQL rows; `[]` for
+    after every row -- `[]` for SQL rows (see `row_prefix_moves`) and for
     READ/RETURN rows, whose implicit default-success MOVE, when one
     exists, already precedes the whole block, see build_site_dispatch);
     once rows are exhausted, `exhausted_moves` fires instead (SQL:
@@ -141,10 +142,16 @@ def build_rows_block(
     group or, for READ only, a default `MOVE "10" TO <status field>` --
     RETURN is never in FILE_STATUS_CATEGORIES, so its TERMINAL group is
     the only source; CALL/DYNCALL/DLI: their mandatory TERMINAL group,
-    with `[]` row suffixes)."""
+    with `[]` row suffixes).
+
+    `row_prefix_moves` fire before each row's own MOVEs: an implicit
+    default the row may override (SQL's `MOVE 0 TO SQLCODE`, so a row
+    giving `SQLCODE = -305` keeps it), where a suffix would overwrite it."""
     lines = ["EVALUATE TRUE"]
     for index, row in enumerate(rows, start=1):
         lines.append(f"    WHEN {tally_name} = {index}")
+        for move in row_prefix_moves or []:
+            lines.append(f"        {move}")
         for field, value in row:
             lines.append(f"        MOVE {value} TO {field}")
         for move in row_suffix_moves:
@@ -375,7 +382,10 @@ def build_site_dispatch(
                 for body in build_rows_block(
                     tally_name,
                     directive.rows,
-                    row_suffix_moves=["MOVE 0 TO SQLCODE"],
+                    # Before the row's own MOVEs, not after: a row that
+                    # sets SQLCODE itself (an error mid-cursor) must win.
+                    row_prefix_moves=["MOVE 0 TO SQLCODE"],
+                    row_suffix_moves=[],
                     exhausted_moves=["MOVE 100 TO SQLCODE"],
                 )
             )
