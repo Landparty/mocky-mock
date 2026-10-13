@@ -1124,9 +1124,38 @@ def _bundle_boundary_keys(bundle: FixtureBundle) -> set[tuple[str, str]]:
     return keys
 
 
+def _unmockable_nested_keys(surface: MockSurface) -> set[tuple[str, str]]:
+    """(category, key) pairs whose only sites are nested inside a clause
+    body with no span -- the shape mockymock already reports as "not
+    mockable" and `_mockymock_boundary_keys` skips. cobol-parser's bundle
+    still lists them, so without this set every such key showed up as a
+    "boundary key mismatch ... should not happen" (issue #164). A key with
+    at least one mockable site is in mockymock's own key set and never
+    reaches this filter.
+
+    A non-interactive ACCEPT (`ACCEPT X FROM DATE YYYYMMDD`) is in the same
+    position: mockymock records it as nothing to mock, while cobol-parser's
+    bundle can still list it when a date-format qualifier follows the
+    source (BATCHSEQ)."""
+    keys: set[tuple[str, str]] = {
+        (MockCategory.ACCEPT.value, accept.target)
+        for accept in surface.non_interactive_accepts
+    }
+    for site in surface.boundary_sites:
+        if site.category is None or not (site.nested and site.span is None):
+            continue
+        if site.category in EXEC_CATEGORIES:
+            keys.add((site.category.value, _unique_prefix(site, surface)))
+            continue
+        for key in site.keys:
+            keys.add((site.category.value, key))
+    return keys
+
+
 def _warn_on_key_mismatch(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     bundle_keys: set[tuple[str, str]],
+    unmockable_keys: set[tuple[str, str]],
 ) -> None:
     """Loud, never-silent warning when the two independent boundary walks
     (mockymock's own `mock_surface.analyze()` and cobol-parser's bundle)
@@ -1140,7 +1169,9 @@ def _warn_on_key_mismatch(
     """
     mockymock_set = {(category.value, key) for category, key in mockymock_keys}
     only_in_mockymock = mockymock_set - bundle_keys
-    only_in_bundle = bundle_keys - mockymock_set
+    # A key mockymock already lists as "not mockable" is an expected gap,
+    # not a disagreement between the two walks.
+    only_in_bundle = bundle_keys - mockymock_set - unmockable_keys
     if not only_in_mockymock and not only_in_bundle:
         return
     print(
@@ -2205,7 +2236,11 @@ def _scaffold_with_bundle(
     source: ProgramContext | None = None,
 ) -> str:
     mockymock_keys = _mockymock_boundary_keys(surface)
-    _warn_on_key_mismatch(mockymock_keys, _bundle_boundary_keys(bundle))
+    _warn_on_key_mismatch(
+        mockymock_keys,
+        _bundle_boundary_keys(bundle),
+        _unmockable_nested_keys(surface),
+    )
     fallback_entry = _first_paragraph(source.program) if source is not None else None
     registry = _build_shadow_tally_registry(bundle, mockymock_keys, fallback_entry)
 

@@ -115,3 +115,24 @@ def test_normalize_flow_targets_upper_cases_every_target_field():
     assert performs[2].thru_paragraph == "READ-ONE-EXIT"
     targets = [list(g.target_paragraphs) or [g.target_paragraph] for g in gos]
     assert targets == [["READ-ONE-EXIT"], ["READ-ONE-EXIT"]]
+
+
+def test_lint_resolves_lowercase_perform_names_written_in_the_cut(
+    tmp_path, monkeypatch, capsys
+):
+    """Issue #164: the names in the .cut itself are case-insensitive too, as
+    they are to cobc -- `PERFORM read-one thru read-one-exit` finds the
+    paragraphs, not UNKNOWN_PARAGRAPH."""
+    monkeypatch.chdir(tmp_path)
+    program, cut = _write(tmp_path)
+    cut.write_text(
+        _CUT.replace("PERFORM MAIN-PARA", "PERFORM main-para")
+        + 'TESTCASE "a lowercase THRU range"\n'
+        "    MOCK READ in-file\n"
+        "        MOVE 5 TO IN-AMT\n"
+        "    END-MOCK\n"
+        "    PERFORM read-one THRU Read-One-Exit\n"
+        "    EXPECT WS-TOTAL TO BE 5\n"
+    )
+
+    assert main(["lint", str(program), "--cut", str(cut)]) == 0, capsys.readouterr()

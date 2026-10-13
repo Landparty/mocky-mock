@@ -457,6 +457,21 @@ def _reject_mock_body_placeholder(
             )
 
 
+_COBOL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
+
+
+def _upper_cobol_name(name: str) -> str:
+    """A paragraph or section name as the analysis knows it. COBOL names are
+    case-insensitive and cobol-parser upper-cases paragraph and section
+    names, so `PERFORM read-one` must find `READ-ONE` (issue #164) -- the
+    same rule bare MOCK/VERIFY keys already follow. Anything that is not a
+    plain COBOL word (a `{Column}` token, which `_reject_name_placeholder`
+    reports verbatim) is left exactly as written."""
+    if not _COBOL_NAME_RE.match(name):
+        return name
+    return name.upper()
+
+
 def _reject_name_placeholder(
     name: str | None, line_no: int, provider: DataProvider, where: str
 ) -> None:
@@ -1137,8 +1152,9 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"period -- drop it (a .cut PERFORM names a "
                         f"paragraph; it is not a COBOL sentence)"
                     )
-            case.perform_target = m.group("target")
-            case.perform_thru = m.group("thru")
+            case.perform_target = _upper_cobol_name(m.group("target"))
+            thru = m.group("thru")
+            case.perform_thru = _upper_cobol_name(thru) if thru else thru
         elif (m := _EXPECT_RE.match(line)) is not None:
             if case is None:
                 if in_before is not None:
