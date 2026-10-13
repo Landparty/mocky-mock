@@ -5,7 +5,11 @@ docs/2026-07-22-dap-debugger-design.md's Empirical basis and the CLI
 implementation plan's Task 4) -- not hand-invented values."""
 
 from mockymock.debug.gdb_session import ResultRecord
-from mockymock.debug.variable_map import parse_local_header, read_variable
+from mockymock.debug.variable_map import (
+    buffer_layouts,
+    parse_local_header,
+    read_variable,
+)
 
 # Verbatim from a real `cobc -g` compile of the spike fixture.
 LOCAL_HEADER_TEXT = """\
@@ -244,3 +248,103 @@ def test_read_variable_comp_with_binary_swap_stays_big_endian():
     session = _field_session("f_19", 0x11, 4, 0, 0x0021, "fffe")
 
     assert read_variable(session, "WS-C", "f_19").decoded == "-2"
+
+
+# --- Issue #168: items cobc only declared as a bare `b_NN` buffer (no
+# `f_NN`, so `.attr` errors) are decoded from the program's own PICTURE
+# and USAGE. The byte images are the ones the issue reported being shown
+# as text.
+
+_B_ONLY_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BONLY.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-BIN PIC S9(8) COMP VALUE 0.
+       01 WS-C5 PIC S9(4) COMP-5.
+       01 WS-D PIC S9(3)V99 VALUE -1.05.
+       01 WS-L PIC S9(3) SIGN LEADING VALUE -12.
+       01 WS-P PIC S9(5)V99 COMP-3.
+       01 WS-F COMP-2.
+       01 WS-X PIC X(4).
+       01 WS-GRP.
+          05 WS-N PIC 9(2).
+       PROCEDURE DIVISION.
+           SUBTRACT 70000 FROM WS-BIN.
+           STOP RUN.
+"""
+
+
+def _layouts():
+    from cobolparser import parse_cobol
+
+    return buffer_layouts(parse_cobol(_B_ONLY_PROGRAM, filename="bonly.cbl").ast)
+
+
+def _buffer_session(expr, hex_bytes, size=None):
+    size = len(hex_bytes) // 2 if size is None else size
+    return _FakeSession(
+        {
+            f"-data-evaluate-expression (int)({expr}).attr->type": ResultRecord(
+                "error", {"msg": "Attempt to extract a component of a value"}
+            ),
+            f"-data-evaluate-expression {expr}": _done('"garbage"'),
+            f"-data-evaluate-expression sizeof({expr})": _done(str(size)),
+            f"-data-evaluate-expression (long)({expr})": _done("8192"),
+            f"-data-read-memory-bytes 8192 {size}": _done(
+                memory=[{"begin": "0x2000", "contents": hex_bytes}]
+            ),
+        }
+    )
+
+
+def _read_b_only(name, hex_bytes, size=None):
+    session = _buffer_session("b_8", hex_bytes, size)
+    return read_variable(session, name, "b_8", _layouts().get(name))
+
+
+def test_b_only_comp_decodes_big_endian():
+    value = _read_b_only("WS-BIN", "fffeee90")
+    assert (value.kind, value.decoded) == ("binary", "-70000")
+
+
+def test_b_only_comp5_decodes_host_order():
+    assert _read_b_only("WS-C5", "feff").decoded == "-2"
+
+
+def test_b_only_signed_display_trailing_overpunch():
+    value = _read_b_only("WS-D", "3030313075")  # `0010u`
+    assert (value.kind, value.decoded) == ("numeric-display", "-001.05")
+
+
+def test_b_only_signed_display_leading_overpunch():
+    assert _read_b_only("WS-L", "703132").decoded == "-012"  # `p12`
+
+
+def test_b_only_packed_decimal():
+    assert _read_b_only("WS-P", "0012645f").decoded == "00126.45"
+
+
+def test_b_only_numeric_without_a_decoder_is_unavailable_not_garbage():
+    value = _read_b_only("WS-F", "0000000000000000")
+    assert value.kind == "unavailable"
+    assert "unavailable" in value.decoded
+
+
+def test_b_only_buffer_of_unexpected_size_is_unavailable():
+    """A buffer the PICTURE does not describe (here 3 bytes for a 5-digit
+    DISPLAY item) is never decoded as if it were."""
+    assert _read_b_only("WS-D", "303030", size=3).kind == "unavailable"
+
+
+def test_buffer_layouts_skips_text_buffers_and_groups():
+    layouts = _layouts()
+    assert "WS-X" not in layouts
+    assert "WS-GRP" not in layouts
+    assert "WS-N" not in layouts  # subordinate: always gets an f_NN
+
+
+def test_field_wrapper_ignores_layout():
+    """An `f_NN` wrapper still decodes from its own attr, not the AST."""
+    session = _field_session("f_19", 0x11, 4, 0, 0x0021, "fffe")
+    assert read_variable(session, "WS-C5", "f_19", _layouts()["WS-C5"]).decoded == "-2"

@@ -22,7 +22,7 @@ import ntpath
 import os
 import posixpath
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import IO
 
 from mockymock.debug.call_stack import (
@@ -38,7 +38,7 @@ from mockymock.debug.gdb_session import (
     StopEvent,
 )
 from mockymock.debug.line_map import LineMap
-from mockymock.debug.variable_map import VariableValue, read_variable
+from mockymock.debug.variable_map import BufferLayout, VariableValue, read_variable
 
 # The DAP capability surface this adapter actually implements. Everything
 # else (conditional breakpoints, setVariable, multiple threads, ...) is
@@ -69,6 +69,9 @@ class DebugSession:
     `setBreakpoints` for any other source -- a copybook, another program --
     cannot be placed and is reported unverified. None (a session that does
     not know its source) accepts every path, as before."""
+    buffer_layouts: dict[str, BufferLayout] = field(default_factory=dict)
+    """Upper-cased COBOL name -> PICTURE/USAGE layout, for decoding items
+    cobc only declared as a bare `b_NN` buffer (see `BufferLayout`)."""
 
 
 LaunchSession = Callable[..., DebugSession]
@@ -430,7 +433,9 @@ class DapAdapter:
             return
         variables = []
         for name, expr in session.variable_table.items():
-            value = read_variable(session.gdb, name, expr)
+            value = read_variable(
+                session.gdb, name, expr, session.buffer_layouts.get(name.upper())
+            )
             variables.append(
                 {"name": name, "value": _display_value(value), "variablesReference": 0}
             )
@@ -466,7 +471,12 @@ class DapAdapter:
                 request, success=False, message=f"unknown variable: {expression}"
             )
             return
-        value = read_variable(session.gdb, expression, expr)
+        value = read_variable(
+            session.gdb,
+            expression,
+            expr,
+            session.buffer_layouts.get(expression.strip().upper()),
+        )
         self._send_response(
             request,
             success=True,
