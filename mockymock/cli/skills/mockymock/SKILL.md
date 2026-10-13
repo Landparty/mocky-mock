@@ -260,7 +260,8 @@ it raw.
   each step.
 - `reference/cut-dsl.md` -- every `.cut` directive: `MOCK`/`END-MOCK`
   categories, `ROWS` (one response per call: SQL/READ/RETURN/CALL/MQ/DLI), `EXPECT`, `VERIFY`, `FILE-STATUS IS`,
-  `BEFORE-ALL`/`BEFORE-EACH`, `PROVIDER`/`HEADER`/`ROW`, `*> STUB EXPECT`.
+  the `BEFORE-ALL`/`BEFORE-EACH`/`AFTER-EACH`/`AFTER-ALL` suite hooks,
+  `PROVIDER`/`HEADER`/`ROW`, `*> STUB EXPECT`.
 - `reference/cli-flags.md` -- every subcommand and flag: `setup`, `init`,
   `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`,
   `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`,

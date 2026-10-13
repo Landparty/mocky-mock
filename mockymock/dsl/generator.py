@@ -859,7 +859,8 @@ def _scaffold_placeholder(
             )
         )
         lines.append("")
-    for paragraph_name, sites in sites_by_paragraph.items():
+    for paragraph_name, own_sites in sites_by_paragraph.items():
+        sites = _reachable_sites(paragraph_name, own_sites, sites_by_paragraph, context)
         directives = _directives_for(sites, surface, context)
         labels = ", ".join(dict.fromkeys(site.label for site in sites))
         lines.append(
@@ -875,6 +876,31 @@ def _scaffold_placeholder(
         lines.extend(f"    {line}" for line in _capture_stub_lines(captured))
         lines.append("")
     return "\n".join(lines)
+
+
+def _reachable_sites(
+    entry: str,
+    own_sites: list[BoundarySite],
+    sites_by_paragraph: dict[str, list[BoundarySite]],
+    context: ProgramContext | None,
+) -> list[BoundarySite]:
+    """Every boundary site a `PERFORM entry` can reach: the paragraph's own
+    sites first, then those of every paragraph it reaches (PERFORM, GO TO,
+    fall-through), in source order. A scaffold that mocked only the entry
+    paragraph's own sites failed the very lint it has to pass whenever the
+    paragraph PERFORMs another that touches a boundary (UNMOCKED_*; the
+    enterprise corpus's DB2SP, whose 0000-MAIN PERFORMs the paragraph that
+    opens its result-set cursor). Falls back to the own sites when
+    reachability can't be established, as the bundle-driven scaffold does
+    (issue #143)."""
+    reachable = context.reachable_from(entry) if context is not None else None
+    if reachable is None:
+        return own_sites
+    sites = list(own_sites)
+    for paragraph_name, paragraph_sites in sites_by_paragraph.items():
+        if paragraph_name != entry and paragraph_name in reachable:
+            sites.extend(paragraph_sites)
+    return sites
 
 
 def _directives_for(
@@ -1133,9 +1159,38 @@ def _bundle_boundary_keys(bundle: FixtureBundle) -> set[tuple[str, str]]:
     return keys
 
 
+def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
+    """(category, key) pairs whose only sites are nested inside a clause
+    body with no span -- the shape mockymock already reports as "not
+    mockable" and `_mockymock_boundary_keys` skips. cobol-parser's bundle
+    still lists them, so without this set every such key showed up as a
+    "boundary key mismatch ... should not happen" (issue #164). A key with
+    at least one mockable site is in mockymock's own key set and never
+    reaches this filter.
+
+    A non-interactive ACCEPT (`ACCEPT X FROM DATE YYYYMMDD`) is in the same
+    position: mockymock records it as nothing to mock, while cobol-parser's
+    bundle can still list it when a date-format qualifier follows the
+    source (BATCHSEQ)."""
+    keys: set[tuple[str, str]] = {
+        (MockCategory.ACCEPT.value, accept.target)
+        for accept in surface.non_interactive_accepts
+    }
+    for site in surface.boundary_sites:
+        if site.category is None or not (site.nested and site.span is None):
+            continue
+        if site.category in EXEC_CATEGORIES:
+            keys.add((site.category.value, _unique_prefix(site, surface)))
+            continue
+        for key in site.keys:
+            keys.add((site.category.value, key))
+    return keys
+
+
 def _warn_on_key_mismatch(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     bundle_keys: set[tuple[str, str]],
+    unmockable_keys: set[tuple[str, str]],
 ) -> None:
     """Loud, never-silent warning when the two independent boundary walks
     (mockymock's own `mock_surface.analyze()` and cobol-parser's bundle)
@@ -1149,7 +1204,9 @@ def _warn_on_key_mismatch(
     """
     mockymock_set = {(category.value, key) for category, key in mockymock_keys}
     only_in_mockymock = mockymock_set - bundle_keys
-    only_in_bundle = bundle_keys - mockymock_set
+    # A key mockymock already lists as "not mockable" is an expected gap,
+    # not a disagreement between the two walks.
+    only_in_bundle = bundle_keys - mockymock_set - unmockable_keys
     if not only_in_mockymock and not only_in_bundle:
         return
     print(
@@ -2239,7 +2296,11 @@ def _scaffold_with_bundle(
     source: ProgramContext | None = None,
 ) -> str:
     mockymock_keys = _mockymock_boundary_keys(surface)
-    _warn_on_key_mismatch(mockymock_keys, _bundle_boundary_keys(bundle))
+    _warn_on_key_mismatch(
+        mockymock_keys,
+        _bundle_boundary_keys(bundle),
+        _known_unmockable_keys(surface),
+    )
     fallback_entry = _first_paragraph(source.program) if source is not None else None
     registry = _build_shadow_tally_registry(bundle, mockymock_keys, fallback_entry)
 

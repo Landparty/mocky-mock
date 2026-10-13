@@ -439,3 +439,30 @@ def test_placeholder_without_any_bundle_warns_every_pair_and_still_succeeds(
     assert (
         "ORD001" not in text
     )  # the ordinary bundle-less scaffold has no seeded data anyway
+
+
+# --- boundary key mismatch warning (issue #164) ------------------------------
+
+_ENTERPRISE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "enterprise"
+
+
+def test_known_unmockable_sites_do_not_raise_the_key_mismatch_warning(tmp_path, capsys):
+    """VSAMKSDS (READ/REWRITE/DELETE nested in a clause body) and BATCHSEQ
+    (a READ nested in a clause body, `ACCEPT X FROM DATE YYYYMMDD`) only
+    differ from their bundles by sites mockymock already lists as not
+    mockable, so the "should not happen" warning stays quiet."""
+    for name in ("VSAMKSDS", "BATCHSEQ"):
+        out = tmp_path / f"{name}.cut"
+        rc = main(
+            [
+                "generate",
+                str(_ENTERPRISE_DIR / f"{name}.cbl"),
+                "--with-data",
+                "--seed",
+                "42",
+                "-o",
+                str(out),
+            ]
+        )
+        assert rc == 0
+        assert "boundary key mismatch" not in capsys.readouterr().err, name

@@ -25,8 +25,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from mockymock.dsl.model import MockTestCase, MockTestSuite
+from mockymock.dsl.model import SUITE_PHASE_ID, HookStep, MockTestCase, MockTestSuite
 from mockymock.splicer.naming import TallyRegistry
+from mockymock.splicer.snapshot import StateSnapshot
 
 _SUITE_PARAGRAPH_NAME_RE = re.compile(r"[^A-Z0-9-]")
 
@@ -51,6 +52,7 @@ def build_driver(
     registry: TallyRegistry,
     record_targets: dict[int, list[str]] | None = None,
     extra_working_storage_lines: list[str] | None = None,
+    snapshot: StateSnapshot | None = None,
 ) -> DriverArtifact:
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
@@ -82,13 +84,26 @@ def build_driver(
     if extra_working_storage_lines:
         working_storage.extend(extra_working_storage_lines)
 
+    # BEFORE-ALL hands its state to every case through a snapshot taken
+    # right after it (splicer.snapshot); without BEFORE-ALL steps there is
+    # nothing to hand over, and each case starts from the reset as always.
+    restore_state = bool(suite.before_all_steps and snapshot and snapshot.save_lines)
+
     procedure: list[str] = []
     procedure.append(f"       {suite_paragraph}.")
     procedure.append(
         f'           DISPLAY "__MOCKYMOCK__ TESTSUITE: {_display_text(suite.name)}"'
     )
+    if suite.before_all_steps:
+        if reset_lines:
+            procedure.append("           PERFORM UT-RESET-WORKING-STORAGE")
+        procedure.extend(_suite_phase_lines(suite, registry, suite.before_all_steps))
+        if restore_state:
+            procedure.append("           PERFORM UT-SAVE-STATE")
     for index in range(1, len(suite.test_cases) + 1):
         procedure.append(f"           PERFORM UT-TESTCASE-{index:03d}")
+    if suite.after_all_steps:
+        procedure.extend(_suite_phase_lines(suite, registry, suite.after_all_steps))
     procedure.append(
         f'           DISPLAY "__MOCKYMOCK__ SUMMARY: RUN={len(suite.test_cases)} '
         f'FAILURES=" UT-FAIL-COUNT'
@@ -108,6 +123,18 @@ def build_driver(
         procedure.append(f"           {reset_lines[-1]}.")
         procedure.append("")
 
+    if restore_state:
+        assert snapshot is not None
+        for paragraph, body in (
+            ("UT-SAVE-STATE", snapshot.save_lines),
+            ("UT-RESTORE-STATE", snapshot.restore_lines),
+        ):
+            procedure.append(f"       {paragraph}.")
+            procedure.extend(f"           {line}" for line in body[:-1])
+            procedure.append(f"           {body[-1]}.")
+            procedure.append("")
+        working_storage.extend(snapshot.working_storage_lines)
+
     for index, case in enumerate(suite.test_cases, start=1):
         procedure.extend(
             _build_testcase_paragraph(
@@ -116,6 +143,8 @@ def build_driver(
                 registry,
                 bool(reset_lines),
                 (record_targets or {}).get(index, []),
+                suite=suite,
+                restore_state=restore_state,
             )
         )
         procedure.append("")
@@ -125,19 +154,58 @@ def build_driver(
     )
 
 
+def _step_lines(steps: list[HookStep]) -> list[str]:
+    lines: list[str] = []
+    for step in steps:
+        if step.kind == "MOVE":
+            lines.append(f"           MOVE {step.value} TO {step.target}")
+        else:
+            thru = f" THRU {step.thru}" if step.thru else ""
+            lines.append(f"           PERFORM {step.target}{thru}")
+    return lines
+
+
+def _tally_zero_lines(mocks, registry: TallyRegistry) -> list[str]:
+    return [
+        f"           MOVE 0 TO {registry.name(category, key)}"
+        for category, key in dict.fromkeys((m.category, m.key) for m in mocks)
+    ]
+
+
+def _suite_phase_lines(
+    suite: MockTestSuite, registry: TallyRegistry, steps: list[HookStep]
+) -> list[str]:
+    """BEFORE-ALL/AFTER-ALL steps, run outside any test case: dispatched
+    under SUITE_PHASE_ID, where BEFORE-ALL's mocks answer (injector)."""
+    return (
+        [
+            f'           MOVE "{SUITE_PHASE_ID}" TO UT-CURRENT-CASE',
+            '           MOVE "N" TO UT-EARLY-EXIT',
+        ]
+        + _tally_zero_lines(suite.before_all_mocks, registry)
+        + _step_lines(steps)
+    )
+
+
 def _build_testcase_paragraph(
     index: int,
     case: MockTestCase,
     registry: TallyRegistry,
     has_reset: bool,
     record_names: list[str] | None = None,
+    suite: MockTestSuite | None = None,
+    restore_state: bool = False,
 ) -> list[str]:
     case_id = f"{index:03d}"
     case_mocks = {(mock.category, mock.key) for mock in case.mocks}
+    before_each = suite.before_each_steps if suite is not None else []
+    after_each = suite.after_each_steps if suite is not None else []
     lines = [f"       UT-TESTCASE-{case_id}."]
 
     if has_reset:
         lines.append("           PERFORM UT-RESET-WORKING-STORAGE")
+    if restore_state:
+        lines.append("           PERFORM UT-RESTORE-STATE")
     lines.append(f'           MOVE "{case_id}" TO UT-CURRENT-CASE')
     # Each case starts from RETURN-CODE 0, like a fresh run would: a
     # previous case's MOVE 8 TO RETURN-CODE otherwise leaked into this
@@ -150,6 +218,16 @@ def _build_testcase_paragraph(
         f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} START: '
         f'{_display_text(case.name)}"'
     )
+
+    if before_each:
+        lines.extend(_step_lines(before_each))
+        # VERIFY counts what the test's own PERFORM did: calls a BEFORE-EACH
+        # PERFORM made are not the code under test.
+        if any(step.kind == "PERFORM" for step in before_each):
+            lines.extend(_tally_zero_lines(case.mocks, registry))
+            # A terminator a BEFORE-EACH PERFORM reached must not cut the
+            # case's own PERFORM short.
+            lines.append('           MOVE "N" TO UT-EARLY-EXIT')
 
     for value, target in case.setup_moves:
         lines.append(f"           MOVE {value} TO {target}")
@@ -208,6 +286,11 @@ def _build_testcase_paragraph(
             f'           DISPLAY "__MOCKYMOCK__ RECORD {case_id} {name}: " {name}'
         )
 
+    if any(step.kind == "PERFORM" for step in after_each):
+        # Nor may one the case's PERFORM reached cut AFTER-EACH short: a
+        # hook paragraph on a terminator chain checks this flag too.
+        lines.append('           MOVE "N" TO UT-EARLY-EXIT')
+    lines.extend(_step_lines(after_each))
     lines.append(f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} END".')
     return lines
 
