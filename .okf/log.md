@@ -5,6 +5,12 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-13 -- CAPTURE ARG of an OMITTED argument is refused
+
+`CALL "X" USING OMITTED B` with `CAPTURE ARG 1` linted clean and then
+failed cobc on the spliced `MOVE OMITTED TO <target>`. `check_test_case`
+now refuses it as `CAPTURE_ARG_OUT_OF_RANGE`. Updated [analysis](analysis.md).
+
 ## 2026-10-10 -- explain covers three more refusal codes
 
 `UNRESOLVED_FLOW_MOCK_TARGET`, `UNRESOLVED_CAPTURE_TARGET` and
