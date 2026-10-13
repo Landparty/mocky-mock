@@ -80,6 +80,7 @@ from mockymock.report.record_rewrite import (
     render_expect_value,
 )
 from mockymock.splicer.naming import TallyRegistry
+from mockymock.splicer.reset import _POINTER_USAGES
 
 _PLACEHOLDER_BODIES: dict[MockCategory, list[str]] = {
     MockCategory.CALL: ["MOVE 0 TO RETURN-CODE"],
@@ -1164,16 +1165,11 @@ def _row_target(spec: FieldSpec, source: ProgramContext | None) -> str:
     return _qualified_reference(spec.qualified_name, spec.column, spec.name)
 
 
-#: USAGEs a mock body cannot MOVE a generated value into: POINTER-family
-#: items take only SET (NULL is their only data-free value), and an INDEX
-#: item's content is implementation-defined. cobol-parser's bundle lays
-#: them out as numeric fields holding "0", and `MOVE 0 TO <pointer>` is a
-#: compile error ("invalid MOVE statement").
-_POINTER_USAGES = frozenset(
-    {"POINTER", "PROCEDURE-POINTER", "FUNCTION-POINTER", "PROGRAM-POINTER"}
-)
-
-
+# A mock body cannot MOVE a generated value into a POINTER-family item
+# (it takes only SET, and NULL is its only data-free value) or an INDEX
+# item (its content is implementation-defined). cobol-parser's bundle lays
+# them out as numeric fields holding "0", and `MOVE 0 TO <pointer>` is a
+# compile error ("invalid MOVE statement").
 def _row_move_line(row: dict[str, str], spec: FieldSpec, target: str) -> str | None:
     usage = (spec.usage or "").upper()
     if usage in _POINTER_USAGES:

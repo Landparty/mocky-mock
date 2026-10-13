@@ -15,6 +15,7 @@ from mockymock.analysis.stub_expectations import (
     StubScanResult,
 )
 from mockymock.report.results import TestSuiteResult
+from mockymock.splicer.reset import _POINTER_USAGES
 
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 # How GnuCOBOL -std=mvs (the only mode mockymock compiles in, see
@@ -268,9 +269,7 @@ def field_pictures(program, captures=()) -> dict[str, str]:
     return pictures
 
 
-_ADDRESS_USAGES = frozenset(
-    {"POINTER", "PROCEDURE-POINTER", "FUNCTION-POINTER", "PROGRAM-POINTER", "INDEX"}
-)
+_ADDRESS_USAGES = _POINTER_USAGES | {"INDEX"}
 
 
 def address_fields(program) -> set[str]:

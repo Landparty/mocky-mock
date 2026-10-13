@@ -1336,13 +1336,15 @@ def test_with_data_never_moves_into_a_pointer_or_index_argument(tmp_path):
        WORKING-STORAGE SECTION.
        01 WS-PROC-PTR   USAGE PROCEDURE-POINTER.
        01 WS-DATA-PTR   USAGE POINTER.
+       01 WS-BUF-PTR    USAGE POINTER.
        01 WS-IDX        USAGE INDEX.
        01 WS-RC         PIC S9(4) COMP VALUE 0.
        01 WS-OUT        PIC X(10) VALUE SPACES.
        PROCEDURE DIVISION.
        0000-MAIN.
            SET WS-DATA-PTR TO ADDRESS OF WS-OUT
-           CALL "REGPGM" USING WS-PROC-PTR WS-DATA-PTR WS-IDX WS-RC
+           CALL "REGPGM" USING WS-PROC-PTR WS-DATA-PTR WS-BUF-PTR
+                               WS-IDX WS-RC
            IF WS-RC = 0
               MOVE "OK" TO WS-OUT
            END-IF
@@ -1360,4 +1362,6 @@ def test_with_data_never_moves_into_a_pointer_or_index_argument(tmp_path):
     assert "MOVE 0 TO WS-IDX" not in text
     assert "TO WS-IDX" not in text
     assert "SET WS-PROC-PTR TO NULL" in text
+    assert "SET WS-BUF-PTR TO NULL" in text
+    assert "TO WS-DATA-PTR" not in text
     assert "MOVE 0 TO WS-RC" in text
