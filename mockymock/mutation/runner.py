@@ -187,6 +187,7 @@ def _run_suite_once(
             reset_lines,
             registry,
             extra_working_storage_lines=extra_working_storage(checked),
+            snapshot=checked.snapshot,
         )
         instrumented = _insert_driver(lines, artifact)
 

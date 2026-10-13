@@ -634,6 +634,9 @@ Rules that matter in practice:
 - Every keyword is case-sensitive uppercase, **except** `END-MOCK`/
   `END-BEFORE` (case-insensitive, optional trailing period — `end-mock.`
   is fine).
+- Paragraph, section and bare key names are not keywords: as in COBOL, any
+  case works (`PERFORM read-one` finds `READ-ONE`). Quoted keys
+  (`MOCK CALL "X"`, SQL/CICS/DLI text) are matched exactly as written.
 - Lines starting with `*>` are comments outside a `MOCK` body; inside a
   body they pass through as ordinary COBOL comments.
 
