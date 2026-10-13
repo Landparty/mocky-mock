@@ -5,6 +5,14 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-13 -- generate --with-data stops counting calls that may not run
+
+A single site under an IF (LOANPMT's ROLLBACK), or a top-level site in a
+paragraph PERFORMed only from inside an IF (DEPTMQP's MQPUT), kept the
+bundle's per-scenario count and failed with "got 0" (#160). Counts are now
+kept only for sites `analysis/exact_counts.py` shows run on every pass.
+Updated [dsl](dsl.md).
+
 ## 2026-10-13 -- CAPTURE ARG of an OMITTED argument is refused
 
 `CALL "X" USING OMITTED B` with `CAPTURE ARG 1` linted clean and then

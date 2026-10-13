@@ -52,6 +52,7 @@ import re
 import sys
 from dataclasses import dataclass, field, replace
 
+from mockymock.analysis.exact_counts import exact_count_scope
 from mockymock.analysis.loops import looped_paragraphs_and_statements, site_in_loop
 from mockymock.analysis.mock_surface import (
     BoundarySite,
@@ -421,6 +422,14 @@ class ProgramContext:
         if reasons or entry not in reached:
             return None
         return reached
+
+    def exact_count_scope(
+        self, entry: str, reachable: set[str]
+    ) -> tuple[set[str], set[int]] | None:
+        """`analysis.exact_counts.exact_count_scope` for `PERFORM entry`."""
+        return exact_count_scope(
+            self.program, entry, reachable, neutralized_goto=self.neutralized_goto
+        )
 
     def captures_for(self, category: MockCategory, key: str) -> list[str]:
         return self.capture_lines.get((category, key), [])
@@ -2149,16 +2158,31 @@ def _sites_for_key(
     ]
 
 
+_SEVERAL_SITES_REASON = (
+    "called from several sites, some inside an IF/EVALUATE/loop, so how "
+    "many of them this case reaches is not known"
+)
+_CONDITIONAL_SITE_REASON = (
+    "called only under an IF/EVALUATE, or from a paragraph PERFORMed "
+    "conditionally, so whether this case reaches it is not known"
+)
+
+
 def _conditional_call_count_keys(
     expectations: list[Expectation],
     surface: MockSurface,
     reachable: set[str] | None = None,
-) -> list[tuple[MockCategory, str]]:
-    """Keys whose summed count (`_merged_call_counts`) is not exact: more
-    than one site, at least one of them nested in an IF/EVALUATE/loop. The
-    bundle counts every site once per scenario whether or not its branch
-    runs (STMTGEN's page-break CALL), so the sum would overshoot."""
-    keys: list[tuple[MockCategory, str]] = []
+    scope: tuple[set[str], set[int]] | None = None,
+) -> list[tuple[tuple[MockCategory, str], str]]:
+    """Keys whose bundle count (`_merged_call_counts`) is not exact, each
+    with the reason. The bundle counts every site once per scenario whether
+    or not its branch runs, so a count is kept only when every site runs on
+    every pass: `scope` is `analysis.exact_counts.exact_count_scope` for
+    this case's entry (issue #160 -- a single site behind `IF SQLCODE NOT =
+    0`, or one in a paragraph PERFORMed only from inside `IF RECORD-OK`).
+    Without a scope, any nested site is enough to demote (issue #142 for
+    several sites, #160 for one)."""
+    keys: list[tuple[tuple[MockCategory, str], str]] = []
     for expectation in expectations:
         if expectation.kind != "call_count":
             continue
@@ -2169,8 +2193,18 @@ def _conditional_call_count_keys(
             continue
         sites = _sites_for_key(category, key, surface, reachable)
         if len(sites) > 1 and any(site.nested for site in sites):
-            keys.append((category, key))
+            keys.append(((category, key), _SEVERAL_SITES_REASON))
+        elif scope is None:
+            if any(site.nested for site in sites):
+                keys.append(((category, key), _CONDITIONAL_SITE_REASON))
+        elif any(not _site_in_scope(site, scope) for site in sites):
+            keys.append(((category, key), _CONDITIONAL_SITE_REASON))
     return keys
+
+
+def _site_in_scope(site: BoundarySite, scope: tuple[set[str], set[int]]) -> bool:
+    paragraphs, statement_ids = scope
+    return site.paragraph_name in paragraphs and id(site.statement) in statement_ids
 
 
 def _unlooped_read_counts(
@@ -2246,17 +2280,17 @@ def _scaffold_with_bundle(
             for line in _capture_stub_lines(_capture_targets(directive_lines))
         )
         expectations = _merged_call_counts(scenario.expectations)
-        for key_pair in _conditional_call_count_keys(expectations, surface, reachable):
+        scope = (
+            source.exact_count_scope(entry, reachable)
+            if source is not None and reachable is not None
+            else None
+        )
+        for key_pair, reason in _conditional_call_count_keys(
+            expectations, surface, reachable, scope
+        ):
             call_count_overrides.setdefault(
                 key_pair,
-                CallCountOverride(
-                    demote_reason=(
-                        "called from several sites, some inside an IF/"
-                        "EVALUATE/loop, so how many of them this case "
-                        "reaches is not known"
-                    ),
-                    from_placeholder=False,
-                ),
+                CallCountOverride(demote_reason=reason, from_placeholder=False),
             )
         if source is not None:
             for key_pair, count in _unlooped_read_counts(
