@@ -24,7 +24,11 @@ the caller-independent line-location work.
 
 from __future__ import annotations
 
-from mockymock.analysis.linkage import AddressOfSite, LinkagePlan
+from mockymock.analysis.linkage import (
+    AddressOfSite,
+    LinkagePlan,
+    procedure_header_clause_spans,
+)
 from mockymock.splicer.reset import reset_lines_for_items
 from mockymock.splicer.source_map import collect_boundaries, statement_span
 from mockymock.splicer.stub_writer import comment_and_replace, replace_columns
@@ -45,6 +49,17 @@ def neutralize(lines: list[str], program, plan: LinkagePlan) -> list[str]:
         lines = comment_and_replace(lines, start, end, [])
 
     lines = comment_and_replace(lines, plan.header_line, plan.header_line, [])
+    # The default entry's USING/RETURNING clause names items that now live
+    # in WORKING-STORAGE, which cobc rejects ("not in LINKAGE SECTION"):
+    # blank it, width-preserving like every edit here. The gate already
+    # refused a header whose clause cannot be delimited.
+    spans = procedure_header_clause_spans(lines, program) or []
+    for index, (line_number, start, end) in enumerate(spans):
+        # The closing period moves to where the clause began, so the header
+        # is complete on its first line (see procedure_header_clause_spans).
+        lines = replace_columns(
+            lines, line_number, start, end, "." if index == 0 else ""
+        )
     return lines
 
 

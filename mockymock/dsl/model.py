@@ -293,12 +293,115 @@ class MockTestCase:
 
 
 @dataclass
+class HookStep:
+    """One statement of a BEFORE-ALL/BEFORE-EACH/AFTER-EACH/AFTER-ALL hook,
+    in declaration order: `MOVE <value> TO <target>` or `PERFORM <target>
+    [THRU <thru>]`. See docs/2026-10-10-suite-hooks-design.md."""
+
+    kind: str  # "MOVE" or "PERFORM"
+    target: str
+    value: str = ""  # MOVE only
+    thru: str | None = None  # PERFORM only
+    line: int = 0
+    """1-based .cut line (0 when built outside the parser)."""
+
+
+HOOK_NAMES = ("BEFORE-ALL", "BEFORE-EACH", "AFTER-EACH", "AFTER-ALL")
+
+# UT-CURRENT-CASE while BEFORE-ALL/AFTER-ALL steps run: never a real case id
+# (those are zero-padded digits), so the mock dispatch can give the suite
+# phase its own WHEN branch holding BEFORE-ALL's mocks.
+SUITE_PHASE_ID = "SUITE"
+
+
+@dataclass
+class HookCheck:
+    """One hook PERFORM step as the static checks see it: a synthetic
+    MockTestCase whose perform target is the step's and whose mocks are
+    the ones in force while the step runs -- the test case's own (EACH
+    hooks, one HookCheck per test case) or BEFORE-ALL's (ALL hooks)."""
+
+    hook: str  # one of HOOK_NAMES
+    step: HookStep
+    case: MockTestCase
+    for_case: MockTestCase | None  # the real test case (EACH hooks), else None
+
+
+@dataclass
 class MockTestSuite:
     name: str
     test_cases: list[MockTestCase] = field(default_factory=list)
     line: int = 0
     """1-based .cut line of the TESTSUITE header (0 when built outside the
     parser)."""
+    before_all_steps: list[HookStep] = field(default_factory=list)
+    """Run once, before the first test case; every test case then starts
+    from the WORKING-STORAGE state they leave behind (splicer.snapshot)."""
+    before_each_steps: list[HookStep] = field(default_factory=list)
+    """Run at the start of every test case, before its own MOVEs."""
+    after_each_steps: list[HookStep] = field(default_factory=list)
+    """Run at the end of every test case, after its EXPECTs/VERIFYs."""
+    after_all_steps: list[HookStep] = field(default_factory=list)
+    """Run once, after the last test case."""
+    before_each_mocks: list[MockDirective] = field(default_factory=list)
+    """BEFORE-EACH's MOCK blocks, already desugared into every test case;
+    kept so the static checks can tell a shared mock from a case's own."""
+    before_all_mocks: list[MockDirective] = field(default_factory=list)
+    """BEFORE-ALL's MOCK blocks. Besides being desugared into every test
+    case (parser._apply_before_blocks), they are the mocks in force while
+    the BEFORE-ALL and AFTER-ALL steps run (dispatch id SUITE_PHASE_ID)."""
+
+    @property
+    def has_suite_phase(self) -> bool:
+        """True when BEFORE-ALL or AFTER-ALL has steps to run outside any
+        test case."""
+        return bool(self.before_all_steps or self.after_all_steps)
+
+    def hook_checks(self) -> list[HookCheck]:
+        """Every hook PERFORM step as a synthetic test case, for the static
+        gates (reachability, unmocked boundaries, terminators, flow mocks)
+        -- a hook PERFORM reaches program code exactly like a TESTCASE's
+        own PERFORM does, so it is refused exactly like one."""
+        checks: list[HookCheck] = []
+
+        def performs(steps: list[HookStep]) -> list[HookStep]:
+            return [s for s in steps if s.kind == "PERFORM"]
+
+        for hook, steps in (
+            ("BEFORE-ALL", self.before_all_steps),
+            ("AFTER-ALL", self.after_all_steps),
+        ):
+            for step in performs(steps):
+                synthetic = MockTestCase(
+                    name=f"{hook} PERFORM {step.target}",
+                    mocks=list(self.before_all_mocks),
+                    perform_target=step.target,
+                    perform_thru=step.thru,
+                    line=step.line,
+                )
+                checks.append(HookCheck(hook, step, synthetic, None))
+        for hook, steps in (
+            ("BEFORE-EACH", self.before_each_steps),
+            ("AFTER-EACH", self.after_each_steps),
+        ):
+            for step in performs(steps):
+                for case in self.test_cases:
+                    synthetic = MockTestCase(
+                        name=f"{hook} PERFORM {step.target} (for {case.name!r})",
+                        mocks=case.mocks,
+                        perform_target=step.target,
+                        perform_thru=step.thru,
+                        line=step.line,
+                    )
+                    checks.append(HookCheck(hook, step, synthetic, case))
+        return checks
+
+    def analysis_cases(self) -> list[MockTestCase]:
+        """Every entry point the program is entered through: the test
+        cases plus each hook PERFORM step (see hook_checks). Static
+        analyses that ask "what could execute?" iterate this, not
+        test_cases."""
+        return self.test_cases + [c.case for c in self.hook_checks()]
 
     def all_mock_keys(self) -> list[tuple[MockCategory, str]]:
         """Every distinct (category, key) mocked anywhere in the suite, in

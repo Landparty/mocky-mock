@@ -117,6 +117,21 @@ TESTCASE "counts"
     assert zero_baseline_hint(_swap_on("ADD 1 TO WS-PURGED"), ast, seeded) == ""
 
 
+@pytest.mark.parametrize("hook", ["BEFORE-ALL", "BEFORE-EACH"])
+def test_seeding_through_a_before_hook_move_suppresses_the_hint(ast, hook):
+    seeded = parse_cut(f"""\
+TESTSUITE "CNTPROG"
+
+{hook}
+    MOVE 7 TO WS-PURGED
+END-BEFORE
+
+TESTCASE "counts"
+    PERFORM MAIN-PARA
+""")
+    assert zero_baseline_hint(_swap_on("ADD 1 TO WS-PURGED"), ast, seeded) == ""
+
+
 def test_other_operators_never_get_a_hint(ast, suite):
     mutant = Mutant(
         line=15,

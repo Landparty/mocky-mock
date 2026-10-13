@@ -431,6 +431,33 @@ truncating past 999) and the injector's `WHEN "{index:03d}"` literals in
 `injector.build_site_dispatch`, which must stay in sync with this field's
 width.
 
+# BEFORE-ALL state snapshot (snapshot.py)
+
+2026-10-10, suite hooks (`docs/2026-10-10-suite-hooks-design.md`). When
+a `.cut` has `BEFORE-ALL` steps, every case must start from the state
+they leave, not from the reset. `plan_snapshot(program, linkage_items)`
+covers exactly the items `reset.py` covers (top-level WORKING-STORAGE /
+LOCAL-STORAGE, each FD's longest record, neutralized LINKAGE items; no
+top-level REDEFINES or FILLER) and returns `UT-SNAP-nnn` declarations
+plus `UT-SAVE-STATE` / `UT-RESTORE-STATE` bodies, and one problem per
+item it can't copy exactly (`cli.checks` step 10 turns them into
+`UNSAVABLE_BEFORE_ALL_STATE`). The driver runs reset, BEFORE-ALL steps,
+save once; each case runs reset then restore -- the reset still handles
+harness fields, captures and the EIB.
+
+| Item | Snapshot field | Copy |
+|---|---|---|
+| Group | `01 UT-SNAP-nnn.` + `05 FILLER PIC X(n)`, n an upper bound (`_max_bytes`: REDEFINES children summed, every elementary at least 16 bytes, national x4) | `MOVE` (group move = byte copy; restore copies back exactly the group's own bytes) |
+| Elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
+| POINTER family, INDEX | same USAGE | `SET` |
+| Group holding OCCURS ... DEPENDING ON, unreadable OCCURS bound, irreproducible description | -- | refused |
+
+The size is an upper bound, not cobol-parser's `calculate_size`, on
+purpose: releases before 2026-09-10 undercounted some usages (COMP-1 as
+0, POINTER as 4), and an undercount would truncate the copy.
+Not compiled in CI (the integration job is off); the shapes are pinned by
+`tests/unit/test_suite_hooks.py`.
+
 # WORKING-STORAGE Reset (reset.py)
 
 Because one binary serves the whole suite, case N's leftover state would
@@ -546,11 +573,26 @@ storage is unbound regardless of `ENTRY`'s presence -- see
 docs/2026-08-27-cics-eib-linkage-support-design.md Part 1).
 `refusal.check_linkage_layout(program, lines)` gates it
 with three guardrails, refusing `UNSUPPORTED_LINKAGE_LAYOUT` rather than
-guessing when any fails: the default entry must have no `USING` of its own
-(the general CALL-driving case, Milestone B, is untested and out of scope
-here); LINKAGE SECTION must be the last DATA DIVISION section (nothing
-after it that would wrongly get absorbed too); and the computed header line
-must textually verify as `LINKAGE SECTION` before ever being commented.
+guessing when any fails: the default entry's header must be delimitable
+(`analysis.linkage.procedure_header_clause_spans`: no `CHAINING`, and a
+closing period within 50 lines of a `USING`/`RETURNING` list); LINKAGE
+SECTION must be the last DATA DIVISION section (nothing after it that
+would wrongly get absorbed too); and the computed header line must
+textually verify as `LINKAGE SECTION` before ever being commented.
+
+**Entry parameters (2026-10-10).** A default entry with its own
+`PROCEDURE DIVISION USING ... [RETURNING ...]` -- the ordinary CALLed
+subprogram, a translated CICS LINK server, an IMS MPP's PCB list, a DB2
+stored procedure -- used to be refused (the "Milestone B" CALL-driving
+case). The driver PERFORMs paragraphs and never CALLs the program, so
+nothing would bind those parameters anyway: `neutralize` now also blanks
+the clause (width-preserving `replace_columns`, every wrapped line up to
+the closing period) and the parameters fold into WORKING-STORAGE with the
+rest of the LINKAGE SECTION. A `.cut` sets entry values with `MOVE`
+(TESTCASE, BEFORE-EACH, BEFORE-ALL) and asserts output parameters with
+`EXPECT`; `extra_reset_lines` resets them before every case and
+`splicer.snapshot` saves them after BEFORE-ALL. The enterprise corpus's
+CICSLINK, IMSMPP and DB2SP now scaffold instead of refusing.
 
 `neutralize(lines, program, plan)` — verified empirically to compile and
 run clean — comments out every `ENTRY` statement's span (`statement_span`,
