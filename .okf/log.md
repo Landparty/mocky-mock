@@ -14,6 +14,30 @@ terminator on one side no longer skips the rest of the other. The
 mutation zero-baseline hint counts BEFORE-ALL/BEFORE-EACH `MOVE`s as
 seeding. Updated [dsl](dsl.md).
 
+## 2026-10-13 -- a SQL ROWS row may set SQLCODE
+
+`MOCK SQL ... ROWS ( ..., SQLCODE = -305 )` answered that FETCH with
+SQLCODE 0: the implicit `MOVE 0 TO SQLCODE` followed the row's own MOVEs.
+`build_rows_block` takes `row_prefix_moves` and SQL puts the default
+there. Updated [dsl](dsl.md), [splicer](splicer.md).
+
+## 2026-10-12 -- pointer and INDEX fields in generated and recorded tests
+
+`generate --with-data` no longer writes `MOVE 0 TO <pointer>` (a compile
+error) for a POINTER-family CALL argument: it writes `SET ... TO NULL`, and
+nothing for an INDEX item. `run --record-expectations` skips a stub on such
+an item instead of recording an address into an EXPECT that does not
+compile. Updated [dsl](dsl.md), [report](report.md).
+
+## 2026-10-11 -- lowercase PERFORM / GO TO targets resolve
+
+cobolparser keeps a PERFORM / GO TO target as written but upper-cases
+paragraph and section names, so a program written in lowercase was refused
+outright (UNRESOLVED_FLOW_TARGET, UNMATCHED_MOCK,
+UNSUPPORTED_TERMINATOR_LAYOUT): all 17 real-world suites, lowercased, were
+refused. `normalize_flow_targets` upper-cases the targets right after every
+`parse_cobol`. Updated [analysis](analysis.md).
+
 ## 2026-10-10 -- suite hooks: BEFORE-ALL/BEFORE-EACH/AFTER-EACH/AFTER-ALL
 
 JUnit-style setup/teardown. `MOVE`/`PERFORM` steps in BEFORE-ALL and
@@ -28,6 +52,7 @@ BEFORE-ALL) instead of refused. Plain `generate` scaffolds now mock every
 boundary a paragraph reaches, not just its own (18 to 27 of 34 corpus and
 example scaffolds lint-clean). Updated [dsl](dsl.md), [splicer](splicer.md),
 [analysis](analysis.md).
+
 
 ## 2026-10-10 -- explain covers three more refusal codes
 

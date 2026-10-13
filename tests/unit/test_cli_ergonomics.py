@@ -237,3 +237,18 @@ def test_malformed_config_file_keeps_collect_json_machine_readable(
     out = capsys.readouterr().out
     assert exit_code == 1
     assert "could not parse" in json.loads(out)["error"]
+
+
+def test_malformed_config_file_reported_on_stderr_for_json_only_stdout_commands(
+    tmp_path, capsys, monkeypatch
+):
+    # `fixtures` promises stdout is exactly the JSON document (or nothing,
+    # on a gate failure) -- a config error must go to stderr instead, the
+    # same convention its own "no such file" gate uses.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mockymock.toml").write_text("copybook_path = [\n")
+    exit_code = main(["fixtures", "MISSING.cbl"])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "could not parse" in captured.err

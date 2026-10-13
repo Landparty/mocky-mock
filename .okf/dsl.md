@@ -692,9 +692,11 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
 `exhausted_moves` verbatim. The two call sites in
 `splicer/injector.build_site_dispatch` supply category-specific values:
 
-- **SQL**: `row_suffix_moves=["MOVE 0 TO SQLCODE"]`,
+- **SQL**: `row_prefix_moves=["MOVE 0 TO SQLCODE"]` (before the row's own
+  MOVEs, so a row giving `SQLCODE = -305` keeps it -- as a suffix it was
+  silently overwritten until 2026-10-13), `row_suffix_moves=[]`,
   `exhausted_moves=["MOVE 100 TO SQLCODE"]` (DB2's "not found" code) —
-  fixed in v1, matching the pre-generalization behavior exactly.
+  fixed in v1.
 - **READ**: `row_suffix_moves=[]` (a file-op category's implicit
   default-success `MOVE "00"` already precedes the whole dispatch block
   when the file declares a `FILE STATUS` field — see the `FILE-STATUS IS`
@@ -782,6 +784,10 @@ paragraph-grouped path described above, unchanged. A real
   via `_sql_rows_directive` (`_sql_wants_rows` decides single vs. multi).
   Values render through `_bundle_rendered_value`: numeric-family
   `FieldSpec` categories render bare, everything else quoted and escaped.
+  A POINTER-family field gets `SET <field> TO NULL` and an INDEX field no
+  line at all (`_row_move_line`, 2026-10-12): the bundle lays both out as
+  numeric fields holding `0`, and `MOVE 0 TO <pointer>` is a cobc compile
+  error (LESERV's `CALL 'CEEHDLR' USING HANDLER-ROUTINE ...`).
 - **`_read_body`'s `WHEN OTHER` branch also replicates the source `AT END`
   clause's own constant-valued statements**, not just the FILE STATUS
   field (`_replicated_at_end_statements`, via `_is_safe_literal_source`

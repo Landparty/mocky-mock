@@ -184,6 +184,7 @@ def run_static_checks(
 
     from mockymock.analysis.cics_eib import cics_eib_plan
     from mockymock.analysis.flow_mocks import check_flow_mocks
+    from mockymock.analysis.flow_targets import normalize_flow_targets
     from mockymock.analysis.linkage import address_of_sites, linkage_plan
     from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
     from mockymock.analysis.refusal import (
@@ -248,6 +249,7 @@ def run_static_checks(
     # Warnings provably confined to one paragraph's own body are held back
     # (scoped_warnings) for the reachability-union gate in step 4b.
     parse_result = parse_cobol(raw_source, filename=source_path.name)
+    normalize_flow_targets(parse_result.ast)
     out.parse_result = parse_result
     whole_program_reasons, scoped_warnings = check_whole_program_scoped(
         parse_result, raw_source
