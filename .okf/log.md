@@ -14,6 +14,46 @@ table is reset with `INITIALIZE ... ALL TO VALUE THEN TO DEFAULT`, so its
 occurrences start each test at their declared VALUE. The debugger lists
 declared items cobc gave no C local as "unavailable". Updated
 [dsl](dsl.md), [splicer](splicer.md), [cli](cli.md).
+## 2026-10-13 -- MOCK CICS takes ROWS/TERMINAL; DFHRESP(...) expands in .cut text
+
+#169. `MOCK CICS "READNEXT" ROWS ( ... ) TERMINAL ( ... )` was rejected, so a
+STARTBR/READNEXT browse loop had no way to end; CICS is now in
+`SEQUENCED_CALL_CATEGORIES` (mandatory TERMINAL, like CALL/DLI). And
+`DFHRESP(NOTFND)` in a mock body reached cobc unexpanded; `parse_cut` now
+expands it in every .cut line and refuses unknown condition names. Updated
+[dsl](dsl.md), [splicer](splicer.md).
+
+## 2026-10-13 -- generate --with-data stops counting calls that may not run
+
+A single site under an IF (LOANPMT's ROLLBACK), or a top-level site in a
+paragraph PERFORMed only from inside an IF (DEPTMQP's MQPUT), kept the
+bundle's per-scenario count and failed with "got 0" (#160). Counts are now
+kept only for sites `analysis/exact_counts.py` shows run on every pass.
+Updated [dsl](dsl.md).
+rrrrrrrrrrrrrrr## 2026-10-13 -- suite hooks: review fixes
+
+An EACH-hook `PERFORM` no longer refuses a test case's own mock as
+`UNMATCHED_MOCK` when the hook doesn't reach it. `UT-EARLY-EXIT` is reset
+after BEFORE-EACH and before AFTER-EACH steps that `PERFORM`, so a
+terminator on one side no longer skips the rest of the other. The
+mutation zero-baseline hint counts BEFORE-ALL/BEFORE-EACH `MOVE`s as
+seeding. Updated [dsl](dsl.md).
+
+## 2026-10-13 -- a SQL ROWS row may set SQLCODE
+
+`MOCK SQL ... ROWS ( ..., SQLCODE = -305 )` answered that FETCH with
+SQLCODE 0: the implicit `MOVE 0 TO SQLCODE` followed the row's own MOVEs.
+`build_rows_block` takes `row_prefix_moves` and SQL puts the default
+there. Updated [dsl](dsl.md), [splicer](splicer.md).
+
+## 2026-10-12 -- pointer and INDEX fields in generated and recorded tests
+
+`generate --with-data` no longer writes `MOVE 0 TO <pointer>` (a compile
+error) for a POINTER-family CALL argument: it writes `SET ... TO NULL`, and
+nothing for an INDEX item. `run --record-expectations` skips a stub on such
+an item instead of recording an address into an EXPECT that does not
+compile. Updated [dsl](dsl.md), [report](report.md).
+
 ## 2026-10-13 -- CAPTURE ARG of an OMITTED argument is refused
 
 `CALL "X" USING OMITTED B` with `CAPTURE ARG 1` linted clean and then
@@ -34,19 +74,22 @@ outright (UNRESOLVED_FLOW_TARGET, UNMATCHED_MOCK,
 UNSUPPORTED_TERMINATOR_LAYOUT): all 17 real-world suites, lowercased, were
 refused. `normalize_flow_targets` upper-cases the targets right after every
 `parse_cobol`. Updated [analysis](analysis.md).
-## 2026-10-12 -- pointer and INDEX fields in generated and recorded tests
 
-`generate --with-data` no longer writes `MOVE 0 TO <pointer>` (a compile
-error) for a POINTER-family CALL argument: it writes `SET ... TO NULL`, and
-nothing for an INDEX item. `run --record-expectations` skips a stub on such
-an item instead of recording an address into an EXPECT that does not
-compile. Updated [dsl](dsl.md), [report](report.md).
-## 2026-10-13 -- a SQL ROWS row may set SQLCODE
+## 2026-10-10 -- suite hooks: BEFORE-ALL/BEFORE-EACH/AFTER-EACH/AFTER-ALL
 
-`MOCK SQL ... ROWS ( ..., SQLCODE = -305 )` answered that FETCH with
-SQLCODE 0: the implicit `MOVE 0 TO SQLCODE` followed the row's own MOVEs.
-`build_rows_block` takes `row_prefix_moves` and SQL puts the default
-there. Updated [dsl](dsl.md), [splicer](splicer.md).
+JUnit-style setup/teardown. `MOVE`/`PERFORM` steps in BEFORE-ALL and
+BEFORE-EACH, new AFTER-EACH/AFTER-ALL blocks (`END-AFTER`). BEFORE-ALL
+runs once and every case starts from the state it left (new
+`splicer/snapshot.py`, `UNSAVABLE_BEFORE_ALL_STATE`); hook PERFORMs go
+through every static gate as synthetic cases; shared BEFORE-* mocks only
+need to be reached by some case or hook step. Entry parameters: a
+default entry's `PROCEDURE DIVISION USING`/`RETURNING` is now blanked and
+its parameters folded into WORKING-STORAGE (reset per case, saved after
+BEFORE-ALL) instead of refused. Plain `generate` scaffolds now mock every
+boundary a paragraph reaches, not just its own (18 to 27 of 34 corpus and
+example scaffolds lint-clean). Updated [dsl](dsl.md), [splicer](splicer.md),
+[analysis](analysis.md).
+
 
 ## 2026-10-10 -- explain covers three more refusal codes
 

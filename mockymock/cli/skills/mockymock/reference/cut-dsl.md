@@ -14,12 +14,22 @@ TESTSUITE "<name>"
       ROW <value>, ... ]*
 
 [ BEFORE-ALL
-      MOCK ... END-MOCK
+      [ MOCK ... END-MOCK ]*
+      [ MOVE <value> TO <target> | PERFORM <paragraph> [ THRU <paragraph> ] ]*
   END-BEFORE ]
 
 [ BEFORE-EACH
-      MOCK ... END-MOCK
+      [ MOCK ... END-MOCK ]*
+      [ MOVE <value> TO <target> | PERFORM <paragraph> [ THRU <paragraph> ] ]*
   END-BEFORE ]
+
+[ AFTER-EACH
+      [ MOVE <value> TO <target> | PERFORM <paragraph> [ THRU <paragraph> ] ]*
+  END-AFTER ]
+
+[ AFTER-ALL
+      [ MOVE <value> TO <target> | PERFORM <paragraph> [ THRU <paragraph> ] ]*
+  END-AFTER ]
 
 TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
     [ MOCK <category> <key> ... END-MOCK ]*
@@ -31,14 +41,15 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
 
 Rules that matter in practice:
 
-- Exactly one `TESTSUITE` per file, at most one `BEFORE-ALL` and one
-  `BEFORE-EACH`, exactly one `PERFORM` per `TESTCASE`.
+- Exactly one `TESTSUITE` per file, at most one each of `BEFORE-ALL`,
+  `BEFORE-EACH`, `AFTER-EACH` and `AFTER-ALL` (all before the first
+  `TESTCASE`), exactly one `PERFORM` per `TESTCASE`.
 - Setup `MOVE`s go above the `PERFORM`, `EXPECT`/`VERIFY` below it; the
   other order is a parse error (they would silently run on the wrong side
   of it). `MOCK` directives can go anywhere in the case.
 - Every keyword is case-sensitive uppercase, **except** `END-MOCK`/
-  `END-BEFORE` (case-insensitive, optional trailing period -- `end-mock.`
-  is fine).
+  `END-BEFORE`/`END-AFTER` (case-insensitive, optional trailing period --
+  `end-mock.` is fine).
 - Lines starting with `*>` are comments outside a `MOCK` body; inside a
   body they pass through as ordinary COBOL comments.
 
@@ -308,14 +319,80 @@ MOCK OPEN INV-FILE
 END-MOCK
 ```
 
-## `BEFORE-ALL` / `BEFORE-EACH ... END-BEFORE`
+## Suite hooks: `BEFORE-ALL` / `BEFORE-EACH` / `AFTER-EACH` / `AFTER-ALL`
 
-Shared `MOCK` directives, declared once and applied to every `TESTCASE` in
-the suite -- useful when most cases need the same boundary mocked the
-same way, with only a few needing to override it. Precedence on a
-collision is `TESTCASE`'s own mock > `BEFORE-EACH` > `BEFORE-ALL`. The
-two blocks differ *only* in that precedence -- there's no timing
-difference despite the xUnit-style names.
+Like JUnit's `@BeforeAll` / `@BeforeEach` / `@AfterEach` / `@AfterAll`.
+The steps are `MOVE` and `PERFORM` lines, run in the order written:
+
+| Block | Runs | Steps run with the mocks of |
+|---|---|---|
+| `BEFORE-ALL ... END-BEFORE` | once, before the first test case | `BEFORE-ALL` |
+| `BEFORE-EACH ... END-BEFORE` | at the start of every test case, before its own `MOVE`s | that test case |
+| `AFTER-EACH ... END-AFTER` | at the end of every test case, after its `EXPECT`/`VERIFY` | that test case |
+| `AFTER-ALL ... END-AFTER` | once, after the last test case | `BEFORE-ALL` |
+
+**Every test case starts from the state `BEFORE-ALL` left behind.**
+mockymock saves WORKING-STORAGE, LOCAL-STORAGE and the file records right
+after `BEFORE-ALL` and restores them at the start of each case, so a
+one-time `PERFORM 0100-INIT` is set up once and no case sees what an
+earlier case changed. A program whose state can't be saved exactly (a
+group holding an `OCCURS ... DEPENDING ON` table) is refused with
+`UNSAVABLE_BEFORE_ALL_STATE`: use `BEFORE-EACH` for that setup instead.
+
+`VERIFY` counts only the test case's own `PERFORM`: calls a `BEFORE-EACH`
+step made are not counted.
+
+```
+BEFORE-ALL
+    MOCK CALL "LOADRATE"
+        MOVE 1.25 TO WS-RATE
+    END-MOCK
+    PERFORM 0100-INIT
+END-BEFORE
+
+BEFORE-EACH
+    MOVE 0 TO WS-TOTAL
+END-BEFORE
+
+AFTER-ALL
+    PERFORM 9000-CLOSE-FILES
+END-AFTER
+```
+
+A hook `PERFORM` is checked like a test case's own: a boundary it reaches
+needs a `MOCK` (in `BEFORE-ALL` for the `-ALL` hooks, in `BEFORE-EACH` or
+the test case for the `-EACH` ones), and the refusal says where to add it.
+
+### Entry parameters (`PROCEDURE DIVISION USING`)
+
+A subprogram's parameters (`PROCEDURE DIVISION USING ...`, `ENTRY ...
+USING ...`, `RETURNING ...`) are ordinary fields in a test: mockymock never
+CALLs the program, so it turns the LINKAGE SECTION into storage the test
+owns. Set entry values with `MOVE` (in the `TESTCASE`, `BEFORE-EACH` or
+`BEFORE-ALL`) and check what the program wrote back with `EXPECT`. They
+are reset before every test case like WORKING-STORAGE, and saved after
+`BEFORE-ALL` like it too.
+
+```
+BEFORE-EACH
+    MOVE "CUST0001" TO LS-CUST-ID
+    MOVE 500.00 TO LS-LIMIT
+END-BEFORE
+
+TESTCASE "over the limit"
+    MOVE 600.00 TO LS-AMOUNT(1)
+    PERFORM 1000-CHECK
+    EXPECT LS-RC TO BE 8
+```
+
+### Shared mocks
+
+`MOCK` blocks in `BEFORE-ALL`/`BEFORE-EACH` are also defaults for every
+`TESTCASE` -- useful when most cases need the same boundary mocked the
+same way. Precedence on a collision is the `TESTCASE`'s own mock >
+`BEFORE-EACH` > `BEFORE-ALL`. A shared mock only has to be reached by
+some test case or hook step, not by every one. `AFTER-EACH`/`AFTER-ALL`
+hold no `MOCK` blocks.
 
 ```
 BEFORE-EACH

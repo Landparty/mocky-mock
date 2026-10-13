@@ -135,11 +135,131 @@ def unavailable_names(declared: list[str], table: dict[str, str]) -> list[str]:
     return missing
 
 
+@dataclass(frozen=True)
+class BufferLayout:
+    """What cobc would have put in a `cob_field`'s attr for an item it
+    only declared as a raw `b_NN` buffer, rebuilt from the program's own
+    PICTURE and USAGE.
+
+    cobc skips the `f_NN` wrapper for an item nothing needs a field for --
+    a counter only ever touched by ADD/SUBTRACT, a signed DISPLAY item the
+    procedure never names -- so `.attr` is unreadable and the buffer was
+    printed as text: PIC S9(8) COMP holding -70000 showed as
+    `"\\377\\376", <incomplete sequence \\356\\220>`, a signed DISPLAY -1.05
+    as `0010u` (issue #168). `type_code` None marks a numeric item this
+    module cannot decode (floating point, a PICTURE with P scaling, ...),
+    shown as unavailable rather than as garbage."""
+
+    type_code: int | None
+    digits: int = 0
+    scale: int = 0
+    flags: int = 0
+
+
+_UNDECODABLE = BufferLayout(type_code=None)
+
+_BINARY_SWAPPED_USAGES = {
+    "BINARY",
+    "COMP",
+    "COMPUTATIONAL",
+    "COMP-4",
+    "COMPUTATIONAL-4",
+}
+_BINARY_NATIVE_USAGES = {"COMP-5", "COMPUTATIONAL-5"}
+_PACKED_USAGES = {"COMP-3", "COMPUTATIONAL-3", "PACKED-DECIMAL"}
+_COMP6_USAGES = {"COMP-6", "COMPUTATIONAL-6"}
+
+
+def _item_layout(item) -> BufferLayout | None:
+    """None for an item whose buffer IS its display text (alphanumeric,
+    numeric-edited, group): the existing unquoted-buffer path is right
+    for those."""
+    usage = (getattr(item, "usage", None) or "DISPLAY").upper()
+    picture = getattr(item, "picture_clause", None)
+    if picture is None:
+        return None if usage == "DISPLAY" else _UNDECODABLE
+    digits = getattr(picture, "total_digits", None)
+    if digits is None or getattr(picture, "is_edited", False):
+        return None if usage == "DISPLAY" else _UNDECODABLE
+    if getattr(picture, "has_scaling_factor", False):
+        return _UNDECODABLE
+    scale = getattr(picture, "decimal_digits", None) or 0
+    flags = _COB_FLAG_HAVE_SIGN if getattr(picture, "is_signed", False) else 0
+    if usage == "DISPLAY":
+        sign = (getattr(item, "sign_clause", None) or "").upper()
+        if flags and "LEADING" in sign:
+            flags |= _COB_FLAG_SIGN_LEADING
+        if flags and "SEPARATE" in sign:
+            flags |= _COB_FLAG_SIGN_SEPARATE
+        return BufferLayout(_COB_TYPE_NUMERIC_DISPLAY, digits, scale, flags)
+    if usage in _BINARY_SWAPPED_USAGES:
+        flags |= _COB_FLAG_BINARY_SWAP
+        return BufferLayout(_COB_TYPE_NUMERIC_BINARY, digits, scale, flags)
+    if usage in _BINARY_NATIVE_USAGES:
+        return BufferLayout(_COB_TYPE_NUMERIC_BINARY, digits, scale, flags)
+    if usage in _PACKED_USAGES:
+        return BufferLayout(_COB_TYPE_NUMERIC_PACKED, digits, scale, flags)
+    if usage in _COMP6_USAGES:
+        flags = _COB_FLAG_NO_SIGN_NIBBLE
+        return BufferLayout(_COB_TYPE_NUMERIC_PACKED, digits, scale, flags)
+    return _UNDECODABLE
+
+
+def buffer_layouts(program) -> dict[str, BufferLayout]:
+    """Upper-cased COBOL name -> `BufferLayout`, for every 01/77 item of
+    the program's DATA DIVISION that needs decoding. Only 01/77 items get
+    a `b_NN` buffer of their own (a subordinate item is an offset into its
+    group's, and always gets an `f_NN`), so nothing else is collected.
+    Two 01s sharing a name with different layouts are marked undecodable:
+    which buffer is which cannot be told from the header."""
+    data_division = program.get_division("DATA") if program is not None else None
+    if data_division is None:
+        return {}
+    layouts: dict[str, BufferLayout] = {}
+    sections = getattr(data_division, "sections", None) or data_division.children
+    for section in sections:
+        for item in getattr(section, "children", []):
+            if getattr(item, "level", None) not in (1, 77):
+                continue
+            name = (getattr(item, "name", None) or "").upper()
+            if not name or name == "FILLER":
+                continue
+            if any(
+                getattr(child, "level", None) is not None
+                for child in getattr(item, "children", [])
+            ):
+                continue  # group: its buffer is alphanumeric
+            layout = _item_layout(item)
+            if layout is None:
+                continue
+            if name in layouts and layouts[name] != layout:
+                layout = _UNDECODABLE
+            layouts[name] = layout
+    return layouts
+
+
+def _expected_buffer_size(layout: BufferLayout) -> set[int] | None:
+    if layout.type_code == _COB_TYPE_NUMERIC_DISPLAY:
+        return {layout.digits + bool(layout.flags & _COB_FLAG_SIGN_SEPARATE)}
+    if layout.type_code == _COB_TYPE_NUMERIC_PACKED:
+        if layout.flags & _COB_FLAG_NO_SIGN_NIBBLE:
+            return {(layout.digits + 1) // 2}
+        return {layout.digits // 2 + 1}
+    if layout.type_code == _COB_TYPE_NUMERIC_BINARY:
+        return {1, 2, 4, 8}
+    return None
+
+
 @dataclass
 class VariableValue:
     name: str
     kind: Literal[
-        "alphanumeric", "numeric-display", "binary", "packed-decimal", "opaque"
+        "alphanumeric",
+        "numeric-display",
+        "binary",
+        "packed-decimal",
+        "opaque",
+        "unavailable",
     ]
     raw_repr: str
     """The MI expression's own printed value, verbatim."""
@@ -239,13 +359,21 @@ def _decode_binary(
     return str(value)
 
 
-def read_variable(session: GdbSession, name: str, expr: str) -> VariableValue:
+def read_variable(
+    session: GdbSession,
+    name: str,
+    expr: str,
+    layout: BufferLayout | None = None,
+) -> VariableValue:
     """Reads one COBOL data item's current value. `expr` is whatever
     `parse_local_header` mapped `name` to (an `f_NN` or `b_NN`
-    expression)."""
+    expression). `layout` is the item's `buffer_layouts` entry, used only
+    when `expr` turns out to be a bare buffer (see `BufferLayout`)."""
     try:
         type_code = int(evaluate(session, f"(int)({expr}).attr->type"))
     except GdbCommandError:
+        if layout is not None:
+            return _read_buffer_with_layout(session, name, expr, layout)
         # Not a cob_field wrapper -- confirmed empirically: a plain PIC X
         # item with no runtime PICTURE decoding needs (no COMP/COMP-3)
         # only ever gets the raw `b_NN` buffer declared, never an `f_NN`
@@ -267,7 +395,56 @@ def read_variable(session: GdbSession, name: str, expr: str) -> VariableValue:
     address = int(evaluate(session, f"(long)({expr}).data"))
     raw_repr = evaluate(session, expr)
     raw_bytes = _read_raw_memory(session, address, size)
+    return _decode_field(name, type_code, digits, scale, flags, raw_repr, raw_bytes)
 
+
+def _read_buffer_with_layout(
+    session: GdbSession, name: str, expr: str, layout: BufferLayout
+) -> VariableValue:
+    raw_repr = evaluate(session, expr)
+    expected = _expected_buffer_size(layout)
+    if expected is None:
+        return _unavailable(name, raw_repr)
+    try:
+        size = int(evaluate(session, f"sizeof({expr})"))
+        address = int(evaluate(session, f"(long)({expr})"))
+    except (GdbCommandError, ValueError):
+        return _unavailable(name, raw_repr)
+    if size not in expected:
+        # Not the buffer the PICTURE describes (a pointer, a differently
+        # sized item of the same name): decoding it would invent a value.
+        return _unavailable(name, raw_repr)
+    raw_bytes = _read_raw_memory(session, address, size)
+    assert layout.type_code is not None  # implied by `expected`
+    return _decode_field(
+        name,
+        layout.type_code,
+        layout.digits,
+        layout.scale,
+        layout.flags,
+        raw_repr,
+        raw_bytes,
+    )
+
+
+def _unavailable(name: str, raw_repr: str) -> VariableValue:
+    return VariableValue(
+        name=name,
+        kind="unavailable",
+        raw_repr=raw_repr,
+        decoded="<unavailable: not materialized by cobc>",
+    )
+
+
+def _decode_field(
+    name: str,
+    type_code: int,
+    digits: int,
+    scale: int,
+    flags: int,
+    raw_repr: str,
+    raw_bytes: bytes,
+) -> VariableValue:
     if type_code in _COB_TYPE_ALPHANUMERIC_FAMILY:
         # Read as raw memory rather than gdb's own char-array printing of
         # `.data`, which renders as "<pointer> <string>" for a field's

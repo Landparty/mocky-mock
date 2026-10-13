@@ -22,14 +22,25 @@ import ntpath
 import os
 import posixpath
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import IO
 
-from mockymock.debug.call_stack import CallFrame, ParagraphIndex, synthesize_stack
-from mockymock.debug.gdb_session import GdbSession, GdbSessionClosedError, StopEvent
+from mockymock.debug.call_stack import (
+    CallFrame,
+    ParagraphIndex,
+    perform_depth,
+    synthesize_stack,
+)
+from mockymock.debug.gdb_session import (
+    GdbCommandError,
+    GdbSession,
+    GdbSessionClosedError,
+    StopEvent,
+)
 from mockymock.debug.line_map import LineMap
 from mockymock.debug.variable_map import (
     UNAVAILABLE_VALUE,
+    BufferLayout,
     VariableValue,
     read_variable,
 )
@@ -63,6 +74,9 @@ class DebugSession:
     `setBreakpoints` for any other source -- a copybook, another program --
     cannot be placed and is reported unverified. None (a session that does
     not know its source) accepts every path, as before."""
+    buffer_layouts: dict[str, BufferLayout] = field(default_factory=dict)
+    """Upper-cased COBOL name -> PICTURE/USAGE layout, for decoding items
+    cobc only declared as a bare `b_NN` buffer (see `BufferLayout`)."""
     unavailable: tuple[str, ...] = ()
     """Declared data items with no `variable_table` entry (cobc gave them
     no C local). Listed after the readable ones with `UNAVAILABLE_VALUE`,
@@ -428,7 +442,9 @@ class DapAdapter:
             return
         variables = []
         for name, expr in session.variable_table.items():
-            value = read_variable(session.gdb, name, expr)
+            value = read_variable(
+                session.gdb, name, expr, session.buffer_layouts.get(name.upper())
+            )
             variables.append(
                 {"name": name, "value": _display_value(value), "variablesReference": 0}
             )
@@ -481,7 +497,12 @@ class DapAdapter:
                 request, success=False, message=f"unknown variable: {expression}"
             )
             return
-        value = read_variable(session.gdb, expression, expr)
+        value = read_variable(
+            session.gdb,
+            expression,
+            expr,
+            session.buffer_layouts.get(expression.strip().upper()),
+        )
         self._send_response(
             request,
             success=True,
@@ -496,17 +517,23 @@ class DapAdapter:
         self._resume(session.gdb.continue_)
 
     def _handle_next(self, request: dict) -> None:
-        self._step(request)
+        self._step(request, "over")
 
     def _handle_stepIn(self, request: dict) -> None:
         # v1 does not step across a mocked CALL boundary (see design doc
-        # Non-goals) -- aliased to the same coalesced-next behavior.
-        self._step(request)
+        # Non-goals); a plain coalesced line step already enters a PERFORM.
+        self._step(request, "in")
 
     def _handle_stepOut(self, request: dict) -> None:
-        self._step(request)
+        self._step(request, "out")
 
-    def _step(self, request: dict) -> None:
+    def _step(self, request: dict, mode: str) -> None:
+        """A coalesced COBOL line step. A PERFORM is not a C call
+        (GnuCOBOL compiles it to a computed goto, see call_stack.py), so
+        gdb's `-exec-next` always walks into the performed paragraph --
+        that is Step Into. Step Over repeats it until the PERFORM depth is
+        back at or above where the step began; Step Out until it is
+        shallower. A breakpoint hit, exit or crash ends any step early."""
         session = self._require_session(request)
         if session is None:
             return
@@ -515,9 +542,30 @@ class DapAdapter:
         def is_visible_line(line: int) -> bool:
             return session.line_map.to_original(line) is not None
 
-        self._resume(
-            lambda: session.gdb.step(session.instrumented_file, is_visible_line)
-        )
+        def step_line() -> StopEvent:
+            return session.gdb.step(session.instrumented_file, is_visible_line)
+
+        def step_by_depth() -> StopEvent:
+            try:
+                start = perform_depth(session.gdb)
+            except (GdbCommandError, ValueError):
+                return step_line()
+            if mode == "out" and start == 0:
+                # Nothing performed this paragraph, so there is no caller
+                # to return to: run on to the next breakpoint or the exit.
+                return session.gdb.continue_()
+            target = start if mode == "over" else start - 1
+            while True:
+                event = step_line()
+                if event.reason != "step":
+                    return event
+                try:
+                    if perform_depth(session.gdb) <= target:
+                        return event
+                except (GdbCommandError, ValueError):
+                    return event
+
+        self._resume(step_line if mode == "in" else step_by_depth)
 
     def _handle_disconnect(self, request: dict) -> None:
         self._shutdown()

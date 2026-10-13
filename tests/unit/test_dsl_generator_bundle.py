@@ -1214,7 +1214,10 @@ def test_placeholder_downgraded_read_demotes_a_downstream_verify_in_the_same_loo
 
     without_placeholder = scaffold_cut("READLOOP", surface, bundle)
     assert "VERIFY READ INV-FILE WAS CALLED 3 TIMES" in without_placeholder
-    assert 'VERIFY CALL "LOGROW" WAS CALLED 2 TIMES' in without_placeholder
+    # issue #160: the CALL sits under `IF WS-EOF = "N"`, so even without a
+    # placeholder its count is not exact by construction.
+    assert 'VERIFY CALL "LOGROW" WAS CALLED 2 TIMES' not in without_placeholder
+    assert "called only under an IF/EVALUATE" in without_placeholder
 
     with_placeholder = scaffold_cut(
         "READLOOP",

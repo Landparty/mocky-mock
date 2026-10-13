@@ -783,6 +783,102 @@ def test_stack_trace_source_is_the_program_not_the_last_breakpoint_source():
     assert frames[0]["source"]["path"] == "/proj/cobol/PROG.cbl"
 
 
+class _SteppingGdb(_FakeGdb):
+    """Replays a scripted run of line steps, each with the PERFORM depth
+    (`frame_ptr-frame_stack`) the program is at after it -- the shape of
+    issue #167's STP.cbl: MAIN-PARA (depth 0) performs SUB-PARA (depth 1),
+    whose line 15 performs LEAF-PARA (lines 17-18, depth 2)."""
+
+    def __init__(self, start_depth, script):
+        super().__init__()
+        self.depth = start_depth
+        self._script = list(script)
+        self.steps = 0
+        self.continued = False
+
+    def step(self, original_file_hint, is_visible_line=None):
+        self.steps += 1
+        reason, line, self.depth = self._script.pop(0)
+        return StopEvent(reason=reason, file="/work/x/fixture.cbl", line=line)
+
+    def continue_(self):
+        self.continued = True
+        return super().continue_()
+
+    def send(self, command):
+        if command == "-data-evaluate-expression frame_ptr-frame_stack":
+            return [ResultRecord("done", {"value": str(self.depth)})]
+        return super().send(command)
+
+
+_STP_FROM_LINE_15 = [
+    ("step", 17, 2),  # into LEAF-PARA
+    ("step", 18, 2),
+    ("step", 16, 1),  # back in SUB-PARA, after the PERFORM
+    ("step", 10, 0),  # SUB-PARA returned to MAIN-PARA
+]
+
+
+def _run_step(command, start_depth, script):
+    gdb = _SteppingGdb(start_depth, script)
+
+    def launch(arguments):
+        session = _fake_launch_session(arguments)
+        session.gdb = gdb
+        return session
+
+    messages, _session = _run_adapter_capturing_session(
+        [_request(1, "launch", {}), _request(2, command, {"threadId": 1})],
+        launch=launch,
+    )
+    events = [m for m in messages if m["type"] == "event"]
+    return events, gdb
+
+
+def _stopped_line(gdb):
+    return gdb.steps and _STP_FROM_LINE_15[gdb.steps - 1][1]
+
+
+def test_step_over_a_perform_stops_on_the_next_line_of_the_paragraph():
+    events, gdb = _run_step("next", 1, _STP_FROM_LINE_15)
+
+    assert [e["body"]["reason"] for e in events if e["event"] == "stopped"] == ["step"]
+    assert gdb.steps == 3
+    assert _stopped_line(gdb) == 16
+
+
+def test_step_in_enters_the_performed_paragraph():
+    _events, gdb = _run_step("stepIn", 1, _STP_FROM_LINE_15)
+
+    assert gdb.steps == 1
+    assert _stopped_line(gdb) == 17
+
+
+def test_step_out_returns_to_the_performing_paragraph():
+    _events, gdb = _run_step("stepOut", 1, _STP_FROM_LINE_15)
+
+    assert gdb.steps == 4
+    assert _stopped_line(gdb) == 10
+
+
+def test_step_over_stops_at_a_breakpoint_inside_the_performed_paragraph():
+    events, gdb = _run_step(
+        "next", 1, [("step", 17, 2), ("breakpoint", 18, 2), ("step", 16, 1)]
+    )
+
+    assert gdb.steps == 2
+    stopped = [e for e in events if e["event"] == "stopped"]
+    assert stopped[0]["body"]["reason"] == "breakpoint"
+
+
+def test_step_out_of_the_top_level_runs_on_instead_of_stepping():
+    events, gdb = _run_step("stepOut", 0, _STP_FROM_LINE_15)
+
+    assert gdb.steps == 0
+    assert gdb.continued
+    assert "exited" in [e["event"] for e in events]
+
+
 def _launch_with_unavailable(arguments: dict) -> DebugSession:
     session = _fake_launch_session(arguments)
     session.unavailable = ("WS-UNUSED",)

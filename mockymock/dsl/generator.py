@@ -52,6 +52,7 @@ import re
 import sys
 from dataclasses import dataclass, field, replace
 
+from mockymock.analysis.exact_counts import exact_count_scope
 from mockymock.analysis.loops import (
     LoopGuard,
     loop_guard_words,
@@ -473,6 +474,14 @@ class ProgramContext:
         if reasons or entry not in reached:
             return None
         return reached
+
+    def exact_count_scope(
+        self, entry: str, reachable: set[str]
+    ) -> tuple[set[str], set[int]] | None:
+        """`analysis.exact_counts.exact_count_scope` for `PERFORM entry`."""
+        return exact_count_scope(
+            self.program, entry, reachable, neutralized_goto=self.neutralized_goto
+        )
 
     def captures_for(self, category: MockCategory, key: str) -> list[str]:
         return self.capture_lines.get((category, key), [])
@@ -902,7 +911,8 @@ def _scaffold_placeholder(
             )
         )
         lines.append("")
-    for paragraph_name, sites in sites_by_paragraph.items():
+    for paragraph_name, own_sites in sites_by_paragraph.items():
+        sites = _reachable_sites(paragraph_name, own_sites, sites_by_paragraph, context)
         directives = _directives_for(sites, surface, context)
         labels = ", ".join(dict.fromkeys(site.label for site in sites))
         lines.append(
@@ -918,6 +928,31 @@ def _scaffold_placeholder(
         lines.extend(f"    {line}" for line in _capture_stub_lines(captured))
         lines.append("")
     return "\n".join(lines)
+
+
+def _reachable_sites(
+    entry: str,
+    own_sites: list[BoundarySite],
+    sites_by_paragraph: dict[str, list[BoundarySite]],
+    context: ProgramContext | None,
+) -> list[BoundarySite]:
+    """Every boundary site a `PERFORM entry` can reach: the paragraph's own
+    sites first, then those of every paragraph it reaches (PERFORM, GO TO,
+    fall-through), in source order. A scaffold that mocked only the entry
+    paragraph's own sites failed the very lint it has to pass whenever the
+    paragraph PERFORMs another that touches a boundary (UNMOCKED_*; the
+    enterprise corpus's DB2SP, whose 0000-MAIN PERFORMs the paragraph that
+    opens its result-set cursor). Falls back to the own sites when
+    reachability can't be established, as the bundle-driven scaffold does
+    (issue #143)."""
+    reachable = context.reachable_from(entry) if context is not None else None
+    if reachable is None:
+        return own_sites
+    sites = list(own_sites)
+    for paragraph_name, paragraph_sites in sites_by_paragraph.items():
+        if paragraph_name != entry and paragraph_name in reachable:
+            sites.extend(paragraph_sites)
+    return sites
 
 
 def _directives_for(
@@ -1289,9 +1324,38 @@ def _bundle_boundary_keys(bundle: FixtureBundle) -> set[tuple[str, str]]:
     return keys
 
 
+def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
+    """(category, key) pairs whose only sites are nested inside a clause
+    body with no span -- the shape mockymock already reports as "not
+    mockable" and `_mockymock_boundary_keys` skips. cobol-parser's bundle
+    still lists them, so without this set every such key showed up as a
+    "boundary key mismatch ... should not happen" (issue #164). A key with
+    at least one mockable site is in mockymock's own key set and never
+    reaches this filter.
+
+    A non-interactive ACCEPT (`ACCEPT X FROM DATE YYYYMMDD`) is in the same
+    position: mockymock records it as nothing to mock, while cobol-parser's
+    bundle can still list it when a date-format qualifier follows the
+    source (BATCHSEQ)."""
+    keys: set[tuple[str, str]] = {
+        (MockCategory.ACCEPT.value, accept.target)
+        for accept in surface.non_interactive_accepts
+    }
+    for site in surface.boundary_sites:
+        if site.category is None or not (site.nested and site.span is None):
+            continue
+        if site.category in EXEC_CATEGORIES:
+            keys.add((site.category.value, _unique_prefix(site, surface)))
+            continue
+        for key in site.keys:
+            keys.add((site.category.value, key))
+    return keys
+
+
 def _warn_on_key_mismatch(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     bundle_keys: set[tuple[str, str]],
+    unmockable_keys: set[tuple[str, str]],
 ) -> None:
     """Loud, never-silent warning when the two independent boundary walks
     (mockymock's own `mock_surface.analyze()` and cobol-parser's bundle)
@@ -1305,7 +1369,9 @@ def _warn_on_key_mismatch(
     """
     mockymock_set = {(category.value, key) for category, key in mockymock_keys}
     only_in_mockymock = mockymock_set - bundle_keys
-    only_in_bundle = bundle_keys - mockymock_set
+    # A key mockymock already lists as "not mockable" is an expected gap,
+    # not a disagreement between the two walks.
+    only_in_bundle = bundle_keys - mockymock_set - unmockable_keys
     if not only_in_mockymock and not only_in_bundle:
         return
     print(
@@ -2335,16 +2401,31 @@ def _sites_for_key(
     ]
 
 
+_SEVERAL_SITES_REASON = (
+    "called from several sites, some inside an IF/EVALUATE/loop, so how "
+    "many of them this case reaches is not known"
+)
+_CONDITIONAL_SITE_REASON = (
+    "called only under an IF/EVALUATE, or from a paragraph PERFORMed "
+    "conditionally, so whether this case reaches it is not known"
+)
+
+
 def _conditional_call_count_keys(
     expectations: list[Expectation],
     surface: MockSurface,
     reachable: set[str] | None = None,
-) -> list[tuple[MockCategory, str]]:
-    """Keys whose summed count (`_merged_call_counts`) is not exact: more
-    than one site, at least one of them nested in an IF/EVALUATE/loop. The
-    bundle counts every site once per scenario whether or not its branch
-    runs (STMTGEN's page-break CALL), so the sum would overshoot."""
-    keys: list[tuple[MockCategory, str]] = []
+    scope: tuple[set[str], set[int]] | None = None,
+) -> list[tuple[tuple[MockCategory, str], str]]:
+    """Keys whose bundle count (`_merged_call_counts`) is not exact, each
+    with the reason. The bundle counts every site once per scenario whether
+    or not its branch runs, so a count is kept only when every site runs on
+    every pass: `scope` is `analysis.exact_counts.exact_count_scope` for
+    this case's entry (issue #160 -- a single site behind `IF SQLCODE NOT =
+    0`, or one in a paragraph PERFORMed only from inside `IF RECORD-OK`).
+    Without a scope, any nested site is enough to demote (issue #142 for
+    several sites, #160 for one)."""
+    keys: list[tuple[tuple[MockCategory, str], str]] = []
     for expectation in expectations:
         if expectation.kind != "call_count":
             continue
@@ -2355,8 +2436,18 @@ def _conditional_call_count_keys(
             continue
         sites = _sites_for_key(category, key, surface, reachable)
         if len(sites) > 1 and any(site.nested for site in sites):
-            keys.append((category, key))
+            keys.append(((category, key), _SEVERAL_SITES_REASON))
+        elif scope is None:
+            if any(site.nested for site in sites):
+                keys.append(((category, key), _CONDITIONAL_SITE_REASON))
+        elif any(not _site_in_scope(site, scope) for site in sites):
+            keys.append(((category, key), _CONDITIONAL_SITE_REASON))
     return keys
+
+
+def _site_in_scope(site: BoundarySite, scope: tuple[set[str], set[int]]) -> bool:
+    paragraphs, statement_ids = scope
+    return site.paragraph_name in paragraphs and id(site.statement) in statement_ids
 
 
 def _unlooped_read_counts(
@@ -2391,7 +2482,11 @@ def _scaffold_with_bundle(
     source: ProgramContext | None = None,
 ) -> str:
     mockymock_keys = _mockymock_boundary_keys(surface)
-    _warn_on_key_mismatch(mockymock_keys, _bundle_boundary_keys(bundle))
+    _warn_on_key_mismatch(
+        mockymock_keys,
+        _bundle_boundary_keys(bundle),
+        _known_unmockable_keys(surface),
+    )
     fallback_entry = _first_paragraph(source.program) if source is not None else None
     registry = _build_shadow_tally_registry(bundle, mockymock_keys, fallback_entry)
 
@@ -2432,17 +2527,17 @@ def _scaffold_with_bundle(
             for line in _capture_stub_lines(_capture_targets(directive_lines))
         )
         expectations = _merged_call_counts(scenario.expectations)
-        for key_pair in _conditional_call_count_keys(expectations, surface, reachable):
+        scope = (
+            source.exact_count_scope(entry, reachable)
+            if source is not None and reachable is not None
+            else None
+        )
+        for key_pair, reason in _conditional_call_count_keys(
+            expectations, surface, reachable, scope
+        ):
             call_count_overrides.setdefault(
                 key_pair,
-                CallCountOverride(
-                    demote_reason=(
-                        "called from several sites, some inside an IF/"
-                        "EVALUATE/loop, so how many of them this case "
-                        "reaches is not known"
-                    ),
-                    from_placeholder=False,
-                ),
+                CallCountOverride(demote_reason=reason, from_placeholder=False),
             )
         if source is not None:
             for key_pair, count in _unlooped_read_counts(

@@ -108,18 +108,55 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   deliberately never substituted) keep parsing verbatim. `PERFORM`'s target
   stays plain `\S+`: a paragraph/section name is never subscripted.
 
-### `BEFORE-EACH` / `BEFORE-ALL`
+### Suite hooks: `BEFORE-ALL` / `BEFORE-EACH` / `AFTER-EACH` / `AFTER-ALL`
 
-At most one of each per `TESTSUITE`, appearing after the `TESTSUITE`
-header and before the first `TESTCASE`. Bodies hold `MOCK` directives
-only. Desugared at parse time into every `TESTCASE`'s own `mocks` list;
+At most one of each per `TESTSUITE`, all after the `TESTSUITE` header and
+before the first `TESTCASE`. `BEFORE-*` close with `END-BEFORE`, `AFTER-*`
+with `END-AFTER` (the wrong one is a parse error naming the right one).
+Design: `docs/2026-10-10-suite-hooks-design.md`.
+
+**Steps** (2026-10-10): `MOVE <value> TO <target>` and `PERFORM <para>
+[THRU <para>]` lines in any of the four blocks become `HookStep`s, in
+order, on `MockTestSuite.before_all_steps` / `before_each_steps` /
+`after_each_steps` / `after_all_steps`. The driver runs them at JUnit's
+points: BEFORE-ALL once before the first case, then `UT-SAVE-STATE`;
+each case `UT-RESET-WORKING-STORAGE` + `UT-RESTORE-STATE` (only when
+BEFORE-ALL has steps), BEFORE-EACH steps before the case's own `MOVE`s,
+AFTER-EACH steps after its `EXPECT`/`VERIFY`; AFTER-ALL once after the
+last case. BEFORE-ALL/AFTER-ALL run with `UT-CURRENT-CASE` =
+`SUITE_PHASE_ID` (`"SUITE"`), answered by `before_all_mocks`
+(`injector.dispatch_entries`); EACH steps run inside the case with its
+mocks. When BEFORE-EACH has a `PERFORM`, the case's tallies are zeroed
+again after it, so `VERIFY` counts only the case's own `PERFORM`.
+`UT-EARLY-EXIT` is reset to `"N"` after BEFORE-EACH's steps and before
+AFTER-EACH's whenever that block has a `PERFORM`: a terminator reached
+on one side must not cut the other short (hook paragraphs on a
+terminator chain check the flag too).
+`EXPECT`/`VERIFY` stay TESTCASE-only. See [splicer](splicer.md)'s
+"BEFORE-ALL state snapshot".
+
+**Static checks**: `MockTestSuite.hook_checks()` turns each hook
+`PERFORM` into a synthetic `MockTestCase` (EACH hooks once per test
+case), and `analysis_cases()` = test cases + those. `cli.checks` runs
+`check_test_case` on each (problems prefixed `BEFORE-ALL PERFORM X:`,
+deduplicated across cases, fix hint `Add to BEFORE-ALL:`/`BEFORE-EACH:`;
+every mock in force counts as `shared` there, the case's own included,
+since only the case's own check decides whether its mock is unmatched);
+`union_executed_paragraphs`, `find_terminator_plans` and `flow_mocks`
+iterate `analysis_cases()` so hook entry points count everywhere a case
+entry point does.
+
+**Mocks**: bodies of `BEFORE-*` may also hold `MOCK` directives (not
+`AFTER-*` -- a parse error that says where to declare it). They are
+desugared at parse time into every `TESTCASE`'s own `mocks` list;
 precedence on a `(category, key)` collision is `TESTCASE` >
-`BEFORE-EACH` > `BEFORE-ALL`, silently. The xUnit-style names suggest an
-execution-timing difference; there isn't one -- `BEFORE-ALL` and
-`BEFORE-EACH` differ **only** in override precedence. Both desugar into
-every test case identically at parse time; no code path ever runs a
-`BEFORE-ALL`/`BEFORE-EACH` body separately from, or before, the test
-case's own spliced mocks. See
+`BEFORE-EACH` > `BEFORE-ALL`, silently. The same directive objects stay
+on `suite.before_all_mocks` / `before_each_mocks`. A shared mock is a
+default: `check_test_case(shared=..., matched_out=...)` no longer
+refuses one a given case doesn't reach; `cli.checks` refuses it
+(`UNMATCHED_MOCK`, "not reached by any test case or hook step") only
+when nothing reaches it (2026-10-10; before, every case had to reach
+every shared mock). See
 `docs/2026-07-20-before-blocks-and-file-status-design.md`.
 
 ### `FILE-STATUS IS <mnemonic-or-code>`
@@ -264,7 +301,9 @@ is case-insensitive and accepts an optional trailing period** (`END-MOCK.`,
 `end-mock` — the trailing period is the natural COBOL habit). The leniency
 exists because a missed END-MOCK doesn't fail at its own line; it silently
 swallows the rest of the file into the mock body. Bare keys are upper-cased
-by the parser; quoted keys are preserved exactly (see below).
+by the parser; quoted keys are preserved exactly (see below). Names are not
+keywords: like cobc, a `PERFORM` target and its `THRU` end may be written in
+any case (`PERFORM read-one` finds `READ-ONE`, #164).
 
 ### Statement order inside a TESTCASE (2026-10-05, #150)
 
@@ -537,6 +576,15 @@ Rules:
   ```
   `labels` are deduped `site.label` values joined with `", "`, used only in
   the human-readable `TESTCASE` name.
+- **Reached boundaries (2026-10-10).** A paragraph's case mocks every
+  boundary its `PERFORM` can reach (`_reachable_sites`: its own sites, then
+  those of every paragraph `ProgramContext.reachable_from` reaches, in
+  source order), not just its own -- the same walk lint gates on. Before,
+  a paragraph that PERFORMed another touching a boundary got a scaffold
+  its own lint refused (UNMOCKED_*); across `examples/` and the enterprise
+  corpus that took lint-clean plain scaffolds from 18 to 27 of 34. Falls
+  back to the paragraph's own sites when reachability can't be
+  established, as the bundle path's #143 filter does.
 - Boundaries between `PROCEDURE DIVISION.` and the first paragraph header
   (cobolparser's unnamed `""` paragraph) are not scaffolded: no `PERFORM`
   can enter there, and emitting one produced a bare `PERFORM ` that made
@@ -547,7 +595,7 @@ Rules:
   inside a quoted name, so interpolating one raw would make the scaffold
   unparseable.
 
-### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`)
+### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`, `CICS`)
 
 `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
 END-MOCK`, `MOCK READ <file> ROWS ( FIELD = value, ... ) ( ... )
@@ -556,11 +604,13 @@ ROWS ( FIELD = value, ... ) ( ... ) TERMINAL ( FIELD = value, ... )
 END-MOCK` were the first three categories `ROWS` was valid on (RETURN
 joined 2026-08-17, SORT/MERGE mocking); `CALL` (quoted static key, and
 `MOCK MQ`, which is CALL), `DYNCALL` (bare `MOCK CALL WS-PGM`) and `DLI`
-joined 2026-10-05 -- see "Per-call sequencing" below. The set is
+joined 2026-10-05 -- see "Per-call sequencing" below -- and `CICS` joined
+2026-10-13 (#169) on the same terms, for the STARTBR/READNEXT browse loop
+whose end only a RESP set by `TERMINAL` can signal. The set is
 `model.ROWS_CATEGORIES`; any other category raises `CutParseError` at
 parse time (`"ROWS is only supported for MOCK SQL, MOCK READ, MOCK
-RETURN, MOCK CALL (static or dynamic), MOCK MQ, and MOCK DLI, not MOCK
-<cat>"`). All three store structured
+RETURN, MOCK CALL (static or dynamic), MOCK MQ, MOCK DLI, and MOCK CICS,
+not MOCK <cat>"`). All three store structured
 rows on `MockDirective.rows` instead of free-form `body_lines` — the two
 are mutually exclusive by construction (the parser routes lines to one or
 the other based on whether `ROWS` appeared on the opening line). Row
@@ -877,6 +927,18 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   `VERIFY` with the summed count; if any of those sites is nested in an
   IF/EVALUATE/loop the count is demoted to a `*> VERIFY ... <count not
   exact by construction -- reason>` comment.
+- **Conditional sites (#160).** The bundle counts every site once per
+  scenario whether or not its branch runs, so a count is kept only when
+  every site of its key is in `analysis/exact_counts.py`'s
+  `exact_count_scope` for the entry: top level of its paragraph (or an
+  inline PERFORM body there), in a paragraph reached through top-level
+  PERFORMs only (looping ones included, since loop counts are the
+  bundle's row model) and by nothing else -- no PERFORM inside an
+  IF/EVALUATE/AT END, no GO TO, SORT/XML procedure, or fall-through from
+  a GO TO target. A PERFORM in a branch that ends with `STOP RUN`/`GOBACK`
+  doesn't count against its target. Everything else is demoted the same
+  way, including a per-row CALL behind a loop's own `IF NOT EOF` guard.
+  Early exits (`IF ... GOBACK`) are not modeled.
 - **Field names (#144).** Fixture fields arrive as `RECORD.FIELD`; rows and
   bodies use the leaf (or `FIELD OF RECORD` when the leaf is ambiguous) and
   an `EXPECT` whose leaf is ambiguous becomes a stub comment.
@@ -1050,3 +1112,14 @@ deliberately overrides it.
 - [cli](cli.md) — `mockymock generate` calls `scaffold_cut`; `mockymock run` calls `parse_cut`
 - [analysis](analysis.md) — `stub_expectations.py`'s raw-text scan for `*> STUB EXPECT` comments
 - [report](report.md) — `record_rewrite.py`, which rewrites a stub comment into a real `EXPECT` line
+
+### `DFHRESP(...)` in .cut text (2026-10-13, #169)
+
+`parse_cut` runs `splicer.cics_resp.expand_dfhresp_text` over every
+non-comment line before matching it, so `DFHRESP(<condition>)` in a mock
+body, a ROWS/TERMINAL value, a setup MOVE or an EXPECT value becomes its
+EIBRESP number exactly as it does in program lines (GnuCOBOL has no CICS
+translator, so an unexpanded one in spliced mock code was a raw cobc error
+naming no .cut line). Calls inside a string literal or after an inline `*>`
+stay text. A condition name not in `DFHRESP_VALUES` is a `CutParseError`,
+so `lint` reports it.

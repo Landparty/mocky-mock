@@ -15,18 +15,21 @@ back-compat, and CALLED/PERFORMED are interchangeable. Lines starting with `*>` 
 MOCK bodies are comments; inside a body they pass through (they're valid
 free-form COBOL).
 
-BEFORE-ALL/BEFORE-EACH (see
-docs/2026-07-20-before-blocks-and-file-status-design.md): at most one of
-each per TESTSUITE, appearing after the TESTSUITE header and before the
-first TESTCASE, holding MOCK directives only. Resolved by desugaring,
-purely inside this module: after the file is fully parsed, each
-TESTCASE's own mocks list is extended with every BEFORE-EACH mock whose
-(category, key) it didn't already declare, then every BEFORE-ALL mock
-neither it nor BEFORE-EACH already declared -- so TESTCASE overrides
-BEFORE-EACH overrides BEFORE-ALL, silently. No other module ever learns
-these blocks existed; by the time parse_cut returns, every case's
-`mocks` list looks exactly as if the author had typed everything by
-hand.
+BEFORE-ALL/BEFORE-EACH/AFTER-EACH/AFTER-ALL (see
+docs/2026-07-20-before-blocks-and-file-status-design.md and
+docs/2026-10-10-suite-hooks-design.md): at most one of each per
+TESTSUITE, appearing after the TESTSUITE header and before the first
+TESTCASE. Their MOVE/PERFORM lines become `HookStep`s on the suite, run
+by the driver at JUnit's @BeforeAll/@BeforeEach/@AfterEach/@AfterAll
+points. Their MOCK blocks (BEFORE-* only) are desugared, purely inside
+this module: after the file is fully parsed, each TESTCASE's own mocks
+list is extended with every BEFORE-EACH mock whose (category, key) it
+didn't already declare, then every BEFORE-ALL mock neither it nor
+BEFORE-EACH already declared -- so TESTCASE overrides BEFORE-EACH
+overrides BEFORE-ALL, silently. The same directive objects are also kept
+on the suite (`before_all_mocks`, which answer during the BEFORE-ALL/
+AFTER-ALL steps, and `before_each_mocks`) so the static checks can tell
+a shared default from a case's own mock.
 
 FILE-STATUS IS <mnemonic-or-code> (see
 docs/2026-07-20-before-blocks-and-file-status-design.md): usable once
@@ -59,12 +62,14 @@ from mockymock.dsl.model import (
     TERMINAL_CATEGORIES,
     DataProvider,
     ExpectDirective,
+    HookStep,
     MockCategory,
     MockDirective,
     MockTestCase,
     MockTestSuite,
     VerifyDirective,
 )
+from mockymock.splicer.cics_resp import expand_dfhresp_text
 
 _QUOTED_CATS = "CALL|MQ|SQL|CICS|DLI"
 # CALL also appears here: the bare-key form is the dynamic-CALL mock.
@@ -88,7 +93,7 @@ _BARE_CATS = (
 
 _ROWS_SUPPORTED = (
     "ROWS is only supported for MOCK SQL, MOCK READ, MOCK RETURN, "
-    "MOCK CALL (static or dynamic), MOCK MQ, and MOCK DLI"
+    "MOCK CALL (static or dynamic), MOCK MQ, MOCK DLI, and MOCK CICS"
 )
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
@@ -97,11 +102,11 @@ _TESTCASE_RE = re.compile(
     r"(?:\s+USING\s+PROVIDER\s+(?P<provider>[A-Za-z0-9][A-Za-z0-9-]*))?$"
 )
 _TAG_RE = re.compile(r'"([^"]*)"')
-_BEFORE_ALL_RE = re.compile(r"^BEFORE-ALL$")
-_BEFORE_EACH_RE = re.compile(r"^BEFORE-EACH$")
+_HOOK_RE = re.compile(r"^(?P<hook>BEFORE-ALL|BEFORE-EACH|AFTER-EACH|AFTER-ALL)$")
 # END-BEFORE is deliberately lenient, same rationale as END-MOCK below: a
 # missed terminator must not silently swallow the rest of the file.
 _END_BEFORE_RE = re.compile(r"^END-BEFORE\.?$", re.IGNORECASE)
+_END_AFTER_RE = re.compile(r"^END-AFTER\.?$", re.IGNORECASE)
 _MOCK_QUOTED_RE = re.compile(
     rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"(?:\s+(?P<rows>ROWS))?$'
 )
@@ -457,6 +462,21 @@ def _reject_mock_body_placeholder(
             )
 
 
+_COBOL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
+
+
+def _upper_cobol_name(name: str) -> str:
+    """A paragraph or section name as the analysis knows it. COBOL names are
+    case-insensitive and cobol-parser upper-cases paragraph and section
+    names, so `PERFORM read-one` must find `READ-ONE` (issue #164) -- the
+    same rule bare MOCK/VERIFY keys already follow. Anything that is not a
+    plain COBOL word (a `{Column}` token, which `_reject_name_placeholder`
+    reports verbatim) is left exactly as written."""
+    if not _COBOL_NAME_RE.match(name):
+        return name
+    return name.upper()
+
+
 def _reject_name_placeholder(
     name: str | None, line_no: int, provider: DataProvider, where: str
 ) -> None:
@@ -618,6 +638,20 @@ def _apply_before_blocks(
             case.mocks.append(directive)
 
 
+def _reject_mock_outside(hook: str | None, line_no: int) -> None:
+    if hook is not None and hook.startswith("AFTER"):
+        raise CutParseError(
+            f"line {line_no}: MOCK not allowed inside {hook} (only MOVE and "
+            f"PERFORM are) -- {hook} steps run with the mocks of "
+            + (
+                "each TESTCASE (declare shared ones in BEFORE-EACH)"
+                if hook == "AFTER-EACH"
+                else "BEFORE-ALL, so declare the mock there"
+            )
+        )
+    raise CutParseError(f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/BEFORE-ALL")
+
+
 def parse_cut(text: str) -> MockTestSuite:
     suite: MockTestSuite | None = None
     case: MockTestCase | None = None
@@ -651,11 +685,20 @@ def parse_cut(text: str) -> MockTestSuite:
     mock_target: list[MockDirective] | None = None
     before_all: list[MockDirective] = []
     before_each: list[MockDirective] = []
-    before_all_seen = False
-    before_each_seen = False
+    hook_mocks = {"BEFORE-ALL": before_all, "BEFORE-EACH": before_each}
+    hook_steps: dict[str, list[HookStep]] = {}
     seen_testcase = False
-    in_before: str | None = None  # None, "BEFORE-ALL", or "BEFORE-EACH"
+    # None, or the open hook block: BEFORE-ALL/BEFORE-EACH/AFTER-EACH/AFTER-ALL.
+    in_before: str | None = None
     before_open_line = 0
+
+    def _hook_end(hook: str) -> str:
+        return "END-BEFORE" if hook.startswith("BEFORE") else "END-AFTER"
+
+    def _hook_allows(hook: str) -> str:
+        if hook.startswith("BEFORE"):
+            return "only MOCK, MOVE and PERFORM are"
+        return "only MOVE and PERFORM are"
 
     def _current_scope_label() -> str:
         if case is not None:
@@ -680,6 +723,19 @@ def parse_cut(text: str) -> MockTestSuite:
         line = raw_line.strip()
         if not line:
             continue
+        if not _COMMENT_RE.match(line):
+            # DFHRESP(...) in suite text expands exactly as it does in
+            # program lines (splicer.cics_resp): GnuCOBOL has no CICS
+            # translator, so a spliced-in `MOVE DFHRESP(NOTFND) TO WS-RESP`
+            # would otherwise be a raw cobc error naming no .cut line.
+            line, unknown_resp = expand_dfhresp_text(line)
+            if unknown_resp:
+                raise CutParseError(
+                    f"line {line_no}: DFHRESP({unknown_resp[0]}) is not a "
+                    f"CICS response condition mockymock knows -- use a "
+                    f"condition name from the EIBRESP table (NORMAL, "
+                    f"NOTFND, ENDFILE, ...) or the numeric RESP value"
+                )
 
         if in_mock is not None:
             if case is not None and case_provider is not None:
@@ -711,7 +767,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 if in_mock.category not in TERMINAL_CATEGORIES:
                     raise CutParseError(
                         f"line {line_no}: TERMINAL is only supported for "
-                        f"MOCK READ/RETURN/CALL/MQ/DLI ... ROWS, not MOCK "
+                        f"MOCK READ/RETURN/CALL/MQ/DLI/CICS ... ROWS, not MOCK "
                         f"{in_mock.category.keyword} ... ROWS (SQL rows "
                         f"always end with SQLCODE 100)"
                     )
@@ -894,7 +950,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 # verification pass).
                 raise CutParseError(
                     f"line {line_no}: PROVIDER inside {in_before} -- "
-                    f"missing END-BEFORE"
+                    f"missing {_hook_end(in_before)}"
                 )
             _close_provider()
             name = m.group("name")
@@ -966,7 +1022,7 @@ def parse_cut(text: str) -> MockTestSuite:
             if in_before is not None:
                 raise CutParseError(
                     f"line {line_no}: TESTCASE inside {in_before} -- "
-                    f"missing END-BEFORE"
+                    f"missing {_hook_end(in_before)}"
                 )
             tags = _TAG_RE.findall(m.group("tags") or "")
             for tag in tags:
@@ -992,66 +1048,51 @@ def parse_cut(text: str) -> MockTestSuite:
             seen_testcase = True
             mock_target = case.mocks
             mock_lines = {}
-        elif (m := _BEFORE_ALL_RE.match(line)) is not None:
+        elif (m := _HOOK_RE.match(line)) is not None:
+            hook = m.group("hook")
             if suite is None:
-                raise CutParseError(f"line {line_no}: BEFORE-ALL before TESTSUITE")
+                raise CutParseError(f"line {line_no}: {hook} before TESTSUITE")
             if in_before is not None:
                 raise CutParseError(
-                    f"line {line_no}: BEFORE-ALL inside {in_before} -- "
-                    f"missing END-BEFORE"
+                    f"line {line_no}: {hook} inside {in_before} -- "
+                    f"missing {_hook_end(in_before)}"
                 )
             if seen_testcase:
                 raise CutParseError(
-                    f"line {line_no}: BEFORE-ALL must appear before the "
-                    f"first TESTCASE"
+                    f"line {line_no}: {hook} must appear before the " f"first TESTCASE"
                 )
-            if before_all_seen:
+            if hook in hook_steps:
                 raise CutParseError(
-                    f"line {line_no}: a second BEFORE-ALL block -- a "
+                    f"line {line_no}: a second {hook} block -- a "
                     f"TESTSUITE holds at most one"
                 )
-            before_all_seen = True
-            in_before = "BEFORE-ALL"
+            hook_steps[hook] = []
+            in_before = hook
             before_open_line = line_no
-            mock_target = before_all
+            mock_target = hook_mocks.get(hook)
             mock_lines = {}
-        elif (m := _BEFORE_EACH_RE.match(line)) is not None:
-            if suite is None:
-                raise CutParseError(f"line {line_no}: BEFORE-EACH before TESTSUITE")
-            if in_before is not None:
-                raise CutParseError(
-                    f"line {line_no}: BEFORE-EACH inside {in_before} -- "
-                    f"missing END-BEFORE"
-                )
-            if seen_testcase:
-                raise CutParseError(
-                    f"line {line_no}: BEFORE-EACH must appear before the "
-                    f"first TESTCASE"
-                )
-            if before_each_seen:
-                raise CutParseError(
-                    f"line {line_no}: a second BEFORE-EACH block -- a "
-                    f"TESTSUITE holds at most one"
-                )
-            before_each_seen = True
-            in_before = "BEFORE-EACH"
-            before_open_line = line_no
-            mock_target = before_each
-            mock_lines = {}
-        elif _END_BEFORE_RE.match(line):
+        elif _END_BEFORE_RE.match(line) or _END_AFTER_RE.match(line):
+            keyword = "END-BEFORE" if _END_BEFORE_RE.match(line) else "END-AFTER"
             if in_before is None:
+                opener = (
+                    "BEFORE-EACH/BEFORE-ALL"
+                    if keyword == "END-BEFORE"
+                    else ("AFTER-EACH/AFTER-ALL")
+                )
                 raise CutParseError(
-                    f"line {line_no}: END-BEFORE without an open "
-                    f"BEFORE-EACH/BEFORE-ALL"
+                    f"line {line_no}: {keyword} without an open {opener}"
+                )
+            if keyword != _hook_end(in_before):
+                raise CutParseError(
+                    f"line {line_no}: {keyword} closing {in_before} -- "
+                    f"use {_hook_end(in_before)}"
                 )
             in_before = None
             mock_target = None
             mock_lines = {}
         elif (m := _MOCK_QUOTED_RE.match(line)) is not None:
             if mock_target is None:
-                raise CutParseError(
-                    f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/" f"BEFORE-ALL"
-                )
+                _reject_mock_outside(in_before, line_no)
             if not m.group("key"):
                 raise CutParseError(
                     f'line {line_no}: empty MOCK {m.group("cat")} key -- '
@@ -1073,9 +1114,7 @@ def parse_cut(text: str) -> MockTestSuite:
             in_mock_line = line_no
         elif (m := _MOCK_BARE_RE.match(line)) is not None:
             if mock_target is None:
-                raise CutParseError(
-                    f"line {line_no}: MOCK outside TESTCASE/BEFORE-EACH/" f"BEFORE-ALL"
-                )
+                _reject_mock_outside(in_before, line_no)
             category = _resolve_category(m.group("cat"), bare_key=True)
             if m.group("rows") and category not in ROWS_CATEGORIES:
                 raise CutParseError(
@@ -1099,12 +1138,18 @@ def parse_cut(text: str) -> MockTestSuite:
                 f"WS-NAME for a dynamic CALL through that identifier)"
             )
         elif (m := _MOVE_RE.match(line)) is not None:
-            if case is None:
-                if in_before is not None:
-                    raise CutParseError(
-                        f"line {line_no}: MOVE not allowed inside "
-                        f"{in_before} (only MOCK directives are)"
+            if case is None and in_before is not None:
+                _reject_unbalanced_subscript(m.group("target"), line_no)
+                hook_steps[in_before].append(
+                    HookStep(
+                        kind="MOVE",
+                        target=m.group("target"),
+                        value=m.group("value"),
+                        line=line_no,
                     )
+                )
+                continue
+            if case is None:
                 raise CutParseError(f"line {line_no}: MOVE outside TESTCASE")
             _reject_unbalanced_subscript(m.group("target"), line_no)
             if case.perform_target:
@@ -1117,19 +1162,8 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             case.setup_moves.append((m.group("value"), m.group("target")))
         elif (m := _PERFORM_RE.match(line)) is not None:
-            if case is None:
-                if in_before is not None:
-                    raise CutParseError(
-                        f"line {line_no}: PERFORM not allowed inside "
-                        f"{in_before} (only MOCK directives are)"
-                    )
+            if case is None and in_before is None:
                 raise CutParseError(f"line {line_no}: PERFORM outside TESTCASE")
-            if case.perform_target:
-                raise CutParseError(
-                    f"line {line_no}: TESTCASE {case.name!r} already has a "
-                    f"PERFORM target {case.perform_target!r}; one PERFORM "
-                    f"per test case"
-                )
             for name in (m.group("target"), m.group("thru")):
                 if name is not None and name.endswith("."):
                     raise CutParseError(
@@ -1137,14 +1171,32 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"period -- drop it (a .cut PERFORM names a "
                         f"paragraph; it is not a COBOL sentence)"
                     )
-            case.perform_target = m.group("target")
-            case.perform_thru = m.group("thru")
+            thru = m.group("thru")
+            if case is None:
+                assert in_before is not None
+                hook_steps[in_before].append(
+                    HookStep(
+                        kind="PERFORM",
+                        target=_upper_cobol_name(m.group("target")),
+                        thru=_upper_cobol_name(thru) if thru else thru,
+                        line=line_no,
+                    )
+                )
+                continue
+            if case.perform_target:
+                raise CutParseError(
+                    f"line {line_no}: TESTCASE {case.name!r} already has a "
+                    f"PERFORM target {case.perform_target!r}; one PERFORM "
+                    f"per test case"
+                )
+            case.perform_target = _upper_cobol_name(m.group("target"))
+            case.perform_thru = _upper_cobol_name(thru) if thru else thru
         elif (m := _EXPECT_RE.match(line)) is not None:
             if case is None:
                 if in_before is not None:
                     raise CutParseError(
                         f"line {line_no}: EXPECT not allowed inside "
-                        f"{in_before} (only MOCK directives are)"
+                        f"{in_before} ({_hook_allows(in_before)})"
                     )
                 raise CutParseError(f"line {line_no}: EXPECT outside TESTCASE")
             _reject_unbalanced_subscript(m.group("name"), line_no)
@@ -1172,7 +1224,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 if in_before is not None:
                     raise CutParseError(
                         f"line {line_no}: VERIFY not allowed inside "
-                        f"{in_before} (only MOCK directives are)"
+                        f"{in_before} ({_hook_allows(in_before)})"
                     )
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             _validate_expectation(m.group("expectation"), line_no)
@@ -1190,7 +1242,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 if in_before is not None:
                     raise CutParseError(
                         f"line {line_no}: VERIFY not allowed inside "
-                        f"{in_before} (only MOCK directives are)"
+                        f"{in_before} ({_hook_allows(in_before)})"
                     )
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             _validate_expectation(m.group("expectation"), line_no)
@@ -1217,13 +1269,19 @@ def parse_cut(text: str) -> MockTestSuite:
     if in_before is not None:
         raise CutParseError(
             f"line {before_open_line}: unterminated {in_before}: reached "
-            f"end of file with no END-BEFORE"
+            f"end of file with no {_hook_end(in_before)}"
         )
 
     if suite is None:
         raise CutParseError("no TESTSUITE found")
 
     _apply_before_blocks(suite, before_all, before_each)
+    suite.before_all_mocks = list(before_all)
+    suite.before_each_mocks = list(before_each)
+    suite.before_all_steps = hook_steps.get("BEFORE-ALL", [])
+    suite.before_each_steps = hook_steps.get("BEFORE-EACH", [])
+    suite.after_each_steps = hook_steps.get("AFTER-EACH", [])
+    suite.after_all_steps = hook_steps.get("AFTER-ALL", [])
 
     if pending_expansions:
         suite.test_cases = _expand_providers(suite.test_cases, pending_expansions)

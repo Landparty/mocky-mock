@@ -71,13 +71,14 @@ EXPECTED: dict[str, tuple[str, str | None]] = {
     "MODERN63": ("empty", None),
     "XMLJSON": ("empty", None),
     "OOCLIENT": ("empty", None),
-    # -- refusals -------------------------------------------------------------
     # a default entry with its own PROCEDURE DIVISION USING (the translated
     # CICS form, an IMS MPP's PCB list, a DB2 stored procedure's parameter
-    # list) is the general CALL-driving case mockymock does not drive yet
-    "CICSLINK": ("refused", "UNSUPPORTED_LINKAGE_LAYOUT"),
-    "IMSMPP": ("refused", "UNSUPPORTED_LINKAGE_LAYOUT"),
-    "DB2SP": ("refused", "UNSUPPORTED_LINKAGE_LAYOUT"),
+    # list): the clause is blanked and the parameters folded into
+    # WORKING-STORAGE for a .cut to MOVE into (2026-10-10, entry parameters)
+    "CICSLINK": ("scaffold", None),
+    "IMSMPP": ("scaffold", None),
+    "DB2SP": ("scaffold", None),
+    # -- refusals -------------------------------------------------------------
     # USE procedures run on I/O conditions no PERFORM/GO TO edge reaches
     "DECLARE": ("refused", "UNSUPPORTED_DECLARATIVES"),
     "RPTWRTR": ("refused", "UNSUPPORTED_DECLARATIVES"),

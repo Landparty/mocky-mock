@@ -228,7 +228,7 @@ def find_flow_mock_plans(
                         statement.thru_paragraph,
                     )
                 )
-    for case in suite.test_cases:
+    for case in suite.analysis_cases():
         if case.perform_target and case.perform_thru:
             thru_ranges.append(
                 (
@@ -338,7 +338,7 @@ def find_flow_mock_plans(
                     f"real body"
                 )
         if problem is None and not is_section:
-            for case in suite.test_cases:
+            for case in suite.analysis_cases():
                 if paragraph_section.get(key) is not None and paragraph_section[
                     key
                 ] in (case.perform_target, case.perform_thru):

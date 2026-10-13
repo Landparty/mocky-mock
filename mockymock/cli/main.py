@@ -1443,6 +1443,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         registry,
         record_targets=record_targets,
         extra_working_storage_lines=extra_working_storage(checked),
+        snapshot=checked.snapshot,
     )
 
     instrumented = _insert_driver(lines, artifact)
@@ -1730,6 +1731,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     from mockymock.debug.gdb_session import GdbSession
     from mockymock.debug.line_map import LineMap
     from mockymock.debug.variable_map import (
+        buffer_layouts,
         declared_data_names,
         parse_local_header,
         unavailable_names,
@@ -1847,6 +1849,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         reset_lines,
         registry,
         extra_working_storage_lines=extra_working_storage(checked),
+        snapshot=checked.snapshot,
     )
     instrumented = _insert_driver(lines, artifact)
 
@@ -1885,6 +1888,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
                 paragraph_index=paragraph_index,
                 instrumented_file=instrumented_path.name,
                 original_file=str(source_path),
+                buffer_layouts=buffer_layouts(result.ast),
                 unavailable=tuple(
                     unavailable_names(declared_data_names(result.ast), variable_table)
                 ),
@@ -2199,6 +2203,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         reset_lines,
         registry,
         extra_working_storage_lines=extra_working_storage(checked),
+        snapshot=checked.snapshot,
     )
     instrumented, driver_line_indices = _insert_driver_with_origins(lines, artifact)
 
