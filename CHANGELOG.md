@@ -67,6 +67,28 @@
 - `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
 - **`find_goto_exit_plans`: adjacency check broke on a phantom `"."` paragraph between enclosing and target.** cobolparser inserts an empty-artifact paragraph literally named `"."` for a bare `.` line sitting on its own between a paragraph's last statement and the next paragraph's header; `immediately_follows` required `target_idx == enclosing_idx + 1` exactly, so a phantom sitting between an otherwise-adjacent `GO TO`'s enclosing paragraph and its exit-only target broke the adjacency check and cascaded into declining that target and every paragraph transitively chained after it. `immediately_follows` now accepts any run of only phantom `"."` paragraphs strictly between the two, the same tolerance `_expand_thru_range` already applies elsewhere. Pinned by `tests/unit/test_goto_exit.py::test_find_goto_exit_plans_tolerates_a_phantom_paragraph_before_the_target`.
 
+## [0.9.0](https://github.com/Landparty/mocky-mock/compare/v0.8.0...v0.9.0) (2026-09-15)
+
+
+### Features
+
+* **refusal:** pin every Enterprise COBOL program type; honest nested-program and DECLARATIVES refusals ([09803b0](https://github.com/Landparty/mocky-mock/commit/09803b04571a6718e7c68a720bb4e51b16565c70))
+
+
+### Bug Fixes
+
+* back UNSUPPORTED_DECLARATIVES with a USE-statement fallback ([f1d24ca](https://github.com/Landparty/mocky-mock/commit/f1d24ca528098565f3fad41714b63eb77e27606d))
+
+
+### Documentation
+
+* correct the FieldSpec "mirrored" claim in the interface contract ([44adf27](https://github.com/Landparty/mocky-mock/commit/44adf2763da88506dbc37d7298666b543c1a6610))
+* design plan for .cut editor completion, hover, and quick fixes ([5c3bd49](https://github.com/Landparty/mocky-mock/commit/5c3bd49aca78e0b2f6d92649ab9ab55700a6d5ff))
+* design plans for a more approachable CLI/DSL onboarding path ([0ed1925](https://github.com/Landparty/mocky-mock/commit/0ed192502c5e8cc57fa94562c912f88ece215e82))
+* record cobol-parser's new copybook record-image formats ([b0d5235](https://github.com/Landparty/mocky-mock/commit/b0d5235359c8e1f895cebb9a57448f5d95b69130))
+* record cobol-parser's new copybook record-image formats ([73f030a](https://github.com/Landparty/mocky-mock/commit/73f030a8d4a622567ae3440e07833ad39871bc85))
+* seventh project audit — nine findings, none fixed ([b71aaa6](https://github.com/Landparty/mocky-mock/commit/b71aaa667b7fded19bb837a1f10262d280711fb6))
+
 ## [0.8.0](https://github.com/Landparty/mocky-mock/compare/v0.7.0...v0.8.0) (2026-09-04)
 
 
