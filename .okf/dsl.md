@@ -301,7 +301,9 @@ is case-insensitive and accepts an optional trailing period** (`END-MOCK.`,
 `end-mock` — the trailing period is the natural COBOL habit). The leniency
 exists because a missed END-MOCK doesn't fail at its own line; it silently
 swallows the rest of the file into the mock body. Bare keys are upper-cased
-by the parser; quoted keys are preserved exactly (see below).
+by the parser; quoted keys are preserved exactly (see below). Names are not
+keywords: like cobc, a `PERFORM` target and its `THRU` end may be written in
+any case (`PERFORM read-one` finds `READ-ONE`, #164).
 
 ### Statement order inside a TESTCASE (2026-10-05, #150)
 
