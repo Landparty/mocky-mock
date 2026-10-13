@@ -646,9 +646,11 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
 `exhausted_moves` verbatim. The two call sites in
 `splicer/injector.build_site_dispatch` supply category-specific values:
 
-- **SQL**: `row_suffix_moves=["MOVE 0 TO SQLCODE"]`,
+- **SQL**: `row_prefix_moves=["MOVE 0 TO SQLCODE"]` (before the row's own
+  MOVEs, so a row giving `SQLCODE = -305` keeps it -- as a suffix it was
+  silently overwritten until 2026-10-13), `row_suffix_moves=[]`,
   `exhausted_moves=["MOVE 100 TO SQLCODE"]` (DB2's "not found" code) —
-  fixed in v1, matching the pre-generalization behavior exactly.
+  fixed in v1.
 - **READ**: `row_suffix_moves=[]` (a file-op category's implicit
   default-success `MOVE "00"` already precedes the whole dispatch block
   when the file declares a `FILE STATUS` field — see the `FILE-STATUS IS`

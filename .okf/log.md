@@ -12,6 +12,12 @@ error) for a POINTER-family CALL argument: it writes `SET ... TO NULL`, and
 nothing for an INDEX item. `run --record-expectations` skips a stub on such
 an item instead of recording an address into an EXPECT that does not
 compile. Updated [dsl](dsl.md), [report](report.md).
+## 2026-10-13 -- a SQL ROWS row may set SQLCODE
+
+`MOCK SQL ... ROWS ( ..., SQLCODE = -305 )` answered that FETCH with
+SQLCODE 0: the implicit `MOVE 0 TO SQLCODE` followed the row's own MOVEs.
+`build_rows_block` takes `row_prefix_moves` and SQL puts the default
+there. Updated [dsl](dsl.md), [splicer](splicer.md).
 
 ## 2026-10-10 -- explain covers three more refusal codes
 
