@@ -151,6 +151,15 @@ def _resolve_frame(
     return CallFrame(paragraph=paragraph, section=section, original_line=original_line)
 
 
+def perform_depth(session: GdbSession) -> int:
+    """How many PERFORMs are active at the current stop: GnuCOBOL's
+    `frame_ptr` offset into `frame_stack` (slot 0 is the sentinel, so a
+    top-level statement is depth 0). Clamped to `_MAX_FRAMES` like the
+    stack walk, so a corrupted `frame_ptr` reads as a bounded depth."""
+    depth = int(evaluate(session, "frame_ptr-frame_stack"))
+    return max(0, min(depth, _MAX_FRAMES))
+
+
 def synthesize_stack(
     session: GdbSession,
     line_map: LineMap,
@@ -171,9 +180,7 @@ def synthesize_stack(
     if current is not None:
         frames.append(current)
 
-    depth_text = evaluate(session, "frame_ptr-frame_stack")
-    depth = int(depth_text)
-    depth = max(0, min(depth, _MAX_FRAMES))
+    depth = perform_depth(session)
 
     # frame_stack[0] is a sentinel, never a real caller: GnuCOBOL
     # initializes it to {perform_through: 0, return_address_ptr: &&P_cgerror}
