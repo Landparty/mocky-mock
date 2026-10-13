@@ -15,6 +15,7 @@ from mockymock.analysis.stub_expectations import (
     StubScanResult,
 )
 from mockymock.report.results import TestSuiteResult
+from mockymock.splicer.reset import _POINTER_USAGES
 
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 # How GnuCOBOL -std=mvs (the only mode mockymock compiles in, see
@@ -151,7 +152,9 @@ class RecordingReport:
 
 
 def build_recording_report(
-    scan: StubScanResult, suite_result: TestSuiteResult
+    scan: StubScanResult,
+    suite_result: TestSuiteResult,
+    address_items: set[str] | frozenset[str] = frozenset(),
 ) -> RecordingReport:
     """Match every stub the scanner found against this run's recorded
     values (by case id + data-name).
@@ -205,6 +208,21 @@ def build_recording_report(
             report.skipped.append(SkippedStub(stub.line, stub.data_name, reason))
             continue
         value = queue.pop(0)
+        if stub.data_name.partition("(")[0].strip().upper() in address_items:
+            # DISPLAY of a POINTER-family item prints an address, of an
+            # INDEX item an implementation-defined number: neither is a
+            # value a golden can pin, and `EXPECT P TO BE "0x..."` does not
+            # even compile (a pointer is not comparable with a literal).
+            report.skipped.append(
+                SkippedStub(
+                    stub.line,
+                    stub.data_name,
+                    "it is a USAGE POINTER/PROCEDURE-POINTER/INDEX item, "
+                    "whose DISPLAY text is an address, not data -- assert it "
+                    "by hand if at all (e.g. TO BE NULL)",
+                )
+            )
+            continue
         if "\ufffd" in value:
             # The run's stdout is decoded with errors="replace", so a byte
             # that is not UTF-8 (HIGH-VALUES' X'FF', packed data) arrives
@@ -249,6 +267,26 @@ def field_pictures(program, captures=()) -> dict[str, str]:
         if source_picture is not None:
             pictures[plan.target.upper()] = source_picture
     return pictures
+
+
+_ADDRESS_USAGES = _POINTER_USAGES | {"INDEX"}
+
+
+def address_fields(program) -> set[str]:
+    """Names (uppercased, unqualified) of every POINTER-family or INDEX
+    item in `program` -- the stubs `build_recording_report` must not turn
+    into an EXPECT. Best-effort like `field_pictures`."""
+    from mockymock.splicer.captures import _data_item_index
+
+    try:
+        index = _data_item_index(program)
+    except Exception:  # pragma: no cover - never break a run over this
+        return set()
+    return {
+        name
+        for name, item in index.items()
+        if str(item.get("usage") or "").upper() in _ADDRESS_USAGES
+    }
 
 
 def picture_for(data_name: str, pictures: dict[str, str] | None) -> str | None:
