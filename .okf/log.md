@@ -5,6 +5,14 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-11 -- lowercase PERFORM / GO TO targets resolve
+
+cobolparser keeps a PERFORM / GO TO target as written but upper-cases
+paragraph and section names, so a program written in lowercase was refused
+outright (UNRESOLVED_FLOW_TARGET, UNMATCHED_MOCK,
+UNSUPPORTED_TERMINATOR_LAYOUT): all 17 real-world suites, lowercased, were
+refused. `normalize_flow_targets` upper-cases the targets right after every
+`parse_cobol`. Updated [analysis](analysis.md).
 ## 2026-10-12 -- pointer and INDEX fields in generated and recorded tests
 
 `generate --with-data` no longer writes `MOVE 0 TO <pointer>` (a compile
