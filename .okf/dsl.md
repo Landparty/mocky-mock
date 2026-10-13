@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-13T12:00:00Z
+timestamp: 2026-10-13T22:00:00Z
 ---
 
 # Overview
@@ -925,6 +925,18 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   `VERIFY` with the summed count; if any of those sites is nested in an
   IF/EVALUATE/loop the count is demoted to a `*> VERIFY ... <count not
   exact by construction -- reason>` comment.
+- **Conditional sites (#160).** The bundle counts every site once per
+  scenario whether or not its branch runs, so a count is kept only when
+  every site of its key is in `analysis/exact_counts.py`'s
+  `exact_count_scope` for the entry: top level of its paragraph (or an
+  inline PERFORM body there), in a paragraph reached through top-level
+  PERFORMs only (looping ones included, since loop counts are the
+  bundle's row model) and by nothing else -- no PERFORM inside an
+  IF/EVALUATE/AT END, no GO TO, SORT/XML procedure, or fall-through from
+  a GO TO target. A PERFORM in a branch that ends with `STOP RUN`/`GOBACK`
+  doesn't count against its target. Everything else is demoted the same
+  way, including a per-row CALL behind a loop's own `IF NOT EOF` guard.
+  Early exits (`IF ... GOBACK`) are not modeled.
 - **Field names (#144).** Fixture fields arrive as `RECORD.FIELD`; rows and
   bodies use the leaf (or `FIELD OF RECORD` when the leaf is ambiguous) and
   an `EXPECT` whose leaf is ambiguous becomes a stub comment.
