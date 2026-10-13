@@ -14,6 +14,7 @@ from mockymock.debug.adapter import (
 from mockymock.debug.call_stack import ParagraphIndex
 from mockymock.debug.gdb_session import GdbSessionClosedError, ResultRecord, StopEvent
 from mockymock.debug.line_map import LineMap
+from mockymock.debug.variable_map import UNAVAILABLE_VALUE
 
 
 def _frame(message: dict) -> bytes:
@@ -780,3 +781,40 @@ def test_stack_trace_source_is_the_program_not_the_last_breakpoint_source():
     stack_response = next(m for m in messages if m.get("command") == "stackTrace")
     frames = stack_response["body"]["stackFrames"]
     assert frames[0]["source"]["path"] == "/proj/cobol/PROG.cbl"
+
+
+def _launch_with_unavailable(arguments: dict) -> DebugSession:
+    session = _fake_launch_session(arguments)
+    session.unavailable = ("WS-UNUSED",)
+    return session
+
+
+def test_variables_lists_items_cobc_did_not_wrap_as_unavailable():
+    """Issue #156: an item with no C local in the .c.l.h used to be missing
+    from the Variables view with nothing saying it was hidden."""
+    messages, _ = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(2, "variables", {"variablesReference": 1}),
+        ],
+        launch=_launch_with_unavailable,
+    )
+
+    variables = messages[-1]["body"]["variables"]
+    assert [v["name"] for v in variables] == ["WS-CUSTOMER-ID", "WS-UNUSED"]
+    assert variables[1]["value"] == UNAVAILABLE_VALUE
+    assert variables[1]["presentationHint"] == {"attributes": ["readOnly"]}
+
+
+def test_evaluate_of_an_unavailable_item_says_so():
+    messages, _ = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(2, "evaluate", {"expression": "ws-unused", "context": "hover"}),
+        ],
+        launch=_launch_with_unavailable,
+    )
+
+    evaluate_response = messages[-1]
+    assert evaluate_response["success"] is True
+    assert evaluate_response["body"]["result"] == UNAVAILABLE_VALUE

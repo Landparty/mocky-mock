@@ -52,7 +52,13 @@ import re
 import sys
 from dataclasses import dataclass, field, replace
 
-from mockymock.analysis.loops import looped_paragraphs_and_statements, site_in_loop
+from mockymock.analysis.loops import (
+    LoopGuard,
+    loop_guard_words,
+    loop_guards,
+    looped_paragraphs_and_statements,
+    site_in_loop,
+)
 from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
@@ -225,6 +231,15 @@ def _data_name_counts(program) -> dict[str, int]:
     return counts
 
 
+def _layout_items(program) -> list[dict]:
+    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+
+    try:
+        return list(compute_program_data_items(program).get("items", []))
+    except Exception:  # pragma: no cover - never break generate over this
+        return []
+
+
 def _select_access_modes(program) -> dict[str, str]:
     """Uppercased file name -> its SELECT's ACCESS MODE (uppercased, '' when
     the clause is omitted, which means SEQUENTIAL)."""
@@ -371,6 +386,13 @@ class ProgramContext:
     #: is a plain sequential read with no AT END / INVALID KEY clause -- the
     #: `PERFORM UNTIL <status> = "10"` idiom. See `_status_read_eof`.
     status_read_eof: dict[str, tuple[str, bool]] = field(default_factory=dict)
+    #: Every looping PERFORM with the data names its UNTIL reads, so a CALL
+    #: whose loop waits on the CALL's own reply can be ended (issue #156).
+    guards: list[LoopGuard] = field(default_factory=list)
+    #: cobol-parser's flat data-item layout (`compute_program_data_items`),
+    #: for the names under a CALL argument (a PCB's status field, an 88).
+    data_items: list[dict] = field(default_factory=list)
+    surface: MockSurface | None = None
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -391,7 +413,37 @@ class ProgramContext:
             status_read_eof=_status_driven_reads(
                 program, surface, looped_paragraphs_and_statements(program)
             ),
+            guards=loop_guards(program),
+            data_items=_layout_items(program),
+            surface=surface,
         )
+
+    def names_under(self, name: str) -> set[str]:
+        """`name` plus every data item declared under it, condition names
+        (88s) included, uppercased."""
+        wanted = name.upper()
+        names = {wanted}
+        for item in self.data_items:
+            parts = str(item.get("qualified_name") or "").upper().split(".")
+            if wanted in parts[:-1]:
+                names.add(parts[-1])
+        return names
+
+    def literal_value(self, name: str) -> str | None:
+        """The alphanumeric VALUE literal `name` is declared with, read from
+        the source text, or None."""
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9-]){re.escape(name)}(?![A-Za-z0-9-])[^.]*?"
+            r"\bVALUE\s+(?:IS\s+)?([\"'])(.*?)\1",
+            re.IGNORECASE,
+        )
+        for line in self.lines:
+            if len(line) > 6 and line[6] in "*/":
+                continue
+            match = pattern.search(line)
+            if match:
+                return match.group(2)
+        return None
 
     def references(self, name: str) -> bool:
         """True when `name` appears as a whole COBOL word in the program."""
@@ -941,9 +993,10 @@ def _directive_for(
             # unmocked site loudly (2026-08-12 audit Finding 20).
             return None
         keyword = "MQ" if site.is_mq else "CALL"
-        return f'MOCK {keyword} "{key}"', _with_captures(
-            category, key, _placeholder_body_for(category, key), context
+        body = _placeholder_body_for(category, key) + _call_loop_end_lines(
+            site, context, None
         )
+        return f'MOCK {keyword} "{key}"', _with_captures(category, key, body, context)
 
     if category is MockCategory.DYNCALL:
         # bare key = dynamic CALL through this identifier; quoting it would
@@ -1017,6 +1070,118 @@ def _dli_loop_end_lines(
         f'    MOVE "{end_status}" TO DIBSTAT',
         "END-IF",
     ]
+
+
+#: CALL-level DL/I interfaces whose USING list is (function, PCB, ...).
+_DLI_CALL_INTERFACES = frozenset({"CBLTDLI", "CEETDLI"})
+
+#: The PCB status a DL/I call reports once nothing more matches: GB (end of
+#: database) for an unqualified get-next, GE (not found) for the rest.
+_DLI_CALL_END = {
+    "GU": "GE",
+    "GHU": "GE",
+    "GN": "GB",
+    "GHN": "GB",
+    "GNP": "GE",
+    "GHNP": "GE",
+}
+
+
+def _call_end_reply(
+    site: BoundarySite, context: ProgramContext
+) -> tuple[tuple[tuple[str, str], ...], set[str]] | None:
+    """The reply a real MQGET or DL/I get call gives once there is nothing
+    left to return, as (value, target) MOVEs, plus the argument names that
+    reply is written to -- or None when `site` is no such call.
+
+    MQGET answers MQCC_FAILED (2) with MQRC_NO_MSG_AVAILABLE (2033) in its
+    CompCode/Reason arguments (8th and 9th). A CBLTDLI/CEETDLI get call
+    puts its status at bytes 11-12 of every DB PCB (after the 8-byte DBD
+    name and 2-byte level), whatever the program named that field."""
+    using = list(getattr(site.statement, "using_parameters", None) or [])
+    names = [str(getattr(param, "name", "") or "") for param in using]
+    key = site.keys[0].upper() if site.keys else ""
+    if key == "MQGET":
+        if len(names) < 9 or not names[7] or not names[8]:
+            return None
+        return (("2", names[7]), ("2033", names[8])), {names[7], names[8]}
+    if key in _DLI_CALL_INTERFACES:
+        if len(names) < 2 or not names[0] or not names[1]:
+            return None
+        function = context.literal_value(names[0]) or names[0]
+        end_status = _DLI_CALL_END.get(function.strip().upper())
+        if end_status is None:
+            return None
+        return ((f'"{end_status}"', f"{names[1]}(11:2)"),), {names[1]}
+    return None
+
+
+def _row_already_ends(
+    body: list[str], site: BoundarySite, context: ProgramContext | None
+) -> bool:
+    """True when the fixture row itself MOVEs the end-of-data status (2033,
+    or the PCB's GB/GE) into the reply field: the loop then ends on the
+    first call and the bundle's own count stands."""
+    if context is None:
+        return False
+    reply = _call_end_reply(site, context)
+    if reply is None:
+        return False
+    value, _ = reply[0][-1]
+    watched = set().union(*(context.names_under(name) for name in reply[1]))
+    for line in body:
+        match = re.match(r"MOVE\s+(.+?)\s+TO\s+(\S+)$", line)
+        if match and match.group(2).upper() in watched:
+            if match.group(1).strip('"').strip() == value.strip('"'):
+                return True
+    return False
+
+
+def _call_loop_end_lines(
+    site: BoundarySite,
+    context: ProgramContext | None,
+    tally: str | None,
+) -> list[str]:
+    """A looped MQGET or DL/I get CALL whose loop waits on the call's own
+    reply (`PERFORM UNTIL WS-REASON = 2033`, `UNTIL PCB-STATUS = "GB"`):
+    a mock that replays its row on every call never satisfies that guard,
+    so the run spins until the executor timeout (issue #156). Report end of
+    data after the first call -- with a tally, so the fixture row is still
+    returned once -- the way a READ mock reports AT END after its rows.
+
+    One MOCK directive answers every site of its key, so the reply is only
+    synthesized when every site would get the same one; a key mixing, say,
+    a GU and an ISRT through CBLTDLI gets a TODO comment instead."""
+    if context is None or site.category is not MockCategory.CALL or not site.keys:
+        return []
+    sites = [
+        other
+        for other in (context.surface.boundary_sites if context.surface else [])
+        if other.category is MockCategory.CALL and site.keys[0] in other.keys
+    ] or [site]
+    replies = [_call_end_reply(other, context) for other in sites]
+    waits_on_reply = any(
+        reply is not None
+        and site_in_loop(other, context.looped)
+        and loop_guard_words(other, context.guards)
+        & set().union(*(context.names_under(name) for name in reply[1]))
+        for other, reply in zip(sites, replies, strict=True)
+    )
+    if not waits_on_reply:
+        return []
+    if len({reply[0] if reply else None for reply in replies}) != 1:
+        return [
+            f"*> TODO: a loop waits on this CALL's reply, but its "
+            f"{len(sites)} sites need different end-of-data replies -- "
+            f"end the loop by hand (e.g. MOCK CALL ... ROWS ... TERMINAL), "
+            f"or this mock never ends it"
+        ]
+    first = replies[0]
+    assert first is not None  # one distinct reply, and some site has one
+    moves = [f"MOVE {value} TO {target}" for value, target in first[0]]
+    if tally is None:
+        return moves
+    return [f"IF {tally} > 1", *(f"    {move}" for move in moves), "END-IF"]
 
 
 def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
@@ -1665,6 +1830,10 @@ def _bundle_directive_for(
             call_count_override = CallCountOverride(count=1)
         else:
             body = _placeholder_body_for(category, fixture.key)
+            end_lines = _call_loop_end_lines(site, source, None)
+            body = body + end_lines
+            if end_lines and not end_lines[0].startswith("*>"):
+                call_count_override = CallCountOverride(count=1)
     elif fixture.direction == "STATUS_ONLY":
         body = _status_only_body(fixture)
     elif category is MockCategory.READ:
@@ -1690,6 +1859,19 @@ def _bundle_directive_for(
             body = body + _dli_loop_end_lines(
                 site, source, registry.name(category, fixture.key)
             )
+        if category is MockCategory.CALL and registry.known(category, fixture.key):
+            end_lines = _call_loop_end_lines(
+                site, source, registry.name(category, fixture.key)
+            )
+            if (
+                end_lines
+                and not end_lines[0].startswith("*>")
+                and not _row_already_ends(body, site, source)
+            ):
+                # The row answers the first call and the end-of-data reply
+                # the second, which ends the loop waiting on it.
+                call_count_override = CallCountOverride(count=2, from_placeholder=False)
+            body = body + end_lines
 
     body = _with_captures(category, fixture.key, body, source)
     lines = [_directive_header(category, fixture.key, site)]
@@ -1860,6 +2042,10 @@ def _bundle_mock_directives(
             body = body + _dli_loop_end_lines(
                 site, source, registry.name(category, key)
             )
+        if category is MockCategory.CALL and registry.known(category, key):
+            body = body + _call_loop_end_lines(
+                site, source, registry.name(category, key)
+            )
         lines.append(directive_line)
         lines.extend(f"    {line}" for line in body)
         lines.append("END-MOCK")
@@ -1900,7 +2086,7 @@ def _bundle_mock_directives(
                 "downgraded by --placeholder -- how many times that loop "
                 "actually executes changed"
                 if loop_override.from_placeholder
-                else "a cursor loop that runs once more than it has rows"
+                else "a loop that runs once more than it has rows"
             )
             call_count_overrides[other_key_pair] = CallCountOverride(
                 demote_reason=(

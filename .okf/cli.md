@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-05T12:00:00Z
+timestamp: 2026-10-13T22:00:00Z
 ---
 
 # Overview
@@ -707,6 +707,12 @@ captured MI transcripts and end-to-end tested against a live container
   three send the same DAP request — but only resolves plain COBOL
   identifiers already in `variable_table` (the same lookup `variables`
   uses); arithmetic/member-access expressions fail cleanly, not silently.
+  Data items the program declares but cobc gave no C local in the
+  `.c.l.h` (`DebugSession.unavailable`, from `variable_map.
+  declared_data_names` / `unavailable_names`) are listed after the
+  readable ones with the value `<unavailable: not materialized by cobc>`,
+  and `evaluate` answers the same for them (issue #156). Items cobc
+  declared only as a `b_NN` buffer are still read (issue #168 covers how).
   `_handle_launch` closes any prior `self._session` and resets
   `self._breakpoint_numbers` before creating a new one (audit finding
   F16) — a second `launch` on one adapter (a client retry, or a bug) used

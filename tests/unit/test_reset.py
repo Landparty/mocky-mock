@@ -284,15 +284,48 @@ def test_numeric_edited_items_reset_to_zero_not_spaces():
     assert not any("MOVE SPACES TO WS-EDITED" in ln for ln in lines)
 
 
-def test_occurs_child_with_value_is_skipped_not_given_unsubscripted_move():
-    """Audit finding 2.4: `MOVE 7 TO WS-CELL` against an OCCURS child is
-    illegal (needs a subscript) and cobc rejected the whole program.
-    Skipping is the sound minimal fix (documented fidelity limit); the
-    non-OCCURS sibling's VALUE must still be restored."""
+def test_occurs_child_with_value_is_restored_through_initialize_to_value():
+    """Issue #156: an OCCURS child's VALUE was left at INITIALIZE's zero
+    fill, so tests saw different starting data from the real program. An
+    unsubscripted `MOVE 7 TO WS-CELL` is illegal COBOL, so the group is
+    reset with INITIALIZE's ALL TO VALUE phrase, which restores every
+    occurrence and the non-OCCURS sibling's VALUE in one statement."""
     lines = reset_move_lines(_ast_edited_and_occurs())
-    assert "INITIALIZE WS-GRP" in lines
+    assert "INITIALIZE WS-GRP ALL TO VALUE THEN TO DEFAULT" in lines
+    assert "INITIALIZE WS-GRP" not in lines
     assert not any("WS-CELL" in ln for ln in lines)
-    assert any('MOVE "ABC" TO WS-NAMED' in ln for ln in lines)
+    assert not any("WS-NAMED" in ln for ln in lines)
+
+
+NESTED_OCCURS_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SAMPLE7B.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-TABLE.
+           05  WS-ROW         OCCURS 3 TIMES.
+               10  WS-FLAG    PIC X VALUE "Y".
+               10  WS-AMT     PIC 9(3).
+       01  WS-PLAIN-TABLE.
+           05  WS-SLOT        PIC 9 OCCURS 4 TIMES.
+           05  WS-LABEL       PIC X(3) VALUE "ABC".
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_value_under_an_occurs_group_uses_initialize_to_value():
+    """A VALUE on a child of an OCCURS group is inside the table too; a
+    table without any VALUE keeps the plain INITIALIZE plus restores."""
+    result = parse_cobol(NESTED_OCCURS_SOURCE, filename="sample7b.cbl")
+    assert result.success, result.errors
+    lines = reset_move_lines(result.ast)
+    assert "INITIALIZE WS-TABLE ALL TO VALUE THEN TO DEFAULT" in lines
+    assert "INITIALIZE WS-PLAIN-TABLE" in lines
+    assert 'MOVE "ABC" TO WS-LABEL' in lines
 
 
 # --- REDEFINES children (two REDEFINES of the same nested item) ---------------

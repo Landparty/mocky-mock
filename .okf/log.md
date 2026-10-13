@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-13 -- issue #156: looped MQGET/CBLTDLI end, OCCURS VALUE, unwrapped vars
+
+A generated MQGET or CBLTDLI get mock inside a loop that waits on the
+call's own reply now reports end of data (2033 / GB / GE) after its row
+instead of replaying it until the timeout. A group with a VALUE inside a
+table is reset with `INITIALIZE ... ALL TO VALUE THEN TO DEFAULT`, so its
+occurrences start each test at their declared VALUE. The debugger lists
+declared items cobc gave no C local as "unavailable". Updated
+[dsl](dsl.md), [splicer](splicer.md), [cli](cli.md).
 ## 2026-10-13 -- CAPTURE ARG of an OMITTED argument is refused
 
 `CALL "X" USING OMITTED B` with `CAPTURE ARG 1` linted clean and then

@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-13T12:00:00Z
+timestamp: 2026-10-13T22:00:00Z
 ---
 
 # Overview
@@ -887,8 +887,20 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
 - **No entry (#150).** A scenario with `entry=''` (IMS `ENTRY 'DLITCBL'`
   programs) falls back to the first named PROCEDURE DIVISION paragraph
   (`_first_paragraph`); `generate --with-data` exits 1 when no scenario
-  became a TESTCASE. A `CALL 'CBLTDLI'` GN loop still gets an empty mock
-  body, so such a case can time out until its body sets the PCB status.
+  became a TESTCASE. A `CALL 'CBLTDLI'` get loop is covered by #156 below.
+- **Looped MQGET / CBLTDLI get calls (#156).** When a CALL sits in a loop
+  whose UNTIL reads the call's own reply (`analysis.loops.loop_guard_words`,
+  matched against the argument and every name declared under it, 88s
+  included), the mock reports end of data after its row: `MOVE 2` /
+  `MOVE 2033` into MQGET's CompCode/Reason (8th/9th USING arguments), or
+  `GE`/`GB` into bytes 11-12 of a CBLTDLI/CEETDLI get call's PCB (GU/GHU/
+  GNP/GHNP -> GE, GN/GHN -> GB; the function code is read from the first
+  argument's VALUE literal). The reply is gated on `IF <tally> > 1` when a
+  tally is known, unconditional in the bundle-less scaffold, and its VERIFY
+  becomes 2 unless the row itself already moves the end status. One MOCK
+  answers every site of its key, so when the key's sites would need
+  different replies (a GN loop plus an ISRT through the same CBLTDLI) the
+  body gets a `*> TODO` comment instead.
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 
