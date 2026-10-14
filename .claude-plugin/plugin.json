@@ -1,10 +1,20 @@
 {
   "name": "cobol-testing",
   "description": "Test COBOL programs with AI: understand a program with cobol-parser, build and run a mockymock suite under GnuCOBOL with assertions grounded in its business rules, and get an HTML report of every step and what each test proves.",
-  "version": "0.9.0",
-  "author": { "name": "Samuel Dion" },
+  "version": "0.10.0",
+  "author": {
+    "name": "Samuel Dion"
+  },
   "homepage": "https://github.com/Landparty/mocky-mock",
   "license": "AGPL-3.0-or-later",
-  "keywords": ["cobol", "mainframe", "testing", "gnucobol", "mocking"],
-  "skills": ["./mockymock/cli/skills/"]
+  "keywords": [
+    "cobol",
+    "mainframe",
+    "testing",
+    "gnucobol",
+    "mocking"
+  ],
+  "skills": [
+    "./mockymock/cli/skills/"
+  ]
 }
