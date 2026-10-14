@@ -67,6 +67,18 @@
 - `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
 - **`find_goto_exit_plans`: adjacency check broke on a phantom `"."` paragraph between enclosing and target.** cobolparser inserts an empty-artifact paragraph literally named `"."` for a bare `.` line sitting on its own between a paragraph's last statement and the next paragraph's header; `immediately_follows` required `target_idx == enclosing_idx + 1` exactly, so a phantom sitting between an otherwise-adjacent `GO TO`'s enclosing paragraph and its exit-only target broke the adjacency check and cascaded into declining that target and every paragraph transitively chained after it. `immediately_follows` now accepts any run of only phantom `"."` paragraphs strictly between the two, the same tolerance `_expand_thru_range` already applies elsewhere. Pinned by `tests/unit/test_goto_exit.py::test_find_goto_exit_plans_tolerates_a_phantom_paragraph_before_the_target`.
 
+## [0.10.0](https://github.com/Landparty/mocky-mock/compare/v0.9.0...v0.10.0) (2026-10-14)
+
+
+### Features
+
+* flag cases that assert nothing; default generate to one case per scenario ([79f3734](https://github.com/Landparty/mocky-mock/commit/79f373484a19c56944edacb1da8e7c33d3d8b6e9))
+
+
+### Bug Fixes
+
+* sync __version__ and plugin.json to 0.9.0; use release-please's generic updater ([80b699c](https://github.com/Landparty/mocky-mock/commit/80b699caa6c011b3ab865887053c103b2c39299f))
+
 ## [0.9.0](https://github.com/Landparty/mocky-mock/compare/v0.8.0...v0.9.0) (2026-09-15)
 
 
