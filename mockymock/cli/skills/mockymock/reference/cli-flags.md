@@ -1,8 +1,8 @@
 # mockymock CLI: subcommand and flag reference
 
-`mockymock <subcommand> [options]`. Fifteen subcommands: `setup`,
+`mockymock <subcommand> [options]`. Subcommands include `setup`,
 `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`,
-`collect`, `explain`, `dashboard`, `doctor`, `export`, `analyze`,
+`collect`, `suites`, `explain`, `dashboard`, `doctor`, `export`, `analyze`,
 `skills`. Running `mockymock` with no subcommand prints help and exits 1.
 
 Only `setup`, `run`, `init`, `debug`, and `mutate` need a running
@@ -15,17 +15,26 @@ the fast inner loop while writing a `.cut` file.
 
 Most subcommands can work out their own arguments:
 
-- Pass only `--cut PROGRAM.cut` and the program is inferred from the
-  sibling file with the same stem (`.cbl`, `.cob`, `.CBL`, `.COB`, in
-  that order); pass only `PROGRAM.cbl` and `--cut` is inferred the same
-  way. Either explicit path always wins.
+- Pass only `--cut SUITE.cut` and the program is inferred, first match
+  wins: the suite's own `PROGRAM "<path>"` line (right after
+  `TESTSUITE`, relative to the `.cut`); a sibling with the same stem or
+  the same base name (`PROG.errors.cut` -> `PROG.cbl`; `.cbl`, `.cob`,
+  `.cobol` and upper-case variants); for a suite under `tests/`, the
+  same relative folder under the source root (`tests/pay/PROG.cut` ->
+  `src/pay/PROG.cbl`); or the only `PROG.cbl` under the source root.
+  Pass only `PROG.cbl` and its suite is inferred the same way; a program
+  with several suites needs `--cut`, except `run`/`lint`, which then
+  process every one. Either explicit path always wins. `mockymock
+  suites` shows the pairing.
 - `run` and `lint` with **neither** argument discover and process every
   `.cut` file under the current directory (or the config file's
   `test_root`), skipping `.git`, `node_modules`, `.venv`, `dist`,
   `build`, and the other usual suspects.
 - A `mockymock.toml`, or a `[tool.mockymock]` table in `pyproject.toml`,
   found by walking up from the source file, supplies defaults for
-  `copybook_path`, `seed`, and `test_root`. Precedence is always
+  `copybook_path`, `seed`, `test_root` (also where new suites go;
+  default `tests/`), and `source_root` (what `tests/` mirrors; default
+  `src/` when it exists, else the project root). Precedence is always
   explicit flag > config file > built-in default, and an unrecognized
   key is an error rather than silently ignored. `mockymock doctor`
   reports which config file (if any) is in effect.
@@ -59,7 +68,8 @@ and prints the next step.
 | Option | Default | Description |
 |---|---|---|
 | `program` (positional) | required | The `.cbl` source file. |
-| `-o`, `--output PATH` | `<program>.cut` | Where to write the `.cut` file. |
+| `-o`, `--output PATH` | `tests/<folder>/<program>.cut` | Where to write the `.cut` file. Same default as `generate -o`. |
+| `--name NAME` | none | Write a second suite, `<program>.<NAME>.cut`. Same meaning as `generate --name`. |
 | `--seed N` | random | Seed for the fixture bundle's generated data. |
 | `--scenarios {happy,branches,all}` | `happy` | Same meaning as `generate --scenarios`. |
 | `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path`. |
@@ -82,7 +92,8 @@ each paragraph touches. Never touches Docker.
 | Option | Default | Description |
 |---|---|---|
 | `program` (positional) | required | The `.cbl` source file to scaffold from. |
-| `-o`, `--output PATH` | `<program>.cut` | Where to write the generated `.cut` file. **Overwritten without asking** -- see `--fill` for an existing file. |
+| `-o`, `--output PATH` | `tests/<folder>/<program>.cut` | Where to write the generated `.cut` file: under the tests folder, mirroring the program's folder under the source root -- or beside the program when it already has a `<program>.cut` there or lies outside the source root. **Overwritten without asking** -- see `--fill` for an existing file. |
+| `--name NAME` | none | Write another suite for the same program, `<program>.<NAME>.cut` (e.g. `--name errors`), in the same place. |
 | `--fill CUT_FILE` | none | Insert only the `MOCK` blocks `CUT_FILE`'s existing test cases are missing (from the same `UNMOCKED_*` analysis `lint` runs), writing back in place. Every existing directive, `EXPECT`, `VERIFY`, and comment is preserved byte for byte; an existing `MOCK` block is never edited, even if its body is empty. Mutually exclusive with `-o/--output`, `--with-data`, and `--fixtures`. |
 | `--copybook-path DIR` (repeatable) | none | A directory to search for `COPY`-referenced copybooks. |
 | `--with-data` | off | Data-driven mode: one `TESTCASE` per scenario, with real generated mock data and `EXPECT`/`VERIFY` assertions, instead of placeholder bodies. |
@@ -239,6 +250,25 @@ notices ("killed") or doesn't ("survived" -- a gap in the assertions).
 | `--fail-under PERCENT` | none | Exit 1 if the mutation score is below this percentage. |
 
 Mock bodies and terminator statements are never mutated.
+
+## `mockymock suites`
+
+```bash
+mockymock suites [--json]
+mockymock suites <program.cbl> [--name NAME] [--json]
+```
+
+Which program each `.cut` suite under the project tests, and by which
+rule (`program`, `sibling`, `mirror`, `unique` -- see "Argument
+inference" above), or the error for a suite that pairs with nothing.
+With a program: that program's suites, and where a new one would go
+(`newSuitePath` in JSON). No Docker, no parsing.
+
+| Option | Default | Description |
+|---|---|---|
+| `program` (positional) | none | List this program's suites instead of every suite. |
+| `--name NAME` | none | With `program`: report the path for `<program>.<NAME>.cut`. |
+| `--json` | off | Machine-readable output (what the VS Code extension reads). |
 
 ## `mockymock collect`
 

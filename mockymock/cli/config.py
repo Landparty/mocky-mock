@@ -54,7 +54,7 @@ UNIVERSAL_FILE_NAMES = ("cobol.yml", "cobol.yaml")
 
 _STRING_LIST_KEY = "copybook_path"
 _INT_KEYS = ("seed",)
-_STRING_KEYS = ("test_root", _AI_MODE_KEY)
+_STRING_KEYS = ("test_root", "source_root", _AI_MODE_KEY)
 # Every key a config file may carry. Anything else is rejected rather
 # than ignored: a typo'd `copybook-path` (hyphen) or a `timeout` key
 # (deliberately not config-overridable -- see `_apply_config_to_args` in
@@ -88,6 +88,9 @@ class MockymockConfig:
     # so `mockymock run` from a subdirectory still finds the same suites
     # as from the project root. "." with no config file means cwd.
     test_root: str = "."
+    # Where the programs live, for mirroring tests/ (cli/discovery.py).
+    # Absolute once read, like test_root; None means the project root.
+    source_root: str | None = None
     # Every file that contributed, base (universal) first. `source` alone
     # cannot express "a cobol.yml supplied the copybook paths and a
     # mockymock.toml the seed", which is what `doctor` needs to report.
@@ -171,6 +174,11 @@ def _validated_values(data: dict, source: Path) -> dict[str, Any]:
         if not test_root.is_absolute():
             test_root = source.parent / test_root
         values["test_root"] = str(test_root)
+    if "source_root" in data:
+        source_root = Path(data["source_root"])
+        if not source_root.is_absolute():
+            source_root = source.parent / source_root
+        values["source_root"] = str(source_root)
     return values
 
 

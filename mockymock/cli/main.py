@@ -208,6 +208,14 @@ def _check_input_files(command: str, *paths: Path) -> bool:
     return ok
 
 
+def _layout(args: argparse.Namespace):
+    """The project layout (tests folder, source root) for this invocation,
+    from the config file main() loaded. See cli/discovery.py."""
+    from mockymock.cli.discovery import project_layout
+
+    return project_layout(getattr(args, "_config", None))
+
+
 def _resolve_program_and_cut(
     command: str, args: argparse.Namespace
 ) -> tuple[Path, Path] | None:
@@ -235,10 +243,10 @@ def _resolve_program_and_cut(
         if program_arg is None:
             assert cut_arg is not None  # the both-None case returned above
             cut_path = Path(cut_arg)
-            source_path = resolve_program_path(None, cut_path)
+            source_path = resolve_program_path(None, cut_path, _layout(args))
         elif cut_arg is None:
             source_path = Path(program_arg)
-            cut_path = resolve_cut_path(None, source_path)
+            cut_path = resolve_cut_path(None, source_path, _layout(args))
         else:
             source_path = Path(program_arg)
             cut_path = Path(cut_arg)
@@ -375,6 +383,91 @@ def _write_failure_reports(
         )
 
 
+def _default_output(args: argparse.Namespace, source_path: Path) -> Path:
+    """-o/--output when given; else the layout's place for a new suite
+    (`<tests>/<folder>/PROG[.<name>].cut`, see discovery.default_suite_path).
+    The folders are created here so the write that follows can't fail on
+    a missing tests/ subfolder."""
+    if args.output:
+        return Path(args.output)
+    from mockymock.cli.discovery import default_suite_path
+
+    output = default_suite_path(source_path, _layout(args), getattr(args, "name", None))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    return output
+
+
+def _cmd_suites(args: argparse.Namespace) -> int:
+    """`mockymock suites [PROGRAM] [--name NAME] [--json]`: which program
+    every suite tests (and by which lookup rule), or with PROGRAM, that
+    program's suites plus where a new one would go. Docker-free and
+    parse-free; the VS Code extension pairs files with this rather than
+    its own copy of the rules. See cli/discovery.py."""
+    import json
+
+    from mockymock.cli.discovery import (
+        DiscoveryError,
+        default_suite_path,
+        discover_cut_files,
+        find_suites,
+        resolve_program,
+    )
+
+    layout = _layout(args)
+    payload: dict = {
+        "version": 1,
+        "root": str(layout.root),
+        "testsDir": str(layout.tests_dir),
+        "sourceRoot": str(layout.source_root),
+    }
+    if args.program is not None:
+        program = Path(args.program)
+        if not program.is_file():
+            message = f"mockymock suites: no such file: {program}"
+            print(json.dumps({**payload, "error": message}) if args.json else message)
+            return 1
+        suites = find_suites(program, layout)
+        new_path = default_suite_path(program, layout, args.name)
+        payload.update(
+            program=str(program.resolve()),
+            suites=[str(p.resolve()) for p in suites],
+            newSuitePath=str(new_path.resolve()),
+        )
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            for suite in suites:
+                print(suite)
+            if not suites:
+                print(f"mockymock suites: {program} has no suites yet")
+            print(f"mockymock suites: a new suite would go to {new_path}")
+        return 0
+
+    rows: list[dict[str, str | None]] = []
+    for cut in discover_cut_files(layout.root):
+        try:
+            program, rule = resolve_program(cut, layout)
+            rows.append(
+                {
+                    "cut": str(cut.resolve()),
+                    "program": str(program.resolve()),
+                    "rule": rule,
+                }
+            )
+        except DiscoveryError as exc:
+            rows.append({"cut": str(cut.resolve()), "program": None, "error": str(exc)})
+    payload["suites"] = rows
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        for row in rows:
+            if row["program"]:
+                print(f"{row['cut']} -> {row['program']} ({row['rule']})")
+            else:
+                print(f"{row['cut']} -> ? ({row['error']})")
+    return 0
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     """`mockymock init PROG.cbl`: compose the existing `generate
     --with-data` + `run --record-expectations` path into one command, so
@@ -399,7 +492,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     if not _check_input_files("mockymock init", source_path):
         return 1
 
-    output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
+    output_path = _default_output(args, source_path)
     if source_path.suffix.lower() == ".cut" or output_path.resolve() == (
         source_path.resolve()
     ):
@@ -968,7 +1061,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         ProgramContext.build(result.ast, lines, surface),
     )
 
-    output_path = Path(args.output) if args.output else source_path.with_suffix(".cut")
+    output_path = _default_output(args, source_path)
     # Unlike run's auxiliary report flags, this file IS the deliverable:
     # a failed write is a failed command (same convention as export).
     if not _write_report_file("generate", "-o/--output", str(output_path), cut_text):
@@ -1180,7 +1273,25 @@ _RUN_OUTPUT_PATH_FLAGS = (
 )
 
 
-def _run_directory(args: argparse.Namespace) -> int:
+def _several_suites(args: argparse.Namespace) -> list[Path] | None:
+    """For `run`/`lint PROG.cbl` with no --cut: the program's suites when it
+    has more than one (each then runs in turn, like the directory-wide
+    mode), else None so the ordinary single-pair path handles it --
+    including its error when there are none."""
+    if args.program is None or args.cut is not None:
+        return None
+    from mockymock.cli.discovery import find_suites
+
+    program = Path(args.program)
+    if not program.is_file():
+        return None
+    suites = find_suites(program, _layout(args))
+    return suites if len(suites) > 1 else None
+
+
+def _run_directory(
+    args: argparse.Namespace, cut_files: list[Path] | None = None
+) -> int:
     """`mockymock run` with neither a program nor --cut given: discover
     every .cut file under the test root (the config file's own
     test_root, default '.') and run each against its sibling program.
@@ -1199,7 +1310,9 @@ def _run_directory(args: argparse.Namespace) -> int:
 
     config = getattr(args, "_config", None)
     test_root = Path((config.test_root if config else None) or ".")
-    cut_files = discover_cut_files(test_root)
+    layout = _layout(args)
+    if cut_files is None:
+        cut_files = discover_cut_files(test_root)
     if not cut_files:
         print(f"mockymock run: no .cut files found under {test_root}")
         return 1
@@ -1209,7 +1322,7 @@ def _run_directory(args: argparse.Namespace) -> int:
     unresolved: list[str] = []
     for cut_path in cut_files:
         try:
-            program_path = resolve_program_path(None, cut_path)
+            program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
             unresolved.append(str(exc))
             continue
@@ -1231,7 +1344,7 @@ def _run_directory(args: argparse.Namespace) -> int:
         print(f"mockymock run: {reason}")
     print(
         f"mockymock run: {ran} suite(s) run, {len(unresolved)} .cut file(s) "
-        f"skipped (no sibling program found)"
+        f"skipped (no program found)"
     )
     if ran == 0:
         return 1
@@ -1292,6 +1405,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # See docs/2026-09-15-cli-ergonomics-design.md.
     if args.program is None and args.cut is None:
         return _run_directory(args)
+    if (several := _several_suites(args)) is not None:
+        return _run_directory(args, several)
 
     # Input existence is the one check that runs even before anything else:
     # a typo'd path must fail in milliseconds with no traceback.
@@ -2009,7 +2124,9 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _lint_directory(args: argparse.Namespace) -> int:
+def _lint_directory(
+    args: argparse.Namespace, cut_files: list[Path] | None = None
+) -> int:
     """`mockymock lint` with neither a program nor --cut given: discover
     every .cut file under the test root and lint each against its
     sibling program. See _run_directory's docstring -- same approach,
@@ -2024,7 +2141,9 @@ def _lint_directory(args: argparse.Namespace) -> int:
 
     config = getattr(args, "_config", None)
     test_root = Path((config.test_root if config else None) or ".")
-    cut_files = discover_cut_files(test_root)
+    layout = _layout(args)
+    if cut_files is None:
+        cut_files = discover_cut_files(test_root)
     if not cut_files:
         print(f"mockymock lint: no .cut files found under {test_root}")
         return 1
@@ -2034,7 +2153,7 @@ def _lint_directory(args: argparse.Namespace) -> int:
     unresolved: list[str] = []
     for cut_path in cut_files:
         try:
-            program_path = resolve_program_path(None, cut_path)
+            program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
             unresolved.append(str(exc))
             continue
@@ -2049,7 +2168,7 @@ def _lint_directory(args: argparse.Namespace) -> int:
         print(f"mockymock lint: {reason}")
     print(
         f"mockymock lint: {ran} suite(s) checked, {len(unresolved)} .cut "
-        f"file(s) skipped (no sibling program found)"
+        f"file(s) skipped (no program found)"
     )
     if ran == 0:
         return 1
@@ -2065,6 +2184,8 @@ def _cmd_lint(args: argparse.Namespace) -> int:
 
     if args.program is None and args.cut is None:
         return _lint_directory(args)
+    if (several := _several_suites(args)) is not None:
+        return _lint_directory(args, several)
 
     pair = _resolve_program_and_cut("mockymock lint", args)
     if pair is None:
@@ -2794,6 +2915,7 @@ commands, grouped by how often you'll reach for them:
     generate   scaffold a starter .cut file from a COBOL program
     lint       static checks only, no Docker
     collect    list a .cut file's suite and test cases
+    suites     which program each .cut suite tests, no Docker
 
   Diagnosing a failure:
     debug      interactive Debug Adapter Protocol session
@@ -2861,7 +2983,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init_parser.add_argument("program")
     init_parser.add_argument(
-        "-o", "--output", help="Where to write the .cut file (default: <program>.cut)"
+        "-o",
+        "--output",
+        help="Where to write the .cut file (default: tests/<folder>/<program>.cut)",
+    )
+    init_parser.add_argument(
+        "--name",
+        help="Name a second suite for the program: writes <program>.<NAME>.cut",
     )
     init_parser.add_argument(
         "--seed", type=int, help="Seed for the fixture bundle's random data generation"
@@ -2884,11 +3012,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init_parser.set_defaults(func=_cmd_init)
 
+    suites_parser = subparsers.add_parser(
+        "suites",
+        help="List which program each .cut suite tests (no Docker)",
+        description=(
+            "Pair every .cut suite under the project with its program, "
+            "or with PROGRAM, list that program's suites and where a new "
+            "one would go. A suite names its program with a PROGRAM line, "
+            "or by file name: PROG.cut / PROG.<topic>.cut beside the "
+            "program, or under tests/ mirroring the program's folder."
+        ),
+    )
+    suites_parser.add_argument("program", nargs="?")
+    suites_parser.add_argument(
+        "--name", help="With PROGRAM: report the path for <program>.<NAME>.cut"
+    )
+    suites_parser.add_argument(
+        "--json", action="store_true", help="Machine-readable output"
+    )
+    suites_parser.set_defaults(func=_cmd_suites)
+
     generate_parser = subparsers.add_parser(
         "generate", help="Scaffold a starter .cut file from a COBOL program"
     )
     generate_parser.add_argument("program")
-    generate_parser.add_argument("-o", "--output")
+    generate_parser.add_argument(
+        "-o",
+        "--output",
+        help=(
+            "Where to write the .cut file (default: tests/<folder>/<program>.cut, "
+            "mirroring the program's folder; beside the program when it "
+            "already has a <program>.cut there)"
+        ),
+    )
+    generate_parser.add_argument(
+        "--name",
+        help="Name a second suite for the program: writes <program>.<NAME>.cut",
+    )
     generate_parser.add_argument(
         "--fill",
         metavar="CUT_FILE",

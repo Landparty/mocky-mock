@@ -1,16 +1,16 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-13T22:00:00Z
+timestamp: 2026-10-14T01:00:00Z
 ---
 
 # Overview
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
-`--version` from `mockymock.__version__`). It defines seventeen subcommands —
-`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal` — each wired via `set_defaults(func=...)` and
+`--version` from `mockymock.__version__`). It defines eighteen subcommands —
+`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `suites`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -131,6 +131,32 @@ explicit flag always wins. `--timeout` (run/mutate) is deliberately not
 config-overridable — see the docstring on `_apply_config_to_args` for why.
 
 See `docs/2026-09-15-cli-ergonomics-design.md`.
+
+**Several suites per program, and `tests/` (2026-10-14):** the sibling
+rule above is now step 2 of `discovery.resolve_program()`'s lookup:
+(1) the suite's `PROGRAM "<path>"` line, relative to the .cut -- an
+explicit claim that never falls through to a guess when the file is
+missing; (2) sibling `<base>.cbl`/`.cob`; (3) a suite under the tests
+folder mirrors to the same relative folder under the source root; (4) the
+only `<base>.cbl` under the source root (two is a `DiscoveryError` asking
+for a PROGRAM line). `<base>` is the .cut name up to its first dot, so
+`PROG.errors.cut` is a second suite of PROG. `ProjectLayout`
+(`project_layout(config)`) supplies root (the deciding config file's
+folder, else cwd), `tests_dir` (`test_root` if a file set it, else
+`<root>/tests`) and `source_root` (new config key, default `<root>/src` when it exists, else root).
+`find_suites(program)` is the reverse direction (scans the root, plus the
+program's own folder when it lies outside it); `resolve_cut_path` errors
+naming the suites when there are several, except that `run`/`lint
+PROG.cbl` hand several suites to `_run_directory`/`_lint_directory`
+(`_several_suites`). `generate`/`init` write to
+`discovery.default_suite_path()` -- `<tests>/<folder>/PROG[.<name>].cut`,
+or beside the program when it already has a `PROG.cut` there or lies
+outside the source root -- and `--name` picks the topic.
+`mockymock suites [PROGRAM] [--name] [--json]` (`_cmd_suites`) prints the
+pairing with the rule that matched, or for one program its suites and
+`newSuitePath`; Docker-free and parse-free, it is what the VS Code
+extension pairs files with. `_programs_by_stem` is `lru_cache`d per
+process. Design: docs/2026-10-14-multi-suite-layout-design.md.
 
 **Default copybook search directories (2026-09-15):** once a
 single-pair `program`/`.cut` is resolved, `_apply_config_to_args(args,

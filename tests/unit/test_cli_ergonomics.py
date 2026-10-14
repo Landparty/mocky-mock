@@ -54,7 +54,8 @@ def test_lint_reports_a_clean_error_when_no_sibling_program_exists(
     exit_code = main(["lint", "--cut", str(cut)])
     out = capsys.readouterr().out
     assert exit_code == 1
-    assert "no COBOL source found beside" in out
+    assert "no COBOL program found for" in out
+    assert "ORPHAN.cbl" in out
     assert "pass the program path explicitly" in out
 
 
