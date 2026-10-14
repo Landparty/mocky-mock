@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-14T01:00:00Z
+timestamp: 2026-10-14T06:00:00Z
 ---
 
 # Overview
@@ -946,6 +946,14 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   doesn't count against its target. Everything else is demoted the same
   way, including a per-row CALL behind a loop's own `IF NOT EOF` guard.
   Early exits (`IF ... GOBACK`) are not modeled.
+- **Sites the entry never reaches (2026-10-14).** The bundle also counts
+  a key's sites in paragraphs nothing PERFORMs from the entry (a CICS
+  `HANDLE CONDITION` target, dead code), and #142's sum included them:
+  ACCTINQ's scaffold verified its CICS RETURN `2 TIMES` (one in
+  0000-MAIN-PROCESS, one in the NOTFND handler) and failed its own first
+  `init` run with "got 1". A key with any site outside the entry's
+  reachable set is demoted (`_UNREACHED_SITE_REASON`); READ/RETURN keep
+  their count, since theirs is the largest per-site count, not a sum.
 - **Field names (#144).** Fixture fields arrive as `RECORD.FIELD`; rows and
   bodies use the leaf (or `FIELD OF RECORD` when the leaf is ambiguous) and
   an `EXPECT` whose leaf is ambiguous becomes a stub comment.

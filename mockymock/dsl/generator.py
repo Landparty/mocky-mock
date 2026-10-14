@@ -2409,6 +2409,11 @@ _CONDITIONAL_SITE_REASON = (
     "called only under an IF/EVALUATE, or from a paragraph PERFORMed "
     "conditionally, so whether this case reaches it is not known"
 )
+_UNREACHED_SITE_REASON = (
+    "also called from a paragraph this case's PERFORM never reaches (a CICS "
+    "HANDLE CONDITION target, or code nothing PERFORMs), which the bundle's "
+    "count includes"
+)
 
 
 def _conditional_call_count_keys(
@@ -2424,7 +2429,12 @@ def _conditional_call_count_keys(
     this case's entry (issue #160 -- a single site behind `IF SQLCODE NOT =
     0`, or one in a paragraph PERFORMed only from inside `IF RECORD-OK`).
     Without a scope, any nested site is enough to demote (issue #142 for
-    several sites, #160 for one)."""
+    several sites, #160 for one). `_merged_call_counts` sums the bundle's
+    per-site counts over every site of the key, so a key that also has a
+    site outside `reachable` (ACCTINQ's CICS RETURN in its HANDLE
+    CONDITION NOTFND paragraph) carries a count this case cannot reach --
+    READ/RETURN excepted, whose merged count is the largest one, not a
+    sum."""
     keys: list[tuple[tuple[MockCategory, str], str]] = []
     for expectation in expectations:
         if expectation.kind != "call_count":
@@ -2435,7 +2445,13 @@ def _conditional_call_count_keys(
         except ValueError:
             continue
         sites = _sites_for_key(category, key, surface, reachable)
-        if len(sites) > 1 and any(site.nested for site in sites):
+        if (
+            reachable is not None
+            and category not in (MockCategory.READ, MockCategory.RETURN)
+            and len(_sites_for_key(category, key, surface)) > len(sites)
+        ):
+            keys.append(((category, key), _UNREACHED_SITE_REASON))
+        elif len(sites) > 1 and any(site.nested for site in sites):
             keys.append(((category, key), _SEVERAL_SITES_REASON))
         elif scope is None:
             if any(site.nested for site in sites):

@@ -101,3 +101,57 @@ def test_scope_follows_top_level_performs_only() -> None:
     assert scope is not None
     paragraphs, _ = scope
     assert paragraphs == {"MAIN-PARA", "DONE-PARA"}
+
+
+def test_a_key_also_called_from_a_paragraph_the_entry_never_reaches_is_not_counted(
+    tmp_path,
+) -> None:
+    # The bundle counts every site of the key, ORPHAN-PARA's included, and
+    # the counts were summed into "2 TIMES" while the case calls FINISH
+    # once (ACCTINQ: its CICS RETURN is also in the HANDLE CONDITION NOTFND
+    # paragraph, and the scaffold `init` wrote failed its own first run).
+    cbl = PROGRAM + ("       ORPHAN-PARA.\n" '           CALL "FINISH" USING WS-N.\n')
+    cut = _generate(tmp_path, cbl)
+    assert 'VERIFY CALL "FINISH" WAS CALLED 2 TIMES' not in cut
+    assert 'VERIFY CALL "FINISH" WAS CALLED 1 TIMES' not in cut
+    assert (
+        '*> VERIFY CALL "FINISH" WAS CALLED <count not exact by construction '
+        "-- also called from a paragraph this case's PERFORM never reaches"
+    ) in cut
+    assert 'VERIFY CALL "ALWAYS" WAS CALLED 1 TIMES' in cut
+
+
+def test_a_cics_handle_condition_target_does_not_inflate_the_count(tmp_path) -> None:
+    cbl = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. INQ.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AREA PIC X(10).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           EXEC CICS HANDLE CONDITION
+               NOTFND(NOTFND-PARA)
+           END-EXEC
+           MOVE "X" TO WS-AREA
+           EXEC CICS RETURN
+               COMMAREA(WS-AREA)
+           END-EXEC.
+       NOTFND-PARA.
+           MOVE SPACES TO WS-AREA
+           EXEC CICS RETURN
+               COMMAREA(WS-AREA)
+           END-EXEC.
+"""
+    from mockymock.cli.main import main
+
+    source = tmp_path / "INQ.cbl"
+    source.write_text(cbl)
+    out = tmp_path / "INQ.cut"
+    assert (
+        main(["generate", str(source), "--with-data", "--seed", "1", "-o", str(out)])
+        == 0
+    )
+    cut = out.read_text()
+    assert "WAS CALLED 2 TIMES" not in cut
+    assert '*> VERIFY CICS "RETURN' in cut
