@@ -914,3 +914,62 @@ def test_evaluate_of_an_unavailable_item_says_so():
     evaluate_response = messages[-1]
     assert evaluate_response["success"] is True
     assert evaluate_response["body"]["result"] == UNAVAILABLE_VALUE
+
+
+class _RelocatingGdb(_FakeGdb):
+    """gdb binds a breakpoint on a line with no code of its own (`ELSE`,
+    `END-IF`, the second line of a statement) to the next line that has
+    some, and says so in the `bkpt` record's `line`."""
+
+    def set_breakpoint(self, file, line):
+        bkpt = super().set_breakpoint(file, line)
+        return {
+            **bkpt,
+            "file": "/root/.mockymock/work/x/fixture.cbl",
+            "line": str(line + 1),
+        }
+
+
+def _relocating_launch_session(arguments: dict) -> DebugSession:
+    # Original 16 (END-IF) -> instrumented 42, bound at 43 = original 17.
+    # Original 20 -> instrumented 50, bound at 51: splicer-inserted, no
+    # original line.
+    to_original = {42: 16, 43: 17, 50: 20, 52: 21}
+    return DebugSession(
+        gdb=_RelocatingGdb(),
+        line_map=LineMap(
+            _to_original=to_original,
+            _to_instrumented={o: i for i, o in to_original.items()},
+        ),
+        variable_table={},
+        generated_c_lines=[],
+        paragraph_index=ParagraphIndex(paragraph_starts=[], section_starts=[]),
+        instrumented_file="fixture.cbl",
+    )
+
+
+def test_set_breakpoints_reports_the_line_gdb_bound_not_the_one_requested():
+    """A breakpoint on END-IF (no code of its own) stops on the next
+    statement. Answering with the requested line left the editor's marker
+    on a line execution never stops at."""
+    messages, _session = _run_adapter_capturing_session(
+        [
+            _request(1, "launch", {}),
+            _request(
+                2,
+                "setBreakpoints",
+                {
+                    "source": {"path": "fixture.cbl"},
+                    "breakpoints": [{"line": 16}, {"line": 20}],
+                },
+            ),
+        ],
+        launch=_relocating_launch_session,
+    )
+
+    set_bp_response = next(m for m in messages if m.get("command") == "setBreakpoints")
+    assert set_bp_response["body"]["breakpoints"] == [
+        {"verified": True, "line": 17, "id": 1},
+        # Bound on splicer-inserted code: nothing truer than the request.
+        {"verified": True, "line": 20, "id": 2},
+    ]

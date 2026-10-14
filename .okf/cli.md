@@ -934,6 +934,13 @@ captured MI transcripts and end-to-end tested against a live container
   line N of a copybook became a live breakpoint on line N of the
   program. `stackTrace` frames fall back to `original_file` when no
   breakpoint has been set in the program.
+  A verified breakpoint reports the line gdb actually bound it to
+  (2026-10-14, `_bound_original_line`): gdb moves a breakpoint on a line
+  with no code of its own (`ELSE`, `END-IF`, a statement's second line)
+  to the next line that has some, and the program stops there. The
+  `bkpt` record's `line` is mapped back through `line_map`; the
+  requested line is kept only when the bound line is splicer-inserted
+  code with no original counterpart.
 
 Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
