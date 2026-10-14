@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-13T22:00:00Z
+timestamp: 2026-10-14T01:00:00Z
 ---
 
 # Overview
@@ -28,6 +28,7 @@ the shared vocabulary between the parser (produces it), the generator
 
 ```
 TESTSUITE "<name>"
+[ PROGRAM "<path to the program, relative to this .cut>" ]
 
 [ PROVIDER <name>
       HEADER <col>, ... [, <col>]*
@@ -47,6 +48,12 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   `CutParseError` with its line number (it used to silently discard every
   previously parsed test case, so concatenated .cut files ran only the
   last suite).
+- `PROGRAM "<path>"` (2026-10-14) is optional, at most once, and only
+  directly after `TESTSUITE` (before any TESTCASE, hook or PROVIDER); it
+  sets `MockTestSuite.program_path`/`program_line`. The parser only stores
+  it -- pairing is `cli/discovery.py`'s job, which reads the line from raw
+  text (`read_program_line`) so a suite with a later syntax error still
+  pairs. See [cli](cli.md).
 - `TESTCASE` must follow a `TESTSUITE`; `MOCK`/`MOVE`/`PERFORM`/`EXPECT`/`VERIFY`
   must all be inside a `TESTCASE`. Violating order raises `CutParseError` at
   the offending line.

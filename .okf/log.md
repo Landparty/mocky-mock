@@ -5,6 +5,19 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-14 -- several suites per program, suites under tests/
+
+A suite can now name its program with a `PROGRAM "<path>"` line after
+`TESTSUITE`, and pairing without one is a four-step lookup in
+`cli/discovery.py` (PROGRAM line, sibling, `tests/` mirror of the source
+root, unique name under the source root). `PROG.<topic>.cut` belongs to
+PROG, so a program can have several suites. `generate`/`init` default to
+`tests/<folder>/PROG.cut`; `--name` writes `PROG.<name>.cut`. New
+`source_root` config key, new `mockymock suites [--json]` command, and
+`run`/`lint PROG.cbl` with several suites run each one. Updated
+[cli](cli.md) and [dsl](dsl.md); design in
+docs/2026-10-14-multi-suite-layout-design.md.
+
 ## 2026-10-14 -- allow cobol-parser 2.x
 
 The dependency cap moves from `<2` to `<3` and `uv.lock` to cobol-parser
@@ -4459,4 +4472,3 @@ docs-only -- no production code changed.
   `ACCTMNT`-based example: a separate cobol-parser bug (task_c5e3b268) drops
   some of `ACCTMNT.cbl`'s own EXEC SQL UPDATE/INSERT statements from the
   AST, causing a different, harder compile failure upstream of this fix.
-

@@ -61,6 +61,7 @@ def test_resolve_cut_path_explicit_value_is_returned_verbatim(tmp_path):
 
 def test_resolve_cut_path_finds_sibling(tmp_path):
     program_path = tmp_path / "ORDRPROC.cbl"
+    program_path.write_text("")
     cut_path = tmp_path / "ORDRPROC.cut"
     cut_path.write_text("")
     assert resolve_cut_path(None, program_path) == cut_path

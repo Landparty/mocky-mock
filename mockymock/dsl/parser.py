@@ -97,6 +97,10 @@ _ROWS_SUPPORTED = (
 )
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
+# `PROGRAM "<path>"`: names the program under test, so a suite can live
+# anywhere and be called anything (cli/discovery.py reads it). Only legal
+# between TESTSUITE and the first TESTCASE/hook/PROVIDER.
+PROGRAM_RE = re.compile(r'^PROGRAM\s+"(?P<path>[^"]*)"$')
 _TESTCASE_RE = re.compile(
     r'^TESTCASE\s+"(?P<name>[^"]*)"(?:\s+TAGS\s+(?P<tags>"[^"]*"(?:\s+"[^"]*")*))?'
     r"(?:\s+USING\s+PROVIDER\s+(?P<provider>[A-Za-z0-9][A-Za-z0-9-]*))?$"
@@ -937,6 +941,30 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"silently run only the last suite"
                 )
             suite = MockTestSuite(name=m.group("name"), line=line_no)
+        elif (m := PROGRAM_RE.match(line)) is not None:
+            if suite is None:
+                raise CutParseError(f"line {line_no}: PROGRAM before TESTSUITE")
+            if suite.program_path is not None:
+                raise CutParseError(
+                    f"line {line_no}: second PROGRAM line (first at line "
+                    f"{suite.program_line}); a suite tests exactly one program"
+                )
+            if (
+                case is not None
+                or in_before is not None
+                or hook_steps
+                or providers
+                or before_all
+                or before_each
+            ):
+                raise CutParseError(
+                    f"line {line_no}: PROGRAM must come right after the "
+                    f"TESTSUITE line, before any TESTCASE, hook or PROVIDER"
+                )
+            if not m.group("path").strip():
+                raise CutParseError(f"line {line_no}: PROGRAM path is empty")
+            suite.program_path = m.group("path")
+            suite.program_line = line_no
         elif (m := _PROVIDER_RE.match(line)) is not None:
             if suite is None:
                 raise CutParseError(f"line {line_no}: PROVIDER before TESTSUITE")

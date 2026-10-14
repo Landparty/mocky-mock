@@ -341,6 +341,13 @@ class MockTestSuite:
     line: int = 0
     """1-based .cut line of the TESTSUITE header (0 when built outside the
     parser)."""
+    program_path: str | None = None
+    """The optional `PROGRAM "<path>"` line: the program under test, as
+    written (relative paths resolve against the .cut file's folder; see
+    cli/discovery.py). None when the suite names no program and pairing
+    falls back to file-name conventions."""
+    program_line: int = 0
+    """1-based .cut line of the PROGRAM line (0 when absent)."""
     before_all_steps: list[HookStep] = field(default_factory=list)
     """Run once, before the first test case; every test case then starts
     from the WORKING-STORAGE state they leave behind (splicer.snapshot)."""
