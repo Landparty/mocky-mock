@@ -73,6 +73,7 @@
 ### Features
 
 * flag cases that assert nothing; default generate to one case per scenario ([79f3734](https://github.com/Landparty/mocky-mock/commit/79f373484a19c56944edacb1da8e7c33d3d8b6e9))
+* several suites per program, and suites under tests/ ([1f91d56](https://github.com/Landparty/mocky-mock/commit/1f91d56d905d765a610765a2cb8894ac0c2dfb28))
 
 
 ### Bug Fixes
