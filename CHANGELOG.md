@@ -67,6 +67,14 @@
 - `mockymock generate --with-data --placeholder CATEGORY:KEY` (#47): downgrading a loop-driving boundary (a multi-row `READ`, a multi-row `SQL ... ROWS` cursor fetch) no longer leaves a DIFFERENT boundary's `VERIFY ... WAS CALLED n TIMES` pinned to the bundle's original, now-stale count when that other boundary is only reached from inside the same loop (e.g. a `CALL` made once per row) -- its VERIFY is demoted to a `*>` comment too, on the same "declared in the same paragraph as the downgraded boundary" heuristic.
 - **`find_goto_exit_plans`: adjacency check broke on a phantom `"."` paragraph between enclosing and target.** cobolparser inserts an empty-artifact paragraph literally named `"."` for a bare `.` line sitting on its own between a paragraph's last statement and the next paragraph's header; `immediately_follows` required `target_idx == enclosing_idx + 1` exactly, so a phantom sitting between an otherwise-adjacent `GO TO`'s enclosing paragraph and its exit-only target broke the adjacency check and cascaded into declining that target and every paragraph transitively chained after it. `immediately_follows` now accepts any run of only phantom `"."` paragraphs strictly between the two, the same tolerance `_expand_thru_range` already applies elsewhere. Pinned by `tests/unit/test_goto_exit.py::test_find_goto_exit_plans_tolerates_a_phantom_paragraph_before_the_target`.
 
+## [0.10.1](https://github.com/Landparty/mocky-mock/compare/v0.10.0...v0.10.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **cli:** give each of a program's several suites its own report file ([fc1344e](https://github.com/Landparty/mocky-mock/commit/fc1344e55aa738495dcc2f4b92e412e2e3e52e12))
+* **cli:** give each of a program's several suites its own report file ([5c2b067](https://github.com/Landparty/mocky-mock/commit/5c2b067774998a8629542d322ff4e48f46d84b92))
+
 ## [0.10.0](https://github.com/Landparty/mocky-mock/compare/v0.9.0...v0.10.0) (2026-10-14)
 
 
