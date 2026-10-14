@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-14 -- several suites of one program no longer share a report file
+
+`run PROG.cbl --json-report r.json` (and every other output-file flag)
+with several suites named each suite's report by its file name alone
+whenever the suites lay outside the test root -- always the case for
+`find_suites`' absolute paths -- so `src/pay/PROG.cut` and
+`tests/pay/PROG.cut` both wrote `r-PROG.json` and the second replaced the
+first. Reports are now named relative to `_report_tag_root()`. Updated
+[cli](cli.md).
+
 ## 2026-10-14 -- several suites per program, suites under tests/
 
 A suite can now name its program with a `PROGRAM "<path>"` line after

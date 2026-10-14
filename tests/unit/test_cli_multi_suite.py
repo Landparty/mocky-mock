@@ -288,3 +288,72 @@ def test_dotted_sibling_program_still_pairs_by_its_whole_stem(tmp_path):
     program = _write(tmp_path / "src" / "A.B.cbl")
     cut = _write(tmp_path / "src" / "A.B.cut")
     assert resolve_program(cut, layout) == (program, "sibling")
+
+
+def test_run_program_with_several_suites_gives_each_its_own_report_file(
+    tmp_path, monkeypatch
+):
+    # A sibling src/pay/PAY.cut and a mirrored tests/pay/PAY.cut are both
+    # suites of PAY; named by file name alone, both reports were written to
+    # report-PAY.json and the second replaced the first.
+    import mockymock.cli.main as cli_main
+
+    _write(tmp_path / "src" / "pay" / "PAY.cbl")
+    _write(tmp_path / "src" / "pay" / "PAY.cut", 'TESTSUITE "a"\n')
+    _write(tmp_path / "tests" / "pay" / "PAY.cut", 'TESTSUITE "b"\n')
+    _write(tmp_path / "tests" / "pay" / "PAY.errors.cut", 'TESTSUITE "c"\n')
+    monkeypatch.chdir(tmp_path)
+    real_cmd_run = cli_main._cmd_run
+    reports: dict[str, tuple[str, str]] = {}
+
+    def fake_cmd_run(args):
+        if args.cut is None:
+            return real_cmd_run(args)
+        reports[args.cut] = (args.json_report, args.junit_xml)
+        return 0
+
+    monkeypatch.setattr(cli_main, "_cmd_run", fake_cmd_run)
+    assert (
+        main(
+            [
+                "run",
+                "src/pay/PAY.cbl",
+                "--json-report",
+                "out/r.json",
+                "--junit-xml",
+                "out/j.xml",
+            ]
+        )
+        == 0
+    )
+    assert len(reports) == 3
+    json_reports = [json_path for json_path, _ in reports.values()]
+    junit_reports = [junit_path for _, junit_path in reports.values()]
+    assert len(set(json_reports)) == 3
+    assert len(set(junit_reports)) == 3
+    assert reports[str((tmp_path / "src" / "pay" / "PAY.cut").resolve())][0] == str(
+        Path("out/r-src-pay-PAY.json")
+    )
+
+
+def test_several_suites_in_one_folder_keep_their_short_report_names(
+    tmp_path, monkeypatch
+):
+    import mockymock.cli.main as cli_main
+
+    _write(tmp_path / "src" / "pay" / "PAY.cbl")
+    _write(tmp_path / "tests" / "pay" / "PAY.cut", 'TESTSUITE "b"\n')
+    _write(tmp_path / "tests" / "pay" / "PAY.errors.cut", 'TESTSUITE "c"\n')
+    monkeypatch.chdir(tmp_path)
+    real_cmd_run = cli_main._cmd_run
+    reports: list[str] = []
+
+    def fake_cmd_run(args):
+        if args.cut is None:
+            return real_cmd_run(args)
+        reports.append(args.json_report)
+        return 0
+
+    monkeypatch.setattr(cli_main, "_cmd_run", fake_cmd_run)
+    assert main(["run", "src/pay/PAY.cbl", "--json-report", "r.json"]) == 0
+    assert sorted(reports) == ["r-PAY.errors.json", "r-PAY.json"]
