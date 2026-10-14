@@ -71,7 +71,7 @@ def _scaffold(tmp_path, name: str, cbl: str) -> str:
     source = tmp_path / f"{name}.cbl"
     source.write_text(cbl)
     out = tmp_path / f"{name}.cut"
-    assert main(["generate", str(source), "-o", str(out)]) == 0
+    assert main(["generate", str(source), "--per-paragraph", "-o", str(out)]) == 0
     return out.read_text()
 
 

@@ -46,7 +46,11 @@ dependencies = [
     # and a project that never writes a cobol.yml should not be forced to
     # upgrade. `_universal_values` soft-imports and, only when a cobol.yml
     # actually exists, fails with a message naming the version to install.
-    "cobol-parser>=1.7.7,<2",
+    # 1.8.2 is excluded: its published wheel raises "Expected type, got
+    # ABCMeta" from BoundaryInventoryAnalyzer._classify on every program,
+    # which breaks `generate` (whose default is now the data-driven path)
+    # and `init`. 1.8.0 and 1.8.4 are fine.
+    "cobol-parser>=1.7.7,!=1.8.2,<2",
 ]
 
 [project.optional-dependencies]

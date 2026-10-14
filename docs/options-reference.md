@@ -139,7 +139,8 @@ analyzing which boundaries (`CALL`, file I/O, `EXEC SQL`/`CICS`/`DLI`,
 | `program` (positional) | required | The `.cbl` source file to scaffold from. |
 | `-o`, `--output PATH` | `<program>.cut` | Where to write the generated `.cut` file. |
 | `--copybook-path DIR` (repeatable) | none | A directory to search for `COPY`-referenced copybooks. Pass one per directory. |
-| `--with-data` | off | Data-driven mode: generate one `TESTCASE` per scenario, complete with real generated mock data and `EXPECT`/`VERIFY` assertions, using cobol-parser's fixture generator. Without this flag, `generate` scaffolds one `TESTCASE` per paragraph with placeholder mock bodies you fill in by hand. |
+| `--with-data` | on (default mode) | Data-driven mode: one `TESTCASE` per scenario, with real generated mock data, using cobol-parser's fixture generator. This is the default; passing it explicitly makes a generator failure fatal instead of falling back to `--per-paragraph`. |
+| `--per-paragraph` | off | One `TESTCASE` per paragraph that touches a boundary, with placeholder mock bodies you fill in by hand. Useful for isolating a leaf paragraph. Not valid with `--with-data` or `--fixtures`. |
 | `--fixtures PATH` | none | Use an already-generated fixture bundle JSON file (e.g. from `mockymock fixtures > bundle.json`) instead of generating one on the fly. Implies `--with-data`. Mutually exclusive with `--rows` (that bundle's row count is already fixed). |
 | `--seed N` | random | Integer seed for reproducible generated data. Same program + same seed + same `--scenarios` = byte-identical output. Only meaningful with `--with-data` (ignored, and unnecessary, with `--fixtures`, since the bundle's data is already generated). |
 | `--scenarios {happy,branches,all}` | `happy` | Which scenario set to generate. `happy` produces exactly one "everything succeeds" scenario. `branches` adds one scenario per reachable, satisfiable IF/EVALUATE/SEARCH branch arm. `all` additionally adds fixed families (empty input, error status, boundary values). Only meaningful with `--with-data`. |
@@ -149,8 +150,11 @@ analyzing which boundaries (`CALL`, file I/O, `EXEC SQL`/`CICS`/`DLI`,
 Examples:
 
 ```bash
-# Plain scaffold: one TESTCASE per paragraph, placeholder bodies to fill in
+# Default: one TESTCASE per scenario, generated data
 mockymock generate ORDRPROC.cbl
+
+# One TESTCASE per paragraph, placeholder bodies to fill in
+mockymock generate ORDRPROC.cbl --per-paragraph
 
 # Custom output path, with copybooks resolved from two directories
 mockymock generate ORDRPROC.cbl -o tests/ORDRPROC.cut \
@@ -871,7 +875,7 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | Subcommand | Needs Docker? | Key options |
 |---|---|---|
 | `setup` | yes | *(none)* |
-| `generate` | no | `-o`, `--copybook-path`, `--with-data`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder` |
+| `generate` | no | `-o`, `--copybook-path`, `--with-data`, `--per-paragraph`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder` |
 | `fixtures` | no | `--scenarios`, `--seed`, `--rows`, `--copybook-path` |
 | `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json]`, `--coverage-fail-under`, `--trace[-json]`, `--record-expectations` |
 | `debug` | yes | `--cut`, `--case`, `--copybook-path`, `--dap-stdio` |
