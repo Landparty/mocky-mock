@@ -98,19 +98,19 @@ wheels = [
 
 [[package]]
 name = "cobol-parser"
-version = "1.10.0"
+version = "2.0.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f0/9c/414c9f161261b51044d424740aa158f079107aec199b8036ec22f96b4018/cobol_parser-1.10.0.tar.gz", hash = "sha256:2dfa0c367bb5b58adea6f08982fb0e0db2334bbaf2740e87162d3b5ce05e1558", size = 1282825, upload-time = "2026-10-08T00:41:29.038Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/87/807a21512fe7610742746e24a1f772fd57a2290092d0d1732625759f73ee/cobol_parser-2.0.1.tar.gz", hash = "sha256:3c092918b650bcb7671f4c73c531276360ab0c6c85ffab305a7f9b791a4a7710", size = 1323442, upload-time = "2026-10-13T19:57:56.556Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/67/f4e2b2c1655cd8a97de88e3843b1a02b2e223a90be702825ac9db5c3b1b7/cobol_parser-1.10.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:ae5b3f870e6d3eda6ab1db0c87a3b7014638c92ea4857c3c292d10021cdc109a", size = 1214614, upload-time = "2026-10-08T00:41:15.175Z" },
-    { url = "https://files.pythonhosted.org/packages/94/4f/83d4eef93f8082e5cceec20585a1bfdfc83dd1ec73d7106ae2c229bb4df0/cobol_parser-1.10.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:cd025e6da59c07393d5ff273914e021f958947979a1a8176d590f5b434640270", size = 2041623, upload-time = "2026-10-08T00:41:16.69Z" },
-    { url = "https://files.pythonhosted.org/packages/a6/25/357fd816921b9365fd5e34e4ef5acc2a691bb0da2230dfb11179b94d7fb2/cobol_parser-1.10.0-cp311-cp311-win_amd64.whl", hash = "sha256:2e4f76f93c9b88bbadef7f5c75be85b37809ebe659036ff874595e9810ac32e1", size = 1189541, upload-time = "2026-10-08T00:41:18.264Z" },
-    { url = "https://files.pythonhosted.org/packages/09/b4/5bb7d0d4792f6d1ffed49959ecc276ba966e5194963af6c95ff9b2c9ebc9/cobol_parser-1.10.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:8de0c7817eae0fe7f2ec2771db2845e9df6185004119401af5980d04af621812", size = 1210304, upload-time = "2026-10-08T00:41:19.801Z" },
-    { url = "https://files.pythonhosted.org/packages/9a/0b/aab519dbf5309e2d6f13280f8a259132416711902819a1f9ba519fadabd1/cobol_parser-1.10.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a3e56228f02d9f3a409c82cf5640bd893a0378e45f2f5581942d9a5d4f72fe2c", size = 2044250, upload-time = "2026-10-08T00:41:21.291Z" },
-    { url = "https://files.pythonhosted.org/packages/60/f3/bf2cb5a1b8959a6872175b22e8362c25ee06c0fe54e49e7e5d4f3ed1d8dd/cobol_parser-1.10.0-cp312-cp312-win_amd64.whl", hash = "sha256:4a573840c99984ac52e6ccb09dc0a5314a2823f8328d5d54127206bc0558ba3f", size = 1184913, upload-time = "2026-10-08T00:41:22.705Z" },
-    { url = "https://files.pythonhosted.org/packages/39/19/2f89b642987758cb94fe2c7893f8129ec647514eb7b4a6601c3e62526fed/cobol_parser-1.10.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:bacfea0824453119b85156f32a121178b80d0637bb34ccae1c2c32902290898f", size = 1211993, upload-time = "2026-10-08T00:41:24.355Z" },
-    { url = "https://files.pythonhosted.org/packages/ba/0e/772cf3e5fb1d20e11eab9952ea2af1df45bc57e507bda87ad53b6c8c4cd8/cobol_parser-1.10.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:014f7fc8059343e2092075e25e215fe9422c7103019c1eeadb29e56c52a665f8", size = 2028425, upload-time = "2026-10-08T00:41:25.883Z" },
-    { url = "https://files.pythonhosted.org/packages/5b/12/de8d0efd73bdb2ac95e4d809abbf222e79905d684ae83a8e7a6e3d27ef35/cobol_parser-1.10.0-cp313-cp313-win_amd64.whl", hash = "sha256:6b33b8ab67a2193c996f8e66292ed6ca5ff25a67044786d74c380adc8ed76d79", size = 1183203, upload-time = "2026-10-08T00:41:27.475Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/07/b27f6d944984f85cd14e3b3398a3ac4bfbaa26f9c663cadca367c146e8d7/cobol_parser-2.0.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:dda6d7d21af4f4885602877f667dcb497d5dcd841b802d7b81fbf5e0352f248e", size = 1257350, upload-time = "2026-10-13T19:57:39.819Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/67/ebbe4dbaee08344e097c854cf5ffbe5ca599e51b7451b81724bab5be00b1/cobol_parser-2.0.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d3f99d626f51c43cbc077023edbfc47919121a11d4a97badc81dc0d8a19008f6", size = 2084369, upload-time = "2026-10-13T19:57:41.63Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/a3/a2c737ce2868e66a9bc8559a4272b188603defcc2028e8bbab9b2f002a06/cobol_parser-2.0.1-cp311-cp311-win_amd64.whl", hash = "sha256:5684380cbfa0a15e98c306d85f3753c2558cb16a6e11775ceba08f728ecccce7", size = 1232490, upload-time = "2026-10-13T19:57:43.573Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/ce/ea69b6c42d55d9eb99d9558fd5edae5019b1078305f187eba212448802b3/cobol_parser-2.0.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:9a3242e0edbb0d7646b6d5c971afda6ea3ee969114fa8eb65a715d5522b60ee5", size = 1253049, upload-time = "2026-10-13T19:57:45.659Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/d9/6526884087239d93c9dc161f38c0e83338533e26c8ff0a7d25b14fabf411/cobol_parser-2.0.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d612a778c4160c41659896eca96bb65d373fe1c2d72e06ff44f4167db134ef52", size = 2087001, upload-time = "2026-10-13T19:57:47.609Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/13/f9806450c1284cf608d55a99c4786ca86af61574f2d0aff6fb63b4dabb08/cobol_parser-2.0.1-cp312-cp312-win_amd64.whl", hash = "sha256:12c0cef6a87d23bc345ff06b443d8c1e4479de2f2745f366c3f687e39321b163", size = 1227860, upload-time = "2026-10-13T19:57:49.613Z" },
+    { url = "https://files.pythonhosted.org/packages/72/f3/5636293d5e8585fdc7af39415ca78f799c07fc6e1deb4e45736e6b049f14/cobol_parser-2.0.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:af367953a2ac90a84f310ad4836b4d44caf193ac73cb97eb970fff38322684ac", size = 1254721, upload-time = "2026-10-13T19:57:51.329Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/f9/ccd150b2a8fe1a0d0c6e904248770112c47e681b32610f1a1c853f03d2be/cobol_parser-2.0.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2443589c5f77a25f6c23d97af558f2e8efdcd3cfb7027cb3d5914525d34c9bf6", size = 2071171, upload-time = "2026-10-13T19:57:53.067Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/a3/f21fc4d33216a36f2c5633fc28e2761ed951595b9481f6c5c1c57585f0bb/cobol_parser-2.0.1-cp313-cp313-win_amd64.whl", hash = "sha256:7ce0aef8c6690f0d7798a76471629be9d9d89095f14e27cdaaca9efeae847cb7", size = 1226147, upload-time = "2026-10-13T19:57:54.964Z" },
 ]
 
 [[package]]
@@ -315,7 +315,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "cobol-parser", specifier = ">=1.7.7,!=1.8.2,<2" },
+    { name = "cobol-parser", specifier = ">=1.7.7,!=1.8.2,<3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },

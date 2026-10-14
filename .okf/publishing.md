@@ -82,7 +82,7 @@ in the same commit.
   by a different build is not silently reused. Caveat: `mockymock`'s own
   version string does not change when `build-and-release.yml`'s
   "Force-install cobol-parser's latest release" step overrides whatever
-  `cobol-parser` the `>=1.7.7,<2` floor resolved — two builds a day apart can share the same
+  `cobol-parser` the `>=1.7.7,!=1.8.2,<3` floor resolved — two builds a day apart can share the same
   `{VERSION}` path. That's still safe (the hash check catches it), just
   worth knowing if you're ever debugging why a "same version" binary
   behaves differently than expected on a machine with a stale cache dir —

@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-14 -- allow cobol-parser 2.x
+
+The dependency cap moves from `<2` to `<3` and `uv.lock` to cobol-parser
+2.0.1. The unit suite passes unchanged on 2.0.1, and `generate`/`lint` on
+the 17 `examples/real-world/` programs give the same exit codes and lint
+output as on 1.10.0; the only scaffold difference is richer SQL keys in
+STUB EXPECT comments (`UPDATE BANK.ACCOUNT SET INTEREST_RATE` rather than
+`UPDATE BANK.ACCOUNT SET`).
+
 ## 2026-10-14 -- assertion-free cases: lint warning, risky result, scenario default
 
 A scaffolded case with no EXPECT/VERIFY used to pass silently. `lint` now
