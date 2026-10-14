@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-14T01:00:00Z
+timestamp: 2026-10-14T06:00:00Z
 ---
 
 # Overview
@@ -148,7 +148,12 @@ folder, else cwd), `tests_dir` (`test_root` if a file set it, else
 program's own folder when it lies outside it); `resolve_cut_path` errors
 naming the suites when there are several, except that `run`/`lint
 PROG.cbl` hand several suites to `_run_directory`/`_lint_directory`
-(`_several_suites`). `generate`/`init` write to
+(`_several_suites`); their per-suite report files are named relative to
+`_report_tag_root()` -- the test root when every suite lies under it,
+else the deepest folder holding them all -- so a sibling `src/pay/PROG.cut`
+and a mirrored `tests/pay/PROG.cut` get `report-src-pay-PROG.json` and
+`report-tests-pay-PROG.json` instead of one shared `report-PROG.json`
+the second suite overwrote. `generate`/`init` write to
 `discovery.default_suite_path()` -- `<tests>/<folder>/PROG[.<name>].cut`,
 or beside the program when it already has a `PROG.cut` there or lies
 outside the source root -- and `--name` picks the topic.
