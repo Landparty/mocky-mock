@@ -91,7 +91,7 @@ jobs:
 
   # Publish to PyPI via Trusted Publishing (OIDC) -- no stored API
   # token/secret. Requires a one-time manual step on pypi.org registering
-  # this repo/workflow as a trusted publisher for the "mocky-mock" project
+  # this repo/workflow as a trusted publisher for the "mockymock" project
   # (must match [project].name in pyproject.toml exactly).
   publish-pypi:
     needs: [release-please, build]
@@ -99,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/mocky-mock/
+      url: https://pypi.org/project/mockymock/
     permissions:
       id-token: write
     steps:
