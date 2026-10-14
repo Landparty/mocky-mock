@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import sys
@@ -1310,9 +1311,34 @@ def _per_pair_report_path(base: str, cut_path: Path, test_root: Path) -> str:
     try:
         relative = cut_path.relative_to(test_root)
     except ValueError:
-        relative = Path(cut_path.name)
+        try:
+            relative = cut_path.resolve().relative_to(test_root.resolve())
+        except ValueError:
+            relative = Path(cut_path.name)
     tag = "-".join(relative.with_suffix("").parts)
     return str(base_path.with_name(f"{base_path.stem}-{tag}{base_path.suffix}"))
+
+
+def _report_tag_root(cut_files: list[Path], test_root: Path) -> Path:
+    """What `_per_pair_report_path` names each suite's report relative to:
+    the test root when every suite lies under it (directory mode), else
+    the deepest folder holding all of them. `run PROG.cbl` with several
+    suites gets them from `find_suites` -- a sibling `src/pay/PROG.cut`
+    beside `tests/pay/PROG.cut`, or suites in different folders that name
+    PROG with a PROGRAM line -- which need not lie under the test root;
+    naming those by file name alone gave two of them one report file, and
+    the second suite's report silently replaced the first's."""
+
+    def under(path: Path) -> bool:
+        try:
+            path.relative_to(test_root)
+            return True
+        except ValueError:
+            return False
+
+    if all(under(path) for path in cut_files):
+        return test_root
+    return Path(os.path.commonpath([str(p.resolve().parent) for p in cut_files]))
 
 
 # Every `run` flag naming an output file: each gets a per-pair name in
@@ -1373,6 +1399,7 @@ def _run_directory(
     exit_code = 0
     ran = 0
     unresolved: list[str] = []
+    tag_root = _report_tag_root(cut_files, test_root)
     for cut_path in cut_files:
         try:
             program_path = resolve_program_path(None, cut_path, layout)
@@ -1388,7 +1415,7 @@ def _run_directory(
                 setattr(
                     sub_args,
                     flag,
-                    _per_pair_report_path(getattr(args, flag), cut_path, test_root),
+                    _per_pair_report_path(getattr(args, flag), cut_path, tag_root),
                 )
         print(f"== {cut_path} ==")
         exit_code = _cmd_run(sub_args) or exit_code

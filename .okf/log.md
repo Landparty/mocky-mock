@@ -13,6 +13,15 @@ PERFORMs (a CICS HANDLE CONDITION target, dead code), so `init` on the
 legacy corpus's ACCTINQ wrote `VERIFY CICS "RETURN ..." WAS CALLED 2
 TIMES` and failed its own first run with "got 1". Such a key's count is
 now demoted to a comment. Updated [dsl](dsl.md).
+## 2026-10-14 -- several suites of one program no longer share a report file
+
+`run PROG.cbl --json-report r.json` (and every other output-file flag)
+with several suites named each suite's report by its file name alone
+whenever the suites lay outside the test root -- always the case for
+`find_suites`' absolute paths -- so `src/pay/PROG.cut` and
+`tests/pay/PROG.cut` both wrote `r-PROG.json` and the second replaced the
+first. Reports are now named relative to `_report_tag_root()`. Updated
+[cli](cli.md).
 
 ## 2026-10-14 -- several suites per program, suites under tests/
 

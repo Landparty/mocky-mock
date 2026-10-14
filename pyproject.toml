@@ -3,7 +3,7 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mocky-mock"
+name = "mockymock"
 version = "0.10.0"
 description = "Mock COBOL CALL statements, compile with GnuCOBOL, run, and assert"
 authors = [

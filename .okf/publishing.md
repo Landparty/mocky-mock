@@ -13,7 +13,7 @@ the GNU AGPL v3 text and `pyproject.toml` declares
 `license = "AGPL-3.0-or-later"` (PEP 639 SPDX form, `license-files =
 ["LICENSE"]`). It was relicensed from a proprietary EULA on 2026-10-04 to
 match `cobol-parser`, which it depends on. As of 2026-08-18 its package is
-published to PyPI as `mocky-mock` — reversing the 2026-08-14
+published to PyPI as `mockymock` — reversing the 2026-08-14
 "no longer independently distributed" decision this concept used to
 describe. `cobol-parser` was published to PyPI first, originally as
 closed-source Cython wheels (that repo's

@@ -94,7 +94,7 @@ jobs:
 
   # Gates the seam between this repo and cobol-parser (2026-08-26 audit
   # finding): pyproject.toml pins only a floor (`cobol-parser>=X,<2`), so
-  # `pip install mocky-mock` always resolves whatever cobol-parser has most
+  # `pip install mockymock` always resolves whatever cobol-parser has most
   # recently published to PyPI within that range -- there was previously
   # nothing here that noticed when a new release changed parser behavior
   # this project's tests depend on (the exact way the pinned floor had to
@@ -102,7 +102,7 @@ jobs:
   # terminator-paragraph bug test_refusal.py's UNSUPPORTED_PHANTOM_PARAGRAPH
   # tests were built to reproduce). This job installs the real published
   # package -- no sibling checkout, no local build -- exactly as a fresh
-  # `pip install mocky-mock` would, and runs the fast, Docker-free unit
+  # `pip install mockymock` would, and runs the fast, Docker-free unit
   # tier against it, so drift shows up as a red scheduled run instead of on
   # a user's first install.
   cobol-parser-compat:
