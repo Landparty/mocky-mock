@@ -5,6 +5,14 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-14 -- generated VERIFY counts no longer include unreachable sites
+
+`generate --with-data` summed the bundle's per-site call counts over every
+site of a key, including sites in paragraphs the case's entry never
+PERFORMs (a CICS HANDLE CONDITION target, dead code), so `init` on the
+legacy corpus's ACCTINQ wrote `VERIFY CICS "RETURN ..." WAS CALLED 2
+TIMES` and failed its own first run with "got 1". Such a key's count is
+now demoted to a comment. Updated [dsl](dsl.md).
 ## 2026-10-14 -- several suites of one program no longer share a report file
 
 `run PROG.cbl --json-report r.json` (and every other output-file flag)
