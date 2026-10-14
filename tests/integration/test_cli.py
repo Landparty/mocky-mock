@@ -133,7 +133,7 @@ def test_generate_refuses_program_with_dropped_statements(tmp_path: Path, capsys
     program.write_text(INVOKER_CBL)
     output = tmp_path / "INVOKER.cut"
 
-    exit_code = main(["generate", str(program), "-o", str(output)])
+    exit_code = main(["generate", str(program), "--per-paragraph", "-o", str(output)])
 
     assert exit_code == 1
     assert "PARSE_WARNING" in capsys.readouterr().out
@@ -158,7 +158,7 @@ def test_generate_writes_a_parseable_cut_file(tmp_path: Path):
     program.write_text(ORDRPROC_CBL)
     output = tmp_path / "ORDRPROC.cut"
 
-    exit_code = main(["generate", str(program), "-o", str(output)])
+    exit_code = main(["generate", str(program), "--per-paragraph", "-o", str(output)])
 
     assert exit_code == 0
     assert output.exists()
@@ -486,7 +486,7 @@ def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys
     program.write_text(BOUNDARY_MIX_CBL)
     output = tmp_path / "BOUNDMIX.cut"
 
-    exit_code = main(["generate", str(program), "-o", str(output)])
+    exit_code = main(["generate", str(program), "--per-paragraph", "-o", str(output)])
 
     assert exit_code == 0
     out = capsys.readouterr().out
@@ -512,7 +512,7 @@ def test_generate_stays_quiet_when_everything_is_mockable(tmp_path: Path, capsys
     program.write_text(ORDRPROC_CBL)
     output = tmp_path / "ORDRPROC.cut"
 
-    exit_code = main(["generate", str(program), "-o", str(output)])
+    exit_code = main(["generate", str(program), "--per-paragraph", "-o", str(output)])
 
     assert exit_code == 0
     assert "not mockable" not in capsys.readouterr().out

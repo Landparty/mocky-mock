@@ -273,6 +273,7 @@ def test_summary_counts():
         "casesFailed": 1,
         "casesCrashed": 0,
         "casesNotRun": 0,
+        "casesRisky": 0,
     }
 
 

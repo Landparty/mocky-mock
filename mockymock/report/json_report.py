@@ -169,6 +169,36 @@ def _case_index(case_id: str) -> int | None:
         return None
 
 
+def _is_risky(result: TestResult, model_case: MockTestCase | None) -> bool:
+    """Passed while asserting nothing (PHPUnit's "risky"): still a pass,
+    but the pass only proves the PERFORM ran. Unknown without the .cut
+    model, so never claimed then."""
+    return (
+        model_case is not None
+        and not result.crashed
+        and result.passed
+        and model_case.assertion_count == 0
+    )
+
+
+def risky_case_ids(
+    suite_result: TestSuiteResult, cut_suite: MockTestSuite | None
+) -> list[str]:
+    """Case ids of the cases that passed with no EXPECT/VERIFY, matched to
+    the .cut model by position the same way `build_json_report` does (ids,
+    not names: names need not be unique), for the console formatter."""
+    if cut_suite is None:
+        return []
+    by_index = dict(enumerate(cut_suite.test_cases, start=1))
+    names = []
+    for result in suite_result.results:
+        index = _case_index(result.case_id)
+        model_case = by_index.get(index) if index is not None else None
+        if _is_risky(result, model_case):
+            names.append(result.case_id)
+    return names
+
+
 def not_run_case_names(
     suite_result: TestSuiteResult, cut_suite: MockTestSuite | None
 ) -> list[str]:
@@ -221,6 +251,10 @@ def build_json_report(
             "tags": list(model_case.tags) if model_case else [],
             "status": _case_status(result),
             "failures": failures,
+            # Additive (report version unchanged): null when there is no
+            # .cut model to count from.
+            "assertions": model_case.assertion_count if model_case else None,
+            "risky": _is_risky(result, model_case),
         }
         if result.crashed:
             entry["crashDetail"] = crash_detail
@@ -239,6 +273,8 @@ def build_json_report(
                     "tags": list(cut_case.tags),
                     "status": "not_run",
                     "failures": [],
+                    "assertions": cut_case.assertion_count,
+                    "risky": False,
                     "crashDetail": crash_detail,
                 }
             )
@@ -282,6 +318,7 @@ def build_json_report(
             ),
             "casesCrashed": sum(1 for r in suite_result.results if r.crashed),
             "casesNotRun": not_run,
+            "casesRisky": sum(1 for case in cases if case["risky"]),
         },
     }
 

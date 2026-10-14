@@ -121,6 +121,35 @@ def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
     return capture_reset_lines(checked.captures)
 
 
+NO_ASSERTION = "NO_ASSERTION"
+
+
+def no_assertion_warnings(suite: MockTestSuite) -> list[str]:
+    """One pre-formatted, unprefixed warning line per TESTCASE with no
+    EXPECT and no VERIFY. Warnings, not problems: such a case is valid and
+    passes whenever its PERFORM runs, so lint flags it without failing
+    (like PHPUnit's "risky" status) and `run` marks its result the same
+    way. The `.cut line N` wording is what lets an editor place the
+    diagnostic on the TESTCASE header. PROVIDER rows expand to cases that
+    share one header line, so each line is reported once."""
+    warnings: list[str] = []
+    seen_lines: set[int] = set()
+    for case in suite.test_cases:
+        if case.assertion_count:
+            continue
+        if case.line:
+            if case.line in seen_lines:
+                continue
+            seen_lines.add(case.line)
+        where = f".cut line {case.line}: " if case.line else ""
+        warnings.append(
+            f'warning ({NO_ASSERTION}): {where}TESTCASE "{case.name}" asserts '
+            f"nothing -- it passes whenever its PERFORM runs. Add an EXPECT "
+            f"on what it writes or a VERIFY on what it calls"
+        )
+    return warnings
+
+
 def filter_suite_cases(
     suite: MockTestSuite,
     case_names: list[str] | None,

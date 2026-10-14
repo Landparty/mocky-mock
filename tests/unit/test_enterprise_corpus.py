@@ -111,6 +111,7 @@ def test_generate_outcome_per_program_type(name, tmp_path, capsys):
         [
             "generate",
             str(CORPUS / f"{name}.cbl"),
+            "--per-paragraph",
             "--copybook-path",
             str(COPYBOOKS),
             "-o",

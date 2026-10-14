@@ -6,7 +6,7 @@
     ".": {
       "package-name": "mockymock",
       "extra-files": [
-        { "type": "python", "path": "mockymock/__init__.py" },
+        { "type": "generic", "path": "mockymock/__init__.py" },
         { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
       ]
     }
