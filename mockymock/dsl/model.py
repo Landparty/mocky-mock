@@ -291,6 +291,13 @@ class MockTestCase:
     """Tags from `TESTCASE "..." TAGS "a" "b"`, in declaration order.
     Selection (`run --tag`) and reporting only -- no runtime semantics."""
 
+    @property
+    def assertion_count(self) -> int:
+        """EXPECT + VERIFY directives. Zero means the case passes whenever
+        its PERFORM runs without crashing -- lint warns (NO_ASSERTION) and
+        the run reports flag it as risky."""
+        return len(self.expectations) + len(self.verifications)
+
 
 @dataclass
 class HookStep:

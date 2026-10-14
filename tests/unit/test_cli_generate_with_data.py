@@ -411,7 +411,7 @@ def test_unmatched_placeholder_warning_omitted_when_matched(tmp_path, capsys):
 def test_placeholder_without_any_bundle_warns_every_pair_and_still_succeeds(
     tmp_path, capsys
 ):
-    """Neither --with-data nor --fixtures given -- there is no bundle at
+    """--per-paragraph (no --with-data/--fixtures) -- there is no bundle at
     all, so every requested pair is, by construction, unmatched (the
     `bundle.scenarios if bundle is not None else []` guard in
     _cmd_generate makes this the same code path as an unmatched pair
@@ -424,6 +424,7 @@ def test_placeholder_without_any_bundle_warns_every_pair_and_still_succeeds(
         [
             "generate",
             str(_FIXTUREDEMO_CBL),
+            "--per-paragraph",
             "--placeholder",
             "READ:ORDER-FILE",
             "-o",

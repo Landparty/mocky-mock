@@ -867,6 +867,14 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if not _check_rows_non_negative("generate", args.rows):
         return 1
 
+    if args.per_paragraph and (args.with_data or args.fixtures):
+        print(
+            "mockymock generate: --per-paragraph is not valid together with "
+            "--with-data or --fixtures -- those build one case per scenario",
+            file=sys.stderr,
+        )
+        return 1
+
     _apply_config_to_args(args, source_path)
 
     # Flag-only validation -- neither check needs the source file, so both
@@ -910,7 +918,13 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         except Exception as exc:  # malformed JSON, missing required keys, ...
             print(f"mockymock generate: invalid fixture bundle {fixtures_path}: {exc}")
             return 1
-    elif args.with_data:
+    elif not args.per_paragraph:
+        # One case per scenario is the default (--with-data only makes it
+        # explicit). When it was NOT asked for explicitly, a generator
+        # failure degrades to the per-paragraph scaffold with a note instead
+        # of failing the command: an editor's "new test suite" button
+        # should still produce a suite on a program the generator can't
+        # handle. An explicit --with-data keeps the hard failure.
         from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
 
         try:
@@ -934,7 +948,13 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 exc.__cause__, CopybookNotFoundError
             ):
                 print(copybook_not_found_hint())
-            return 1
+                return 1
+            if args.with_data:
+                return 1
+            print(
+                "mockymock generate: falling back to one test case per "
+                "paragraph (--per-paragraph)"
+            )
 
     if placeholder_pairs:
         # Fail-loud: a --placeholder pair that never matches a bundle
@@ -1030,6 +1050,17 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if cics_eib is not None:
         _print_cics_eib_synthesis("generate", cics_eib, applied=False)
 
+    if (
+        bundle is not None
+        and not bundle.scenarios
+        and not (args.with_data or args.fixtures)
+    ):
+        # Implicit scenario mode: degrade like a generator failure does.
+        print(
+            "mockymock generate: the fixture bundle has zero scenarios -- "
+            "falling back to one test case per paragraph (--per-paragraph)"
+        )
+        bundle = None
     if bundle is not None and not bundle.scenarios:
         # Possible with --scenarios branches|all on a program with no
         # branch arms and no fixed-family (empty-input/error-status/
@@ -1047,19 +1078,41 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    program_name = result.ast.program_name
+    # The same normalized lines + statement-start boundaries the splicer's
+    # own `statement_span` uses (so a generated MOCK READ's exhaustion
+    # branch can carry the program's own AT END imperative verbatim -- the
+    # exact text the splice is about to delete), plus the CAPTURE ARG lines
+    # each CALL boundary can safely be scaffolded with.
+    program_context = ProgramContext.build(result.ast, lines, surface)
     cut_text = scaffold_cut(
-        result.ast.program_name,
+        program_name,
         surface,
         bundle,
         frozenset(placeholder_pairs),
-        # The same normalized lines + statement-start boundaries the
-        # splicer's own `statement_span` uses (so a generated MOCK READ's
-        # exhaustion branch can carry the program's own AT END imperative
-        # verbatim -- the exact text the splice is about to delete), plus
-        # the CAPTURE ARG lines each CALL boundary can safely be
-        # scaffolded with.
-        ProgramContext.build(result.ast, lines, surface),
+        program_context,
     )
+
+    if bundle is not None and not (args.with_data or args.fixtures):
+        if "TESTCASE " not in cut_text:
+            # Implicit scenario mode produced nothing to run (e.g. the
+            # program's entry point has no boundary to mock): the
+            # per-paragraph scaffold is the more useful default here, and
+            # matches what plain `generate` wrote before scenarios became
+            # the default.
+            print(
+                "mockymock generate: no scenario could be scaffolded as a "
+                "test case -- falling back to one test case per paragraph "
+                "(--per-paragraph)"
+            )
+            bundle = None
+            cut_text = scaffold_cut(
+                program_name,
+                surface,
+                None,
+                frozenset(placeholder_pairs),
+                program_context,
+            )
 
     output_path = _default_output(args, source_path)
     # Unlike run's auxiliary report flags, this file IS the deliverable:
@@ -1375,6 +1428,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         build_json_report,
         format_json_report,
         not_run_case_names,
+        risky_case_ids,
     )
     from mockymock.report.record_rewrite import (
         address_fields,
@@ -1656,7 +1710,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
     else:
         crash_detail = None
     not_run = not_run_case_names(suite_result, suite)
-    print(format_console(suite_result, crash_detail=crash_detail, not_run=not_run))
+    # Under --record-expectations the run exists to fill in the missing
+    # assertions, so labelling its cases risky would only be noise.
+    risky = [] if stub_scan is not None else risky_case_ids(suite_result, suite)
+    print(
+        format_console(
+            suite_result, crash_detail=crash_detail, not_run=not_run, risky=risky
+        )
+    )
     if executed.stderr:
         print("mockymock run: binary stderr:")
         print(executed.stderr.rstrip("\n"))
@@ -2180,7 +2241,7 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     function must never import mockymock.runtime.docker_toolchain -- that
     structural guarantee (not just documentation) is what makes `lint`
     usable in editors, pre-commit hooks, and CI lanes with no daemon."""
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.cli.checks import no_assertion_warnings, run_static_checks
 
     if args.program is None and args.cut is None:
         return _lint_directory(args)
@@ -2200,6 +2261,21 @@ def _cmd_lint(args: argparse.Namespace) -> int:
             print(problem)
         else:
             print(f"mockymock lint: {problem}")
+    suite = result.suite
+    if suite is None:
+        # A refusal stopped the checks before they parsed the .cut file;
+        # the warning is .cut-only, so it doesn't need the program.
+        from mockymock.dsl.parser import parse_cut
+
+        try:
+            suite = parse_cut(read_utf8_source(cut_path))
+        except Exception:  # noqa: BLE001 -- already reported as a problem
+            suite = None
+    warnings = no_assertion_warnings(suite) if suite is not None else []
+    for warning in warnings:
+        print(f"mockymock lint: {warning}")
+    if warnings:
+        print(f"mockymock lint: {len(warnings)} warning(s).")
     if result.problems:
         problem_count = sum(1 for p in result.problems if not p.startswith("  "))
         print(f"mockymock lint: {problem_count} problem(s) found.")
@@ -3072,13 +3148,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--with-data",
         action="store_true",
         help=(
-            "Data-driven mode (Phase 8 of the gen-fixtures initiative): one "
-            "TESTCASE per scenario from a cobol-parser fixture bundle, mock "
-            "bodies built from its own generated data, instead of the "
-            "placeholder scaffold. Calls cobol-parser's Python API directly "
-            "unless --fixtures is also given. See "
+            "Data-driven mode, the default: one TESTCASE per scenario from "
+            "a cobol-parser fixture bundle, mock bodies built from its own "
+            "generated data. Passing it explicitly makes a generator "
+            "failure fatal instead of falling back to --per-paragraph. "
+            "Calls cobol-parser's Python API directly unless --fixtures is "
+            "also given. See "
             "docs/plans/2026-08-02-program-data-generation-implementation.md's "
             "Phase 8"
+        ),
+    )
+    generate_parser.add_argument(
+        "--per-paragraph",
+        action="store_true",
+        help=(
+            "One TESTCASE per paragraph that touches a boundary, with "
+            "placeholder mock bodies, instead of one per scenario. Useful "
+            "for isolating a leaf paragraph. Not valid with --with-data or "
+            "--fixtures"
         ),
     )
     generate_parser.add_argument(

@@ -36,21 +36,28 @@ def format_console(
     suite: TestSuiteResult,
     crash_detail: str | None = None,
     not_run: Sequence[str] = (),
+    risky: Sequence[str] = (),
 ) -> str:
     """`not_run`: the selected cases that never printed a START marker
     (`json_report.not_run_case_names`) -- a GO TO or STOP RUN that ended
-    the binary early used to make them vanish from this listing."""
+    the binary early used to make them vanish from this listing.
+    `risky`: case ids of the passing cases with no EXPECT/VERIFY
+    (`json_report.risky_case_ids`); still passes, labelled as such."""
     lines = [f"TESTSUITE: {suite.suite_name}"]
     crashed_count = 0
+    risky_ids = set(risky)
     for result in suite.results:
+        suffix = ""
         if result.crashed:
             status = "CRASH"
             crashed_count += 1
         elif result.passed:
             status = "PASS"
+            if result.case_id in risky_ids:
+                suffix = " (risky: asserts nothing)"
         else:
             status = "FAIL"
-        lines.append(f"  [{status}] {result.case_name}")
+        lines.append(f"  [{status}] {result.case_name}{suffix}")
         if result.crashed and crash_detail:
             lines.append(f"         {crash_detail}")
         for reason in result.failure_reasons:
@@ -72,6 +79,8 @@ def format_console(
         summary += f", {crashed_count} crashed"
     if not_run:
         summary += f", {len(not_run)} not run"
+    if risky:
+        summary += f", {len(risky)} risky"
     lines.append(summary)
     if crash_detail and not suite.results:
         lines.append(f"  process exited before any test case started: {crash_detail}")

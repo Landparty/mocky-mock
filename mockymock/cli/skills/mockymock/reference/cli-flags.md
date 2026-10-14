@@ -86,8 +86,12 @@ before treating them as assertions.
 mockymock generate <program.cbl> [options]
 ```
 
-Scaffolds a starter `.cut` file by statically analyzing which boundaries
-each paragraph touches. Never touches Docker.
+Scaffolds a starter `.cut` file. By default it writes one `TESTCASE` per
+scenario through the program's entry point, with generated mock data; when
+the fixture generator can't handle the program it falls back to one
+`TESTCASE` per paragraph that touches a boundary (`--per-paragraph`), and
+says so. Neither mode writes `EXPECT`/`VERIFY` lines -- use `init` for
+that. Never touches Docker.
 
 | Option | Default | Description |
 |---|---|---|
@@ -96,7 +100,8 @@ each paragraph touches. Never touches Docker.
 | `--name NAME` | none | Write another suite for the same program, `<program>.<NAME>.cut` (e.g. `--name errors`), in the same place. |
 | `--fill CUT_FILE` | none | Insert only the `MOCK` blocks `CUT_FILE`'s existing test cases are missing (from the same `UNMOCKED_*` analysis `lint` runs), writing back in place. Every existing directive, `EXPECT`, `VERIFY`, and comment is preserved byte for byte; an existing `MOCK` block is never edited, even if its body is empty. Mutually exclusive with `-o/--output`, `--with-data`, and `--fixtures`. |
 | `--copybook-path DIR` (repeatable) | none | A directory to search for `COPY`-referenced copybooks. |
-| `--with-data` | off | Data-driven mode: one `TESTCASE` per scenario, with real generated mock data and `EXPECT`/`VERIFY` assertions, instead of placeholder bodies. |
+| `--with-data` | on (default mode) | Data-driven mode: one `TESTCASE` per scenario, with real generated mock data. This is the default; passing it explicitly makes a fixture-generator failure fatal instead of falling back to `--per-paragraph`. |
+| `--per-paragraph` | off | One `TESTCASE` per paragraph that touches a boundary, with placeholder mock bodies, instead of one per scenario. Useful for isolating a leaf paragraph. Not valid with `--with-data` or `--fixtures`. |
 | `--fixtures PATH` | none | Use an already-generated fixture bundle JSON file instead of generating one on the fly. Implies `--with-data`. Mutually exclusive with `--rows`. |
 | `--seed N` | random | Integer seed for reproducible generated data (`--with-data` only). |
 | `--scenarios {happy,branches,all}` | `happy` | `happy` = one "everything succeeds" scenario. `branches` = one scenario per reachable branch arm. `all` = branches plus fixed families (empty input, error status, boundary values). `--with-data` only. |
@@ -108,6 +113,7 @@ Examples:
 ```bash
 mockymock generate ORDRPROC.cbl
 mockymock generate ORDRPROC.cbl --fill ORDRPROC.cut
+mockymock generate ORDRPROC.cbl --per-paragraph
 mockymock generate ORDRPROC.cbl -o tests/ORDRPROC.cut --copybook-path copybooks/
 mockymock generate ORDRPROC.cbl --with-data --seed 7 --scenarios branches
 mockymock generate ORDRPROC.cbl --with-data --rows 5 --placeholder READ:ORDER-FILE
@@ -226,6 +232,11 @@ CI lanes without a daemon.
 
 Prints `mockymock lint: no problems found.` and exits 0 if clean, or one
 `mockymock lint: <problem>` line per problem plus a count, exiting 1.
+
+Warnings never change the exit code. Today there is one:
+`mockymock lint: warning (NO_ASSERTION): .cut line N: TESTCASE "X" asserts
+nothing ...` for a test case with no `EXPECT` or `VERIFY`. It passes
+whenever its `PERFORM` runs, and `run` reports it as risky.
 
 ## `mockymock mutate`
 

@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-10-05T12:00:00Z
+timestamp: 2026-10-14T01:00:00Z
 ---
 # Overview
 
@@ -163,6 +163,15 @@ discarded (audit 2026-07-07, findings 4.2/5.1).
   selected cases that never printed START; `format_console` shows each as
   `[NOT RUN]` (and `N not run` in the summary) and `format_junit_xml` adds
   a `<testcase>` with an `<error>` for each, counted in `tests=`/`errors=`.
+- **Risky cases (2026-10-14).** A case that passed with
+  `MockTestCase.assertion_count == 0` is "risky" (PHPUnit's term): still a
+  pass. `json_report.risky_case_ids` (position-matched, ids not names)
+  feeds `format_console(..., risky=)`, which prints
+  `[PASS] X (risky: asserts nothing)` and `, N risky` in the summary;
+  `run --record-expectations` passes none, since that run exists to fill
+  the assertions in. The JSON report carries per-case `assertions` (null
+  without a `.cut` model) and `risky`, plus `summary.casesRisky`; the
+  report version stays 1 (additive).
 - **Record rewrite (#146).** `build_recording_report` skips a value
   containing U+FFFD (bytes such as HIGH-VALUES that stdout could not
   carry) instead of writing a golden that can never match.

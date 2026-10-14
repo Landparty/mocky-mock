@@ -43,6 +43,7 @@ def test_generate_expands_copybook_and_finds_call_site(tmp_path: Path):
     exit_code = main(
         [
             "generate",
+            "--per-paragraph",
             str(FIXTURE_DIR / "MAINPGM.cbl"),
             "-o",
             str(output),
@@ -92,6 +93,7 @@ def test_generate_without_copybook_path_leaves_copy_unresolved(tmp_path: Path, c
     exit_code = main(
         [
             "generate",
+            "--per-paragraph",
             str(program),
             "-o",
             str(output),
@@ -122,6 +124,7 @@ def test_generate_refuses_lossy_copybook_decode(tmp_path: Path, capsys):
     exit_code = main(
         [
             "generate",
+            "--per-paragraph",
             str(FIXTURE_DIR / "MAINPGM.cbl"),
             "-o",
             str(output),
@@ -143,6 +146,7 @@ def test_generate_with_copybook_path_does_not_flag_unresolved_copybook(
     exit_code = main(
         [
             "generate",
+            "--per-paragraph",
             str(FIXTURE_DIR / "MAINPGM.cbl"),
             "-o",
             str(output),
@@ -256,6 +260,7 @@ def test_generate_with_copybook_path_expands_before_parsing(tmp_path: Path):
     with_flag = _spy_and_capture(
         [
             "generate",
+            "--per-paragraph",
             str(FIXTURE_DIR / "MAINPGM.cbl"),
             "-o",
             str(output),
@@ -270,6 +275,7 @@ def test_generate_with_copybook_path_expands_before_parsing(tmp_path: Path):
     without_flag = _spy_and_capture(
         [
             "generate",
+            "--per-paragraph",
             str(program),
             "-o",
             str(output),

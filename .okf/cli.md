@@ -234,10 +234,23 @@ values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
 
 See `docs/2026-09-15-init-command-design.md`.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE]`
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
+
+**Default unit is the scenario (2026-10-14).** With neither `--with-data`
+nor `--per-paragraph`, `generate` takes the `--with-data` path (one TESTCASE
+per scenario through the entry point; 17 cases for the 17
+`examples/real-world/` programs, against 112 per-paragraph ones). Implicit
+mode degrades instead of failing: a generator exception (other than a
+missing copybook), a zero-scenario bundle, or a scaffold with no TESTCASE
+prints a `falling back to one test case per paragraph (--per-paragraph)`
+line and writes the bundle-less scaffold. An explicit `--with-data` keeps
+the hard failures. `--per-paragraph` selects the bundle-less scaffold
+directly and is refused (exit 1, stderr) with `--with-data`/`--fixtures`.
+In the steps below, "`--with-data`" means "scenario mode, explicit or
+implicit" and "neither flag" means `--per-paragraph`.
 
 **`--fill CUT_FILE` (2026-09-15)** is a separate mode, dispatched (after
 `_apply_config_to_args`, so config-file copybook paths apply) before any
@@ -911,6 +924,16 @@ per problem plus a `N problem(s) found.` summary, exit 1; or
 `mockymock lint: no problems found.`, exit 0. Built for editors (the VS Code
 extension publishes these as diagnostics), pre-commit hooks, and CI lanes
 without a daemon.
+
+**Warnings (2026-10-14).** `checks.no_assertion_warnings(suite)` adds one
+`mockymock lint: warning (NO_ASSERTION): .cut line N: TESTCASE "X" asserts
+nothing ...` line per TESTCASE with no EXPECT/VERIFY
+(`MockTestCase.assertion_count == 0`; PROVIDER rows sharing a header line
+report once), then `N warning(s).`. Warnings never change the exit code.
+They print even when a refusal stopped `run_static_checks` before it parsed
+the `.cut` (`_cmd_lint` re-parses it quietly), since the check is
+`.cut`-only. The `.cut line N` wording is what lets the extension place the
+diagnostic on the TESTCASE header.
 
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 

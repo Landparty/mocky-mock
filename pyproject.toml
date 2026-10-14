@@ -32,7 +32,8 @@ dependencies = [
     # tracked via git SHA (DIVIDE/MULTIPLY GIVING ROUNDED, the gen-fixtures
     # bundle surface, EVALUATE WHEN-clause truncation, ...). Bump the floor
     # deliberately, with a test run, when adopting new cobol-parser work --
-    # <2 guards against an unreviewed breaking major bump. The Report
+    # the <3 cap guards against an unreviewed breaking major bump (2.x was
+    # reviewed 2026-10-14: the unit suite passes unchanged on 2.0.1). The Report
     # Writer categories (INITIATE/GENERATE/TERMINATE), the INVOKE/CHAIN/
     # Communication-Module refusals and the XML PARSE flow edge need the
     # cobol-parser release carrying its 2026-09-02 statement-coverage and
@@ -46,7 +47,11 @@ dependencies = [
     # and a project that never writes a cobol.yml should not be forced to
     # upgrade. `_universal_values` soft-imports and, only when a cobol.yml
     # actually exists, fails with a message naming the version to install.
-    "cobol-parser>=1.7.7,<2",
+    # 1.8.2 is excluded: its published wheel raises "Expected type, got
+    # ABCMeta" from BoundaryInventoryAnalyzer._classify on every program,
+    # which breaks `generate` (whose default is now the data-driven path)
+    # and `init`. 1.8.0 and 1.8.4 are fine.
+    "cobol-parser>=1.7.7,!=1.8.2,<3",
 ]
 
 [project.optional-dependencies]

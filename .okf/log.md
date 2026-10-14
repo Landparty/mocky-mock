@@ -18,6 +18,28 @@ PROG, so a program can have several suites. `generate`/`init` default to
 [cli](cli.md) and [dsl](dsl.md); design in
 docs/2026-10-14-multi-suite-layout-design.md.
 
+## 2026-10-14 -- allow cobol-parser 2.x
+
+The dependency cap moves from `<2` to `<3` and `uv.lock` to cobol-parser
+2.0.1. The unit suite passes unchanged on 2.0.1, and `generate`/`lint` on
+the 17 `examples/real-world/` programs give the same exit codes and lint
+output as on 1.10.0; the only scaffold difference is richer SQL keys in
+STUB EXPECT comments (`UPDATE BANK.ACCOUNT SET INTEREST_RATE` rather than
+`UPDATE BANK.ACCOUNT SET`).
+
+## 2026-10-14 -- assertion-free cases: lint warning, risky result, scenario default
+
+A scaffolded case with no EXPECT/VERIFY used to pass silently. `lint` now
+prints a `warning (NO_ASSERTION)` per such TESTCASE (exit code unchanged),
+and `run` labels its pass `(risky: asserts nothing)` on the console and
+`"risky": true` in the JSON report. `generate` now defaults to one case
+per scenario (the `--with-data` path), falling back to per-paragraph with
+a note when the fixture generator can't handle the program;
+`--per-paragraph` keeps the old scaffold. cobol-parser 1.8.2 is excluded
+(`!=1.8.2`; its wheel raises "Expected type, got ABCMeta" from
+`BoundaryInventoryAnalyzer._classify`), and `uv.lock` moves off it to
+1.10.0. See `.okf/cli.md` (generate, lint) and `.okf/report.md`.
+
 ## 2026-10-13 -- issue #156: looped MQGET/CBLTDLI end, OCCURS VALUE, unwrapped vars
 
 A generated MQGET or CBLTDLI get mock inside a loop that waits on the
@@ -4450,4 +4472,3 @@ docs-only -- no production code changed.
   `ACCTMNT`-based example: a separate cobol-parser bug (task_c5e3b268) drops
   some of `ACCTMNT.cbl`'s own EXEC SQL UPDATE/INSERT statements from the
   AST, causing a different, harder compile failure upstream of this fix.
-

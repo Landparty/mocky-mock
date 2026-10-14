@@ -105,6 +105,7 @@ def test_generate_scaffolds_testcase_for_copybook_paragraph(tmp_path: Path):
     exit_code = main(
         [
             "generate",
+            "--per-paragraph",
             str(EXAMPLE_DIR / "CPYPROC.cbl"),
             "-o",
             str(output),
