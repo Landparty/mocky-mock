@@ -39,7 +39,7 @@ stay private.
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
-uv tool install mocky-mock
+uv tool install mockymock
 ```
 
 Upgrade with `uv tool upgrade mockymock`; remove with

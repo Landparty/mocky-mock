@@ -434,7 +434,7 @@ reports 4 mypy errors this job calls success.
 `pyproject.toml` pins only a floor (`cobol-parser>=1.7.7,!=1.8.2,<3`), so any
 install resolves whatever cobol-parser most recently published inside that
 range. This job installs the **published** package -- no sibling checkout,
-no local build, exactly what `pip install mocky-mock` gets -- and runs the
+no local build, exactly what `pip install mockymock` gets -- and runs the
 Docker-free unit tier against it, so parser drift shows up as a red
 scheduled run rather than on a user's first install. Tests that need parser
 behavior newer than the floor skip themselves by capability probe rather
