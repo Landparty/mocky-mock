@@ -357,3 +357,78 @@ def test_several_suites_in_one_folder_keep_their_short_report_names(
     monkeypatch.setattr(cli_main, "_cmd_run", fake_cmd_run)
     assert main(["run", "src/pay/PAY.cbl", "--json-report", "r.json"]) == 0
     assert sorted(reports) == ["r-PAY.errors.json", "r-PAY.json"]
+
+
+def _record_suite_runs(monkeypatch) -> dict[str, tuple]:
+    """Stand in for each suite's own single-pair run, recording the
+    selection it was handed."""
+    import mockymock.cli.main as cli_main
+
+    real_cmd_run = cli_main._cmd_run
+    runs: dict[str, tuple] = {}
+
+    def fake_cmd_run(args):
+        if args.cut is None:
+            return real_cmd_run(args)
+        runs[Path(args.cut).name] = (args.case, args.tag)
+        return 0
+
+    monkeypatch.setattr(cli_main, "_cmd_run", fake_cmd_run)
+    return runs
+
+
+def _two_suites_of_pay(tmp_path: Path) -> None:
+    _write(tmp_path / "src" / "pay" / "PAY.cbl")
+    _write(
+        tmp_path / "tests" / "pay" / "PAY.cut",
+        'TESTSUITE "main"\nTESTCASE "happy" TAGS "smoke"\n    PERFORM P\n',
+    )
+    _write(
+        tmp_path / "tests" / "pay" / "PAY.errors.cut",
+        'TESTSUITE "errors"\nTESTCASE "bad input"\n    PERFORM P\n',
+    )
+
+
+def test_case_selection_runs_only_the_suite_that_has_the_case(
+    tmp_path, monkeypatch, capsys
+):
+    # `run PAY.cbl --case "bad input"` used to fail in PAY.cut ("no TESTCASE
+    # named ...") and exit 1 even though the selected case ran and passed.
+    _two_suites_of_pay(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    runs = _record_suite_runs(monkeypatch)
+    assert main(["run", "src/pay/PAY.cbl", "--case", "bad input"]) == 0
+    assert runs == {"PAY.errors.cut": (["bad input"], None)}
+    assert "1 suite(s) without a selected TESTCASE skipped" in capsys.readouterr().out
+
+
+def test_tag_selection_in_directory_mode_skips_suites_without_the_tag(
+    tmp_path, monkeypatch
+):
+    _two_suites_of_pay(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    runs = _record_suite_runs(monkeypatch)
+    assert main(["run", "--tag", "smoke"]) == 0
+    assert runs == {"PAY.cut": (None, ["smoke"])}
+
+
+def test_mixed_selection_hands_each_suite_only_what_it_has(tmp_path, monkeypatch):
+    _two_suites_of_pay(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    runs = _record_suite_runs(monkeypatch)
+    assert (
+        main(["run", "src/pay/PAY.cbl", "--case", "bad input", "--tag", "smoke"]) == 0
+    )
+    assert runs == {
+        "PAY.cut": (None, ["smoke"]),
+        "PAY.errors.cut": (["bad input"], None),
+    }
+
+
+def test_a_selection_no_suite_has_is_still_an_error(tmp_path, monkeypatch, capsys):
+    _two_suites_of_pay(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    runs = _record_suite_runs(monkeypatch)
+    assert main(["run", "src/pay/PAY.cbl", "--case", "happy", "--tag", "nope"]) == 1
+    assert runs == {"PAY.cut": (["happy"], None)}
+    assert "no TESTCASE carries tag 'nope' in any suite" in capsys.readouterr().out

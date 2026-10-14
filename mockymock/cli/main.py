@@ -1368,6 +1368,26 @@ def _several_suites(args: argparse.Namespace) -> list[Path] | None:
     return suites if len(suites) > 1 else None
 
 
+def _selection_in_suite(
+    args: argparse.Namespace, cut_path: Path
+) -> tuple[list[str], list[str]] | None:
+    """The `--case` names and `--tag`s that `cut_path`'s suite has, for a
+    run over several suites; None when the suite can't be read or parsed
+    (its own run then reports why, with the selection unchanged)."""
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        suite = parse_cut(read_utf8_source(cut_path))
+    except (OSError, UnicodeDecodeError, CutParseError):
+        return None
+    names = {case.name for case in suite.test_cases}
+    tags = {tag for case in suite.test_cases for tag in case.tags}
+    return (
+        [name for name in args.case or [] if name in names],
+        [tag for tag in args.tag or [] if tag in tags],
+    )
+
+
 def _run_directory(
     args: argparse.Namespace, cut_files: list[Path] | None = None
 ) -> int:
@@ -1400,14 +1420,36 @@ def _run_directory(
     ran = 0
     unresolved: list[str] = []
     tag_root = _report_tag_root(cut_files, test_root)
+    # --case/--tag over several suites select across all of them: each suite
+    # runs only the selected cases it has, a suite with none is skipped, and
+    # only a name or tag no suite has is an error (each suite used to demand
+    # every one, so any selection failed in every suite lacking it).
+    selecting = bool(getattr(args, "case", None) or getattr(args, "tag", None))
+    matched_cases: set[str] = set()
+    matched_tags: set[str] = set()
+    not_selected = 0
     for cut_path in cut_files:
         try:
             program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
             unresolved.append(str(exc))
             continue
-        ran += 1
         sub_args = copy.copy(args)
+        if selecting:
+            selection = _selection_in_suite(args, cut_path)
+            if selection is not None:
+                cases, tags = selection
+                if not cases and not tags:
+                    not_selected += 1
+                    continue
+                matched_cases.update(cases)
+                matched_tags.update(tags)
+                sub_args.case = cases or None
+                sub_args.tag = tags or None
+            else:
+                matched_cases.update(args.case or [])
+                matched_tags.update(args.tag or [])
+        ran += 1
         sub_args.program = str(program_path)
         sub_args.cut = str(cut_path)
         for flag in _RUN_OUTPUT_PATH_FLAGS:
@@ -1422,11 +1464,27 @@ def _run_directory(
 
     for reason in unresolved:
         print(f"mockymock run: {reason}")
+    missing = [
+        f"no TESTCASE named {name!r} in any suite"
+        for name in args.case or []
+        if selecting and name not in matched_cases
+    ] + [
+        f"no TESTCASE carries tag {tag!r} in any suite"
+        for tag in args.tag or []
+        if selecting and tag not in matched_tags
+    ]
+    for problem in missing:
+        print(f"mockymock run: {problem}")
+    skipped_note = (
+        f", {not_selected} suite(s) without a selected TESTCASE skipped"
+        if not_selected
+        else ""
+    )
     print(
         f"mockymock run: {ran} suite(s) run, {len(unresolved)} .cut file(s) "
-        f"skipped (no program found)"
+        f"skipped (no program found){skipped_note}"
     )
-    if ran == 0:
+    if ran == 0 or missing:
         return 1
     return exit_code
 

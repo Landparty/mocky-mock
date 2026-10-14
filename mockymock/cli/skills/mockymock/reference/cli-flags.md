@@ -167,6 +167,7 @@ Docker, execute, and report pass/fail.
 | `--json-report PATH` | none | Write a machine-readable run report (per-case status, `.cut` line numbers, expected vs. actual, tags). |
 | `--case NAME` (repeatable) | all cases | Run only the named `TESTCASE`(s). Unions with `--tag`. |
 | `--tag TAG` (repeatable) | all cases | Run only `TESTCASE`s carrying this tag. Unions with `--case`. |
+| | | Over several suites (no `--cut`, or a program with several suites), each suite runs the selected cases it has and a suite with none is skipped; only a name or tag that no suite has is an error. |
 | `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path`. |
 | `--keep-sandbox` | off | Don't delete the temporary sandbox directory; print its path. |
 | `--verbose` | off | On a compile failure, print the path to the instrumented source. |

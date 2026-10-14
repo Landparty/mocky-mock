@@ -470,6 +470,14 @@ Flags beyond the pipeline inputs:
   sibling case no longer blocks running a clean one. An unknown name/tag is
   a static problem listing what is available. The suite still runs as ONE
   compile + binary — just with only the selected cases spliced in.
+  Over several suites (`_run_directory`: directory mode, or `run
+  PROG.cbl` with several suites) the selection spans them all
+  (2026-10-14): `_selection_in_suite` hands each suite only the names and
+  tags it has, a suite with none is skipped (counted in the summary line),
+  and only a name or tag no suite has is an error (`no TESTCASE named X in
+  any suite`, exit 1). Before, every suite demanded every selector, so
+  `run --tag smoke` exited 1 whenever one suite had no smoke case, even
+  with every selected case passing.
 - `--coverage` — the console report leads with the ORIGINAL `.cbl`'s own
   percentage and lists its own uncovered lines by their original line
   numbers; the instrumented sandbox copy's higher number (it counts

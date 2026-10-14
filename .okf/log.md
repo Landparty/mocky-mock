@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-15 -- --case/--tag select across several suites
+
+`run --tag smoke` (directory mode) and `run PROG.cbl --case X` (a program
+with several suites) applied the selection to every suite on its own, so
+each suite without the name or tag reported "no TESTCASE named ..." and
+the command exited 1 even when the selected cases ran and passed. Each
+suite now gets the part of the selection it has, suites with none are
+skipped, and only a selector no suite has is an error. Updated
+[cli](cli.md) and the skill's cli-flags reference.
+
 ## 2026-10-14 -- generated VERIFY counts no longer include unreachable sites
 
 `generate --with-data` summed the bundle's per-site call counts over every
