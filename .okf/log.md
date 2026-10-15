@@ -5,6 +5,18 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-15 -- allow cobol-parser 3.x
+
+The dependency cap moves from `<3` to `<4` and `uv.lock` to cobol-parser
+3.0.0. Its one breaking change (`decode --view` / `RecordViews.to_dict()`
+now cover the whole record) touches no API this project calls. The unit
+suite passes unchanged on 3.0.0; `generate --scenarios all` on the 12
+`examples/` programs writes identical .cut files, and `generate`/`lint` on
+the 17 `examples/real-world/` programs give the same exit codes and lint
+output as on 2.0.1. The only scaffold difference is 3.0.0's wide-numeric
+fix: GLRECON's 18-digit SQL host variables keep every digit
+(`41108753171565493.27` instead of the float-rounded `41108753171565496.00`).
+
 ## 2026-10-14 -- generated VERIFY counts no longer include unreachable sites
 
 `generate --with-data` summed the bundle's per-site call counts over every
