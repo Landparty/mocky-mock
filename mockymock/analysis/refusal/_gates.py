@@ -1591,7 +1591,7 @@ def check_test_case(
                         )
                     ),
                     suggested_fix=(
-                        directive_snippet(site, surface)
+                        directive_snippet(site, surface, file_status_fields)
                         if unspliceable is None
                         else None
                     ),

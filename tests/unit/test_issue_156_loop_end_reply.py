@@ -119,4 +119,46 @@ def test_cbltdli_sites_needing_different_replies_get_a_todo(tmp_path) -> None:
     )
     body = _mock(_scaffold(tmp_path, "IMSMIX", cbl), 'MOCK CALL "CBLTDLI"')
     assert "*> TODO: a loop waits on this CALL's reply" in body
-    assert "DB-PCB(11:2)" not in body
+    assert '"GB" TO DB-PCB(11:2)' not in body
+    # Both calls succeed on a blank status (issue #317).
+    assert "MOVE SPACES TO DB-PCB(11:2)" in body
+
+
+DLC_PRIMED_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DLC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-GN   PIC X(4) VALUE "GN  ".
+       01 WS-SEG  PIC X(20).
+       01 WS-CNT  PIC 9(4) VALUE 0.
+       LINKAGE SECTION.
+       01 DB-PCB.
+          05 PCB-DBD     PIC X(8).
+          05 PCB-LEVEL   PIC XX.
+          05 PCB-STATUS  PIC XX.
+          05 PCB-REST    PIC X(20).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           ENTRY "DLITCBL" USING DB-PCB.
+           CALL "CBLTDLI" USING WS-GN DB-PCB WS-SEG
+           PERFORM UNTIL PCB-STATUS NOT = SPACES
+               ADD 1 TO WS-CNT
+               CALL "CBLTDLI" USING WS-GN DB-PCB WS-SEG
+           END-PERFORM
+           GOBACK.
+"""
+
+
+def test_cbltdli_row_reports_a_blank_status_before_the_end_reply(tmp_path) -> None:
+    """Issue #317: the random fixture row put a status such as "PO" into
+    PCB-STATUS, so the get loop never ran and VERIFY ... 2 TIMES failed.
+    Every row now reports a blank status; the end reply still follows."""
+    cut = _generate(tmp_path, "DLC", DLC_PRIMED_CBL, "--seed", "1")
+    body = [line.strip() for line in _mock(cut, 'MOCK CALL "CBLTDLI"').splitlines()]
+    blank = body.index("MOVE SPACES TO DB-PCB(11:2)")
+    assert body[blank + 1 : blank + 3] == [
+        "IF UT-CBLTDLI-TALLY > 1",
+        'MOVE "GB" TO DB-PCB(11:2)',
+    ]
+    assert 'VERIFY CALL "CBLTDLI" WAS CALLED 2 TIMES' in cut

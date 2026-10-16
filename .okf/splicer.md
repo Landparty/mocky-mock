@@ -345,6 +345,14 @@ category:
   own MOVEs so a row that sets `SQLCODE` (an error mid-cursor) wins (as a
   suffix it overwrote it, until 2026-10-13); `row_suffix_moves=[]`;
   `exhausted_moves=["MOVE 100 TO SQLCODE"]` -- fixed in v1.
+  When the program names `SQLSTATE` anywhere (`orchestrator._SQLSTATE_RE`
+  over the normalized lines, passed as `build_site_dispatch(sqlstate=True)`),
+  the prefix also carries `MOVE "00000" TO SQLSTATE` and the exhaustion
+  `MOVE "02000" TO SQLSTATE` (issue #313: a cursor loop ended by
+  `UNTIL SQLSTATE = '02000'` never ended); a program that never names it
+  gets neither, since its own SQLCA copy may not declare one. `generate
+  --placeholder`'s SQL downgrade adds the same `"02000"`. `TERMINAL` is
+  still not accepted on SQL ROWS.
 - **READ**: `row_suffix_moves=[]` (the ordinary FILE-STATUS
   default-success `MOVE "00"` above already covers every row when the
   file declares a status field, so there is nothing left to append per

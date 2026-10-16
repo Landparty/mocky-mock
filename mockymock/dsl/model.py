@@ -146,8 +146,17 @@ CAPTURE_CATEGORIES = frozenset({MockCategory.CALL, MockCategory.DYNCALL})
 # would spin until `run --timeout`. MQ is CALL at parse time. CICS
 # (2026-10-13, #169) is the STARTBR/READNEXT browse loop's case: EXEC CICS
 # reports its end through RESP, which only the TERMINAL group can set.
+# ACCEPT (#263) is the SYSIN control-card loop's case: `PERFORM ... UNTIL
+# WS-IN = "END"` around `ACCEPT WS-IN` needs card 1, card 2, then the
+# sentinel, and the sentinel is what its TERMINAL group sets.
 SEQUENCED_CALL_CATEGORIES = frozenset(
-    {MockCategory.CALL, MockCategory.DYNCALL, MockCategory.DLI, MockCategory.CICS}
+    {
+        MockCategory.CALL,
+        MockCategory.DYNCALL,
+        MockCategory.DLI,
+        MockCategory.CICS,
+        MockCategory.ACCEPT,
+    }
 )
 
 # Every category ROWS is valid on. SQL ends with SQLCODE 100 (no TERMINAL),

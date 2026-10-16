@@ -93,7 +93,7 @@ _BARE_CATS = (
 
 _ROWS_SUPPORTED = (
     "ROWS is only supported for MOCK SQL, MOCK READ, MOCK RETURN, "
-    "MOCK CALL (static or dynamic), MOCK MQ, MOCK DLI, and MOCK CICS"
+    "MOCK CALL (static or dynamic), MOCK MQ, MOCK DLI, MOCK CICS, and MOCK ACCEPT"
 )
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
@@ -838,7 +838,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 if in_mock.category not in TERMINAL_CATEGORIES:
                     raise CutParseError(
                         f"line {line_no}: TERMINAL is only supported for "
-                        f"MOCK READ/RETURN/CALL/MQ/DLI/CICS ... ROWS, not MOCK "
+                        f"MOCK READ/RETURN/CALL/MQ/DLI/CICS/ACCEPT ... ROWS, not MOCK "
                         f"{in_mock.category.keyword} ... ROWS (SQL rows "
                         f"always end with SQLCODE 100)"
                     )

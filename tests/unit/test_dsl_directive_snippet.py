@@ -49,7 +49,11 @@ def test_directive_snippet_read_shape():
     surface, _ = _surface()
     read_site = next(s for s in surface.boundary_sites if s.label == "READ")
     snippet = directive_snippet(read_site, surface)
-    assert snippet == "    MOCK READ INV-FILE\n    END-MOCK"
+    # The READ has an AT END clause: the snippet reports end-of-file so
+    # the splice re-runs it and a read loop ends (issue #302).
+    assert snippet == (
+        '    MOCK READ INV-FILE\n        MOVE "10" TO UT-MOCK-STATUS\n    END-MOCK'
+    )
 
 
 def test_directive_snippet_call_shape():

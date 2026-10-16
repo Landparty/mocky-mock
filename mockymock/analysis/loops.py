@@ -43,15 +43,24 @@ def _is_loop(statement: PerformStatement) -> bool:
 class LoopGuard:
     """One looping PERFORM: the paragraphs/sections its target reaches, the
     ids of the statements in its inline body, and the data names its UNTIL
-    condition reads (uppercased; empty for `PERFORM n TIMES`)."""
+    condition reads (uppercased; empty for `PERFORM n TIMES`). `varying`
+    names the loop's own VARYING / AFTER control items, which the program
+    advances itself (issue #286)."""
 
     paragraphs: frozenset[str]
     statement_ids: frozenset[int]
     words: frozenset[str]
+    varying: frozenset[str] = frozenset()
+    until_text: str = ""
 
 
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
 _LITERAL_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def _until_text(statement: PerformStatement) -> str:
+    condition = getattr(statement, "until_condition", None)
+    return " ".join(str(op) for op in getattr(condition, "operands", None) or [])
 
 
 def _condition_words(statement: PerformStatement) -> frozenset[str]:
@@ -61,6 +70,25 @@ def _condition_words(statement: PerformStatement) -> frozenset[str]:
     return frozenset(
         word.upper() for word in _WORD_RE.findall(text) if not word.isdigit()
     )
+
+
+def _varying_words(statement: PerformStatement) -> frozenset[str]:
+    """The VARYING / AFTER control items of `statement`, plus the words of
+    each AFTER clause's own UNTIL (uppercased)."""
+    words: set[str] = set()
+    clauses = [getattr(statement, "varying_clause", None)]
+    clauses += list(getattr(statement, "after_clauses", None) or [])
+    for clause in clauses:
+        if not isinstance(clause, dict):
+            continue
+        variable = clause.get("variable")
+        if isinstance(variable, str) and variable:
+            words.add(variable.upper())
+        condition = clause.get("until_condition")
+        text = " ".join(str(op) for op in getattr(condition, "operands", None) or [])
+        text = _LITERAL_RE.sub(" ", text)
+        words |= {word.upper() for word in _WORD_RE.findall(text) if not word.isdigit()}
+    return frozenset(words)
 
 
 def loop_guards(program) -> list[LoopGuard]:
@@ -97,6 +125,8 @@ def loop_guards(program) -> list[LoopGuard]:
                     frozenset(paragraphs),
                     frozenset(statement_ids),
                     _condition_words(statement),
+                    _varying_words(statement),
+                    _until_text(statement),
                 )
             )
     return guards
@@ -138,6 +168,41 @@ _EXPRESSION_ATTRS = (
     "operands",
     "condition_tree",
 )
+
+
+def loop_exit_literal(
+    site: BoundarySite, guards: list[LoopGuard], name: str
+) -> str | None:
+    """The literal an enclosing loop's UNTIL compares `name` equal to
+    (`UNTIL WS-IN = "END"` -> `"END"`, quoted as in the source), or None.
+    Used to end a SYSIN control-card loop around `ACCEPT WS-IN` (issue
+    #263)."""
+    pattern = re.compile(
+        rf"(?<![\w-]){re.escape(name)}\s*(?:=|(?:IS\s+)?EQUALS?(?:\s+TO)?)\s*"
+        r"(\"[^\"]*\"|'[^']*')",
+        re.IGNORECASE,
+    )
+    for guard in guards:
+        if site.paragraph_name in guard.paragraphs or id(site.statement) in (
+            guard.statement_ids
+        ):
+            match = pattern.search(guard.until_text)
+            if match:
+                return match.group(1)
+    return None
+
+
+def loop_control_words(site: BoundarySite, guards: list[LoopGuard]) -> set[str]:
+    """Every data name a loop `site` runs inside is controlled by: its
+    VARYING / AFTER items and the words of its UNTIL conditions. A mock
+    that writes one of them resets the program's own loop (issue #286)."""
+    words: set[str] = set()
+    for guard in guards:
+        if site.paragraph_name in guard.paragraphs or id(site.statement) in (
+            guard.statement_ids
+        ):
+            words |= guard.words | guard.varying
+    return words
 
 
 def _expression_words(node) -> set[str]:

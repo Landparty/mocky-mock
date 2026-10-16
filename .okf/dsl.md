@@ -585,7 +585,11 @@ Rules:
     program's sites of the same category (`_unique_prefix`), so the
     generator itself never emits an `AMBIGUOUS_MOCK` pair that the splicer
     would later reject. Falls back to the full text if no proper prefix is
-    unique.
+    unique. When another site's whole text is a prefix of this one
+    (`SYNCPOINT` / `SYNCPOINT ROLLBACK`, `RETURN` / `RETURN TRANSID(...)`),
+    the shorter text is the key for both (issue #248): the fallback full
+    text already matches the longer site, so a second key was
+    `AMBIGUOUS_MOCK`. One directive answers both sites.
 - **`directive_snippet(site, surface) -> str | None` (2026-09-15)** wraps
   `_directive_for` to render one site's full `MOCK ... END-MOCK` block as a
   single string (4-space header/footer, 8-space body — exactly what
@@ -626,7 +630,7 @@ Rules:
   inside a quoted name, so interpolating one raw would make the scaffold
   unparseable.
 
-### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`, `CICS`)
+### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`, `CICS`, `ACCEPT`)
 
 `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
 END-MOCK`, `MOCK READ <file> ROWS ( FIELD = value, ... ) ( ... )
@@ -685,8 +689,8 @@ one.
 same way, which capped a whole-program case on any program that calls one
 routine for several purposes in a loop (IMS `CBLTDLI` as priming GHN,
 DLET and loop GHN; `MQGET`; a DB2 access module) at its empty-input path.
-`ROWS` on `SEQUENCED_CALL_CATEGORIES` (`CALL`/`DYNCALL`/`DLI`, in
-`model.py`) gives one row per call, in order: row N fires when the key's
+`ROWS` on `SEQUENCED_CALL_CATEGORIES` (`CALL`/`DYNCALL`/`DLI`/`CICS`,
+and `ACCEPT` since #263, in `model.py`) gives one row per call, in order: row N fires when the key's
 own tally reaches N. That tally is per `(category, key)`, so it counts
 calls across **every** site the key matches (a DLI tally is per quoted
 prefix key, since that is the directive's key), and `driver.py` zeroes it
@@ -745,6 +749,14 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
   silently overwritten until 2026-10-13), `row_suffix_moves=[]`,
   `exhausted_moves=["MOVE 100 TO SQLCODE"]` (DB2's "not found" code) —
   fixed in v1.
+  When the program names `SQLSTATE` anywhere (`orchestrator._SQLSTATE_RE`
+  over the normalized lines, passed as `build_site_dispatch(sqlstate=True)`),
+  the prefix also carries `MOVE "00000" TO SQLSTATE` and the exhaustion
+  `MOVE "02000" TO SQLSTATE` (issue #313: a cursor loop ended by
+  `UNTIL SQLSTATE = '02000'` never ended); a program that never names it
+  gets neither, since its own SQLCA copy may not declare one. `generate
+  --placeholder`'s SQL downgrade adds the same `"02000"`. `TERMINAL` is
+  still not accepted on SQL ROWS.
 - **READ**: `row_suffix_moves=[]` (a file-op category's implicit
   default-success `MOVE "00"` already precedes the whole dispatch block
   when the file declares a `FILE STATUS` field — see the `FILE-STATUS IS`
@@ -788,7 +800,12 @@ paragraph-grouped path described above, unchanged. A real
   INSERT/UPDATE/DELETE — gets no fixture at all, only a stub expectation;
   skipping stub refs here would misreport every OUT-direction boundary as
   a mismatch). Disagreement is never silent: `_warn_on_key_mismatch`
-  prints both one-sided sets to stderr. This exact comparison is pinned by
+  prints both one-sided sets to stderr. Two mockymock-only shapes are
+  expected, not disagreements, and are left out of it: RELEASE / RETURN
+  (#262, never in a bundle), and a CALL / DYNCALL whose every argument the
+  program supplies (#300, `_program_supplied_call_keys`: cobol-parser's own
+  `BoundaryInventoryAnalyzer`, each `call_args` direction OUT -- the
+  bundle counts it but has nothing to generate for it). This exact comparison is pinned by
   `tests/unit/test_fixture_bundle_contract.py`, parametrized over the
   `examples/*/` corpus — a mismatch there must be root-caused (nested-site
   span annotation missing, a real cobol-parser gap, etc.), not silently
@@ -905,6 +922,16 @@ paragraph-grouped path described above, unchanged. A real
   generated record below the FD minimum. The bundle carries no per-row
   length (`declared_lengths` is not surfaced upstream yet), so every row
   reports the layout's full length clamped into the FD's range.
+- **A SELECT / FETCH mock writes only its INTO targets** (issue #239):
+  the bundle lays out every host variable of an EXEC SQL, the WHERE
+  clause's input key included, so a SELECT mock overwrote the key the
+  program had set and `--record-expectations` recorded the random text.
+  `_sql_output_layout` keeps only the fields named by the statement's
+  `into_variables` (cobol-parser's `ExecSQLStatement` / `FetchStatement`;
+  null indicators are in that list), matching the fixture's line, else
+  every SQL site its key prefixes; a statement with no INTO list leaves
+  the layout alone. `examples/fixtures/FIXTUREDEMO.cut` was regenerated
+  (it no longer moves into `WS-CUSTOMER-ID`).
 - **A CICS mock writes only what the command returns** (issue #222):
   cobol-parser marks every EXEC CICS boundary BIDIRECTIONAL and lays out
   every resolved operand, so `_single_row_body` used to MOVE random text
@@ -920,6 +947,25 @@ paragraph-grouped path described above, unchanged. A real
   only ABSTIME on FORMATTIME; nothing on ASSIGN/INQUIRE/ADDRESS/ASKTIME.
   A field also named by a non-input operand of any statement for the key
   is kept.
+- **CICS RESP/RESP2 answer NORMAL** (issue #253): the bundle lays the
+  `RESP(item)`/`RESP2(item)` operands out as ordinary fields with random
+  values, which sent every happy path down `IF WS-RESP NOT =
+  DFHRESP(NORMAL)` and let `--record-expectations` record the error
+  branch. `_single_row_body` drops those fields from the row and writes
+  `MOVE 0 TO <item>` for each (`_cics_resp_names` over the fixture's
+  statements), unless the scenario pinned the field to reach its branch
+  (`_pinned_fields`: the leaf names in the scenario's
+  `verification.fields`, threaded through `_bundle_directive_for_group` /
+  `_bundle_directive_for` as `pinned`).
+- **CICS browse loops end (#316).** A READNEXT/READPREV/READQ whose key
+  has a site inside a loop whose UNTIL reads the command's own RESP field
+  (or, one hop, a flag set from it: `_reply_watched_names`) gets
+  `_cics_loop_end_lines`: `IF <tally> > 1 / MOVE 20 TO <resp>` (ENDFILE;
+  26 ITEMERR for READQ TS, 23 QZERO for READQ TD), unconditional without
+  a tally, and a `VERIFY ... 2 TIMES` (`CallCountOverride(count=2)`).
+  Every site the key's MOCK answers is checked, so a priming READNEXT
+  before the loop works; sites needing different replies get a TODO.
+  Applied in the bundle row, the placeholder bodies and `--placeholder`.
 - **An AT END clause the splice re-runs is not copied at all** (issue
   #209): `_at_end_handling` asks `analysis.clause_bodies.lift_clause_bodies`
   first; when the splice will run the READ's own AT END clause after the
@@ -1057,6 +1103,9 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   an `EXPECT` whose leaf is ambiguous becomes a stub comment.
 - **DL/I get-next loops (#145).** A looped `GN`/`GHN`/`GNP`/`GHNP` mock
   sets `DIBSTAT` to `GB`/`GE` after its first call, so the scan ends.
+  Every DLI site the key's MOCK answers is checked for a loop (#315): the
+  usual priming GN before the loop is the first site seen and is not
+  itself looped.
 - **SQL status-only bodies (#148).** OPEN/CLOSE/COMMIT-style bodies set
   `SQLCODE` to 0 when the fixture names no SQLCODE.
 - **No entry (#150).** A scenario with `entry=''` (IMS `ENTRY 'DLITCBL'`
@@ -1108,6 +1157,50 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   without it the loop never ends. A `PERFORM n TIMES` loop (no guard
   words) is still left alone. (The issue's option (b), demoting VERIFY
   counts for sites after an `IF ... GOBACK`, is not implemented.)
+- **DL/I calls answer a blank PCB status (#317).** The DL/I counterpart:
+  `_dli_success_reply` appends `MOVE SPACES TO <pcb>(11:2)` (the PCB is a
+  CBLTDLI/CEETDLI call's second USING argument) after the fixture row and
+  before any #156 end reply, in the bundle row, the `--placeholder`
+  downgrade and the bundle-less body alike. A random status such as "PO"
+  ended a `PERFORM UNTIL PCB-STATUS NOT = SPACES` get loop on the first
+  call and failed the scaffold's own `VERIFY ... 2 TIMES`.
+  `_row_already_ends` therefore never credits a DL/I row with ending the
+  loop.
+- **CALL mocks leave a loop's control items alone (#286).** A CALL
+  (or DYNCALL / DLI) passing its enclosing loop's own counter -- `CALL
+  "FMTLINE" USING WS-IX WS-LINE` inside `PERFORM VARYING WS-IX ... UNTIL
+  WS-IX > WS-COUNT` -- had that argument laid out as a fixture field, and
+  the row's `MOVE 0 TO WS-IX` reset the loop on every call (hang until
+  `--timeout`). `_without_loop_control` drops every layout field naming a
+  VARYING / AFTER item or UNTIL word of an enclosing loop
+  (`loops.loop_control_words`; `LoopGuard.varying` holds the VARYING /
+  AFTER items) and leaves a `*> TODO` naming it. A guard that waits on the
+  call's own reply (MQGET / DL/I get, #156) keeps its reply fields.
+- **ACCEPT control-card loops end (#263).** `MOCK ACCEPT <target> ROWS (
+  ... ) TERMINAL ( <target> = "END" )` feeds SYSIN cards in order (ACCEPT
+  is in `SEQUENCED_CALL_CATEGORIES`, so TERMINAL is mandatory). In the
+  scaffold, `_accept_loop_end_lines` handles an ACCEPT whose loop's UNTIL
+  compares the target to a literal (`loops.loop_exit_literal`, read from
+  `LoopGuard.until_text`): the row's value answers the first call and
+  `IF UT-ACCEPT-<key>-TALLY > 1 MOVE <literal> TO <target>` the rest
+  (`VERIFY ... 2 TIMES`); a bundle-less or `--placeholder` body moves the
+  literal outright (`VERIFY ... 1 TIMES`). A guard on the target with no
+  literal to match gets a TODO.
+- **Placeholder READ/RETURN mocks report end-of-file (#302).** A
+  bundle-less `MOCK READ`/`MOCK RETURN` for a statement with an AT END
+  clause was an empty body, so a `PERFORM UNTIL WS-EOF = "Y"` read loop
+  ran until `--timeout` from lint's suggested fix, `generate --fill` and
+  `--per-paragraph`. `_end_of_file_placeholder` now gives the FILE_OP body
+  (`_directive_for`, and through it `directive_snippet`) its exhaustion
+  lines: with a `ProgramContext`, exactly a bundle READ fixture's
+  (`_at_end_handling` / `_read_exhaustion_lines`); without one (lint),
+  `MOVE "10"` into the file's FILE STATUS field or else `UT-MOCK-STATUS`,
+  plus the clause's replicable statements. `directive_snippet` takes the
+  program's `file_status_fields` (lint's gate passes them). This is also
+  what ends a SORT OUTPUT PROCEDURE's `RETURN ... AT END` loop (#262): the
+  bundle never lays out RELEASE / RETURN, so they always take the
+  placeholder path, and `_warn_on_key_mismatch` no longer calls that a
+  "should not happen" mismatch (`_BUNDLELESS_CATEGORIES`).
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 

@@ -34,6 +34,7 @@ but one statement must get exactly one splice.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from mockymock.analysis.clause_bodies import lift_clause_bodies
@@ -91,6 +92,10 @@ def _span_ends_sentence(lines: list[str], start: int, end: int) -> bool:
     return False
 
 
+#: A reference to SQLSTATE as a COBOL word (not RETURNED_SQLSTATE).
+_SQLSTATE_RE = re.compile(r"(?<![\w-])SQLSTATE(?![\w-])", re.IGNORECASE)
+
+
 def splice_program(
     lines: list[str],
     boundaries: list[int],
@@ -106,6 +111,7 @@ def splice_program(
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
     seen_statement_ids: set[int] = set()
+    sqlstate = any(_SQLSTATE_RE.search(line) for line in lines)
     # EXEC CICS RETURN/XCTL/ABEND plans (issue #215): the site keeps its
     # ordinary dispatch below, wrapped with the early exit.
     cics_terminators = {
@@ -173,6 +179,7 @@ def splice_program(
                 # with a span bounded by its own scope terminator (#258),
                 # so its bodies lift exactly like a top-level site's.
                 lifted_clauses=lift_clause_bodies(site.statement, lines),
+                sqlstate=sqlstate,
             )
             # What the DB2 precompiler puts after the statement for every
             # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).

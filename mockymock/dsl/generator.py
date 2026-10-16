@@ -61,6 +61,8 @@ from mockymock.analysis.clause_bodies import (
 from mockymock.analysis.exact_counts import exact_count_scope
 from mockymock.analysis.loops import (
     LoopGuard,
+    loop_control_words,
+    loop_exit_literal,
     loop_guard_words,
     loop_guards,
     looped_paragraphs_and_statements,
@@ -72,6 +74,7 @@ from mockymock.analysis.mock_surface import (
     MockSurface,
     _all_paragraphs,
     _nested_statement_lists,
+    analyze_file_status_fields,
 )
 from mockymock.dsl.fixture_bundle import (
     BoundaryFixture,
@@ -883,7 +886,11 @@ def scaffold_cut(
     return _scaffold_with_bundle(suite_name, surface, bundle, placeholder_keys, source)
 
 
-def directive_snippet(site: BoundarySite, surface: MockSurface) -> str | None:
+def directive_snippet(
+    site: BoundarySite,
+    surface: MockSurface,
+    file_status_fields: dict[str, str] | None = None,
+) -> str | None:
     """Render the exact `.cut` text a bundle-less scaffold would emit for
     this one boundary site: a `MOCK ... END-MOCK` block, 4-space-indented
     header/footer and 8-space-indented body, matching
@@ -902,14 +909,18 @@ def directive_snippet(site: BoundarySite, surface: MockSurface) -> str | None:
     scaffold itself skips (a nested site with no recorded span, a
     top-level site the splicer cannot rewrite): suggesting a MOCK the
     next lint would refuse as UNSUPPORTED_NESTED_MOCK_TARGET /
-    UNSPLICEABLE is not a fix."""
+    UNSPLICEABLE is not a fix.
+
+    `file_status_fields` (`analyze_file_status_fields`) lets a READ's
+    placeholder report end of file through the file's own FILE STATUS
+    field -- see `_end_of_file_placeholder`."""
     if site.category is None:
         return None
     if site.nested and site.span is None:
         return None
     if not site.nested and site.unspliceable_reason:
         return None
-    rendered = _directive_for(site, surface)
+    rendered = _directive_for(site, surface, file_status_fields=file_status_fields)
     if rendered is None:
         return None
     header, body = rendered
@@ -1163,7 +1174,10 @@ def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
 
 
 def _directive_for(
-    site: BoundarySite, surface: MockSurface, context: ProgramContext | None = None
+    site: BoundarySite,
+    surface: MockSurface,
+    context: ProgramContext | None = None,
+    file_status_fields: dict[str, str] | None = None,
 ) -> tuple[str, list[str]] | None:
     category = site.category
     if category is None:
@@ -1186,9 +1200,9 @@ def _directive_for(
             # unmocked site loudly (2026-08-12 audit Finding 20).
             return None
         keyword = "MQ" if site.is_mq else "CALL"
-        body = _placeholder_body_for(category, key) + _call_loop_end_lines(
-            site, context, None
-        )
+        body = _dli_success_reply(
+            _placeholder_body_for(category, key), site
+        ) + _call_loop_end_lines(site, context, None)
         return f'MOCK {keyword} "{key}"', _with_captures(category, key, body, context)
 
     if category is MockCategory.DYNCALL:
@@ -1203,13 +1217,21 @@ def _directive_for(
         if not site.keys:
             return None  # no usable key parsed; run's refusal gate will name it
         key = site.keys[0]
-        return f"MOCK {category.value} {key}", _placeholder_body_for(category, key)
+        return f"MOCK {category.value} {key}", _placeholder_body_for(
+            category, key
+        ) + _end_of_file_placeholder(site, context, file_status_fields)
 
     if category is MockCategory.ACCEPT:
         if not site.keys:
             return None
         key = site.keys[0]
-        return f"MOCK ACCEPT {key}", _placeholder_body_for(category, key)
+        end_lines = _accept_loop_end_lines(site, context, None)
+        body = _placeholder_body_for(category, key)
+        if end_lines and not end_lines[0].startswith("*>"):
+            body = end_lines  # the sentinel replaces the placeholder value
+        else:
+            body = body + end_lines
+        return f"MOCK ACCEPT {key}", body
 
     if category in REPORT_WRITER_CATEGORIES:
         # INITIATE/GENERATE/TERMINATE: bare report name, empty body (the
@@ -1231,7 +1253,66 @@ def _directive_for(
     body = _placeholder_body_for(category, prefix)
     if category is MockCategory.DLI:
         body = body + _dli_loop_end_lines(site, context, None)
+    if category is MockCategory.CICS:
+        body = body + _cics_loop_end_lines(site, context, None)
     return f'MOCK {category.value} "{prefix}"', body
+
+
+def _end_of_file_placeholder(
+    site: BoundarySite,
+    context: ProgramContext | None,
+    file_status_fields: dict[str, str] | None = None,
+) -> list[str]:
+    """A READ or RETURN placeholder's body when the statement has an AT END
+    clause: report end of file on the first call, and carry the program's
+    own AT END handling. An empty body answered every call with a record,
+    so the commonest batch loop, `PERFORM ... UNTIL WS-EOF = "Y"` around
+    `READ ... AT END MOVE "Y" TO WS-EOF`, ran until --timeout from lint's
+    suggested fix, `generate --fill` and `--per-paragraph` alike (issue
+    #302; RETURN, the SORT OUTPUT PROCEDURE shape, is #262).
+
+    With a `ProgramContext` this is exactly what a bundle READ fixture's
+    exhaustion branch is (`_at_end_handling` / `_read_exhaustion_lines`).
+    Without one (lint's suggestion): the FILE STATUS field gets "10", or,
+    for a file with none, the splice's outcome field does, so the splice
+    re-runs the statement's own AT END clause; the clause's replicable
+    statements (idempotent MOVEs/SETs) are added too, for a site the splice
+    cannot lift the clause from."""
+    if site.category not in (MockCategory.READ, MockCategory.RETURN):
+        return []
+    if not getattr(site.statement, "at_end_clause", None) or not site.keys:
+        return []
+    key = site.keys[0]
+    if file_status_fields is None and context is not None and context.program:
+        file_status_fields = analyze_file_status_fields(
+            context.program  # type: ignore[arg-type]
+        )
+    status = (
+        (file_status_fields or {}).get(key.upper())
+        if site.category is MockCategory.READ
+        else None
+    )
+    if context is not None:
+        fixture = BoundaryFixture(
+            category=site.category.value,
+            key=key,
+            paragraph=site.paragraph_name,
+            line=site.line,
+            direction="IN",
+            terminal={status: "10"} if status else None,
+        )
+        replicated, at_end, lifted = _at_end_handling(fixture, site, context)
+        return _read_exhaustion_lines(fixture, replicated, at_end, lifted)
+    lines = [f'MOVE "10" TO {status or OUTCOME_FIELD}']
+    replicated = _replicated_at_end_statements(site.statement)
+    lines.extend(replicated)
+    if site.nested and not replicated:
+        lines.append(
+            "*> TODO: this program's AT END clause could not be "
+            "auto-replicated -- add its loop-guard statement by hand, "
+            "or this mock will never end the program's read loop"
+        )
+    return lines
 
 
 #: DL/I get-next calls and the DIBSTAT each returns once nothing is left:
@@ -1249,12 +1330,28 @@ def _dli_loop_end_lines(
     an empty mock body leaves DIBSTAT blank ("found") on every call, so a
     `PERFORM UNTIL` scan never ends (EXECDLI, found with #145). Report the
     end status after the first call -- with a tally, so one segment is
-    still returned -- or on the first call when no tally name is known."""
+    still returned -- or on the first call when no tally name is known.
+
+    Every site the key's MOCK answers is checked, not just `site` (issue
+    #315): the standard shape primes the loop with an identical GN before
+    it, and that priming site -- the first one seen -- is not itself in a
+    loop."""
     if context is None or not context.references("DIBSTAT"):
         return []
     words = (site.match_text or "").split()
     end_status = _DLI_GET_NEXT_END.get(words[0].upper()) if words else None
-    if end_status is None or not site_in_loop(site, context.looped):
+    if end_status is None:
+        return []
+    sites = [site]
+    if context.surface is not None:
+        key = _unique_prefix(site, context.surface)
+        sites += [
+            other
+            for other in context.surface.boundary_sites
+            if other.category is MockCategory.DLI
+            and (other.match_text or "").startswith(key)
+        ]
+    if not any(site_in_loop(other, context.looped) for other in sites):
         return []
     if tally is None:
         return [f'MOVE "{end_status}" TO DIBSTAT']
@@ -1309,6 +1406,26 @@ def _mq_success_reply(body: list[str], site: BoundarySite) -> list[str]:
     return kept + [f"MOVE 0 TO {name}" for name in names[-2:]]
 
 
+def _dli_success_reply(body: list[str], site: BoundarySite) -> list[str]:
+    """`body` plus a blank PCB status for a CBLTDLI/CEETDLI call: the
+    status DL/I reports for a call that found (or stored) its segment,
+    at bytes 11-12 of the PCB, the call's second USING argument. The
+    fixture row is random, so without this it handed the first call a
+    non-blank status such as "PO" and a `PERFORM UNTIL PCB-STATUS NOT =
+    SPACES` get loop ended before it started (issue #317, the DL/I
+    counterpart of #205). The end-of-data reply `_call_loop_end_lines`
+    adds after this still wins on the call that ends the loop."""
+    if site.category is not MockCategory.CALL or not site.keys:
+        return body
+    if site.keys[0].upper() not in _DLI_CALL_INTERFACES:
+        return body
+    using = list(getattr(site.statement, "using_parameters", None) or [])
+    names = [str(getattr(param, "name", "") or "") for param in using]
+    if len(names) < 2 or not names[1]:
+        return body
+    return body + [f"MOVE SPACES TO {names[1]}(11:2)"]
+
+
 def _call_end_reply(
     site: BoundarySite, context: ProgramContext
 ) -> tuple[tuple[tuple[str, str], ...], set[str]] | None:
@@ -1345,6 +1462,10 @@ def _row_already_ends(
     or the PCB's GB/GE) into the reply field: the loop then ends on the
     first call and the bundle's own count stands."""
     if context is None:
+        return False
+    if site.keys and site.keys[0].upper() in _DLI_CALL_INTERFACES:
+        # `_dli_success_reply` blanks the PCB status after the row's own
+        # MOVEs, so no DL/I row ends the loop by itself.
         return False
     reply = _call_end_reply(site, context)
     if reply is None:
@@ -1406,6 +1527,111 @@ def _call_loop_end_lines(
     return [f"IF {tally} > 1", *(f"    {move}" for move in moves), "END-IF"]
 
 
+#: The EIBRESP a CICS get-next command answers once nothing is left:
+#: ENDFILE (20) for a browse, ITEMERR (26) for a TS queue, QZERO (23) for
+#: a TD queue.
+_CICS_GET_NEXT_END = {"READNEXT": 20, "READPREV": 20, "READQ TS": 26, "READQ TD": 23}
+
+
+def _accept_loop_end_lines(
+    site: BoundarySite,
+    context: ProgramContext | None,
+    tally: str | None,
+) -> list[str]:
+    """An ACCEPT inside a loop whose UNTIL waits for the accepted value
+    itself (`PERFORM GET-CARD UNTIL WS-IN = "END"` around `ACCEPT WS-IN`,
+    the SYSIN control-card loop): a mock giving the same value on every
+    call never ends it, so the scaffold hung until --timeout (issue #263).
+    Move the loop's sentinel literal into the target after the first call
+    (gated on the tally, so the row's own value is still accepted once),
+    or on the first call when no tally name is known. A guard that reads
+    the target without a literal to match gets a TODO comment."""
+    if context is None or not site.keys or not site_in_loop(site, context.looped):
+        return []
+    target = site.keys[0].upper()
+    if target not in loop_guard_words(site, context.guards):
+        return []
+    literal = loop_exit_literal(site, context.guards, target)
+    if literal is None:
+        return [
+            f"*> TODO: a loop waits on the value this ACCEPT reads into "
+            f"{target} -- end it by hand (e.g. MOCK ACCEPT {target} ROWS "
+            f"... TERMINAL ( ... )), or this mock never ends it"
+        ]
+    move = f"MOVE {literal} TO {target}"
+    if tally is None:
+        return [move]
+    return [f"IF {tally} > 1", f"    {move}", "END-IF"]
+
+
+def _cics_get_next_command(site: BoundarySite) -> str | None:
+    """`site`'s key in `_CICS_GET_NEXT_END`, or None. A READQ with no TD
+    is a TS queue, CICS's own default."""
+    words = (site.match_text or "").upper().split()
+    if not words:
+        return None
+    if words[0] == "READQ":
+        return "READQ TD" if "TD" in words[1:2] else "READQ TS"
+    return words[0] if words[0] in _CICS_GET_NEXT_END else None
+
+
+def _cics_loop_end_lines(
+    site: BoundarySite,
+    context: ProgramContext | None,
+    tally: str | None,
+) -> list[str]:
+    """A READNEXT/READPREV/READQ in a loop whose UNTIL reads the command's
+    own RESP field (`PERFORM UNTIL WS-RESP NOT = DFHRESP(NORMAL)`, or a
+    flag set from it): a mock answering NORMAL on every call never ends
+    the browse, so the scaffold hung until --timeout (issue #316). Report
+    ENDFILE / ITEMERR / QZERO after the first call -- gated on the tally,
+    so the row is still returned once -- the way `_call_loop_end_lines`
+    ends an MQGET loop. Every site the key's MOCK answers is checked (a
+    priming READNEXT before the loop is the usual shape); sites needing
+    different end replies get a TODO comment instead."""
+    if (
+        context is None
+        or context.surface is None
+        or site.category is not (MockCategory.CICS)
+    ):
+        return []
+    key = _unique_prefix(site, context.surface)
+    sites = [
+        other
+        for other in context.surface.boundary_sites
+        if other.category is MockCategory.CICS
+        and (other.match_text or "").startswith(key)
+    ] or [site]
+    waits = False
+    replies: set[tuple[int, str] | None] = set()
+    for other in sites:
+        command = _cics_get_next_command(other)
+        resp = _cics_resp_names([other.statement])
+        if command is None or not resp:
+            replies.add(None)
+            continue
+        replies.add((_CICS_GET_NEXT_END[command], resp[0]))
+        if site_in_loop(other, context.looped) and loop_guard_words(
+            other, context.guards
+        ) & _reply_watched_names(other, {resp[0]}, context):
+            waits = True
+    if not waits:
+        return []
+    if len(replies) != 1 or None in replies:
+        return [
+            f"*> TODO: a loop waits on this command's RESP, but its "
+            f"{len(sites)} sites need different end replies -- end the "
+            f"loop by hand (e.g. MOCK CICS ... ROWS ... TERMINAL), or this "
+            f"mock never ends it"
+        ]
+    reply = replies.pop()
+    assert reply is not None  # one distinct reply, and None was excluded
+    move = f"MOVE {reply[0]} TO {reply[1]}"
+    if tally is None:
+        return [move]
+    return [f"IF {tally} > 1", f"    {move}", "END-IF"]
+
+
 def _reply_watched_names(
     site: BoundarySite, reply_args: set[str], context: ProgramContext
 ) -> set[str]:
@@ -1426,6 +1652,15 @@ def _reply_watched_names(
 
 
 def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
+    """The EXEC key for `site`: the shortest word prefix of its text no
+    other same-category site's text starts with, else its full text.
+
+    When another site's whole text is itself a prefix of this one
+    (`SYNCPOINT` beside `SYNCPOINT ROLLBACK`, a bare `RETURN` beside
+    `RETURN TRANSID(...)`), that site's key -- its full text -- already
+    matches this site too, so a second, longer key made the scaffold's
+    own directives AMBIGUOUS_MOCK (issue #248). Such a site takes the
+    shortest of those texts instead, so both share one directive."""
     words = (site.match_text or "").split()
     if not words:
         return ""
@@ -1434,12 +1669,29 @@ def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
         for other in surface.boundary_sites
         if other.category is site.category and other is not site
     ]
+    key = " ".join(words)
     for length in range(1, len(words) + 1):
         prefix = " ".join(words[:length])
         collisions = [o for o in others if o.startswith(prefix)]
         if not collisions:
-            return prefix
-    return " ".join(words)
+            key = prefix
+            break
+    # Imported here: refusal imports the generator.
+    from mockymock.analysis.refusal._gates import (
+        _exec_match_form,
+        _exec_prefix_matches,
+    )
+
+    own = _exec_match_form(" ".join(words))
+    for other in others:
+        other_key = " ".join(other.split())
+        if (
+            other_key
+            and len(other_key) < len(key)
+            and _exec_prefix_matches(_exec_match_form(other_key), own)
+        ):
+            key = other_key
+    return key
 
 
 # --- bundle-driven scaffold (mockymock generate --with-data) -----------------
@@ -1564,10 +1816,48 @@ def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
     return keys
 
 
+#: Categories cobol-parser's fixture bundle never lays out (issue #262).
+_BUNDLELESS_CATEGORIES = frozenset(
+    {MockCategory.RELEASE.value, MockCategory.RETURN.value}
+)
+
+
+def _program_supplied_call_keys(program) -> set[tuple[str, str]]:
+    """(category, key) of every CALL / DYNCALL boundary in cobol-parser's
+    own inventory whose arguments the program supplies all of (each
+    `call_args` direction OUT): the bundle counts such a boundary but has
+    no fixture or call_count expectation for it -- there is nothing to
+    generate -- so its absence from the bundle's keys is no disagreement
+    (issue #300). Empty when the inventory cannot be built, which keeps
+    the warning loud."""
+    if program is None:
+        return set()
+    try:
+        from cobolparser.analysis.boundary_inventory import (
+            BoundaryInventoryAnalyzer,
+        )
+        from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+
+        report = BoundaryInventoryAnalyzer().analyze(
+            program, ProgramLayoutIndex.build(program)
+        )
+    except Exception:  # noqa: BLE001 -- a warning helper never fails generate
+        return set()
+    keys: set[tuple[str, str]] = set()
+    for boundary in report.boundaries:
+        category = str(getattr(boundary.ref.category, "value", boundary.ref.category))
+        if category not in (MockCategory.CALL.value, MockCategory.DYNCALL.value):
+            continue
+        if all(arg.direction == "OUT" for arg in boundary.call_args or []):
+            keys.add((category, str(boundary.ref.key)))
+    return keys
+
+
 def _warn_on_key_mismatch(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     bundle_keys: set[tuple[str, str]],
     unmockable_keys: set[tuple[str, str]],
+    program_supplied_keys: set[tuple[str, str]] | None = None,
 ) -> None:
     """Loud, never-silent warning when the two independent boundary walks
     (mockymock's own `mock_surface.analyze()` and cobol-parser's bundle)
@@ -1580,7 +1870,15 @@ def _warn_on_key_mismatch(
     either without a matching MOCK directive would fail `mockymock lint`.
     """
     mockymock_set = {(category.value, key) for category, key in mockymock_keys}
-    only_in_mockymock = mockymock_set - bundle_keys
+    # The bundle has no fixtures for a SORT's RELEASE / RETURN (they
+    # touch the sort work file, not a mockable dataset): their placeholder
+    # bodies are the expected path, not a disagreement (issue #262).
+    only_in_mockymock = {
+        (category, key)
+        for category, key in mockymock_set - bundle_keys
+        if category not in _BUNDLELESS_CATEGORIES
+        and (category, key) not in (program_supplied_keys or set())
+    }
     # A key mockymock already lists as "not mockable" is an expected gap,
     # not a disagreement between the two walks.
     only_in_bundle = bundle_keys - mockymock_set - unmockable_keys
@@ -1913,6 +2211,79 @@ def _cics_operand_roles(statement: object) -> tuple[set[str], set[str]]:
     return inputs, others
 
 
+def _cics_fixture_statements(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> list | None:
+    """The EXEC CICS statement(s) a CICS fixture stands for: the one on
+    the fixture's own line, else every statement its key prefixes. None
+    with no program to read them from."""
+    surface = source.surface if source is not None else None
+    if surface is None:
+        return None
+    key = " ".join(fixture.key.upper().split())
+    cics_sites = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.CICS
+        and (site.match_text or "").startswith(key)
+    ]
+    return [site.statement for site in cics_sites if site.line == fixture.line] or [
+        site.statement for site in cics_sites
+    ]
+
+
+def _sql_output_layout(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> list[FieldSpec]:
+    """`fixture.layout` restricted to the INTO host variables (and their
+    null indicators) of the fixture's own SELECT / FETCH statement(s)
+    (issue #239). The bundle lays out every host variable, the WHERE
+    clause's input key included, so a generated SELECT mock overwrote the
+    key the program had just set and `--record-expectations` recorded the
+    random text as golden. Left unchanged when no statement is found or
+    any of them carries no INTO list (UPDATE / INSERT / an unparsed one)."""
+    surface = source.surface if source is not None else None
+    if surface is None or fixture.category != "SQL":
+        return list(fixture.layout)
+    key = " ".join(fixture.key.upper().split())
+    sql_sites = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.SQL
+        and (site.match_text or "").upper().startswith(key)
+    ]
+    statements = [
+        site.statement for site in sql_sites if site.line == fixture.line
+    ] or [site.statement for site in sql_sites]
+    into: set[str] = set()
+    for statement in statements:
+        names = getattr(statement, "into_variables", None)
+        if not isinstance(names, list) or not names:
+            return list(fixture.layout)
+        into |= {str(name).upper() for name in names}
+    if not into:
+        return list(fixture.layout)
+    return [
+        spec
+        for spec in fixture.layout
+        if set(spec.qualified_name.upper().split(".")) & into
+    ]
+
+
+def _cics_resp_names(statements: list) -> list[str]:
+    """The RESP and RESP2 operand names of `statements`, in order, once."""
+    names: list[str] = []
+    for statement in statements:
+        options = getattr(statement, "options", None) or {}
+        for option, value in options.items():
+            if str(option).upper() not in ("RESP", "RESP2"):
+                continue
+            name = _cics_operand_name(value)
+            if name is not None and name not in names:
+                names.append(name)
+    return names
+
+
 def _cics_output_layout(
     fixture: BoundaryFixture, source: ProgramContext | None
 ) -> list[FieldSpec]:
@@ -1923,19 +2294,9 @@ def _cics_output_layout(
     A field also named by a non-input operand of any statement for this
     key is kept. With no program to read the statements from, nothing is
     filtered."""
-    surface = source.surface if source is not None else None
-    if surface is None:
+    statements = _cics_fixture_statements(fixture, source)
+    if statements is None:
         return fixture.layout
-    key = " ".join(fixture.key.upper().split())
-    cics_sites = [
-        site
-        for site in surface.boundary_sites
-        if site.category is MockCategory.CICS
-        and (site.match_text or "").startswith(key)
-    ]
-    statements = [
-        site.statement for site in cics_sites if site.line == fixture.line
-    ] or [site.statement for site in cics_sites]
     inputs: set[str] = set()
     others: set[str] = set()
     for statement in statements:
@@ -1951,8 +2312,51 @@ def _cics_output_layout(
     return kept
 
 
+def _without_loop_control(
+    fixture: BoundaryFixture,
+    site: BoundarySite | None,
+    context: ProgramContext | None,
+) -> tuple[BoundaryFixture, list[str]]:
+    """Drop the fixture fields a CALL/DYNCALL/DLI mock must not write: the
+    VARYING / AFTER control items and UNTIL words of the loops `site` runs
+    in. `CALL "FMTLINE" USING WS-IX WS-LINE` inside `PERFORM VARYING WS-IX
+    ... UNTIL WS-IX > WS-COUNT` passes the counter BY REFERENCE, so the
+    bundle lays it out, and a generated `MOVE 0 TO WS-IX` reset the loop on
+    every call: the happy path ran until --timeout (issue #286). The
+    program advances those items itself; a guard that waits on the call's
+    own reply (MQGET / DL/I get, #156) keeps its fields, since the end
+    reply is what ends that loop. Returns the trimmed fixture and a TODO
+    naming each dropped field."""
+    if context is None or site is None or not fixture.layout:
+        return fixture, []
+    control = loop_control_words(site, context.guards)
+    if not control:
+        return fixture, []
+    reply = (
+        _call_end_reply(site, context) if site.category is MockCategory.CALL else None
+    )
+    if reply is not None:
+        control -= set().union(*(context.names_under(name) for name in reply[1]))
+    kept, dropped = [], []
+    for spec in fixture.layout:
+        if set(spec.qualified_name.upper().split(".")) & control:
+            dropped.append(spec.name)
+        else:
+            kept.append(spec)
+    if not dropped:
+        return fixture, []
+    todo = [
+        f"*> TODO: {name} controls a loop around this call -- not set here, "
+        f"or the loop never ends"
+        for name in dropped
+    ]
+    return replace(fixture, layout=kept), todo
+
+
 def _single_row_body(
-    fixture: BoundaryFixture, source: ProgramContext | None = None
+    fixture: BoundaryFixture,
+    source: ProgramContext | None = None,
+    pinned: frozenset[str] = frozenset(),
 ) -> list[str]:
     """ACCEPT / CALL / DYNCALL / CICS / DLI (always single-invocation), and
     SQL's own single-row/status-override fallback (see `_sql_wants_rows`).
@@ -1961,10 +2365,28 @@ def _single_row_body(
     categories do: every existing hand-written SQL mock in this codebase
     sets SQLCODE itself, always)."""
     body: list[str] = []
+    normal_resp: list[str] = []
     if fixture.category == "CICS":
-        fixture = replace(fixture, layout=_cics_output_layout(fixture, source))
+        layout = _cics_output_layout(fixture, source)
+        # RESP/RESP2 answer DFHRESP(NORMAL) and 0 unless the scenario pins
+        # them: a random number sent every happy path down the error
+        # branch, and --record-expectations recorded it (issue #253).
+        normal_resp = [
+            name
+            for name in _cics_resp_names(
+                _cics_fixture_statements(fixture, source) or []
+            )
+            if name not in pinned
+        ]
+        layout = [
+            spec
+            for spec in layout
+            if not set(spec.qualified_name.upper().split(".")) & set(normal_resp)
+        ]
+        fixture = replace(fixture, layout=layout)
     if fixture.sequence:
         body.extend(_row_move_lines(fixture.sequence[0], fixture, source))
+    body.extend(f"MOVE 0 TO {name}" for name in normal_resp)
     if fixture.category == "SQL":
         body.extend(_sql_status_lines(fixture))
         return body
@@ -2243,6 +2665,7 @@ def _bundle_directive_for(
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
+    pinned: frozenset[str] = frozenset(),
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """The full `MOCK ... END-MOCK` (or `MOCK ... ROWS ... END-MOCK`) block
     for one scenario's boundary fixture, or None if this (category, key)
@@ -2320,6 +2743,8 @@ def _bundle_directive_for(
     looped_fetch = category is MockCategory.SQL and _is_looped_fetch(
         fixture, site, source
     )
+    if category is MockCategory.SQL:
+        fixture = replace(fixture, layout=_sql_output_layout(fixture, source))
     if (fixture.category, fixture.key) in placeholder_keys:
         if category is MockCategory.READ:
             replicated, at_end, lifted = _at_end_handling(fixture, site, source)
@@ -2338,10 +2763,22 @@ def _bundle_directive_for(
                 )
         elif category is MockCategory.SQL and _sql_wants_rows(fixture, looped_fetch):
             body = list(_SQL_ROWS_EXHAUSTED_BODY)
+            if source is not None and source.references("SQLSTATE"):
+                # The same "not found" SQLSTATE a ROWS mock's exhaustion
+                # reports (issue #313).
+                body.append('MOVE "02000" TO SQLSTATE')
             call_count_override = CallCountOverride(count=1)
         else:
-            body = _placeholder_body_for(category, fixture.key)
-            end_lines = _call_loop_end_lines(site, source, None)
+            body = _dli_success_reply(
+                _placeholder_body_for(category, fixture.key), site
+            )
+            end_lines = _call_loop_end_lines(site, source, None) + _cics_loop_end_lines(
+                site, source, None
+            )
+            if category is MockCategory.ACCEPT:
+                end_lines = _accept_loop_end_lines(site, source, None)
+                if end_lines and not end_lines[0].startswith("*>"):
+                    body = []  # the sentinel replaces the placeholder value
             body = body + end_lines
             if end_lines and not end_lines[0].startswith("*>"):
                 call_count_override = CallCountOverride(count=1)
@@ -2373,13 +2810,32 @@ def _bundle_directive_for(
             override,
         )
     else:
-        body = _single_row_body(fixture, source)
+        loop_todo: list[str] = []
+        if category in (MockCategory.CALL, MockCategory.DYNCALL, MockCategory.DLI):
+            fixture, loop_todo = _without_loop_control(fixture, site, source)
+        body = _single_row_body(fixture, source, pinned) + loop_todo
         if category is MockCategory.CALL:
-            body = _mq_success_reply(body, site)
+            body = _dli_success_reply(_mq_success_reply(body, site), site)
         if category is MockCategory.DLI and registry.known(category, fixture.key):
             body = body + _dli_loop_end_lines(
                 site, source, registry.name(category, fixture.key)
             )
+        if category is MockCategory.CICS and registry.known(category, fixture.key):
+            end_lines = _cics_loop_end_lines(
+                site, source, registry.name(category, fixture.key)
+            )
+            if end_lines and not end_lines[0].startswith("*>"):
+                # The row answers the first call, ENDFILE the second.
+                call_count_override = CallCountOverride(count=2, from_placeholder=False)
+            body = body + end_lines
+        if category is MockCategory.ACCEPT and registry.known(category, fixture.key):
+            end_lines = _accept_loop_end_lines(
+                site, source, registry.name(category, fixture.key)
+            )
+            if end_lines and not end_lines[0].startswith("*>"):
+                # The row answers the first ACCEPT, the sentinel the second.
+                call_count_override = CallCountOverride(count=2, from_placeholder=False)
+            body = body + end_lines
         if category is MockCategory.CALL and registry.known(category, fixture.key):
             end_lines = _call_loop_end_lines(
                 site, source, registry.name(category, fixture.key)
@@ -2421,6 +2877,7 @@ def _bundle_directive_for_group(
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
+    pinned: frozenset[str] = frozenset(),
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """Like `_bundle_directive_for`, but for every fixture that resolves
     to the SAME physical mockymock `BoundarySite` (only possible for
@@ -2451,7 +2908,7 @@ def _bundle_directive_for_group(
     them as status-only left the READ mock empty and the loop endless."""
     if len(fixtures) == 1 or any(f.direction != "STATUS_ONLY" for f in fixtures):
         return _bundle_directive_for(
-            fixtures[0], mockymock_keys, registry, placeholder_keys, source
+            fixtures[0], mockymock_keys, registry, placeholder_keys, source, pinned
         )
     primary = fixtures[0]
     try:
@@ -2469,6 +2926,19 @@ def _bundle_directive_for_group(
     lines.extend(f"    {line}" for line in body)
     lines.append("END-MOCK")
     return lines, None
+
+
+def _pinned_fields(scenario: Scenario) -> frozenset[str]:
+    """Leaf names (uppercased) of the fields cobol-parser pinned to reach
+    the branch `scenario` is named for (`verification.fields`): their
+    generated values are the point of the scenario and are never replaced
+    by a success default. Empty for the happy path."""
+    fields = (scenario.verification or {}).get("fields") or []
+    return frozenset(
+        str(entry.get("field") or "").upper().rsplit(".", 1)[-1]
+        for entry in fields
+        if isinstance(entry, dict) and entry.get("field")
+    )
 
 
 def _bundle_mock_directives(
@@ -2514,6 +2984,7 @@ def _bundle_mock_directives(
     reads the SAME downgrade decision the body rendering above it just
     made instead of re-deriving it from `placeholder_keys` a second time.
     """
+    pinned = _pinned_fields(scenario)
     fixtures_by_site: dict[int, list[BoundaryFixture]] = {}
     site_order: list[int] = []
     for fixture in scenario.fixtures:
@@ -2537,7 +3008,7 @@ def _bundle_mock_directives(
     for site_id in site_order:
         group = fixtures_by_site[site_id]
         result = _bundle_directive_for_group(
-            group, mockymock_keys, registry, placeholder_keys, source
+            group, mockymock_keys, registry, placeholder_keys, source, pinned
         )
         if result is not None:
             directive, override = result
@@ -2565,6 +3036,10 @@ def _bundle_mock_directives(
             )
         if category is MockCategory.CALL and registry.known(category, key):
             body = body + _call_loop_end_lines(
+                site, source, registry.name(category, key)
+            )
+        if category is MockCategory.CICS and registry.known(category, key):
+            body = body + _cics_loop_end_lines(
                 site, source, registry.name(category, key)
             )
         lines.append(directive_line)
@@ -2983,6 +3458,7 @@ def _scaffold_with_bundle(
         mockymock_keys,
         _bundle_boundary_keys(bundle),
         _known_unmockable_keys(surface),
+        _program_supplied_call_keys(source.program if source is not None else None),
     )
     fallback_entry = _first_paragraph(source.program) if source is not None else None
     registry = _build_shadow_tally_registry(bundle, mockymock_keys, fallback_entry)
