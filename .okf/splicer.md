@@ -511,12 +511,19 @@ plus `UT-SAVE-STATE` / `UT-RESTORE-STATE` bodies, and one problem per
 item it can't copy exactly (`cli.checks` step 10 turns them into
 `UNSAVABLE_BEFORE_ALL_STATE`). The driver runs reset, BEFORE-ALL steps,
 save once; each case runs reset then restore -- the reset still handles
-harness fields, captures and the EIB.
+harness fields and captures. The blocks mockymock synthesizes after
+parsing -- `DFHEIBLK`, `DLIDIB` (`cics_eib`) and the generated `SQLCA`
+(`sqlca`) -- are snapshotted too, as group byte copies sized from
+`SYNTHESIZED_GROUP_BYTES` (`cli.checks._synthesized_groups` decides which
+the program gets): the reset clears them before every case, so a
+BEFORE-ALL that set `EIBCALEN` or `SQLCODE` was wiped before the first
+case (issue #225).
 
 | Item | Snapshot field | Copy |
 |---|---|---|
 | Group | `01 UT-SNAP-nnn.` + `05 FILLER PIC X(n)`, n an upper bound (`_max_bytes`: REDEFINES children summed, every elementary at least 16 bytes, national x4) | `MOVE` (group move = byte copy; restore copies back exactly the group's own bytes) |
-| Elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
+| Elementary with an editing PICTURE (`XX/XX`, `XXXBXXXX`, `NNBNN`, `ZZ9.99`) | as for a group | `MOVE` through the group snapshot (byte copy). A same-PICTURE MOVE re-applied the editing mask to already-edited text, so `"AB/CD"` came back `"AB///"` (issue #224) |
+| Other elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
 | POINTER family, INDEX | same USAGE | `SET` |
 | Group holding OCCURS ... DEPENDING ON, unreadable OCCURS bound, irreproducible description | -- | refused |
 
@@ -760,6 +767,29 @@ transform exists to prevent (the pointer would come from a mocked
 `splicer.linkage.redirect_address_of` overwrites each one with
 `DISCARD_POINTER` (`UT-ADDR-SINK`), space-padded to the identical width via
 `stub_writer.replace_columns`. Consequences worth knowing:
+
+**Real rebinds where the address is the program's own (issue #226,
+option 1 with the mocked-boundary exception).** The redirect made every
+read through a re-addressed item see its blank folded storage
+(`SET ADDRESS OF LK-VIEW TO ADDRESS OF WS-BUF` then `MOVE LK-VIEW ...`
+read spaces). `analysis.linkage.rebindable_sites` now keeps the rebind for
+a site whose sending operand is `ADDRESS OF <item>`, or a pointer the
+PROCEDURE DIVISION only ever writes with `SET <ptr> TO ADDRESS OF ...`
+(and otherwise only reads as another rebind's source). For those items
+`splicer.linkage.mark_based` inserts `BASED` after the name on the 01/77
+declaration line (widening that one DATA DIVISION line; no line moves),
+records a `Rebinding` on `LinkagePlan.rebindings`, and the item gets
+`UT-LKB-nnn PIC X(n)` backing storage (n from `snapshot._max_bytes`,
+declared through `cli.checks.extra_working_storage`).
+`extra_reset_lines` points it back at that storage *before* the folded
+items' own resets, so a previous case's alias is never written through;
+the BEFORE-ALL snapshot saves and restores its address (`SET`) ahead of
+any data. Every other site -- a pointer a CALL or EXEC fills in (the IMS
+`UIBPCBAL` idiom: NULL from a mocked `CBLTDLI`), one a MOVE touches,
+`NULL`, a qualified or subscripted source, or an item whose declaration
+line cannot be found -- keeps the redirect below, which can never
+dereference an address the test run does not have. `run` prints which
+items were kept as real rebinds.
 
 - **Column- and line-preserving**, like `neutralize` above and unlike
   `cics_eib`'s insertion: nothing any `SourceLocation` indexes into moves,
@@ -1191,8 +1221,9 @@ case's `perform_target` (with optional `perform_thru`).
 
 Each `UT-TESTCASE-NNN` paragraph: optionally performs the reset paragraph,
 moves the case ID into `UT-CURRENT-CASE` (this is what every injected
-EVALUATE dispatch block switches on), zeroes every tally this case's mocks
-touch, displays a `CASE NNN START` marker, runs any `setup_moves`,
+EVALUATE dispatch block switches on), starts every tally this case's mocks
+touch (0, or a BEFORE-ALL mock's saved `-START` count) and its VERIFY
+baseline `-BASE` (see dsl.md's "ROWS cursor across hooks"), displays a `CASE NNN START` marker, runs any `setup_moves`,
 performs the target paragraph, then checks `expectations` (the
 directive's own relation from `ExpectDirective.operator` — `=` for plain
 `TO BE`, plus `NOT =`/`>`/`<`/`>=`/`<=` and their negations from the

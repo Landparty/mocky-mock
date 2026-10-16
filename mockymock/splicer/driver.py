@@ -156,8 +156,15 @@ def build_driver(
     # Z-edited field and TRIMming yields a plain "3" in the FAIL line.
     if any(case.verifications for case in suite.test_cases):
         working_storage.append("01  UT-TALLY-EDITED        PIC Z(8)9.")
-    for _, tally in registry.items():
+    for (category, key), tally in registry.items():
         working_storage.append(f"01  {tally}      PIC 9(9) VALUE 0.")
+        working_storage.append(
+            f"01  {registry.base_name(category, key)}      PIC 9(9) VALUE 0."
+        )
+    for category, key in _resumed_keys(suite):
+        working_storage.append(
+            f"01  {registry.start_name(category, key)}      PIC 9(9) VALUE 0."
+        )
     if extra_working_storage_lines:
         working_storage.extend(extra_working_storage_lines)
 
@@ -175,6 +182,10 @@ def build_driver(
         if reset_lines:
             procedure.append("           PERFORM UT-RESET-WORKING-STORAGE")
         procedure.extend(_suite_phase_lines(suite, registry, suite.before_all_steps))
+        procedure.extend(
+            f"           MOVE {registry.name(*key)} TO {registry.start_name(*key)}"
+            for key in _resumed_keys(suite)
+        )
         if restore_state:
             procedure.append("           PERFORM UT-SAVE-STATE")
     for index in range(1, len(suite.test_cases) + 1):
@@ -249,6 +260,56 @@ def _tally_zero_lines(mocks, registry: TallyRegistry) -> list[str]:
     ]
 
 
+def _resumed_keys(suite: MockTestSuite) -> list[tuple]:
+    """BEFORE-ALL mock keys whose ROWS cursor each case resumes from where
+    the BEFORE-ALL steps left it (only when there are steps to consume
+    rows)."""
+    if not suite.before_all_steps:
+        return []
+    return list(dict.fromkeys((m.category, m.key) for m in suite.before_all_mocks))
+
+
+def _case_tally_start_lines(
+    case: MockTestCase, registry: TallyRegistry, suite: MockTestSuite | None
+) -> list[str]:
+    """Case-start values of each mocked key's tally and VERIFY baseline.
+
+    The tally is also the ROWS cursor (injector.build_rows_block), so it
+    must continue across hook steps rather than restart: a row a priming
+    READ in BEFORE-EACH or BEFORE-ALL consumed was handed out again in the
+    case (issue #223). A key the case inherits from BEFORE-ALL resumes at
+    the count BEFORE-ALL left (its -START field); every other key starts at
+    0. The baseline starts equal to the tally, so VERIFY counts nothing
+    that happened before the case."""
+    resumed = set(_resumed_keys(suite)) if suite is not None else set()
+    inherited = {id(m) for m in suite.before_all_mocks} if suite is not None else set()
+    lines: list[str] = []
+    seen: set[tuple] = set()
+    for mock in case.mocks:
+        key = (mock.category, mock.key)
+        if key in seen:
+            continue
+        seen.add(key)
+        tally = registry.name(*key)
+        start = (
+            registry.start_name(*key)
+            if key in resumed and id(mock) in inherited
+            else "0"
+        )
+        lines.append(f"           MOVE {start} TO {tally}")
+        lines.append(f"           MOVE {tally} TO {registry.base_name(*key)}")
+    return lines
+
+
+def _tally_baseline_lines(mocks, registry: TallyRegistry) -> list[str]:
+    """After a BEFORE-EACH PERFORM: VERIFY counts from here on, while the
+    tally (the ROWS cursor) keeps the rows the hook consumed."""
+    return [
+        f"           MOVE {registry.name(*key)} TO {registry.base_name(*key)}"
+        for key in dict.fromkeys((m.category, m.key) for m in mocks)
+    ]
+
+
 def _suite_phase_lines(
     suite: MockTestSuite, registry: TallyRegistry, steps: list[HookStep]
 ) -> list[str]:
@@ -289,8 +350,7 @@ def _build_testcase_paragraph(
     # case's EXPECT RETURN-CODE (issue #140).
     lines.append("           MOVE 0 TO RETURN-CODE")
     lines.append('           MOVE "N" TO UT-EARLY-EXIT')
-    for category, key in dict.fromkeys((m.category, m.key) for m in case.mocks):
-        lines.append(f"           MOVE 0 TO {registry.name(category, key)}")
+    lines.extend(_case_tally_start_lines(case, registry, suite))
     lines.append(
         f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} START: '
         f'{_display_text(case.name)}"'
@@ -301,7 +361,7 @@ def _build_testcase_paragraph(
         # VERIFY counts what the test's own PERFORM did: calls a BEFORE-EACH
         # PERFORM made are not the code under test.
         if any(step.kind == "PERFORM" for step in before_each):
-            lines.extend(_tally_zero_lines(case.mocks, registry))
+            lines.extend(_tally_baseline_lines(case.mocks, registry))
             # A terminator a BEFORE-EACH PERFORM reached must not cut the
             # case's own PERFORM short.
             lines.append('           MOVE "N" TO UT-EARLY-EXIT')
@@ -373,9 +433,11 @@ def _build_testcase_paragraph(
                 f"declares (should have been refused before codegen)"
             )
         tally = registry.name(verification.category, verification.key)
-        condition = _verify_condition(verification.expectation, tally)
+        base = registry.base_name(verification.category, verification.key)
+        count = f"({tally} - {base})"
+        condition = _verify_condition(verification.expectation, count)
         lines.append(f"           IF {condition}")
-        lines.append(f"               MOVE {tally} TO UT-TALLY-EDITED")
+        lines.append(f"               COMPUTE UT-TALLY-EDITED = {tally} - {base}")
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY '
             f"{verification.category.keyword} {_display_text(verification.key)} WAS CALLED "

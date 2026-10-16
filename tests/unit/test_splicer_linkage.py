@@ -370,3 +370,83 @@ def test_a_value_side_address_of_continued_onto_the_next_line_is_legal():
     )
     assert problems == []
     assert [site.item_name for site in sites] == ["LKPCB-CLP100MA"]  # line 1 only
+
+
+REBIND_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LK.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-BUF                PIC X(10) VALUE "HELLOWORLD".
+       01  WS-PTR                USAGE POINTER.
+       01  WS-OUT                PIC X(5) VALUE SPACES.
+       01  WS-OUT2               PIC X(5) VALUE SPACES.
+       LINKAGE SECTION.
+       01  LK-PARM               PIC X(3).
+       01  LK-VIEW               PIC X(10).
+       01  LK-PCB                PIC X(4).
+       01  LK-UIB.
+           05  LK-PCBAL          USAGE POINTER.
+       PROCEDURE DIVISION USING LK-PARM.
+       0000-MAIN.
+           SET WS-PTR TO ADDRESS OF WS-BUF
+           SET ADDRESS OF LK-VIEW TO WS-PTR
+           MOVE LK-VIEW(1:5) TO WS-OUT
+           GOBACK.
+       1000-DIRECT.
+           SET ADDRESS OF LK-VIEW TO ADDRESS OF WS-BUF
+           MOVE LK-VIEW(6:5) TO WS-OUT2
+           MOVE "XY" TO LK-VIEW(1:2).
+       2000-PSB.
+           CALL "CBLTDLI" USING LK-PARM ADDRESS OF LK-UIB
+           SET ADDRESS OF LK-PCB TO LK-PCBAL
+           MOVE LK-PCB TO WS-OUT.
+       3000-PEEK.
+           MOVE LK-VIEW(1:5) TO WS-OUT.
+"""
+
+REBIND_CUT = """\
+TESTSUITE "lk"
+BEFORE-ALL
+    PERFORM 1000-DIRECT
+END-BEFORE
+TESTCASE "addr"
+    PERFORM 0000-MAIN
+    EXPECT WS-OUT TO BE "HELLO"
+"""
+
+
+def test_set_address_of_to_a_program_address_is_a_real_rebind(tmp_path):
+    """Issue #226 (option 1, with the mocked-boundary exception): a folded
+    item the program re-addresses at its own storage -- ADDRESS OF an item,
+    or a pointer it only ever SETs to an ADDRESS OF -- becomes BASED over
+    its own backing storage, so reads through it see the data it points
+    at. A rebind to a pointer anything else fills (LK-PCBAL, written by
+    the mocked CBLTDLI) keeps the redirect into UT-ADDR-SINK."""
+    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.splicer.linkage import extra_reset_lines
+
+    cbl = tmp_path / "LK.cbl"
+    cbl.write_text(REBIND_SOURCE)
+    cut = tmp_path / "LK.cut"
+    cut.write_text(REBIND_CUT)
+    checked = run_static_checks(cbl, cut, None)
+    assert checked.problems == []
+    assert checked.lines is not None and checked.linkage is not None
+    assert any("01  LK-VIEW BASED" in line for line in checked.lines)
+    assert not any("LK-PCB BASED" in line for line in checked.lines)
+    assert [site.item_name for site in checked.linkage_address_of] == ["LK-PCB"]
+    assert any("SET ADDRESS OF LK-VIEW TO WS-PTR" in line for line in checked.lines)
+    assert any("SET UT-ADDR-SINK" in line for line in checked.lines)
+
+    [rebinding] = checked.linkage.rebindings
+    assert rebinding.item_name == "LK-VIEW"
+    assert rebinding.size >= 10
+    assert f"01  UT-LKB-001  PIC X({rebinding.size})." in (
+        extra_working_storage(checked) or []
+    )
+    reset = extra_reset_lines(checked.linkage)
+    assert reset[0] == "SET ADDRESS OF LK-VIEW TO ADDRESS OF UT-LKB-001"
+    assert checked.snapshot is not None
+    assert checked.snapshot.save_lines[0] == "SET UT-SNAP-001 TO ADDRESS OF LK-VIEW"
+    assert checked.snapshot.restore_lines[0] == "SET ADDRESS OF LK-VIEW TO UT-SNAP-001"
