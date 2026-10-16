@@ -1226,6 +1226,14 @@ def _print_linkage_neutralization(
             f"pointer -- once folded into WORKING-STORAGE those items own "
             f"real storage, which GnuCOBOL will not let a program rebind"
         )
+    rebindings = getattr(plan, "rebindings", None) or []
+    if applied and rebindings:
+        names = ", ".join(r.item_name for r in rebindings)
+        print(
+            f"mockymock {command}: kept `SET ADDRESS OF` on {names} as a real "
+            f"rebind (BASED, over its own storage at the start of each case) "
+            f"-- every address it is set to is one the program itself takes"
+        )
 
 
 def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:

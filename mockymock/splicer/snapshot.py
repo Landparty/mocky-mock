@@ -86,6 +86,7 @@ def plan_snapshot(
     program,
     linkage_items: list | None = None,
     synthesized_groups: list[str] | None = None,
+    rebound_items: list[str] | None = None,
 ) -> tuple[StateSnapshot, list[str]]:
     """The snapshot fields and the save/restore statements for `program`,
     plus one problem string per item that cannot be saved exactly (empty
@@ -96,9 +97,19 @@ def plan_snapshot(
     parsing (DFHEIBLK, DLIDIB, SQLCA; keys of SYNTHESIZED_GROUP_BYTES).
     They are reset before every case like any other storage, so without a
     snapshot entry a BEFORE-ALL that set EIBCALEN or SQLCODE was wiped
-    before the first case (issue #225); each is byte-copied like a group."""
+    before the first case (issue #225); each is byte-copied like a group.
+
+    `rebound_items` names folded LINKAGE items kept BASED
+    (`splicer.linkage.mark_based`, issue #226): the address BEFORE-ALL left
+    each one at is saved too, and restored before any data, because the
+    reset points it back at its own backing storage."""
     snapshot = StateSnapshot()
     problems: list[str] = []
+    for name in rebound_items or []:
+        snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
+        snapshot.working_storage_lines.append(f"01  {snap} USAGE POINTER.")
+        snapshot.save_lines.append(f"SET {snap} TO ADDRESS OF {name}")
+        snapshot.restore_lines.append(f"SET ADDRESS OF {name} TO {snap}")
     for name in synthesized_groups or []:
         snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
         snapshot.working_storage_lines.extend(

@@ -700,6 +700,29 @@ transform exists to prevent (the pointer would come from a mocked
 `DISCARD_POINTER` (`UT-ADDR-SINK`), space-padded to the identical width via
 `stub_writer.replace_columns`. Consequences worth knowing:
 
+**Real rebinds where the address is the program's own (issue #226,
+option 1 with the mocked-boundary exception).** The redirect made every
+read through a re-addressed item see its blank folded storage
+(`SET ADDRESS OF LK-VIEW TO ADDRESS OF WS-BUF` then `MOVE LK-VIEW ...`
+read spaces). `analysis.linkage.rebindable_sites` now keeps the rebind for
+a site whose sending operand is `ADDRESS OF <item>`, or a pointer the
+PROCEDURE DIVISION only ever writes with `SET <ptr> TO ADDRESS OF ...`
+(and otherwise only reads as another rebind's source). For those items
+`splicer.linkage.mark_based` inserts `BASED` after the name on the 01/77
+declaration line (widening that one DATA DIVISION line; no line moves),
+records a `Rebinding` on `LinkagePlan.rebindings`, and the item gets
+`UT-LKB-nnn PIC X(n)` backing storage (n from `snapshot._max_bytes`,
+declared through `cli.checks.extra_working_storage`).
+`extra_reset_lines` points it back at that storage *before* the folded
+items' own resets, so a previous case's alias is never written through;
+the BEFORE-ALL snapshot saves and restores its address (`SET`) ahead of
+any data. Every other site -- a pointer a CALL or EXEC fills in (the IMS
+`UIBPCBAL` idiom: NULL from a mocked `CBLTDLI`), one a MOVE touches,
+`NULL`, a qualified or subscripted source, or an item whose declaration
+line cannot be found -- keeps the redirect below, which can never
+dereference an address the test run does not have. `run` prints which
+items were kept as real rebinds.
+
 - **Column- and line-preserving**, like `neutralize` above and unlike
   `cics_eib`'s insertion: nothing any `SourceLocation` indexes into moves,
   so this is safe at the point in the pipeline where it runs (step 5 of

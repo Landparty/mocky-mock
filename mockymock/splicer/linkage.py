@@ -24,6 +24,9 @@ the caller-independent line-location work.
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+
 from mockymock.analysis.linkage import (
     AddressOfSite,
     LinkagePlan,
@@ -67,8 +70,85 @@ def extra_reset_lines(plan: LinkagePlan) -> list[str]:
     """Reset lines for the LINKAGE items `neutralize` folded into
     WORKING-STORAGE -- `reset_move_lines` walks the AST's WORKING-STORAGE
     section directly and would never see them (the transform above edits
-    text only, not the AST each item still belongs to)."""
-    return reset_lines_for_items(plan.linkage_items)
+    text only, not the AST each item still belongs to).
+
+    A rebound (BASED) item is first pointed back at its own backing storage
+    -- a previous case may have left it addressing the program's storage,
+    which the item's reset would otherwise overwrite."""
+    return rebinding_reset_lines(plan.rebindings) + reset_lines_for_items(
+        plan.linkage_items
+    )
+
+
+# Backing storage of a folded item made BASED (issue #226).
+REBIND_BACKING_PREFIX = "UT-LKB-"
+
+
+@dataclass(frozen=True)
+class Rebinding:
+    """A folded LINKAGE item kept BASED so its `SET ADDRESS OF` really
+    rebinds it, with `backing` (`size` bytes, an upper bound) as the
+    storage it addresses at the start of every case."""
+
+    item_name: str
+    backing: str
+    size: int
+
+
+def mark_based(
+    lines: list[str], plan: LinkagePlan, sites: list[AddressOfSite]
+) -> tuple[list[str], list[Rebinding]]:
+    """Make each folded 01/77 item that one of `sites` rebinds a BASED
+    item, so the `SET ADDRESS OF` keeps its meaning instead of being
+    redirected into `UT-ADDR-SINK` (issue #226: reads through a view the
+    program pointed at its own storage saw blank folded storage).
+
+    `BASED` is inserted after the item's name on its declaration line. That
+    widens that one DATA DIVISION line only; no line moves. An item whose
+    declaration cannot be found that way, or whose size cannot be bounded,
+    is left alone -- its sites stay redirected."""
+    from mockymock.splicer.snapshot import _max_bytes
+
+    wanted = {site.item_name.upper() for site in sites}
+    rebindings: list[Rebinding] = []
+    for item in plan.linkage_items:
+        name = (getattr(item, "name", None) or "").upper()
+        if name not in wanted or getattr(item, "level", None) not in (1, 77):
+            continue
+        location = getattr(item, "location", None)
+        size = _max_bytes(item)
+        if location is None or size is None or not 0 < location.line <= len(lines):
+            continue
+        text = lines[location.line - 1]
+        match = re.search(
+            rf"(?<![A-Za-z0-9-])(?:0?1|77)\s+({re.escape(name)})(?![A-Za-z0-9-])",
+            text,
+            re.IGNORECASE,
+        )
+        if match is None:
+            continue
+        lines = list(lines)
+        lines[location.line - 1] = (
+            text[: match.end(1)] + " BASED" + text[match.end(1) :]
+        )
+        rebindings.append(
+            Rebinding(
+                item_name=name,
+                backing=f"{REBIND_BACKING_PREFIX}{len(rebindings) + 1:03d}",
+                size=size,
+            )
+        )
+    return lines, rebindings
+
+
+def rebinding_working_storage_lines(rebindings: list[Rebinding]) -> list[str]:
+    return [f"01  {r.backing}  PIC X({r.size})." for r in rebindings]
+
+
+def rebinding_reset_lines(rebindings: list[Rebinding]) -> list[str]:
+    return [
+        f"SET ADDRESS OF {r.item_name} TO ADDRESS OF {r.backing}" for r in rebindings
+    ]
 
 
 # Where a folded item's `SET ADDRESS OF` target is redirected to. Chosen to be
