@@ -335,6 +335,14 @@ contain, `build_rows_block` itself has no category knowledge. Both call
 sites live in `build_site_dispatch`, one per `directive.rows is not None`
 category:
 
+Every `.cut` `value -> field` assignment (ROWS rows, TERMINAL groups,
+setup and hook MOVEs) is spliced through `naming.assign(value, target)`:
+`SET <target> TO TRUE|FALSE` when the value is TRUE/FALSE (COBOL cannot
+MOVE to a level-88 condition-name, issue #251), `MOVE value TO target`
+otherwise. Lint (`cut_names`, `CONDITION_NAME_MISMATCH`) refuses
+TRUE/FALSE on a non-88 target, any other value on an 88, and FALSE on an
+88 with no `WHEN SET TO FALSE`.
+
 - **CALL / DYNCALL / DLI** (`SEQUENCED_CALL_CATEGORIES`, 2026-10-05):
   `row_suffix_moves=[]`, `exhausted_moves` = the directive's own
   (mandatory) `TERMINAL` group's MOVEs -- there is no implicit default for
@@ -982,8 +990,12 @@ pipeline ever sees -- an undeclared-data-name `cobc` compile error, not the
 IMS case's runtime SIGSEGV. See
 docs/2026-08-27-cics-eib-linkage-support-design.md.
 
-`analysis.cics_eib.cics_eib_plan(program, lines)` detects the shape (`None`
-when no EIB name is referenced anywhere in `lines`, or every referenced name
+`analysis.cics_eib.cics_eib_plan(program, lines, suite_lines=None)` detects
+the shape (`None` when no EIB/DIB name is referenced anywhere in `lines` or
+in `suite_lines` -- `run_static_checks` passes the `.cut` text minus
+full-line comments, since a test that sets EIBCALEN or asserts EIBRESP of
+a program that never names one splices that name into the same build,
+issue #269 -- or every referenced name
 is already declared somewhere in the program's own DATA DIVISION -- e.g. a
 hand-declared or `COPY DFHEIBLK`-expanded copy). `refusal.check_cics_eib_
 layout(program, lines)` guards the two situations this feature cannot

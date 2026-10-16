@@ -95,3 +95,22 @@ class TallyRegistry:
 
     def items(self) -> list[tuple[tuple[MockCategory, str], str]]:
         return list(self._names.items())
+
+
+def truth_set(value: str, target: str) -> str | None:
+    """`SET <target> TO TRUE|FALSE` for a `.cut` MOVE / ROWS / TERMINAL
+    assignment whose value is TRUE or FALSE, None for any other value.
+    TRUE and FALSE are not values COBOL can MOVE: the form can only mean a
+    level-88 condition-name, which only SET can change -- the same reading
+    EXPECT <88> TO BE TRUE gets (issue #251). Lint refuses the form on a
+    target that is not an 88 (analysis.cut_names)."""
+    word = value.strip().upper()
+    if word not in ("TRUE", "FALSE"):
+        return None
+    return f"SET {target.strip()} TO {word}"
+
+
+def assign(value: str, target: str) -> str:
+    """The one statement a `.cut` `value -> target` assignment splices as:
+    a SET for TRUE/FALSE (see truth_set), a MOVE otherwise."""
+    return truth_set(value, target) or f"MOVE {value} TO {target}"

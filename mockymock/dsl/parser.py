@@ -129,8 +129,11 @@ _END_MOCK_RE = re.compile(r"^END-MOCK\.?$", re.IGNORECASE)
 # A data-name that may carry one non-nested `(...)` group -- a table
 # subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`) or reference modification
 # (`FIELD(1:5)`) -- so a plain `\S+` would stop at the space after a
-# comma/space-separated subscript. Nested parens (`TABLE(FUNCTION MOD(I 3))`)
-# and qualification (`A OF B`) are out of scope: they fail closed
+# comma/space-separated subscript. The name may be qualified, COBOL's own
+# way (`CUST-ID OF OUT-REC`, `CUST-ID IN OUT-REC (1)`; the subscript follows
+# the qualifiers): the only way to name a field declared under two records
+# (issue #252). It is spliced verbatim. Nested parens
+# (`TABLE(FUNCTION MOD(I 3))`) are out of scope: they fail closed
 # (unrecognized statement) rather than being silently mis-parsed. The `\S+`
 # fallback alternative preserves the pre-subscript behavior for
 # non-identifier tokens -- notably a literal `{Placeholder}` name in a
@@ -138,7 +141,9 @@ _END_MOCK_RE = re.compile(r"^END-MOCK\.?$", re.IGNORECASE)
 # `_substitute`'s callers) and must still parse verbatim. Shared by MOVE's
 # target and EXPECT's name -- both reference a data-item that may be a
 # table element.
-_SUBSCRIPTED_NAME = r"[A-Za-z0-9][A-Za-z0-9-]*(?:\s*\([^)]*\))?|\S+"
+_COBOL_WORD = r"[A-Za-z0-9][A-Za-z0-9-]*"
+_QUALIFIED_NAME = rf"{_COBOL_WORD}(?:\s+(?:OF|IN)\s+{_COBOL_WORD})*"
+_SUBSCRIPTED_NAME = rf"{_QUALIFIED_NAME}(?:\s*\([^)]*\))?|\S+"
 _MOVE_RE = re.compile(
     rf"^MOVE\s+(?P<value>.+?)\s+TO\s+(?P<target>{_SUBSCRIPTED_NAME})$"
 )
@@ -230,10 +235,35 @@ _CAPTURE_PREFIX_RE = re.compile(r"^CAPTURE\b")
 # COBOL target that only surfaced later as a confusing cobc compile error
 # (2026-08-12 audit Finding 4). Any matched token that contains a paren is
 # re-checked against this and refused at .cut level when it doesn't hold.
-_BALANCED_SUBSCRIPT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\s*\([^()]*\)$")
+_BALANCED_SUBSCRIPT_RE = re.compile(rf"^{_QUALIFIED_NAME}\s*\([^()]*\)$")
 
 
 _DOTTED_NAME_RE = re.compile(r"[A-Za-z0-9-]\.[A-Za-z0-9]")
+
+
+def _strip_inline_comment(line: str) -> str:
+    """`line` without a trailing `*>` comment that starts outside any quoted
+    literal (issue #236). DSL lines are parsed, then spliced into the
+    driver: a comment left on an EXPECT value or a PROVIDER ROW column was
+    spliced as COBOL text. Only MOCK body lines keep theirs (they are
+    COBOL already, and cobc reads an inline comment there correctly)."""
+    quote: str | None = None
+    for index, char in enumerate(line):
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif line.startswith("*>", index):
+            return line[:index].rstrip()
+    return line
+
+
+#: Lines inside a MOCK block that the DSL parses itself (rather than
+#: splicing verbatim), so a trailing comment is stripped from them too.
+_STRUCTURED_MOCK_LINE_RE = re.compile(
+    r"^(?:END-MOCK|TERMINAL|CAPTURE|FILE-STATUS)\b", re.IGNORECASE
+)
 
 
 class CutParseError(ValueError):
@@ -264,10 +294,13 @@ def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
     # COBOL: spliced verbatim it is a cobc "incomplete expression" (issue
     # #144), so refuse it here, at the .cut line.
     if _DOTTED_NAME_RE.search(token.partition("(")[0]):
+        parts = token.partition("(")[0].strip().split(".")
+        qualified = " OF ".join(reversed(parts))
         raise CutParseError(
             f"line {line_no}: data-name {token!r} contains a '.' -- COBOL "
-            f"names have none; name the elementary item itself (e.g. "
-            f"{token.partition('(')[0].rsplit('.', 1)[-1]!r})"
+            f"names have none; qualify it the COBOL way instead (e.g. "
+            f"{qualified!r}), or name the elementary item alone when it is "
+            f"unique"
         )
 
 
@@ -308,6 +341,24 @@ def _reject_body_sentence_period(line: str, line_no: int, directive: str) -> Non
         )
 
 
+def _reject_unterminated_literal(value: str, line_no: int, what: str) -> None:
+    """Refuse a value whose quoted literal never closes (issue #270):
+    spliced verbatim, the open literal swallows the rest of the generated
+    line, and cobc fails at a sandbox line naming no .cut line."""
+    quote: str | None = None
+    for char in value:
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+    if quote is not None:
+        raise CutParseError(
+            f"line {line_no}: {what} {value!r} has an unterminated {quote} "
+            f"literal -- close the quote"
+        )
+
+
 def _reject_sentence_period(value: str, line_no: int, verb: str = "EXPECT") -> None:
     """Refuse an EXPECT value ending in a period outside any quoted
     literal (`EXPECT WS-X TO BE 5.` -- the natural COBOL sentence habit).
@@ -337,6 +388,7 @@ def _reject_sentence_period(value: str, line_no: int, verb: str = "EXPECT") -> N
         elif value.startswith("*>", index):
             code_end = index
             break
+    _reject_unterminated_literal(value, line_no, f"{verb} value")
     if quote is None and value[:code_end].rstrip().endswith("."):
         consequence = (
             "the period would terminate the generated IF"
@@ -806,6 +858,15 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"NOTFND, ENDFILE, ...) or the numeric RESP value"
                 )
 
+        if not _COMMENT_RE.match(line):
+            code = _strip_inline_comment(line)
+            if (
+                in_mock is None
+                or in_mock.rows is not None
+                or _STRUCTURED_MOCK_LINE_RE.match(code)
+            ):
+                line = code
+
         if in_mock is not None:
             if case is not None and case_provider is not None:
                 _reject_mock_body_placeholder(line, line_no, case_provider, in_mock)
@@ -863,10 +924,14 @@ def parse_cut(text: str) -> MockTestSuite:
                         line_no,
                         in_mock.describe(),
                     )
+                    _reject_unterminated_literal(
+                        pair_match.group("value").strip(), line_no, "TERMINAL value"
+                    )
                     terminal.append(
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.terminal_row = terminal
+                in_mock.terminal_line = line_no
             elif (m := _FILE_STATUS_RE.match(line)) is not None:
                 if in_mock.category not in FILE_STATUS_CATEGORIES:
                     eligible = "/".join(
@@ -967,13 +1032,18 @@ def parse_cut(text: str) -> MockTestSuite:
                         line_no,
                         in_mock.describe(),
                     )
+                    _reject_unterminated_literal(
+                        pair_match.group("value").strip(), line_no, "ROWS value"
+                    )
                     row.append(
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.rows.append(row)
+                in_mock.row_lines.append(line_no)
             else:
                 _reject_body_sentence_period(line, line_no, in_mock.describe())
                 in_mock.body_lines.append(line)
+                in_mock.body_line_numbers.append(line_no)
             continue
 
         if _COMMENT_RE.match(line):
@@ -1101,6 +1171,7 @@ def parse_cut(text: str) -> MockTestSuite:
             # distinguishable: its quote characters survive .strip(), so it
             # is not caught by this check.
             for column, value in zip(current_provider.header, values, strict=True):
+                _reject_unterminated_literal(value, line_no, f"ROW {column} value")
                 if not value:
                     raise CutParseError(
                         f"line {line_no}: ROW value for column {column!r} "
@@ -1119,6 +1190,14 @@ def parse_cut(text: str) -> MockTestSuite:
                 raise CutParseError(
                     f"line {line_no}: TESTCASE inside {in_before} -- "
                     f"missing {_hook_end(in_before)}"
+                )
+            if not m.group("name").strip():
+                # The driver's START marker would carry no name, which the
+                # report cannot attribute (issue #308); nor could --case
+                # select it.
+                raise CutParseError(
+                    f"line {line_no}: TESTCASE name is empty -- give the "
+                    f"test case a non-blank quoted name"
                 )
             tags = _TAG_RE.findall(m.group("tags") or "")
             for tag in tags:

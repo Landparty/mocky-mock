@@ -207,6 +207,15 @@ class MockDirective:
     capture_lines: list[int] = field(default_factory=list)
     """1-based .cut line of each `captures` entry, same index alignment
     (empty when built outside the parser)."""
+    row_lines: list[int] = field(default_factory=list)
+    """1-based .cut line of each `rows` entry, same index alignment
+    (empty when built outside the parser)."""
+    body_line_numbers: list[int] = field(default_factory=list)
+    """1-based .cut line of each `body_lines` entry, same index alignment
+    (empty when built outside the parser) -- issue #243."""
+    terminal_line: int = 0
+    """1-based .cut line of the `TERMINAL` group (0 when absent or built
+    outside the parser)."""
 
     @property
     def program_name(self) -> str:

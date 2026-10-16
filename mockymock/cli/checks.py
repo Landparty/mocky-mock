@@ -515,7 +515,14 @@ def run_static_checks(
             f"refused ({r.code}): {r.message}" for r in cics_eib_reasons
         )
         return out
-    out.cics_eib = cics_eib_plan(parse_result.ast, lines)
+    # The .cut's own text counts too: whatever it names is spliced into the
+    # same build (issue #269). Full-line comments are not spliced.
+    suite_lines = [
+        line
+        for line in read_utf8_source(cut_path).splitlines()
+        if not line.lstrip().startswith("*>")
+    ]
+    out.cics_eib = cics_eib_plan(parse_result.ast, lines, suite_lines)
     out.lines = lines
 
     # 6. Nested-site annotation (must precede any nested-site check), then
@@ -548,7 +555,10 @@ def run_static_checks(
     out.problems.extend(
         f"refused ({r.code}): {r.message}"
         for r in check_cut_data_names(
-            suite, transformed, getattr(parse_result.ast, "program_name", None)
+            suite,
+            transformed,
+            getattr(parse_result.ast, "program_name", None),
+            parse_result.ast,
         )
     )
 

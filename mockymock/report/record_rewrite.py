@@ -231,7 +231,7 @@ def build_recording_report(
             report.skipped.append(SkippedStub(stub.line, stub.data_name, reason))
             continue
         value = queue.pop(0)
-        if stub.data_name.partition("(")[0].strip().upper() in address_items:
+        if _leaf_name(stub.data_name) in address_items:
             # DISPLAY of a POINTER-family item prints an address, of an
             # INDEX item an implementation-defined number: neither is a
             # value a golden can pin, and `EXPECT P TO BE "0x..."` does not
@@ -343,7 +343,14 @@ def picture_for(data_name: str, pictures: dict[str, str] | None) -> str | None:
     base, paren, subscript = data_name.partition("(")
     if paren and ":" in subscript:
         return None
-    return pictures.get(base.strip().upper())
+    return pictures.get(_leaf_name(base))
+
+
+def _leaf_name(data_name: str) -> str:
+    """The item a (qualified, subscripted) data-name names, upper-cased:
+    `CUST-ID OF OUT-REC (1)` -> `CUST-ID` (issue #252)."""
+    words = data_name.partition("(")[0].split()
+    return words[0].upper() if words else ""
 
 
 def rewrite_cut_text(

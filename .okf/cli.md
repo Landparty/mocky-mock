@@ -1007,11 +1007,33 @@ refuses `UNKNOWN_DATA_NAME` at the `.cut` line of every setup/hook MOVE
 target, EXPECT data-name and non-`UT-CAP-` `CAPTURE ... INTO` target, and
 every bare-word MOVE/EXPECT value (`TO BE Y`), that appears nowhere in the
 transformed program text (literals and `*>` comments stripped; generated
-SQLCA and `EXEC SQL INCLUDE` members count), is not a `UT-` harness item,
-DFHEIBLK/DLIDIB field, special register or figurative constant. Loose on
+SQLCA and `EXEC SQL INCLUDE` members count), is not a harness item this
+suite's driver declares (its fixed `UT-` fields, every tally with its
+`-BASE`/`-START` twin, every `UT-CAP-` target a CAPTURE line declares --
+not any `UT-` word, issue #296), DFHEIBLK/DLIDIB field, special register
+or figurative constant. The AST's own data-item and condition names
+(`cut_names.data_item_levels`) are known too: a name built through
+`REPLACE` pseudo-text appears in no word of the pre-REPLACE text the
+splicer compiles (issue #273). Loose on
 purpose: it only catches names cobc would certainly reject.
 `MockTestCase.setup_move_lines` / `MockDirective.capture_lines` carry the
-line numbers the model did not record before.
+line numbers the model did not record before. ROWS rows and the `TERMINAL`
+group are checked the same way, field and value (issue #299), at
+`MockDirective.row_lines` / `terminal_line`. A MOCK body is otherwise
+spliced unchecked, but each one-line `MOVE <value> TO <target>...` in it has
+its targets and bare-word value checked the same way, at its own line
+(`MockDirective.body_line_numbers`, issue #243 -- the lint half of that
+issue; cobc errors are still reported against the sandbox copy, not
+remapped to the `.cut`). The same step refuses
+`CONDITION_NAME_MISMATCH` when an EXPECT's kind does not match its item's
+level in the AST (issue #307): `TO BE TRUE|FALSE` on an item that is not a
+level 88 (the driver would emit `IF NOT X`), or any other value on an 88
+(`IF X NOT = v`, "condition-name not allowed here"). A name declared at both
+kinds, or not in the AST, is left alone. The same code covers a setup/hook
+MOVE or a ROWS/TERMINAL field assigned the wrong kind (issue #251, which
+splices TRUE/FALSE as `SET`): TRUE/FALSE to a non-88, any other value to
+an 88, FALSE to an 88 with no `WHEN SET TO FALSE`
+(`cut_names.conditions_without_false`).
 
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 

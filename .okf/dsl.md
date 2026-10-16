@@ -121,8 +121,13 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
   to an identifier — a table subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`,
   `WS-TABLE(1,1)` all parse) or reference modification (`FIELD(1:5)`).
-  Nested parens and `A OF B` qualification are unsupported and fail closed
-  (`unrecognized statement`) rather than being mis-parsed. Both regexes
+  The name may be qualified the COBOL way, `CUST-ID OF OUT-REC` /
+  `CUST-TAB IN OUT-REC (2)` (subscript after the qualifiers), spliced
+  verbatim -- the only way to name a field declared under two records
+  (issue #252); `cut_names` checks every word, `CAPTURE ... INTO` and
+  `*> STUB EXPECT` take the same shape, and `record_rewrite` looks the
+  PICTURE up by the leading word. Nested parens are unsupported and fail
+  closed (`unrecognized statement`) rather than being mis-parsed. Both regexes
   share the `_SUBSCRIPTED_NAME` fragment in `parser.py`, which falls back to
   plain `\S+` for non-identifier tokens — that's what lets a literal
   `{Placeholder}` name (see `PROVIDER` below — data-names/MOVE-targets are
@@ -339,7 +344,7 @@ two orders that would mean something else: an `EXPECT`/`VERIFY` above the
 `PERFORM` (`EXPECT before the PERFORM`) and a `MOVE` below it (`MOVE after
 the PERFORM`). `MOCK` directives may sit anywhere. Data names containing a
 `.` (`IN-REC.CUST-ID`) are refused too (#144) -- COBOL qualifies with
-`CUST-ID OF IN-REC`.
+`CUST-ID OF IN-REC`, which the refusal now suggests (#252).
 
 ## `PROVIDER` parameterized test cases
 
@@ -509,10 +514,22 @@ Key regexes, matched in this order per non-blank line:
    failed on generated code (`unexpected END-EVALUATE`). ROWS/`TERMINAL`
    field values get the same check. A decimal point (`1.5`), a period
    inside a literal, or one in a comment is untouched.
-2. `*>` comment (only reachable when not inside a mock body).
+2. `*>` comment (only reachable when not inside a mock body). A
+   *trailing* `*>` comment (outside quotes) is stripped from every line the
+   DSL parses itself before matching -- outside MOCK blocks, and inside one
+   for ROWS rows, `TERMINAL`, `CAPTURE`, `FILE-STATUS` and `END-MOCK`
+   (`_strip_inline_comment`, issue #236: it used to be swallowed into an
+   EXPECT value or a PROVIDER ROW column and spliced into the driver).
+   Plain MOCK body lines keep theirs; cobc reads it there. A MOVE/EXPECT
+   value, ROWS/`TERMINAL` value or PROVIDER `ROW` value whose quoted
+   literal never closes raises `CutParseError` at its line
+   (`_reject_unterminated_literal`, issue #270).
 3. `TESTSUITE "..."` — errors if a suite is already open (one per file).
 4. `TESTCASE "..."` — requires `suite` already set; resets the per-case
-   duplicate-MOCK tracker.
+   duplicate-MOCK tracker. An empty or blank name raises `CutParseError`
+   (issue #308: the driver's `START:` marker would carry no name, and
+   `--case` could not select it); `report.results`' `_CASE_START_RE`
+   accepts an empty name anyway, so a printed START is never dropped.
 5. `MOCK <quoted-cat> "<key>"` then `MOCK <bare-cat> <key>` — requires
    `case` already set; whichever matches opens `in_mock` and appends it to
    `case.mocks` immediately (body lines get attached as they arrive on

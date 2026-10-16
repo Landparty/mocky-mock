@@ -155,6 +155,13 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "paragraph, or mock the whole paragraph/section instead (MOCK "
         "PARAGRAPH/MOCK SECTION)."
     ),
+    "CONDITION_NAME_MISMATCH": (
+        "A .cut line treats a level-88 condition-name as a value, or a "
+        "plain data item as a condition: EXPECT <item> TO BE TRUE on an "
+        "item that is not an 88, or EXPECT <88> TO BE <value>. cobc would "
+        "reject the generated driver. A condition-name is only ever TRUE "
+        "or FALSE; any other item is compared with a value."
+    ),
     "UNKNOWN_DATA_NAME": (
         "A MOVE target, EXPECT data-name, CAPTURE INTO target or bare-word "
         "value in the .cut names nothing the program declares -- cobc "

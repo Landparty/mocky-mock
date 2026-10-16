@@ -36,7 +36,7 @@ from mockymock.dsl.model import (
     MockTestSuite,
 )
 from mockymock.splicer.io_copy import DataLayout, from_move, into_move
-from mockymock.splicer.naming import TallyRegistry
+from mockymock.splicer.naming import TallyRegistry, assign
 
 #: One token of a CALL statement's text: a (possibly X/N/G/Z/NX/U-prefixed)
 #: quoted literal with doubled quotes inside, a parenthesis, a period, or a
@@ -160,7 +160,7 @@ def build_rows_block(
         for move in row_prefix_moves or []:
             lines.append(f"        {move}")
         for field, value in row:
-            lines.append(f"        MOVE {value} TO {field}")
+            lines.append(f"        {assign(value, field)}")
         for move in row_suffix_moves:
             lines.append(f"        {move}")
     lines.append("    WHEN OTHER")
@@ -393,8 +393,7 @@ def build_site_dispatch(
                 exhausted_moves.append(f'MOVE "10" TO {status_field}')
             if directive.terminal_row is not None:
                 exhausted_moves.extend(
-                    f"MOVE {value} TO {field}"
-                    for field, value in directive.terminal_row
+                    assign(value, field) for field, value in directive.terminal_row
                 )
             lines.extend(
                 f"                   {body}"
@@ -426,8 +425,7 @@ def build_site_dispatch(
                     directive.rows,
                     row_suffix_moves=[],
                     exhausted_moves=[
-                        f"MOVE {value} TO {field}"
-                        for field, value in directive.terminal_row
+                        assign(value, field) for field, value in directive.terminal_row
                     ],
                 )
             )
