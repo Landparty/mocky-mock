@@ -13,8 +13,15 @@ to become a `*> TODO` comment, which is not a visible gap so much as a
 silently hanging test. The lifted text closes that: it is a slice of the
 program's own source -- exactly the text the splice is about to delete --
 rather than a re-render limited to the shapes an AST walk knows about.
+
+Since issue #209 the splice itself re-runs a READ's clause bodies whenever
+it can lift them exactly (`analysis.clause_bodies`), and the scaffold then
+only reports end of file. The copying covered here is the fallback for a
+clause the splice cannot lift; the `splice_cannot_lift` fixture stands in
+for one.
 """
 
+import pytest
 from cobolparser import parse_cobol
 from cobolparser.generators import ProgramFixtureGenerator
 from cobolparser.generators.data.options import DataGeneratorOptions
@@ -66,6 +73,13 @@ IDENTIFIER_AT_END_SOURCE = """\
 """
 
 
+@pytest.fixture
+def splice_cannot_lift(monkeypatch):
+    import mockymock.dsl.generator as generator
+
+    monkeypatch.setattr(generator, "lift_clause_bodies", lambda *_: None)
+
+
 def _scaffold(source: str, name: str, rows: int = 3, with_source: bool = True) -> str:
     from cobolparser.preprocess import normalize_fixed_format
 
@@ -87,7 +101,7 @@ def _scaffold(source: str, name: str, rows: int = 3, with_source: bool = True) -
     return scaffold_cut(result.ast.program_name, surface, bundle, frozenset(), context)
 
 
-def test_when_other_carries_the_programs_own_at_end_statements():
+def test_when_other_carries_the_programs_own_at_end_statements(splice_cannot_lift):
     text = _scaffold(IDENTIFIER_AT_END_SOURCE, "rdloop.cbl")
     assert "WHEN OTHER" in text
     assert "MOVE WS-END-MARKER TO WS-EOF-FLAG" in text
@@ -95,7 +109,7 @@ def test_when_other_carries_the_programs_own_at_end_statements():
     assert "TODO" not in text
 
 
-def test_the_lifted_text_says_where_it_came_from():
+def test_the_lifted_text_says_where_it_came_from(splice_cannot_lift):
     """A generated file a human reads should not silently contain code it
     did not derive from the fixture data."""
     text = _scaffold(IDENTIFIER_AT_END_SOURCE, "rdloop.cbl")
@@ -103,7 +117,7 @@ def test_the_lifted_text_says_where_it_came_from():
     assert "(line 27)" in text
 
 
-def test_the_generated_cut_still_parses_and_lints_clean():
+def test_the_generated_cut_still_parses_and_lints_clean(splice_cannot_lift):
     from mockymock.analysis.refusal import check_test_case
 
     text = _scaffold(IDENTIFIER_AT_END_SOURCE, "rdloop.cbl")
@@ -114,7 +128,7 @@ def test_the_generated_cut_still_parses_and_lints_clean():
         assert check_test_case(surface, result.ast, case) == [], case.name
 
 
-def test_without_a_source_context_the_todo_comment_is_still_emitted():
+def test_without_a_source_context_the_todo_comment_is_still_emitted(splice_cannot_lift):
     """The lift is an enhancement layered on the existing behavior, not a
     replacement -- a caller that cannot supply the program text still gets
     the honest TODO rather than an empty exhaustion branch."""
@@ -123,7 +137,7 @@ def test_without_a_source_context_the_todo_comment_is_still_emitted():
     assert "MOVE WS-END-MARKER TO WS-EOF-FLAG" not in text
 
 
-def test_ast_replication_still_wins_where_it_applies():
+def test_ast_replication_still_wins_where_it_applies(splice_cannot_lift):
     """The proven AST path is unchanged: a literal-sourced MOVE is still
     replicated from the AST, with no lifted-text comment attached."""
     source = IDENTIFIER_AT_END_SOURCE.replace(
@@ -203,3 +217,42 @@ def test_a_period_terminates_the_clause_rather_than_being_lifted_into_it():
     lifted = _lifted_at_end_lines(site, context)
     assert lifted[1:] == ["MOVE WS-M TO WS-EOF"]
     assert not any("ADD 1 TO WS-N" in line for line in lifted)
+
+
+def test_a_partly_replicable_at_end_clause_is_lifted_whole(splice_cannot_lift):
+    """Issue #217: a literal MOVE next to an identifier-sourced one used to
+    be replicated alone -- `MOVE WS-READ-CNT TO WS-TRAILER-CNT` vanished
+    with no TODO, and `run --record-expectations` recorded the wrong value
+    as golden. Replication is all or nothing, so the whole clause is lifted."""
+    source = IDENTIFIER_AT_END_SOURCE.replace(
+        "                   MOVE WS-END-MARKER TO WS-EOF-FLAG\n",
+        '                   MOVE "Y" TO WS-EOF-FLAG\n',
+    )
+    text = _scaffold(source, "rdloop.cbl", with_source=True)
+    assert 'MOVE "Y" TO WS-EOF-FLAG' in text
+    assert "ADD 1 TO WS-TOTAL" in text
+
+
+def test_partial_replication_is_never_emitted():
+    from mockymock.dsl.generator import _replicated_at_end_statements
+
+    source = IDENTIFIER_AT_END_SOURCE.replace(
+        "                   MOVE WS-END-MARKER TO WS-EOF-FLAG\n",
+        '                   MOVE "Y" TO WS-EOF-FLAG\n',
+    )
+    result = parse_cobol(source, filename="rdloop.cbl")
+    (read,) = result.ast.find_all_by_type("IOReadStatement")
+    assert _replicated_at_end_statements(read) == []
+
+
+def test_a_clause_the_splice_lifts_is_not_copied_into_the_mock():
+    """Issue #209: the splice runs the READ's own AT END clause once the
+    mocked outcome says end of file, so copying it into WHEN OTHER too
+    would run it twice. With no FILE STATUS field to report through, the
+    branch sets the splice's own outcome field."""
+    text = _scaffold(IDENTIFIER_AT_END_SOURCE, "rdloop.cbl")
+    assert "WHEN OTHER" in text
+    assert 'MOVE "10" TO UT-MOCK-STATUS' in text
+    assert "the splice runs this READ's own AT END clause (line 27)" in text
+    assert "MOVE WS-END-MARKER TO WS-EOF-FLAG" not in text
+    assert "TODO" not in text

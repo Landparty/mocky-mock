@@ -117,6 +117,15 @@ INVALID KEY / NOT AT END clauses** — the span runs to the next top-level
 statement boundary, which is exactly v1's CALL-with-ON-EXCEPTION behavior.
 The mock author owns the flag/record effects those clauses used to produce.
 
+> **Superseded (issue #209, 2026-10-16):** the statement is still replaced,
+> but its AT END / NOT AT END / INVALID KEY / NOT INVALID KEY / ON EXCEPTION
+> / NOT ON EXCEPTION bodies are lifted out of the replaced span and re-run
+> after the mock, selected by the mocked outcome (`UT-MOCK-STATUS`) --
+> `mockymock/analysis/clause_bodies.py`. For a file with no FILE STATUS
+> field, the pattern above now ends the loop with `MOVE "10" TO
+> UT-MOCK-STATUS` (which runs the program's own AT END) rather than by
+> setting the flag by hand.
+
 `SORT`/`MERGE`/`RELEASE`/`RETURN` remain **refused**
 (`UNSUPPORTED_SORT_MERGE`): mocking a SORT means mocking an algorithm plus
 its INPUT/OUTPUT PROCEDURE contract, not a boundary statement; out of scope.

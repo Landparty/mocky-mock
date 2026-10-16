@@ -216,6 +216,21 @@ The same audit's Finding 2 fixed a THRU-seed hole in `_reachable_paragraphs`: th
 
 Paragraph attribution is depth-independent: nested statements stay attributed to the *enclosing paragraph name*, since that's the granularity the refusal gate's reachability check cares about.
 
+## `clause_bodies.py` — a mocked statement's own clause bodies (issue #209)
+
+`clause_bodies_liftable(statement)` (AST only) and
+`lift_clause_bodies(statement, lines)` (positional slice of the normalized
+source) decide whether the splicer re-runs a mocked READ / RETURN / WRITE /
+REWRITE / DELETE / START / CALL's clause bodies after the mock, guarded by
+the mocked outcome in `UT-MOCK-STATUS`. Fail closed: anything they cannot
+lift exactly keeps the old deletion. Reachability needed no change: the
+BFS already followed PERFORMs inside boundary clause bodies (the
+`in_boundary` skip applies only to terminator chain edges and GO TO exit
+plans, and a body holding a GO TO or terminator is never lifted). See
+[splicer](splicer.md#clause-bodies-re-run-after-the-mock-issue-209-2026-10-16).
+`scan_words` (words outside quoted literals, plus sentence periods) moved
+here from `dsl.generator`, which still uses it for its own AT END lift.
+
 ## `BoundarySite` fields relevant to refusal
 
 `category` (None for detected-but-unmockable), `label` (message string), `keys` (candidate match tuple), `match_text` (normalized EXEC text), `nested`, `nested_in_boundary`, and two fields **not set by mock_surface.py** — filled in later by the splicer's `source_map.annotate_nested_sites`: `span: tuple[int,int] | None` (validated replacement span, nested sites only) and `unspliceable_reason: str | None`. Since the 2026-07-07 fix, `annotate_nested_sites` stamps `unspliceable_reason` on **top-level** sites too (leaving their `span` at `None` — top-level replacement spans still come from `source_map.statement_span`, not this field) when the statement does not own its source line(s); see [splicer](splicer.md#top-level-own-line-guard).

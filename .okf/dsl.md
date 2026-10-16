@@ -859,6 +859,46 @@ paragraph-grouped path described above, unchanged. A real
   the loop body still runs once per row, so the other boundaries in its
   paragraph keep their counts). A keyed/random READ is left alone: out of
   rows it would answer "23", not "10".
+- **A READ of a `RECORD VARYING ... DEPENDING ON` file sets the length
+  item** (issue #214): `_row_move_lines` appends `MOVE <length> TO <item>`
+  to every READ row (`_record_length_move`, cached per file on
+  `ProgramContext.record_length_moves`), read from the FD record's
+  `fd_clauses` metadata through cobol-parser's
+  `VaryingLength.from_fd_clauses`. A real READ stores the length of the
+  record it read there; leaving it at its VALUE (usually 0) put every
+  generated record below the FD minimum. The bundle carries no per-row
+  length (`declared_lengths` is not surfaced upstream yet), so every row
+  reports the layout's full length clamped into the FD's range.
+- **A CICS mock writes only what the command returns** (issue #222):
+  cobol-parser marks every EXEC CICS boundary BIDIRECTIONAL and lays out
+  every resolved operand, so `_single_row_body` used to MOVE random text
+  into `WRITE ... FROM(rec)`, a WRITE's `RIDFLD` and `SEND TEXT FROM(msg)`
+  -- state the real transaction never touches, recorded as golden by
+  `--record-expectations`. `_cics_output_layout` drops a layout field that
+  only an input operand names (`_cics_operand_roles` over the statement's
+  `options`, found by the fixture's line among the key's CICS sites): FROM,
+  FILE/QUEUE/MAP/PROGRAM/TRANSID/... always; RIDFLD except on
+  READ/READNEXT/READPREV; LENGTH/FLENGTH except on the commands that
+  return a length (READ*, RECEIVE, READQ, RETRIEVE, GET, CONVERSE, WEB);
+  COMMAREA on RETURN/XCTL (LINK's stays: the callee may update it);
+  only ABSTIME on FORMATTIME; nothing on ASSIGN/INQUIRE/ADDRESS/ASKTIME.
+  A field also named by a non-input operand of any statement for the key
+  is kept.
+- **An AT END clause the splice re-runs is not copied at all** (issue
+  #209): `_at_end_handling` asks `analysis.clause_bodies.lift_clause_bodies`
+  first; when the splice will run the READ's own AT END clause after the
+  mock, the exhaustion branch only reports end of file -- `fixture.terminal`'s
+  status MOVE, or `MOVE "10" TO UT-MOCK-STATUS` for a file with no FILE
+  STATUS field -- plus a comment saying so. Copying it too would run it
+  twice. The replication / lift below is now the fallback for a clause the
+  splice cannot lift (or a scaffold built without a `ProgramContext`).
+- **AST replication is all or nothing** (issue #217): when any statement in
+  the `AT END` clause is not one of the two replicable shapes,
+  `_replicated_at_end_statements` returns nothing, so the whole clause is
+  lifted (below) or flagged with the TODO. It used to replicate the literal
+  `MOVE "Y" TO WS-EOF` and silently drop `MOVE WS-READ-CNT TO
+  WS-TRAILER-CNT` beside it, and `run --record-expectations` then recorded
+  goldens for behaviour the program does not have.
 - **When the AST-driven replication comes up empty, the clause's own source
   text is lifted verbatim instead** (`_lifted_at_end_lines`, 2026-09-04).
   The `*> TODO` comment that used to be emitted there is not a visible gap
@@ -995,6 +1035,19 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   answers every site of its key, so when the key's sites would need
   different replies (a GN loop plus an ISRT through the same CBLTDLI) the
   body gets a `*> TODO` comment instead.
+- **MQ calls answer MQCC_OK / MQRC_NONE (#205).** By the MQI's fixed
+  convention CompCode and Reason are an MQ call's last two USING
+  arguments; `_mq_success_reply` replaces the fixture row's random numbers
+  there with `MOVE 0` for every `site.is_mq` CALL. A random CompCode sent
+  the `IF WS-COMPCODE NOT = MQCC-OK ... GOBACK` idiom (MQCC-OK is a data
+  item the solver cannot see) down the failure exit on the first call, so
+  the happy path never ran and its later `VERIFY ... 1 TIMES` failed. With
+  success answered, an MQGET in any UNTIL loop also gets the #156 end
+  reply, whatever its guard reads: a drain loop's flag is set *from* the
+  2033 reply (`WHEN WS-REASON = MQRC-NO-MSG-AVAILABLE SET DRAIN-DONE`), so
+  without it the loop never ends. A `PERFORM n TIMES` loop (no guard
+  words) is still left alone. (The issue's option (b), demoting VERIFY
+  counts for sites after an `IF ... GOBACK`, is not implemented.)
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 

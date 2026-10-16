@@ -141,7 +141,10 @@ def test_rows_0_is_honored_not_treated_as_falsy(tmp_path):
     # replicated AT END MOVE, with no EVALUATE wrapper since there is no
     # row-selecting branch to choose between with zero rows.
     assert 'MOVE "10" TO WS-ORDER-STATUS' in text
-    assert 'MOVE "Y" TO WS-EOF' in text
+    # The AT END clause itself (`MOVE "Y" TO WS-EOF`) is no longer copied
+    # into the mock: the splice runs the program's own clause once the
+    # status reports end of file (issue #209).
+    assert "the splice runs this READ's own AT END clause" in text
     assert "VERIFY READ ORDER-FILE WAS CALLED 1 TIMES" in text
 
 
@@ -206,7 +209,8 @@ def test_fixtures_path_empty_read_sequence_still_emits_the_exhaustion_branch(
     text = out.read_text(encoding="utf-8")
     assert _tally_count(text) == 0
     assert 'MOVE "10" TO WS-ORDER-STATUS' in text
-    assert 'MOVE "Y" TO WS-EOF' in text
+    # Issue #209: the splice runs the program's own AT END clause.
+    assert "the splice runs this READ's own AT END clause" in text
 
 
 def test_rows_negative_is_rejected(tmp_path, capsys):

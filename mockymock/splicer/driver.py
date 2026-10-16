@@ -73,6 +73,9 @@ def build_driver(
         "01  UT-CURRENT-CASE        PIC X(9).",
         "01  UT-FAIL-COUNT          PIC 9(9) VALUE 0.",
         '01  UT-EARLY-EXIT          PIC X VALUE "N".',
+        # The mocked outcome a replaced statement's own clause bodies are
+        # selected by (analysis.clause_bodies, issue #209).
+        '01  UT-MOCK-STATUS         PIC XX VALUE "00".',
     ]
     # Scratch field for VERIFY failure messages: tallies are PIC 9(9), so
     # displaying one directly prints "000000003"; moving it through this
