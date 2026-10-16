@@ -1382,11 +1382,17 @@ def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
     A non-interactive ACCEPT (`ACCEPT X FROM DATE YYYYMMDD`) is in the same
     position: mockymock records it as nothing to mock, while cobol-parser's
     bundle can still list it when a date-format qualifier follows the
-    source (BATCHSEQ)."""
+    source (BATCHSEQ).
+
+    So is `EXEC SQL WHENEVER`: a precompiler declaration mockymock emulates
+    instead of mocking (issue #195), which cobol-parser's bundle lists as
+    an SQL boundary keyed `WHENEVER`."""
     keys: set[tuple[str, str]] = {
         (MockCategory.ACCEPT.value, accept.target)
         for accept in surface.non_interactive_accepts
     }
+    if surface.whenever_sites:
+        keys.add((MockCategory.SQL.value, "WHENEVER"))
     for site in surface.boundary_sites:
         if site.category is None or not (site.nested and site.span is None):
             continue

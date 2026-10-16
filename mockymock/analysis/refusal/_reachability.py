@@ -45,6 +45,7 @@ See `.okf/analysis.md` for the full refusal-package overview.
 from __future__ import annotations
 
 from cobolparser.models.program import CobolParagraph
+from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.models.statements.control import (
     GoStatement,
     PerformStatement,
@@ -64,6 +65,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     _nested_statement_lists,
 )
+from mockymock.analysis.sql_whenever import whenever_actions, whenever_targets
 
 from ._types import RefusalReason
 
@@ -348,6 +350,7 @@ def _reachable_paragraphs(
             )
 
     seen: set[str] = set()
+    whenever = whenever_actions(program)
     go_to_targets = _go_to_targets(program) - set(neutralized_goto)
     index_by_name = (
         {p.paragraph_name: i for i, p in enumerate(ordered)} if ordered else {}
@@ -397,6 +400,14 @@ def _reachable_paragraphs(
                 # pushing); check_test_case reports it as UNKNOWN_PARAGRAPH.
                 continue
             seen.add(name)
+            # The GO TO an `EXEC SQL WHENEVER` puts after each later SQL
+            # statement (issue #195): the splicer emits it after the mocked
+            # dispatch, so it is a real edge of the program that runs.
+            for sql in _find_statements_of_type(
+                by_name[name].statements, ExecSQLStatement
+            ):
+                for _, target in whenever.get(id(sql), ()):
+                    push_target(target, name, "EXEC SQL WHENEVER GO TO")
             for statement in _find_flow_statements(by_name[name].statements):
                 if isinstance(statement, GoStatement):
                     single_target = _go_statement_target(statement)
@@ -606,6 +617,9 @@ def _go_to_targets(program) -> set[str]:
             targets.update(statement.target_paragraphs)
             if statement.target_paragraph:
                 targets.add(statement.target_paragraph)
+    # An `EXEC SQL WHENEVER ... GO TO` target is entered by a spliced GO TO
+    # (issue #195) exactly like a written one.
+    targets |= whenever_targets(program)
     return targets
 
 

@@ -353,6 +353,25 @@ is unreachable from every test case; the trap exists so that if
 reachability analysis and reality ever disagree, the mismatch fails loudly
 at runtime instead of silently doing nothing.
 
+**`EXEC SQL WHENEVER` emulation (2026-10-16, issue #195).** WHENEVER is a
+precompiler declaration, so it is never a mockable site: `mock_surface`
+keeps it in `MockSurface.whenever_sites` (not `boundary_sites`, so no
+UNMOCKED_SQL, no scaffolded MOCK, no `collect --boundaries` entry), and
+`splice_program` replaces each one with `CONTINUE`. What DB2's precompiler
+would generate is put back instead: every mocked SQL dispatch is followed by
+`analysis.sql_whenever.whenever_check_lines(site.whenever_checks)` --
+`IF SQLCODE < 0 GO TO x END-IF` (SQLERROR), `IF SQLWARN0 = "W" OR (SQLCODE
+> 0 AND SQLCODE NOT = 100) ...` (SQLWARNING), `IF SQLCODE = 100 ...` (NOT
+FOUND), in that order -- for the WHENEVERs in force at that statement in
+*physical source order* (`whenever_actions`; `CONTINUE` switches a
+condition off; INCLUDE/DECLARE/BEGIN-END DECLARE get no checks). The trap
+of an unmocked site gets none. The reachability walk follows each check's
+GO TO like a written one, and `_go_to_targets` includes the handlers.
+`check_nested_exec` validates WHENEVER spans like any EXEC and refuses an
+action it cannot read (`UNSUPPORTED_SQL_WHENEVER`); a leftover `MOCK SQL
+"WHENEVER"` is UNMATCHED_MOCK with a message saying why. CICS `HANDLE
+CONDITION`/`HANDLE ABEND` are not emulated.
+
 # Orchestration and Ordering Invariant (orchestrator.py)
 
 `splice_program` computes every span **up front** against the original

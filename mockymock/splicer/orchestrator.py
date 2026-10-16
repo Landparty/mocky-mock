@@ -43,6 +43,7 @@ from mockymock.analysis.refusal import (
     TerminatorPlan,
     directive_matches_site,
 )
+from mockymock.analysis.sql_whenever import whenever_check_lines
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
 from mockymock.splicer.injector import (
     build_chain_check,
@@ -162,11 +163,43 @@ def splice_program(
                 statement_text=" ".join(lines[start - 1 : end]),
                 layout=surface.data_layout,
             )
+            # What the DB2 precompiler puts after the statement for every
+            # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).
+            replacement += [
+                f"           {line}"
+                for line in whenever_check_lines(site.whenever_checks)
+            ]
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /
         # paragraph), the replacement block must terminate the sentence too
         # -- otherwise the unterminated sentence runs into the next
         # paragraph header and cobc rejects it.
+        if _span_ends_sentence(lines, start, end):
+            replacement = replacement[:-1] + [replacement[-1] + "."]
+        spans.append((start, end, replacement))
+
+    # `EXEC SQL WHENEVER` declarations (issue #195): their effect is the
+    # checks appended to each SQL dispatch above; the statement itself has
+    # no runtime behavior, and cobc cannot compile it. check_nested_exec
+    # refuses one with no safe span before any splicing.
+    for site in surface.whenever_sites:
+        if site.nested:
+            if site.span is None:
+                raise ValueError(
+                    f"nested EXEC SQL WHENEVER at line {site.line} reached "
+                    f"the splicer without a validated span -- the refusal "
+                    f"gate (NESTED_EXEC) should have refused it"
+                )
+            start, end = site.span
+        else:
+            if site.unspliceable_reason:
+                raise ValueError(
+                    f"EXEC SQL WHENEVER at line {site.line} reached the "
+                    f"splicer although it {site.unspliceable_reason} -- the "
+                    f"refusal gate (UNSPLICEABLE_EXEC) should have refused it"
+                )
+            start, end = statement_span(site.statement, boundaries, last_line, lines)
+        replacement = ["           CONTINUE"]
         if _span_ends_sentence(lines, start, end):
             replacement = replacement[:-1] + [replacement[-1] + "."]
         spans.append((start, end, replacement))
