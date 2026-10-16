@@ -1569,6 +1569,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         run_static_checks,
     )
     from mockymock.report.coverage import (
+        build_copybook_line_map,
         build_original_line_map,
         format_coverage_console,
         format_coverage_json,
@@ -2050,6 +2051,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 model_case.line if model_case is not None else None,
                 str(cut_path),
                 str(source_path),
+                build_copybook_line_map(
+                    instrumented, normalized_lines, checked.source_location_map
+                ),
             )
             if args.trace_json:
                 _write_report_file("run", "--trace-json", args.trace_json, trace_json)

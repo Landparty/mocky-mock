@@ -79,21 +79,33 @@ def format_trace_json(
     case_line: int | None,
     cut_file: str,
     program_file: str,
+    copybook_lines: dict[int, tuple[str, int]] | None = None,
 ) -> str:
-    """The machine-readable contract consumed by the VS Code extension."""
+    """The machine-readable contract consumed by the VS Code extension.
+
+    `copybook_lines` (`coverage.build_copybook_line_map`) places a
+    statement a COPY brought in: its entry carries the copybook's `file`
+    name and its line there (issue #242). Entries without `file` are lines
+    of `programFile`."""
     path: list[dict[str, object]] = []
     truncated = False
     for entry in entries:
         original = line_map.get(entry.line)
-        if original is None:
+        where: dict[str, object]
+        if original is not None:
+            where = {"line": original}
+        elif copybook_lines and entry.line in copybook_lines:
+            copybook, copybook_line = copybook_lines[entry.line]
+            where = {"file": copybook, "line": copybook_line}
+        else:
             continue  # splicer-inserted line: not the user's code
         if len(path) >= TRACE_ENTRY_CAP:
             truncated = True
             break
         if entry.paragraph is not None:
-            path.append({"line": original, "paragraph": entry.paragraph})
+            path.append({**where, "paragraph": entry.paragraph})
         else:
-            path.append({"line": original, "statement": entry.statement})
+            path.append({**where, "statement": entry.statement})
 
     payload = {
         "version": TRACE_JSON_VERSION,
@@ -125,12 +137,13 @@ def format_trace_console(payload: dict) -> str:
     if payload["truncated"]:
         lines.append(f"  (path truncated at {TRACE_ENTRY_CAP} entries)")
     for entry in payload["path"]:
+        origin = f" ({entry['file']})" if entry.get("file") else ""
         if "paragraph" in entry:
             lines.append(
-                f"    line {entry['line']:>6}  paragraph  {entry['paragraph']}"
+                f"    line {entry['line']:>6}  paragraph  {entry['paragraph']}{origin}"
             )
         else:
             lines.append(
-                f"    line {entry['line']:>6}             {entry['statement']}"
+                f"    line {entry['line']:>6}             {entry['statement']}{origin}"
             )
     return "\n".join(lines)
