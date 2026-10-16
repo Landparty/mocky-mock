@@ -229,7 +229,10 @@ BFS already followed PERFORMs inside boundary clause bodies (the
 plans, and a body holding a GO TO or terminator is never lifted). See
 [splicer](splicer.md#clause-bodies-re-run-after-the-mock-issue-209-2026-10-16).
 `scan_words` (words outside quoted literals, plus sentence periods) moved
-here from `dsl.generator`, which still uses it for its own AT END lift.
+here from `dsl.generator`, which still uses it for its own AT END lift. It
+skips an inline `*>` comment (outside a literal) to the end of its line
+(#327): before, a period in the comment read as the sentence end and an
+apostrophe opened a literal, so the body was refused or cut short.
 
 ## `BoundarySite` fields relevant to refusal
 

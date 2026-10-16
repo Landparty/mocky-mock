@@ -202,11 +202,17 @@ def scan_words(text: str):
     literal, plus `(index, index + 1, ".")` for every sentence-terminating
     period (a period followed by whitespace or end of text -- COBOL's own
     rule, which is also what keeps a numeric literal's decimal point from
-    being mistaken for one)."""
+    being mistaken for one). An inline `*>` comment outside a literal is
+    skipped to the end of its line: a period or apostrophe in it is not
+    code (issue #327)."""
     index = 0
     length = len(text)
     while index < length:
         char = text[index]
+        if char == "*" and text.startswith("*>", index):
+            newline = text.find("\n", index)
+            index = length if newline < 0 else newline
+            continue
         if char in ('"', "'"):
             quote = char
             index += 1
@@ -231,6 +237,7 @@ def scan_words(text: str):
             index < length
             and not text[index].isspace()
             and text[index] not in ('"', "'")
+            and not text.startswith("*>", index)
         ):
             index += 1
         word = text[start:index]
