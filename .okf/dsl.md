@@ -980,12 +980,20 @@ paragraph-grouped path described above, unchanged. A real
   the analysis knew something the generated `.cut` never said. A `*>`
   comment is inert, so surfacing it can never break the file; dropping it
   opened a gap between what the analysis knew and what reached the file,
-  which is the one thing a scaffold must not do. The two-token boundary
-  form deliberately does NOT match the stub scanner's data-name grammar
-  (`analysis/stub_expectations.py`'s `_STUB_RE`), so `run
-  --record-expectations` leaves it alone rather than mistaking `WRITE` for
-  a data item — see `analysis.md`'s stub-expectation scanner for how a
-  human promotes a real data-name stub comment to an `EXPECT`.
+  which is the one thing a scaffold must not do. A WRITE/REWRITE/RELEASE
+  boundary (`_RECORD_OUTPUT_CATEGORIES`) instead renders as `*> STUB
+  EXPECT <record> -- last record written by WRITE <record>`: the record
+  area holds the last record written (a mocked `WRITE r FROM y` keeps its
+  implicit MOVE), so `run --record-expectations` (and so `init`) fills it.
+  As `STUB EXPECT WRITE OUT-REC` it named no data item, the scanner
+  dropped it, and a read-process-write scaffold never got an output
+  assertion (issue #255). Every other boundary keeps the two-token form,
+  which does NOT match the scanner's data-name grammar
+  (`analysis/stub_expectations.py`'s `_STUB_RE`); the scanner reports such
+  a line as skipped (`not a data name`, `_ANY_STUB_RE`) rather than
+  mistaking `READ` for a data item or dropping it silently -- see
+  `analysis.md`'s stub-expectation scanner for how a human promotes a real
+  data-name stub comment to an `EXPECT`.
 - **Unverified-scenario notes** (`_verification_comment_lines`, 2026-09-04):
   cobol-parser's bundle now carries a `Scenario.verification` verdict --
   whether that scenario's own generated data actually satisfies the branch

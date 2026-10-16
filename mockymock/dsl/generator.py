@@ -2601,6 +2601,12 @@ def _rendered_call_count_refs(
     return rendered
 
 
+# OUT boundaries whose record area holds what the program wrote.
+_RECORD_OUTPUT_CATEGORIES = frozenset(
+    {MockCategory.WRITE, MockCategory.REWRITE, MockCategory.RELEASE}
+)
+
+
 def _describe_boundary_ref(ref: str) -> str:
     """`"WRITE:INV-REC"` -> `WRITE INV-REC`, matching how a MOCK/VERIFY
     directive for that boundary reads in the `.cut`. Falls back to the raw
@@ -2720,6 +2726,13 @@ def _render_expectation(
             pair = None
         if pair is not None and pair in (counted_boundaries or set()):
             return []  # already asserted by this case's own VERIFY ... WAS CALLED
+        if pair is not None and pair[0] in _RECORD_OUTPUT_CATEGORIES:
+            # The record area holds the last record written (a mocked
+            # `WRITE r FROM y` keeps its implicit MOVE), so name the record
+            # itself: `STUB EXPECT WRITE OUT-REC` is no data-name, and
+            # `run --record-expectations` could never fill it (issue #255).
+            directive = _describe_boundary_ref(expectation.ref)
+            return [f"*> STUB EXPECT {key} -- last record written by {directive}"]
         return [f"*> STUB EXPECT {_describe_boundary_ref(expectation.ref)}{note}"]
     return [
         f"*> STUB EXPECT {_expect_name(expectation.ref, source) or expectation.ref}{note}"
