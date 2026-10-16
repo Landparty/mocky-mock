@@ -9,7 +9,9 @@ from mockymock.dsl.parser import _SUBSCRIPTED_NAME
 
 _MARKER = "__MOCKYMOCK__ "
 _TESTSUITE_RE = re.compile(r"^__MOCKYMOCK__ TESTSUITE: (?P<name>.+)$")
-_CASE_START_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) START: (?P<name>.+)$")
+# `.*`, not `.+`: a START marker the driver printed is never dropped, even
+# for a name the parser should have refused (issue #308).
+_CASE_START_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) START: ?(?P<name>.*)$")
 _CASE_FAIL_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) FAIL: (?P<reason>.+)$")
 _CASE_END_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) END$")
 # Emitted only in trace mode, by the splicer's mock dispatch blocks. Carries

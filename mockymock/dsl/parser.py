@@ -1120,6 +1120,14 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"line {line_no}: TESTCASE inside {in_before} -- "
                     f"missing {_hook_end(in_before)}"
                 )
+            if not m.group("name").strip():
+                # The driver's START marker would carry no name, which the
+                # report cannot attribute (issue #308); nor could --case
+                # select it.
+                raise CutParseError(
+                    f"line {line_no}: TESTCASE name is empty -- give the "
+                    f"test case a non-blank quoted name"
+                )
             tags = _TAG_RE.findall(m.group("tags") or "")
             for tag in tags:
                 if not tag.strip():

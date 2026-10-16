@@ -512,7 +512,10 @@ Key regexes, matched in this order per non-blank line:
 2. `*>` comment (only reachable when not inside a mock body).
 3. `TESTSUITE "..."` — errors if a suite is already open (one per file).
 4. `TESTCASE "..."` — requires `suite` already set; resets the per-case
-   duplicate-MOCK tracker.
+   duplicate-MOCK tracker. An empty or blank name raises `CutParseError`
+   (issue #308: the driver's `START:` marker would carry no name, and
+   `--case` could not select it); `report.results`' `_CASE_START_RE`
+   accepts an empty name anyway, so a printed START is never dropped.
 5. `MOCK <quoted-cat> "<key>"` then `MOCK <bare-cat> <key>` — requires
    `case` already set; whichever matches opens `in_mock` and appends it to
    `case.mocks` immediately (body lines get attached as they arrive on
