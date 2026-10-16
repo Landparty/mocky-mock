@@ -533,3 +533,46 @@ def test_value_restores_that_a_plain_move_would_get_wrong():
         "MOVE SPACES TO RPT-AMT2(1:)",
         "MOVE -1.5 TO WS-NUM",
     ]
+
+
+ODO_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ODO.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CNT              PIC 9(2) VALUE 2.
+       01  WS-TABLE.
+           05  WS-ENT          PIC X(3) OCCURS 1 TO 10 TIMES
+                               DEPENDING ON WS-CNT.
+       01  WS-T2.
+           05  WS-HDR.
+               10  WS-N2       PIC 9(2).
+           05  WS-E2           PIC X(3) VALUE "ZZZ" OCCURS 0 TO 4 TIMES
+                               DEPENDING ON WS-N2.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_odo_table_is_initialized_at_its_maximum_size():
+    """Issue #216: INITIALIZE of an ODO group only clears the occurrences
+    the counter names, and the counter's own reset had already set it to 0,
+    so table entries leaked between cases. The counter is set to the
+    table's maximum around the INITIALIZE and restored afterwards; with a
+    VALUE in the table, the group is default-filled first and then has its
+    VALUEs restored alone, since ALL TO VALUE THEN TO DEFAULT zeroes a
+    counter inside the group before reaching the table."""
+    result = parse_cobol(ODO_SOURCE, filename="odo.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        "MOVE 2 TO WS-CNT",
+        "MOVE 10 TO WS-CNT",
+        "INITIALIZE WS-TABLE",
+        "MOVE 2 TO WS-CNT",
+        "MOVE 4 TO WS-N2 OF WS-HDR OF WS-T2",
+        "INITIALIZE WS-T2",
+        "MOVE 4 TO WS-N2 OF WS-HDR OF WS-T2",
+        "INITIALIZE WS-T2 ALL TO VALUE",
+        "MOVE 0 TO WS-N2 OF WS-HDR OF WS-T2",
+    ]

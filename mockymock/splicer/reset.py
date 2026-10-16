@@ -122,20 +122,131 @@ def reset_lines_for_items(items) -> list[str]:
             # initializes storage from the first (redefined) description.
             continue
         if _is_group(item) and not item.value_clause:
+            odo_max, odo_restore = _odo_counter_lines(item)
+            lines.extend(odo_max)
             if _has_occurs_value(item):
                 # A table element's VALUE needs a subscripted MOVE per
                 # occurrence; INITIALIZE's ALL TO VALUE phrase restores
                 # every occurrence (and every other child's VALUE) in one
                 # statement, then zero/space-fills the rest (issue #156).
-                lines.append(f"INITIALIZE {item.name} ALL TO VALUE THEN TO DEFAULT")
-                continue
-            lines.append(f"INITIALIZE {item.name}")
-            lines.extend(_child_value_restores(item, item.name))
+                if odo_max:
+                    # ALL TO VALUE THEN TO DEFAULT works item by item, so an
+                    # ODO counter inside the group drops to 0 before its
+                    # table is reached. Default-fill the whole group first,
+                    # then restore VALUEs alone, which leaves a VALUE-less
+                    # counter at its maximum (checked on GnuCOBOL 3.1).
+                    lines.append(f"INITIALIZE {item.name}")
+                    lines.extend(odo_max)
+                    lines.append(f"INITIALIZE {item.name} ALL TO VALUE")
+                else:
+                    lines.append(f"INITIALIZE {item.name} ALL TO VALUE THEN TO DEFAULT")
+            else:
+                lines.append(f"INITIALIZE {item.name}")
+                lines.extend(_child_value_restores(item, item.name))
+            lines.extend(odo_restore)
         else:
             reset = _elementary_reset(item)
             if reset is not None:
                 lines.append(reset)
     return lines
+
+
+def _odo_counter_lines(group) -> tuple[list[str], list[str]]:
+    """The lines that bracket a group's reset so every `OCCURS ...
+    DEPENDING ON` table in it is cleared at its full size (issue #216).
+
+    INITIALIZE of a variable-length group only covers the occurrences its
+    ODO object currently names. The counter's own reset line usually ran
+    first (declaration order) and left it at 0, so no entry was cleared and
+    the previous case's table data leaked into the next; declared after the
+    table, the INITIALIZE used whatever count the previous case left. A
+    fresh program starts with the whole maximum-size area initialized, so
+    each counter is set to its table's maximum first and reset to its own
+    VALUE (or type default) afterwards: returns (set-to-maximum lines,
+    counter-restore lines). A counter that cannot be found (or sits inside
+    a table), or an unbounded table, leaves the reset as it was."""
+    before: list[str] = []
+    after: list[str] = []
+    for clause in _odo_clauses(group):
+        counter = _find_data_item(
+            group, clause.depending_on, clause.depending_on_qualifiers
+        )
+        if counter is None or getattr(clause, "is_unbounded", False):
+            continue
+        if _inside_table(counter):
+            continue  # an unsubscripted MOVE to it would be illegal
+        if not getattr(clause, "max_times", None):
+            continue
+        target = _qualified_name(counter)
+        restore = _elementary_reset(counter, target)
+        if restore is None:
+            continue
+        before.append(f"MOVE {clause.max_times} TO {target}")
+        after.append(restore)
+    return before, after
+
+
+def _inside_table(item) -> bool:
+    node = item
+    while node is not None and getattr(node, "level", None) is not None:
+        if getattr(node, "occurs_clause", None) is not None:
+            return True
+        node = getattr(node, "parent", None)
+    return False
+
+
+def _data_children(item) -> list:
+    return [
+        child
+        for child in getattr(item, "children", [])
+        if getattr(child, "level", None) is not None
+    ]
+
+
+def _odo_clauses(group) -> list:
+    """Every OCCURS clause with a DEPENDING ON phrase under `group`."""
+    out = []
+    for child in _data_children(group):
+        clause = getattr(child, "occurs_clause", None)
+        if clause is not None and getattr(clause, "depending_on", None):
+            out.append(clause)
+        out.extend(_odo_clauses(child))
+    return out
+
+
+def _qualified_name(item) -> str:
+    """`item`'s name qualified by every enclosing group: `CNT OF HDR OF REC`."""
+    names = [item.name]
+    parent = getattr(item, "parent", None)
+    while parent is not None and getattr(parent, "level", None) is not None:
+        names.append(parent.name)
+        parent = getattr(parent, "parent", None)
+    return " OF ".join(names)
+
+
+def _find_data_item(anchor, name: str, qualifiers) -> object | None:
+    """The data item named `name` (whose enclosing groups include every name
+    in `qualifiers`) anywhere in the program `anchor` belongs to, or None
+    when there is no single match."""
+    root = anchor
+    while getattr(root, "parent", None) is not None:
+        root = root.parent
+    wanted = name.upper()
+    quals = {q.upper() for q in qualifiers or []}
+    matches = []
+
+    def walk(node) -> None:
+        for child in getattr(node, "children", []):
+            if getattr(child, "level", None) is not None and (
+                (getattr(child, "name", None) or "").upper() == wanted
+            ):
+                chain = {n.upper() for n in _qualified_name(child).split(" OF ")[1:]}
+                if quals <= chain:
+                    matches.append(child)
+            walk(child)
+
+    walk(root)
+    return matches[0] if len(matches) == 1 else None
 
 
 def cobol_literal(value_clause: str) -> str:

@@ -531,6 +531,21 @@ zero/space-fills the rest (checked against GnuCOBOL 3.1's cobc). Before
 test saw different starting data from the real program. Groups with no
 VALUE inside a table keep the plain INITIALIZE plus per-child restores.
 
+**OCCURS DEPENDING ON tables are cleared at full size (issue #216).**
+INITIALIZE of a variable-length group only covers the occurrences its ODO
+object currently names. The counter's own reset line usually ran first
+(declaration order) and left it at 0, so nothing in the table was cleared
+and one case's entries leaked into the next. For a VALUE-less group holding
+an ODO table, `_odo_counter_lines` brackets the group's reset: `MOVE <max>
+TO <counter>` before, the counter's own VALUE/default reset after (both
+fully qualified; the counter is found anywhere in the program by name and
+DEPENDING ON qualifiers). On the `ALL TO VALUE` path the group is first
+reset with a plain `INITIALIZE`, the counter set to its maximum again, then
+`INITIALIZE <group> ALL TO VALUE`: `ALL TO VALUE THEN TO DEFAULT` works item
+by item, so a counter declared inside the group dropped to 0 before its
+table was reached (checked on GnuCOBOL 3.1). A counter that cannot be
+resolved, one inside a table, and unbounded tables keep the old reset.
+
 **Child restores are fully qualified (issue #220).** Each per-child VALUE
 restore names the child through its whole chain of enclosing groups,
 intermediate levels included: `MOVE "N" TO REC-FLAG OF HDR OF OUT-REC`.
