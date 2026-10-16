@@ -654,14 +654,17 @@ def build_goto_exit_replacement(exit_kind: str = "PARAGRAPH") -> list[str]:
     return [f"           EXIT {exit_kind}"]
 
 
-def build_chain_check() -> list[str]:
+def build_chain_check(exit_kind: str = "PARAGRAPH") -> list[str]:
     """Inserted immediately after an intermediate PERFORM statement lying
     on a safe chain toward a neutralized terminator: if the flag is set,
     stop this paragraph too instead of running whatever sibling code
     follows -- propagating the early exit one more level toward the test
-    driver. Identical every time it's used; no parameters needed."""
+    driver. `exit_kind` is `TerminatorPlan.chain_exit_kinds`' entry for
+    the PERFORM: "SECTION" when it sits in a SECTION's first paragraph
+    entered via PERFORM <section-name>, where EXIT PARAGRAPH would fall
+    into the section's next paragraph (issue #338)."""
     return [
         '           IF UT-EARLY-EXIT = "Y"',
-        "               EXIT PARAGRAPH",
+        f"               EXIT {exit_kind}",
         "           END-IF",
     ]

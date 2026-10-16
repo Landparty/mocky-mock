@@ -58,6 +58,7 @@ from ._reachability import (
     _is_exit_only_paragraph,
     _paragraph_safe_section_map,
     _plain_perform_edges_from,
+    _plain_perform_statements,
     _reachable_paragraphs,
     _safe_section_entry_points,
     _source_ordered_paragraphs,
@@ -90,6 +91,12 @@ class TerminatorPlan:
     # right after the PERFORM inside its own branch. A top-level chain
     # PERFORM has no entry here and keeps its `statement_span`.
     chain_spans: dict[int, tuple[int, int]] = field(default_factory=dict)
+    # id(perform) -> "SECTION" for each chain PERFORM held by a SECTION's
+    # first paragraph entered via PERFORM <section-name> (issue #338): its
+    # check must leave the whole section, as the terminator's own
+    # `exit_kind` does, or control falls into the section's next
+    # paragraph. Absent means "PARAGRAPH".
+    chain_exit_kinds: dict[int, str] = field(default_factory=dict)
     # The operand of `STOP RUN RETURNING n` / `GOBACK RETURNING n` (issue
     # #219): the neutralization MOVEs it to RETURN-CODE before setting the
     # early-exit flag, since removing the statement removes the phrase too.
@@ -647,6 +654,18 @@ def find_terminator_plans(
     neutralized_goto = neutralized_goto_targets(program, scope_map, lines)
     safe_section_entries = _safe_section_entry_points(program)
     safe_section_first_names = set(safe_section_entries.values())
+    # The restricted chain walk only ever enters a SECTION through its
+    # first paragraph, via PERFORM <section-name>, so a chain PERFORM held
+    # there must end with EXIT SECTION (issue #338).
+    section_chain_performs = {
+        id(perform)
+        for section in procedure._sections.values()
+        for paragraph in section.paragraphs
+        if paragraph.paragraph_name in safe_section_first_names
+        for perform, _nested, _in_boundary in _plain_perform_statements(
+            paragraph.statements
+        )
+    }
     # The GO TO fall-through hazard map is per case: a walk stops at the
     # end of a section entered only via `PERFORM <section-name>` -- unless
     # the case's own entry point names one of its members directly -- the
@@ -943,6 +962,9 @@ def find_terminator_plans(
                     plan.chain_performs.append(perform)
                     existing_ids.add(id(perform))
             plan.chain_spans.update(chain_spans)
+            for perform, _nested in chain_performs:
+                if id(perform) in section_chain_performs:
+                    plan.chain_exit_kinds[id(perform)] = "SECTION"
 
     return list(plans_by_statement.values()), reasons
 

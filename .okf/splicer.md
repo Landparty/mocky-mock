@@ -1185,7 +1185,12 @@ rest of the branch still ran and an inline loop kept iterating. Inside an
 inline loop body the check's `EXIT PARAGRAPH` leaves the loop too. A
 nested chain `PERFORM` with no safe nested span (it shares its line, or
 the next scope word does) refuses every terminator the case reaches
-(`UNSUPPORTED_TERMINATOR_LAYOUT`). `driver.py` needs only one addition:
+(`UNSUPPORTED_TERMINATOR_LAYOUT`). A chain `PERFORM` held by a
+SECTION's first paragraph -- the only section member the chain walk
+enters, via `PERFORM <section-name>` -- gets `EXIT SECTION` in its check
+instead (`TerminatorPlan.chain_exit_kinds`, the same rule as the
+terminator's own `exit_kind`; issue #338): `EXIT PARAGRAPH` fell into the
+section's next paragraph. `driver.py` needs only one addition:
 `UT-EARLY-EXIT` declared once, reset to `"N"` per test case. No paragraph
 restructuring -- `UT-TESTCASE-NNN`'s existing checks run automatically
 once the flag has propagated back via ordinary, unmodified `PERFORM`

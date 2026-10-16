@@ -344,7 +344,9 @@ def splice_program(
                 start, end = nested_span
             else:
                 start, end = statement_span(perform, boundaries, last_line, lines)
-            chain_check = build_chain_check()
+            chain_check = build_chain_check(
+                plan.chain_exit_kinds.get(id(perform), "PARAGRAPH")
+            )
             # If the PERFORM this follows ended its own sentence with a
             # period, the inserted IF/END-IF block is itself a brand-new,
             # unterminated sentence -- give it its own closing period, or
