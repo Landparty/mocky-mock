@@ -311,3 +311,54 @@ def test_hint_kept_for_arithmetic_outside_any_loop(looped_ast):
     mutant = _swap_in(LOOPED_PROGRAM, "ADD 1 TO WS-ONCE")
     hint = zero_baseline_hint(mutant, looped_ast, parse_cut(LOOPED_CUT))
     assert "untestable" in hint
+
+
+COPY_LOOPED_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. Z.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       COPY WSCOMMON.
+       01 WS-I    PIC 9(3) VALUE 0.
+       01 WS-CNT  PIC 9(3) VALUE 0.
+       01 WS-OUT  PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM COUNT-PARA WS-I TIMES
+           MOVE WS-CNT TO WS-OUT.
+       COUNT-PARA.
+           ADD 1 TO WS-CNT.
+"""
+
+COPY_LOOPED_CUT = """\
+TESTSUITE "Z"
+
+TESTCASE "once"
+    MOVE 1 TO WS-I
+    PERFORM MAIN-PARA
+    EXPECT WS-OUT TO BE 1
+"""
+
+
+@pytest.mark.parametrize("with_copy", [True, False])
+def test_looped_add_gets_no_hint_with_a_working_storage_copy(tmp_path, with_copy):
+    """Issue #342: the loop check matched `mutant.line` (a line of the
+    program) against copybook-expanded AST lines, so a WORKING-STORAGE COPY
+    shifted every PROCEDURE DIVISION line and the #203 suppression missed."""
+    copybooks = tmp_path / "copybooks"
+    copybooks.mkdir()
+    (copybooks / "WSCOMMON.cpy").write_text(
+        "".join(f"       01 WS-C{n} PIC X(10).\n" for n in range(1, 6))
+    )
+    source = COPY_LOOPED_PROGRAM
+    if not with_copy:
+        source = source.replace("       COPY WSCOMMON.\n", "")
+    program = tmp_path / "Z.cbl"
+    program.write_text(source)
+    cut = tmp_path / "Z.cut"
+    cut.write_text(COPY_LOOPED_CUT)
+    survivor = runner.MutantResult(_swap_in(source, "ADD 1 TO WS-CNT"), "survived")
+    runner._attach_zero_baseline_hints(
+        [survivor], program, cut, [str(copybooks)] if with_copy else None
+    )
+    assert survivor.hint == ""

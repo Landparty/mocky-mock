@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-16T12:00:00Z
+timestamp: 2026-10-16T20:00:00Z
 ---
 
 # Overview
@@ -1012,7 +1012,11 @@ at most once per case (`_may_run_more_than_once`, issue #203): an
 ADD/SUBTRACT in a paragraph a looping PERFORM (UNTIL/VARYING/TIMES)
 reaches, or in a looping inline PERFORM body (`analysis/loops.py`), gets
 no hint -- a counter bumped n times ends at n while the swap alternates
-1, 0, 1, ..., so a plain EXPECT kills it. The verdict and score
+1, 0, 1, ..., so a plain EXPECT kills it. The AST is copybook-expanded
+and `mutant.line` is a line of the program itself, so the mutant's line
+is first mapped through `StaticCheckResult.source_location_map` (issue
+#342: a WORKING-STORAGE COPY shifted every PROCEDURE DIVISION line and
+the loop check never matched). The verdict and score
 are unchanged -- seeding the field is how the author kills it -- but the
 console prints a `!` line under the diff plus a count, `--json-report`
 carries a per-mutant `hint`, and `mockymock report` files it as

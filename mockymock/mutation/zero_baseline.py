@@ -58,8 +58,18 @@ _NAME = re.compile(r"^[A-Z0-9][A-Z0-9-]*$", re.IGNORECASE)
 _QUALIFIER = frozenset({"OF", "IN"})
 
 
-def zero_baseline_hint(mutant: Mutant, ast: object, suite: object) -> str:
-    """The hint for one surviving mutant, or "" when it does not apply."""
+def zero_baseline_hint(
+    mutant: Mutant,
+    ast: object,
+    suite: object,
+    source_location_map: dict[int, tuple[str, int]] | None = None,
+) -> str:
+    """The hint for one surviving mutant, or "" when it does not apply.
+
+    `source_location_map` is `StaticCheckResult.source_location_map`: the
+    AST's lines are copybook-expanded, `mutant.line` is a line of the
+    program itself, and every COPY above it shifts the two apart (issue
+    #342). Empty or None when nothing was expanded."""
     if (
         mutant.operator != "arith-verb-swap"
         or mutant.description not in _SWAP_DESCRIPTIONS
@@ -78,7 +88,7 @@ def zero_baseline_hint(mutant: Mutant, ast: object, suite: object) -> str:
             return ""
     if not any(_is_observed(name, items, ast, suite) for name in targets):
         return ""
-    if _may_run_more_than_once(mutant.line, ast):
+    if _may_run_more_than_once(_ast_lines(mutant.line, source_location_map), ast):
         return ""
     names = ", ".join(targets)
     first = targets[0]
@@ -91,8 +101,23 @@ def zero_baseline_hint(mutant: Mutant, ast: object, suite: object) -> str:
     )
 
 
-def _may_run_more_than_once(line: int, ast: object) -> bool:
-    """Whether the ADD/SUBTRACT on source line `line` sits in a paragraph a
+def _ast_lines(
+    line: int, source_location_map: dict[int, tuple[str, int]] | None
+) -> frozenset[int]:
+    """The AST (copybook-expanded) line numbers of the program's own source
+    line `line`: itself without an expansion, else every expanded line the
+    source map pairs with `("<main>", line)`."""
+    if not source_location_map:
+        return frozenset({line})
+    return frozenset(
+        expanded
+        for expanded, (origin_file, origin_line) in source_location_map.items()
+        if origin_file == "<main>" and origin_line == line
+    )
+
+
+def _may_run_more_than_once(lines: frozenset[int], ast: object) -> bool:
+    """Whether the ADD/SUBTRACT on AST line(s) `lines` sits in a paragraph a
     looping PERFORM reaches, or in a looping inline PERFORM's body. When
     the loop analysis cannot run, False: the hint stays, as before."""
     try:
@@ -109,7 +134,7 @@ def _may_run_more_than_once(line: int, ast: object) -> bool:
         for paragraph in _all_paragraphs(procedure):
             for statement in _walk(paragraph.statements):
                 location = getattr(statement, "location", None)
-                if getattr(location, "line", None) != line:
+                if getattr(location, "line", None) not in lines:
                     continue
                 if type(statement).__name__ not in _ARITHMETIC_STATEMENTS:
                     continue
