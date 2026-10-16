@@ -28,7 +28,7 @@ from cobolparser.models.statements.control import (
     PerformStatement,
     StopStatement,
 )
-from cobolparser.models.statements.misc import GobackStatement
+from cobolparser.models.statements.misc import ExitStatement, GobackStatement
 
 from mockymock.analysis.mock_surface import _all_paragraphs, _nested_statement_lists
 
@@ -69,6 +69,8 @@ def _branch_performs(statements: list):
 
 def _stops_run(statement) -> bool:
     if isinstance(statement, GobackStatement):
+        return True
+    if isinstance(statement, ExitStatement) and statement.exit_type == "PROGRAM":
         return True
     return isinstance(statement, StopStatement) and statement.stop_type == "RUN"
 

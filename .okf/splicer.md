@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-13T22:00:00Z
+timestamp: 2026-10-16T00:00:00Z
 ---
 
 # Overview
@@ -777,7 +777,7 @@ corpus evidence" section for the required follow-up.
 # Terminator Neutralization (GOBACK/STOP RUN, Approach B)
 
 `refusal.find_terminator_plans` finds every `StopStatement`(RUN-form)/
-`GobackStatement` reachable from at least one test case whose enclosing
+`GobackStatement`/`EXIT PROGRAM` (issue #212) reachable from at least one test case whose enclosing
 paragraph -- and every intermediate paragraph between it and the test's
 `perform_target` -- is reached exclusively via plain, unconditional,
 single-shot, top-level `PERFORM` statements (`refusal._plain_perform_edges_from`,

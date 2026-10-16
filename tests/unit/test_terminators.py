@@ -887,3 +887,64 @@ def test_check_terminator_layout_is_reasons_only():
     reasons = check_terminator_layout(surface, program, _suite(), scope_map, lines)
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+
+
+# Issue #212: EXIT PROGRAM in a called subprogram returns to the caller, but
+# the driver makes the program under test the main program, where EXIT
+# PROGRAM is a no-op -- it has to be neutralized like GOBACK.
+EXIT_PROGRAM_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EXITPGM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-X                PIC 999 VALUE 0.
+       01  WS-CODE             PIC X.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-VALIDATE
+           ADD 100 TO WS-X
+           GOBACK.
+
+       1000-VALIDATE.
+           ADD 1 TO WS-X
+           IF WS-CODE = "E"
+               EXIT PROGRAM
+           END-IF
+           ADD 10 TO WS-X.
+"""
+
+
+def test_exit_program_is_a_terminator_site():
+    _, surface, _, _ = _analyze(EXIT_PROGRAM_SOURCE)
+    labels = [s.label for s in surface.boundary_sites if s.category is None]
+    assert "EXIT PROGRAM" in labels
+
+
+def test_exit_program_is_planned_and_spliced_like_goback():
+    from mockymock.splicer.naming import TallyRegistry
+    from mockymock.splicer.orchestrator import splice_program
+    from mockymock.splicer.source_map import collect_boundaries
+
+    program, surface, scope_map, lines = _analyze(EXIT_PROGRAM_SOURCE)
+    suite = _suite()
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert reasons == []
+    exit_plans = [p for p in plans if p.site.label == "EXIT PROGRAM"]
+    assert len(exit_plans) == 1
+    assert {p.target_paragraph for p in exit_plans[0].chain_performs} == {
+        "1000-VALIDATE"
+    }
+    spliced = "\n".join(
+        splice_program(
+            lines,
+            collect_boundaries(program),
+            surface,
+            suite,
+            TallyRegistry(suite),
+            plans,
+        )
+    )
+    assert "*>         EXIT PROGRAM" in spliced
+    assert 'IF UT-EARLY-EXIT = "Y"' in spliced
