@@ -197,6 +197,21 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if report.ready else 1
 
 
+def _timeout_seconds(value: str) -> int:
+    """argparse `type=` for `--timeout`: a whole number of seconds, at
+    least 1. coreutils `timeout 0` disables the container-side kill, so a
+    hung binary outlived its `docker exec` as an orphan at 100% CPU, and a
+    negative value made `timeout` itself fail with exit 125 (issue
+    #306)."""
+    try:
+        seconds = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from None
+    if seconds < 1:
+        raise argparse.ArgumentTypeError("--timeout must be at least 1 second")
+    return seconds
+
+
 def _check_input_files(command: str, *paths: Path) -> bool:
     """Print a clean error for every input path that doesn't exist. Runs
     before any toolchain/parse work so a typo'd path fails in milliseconds
@@ -3613,7 +3628,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--timeout",
-        type=int,
+        type=_timeout_seconds,
         default=30,
         help=(
             "Binary execution timeout in seconds (default 30); a mocked "
@@ -3724,7 +3739,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mutate_parser.add_argument(
         "--timeout",
-        type=int,
+        type=_timeout_seconds,
         default=15,
         help=(
             "Per-mutant run timeout in seconds (default 15); a mutant that "
@@ -3939,7 +3954,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report_parser.add_argument("--seed", type=int, help="Seed for fixture generation")
     report_parser.add_argument(
-        "--timeout", type=int, help="Per-run timeout in seconds passed to 'run'"
+        "--timeout",
+        type=_timeout_seconds,
+        help="Per-run timeout in seconds passed to 'run'",
     )
     report_parser.add_argument(
         "--mutation-threshold",

@@ -491,6 +491,10 @@ Flags beyond the pipeline inputs:
   could shorten or lengthen the bound a hung mocked CALL is killed by. The
   help text now points at the fix for that hang: `MOCK CALL "X" ROWS (
   ... ) TERMINAL ( ... )`, so the calls after the last row end the loop.
+  Values below 1 are refused on run / mutate / report (`_timeout_seconds`,
+  issue #306): coreutils `timeout 0` turns the container-side kill off, so
+  a hung binary outlived its `docker exec` as an orphan. `run_binary`
+  also clamps to at least 1 second for any other caller.
 - `--case NAME` (repeatable) / `--tag TAG` (repeatable) — run only the named
   or tagged TESTCASEs (union when both given). Selection happens in
   `run_static_checks` before any per-case refusal check, so a refused
