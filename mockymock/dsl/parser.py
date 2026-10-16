@@ -308,7 +308,7 @@ def _reject_body_sentence_period(line: str, line_no: int, directive: str) -> Non
         )
 
 
-def _reject_sentence_period(value: str, line_no: int) -> None:
+def _reject_sentence_period(value: str, line_no: int, verb: str = "EXPECT") -> None:
     """Refuse an EXPECT value ending in a period outside any quoted
     literal (`EXPECT WS-X TO BE 5.` -- the natural COBOL sentence habit).
     The value is spliced verbatim into the generated `IF <name> NOT =
@@ -320,7 +320,12 @@ def _reject_sentence_period(value: str, line_no: int) -> None:
 
     A trailing `*>` inline comment is not part of the value: the generated
     `IF` line keeps it as a comment, so `5. *> note` still ends the
-    sentence there (and a period inside the comment is harmless)."""
+    sentence there (and a period inside the comment is harmless).
+
+    A setup/hook `MOVE` value (`verb="MOVE"`) is spliced verbatim into the
+    driver's `MOVE <value> TO <target>` the same way, where the period
+    ends the sentence before `TO` and cobc rejects the driver (issue
+    #197)."""
     quote: str | None = None
     code_end = len(value)
     for index, char in enumerate(value):
@@ -333,10 +338,15 @@ def _reject_sentence_period(value: str, line_no: int) -> None:
             code_end = index
             break
     if quote is None and value[:code_end].rstrip().endswith("."):
+        consequence = (
+            "the period would terminate the generated IF"
+            if verb == "EXPECT"
+            else "the period would end the generated MOVE before its TO"
+        )
         raise CutParseError(
-            f"line {line_no}: EXPECT value {value!r} ends with a period -- "
-            f"drop it (a .cut EXPECT is not a COBOL sentence, and the "
-            f"period would terminate the generated IF)"
+            f"line {line_no}: {verb} value {value!r} ends with a period -- "
+            f"drop it (a .cut {verb} is not a COBOL sentence, and "
+            f"{consequence})"
         )
 
 
@@ -567,6 +577,8 @@ def _instantiate_row(
     # generated IF as a literal one -- checked against the row's own line.
     for expectation in expectations:
         _reject_sentence_period(expectation.expected_value, row_line)
+    for value, _ in setup_moves:
+        _reject_sentence_period(value, row_line, "MOVE")
     return MockTestCase(
         name=f"{case.name} [row {row_index}: {_display_value(row[0])}]",
         # `list(case.mocks)` copies the list, but not its elements: every
@@ -577,6 +589,7 @@ def _instantiate_row(
         # per-case; copy it first if you need a per-case change.
         mocks=list(case.mocks),
         setup_moves=setup_moves,
+        setup_move_lines=list(case.setup_move_lines),
         perform_target=case.perform_target,
         perform_thru=case.perform_thru,
         expectations=expectations,
@@ -657,6 +670,9 @@ def _reject_mock_outside(hook: str | None, line_no: int) -> None:
 
 
 def parse_cut(text: str) -> MockTestSuite:
+    # A UTF-8 byte-order mark is an encoding artifact, not text (issue
+    # #198): left in, it made line 1 an "unrecognized statement".
+    text = text.removeprefix("\ufeff")
     suite: MockTestSuite | None = None
     case: MockTestCase | None = None
     in_mock: MockDirective | None = None
@@ -872,6 +888,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 _reject_unbalanced_subscript(m.group("target"), line_no)
                 in_mock.captures.append((index, m.group("target")))
+                in_mock.capture_lines.append(line_no)
             elif _CAPTURE_PREFIX_RE.match(line) is not None:
                 raise CutParseError(
                     f"line {line_no}: malformed CAPTURE statement {line!r} -- "
@@ -1166,6 +1183,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 f"WS-NAME for a dynamic CALL through that identifier)"
             )
         elif (m := _MOVE_RE.match(line)) is not None:
+            _reject_sentence_period(m.group("value"), line_no, "MOVE")
             if case is None and in_before is not None:
                 _reject_unbalanced_subscript(m.group("target"), line_no)
                 hook_steps[in_before].append(
@@ -1189,6 +1207,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"run before it, so write them above the PERFORM"
                 )
             case.setup_moves.append((m.group("value"), m.group("target")))
+            case.setup_move_lines.append(line_no)
         elif (m := _PERFORM_RE.match(line)) is not None:
             if case is None and in_before is None:
                 raise CutParseError(f"line {line_no}: PERFORM outside TESTCASE")
@@ -1237,6 +1256,17 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             _reject_sentence_period(m.group("value"), line_no)
             _reject_before_perform(case, "EXPECT", line_no)
+            if m.group("comparison") and m.group("value").strip().upper() in (
+                "TRUE",
+                "FALSE",
+            ):
+                # TO BE TRUE/FALSE tests a level-88 condition-name, which
+                # has no order: `TO BE GREATER THAN TRUE` means nothing.
+                raise CutParseError(
+                    f"line {line_no}: {m.group('value').strip()} can only "
+                    f"follow [NOT] TO BE (it tests a level-88 "
+                    f"condition-name): {line!r}"
+                )
             case.expectations.append(
                 ExpectDirective(
                     data_name=m.group("name"),

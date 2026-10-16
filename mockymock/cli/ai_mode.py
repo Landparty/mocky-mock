@@ -153,8 +153,8 @@ ALWAYS_ASK = (
     "Editing the .cbl program under test. The suite is the deliverable; "
     "the program is the developer's.",
     "Overwriting a .cut containing cases you did not write this session -- "
-    "plain `generate` overwrites its output path silently. Use `generate "
-    "--fill <cut>` or `-o <new file>`.",
+    "do not pass `generate --force` on the developer's behalf. Use "
+    "`generate --fill <cut>` or `-o <new file>`.",
     "Turning a suspected program bug into a passing assertion. Report the "
     "expected and actual values and leave it open, in every mode -- "
     "hands-off means you do not stop, not that you guess.",

@@ -62,6 +62,14 @@ _EXCLUDED_VERBS = re.compile(
     re.IGNORECASE,
 )
 
+# An EXEC SQL/CICS/DLI block runs from its EXEC to its END-EXEC, usually
+# across several lines. The splicer replaces the whole statement, so no
+# line of it -- not just the EXEC line `_EXCLUDED_VERBS` catches -- may
+# yield a mutant: an SQL `WHEN BALANCE > 1000` or a `SET(ADDRESS OF X)`
+# mutated there could never be killed.
+_EXEC_OPEN = re.compile(_cobol_word("EXEC"), re.IGNORECASE)
+_EXEC_CLOSE = re.compile(_cobol_word("END-EXEC"), re.IGNORECASE)
+
 _PROCEDURE_DIVISION = re.compile(r"\bPROCEDURE\s+DIVISION\b", re.IGNORECASE)
 # A source file can hold more than one program (nested or batched). Once
 # either of these appears the PROCEDURE DIVISION we were in has ended, so
@@ -326,6 +334,7 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
     mutants: list[Mutant] = []
     in_procedure = False
     debugging_mode = any(_DEBUGGING_MODE.search(line) for line in lines)
+    in_exec = False
 
     for index, line in enumerate(lines):
         line_no = index + 1
@@ -356,6 +365,21 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
         if comment_at != -1:
             code = code[:comment_at]
 
+        if in_exec:
+            in_exec = _exec_block_open_after(code, mask, 0)
+            continue
+        opener = next(
+            (
+                m
+                for m in _EXEC_OPEN.finditer(code)
+                if _outside_literals(mask, m.start(), m.end())
+            ),
+            None,
+        )
+        if opener is not None:
+            in_exec = _exec_block_open_after(code, mask, opener.end())
+            continue
+
         excluded = any(
             _outside_literals(mask, m.start(), m.end())
             for m in _EXCLUDED_VERBS.finditer(code)
@@ -376,6 +400,16 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
             mutants.append(deletion)
 
     return mutants
+
+
+def _exec_block_open_after(code: str, mask: list[bool], start: int) -> bool:
+    """Whether an EXEC block that is open at `code[start]` is still open
+    at the end of the line, i.e. no END-EXEC (outside literals) closes it
+    on this line."""
+    return not any(
+        _outside_literals(mask, m.start(), m.end())
+        for m in _EXEC_CLOSE.finditer(code, start)
+    )
 
 
 def _in_condition_context(code: str, mask: list[bool]) -> bool:

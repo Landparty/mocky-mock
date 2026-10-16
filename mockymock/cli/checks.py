@@ -101,24 +101,38 @@ def extra_working_storage(checked: StaticCheckResult) -> list[str] | None:
     from mockymock.splicer import cics_eib
     from mockymock.splicer.captures import capture_working_storage_lines
     from mockymock.splicer.linkage import extra_working_storage_lines
+    from mockymock.splicer.reset import index_working_storage_lines
 
     lines: list[str] = []
     if checked.cics_eib is not None:
         lines.extend(cics_eib.working_storage_lines(checked.cics_eib))
     lines.extend(extra_working_storage_lines(checked.linkage_address_of))
     lines.extend(capture_working_storage_lines(checked.captures))
+    lines.extend(index_working_storage_lines(_index_names(checked)))
     return lines or None
 
 
 def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
-    """Reset lines the synthesized capture targets need between test cases.
-    Kept beside `extra_working_storage` so the declaration and the reset can
+    """Reset lines the synthesized capture targets need between test cases,
+    and the save/restore of every INDEXED BY index (issue #189). Kept
+    beside `extra_working_storage` so the declaration and the reset can
     never be added in one pipeline and forgotten in another -- the suite
     compiles to ONE binary, so a capture left unreset would let a case that
     never reached its CALL assert against the previous case's value."""
     from mockymock.splicer.captures import capture_reset_lines
+    from mockymock.splicer.reset import index_reset_lines
 
-    return capture_reset_lines(checked.captures)
+    return capture_reset_lines(checked.captures) + index_reset_lines(
+        _index_names(checked)
+    )
+
+
+def _index_names(checked: StaticCheckResult) -> list[str]:
+    from mockymock.splicer.reset import index_names
+
+    if checked.parse_result is None or checked.parse_result.ast is None:
+        return []
+    return index_names(checked.parse_result.ast)
 
 
 NO_ASSERTION = "NO_ASSERTION"
@@ -212,6 +226,7 @@ def run_static_checks(
     )
 
     from mockymock.analysis.cics_eib import cics_eib_plan
+    from mockymock.analysis.cut_names import check_cut_data_names
     from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.flow_targets import normalize_flow_targets
     from mockymock.analysis.linkage import address_of_sites, linkage_plan
@@ -222,6 +237,7 @@ def run_static_checks(
         check_expansion_warnings,
         check_linkage_layout,
         check_nested_exec,
+        check_source_format,
         check_terminator_layout,
         check_test_case,
         check_unresolved_copybooks_scoped,
@@ -247,6 +263,7 @@ def run_static_checks(
     except SourceEncodingError as exc:
         out.problems.append(str(exc))
         return out
+    program_source = raw_source
     if copybook_paths:
         # cobolparser genuinely raises for realistic inputs (a copybook
         # that COPYs itself, an oversized/deeply-nested chain, a
@@ -280,6 +297,17 @@ def run_static_checks(
     parse_result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(parse_result.ast)
     out.parse_result = parse_result
+    # Free-format source parses, but is column-chopped by everything below
+    # (issue #210). Checked once the parse succeeded, so unparseable text
+    # still reports PARSE_ERROR with its detail lines rather than a
+    # format guess; decided on the program's own text, before expansion.
+    if parse_result.success:
+        format_reasons = check_source_format(program_source)
+        if format_reasons:
+            out.problems.extend(
+                f"refused ({r.code}): {r.message}" for r in format_reasons
+            )
+            return out
     whole_program_reasons, scoped_warnings = check_whole_program_scoped(
         parse_result, raw_source
     )
@@ -462,7 +490,7 @@ def run_static_checks(
 
     # 7. DATA DIVISION EXEC SQL pre-check (check-only: the transformed lines
     # are discarded -- the real transform runs after splicing).
-    _, data_exec_reasons = transform_data_division_exec(
+    transformed, data_exec_reasons = transform_data_division_exec(
         lines, copybook_paths=copybook_paths
     )
     if data_exec_reasons:
@@ -470,6 +498,17 @@ def run_static_checks(
             f"refused ({r.code}): {r.message}" for r in data_exec_reasons
         )
         return out
+
+    # 7b. Every data-name the .cut writes into the driver must exist in the
+    # program, or cobc rejects it at a line of a deleted sandbox copy
+    # (issue #204). Checked against the transformed text, so a generated
+    # SQLCA and EXEC SQL INCLUDE members count. Cumulative with step 8.
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}"
+        for r in check_cut_data_names(
+            suite, transformed, getattr(parse_result.ast, "program_name", None)
+        )
+    )
 
     # 8. Per-test-case checks, then flow-mock (MOCK PARAGRAPH/SECTION) and
     # terminator layout -- accumulated across all cases rather than

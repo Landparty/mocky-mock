@@ -15,7 +15,9 @@ SKIPPED rather than given illegal COBOL (documented fidelity limits, see
 .okf/splicer.md): USAGE INDEX items, PICTURE-less items of unrecognized
 usage. A group with a VALUE clause inside a table (an OCCURS item) is
 reset with `INITIALIZE <group> ALL TO VALUE THEN TO DEFAULT`, which
-restores every occurrence's VALUE without subscripted MOVEs. Top-level REDEFINES items are skipped on purpose: their
+restores every occurrence's VALUE without subscripted MOVEs; a group with
+a FILLER VALUE adds WITH FILLER, since a FILLER cannot be named in a MOVE.
+Top-level REDEFINES items are skipped on purpose: their
 storage is the redefined item's, which is reset (and its VALUE restored)
 by its own line -- a second reset through the redefining view would
 overwrite it.
@@ -40,6 +42,13 @@ _QUOTE_RUN_RE = re.compile(QUOTE + "+")
 # `MOVE SPACES TO <PIC ZZZ item>`). Z/*/$/+/- only ever appear in
 # numeric-edited pictures; X/A/B pictures never contain them.
 _NUMERIC_PIC_CHARS = frozenset("9VPZ*$+-")
+
+# A VALUE clause a plain MOVE can store into a numeric(-edited) item: a
+# numeric literal or the figurative ZERO. Anything else (SPACES, an
+# alphanumeric literal, HIGH-VALUES, ALL "*") needs reference modification.
+_NUMERIC_VALUE_RE = re.compile(
+    r"^(?:[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)|ZERO|ZEROS|ZEROES)$", re.IGNORECASE
+)
 
 # usage strings as cobolparser stores them (verified empirically).
 _FLOAT_USAGES = frozenset({"COMP-1", "COMP-2", "COMPUTATIONAL-1", "COMPUTATIONAL-2"})
@@ -115,20 +124,139 @@ def reset_lines_for_items(items) -> list[str]:
             # initializes storage from the first (redefined) description.
             continue
         if _is_group(item) and not item.value_clause:
-            if _has_occurs_value(item):
+            odo_max, odo_restore = _odo_counter_lines(item)
+            lines.extend(odo_max)
+            filler = " WITH FILLER" if _has_filler_value(item) else ""
+            if filler or _has_occurs_value(item):
                 # A table element's VALUE needs a subscripted MOVE per
                 # occurrence; INITIALIZE's ALL TO VALUE phrase restores
                 # every occurrence (and every other child's VALUE) in one
                 # statement, then zero/space-fills the rest (issue #156).
-                lines.append(f"INITIALIZE {item.name} ALL TO VALUE THEN TO DEFAULT")
-                continue
-            lines.append(f"INITIALIZE {item.name}")
-            lines.extend(_child_value_restores(item))
+                # A FILLER's VALUE cannot be restored by name at all, and a
+                # case that overwrote the whole group (MOVE SPACES TO
+                # a report line) changed it: WITH FILLER restores it too
+                # (issue #196).
+                if odo_max:
+                    # ALL TO VALUE THEN TO DEFAULT works item by item, so an
+                    # ODO counter inside the group drops to 0 before its
+                    # table is reached. Default-fill the whole group first,
+                    # then restore VALUEs alone, which leaves a VALUE-less
+                    # counter at its maximum (checked on GnuCOBOL 3.1).
+                    lines.append(f"INITIALIZE {item.name}{filler}")
+                    lines.extend(odo_max)
+                    lines.append(f"INITIALIZE {item.name}{filler} ALL TO VALUE")
+                else:
+                    lines.append(
+                        f"INITIALIZE {item.name}{filler}"
+                        " ALL TO VALUE THEN TO DEFAULT"
+                    )
+            else:
+                lines.append(f"INITIALIZE {item.name}")
+                lines.extend(_child_value_restores(item, item.name))
+            lines.extend(odo_restore)
         else:
             reset = _elementary_reset(item)
             if reset is not None:
                 lines.append(reset)
     return lines
+
+
+def _odo_counter_lines(group) -> tuple[list[str], list[str]]:
+    """The lines that bracket a group's reset so every `OCCURS ...
+    DEPENDING ON` table in it is cleared at its full size (issue #216).
+
+    INITIALIZE of a variable-length group only covers the occurrences its
+    ODO object currently names. The counter's own reset line usually ran
+    first (declaration order) and left it at 0, so no entry was cleared and
+    the previous case's table data leaked into the next; declared after the
+    table, the INITIALIZE used whatever count the previous case left. A
+    fresh program starts with the whole maximum-size area initialized, so
+    each counter is set to its table's maximum first and reset to its own
+    VALUE (or type default) afterwards: returns (set-to-maximum lines,
+    counter-restore lines). A counter that cannot be found (or sits inside
+    a table), or an unbounded table, leaves the reset as it was."""
+    before: list[str] = []
+    after: list[str] = []
+    for clause in _odo_clauses(group):
+        counter = _find_data_item(
+            group, clause.depending_on, clause.depending_on_qualifiers
+        )
+        if counter is None or getattr(clause, "is_unbounded", False):
+            continue
+        if _inside_table(counter):
+            continue  # an unsubscripted MOVE to it would be illegal
+        if not getattr(clause, "max_times", None):
+            continue
+        target = _qualified_name(counter)
+        restore = _elementary_reset(counter, target)
+        if restore is None:
+            continue
+        before.append(f"MOVE {clause.max_times} TO {target}")
+        after.append(restore)
+    return before, after
+
+
+def _inside_table(item) -> bool:
+    node = item
+    while node is not None and getattr(node, "level", None) is not None:
+        if getattr(node, "occurs_clause", None) is not None:
+            return True
+        node = getattr(node, "parent", None)
+    return False
+
+
+def _data_children(item) -> list:
+    return [
+        child
+        for child in getattr(item, "children", [])
+        if getattr(child, "level", None) is not None
+    ]
+
+
+def _odo_clauses(group) -> list:
+    """Every OCCURS clause with a DEPENDING ON phrase under `group`."""
+    out = []
+    for child in _data_children(group):
+        clause = getattr(child, "occurs_clause", None)
+        if clause is not None and getattr(clause, "depending_on", None):
+            out.append(clause)
+        out.extend(_odo_clauses(child))
+    return out
+
+
+def _qualified_name(item) -> str:
+    """`item`'s name qualified by every enclosing group: `CNT OF HDR OF REC`."""
+    names = [item.name]
+    parent = getattr(item, "parent", None)
+    while parent is not None and getattr(parent, "level", None) is not None:
+        names.append(parent.name)
+        parent = getattr(parent, "parent", None)
+    return " OF ".join(names)
+
+
+def _find_data_item(anchor, name: str, qualifiers) -> object | None:
+    """The data item named `name` (whose enclosing groups include every name
+    in `qualifiers`) anywhere in the program `anchor` belongs to, or None
+    when there is no single match."""
+    root = anchor
+    while getattr(root, "parent", None) is not None:
+        root = root.parent
+    wanted = name.upper()
+    quals = {q.upper() for q in qualifiers or []}
+    matches = []
+
+    def walk(node) -> None:
+        for child in getattr(node, "children", []):
+            if getattr(child, "level", None) is not None and (
+                (getattr(child, "name", None) or "").upper() == wanted
+            ):
+                chain = {n.upper() for n in _qualified_name(child).split(" OF ")[1:]}
+                if quals <= chain:
+                    matches.append(child)
+            walk(child)
+
+    walk(root)
+    return matches[0] if len(matches) == 1 else None
 
 
 def cobol_literal(value_clause: str) -> str:
@@ -220,9 +348,26 @@ def _has_occurs_value(group) -> bool:
     return walk(group, False)
 
 
-def _child_value_restores(group) -> list[str]:
+def _has_filler_value(group) -> bool:
+    """True when a FILLER somewhere under `group` declares a VALUE clause."""
+    return any(
+        (_is_filler(child) and getattr(child, "value_clause", None))
+        or _has_filler_value(child)
+        for child in _data_children(group)
+    )
+
+
+def _child_value_restores(group, qualifier: str) -> list[str]:
     """After INITIALIZE zeroes/space-fills a group, restore any child that
     declared its own VALUE clause (INITIALIZE does not honor those).
+
+    Every restore targets the child fully qualified through its enclosing
+    groups (`REC-FLAG OF HDR OF OUT-REC`; `qualifier` is the `OF ...` chain
+    for `group` itself). COBOL lets one child name repeat under different
+    groups -- IN-REC/OUT-REC built from one copybook -- and an unqualified
+    MOVE to such a name is ambiguous, which cobc rejects for the whole
+    driver (issue #220). Full qualification is always legal, so there is no
+    need to detect the ambiguity first.
 
     Children carrying an OCCURS clause are skipped entirely (subtree
     included): an unsubscripted `MOVE 7 TO WS-CELL` against an OCCURS item
@@ -234,13 +379,16 @@ def _child_value_restores(group) -> list[str]:
         if getattr(child, "level", None) is None:
             continue  # clause node, not a data item
         if _is_filler(child):
-            continue  # FILLER is unaddressable; its VALUE already survives INITIALIZE
+            # Unaddressable. A group with a FILLER VALUE never gets here:
+            # it is reset WITH FILLER ALL TO VALUE (see _has_filler_value).
+            continue
         if getattr(child, "occurs_clause", None) is not None:
             continue  # unsubscripted MOVE is illegal; see _has_occurs_value
+        target = f"{child.name} OF {qualifier}"
         if _is_group(child):
-            out.extend(_child_value_restores(child))
+            out.extend(_child_value_restores(child, target))
         elif getattr(child, "value_clause", None):
-            restore = _elementary_reset(child)
+            restore = _elementary_reset(child, target)
             if restore is not None:
                 out.append(restore)
     return out
@@ -257,7 +405,49 @@ def _is_numeric(item) -> bool:
     return any(c in _NUMERIC_PIC_CHARS for c in stripped.upper())
 
 
-def _elementary_reset(item) -> str | None:
+def _value_restore(item, name: str) -> str:
+    """`MOVE <VALUE literal> TO <name>`, adjusted where a plain MOVE would
+    not rebuild the bytes the VALUE clause put there (issue #218):
+
+    * a numeric or numeric-edited DISPLAY item whose VALUE is not a number
+      (`PIC ZZ,ZZ9.99 VALUE SPACES`, the report-line idiom) is moved through
+      reference modification, `MOVE SPACES TO <name>(1:)` -- cobc rejects a
+      figurative SPACE or an alphanumeric literal moved to a numeric item,
+      and the byte-wise move reproduces what VALUE stored;
+    * a JUSTIFIED item's literal is padded to the item's full length, since
+      VALUE ignores JUSTIFIED (`PIC X(6) JUST RIGHT VALUE "AB"` starts as
+      "AB    ") while a MOVE right-justifies. Reference modification does
+      not help there: GnuCOBOL still justified `WS-J(1:)`."""
+    literal = cobol_literal(item.value_clause)
+    picture = item.picture_clause
+    if picture is None:
+        return f"MOVE {literal} TO {name}"
+    usage = (getattr(item, "usage", None) or "DISPLAY").upper()
+    if (
+        _is_numeric(item)
+        and usage == "DISPLAY"
+        and not _NUMERIC_VALUE_RE.match(literal)
+    ):
+        return f"MOVE {literal} TO {name}(1:)"
+    if getattr(item, "justified", False):
+        literal = _pad_literal(literal, getattr(picture, "size", None))
+    return f"MOVE {literal} TO {name}"
+
+
+def _pad_literal(literal: str, size: int | None) -> str:
+    """Pad a plain quoted literal with trailing spaces to `size` characters
+    (an embedded doubled quote counts as one). Figurative constants, `ALL`
+    literals and anything else already fill the item and are returned as is."""
+    if not size or len(literal) < 2 or literal[0] != QUOTE or literal[-1] != QUOTE:
+        return literal
+    inner = literal[1:-1]
+    length = len(inner.replace(QUOTE * 2, QUOTE))
+    if length >= size:
+        return literal
+    return f"{QUOTE}{inner}{' ' * (size - length)}{QUOTE}"
+
+
+def _elementary_reset(item, target: str | None = None) -> str | None:
     """The reset line for one elementary (or VALUE-carrying group) item, or
     None when no legal reset exists (skip rather than emit illegal COBOL).
 
@@ -265,16 +455,86 @@ def _elementary_reset(item) -> str | None:
     only legal VALUE, so `SET ... TO NULL` both resets and restores. USAGE
     INDEX items are skipped: their content is implementation-defined and a
     reset adds nothing a fresh SEARCH/SET in the test flow doesn't. A
-    PICTURE-less item of unrecognized usage is skipped fail-safe."""
+    PICTURE-less item of unrecognized usage is skipped fail-safe.
+
+    `target` is the reference the line writes to (a qualified name for a
+    group child); it defaults to the item's own name."""
+    name = target or item.name
     usage = (getattr(item, "usage", None) or "").upper()
     if usage in _POINTER_USAGES:
-        return f"SET {item.name} TO NULL"
+        return f"SET {name} TO NULL"
     if usage == "INDEX":
         return None  # no legal MOVE; fidelity limit
     if item.value_clause:
-        return f"MOVE {cobol_literal(item.value_clause)} TO {item.name}"
+        return _value_restore(item, name)
     if item.picture_clause is None:
         if usage in _FLOAT_USAGES:
-            return f"MOVE 0 TO {item.name}"
+            return f"MOVE 0 TO {name}"
         return None  # PIC-less, unrecognized usage: skip fail-safe
-    return f"MOVE {'0' if _is_numeric(item) else 'SPACES'} TO {item.name}"
+    return f"MOVE {'0' if _is_numeric(item) else 'SPACES'} TO {name}"
+
+
+# Driver fields that hold each INDEXED BY index's start-up value (issue #189).
+INDEX_SAVED_FLAG = "UT-IDX-SAVED"
+INDEX_SAVE_PREFIX = "UT-IDX-SAVE-"
+
+
+def index_names(program) -> list[str]:
+    """Every `INDEXED BY` index name declared in the program's DATA
+    DIVISION, in declaration order."""
+    data_division = program.get_division("DATA")
+    if data_division is None:
+        return []
+    names: list[str] = []
+
+    def walk(node) -> None:
+        for child in _data_children(node):
+            clause = getattr(child, "occurs_clause", None)
+            for name in getattr(clause, "index_names", None) or []:
+                if name and name.upper() not in names:
+                    names.append(name.upper())
+            walk(child)
+
+    for section in getattr(data_division, "sections", data_division.children):
+        walk(section)
+    return names
+
+
+def index_working_storage_lines(names: list[str]) -> list[str]:
+    """Declarations for the saved start-up value of each index name."""
+    if not names:
+        return []
+    lines = [f'01  {INDEX_SAVED_FLAG}  PIC X VALUE "N".']
+    lines.extend(
+        f"01  {INDEX_SAVE_PREFIX}{n:03d}  USAGE INDEX."
+        for n in range(1, len(names) + 1)
+    )
+    return lines
+
+
+def index_reset_lines(names: list[str]) -> list[str]:
+    """Put every `INDEXED BY` index back to the value the program started
+    with (issue #189): an index name is not a data item, so the
+    WORKING-STORAGE reset never saw it, and a case that did `SET IX UP BY
+    1` left the next case subscripting from 2. A fresh index's value is
+    compiler-defined (GnuCOBOL 3.1 starts it at 1; 3.2 under -std=mvs was
+    seen at 0), so rather than pick a constant, the first reset -- which
+    runs before any program code -- saves each index, and every reset
+    restores it."""
+    if not names:
+        return []
+    saves = [
+        f"SET {INDEX_SAVE_PREFIX}{n:03d} TO {name}"
+        for n, name in enumerate(names, start=1)
+    ]
+    restores = [
+        f"SET {name} TO {INDEX_SAVE_PREFIX}{n:03d}"
+        for n, name in enumerate(names, start=1)
+    ]
+    return [
+        f'IF {INDEX_SAVED_FLAG} = "N"',
+        *(f"    {line}" for line in saves),
+        f'    MOVE "Y" TO {INDEX_SAVED_FLAG}',
+        "END-IF",
+        *restores,
+    ]

@@ -187,3 +187,12 @@ TESTCASE "c"
 """)
     reasons = check_test_case(surface, result.ast, suite.test_cases[0])
     assert reasons == []
+
+
+def test_fd_records_map_to_their_file_status_field():
+    """Issue #221: a WRITE/REWRITE MOCK keys on the record name, so each FD
+    record resolves to its file's status field; a file with no FILE STATUS
+    clause contributes nothing for its records either."""
+    result = parse_cobol(SOURCE, filename="statchk.cbl")
+    fields = analyze_file_status_fields(result.ast)
+    assert fields == {"WITH-STATUS": "WS-STATUS", "WITH-STATUS-REC": "WS-STATUS"}

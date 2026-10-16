@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -101,8 +101,19 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   raises `CutParseError` (`_reject_sentence_period`, 2026-09-27) --
   spliced into the generated `IF`, the period ended the sentence mid-IF
   and `cobc` rejected the driver while `lint` passed; a PROVIDER row
-  substituting such a value is refused at its `ROW` line. Phrase words are case-sensitive
+  substituting such a value is refused at its `ROW` line. The same check
+  covers setup and BEFORE-*/AFTER-* hook `MOVE` values, and PROVIDER rows
+  substituted into them (issue #197, 2026-10-16). Phrase words are case-sensitive
   uppercase like every other keyword.
+- `EXPECT <88-name> [NOT] TO BE TRUE|FALSE` tests a level-88
+  condition-name (issue #189). TRUE/FALSE are not values any data item
+  compares with, so `driver._condition_name_truth` emits `IF NOT <name>`
+  / `IF <name>` instead of the relational `IF FLAG-ON NOT = TRUE`, which
+  cobc rejected ("condition-name not allowed here"); an 88 cannot be
+  DISPLAYed, so the FAIL line reports the truth value it had (`expected
+  FLAG-ON = TRUE, got FALSE`). TRUE/FALSE after an ordering phrase
+  (`TO BE GREATER THAN TRUE`) is a `CutParseError`. The target is not
+  checked statically: a non-88 name still fails at compile time.
 - `EXPECT <data-name> TO BE <value>`'s `<data-name>` and `MOVE <value> TO
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
   to an identifier — a table subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`,
@@ -168,8 +179,9 @@ every shared mock). See
 
 ### `FILE-STATUS IS <mnemonic-or-code>`
 
-Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK` body
-(not `WRITE`/`REWRITE`). `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`,
+Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK|WRITE|REWRITE`
+body. WRITE/REWRITE key on the record name, which resolves to its FD's
+status field (issue #221). `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`,
 `DUPLICATE-KEY`, `RECORD-NOT-FOUND`, `FILE-NOT-FOUND`, `ALREADY-OPEN`,
 `NOT-OPEN`, `NO-CURRENT-RECORD`; a quoted two-character literal (e.g.
 `"92"`) always works too. Every eligible category also gets an implicit
@@ -968,7 +980,12 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
 - **Looped MQGET / CBLTDLI get calls (#156).** When a CALL sits in a loop
   whose UNTIL reads the call's own reply (`analysis.loops.loop_guard_words`,
   matched against the argument and every name declared under it, 88s
-  included), the mock reports end of data after its row: `MOVE 2` /
+  included -- plus, one hop out (#188), any flag the CALL's own paragraph
+  writes by `SET ... TO TRUE` or `MOVE` inside an IF/EVALUATE whose
+  condition reads the reply, `analysis.loops.names_set_on_reply`, with an
+  88's own field and sibling 88s: DEPTMQC's `UNTIL NO-MORE-MSGS` set under
+  `WHEN MQ-REASON-CODE = MQRC-NO-MSG-AVAIL`), the mock reports end of data
+  after its row: `MOVE 2` /
   `MOVE 2033` into MQGET's CompCode/Reason (8th/9th USING arguments), or
   `GE`/`GB` into bytes 11-12 of a CBLTDLI/CEETDLI get call's PCB (GU/GHU/
   GNP/GHNP -> GE, GN/GHN -> GB; the function code is read from the first

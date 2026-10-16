@@ -250,3 +250,64 @@ def test_hint_kept_when_the_field_is_observed(unasserted_ast, line):
     mutant = _swap_in(UNASSERTED_PROGRAM, line)
     hint = zero_baseline_hint(mutant, unasserted_ast, parse_cut(UNASSERTED_CUT))
     assert "untestable" in hint
+
+
+LOOPED_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOOPT.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CNT     PIC 9(3) VALUE 0.
+       01  WS-INL     PIC 9(3) VALUE 0.
+       01  WS-ONCE    PIC 9(3) VALUE 0.
+       01  WS-OUT     PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           PERFORM 1000-STEP 3 TIMES
+           PERFORM 2 TIMES
+               ADD 1 TO WS-INL
+           END-PERFORM
+           ADD 1 TO WS-ONCE
+           MOVE WS-CNT TO WS-OUT
+           MOVE WS-INL TO WS-OUT
+           MOVE WS-ONCE TO WS-OUT
+           GOBACK.
+       1000-STEP.
+           ADD 1 TO WS-CNT.
+"""
+
+LOOPED_CUT = """\
+TESTSUITE "LOOPT"
+
+TESTCASE "main"
+    PERFORM 0000-MAIN
+    EXPECT WS-OUT TO BE 1
+"""
+
+
+@pytest.fixture(scope="module")
+def looped_ast():
+    result = parse_cobol(LOOPED_PROGRAM, filename="LOOPT.cbl")
+    assert result.success, result.errors
+    return result.ast
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "ADD 1 TO WS-CNT",  # in a paragraph a PERFORM .. TIMES reaches
+        "ADD 1 TO WS-INL",  # in a looping inline PERFORM's body
+    ],
+)
+def test_no_hint_when_the_arithmetic_runs_more_than_once_per_case(looped_ast, line):
+    """Run n times, ADD 1 ends at n while the SUBTRACT mutant alternates
+    1, 0, 1, ...: an ordinary EXPECT kills it, so calling it untestable
+    (issue #203) sends the author to seed data instead of asserting."""
+    mutant = _swap_in(LOOPED_PROGRAM, line)
+    assert zero_baseline_hint(mutant, looped_ast, parse_cut(LOOPED_CUT)) == ""
+
+
+def test_hint_kept_for_arithmetic_outside_any_loop(looped_ast):
+    mutant = _swap_in(LOOPED_PROGRAM, "ADD 1 TO WS-ONCE")
+    hint = zero_baseline_hint(mutant, looped_ast, parse_cut(LOOPED_CUT))
+    assert "untestable" in hint

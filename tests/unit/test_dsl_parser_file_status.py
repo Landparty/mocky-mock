@@ -122,17 +122,20 @@ TESTCASE "c"
         parse_cut(cut)
 
 
-def test_file_status_inside_write_is_rejected():
-    cut = """\
+@pytest.mark.parametrize("verb", ["WRITE", "REWRITE"])
+def test_file_status_inside_write_and_rewrite_is_accepted(verb):
+    """Issue #221: WRITE/REWRITE resolve their record key to the FD's status
+    field, so FILE-STATUS IS DUPLICATE-KEY etc. is meaningful there."""
+    cut = f"""\
 TESTSUITE "s"
 TESTCASE "c"
-    MOCK WRITE REC1
-        FILE-STATUS IS SUCCESS
+    MOCK {verb} REC1
+        FILE-STATUS IS DUPLICATE-KEY
     END-MOCK
     PERFORM MAIN-PROCESS
 """
-    with pytest.raises(CutParseError, match="only valid inside"):
-        parse_cut(cut)
+    directive = parse_cut(cut).test_cases[0].mocks[0]
+    assert directive.file_status == "22"
 
 
 def test_file_status_inside_call_is_rejected():

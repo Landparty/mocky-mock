@@ -34,7 +34,7 @@ _PROGRAM = """\
        01  ws-step             pic 9 value 1.
        procedure division.
        main-para.
-           perform read-one
+           perform read-one thru read-one-exit
            perform tally-section
            perform read-one thru read-one-exit
            goback.

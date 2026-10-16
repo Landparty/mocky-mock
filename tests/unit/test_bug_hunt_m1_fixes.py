@@ -529,7 +529,7 @@ def test_147_local_storage_and_the_first_fd_record_are_reset() -> None:
     assert "MOVE 0 TO WS-TOTAL" in lines
     assert "MOVE 0 TO LS-COUNT" in lines
     assert "INITIALIZE LS-GRP" in lines
-    assert 'MOVE "AB" TO LS-A' in lines
+    assert 'MOVE "AB" TO LS-A OF LS-GRP' in lines
 
 
 def test_148_generated_sql_open_and_close_bodies_set_sqlcode(tmp_path) -> None:

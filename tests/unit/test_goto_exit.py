@@ -633,3 +633,68 @@ def test_no_goto_exit_plans_argument_leaves_existing_behavior_unchanged():
     suite = _suite()
     spliced = splice_program(lines, boundaries, surface, suite, TallyRegistry(suite))
     assert "\n".join(spliced) == "\n".join(lines)
+
+
+# --- issue #213: an in-program PERFORM without THRU -------------------------
+
+FORGOTTEN_THRU_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FORGOTTHRU.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-X                PIC 999 VALUE 0.
+       01  WS-A                PIC 9 VALUE 0.
+
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           PERFORM 1000-A
+           ADD 100 TO WS-X
+           STOP RUN.
+
+       1000-A.
+           IF WS-A = 1
+               GO TO 1000-EXIT
+           END-IF
+           ADD 1 TO WS-X.
+
+       1000-EXIT.
+           EXIT.
+
+       2000-NEXT.
+           ADD 50 TO WS-X.
+"""
+
+
+def test_find_goto_exit_plans_declines_when_an_in_program_perform_lacks_the_thru():
+    """`PERFORM 1000-A` (no THRU 1000-EXIT): the real GO TO leaves the
+    PERFORM range and falls into 2000-NEXT, never returning. Rewriting it
+    into EXIT PARAGRAPH would certify a clean return that never happens."""
+    program, _, scope_map, lines = _analyze(FORGOTTEN_THRU_SOURCE)
+    plans, notes = find_goto_exit_plans(program, scope_map, lines)
+    assert plans == []
+    assert len(notes) == 1
+    assert "ends its range at enclosing paragraph '1000-A'" in notes[0]
+
+
+def test_find_goto_exit_plans_accepts_an_in_program_perform_thru_the_exit():
+    source = FORGOTTEN_THRU_SOURCE.replace(
+        "PERFORM 1000-A\n", "PERFORM 1000-A THRU 1000-EXIT\n"
+    )
+    program, _, scope_map, lines = _analyze(source)
+    plans, notes = find_goto_exit_plans(program, scope_map, lines)
+    assert notes == []
+    assert [plan.paragraph_name for plan in plans] == ["1000-A"]
+
+
+def test_find_goto_exit_plans_declines_when_a_thru_range_ends_at_the_enclosing():
+    source = FORGOTTEN_THRU_SOURCE.replace(
+        "PERFORM 1000-A\n", "PERFORM 0000-START THRU 1000-A\n"
+    ).replace(
+        "       1000-A.\n",
+        '       0000-START.\n           DISPLAY "S".\n\n       1000-A.\n',
+    )
+    program, _, scope_map, lines = _analyze(source)
+    plans, notes = find_goto_exit_plans(program, scope_map, lines)
+    assert plans == []
+    assert "ends its range at enclosing paragraph '1000-A'" in notes[0]

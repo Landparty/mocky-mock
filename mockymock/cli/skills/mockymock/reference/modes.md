@@ -129,11 +129,10 @@ or quietly decide. These four hold in `hands-off` exactly as they do in
 1. **Never edit the `.cbl` program under test.** The suite is the
    deliverable; the program is the developer's.
 2. **Never overwrite a `.cut` containing cases you didn't write this
-   session.** Plain `generate` overwrites its output path silently -- use
-   `generate --fill <cut>` to add missing mocks to a file in progress, or
-   `-o <new file>` to generate beside it. `mockymock init` refuses
-   without `--force`; don't reach for `--force` on the developer's
-   behalf.
+   session.** `generate` and `mockymock init` both refuse an existing
+   `.cut` without `--force`; don't reach for `--force` on the developer's
+   behalf -- use `generate --fill <cut>` to add missing mocks to a file
+   in progress, or `-o <new file>` to generate beside it.
 3. **Never turn a suspected program bug into a passing assertion.** If
    the program produces 1180.00 and you expected 1250.00, that's a
    finding, not a value to paste into an `EXPECT`. In `hands-off` you

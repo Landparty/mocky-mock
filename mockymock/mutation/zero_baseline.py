@@ -17,6 +17,12 @@ between-case reset value is zero (its VALUE clause, or the zero default
 may seed it. A program statement that changes the field before the
 arithmetic runs is not modelled, which is why the hint says "probably".
 
+The premise also needs the statement to run once per case. Inside a
+looping PERFORM (a looped paragraph or an inline PERFORM body) a counter's
+`ADD 1` runs n times and ends at n while the mutant alternates 1, 0, 1,
+..., so an ordinary EXPECT kills it -- that survivor is a missing
+assertion and gets no hint (issue #203).
+
 Seeding only helps if something the suite can see depends on the field:
 an EXPECT on it (or on a group holding it), or a program statement that
 reads it -- a MOVE, a condition, a CALL argument -- other than its own
@@ -72,6 +78,8 @@ def zero_baseline_hint(mutant: Mutant, ast: object, suite: object) -> str:
             return ""
     if not any(_is_observed(name, items, ast, suite) for name in targets):
         return ""
+    if _may_run_more_than_once(mutant.line, ast):
+        return ""
     names = ", ".join(targets)
     first = targets[0]
     return (
@@ -81,6 +89,41 @@ def zero_baseline_hint(mutant: Mutant, ast: object, suite: object) -> str:
         f"gap, not a missing assertion: seed it to a non-zero value in a test "
         f"case (e.g. MOVE 5 TO {first}) so the two results differ."
     )
+
+
+def _may_run_more_than_once(line: int, ast: object) -> bool:
+    """Whether the ADD/SUBTRACT on source line `line` sits in a paragraph a
+    looping PERFORM reaches, or in a looping inline PERFORM's body. When
+    the loop analysis cannot run, False: the hint stays, as before."""
+    try:
+        from mockymock.analysis.loops import (
+            _walk,
+            looped_paragraphs_and_statements,
+        )
+        from mockymock.analysis.mock_surface import _all_paragraphs
+
+        looped_paragraphs, looped_ids = looped_paragraphs_and_statements(ast)
+        if not looped_paragraphs and not looped_ids:
+            return False
+        procedure = ast.get_division("PROCEDURE")  # type: ignore[attr-defined]
+        for paragraph in _all_paragraphs(procedure):
+            for statement in _walk(paragraph.statements):
+                location = getattr(statement, "location", None)
+                if getattr(location, "line", None) != line:
+                    continue
+                if type(statement).__name__ not in _ARITHMETIC_STATEMENTS:
+                    continue
+                if (
+                    paragraph.paragraph_name in looped_paragraphs
+                    or id(statement) in looped_ids
+                ):
+                    return True
+    except Exception:  # noqa: BLE001 -- hints are advisory
+        return False
+    return False
+
+
+_ARITHMETIC_STATEMENTS = frozenset({"AddStatement", "SubtractStatement"})
 
 
 def _receiving_names(line: str) -> list[str]:

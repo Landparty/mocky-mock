@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-10-14T01:00:00Z
+timestamp: 2026-10-16T00:00:00Z
 ---
 # Overview
 
@@ -273,6 +273,13 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   A stub on a POINTER-family or INDEX item is skipped, not recorded
   (`address_fields`, passed to `build_recording_report`, 2026-10-12): its
   DISPLAY text is an address, and `EXPECT P TO BE "0x..."` does not compile.
+  Issue #194 (2026-10-16): only *spaces* are trimmed (`rstrip(" ")`), since
+  X'09'-X'0D'/X'1C'-X'1F' are field data (X'0C' ends a positive packed
+  zero) and go to the hex-literal path; `field_pictures` maps a group item
+  to `X(length)` so it is always quoted/hex, never bare; and a stub on a
+  P-scaled PICTURE (`has_p_scaling`: `9(3)PP`, `SVP9(2)`) is skipped by
+  `build_recording_report(..., pictures=...)`, because DISPLAY prints only
+  the stored digits (12300 shows as `00123`).
 - `build_recording_report(scan, suite_result)` — matches every
   `StubExpectation` the scanner found against `suite_result`'s recorded
   values by `f"{case_index:03d}"` (the same case-id convention

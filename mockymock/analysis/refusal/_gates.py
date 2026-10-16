@@ -312,6 +312,33 @@ def _paragraph_owning_line(
     return owner
 
 
+def check_source_format(raw_source: str) -> list[RefusalReason]:
+    """UNSUPPORTED_SOURCE_FORMAT when `raw_source` is free-format COBOL.
+
+    cobol-parser decides fixed vs. free itself
+    (`detect_fixed_format`), so a free-format program parses correctly --
+    but every text the splicer edits and cobc compiles is cut down to
+    columns 8-72 by `normalize_fixed_format`, which chops the first seven
+    characters off each free-format line. The AST's line/column facts
+    then describe text that no longer exists, and the run fails in cobc on
+    garbage (or with a false layout refusal). Refuse up front, using the
+    same decision cobol-parser parsed with (issue #210)."""
+    from cobolparser.preprocess.source_format import detect_fixed_format
+
+    if detect_fixed_format(raw_source):
+        return []
+    return [
+        RefusalReason(
+            code="UNSUPPORTED_SOURCE_FORMAT",
+            message=(
+                "the program is free-format COBOL; mockymock only splices "
+                "and compiles fixed-format source (sequence area in "
+                "columns 1-6, indicator in column 7, code in columns 8-72)"
+            ),
+        )
+    ]
+
+
 def check_whole_program(parse_result) -> list[RefusalReason]:
     """PARSE_ERROR for a failed parse; PARSE_WARNING for each entry in
     `ParseResult.warnings`. Since cobolparser's 2026-07-07 silent-drop fixes,
@@ -687,6 +714,22 @@ def check_nested_exec(surface: MockSurface) -> list[RefusalReason]:
         )
         for site in surface.exec_sites()
         if not site.nested and site.unspliceable_reason
+    )
+    # A WHENEVER whose action cannot be read cannot be emulated, and an
+    # EXEC that is not emulated cannot stay (cobc can't compile it) --
+    # dropping it would silently run different control flow (issue #195).
+    reasons.extend(
+        RefusalReason(
+            code="UNSUPPORTED_SQL_WHENEVER",
+            message=(
+                f"EXEC SQL WHENEVER at line {site.line} (paragraph "
+                f"'{site.paragraph_name}'): {site.whenever.problem} -- "
+                f"mockymock emulates the precompiler's checks only for "
+                f"those forms"
+            ),
+        )
+        for site in surface.whenever_sites
+        if site.whenever is not None and site.whenever.problem
     )
     return reasons
 
@@ -1684,6 +1727,27 @@ def check_test_case(
                         f"in the mock body of a boundary the test does "
                         f"reach, or make the program take it as a CALL/file "
                         f"input"
+                    ),
+                )
+            )
+            continue
+        if (
+            directive.category is MockCategory.SQL
+            and surface.whenever_sites
+            and _exec_match_form(directive.key).startswith("WHENEVER")
+        ):
+            # Before issue #195 lint asked for exactly this mock; say why
+            # it now goes rather than send the author after reachability.
+            reasons.append(
+                RefusalReason(
+                    code="UNMATCHED_MOCK",
+                    message=(
+                        f"MOCK {directive.describe()} targets an EXEC SQL "
+                        f"WHENEVER, which is a precompiler declaration, not "
+                        f"a boundary: mockymock now emulates it (the "
+                        f"IF SQLCODE ... GO TO check after every later SQL "
+                        f"statement) and nothing mocks it. Drop this MOCK "
+                        f"directive and its VERIFY"
                     ),
                 )
             )

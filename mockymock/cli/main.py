@@ -339,7 +339,14 @@ def _write_report_file(command: str, flag: str, target: str, content: str) -> bo
 
 
 def _write_failure_reports(
-    args: argparse.Namespace, command: str, suite_name: str, reason: str
+    args: argparse.Namespace,
+    command: str,
+    suite_name: str,
+    reason: str,
+    *,
+    cut_suite=None,
+    cut_file: Path | None = None,
+    program_file: Path | None = None,
 ) -> None:
     """Write `run`'s --junit-xml/--json-report for an exit that never
     produced a TestSuiteResult at all -- a static refusal or a compile
@@ -350,7 +357,11 @@ def _write_failure_reports(
     read as "nothing ran" rather than "something failed" (carried-over open
     item from the 2026-08-10 framework audit). Reuses the ordinary
     formatters via one synthetic TestResult standing in for the whole run,
-    rather than a bespoke report shape only this path would exercise."""
+    rather than a bespoke report shape only this path would exercise.
+
+    `cut_suite`/`cut_file`/`program_file`, when known, go into the JSON
+    report so an editor can still place the failure (issue #204): without
+    them `cutFile`, `programFile` and the suite line were all null."""
     if not args.junit_xml and not args.json_report:
         return
 
@@ -380,7 +391,16 @@ def _write_failure_reports(
             command,
             "--json-report",
             args.json_report,
-            format_json_report(build_json_report(suite_result)),
+            format_json_report(
+                build_json_report(
+                    suite_result,
+                    cut_suite=cut_suite,
+                    cut_file=str(cut_file) if cut_file is not None else None,
+                    program_file=(
+                        str(program_file) if program_file is not None else None
+                    ),
+                )
+            ),
         )
 
 
@@ -525,6 +545,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         "--scenarios",
         args.scenarios,
     ]
+    if args.force:
+        # Already gated above with init's own message; generate refuses
+        # an existing output without it.
+        generate_argv.append("--force")
     if args.seed is not None:
         generate_argv += ["--seed", str(args.seed)]
     for path in copybook_paths:
@@ -785,10 +809,21 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
     # (a flow-mock target that doesn't exist, a terminator layout, an
     # UNMOCKED_* reason with no mechanical fix): print it and fail, so
     # `--fill` exiting 0 means the next `lint` exits 0 too.
+    # Only the per-TESTCASE UNMOCKED_* lines `--fill` read from
+    # `unmocked_reasons` count as handled: a hook PERFORM's refusal reads
+    # the same way ("refused (UNMOCKED_...)") but nothing here inserts
+    # into BEFORE-EACH/BEFORE-ALL, so matching on the prefix exited 0 with
+    # nothing filled and the next lint failed again (issue #208).
+    filled = {
+        f"refused ({r.code}): {r.message}"
+        for reasons in checked.unmocked_reasons.values()
+        for r in reasons
+        if r.code.startswith("UNMOCKED_")
+    }
     remaining = [
         problem
         for problem in checked.problems
-        if not problem.startswith("  ") and not _is_filled_problem(problem)
+        if not problem.startswith("  ") and problem not in filled
     ]
     for problem in remaining:
         print(f"mockymock generate: {problem}")
@@ -802,12 +837,6 @@ def _header_line(raw: str) -> str:
     stripped, so an existing `MOCK READ INV-FILE` (any indentation) is
     recognized as already present."""
     return raw.strip()
-
-
-def _is_filled_problem(problem: str) -> bool:
-    """True for the `refused (UNMOCKED_*): ...` lines `--fill` acts on
-    itself; every other problem line is one it cannot fix."""
-    return problem.startswith("refused (UNMOCKED_")
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
@@ -827,6 +856,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         check_cics_eib_layout,
         check_expansion_warnings,
         check_linkage_layout,
+        check_source_format,
         check_unresolved_copybooks,
         check_whole_program,
     )
@@ -864,6 +894,19 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             return 1
         _apply_config_to_args(args, source_path)
         return _fill_cut_file(source_path, Path(args.fill), args)
+
+    # The default path is the program's existing sibling PROG.cut when
+    # there is one, so writing unconditionally replaced a hand-written
+    # suite with a bare scaffold (issue #201). Refuse like `init` does,
+    # an explicit -o included, before any parsing.
+    existing = _default_output(args, source_path)
+    if existing.exists() and not args.force:
+        print(
+            f"mockymock generate: {existing} already exists -- pass --force "
+            f"to overwrite it, -o/--output to write somewhere else, or "
+            f"--fill {existing} to add only its missing mocks"
+        )
+        return 1
 
     if not _check_rows_non_negative("generate", args.rows):
         return 1
@@ -976,6 +1019,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 )
 
     raw_source = read_utf8_source(source_path)
+    program_source = raw_source
     if args.copybook_path:
         # See _cmd_fixtures's identical guard on the same call for why
         # this can raise on realistic inputs (audit finding F6).
@@ -1000,6 +1044,13 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         print(f"mockymock generate: {len(result.errors)} parse error(s):")
         for error in result.errors:
             print(f"  {error}")
+        return 1
+
+    # See run_static_checks: free-format source is column-chopped below.
+    format_reasons = check_source_format(program_source)
+    for reason in format_reasons:
+        print(f"mockymock generate: refused ({reason.code}): {reason.message}")
+    if format_reasons:
         return 1
 
     # success=True is not enough: cobolparser reports dropped statements
@@ -1559,6 +1610,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "run",
             checked.suite.name if checked.suite is not None else "",
             "\n".join(checked.problems),
+            cut_suite=checked.suite,
+            cut_file=cut_path,
+            program_file=source_path,
         )
         return 1
 
@@ -1624,7 +1678,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # run_static_checks) so a stub's case_index always means what
     # build_driver means by it. See
     # docs/2026-08-04-record-expectations-design.md.
-    cut_text = read_utf8_source(cut_path)
+    # Untranslated newlines, like `generate --fill`: the rewrite below
+    # must keep a CRLF .cut CRLF (issue #199), so it is written back with
+    # newline="" and rewrite_cut_text joins with the file's own newline.
+    cut_text = read_utf8_source(cut_path, keep_newlines=True)
     stub_scan = (
         scan_stub_expectations(cut_text, suite) if args.record_expectations else None
     )
@@ -1678,7 +1735,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
             # F10; a `return 1` from *this* branch used to be lumped in
             # with that same fix, which broke the documented, tested
             # --verbose-survives-a-compile-failure contract below).
-            _write_failure_reports(args, "run", suite.name, compiled.stderr)
+            _write_failure_reports(
+                args,
+                "run",
+                suite.name,
+                compiled.stderr,
+                cut_suite=suite,
+                cut_file=cut_path,
+                program_file=source_path,
+            )
             return 1
 
         # try/finally, not just a statement after the `with`: plain --verbose
@@ -1755,14 +1820,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # "Never overwrite a hand-edited EXPECT" sections): every stub the
         # scanner found ends up in exactly one of recorded/skipped, and the
         # file is only ever touched when at least one stub was recorded.
+        pictures = field_pictures(result.ast, checked.captures)
         recording = build_recording_report(
-            stub_scan, suite_result, address_fields(result.ast)
+            stub_scan, suite_result, address_fields(result.ast), pictures
         )
-        rewritten = rewrite_cut_text(
-            cut_text, recording, field_pictures(result.ast, checked.captures)
-        )
+        rewritten = rewrite_cut_text(cut_text, recording, pictures)
         if rewritten is not None:
-            cut_path.write_text(rewritten, encoding="utf-8", newline="\n")
+            cut_path.write_text(rewritten, encoding="utf-8", newline="")
         print(
             f"mockymock run: --record-expectations: recorded "
             f"{len(recording.recorded)}, skipped {len(recording.skipped)}"
@@ -2202,7 +2266,7 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
 
     score = outcome.score
     if args.fail_under is not None:
-        if score is None or score * 100 < args.fail_under:
+        if outcome.score_below(args.fail_under):
             shown = "n/a" if score is None else f"{score * 100:.1f}%"
             print(
                 f"mockymock mutate: mutation score {shown} is below "
@@ -2641,6 +2705,10 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     boundaries = None
     if args.boundaries:
         assert program_path is not None  # checked above
+        # Same copybook lookup lint/run use (config file + the program's
+        # copybooks/ folder): without it a site inside a copybook vanished
+        # from the list and completion offered nothing for it (issue #200).
+        _apply_config_to_args(args, program_path)
         try:
             boundaries = _collect_boundaries(program_path, args.copybook_path)
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
@@ -3151,6 +3219,11 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument(
         "--name",
         help="Name a second suite for the program: writes <program>.<NAME>.cut",
+    )
+    generate_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output .cut file if it already exists",
     )
     generate_parser.add_argument(
         "--fill",

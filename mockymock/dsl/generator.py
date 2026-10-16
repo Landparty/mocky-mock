@@ -58,6 +58,7 @@ from mockymock.analysis.loops import (
     loop_guard_words,
     loop_guards,
     looped_paragraphs_and_statements,
+    names_set_on_reply,
     site_in_loop,
 )
 from mockymock.analysis.mock_surface import (
@@ -429,6 +430,32 @@ class ProgramContext:
             if wanted in parts[:-1]:
                 names.add(parts[-1])
         return names
+
+    def condition_owners(self, name: str) -> set[str]:
+        """The field(s) `name` is a level-88 condition of, uppercased."""
+        wanted = name.upper()
+        owners: set[str] = set()
+        for item in self.data_items:
+            parts = str(item.get("qualified_name") or "").upper().split(".")
+            if item.get("level") == 88 and parts[-1] == wanted and len(parts) > 1:
+                owners.add(parts[-2])
+        return owners
+
+    def paragraph_statements(self, name: str | None) -> list:
+        """The statements of the PROCEDURE DIVISION paragraph `name`, or
+        [] when there is none (or no parsed program)."""
+        procedure = (
+            self.program.get_division("PROCEDURE")  # type: ignore[attr-defined]
+            if self.program is not None
+            else None
+        )
+        if procedure is None or not name:
+            return []
+        wanted = name.upper()
+        for paragraph in _all_paragraphs(procedure):
+            if str(getattr(paragraph, "paragraph_name", "") or "").upper() == wanted:
+                return list(paragraph.statements)
+        return []
 
     def literal_value(self, name: str) -> str | None:
         """The alphanumeric VALUE literal `name` is declared with, read from
@@ -1199,7 +1226,7 @@ def _call_loop_end_lines(
         reply is not None
         and site_in_loop(other, context.looped)
         and loop_guard_words(other, context.guards)
-        & set().union(*(context.names_under(name) for name in reply[1]))
+        & _reply_watched_names(other, reply[1], context)
         for other, reply in zip(sites, replies, strict=True)
     )
     if not waits_on_reply:
@@ -1217,6 +1244,25 @@ def _call_loop_end_lines(
     if tally is None:
         return moves
     return [f"IF {tally} > 1", *(f"    {move}" for move in moves), "END-IF"]
+
+
+def _reply_watched_names(
+    site: BoundarySite, reply_args: set[str], context: ProgramContext
+) -> set[str]:
+    """Every data name that follows `site`'s reply: the reply arguments and
+    what is declared under them, plus -- one hop -- any flag the site's own
+    paragraph sets in a branch on that reply (issue #188: `PERFORM ...
+    UNTIL NO-MORE-MSGS` where `SET NO-MORE-MSGS TO TRUE` sits under `WHEN
+    MQ-REASON-CODE = MQRC-NO-MSG-AVAIL`). A flag that is an 88 brings its
+    own field (and the field's other 88s) along, so an UNTIL on either
+    spelling matches."""
+    watched = set().union(*(context.names_under(name) for name in reply_args))
+    statements = context.paragraph_statements(site.paragraph_name)
+    for flag in names_set_on_reply(statements, watched):
+        watched |= context.names_under(flag)
+        for owner in context.condition_owners(flag):
+            watched |= context.names_under(owner)
+    return watched
 
 
 def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
@@ -1336,11 +1382,17 @@ def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
     A non-interactive ACCEPT (`ACCEPT X FROM DATE YYYYMMDD`) is in the same
     position: mockymock records it as nothing to mock, while cobol-parser's
     bundle can still list it when a date-format qualifier follows the
-    source (BATCHSEQ)."""
+    source (BATCHSEQ).
+
+    So is `EXEC SQL WHENEVER`: a precompiler declaration mockymock emulates
+    instead of mocking (issue #195), which cobol-parser's bundle lists as
+    an SQL boundary keyed `WHENEVER`."""
     keys: set[tuple[str, str]] = {
         (MockCategory.ACCEPT.value, accept.target)
         for accept in surface.non_interactive_accepts
     }
+    if surface.whenever_sites:
+        keys.add((MockCategory.SQL.value, "WHENEVER"))
     for site in surface.boundary_sites:
         if site.category is None or not (site.nested and site.span is None):
             continue
