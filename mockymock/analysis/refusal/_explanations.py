@@ -153,6 +153,12 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "paragraph, or mock the whole paragraph/section instead (MOCK "
         "PARAGRAPH/MOCK SECTION)."
     ),
+    "UNKNOWN_DATA_NAME": (
+        "A MOVE target, EXPECT data-name, CAPTURE INTO target or bare-word "
+        "value in the .cut names nothing the program declares -- cobc "
+        "would reject the generated driver. Fix the spelling, or quote the "
+        'value if it is meant as text (TO BE "Y", not TO BE Y).'
+    ),
     "UNSUPPORTED_SOURCE_FORMAT": (
         "The program is free-format COBOL. mockymock edits and compiles "
         "fixed-format source only (code in columns 8-72), so a free-format "

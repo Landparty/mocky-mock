@@ -212,6 +212,7 @@ def run_static_checks(
     )
 
     from mockymock.analysis.cics_eib import cics_eib_plan
+    from mockymock.analysis.cut_names import check_cut_data_names
     from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.flow_targets import normalize_flow_targets
     from mockymock.analysis.linkage import address_of_sites, linkage_plan
@@ -475,7 +476,7 @@ def run_static_checks(
 
     # 7. DATA DIVISION EXEC SQL pre-check (check-only: the transformed lines
     # are discarded -- the real transform runs after splicing).
-    _, data_exec_reasons = transform_data_division_exec(
+    transformed, data_exec_reasons = transform_data_division_exec(
         lines, copybook_paths=copybook_paths
     )
     if data_exec_reasons:
@@ -483,6 +484,17 @@ def run_static_checks(
             f"refused ({r.code}): {r.message}" for r in data_exec_reasons
         )
         return out
+
+    # 7b. Every data-name the .cut writes into the driver must exist in the
+    # program, or cobc rejects it at a line of a deleted sandbox copy
+    # (issue #204). Checked against the transformed text, so a generated
+    # SQLCA and EXEC SQL INCLUDE members count. Cumulative with step 8.
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}"
+        for r in check_cut_data_names(
+            suite, transformed, getattr(parse_result.ast, "program_name", None)
+        )
+    )
 
     # 8. Per-test-case checks, then flow-mock (MOCK PARAGRAPH/SECTION) and
     # terminator layout -- accumulated across all cases rather than

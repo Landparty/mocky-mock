@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T00:00:00Z
 ---
 
 # Overview
@@ -598,8 +598,11 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     run), then exit 1 if any fired. See [analysis](analysis.md). Every
     refusal exit in `_cmd_run` (this step and every earlier one) calls
     `_write_failure_reports(args, "run", <suite name or "">, <joined
-    problems>)` before returning 1 — see the `--junit-xml`/`--json-report`
-    bullets above.
+    problems>, cut_suite=..., cut_file=..., program_file=...)` before
+    returning 1 — see the `--junit-xml`/`--json-report` bullets above. The
+    three keyword arguments (issue #204, 2026-10-16; also passed on the
+    compile-failure exit) keep the JSON report's `cutFile`, `programFile`
+    and `suite.line` populated, and list the suite's cases as `not_run`.
 11. `collect_boundaries(result.ast)`, `TallyRegistry(suite)`,
     `find_terminator_plans(...)`, `find_flow_mock_plans(...)`,
     `splice_program(lines, boundaries, surface, suite, registry,
@@ -939,6 +942,18 @@ They print even when a refusal stopped `run_static_checks` before it parsed
 the `.cut` (`_cmd_lint` re-parses it quietly), since the check is
 `.cut`-only. The `.cut line N` wording is what lets the extension place the
 diagnostic on the TESTCASE header.
+
+**Unknown data-names (issue #204, 2026-10-16).** `run_static_checks` step
+7b (`analysis.cut_names.check_cut_data_names`, cumulative with step 8)
+refuses `UNKNOWN_DATA_NAME` at the `.cut` line of every setup/hook MOVE
+target, EXPECT data-name and non-`UT-CAP-` `CAPTURE ... INTO` target, and
+every bare-word MOVE/EXPECT value (`TO BE Y`), that appears nowhere in the
+transformed program text (literals and `*>` comments stripped; generated
+SQLCA and `EXEC SQL INCLUDE` members count), is not a `UT-` harness item,
+DFHEIBLK/DLIDIB field, special register or figurative constant. Loose on
+purpose: it only catches names cobc would certainly reject.
+`MockTestCase.setup_move_lines` / `MockDirective.capture_lines` carry the
+line numbers the model did not record before.
 
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 

@@ -339,7 +339,14 @@ def _write_report_file(command: str, flag: str, target: str, content: str) -> bo
 
 
 def _write_failure_reports(
-    args: argparse.Namespace, command: str, suite_name: str, reason: str
+    args: argparse.Namespace,
+    command: str,
+    suite_name: str,
+    reason: str,
+    *,
+    cut_suite=None,
+    cut_file: Path | None = None,
+    program_file: Path | None = None,
 ) -> None:
     """Write `run`'s --junit-xml/--json-report for an exit that never
     produced a TestSuiteResult at all -- a static refusal or a compile
@@ -350,7 +357,11 @@ def _write_failure_reports(
     read as "nothing ran" rather than "something failed" (carried-over open
     item from the 2026-08-10 framework audit). Reuses the ordinary
     formatters via one synthetic TestResult standing in for the whole run,
-    rather than a bespoke report shape only this path would exercise."""
+    rather than a bespoke report shape only this path would exercise.
+
+    `cut_suite`/`cut_file`/`program_file`, when known, go into the JSON
+    report so an editor can still place the failure (issue #204): without
+    them `cutFile`, `programFile` and the suite line were all null."""
     if not args.junit_xml and not args.json_report:
         return
 
@@ -380,7 +391,16 @@ def _write_failure_reports(
             command,
             "--json-report",
             args.json_report,
-            format_json_report(build_json_report(suite_result)),
+            format_json_report(
+                build_json_report(
+                    suite_result,
+                    cut_suite=cut_suite,
+                    cut_file=str(cut_file) if cut_file is not None else None,
+                    program_file=(
+                        str(program_file) if program_file is not None else None
+                    ),
+                )
+            ),
         )
 
 
@@ -1568,6 +1588,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "run",
             checked.suite.name if checked.suite is not None else "",
             "\n".join(checked.problems),
+            cut_suite=checked.suite,
+            cut_file=cut_path,
+            program_file=source_path,
         )
         return 1
 
@@ -1687,7 +1710,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
             # F10; a `return 1` from *this* branch used to be lumped in
             # with that same fix, which broke the documented, tested
             # --verbose-survives-a-compile-failure contract below).
-            _write_failure_reports(args, "run", suite.name, compiled.stderr)
+            _write_failure_reports(
+                args,
+                "run",
+                suite.name,
+                compiled.stderr,
+                cut_suite=suite,
+                cut_file=cut_path,
+                program_file=source_path,
+            )
             return 1
 
         # try/finally, not just a statement after the `with`: plain --verbose

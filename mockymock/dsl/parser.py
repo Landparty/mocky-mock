@@ -577,6 +577,7 @@ def _instantiate_row(
         # per-case; copy it first if you need a per-case change.
         mocks=list(case.mocks),
         setup_moves=setup_moves,
+        setup_move_lines=list(case.setup_move_lines),
         perform_target=case.perform_target,
         perform_thru=case.perform_thru,
         expectations=expectations,
@@ -872,6 +873,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 _reject_unbalanced_subscript(m.group("target"), line_no)
                 in_mock.captures.append((index, m.group("target")))
+                in_mock.capture_lines.append(line_no)
             elif _CAPTURE_PREFIX_RE.match(line) is not None:
                 raise CutParseError(
                     f"line {line_no}: malformed CAPTURE statement {line!r} -- "
@@ -1189,6 +1191,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"run before it, so write them above the PERFORM"
                 )
             case.setup_moves.append((m.group("value"), m.group("target")))
+            case.setup_move_lines.append(line_no)
         elif (m := _PERFORM_RE.match(line)) is not None:
             if case is None and in_before is None:
                 raise CutParseError(f"line {line_no}: PERFORM outside TESTCASE")

@@ -191,6 +191,9 @@ class MockDirective:
     empty for every other category. Resolved against the real call site's
     CallStatement.using_parameters at splice time -- see
     injector.build_site_dispatch."""
+    capture_lines: list[int] = field(default_factory=list)
+    """1-based .cut line of each `captures` entry, same index alignment
+    (empty when built outside the parser)."""
 
     @property
     def program_name(self) -> str:
@@ -280,6 +283,9 @@ class MockTestCase:
     name: str
     mocks: list[MockDirective] = field(default_factory=list)
     setup_moves: list[tuple[str, str]] = field(default_factory=list)  # (value, target)
+    setup_move_lines: list[int] = field(default_factory=list)
+    """1-based .cut line of each `setup_moves` entry, same index alignment
+    (empty when built outside the parser)."""
     perform_target: str = ""
     perform_thru: str | None = None  # PERFORM <target> THRU <perform_thru>
     expectations: list[ExpectDirective] = field(default_factory=list)
