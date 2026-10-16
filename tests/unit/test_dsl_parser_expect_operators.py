@@ -158,3 +158,23 @@ def test_trailing_period_substituted_from_a_provider_row_fails_closed():
     )
     with pytest.raises(CutParseError, match="line 5: EXPECT value '7.'"):
         parse_cut(text)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "EXPECT FLAG-ON TO BE GREATER THAN TRUE",
+        "EXPECT FLAG-ON NOT TO BE LESS THAN OR EQUAL TO FALSE",
+    ],
+)
+def test_condition_truth_value_refuses_an_ordering_comparison(line):
+    """Issue #189: TRUE/FALSE tests a level-88 condition-name, which has no
+    order, so only [NOT] TO BE may precede it."""
+    with pytest.raises(CutParseError, match="can only follow"):
+        parse_cut(_cut(line))
+
+
+def test_condition_truth_value_parses_with_to_be():
+    suite = parse_cut(_cut("EXPECT FLAG-ON NOT TO BE TRUE"))
+    expectation = suite.test_cases[0].expectations[0]
+    assert (expectation.operator, expectation.expected_value) == ("NOT =", "TRUE")

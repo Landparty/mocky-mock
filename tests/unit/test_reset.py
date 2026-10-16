@@ -187,14 +187,46 @@ def _ast_group_with_filler_child():
 
 def test_filler_child_is_never_targeted_by_reset():
     """FILLER is unaddressable in COBOL -- MOVE ... TO FILLER is a syntax
-    error. A group's FILLER child with a VALUE clause must be skipped when
-    restoring child VALUEs after INITIALIZE (INITIALIZE also never disturbs
-    FILLER, so there's nothing to restore anyway). Named siblings must still
-    be restored normally."""
+    error. A group whose FILLER child declares a VALUE is reset with
+    INITIALIZE ... WITH FILLER ALL TO VALUE, which restores the FILLER's
+    VALUE (and every named sibling's) without naming it (issue #196: a case
+    that overwrote the whole group left the FILLER bytes changed)."""
     lines = reset_move_lines(_ast_group_with_filler_child())
-    assert "INITIALIZE WS-HDR" in lines
-    assert any('MOVE "ABC" TO WS-NAMED' in ln for ln in lines)
+    assert "INITIALIZE WS-HDR WITH FILLER ALL TO VALUE THEN TO DEFAULT" in lines
     assert not any("TO FILLER" in ln for ln in lines)
+    assert not any("WS-NAMED" in ln for ln in lines)
+
+
+NESTED_FILLER_VALUE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FIL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-HDR.
+           05 WS-H1           PIC X(2) VALUE "AB".
+           05 WS-SUB.
+              10 FILLER       PIC X VALUE "-".
+              10 WS-H2        PIC 9 VALUE 5.
+       01  WS-PLAIN.
+           05 FILLER          PIC X(3).
+           05 WS-P1           PIC X VALUE "P".
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_nested_filler_value_restores_the_group_with_filler():
+    """Issue #196: a FILLER VALUE nested at any depth makes the group reset
+    WITH FILLER; a group whose FILLERs carry no VALUE keeps the plain
+    INITIALIZE plus per-child restores."""
+    result = parse_cobol(NESTED_FILLER_VALUE_SOURCE, filename="fil.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        "INITIALIZE WS-HDR WITH FILLER ALL TO VALUE THEN TO DEFAULT",
+        "INITIALIZE WS-PLAIN",
+        'MOVE "P" TO WS-P1 OF WS-PLAIN',
+    ]
 
 
 # --- PICTURE-less usage-typed items (audit 2.3) -------------------------------
@@ -325,7 +357,7 @@ def test_value_under_an_occurs_group_uses_initialize_to_value():
     lines = reset_move_lines(result.ast)
     assert "INITIALIZE WS-TABLE ALL TO VALUE THEN TO DEFAULT" in lines
     assert "INITIALIZE WS-PLAIN-TABLE" in lines
-    assert 'MOVE "ABC" TO WS-LABEL' in lines
+    assert 'MOVE "ABC" TO WS-LABEL OF WS-PLAIN-TABLE' in lines
 
 
 # --- REDEFINES children (two REDEFINES of the same nested item) ---------------
@@ -396,8 +428,8 @@ def test_top_level_redefines_item_does_not_clobber_the_redefined_value():
     assert reset_move_lines(result.ast) == [
         'MOVE "AB12" TO WS-CODE',
         "INITIALIZE WS-DATE",
-        "MOVE 2026 TO WS-YYYY",
-        "MOVE 9 TO WS-MM",
+        "MOVE 2026 TO WS-YYYY OF WS-DATE",
+        "MOVE 9 TO WS-MM OF WS-DATE",
         "MOVE SPACES TO WS-AFTER",
     ]
 
@@ -460,3 +492,169 @@ def test_cobol_literal_handles_the_all_repetition_prefix():
     quote = chr(34)
     assert cobol_literal("ALL " + quote * 3) == "ALL " + quote * 4
     assert cobol_literal('ALL "="') == 'ALL "="'
+
+
+SHARED_CHILD_NAME_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. AMB.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  IN-REC.
+           05  REC-FLAG        PIC X VALUE "N".
+           05  REC-AMT         PIC 9(3).
+       01  OUT-REC.
+           05  HDR.
+               10  REC-FLAG    PIC X VALUE "N".
+           05  REC-AMT         PIC 9(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_child_value_restores_are_fully_qualified():
+    """Issue #220: two groups sharing a child name (IN-REC/OUT-REC from one
+    copybook) made an unqualified `MOVE "N" TO REC-FLAG` ambiguous, and cobc
+    rejected the whole driver. Every child restore names its full chain of
+    enclosing groups, intermediate levels included."""
+    result = parse_cobol(SHARED_CHILD_NAME_SOURCE, filename="amb.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        "INITIALIZE IN-REC",
+        'MOVE "N" TO REC-FLAG OF IN-REC',
+        "INITIALIZE OUT-REC",
+        'MOVE "N" TO REC-FLAG OF HDR OF OUT-REC',
+    ]
+
+
+VALUE_NEEDS_MORE_THAN_A_MOVE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NE.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-J                PIC X(6) JUSTIFIED RIGHT VALUE "AB".
+       01  WS-JQ               PIC X(4) JUST RIGHT VALUE "A\"\"\".
+       01  WS-JS               PIC X(4) JUST RIGHT VALUE SPACES.
+       01  RPT-LINE.
+           05  RPT-AMT         PIC ZZ,ZZ9.99 VALUE SPACES.
+           05  RPT-STAR        PIC ZZ9 VALUE ALL "*".
+           05  RPT-ZERO        PIC ZZ9 VALUE ZERO.
+       01  RPT-AMT2            PIC ZZ9 VALUE SPACES.
+       01  WS-NUM              PIC S9(3)V9 VALUE -1.5.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_value_restores_that_a_plain_move_would_get_wrong():
+    """Issue #218: `MOVE SPACES TO <numeric-edited>` does not compile, so a
+    non-numeric VALUE on a numeric(-edited) item is moved through reference
+    modification; and VALUE ignores JUSTIFIED while MOVE honours it, so a
+    JUSTIFIED item's literal is padded to the item's full length."""
+    result = parse_cobol(VALUE_NEEDS_MORE_THAN_A_MOVE_SOURCE, filename="ne.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        'MOVE "AB    " TO WS-J',
+        'MOVE "A""  " TO WS-JQ',
+        "MOVE SPACES TO WS-JS",
+        "INITIALIZE RPT-LINE",
+        "MOVE SPACES TO RPT-AMT OF RPT-LINE(1:)",
+        'MOVE ALL "*" TO RPT-STAR OF RPT-LINE(1:)',
+        "MOVE ZERO TO RPT-ZERO OF RPT-LINE",
+        "MOVE SPACES TO RPT-AMT2(1:)",
+        "MOVE -1.5 TO WS-NUM",
+    ]
+
+
+ODO_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ODO.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CNT              PIC 9(2) VALUE 2.
+       01  WS-TABLE.
+           05  WS-ENT          PIC X(3) OCCURS 1 TO 10 TIMES
+                               DEPENDING ON WS-CNT.
+       01  WS-T2.
+           05  WS-HDR.
+               10  WS-N2       PIC 9(2).
+           05  WS-E2           PIC X(3) VALUE "ZZZ" OCCURS 0 TO 4 TIMES
+                               DEPENDING ON WS-N2.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_odo_table_is_initialized_at_its_maximum_size():
+    """Issue #216: INITIALIZE of an ODO group only clears the occurrences
+    the counter names, and the counter's own reset had already set it to 0,
+    so table entries leaked between cases. The counter is set to the
+    table's maximum around the INITIALIZE and restored afterwards; with a
+    VALUE in the table, the group is default-filled first and then has its
+    VALUEs restored alone, since ALL TO VALUE THEN TO DEFAULT zeroes a
+    counter inside the group before reaching the table."""
+    result = parse_cobol(ODO_SOURCE, filename="odo.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        "MOVE 2 TO WS-CNT",
+        "MOVE 10 TO WS-CNT",
+        "INITIALIZE WS-TABLE",
+        "MOVE 2 TO WS-CNT",
+        "MOVE 4 TO WS-N2 OF WS-HDR OF WS-T2",
+        "INITIALIZE WS-T2",
+        "MOVE 4 TO WS-N2 OF WS-HDR OF WS-T2",
+        "INITIALIZE WS-T2 ALL TO VALUE",
+        "MOVE 0 TO WS-N2 OF WS-HDR OF WS-T2",
+    ]
+
+
+INDEXED_BY_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. IDX.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-TAB.
+           05  WS-ROW          OCCURS 3 INDEXED BY IX-ROW.
+               10  WS-EV       PIC X OCCURS 5 INDEXED BY IX, IX2.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_index_names_are_saved_once_and_restored_every_case():
+    """Issue #189: an INDEXED BY index is not a data item, so the reset
+    never touched it and `SET IX UP BY 1` in one case shifted the next
+    case's subscripts. The first reset saves each index's start-up value;
+    every reset restores it."""
+    from mockymock.splicer.reset import (
+        index_names,
+        index_reset_lines,
+        index_working_storage_lines,
+    )
+
+    result = parse_cobol(INDEXED_BY_SOURCE, filename="idx.cbl")
+    assert result.success, result.errors
+    names = index_names(result.ast)
+    assert names == ["IX-ROW", "IX", "IX2"]
+    assert index_working_storage_lines(names) == [
+        '01  UT-IDX-SAVED  PIC X VALUE "N".',
+        "01  UT-IDX-SAVE-001  USAGE INDEX.",
+        "01  UT-IDX-SAVE-002  USAGE INDEX.",
+        "01  UT-IDX-SAVE-003  USAGE INDEX.",
+    ]
+    assert index_reset_lines(names) == [
+        'IF UT-IDX-SAVED = "N"',
+        "    SET UT-IDX-SAVE-001 TO IX-ROW",
+        "    SET UT-IDX-SAVE-002 TO IX",
+        "    SET UT-IDX-SAVE-003 TO IX2",
+        '    MOVE "Y" TO UT-IDX-SAVED',
+        "END-IF",
+        "SET IX-ROW TO UT-IDX-SAVE-001",
+        "SET IX TO UT-IDX-SAVE-002",
+        "SET IX2 TO UT-IDX-SAVE-003",
+    ]
+    assert index_working_storage_lines([]) == []
+    assert index_reset_lines([]) == []

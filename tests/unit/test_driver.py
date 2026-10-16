@@ -382,3 +382,37 @@ def test_unrecognized_expect_operator_raises():
     suite.test_cases[0].expectations = [ExpectDirective("WS-X", "5", operator="<>")]
     with pytest.raises(ValueError, match="unrecognized EXPECT operator"):
         _build(suite)
+
+
+@pytest.mark.parametrize(
+    ("value", "operator", "condition", "got"),
+    [
+        ("TRUE", "=", "IF NOT FLAG-ON", "FALSE"),
+        ("FALSE", "=", "IF FLAG-ON", "TRUE"),
+        ("TRUE", "NOT =", "IF FLAG-ON", "TRUE"),
+        ("FALSE", "NOT =", "IF NOT FLAG-ON", "FALSE"),
+    ],
+)
+def test_expect_condition_name_to_be_true_tests_the_condition(
+    value, operator, condition, got
+):
+    """Issue #189: `EXPECT FLAG-ON TO BE TRUE` compiled to `IF FLAG-ON NOT =
+    TRUE`, which cobc rejects (condition-name not allowed here). TRUE and
+    FALSE can only mean a level-88 condition-name, so the condition is
+    tested directly and the truth value it had is reported."""
+    suite = MockTestSuite(
+        name="s",
+        test_cases=[
+            MockTestCase(
+                name="c",
+                perform_target="MAIN",
+                expectations=[ExpectDirective("FLAG-ON", value, operator=operator)],
+            )
+        ],
+    )
+    lines = [line.strip() for line in _build(suite).procedure_lines]
+    assert condition in lines
+    assert (
+        f'DISPLAY "__MOCKYMOCK__ CASE 001 FAIL: expected FLAG-ON {operator} '
+        f'{value}, got {got}"'
+    ) in lines

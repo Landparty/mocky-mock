@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-13T22:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -469,6 +469,8 @@ skipped.
 | Item shape | Reset line | Why |
 |---|---|---|
 | Elementary, has `VALUE` clause | `MOVE <value> TO <name>` | restores the declared initial value (the clause first passes through `cobol_literal` -- see below) |
+| Elementary, numeric or numeric-edited `DISPLAY` PIC, `VALUE` that is not a number or `ZERO` (`PIC ZZ,ZZ9.99 VALUE SPACES`, `VALUE ALL "*"`) | `MOVE <value> TO <name>(1:)` | cobc rejects a figurative SPACE / alphanumeric literal moved to a numeric item (`move-figurative-space-to-numeric: error`), which broke the driver's compile for every suite (issue #218); the reference-modified byte move stores what VALUE stored |
+| Elementary, `JUSTIFIED`, quoted-literal `VALUE` | `MOVE "<literal padded to the item's size>" TO <name>` | VALUE ignores JUSTIFIED (`PIC X(6) JUST RIGHT VALUE "AB"` starts as `"AB    "`), a MOVE right-justifies; padding to full length makes the two agree. Reference modification does not: GnuCOBOL 3.1 still justified `WS-J(1:)` (issue #218) |
 | Elementary, no `VALUE`, numeric or numeric-edited PIC | `MOVE 0 TO <name>` | numeric-edited PICs (e.g. `PIC ZZZ9`) reject `MOVE SPACES` — `_is_numeric` treats any of `9 V P Z * $ + -` in the (repeat-group-stripped) picture as numeric, not just `9`/`V`/`P` |
 | Elementary, no `VALUE`, alphanumeric PIC | `MOVE SPACES TO <name>` | COBOL's conventional type default, a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |
 | Elementary, no `PICTURE` (usage-typed), `USAGE POINTER`/`PROCEDURE-POINTER`/`FUNCTION-POINTER`/`PROGRAM-POINTER` | `SET <name> TO NULL` | pointers can only be assigned with `SET`; `NULL` is their only legal literal value — `MOVE SPACES` (the old picture-blind fallback) is rejected by cobc |
@@ -528,6 +530,56 @@ zero/space-fills the rest (checked against GnuCOBOL 3.1's cobc). Before
 #156 those occurrences were left at INITIALIZE's zero/space default, so a
 test saw different starting data from the real program. Groups with no
 VALUE inside a table keep the plain INITIALIZE plus per-child restores.
+
+**OCCURS DEPENDING ON tables are cleared at full size (issue #216).**
+INITIALIZE of a variable-length group only covers the occurrences its ODO
+object currently names. The counter's own reset line usually ran first
+(declaration order) and left it at 0, so nothing in the table was cleared
+and one case's entries leaked into the next. For a VALUE-less group holding
+an ODO table, `_odo_counter_lines` brackets the group's reset: `MOVE <max>
+TO <counter>` before, the counter's own VALUE/default reset after (both
+fully qualified; the counter is found anywhere in the program by name and
+DEPENDING ON qualifiers). On the `ALL TO VALUE` path the group is first
+reset with a plain `INITIALIZE`, the counter set to its maximum again, then
+`INITIALIZE <group> ALL TO VALUE`: `ALL TO VALUE THEN TO DEFAULT` works item
+by item, so a counter declared inside the group dropped to 0 before its
+table was reached (checked on GnuCOBOL 3.1). A counter that cannot be
+resolved, one inside a table, and unbounded tables keep the old reset.
+
+**Child restores are fully qualified (issue #220).** Each per-child VALUE
+restore names the child through its whole chain of enclosing groups,
+intermediate levels included: `MOVE "N" TO REC-FLAG OF HDR OF OUT-REC`.
+COBOL lets one child name repeat under different groups (IN-REC/OUT-REC
+built from one copybook); the old unqualified `MOVE "N" TO REC-FLAG` was
+ambiguous there, and cobc rejected the whole driver, so no suite for the
+program could run. Full qualification is always legal, so nothing detects
+the ambiguity first. `_elementary_reset(item, target)` takes the reference
+to write to; top-level items still use their bare name.
+
+**FILLER VALUEs are restored (issue #196).** A FILLER cannot be named in
+a MOVE, and the old reset assumed its VALUE "survives INITIALIZE" -- true
+only until a case overwrote the whole group (`MOVE SPACES TO <report
+line>`, a group MOVE, READ INTO), after which every later case saw the
+changed bytes. A VALUE-less group with a FILLER VALUE anywhere under it
+(`_has_filler_value`) is now reset with `INITIALIZE <group> WITH FILLER ALL
+TO VALUE THEN TO DEFAULT`, which restores the FILLER's VALUE and every
+named child's in one statement (checked on GnuCOBOL 3.1). Combined with an
+ODO table it takes the two-step form above, each step `WITH FILLER`.
+
+**INDEXED BY index names are saved and restored (issue #189).** An index
+name is not a data item, so the reset never saw it: a case that did `SET
+IX UP BY 1` left the next case subscripting from 2. A fresh index's value
+is compiler-defined (GnuCOBOL 3.1 starts at 1; 3.2 under `-std=mvs` was
+seen at 0), so instead of picking a constant, `reset.index_names` lists
+every `INDEXED BY` name in the DATA DIVISION, `index_working_storage_lines`
+declares `UT-IDX-SAVED` plus one `UT-IDX-SAVE-NNN USAGE INDEX` per name,
+and `index_reset_lines` makes the first reset (which runs before any
+program code) save each index and every reset restore it. Both are wired
+through `cli/checks.py`'s `extra_working_storage` / `extra_reset_lines_for`,
+so all four splice pipelines get them. An index a BEFORE-ALL step SETs is
+put back to its start-up value at each case, not to the BEFORE-ALL value
+(the snapshot does not cover index names). USAGE INDEX *data items* are
+still skipped (table above).
 
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.
