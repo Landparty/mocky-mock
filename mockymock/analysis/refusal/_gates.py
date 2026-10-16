@@ -58,7 +58,10 @@ from mockymock.analysis.cics_handle import (
     raised_conditions,
     resolve_condition,
 )
-from mockymock.analysis.clause_bodies import clause_lift_problem
+from mockymock.analysis.clause_bodies import (
+    clause_bodies_liftable,
+    clause_lift_problem,
+)
 from mockymock.analysis.linkage import (
     address_of_sites,
     linkage_plan,
@@ -147,6 +150,20 @@ def _exec_prefix_matches(prefix: str, text: str) -> bool:
         return True
     return not (
         prefix[-1] in _EXEC_NAME_CHARS and text[len(prefix)] in _EXEC_NAME_CHARS
+    )
+
+
+def _at_end_ends_rows(directive: MockDirective, surface: MockSurface) -> bool:
+    """Whether exhausting a READ/RETURN ROWS mock with no TERMINAL group and
+    no FILE STATUS field still signals end-of-data (issue #341): every site
+    the directive matches has an AT END clause the splice lifts, and once
+    the rows run out the dispatch moves "10" to the outcome field, which
+    runs that clause -- what ends the loop in the real program too (#209)."""
+    sites = [s for s in surface.boundary_sites if directive_matches_site(directive, s)]
+    return bool(sites) and all(
+        getattr(site.statement, "at_end_clause", None)
+        and clause_bodies_liftable(site.statement)
+        for site in sites
     )
 
 
@@ -1934,6 +1951,7 @@ def check_test_case(
             and directive.rows is not None
             and directive.terminal_row is None
             and missing_status_field
+            and not _at_end_ends_rows(directive, surface)
         ):
             reasons.append(
                 RefusalReason(

@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-16T14:00:00Z
+timestamp: 2026-10-16T20:00:00Z
 ---
 
 # Overview
@@ -95,7 +95,10 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   `EXPECT_OPERATORS`. A value carrying an unquoted `AND`/`OR`
   (`TO BE > 0 AND < 10`, `TO BE 7 OR 8`) is an abbreviated combined
   condition; the driver negates it whole, `IF NOT (<name> <op> <value>)`
-  (issue #265). The FAIL `DISPLAY` carries the operator between
+  (issue #265) -- except for a negated operator (`NOT TO BE 7 OR 8`),
+  whose NOT COBOL would carry onto every abbreviated relation in the
+  tail, so its guard is the un-negated condition, `IF (<name> = 7 OR 8)`
+  (issue #339). The FAIL `DISPLAY` carries the operator between
   name and value (`expected WS-X > 5, got ...`), and
   `report/json_report.py`'s `_EXPECT_HEAD_RE` splits attribution on it
   (`expected` field keeps the bare value for `=`, is operator-prefixed
@@ -721,9 +724,12 @@ never in `FILE_STATUS_CATEGORIES` (a SORT/MERGE's SD has no FILE STATUS
 clause of its own, same reasoning as WRITE/REWRITE, see
 [analysis](analysis.md)) — so `refusal.check_test_case`'s
 `UNRESOLVED_FILE_STATUS_TARGET` check refuses a `MOCK RETURN ... ROWS`
-with no `TERMINAL` group unconditionally, not just when a status field
-happens to be missing (unlike READ, where the same check only fires when
-BOTH the TERMINAL group and a FILE STATUS field are absent).
+with no `TERMINAL` group whenever the RETURN has no liftable `AT END`
+clause, not just when a status field happens to be missing (unlike READ,
+where the same check only fires when BOTH the TERMINAL group and a FILE
+STATUS field are absent). A RETURN or READ whose matched sites all have a
+liftable `AT END` clause is accepted without either (issue #341):
+exhausting the rows runs that clause, which ends the loop.
 
 A `PERFORM ... UNTIL <flag> = <value>` loop driven by the READ's own
 `AT END`-set flag (rather than the file's `FILE STATUS` field) needs that
@@ -825,7 +831,9 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
   With no `FILE STATUS` field, `exhausted_moves` is just the TERMINAL
   group's own MOVEs. See [analysis](analysis.md)'s
   `UNRESOLVED_FILE_STATUS_TARGET` refusal for the case where **neither**
-  exists — `check_test_case` refuses fail-closed before splicing is ever
+  exists and the READ has no liftable `AT END` clause either (with one,
+  the exhausted branch moves `"10"` to `UT-MOCK-STATUS` and the lifted
+  clause signals end-of-data, issue #341) — `check_test_case` refuses fail-closed before splicing is ever
   reached, so `build_site_dispatch` raising `ValueError` for that same
   gap is a should-be-unreachable production invariant, not a normal
   control path.

@@ -179,6 +179,9 @@ _VERB_TERMINATORS: dict[MockCategory, str] = {
     MockCategory.CALL: "END-CALL",
     MockCategory.DYNCALL: "END-CALL",
     MockCategory.READ: "END-READ",
+    # RETURN ... AT END ... END-RETURN, the SORT OUTPUT PROCEDURE loop
+    # (issue #340); `clause_bodies._LIFTABLE` already lifts its clauses.
+    MockCategory.RETURN: "END-RETURN",
     MockCategory.WRITE: "END-WRITE",
     MockCategory.REWRITE: "END-REWRITE",
     MockCategory.DELETE: "END-DELETE",

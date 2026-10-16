@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-16T14:00:00Z
+timestamp: 2026-10-16T20:00:00Z
 ---
 
 # Overview
@@ -199,8 +199,9 @@ terminator before the next statement that is not its own (the clause would
 run on to whatever closes the enclosing block -- not guessed), when a
 statement of its own kind sits in its clause bodies (which terminator is
 whose is ambiguous), or when anything but a period follows the terminator
-on its line. RETURN has no `_VERB_TERMINATORS` entry, so a nested `RETURN
-... END-RETURN` stays refused. Before #258 every nested site with clause
+on its line. RETURN maps to `END-RETURN` (issue #340), so the SORT
+OUTPUT PROCEDURE loop's nested `RETURN ... AT END ... END-RETURN` is
+spliced like the nested READ. Before #258 every nested site with clause
 bodies was refused, which made the standard inline read loop untestable.
 
 # Flow-Mock Header Dispatch (2026-07-20, MOCK PARAGRAPH/SECTION)
@@ -384,7 +385,9 @@ TRUE/FALSE on a non-88 target, any other value on an 88, and FALSE on an
   call that triggered this WHEN OTHER path -- it gets the correct "10"
   instead. When the file has no status field, `exhausted_moves` is just
   the TERMINAL group's own MOVEs (nothing to default). When **neither** a
-  status field nor a TERMINAL group exists, `build_site_dispatch` raises
+  status field nor a TERMINAL group exists, and no lifted `AT END` clause
+  either (whose `"10"` in `UT-MOCK-STATUS` ends the loop, issue #341),
+  `build_site_dispatch` raises
   `ValueError` rather than emit a READ loop with no way to terminate --
   but every production call site gates on `refusal.check_test_case` first
   (same `UNRESOLVED_FILE_STATUS_TARGET` code as the `FILE-STATUS IS` case
@@ -1175,7 +1178,22 @@ are replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH`
 PARAGRAPH END-IF` inserted immediately after it
 (`injector.build_chain_check`, via `stub_writer.insert_lines_after` --
 the only splice primitive in this codebase that preserves the original
-statement rather than replacing it). `driver.py` needs only one addition:
+statement rather than replacing it). A chain `PERFORM` nested in an
+IF/ELSE branch, an EVALUATE WHEN or an inline `PERFORM ... END-PERFORM`
+body gets its check right after itself, inside that branch, at the end of
+its `nested_statement_span` (`TerminatorPlan.chain_spans`, keyed by
+`id(perform)`; issue #337) -- `statement_span` would end at the next
+top-level statement, i.e. after the enclosing END-IF/END-PERFORM, so the
+rest of the branch still ran and an inline loop kept iterating. Inside an
+inline loop body the check's `EXIT PARAGRAPH` leaves the loop too. A
+nested chain `PERFORM` with no safe nested span (it shares its line, or
+the next scope word does) refuses every terminator the case reaches
+(`UNSUPPORTED_TERMINATOR_LAYOUT`). A chain `PERFORM` held by a
+SECTION's first paragraph -- the only section member the chain walk
+enters, via `PERFORM <section-name>` -- gets `EXIT SECTION` in its check
+instead (`TerminatorPlan.chain_exit_kinds`, the same rule as the
+terminator's own `exit_kind`; issue #338): `EXIT PARAGRAPH` fell into the
+section's next paragraph. `driver.py` needs only one addition:
 `UT-EARLY-EXIT` declared once, reset to `"N"` per test case. No paragraph
 restructuring -- `UT-TESTCASE-NNN`'s existing checks run automatically
 once the flag has propagated back via ordinary, unmodified `PERFORM`
@@ -1454,7 +1472,9 @@ sync with `model.EXPECT_OPERATORS`; a value with an unquoted `AND`/`OR`
 tail, i.e. an abbreviated combined condition such as `TO BE > 0 AND < 10`
 or `TO BE 7 OR 8`, instead compiles to `IF NOT (<name> <op> <value>)`,
 because swapping the operator would negate only the first relation, issue
-#265) and `verifications` (tally-based
+#265 -- or, for a negated operator (`NOT =`, `NOT >`, ...), to the
+un-negated `IF (<name> <positive-op> <value>)`, because COBOL carries a
+NOT onto every abbreviated relation in the tail, issue #339) and `verifications` (tally-based
 `VERIFY ... WAS CALLED` conditions from `_verify_condition`: `ONCE` →
 `NOT = 1`, `NEVER` → `NOT = 0`, `AT LEAST ONCE` → `< 1`, `N TIMES` →
 `NOT = N`), incrementing `UT-FAIL-COUNT` and displaying a `CASE NNN

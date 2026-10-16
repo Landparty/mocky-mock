@@ -488,7 +488,10 @@ def _attach_zero_baseline_hints(
         return
     for result in candidates:
         result.hint = zero_baseline_hint(
-            result.mutant, checked.parse_result.ast, checked.suite
+            result.mutant,
+            checked.parse_result.ast,
+            checked.suite,
+            checked.source_location_map,
         )
 
 

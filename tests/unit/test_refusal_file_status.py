@@ -136,12 +136,24 @@ def _reasons_for(source: str, cut_text: str):
     return check_test_case(surface, result.ast, case, file_status_fields)
 
 
-def test_read_rows_without_status_field_or_terminal_refuses():
-    # program whose SELECT has no FILE STATUS clause; .cut mocks its READ
-    # with ROWS and no TERMINAL group
-    reasons = _reasons_for(PROGRAM_NO_STATUS_FIELD, CUT_READ_ROWS_NO_TERMINAL)
+def test_read_rows_without_status_field_terminal_or_at_end_refuses():
+    # program whose SELECT has no FILE STATUS clause and whose READ has no
+    # AT END; .cut mocks its READ with ROWS and no TERMINAL group
+    source = PROGRAM_NO_STATUS_FIELD.replace(
+        '               AT END DISPLAY "EOF"\n', ""
+    )
+    assert "AT END" not in source
+    reasons = _reasons_for(source, CUT_READ_ROWS_NO_TERMINAL)
     assert any(r.code == "UNRESOLVED_FILE_STATUS_TARGET" for r in reasons)
     assert any("TERMINAL" in r.message for r in reasons)
+
+
+def test_read_rows_without_status_field_or_terminal_is_accepted_with_at_end():
+    """Issue #341: exhausting the ROWS runs the READ's own lifted AT END
+    clause (#209), which is what ends the loop in the real program too, so
+    no FILE STATUS field or TERMINAL group is needed to signal end-of-data."""
+    reasons = _reasons_for(PROGRAM_NO_STATUS_FIELD, CUT_READ_ROWS_NO_TERMINAL)
+    assert not [r for r in reasons if r.code == "UNRESOLVED_FILE_STATUS_TARGET"]
 
 
 def test_read_rows_with_terminal_but_no_status_field_is_accepted():

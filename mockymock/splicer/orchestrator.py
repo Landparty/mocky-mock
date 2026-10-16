@@ -335,8 +335,18 @@ def splice_program(
             if id(perform) in seen_perform_ids:
                 continue
             seen_perform_ids.add(id(perform))
-            start, end = statement_span(perform, boundaries, last_line, lines)
-            chain_check = build_chain_check()
+            # A PERFORM nested in an IF/EVALUATE branch or inline PERFORM
+            # body has a precomputed nested span (issue #337):
+            # statement_span would end at the next TOP-LEVEL statement, past
+            # the enclosing END-IF/END-PERFORM.
+            nested_span = plan.chain_spans.get(id(perform))
+            if nested_span is not None:
+                start, end = nested_span
+            else:
+                start, end = statement_span(perform, boundaries, last_line, lines)
+            chain_check = build_chain_check(
+                plan.chain_exit_kinds.get(id(perform), "PARAGRAPH")
+            )
             # If the PERFORM this follows ended its own sentence with a
             # period, the inserted IF/END-IF block is itself a brand-new,
             # unterminated sentence -- give it its own closing period, or

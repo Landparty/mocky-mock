@@ -477,6 +477,37 @@ def test_dispatch_raises_for_read_rows_without_terminal_or_status_field():
         build_site_dispatch(site, suite, TallyRegistry(suite), {})
 
 
+def test_dispatch_read_rows_exhaustion_runs_the_lifted_at_end_clause():
+    """Issue #341: with no TERMINAL group and no FILE STATUS field, the
+    lifted AT END clause still signals end-of-data -- the exhausted branch
+    moves "10" to the outcome field that selects it."""
+    from mockymock.analysis.clause_bodies import LiftedClause
+
+    site = _site(MockCategory.READ, "READ", keys=("ORDER-FILE",))
+    case = MockTestCase(
+        name="rows",
+        mocks=[
+            MockDirective(
+                MockCategory.READ,
+                "ORDER-FILE",
+                rows=[[("ORDER-QTY", "50")]],
+            )
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    lifted = (
+        LiftedClause(
+            attr="at_end_clause",
+            guard='UT-MOCK-STATUS = "10"',
+            lines=('MOVE "Y" TO WS-EOF',),
+        ),
+    )
+    lines = build_site_dispatch(
+        site, suite, TallyRegistry(suite), {}, lifted_clauses=lifted
+    )
+    assert any('MOVE "10" TO UT-MOCK-STATUS' in line for line in lines)
+
+
 def test_default_success_status_injected_when_file_declares_a_status_field():
     case = MockTestCase(name="c")
     case.mocks.append(MockDirective(MockCategory.OPEN, "INFILE"))

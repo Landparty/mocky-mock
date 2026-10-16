@@ -451,11 +451,21 @@ def _build_testcase_paragraph(
             # `TO BE > 0 AND < 10` / `TO BE 7 OR 8`: an abbreviated combined
             # condition. Swapping the operator would negate only its first
             # relation (`X NOT > 0 AND < 10`), so negate the whole condition
-            # instead (issue #265).
-            lines.append(
-                f"           IF NOT ({expectation.data_name} "
-                f"{expectation.operator} {expectation.expected_value})"
-            )
+            # instead (issue #265). A negated operator (`NOT TO BE 7 OR 8`)
+            # would carry its NOT onto every abbreviated relation in the
+            # tail (`X NOT = 7 OR NOT = 8`, always true), so the failure
+            # guard is the un-negated condition itself (issue #339).
+            operator = expectation.operator
+            if operator.startswith("NOT "):
+                lines.append(
+                    f"           IF ({expectation.data_name} "
+                    f"{operator[len('NOT '):]} {expectation.expected_value})"
+                )
+            else:
+                lines.append(
+                    f"           IF NOT ({expectation.data_name} "
+                    f"{operator} {expectation.expected_value})"
+                )
         else:
             fail_operator = _expect_fail_condition(expectation.operator)
             lines.extend(
