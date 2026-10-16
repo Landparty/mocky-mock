@@ -206,7 +206,8 @@ def test_generate_fill_skips_a_perform_inside_a_mock_body(tmp_path, capsys):
     lines = cut.read_text().splitlines()
     read_at = lines.index("    MOCK READ INV-FILE")
     assert lines[read_at - 1] == "    END-MOCK"
-    assert lines[read_at + 2] == "    PERFORM 0000-MAIN-PROCESS"
+    read_end = lines.index("    END-MOCK", read_at)
+    assert lines[read_end + 1] == "    PERFORM 0000-MAIN-PROCESS"
     assert main(["lint", str(cbl), "--cut", str(cut)]) == 0
 
 

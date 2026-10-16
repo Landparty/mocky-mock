@@ -1126,6 +1126,17 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   call and failed the scaffold's own `VERIFY ... 2 TIMES`.
   `_row_already_ends` therefore never credits a DL/I row with ending the
   loop.
+- **Placeholder READ/RETURN mocks report end-of-file (#302).** A
+  bundle-less `MOCK READ`/`MOCK RETURN` for a statement with an AT END
+  clause was an empty body, so a `PERFORM UNTIL WS-EOF = "Y"` read loop
+  ran until `--timeout` from lint's suggested fix, `generate --fill` and
+  `--per-paragraph`. `_end_of_file_placeholder` now gives the FILE_OP body
+  (`_directive_for`, and through it `directive_snippet`) its exhaustion
+  lines: with a `ProgramContext`, exactly a bundle READ fixture's
+  (`_at_end_handling` / `_read_exhaustion_lines`); without one (lint),
+  `MOVE "10"` into the file's FILE STATUS field or else `UT-MOCK-STATUS`,
+  plus the clause's replicable statements. `directive_snippet` takes the
+  program's `file_status_fields` (lint's gate passes them).
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 

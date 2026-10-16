@@ -1572,7 +1572,7 @@ def check_test_case(
                         + f") is reachable from '{case.perform_target}' but "
                         f"no MOCK directive in this test case matches it"
                     ),
-                    suggested_fix=directive_snippet(site, surface),
+                    suggested_fix=directive_snippet(site, surface, file_status_fields),
                 )
             )
         elif len(matches) > 1:

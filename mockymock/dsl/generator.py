@@ -71,6 +71,7 @@ from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
     _all_paragraphs,
+    analyze_file_status_fields,
 )
 from mockymock.dsl.fixture_bundle import (
     BoundaryFixture,
@@ -845,7 +846,11 @@ def scaffold_cut(
     return _scaffold_with_bundle(suite_name, surface, bundle, placeholder_keys, source)
 
 
-def directive_snippet(site: BoundarySite, surface: MockSurface) -> str | None:
+def directive_snippet(
+    site: BoundarySite,
+    surface: MockSurface,
+    file_status_fields: dict[str, str] | None = None,
+) -> str | None:
     """Render the exact `.cut` text a bundle-less scaffold would emit for
     this one boundary site: a `MOCK ... END-MOCK` block, 4-space-indented
     header/footer and 8-space-indented body, matching
@@ -864,14 +869,18 @@ def directive_snippet(site: BoundarySite, surface: MockSurface) -> str | None:
     scaffold itself skips (a nested site with no recorded span, a
     top-level site the splicer cannot rewrite): suggesting a MOCK the
     next lint would refuse as UNSUPPORTED_NESTED_MOCK_TARGET /
-    UNSPLICEABLE is not a fix."""
+    UNSPLICEABLE is not a fix.
+
+    `file_status_fields` (`analyze_file_status_fields`) lets a READ's
+    placeholder report end of file through the file's own FILE STATUS
+    field -- see `_end_of_file_placeholder`."""
     if site.category is None:
         return None
     if site.nested and site.span is None:
         return None
     if not site.nested and site.unspliceable_reason:
         return None
-    rendered = _directive_for(site, surface)
+    rendered = _directive_for(site, surface, file_status_fields=file_status_fields)
     if rendered is None:
         return None
     header, body = rendered
@@ -1037,7 +1046,10 @@ def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
 
 
 def _directive_for(
-    site: BoundarySite, surface: MockSurface, context: ProgramContext | None = None
+    site: BoundarySite,
+    surface: MockSurface,
+    context: ProgramContext | None = None,
+    file_status_fields: dict[str, str] | None = None,
 ) -> tuple[str, list[str]] | None:
     category = site.category
     if category is None:
@@ -1077,7 +1089,9 @@ def _directive_for(
         if not site.keys:
             return None  # no usable key parsed; run's refusal gate will name it
         key = site.keys[0]
-        return f"MOCK {category.value} {key}", _placeholder_body_for(category, key)
+        return f"MOCK {category.value} {key}", _placeholder_body_for(
+            category, key
+        ) + _end_of_file_placeholder(site, context, file_status_fields)
 
     if category is MockCategory.ACCEPT:
         if not site.keys:
@@ -1108,6 +1122,63 @@ def _directive_for(
     if category is MockCategory.CICS:
         body = body + _cics_loop_end_lines(site, context, None)
     return f'MOCK {category.value} "{prefix}"', body
+
+
+def _end_of_file_placeholder(
+    site: BoundarySite,
+    context: ProgramContext | None,
+    file_status_fields: dict[str, str] | None = None,
+) -> list[str]:
+    """A READ or RETURN placeholder's body when the statement has an AT END
+    clause: report end of file on the first call, and carry the program's
+    own AT END handling. An empty body answered every call with a record,
+    so the commonest batch loop, `PERFORM ... UNTIL WS-EOF = "Y"` around
+    `READ ... AT END MOVE "Y" TO WS-EOF`, ran until --timeout from lint's
+    suggested fix, `generate --fill` and `--per-paragraph` alike (issue
+    #302; RETURN, the SORT OUTPUT PROCEDURE shape, is #262).
+
+    With a `ProgramContext` this is exactly what a bundle READ fixture's
+    exhaustion branch is (`_at_end_handling` / `_read_exhaustion_lines`).
+    Without one (lint's suggestion): the FILE STATUS field gets "10", or,
+    for a file with none, the splice's outcome field does, so the splice
+    re-runs the statement's own AT END clause; the clause's replicable
+    statements (idempotent MOVEs/SETs) are added too, for a site the splice
+    cannot lift the clause from."""
+    if site.category not in (MockCategory.READ, MockCategory.RETURN):
+        return []
+    if not getattr(site.statement, "at_end_clause", None) or not site.keys:
+        return []
+    key = site.keys[0]
+    if file_status_fields is None and context is not None and context.program:
+        file_status_fields = analyze_file_status_fields(
+            context.program  # type: ignore[arg-type]
+        )
+    status = (
+        (file_status_fields or {}).get(key.upper())
+        if site.category is MockCategory.READ
+        else None
+    )
+    if context is not None:
+        fixture = BoundaryFixture(
+            category=site.category.value,
+            key=key,
+            paragraph=site.paragraph_name,
+            line=site.line,
+            direction="IN",
+            terminal={status: "10"} if status else None,
+        )
+        replicated, at_end, lifted = _at_end_handling(fixture, site, context)
+        return _read_exhaustion_lines(fixture, replicated, at_end, lifted)
+    lines = [f'MOVE "10" TO {status or OUTCOME_FIELD}']
+    replicated = _replicated_at_end_statements(site.statement)
+    lines.extend(replicated)
+    if site.nested and not replicated:
+        lines.append(
+            "*> TODO: this program's AT END clause could not be "
+            "auto-replicated -- add its loop-guard statement by hand, "
+            "or this mock will never end the program's read loop"
+        )
+    return lines
 
 
 #: DL/I get-next calls and the DIBSTAT each returns once nothing is left:
@@ -1353,8 +1424,10 @@ def _cics_loop_end_lines(
     ends an MQGET loop. Every site the key's MOCK answers is checked (a
     priming READNEXT before the loop is the usual shape); sites needing
     different end replies get a TODO comment instead."""
-    if context is None or context.surface is None or site.category is not (
-        MockCategory.CICS
+    if (
+        context is None
+        or context.surface is None
+        or site.category is not (MockCategory.CICS)
     ):
         return []
     key = _unique_prefix(site, context.surface)
@@ -1970,7 +2043,9 @@ def _single_row_body(
         # branch, and --record-expectations recorded it (issue #253).
         normal_resp = [
             name
-            for name in _cics_resp_names(_cics_fixture_statements(fixture, source) or [])
+            for name in _cics_resp_names(
+                _cics_fixture_statements(fixture, source) or []
+            )
             if name not in pinned
         ]
         layout = [
@@ -2365,9 +2440,9 @@ def _bundle_directive_for(
             body = _dli_success_reply(
                 _placeholder_body_for(category, fixture.key), site
             )
-            end_lines = _call_loop_end_lines(
+            end_lines = _call_loop_end_lines(site, source, None) + _cics_loop_end_lines(
                 site, source, None
-            ) + _cics_loop_end_lines(site, source, None)
+            )
             body = body + end_lines
             if end_lines and not end_lines[0].startswith("*>"):
                 call_count_override = CallCountOverride(count=1)
