@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-16T14:00:00Z
+timestamp: 2026-10-16T20:00:00Z
 ---
 
 # Overview
@@ -95,7 +95,10 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   `EXPECT_OPERATORS`. A value carrying an unquoted `AND`/`OR`
   (`TO BE > 0 AND < 10`, `TO BE 7 OR 8`) is an abbreviated combined
   condition; the driver negates it whole, `IF NOT (<name> <op> <value>)`
-  (issue #265). The FAIL `DISPLAY` carries the operator between
+  (issue #265) -- except for a negated operator (`NOT TO BE 7 OR 8`),
+  whose NOT COBOL would carry onto every abbreviated relation in the
+  tail, so its guard is the un-negated condition, `IF (<name> = 7 OR 8)`
+  (issue #339). The FAIL `DISPLAY` carries the operator between
   name and value (`expected WS-X > 5, got ...`), and
   `report/json_report.py`'s `_EXPECT_HEAD_RE` splits attribution on it
   (`expected` field keeps the bare value for `=`, is operator-prefixed

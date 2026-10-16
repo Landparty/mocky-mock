@@ -1469,7 +1469,9 @@ sync with `model.EXPECT_OPERATORS`; a value with an unquoted `AND`/`OR`
 tail, i.e. an abbreviated combined condition such as `TO BE > 0 AND < 10`
 or `TO BE 7 OR 8`, instead compiles to `IF NOT (<name> <op> <value>)`,
 because swapping the operator would negate only the first relation, issue
-#265) and `verifications` (tally-based
+#265 -- or, for a negated operator (`NOT =`, `NOT >`, ...), to the
+un-negated `IF (<name> <positive-op> <value>)`, because COBOL carries a
+NOT onto every abbreviated relation in the tail, issue #339) and `verifications` (tally-based
 `VERIFY ... WAS CALLED` conditions from `_verify_condition`: `ONCE` →
 `NOT = 1`, `NEVER` → `NOT = 0`, `AT LEAST ONCE` → `< 1`, `N TIMES` →
 `NOT = N`), incrementing `UT-FAIL-COUNT` and displaying a `CASE NNN
