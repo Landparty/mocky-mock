@@ -1069,6 +1069,9 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   an `EXPECT` whose leaf is ambiguous becomes a stub comment.
 - **DL/I get-next loops (#145).** A looped `GN`/`GHN`/`GNP`/`GHNP` mock
   sets `DIBSTAT` to `GB`/`GE` after its first call, so the scan ends.
+  Every DLI site the key's MOCK answers is checked for a loop (#315): the
+  usual priming GN before the loop is the first site seen and is not
+  itself looped.
 - **SQL status-only bodies (#148).** OPEN/CLOSE/COMMIT-style bodies set
   `SQLCODE` to 0 when the fixture names no SQLCODE.
 - **No entry (#150).** A scenario with `entry=''` (IMS `ENTRY 'DLITCBL'`

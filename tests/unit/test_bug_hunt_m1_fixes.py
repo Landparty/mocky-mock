@@ -450,6 +450,39 @@ def test_145_looped_get_next_dli_mock_reports_end_of_segments(tmp_path) -> None:
     assert "-TALLY > 1" in cut
 
 
+PRIMED_SCAN_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EDL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-SEG  PIC X(20).
+       01 WS-CNT  PIC 9(4) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           EXEC DLI GN USING PCB(1) SEGMENT(CUSTSEG) INTO(WS-SEG)
+           END-EXEC
+           PERFORM UNTIL DIBSTAT NOT = SPACES
+               ADD 1 TO WS-CNT
+               EXEC DLI GN USING PCB(1) SEGMENT(CUSTSEG) INTO(WS-SEG)
+               END-EXEC
+           END-PERFORM
+           GOBACK.
+"""
+
+
+@pytest.mark.parametrize("mode", ["--with-data", "--per-paragraph"])
+def test_315_primed_get_next_loop_reports_end_of_segments(tmp_path, mode) -> None:
+    """Issue #315: the priming GN before the loop is the first site seen
+    for the key and is not itself looped; the GN inside the loop is."""
+    from mockymock.cli.main import main
+
+    source = tmp_path / "EDL.cbl"
+    source.write_text(PRIMED_SCAN_CBL)
+    out = tmp_path / "EDL.cut"
+    assert main(["generate", str(source), mode, "-o", str(out)]) == 0
+    assert 'MOVE "GB" TO DIBSTAT' in out.read_text()
+
+
 def test_146_a_value_decoded_with_replacement_chars_is_skipped_not_recorded() -> None:
     from mockymock.analysis.stub_expectations import scan_stub_expectations
     from mockymock.dsl.parser import parse_cut

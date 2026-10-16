@@ -1125,12 +1125,28 @@ def _dli_loop_end_lines(
     an empty mock body leaves DIBSTAT blank ("found") on every call, so a
     `PERFORM UNTIL` scan never ends (EXECDLI, found with #145). Report the
     end status after the first call -- with a tally, so one segment is
-    still returned -- or on the first call when no tally name is known."""
+    still returned -- or on the first call when no tally name is known.
+
+    Every site the key's MOCK answers is checked, not just `site` (issue
+    #315): the standard shape primes the loop with an identical GN before
+    it, and that priming site -- the first one seen -- is not itself in a
+    loop."""
     if context is None or not context.references("DIBSTAT"):
         return []
     words = (site.match_text or "").split()
     end_status = _DLI_GET_NEXT_END.get(words[0].upper()) if words else None
-    if end_status is None or not site_in_loop(site, context.looped):
+    if end_status is None:
+        return []
+    sites = [site]
+    if context.surface is not None:
+        key = _unique_prefix(site, context.surface)
+        sites += [
+            other
+            for other in context.surface.boundary_sites
+            if other.category is MockCategory.DLI
+            and (other.match_text or "").startswith(key)
+        ]
+    if not any(site_in_loop(other, context.looped) for other in sites):
         return []
     if tally is None:
         return [f'MOVE "{end_status}" TO DIBSTAT']
