@@ -3,6 +3,7 @@ naming, per-case refusal-gate behavior (reachability exclusion, entry-point
 overlap, UNMATCHED), the program-wide plan finder's fail-closed hazard
 refusals, and the header-dispatch splice itself."""
 
+import pytest
 from cobolparser import parse_cobol
 from cobolparser.preprocess import normalize_fixed_format
 
@@ -465,3 +466,52 @@ class TestSplice:
         # section header.
         assert "RPT-HEADER." in text
         assert "RPT-BODY." in text
+
+
+QUALIFIED_SECTION_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FSEC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A PIC 99 VALUE 0.
+       01  WS-B PIC 99 VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN SECTION.
+       MAIN-PARA.
+           PERFORM CALC
+           PERFORM P2 {qualifier} CALC.
+       CALC SECTION.
+       P1.
+           ADD 1 TO WS-A.
+       P2.
+           ADD 10 TO WS-B.
+"""
+
+
+@pytest.mark.parametrize("qualifier", ["OF", "IN"])
+def test_section_mock_with_a_qualified_paragraph_reference_is_refused(qualifier):
+    """Issue #293: the splice moves the section's paragraphs under the
+    relocated UT-REAL-n- section, so `P2 OF CALC` stopped resolving."""
+    ast, _, lines, _ = _prepared(QUALIFIED_SECTION_SOURCE.format(qualifier=qualifier))
+    suite = parse_cut(
+        'TESTSUITE "s"\nTESTCASE "c"\n    MOCK SECTION CALC\n'
+        "        MOVE 99 TO WS-A\n    END-MOCK\n    PERFORM MAIN-PARA\n"
+    )
+    plans, reasons = find_flow_mock_plans(ast, suite, lines)
+    assert plans == []
+    assert [r.code for r in reasons] == ["UNSUPPORTED_FLOW_MOCK_TARGET"]
+    assert "'P2 OF CALC'" in reasons[0].message
+
+
+def test_unqualified_references_keep_the_section_mock():
+    source = QUALIFIED_SECTION_SOURCE.format(qualifier="OF").replace(
+        "PERFORM P2 OF CALC", "PERFORM P2"
+    )
+    ast, _, lines, _ = _prepared(source)
+    suite = parse_cut(
+        'TESTSUITE "s"\nTESTCASE "c"\n    MOCK SECTION CALC\n'
+        "    END-MOCK\n    PERFORM MAIN-PARA\n"
+    )
+    plans, reasons = find_flow_mock_plans(ast, suite, lines)
+    assert reasons == []
+    assert len(plans) == 1

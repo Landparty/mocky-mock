@@ -152,6 +152,41 @@ def _header_line_problem(
     return None
 
 
+def _qualified_reference_problem(
+    lines: list[str], section: str, members: list[str]
+) -> str | None:
+    """Why a SECTION mock cannot be spliced when the program names one of
+    the section's paragraphs qualified by it (`PERFORM P2 OF CALC`), or
+    None. The splice moves every paragraph of the section under the
+    relocated `UT-REAL-n-` section, so `P2 OF CALC` no longer resolves and
+    cobc rejected the program after a clean lint (issue #293)."""
+    if not members:
+        return None
+    pattern = re.compile(
+        r"(?<![A-Z0-9-])("
+        + "|".join(re.escape(m.upper()) for m in members)
+        + r")\s+(?:OF|IN)\s+"
+        + re.escape(section.upper())
+        + r"(?![A-Z0-9-])"
+    )
+    in_procedure = False
+    for number, line in enumerate(lines, start=1):
+        code = line.split("*>", 1)[0].upper()
+        if not in_procedure:
+            in_procedure = bool(re.match(r"\s*PROCEDURE\s+DIVISION\b", code))
+            continue
+        found = pattern.search(code)
+        if found:
+            return (
+                f"has its paragraph '{found.group(1)}' referenced qualified "
+                f"by the section at line {number} ('{found.group(1)} OF "
+                f"{section.upper()}') -- the splice moves the section's "
+                f"paragraphs under the relocated real section, so that "
+                f"reference would no longer resolve"
+            )
+    return None
+
+
 def find_flow_mock_plans(
     program, suite: MockTestSuite, lines: list[str]
 ) -> tuple[list[FlowMockPlan], list]:
@@ -379,6 +414,9 @@ def find_flow_mock_plans(
                         f"body back to back"
                     )
                     break
+
+        if problem is None and is_section:
+            problem = _qualified_reference_problem(lines, key, member_names)
 
         # --- header layout --------------------------------------------------
         if problem is None:
