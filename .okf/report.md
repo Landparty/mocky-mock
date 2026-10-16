@@ -139,7 +139,7 @@ purely from absence of a FAIL marker.
 
 | Function | Output | Notes |
 |---|---|---|
-| `format_console(suite, crash_detail=None)` | Plain text | `TESTSUITE: <name>` header, one `[PASS]`/`[FAIL]`/`[CRASH]` line per case (indented, failure reasons indented further below), trailing `<run> run, <failures> failed[, <n> crashed]` summary line (`<failures>` is the raw SUMMARY check-count as-is; `<run>` falls back to `len(suite.results)` when `suite.tests_run` is 0 -- see Gotchas; the `, <n> crashed` segment only appears when `<n> > 0`) |
+| `format_console(suite, crash_detail=None)` | Plain text | `TESTSUITE: <name>` header, one `[PASS]`/`[FAIL]`/`[CRASH]` line per case (indented, failure reasons indented further below), trailing `<run> run, <failed cases> failed[ (<checks> failed checks)][, <n> crashed]` summary line (`<failed cases>` counts cases, the parenthesised check count shows only when it differs, issue #235; `<run>` falls back to `len(suite.results)` when `suite.tests_run` is 0 -- see Gotchas; the `, <n> crashed` segment only appears when `<n> > 0`) |
 | `format_junit_xml(suite, crash_detail=None)` | Pretty-printed JUnit XML via `xml.etree.ElementTree` (`indent` + `tostring`; since 2026-09-30 no `minidom` -- `toprettyxml` wrote tab/LF/CR inside attribute values raw, which readers normalize to spaces; ElementTree escapes them as `&#09;`/`&#10;`/`&#13;`) | `<testsuite name tests failures errors>` with one `<testcase>` per result; failing cases get a `<failure message>` child per failure reason, crashed cases get a single `<error message>` child instead (JUnit's own failure-vs-error distinction); orphan failures each get their own `<testcase name="orphan-<id>">` with an `<error>` child and are counted into `errors=` and `tests=`; `tests` uses the same `len(suite.results)` fallback as the console `<run>` count. All names/reasons/messages pass through `_xml_safe` first (see Gotchas) |
 
 Both formatters take an optional `crash_detail: str | None`. The CLI passes
@@ -293,6 +293,16 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   A stub on a POINTER-family or INDEX item is skipped, not recorded
   (`address_fields`, passed to `build_recording_report`, 2026-10-12): its
   DISPLAY text is an address, and `EXPECT P TO BE "0x..."` does not compile.
+  Issue #237: a stub on a level-88 condition-name (`record_rewrite.
+  condition_names`, from cobol-parser's data-item list, ambiguous names
+  included) is recorded by the driver as its truth value (`IF F-YES
+  DISPLAY "... F-YES: TRUE" ELSE ... FALSE END-IF`, `build_driver(...,
+  condition_names=...)`), since `DISPLAY F-YES` failed the whole recording
+  build, and rewritten as `EXPECT F-YES TO BE TRUE|FALSE`. A stub on an
+  INDEXED BY index-name (`splicer.reset.index_names`, not a USAGE INDEX
+  item) records its occurrence number bare (`EXPECT WS-IDX TO BE 3`, not
+  the quoted `"+000000003"` that did not compile). Both use
+  `RecordedExpectation.rendered`, which bypasses `render_expect_value`.
   Issue #194 (2026-10-16): only *spaces* are trimmed (`rstrip(" ")`), since
   X'09'-X'0D'/X'1C'-X'1F' are field data (X'0C' ends a positive packed
   zero) and go to the hex-literal path; `field_pictures` maps a group item
@@ -346,17 +356,36 @@ the `cobol-test` skill's hand-over.
   `scenario_coverage`), run, coverage, mutation, dialect
   (`analysis.dialect_risk.find_dialect_risks`), verdict.
 - Case reach: each case's PERFORM target(s) closed over flow edges except
-  `FALL_THROUGH`/`CALL`, intersected with paragraphs; synthetic nodes
+  `FALL_THROUGH`/`CALL`, plus, for every reached SECTION, its member
+  paragraphs (`_section_members` from the AST; the flow graph links them
+  only by FALL_THROUGH, so `PERFORM S2` reached `S2` alone and its
+  paragraphs read "No test reaches P2" while their dialect risks never
+  blocked L3, issue #292), intersected with paragraphs; synthetic nodes
   (`X__IF_1`) are dropped. Copybook-expanded programs map lines back via
   `coverage._matching_index_map`.
 - Mutation `score` in mutate's JSON is a 0..1 fraction; the report stores
-  `scorePercent`. A mutate run that wrote no report (no mutable
+  `scorePercent`, truncated (not rounded) to one decimal so a score
+  under the threshold never displays as the threshold. The threshold
+  itself (step status and L2) is compared exactly, as
+  `Fraction(100 * (killed + timeouts), scored) >= Fraction(str(threshold))`
+  from the totals (the `score` fraction only when totals lack the counts)
+  -- the same comparison `mutate --fail-under` makes, so the report and
+  the CI gate agree (issue #282). A mutate run that wrote no report (no mutable
   statements) is a `skipped` step carrying mutate's last output line.
 - Verification level per case: L0 static, L1 executed and passed, L2 also
   has at least one assertion and suite mutation >= threshold (default
   80%), L3 also no high/medium dialect risk inside its reach. L4
   (mainframe) is never computed -- shown as a reminder only.
-- `_findings` categories (severity-ordered): refused, test-failure,
+- Run step (issue #260): a `run.json` case whose name matches no TESTCASE
+  (`run`'s synthetic `"mockymock run"` entry for a failure before any case
+  started, e.g. a compile error) and every `orphanFailures` entry is
+  collected into `run_errors`, as is a `summary.casesFailed + casesCrashed`
+  larger than the matched failures. Any of them fails the step (its
+  summary names the first error line), adds one high `run-failure`
+  finding, and sets `summary.runFailed`, which makes `report` exit 1 and
+  changes the HTML verdict sentence. Before, the entry was dropped and a
+  suite that never compiled read as an ok run with exit 0.
+- `_findings` categories (severity-ordered): refused, run-failure, test-failure,
   suspected-bug (a failed INTENT assertion), no-assertion,
   missing-assertion (surviving mutant), dead-code, untested-paragraph,
   rule-without-intent, unlabelled, dialect, coverage, scenario-gap,
@@ -474,8 +503,14 @@ would print `[FAIL] ...` with its reason and then "0 failed" directly
 beneath it). Both formatters now fall back to values reconstructed from
 `suite.results` whenever the SUMMARY-derived field is falsy:
 `run_count = suite.tests_run or len(suite.results)` and (console only)
-`failed_count = suite.failures or sum(len(r.failure_reasons) for r in
-suite.results)`. The two are mutually exclusive in practice — SUMMARY
+the check count `suite.failures or sum(len(r.failure_reasons) for r in
+suite.results if not r.crashed)`. Since issue #235 the console's
+`<n> failed` is a CASE count (`sum(1 for r in suite.results if
+r.failure_reasons and not r.crashed)`, as JUnit and `casesFailed` count
+it) -- printing the check count there gave "2 run, 2 failed" for one
+case failing two checks. The check count is appended as `(<n> failed
+checks)` only when it differs (several failed checks in one case, or
+orphan failures). The two SUMMARY/fallback sources are mutually exclusive in practice — SUMMARY
 printing means no crash occurred — so the `or` fallback never overwrites a
 real clean-run count of 0 with a reconstructed one. Do not touch
 `suite.tests_run`/`suite.failures` themselves to "fix" this —

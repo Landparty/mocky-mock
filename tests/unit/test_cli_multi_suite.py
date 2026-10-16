@@ -357,3 +357,64 @@ def test_several_suites_in_one_folder_keep_their_short_report_names(
     monkeypatch.setattr(cli_main, "_cmd_run", fake_cmd_run)
     assert main(["run", "src/pay/PAY.cbl", "--json-report", "r.json"]) == 0
     assert sorted(reports) == ["r-PAY.errors.json", "r-PAY.json"]
+
+
+def _selection_project(tmp_path, monkeypatch):
+    import mockymock.cli.main as cli_main
+
+    _write(tmp_path / "src" / "pay" / "PAY.cbl")
+    _write(
+        tmp_path / "tests" / "pay" / "PAY.cut",
+        'TESTSUITE "b"\nTESTCASE "ok" TAGS "smoke"\n    PERFORM P\n'
+        'TESTCASE "other"\n    PERFORM P\n',
+    )
+    _write(
+        tmp_path / "tests" / "pay" / "PAY.errors.cut",
+        'TESTSUITE "c"\nTESTCASE "errs"\n    PERFORM P\n',
+    )
+    monkeypatch.chdir(tmp_path)
+    real_cmd_run = cli_main._cmd_run
+    runs: dict[str, tuple[list[str] | None, list[str] | None]] = {}
+
+    def fake_cmd_run(args):
+        if args.cut is None:
+            return real_cmd_run(args)
+        runs[Path(args.cut).name] = (args.case, args.tag)
+        return 0
+
+    monkeypatch.setattr(cli_main, "_cmd_run", fake_cmd_run)
+    return runs
+
+
+def test_run_tag_skips_suites_with_no_selected_case(tmp_path, monkeypatch, capsys):
+    """Issue #254: `run --tag smoke` across suites exited 1 because a suite
+    with no smoke case was refused, and wrote a fake JUnit failure for it."""
+    runs = _selection_project(tmp_path, monkeypatch)
+    assert main(["run", "src/pay/PAY.cbl", "--tag", "smoke"]) == 0
+    assert runs == {"PAY.cut": (None, ["smoke"])}
+    assert "skipped: no selected TESTCASE" in capsys.readouterr().out
+
+
+def test_run_case_union_passes_each_suite_only_its_own_names(tmp_path, monkeypatch):
+    runs = _selection_project(tmp_path, monkeypatch)
+    assert main(["run", "src/pay/PAY.cbl", "--case", "ok", "--case", "errs"]) == 0
+    assert runs == {"PAY.cut": (["ok"], None), "PAY.errors.cut": (["errs"], None)}
+
+
+def test_run_selector_matching_no_suite_is_an_error(tmp_path, monkeypatch, capsys):
+    runs = _selection_project(tmp_path, monkeypatch)
+    assert main(["run", "src/pay/PAY.cbl", "--tag", "smoke", "--tag", "nosuch"]) == 1
+    assert runs == {}
+    assert "no TESTCASE carries tag 'nosuch' in any suite" in capsys.readouterr().out
+
+
+def test_single_suite_tag_union_accepts_a_tag_it_lacks():
+    from mockymock.cli.checks import filter_suite_cases
+
+    suite = parse_cut(
+        'TESTSUITE "s"\nTESTCASE "a" TAGS "smoke"\n    PERFORM P\n'
+        'TESTCASE "b"\n    PERFORM P\n'
+    )
+    assert filter_suite_cases(suite, None, ["smoke", "slow"]) == []
+    assert [c.name for c in suite.test_cases] == ["a"]
+    assert filter_suite_cases(suite, None, ["slow"]) != []

@@ -243,12 +243,19 @@ def find_dialect_risks(
             return line if 0 < line <= len(original_lines) else None
         return line_map.get(line)
 
+    # Sections count as owners too: statements written directly under a
+    # SECTION header (cobol-parser's unnamed paragraph, left out here)
+    # belong to that section, not to the previous section's last
+    # paragraph (issue #292).
     paragraphs = sorted(
-        (
-            (p.location.line, getattr(p, "paragraph_name", None) or "")
-            for p in ast.get_procedures()
-            if getattr(p, "location", None) is not None
-        ),
+        (p.location.line, name)
+        for p in ast.get_procedures()
+        if getattr(p, "location", None) is not None
+        and (
+            name := getattr(p, "paragraph_name", None)
+            or getattr(p, "section_name", None)
+            or ""
+        )
     )
 
     def paragraph_at(line: int) -> str | None:
@@ -256,7 +263,7 @@ def find_dialect_risks(
         for start, name in paragraphs:
             if start > line:
                 break
-            current = name or current
+            current = name
         return current
 
     risks: list[DialectRisk] = []

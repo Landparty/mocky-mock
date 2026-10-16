@@ -81,8 +81,19 @@ def format_console(
     # only when the SUMMARY-derived value is falsy never overwrites a real
     # clean-run count of 0.
     run_count = suite.tests_run or len(suite.results)
-    failed_count = suite.failures or sum(len(r.failure_reasons) for r in suite.results)
+    # Failed CASES, counted the way format_junit_xml and --json-report's
+    # casesFailed count them; suite.failures is the driver's count of
+    # failed CHECKS, so one case failing two assertions printed "2 failed"
+    # under a [PASS] line (issue #235). The check count is shown
+    # separately when it differs.
+    failed_count = sum(1 for r in suite.results if r.failure_reasons and not r.crashed)
+    failed_checks = suite.failures or sum(
+        len(r.failure_reasons) for r in suite.results if not r.crashed
+    )
     summary = f"{run_count} run, {failed_count} failed"
+    if failed_checks != failed_count:
+        plural = "s" if failed_checks != 1 else ""
+        summary += f" ({failed_checks} failed check{plural})"
     if crashed_count:
         summary += f", {crashed_count} crashed"
     if not_run:
