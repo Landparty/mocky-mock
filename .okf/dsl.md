@@ -509,7 +509,13 @@ Key regexes, matched in this order per non-blank line:
    failed on generated code (`unexpected END-EVALUATE`). ROWS/`TERMINAL`
    field values get the same check. A decimal point (`1.5`), a period
    inside a literal, or one in a comment is untouched.
-2. `*>` comment (only reachable when not inside a mock body).
+2. `*>` comment (only reachable when not inside a mock body). A
+   *trailing* `*>` comment (outside quotes) is stripped from every line the
+   DSL parses itself before matching -- outside MOCK blocks, and inside one
+   for ROWS rows, `TERMINAL`, `CAPTURE`, `FILE-STATUS` and `END-MOCK`
+   (`_strip_inline_comment`, issue #236: it used to be swallowed into an
+   EXPECT value or a PROVIDER ROW column and spliced into the driver).
+   Plain MOCK body lines keep theirs; cobc reads it there.
 3. `TESTSUITE "..."` — errors if a suite is already open (one per file).
 4. `TESTCASE "..."` — requires `suite` already set; resets the per-case
    duplicate-MOCK tracker. An empty or blank name raises `CutParseError`

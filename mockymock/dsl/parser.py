@@ -236,6 +236,31 @@ _BALANCED_SUBSCRIPT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\s*\([^()]*\)$")
 _DOTTED_NAME_RE = re.compile(r"[A-Za-z0-9-]\.[A-Za-z0-9]")
 
 
+def _strip_inline_comment(line: str) -> str:
+    """`line` without a trailing `*>` comment that starts outside any quoted
+    literal (issue #236). DSL lines are parsed, then spliced into the
+    driver: a comment left on an EXPECT value or a PROVIDER ROW column was
+    spliced as COBOL text. Only MOCK body lines keep theirs (they are
+    COBOL already, and cobc reads an inline comment there correctly)."""
+    quote: str | None = None
+    for index, char in enumerate(line):
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif line.startswith("*>", index):
+            return line[:index].rstrip()
+    return line
+
+
+#: Lines inside a MOCK block that the DSL parses itself (rather than
+#: splicing verbatim), so a trailing comment is stripped from them too.
+_STRUCTURED_MOCK_LINE_RE = re.compile(
+    r"^(?:END-MOCK|TERMINAL|CAPTURE|FILE-STATUS)\b", re.IGNORECASE
+)
+
+
 class CutParseError(ValueError):
     """Raised when a .cut file doesn't match the grammar."""
 
@@ -805,6 +830,15 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"condition name from the EIBRESP table (NORMAL, "
                     f"NOTFND, ENDFILE, ...) or the numeric RESP value"
                 )
+
+        if not _COMMENT_RE.match(line):
+            code = _strip_inline_comment(line)
+            if (
+                in_mock is None
+                or in_mock.rows is not None
+                or _STRUCTURED_MOCK_LINE_RE.match(code)
+            ):
+                line = code
 
         if in_mock is not None:
             if case is not None and case_provider is not None:
