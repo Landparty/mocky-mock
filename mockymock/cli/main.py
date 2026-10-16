@@ -2035,6 +2035,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # line, or the timeout killed a straggler). A tripped
     # --coverage-fail-under gate fails the command the same way, so a green
     # suite under an unmet coverage floor still exits nonzero in CI.
+    if (
+        suite_result.results
+        and suite_result.tests_run == 0
+        and all(result.passed for result in suite_result.results)
+    ):
+        # Every case printed a clean END, yet the driver never reached its
+        # SUMMARY line: something the program ran after the last case
+        # ended the binary before AFTER-ALL. Exiting 1 under an all-PASS
+        # report without saying why read as a mockymock bug (issue #264).
+        print(
+            "mockymock run: every case passed, but the test binary ended "
+            "without printing its SUMMARY line -- program code that ran "
+            "after the last case (a STOP RUN, GOBACK, or abend) stopped it "
+            "before AFTER-ALL, so the run is not counted as passed"
+        )
     if coverage_gate_failed:
         return 1
     return 0 if suite_result.all_passed and executed.exit_code == 0 else 1
@@ -3093,9 +3108,18 @@ def _insert_driver_with_origins(
         _WS_HEADER_RE.match(line) for line in lines[: _first_procedure_index(lines)]
     )
     seen_data_division = False
+    entry_check_at: int | None = None
 
-    for line in lines:
+    for index, line in enumerate(lines):
         upper = line.strip().upper()
+        if index == entry_check_at and _starts_unnamed_code(lines, index):
+            # Statements straight after the PROCEDURE DIVISION header, with
+            # no paragraph name of their own, would otherwise read as more
+            # sentences of the last UT-TESTCASE paragraph -- the main line
+            # (and its STOP RUN) ran after the last case and SUMMARY never
+            # printed (issue #264). A header makes them a paragraph nothing
+            # performs.
+            extend([f"       {_ORIGINAL_ENTRY_PARAGRAPH}."])
         if not inserted_ws and not has_ws:
             if upper.startswith("DATA DIVISION"):
                 seen_data_division = True
@@ -3115,7 +3139,46 @@ def _insert_driver_with_origins(
             extend([""])
             extend(artifact.procedure_lines)
             inserted_proc = True
+            entry_check_at = index + 1
     return result, inserted
+
+
+#: The paragraph header `_insert_driver_with_origins` gives a PROCEDURE
+#: DIVISION main line that has no paragraph name of its own.
+_ORIGINAL_ENTRY_PARAGRAPH = "UT-ORIGINAL-ENTRY"
+#: A paragraph or SECTION header: one word (or `<word> SECTION`) and a
+#: period, optionally followed by the paragraph's first sentence.
+_PROCEDURE_HEADER_RE = re.compile(
+    r"^\s*(?P<name>[A-Z0-9][A-Z0-9-]*)(?:\s+SECTION(?:\s+\d+)?)?\s*\.(?:\s|$)",
+    re.IGNORECASE,
+)
+#: One-word statements that look like a header: `EXIT.`, `GOBACK.`, ...
+_HEADER_LOOKALIKE_VERBS = frozenset(
+    {"CONTINUE", "EJECT", "EXIT", "GOBACK", "SKIP1", "SKIP2", "SKIP3"}
+)
+
+
+def _starts_unnamed_code(lines: list[str], index: int) -> bool:
+    """Whether the first code line from `index` on (the line after the
+    PROCEDURE DIVISION header) is a statement rather than a paragraph or
+    SECTION header, DECLARATIVES, or END PROGRAM. A header missed here
+    only costs an empty extra paragraph; a statement missed would run
+    inside the last test case, so the check leans towards inserting.
+    False when the header line itself had no period (a USING list still
+    running onto the next lines: inserting there would split it)."""
+    header = lines[index - 1].split("*>", 1)[0]
+    if "." not in header:
+        return False
+    for line in lines[index:]:
+        text = line.split("*>", 1)[0].strip()
+        if not text:
+            continue
+        upper = text.upper()
+        if upper.startswith(("DECLARATIVES", "END PROGRAM")):
+            return False
+        m = _PROCEDURE_HEADER_RE.match(text)
+        return m is None or m.group("name").upper() in _HEADER_LOOKALIKE_VERBS
+    return False
 
 
 _WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\b", re.IGNORECASE)

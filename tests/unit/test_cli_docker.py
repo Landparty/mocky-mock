@@ -1065,3 +1065,23 @@ def test_run_passes_timeout_flag_through_to_run_binary(tmp_path):
         exit_code = main(["run", str(program), "--cut", str(cut), "--timeout", "5"])
     assert exit_code == 0
     assert run_binary.call_args.kwargs["timeout_seconds"] == 5
+
+
+def test_run_explains_an_all_pass_run_that_never_printed_summary(tmp_path, capsys):
+    """Issue #264: every case printed a clean END but the binary stopped
+    before its SUMMARY line; the run exits 1 and must say why."""
+    executed = ExecutionResult(
+        exit_code=0,
+        stdout=CLEAN_STDOUT.rsplit("__MOCKYMOCK__ SUMMARY", 1)[0],
+        stderr="",
+    )
+    assert _run_cli(tmp_path, executed) == 1
+    out = capsys.readouterr().out
+    assert "[PASS] calls discrate" in out
+    assert "without printing its SUMMARY line" in out
+
+
+def test_run_with_summary_does_not_explain_a_missing_summary(tmp_path, capsys):
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    assert _run_cli(tmp_path, executed) == 0
+    assert "SUMMARY line" not in capsys.readouterr().out

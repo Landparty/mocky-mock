@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-16T00:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -656,6 +656,14 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     procedure lines go immediately after `PROCEDURE DIVISION` (matched via
     `line.strip().upper().startswith(...)`, first occurrence only — both
     insertions are one-shot via `inserted_ws`/`inserted_proc` flags).
+    When the first code line after the PROCEDURE DIVISION header is a
+    statement rather than a paragraph/SECTION header (an unnamed main
+    line), `_starts_unnamed_code` has a `UT-ORIGINAL-ENTRY.` header
+    inserted before it, so that code is a paragraph nothing performs
+    instead of more sentences of the last `UT-TESTCASE-<n>` paragraph
+    (issue #264: it ran after the last case and its STOP RUN hid
+    SUMMARY). A header line with no period (a `USING` list running on)
+    gets no synthetic header.
 14. Write the instrumented source into a fresh `sandbox_dir(root=docker_toolchain.WORK_ROOT)`
     as `<program-stem>.cbl` (LF newlines forced via `newline="\n"`).
 15. `docker_toolchain.compile_source(...)` — on failure, print stderr,
@@ -682,7 +690,9 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     reason per skip) is printed. See [report](report.md).
 18. Exit 0 only if `suite_result.all_passed` **and** `executed.exit_code
     == 0` — a nonzero binary exit after the SUMMARY line still fails the
-    run. **Unaffected by `--record-expectations`** — recording outcomes
+    run. When every case passed but no SUMMARY line was printed
+    (`tests_run == 0`), `run` says so before exiting 1, rather than
+    failing silently under an all-PASS report (issue #264). **Unaffected by `--record-expectations`** — recording outcomes
     never change this; see the design doc's "Best-effort, cumulative
     reporting" section for why.
 
