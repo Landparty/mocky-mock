@@ -1507,6 +1507,135 @@ def _sql_status_lines(fixture: BoundaryFixture) -> list[str]:
     return lines
 
 
+#: CICS options whose operand the command only READS, for every command
+#: `_cics_input_operand_names` filters (issue #222). cobol-parser marks every
+#: EXEC CICS boundary BIDIRECTIONAL and lays out every resolved operand, so
+#: without this a generated mock overwrote what the program had just put in
+#: `FROM(rec)` / `SEND TEXT FROM(msg)` with random text -- state the real
+#: transaction never touches, recorded as golden by `--record-expectations`.
+_CICS_INPUT_OPTIONS = frozenset(
+    {
+        "FROM",
+        "FILE",
+        "DATASET",
+        "QUEUE",
+        "QNAME",
+        "MAP",
+        "MAPSET",
+        "PROGRAM",
+        "TRANSID",
+        "CHANNEL",
+        "CONTAINER",
+        "SYSID",
+        "REQID",
+        "TERMID",
+        "INTERVAL",
+        "TIME",
+        "ABCODE",
+        "KEYLENGTH",
+        "FROMLENGTH",
+        "FROMFLENGTH",
+        "CURSOR",
+    }
+)
+#: Commands whose RIDFLD the command updates (a browse, or a generic READ).
+_CICS_RIDFLD_OUTPUT_COMMANDS = frozenset({"READ", "READNEXT", "READPREV"})
+#: Commands whose LENGTH/FLENGTH the command sets to the length it returned.
+_CICS_LENGTH_OUTPUT_COMMANDS = frozenset(
+    {
+        "READ",
+        "READNEXT",
+        "READPREV",
+        "RECEIVE",
+        "READQ",
+        "RETRIEVE",
+        "GET",
+        "CONVERSE",
+        "WEB",
+    }
+)
+#: Commands that pass COMMAREA to a program that cannot hand it back.
+_CICS_COMMAREA_INPUT_COMMANDS = frozenset({"RETURN", "XCTL"})
+#: Commands whose operands are all answers (ASSIGN USERID(x), ADDRESS
+#: COMMAREA(ptr), ...): nothing is filtered for them.
+_CICS_ALL_OUTPUT_COMMANDS = frozenset({"ASSIGN", "INQUIRE", "ADDRESS", "ASKTIME"})
+
+
+def _cics_operand_name(value: object) -> str | None:
+    """The data name an option's operand text starts with, or None for a
+    literal / figurative / empty operand."""
+    words = str(value or "").replace("(", " ").split()
+    if not words or words[0][0] in "\"'0123456789+-":
+        return None
+    return words[0].upper()
+
+
+def _cics_operand_roles(statement: object) -> tuple[set[str], set[str]]:
+    """(input-only operand names, other operand names) of one EXEC CICS
+    statement -- see `_CICS_INPUT_OPTIONS` and the per-command tables."""
+    command = str(getattr(statement, "_cics_command", "") or "").upper()
+    options = getattr(statement, "options", None) or {}
+    inputs: set[str] = set()
+    others: set[str] = set()
+    for option, value in options.items():
+        name = _cics_operand_name(value)
+        if name is None:
+            continue
+        option = str(option).upper()
+        if command in _CICS_ALL_OUTPUT_COMMANDS:
+            is_input = False
+        elif command == "FORMATTIME":
+            is_input = option == "ABSTIME"
+        elif option == "RIDFLD":
+            is_input = command not in _CICS_RIDFLD_OUTPUT_COMMANDS
+        elif option in ("LENGTH", "FLENGTH"):
+            is_input = command not in _CICS_LENGTH_OUTPUT_COMMANDS
+        elif option == "COMMAREA":
+            is_input = command in _CICS_COMMAREA_INPUT_COMMANDS
+        else:
+            is_input = option in _CICS_INPUT_OPTIONS
+        (inputs if is_input else others).add(name)
+    return inputs, others
+
+
+def _cics_output_layout(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> list[FieldSpec]:
+    """`fixture.layout` without the fields only an input operand of the
+    fixture's own EXEC CICS statement(s) names (issue #222): a CICS mock
+    writes what the command returns (INTO, SET, RESP, RESP2, a READ's
+    LENGTH/RIDFLD, ...), never what it reads (FROM, a WRITE's RIDFLD).
+    A field also named by a non-input operand of any statement for this
+    key is kept. With no program to read the statements from, nothing is
+    filtered."""
+    surface = source.surface if source is not None else None
+    if surface is None:
+        return fixture.layout
+    key = " ".join(fixture.key.upper().split())
+    cics_sites = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.CICS
+        and (site.match_text or "").startswith(key)
+    ]
+    statements = [
+        site.statement for site in cics_sites if site.line == fixture.line
+    ] or [site.statement for site in cics_sites]
+    inputs: set[str] = set()
+    others: set[str] = set()
+    for statement in statements:
+        statement_inputs, statement_others = _cics_operand_roles(statement)
+        inputs |= statement_inputs
+        others |= statement_others
+    kept = []
+    for spec in fixture.layout:
+        parts = set(spec.qualified_name.upper().split("."))
+        if parts & inputs and not parts & others:
+            continue
+        kept.append(spec)
+    return kept
+
+
 def _single_row_body(
     fixture: BoundaryFixture, source: ProgramContext | None = None
 ) -> list[str]:
@@ -1517,6 +1646,8 @@ def _single_row_body(
     categories do: every existing hand-written SQL mock in this codebase
     sets SQLCODE itself, always)."""
     body: list[str] = []
+    if fixture.category == "CICS":
+        fixture = replace(fixture, layout=_cics_output_layout(fixture, source))
     if fixture.sequence:
         body.extend(_row_move_lines(fixture.sequence[0], fixture, source))
     if fixture.category == "SQL":

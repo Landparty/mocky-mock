@@ -847,6 +847,21 @@ paragraph-grouped path described above, unchanged. A real
   the loop body still runs once per row, so the other boundaries in its
   paragraph keep their counts). A keyed/random READ is left alone: out of
   rows it would answer "23", not "10".
+- **A CICS mock writes only what the command returns** (issue #222):
+  cobol-parser marks every EXEC CICS boundary BIDIRECTIONAL and lays out
+  every resolved operand, so `_single_row_body` used to MOVE random text
+  into `WRITE ... FROM(rec)`, a WRITE's `RIDFLD` and `SEND TEXT FROM(msg)`
+  -- state the real transaction never touches, recorded as golden by
+  `--record-expectations`. `_cics_output_layout` drops a layout field that
+  only an input operand names (`_cics_operand_roles` over the statement's
+  `options`, found by the fixture's line among the key's CICS sites): FROM,
+  FILE/QUEUE/MAP/PROGRAM/TRANSID/... always; RIDFLD except on
+  READ/READNEXT/READPREV; LENGTH/FLENGTH except on the commands that
+  return a length (READ*, RECEIVE, READQ, RETRIEVE, GET, CONVERSE, WEB);
+  COMMAREA on RETURN/XCTL (LINK's stays: the callee may update it);
+  only ABSTIME on FORMATTIME; nothing on ASSIGN/INQUIRE/ADDRESS/ASKTIME.
+  A field also named by a non-input operand of any statement for the key
+  is kept.
 - **An AT END clause the splice re-runs is not copied at all** (issue
   #209): `_at_end_handling` asks `analysis.clause_bodies.lift_clause_bodies`
   first; when the splice will run the READ's own AT END clause after the
