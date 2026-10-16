@@ -18,7 +18,10 @@ longest record, and LINKAGE items neutralized into WORKING-STORAGE --
 plus the blocks mockymock synthesizes (the CICS DFHEIBLK, DLIDIB and the
 generated SQLCA), which `reset` clears too.
 Top-level REDEFINES items are skipped (their storage is the redefined
-item's, which is saved), as are top-level FILLERs (not addressable).
+item's, which is saved), as are elementary top-level FILLERs (not
+addressable); a top-level FILLER group is replaced by its named children
+(`reset.reset_targets`, issue #247), and so is a top-level group whose
+name is ambiguous (each child saved through it, issue #281).
 
 How each item is copied, chosen so every MOVE is one COBOL defines as
 exact:
@@ -41,6 +44,8 @@ exact:
   preserves the value.
 - POINTER-family and INDEX items: `SET` into a field of the same usage
   (COBOL forbids MOVE on them).
+- Every INDEXED BY index (`reset.index_names`): `SET` into a `USAGE
+  INDEX` field (issue #280).
 
 Refused (fail closed, reported by `plan_snapshot`): a group containing an
 OCCURS ... DEPENDING ON table, whose size at restore time depends on a
@@ -55,7 +60,13 @@ import re
 from dataclasses import dataclass, field
 
 from mockymock.splicer.io_copy import longest_record_per_file
-from mockymock.splicer.reset import _is_filler, _is_group, _sections, _top_level_items
+from mockymock.splicer.reset import (
+    _is_group,
+    _sections,
+    _top_level_items,
+    index_names,
+    reset_targets,
+)
 
 SNAP_PREFIX = "UT-SNAP-"
 
@@ -117,14 +128,14 @@ def plan_snapshot(
         )
         snapshot.save_lines.append(f"MOVE {name} TO {snap}")
         snapshot.restore_lines.append(f"MOVE {snap} TO {name}")
-    for item in _state_items(program, linkage_items or []):
+    for item, ref in _state_items(program, linkage_items or []):
         snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
         if _is_group(item) or _is_edited(item):
             reason = _odo_reason(item)
             size = None if reason else _max_bytes(item)
             if reason or size is None:
                 problems.append(
-                    f"{item.name}: "
+                    f"{ref}: "
                     + (reason or "an OCCURS table's bound could not be read")
                     + " -- its state after BEFORE-ALL cannot be saved exactly"
                 )
@@ -132,33 +143,43 @@ def plan_snapshot(
             snapshot.working_storage_lines.extend(
                 [f"01  {snap}.", f"    05 FILLER PIC X({size})."]
             )
-            snapshot.save_lines.append(f"MOVE {item.name} TO {snap}")
-            snapshot.restore_lines.append(f"MOVE {snap} TO {item.name}")
+            snapshot.save_lines.append(f"MOVE {ref} TO {snap}")
+            snapshot.restore_lines.append(f"MOVE {snap} TO {ref}")
             continue
         usage = (getattr(item, "usage", None) or "").upper()
         if usage in _SET_USAGES and getattr(item, "picture_clause", None) is None:
             snapshot.working_storage_lines.append(f"01  {snap} USAGE {usage}.")
-            snapshot.save_lines.append(f"SET {snap} TO {item.name}")
-            snapshot.restore_lines.append(f"SET {item.name} TO {snap}")
+            snapshot.save_lines.append(f"SET {snap} TO {ref}")
+            snapshot.restore_lines.append(f"SET {ref} TO {snap}")
             continue
         description = _elementary_description(item)
         if description is None:
             problems.append(
-                f"{item.name}: its description (no PICTURE, usage "
+                f"{ref}: its description (no PICTURE, usage "
                 f"{usage or 'unknown'}) cannot be reproduced -- its state "
                 f"after BEFORE-ALL cannot be saved exactly"
             )
             continue
         snapshot.working_storage_lines.append(f"01  {snap} {description}.")
-        snapshot.save_lines.append(f"MOVE {item.name} TO {snap}")
-        snapshot.restore_lines.append(f"MOVE {snap} TO {item.name}")
+        snapshot.save_lines.append(f"MOVE {ref} TO {snap}")
+        snapshot.restore_lines.append(f"MOVE {snap} TO {ref}")
+    # An INDEXED BY index is not a data item, but the reset puts it back to
+    # its start-up value before every case (issue #189); without its own
+    # slot the position BEFORE-ALL SET or SEARCHed it to was lost (#280).
+    # The restore runs after the reset, so it wins.
+    for name in index_names(program):
+        snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
+        snapshot.working_storage_lines.append(f"01  {snap} USAGE INDEX.")
+        snapshot.save_lines.append(f"SET {snap} TO {name}")
+        snapshot.restore_lines.append(f"SET {name} TO {snap}")
     return snapshot, problems
 
 
-def _state_items(program, linkage_items: list) -> list:
+def _state_items(program, linkage_items: list) -> list[tuple[object, str]]:
+    """(item, the reference naming it) for every item the snapshot saves."""
     data_division = program.get_division("DATA")
     if data_division is None:
-        return list(linkage_items)
+        return [(item, item.name) for item in linkage_items]
     items: list = []
     for section in _sections(data_division, "FILE"):
         items.extend(longest_record_per_file(_top_level_items(section)))
@@ -166,10 +187,12 @@ def _state_items(program, linkage_items: list) -> list:
         for section in _sections(data_division, name):
             items.extend(_top_level_items(section))
     items.extend(linkage_items)
+    # A FILLER group's named children, and an ambiguous 01's (issues #247,
+    # #281), are reset one by one, so they are saved one by one too.
     return [
-        item
-        for item in items
-        if not _is_filler(item) and not getattr(item, "redefines", None)
+        (item, ref)
+        for item, ref in reset_targets(items)
+        if not getattr(item, "redefines", None)
     ]
 
 

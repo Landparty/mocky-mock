@@ -30,6 +30,7 @@ import re
 from dataclasses import dataclass
 
 from mockymock.dsl.model import CAPTURE_CATEGORIES, MockCategory, MockTestSuite
+from mockymock.splicer.reset import is_alphanumeric_edited_picture
 
 #: Names starting with this are mockymock's to declare. Deliberately shares
 #: the `UT-` namespace every other generated field uses, so a program of its
@@ -130,6 +131,16 @@ def _declaration_for(target: str, item: dict) -> tuple[str, str] | None:
         )
     if not picture:
         return None  # COMP-1/COMP-2/POINTER/INDEX: nothing to mirror
+    length = item.get("byte_length")
+    if (
+        usage in _DISPLAY_USAGES
+        and length
+        and is_alphanumeric_edited_picture(str(picture))
+    ):
+        # Mirroring an editing PICTURE would edit the captured value again
+        # on the MOVE (issue #277); moving an edited sender to PIC X is a
+        # plain byte copy.
+        return f"01  {target}  PIC X({length}).", f"MOVE SPACES TO {target}"
     suffix = "" if usage in _DISPLAY_USAGES else f" USAGE {usage}"
     declaration = f"01  {target}  PIC {picture}{suffix}."
     # Repeat counts are not symbols: `X(9)` is alphanumeric, and treating

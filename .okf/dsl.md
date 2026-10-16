@@ -835,7 +835,10 @@ paragraph-grouped path described above, unchanged. A real
   A POINTER-family field gets `SET <field> TO NULL` and an INDEX field no
   line at all (`_row_move_line`, 2026-10-12): the bundle lays both out as
   numeric fields holding `0`, and `MOVE 0 TO <pointer>` is a cobc compile
-  error (LESERV's `CALL 'CEEHDLR' USING HANDLER-ROUTINE ...`).
+  error (LESERV's `CALL 'CEEHDLR' USING HANDLER-ROUTINE ...`). An
+  `alphanumeric-edited` field's value is the record's bytes (its edited
+  image), so it is moved by reference modification, `MOVE "N8/DF/B3" TO
+  IN-AE(1:)`; a plain MOVE edited it again (#277).
 - **`_read_body`'s `WHEN OTHER` branch also replicates the source `AT END`
   clause's own constant-valued statements**, not just the FILE STATUS
   field (`_replicated_at_end_statements`, via `_is_safe_literal_source`
@@ -1081,6 +1084,17 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   answers every site of its key, so when the key's sites would need
   different replies (a GN loop plus an ISRT through the same CBLTDLI) the
   body gets a `*> TODO` comment instead.
+- **A CICS LINK server gets its commarea (#245).** The reset zeroes
+  EIBCALEN before every case, and since #215 a mocked `EXEC CICS ABEND`
+  ends the run, so a LINK server's `IF EIBCALEN < LENGTH OF DFHCOMMAREA
+  EXEC CICS ABEND` guard ended every generated happy path before the
+  READ/REWRITE its VERIFYs counted. `_commarea_setup_lines` (stored as
+  `ProgramContext.setup_lines`) finds an `IF` whose condition names
+  EIBCALEN and whose THEN branch ABENDs, in a program declaring
+  DFHCOMMAREA, and both scaffolds then write `MOVE LENGTH OF DFHCOMMAREA
+  TO EIBCALEN` before every case's PERFORM, as a real LINK passes it. An
+  `IF EIBCALEN = 0` first-time path (pseudo-conversational) is not an
+  ABEND guard and gets nothing.
 - **MQ calls answer MQCC_OK / MQRC_NONE (#205).** By the MQI's fixed
   convention CompCode and Reason are an MQ call's last two USING
   arguments; `_mq_success_reply` replaces the fixture row's random numbers
