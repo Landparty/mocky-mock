@@ -906,6 +906,16 @@ paragraph-grouped path described above, unchanged. A real
   generated record below the FD minimum. The bundle carries no per-row
   length (`declared_lengths` is not surfaced upstream yet), so every row
   reports the layout's full length clamped into the FD's range.
+- **A SELECT / FETCH mock writes only its INTO targets** (issue #239):
+  the bundle lays out every host variable of an EXEC SQL, the WHERE
+  clause's input key included, so a SELECT mock overwrote the key the
+  program had set and `--record-expectations` recorded the random text.
+  `_sql_output_layout` keeps only the fields named by the statement's
+  `into_variables` (cobol-parser's `ExecSQLStatement` / `FetchStatement`;
+  null indicators are in that list), matching the fixture's line, else
+  every SQL site its key prefixes; a statement with no INTO list leaves
+  the layout alone. `examples/fixtures/FIXTUREDEMO.cut` was regenerated
+  (it no longer moves into `WS-CUSTOMER-ID`).
 - **A CICS mock writes only what the command returns** (issue #222):
   cobol-parser marks every EXEC CICS boundary BIDIRECTIONAL and lays out
   every resolved operand, so `_single_row_body` used to MOVE random text

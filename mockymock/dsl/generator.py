@@ -2033,6 +2033,44 @@ def _cics_fixture_statements(
     ]
 
 
+def _sql_output_layout(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> list[FieldSpec]:
+    """`fixture.layout` restricted to the INTO host variables (and their
+    null indicators) of the fixture's own SELECT / FETCH statement(s)
+    (issue #239). The bundle lays out every host variable, the WHERE
+    clause's input key included, so a generated SELECT mock overwrote the
+    key the program had just set and `--record-expectations` recorded the
+    random text as golden. Left unchanged when no statement is found or
+    any of them carries no INTO list (UPDATE / INSERT / an unparsed one)."""
+    surface = source.surface if source is not None else None
+    if surface is None or fixture.category != "SQL":
+        return list(fixture.layout)
+    key = " ".join(fixture.key.upper().split())
+    sql_sites = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.SQL
+        and (site.match_text or "").upper().startswith(key)
+    ]
+    statements = [
+        site.statement for site in sql_sites if site.line == fixture.line
+    ] or [site.statement for site in sql_sites]
+    into: set[str] = set()
+    for statement in statements:
+        names = getattr(statement, "into_variables", None)
+        if not isinstance(names, list) or not names:
+            return list(fixture.layout)
+        into |= {str(name).upper() for name in names}
+    if not into:
+        return list(fixture.layout)
+    return [
+        spec
+        for spec in fixture.layout
+        if set(spec.qualified_name.upper().split(".")) & into
+    ]
+
+
 def _cics_resp_names(statements: list) -> list[str]:
     """The RESP and RESP2 operand names of `statements`, in order, once."""
     names: list[str] = []
@@ -2506,6 +2544,8 @@ def _bundle_directive_for(
     looped_fetch = category is MockCategory.SQL and _is_looped_fetch(
         fixture, site, source
     )
+    if category is MockCategory.SQL:
+        fixture = replace(fixture, layout=_sql_output_layout(fixture, source))
     if (fixture.category, fixture.key) in placeholder_keys:
         if category is MockCategory.READ:
             replicated, at_end, lifted = _at_end_handling(fixture, site, source)
