@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mockymock"
-version = "0.10.1"
+version = "0.10.2"
 description = "Mock COBOL CALL statements, compile with GnuCOBOL, run, and assert"
 authors = [
     {name = "Samuel Dion"}
@@ -32,11 +32,8 @@ dependencies = [
     # tracked via git SHA (DIVIDE/MULTIPLY GIVING ROUNDED, the gen-fixtures
     # bundle surface, EVALUATE WHEN-clause truncation, ...). Bump the floor
     # deliberately, with a test run, when adopting new cobol-parser work --
-    # the <4 cap guards against an unreviewed breaking major bump (2.x was
-    # reviewed 2026-10-14: the unit suite passes unchanged on 2.0.1; 3.x on
-    # 2026-10-15: its one breaking change is the `decode --view` column set,
-    # which this project never calls, and the unit suite passes unchanged on
-    # 3.0.0). The Report
+    # the <3 cap guards against an unreviewed breaking major bump (2.x was
+    # reviewed 2026-10-14: the unit suite passes unchanged on 2.0.1). The Report
     # Writer categories (INITIATE/GENERATE/TERMINATE), the INVOKE/CHAIN/
     # Communication-Module refusals and the XML PARSE flow edge need the
     # cobol-parser release carrying its 2026-09-02 statement-coverage and
@@ -54,7 +51,7 @@ dependencies = [
     # ABCMeta" from BoundaryInventoryAnalyzer._classify on every program,
     # which breaks `generate` (whose default is now the data-driven path)
     # and `init`. 1.8.0 and 1.8.4 are fine.
-    "cobol-parser>=1.7.7,!=1.8.2,<4",
+    "cobol-parser>=1.7.7,!=1.8.2,<3",
 ]
 
 [project.optional-dependencies]
