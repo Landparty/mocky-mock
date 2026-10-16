@@ -2771,7 +2771,9 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         print("mockymock collect: --boundaries requires --json")
         return 1
     if args.boundaries and not args.program:
-        print("mockymock collect: --boundaries requires a program argument")
+        # With --json every failure is a JSON error object on stdout: the
+        # VS Code extension parses it (issue #309).
+        _print_command_error(args, "--boundaries requires a program argument")
         return 1
 
     cut_path = Path(args.cut)
@@ -2779,7 +2781,14 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     program_path = Path(args.program) if args.program else None
     if program_path is not None:
         check_paths.append(program_path)
-    if not _check_input_files("mockymock collect", *check_paths):
+    if args.json:
+        missing = [path for path in check_paths if not path.is_file()]
+        if missing:
+            _print_command_error(
+                args, "; ".join(f"no such file: {path}" for path in missing)
+            )
+            return 1
+    elif not _check_input_files("mockymock collect", *check_paths):
         return 1
     try:
         suite = parse_cut(read_utf8_source(cut_path))

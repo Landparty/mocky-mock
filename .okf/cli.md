@@ -1020,7 +1020,9 @@ test cases with 1-based line numbers and tags. `--json` emits the
 machine-readable form (`{"version": 1, "cutFile", "suite": {name, line},
 "cases": [{name, line, tags}]}`) the VS Code extension uses for
 authoritative test discovery; a `CutParseError` yields `{"version": 1,
-"error": "..."}` and exit 1.
+"error": "..."}` and exit 1. So does every other `--json` failure: a
+missing `.cut` or program file, and `--boundaries` without a program, go
+through `_print_command_error` too (issue #309; they printed plain text).
 
 **`--boundaries` (2026-09-15)** additionally reports `boundaries: [{category,
 key, keys, directive, label, paragraph, line, matchText}]` -- every site in
