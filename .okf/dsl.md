@@ -847,6 +847,16 @@ paragraph-grouped path described above, unchanged. A real
   the loop body still runs once per row, so the other boundaries in its
   paragraph keep their counts). A keyed/random READ is left alone: out of
   rows it would answer "23", not "10".
+- **A READ of a `RECORD VARYING ... DEPENDING ON` file sets the length
+  item** (issue #214): `_row_move_lines` appends `MOVE <length> TO <item>`
+  to every READ row (`_record_length_move`, cached per file on
+  `ProgramContext.record_length_moves`), read from the FD record's
+  `fd_clauses` metadata through cobol-parser's
+  `VaryingLength.from_fd_clauses`. A real READ stores the length of the
+  record it read there; leaving it at its VALUE (usually 0) put every
+  generated record below the FD minimum. The bundle carries no per-row
+  length (`declared_lengths` is not surfaced upstream yet), so every row
+  reports the layout's full length clamped into the FD's range.
 - **A CICS mock writes only what the command returns** (issue #222):
   cobol-parser marks every EXEC CICS boundary BIDIRECTIONAL and lays out
   every resolved operand, so `_single_row_body` used to MOVE random text

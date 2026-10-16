@@ -410,6 +410,8 @@ class ProgramContext:
     #: for the names under a CALL argument (a PCB's status field, an 88).
     data_items: list[dict] = field(default_factory=list)
     surface: MockSurface | None = None
+    #: File key -> `_record_length_move`'s answer, computed once per file.
+    record_length_moves: dict[str, str | None] = field(default_factory=dict)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -1512,15 +1514,63 @@ def _row_move_line(row: dict[str, str], spec: FieldSpec, target: str) -> str | N
     return f"MOVE {_bundle_rendered_value(row.get(spec.column, ''), spec.category)} TO {target}"
 
 
+def _record_length_move(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> str | None:
+    """`MOVE <length> TO <item>` for a READ of a file whose FD says `RECORD
+    VARYING FROM n TO m DEPENDING ON item` (issue #214): a real READ stores
+    the length of the record it just read there, and a mock that never
+    sets it left every generated record at the item's VALUE (usually 0),
+    below the FD's own minimum, so a program checking the length took its
+    short-record path for all the happy-path data. The bundle carries no
+    per-row length yet (cobol-parser's `declared_lengths` is not surfaced),
+    so every row reports the full length the record layout describes,
+    clamped into the FD's range. None for any other file."""
+    if fixture.category != "READ" or source is None or source.program is None:
+        return None
+    key = fixture.key.upper()
+    if key not in source.record_length_moves:
+        source.record_length_moves[key] = _compute_record_length_move(
+            key, source.program
+        )
+    return source.record_length_moves[key]
+
+
+def _compute_record_length_move(key: str, program) -> str | None:
+    from cobolparser.generators.data.layout import VaryingLength
+    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+
+    try:
+        records = ProgramLayoutIndex.build(program).records_for_file(key)
+    except Exception:  # noqa: BLE001 -- a layout the index cannot read: no MOVE
+        return None
+    for record in records or []:
+        size = int(record.calculate_size() or 0)
+        varying = VaryingLength.from_fd_clauses(
+            record.get_metadata("fd_clauses"), record_size=size
+        )
+        if varying is not None and varying.depending_on:
+            return f"MOVE {varying.maximum} TO {varying.depending_on}"
+    return None
+
+
 def _row_move_lines(
     row: dict[str, str],
     fixture: BoundaryFixture,
     source: ProgramContext | None = None,
 ) -> list[str]:
-    lines = (
-        _row_move_line(row, spec, _row_target(spec, source)) for spec in fixture.layout
-    )
-    return [line for line in lines if line is not None]
+    lines = [
+        line
+        for line in (
+            _row_move_line(row, spec, _row_target(spec, source))
+            for spec in fixture.layout
+        )
+        if line is not None
+    ]
+    length_move = _record_length_move(fixture, source)
+    if length_move is not None:
+        lines.append(length_move)
+    return lines
 
 
 def _status_only_body(fixture: BoundaryFixture) -> list[str]:
