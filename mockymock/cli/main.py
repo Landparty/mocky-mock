@@ -444,8 +444,8 @@ def _cmd_suites(args: argparse.Namespace) -> int:
     from mockymock.cli.discovery import (
         DiscoveryError,
         default_suite_path,
-        discover_cut_files,
         find_suites,
+        project_cut_files,
         resolve_program,
     )
 
@@ -480,7 +480,7 @@ def _cmd_suites(args: argparse.Namespace) -> int:
         return 0
 
     rows: list[dict[str, str | None]] = []
-    for cut in discover_cut_files(layout.root):
+    for cut in project_cut_files(layout):
         try:
             program, rule = resolve_program(cut, layout)
             rows.append(

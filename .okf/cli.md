@@ -151,7 +151,9 @@ for a PROGRAM line). `<base>` is the .cut name up to its first dot, so
 folder, else cwd), `tests_dir` (`test_root` if a file set it, else
 `<root>/tests`) and `source_root` (new config key, default `<root>/src` when it exists, else root).
 `find_suites(program)` is the reverse direction (scans the root, plus the
-program's own folder when it lies outside it); `resolve_cut_path` errors
+tests folder when `test_root` points outside the root -- `project_cut_files`,
+shared with `mockymock suites`, issue #294: `generate` writes new suites
+there -- plus the program's own folder when it lies outside the root); `resolve_cut_path` errors
 naming the suites when there are several, except that `run`/`lint
 PROG.cbl` hand several suites to `_run_directory`/`_lint_directory`
 (`_several_suites`); their per-suite report files are named relative to

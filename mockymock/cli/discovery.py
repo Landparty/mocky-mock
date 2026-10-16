@@ -247,7 +247,7 @@ def find_suites(program_path: Path, layout: ProjectLayout | None = None) -> list
     sorted. Scans the project root, plus the program's own folder when it
     lies outside the root (a program passed by absolute path)."""
     layout = layout or project_layout()
-    candidates = set(discover_cut_files(layout.root))
+    candidates = set(project_cut_files(layout))
     if not _is_within(program_path.resolve().parent, layout.root):
         candidates.update(p for p in program_path.parent.glob("*.cut") if p.is_file())
     found = []
@@ -359,6 +359,19 @@ def copybook_not_found_hint() -> str:
         "set copybook_path under project: in cobol.yml (shared with "
         "cobol-parser) or in mockymock.toml / [tool.mockymock]."
     )
+
+
+def project_cut_files(layout: ProjectLayout) -> list[Path]:
+    """Every `.cut` file of the project: those under its root, plus those
+    under its tests folder when `test_root` points outside the root
+    (`test_root = "../qa-tests"`, an absolute CI path) -- the folder
+    `generate` writes new suites into, so a program-only command must find
+    them there too (issue #294). Sorted, each file once."""
+    found = {path.resolve(): path for path in discover_cut_files(layout.root)}
+    if not _is_within(layout.tests_dir.resolve(), layout.root.resolve()):
+        for path in discover_cut_files(layout.tests_dir):
+            found.setdefault(path.resolve(), path)
+    return sorted(found.values())
 
 
 def discover_cut_files(root: Path) -> list[Path]:
