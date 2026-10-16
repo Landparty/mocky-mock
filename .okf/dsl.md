@@ -989,6 +989,15 @@ paragraph-grouped path described above, unchanged. A real
   --record-expectations` leaves it alone rather than mistaking `WRITE` for
   a data item — see `analysis.md`'s stub-expectation scanner for how a
   human promotes a real data-name stub comment to an `EXPECT`.
+- **Bundle `unresolved` notes** (issue #331): `FixtureBundle.unresolved` and
+  each `BoundaryFixture.unresolved` (what cobol-parser could not generate,
+  e.g. a header/detail FD generated through its first 01 record only) were
+  parsed and dropped. `_scaffold_with_bundle` now writes each fixture's
+  entries as `*> NOTE:` lines directly above its MOCK
+  (`_bundle_mock_directives`), the bundle-level entries not already shown
+  at a fixture under TESTSUITE, and prints every entry once on stderr
+  (`mockymock generate: note: ...`) -- `init` composes `generate`, so it
+  prints them too.
 - **Unverified-scenario notes** (`_verification_comment_lines`, 2026-09-04):
   cobol-parser's bundle now carries a `Scenario.verification` verdict --
   whether that scenario's own generated data actually satisfies the branch

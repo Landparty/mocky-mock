@@ -2476,6 +2476,12 @@ def _bundle_mock_directives(
         )
         if result is not None:
             directive, override = result
+            lines.extend(
+                f"*> NOTE: {_comment_text(note)}"
+                for note in dict.fromkeys(
+                    note for fixture in group for note in fixture.unresolved
+                )
+            )
             lines.extend(directive)
             try:
                 key_pair = (MockCategory(group[0].category), group[0].key)
@@ -2906,6 +2912,11 @@ def _unlooped_read_counts(
     return counts
 
 
+def _comment_text(text: str) -> str:
+    """`text` on one `*>` comment line: line breaks folded to spaces."""
+    return " ".join(text.split())
+
+
 def _scaffold_with_bundle(
     suite_name: str,
     surface: MockSurface,
@@ -2923,6 +2934,29 @@ def _scaffold_with_bundle(
     registry = _build_shadow_tally_registry(bundle, mockymock_keys, fallback_entry)
 
     lines = [f'TESTSUITE "{_quote_safe(suite_name)}"', ""]
+    # What the bundle itself says it could not generate (issue #331): the
+    # bundle-level entries under TESTSUITE, each fixture's own above its
+    # MOCK (`_bundle_mock_directives`), and all of them on stderr -- a
+    # header/detail FD generated through its first 01 record only must
+    # not read as a clean scaffold whose recorded goldens can be trusted.
+    fixture_notes = [
+        note
+        for scenario in bundle.scenarios
+        for fixture in scenario.fixtures
+        for note in fixture.unresolved
+    ]
+    suite_notes = [
+        n for n in dict.fromkeys(bundle.unresolved) if n not in fixture_notes
+    ]
+    if suite_notes:
+        lines.extend(f"*> NOTE: {_comment_text(note)}" for note in suite_notes)
+        lines.append("")
+    for note in dict.fromkeys([*bundle.unresolved, *fixture_notes]):
+        print(
+            f"mockymock generate: note: the fixture bundle could not generate "
+            f"everything -- {note}",
+            file=sys.stderr,
+        )
     skipped_scenarios = 0
     for scenario in bundle.scenarios:
         entry = scenario.entry or fallback_entry
