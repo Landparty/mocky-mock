@@ -1649,6 +1649,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.report.record_rewrite import (
         address_fields,
         build_recording_report,
+        condition_names,
         field_pictures,
         rewrite_cut_text,
     )
@@ -1666,7 +1667,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.linkage import extra_reset_lines
     from mockymock.splicer.naming import TallyRegistry
     from mockymock.splicer.orchestrator import splice_program
-    from mockymock.splicer.reset import reset_move_lines
+    from mockymock.splicer.reset import index_names, reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
@@ -1828,6 +1829,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         for stub in stub_scan.stubs:
             record_targets.setdefault(stub.case_index, []).append(stub.data_name)
 
+    record_conditions = condition_names(result.ast) if record_targets else set()
     artifact = build_driver(
         suite,
         reset_lines,
@@ -1835,6 +1837,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         record_targets=record_targets,
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
+        condition_names=record_conditions,
     )
 
     instrumented = _insert_driver(lines, artifact)
@@ -1964,7 +1967,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # file is only ever touched when at least one stub was recorded.
         pictures = field_pictures(result.ast, checked.captures)
         recording = build_recording_report(
-            stub_scan, suite_result, address_fields(result.ast), pictures
+            stub_scan,
+            suite_result,
+            address_fields(result.ast),
+            pictures,
+            condition_names=record_conditions,
+            index_names={name.upper() for name in index_names(result.ast)},
         )
         rewritten = rewrite_cut_text(
             cut_text,

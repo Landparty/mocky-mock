@@ -284,6 +284,16 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   A stub on a POINTER-family or INDEX item is skipped, not recorded
   (`address_fields`, passed to `build_recording_report`, 2026-10-12): its
   DISPLAY text is an address, and `EXPECT P TO BE "0x..."` does not compile.
+  Issue #237: a stub on a level-88 condition-name (`record_rewrite.
+  condition_names`, from cobol-parser's data-item list, ambiguous names
+  included) is recorded by the driver as its truth value (`IF F-YES
+  DISPLAY "... F-YES: TRUE" ELSE ... FALSE END-IF`, `build_driver(...,
+  condition_names=...)`), since `DISPLAY F-YES` failed the whole recording
+  build, and rewritten as `EXPECT F-YES TO BE TRUE|FALSE`. A stub on an
+  INDEXED BY index-name (`splicer.reset.index_names`, not a USAGE INDEX
+  item) records its occurrence number bare (`EXPECT WS-IDX TO BE 3`, not
+  the quoted `"+000000003"` that did not compile). Both use
+  `RecordedExpectation.rendered`, which bypasses `render_expect_value`.
   Issue #194 (2026-10-16): only *spaces* are trimmed (`rstrip(" ")`), since
   X'09'-X'0D'/X'1C'-X'1F' are field data (X'0C' ends a positive packed
   zero) and go to the hex-literal path; `field_pictures` maps a group item

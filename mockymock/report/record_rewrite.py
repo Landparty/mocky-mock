@@ -165,6 +165,10 @@ class RecordedExpectation:
     #: Raw text as DISPLAY rendered it -- render_expect_value() does the
     #: bare-vs-quoted decision at rewrite time, not here.
     value: str
+    #: The EXPECT value text to write as-is, bypassing render_expect_value:
+    #: TRUE/FALSE for a level-88 name, the bare occurrence number for an
+    #: INDEXED BY index-name (issue #237).
+    rendered: str | None = None
 
 
 @dataclass
@@ -178,6 +182,8 @@ def build_recording_report(
     suite_result: TestSuiteResult,
     address_items: set[str] | frozenset[str] = frozenset(),
     pictures: dict[str, str] | None = None,
+    condition_names: set[str] | frozenset[str] = frozenset(),
+    index_names: set[str] | frozenset[str] = frozenset(),
 ) -> RecordingReport:
     """Match every stub the scanner found against this run's recorded
     values (by case id + data-name).
@@ -231,7 +237,33 @@ def build_recording_report(
             report.skipped.append(SkippedStub(stub.line, stub.data_name, reason))
             continue
         value = queue.pop(0)
-        if stub.data_name.partition("(")[0].strip().upper() in address_items:
+        base_name = stub.data_name.partition("(")[0].strip().upper()
+        if base_name in condition_names and value.strip() in ("TRUE", "FALSE"):
+            # The driver records an 88's truth value (issue #237).
+            report.recorded.append(
+                RecordedExpectation(stub=stub, value=value, rendered=value.strip())
+            )
+            continue
+        if base_name in index_names:
+            # An INDEXED BY index-name DISPLAYs its occurrence number
+            # (`+000000003`); quoted, the golden did not compile next run.
+            try:
+                occurrence = int(value.strip())
+            except ValueError:
+                report.skipped.append(
+                    SkippedStub(
+                        stub.line,
+                        stub.data_name,
+                        f"it is an INDEXED BY index-name whose DISPLAY text "
+                        f"{value.strip()!r} is not an occurrence number",
+                    )
+                )
+                continue
+            report.recorded.append(
+                RecordedExpectation(stub=stub, value=value, rendered=str(occurrence))
+            )
+            continue
+        if base_name in address_items:
             # DISPLAY of a POINTER-family item prints an address, of an
             # INDEX item an implementation-defined number: neither is a
             # value a golden can pin, and `EXPECT P TO BE "0x..."` does not
@@ -333,6 +365,23 @@ def address_fields(program) -> set[str]:
     }
 
 
+def condition_names(program) -> set[str]:
+    """Names (uppercased, unqualified) of every level-88 condition-name in
+    `program`, declared once or under several parents alike (none of them
+    can be DISPLAYed). Best-effort like `field_pictures`."""
+    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+
+    try:
+        items = compute_program_data_items(program).get("items", [])
+    except Exception:  # pragma: no cover - never break a run over this
+        return set()
+    return {
+        str(item.get("name") or "").upper()
+        for item in items
+        if item.get("level") == 88 and item.get("name")
+    }
+
+
 def picture_for(data_name: str, pictures: dict[str, str] | None) -> str | None:
     """Look a stub's data-name up in a name (uppercased, unqualified) ->
     PICTURE map, ignoring any subscript/reference-modification group: a
@@ -391,7 +440,7 @@ def rewrite_cut_text(
         stub = item.stub
         original = lines[stub.line - 1]
         indent = original[: len(original) - len(original.lstrip())]
-        rendered = render_expect_value(
+        rendered = item.rendered or render_expect_value(
             item.value,
             picture_for(stub.data_name, pictures),
             decimal_comma=decimal_comma,

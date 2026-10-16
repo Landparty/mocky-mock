@@ -127,6 +127,7 @@ def build_driver(
     record_targets: dict[int, list[str]] | None = None,
     extra_working_storage_lines: list[str] | None = None,
     snapshot: StateSnapshot | None = None,
+    condition_names: frozenset[str] | set[str] = frozenset(),
 ) -> DriverArtifact:
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
@@ -233,6 +234,7 @@ def build_driver(
                 (record_targets or {}).get(index, []),
                 suite=suite,
                 restore_state=restore_state,
+                condition_names=condition_names,
             )
         )
         procedure.append("")
@@ -333,6 +335,7 @@ def _build_testcase_paragraph(
     record_names: list[str] | None = None,
     suite: MockTestSuite | None = None,
     restore_state: bool = False,
+    condition_names: frozenset[str] | set[str] = frozenset(),
 ) -> list[str]:
     case_id = f"{index:03d}"
     case_mocks = {(mock.category, mock.key) for mock in case.mocks}
@@ -465,6 +468,17 @@ def _build_testcase_paragraph(
     # splice site), record_names is built here with case_id already known,
     # so this marker carries one and is attributed by id, not position.
     for name in record_names or []:
+        if name.partition("(")[0].strip().upper() in condition_names:
+            # A level-88 condition-name cannot be DISPLAYed ("condition-name
+            # not allowed here" failed the whole recording build, issue
+            # #237): record its truth value instead.
+            marker = f"__MOCKYMOCK__ RECORD {case_id} {name}: "
+            lines.append(f"           IF {name}")
+            lines.append(f'               DISPLAY "{marker}TRUE"')
+            lines.append("           ELSE")
+            lines.append(f'               DISPLAY "{marker}FALSE"')
+            lines.append("           END-IF")
+            continue
         lines.append(
             f'           DISPLAY "__MOCKYMOCK__ RECORD {case_id} {name}: " {name}'
         )
