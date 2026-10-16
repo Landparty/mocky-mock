@@ -333,6 +333,24 @@ def _reject_body_sentence_period(line: str, line_no: int, directive: str) -> Non
         )
 
 
+def _reject_unterminated_literal(value: str, line_no: int, what: str) -> None:
+    """Refuse a value whose quoted literal never closes (issue #270):
+    spliced verbatim, the open literal swallows the rest of the generated
+    line, and cobc fails at a sandbox line naming no .cut line."""
+    quote: str | None = None
+    for char in value:
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+    if quote is not None:
+        raise CutParseError(
+            f"line {line_no}: {what} {value!r} has an unterminated {quote} "
+            f"literal -- close the quote"
+        )
+
+
 def _reject_sentence_period(value: str, line_no: int, verb: str = "EXPECT") -> None:
     """Refuse an EXPECT value ending in a period outside any quoted
     literal (`EXPECT WS-X TO BE 5.` -- the natural COBOL sentence habit).
@@ -362,6 +380,7 @@ def _reject_sentence_period(value: str, line_no: int, verb: str = "EXPECT") -> N
         elif value.startswith("*>", index):
             code_end = index
             break
+    _reject_unterminated_literal(value, line_no, f"{verb} value")
     if quote is None and value[:code_end].rstrip().endswith("."):
         consequence = (
             "the period would terminate the generated IF"
@@ -897,6 +916,9 @@ def parse_cut(text: str) -> MockTestSuite:
                         line_no,
                         in_mock.describe(),
                     )
+                    _reject_unterminated_literal(
+                        pair_match.group("value").strip(), line_no, "TERMINAL value"
+                    )
                     terminal.append(
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
@@ -1000,6 +1022,9 @@ def parse_cut(text: str) -> MockTestSuite:
                         pair_match.group("value").strip(),
                         line_no,
                         in_mock.describe(),
+                    )
+                    _reject_unterminated_literal(
+                        pair_match.group("value").strip(), line_no, "ROWS value"
                     )
                     row.append(
                         (pair_match.group("field"), pair_match.group("value").strip())
@@ -1135,6 +1160,7 @@ def parse_cut(text: str) -> MockTestSuite:
             # distinguishable: its quote characters survive .strip(), so it
             # is not caught by this check.
             for column, value in zip(current_provider.header, values, strict=True):
+                _reject_unterminated_literal(value, line_no, f"ROW {column} value")
                 if not value:
                     raise CutParseError(
                         f"line {line_no}: ROW value for column {column!r} "

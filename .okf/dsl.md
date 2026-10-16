@@ -515,7 +515,10 @@ Key regexes, matched in this order per non-blank line:
    for ROWS rows, `TERMINAL`, `CAPTURE`, `FILE-STATUS` and `END-MOCK`
    (`_strip_inline_comment`, issue #236: it used to be swallowed into an
    EXPECT value or a PROVIDER ROW column and spliced into the driver).
-   Plain MOCK body lines keep theirs; cobc reads it there.
+   Plain MOCK body lines keep theirs; cobc reads it there. A MOVE/EXPECT
+   value, ROWS/`TERMINAL` value or PROVIDER `ROW` value whose quoted
+   literal never closes raises `CutParseError` at its line
+   (`_reject_unterminated_literal`, issue #270).
 3. `TESTSUITE "..."` — errors if a suite is already open (one per file).
 4. `TESTCASE "..."` — requires `suite` already set; resets the per-case
    duplicate-MOCK tracker. An empty or blank name raises `CutParseError`
