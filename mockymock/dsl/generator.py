@@ -1696,10 +1696,42 @@ _BUNDLELESS_CATEGORIES = frozenset(
 )
 
 
+def _program_supplied_call_keys(program) -> set[tuple[str, str]]:
+    """(category, key) of every CALL / DYNCALL boundary in cobol-parser's
+    own inventory whose arguments the program supplies all of (each
+    `call_args` direction OUT): the bundle counts such a boundary but has
+    no fixture or call_count expectation for it -- there is nothing to
+    generate -- so its absence from the bundle's keys is no disagreement
+    (issue #300). Empty when the inventory cannot be built, which keeps
+    the warning loud."""
+    if program is None:
+        return set()
+    try:
+        from cobolparser.analysis.boundary_inventory import (
+            BoundaryInventoryAnalyzer,
+        )
+        from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+
+        report = BoundaryInventoryAnalyzer().analyze(
+            program, ProgramLayoutIndex.build(program)
+        )
+    except Exception:  # noqa: BLE001 -- a warning helper never fails generate
+        return set()
+    keys: set[tuple[str, str]] = set()
+    for boundary in report.boundaries:
+        category = str(getattr(boundary.ref.category, "value", boundary.ref.category))
+        if category not in (MockCategory.CALL.value, MockCategory.DYNCALL.value):
+            continue
+        if all(arg.direction == "OUT" for arg in boundary.call_args or []):
+            keys.add((category, str(boundary.ref.key)))
+    return keys
+
+
 def _warn_on_key_mismatch(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     bundle_keys: set[tuple[str, str]],
     unmockable_keys: set[tuple[str, str]],
+    program_supplied_keys: set[tuple[str, str]] | None = None,
 ) -> None:
     """Loud, never-silent warning when the two independent boundary walks
     (mockymock's own `mock_surface.analyze()` and cobol-parser's bundle)
@@ -1719,6 +1751,7 @@ def _warn_on_key_mismatch(
         (category, key)
         for category, key in mockymock_set - bundle_keys
         if category not in _BUNDLELESS_CATEGORIES
+        and (category, key) not in (program_supplied_keys or set())
     }
     # A key mockymock already lists as "not mockable" is an expected gap,
     # not a disagreement between the two walks.
@@ -3285,6 +3318,7 @@ def _scaffold_with_bundle(
         mockymock_keys,
         _bundle_boundary_keys(bundle),
         _known_unmockable_keys(surface),
+        _program_supplied_call_keys(source.program if source is not None else None),
     )
     fallback_entry = _first_paragraph(source.program) if source is not None else None
     registry = _build_shadow_tally_registry(bundle, mockymock_keys, fallback_entry)

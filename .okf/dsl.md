@@ -796,7 +796,12 @@ paragraph-grouped path described above, unchanged. A real
   INSERT/UPDATE/DELETE — gets no fixture at all, only a stub expectation;
   skipping stub refs here would misreport every OUT-direction boundary as
   a mismatch). Disagreement is never silent: `_warn_on_key_mismatch`
-  prints both one-sided sets to stderr. This exact comparison is pinned by
+  prints both one-sided sets to stderr. Two mockymock-only shapes are
+  expected, not disagreements, and are left out of it: RELEASE / RETURN
+  (#262, never in a bundle), and a CALL / DYNCALL whose every argument the
+  program supplies (#300, `_program_supplied_call_keys`: cobol-parser's own
+  `BoundaryInventoryAnalyzer`, each `call_args` direction OUT -- the
+  bundle counts it but has nothing to generate for it). This exact comparison is pinned by
   `tests/unit/test_fixture_bundle_contract.py`, parametrized over the
   `examples/*/` corpus — a mismatch there must be root-caused (nested-site
   span annotation missing, a real cobol-parser gap, etc.), not silently
