@@ -62,6 +62,7 @@ from mockymock.analysis.exact_counts import exact_count_scope
 from mockymock.analysis.loops import (
     LoopGuard,
     loop_control_words,
+    loop_exit_literal,
     loop_guard_words,
     loop_guards,
     looped_paragraphs_and_statements,
@@ -1098,7 +1099,13 @@ def _directive_for(
         if not site.keys:
             return None
         key = site.keys[0]
-        return f"MOCK ACCEPT {key}", _placeholder_body_for(category, key)
+        end_lines = _accept_loop_end_lines(site, context, None)
+        body = _placeholder_body_for(category, key)
+        if end_lines and not end_lines[0].startswith("*>"):
+            body = end_lines  # the sentinel replaces the placeholder value
+        else:
+            body = body + end_lines
+        return f"MOCK ACCEPT {key}", body
 
     if category in REPORT_WRITER_CATEGORIES:
         # INITIATE/GENERATE/TERMINATE: bare report name, empty body (the
@@ -1398,6 +1405,37 @@ def _call_loop_end_lines(
 #: ENDFILE (20) for a browse, ITEMERR (26) for a TS queue, QZERO (23) for
 #: a TD queue.
 _CICS_GET_NEXT_END = {"READNEXT": 20, "READPREV": 20, "READQ TS": 26, "READQ TD": 23}
+
+
+def _accept_loop_end_lines(
+    site: BoundarySite,
+    context: ProgramContext | None,
+    tally: str | None,
+) -> list[str]:
+    """An ACCEPT inside a loop whose UNTIL waits for the accepted value
+    itself (`PERFORM GET-CARD UNTIL WS-IN = "END"` around `ACCEPT WS-IN`,
+    the SYSIN control-card loop): a mock giving the same value on every
+    call never ends it, so the scaffold hung until --timeout (issue #263).
+    Move the loop's sentinel literal into the target after the first call
+    (gated on the tally, so the row's own value is still accepted once),
+    or on the first call when no tally name is known. A guard that reads
+    the target without a literal to match gets a TODO comment."""
+    if context is None or not site.keys or not site_in_loop(site, context.looped):
+        return []
+    target = site.keys[0].upper()
+    if target not in loop_guard_words(site, context.guards):
+        return []
+    literal = loop_exit_literal(site, context.guards, target)
+    if literal is None:
+        return [
+            f"*> TODO: a loop waits on the value this ACCEPT reads into "
+            f"{target} -- end it by hand (e.g. MOCK ACCEPT {target} ROWS "
+            f"... TERMINAL ( ... )), or this mock never ends it"
+        ]
+    move = f"MOVE {literal} TO {target}"
+    if tally is None:
+        return [move]
+    return [f"IF {tally} > 1", f"    {move}", "END-IF"]
 
 
 def _cics_get_next_command(site: BoundarySite) -> str | None:
@@ -2498,6 +2536,10 @@ def _bundle_directive_for(
             end_lines = _call_loop_end_lines(site, source, None) + _cics_loop_end_lines(
                 site, source, None
             )
+            if category is MockCategory.ACCEPT:
+                end_lines = _accept_loop_end_lines(site, source, None)
+                if end_lines and not end_lines[0].startswith("*>"):
+                    body = []  # the sentinel replaces the placeholder value
             body = body + end_lines
             if end_lines and not end_lines[0].startswith("*>"):
                 call_count_override = CallCountOverride(count=1)
@@ -2545,6 +2587,14 @@ def _bundle_directive_for(
             )
             if end_lines and not end_lines[0].startswith("*>"):
                 # The row answers the first call, ENDFILE the second.
+                call_count_override = CallCountOverride(count=2, from_placeholder=False)
+            body = body + end_lines
+        if category is MockCategory.ACCEPT and registry.known(category, fixture.key):
+            end_lines = _accept_loop_end_lines(
+                site, source, registry.name(category, fixture.key)
+            )
+            if end_lines and not end_lines[0].startswith("*>"):
+                # The row answers the first ACCEPT, the sentinel the second.
                 call_count_override = CallCountOverride(count=2, from_placeholder=False)
             body = body + end_lines
         if category is MockCategory.CALL and registry.known(category, fixture.key):

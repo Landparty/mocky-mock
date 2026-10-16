@@ -51,10 +51,16 @@ class LoopGuard:
     statement_ids: frozenset[int]
     words: frozenset[str]
     varying: frozenset[str] = frozenset()
+    until_text: str = ""
 
 
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
 _LITERAL_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def _until_text(statement: PerformStatement) -> str:
+    condition = getattr(statement, "until_condition", None)
+    return " ".join(str(op) for op in getattr(condition, "operands", None) or [])
 
 
 def _condition_words(statement: PerformStatement) -> frozenset[str]:
@@ -120,6 +126,7 @@ def loop_guards(program) -> list[LoopGuard]:
                     frozenset(statement_ids),
                     _condition_words(statement),
                     _varying_words(statement),
+                    _until_text(statement),
                 )
             )
     return guards
@@ -161,6 +168,28 @@ _EXPRESSION_ATTRS = (
     "operands",
     "condition_tree",
 )
+
+
+def loop_exit_literal(
+    site: BoundarySite, guards: list[LoopGuard], name: str
+) -> str | None:
+    """The literal an enclosing loop's UNTIL compares `name` equal to
+    (`UNTIL WS-IN = "END"` -> `"END"`, quoted as in the source), or None.
+    Used to end a SYSIN control-card loop around `ACCEPT WS-IN` (issue
+    #263)."""
+    pattern = re.compile(
+        rf"(?<![\w-]){re.escape(name)}\s*(?:=|(?:IS\s+)?EQUALS?(?:\s+TO)?)\s*"
+        r"(\"[^\"]*\"|'[^']*')",
+        re.IGNORECASE,
+    )
+    for guard in guards:
+        if site.paragraph_name in guard.paragraphs or id(site.statement) in (
+            guard.statement_ids
+        ):
+            match = pattern.search(guard.until_text)
+            if match:
+                return match.group(1)
+    return None
 
 
 def loop_control_words(site: BoundarySite, guards: list[LoopGuard]) -> set[str]:

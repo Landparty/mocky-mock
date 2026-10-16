@@ -622,7 +622,7 @@ Rules:
   inside a quoted name, so interpolating one raw would make the scaffold
   unparseable.
 
-### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`, `CICS`)
+### `ROWS` cursor sugar (`SQL`) and `ROWS ... TERMINAL` (`READ`, `RETURN`, `CALL`, `DLI`, `CICS`, `ACCEPT`)
 
 `MOCK SQL "<prefix>" ROWS ( FIELD = value, ... ) ( FIELD = value, ... )
 END-MOCK`, `MOCK READ <file> ROWS ( FIELD = value, ... ) ( ... )
@@ -681,8 +681,8 @@ one.
 same way, which capped a whole-program case on any program that calls one
 routine for several purposes in a loop (IMS `CBLTDLI` as priming GHN,
 DLET and loop GHN; `MQGET`; a DB2 access module) at its empty-input path.
-`ROWS` on `SEQUENCED_CALL_CATEGORIES` (`CALL`/`DYNCALL`/`DLI`, in
-`model.py`) gives one row per call, in order: row N fires when the key's
+`ROWS` on `SEQUENCED_CALL_CATEGORIES` (`CALL`/`DYNCALL`/`DLI`/`CICS`,
+and `ACCEPT` since #263, in `model.py`) gives one row per call, in order: row N fires when the key's
 own tally reaches N. That tally is per `(category, key)`, so it counts
 calls across **every** site the key matches (a DLI tally is per quoted
 prefix key, since that is the directive's key), and `driver.py` zeroes it
@@ -1136,6 +1136,16 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   (`loops.loop_control_words`; `LoopGuard.varying` holds the VARYING /
   AFTER items) and leaves a `*> TODO` naming it. A guard that waits on the
   call's own reply (MQGET / DL/I get, #156) keeps its reply fields.
+- **ACCEPT control-card loops end (#263).** `MOCK ACCEPT <target> ROWS (
+  ... ) TERMINAL ( <target> = "END" )` feeds SYSIN cards in order (ACCEPT
+  is in `SEQUENCED_CALL_CATEGORIES`, so TERMINAL is mandatory). In the
+  scaffold, `_accept_loop_end_lines` handles an ACCEPT whose loop's UNTIL
+  compares the target to a literal (`loops.loop_exit_literal`, read from
+  `LoopGuard.until_text`): the row's value answers the first call and
+  `IF UT-ACCEPT-<key>-TALLY > 1 MOVE <literal> TO <target>` the rest
+  (`VERIFY ... 2 TIMES`); a bundle-less or `--placeholder` body moves the
+  literal outright (`VERIFY ... 1 TIMES`). A guard on the target with no
+  literal to match gets a TODO.
 - **Placeholder READ/RETURN mocks report end-of-file (#302).** A
   bundle-less `MOCK READ`/`MOCK RETURN` for a statement with an AT END
   clause was an empty body, so a `PERFORM UNTIL WS-EOF = "Y"` read loop
