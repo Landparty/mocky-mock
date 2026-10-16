@@ -1,7 +1,9 @@
 """Unit tests for the (category, key) -> tally-field registry."""
 
+import re
+
 from mockymock.dsl.model import MockCategory, MockDirective, MockTestCase, MockTestSuite
-from mockymock.splicer.naming import TallyRegistry
+from mockymock.splicer.naming import TallyRegistry, tally_name
 
 
 def _suite_with(*mocks: MockDirective) -> MockTestSuite:
@@ -18,7 +20,10 @@ def test_call_sanitizes_non_cobol_name_chars():
     registry = TallyRegistry(
         _suite_with(MockDirective(MockCategory.CALL, "sub.pgm 01"))
     )
-    assert registry.name(MockCategory.CALL, "sub.pgm 01") == "UT-SUB-PGM-01-TALLY"
+    # Folding "." to "-" loses information ("sub-pgm 01" would sanitize the
+    # same), so the name carries a hash of the full key (#314).
+    name = registry.name(MockCategory.CALL, "sub.pgm 01")
+    assert re.fullmatch(r"UT-SUB-PGM-01-[0-9A-F]{4}-TALLY", name)
 
 
 def test_file_ops_prefix_the_category_word():
@@ -36,7 +41,7 @@ def test_sql_key_is_sanitized_and_capped():
     key = "UPDATE ORDERS SET STATUS = 'X' WHERE ID = :WS-ID"
     registry = TallyRegistry(_suite_with(MockDirective(MockCategory.SQL, key)))
     name = registry.name(MockCategory.SQL, key)
-    assert name.startswith("UT-SQL-UPDATE-ORDERS")
+    assert name.startswith("UT-SQL-UPDATE-ORDER")
     assert len(name) <= 30
     assert "--" not in name
 
@@ -71,3 +76,29 @@ def test_known_reports_membership():
     registry = TallyRegistry(_suite_with(MockDirective(MockCategory.DLI, "GU")))
     assert registry.known(MockCategory.DLI, "GU")
     assert not registry.known(MockCategory.SQL, "GU")
+
+
+# --- #314: a tally name never depends on which other keys the suite holds ---
+
+_OLD = MockDirective(MockCategory.READ, "CUSTOMER-MASTER-OLD")
+_TRANS = MockDirective(MockCategory.READ, "CUSTOMER-MASTER-TRANS")
+
+
+def test_names_cut_at_the_cap_do_not_depend_on_mock_order():
+    one = TallyRegistry(_suite_with(_OLD, _TRANS))
+    two = TallyRegistry(_suite_with(_TRANS, _OLD))
+    alone = TallyRegistry(_suite_with(_OLD))
+    old = one.name(MockCategory.READ, "CUSTOMER-MASTER-OLD")
+    trans = one.name(MockCategory.READ, "CUSTOMER-MASTER-TRANS")
+    assert old != trans
+    assert two.name(MockCategory.READ, "CUSTOMER-MASTER-OLD") == old
+    assert two.name(MockCategory.READ, "CUSTOMER-MASTER-TRANS") == trans
+    assert alone.name(MockCategory.READ, "CUSTOMER-MASTER-OLD") == old
+    assert re.fullmatch(r"UT-READ-CUSTOMER-MA-[0-9A-F]{4}-TALLY", old)
+    assert len(old) <= 30
+
+
+def test_tally_name_is_the_registry_name():
+    registry = TallyRegistry(_suite_with(_TRANS, _OLD))
+    for (category, key), name in registry.items():
+        assert tally_name(category, key) == name

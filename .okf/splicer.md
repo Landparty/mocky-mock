@@ -465,8 +465,11 @@ Other invariants enforced here:
 # Tally-Field Naming (naming.py)
 
 `TallyRegistry` assigns one `UT-*-TALLY` WORKING-STORAGE field per
-`(category, key)` mocked anywhere in the suite, in first-appearance order,
-deterministically for a given `.cut` file.
+`(category, key)` mocked anywhere in the suite. Each name is
+`naming.tally_name(category, key)`, a pure function of that pair alone
+(#314) -- `generate` writes these names into mock bodies, so they must not
+move when a case is added, MOCK blocks are reordered, or `--case`/`--tag`
+filters the suite.
 
 | Category | Body format | Example |
 |---|---|---|
@@ -483,11 +486,16 @@ categories are always distinguishable by name.
 
 Body text is sanitized (non-COBOL-word chars → `-`, collapsed, trimmed)
 and capped at 21 chars so `"UT-" + body + "-TALLY"` stays a conservative
-30-char COBOL word (well under GnuCOBOL's 63-char limit). Sanitized keys
-can collide (two SQL prefixes differing only in punctuation, or only
-beyond the length cap) — collisions are resolved by suffixing `-2`, `-3`,
-... in first-appearance order, so naming is still fully deterministic per
-`.cut` file.
+30-char COBOL word (well under GnuCOBOL's 63-char limit). When that would
+lose information -- the body is over the cap, or sanitizing changed more
+than case and spaces (`sub.pgm 01`) -- the body is cut to 16 chars and a
+4-hex-digit SHA-1 of `"<category>:<key>"` appended:
+`READ CUSTOMER-MASTER-OLD` → `UT-READ-CUSTOMER-MA-66B4-TALLY`. Before #314
+such keys collided at the cap and took `-2`, `-3` suffixes in
+first-appearance order over the *selected* cases, so adding a case above a
+generated one swapped the two files' tallies and the happy path hung. A
+suffix is now only a last resort, for a hash collision or two keys that
+differ in nothing but letter case or a space vs. a hyphen.
 
 `driver.py`'s `_SUITE_PARAGRAPH_NAME_RE` sanitization for the
 `UT-TESTSUITE-*` paragraph name follows the identical collapse-and-strip
