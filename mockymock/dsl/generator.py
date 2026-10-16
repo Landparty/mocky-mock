@@ -1093,6 +1093,35 @@ _DLI_CALL_END = {
 }
 
 
+def _mq_success_reply(body: list[str], site: BoundarySite) -> list[str]:
+    """`body` with an MQI call's CompCode and Reason -- by the MQI's fixed
+    convention its last two USING arguments -- answered MQCC_OK (0) and
+    MQRC_NONE (0) instead of the random numbers the fixture row generated
+    (issue #205). A real CompCode is only ever 0, 1 or 2, and the standard
+    `IF WS-COMPCODE NOT = MQCC-OK ... GOBACK` idiom compares it against a
+    data item the constraint solver cannot see, so a random one sent every
+    generated happy path down the MQCONN-failed exit and failed its own
+    VERIFYs. The end-of-data reply MQGET's loop needs is added after this,
+    by `_call_loop_end_lines`, and still wins on the call that ends the
+    loop."""
+    if not site.is_mq:
+        return body
+    using = list(getattr(site.statement, "using_parameters", None) or [])
+    names = [str(getattr(param, "name", "") or "") for param in using]
+    if len(names) < 2 or not names[-1] or not names[-2]:
+        return body
+    targets = {name.upper() for name in names[-2:]}
+    kept = [
+        line
+        for line in body
+        if not (
+            line.upper().startswith("MOVE ")
+            and line.upper().rsplit(" TO ", 1)[-1].strip() in targets
+        )
+    ]
+    return kept + [f"MOVE 0 TO {name}" for name in names[-2:]]
+
+
 def _call_end_reply(
     site: BoundarySite, context: ProgramContext
 ) -> tuple[tuple[tuple[str, str], ...], set[str]] | None:
@@ -1169,8 +1198,20 @@ def _call_loop_end_lines(
     waits_on_reply = any(
         reply is not None
         and site_in_loop(other, context.looped)
-        and loop_guard_words(other, context.guards)
-        & set().union(*(context.names_under(name) for name in reply[1]))
+        and (
+            # An MQGET in an UNTIL loop drains its queue: whatever flag the
+            # guard tests, the program sets it from the MQRC_NO_MSG_AVAILABLE
+            # reply (`WHEN WS-REASON = MQRC-NO-MSG-AVAILABLE SET DRAIN-DONE`).
+            # Now that the row answers MQCC_OK (issue #205), a loop that
+            # never sees that reply never ends. (A `PERFORM n TIMES` loop has
+            # no guard words and is left alone.)
+            (
+                site.keys[0].upper() == "MQGET"
+                and bool(loop_guard_words(other, context.guards))
+            )
+            or loop_guard_words(other, context.guards)
+            & set().union(*(context.names_under(name) for name in reply[1]))
+        )
         for other, reply in zip(sites, replies, strict=True)
     )
     if not waits_on_reply:
@@ -2047,6 +2088,8 @@ def _bundle_directive_for(
         return _sql_rows_directive(category, fixture.key, fixture), override
     else:
         body = _single_row_body(fixture, source)
+        if category is MockCategory.CALL:
+            body = _mq_success_reply(body, site)
         if category is MockCategory.DLI and registry.known(category, fixture.key):
             body = body + _dli_loop_end_lines(
                 site, source, registry.name(category, fixture.key)

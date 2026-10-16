@@ -1008,6 +1008,19 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   answers every site of its key, so when the key's sites would need
   different replies (a GN loop plus an ISRT through the same CBLTDLI) the
   body gets a `*> TODO` comment instead.
+- **MQ calls answer MQCC_OK / MQRC_NONE (#205).** By the MQI's fixed
+  convention CompCode and Reason are an MQ call's last two USING
+  arguments; `_mq_success_reply` replaces the fixture row's random numbers
+  there with `MOVE 0` for every `site.is_mq` CALL. A random CompCode sent
+  the `IF WS-COMPCODE NOT = MQCC-OK ... GOBACK` idiom (MQCC-OK is a data
+  item the solver cannot see) down the failure exit on the first call, so
+  the happy path never ran and its later `VERIFY ... 1 TIMES` failed. With
+  success answered, an MQGET in any UNTIL loop also gets the #156 end
+  reply, whatever its guard reads: a drain loop's flag is set *from* the
+  2033 reply (`WHEN WS-REASON = MQRC-NO-MSG-AVAILABLE SET DRAIN-DONE`), so
+  without it the loop never ends. A `PERFORM n TIMES` loop (no guard
+  words) is still left alone. (The issue's option (b), demoting VERIFY
+  counts for sites after an `IF ... GOBACK`, is not implemented.)
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 
