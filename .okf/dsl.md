@@ -1126,6 +1126,16 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   call and failed the scaffold's own `VERIFY ... 2 TIMES`.
   `_row_already_ends` therefore never credits a DL/I row with ending the
   loop.
+- **CALL mocks leave a loop's control items alone (#286).** A CALL
+  (or DYNCALL / DLI) passing its enclosing loop's own counter -- `CALL
+  "FMTLINE" USING WS-IX WS-LINE` inside `PERFORM VARYING WS-IX ... UNTIL
+  WS-IX > WS-COUNT` -- had that argument laid out as a fixture field, and
+  the row's `MOVE 0 TO WS-IX` reset the loop on every call (hang until
+  `--timeout`). `_without_loop_control` drops every layout field naming a
+  VARYING / AFTER item or UNTIL word of an enclosing loop
+  (`loops.loop_control_words`; `LoopGuard.varying` holds the VARYING /
+  AFTER items) and leaves a `*> TODO` naming it. A guard that waits on the
+  call's own reply (MQGET / DL/I get, #156) keeps its reply fields.
 - **Placeholder READ/RETURN mocks report end-of-file (#302).** A
   bundle-less `MOCK READ`/`MOCK RETURN` for a statement with an AT END
   clause was an empty body, so a `PERFORM UNTIL WS-EOF = "Y"` read loop

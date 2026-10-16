@@ -61,6 +61,7 @@ from mockymock.analysis.clause_bodies import (
 from mockymock.analysis.exact_counts import exact_count_scope
 from mockymock.analysis.loops import (
     LoopGuard,
+    loop_control_words,
     loop_guard_words,
     loop_guards,
     looped_paragraphs_and_statements,
@@ -2023,6 +2024,47 @@ def _cics_output_layout(
     return kept
 
 
+def _without_loop_control(
+    fixture: BoundaryFixture,
+    site: BoundarySite | None,
+    context: ProgramContext | None,
+) -> tuple[BoundaryFixture, list[str]]:
+    """Drop the fixture fields a CALL/DYNCALL/DLI mock must not write: the
+    VARYING / AFTER control items and UNTIL words of the loops `site` runs
+    in. `CALL "FMTLINE" USING WS-IX WS-LINE` inside `PERFORM VARYING WS-IX
+    ... UNTIL WS-IX > WS-COUNT` passes the counter BY REFERENCE, so the
+    bundle lays it out, and a generated `MOVE 0 TO WS-IX` reset the loop on
+    every call: the happy path ran until --timeout (issue #286). The
+    program advances those items itself; a guard that waits on the call's
+    own reply (MQGET / DL/I get, #156) keeps its fields, since the end
+    reply is what ends that loop. Returns the trimmed fixture and a TODO
+    naming each dropped field."""
+    if context is None or site is None or not fixture.layout:
+        return fixture, []
+    control = loop_control_words(site, context.guards)
+    if not control:
+        return fixture, []
+    reply = (
+        _call_end_reply(site, context) if site.category is MockCategory.CALL else None
+    )
+    if reply is not None:
+        control -= set().union(*(context.names_under(name) for name in reply[1]))
+    kept, dropped = [], []
+    for spec in fixture.layout:
+        if set(spec.qualified_name.upper().split(".")) & control:
+            dropped.append(spec.name)
+        else:
+            kept.append(spec)
+    if not dropped:
+        return fixture, []
+    todo = [
+        f"*> TODO: {name} controls a loop around this call -- not set here, "
+        f"or the loop never ends"
+        for name in dropped
+    ]
+    return replace(fixture, layout=kept), todo
+
+
 def _single_row_body(
     fixture: BoundaryFixture,
     source: ProgramContext | None = None,
@@ -2474,7 +2516,10 @@ def _bundle_directive_for(
             override,
         )
     else:
-        body = _single_row_body(fixture, source, pinned)
+        loop_todo: list[str] = []
+        if category in (MockCategory.CALL, MockCategory.DYNCALL, MockCategory.DLI):
+            fixture, loop_todo = _without_loop_control(fixture, site, source)
+        body = _single_row_body(fixture, source, pinned) + loop_todo
         if category is MockCategory.CALL:
             body = _dli_success_reply(_mq_success_reply(body, site), site)
         if category is MockCategory.DLI and registry.known(category, fixture.key):
