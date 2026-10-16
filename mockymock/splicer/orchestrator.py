@@ -179,7 +179,7 @@ def splice_program(
         if id(site.statement) in seen_terminator_ids:
             continue
         seen_terminator_ids.add(id(site.statement))
-        replacement = build_terminator_neutralization(plan.exit_kind)
+        replacement = build_terminator_neutralization(plan.exit_kind, plan.return_code)
         if site.nested:
             if site.span is None:
                 raise ValueError(

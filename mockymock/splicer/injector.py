@@ -476,7 +476,9 @@ def build_exec_trap(kind: str, line: int) -> list[str]:
     ]
 
 
-def build_terminator_neutralization(exit_kind: str = "PARAGRAPH") -> list[str]:
+def build_terminator_neutralization(
+    exit_kind: str = "PARAGRAPH", return_code: str | None = None
+) -> list[str]:
     """Replacement for a STOP RUN/GOBACK statement found safe to
     neutralize (see docs/2026-07-08-goback-stop-run-support-design.md):
     set the early-exit flag and return via EXIT PARAGRAPH/EXIT SECTION --
@@ -487,8 +489,14 @@ def build_terminator_neutralization(exit_kind: str = "PARAGRAPH") -> list[str]:
     docs/2026-07-10-section-scoped-terminator-support-design.md
     supports. Identical regardless of which test case is running --
     unlike build_site_dispatch, no per-case EVALUATE UT-CURRENT-CASE
-    dispatch is needed here."""
-    return [
+    dispatch is needed here. `return_code` is `TerminatorPlan.return_code`,
+    the operand of a `STOP RUN RETURNING n` / `GOBACK RETURNING n` the
+    replacement would otherwise drop (issue #219): it is MOVEd to
+    RETURN-CODE first, as the real statement would have set it."""
+    lines = []
+    if return_code is not None:
+        lines.append(f"           MOVE {return_code} TO RETURN-CODE")
+    return lines + [
         '           MOVE "Y" TO UT-EARLY-EXIT',
         f"           EXIT {exit_kind}",
     ]

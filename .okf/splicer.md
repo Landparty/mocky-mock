@@ -819,6 +819,13 @@ returns. An earlier design (`GO TO` redirect into a `PERFORM ... THRU
 before any of it shipped -- see
 [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md).
 
+**`RETURNING`/`GIVING` operands** (issue #219): `STOP RUN RETURNING n` /
+`GOBACK RETURNING n` (cobolparser's `StopStatement.returning` /
+`GobackStatement.returning_value`) set RETURN-CODE, so the replacement
+starts with `MOVE n TO RETURN-CODE` (`TerminatorPlan.return_code`). An
+operand that is not an integer literal or a single data name refuses
+`UNSUPPORTED_TERMINATOR_LAYOUT` rather than being dropped.
+
 **A test's (or hook step's) own `PERFORM X THRU Y`** (issue #211): the
 neutralization only ends `X`, after which the driver's THRU range falls
 through into the rest of the range. `_plans._thru_tail_problem` therefore

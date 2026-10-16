@@ -19,6 +19,7 @@ design history behind these two plan shapes.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from cobolparser.models.statements.control import GoStatement
@@ -73,6 +74,36 @@ class TerminatorPlan:
     site: BoundarySite
     chain_performs: list = field(default_factory=list)
     exit_kind: str = "PARAGRAPH"
+    # The operand of `STOP RUN RETURNING n` / `GOBACK RETURNING n` (issue
+    # #219): the neutralization MOVEs it to RETURN-CODE before setting the
+    # early-exit flag, since removing the statement removes the phrase too.
+    return_code: str | None = None
+
+
+# A RETURNING/GIVING operand the neutralization can MOVE to RETURN-CODE
+# verbatim: a signed or unsigned integer literal, or one data name.
+_RETURN_CODE_OPERAND_RE = re.compile(r"^(?:[+-]?\d+|[A-Z0-9][A-Z0-9-]*)$", re.I)
+
+
+def _terminator_return_code(statement) -> tuple[str | None, str | None]:
+    """(operand, problem) for a terminator's RETURNING/GIVING phrase:
+    cobolparser keeps it as `StopStatement.returning` /
+    `GobackStatement.returning_value`. (None, None) when there is none;
+    a problem when the operand is not one this neutralization can copy to
+    RETURN-CODE as written."""
+    operand = getattr(statement, "returning", None) or getattr(
+        statement, "returning_value", None
+    )
+    if operand is None:
+        return None, None
+    text = str(operand).strip()
+    if not _RETURN_CODE_OPERAND_RE.match(text):
+        return None, (
+            f"has a RETURNING operand ({text!r}) mockymock can't copy to "
+            f"RETURN-CODE when it neutralizes the statement -- use an "
+            f"integer literal or a single data name"
+        )
+    return text, None
 
 
 @dataclass
@@ -670,6 +701,8 @@ def find_terminator_plans(
                 )
             elif chain_problem is not None:
                 problem = chain_problem
+            else:
+                problem = _terminator_return_code(site.statement)[1]
 
             if problem is not None:
                 reasons.append(
@@ -692,7 +725,9 @@ def find_terminator_plans(
                     else "PARAGRAPH"
                 )
                 plans_by_statement[key] = TerminatorPlan(
-                    site=terminator_sites[key], exit_kind=exit_kind
+                    site=terminator_sites[key],
+                    exit_kind=exit_kind,
+                    return_code=_terminator_return_code(site.statement)[0],
                 )
             qualified_keys.append(key)
 

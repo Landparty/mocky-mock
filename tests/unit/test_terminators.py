@@ -1017,3 +1017,69 @@ def test_terminator_under_a_hook_thru_range_with_real_tail_refuses():
     plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
     assert plans == []
     assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+
+
+# Issue #219: STOP RUN RETURNING n / GOBACK RETURNING n set RETURN-CODE,
+# and the neutralization used to drop the phrase with the statement.
+RETURNING_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RETCODE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CODE             PIC X.
+       01  WS-RC               PIC 9 VALUE 4.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-CHECK
+           GOBACK RETURNING WS-RC.
+
+       1000-CHECK.
+           IF WS-CODE = "E"
+               STOP RUN RETURNING 8
+           END-IF.
+"""
+
+
+def test_terminator_plan_carries_its_returning_operand():
+    from mockymock.splicer.naming import TallyRegistry
+    from mockymock.splicer.orchestrator import splice_program
+    from mockymock.splicer.source_map import collect_boundaries
+
+    program, surface, scope_map, lines = _analyze(RETURNING_SOURCE)
+    suite = _suite()
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert reasons == []
+    assert sorted((p.site.label, p.return_code) for p in plans) == [
+        ("GOBACK", "WS-RC"),
+        ("STOP RUN", "8"),
+    ]
+    spliced = "\n".join(
+        splice_program(
+            lines,
+            collect_boundaries(program),
+            surface,
+            suite,
+            TallyRegistry(suite),
+            plans,
+        )
+    )
+    assert "MOVE 8 TO RETURN-CODE" in spliced
+    assert "MOVE WS-RC TO RETURN-CODE" in spliced
+
+
+def test_terminator_with_an_uncopyable_returning_operand_refuses():
+    from mockymock.analysis.refusal._plans import _terminator_return_code
+
+    class _Stop:
+        returning = "WS-RC OF WS-GROUP"
+
+    operand, problem = _terminator_return_code(_Stop())
+    assert operand is None
+    assert "RETURNING operand" in problem
+
+    class _Goback:
+        returning_value = "-8"
+
+    assert _terminator_return_code(_Goback()) == ("-8", None)

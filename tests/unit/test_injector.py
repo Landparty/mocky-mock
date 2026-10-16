@@ -175,6 +175,17 @@ def test_terminator_neutralization_with_section_exit_kind_exits_section():
     ]
 
 
+def test_terminator_neutralization_keeps_a_returning_operand():
+    """Issue #219: STOP RUN/GOBACK RETURNING n sets RETURN-CODE; the
+    replacement must still do so before signalling the early exit."""
+    lines = build_terminator_neutralization("PARAGRAPH", "8")
+    assert lines == [
+        "           MOVE 8 TO RETURN-CODE",
+        '           MOVE "Y" TO UT-EARLY-EXIT',
+        "           EXIT PARAGRAPH",
+    ]
+
+
 def test_chain_check_exits_paragraph_when_flag_set():
     lines = build_chain_check()
     assert lines == [
