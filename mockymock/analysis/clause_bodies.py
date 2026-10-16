@@ -133,13 +133,28 @@ _FORBIDDEN_TYPES: tuple[type, ...] = (
     CancelStatement,
 )
 
-#: Words that open a conditional phrase of a NESTED statement (SIZE ERROR,
-#: ON OVERFLOW, SEARCH's AT END, ...). Inside a lifted body such a phrase
-#: may legally be closed only by the enclosing statement's own terminator,
-#: which the lift removes -- so a body holding one is not lifted.
-_NESTED_PHRASE_WORDS = frozenset(
-    {"SIZE", "OVERFLOW", "EXCEPTION", "INVALID", "END", "EOP", "END-OF-PAGE"}
-)
+#: Conditional phrases a NESTED statement may carry (SIZE ERROR, ON
+#: OVERFLOW, a SEARCH's AT END, ...), keyed by the word that opens them,
+#: with the verbs that may own each. Inside a lifted body such a phrase is
+#: safe only when its owner is closed by its own explicit terminator after
+#: the phrase: otherwise the phrase would legally run to the enclosing
+#: statement's terminator, which the lift removes, and swallow the next
+#: guard `WHEN`. `SIZE` opens one only before `ERROR` -- `STRING ...
+#: DELIMITED BY SIZE` is not a phrase (issue #326). A phrase whose owners
+#: are all boundaries (INVALID KEY, END-OF-PAGE) never appears in a lifted
+#: body, which holds no boundary; it is refused outright all the same.
+_PHRASE_OWNERS: dict[str, frozenset[str]] = {
+    "SIZE": frozenset({"ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "COMPUTE"}),
+    "OVERFLOW": frozenset({"STRING", "UNSTRING", "CALL"}),
+    "EXCEPTION": frozenset({"CALL", "ACCEPT", "DISPLAY", "XML", "JSON"}),
+    "END": frozenset({"SEARCH"}),
+    "INVALID": frozenset(),
+    "EOP": frozenset(),
+    "END-OF-PAGE": frozenset(),
+}
+
+#: Every verb that may own a conditional phrase.
+_PHRASE_VERBS = frozenset().union(*_PHRASE_OWNERS.values())
 
 #: Conditional verbs whose explicit terminator must appear in a lifted body
 #: as often as the verb itself: an unterminated nested IF would otherwise
@@ -248,10 +263,44 @@ def scan_words(text: str):
         yield start, index, word.upper()
 
 
+def _nested_phrases_terminated(words: list[str]) -> bool:
+    """True when every conditional phrase in `words` belongs to a nested
+    statement closed by its own `END-<verb>` after the phrase. Tracks the
+    open phrase-capable verbs as a stack: a terminator closes the nearest
+    open verb of its name (and every unterminated verb nested inside it),
+    a phrase marks the nearest open verb that may own it."""
+    stack: list[list] = []  # [verb, has_phrase]
+    for index, word in enumerate(words):
+        if word in _PHRASE_VERBS:
+            stack.append([word, False])
+            continue
+        if word.startswith("END-") and word[4:] in _PHRASE_VERBS:
+            verb = word[4:]
+            for depth in range(len(stack) - 1, -1, -1):
+                if stack[depth][0] == verb:
+                    if any(entry[1] for entry in stack[depth + 1 :]):
+                        return False
+                    del stack[depth:]
+                    break
+            continue
+        owners = _PHRASE_OWNERS.get(word)
+        if owners is None:
+            continue
+        if word == "SIZE" and (index + 1 >= len(words) or words[index + 1] != "ERROR"):
+            continue
+        for entry in reversed(stack):
+            if entry[0] in owners:
+                entry[1] = True
+                break
+        else:
+            return False
+    return not any(entry[1] for entry in stack)
+
+
 def _body_is_safe(words: list[str]) -> bool:
     if not words or "." in words:
         return False
-    if any(word in _NESTED_PHRASE_WORDS for word in words):
+    if not _nested_phrases_terminated(words):
         return False
     return all(
         words.count(verb) == words.count(terminator)

@@ -453,9 +453,13 @@ header, or the verb's own `END-xxx` / the sentence period for the last).
 `lift_clause_bodies` returns None -- and the old whole-statement deletion
 stands -- when any body holds another boundary statement, GO TO, GOBACK,
 STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL; when a body has a
-nested conditional phrase (SIZE ERROR, OVERFLOW, a SEARCH's AT END, ...)
-or an IF/EVALUATE/SEARCH without its explicit terminator (either would
-swallow the next guard `WHEN`); when the statement has a clause outside
+nested conditional phrase (SIZE ERROR, OVERFLOW, ON EXCEPTION, a SEARCH's
+AT END, ...) whose owning verb is not closed by its own `END-<verb>` after
+it, or an IF/EVALUATE/SEARCH without its explicit terminator (either would
+swallow the next guard `WHEN`). Phrases, not words (#326): `_PHRASE_OWNERS`
+maps each opener to the verbs that may own it, `SIZE` counts only before
+`ERROR` (so `DELIMITED BY SIZE` is fine), and a terminated
+`COMPUTE ... ON SIZE ERROR ... END-COMPUTE` is lifted; when the statement has a clause outside
 the liftable set (`WRITE ... AT END-OF-PAGE`); or when a header cannot be
 matched exactly. `dsl.generator` asks the same function, so the scaffold
 stops copying an AT END clause the splice already re-runs (it reports end
