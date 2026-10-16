@@ -819,6 +819,15 @@ returns. An earlier design (`GO TO` redirect into a `PERFORM ... THRU
 before any of it shipped -- see
 [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md).
 
+**A test's (or hook step's) own `PERFORM X THRU Y`** (issue #211): the
+neutralization only ends `X`, after which the driver's THRU range falls
+through into the rest of the range. `_plans._thru_tail_problem` therefore
+refuses `UNSUPPORTED_TERMINATOR_LAYOUT` for every terminator such a case
+reaches unless every paragraph after `X` in the range is exit-only
+(`X-EXIT. EXIT.`) or a phantom `"."` -- so the common `PERFORM X THRU
+X-EXIT` idiom still plans, while a range covering real paragraphs refuses
+instead of running them on the early-exit path.
+
 # GO-TO-to-EXIT-PARAGRAPH Simplification
 
 **STATUS: implemented, not yet verified against real GnuCOBOL** -- see

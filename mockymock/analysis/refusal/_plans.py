@@ -39,6 +39,7 @@ from mockymock.splicer.source_map import (
 )
 
 from ._reachability import (
+    _expand_thru_range,
     _go_statement_raw_targets,
     _go_statement_target,
     _go_statements_with_nesting,
@@ -551,6 +552,9 @@ def find_terminator_plans(
                 )
                 break
 
+        if chain_problem is None:
+            chain_problem = _thru_tail_problem(program, case)
+
         qualified_keys: list[int] = []
 
         for site in surface.sites_in(reachable):
@@ -701,3 +705,47 @@ def find_terminator_plans(
                     existing_ids.add(id(perform))
 
     return list(plans_by_statement.values()), reasons
+
+
+def _thru_tail_problem(program, case) -> str | None:
+    """Why a terminator this case reaches can't be neutralized because of
+    the case's own `PERFORM <target> THRU <thru>` (issue #211), or None.
+
+    The neutralization ends the case's perform target with EXIT PARAGRAPH
+    (directly, or through the chain checks). The driver's THRU range then
+    carries on into the next paragraph of the range by fall-through, which
+    the real program never reached. That is harmless only when every later
+    paragraph of the range does nothing: an exit-only `X-EXIT. EXIT.`
+    paragraph (the usual `PERFORM X THRU X-EXIT` idiom) or a phantom "."
+    paragraph. Any other paragraph would run on the early-exit path, so
+    the terminator is refused instead. A range that can't be expanded is
+    refused too (the reachability gate reports why)."""
+    thru = case.perform_thru
+    if not thru or thru == case.perform_target:
+        return None
+    procedure = program.get_division("PROCEDURE")
+    ordered = _source_ordered_paragraphs(procedure)
+    members, reason = _expand_thru_range(
+        ordered, case.perform_target, thru, "test case PERFORM"
+    )
+    if reason is not None:
+        return (
+            f"is reached through PERFORM {case.perform_target} THRU {thru}, "
+            f"whose range cannot be expanded -- {reason.message}"
+        )
+    by_name = {p.paragraph_name: p for p in ordered or []}
+    for name in members[1:]:
+        paragraph = by_name.get(name)
+        if name == "." or (
+            paragraph is not None and _is_exit_only_paragraph(paragraph)
+        ):
+            continue
+        return (
+            f"is reached through PERFORM {case.perform_target} THRU {thru}: "
+            f"once the terminator ends '{case.perform_target}', the THRU "
+            f"range would fall through into '{name}', which the real "
+            f"program never runs after the terminator -- PERFORM "
+            f"{case.perform_target} on its own (or THRU an exit-only "
+            f"paragraph right after it) to test this path"
+        )
+    return None

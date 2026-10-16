@@ -948,3 +948,72 @@ def test_exit_program_is_planned_and_spliced_like_goback():
     )
     assert "*>         EXIT PROGRAM" in spliced
     assert 'IF UT-EARLY-EXIT = "Y"' in spliced
+
+
+# Issue #211: the .cut's own PERFORM X THRU Y. Neutralizing a terminator
+# ends X with EXIT PARAGRAPH, and the driver's THRU range then falls
+# through into the rest of the range -- code the real program never runs.
+THRU_TAIL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. THRUTAIL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-X                PIC 999 VALUE 0.
+       01  WS-ERR              PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       1000-A.
+           ADD 1 TO WS-X
+           IF WS-ERR = "Y"
+               GOBACK
+           END-IF.
+
+       1000-B.
+           ADD 10 TO WS-X.
+
+       1000-EXIT.
+           EXIT.
+"""
+
+
+def _thru_suite(target, thru):
+    case = MockTestCase(name="c", perform_target=target, perform_thru=thru)
+    return MockTestSuite(name="S", test_cases=[case])
+
+
+def test_terminator_under_a_cut_thru_range_with_real_tail_refuses():
+    program, surface, scope_map, lines = _analyze(THRU_TAIL_SOURCE)
+    suite = _thru_suite("1000-A", "1000-EXIT")
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert plans == []
+    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+    assert "fall through into '1000-B'" in reasons[0].message
+
+
+def test_terminator_under_a_cut_thru_range_with_exit_only_tail_is_planned():
+    source = THRU_TAIL_SOURCE.replace(
+        """       1000-B.
+           ADD 10 TO WS-X.
+
+""",
+        "",
+    )
+    program, surface, scope_map, lines = _analyze(source)
+    suite = _thru_suite("1000-A", "1000-EXIT")
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert reasons == []
+    assert [p.site.label for p in plans] == ["GOBACK"]
+
+
+def test_terminator_under_a_hook_thru_range_with_real_tail_refuses():
+    from mockymock.dsl.model import HookStep
+
+    program, surface, scope_map, lines = _analyze(THRU_TAIL_SOURCE)
+    suite = _thru_suite("1000-EXIT", None)
+    suite.before_each_steps = [
+        HookStep(kind="PERFORM", target="1000-A", thru="1000-EXIT")
+    ]
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert plans == []
+    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
