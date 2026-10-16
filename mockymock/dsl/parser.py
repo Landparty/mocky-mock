@@ -670,6 +670,9 @@ def _reject_mock_outside(hook: str | None, line_no: int) -> None:
 
 
 def parse_cut(text: str) -> MockTestSuite:
+    # A UTF-8 byte-order mark is an encoding artifact, not text (issue
+    # #198): left in, it made line 1 an "unrecognized statement".
+    text = text.removeprefix("\ufeff")
     suite: MockTestSuite | None = None
     case: MockTestCase | None = None
     in_mock: MockDirective | None = None
