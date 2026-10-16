@@ -170,7 +170,8 @@ def test_field_pictures_covers_program_items_and_capture_targets():
     pictures = field_pictures(program, [plan])
     assert pictures["WS-AMT"] == "S9(3)V99"
     assert pictures["UT-CAP-X-1"] == "S9(3)V99"
-    assert "WS-GRP" not in pictures
+    # A group is alphanumeric text whatever it holds (issue #194).
+    assert pictures["WS-GRP"] == "X(5)"
 
 
 def test_rewrite_renders_a_signed_field_from_its_picture():
@@ -186,6 +187,36 @@ def test_rewrite_renders_a_signed_field_from_its_picture():
     report = build_recording_report(scan, suite_result)
     rewritten = rewrite_cut_text(CUT_TEXT, report, {"WS-NET-TOTAL": "S9(5)V99"})
     assert "EXPECT WS-NET-TOTAL TO BE -145.50" in rewritten
+
+
+def test_trailing_control_bytes_are_kept_not_stripped_as_whitespace():
+    # Issue #194: X'0C' ends a positive packed zero; str.rstrip() dropped it.
+    assert render_expect_value("AB\x00\x0c   ") == 'X"4142000C"'
+    assert render_expect_value("AB\t") == 'X"414209"'
+
+
+def test_a_group_holding_numeric_looking_text_is_quoted():
+    # Issue #194: a group has no PICTURE, so `1.5` rendered bare and failed.
+    assert render_expect_value("1.5", "X(3)") == '"1.5"'
+
+
+def test_a_p_scaled_field_is_skipped_not_recorded_as_its_bare_digits():
+    # Issue #194: 12300 in a 9(3)PP DISPLAYs as 00123.
+    scan = _scan()
+    suite_result = _TestSuiteResult(
+        suite_name="S",
+        results=[
+            _TestResult(
+                case_id="001", case_name="calc", recorded=[("WS-NET-TOTAL", "00123")]
+            )
+        ],
+    )
+    for picture in ("9(3)PP", "SVP9(2)"):
+        report = build_recording_report(
+            scan, suite_result, pictures={"WS-NET-TOTAL": picture}
+        )
+        assert report.recorded == []
+        assert "P scaling" in report.skipped[0].reason
 
 
 # --- build_recording_report --------------------------------------------------

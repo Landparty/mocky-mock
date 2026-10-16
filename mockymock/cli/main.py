@@ -1755,12 +1755,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # "Never overwrite a hand-edited EXPECT" sections): every stub the
         # scanner found ends up in exactly one of recorded/skipped, and the
         # file is only ever touched when at least one stub was recorded.
+        pictures = field_pictures(result.ast, checked.captures)
         recording = build_recording_report(
-            stub_scan, suite_result, address_fields(result.ast)
+            stub_scan, suite_result, address_fields(result.ast), pictures
         )
-        rewritten = rewrite_cut_text(
-            cut_text, recording, field_pictures(result.ast, checked.captures)
-        )
+        rewritten = rewrite_cut_text(cut_text, recording, pictures)
         if rewritten is not None:
             cut_path.write_text(rewritten, encoding="utf-8", newline="\n")
         print(

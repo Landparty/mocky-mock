@@ -102,7 +102,11 @@ def render_expect_value(raw_value: str, picture: str | None = None) -> str:
             return rendered
     if _NUMERIC_RE.match(raw_value) and not is_alphanumeric_picture(picture):
         return raw_value
-    trimmed = raw_value.rstrip()
+    # Spaces only: str.rstrip() also strips X'09'-X'0D' and X'1C'-X'1F',
+    # which are ordinary field data (X'0C' ends every positive packed
+    # zero), and dropping them wrote a golden that failed the next run
+    # (issue #194). COBOL's space padding makes only spaces insignificant.
+    trimmed = raw_value.rstrip(" ")
     if not trimmed:
         # `""` is a zero-length literal: GnuCOBOL warns and assumes a
         # space, IBM Enterprise COBOL rejects it. SPACES is the same
@@ -118,6 +122,16 @@ def render_expect_value(raw_value: str, picture: str | None = None) -> str:
         return f'X"{trimmed.encode("utf-8").hex().upper()}"'
     escaped = trimmed.replace('"', '""')
     return f'"{escaped}"'
+
+
+def has_p_scaling(picture: str | None) -> bool:
+    """Whether `picture` is a numeric PICTURE with `P` scaling positions
+    (`9(3)PP`, `SVP9(2)`). DISPLAY prints only the stored digits of such
+    an item (12300 in a `9(3)PP` shows as `00123`), so its recorded text
+    is not the value it stands for and no golden can be built from it."""
+    if not picture or is_alphanumeric_picture(picture):
+        return False
+    return "P" in _PICTURE_REPEAT_RE.sub(lambda m: m.group(1), picture.upper())
 
 
 def is_alphanumeric_picture(picture: str | None) -> bool:
@@ -155,6 +169,7 @@ def build_recording_report(
     scan: StubScanResult,
     suite_result: TestSuiteResult,
     address_items: set[str] | frozenset[str] = frozenset(),
+    pictures: dict[str, str] | None = None,
 ) -> RecordingReport:
     """Match every stub the scanner found against this run's recorded
     values (by case id + data-name).
@@ -223,6 +238,21 @@ def build_recording_report(
                 )
             )
             continue
+        if has_p_scaling(picture_for(stub.data_name, pictures)):
+            # DISPLAY shows a P-scaled item's stored digits without its
+            # scaling positions (12300 in a `9(3)PP` prints `00123`), so
+            # the recorded text is not the value: a golden built from it
+            # fails the next run (issue #194).
+            report.skipped.append(
+                SkippedStub(
+                    stub.line,
+                    stub.data_name,
+                    "its PICTURE has P scaling positions, which DISPLAY "
+                    "leaves out of the text it prints -- write this EXPECT "
+                    "by hand with the scaled value",
+                )
+            )
+            continue
         if "\ufffd" in value:
             # The run's stdout is decoded with errors="replace", so a byte
             # that is not UTF-8 (HIGH-VALUES' X'FF', packed data) arrives
@@ -248,9 +278,11 @@ def field_pictures(program, captures=()) -> dict[str, str]:
     """Name (uppercased, unqualified) -> PICTURE for every elementary data
     item in `program`, plus every synthesized `UT-CAP-` capture target
     (`splicer.captures.CapturePlan`, which mirrors its source item's
-    PICTURE) -- the names a `*> STUB EXPECT` can point at. Best-effort: a
-    layout walk that fails leaves the map empty, and rendering falls back
-    to the text-shape check."""
+    PICTURE) -- the names a `*> STUB EXPECT` can point at. A group item
+    maps to `X(length)`: it is compared as alphanumeric text whatever its
+    content, so `1.5` held in a group must render quoted, never bare
+    (issue #194). Best-effort: a layout walk that fails leaves the map
+    empty, and rendering falls back to the text-shape check."""
     from mockymock.splicer.captures import _data_item_index
 
     try:
@@ -262,6 +294,10 @@ def field_pictures(program, captures=()) -> dict[str, str]:
         for name, item in index.items()
         if item.get("picture") and not item.get("is_group")
     }
+    for name, item in index.items():
+        if item.get("is_group"):
+            length = item.get("byte_length")
+            pictures[name] = f"X({length})" if length else "X"
     for plan in captures:
         source_picture = pictures.get(plan.source_name.upper())
         if source_picture is not None:
