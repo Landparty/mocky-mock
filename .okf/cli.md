@@ -1178,7 +1178,9 @@ pipeline as `run`, but without Docker or any GnuCOBOL step. The output is adjust
 under a real fixed-format (z/OS) COBOL compiler instead of GnuCOBOL-only: `PROCESS`/`CBL` directives
 are preserved (where `run`/`lint` strip them), columns are restored to z/OS fixed-format discipline
 (7-space prefix for Area A), and over-column-72 lines are fitted by `mainframe_export.fit_within_columns`.
-A provenance/disclaimer header is prepended, documenting that this is a
+A provenance/disclaimer header is inserted directly before `IDENTIFICATION DIVISION` (or the IBM
+abbreviation `ID DIVISION`; with neither, after any leading `CBL`/`PROCESS` cards — IBM requires
+those before any comment line, #276), documenting that this is a
 mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
 to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.

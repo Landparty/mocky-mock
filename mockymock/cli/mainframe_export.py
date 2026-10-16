@@ -115,15 +115,26 @@ def build_provenance_header(program_path: str, cut_path: str) -> list[str]:
     ]
 
 
+_ID_DIVISION_RE = re.compile(r"^\s*(IDENTIFICATION|ID)\s+DIVISION\b", re.IGNORECASE)
+
+
 def insert_provenance_header(lines: list[str], header: list[str]) -> list[str]:
     """Insert `header` immediately before the IDENTIFICATION DIVISION
-    line, so any preserved PROCESS/CBL directive (which must precede it)
-    stays first -- matching _insert_driver's own "find the header line,
-    splice relative to it" convention."""
+    line (or its IBM abbreviation `ID DIVISION`), so any preserved
+    PROCESS/CBL directive (which must precede it) stays first -- matching
+    _insert_driver's own "find the header line, splice relative to it"
+    convention. With neither found, the header still goes after the
+    leading PROCESS/CBL cards rather than ahead of them: IBM requires
+    those before any comment line."""
     for index, line in enumerate(lines):
-        if line.strip().upper().startswith("IDENTIFICATION DIVISION"):
+        if _ID_DIVISION_RE.match(line):
             return lines[:index] + header + lines[index:]
-    return header + lines  # defensive: refusal gates guarantee this exists
+    index = 0
+    while index < len(lines) and (
+        _DIRECTIVE_RE.match(lines[index]) or not lines[index].strip()
+    ):
+        index += 1
+    return lines[:index] + header + lines[index:]
 
 
 _DISPLAY_RE = re.compile(r"^(?P<indent>\s*)DISPLAY\s+(?P<rest>.+)$", re.IGNORECASE)
