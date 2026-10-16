@@ -422,6 +422,13 @@ def _whole_program_reasons(
         text = str(warning)
         if text.startswith("COPY ") and "not expanded" in text:
             continue
+        if text.startswith("REPLACE statement set was still active at end of source"):
+            # Standard COBOL: a REPLACE stays in force to the end of the
+            # compilation unit, so a closing REPLACE OFF is optional.
+            # cobol-parser applied it through EOF, as cobc does -- nothing
+            # was dropped (issue #272). The "could not be parsed and was
+            # ignored" REPLACE warning still refuses below.
+            continue
         if text.startswith("Compilation unit contains "):
             # cobol-parser parses every program unit of a multi-program
             # compilation unit (nested and stacked PROGRAM-IDs, and an OO
