@@ -13,8 +13,10 @@ Deliberately loose on the "known" side, so it can never refuse a name cobc
 would accept: a name is known when it appears as a COBOL word anywhere in
 the program text the splicer compiles (literals and inline comments
 removed) -- data items, copybook and `EXEC SQL INCLUDE` members, the
-generated SQLCA alike -- or is a harness item (`UT-` prefix, the
-synthesized DFHEIBLK/DLIDIB fields) or a special register. A misspelt data
+generated SQLCA alike -- or is a harness item this suite's driver declares
+(its fixed fields, tallies and `UT-CAP-` capture targets -- not any `UT-`
+word, issue #296 -- or the synthesized DFHEIBLK/DLIDIB fields) or a
+special register. A misspelt data
 name appears nowhere in the program, which is all this needs to catch.
 Anything that is not a plain (possibly qualified/subscripted) name --
 `LENGTH OF X`, `FUNCTION ...`, an expression -- is left unchecked.
@@ -89,7 +91,57 @@ _SPECIAL_REGISTERS = frozenset(
 #: A name starting with one of these is not a plain data reference.
 _UNCHECKED_LEADS = frozenset({"LENGTH", "ADDRESS", "FUNCTION"})
 
-_HARNESS_PREFIX = "UT-"
+#: A CAPTURE target starting with this is synthesized (splicer.captures).
+_CAPTURE_PREFIX = "UT-CAP-"
+
+#: The driver's own fixed fields (splicer.driver.build_driver).
+_DRIVER_FIELDS = frozenset(
+    {
+        "UT-CURRENT-CASE",
+        "UT-FAIL-COUNT",
+        "UT-EARLY-EXIT",
+        "UT-MOCK-STATUS",
+        "UT-TALLY-EDITED",
+    }
+)
+
+
+def _suite_harness_words(suite: MockTestSuite) -> set[str]:
+    """The `UT-` names this suite's driver actually declares: the fixed
+    fields, every tally (with its -BASE/-START twins) and every `UT-CAP-`
+    target a CAPTURE line declares (issue #296)."""
+    from mockymock.splicer.naming import TallyRegistry
+
+    words = set(_DRIVER_FIELDS)
+    registry = TallyRegistry(suite)
+    for (category, key), tally in registry.items():
+        words.update(
+            {
+                tally,
+                registry.base_name(category, key),
+                registry.start_name(category, key),
+            }
+        )
+    for directive in _all_mocks(suite):
+        for _, target in directive.captures:
+            for word in _name_words(target) or []:
+                if word.startswith(_CAPTURE_PREFIX):
+                    words.add(word)
+    return words
+
+
+def _all_mocks(suite: MockTestSuite) -> list:
+    seen: set[int] = set()
+    found: list = []
+    for directive in [
+        *suite.before_all_mocks,
+        *suite.before_each_mocks,
+        *(d for case in suite.test_cases for d in case.mocks),
+    ]:
+        if id(directive) not in seen:
+            seen.add(id(directive))
+            found.append(directive)
+    return found
 
 
 def _program_words(lines: list[str]) -> set[str]:
@@ -148,13 +200,18 @@ def check_cut_data_names(
 ) -> list[RefusalReason]:
     """UNKNOWN_DATA_NAME for each `.cut` data reference no program text
     declares -- see the module docstring for what is checked."""
-    known = _program_words(lines) | _harness_words() | _SPECIAL_REGISTERS
+    known = (
+        _program_words(lines)
+        | _harness_words()
+        | _SPECIAL_REGISTERS
+        | _suite_harness_words(suite)
+    )
     owner = f" of {program_name}" if program_name else ""
     reasons: list[RefusalReason] = []
     seen: set[tuple[int, str, str]] = set()
 
     def unknown(word: str) -> bool:
-        return word not in known and not word.startswith(_HARNESS_PREFIX)
+        return word not in known
 
     def name(line: int, role: str, text: str) -> None:
         for word in _name_words(text) or []:
@@ -217,7 +274,7 @@ def check_cut_data_names(
         seen_mocks.add(id(directive))
         capture_lines = directive.capture_lines or [0] * len(directive.captures)
         for (_, target), line in zip(directive.captures, capture_lines, strict=False):
-            if target.upper().startswith(_HARNESS_PREFIX):
+            if target.upper().startswith(_CAPTURE_PREFIX):
                 continue
             name(line, "CAPTURE INTO target", target)
         # ROWS rows and the TERMINAL group are spliced as `MOVE value TO

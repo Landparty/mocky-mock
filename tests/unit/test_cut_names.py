@@ -65,6 +65,9 @@ BEFORE-EACH
     MOVE ZERO TO WS-N
 END-BEFORE
 TESTCASE "a"
+    MOCK CALL "SVC"
+        CAPTURE ARG 1 INTO UT-CAP-X
+    END-MOCK
     MOVE "A" TO WS-EL (2)
     MOVE WS-N TO WS-EL(1)
     PERFORM 0000-MAIN
@@ -118,4 +121,27 @@ def test_rows_and_terminal_names_are_checked_at_their_lines():
         ".cut line 5: ROWS value Q is neither a literal nor a data item of "
         "MUT1 -- quote it if it is text",
         ".cut line 6: TERMINAL field WS-EOFF is not a data item of MUT1",
+    ]
+
+
+def test_ut_names_are_known_only_when_this_suites_driver_declares_them():
+    # Issue #296: a typo'd UT-CAP- target was waved through by the blanket
+    # `UT-` exemption.
+    suite = parse_cut(
+        'TESTSUITE "x"\n'
+        'TESTCASE "a"\n'
+        '    MOCK CALL "RATESVC"\n'
+        "        CAPTURE ARG 1 INTO UT-CAP-RATESVC-1\n"
+        "    END-MOCK\n"
+        "    MOVE 0 TO UT-FAIL-COUNT\n"
+        "    PERFORM 0000-MAIN\n"
+        "    EXPECT UT-CAP-RATESVC-1 TO BE 12.5\n"
+        "    EXPECT UT-CAP-RATESVC1 TO BE 12.5\n"
+        "    EXPECT UT-RATESVC-TALLY TO BE 1\n"
+        "    EXPECT UT-NOPE TO BE 1\n"
+    )
+    reasons = check_cut_data_names(suite, PROGRAM.splitlines(), "MUT1")
+    assert [r.message for r in reasons] == [
+        ".cut line 9: EXPECT UT-CAP-RATESVC1 is not a data item of MUT1",
+        ".cut line 11: EXPECT UT-NOPE is not a data item of MUT1",
     ]
