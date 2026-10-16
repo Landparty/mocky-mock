@@ -123,7 +123,13 @@ from `_per_pair_report_path`, which folds the `.cut`'s path *relative to the
 test root* into the file name so `svc1/PROG.cut` and `svc2/PROG.cut` never
 share one report)
 — not a parallel implementation, so an explicit single-pair invocation is
-byte-for-byte unaffected.
+byte-for-byte unaffected. A `.cut` whose program cannot be resolved is
+skipped and listed; the command exits 1 when nothing ran, or (issue #303,
+option (b)) when a skipped `.cut` declares a `PROGRAM "..."` line, since
+that explicit claim is now broken (`_report_broken_claims`). A `.cut`
+whose program was only guessed is still just skipped. `run` also writes a
+failing per-pair `--junit-xml` / `--json-report` entry for every skipped
+suite (`_write_skipped_suite_reports`, via `_write_failure_reports`).
 
 `_apply_config_to_args()` fills `args.copybook_path`/`args.seed` from the
 loaded config when the CLI flag was left at its argparse default; an

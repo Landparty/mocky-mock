@@ -1509,6 +1509,7 @@ def _run_directory(
     from mockymock.cli.discovery import (
         DiscoveryError,
         discover_cut_files,
+        read_program_line,
         resolve_program_path,
     )
 
@@ -1524,12 +1525,16 @@ def _run_directory(
     exit_code = 0
     ran = 0
     unresolved: list[str] = []
+    broken_claims = 0
     tag_root = _report_tag_root(cut_files, test_root)
     for cut_path in cut_files:
         try:
             program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
             unresolved.append(str(exc))
+            if read_program_line(cut_path) is not None:
+                broken_claims += 1
+            _write_skipped_suite_reports(args, cut_path, tag_root, str(exc))
             continue
         ran += 1
         sub_args = copy.copy(args)
@@ -1551,9 +1556,58 @@ def _run_directory(
         f"mockymock run: {ran} suite(s) run, {len(unresolved)} .cut file(s) "
         f"skipped (no program found)"
     )
-    if ran == 0:
+    if ran == 0 or _report_broken_claims("run", broken_claims):
         return 1
     return exit_code
+
+
+def _report_broken_claims(command: str, broken_claims: int) -> bool:
+    """True (after saying so) when a skipped `.cut` declares a PROGRAM
+    "..." line that no longer resolves (issue #303, option (b)): an
+    explicit claim that is now broken is a renamed or moved program, and
+    exiting 0 dropped its suite from a green CI build. A `.cut` whose
+    program was only guessed from the folder is still just skipped."""
+    if not broken_claims:
+        return False
+    print(
+        f"mockymock {command}: {broken_claims} .cut file(s) name a PROGRAM "
+        f"that does not exist -- failing"
+    )
+    return True
+
+
+def _write_skipped_suite_reports(
+    args: argparse.Namespace, cut_path: Path, tag_root: Path, reason: str
+) -> None:
+    """A failing --junit-xml / --json-report entry for a directory-mode
+    suite skipped because its program was not found (issue #303), so a
+    CI collector sees the skip instead of a smaller, clean build."""
+    if not getattr(args, "junit_xml", None) and not getattr(args, "json_report", None):
+        return
+    import copy
+
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        cut_suite = parse_cut(read_utf8_source(cut_path))
+    except (CutParseError, OSError, UnicodeDecodeError):
+        cut_suite = None
+    sub_args = copy.copy(args)
+    for flag in ("junit_xml", "json_report"):
+        if getattr(args, flag, None):
+            setattr(
+                sub_args,
+                flag,
+                _per_pair_report_path(getattr(args, flag), cut_path, tag_root),
+            )
+    _write_failure_reports(
+        sub_args,
+        "run",
+        cut_suite.name if cut_suite is not None else cut_path.stem,
+        reason,
+        cut_suite=cut_suite,
+        cut_file=cut_path,
+    )
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -2391,6 +2445,7 @@ def _lint_directory(
     from mockymock.cli.discovery import (
         DiscoveryError,
         discover_cut_files,
+        read_program_line,
         resolve_program_path,
     )
 
@@ -2406,11 +2461,14 @@ def _lint_directory(
     exit_code = 0
     ran = 0
     unresolved: list[str] = []
+    broken_claims = 0
     for cut_path in cut_files:
         try:
             program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
             unresolved.append(str(exc))
+            if read_program_line(cut_path) is not None:
+                broken_claims += 1
             continue
         ran += 1
         sub_args = copy.copy(args)
@@ -2425,7 +2483,7 @@ def _lint_directory(
         f"mockymock lint: {ran} suite(s) checked, {len(unresolved)} .cut "
         f"file(s) skipped (no program found)"
     )
-    if ran == 0:
+    if ran == 0 or _report_broken_claims("lint", broken_claims):
         return 1
     return exit_code
 
