@@ -837,3 +837,28 @@ def test_ambiguous_top_level_names_are_never_referenced_bare():
     assert problems == []
     targets = [line.rsplit(" TO ", 1)[1] for line in snapshot.restore_lines]
     assert targets == ["IN-REC", "OUT-REC", "CNT OF HDR"]
+
+
+def test_before_all_snapshot_saves_every_indexed_by_index():
+    """Issue #280: the reset puts each index back to its start-up value, so
+    the snapshot must carry the position BEFORE-ALL left it at."""
+    from mockymock.splicer.snapshot import plan_snapshot
+
+    result = parse_cobol(INDEXED_BY_SOURCE, filename="idx.cbl")
+    snapshot, problems = plan_snapshot(result.ast)
+    assert problems == []
+    assert snapshot.working_storage_lines[-3:] == [
+        "01  UT-SNAP-002 USAGE INDEX.",
+        "01  UT-SNAP-003 USAGE INDEX.",
+        "01  UT-SNAP-004 USAGE INDEX.",
+    ]
+    assert snapshot.save_lines[-3:] == [
+        "SET UT-SNAP-002 TO IX-ROW",
+        "SET UT-SNAP-003 TO IX",
+        "SET UT-SNAP-004 TO IX2",
+    ]
+    assert snapshot.restore_lines[-3:] == [
+        "SET IX-ROW TO UT-SNAP-002",
+        "SET IX TO UT-SNAP-003",
+        "SET IX2 TO UT-SNAP-004",
+    ]

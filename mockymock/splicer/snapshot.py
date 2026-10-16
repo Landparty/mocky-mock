@@ -44,6 +44,8 @@ exact:
   preserves the value.
 - POINTER-family and INDEX items: `SET` into a field of the same usage
   (COBOL forbids MOVE on them).
+- Every INDEXED BY index (`reset.index_names`): `SET` into a `USAGE
+  INDEX` field (issue #280).
 
 Refused (fail closed, reported by `plan_snapshot`): a group containing an
 OCCURS ... DEPENDING ON table, whose size at restore time depends on a
@@ -62,6 +64,7 @@ from mockymock.splicer.reset import (
     _is_group,
     _sections,
     _top_level_items,
+    index_names,
     reset_targets,
 )
 
@@ -160,6 +163,15 @@ def plan_snapshot(
         snapshot.working_storage_lines.append(f"01  {snap} {description}.")
         snapshot.save_lines.append(f"MOVE {ref} TO {snap}")
         snapshot.restore_lines.append(f"MOVE {snap} TO {ref}")
+    # An INDEXED BY index is not a data item, but the reset puts it back to
+    # its start-up value before every case (issue #189); without its own
+    # slot the position BEFORE-ALL SET or SEARCHed it to was lost (#280).
+    # The restore runs after the reset, so it wins.
+    for name in index_names(program):
+        snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
+        snapshot.working_storage_lines.append(f"01  {snap} USAGE INDEX.")
+        snapshot.save_lines.append(f"SET {snap} TO {name}")
+        snapshot.restore_lines.append(f"SET {name} TO {snap}")
     return snapshot, problems
 
 

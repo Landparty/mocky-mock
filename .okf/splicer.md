@@ -717,9 +717,11 @@ so all four splice pipelines get them. `index_names` returns one reference
 per *declaration*: a name declared by two tables (one copybook under two
 01s) is qualified through the table's named ancestors, FILLERs skipped
 (`IX OF ENT OF IN-REC`) -- the bare `SET ... TO IX` was ambiguous and cobc
-rejected the driver (#249). An index a BEFORE-ALL step SETs is
-put back to its start-up value at each case, not to the BEFORE-ALL value
-(the snapshot does not cover index names). USAGE INDEX *data items* are
+rejected the driver (#249). An index a BEFORE-ALL step SETs or SEARCHes
+keeps that position in every case: `plan_snapshot` adds one `01
+UT-SNAP-nnn USAGE INDEX.` per `index_names` entry, `SET`-saved in
+`UT-SAVE-STATE` and `SET` back in `UT-RESTORE-STATE`, which runs after the
+reset (#280; before, each case saw the start-up value). USAGE INDEX *data items* are
 still skipped (table above).
 
 `_is_group` must only count children that carry a `level` attribute:
