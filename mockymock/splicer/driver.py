@@ -114,6 +114,15 @@ def _display_operands(text: str) -> list[str]:
     ]
 
 
+#: Closes a FAIL / RECORD marker that DISPLAYs a field's raw value (issue
+#: #285): a value holding byte X'0A' -- a binary halfword of 10 in a group,
+#: an LF in a PIC X -- splits its marker across lines, and every line
+#: before this one is that value's continuation (no program code runs
+#: between the two DISPLAYs). `report.results.parse_stdout` rejoins them.
+VALUE_END_MARKER = "__MOCKYMOCK__ VALUE-END"
+_VALUE_END_DISPLAY = f'               DISPLAY "{VALUE_END_MARKER}"'
+
+
 @dataclass
 class DriverArtifact:
     working_storage_lines: list[str]
@@ -422,6 +431,7 @@ def _build_testcase_paragraph(
                 f"{_display_text(expectation.expected_value)}, "
                 f'got " {expectation.data_name}'
             )
+            lines.append(_VALUE_END_DISPLAY)
         else:
             lines.append(
                 f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: '
@@ -432,6 +442,7 @@ def _build_testcase_paragraph(
                 for operand in _display_operands(expectation.expected_value)
             )
             lines.append(f'                   ", got " {expectation.data_name}')
+            lines.append(_VALUE_END_DISPLAY)
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")
 
@@ -468,6 +479,7 @@ def _build_testcase_paragraph(
         lines.append(
             f'           DISPLAY "__MOCKYMOCK__ RECORD {case_id} {name}: " {name}'
         )
+        lines.append(_VALUE_END_DISPLAY.replace("               ", "           ", 1))
 
     if any(step.kind == "PERFORM" for step in after_each):
         # Nor may one the case's PERFORM reached cut AFTER-EACH short: a

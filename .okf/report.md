@@ -164,6 +164,15 @@ the console line and the JSON `crashDetail` are never blank/null there.
 - **Mid-line markers (#139).** `parse_stdout` finds `__MOCKYMOCK__ ` after
   leading text, so a program's `DISPLAY ... WITH NO ADVANCING` no longer
   hides the next marker (it used to drop a FAIL line and report a pass).
+- **Values split at X'0A' (#285, audit Finding 11).** Every FAIL /
+  RECORD marker that DISPLAYs a raw field value is followed by
+  `__MOCKYMOCK__ VALUE-END` (`splicer.driver.VALUE_END_MARKER`). A value
+  holding byte X'0A' (a binary halfword of 10 in a group, an LF in a
+  PIC X) splits its marker across lines; `parse_stdout` rejoins every
+  marker-less line between the marker and VALUE-END with LF, so a
+  `--record-expectations` golden is no longer cut (and failing the next
+  run) and a FAIL reason shows the whole actual value. Without VALUE-END
+  the continuation is dropped as before.
 - **Not-run cases (#150).** `json_report.not_run_case_names` lists the
   selected cases that never printed START; `format_console` shows each as
   `[NOT RUN]` (and `N not run` in the summary) and `format_junit_xml` adds
