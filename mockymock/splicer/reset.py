@@ -467,6 +467,11 @@ def _value_restore(item, name: str) -> str:
     picture = item.picture_clause
     if picture is None:
         return f"MOVE {literal} TO {name}"
+    if is_text_edited(item):
+        # VALUE stores the literal's bytes as they are; a MOVE re-applies
+        # the editing mask to them ("12/31/99" into XX/XX/XX became
+        # "12//3/1/", issue #277). Reference modification is a byte copy.
+        return f"MOVE {literal} TO {name}(1:)"
     usage = (getattr(item, "usage", None) or "DISPLAY").upper()
     if (
         _is_numeric(item)
@@ -477,6 +482,28 @@ def _value_restore(item, name: str) -> str:
     if getattr(item, "justified", False):
         literal = _pad_literal(literal, getattr(picture, "size", None))
     return f"MOVE {literal} TO {name}"
+
+
+def is_text_edited(item) -> bool:
+    """An alphanumeric- or national-edited item (`PIC XX/XX/XX`,
+    `XXXBXXXX`, `NNBNN`): a MOVE into one edits the sending text again, so
+    a value that is already the item's bytes must be copied by reference
+    modification instead (issue #277)."""
+    picture = getattr(item, "picture_clause", None)
+    if picture is None:
+        return False
+    if getattr(picture, "is_alphanumeric_edited", False) or getattr(
+        picture, "is_national_edited", False
+    ):
+        return True
+    return is_alphanumeric_edited_picture(getattr(picture, "pattern", "") or "")
+
+
+def is_alphanumeric_edited_picture(pattern: str) -> bool:
+    """A PICTURE string holding an X or A plus a B, 0 or / insertion
+    symbol -- the definition of alphanumeric-edited."""
+    symbols = _REPEAT_GROUP_RE.sub("", pattern.upper())
+    return any(c in symbols for c in "XA") and any(c in symbols for c in "B0/")
 
 
 def _pad_literal(literal: str, size: int | None) -> str:

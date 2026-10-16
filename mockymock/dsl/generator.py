@@ -1631,6 +1631,11 @@ def _row_move_line(
     value = _bundle_rendered_value(
         row.get(spec.column, ""), spec.category, decimal_comma
     )
+    if spec.category == "alphanumeric-edited":
+        # The bundle gives the field's edited image, which is the bytes a
+        # real record holds; a plain MOVE would edit it again ("N8/DF/B3"
+        # into XX/XX/XX became "N8//D/F/", issue #277).
+        return f"MOVE {value} TO {target}(1:)"
     return f"MOVE {value} TO {target}"
 
 

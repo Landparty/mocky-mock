@@ -300,6 +300,9 @@ load-bearing and was briefly lost in `mutate` (2026-09-04): one binary
 serves the whole suite, so an unreset capture lets a case that never
 reached its CALL assert against the previous case's value — and in
 `mutate` that stale value can "kill" a mutant, inflating the score.
+An alphanumeric-edited argument (`PIC XX/XX/XX`) is not mirrored: its
+target is declared `PIC X(<byte length>)`, since a MOVE into the same
+editing PICTURE edits the captured value again (#277).
 Anything unmirrorable (a table, a PICTURE-less `COMP-1`/`POINTER`, a group
 holding non-DISPLAY bytes, or one directive matching two sites whose
 argument `n` names different items) fails closed as
@@ -574,6 +577,7 @@ comma spelling too (`injector`, read from the site's text).
 |---|---|---|
 | Elementary, has `VALUE` clause | `MOVE <value> TO <name>` | restores the declared initial value (the clause first passes through `cobol_literal` -- see below) |
 | Elementary, numeric or numeric-edited `DISPLAY` PIC, `VALUE` that is not a number or `ZERO` (`PIC ZZ,ZZ9.99 VALUE SPACES`, `VALUE ALL "*"`) | `MOVE <value> TO <name>(1:)` | cobc rejects a figurative SPACE / alphanumeric literal moved to a numeric item (`move-figurative-space-to-numeric: error`), which broke the driver's compile for every suite (issue #218); the reference-modified byte move stores what VALUE stored |
+| Elementary, alphanumeric- or national-edited PIC with a `VALUE` (`PIC XX/XX/XX VALUE "12/31/99"`) | `MOVE <value> TO <name>(1:)` | VALUE stores the literal's bytes; a MOVE re-applies the editing mask (`12//3/1/`), so the reset is a byte copy (`reset.is_text_edited`, issue #277) |
 | Elementary, `JUSTIFIED`, quoted-literal `VALUE` | `MOVE "<literal padded to the item's size>" TO <name>` | VALUE ignores JUSTIFIED (`PIC X(6) JUST RIGHT VALUE "AB"` starts as `"AB    "`), a MOVE right-justifies; padding to full length makes the two agree. Reference modification does not: GnuCOBOL 3.1 still justified `WS-J(1:)` (issue #218) |
 | Elementary, no `VALUE`, numeric or numeric-edited PIC | `MOVE 0 TO <name>` | numeric-edited PICs (e.g. `PIC ZZZ9`) reject `MOVE SPACES` — `_is_numeric` treats any of `9 V P Z * $ + -` in the (repeat-group-stripped) picture as numeric, not just `9`/`V`/`P` |
 | Elementary, no `VALUE`, alphanumeric PIC | `MOVE SPACES TO <name>` | COBOL's conventional type default, a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |

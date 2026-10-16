@@ -828,7 +828,10 @@ paragraph-grouped path described above, unchanged. A real
   A POINTER-family field gets `SET <field> TO NULL` and an INDEX field no
   line at all (`_row_move_line`, 2026-10-12): the bundle lays both out as
   numeric fields holding `0`, and `MOVE 0 TO <pointer>` is a cobc compile
-  error (LESERV's `CALL 'CEEHDLR' USING HANDLER-ROUTINE ...`).
+  error (LESERV's `CALL 'CEEHDLR' USING HANDLER-ROUTINE ...`). An
+  `alphanumeric-edited` field's value is the record's bytes (its edited
+  image), so it is moved by reference modification, `MOVE "N8/DF/B3" TO
+  IN-AE(1:)`; a plain MOVE edited it again (#277).
 - **`_read_body`'s `WHEN OTHER` branch also replicates the source `AT END`
   clause's own constant-valued statements**, not just the FILE STATUS
   field (`_replicated_at_end_statements`, via `_is_safe_literal_source`
