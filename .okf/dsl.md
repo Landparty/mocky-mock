@@ -508,7 +508,18 @@ Key regexes, matched in this order per non-blank line:
    ends the sentence mid-EVALUATE -- `lint` used to pass and `cobc` then
    failed on generated code (`unexpected END-EVALUATE`). ROWS/`TERMINAL`
    field values get the same check. A decimal point (`1.5`), a period
-   inside a literal, or one in a comment is untouched.
+   inside a literal, or one in a comment is untouched. A second exception
+   (issue #287, `_reject_body_control_flow`): a body line that leaves the
+   body -- `PERFORM <paragraph>` (THRU/TIMES/UNTIL forms included), `GO
+   TO`, `GOBACK`, `STOP RUN`, `EXIT PROGRAM`, outside literals and `*>`
+   comments -- raises `CutParseError` at its line. Nothing walks a mock
+   body, so a performed paragraph's CALLs/file I/O ran for real after a
+   clean lint, and a terminator ended the whole binary (CRASH, every later
+   case NOT RUN). Inline `PERFORM VARYING/UNTIL/WITH TEST/n TIMES/<id> TIMES
+   ... END-PERFORM` is allowed. The error is held until the block's
+   END-MOCK, so a MOCK missing its END-MOCK (which swallows the case's own
+   PERFORM) still reports "unterminated MOCK". Following such edges instead
+   (pushing the targets into the case's reachable set) is not implemented.
 2. `*>` comment (only reachable when not inside a mock body).
 3. `TESTSUITE "..."` — errors if a suite is already open (one per file).
 4. `TESTCASE "..."` — requires `suite` already set; resets the per-case
