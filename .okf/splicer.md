@@ -618,9 +618,9 @@ comma spelling too (`injector`, read from the site's text).
 | Elementary, no `VALUE`, numeric or numeric-edited PIC | `MOVE 0 TO <name>` | numeric-edited PICs (e.g. `PIC ZZZ9`) reject `MOVE SPACES` — `_is_numeric` treats any of `9 V P Z * $ + -` in the (repeat-group-stripped) picture as numeric, not just `9`/`V`/`P` |
 | Elementary, no `VALUE`, alphanumeric PIC | `MOVE SPACES TO <name>` | COBOL's conventional type default, a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |
 | Elementary, no `PICTURE` (usage-typed), `USAGE POINTER`/`PROCEDURE-POINTER`/`FUNCTION-POINTER`/`PROGRAM-POINTER` | `SET <name> TO NULL` | pointers can only be assigned with `SET`; `NULL` is their only legal literal value — `MOVE SPACES` (the old picture-blind fallback) is rejected by cobc |
-| Elementary, no `PICTURE`, `USAGE COMP-1`/`COMP-2` (or `COMPUTATIONAL-1`/`-2`) | `MOVE 0 TO <name>` | floats have no `PICTURE`, so the old numeric test (`item.picture_clause is None → False`) misclassified them alphanumeric and emitted an illegal `MOVE SPACES` |
-| Elementary, no `PICTURE`, `USAGE INDEX` | *(skipped — no line emitted)* | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; skipping is the only reset that never emits illegal COBOL (documented fidelity limit) |
-| Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE |
+| Elementary, no `PICTURE`, `USAGE COMP-1`/`COMP-2` (or `COMPUTATIONAL-1`/`-2`), or (issue #333) `BINARY-CHAR`/`-SHORT`/`-LONG`/`-DOUBLE`/`BINARY-C-LONG`/`FLOAT-SHORT`/`-LONG`/`-EXTENDED` (`_PICLESS_NUMERIC_USAGES`) | `MOVE 0 TO <name>` | floats have no `PICTURE`, so the old numeric test (`item.picture_clause is None → False`) misclassified them alphanumeric and emitted an illegal `MOVE SPACES` |
+| Elementary, no `PICTURE`, `USAGE INDEX` | *(no MOVE line)* -- saved and restored by `SET` with the INDEXED BY names below (issue #333) | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; one inside a table or with a duplicated name is still skipped and reported (`unreset_items`) |
+| Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE; reported by `unreset_items` as a run/lint note, since its value carries between cases (issue #333) |
 | Group, no `VALUE` clause | `INITIALIZE <name>` | a `MOVE SPACES` over a group would write spaces across numeric children, corrupting them for the next case's arithmetic; `INITIALIZE` zeros numeric children and space-fills alphanumeric ones |
 | Any top-level item with a `REDEFINES` clause | *(skipped — no line emitted)* | it shares the redefined item's storage, which that item's own line already reset/restored; a second reset through the redefining view ran after it and overwrote it (2026-09-27 fix: `01 WS-CODE PIC X(4) VALUE "AB12".` + `01 WS-CODE-NUM REDEFINES WS-CODE PIC 9(4).` left `WS-CODE` = `"0000"` in every case, the first included). Skipping matches program start-up, where GnuCOBOL initializes the storage from the first description |
 
@@ -722,8 +722,13 @@ program code) save each index and every reset restore it. Both are wired
 through `cli/checks.py`'s `extra_working_storage` / `extra_reset_lines_for`,
 so all four splice pipelines get them. An index a BEFORE-ALL step SETs is
 put back to its start-up value at each case, not to the BEFORE-ALL value
-(the snapshot does not cover index names). USAGE INDEX *data items* are
-still skipped (table above).
+(the snapshot does not cover index names). Since issue #333 `index_names`
+also lists every WORKING-STORAGE / LOCAL-STORAGE `USAGE INDEX` *data item*
+outside any table whose name is declared once, so it gets the same save /
+restore (SET between index data items is legal); before, `SET WS-IX UP BY
+4` in one case left the next starting at 4. Whatever the reset still
+cannot put back is listed by `reset.unreset_items` and reported by
+`run_static_checks` as a note (printed by run/lint/debug/export).
 
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.
