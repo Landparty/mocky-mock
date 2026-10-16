@@ -1153,6 +1153,11 @@ pipeline as `run`, but without Docker or any GnuCOBOL step. The output is adjust
 under a real fixed-format (z/OS) COBOL compiler instead of GnuCOBOL-only: `PROCESS`/`CBL` directives
 are preserved (where `run`/`lint` strip them), columns are restored to z/OS fixed-format discipline
 (7-space prefix for Area A), and over-column-72 lines are fitted by `mainframe_export.fit_within_columns`.
+The prefix is applied *before* splicing, so `splice_program(..., column_offset=SEQUENCE_AREA_WIDTH)`
+tells the one column-sensitive step, the clause-body lift, about the shift (issue #325): without it
+`lift_clause_bodies` found no word at its AST offsets and every mocked statement's AT END / NOT AT
+END / INVALID KEY / ON EXCEPTION body (and the `UT-MOCK-STATUS` bookkeeping) was dropped from the
+export while `run` kept them -- a read-until-EOF loop hung.
 A provenance/disclaimer header is prepended, documenting that this is a
 mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults

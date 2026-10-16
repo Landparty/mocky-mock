@@ -102,7 +102,13 @@ def splice_program(
     file_status_fields: dict[str, str] | None = None,
     trace: bool = False,
     goto_exit_plans: Sequence[GotoExitPlan] = (),
+    column_offset: int = 0,
 ) -> list[str]:
+    """`column_offset` is how many columns every line of `lines` has been
+    shifted right of the normalized source the AST's columns index --
+    `export` splices lines with the 7-column sequence area restored
+    (issue #325); the only column-sensitive step, the clause-body lift,
+    needs it."""
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
     seen_statement_ids: set[int] = set()
@@ -172,7 +178,7 @@ def splice_program(
                 # A nested site with clauses of its own reaches here only
                 # with a span bounded by its own scope terminator (#258),
                 # so its bodies lift exactly like a top-level site's.
-                lifted_clauses=lift_clause_bodies(site.statement, lines),
+                lifted_clauses=lift_clause_bodies(site.statement, lines, column_offset),
             )
             # What the DB2 precompiler puts after the statement for every
             # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).

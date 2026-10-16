@@ -392,7 +392,7 @@ def _body_problem(words: list[str], at_period: bool) -> tuple[str | None, list[s
 
 
 def _lift(
-    statement: object, lines: list[str]
+    statement: object, lines: list[str], column_offset: int = 0
 ) -> tuple[tuple[LiftedClause, ...] | None, str | None]:
     """The lifted clauses, or None and why not (None too when `statement`
     has no clause bodies this module handles)."""
@@ -424,7 +424,7 @@ def _lift(
         index = line - start_line
         if index >= len(window):
             return None
-        return offsets[index] + column - 1
+        return offsets[index] + column_offset + column - 1
 
     clauses: list[tuple[int, str]] = []
     for attr in attrs:
@@ -496,7 +496,7 @@ def _lift(
 
 
 def lift_clause_bodies(
-    statement: object, lines: list[str]
+    statement: object, lines: list[str], column_offset: int = 0
 ) -> tuple[LiftedClause, ...] | None:
     """Every clause body of `statement`, located in `lines` (the normalized
     source the AST's line/column numbers index), or None when it has none
@@ -508,8 +508,10 @@ def lift_clause_bodies(
     statement's own scope terminator / sentence period for the last one,
     and each header must be one of that clause's own spellings
     (`_HEADERS`). The answer is a slice of the source, never a re-render,
-    plus the END-IF / END-EVALUATE / END-SEARCH a sentence period closed."""
-    return _lift(statement, lines)[0]
+    plus the END-IF / END-EVALUATE / END-SEARCH a sentence period closed.
+    `column_offset`: how far right of the AST's columns every line sits
+    (`export` restores the 7-column sequence area first, issue #325)."""
+    return _lift(statement, lines, column_offset)[0]
 
 
 def clause_lift_problem(statement: object, lines: list[str]) -> str | None:

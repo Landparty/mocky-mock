@@ -21,6 +21,9 @@ COLUMN_LIMIT = 72
 # normalize_fixed_format's "extract program text cols 8-72" strips away.
 _SEQUENCE_AREA = "       "
 
+#: How many columns restore_fixed_format_columns shifts every line right.
+SEQUENCE_AREA_WIDTH = len(_SEQUENCE_AREA)
+
 
 def restore_fixed_format_columns(lines: list[str]) -> list[str]:
     """Undo normalize_fixed_format's column-8-72 extraction by prepending
@@ -31,7 +34,9 @@ def restore_fixed_format_columns(lines: list[str]) -> list[str]:
     `run_static_checks`'s returned `lines`, BEFORE collect_boundaries/
     splice_program -- both are line-granular, never column-position-
     sensitive (verified during design), so this uniform prefix is
-    transparent to them."""
+    transparent to them -- except the clause-body lift, which slices by
+    AST column: pass `column_offset=SEQUENCE_AREA_WIDTH` to splice_program
+    (issue #325)."""
     return [_SEQUENCE_AREA + line for line in lines]
 
 
