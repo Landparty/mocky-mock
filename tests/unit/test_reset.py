@@ -187,14 +187,46 @@ def _ast_group_with_filler_child():
 
 def test_filler_child_is_never_targeted_by_reset():
     """FILLER is unaddressable in COBOL -- MOVE ... TO FILLER is a syntax
-    error. A group's FILLER child with a VALUE clause must be skipped when
-    restoring child VALUEs after INITIALIZE (INITIALIZE also never disturbs
-    FILLER, so there's nothing to restore anyway). Named siblings must still
-    be restored normally."""
+    error. A group whose FILLER child declares a VALUE is reset with
+    INITIALIZE ... WITH FILLER ALL TO VALUE, which restores the FILLER's
+    VALUE (and every named sibling's) without naming it (issue #196: a case
+    that overwrote the whole group left the FILLER bytes changed)."""
     lines = reset_move_lines(_ast_group_with_filler_child())
-    assert "INITIALIZE WS-HDR" in lines
-    assert any('MOVE "ABC" TO WS-NAMED' in ln for ln in lines)
+    assert "INITIALIZE WS-HDR WITH FILLER ALL TO VALUE THEN TO DEFAULT" in lines
     assert not any("TO FILLER" in ln for ln in lines)
+    assert not any("WS-NAMED" in ln for ln in lines)
+
+
+NESTED_FILLER_VALUE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FIL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-HDR.
+           05 WS-H1           PIC X(2) VALUE "AB".
+           05 WS-SUB.
+              10 FILLER       PIC X VALUE "-".
+              10 WS-H2        PIC 9 VALUE 5.
+       01  WS-PLAIN.
+           05 FILLER          PIC X(3).
+           05 WS-P1           PIC X VALUE "P".
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_nested_filler_value_restores_the_group_with_filler():
+    """Issue #196: a FILLER VALUE nested at any depth makes the group reset
+    WITH FILLER; a group whose FILLERs carry no VALUE keeps the plain
+    INITIALIZE plus per-child restores."""
+    result = parse_cobol(NESTED_FILLER_VALUE_SOURCE, filename="fil.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        "INITIALIZE WS-HDR WITH FILLER ALL TO VALUE THEN TO DEFAULT",
+        "INITIALIZE WS-PLAIN",
+        'MOVE "P" TO WS-P1 OF WS-PLAIN',
+    ]
 
 
 # --- PICTURE-less usage-typed items (audit 2.3) -------------------------------

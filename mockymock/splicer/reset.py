@@ -15,7 +15,9 @@ SKIPPED rather than given illegal COBOL (documented fidelity limits, see
 .okf/splicer.md): USAGE INDEX items, PICTURE-less items of unrecognized
 usage. A group with a VALUE clause inside a table (an OCCURS item) is
 reset with `INITIALIZE <group> ALL TO VALUE THEN TO DEFAULT`, which
-restores every occurrence's VALUE without subscripted MOVEs. Top-level REDEFINES items are skipped on purpose: their
+restores every occurrence's VALUE without subscripted MOVEs; a group with
+a FILLER VALUE adds WITH FILLER, since a FILLER cannot be named in a MOVE.
+Top-level REDEFINES items are skipped on purpose: their
 storage is the redefined item's, which is reset (and its VALUE restored)
 by its own line -- a second reset through the redefining view would
 overwrite it.
@@ -124,22 +126,30 @@ def reset_lines_for_items(items) -> list[str]:
         if _is_group(item) and not item.value_clause:
             odo_max, odo_restore = _odo_counter_lines(item)
             lines.extend(odo_max)
-            if _has_occurs_value(item):
+            filler = " WITH FILLER" if _has_filler_value(item) else ""
+            if filler or _has_occurs_value(item):
                 # A table element's VALUE needs a subscripted MOVE per
                 # occurrence; INITIALIZE's ALL TO VALUE phrase restores
                 # every occurrence (and every other child's VALUE) in one
                 # statement, then zero/space-fills the rest (issue #156).
+                # A FILLER's VALUE cannot be restored by name at all, and a
+                # case that overwrote the whole group (MOVE SPACES TO
+                # a report line) changed it: WITH FILLER restores it too
+                # (issue #196).
                 if odo_max:
                     # ALL TO VALUE THEN TO DEFAULT works item by item, so an
                     # ODO counter inside the group drops to 0 before its
                     # table is reached. Default-fill the whole group first,
                     # then restore VALUEs alone, which leaves a VALUE-less
                     # counter at its maximum (checked on GnuCOBOL 3.1).
-                    lines.append(f"INITIALIZE {item.name}")
+                    lines.append(f"INITIALIZE {item.name}{filler}")
                     lines.extend(odo_max)
-                    lines.append(f"INITIALIZE {item.name} ALL TO VALUE")
+                    lines.append(f"INITIALIZE {item.name}{filler} ALL TO VALUE")
                 else:
-                    lines.append(f"INITIALIZE {item.name} ALL TO VALUE THEN TO DEFAULT")
+                    lines.append(
+                        f"INITIALIZE {item.name}{filler}"
+                        " ALL TO VALUE THEN TO DEFAULT"
+                    )
             else:
                 lines.append(f"INITIALIZE {item.name}")
                 lines.extend(_child_value_restores(item, item.name))
@@ -338,6 +348,15 @@ def _has_occurs_value(group) -> bool:
     return walk(group, False)
 
 
+def _has_filler_value(group) -> bool:
+    """True when a FILLER somewhere under `group` declares a VALUE clause."""
+    return any(
+        (_is_filler(child) and getattr(child, "value_clause", None))
+        or _has_filler_value(child)
+        for child in _data_children(group)
+    )
+
+
 def _child_value_restores(group, qualifier: str) -> list[str]:
     """After INITIALIZE zeroes/space-fills a group, restore any child that
     declared its own VALUE clause (INITIALIZE does not honor those).
@@ -360,7 +379,9 @@ def _child_value_restores(group, qualifier: str) -> list[str]:
         if getattr(child, "level", None) is None:
             continue  # clause node, not a data item
         if _is_filler(child):
-            continue  # FILLER is unaddressable; its VALUE already survives INITIALIZE
+            # Unaddressable. A group with a FILLER VALUE never gets here:
+            # it is reset WITH FILLER ALL TO VALUE (see _has_filler_value).
+            continue
         if getattr(child, "occurs_clause", None) is not None:
             continue  # unsubscripted MOVE is illegal; see _has_occurs_value
         target = f"{child.name} OF {qualifier}"

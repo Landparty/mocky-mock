@@ -556,6 +556,16 @@ program could run. Full qualification is always legal, so nothing detects
 the ambiguity first. `_elementary_reset(item, target)` takes the reference
 to write to; top-level items still use their bare name.
 
+**FILLER VALUEs are restored (issue #196).** A FILLER cannot be named in
+a MOVE, and the old reset assumed its VALUE "survives INITIALIZE" -- true
+only until a case overwrote the whole group (`MOVE SPACES TO <report
+line>`, a group MOVE, READ INTO), after which every later case saw the
+changed bytes. A VALUE-less group with a FILLER VALUE anywhere under it
+(`_has_filler_value`) is now reset with `INITIALIZE <group> WITH FILLER ALL
+TO VALUE THEN TO DEFAULT`, which restores the FILLER's VALUE and every
+named child's in one statement (checked on GnuCOBOL 3.1). Combined with an
+ODO table it takes the two-step form above, each step `WITH FILLER`.
+
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.
 `PictureClause`) alongside subordinate data items.
