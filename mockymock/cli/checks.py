@@ -101,24 +101,38 @@ def extra_working_storage(checked: StaticCheckResult) -> list[str] | None:
     from mockymock.splicer import cics_eib
     from mockymock.splicer.captures import capture_working_storage_lines
     from mockymock.splicer.linkage import extra_working_storage_lines
+    from mockymock.splicer.reset import index_working_storage_lines
 
     lines: list[str] = []
     if checked.cics_eib is not None:
         lines.extend(cics_eib.working_storage_lines(checked.cics_eib))
     lines.extend(extra_working_storage_lines(checked.linkage_address_of))
     lines.extend(capture_working_storage_lines(checked.captures))
+    lines.extend(index_working_storage_lines(_index_names(checked)))
     return lines or None
 
 
 def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
-    """Reset lines the synthesized capture targets need between test cases.
-    Kept beside `extra_working_storage` so the declaration and the reset can
+    """Reset lines the synthesized capture targets need between test cases,
+    and the save/restore of every INDEXED BY index (issue #189). Kept
+    beside `extra_working_storage` so the declaration and the reset can
     never be added in one pipeline and forgotten in another -- the suite
     compiles to ONE binary, so a capture left unreset would let a case that
     never reached its CALL assert against the previous case's value."""
     from mockymock.splicer.captures import capture_reset_lines
+    from mockymock.splicer.reset import index_reset_lines
 
-    return capture_reset_lines(checked.captures)
+    return capture_reset_lines(checked.captures) + index_reset_lines(
+        _index_names(checked)
+    )
+
+
+def _index_names(checked: StaticCheckResult) -> list[str]:
+    from mockymock.splicer.reset import index_names
+
+    if checked.parse_result is None or checked.parse_result.ast is None:
+        return []
+    return index_names(checked.parse_result.ast)
 
 
 NO_ASSERTION = "NO_ASSERTION"

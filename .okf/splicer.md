@@ -566,6 +566,21 @@ TO VALUE THEN TO DEFAULT`, which restores the FILLER's VALUE and every
 named child's in one statement (checked on GnuCOBOL 3.1). Combined with an
 ODO table it takes the two-step form above, each step `WITH FILLER`.
 
+**INDEXED BY index names are saved and restored (issue #189).** An index
+name is not a data item, so the reset never saw it: a case that did `SET
+IX UP BY 1` left the next case subscripting from 2. A fresh index's value
+is compiler-defined (GnuCOBOL 3.1 starts at 1; 3.2 under `-std=mvs` was
+seen at 0), so instead of picking a constant, `reset.index_names` lists
+every `INDEXED BY` name in the DATA DIVISION, `index_working_storage_lines`
+declares `UT-IDX-SAVED` plus one `UT-IDX-SAVE-NNN USAGE INDEX` per name,
+and `index_reset_lines` makes the first reset (which runs before any
+program code) save each index and every reset restore it. Both are wired
+through `cli/checks.py`'s `extra_working_storage` / `extra_reset_lines_for`,
+so all four splice pipelines get them. An index a BEFORE-ALL step SETs is
+put back to its start-up value at each case, not to the BEFORE-ALL value
+(the snapshot does not cover index names). USAGE INDEX *data items* are
+still skipped (table above).
+
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.
 `PictureClause`) alongside subordinate data items.

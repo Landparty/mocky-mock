@@ -1237,6 +1237,17 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             _reject_sentence_period(m.group("value"), line_no)
             _reject_before_perform(case, "EXPECT", line_no)
+            if m.group("comparison") and m.group("value").strip().upper() in (
+                "TRUE",
+                "FALSE",
+            ):
+                # TO BE TRUE/FALSE tests a level-88 condition-name, which
+                # has no order: `TO BE GREATER THAN TRUE` means nothing.
+                raise CutParseError(
+                    f"line {line_no}: {m.group('value').strip()} can only "
+                    f"follow [NOT] TO BE (it tests a level-88 "
+                    f"condition-name): {line!r}"
+                )
             case.expectations.append(
                 ExpectDirective(
                     data_name=m.group("name"),

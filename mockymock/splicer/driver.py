@@ -240,6 +240,24 @@ def _build_testcase_paragraph(
     lines.append("")
 
     for expectation in case.expectations:
+        asserted = _condition_name_truth(expectation)
+        if asserted is not None:
+            # `EXPECT <88-name> TO BE TRUE`: a condition-name is a condition,
+            # not a value -- `IF FLAG-ON NOT = TRUE` does not compile and an
+            # 88 cannot be DISPLAYed, so test it directly and report the
+            # truth value it had instead (issue #189).
+            lines.append(
+                f"           IF {'NOT ' if asserted else ''}{expectation.data_name}"
+            )
+            got = "FALSE" if asserted else "TRUE"
+            lines.append(
+                f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: expected '
+                f"{expectation.data_name} {expectation.operator} "
+                f'{_display_text(expectation.expected_value)}, got {got}"'
+            )
+            lines.append("               ADD 1 TO UT-FAIL-COUNT")
+            lines.append("           END-IF")
+            continue
         fail_operator = _expect_fail_condition(expectation.operator)
         lines.append(
             f"           IF {expectation.data_name} {fail_operator} "
@@ -314,6 +332,18 @@ _EXPECT_FAIL_CONDITIONS = {
     "<=": ">",
     "NOT <=": "<=",
 }
+
+
+def _condition_name_truth(expectation) -> bool | None:
+    """For `EXPECT <name> [NOT] TO BE TRUE|FALSE`, whether the condition-name
+    is asserted to hold; None for every other EXPECT. TRUE and FALSE are
+    not values any data item can be compared with, so the form can only
+    mean a level-88 condition-name. The DSL parser refuses them with an
+    ordering comparison, leaving `=` and `NOT =` here."""
+    value = expectation.expected_value.strip().upper()
+    if value not in ("TRUE", "FALSE") or expectation.operator not in ("=", "NOT ="):
+        return None
+    return (value == "TRUE") != (expectation.operator == "NOT =")
 
 
 def _expect_fail_condition(operator: str) -> str:

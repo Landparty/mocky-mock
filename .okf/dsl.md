@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -103,6 +103,15 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   and `cobc` rejected the driver while `lint` passed; a PROVIDER row
   substituting such a value is refused at its `ROW` line. Phrase words are case-sensitive
   uppercase like every other keyword.
+- `EXPECT <88-name> [NOT] TO BE TRUE|FALSE` tests a level-88
+  condition-name (issue #189). TRUE/FALSE are not values any data item
+  compares with, so `driver._condition_name_truth` emits `IF NOT <name>`
+  / `IF <name>` instead of the relational `IF FLAG-ON NOT = TRUE`, which
+  cobc rejected ("condition-name not allowed here"); an 88 cannot be
+  DISPLAYed, so the FAIL line reports the truth value it had (`expected
+  FLAG-ON = TRUE, got FALSE`). TRUE/FALSE after an ordering phrase
+  (`TO BE GREATER THAN TRUE`) is a `CutParseError`. The target is not
+  checked statically: a non-88 name still fails at compile time.
 - `EXPECT <data-name> TO BE <value>`'s `<data-name>` and `MOVE <value> TO
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
   to an identifier — a table subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`,

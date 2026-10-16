@@ -608,3 +608,53 @@ def test_odo_table_is_initialized_at_its_maximum_size():
         "INITIALIZE WS-T2 ALL TO VALUE",
         "MOVE 0 TO WS-N2 OF WS-HDR OF WS-T2",
     ]
+
+
+INDEXED_BY_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. IDX.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-TAB.
+           05  WS-ROW          OCCURS 3 INDEXED BY IX-ROW.
+               10  WS-EV       PIC X OCCURS 5 INDEXED BY IX, IX2.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_index_names_are_saved_once_and_restored_every_case():
+    """Issue #189: an INDEXED BY index is not a data item, so the reset
+    never touched it and `SET IX UP BY 1` in one case shifted the next
+    case's subscripts. The first reset saves each index's start-up value;
+    every reset restores it."""
+    from mockymock.splicer.reset import (
+        index_names,
+        index_reset_lines,
+        index_working_storage_lines,
+    )
+
+    result = parse_cobol(INDEXED_BY_SOURCE, filename="idx.cbl")
+    assert result.success, result.errors
+    names = index_names(result.ast)
+    assert names == ["IX-ROW", "IX", "IX2"]
+    assert index_working_storage_lines(names) == [
+        '01  UT-IDX-SAVED  PIC X VALUE "N".',
+        "01  UT-IDX-SAVE-001  USAGE INDEX.",
+        "01  UT-IDX-SAVE-002  USAGE INDEX.",
+        "01  UT-IDX-SAVE-003  USAGE INDEX.",
+    ]
+    assert index_reset_lines(names) == [
+        'IF UT-IDX-SAVED = "N"',
+        "    SET UT-IDX-SAVE-001 TO IX-ROW",
+        "    SET UT-IDX-SAVE-002 TO IX",
+        "    SET UT-IDX-SAVE-003 TO IX2",
+        '    MOVE "Y" TO UT-IDX-SAVED',
+        "END-IF",
+        "SET IX-ROW TO UT-IDX-SAVE-001",
+        "SET IX TO UT-IDX-SAVE-002",
+        "SET IX2 TO UT-IDX-SAVE-003",
+    ]
+    assert index_working_storage_lines([]) == []
+    assert index_reset_lines([]) == []

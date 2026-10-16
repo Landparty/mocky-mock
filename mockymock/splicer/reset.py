@@ -472,3 +472,69 @@ def _elementary_reset(item, target: str | None = None) -> str | None:
             return f"MOVE 0 TO {name}"
         return None  # PIC-less, unrecognized usage: skip fail-safe
     return f"MOVE {'0' if _is_numeric(item) else 'SPACES'} TO {name}"
+
+
+# Driver fields that hold each INDEXED BY index's start-up value (issue #189).
+INDEX_SAVED_FLAG = "UT-IDX-SAVED"
+INDEX_SAVE_PREFIX = "UT-IDX-SAVE-"
+
+
+def index_names(program) -> list[str]:
+    """Every `INDEXED BY` index name declared in the program's DATA
+    DIVISION, in declaration order."""
+    data_division = program.get_division("DATA")
+    if data_division is None:
+        return []
+    names: list[str] = []
+
+    def walk(node) -> None:
+        for child in _data_children(node):
+            clause = getattr(child, "occurs_clause", None)
+            for name in getattr(clause, "index_names", None) or []:
+                if name and name.upper() not in names:
+                    names.append(name.upper())
+            walk(child)
+
+    for section in getattr(data_division, "sections", data_division.children):
+        walk(section)
+    return names
+
+
+def index_working_storage_lines(names: list[str]) -> list[str]:
+    """Declarations for the saved start-up value of each index name."""
+    if not names:
+        return []
+    lines = [f'01  {INDEX_SAVED_FLAG}  PIC X VALUE "N".']
+    lines.extend(
+        f"01  {INDEX_SAVE_PREFIX}{n:03d}  USAGE INDEX."
+        for n in range(1, len(names) + 1)
+    )
+    return lines
+
+
+def index_reset_lines(names: list[str]) -> list[str]:
+    """Put every `INDEXED BY` index back to the value the program started
+    with (issue #189): an index name is not a data item, so the
+    WORKING-STORAGE reset never saw it, and a case that did `SET IX UP BY
+    1` left the next case subscripting from 2. A fresh index's value is
+    compiler-defined (GnuCOBOL 3.1 starts it at 1; 3.2 under -std=mvs was
+    seen at 0), so rather than pick a constant, the first reset -- which
+    runs before any program code -- saves each index, and every reset
+    restores it."""
+    if not names:
+        return []
+    saves = [
+        f"SET {INDEX_SAVE_PREFIX}{n:03d} TO {name}"
+        for n, name in enumerate(names, start=1)
+    ]
+    restores = [
+        f"SET {name} TO {INDEX_SAVE_PREFIX}{n:03d}"
+        for n, name in enumerate(names, start=1)
+    ]
+    return [
+        f'IF {INDEX_SAVED_FLAG} = "N"',
+        *(f"    {line}" for line in saves),
+        f'    MOVE "Y" TO {INDEX_SAVED_FLAG}',
+        "END-IF",
+        *restores,
+    ]
