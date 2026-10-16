@@ -556,3 +556,83 @@ def test_statement_top_level_problem_set_when_perform_shares_its_line():
         statement_top_level_problem(perform, scope_map, lines)
         == "does not start its own line"
     )
+
+
+# --- #310: a compiler-directing line never belongs to a statement's span ---
+
+REPLACE_OFF_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RP.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-X PIC X(4) VALUE SPACES.
+       01 WS-Y PIC X(4) VALUE SPACES.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           REPLACE ==WS-Y== BY ==WS-X==.
+           CALL "SUBPGM" USING WS-Y
+           REPLACE OFF.
+           MOVE "YYYY" TO WS-Y
+           GOBACK.
+"""
+
+COND_COMPILE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-X PIC X(4) VALUE SPACES.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+       >>IF TESTMODE DEFINED
+           CALL "TESTPGM" USING WS-X
+       >>ELSE
+           CALL "REALPGM" USING WS-X
+       >>END-IF
+           GOBACK.
+       OTHER-PARA.
+       >>IF TESTMODE DEFINED
+           DISPLAY "T"
+       >>ELSE
+           GOBACK
+       >>END-IF
+           .
+"""
+
+
+def _span_of(source, predicate):
+    result = parse_cobol(source, filename="d.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    procedure = result.ast.get_division("PROCEDURE")
+    statement = next(
+        s for p in procedure.paragraphs for s in p.statements if predicate(s)
+    )
+    start, end = statement_span(
+        statement, collect_boundaries(result.ast), len(lines), lines
+    )
+    return lines[start - 1 : end]
+
+
+def test_span_stops_before_replace_off():
+    text = _span_of(REPLACE_OFF_SOURCE, lambda s: isinstance(s, CallStatement))
+    assert any("CALL" in line for line in text)
+    assert not any("REPLACE" in line for line in text)
+
+
+def test_span_stops_before_end_if_directive():
+    text = _span_of(
+        COND_COMPILE_SOURCE,
+        lambda s: isinstance(s, CallStatement) and "REALPGM" in str(s.to_dict()),
+    )
+    assert any("REALPGM" in line for line in text)
+    assert not any(">>" in line for line in text)
+
+
+def test_goback_span_stops_before_end_if_directive():
+    text = _span_of(
+        COND_COMPILE_SOURCE,
+        lambda s: type(s).__name__ == "GobackStatement" and s.location.line > 13,
+    )
+    assert any("GOBACK" in line for line in text)
+    assert not any(">>" in line for line in text)

@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-16T12:00:00Z
+timestamp: 2026-10-16T14:00:00Z
 ---
 
 # Overview
@@ -88,6 +88,17 @@ program's last statement. `collect_boundaries` walks every SECTION header
 (`procedure._sections.values()`, keyed by `.location.line`), every
 paragraph (including nested `_sections`), and every statement's
 `.location.line`.
+
+**Compiler-directing lines end every span (#310):** `normalize_fixed_format`
+keeps `>>IF`/`>>ELSE`/`>>END-IF`/`>>DEFINE` and `REPLACE ... .`/`REPLACE OFF.`
+lines, but they are not AST statements, so no boundary list has them.
+`_trim_trailing_blank_lines` (shared by `statement_span`, `nested_statement_span`
+and `_nested_site_span`, so mock splices and GOBACK/STOP RUN neutralization
+alike) first cuts the span before the first line after the start whose text
+begins with `>>` or `REPLACE\b`, then trims blank lines. Before this a
+directive directly after a mocked statement was commented out with it: a lost
+`REPLACE OFF.` silently kept the REPLACE active over later code, a lost
+`>>END-IF` failed cobc after a clean lint.
 
 **SECTION headers are boundaries (2026-07-07 fix, audit finding 2.2):**
 before this fix `collect_boundaries` collected only paragraph headers and

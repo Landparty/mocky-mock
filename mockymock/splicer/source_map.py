@@ -30,6 +30,7 @@ docs/2026-07-05-nested-mock-targets-design.md for the safety rules.
 
 from __future__ import annotations
 
+import re
 from bisect import bisect_right
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -106,8 +107,22 @@ def statement_span(
     return start, _trim_trailing_blank_lines(start, end, lines)
 
 
+# A compiler-directing line (`>>IF`/`>>ELSE`/`>>END-IF`/`>>DEFINE`/...,
+# `REPLACE ... .`, `REPLACE OFF.`) is kept by normalize_fixed_format but is
+# never an AST statement, so it is not in any boundary list. Without this
+# test a directive directly after a mocked statement fell inside its span and
+# was commented out with it: a lost `REPLACE OFF.` left the REPLACE active
+# over the rest of the program, a lost `>>END-IF` failed cobc (#310).
+_DIRECTIVE_LINE = re.compile(r"\s*(>>|REPLACE\b)", re.IGNORECASE)
+
+
 def _trim_trailing_blank_lines(start: int, end: int, lines: list[str]) -> int:
-    """Walk `end` back to the last non-blank line, never past `start`."""
+    """Cut `end` before the first compiler-directing line after `start`,
+    then walk it back to the last non-blank line, never past `start`."""
+    for line_no in range(start + 1, end + 1):
+        if _DIRECTIVE_LINE.match(lines[line_no - 1]):
+            end = line_no - 1
+            break
     while end > start and not lines[end - 1].strip():
         end -= 1
     return end
