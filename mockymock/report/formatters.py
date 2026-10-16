@@ -23,6 +23,14 @@ _XML_ILLEGAL_RE = re.compile(
 # hypothesis is only offered when the binary exited cleanly (code 0),
 # which is what STOP RUN does.
 _DEFAULT_CRASH_HYPOTHESIS = "PERFORM target reached STOP RUN?"
+# The binary exited 0 with a case unfinished: nothing aborted, control just
+# never came back to the driver (issue #238).
+CLEAN_EXIT_CRASH_DETAIL = (
+    "binary exited with code 0 before the case finished: "
+    f"{_DEFAULT_CRASH_HYPOTHESIS} Or a GO TO left the PERFORMed range "
+    "(e.g. into another paragraph of its SECTION), so control never "
+    "returned to the test driver"
+)
 
 
 def _xml_safe(text: str) -> str:

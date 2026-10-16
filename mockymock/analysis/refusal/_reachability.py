@@ -199,6 +199,7 @@ def _reachable_paragraphs(
     thru: str | None = None,
     skip_traversal: frozenset[str] | set[str] = frozenset(),
     neutralized_goto: frozenset[str] | set[str] = frozenset(),
+    follow_whenever: bool = True,
 ) -> tuple[set[str], list[RefusalReason]]:
     """Return (reachable paragraph/section names, flow refusals), computed
     in a single BFS pass over PerformStatement and GoStatement edges, plus
@@ -279,7 +280,12 @@ def _reachable_paragraphs(
     disqualifies any target also named by a computed/multi-target GO TO:
     a name in this set is therefore never reachable through any GO TO
     shape this walk would otherwise have to model. Callers that do not
-    splice (or predict a run that will not splice) must leave it empty."""
+    splice (or predict a run that will not splice) must leave it empty.
+
+    `follow_whenever=False` drops the emulated `EXEC SQL WHENEVER ... GO
+    TO` edges (and their targets from the fall-through seeds): only for a
+    case whose mocks can never make one fire
+    (`sql_whenever.whenever_can_fire`, issue #244)."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
@@ -351,8 +357,10 @@ def _reachable_paragraphs(
             )
 
     seen: set[str] = set()
-    whenever = whenever_actions(program)
-    go_to_targets = _go_to_targets(program) - set(neutralized_goto)
+    whenever = whenever_actions(program) if follow_whenever else {}
+    go_to_targets = _go_to_targets(program, include_whenever=follow_whenever) - set(
+        neutralized_goto
+    )
     index_by_name = (
         {p.paragraph_name: i for i, p in enumerate(ordered)} if ordered else {}
     )
@@ -597,7 +605,7 @@ def _reachable_paragraphs(
     return seen, reasons
 
 
-def _go_to_targets(program) -> set[str]:
+def _go_to_targets(program, include_whenever: bool = True) -> set[str]:
     """Every paragraph/section name that is EVER a GO TO target anywhere
     in the whole program, regardless of reachability from any one test
     case -- a categorical, whole-program exclusion list.
@@ -619,8 +627,10 @@ def _go_to_targets(program) -> set[str]:
             if statement.target_paragraph:
                 targets.add(statement.target_paragraph)
     # An `EXEC SQL WHENEVER ... GO TO` target is entered by a spliced GO TO
-    # (issue #195) exactly like a written one.
-    targets |= whenever_targets(program)
+    # (issue #195) exactly like a written one -- unless the caller is judging
+    # a case whose mocks can never make the WHENEVER fire (issue #244).
+    if include_whenever:
+        targets |= whenever_targets(program)
     return targets
 
 

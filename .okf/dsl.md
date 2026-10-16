@@ -177,7 +177,11 @@ default: `check_test_case(shared=..., matched_out=...)` no longer
 refuses one a given case doesn't reach; `cli.checks` refuses it
 (`UNMATCHED_MOCK`, "not reached by any test case or hook step") only
 when nothing reaches it (2026-10-10; before, every case had to reach
-every shared mock). See
+every shared mock). "Nothing" means the whole suite, not a `--case`/`--tag`
+selection: when the selected cases leave a shared mock unmatched, the
+unselected cases are checked for their matches only (their own refusals
+are discarded), so selecting a case never refuses a clean suite (issue
+#250). See
 `docs/2026-07-20-before-blocks-and-file-status-design.md`.
 
 ### `FILE-STATUS IS <mnemonic-or-code>`
@@ -1053,8 +1057,11 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
 - **SQL status-only bodies (#148).** OPEN/CLOSE/COMMIT-style bodies set
   `SQLCODE` to 0 when the fixture names no SQLCODE.
 - **No entry (#150).** A scenario with `entry=''` (IMS `ENTRY 'DLITCBL'`
-  programs) falls back to the first named PROCEDURE DIVISION paragraph
-  (`_first_paragraph`); `generate --with-data` exits 1 when no scenario
+  programs) falls back to the first named PROCEDURE DIVISION section
+  or paragraph by source line (`_first_paragraph`) -- sections count
+  since #238, so a section-structured program whose main line sits
+  unnamed under `A000-MAIN SECTION.` is entered with `PERFORM A000-MAIN`,
+  not with the first paragraph of a later section; `generate --with-data` exits 1 when no scenario
   became a TESTCASE. A `CALL 'CBLTDLI'` get loop is covered by #156 below.
 - **Looped MQGET / CBLTDLI get calls (#156).** When a CALL sits in a loop
   whose UNTIL reads the call's own reply (`analysis.loops.loop_guard_words`,

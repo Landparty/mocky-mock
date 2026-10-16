@@ -181,12 +181,27 @@ a validated `.span` or a precise `.unspliceable_reason` string (fail
 closed) — see the spliceability rules in
 [docs/2026-07-05-nested-mock-targets-design.md](../docs/2026-07-05-nested-mock-targets-design.md).
 Key preconditions checked there: no ancestor is itself a boundary
-statement, the site has no clause bodies of its own, it owns its start
+statement, it owns its start
 line (own-verb terminators like END-CALL/END-READ are exempt — they
 belong to the statement per `_VERB_TERMINATORS`), the next boundary owns
 its line too, and (EXEC only) the span's text actually contains
 `END-EXEC`. This must run **before** the refusal gate and the splicer look
 at nested sites — it is idempotent.
+
+A nested site WITH clause bodies of its own (`READ ... AT END ... END-READ`
+in an inline PERFORM, `CALL ... ON EXCEPTION ... END-CALL` in an IF; issue
+#258) is spanned by `_nested_clause_site_span`: from its start line to the
+line of its own explicit `_VERB_TERMINATORS` word, found by walking the
+scope map past its own clause-body statement starts (every boundary in
+between must be one of those, or a scope word) and taking the first
+own-terminator after the last of them. Refused when there is no such
+terminator before the next statement that is not its own (the clause would
+run on to whatever closes the enclosing block -- not guessed), when a
+statement of its own kind sits in its clause bodies (which terminator is
+whose is ambiguous), or when anything but a period follows the terminator
+on its line. RETURN has no `_VERB_TERMINATORS` entry, so a nested `RETURN
+... END-RETURN` stays refused. Before #258 every nested site with clause
+bodies was refused, which made the standard inline read loop untestable.
 
 # Flow-Mock Header Dispatch (2026-07-20, MOCK PARAGRAPH/SECTION)
 
@@ -377,7 +392,23 @@ FOUND), in that order -- for the WHENEVERs in force at that statement in
 *physical source order* (`whenever_actions`; `CONTINUE` switches a
 condition off; INCLUDE/DECLARE/BEGIN-END DECLARE get no checks). The trap
 of an unmocked site gets none. The reachability walk follows each check's
-GO TO like a written one, and `_go_to_targets` includes the handlers.
+GO TO like a written one, and `_go_to_targets` includes the handlers --
+but only for a test case whose mocks can make a WHENEVER fire (issue
+#244, option B). `sql_whenever.whenever_can_fire(program, case.mocks)` is
+fail closed: it is False only when every SQL mock provably leaves SQLCODE
+at a value no active condition fires on (a body with no IF/EVALUATE/
+PERFORM/... whose every SQLCODE/SQLCA reference is `MOVE <integer> TO
+SQLCODE`; a ROWS mock only while NOT FOUND is inactive and no row sets a
+firing SQLCODE; never while a WHENEVER SQLWARNING GO TO is active). For
+such a case `check_test_case` and `find_terminator_plans` walk with
+`_reachable_paragraphs(follow_whenever=False)` and judge terminators
+against `_go_to_targets(include_whenever=False)`, so the success path is
+neither refused for the handler's GOBACK nor asked to mock its ROLLBACK.
+A case that can fire it is still refused (UNSUPPORTED_TERMINATOR_LAYOUT),
+naming the WHENEVER's line instead of a GO TO the program never wrote.
+`generate` (bundle and `--per-paragraph`) asks the same question of the
+mocks it is about to write (`ProgramContext.whenever_quiet`, the lines
+read back through `parse_cut`) and narrows the reachable set to match.
 `check_nested_exec` validates WHENEVER spans like any EXEC and refuses an
 action it cannot read (`UNSUPPORTED_SQL_WHENEVER`); a leftover `MOCK SQL
 "WHENEVER"` is UNMATCHED_MOCK with a message saying why. CICS `HANDLE
@@ -390,8 +421,9 @@ statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY / ON
 EXCEPTION / NOT ON EXCEPTION (/ ON OVERFLOW) bodies, which
 `orchestrator.splice_program` gets from
 `analysis.clause_bodies.lift_clause_bodies(site.statement, lines)` for
-every mocked **top-level** site (a nested site with clauses is refused as
-unspliceable, so it never gets here). Before #209 the whole span was
+every mocked site -- top-level, or nested with a span bounded by its own
+scope terminator (#258; `dsl.generator._at_end_handling` mirrors this with
+`not site.nested or site.span is not None`). Before #209 the whole span was
 replaced and those bodies were deleted with it: a mocked READ fed rows the
 program's own `NOT AT END` never processed, `FILE-STATUS IS
 RECORD-NOT-FOUND` never reached `INVALID KEY`, and a mutant inside a

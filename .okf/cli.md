@@ -384,7 +384,10 @@ Flow (`_cmd_generate`):
     followed by a stderr note that the file was written but `lint` refuses
     it, and generate exits 1 (#231 — it used to exit 0 on a case its own
     lint rejects). The `.cut` is still written. `UNMOCKED_*` refusals are
-    left alone, since a MOCK block fixes those. `--per-paragraph`
+    left alone, since a MOCK block fixes those -- except one with no
+    `suggested_fix`: `check_test_case` gives none (and says why in the
+    message) when the site cannot be spliced where it stands (nested, no
+    span), because the MOCK would be refused in turn (#258). `--per-paragraph`
     (`bundle=None`) is exempt: one case per paragraph is a starting point
     to prune, and some of those cases are expected to be refused.
 
@@ -675,8 +678,9 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     code is translated into `crash_detail` evidence for the formatters:
     exit 124 (TIMEOUT_EXIT_CODE) -> `"binary timed out (exit 124); see
     stderr below"`; any other nonzero exit -> `"binary exited with code
-    <n>"`; exit 0 -> `None` (the formatters then fall back to the STOP RUN
-    hypothesis for crashed cases — a reached STOP RUN exits 0).
+    <n>"`; exit 0 with a crashed case -> `CLEAN_EXIT_CRASH_DETAIL` (the
+    STOP RUN hypothesis plus a GO TO out of the PERFORMed range, issue
+    #238); exit 0 otherwise -> `None`.
     `format_console(suite_result, crash_detail=...)` is printed always;
     then, if `executed.stderr` is non-empty, it is printed under a
     `mockymock run: binary stderr:` header — this is how run_binary's

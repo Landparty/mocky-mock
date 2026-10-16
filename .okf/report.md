@@ -152,7 +152,12 @@ reached `STOP RUN` does) do they fall back to the
 `_DEFAULT_CRASH_HYPOTHESIS` text `"PERFORM target reached STOP RUN?"`.
 Do not re-hardcode that hypothesis into the message: it was previously
 shown even for timeouts and aborts whose stderr evidence had been
-discarded (audit 2026-07-07, findings 4.2/5.1).
+discarded (audit 2026-07-07, findings 4.2/5.1). Since issue #238 `run`
+also passes `CLEAN_EXIT_CRASH_DETAIL` when the binary exited 0 with a
+case unfinished: it embeds the same STOP RUN hypothesis and adds the other
+clean-exit cause, a GO TO out of the PERFORMed range (e.g. into another
+paragraph of a SECTION, which the GO-TO-exit rewrite does not cover), so
+the console line and the JSON `crashDetail` are never blank/null there.
 
 ## Bug-hunt corrections (2026-10-05)
 

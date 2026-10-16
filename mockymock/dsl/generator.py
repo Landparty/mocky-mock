@@ -509,21 +509,54 @@ class ProgramContext:
         behavior: every name is treated as unique."""
         return self.name_counts.get(name.upper(), 1) <= 1
 
-    def reachable_from(self, entry: str) -> set[str] | None:
+    def reachable_from(
+        self, entry: str, follow_whenever: bool = True
+    ) -> set[str] | None:
         """Paragraph/section names a `PERFORM entry` can execute, or None
         when that can't be established (no program, unknown entry, or a
         flow the reachability model itself refuses) -- callers then keep
-        every site, as before."""
+        every site, as before. `follow_whenever=False` leaves out the
+        `EXEC SQL WHENEVER` handlers, as lint does for a case whose mocks
+        can never make one fire (issue #244)."""
         if self.program is None:
             return None
         from mockymock.analysis.refusal._reachability import _reachable_paragraphs
 
         reached, reasons = _reachable_paragraphs(
-            self.program, entry, neutralized_goto=self.neutralized_goto
+            self.program,
+            entry,
+            neutralized_goto=self.neutralized_goto,
+            follow_whenever=follow_whenever,
         )
         if reasons or entry not in reached:
             return None
         return reached
+
+    def whenever_quiet(self, directive_lines: list[str]) -> bool:
+        """True when a TESTCASE with these MOCK lines provably never makes
+        an emulated `EXEC SQL WHENEVER ... GO TO` fire -- the same
+        judgement lint makes (`sql_whenever.whenever_can_fire`), read off
+        the lines through the real .cut parser. False on any doubt."""
+        if self.program is None:
+            return False
+        from mockymock.analysis.sql_whenever import (
+            whenever_actions,
+            whenever_can_fire,
+        )
+        from mockymock.dsl.parser import CutParseError, parse_cut
+
+        if not whenever_actions(self.program):
+            return False
+        text = "\n".join(
+            ['TESTSUITE "x"', 'TESTCASE "x"']
+            + [f"    {line}" for line in directive_lines]
+            + ["    PERFORM X"]
+        )
+        try:
+            (case,) = parse_cut(text).test_cases
+        except (CutParseError, ValueError):
+            return False
+        return not whenever_can_fire(self.program, case.mocks)
 
     def exact_count_scope(
         self, entry: str, reachable: set[str], loops_exact: bool = False
@@ -946,6 +979,20 @@ def _scaffold_placeholder(
     for paragraph_name, own_sites in sites_by_paragraph.items():
         sites = _reachable_sites(paragraph_name, own_sites, sites_by_paragraph, context)
         directives = _directives_for(sites, surface, context)
+        if context is not None and context.whenever_quiet(
+            _directive_text_lines(directives)
+        ):
+            # Placeholder mocks that never make a WHENEVER fire never reach
+            # its handler: leave the handler's boundaries out, as lint does
+            # (issue #244).
+            sites = _reachable_sites(
+                paragraph_name,
+                own_sites,
+                sites_by_paragraph,
+                context,
+                follow_whenever=False,
+            )
+            directives = _directives_for(sites, surface, context)
         labels = ", ".join(dict.fromkeys(site.label for site in sites))
         lines.append(
             f'TESTCASE "{_quote_safe(f"{paragraph_name} boundaries: {labels}")}"'
@@ -967,6 +1014,7 @@ def _reachable_sites(
     own_sites: list[BoundarySite],
     sites_by_paragraph: dict[str, list[BoundarySite]],
     context: ProgramContext | None,
+    follow_whenever: bool = True,
 ) -> list[BoundarySite]:
     """Every boundary site a `PERFORM entry` can reach: the paragraph's own
     sites first, then those of every paragraph it reaches (PERFORM, GO TO,
@@ -977,7 +1025,11 @@ def _reachable_sites(
     opens its result-set cursor). Falls back to the own sites when
     reachability can't be established, as the bundle-driven scaffold does
     (issue #143)."""
-    reachable = context.reachable_from(entry) if context is not None else None
+    reachable = (
+        context.reachable_from(entry, follow_whenever=follow_whenever)
+        if context is not None
+        else None
+    )
     if reachable is None:
         return own_sites
     sites = list(own_sites)
@@ -985,6 +1037,16 @@ def _reachable_sites(
         if paragraph_name != entry and paragraph_name in reachable:
             sites.extend(paragraph_sites)
     return sites
+
+
+def _directive_text_lines(directives: list[tuple[str, list[str]]]) -> list[str]:
+    """`_directives_for`'s output as the .cut lines it is written as."""
+    lines: list[str] = []
+    for directive_line, body in directives:
+        lines.append(directive_line)
+        lines.extend(f"    {body_line}" for body_line in body)
+        lines.append("END-MOCK")
+    return lines
 
 
 def _directives_for(
@@ -1492,27 +1554,36 @@ def _warn_on_key_mismatch(
 
 
 def _first_paragraph(program) -> str | None:
-    """The first named PROCEDURE DIVISION paragraph, by source line.
+    """The first named PROCEDURE DIVISION section or paragraph, by source
+    line -- where the program itself enters.
 
     The fallback entry for a scenario cobol-parser left without one: an IMS
     program opening with `ENTRY 'DLITCBL' USING ...` comes back with
     `entry=''` because the ENTRY statement sits in an unnamed leading
-    paragraph (issue #150)."""
+    paragraph (issue #150). A section-structured program (`A000-MAIN
+    SECTION.` with its main line directly under the header) comes back the
+    same way; its first *paragraph* name belongs to a later section, so
+    the section headers count too (issue #238)."""
     procedure = program.get_division("PROCEDURE") if program is not None else None
     if procedure is None:
         return None
+
+    def line_of(node) -> int:
+        return int(getattr(getattr(node, "location", None), "line", 0) or 0)
+
     named = [
-        paragraph
+        (line_of(paragraph), str(paragraph.paragraph_name))
         for paragraph in _all_paragraphs(procedure)
         if getattr(paragraph, "paragraph_name", "")
     ]
+    named.extend(
+        (line_of(section), str(section.section_name))
+        for section in getattr(procedure, "_sections", {}).values()
+        if getattr(section, "section_name", "")
+    )
     if not named:
         return None
-    first = min(
-        named,
-        key=lambda paragraph: getattr(getattr(paragraph, "location", None), "line", 0),
-    )
-    return str(first.paragraph_name)
+    return min(named, key=lambda pair: pair[0])[1]
 
 
 def _build_shadow_tally_registry(
@@ -1894,7 +1965,7 @@ def _at_end_handling(
     splicer's own outcome field. Otherwise the clause is replicated or
     lifted into the branch as before."""
     at_end = getattr(site.statement, "at_end_clause", None) or []
-    if at_end and source is not None and not site.nested:
+    if at_end and source is not None and (not site.nested or site.span is not None):
         lifted_clauses = lift_clause_bodies(site.statement, source.lines)
         if lifted_clauses and any(c.attr == "at_end_clause" for c in lifted_clauses):
             signal = [
@@ -2877,6 +2948,32 @@ def _scaffold_with_bundle(
         directive_lines, declared_keys, call_count_overrides = _bundle_mock_directives(
             scenario, surface, scenario_keys, registry, placeholder_keys, source
         )
+        if (
+            source is not None
+            and reachable is not None
+            and source.whenever_quiet(directive_lines)
+        ):
+            # Mocks that never make a WHENEVER fire never reach its handler
+            # either: lint then leaves the handler out of the reachable set
+            # and would refuse its boundaries' mocks as UNMATCHED (#244).
+            quiet = source.reachable_from(entry, follow_whenever=False)
+            if quiet is not None and quiet != reachable:
+                reachable = quiet
+                scenario_keys = {
+                    pair: site
+                    for pair, site in mockymock_keys.items()
+                    if site.paragraph_name in reachable
+                }
+                directive_lines, declared_keys, call_count_overrides = (
+                    _bundle_mock_directives(
+                        scenario,
+                        surface,
+                        scenario_keys,
+                        registry,
+                        placeholder_keys,
+                        source,
+                    )
+                )
         lines.extend(f"    {line}" for line in directive_lines)
         lines.append(f"    PERFORM {entry}")
         lines.extend(

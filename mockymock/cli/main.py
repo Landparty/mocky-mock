@@ -1225,7 +1225,9 @@ def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
         remaining.extend(
             f"{where}refused ({r.code}): {r.message}"
             for r in reasons
-            if not r.code.startswith("UNMOCKED_")
+            # An UNMOCKED_* refusal with no suggested MOCK is one no MOCK
+            # can fix (a site that cannot be spliced where it stands).
+            if not (r.code.startswith("UNMOCKED_") and r.suggested_fix)
         )
     remaining.extend(
         problem
@@ -1559,7 +1561,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         parse_gcov,
         summarize_original,
     )
-    from mockymock.report.formatters import format_console, format_junit_xml
+    from mockymock.report.formatters import (
+        CLEAN_EXIT_CRASH_DETAIL,
+        format_console,
+        format_junit_xml,
+    )
     from mockymock.report.json_report import (
         build_json_report,
         format_json_report,
@@ -1857,6 +1863,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
         crash_detail = "binary timed out (exit 124); see stderr below"
     elif executed.exit_code != 0:
         crash_detail = f"binary exited with code {executed.exit_code}"
+    elif any(result.crashed for result in suite_result.results):
+        # A clean exit with a case left unfinished: control never came back
+        # to the driver. Saying so beats a bare [CRASH] (issue #238).
+        crash_detail = CLEAN_EXIT_CRASH_DETAIL
     else:
         crash_detail = None
     not_run = not_run_case_names(suite_result, suite)
