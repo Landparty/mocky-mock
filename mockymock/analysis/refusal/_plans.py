@@ -106,12 +106,14 @@ _RETURN_CODE_OPERAND_RE = re.compile(r"^(?:[+-]?\d+|[A-Z0-9][A-Z0-9-]*)$", re.I)
 
 _RESP_FIELD_RE = re.compile(r"\bRESP\s*\(\s*([A-Z0-9][A-Z0-9-]*)\s*\)", re.I)
 _RESP_OPTION_RE = re.compile(r"\bRESP\s*\(", re.I)
+_NOHANDLE_RE = re.compile(r"\bNOHANDLE\b", re.I)
 
 
 def _cics_resp_field(statement) -> tuple[str | None, str | None]:
     """(field, problem) for an EXEC CICS terminator's RESP option: the
-    single data name in `RESP(field)`, (None, None) when there is no RESP,
-    or a problem when RESP names something this can't test against 0."""
+    single data name in `RESP(field)`, `EIBRESP` for a NOHANDLE command
+    without RESP, (None, None) when there is neither, or a problem when
+    RESP names something this can't test against 0."""
     text = str(getattr(statement, "cics_text", "") or "")
     match = _RESP_FIELD_RE.search(text)
     if match is not None:
@@ -122,6 +124,10 @@ def _cics_resp_field(statement) -> tuple[str | None, str | None]:
             "name, so it can't tell a failed command (which returns "
             "control) from a successful one (which ends the program)"
         )
+    if _NOHANDLE_RE.search(text):
+        # NOHANDLE returns control on a failed command just as RESP does,
+        # with the condition in EIBRESP (issue #301).
+        return "EIBRESP", None
     return None, None
 
 

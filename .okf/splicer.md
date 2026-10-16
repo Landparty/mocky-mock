@@ -287,7 +287,12 @@ passes it as `statement_text`) and emits the literal token verbatim
 (`MOVE "ABC" TO target`). It trusts the text only when its operand list
 agrees with the parser's operand for operand; otherwise it falls back to
 the name (2026-09-28 -- before, the MOVE silently copied an unrelated item
-named ABC, or failed in cobc). `plan_captures` (given `lines` by
+named ABC, or failed in cobc). A subscript or reference modification after
+an operand (`WS-ENT(WS-I)`, `WS-A(1:2)`) is consumed as one balanced group
+and compared with cobolparser's spaced-out name (`WS-ENT ( WS-I )`) with
+whitespace and commas dropped (`_operand_key`); the scan used to give up
+on any parenthesis, which put a literal next to a subscripted operand back
+on the name fallback (#291). Only an unbalanced group still falls back. `plan_captures` (given `lines` by
 `cli.checks`) applies the same recognition via `_site_argument`, so a
 `UT-CAP-` target for a literal is declared from the literal itself
 (`_literal_declaration`: `PIC X(len)` for a quoted literal, `PIC [S]9(i)[V9(d)]`
@@ -1101,6 +1106,10 @@ GOBACK, and the orchestrator wraps the site's own dispatch block with
 field is preset to 0 before the dispatch (what a successful command
 leaves there; the mock body may set a failure code) and the exit is taken
 only `IF field = 0`. A RESP operand that is not one data name refuses.
+`NOHANDLE` without RESP is the same contract with the condition in
+EIBRESP, so `resp_field` is `EIBRESP` there (#301), and
+`analysis.cics_eib.cics_eib_plan` counts such a command as a reference to
+EIBRESP so DFHEIBLK is synthesized even when the program never names it.
 `_falls_through` and `exact_counts` treat these commands as path ends.
 
 **`RETURNING`/`GIVING` operands** (issue #219): `STOP RUN RETURNING n` /

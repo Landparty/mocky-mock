@@ -835,7 +835,17 @@ paragraph-grouped path described above, unchanged. A real
   naively emitting one directive per key would declare two `MOCK OPEN`
   directives that both match the same physical site
   (`AMBIGUOUS_MOCK`). One representative key per physical site is chosen
-  and its status data merged instead. It returns `(lines, declared_keys,
+  and its status data merged instead. The representative is
+  `generator.file_op_key(site, surface)` -- the same choice the
+  bundle-less scaffold, lint's `suggested_fix` and `--fill` make
+  (`_directive_for`): a multi-file OPEN/CLOSE is keyed on a file that is
+  also the *only* file of another site of the same verb, else on
+  `keys[0]`. Keying `OPEN INPUT A B` on `A` left a later `OPEN OUTPUT B`
+  needing `MOCK OPEN B`, which also matches the multi-file site, so the
+  generated suite refused `AMBIGUOUS_MOCK` (issue #312). One `MOCK OPEN B`
+  now covers both sites. Shapes where no single key covers every site
+  (`OPEN A B` plus separate `OPEN A` and `OPEN B`) still need hand
+  editing; per-file dispatch for one multi-file site is not built. It returns `(lines, declared_keys,
   call_count_overrides)` — the third element covers `--placeholder`'s
   effect on VERIFY counts, see below. `declared_keys` is only the
   literally-emitted primary keys and gates

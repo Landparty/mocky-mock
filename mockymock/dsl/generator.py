@@ -74,6 +74,7 @@ from mockymock.analysis.mock_surface import (
     MockSurface,
     _all_paragraphs,
     _nested_statement_lists,
+    accept_key,
     analyze_file_status_fields,
 )
 from mockymock.dsl.fixture_bundle import (
@@ -1159,7 +1160,9 @@ def _with_captures(
     return context.captures_for(category, key) + body
 
 
-def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
+def _placeholder_body_for(
+    category: MockCategory, key: str, site: BoundarySite | None = None
+) -> list[str]:
     """The body `_directive_for` gives `(category, key)` outside a fixture
     bundle: `_PLACEHOLDER_BODIES`'s entry (CALL/DYNCALL/SQL), or ACCEPT's
     own `MOVE SPACES TO <key>`, or empty for everything else (the file-op
@@ -1169,8 +1172,33 @@ def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
     emitted for this site, rather than a second, driftable copy of this
     per-category logic."""
     if category is MockCategory.ACCEPT:
-        return [f"MOVE SPACES TO {key}"]
+        # The ACCEPT's own target, subscript/qualifier included: the key is
+        # its bare data-name (issue #311), which may name a table or an
+        # ambiguous field.
+        target = site.accept_target if site is not None else None
+        return [f"MOVE SPACES TO {target or key}"]
     return list(_PLACEHOLDER_BODIES.get(category, []))
+
+
+def file_op_key(site: BoundarySite, surface: MockSurface | None) -> str:
+    """The key a MOCK for this file-op site uses. A multi-file `OPEN A B`
+    is one site matched by a MOCK for any of its files, and two MOCKs
+    matching it are AMBIGUOUS_MOCK. When one of its files is also the only
+    file of another site of the same verb (`CLOSE B` / `OPEN OUTPUT B`
+    after it), keying both on that file lets one MOCK cover both sites;
+    keying the multi-file site on its first file left the other site
+    needing a second MOCK that the first site then also matched (issue
+    #312)."""
+    if len(site.keys) > 1 and surface is not None:
+        for key in site.keys:
+            if any(
+                other is not site
+                and other.category is site.category
+                and other.keys == (key,)
+                for other in surface.boundary_sites
+            ):
+                return key
+    return site.keys[0]
 
 
 def _directive_for(
@@ -1216,7 +1244,7 @@ def _directive_for(
     if category in FILE_OP_CATEGORIES:
         if not site.keys:
             return None  # no usable key parsed; run's refusal gate will name it
-        key = site.keys[0]
+        key = file_op_key(site, surface)
         return f"MOCK {category.value} {key}", _placeholder_body_for(
             category, key
         ) + _end_of_file_placeholder(site, context, file_status_fields)
@@ -1226,7 +1254,7 @@ def _directive_for(
             return None
         key = site.keys[0]
         end_lines = _accept_loop_end_lines(site, context, None)
-        body = _placeholder_body_for(category, key)
+        body = _placeholder_body_for(category, key, site)
         if end_lines and not end_lines[0].startswith("*>"):
             body = end_lines  # the sentinel replaces the placeholder value
         else:
@@ -1558,7 +1586,9 @@ def _accept_loop_end_lines(
             f"{target} -- end it by hand (e.g. MOCK ACCEPT {target} ROWS "
             f"... TERMINAL ( ... )), or this mock never ends it"
         ]
-    move = f"MOVE {literal} TO {target}"
+    # The ACCEPT's own target, subscript/qualifier included: the site key
+    # is its bare data-name (issue #311).
+    move = f"MOVE {literal} TO {site.accept_target or target}"
     if tally is None:
         return [move]
     return [f"IF {tally} > 1", f"    {move}", "END-IF"]
@@ -2770,7 +2800,7 @@ def _bundle_directive_for(
             call_count_override = CallCountOverride(count=1)
         else:
             body = _dli_success_reply(
-                _placeholder_body_for(category, fixture.key), site
+                _placeholder_body_for(category, fixture.key, site), site
             )
             end_lines = _call_loop_end_lines(site, source, None) + _cics_loop_end_lines(
                 site, source, None
@@ -2919,7 +2949,7 @@ def _bundle_directive_for_group(
     if site is None:
         return None
     if any((f.category, f.key) in placeholder_keys for f in fixtures):
-        body = _placeholder_body_for(category, primary.key)
+        body = _placeholder_body_for(category, primary.key, site)
     else:
         body = _merged_status_only_body(fixtures)
     lines = [_directive_header(category, primary.key, site)]
@@ -2939,6 +2969,13 @@ def _pinned_fields(scenario: Scenario) -> frozenset[str]:
         for entry in fields
         if isinstance(entry, dict) and entry.get("field")
     )
+
+
+def _fixture_pair(fixture: BoundaryFixture) -> tuple[MockCategory, str] | None:
+    try:
+        return MockCategory(fixture.category), fixture.key
+    except ValueError:
+        return None
 
 
 def _bundle_mock_directives(
@@ -3007,6 +3044,14 @@ def _bundle_mock_directives(
     covered_site_ids: set[int] = set()
     for site_id in site_order:
         group = fixtures_by_site[site_id]
+        # A multi-file OPEN/CLOSE is keyed the way the bundle-less scaffold
+        # and lint's suggestion key it, so one MOCK can also cover a later
+        # single-file statement on the same file (issue #312).
+        pair = _fixture_pair(group[0])
+        group_site = mockymock_keys.get(pair) if pair is not None else None
+        if group_site is not None and len(group_site.keys) > 1:
+            preferred = file_op_key(group_site, surface)
+            group.sort(key=lambda f: f.key != preferred)
         result = _bundle_directive_for_group(
             group, mockymock_keys, registry, placeholder_keys, source, pinned
         )
@@ -3446,6 +3491,40 @@ def _unlooped_read_counts(
     return counts
 
 
+def _with_accept_keys(bundle: FixtureBundle) -> FixtureBundle:
+    """`bundle` with every ACCEPT fixture and expectation keyed on the
+    target's data-name, as mockymock keys the site (issue #311):
+    cobol-parser keys it on the whole target (`FLD OF REC-B`, `WS-ENT ( WS-I
+    )`), which no `MOCK ACCEPT` line can spell. Two fixtures that now share
+    a key (`ACCEPT FLD OF REC-A` and `OF REC-B`) keep the first: one MOCK
+    answers both sites; their call counts are summed downstream."""
+    prefix = f"{MockCategory.ACCEPT.value}:"
+    scenarios = []
+    for scenario in bundle.scenarios:
+        fixtures: list[BoundaryFixture] = []
+        seen: set[str] = set()
+        for fixture in scenario.fixtures:
+            if fixture.category == MockCategory.ACCEPT.value:
+                key = accept_key(fixture.key)
+                if key in seen:
+                    continue
+                seen.add(key)
+                fixture = replace(fixture, key=key)
+            fixtures.append(fixture)
+        expectations = [
+            (
+                replace(e, ref=prefix + accept_key(e.ref[len(prefix) :]))
+                if e.ref.startswith(prefix)
+                else e
+            )
+            for e in scenario.expectations
+        ]
+        scenarios.append(
+            replace(scenario, fixtures=fixtures, expectations=expectations)
+        )
+    return replace(bundle, scenarios=scenarios)
+
+
 def _scaffold_with_bundle(
     suite_name: str,
     surface: MockSurface,
@@ -3453,6 +3532,7 @@ def _scaffold_with_bundle(
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
 ) -> str:
+    bundle = _with_accept_keys(bundle)
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(
         mockymock_keys,

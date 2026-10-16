@@ -63,6 +63,10 @@ class StaticCheckResult:
     # command prefix -- silently proceeding past a warning, or silently
     # editing source a .cut author didn't write, would both be surprises.
     notes: list[str] = field(default_factory=list)
+    # Pre-formatted, unprefixed "warning (CODE): ..." lines for things that
+    # pass every check but cannot behave as in production (issue #288).
+    # lint counts them alongside its NO_ASSERTION warnings; run prints them.
+    warnings: list[str] = field(default_factory=list)
     # Raw check_test_case() output per TESTCASE, keyed by the case's
     # index in `suite.test_cases` (not its name: duplicate TESTCASE names
     # are legal, and a name key would hand the last case's reasons to
@@ -254,6 +258,8 @@ def run_static_checks(
     from mockymock.analysis.linkage import (
         address_of_sites,
         linkage_plan,
+        omitted_argument_tests,
+        omitted_argument_warnings,
         rebindable_sites,
     )
     from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
@@ -472,6 +478,17 @@ def run_static_checks(
         out.linkage_address_of = address_of
         if address_of:
             lines = redirect_address_of(lines, address_of)
+        # The fold gives every parameter storage, and the driver PERFORMs
+        # rather than CALLs, so an omitted-argument test the selected cases
+        # reach can never be true -- say so instead of letting that branch
+        # go silently untested (issue #288).
+        out.warnings.extend(
+            omitted_argument_warnings(
+                parse_result.ast,
+                omitted_argument_tests(lines, linkage, rebound),
+                executed_paragraphs(),
+            )
+        )
 
     # 5b. CICS implicit-linkage guardrails (DFHRESP/DFHVALUE macro calls,
     # an undeclared DFHCOMMAREA) -- independent of the LINKAGE guardrails

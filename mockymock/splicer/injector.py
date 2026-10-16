@@ -64,6 +64,13 @@ def _literal_inner(token: str) -> str:
     return token[start + 1 : -1].replace(quote * 2, quote)
 
 
+def _operand_key(text: str) -> str:
+    """An operand's text for comparison with cobolparser's name for it,
+    which spaces out subscripts differently (`WS-ENT ( WS-I )`, `WS-I ( 1
+    : 1 )`): whitespace and subscript commas dropped, uppercased."""
+    return re.sub(r"[\s,]+", "", text.upper())
+
+
 def _call_using_literals(statement_text: str, names: list[str]) -> list[str | None]:
     """Per USING operand of the CALL in `statement_text`, the operand's own
     literal token verbatim (quotes, prefix and all) when it is a quoted
@@ -93,7 +100,7 @@ def _call_using_literals(statement_text: str, names: list[str]) -> list[str | No
             i += 1
             continue
         if tok.group("punct"):
-            return none  # a subscript/parenthesis this scan does not model
+            return none  # a parenthesis not after an operand: unmodelled
         if word in _USING_END_WORDS:
             break
         if word in _PASSING_WORDS:
@@ -112,6 +119,22 @@ def _call_using_literals(statement_text: str, names: list[str]) -> list[str | No
         while i + 1 < len(tokens) and upper[i] in _QUALIFIERS:
             text = f"{text} {words[i]} {words[i + 1]}"
             i += 2
+        # A subscript and/or reference modification belongs to the operand
+        # (`WS-ENT(WS-I)`, `WS-A(1:2)`): consume each balanced group. This
+        # scan used to give up on any parenthesis, so a literal next to a
+        # subscripted operand was captured as a data-name (issue #291).
+        while i < len(tokens) and tokens[i].group("punct") == "(":
+            depth = 0
+            while i < len(tokens):
+                punct = tokens[i].group("punct")
+                depth += punct == "("
+                depth -= punct == ")"
+                text = f"{text} {words[i]}"
+                i += 1
+                if depth == 0:
+                    break
+            if depth:
+                return none  # unbalanced: not a shape this scan models
         operands.append((text, False))
     if len(operands) != len(names):
         return none
@@ -122,7 +145,7 @@ def _call_using_literals(statement_text: str, names: list[str]) -> list[str | No
                 return none
             result.append(text)
         else:
-            if " ".join(text.upper().split()) != " ".join(name.upper().split()):
+            if _operand_key(text) != _operand_key(name):
                 return none
             result.append(None)
     return result

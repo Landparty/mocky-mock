@@ -92,7 +92,9 @@ def linkage_plan(program) -> LinkagePlan | None:
 # Every OTHER use of `ADDRESS OF <folded item>` stays legal after the fold
 # (verified against GnuCOBOL 3.1.2): `SET <ptr> TO ADDRESS OF X`,
 # `CALL 'CBLTDLI' USING ... ADDRESS OF DLIUIB` (the CICS-DL/I UIB idiom),
-# `IF ADDRESS OF X = NULL`. And an occurrence inside `EXEC ... END-EXEC`
+# `IF ADDRESS OF X = NULL` (legal, but always false after the fold -- lint
+# warns when a case reaches one, see `omitted_argument_tests`, issue #288).
+# And an occurrence inside `EXEC ... END-EXEC`
 # (`EXEC CICS ADDRESS TCTUA(ADDRESS OF TCTUA) END-EXEC`) never reaches cobc
 # at all: the splicer replaces every EXEC block with a mock or a trap stub.
 #
@@ -475,3 +477,134 @@ def _only_set_to_addresses(
             continue
         return False
     return assigned
+
+
+# Words that may sit between an `ADDRESS OF <item>` operand and the NULL it is
+# compared with (`= NULL`, `IS NOT EQUAL TO NULLS`, ...), in either order.
+_NULL_COMPARE_WORDS = frozenset({"IS", "NOT", "=", "EQUAL", "TO"})
+
+
+@dataclass(frozen=True)
+class OmittedArgumentTest:
+    """One PROCEDURE DIVISION test for an argument the caller did not pass
+    (`ADDRESS OF <folded item> = NULL`, or `NUMBER-OF-CALL-PARAMETERS`),
+    which can never see an omitted argument once the item is folded into
+    WORKING-STORAGE: the item always has storage, and the driver PERFORMs
+    rather than CALLs (issue #288). `line` is 1-indexed into the normalized
+    text; `item_name` is None for NUMBER-OF-CALL-PARAMETERS."""
+
+    line: int
+    item_name: str | None
+
+
+def omitted_argument_tests(
+    lines: list[str],
+    plan: LinkagePlan,
+    rebound: set[str] | frozenset[str] = frozenset(),
+) -> list[OmittedArgumentTest]:
+    """Every omitted-argument test in the PROCEDURE DIVISION of `lines`.
+    Items in `rebound` (made BASED because the program rebinds them itself,
+    issue #226) are skipped: their address is the program's to set, NULL
+    included."""
+    folded = {
+        (getattr(item, "name", None) or "").upper() for item in plan.linkage_items
+    } - {name.upper() for name in rebound}
+    folded.discard("")
+    tokens = _tokenize(lines)
+    out: list[OmittedArgumentTest] = []
+    for i in range(_procedure_start(tokens), len(tokens)):
+        token = tokens[i]
+        if token.text == "NUMBER-OF-CALL-PARAMETERS":
+            out.append(OmittedArgumentTest(token.line, None))
+            continue
+        if (
+            token.text != "ADDRESS"
+            or i + 2 >= len(tokens)
+            or tokens[i + 1].text != "OF"
+            or tokens[i + 2].text not in folded
+        ):
+            continue
+        if not _is_set_receiving(tokens, i) and _compared_with_null(tokens, i, i + 3):
+            out.append(OmittedArgumentTest(token.line, tokens[i + 2].text))
+    return out
+
+
+def _compared_with_null(tokens: list[_Token], start: int, end: int) -> bool:
+    """True when the operand `tokens[start:end]` is compared with NULL/NULLS
+    on either side, through only `_NULL_COMPARE_WORDS` in between."""
+    j = end
+    while j < len(tokens) and tokens[j].text in _NULL_COMPARE_WORDS:
+        j += 1
+    if j > end and j < len(tokens) and tokens[j].text in ("NULL", "NULLS"):
+        return True
+    j = start - 1
+    while j >= 0 and tokens[j].text in _NULL_COMPARE_WORDS:
+        j -= 1
+    return j < start - 1 and j >= 0 and tokens[j].text in ("NULL", "NULLS")
+
+
+OMITTED_ARGUMENT = "OMITTED_ARGUMENT_UNTESTABLE"
+
+
+def omitted_argument_warnings(
+    program, tests: list[OmittedArgumentTest], executed: set[str] | None
+) -> list[str]:
+    """One unprefixed warning line per omitted-argument test in a paragraph
+    some selected test case can execute (`executed` is the reachability
+    union; None means "may be any", so every test is reported). A warning,
+    not a refusal: the branch for a passed argument still runs and can be
+    tested; only the omitted-argument branch cannot (issue #288)."""
+    if not tests:
+        return []
+    procedure = program.get_division("PROCEDURE") if program is not None else None
+    starts: list[tuple[int, str, str | None]] = []  # (line, paragraph, section)
+    if procedure is not None:
+        for paragraph in procedure.paragraphs:
+            if paragraph.location is not None:
+                starts.append((paragraph.location.line, paragraph.paragraph_name, None))
+        for section_name, section in procedure._sections.items():
+            if section.location is not None:
+                starts.append((section.location.line, section_name, section_name))
+            for paragraph in section.paragraphs:
+                if paragraph.location is not None:
+                    starts.append(
+                        (
+                            paragraph.location.line,
+                            paragraph.paragraph_name,
+                            section_name,
+                        )
+                    )
+    starts.sort(key=lambda entry: entry[0])
+    executed_upper = None if executed is None else {n.upper() for n in executed}
+    warnings: list[str] = []
+    for test in tests:
+        owner = None
+        for start in starts:
+            if start[0] > test.line:
+                break
+            owner = start
+        if executed_upper is not None:
+            names = {owner[1].upper()} if owner else set()
+            if owner and owner[2]:
+                names.add(owner[2].upper())
+            if not names & executed_upper:
+                continue
+        where = f"paragraph {owner[1]}, " if owner else ""
+        if test.item_name is None:
+            what = (
+                "NUMBER-OF-CALL-PARAMETERS is tested, but the test driver "
+                "PERFORMs the program's paragraphs rather than CALLing it"
+            )
+        else:
+            what = (
+                f"ADDRESS OF {test.item_name} is compared with NULL, but "
+                f"{test.item_name} is folded into WORKING-STORAGE and always "
+                f"has storage, so the comparison is always false"
+            )
+        warnings.append(
+            f"warning ({OMITTED_ARGUMENT}): {where}line {test.line}: {what}. "
+            f"The program's branch for an omitted argument cannot be reached "
+            f"by any TESTCASE; mockymock has no way yet to omit a LINKAGE "
+            f"parameter"
+        )
+    return warnings
