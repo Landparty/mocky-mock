@@ -354,3 +354,40 @@ def test_scenario_gap_without_coverage_does_not_claim_no_test_reaches_it():
         if f["category"] == "scenario-gap"
     ]
     assert gap["title"].startswith("1 branch of 2 never ran")
+
+
+def test_mutation_threshold_is_applied_exactly_not_after_rounding(ordrproc):
+    """Issue #282: 399/499 = 79.96% used to round to 80.0, read `ok` and
+    earn L3, while `mutate --fail-under 80` failed the same mutants."""
+    path = _write(
+        ordrproc / "mutation.json",
+        {
+            "score": 399 / 499,
+            "totals": {
+                "generated": 499,
+                "killed": 399,
+                "timeouts": 0,
+                "survived": 100,
+            },
+            "mutants": [],
+        },
+    )
+    report = build_report(
+        _options(
+            ordrproc,
+            run_json=_run_json(ordrproc),
+            coverage_json=_coverage_json(ordrproc),
+            mutation_json=path,
+            mutation_threshold=80.0,
+        )
+    )
+    step = _step(report, "mutation")
+    assert step["status"] == "warn"
+    assert "79.9%" in step["summary"]
+    assert "80.0%" not in step["summary"]
+    assert "L3" not in {c["level"] for c in report["cases"]}
+    from mockymock.report.html_report import render_html
+
+    html = render_html(report)
+    assert '<span class="value">79.9%</span>' in html
+    assert '<span class="value">80%</span>' not in html

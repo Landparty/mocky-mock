@@ -389,7 +389,7 @@ def _summary_strip(report: dict[str, Any]) -> str:
     else:
         passed_sub = f"{s['failed']} failed, {s['notRun']} not run"
     coverage = "—" if s["coverage"] is None else f"{s['coverage']:.0f}%"
-    mutation = "—" if s["mutationScore"] is None else f"{s['mutationScore']:.0f}%"
+    mutation = "—" if s["mutationScore"] is None else f"{s['mutationScore']:g}%"
     intent = "—" if s["intentShare"] is None else f"{s['intentShare']:.0f}%"
     f = s["findings"]
     urgent = f["high"] + f["medium"]

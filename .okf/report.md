@@ -341,7 +341,13 @@ the `cobol-test` skill's hand-over.
   (`X__IF_1`) are dropped. Copybook-expanded programs map lines back via
   `coverage._matching_index_map`.
 - Mutation `score` in mutate's JSON is a 0..1 fraction; the report stores
-  `scorePercent`. A mutate run that wrote no report (no mutable
+  `scorePercent`, truncated (not rounded) to one decimal so a score
+  under the threshold never displays as the threshold. The threshold
+  itself (step status and L2) is compared exactly, as
+  `Fraction(100 * (killed + timeouts), scored) >= Fraction(str(threshold))`
+  from the totals (the `score` fraction only when totals lack the counts)
+  -- the same comparison `mutate --fail-under` makes, so the report and
+  the CI gate agree (issue #282). A mutate run that wrote no report (no mutable
   statements) is a `skipped` step carrying mutate's last output line.
 - Verification level per case: L0 static, L1 executed and passed, L2 also
   has at least one assertion and suite mutation >= threshold (default

@@ -43,6 +43,7 @@ Verification levels (per test case, the highest one reached in order):
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 import sys
@@ -50,6 +51,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -299,6 +301,22 @@ def _run_cli(args: list[str], timeout: int | None) -> tuple[int, str]:
 
 def _tail(text: str, lines: int = 40) -> str:
     return "\n".join(text.rstrip().splitlines()[-lines:])
+
+
+def _exact_mutation_percent(totals: dict[str, Any], raw_score: Any) -> Fraction | None:
+    """The mutation score as an exact percentage: from the killed /
+    timeout / survived counts when the report carries them (what
+    `MutationOutcome.score_below` compares), else from the 0..1 `score`
+    read as its decimal text. None when there is no score at all."""
+    counts = [totals.get(k) for k in ("killed", "timeouts", "survived")]
+    if all(type(c) is int for c in counts):
+        killed, timeouts, survived = (int(str(c)) for c in counts)
+        scored = killed + timeouts + survived
+        if scored > 0:
+            return Fraction(100 * (killed + timeouts), scored)
+    if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool):
+        return Fraction(str(raw_score)) * 100
+    return None
 
 
 def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
@@ -809,6 +827,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         command=f"mockymock mutate {program_rel} --cut {cut_rel}{cb} --json-report MUTATION.json",
     )
     mutation_report: dict[str, Any] | None = None
+    mutation_passes = False
     mutation_json = options.mutation_json
     with _Timer(mutation_step):
         if options.mutate:
@@ -853,12 +872,17 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             # `mutate --json-report` writes the score as a 0..1 fraction;
             # the report (and --mutation-threshold) speaks percent.
             raw_score = mutation_report.get("score")
-            score = (
-                round(raw_score * 100.0, 1)
-                if isinstance(raw_score, (int, float))
-                else None
-            )
+            exact = _exact_mutation_percent(totals, raw_score)
+            # Truncated, not rounded, for display: 79.96% must never read
+            # as 80.0% next to a threshold of 80 (issue #282).
+            score = None if exact is None else math.floor(exact * 10) / 10.0
             mutation_report["scorePercent"] = score
+            # Compared exactly, the way `mutate --fail-under` compares
+            # (`MutationOutcome.score_below`), so the report and the CI
+            # gate never disagree about the same mutants.
+            mutation_passes = exact is not None and exact >= Fraction(
+                str(options.mutation_threshold)
+            )
             survivors = [
                 m
                 for m in mutation_report.get("mutants") or []
@@ -875,7 +899,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 f"Mutation score {score_text}: {totals.get('killed', 0)} killed, "
                 f"{totals.get('survived', 0)} survived of {totals.get('generated', 0)}."
             )
-            if score is None or score < options.mutation_threshold:
+            if not mutation_passes:
                 mutation_step.status = "warn"
     steps.append(mutation_step)
 
@@ -915,11 +939,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
 
     # 11. Verdict ---------------------------------------------------------
     verdict = Step("verdict", "Decide what each test proves")
-    mutation_ok = (
-        mutation_report is not None
-        and isinstance(mutation_report.get("scorePercent"), (int, float))
-        and mutation_report["scorePercent"] >= options.mutation_threshold
-    )
+    mutation_ok = mutation_report is not None and mutation_passes
     with _Timer(verdict):
         for case in cases:
             if lint_problems:
