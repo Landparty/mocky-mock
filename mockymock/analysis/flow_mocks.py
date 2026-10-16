@@ -161,10 +161,14 @@ def find_flow_mock_plans(
     the splicer edits (SourceLocation lines index into it)."""
     from mockymock.analysis.refusal import (
         _expand_thru_range,
+        _find_sort_merge_statements,
         _find_statements_of_type,
         _go_to_fallthrough_targets,
         _go_to_targets,
         _source_ordered_paragraphs,
+    )
+    from mockymock.analysis.refusal._reachability import (
+        _find_xml_parse_statements,
     )
 
     flow_keys = [
@@ -212,6 +216,40 @@ def find_flow_mock_plans(
                 flow_target_names.add(statement.target_paragraph)
             if statement.thru_paragraph:
                 flow_target_names.add(statement.thru_paragraph)
+    # SORT/MERGE INPUT/OUTPUT PROCEDURE and XML PARSE PROCESSING PROCEDURE
+    # are implicit PERFORMs, ranges included (issue #261).
+    implicit_ranges: list[tuple[str, str, str | None]] = []
+    for paragraph in _all_paragraphs(procedure):
+        origin = f"paragraph '{paragraph.paragraph_name}'"
+        for statement in _find_sort_merge_statements(paragraph.statements):
+            for procedure_attr, thru_attr in (
+                ("input_procedure", "input_procedure_thru"),
+                ("output_procedure", "output_procedure_thru"),
+            ):
+                start = getattr(statement, procedure_attr, None)
+                if start:
+                    implicit_ranges.append(
+                        (
+                            f"{origin} {statement.statement_type} "
+                            f"{procedure_attr.replace('_', ' ').upper()}",
+                            start,
+                            getattr(statement, thru_attr, None),
+                        )
+                    )
+        for statement in _find_xml_parse_statements(paragraph.statements):
+            start = getattr(statement, "processing_procedure", None)
+            if start:
+                implicit_ranges.append(
+                    (
+                        f"{origin} XML PARSE PROCESSING PROCEDURE",
+                        start,
+                        getattr(statement, "processing_procedure_thru", None),
+                    )
+                )
+    for _, start, thru in implicit_ranges:
+        flow_target_names.add(start)
+        if thru:
+            flow_target_names.add(thru)
 
     # Every PERFORM ... THRU range in the program plus each test case's own
     # driver-side range, kept as (origin, start, thru) for messages.
@@ -228,6 +266,9 @@ def find_flow_mock_plans(
                         statement.thru_paragraph,
                     )
                 )
+    thru_ranges.extend(
+        (origin, start, thru) for origin, start, thru in implicit_ranges if thru
+    )
     for case in suite.analysis_cases():
         if case.perform_target and case.perform_thru:
             thru_ranges.append(
