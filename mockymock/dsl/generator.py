@@ -52,6 +52,7 @@ import re
 import sys
 from dataclasses import dataclass, field, replace
 
+from mockymock._decimal import decimal_point_is_comma, localize_numeric
 from mockymock.analysis.clause_bodies import (
     OUTCOME_FIELD,
     lift_clause_bodies,
@@ -411,6 +412,9 @@ class ProgramContext:
     #: for the names under a CALL argument (a PCB's status field, an 88).
     data_items: list[dict] = field(default_factory=list)
     surface: MockSurface | None = None
+    #: `SPECIAL-NAMES. DECIMAL-POINT IS COMMA.`: every numeric literal the
+    #: scaffold writes uses a comma (issue #230).
+    decimal_comma: bool = False
     #: File key -> `_record_length_move`'s answer, computed once per file.
     record_length_moves: dict[str, str | None] = field(default_factory=dict)
 
@@ -436,6 +440,7 @@ class ProgramContext:
             guards=loop_guards(program),
             data_items=_layout_items(program),
             surface=surface,
+            decimal_comma=decimal_point_is_comma(program),
         )
 
     def names_under(self, name: str) -> set[str]:
@@ -1521,7 +1526,9 @@ def _build_shadow_tally_registry(
     return TallyRegistry(suite)
 
 
-def _bundle_rendered_value(raw_value: str, field_category: str) -> str:
+def _bundle_rendered_value(
+    raw_value: str, field_category: str, decimal_comma: bool = False
+) -> str:
     """Bare for a numeric-family FieldSpec category (see cobol-parser's
     fixture-bundle-schema.md), quoted (with embedded `"` doubled,
     mirroring driver._display_text's escaping) otherwise. Unlike
@@ -1529,7 +1536,7 @@ def _bundle_rendered_value(raw_value: str, field_category: str) -> str:
     FieldSpec's own resolved category -- exact, not a text-shape guess --
     since a bundle row always carries one."""
     if field_category in _NUMERIC_FIELD_CATEGORIES:
-        return raw_value
+        return localize_numeric(raw_value, decimal_comma)
     escaped = raw_value.replace('"', '""')
     return f'"{escaped}"'
 
@@ -1545,13 +1552,18 @@ def _row_target(spec: FieldSpec, source: ProgramContext | None) -> str:
 # item (its content is implementation-defined). cobol-parser's bundle lays
 # them out as numeric fields holding "0", and `MOVE 0 TO <pointer>` is a
 # compile error ("invalid MOVE statement").
-def _row_move_line(row: dict[str, str], spec: FieldSpec, target: str) -> str | None:
+def _row_move_line(
+    row: dict[str, str], spec: FieldSpec, target: str, decimal_comma: bool = False
+) -> str | None:
     usage = (spec.usage or "").upper()
     if usage in _POINTER_USAGES:
         return f"SET {target} TO NULL"
     if usage == "INDEX":
         return None
-    return f"MOVE {_bundle_rendered_value(row.get(spec.column, ''), spec.category)} TO {target}"
+    value = _bundle_rendered_value(
+        row.get(spec.column, ""), spec.category, decimal_comma
+    )
+    return f"MOVE {value} TO {target}"
 
 
 def _record_length_move(
@@ -1602,7 +1614,12 @@ def _row_move_lines(
     lines = [
         line
         for line in (
-            _row_move_line(row, spec, _row_target(spec, source))
+            _row_move_line(
+                row,
+                spec,
+                _row_target(spec, source),
+                source is not None and source.decimal_comma,
+            )
             for spec in fixture.layout
         )
         if line is not None
@@ -1991,12 +2008,16 @@ _SQL_ROWS_EXHAUSTED_BODY = ["MOVE 100 TO SQLCODE"]
 
 
 def _sql_rows_directive(
-    category: MockCategory, key: str, fixture: BoundaryFixture
+    category: MockCategory,
+    key: str,
+    fixture: BoundaryFixture,
+    decimal_comma: bool = False,
 ) -> list[str]:
     lines = [f'MOCK {category.value} "{key}" ROWS']
     for row in fixture.sequence:
         pairs = ", ".join(
-            f"{spec.column} = {_bundle_rendered_value(row.get(spec.column, ''), spec.category)}"
+            f"{spec.column} = "
+            f"{_bundle_rendered_value(row.get(spec.column, ''), spec.category, decimal_comma)}"
             for spec in fixture.layout
         )
         lines.append(f"    ( {pairs} )")
@@ -2175,7 +2196,15 @@ def _bundle_directive_for(
             if looped_fetch
             else None
         )
-        return _sql_rows_directive(category, fixture.key, fixture), override
+        return (
+            _sql_rows_directive(
+                category,
+                fixture.key,
+                fixture,
+                source is not None and source.decimal_comma,
+            ),
+            override,
+        )
     else:
         body = _single_row_body(fixture, source)
         if category is MockCategory.CALL:
@@ -2577,7 +2606,11 @@ def _render_expectation(
         # first run (GnuCOBOL compares it as text). `A OF B` qualification
         # is looked up by its first word, the item itself.
         picture = picture_for(expectation.ref.split()[0], pictures)
-        rendered = render_expect_value(str(expectation.value), picture)
+        rendered = render_expect_value(
+            str(expectation.value),
+            picture,
+            decimal_comma=source is not None and source.decimal_comma,
+        )
         return [f"EXPECT {expectation.ref} TO BE {rendered}"]
     # kind == "stub"
     note = f" -- {expectation.note}" if expectation.note else ""

@@ -1485,6 +1485,7 @@ def _run_directory(
 def _cmd_run(args: argparse.Namespace) -> int:
     import json
 
+    from mockymock._decimal import decimal_point_is_comma
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.analysis.stub_expectations import scan_stub_expectations
@@ -1824,7 +1825,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
         recording = build_recording_report(
             stub_scan, suite_result, address_fields(result.ast), pictures
         )
-        rewritten = rewrite_cut_text(cut_text, recording, pictures)
+        rewritten = rewrite_cut_text(
+            cut_text,
+            recording,
+            pictures,
+            decimal_comma=decimal_point_is_comma(result.ast),
+        )
         if rewritten is not None:
             cut_path.write_text(rewritten, encoding="utf-8", newline="")
         print(

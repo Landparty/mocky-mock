@@ -859,6 +859,14 @@ paragraph-grouped path described above, unchanged. A real
   the loop body still runs once per row, so the other boundaries in its
   paragraph keep their counts). A keyed/random READ is left alone: out of
   rows it would answer "23", not "10".
+- **`DECIMAL-POINT IS COMMA` (issue #230)**: `ProgramContext.decimal_comma`
+  (from `mockymock._decimal.decimal_point_is_comma`) makes
+  `_bundle_rendered_value` (mock-body MOVEs, SQL `ROWS` values) and the
+  Tier 2 `field_equals` EXPECTs write `9,99` instead of `9.99`. The parser's
+  `_split_top_level` treats a comma between two digits as a decimal comma,
+  not a separator, so `ROW 100,5, 125,62` and `( F = 1,25, G = 2 )` hold
+  the values the program means (a separator comma is always followed by a
+  space in COBOL).
 - **A READ of a `RECORD VARYING ... DEPENDING ON` file sets the length
   item** (issue #214): `_row_move_lines` appends `MOVE <length> TO <item>`
   to every READ row (`_record_length_move`, cached per file on
