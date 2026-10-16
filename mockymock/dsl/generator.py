@@ -1060,9 +1060,9 @@ def _directive_for(
             # unmocked site loudly (2026-08-12 audit Finding 20).
             return None
         keyword = "MQ" if site.is_mq else "CALL"
-        body = _placeholder_body_for(category, key) + _call_loop_end_lines(
-            site, context, None
-        )
+        body = _dli_success_reply(
+            _placeholder_body_for(category, key), site
+        ) + _call_loop_end_lines(site, context, None)
         return f'MOCK {keyword} "{key}"', _with_captures(category, key, body, context)
 
     if category is MockCategory.DYNCALL:
@@ -1183,6 +1183,26 @@ def _mq_success_reply(body: list[str], site: BoundarySite) -> list[str]:
     return kept + [f"MOVE 0 TO {name}" for name in names[-2:]]
 
 
+def _dli_success_reply(body: list[str], site: BoundarySite) -> list[str]:
+    """`body` plus a blank PCB status for a CBLTDLI/CEETDLI call: the
+    status DL/I reports for a call that found (or stored) its segment,
+    at bytes 11-12 of the PCB, the call's second USING argument. The
+    fixture row is random, so without this it handed the first call a
+    non-blank status such as "PO" and a `PERFORM UNTIL PCB-STATUS NOT =
+    SPACES` get loop ended before it started (issue #317, the DL/I
+    counterpart of #205). The end-of-data reply `_call_loop_end_lines`
+    adds after this still wins on the call that ends the loop."""
+    if site.category is not MockCategory.CALL or not site.keys:
+        return body
+    if site.keys[0].upper() not in _DLI_CALL_INTERFACES:
+        return body
+    using = list(getattr(site.statement, "using_parameters", None) or [])
+    names = [str(getattr(param, "name", "") or "") for param in using]
+    if len(names) < 2 or not names[1]:
+        return body
+    return body + [f"MOVE SPACES TO {names[1]}(11:2)"]
+
+
 def _call_end_reply(
     site: BoundarySite, context: ProgramContext
 ) -> tuple[tuple[tuple[str, str], ...], set[str]] | None:
@@ -1219,6 +1239,10 @@ def _row_already_ends(
     or the PCB's GB/GE) into the reply field: the loop then ends on the
     first call and the bundle's own count stands."""
     if context is None:
+        return False
+    if site.keys and site.keys[0].upper() in _DLI_CALL_INTERFACES:
+        # `_dli_success_reply` blanks the PCB status after the row's own
+        # MOVEs, so no DL/I row ends the loop by itself.
         return False
     reply = _call_end_reply(site, context)
     if reply is None:
@@ -2200,7 +2224,9 @@ def _bundle_directive_for(
             body = list(_SQL_ROWS_EXHAUSTED_BODY)
             call_count_override = CallCountOverride(count=1)
         else:
-            body = _placeholder_body_for(category, fixture.key)
+            body = _dli_success_reply(
+                _placeholder_body_for(category, fixture.key), site
+            )
             end_lines = _call_loop_end_lines(site, source, None)
             body = body + end_lines
             if end_lines and not end_lines[0].startswith("*>"):
@@ -2235,7 +2261,7 @@ def _bundle_directive_for(
     else:
         body = _single_row_body(fixture, source)
         if category is MockCategory.CALL:
-            body = _mq_success_reply(body, site)
+            body = _dli_success_reply(_mq_success_reply(body, site), site)
         if category is MockCategory.DLI and registry.known(category, fixture.key):
             body = body + _dli_loop_end_lines(
                 site, source, registry.name(category, fixture.key)

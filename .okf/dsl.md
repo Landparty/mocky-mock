@@ -1087,6 +1087,15 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   without it the loop never ends. A `PERFORM n TIMES` loop (no guard
   words) is still left alone. (The issue's option (b), demoting VERIFY
   counts for sites after an `IF ... GOBACK`, is not implemented.)
+- **DL/I calls answer a blank PCB status (#317).** The DL/I counterpart:
+  `_dli_success_reply` appends `MOVE SPACES TO <pcb>(11:2)` (the PCB is a
+  CBLTDLI/CEETDLI call's second USING argument) after the fixture row and
+  before any #156 end reply, in the bundle row, the `--placeholder`
+  downgrade and the bundle-less body alike. A random status such as "PO"
+  ended a `PERFORM UNTIL PCB-STATUS NOT = SPACES` get loop on the first
+  call and failed the scaffold's own `VERIFY ... 2 TIMES`.
+  `_row_already_ends` therefore never credits a DL/I row with ending the
+  loop.
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 
