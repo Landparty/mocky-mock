@@ -121,8 +121,13 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
   to an identifier — a table subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`,
   `WS-TABLE(1,1)` all parse) or reference modification (`FIELD(1:5)`).
-  Nested parens and `A OF B` qualification are unsupported and fail closed
-  (`unrecognized statement`) rather than being mis-parsed. Both regexes
+  The name may be qualified the COBOL way, `CUST-ID OF OUT-REC` /
+  `CUST-TAB IN OUT-REC (2)` (subscript after the qualifiers), spliced
+  verbatim -- the only way to name a field declared under two records
+  (issue #252); `cut_names` checks every word, `CAPTURE ... INTO` and
+  `*> STUB EXPECT` take the same shape, and `record_rewrite` looks the
+  PICTURE up by the leading word. Nested parens are unsupported and fail
+  closed (`unrecognized statement`) rather than being mis-parsed. Both regexes
   share the `_SUBSCRIPTED_NAME` fragment in `parser.py`, which falls back to
   plain `\S+` for non-identifier tokens — that's what lets a literal
   `{Placeholder}` name (see `PROVIDER` below — data-names/MOVE-targets are
@@ -339,7 +344,7 @@ two orders that would mean something else: an `EXPECT`/`VERIFY` above the
 `PERFORM` (`EXPECT before the PERFORM`) and a `MOVE` below it (`MOVE after
 the PERFORM`). `MOCK` directives may sit anywhere. Data names containing a
 `.` (`IN-REC.CUST-ID`) are refused too (#144) -- COBOL qualifies with
-`CUST-ID OF IN-REC`.
+`CUST-ID OF IN-REC`, which the refusal now suggests (#252).
 
 ## `PROVIDER` parameterized test cases
 

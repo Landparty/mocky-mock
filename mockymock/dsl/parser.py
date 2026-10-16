@@ -129,8 +129,11 @@ _END_MOCK_RE = re.compile(r"^END-MOCK\.?$", re.IGNORECASE)
 # A data-name that may carry one non-nested `(...)` group -- a table
 # subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`) or reference modification
 # (`FIELD(1:5)`) -- so a plain `\S+` would stop at the space after a
-# comma/space-separated subscript. Nested parens (`TABLE(FUNCTION MOD(I 3))`)
-# and qualification (`A OF B`) are out of scope: they fail closed
+# comma/space-separated subscript. The name may be qualified, COBOL's own
+# way (`CUST-ID OF OUT-REC`, `CUST-ID IN OUT-REC (1)`; the subscript follows
+# the qualifiers): the only way to name a field declared under two records
+# (issue #252). It is spliced verbatim. Nested parens
+# (`TABLE(FUNCTION MOD(I 3))`) are out of scope: they fail closed
 # (unrecognized statement) rather than being silently mis-parsed. The `\S+`
 # fallback alternative preserves the pre-subscript behavior for
 # non-identifier tokens -- notably a literal `{Placeholder}` name in a
@@ -138,7 +141,9 @@ _END_MOCK_RE = re.compile(r"^END-MOCK\.?$", re.IGNORECASE)
 # `_substitute`'s callers) and must still parse verbatim. Shared by MOVE's
 # target and EXPECT's name -- both reference a data-item that may be a
 # table element.
-_SUBSCRIPTED_NAME = r"[A-Za-z0-9][A-Za-z0-9-]*(?:\s*\([^)]*\))?|\S+"
+_COBOL_WORD = r"[A-Za-z0-9][A-Za-z0-9-]*"
+_QUALIFIED_NAME = rf"{_COBOL_WORD}(?:\s+(?:OF|IN)\s+{_COBOL_WORD})*"
+_SUBSCRIPTED_NAME = rf"{_QUALIFIED_NAME}(?:\s*\([^)]*\))?|\S+"
 _MOVE_RE = re.compile(
     rf"^MOVE\s+(?P<value>.+?)\s+TO\s+(?P<target>{_SUBSCRIPTED_NAME})$"
 )
@@ -230,7 +235,7 @@ _CAPTURE_PREFIX_RE = re.compile(r"^CAPTURE\b")
 # COBOL target that only surfaced later as a confusing cobc compile error
 # (2026-08-12 audit Finding 4). Any matched token that contains a paren is
 # re-checked against this and refused at .cut level when it doesn't hold.
-_BALANCED_SUBSCRIPT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*\s*\([^()]*\)$")
+_BALANCED_SUBSCRIPT_RE = re.compile(rf"^{_QUALIFIED_NAME}\s*\([^()]*\)$")
 
 
 _DOTTED_NAME_RE = re.compile(r"[A-Za-z0-9-]\.[A-Za-z0-9]")
@@ -289,10 +294,13 @@ def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
     # COBOL: spliced verbatim it is a cobc "incomplete expression" (issue
     # #144), so refuse it here, at the .cut line.
     if _DOTTED_NAME_RE.search(token.partition("(")[0]):
+        parts = token.partition("(")[0].strip().split(".")
+        qualified = " OF ".join(reversed(parts))
         raise CutParseError(
             f"line {line_no}: data-name {token!r} contains a '.' -- COBOL "
-            f"names have none; name the elementary item itself (e.g. "
-            f"{token.partition('(')[0].rsplit('.', 1)[-1]!r})"
+            f"names have none; qualify it the COBOL way instead (e.g. "
+            f"{qualified!r}), or name the elementary item alone when it is "
+            f"unique"
         )
 
 
