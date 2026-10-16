@@ -1071,6 +1071,17 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   answers every site of its key, so when the key's sites would need
   different replies (a GN loop plus an ISRT through the same CBLTDLI) the
   body gets a `*> TODO` comment instead.
+- **A CICS LINK server gets its commarea (#245).** The reset zeroes
+  EIBCALEN before every case, and since #215 a mocked `EXEC CICS ABEND`
+  ends the run, so a LINK server's `IF EIBCALEN < LENGTH OF DFHCOMMAREA
+  EXEC CICS ABEND` guard ended every generated happy path before the
+  READ/REWRITE its VERIFYs counted. `_commarea_setup_lines` (stored as
+  `ProgramContext.setup_lines`) finds an `IF` whose condition names
+  EIBCALEN and whose THEN branch ABENDs, in a program declaring
+  DFHCOMMAREA, and both scaffolds then write `MOVE LENGTH OF DFHCOMMAREA
+  TO EIBCALEN` before every case's PERFORM, as a real LINK passes it. An
+  `IF EIBCALEN = 0` first-time path (pseudo-conversational) is not an
+  ABEND guard and gets nothing.
 - **MQ calls answer MQCC_OK / MQRC_NONE (#205).** By the MQI's fixed
   convention CompCode and Reason are an MQ call's last two USING
   arguments; `_mq_success_reply` replaces the fixture row's random numbers

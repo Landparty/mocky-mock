@@ -71,6 +71,7 @@ from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
     _all_paragraphs,
+    _nested_statement_lists,
 )
 from mockymock.dsl.fixture_bundle import (
     BoundaryFixture,
@@ -417,6 +418,9 @@ class ProgramContext:
     decimal_comma: bool = False
     #: File key -> `_record_length_move`'s answer, computed once per file.
     record_length_moves: dict[str, str | None] = field(default_factory=dict)
+    #: Steps every generated case runs before its PERFORM so the program
+    #: starts the way a real invocation would -- see `_commarea_setup_lines`.
+    setup_lines: list[str] = field(default_factory=list)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -441,6 +445,7 @@ class ProgramContext:
             data_items=_layout_items(program),
             surface=surface,
             decimal_comma=decimal_point_is_comma(program),
+            setup_lines=_commarea_setup_lines(program, lines),
         )
 
     def names_under(self, name: str) -> set[str]:
@@ -881,6 +886,63 @@ def directive_snippet(site: BoundarySite, surface: MockSurface) -> str | None:
     return "\n".join(lines)
 
 
+def _commarea_setup_lines(program, lines: list[str]) -> list[str]:
+    """`MOVE LENGTH OF DFHCOMMAREA TO EIBCALEN` for a CICS LINK server
+    whose `IF EIBCALEN ...` guard ABENDs (issue #245).
+
+    The reset zeroes EIBCALEN before every case, so without this the
+    generated happy path always took the guard. Since a mocked ABEND ends
+    the run (#215) it stopped there, and the scaffold's own VERIFYs for the
+    READ/REWRITE behind the guard failed. A real LINK passes the
+    commarea, so its length is what the program sees. Only a guard that
+    ABENDs counts: `IF EIBCALEN = 0` in a pseudo-conversational program
+    picks its genuine first-time path and is left alone."""
+    procedure = program.get_division("PROCEDURE") if program is not None else None
+    if procedure is None or not _declares(program, "DFHCOMMAREA"):
+        return []
+
+    def walk(statements):
+        for statement in statements:
+            yield statement
+            for nested in _nested_statement_lists(statement):
+                yield from walk(nested)
+
+    def abends(statements) -> bool:
+        return any(
+            str(getattr(s, "cics_command", "") or "").upper() == "ABEND"
+            for s in walk(statements)
+        )
+
+    for paragraph in _all_paragraphs(procedure):
+        for statement in walk(paragraph.statements):
+            then = list(getattr(statement, "then_statements", None) or [])
+            if type(statement).__name__ != "IfStatement" or not then:
+                continue
+            start = statement.location.line
+            end = max(start, then[0].location.line - 1)
+            condition = " ".join(lines[start - 1 : end]).upper()
+            if re.search(r"\bEIBCALEN\b", condition) and abends(then):
+                return ["MOVE LENGTH OF DFHCOMMAREA TO EIBCALEN"]
+    return []
+
+
+def _declares(program, name: str) -> bool:
+    data_division = program.get_division("DATA")
+    wanted = name.upper()
+
+    def walk(node) -> bool:
+        for child in getattr(node, "children", []):
+            if getattr(child, "level", None) is not None and (
+                str(getattr(child, "name", "") or "").upper() == wanted
+            ):
+                return True
+            if walk(child):
+                return True
+        return False
+
+    return data_division is not None and walk(data_division)
+
+
 # --- placeholder scaffold (no bundle) ----------------------------------------
 
 
@@ -933,6 +995,8 @@ def _scaffold_placeholder(
             lines.extend(f"        {body_line}" for body_line in body)
             lines.append("    END-MOCK")
             captured.extend(_capture_targets(body))
+        if context is not None:
+            lines.extend(f"    {line}" for line in context.setup_lines)
         lines.append(f"    PERFORM {paragraph_name}")
         lines.extend(f"    {line}" for line in _capture_stub_lines(captured))
         lines.append("")
@@ -2855,6 +2919,8 @@ def _scaffold_with_bundle(
             scenario, surface, scenario_keys, registry, placeholder_keys, source
         )
         lines.extend(f"    {line}" for line in directive_lines)
+        if source is not None:
+            lines.extend(f"    {line}" for line in source.setup_lines)
         lines.append(f"    PERFORM {entry}")
         lines.extend(
             f"    {line}"
