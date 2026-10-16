@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T00:00:00Z
 ---
 
 # Overview
@@ -168,8 +168,9 @@ every shared mock). See
 
 ### `FILE-STATUS IS <mnemonic-or-code>`
 
-Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK` body
-(not `WRITE`/`REWRITE`). `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`,
+Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK|WRITE|REWRITE`
+body. WRITE/REWRITE key on the record name, which resolves to its FD's
+status field (issue #221). `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`,
 `DUPLICATE-KEY`, `RECORD-NOT-FOUND`, `FILE-NOT-FOUND`, `ALREADY-OPEN`,
 `NOT-OPEN`, `NO-CURRENT-RECORD`; a quoted two-character literal (e.g.
 `"92"`) always works too. Every eligible category also gets an implicit

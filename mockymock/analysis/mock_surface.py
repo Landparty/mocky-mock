@@ -911,7 +911,13 @@ def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
     read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT statements. A
     file whose SELECT entry has no FILE STATUS clause has no entry -- there
     is no WORKING-STORAGE field to default or target with FILE-STATUS IS
-    sugar (see docs/2026-07-20-before-blocks-and-file-status-design.md)."""
+    sugar (see docs/2026-07-20-before-blocks-and-file-status-design.md).
+
+    Every record (01) declared under such a file's FD maps to the same
+    field, keyed by its own uppercased name: a WRITE/REWRITE site and its
+    MOCK key on the record, not the file, and a mocked WRITE/REWRITE must
+    set the status like the real statement does (issue #221). COBOL file
+    names and data names share one namespace, so the keys cannot clash."""
     fields: dict[str, str] = {}
     environment = program.get_division("ENVIRONMENT")
     if environment is None:
@@ -927,7 +933,30 @@ def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
             continue
         if statement.file_name and statement.file_status:
             fields[statement.file_name.upper()] = statement.file_status
+    for record, file_name in _fd_records(program):
+        status = fields.get(file_name)
+        if status and record not in fields:
+            fields[record] = status
     return fields
+
+
+def _fd_records(program: CobolProgram) -> list[tuple[str, str]]:
+    """(uppercased record name, uppercased FD file name) for every 01
+    declared under an FD/SD."""
+    data = program.get_division("DATA")
+    if data is None:
+        return []
+    records: list[tuple[str, str]] = []
+    for section in getattr(data, "sections", data.children):
+        for item in getattr(section, "children", []):
+            if getattr(item, "level", None) != 1:
+                continue
+            metadata = getattr(item, "_metadata", None) or {}
+            file_name = str(metadata.get("fd_file_name") or "").upper()
+            name = str(getattr(item, "name", "") or "").upper()
+            if file_name and name and name != "FILLER":
+                records.append((name, file_name))
+    return records
 
 
 def _all_paragraphs(procedure_division: CobolDivision) -> list[CobolParagraph]:

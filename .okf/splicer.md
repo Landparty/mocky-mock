@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-13T22:00:00Z
+timestamp: 2026-10-16T00:00:00Z
 ---
 
 # Overview
@@ -219,11 +219,14 @@ mock it, that's a hard, loud failure (`__MOCKYMOCK__ ERROR: ... reached
 from unmocked test case`), never a silent fall-through.
 
 **FILE-STATUS default-success/override injection.** For a directive whose
-category is in `FILE_STATUS_CATEGORIES` (the 6 eligible file ops --
-`OPEN`/`CLOSE`/`READ`/`DELETE`/`START`/`UNLOCK`; `WRITE`/`REWRITE` are not
-eligible), `build_site_dispatch` looks up `directive.key.upper()` in the
+category is in `FILE_STATUS_CATEGORIES` (the 8 eligible file ops --
+`OPEN`/`CLOSE`/`READ`/`DELETE`/`START`/`UNLOCK`/`WRITE`/`REWRITE`),
+`build_site_dispatch` looks up `directive.key.upper()` in the
 `file_status_fields` map (`mock_surface.analyze_file_status_fields`'s
-uppercased-file-name -> declared `FILE STATUS IS <field>` result, computed
+uppercased-file-name -> declared `FILE STATUS IS <field>` result, plus
+every FD record name -> its file's field so a WRITE/REWRITE keyed on the
+record resolves too -- issue #221; before, a mocked WRITE left the status
+at its reset value or the previous mock's code, computed
 once per program and threaded down from `run_static_checks`/`_cmd_run`
 through `splice_program`). If the file declares a status field, the `WHEN`
 branch always starts with an implicit `MOVE "00" TO <field>` (default
