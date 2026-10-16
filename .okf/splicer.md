@@ -525,7 +525,8 @@ a `.cut` has `BEFORE-ALL` steps, every case must start from the state
 they leave, not from the reset. `plan_snapshot(program, linkage_items)`
 covers exactly the items `reset.py` covers (top-level WORKING-STORAGE /
 LOCAL-STORAGE, each FD's longest record, neutralized LINKAGE items; no
-top-level REDEFINES or FILLER) and returns `UT-SNAP-nnn` declarations
+top-level REDEFINES or elementary FILLER, and a top-level FILLER group's
+named children in its place -- see #247 below) and returns `UT-SNAP-nnn` declarations
 plus `UT-SAVE-STATE` / `UT-RESTORE-STATE` bodies, and one problem per
 item it can't copy exactly (`cli.checks` step 10 turns them into
 `UNSAVABLE_BEFORE_ALL_STATE`). The driver runs reset, BEFORE-ALL steps,
@@ -660,6 +661,16 @@ ambiguous there, and cobc rejected the whole driver, so no suite for the
 program could run. Full qualification is always legal, so nothing detects
 the ambiguity first. `_elementary_reset(item, target)` takes the reference
 to write to; top-level items still use their bare name.
+
+**FILLER groups are transparent (issue #247).** A FILLER group can still
+hold named items. `addressable_items` replaces a top-level `01 FILLER.`
+group with its named children (recursively through nested FILLER groups,
+OCCURS children left out), so each is reset as if it were top-level and
+saved by the BEFORE-ALL snapshot by its own name -- before, they were
+never reset and leaked between cases. `_child_value_restores` recurses
+into a `05 FILLER.` group inside a named record, qualifying each restore by
+the named ancestors alone (`MOVE "ABC" TO WS-X OF WS-AREA`); their VALUEs
+used to be lost to the record's INITIALIZE.
 
 **FILLER VALUEs are restored (issue #196).** A FILLER cannot be named in
 a MOVE, and the old reset assumed its VALUE "survives INITIALIZE" -- true

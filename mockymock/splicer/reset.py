@@ -17,7 +17,8 @@ usage. A group with a VALUE clause inside a table (an OCCURS item) is
 reset with `INITIALIZE <group> ALL TO VALUE THEN TO DEFAULT`, which
 restores every occurrence's VALUE without subscripted MOVEs; a group with
 a FILLER VALUE adds WITH FILLER, since a FILLER cannot be named in a MOVE.
-Top-level REDEFINES items are skipped on purpose: their
+A FILLER group is transparent (its named children are reset in its
+place, issue #247). Top-level REDEFINES items are skipped on purpose: their
 storage is the redefined item's, which is reset (and its VALUE restored)
 by its own line -- a second reset through the redefining view would
 overwrite it.
@@ -117,9 +118,7 @@ def reset_lines_for_items(items) -> list[str]:
     by `mockymock.splicer.linkage`) get the identical VALUE-restoring
     treatment without duplicating this logic."""
     lines: list[str] = []
-    for item in items:
-        if _is_filler(item):
-            continue  # a top-level FILLER cannot be a valid MOVE/INITIALIZE target
+    for item in addressable_items(items):
         if getattr(item, "redefines", None):
             # A REDEFINES item shares the storage of the item it redefines,
             # which already got its own reset line just above. Resetting it
@@ -165,6 +164,32 @@ def reset_lines_for_items(items) -> list[str]:
             if reset is not None:
                 lines.append(reset)
     return lines
+
+
+def addressable_items(items) -> list:
+    """`items` with every FILLER replaced by what can be named under it.
+
+    A FILLER cannot be the target of a MOVE or INITIALIZE, but a FILLER
+    *group* (`01 FILLER.` holding flags and counters, a legacy idiom) can
+    still hold named items, and skipping the whole subtree let their
+    values leak from one case to the next (issue #247). Such a group is
+    transparent: its named children stand in for it (recursively through
+    nested FILLER groups), each referenced by its own name. A child with
+    an OCCURS clause is left out, since an unsubscripted reference to it
+    is illegal; an elementary FILLER has nothing to reference."""
+    out: list = []
+    for item in items:
+        if not _is_filler(item):
+            out.append(item)
+            continue
+        out.extend(
+            addressable_items(
+                child
+                for child in _data_children(item)
+                if getattr(child, "occurs_clause", None) is None
+            )
+        )
+    return out
 
 
 def _odo_counter_lines(group) -> tuple[list[str], list[str]]:
@@ -382,12 +407,15 @@ def _child_value_restores(group, qualifier: str) -> list[str]:
     for child in getattr(group, "children", []):
         if getattr(child, "level", None) is None:
             continue  # clause node, not a data item
-        if _is_filler(child):
-            # Unaddressable. A group with a FILLER VALUE never gets here:
-            # it is reset WITH FILLER ALL TO VALUE (see _has_filler_value).
-            continue
         if getattr(child, "occurs_clause", None) is not None:
             continue  # unsubscripted MOVE is illegal; see _has_occurs_value
+        if _is_filler(child):
+            # Unaddressable itself, but a FILLER group's named children
+            # are not: restore them through the named ancestors alone
+            # (issue #247). A group with a FILLER VALUE never gets here: it
+            # is reset WITH FILLER ALL TO VALUE (see _has_filler_value).
+            out.extend(_child_value_restores(child, qualifier))
+            continue
         target = f"{child.name} OF {qualifier}"
         if _is_group(child):
             out.extend(_child_value_restores(child, target))

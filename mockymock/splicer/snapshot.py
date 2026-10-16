@@ -18,7 +18,9 @@ longest record, and LINKAGE items neutralized into WORKING-STORAGE --
 plus the blocks mockymock synthesizes (the CICS DFHEIBLK, DLIDIB and the
 generated SQLCA), which `reset` clears too.
 Top-level REDEFINES items are skipped (their storage is the redefined
-item's, which is saved), as are top-level FILLERs (not addressable).
+item's, which is saved), as are elementary top-level FILLERs (not
+addressable); a top-level FILLER group is replaced by its named children
+(`reset.addressable_items`, issue #247).
 
 How each item is copied, chosen so every MOVE is one COBOL defines as
 exact:
@@ -55,7 +57,12 @@ import re
 from dataclasses import dataclass, field
 
 from mockymock.splicer.io_copy import longest_record_per_file
-from mockymock.splicer.reset import _is_filler, _is_group, _sections, _top_level_items
+from mockymock.splicer.reset import (
+    _is_group,
+    _sections,
+    _top_level_items,
+    addressable_items,
+)
 
 SNAP_PREFIX = "UT-SNAP-"
 
@@ -166,10 +173,12 @@ def _state_items(program, linkage_items: list) -> list:
         for section in _sections(data_division, name):
             items.extend(_top_level_items(section))
     items.extend(linkage_items)
+    # A FILLER group's named children are reset one by one (issue #247), so
+    # they are saved one by one too.
     return [
         item
-        for item in items
-        if not _is_filler(item) and not getattr(item, "redefines", None)
+        for item in addressable_items(items)
+        if not getattr(item, "redefines", None)
     ]
 
 

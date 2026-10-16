@@ -721,3 +721,49 @@ def test_odo_counter_under_a_filler_group_is_qualified_past_it():
     assert "MOVE 0 TO WS-COUNT" in lines
     assert "MOVE 5 TO WS-N2 OF WS-REC" in lines
     assert "MOVE 1 TO WS-N2 OF WS-REC" in lines
+
+
+FILLER_GROUP_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FG.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  FILLER.
+           05  WS-EOF       PIC X VALUE "N".
+           05  WS-CNT       PIC 9(3) VALUE 5.
+           05  FILLER.
+               10  WS-DEEP  PIC X(2) VALUE "DD".
+           05  WS-TAB       PIC X OCCURS 3.
+       01  WS-AREA.
+           05  FILLER.
+               10  WS-X     PIC X(3) VALUE "ABC".
+               10  WS-N     PIC 9(3) VALUE 7.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_filler_groups_are_transparent_to_the_reset():
+    """Issue #247: named items under `01 FILLER.` were never reset, and a
+    `05 FILLER.` group's named children lost their VALUEs."""
+    result = parse_cobol(FILLER_GROUP_SOURCE, filename="fg.cbl")
+    assert result.success, result.errors
+    lines = reset_move_lines(result.ast)
+    assert 'MOVE "N" TO WS-EOF' in lines
+    assert "MOVE 5 TO WS-CNT" in lines
+    assert 'MOVE "DD" TO WS-DEEP' in lines
+    assert not any("WS-TAB" in line for line in lines)
+    assert 'MOVE "ABC" TO WS-X OF WS-AREA' in lines
+    assert "MOVE 7 TO WS-N OF WS-AREA" in lines
+    assert not any("FILLER" in line for line in lines if "MOVE" in line)
+
+
+def test_snapshot_saves_the_named_children_of_a_filler_group():
+    from mockymock.splicer.snapshot import plan_snapshot
+
+    result = parse_cobol(FILLER_GROUP_SOURCE, filename="fg.cbl")
+    snapshot, problems = plan_snapshot(result.ast)
+    assert problems == []
+    targets = [line.rsplit(" TO ", 1)[1] for line in snapshot.restore_lines]
+    assert targets == ["WS-EOF", "WS-CNT", "WS-DEEP", "WS-AREA"]
