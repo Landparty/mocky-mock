@@ -969,7 +969,12 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
 - **Looped MQGET / CBLTDLI get calls (#156).** When a CALL sits in a loop
   whose UNTIL reads the call's own reply (`analysis.loops.loop_guard_words`,
   matched against the argument and every name declared under it, 88s
-  included), the mock reports end of data after its row: `MOVE 2` /
+  included -- plus, one hop out (#188), any flag the CALL's own paragraph
+  writes by `SET ... TO TRUE` or `MOVE` inside an IF/EVALUATE whose
+  condition reads the reply, `analysis.loops.names_set_on_reply`, with an
+  88's own field and sibling 88s: DEPTMQC's `UNTIL NO-MORE-MSGS` set under
+  `WHEN MQ-REASON-CODE = MQRC-NO-MSG-AVAIL`), the mock reports end of data
+  after its row: `MOVE 2` /
   `MOVE 2033` into MQGET's CompCode/Reason (8th/9th USING arguments), or
   `GE`/`GB` into bytes 11-12 of a CBLTDLI/CEETDLI get call's PCB (GU/GHU/
   GNP/GHNP -> GE, GN/GHN -> GB; the function code is read from the first
