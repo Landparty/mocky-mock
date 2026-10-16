@@ -508,3 +508,62 @@ def test_deletion_allowed_before_a_paragraph_header_in_area_a():
     )
     deletions = [m for m in mutants if m.operator == "stmt-delete"]
     assert [m.mutated for m in deletions] == ["           CONTINUE"]
+
+
+def _swaps(mutants):
+    return [m for m in mutants if m.operator == "arith-verb-swap"]
+
+
+def test_verb_swap_rewrites_a_same_line_scope_terminator():
+    """#234: `ADD ... END-ADD` swapped to `SUBTRACT ... END-ADD` never
+    compiled; the terminator now follows the verb."""
+    mutants = _swaps(
+        generate_mutants(
+            _procedure(
+                "           ADD 5 TO WS-A ON SIZE ERROR CONTINUE END-ADD",
+                "           MULTIPLY 3 BY WS-B END-MULTIPLY.",
+            )
+        )
+    )
+    mutated = {m.description: m.mutated for m in mutants}
+    add = mutated["ADD..TO -> SUBTRACT..FROM"]
+    assert "SUBTRACT 5 FROM WS-A" in add and add.rstrip().endswith("END-SUBTRACT")
+    assert "END-ADD" not in add
+    mul = mutated["MULTIPLY..BY -> DIVIDE..INTO"]
+    assert mul.rstrip().endswith("DIVIDE 3 INTO WS-B END-DIVIDE.")
+
+
+def test_verb_swap_skips_a_terminator_on_a_later_line():
+    """A single-line mutant cannot rewrite an END-<verb> lines below, so the
+    site is skipped rather than shipped as a guaranteed stillborn."""
+    mutants = _swaps(
+        generate_mutants(
+            _procedure(
+                "           ADD 5 TO WS-A",
+                '               ON SIZE ERROR MOVE "Y" TO WS-ERR',
+                "           END-ADD",
+                "           MULTIPLY 3 BY WS-B",
+                "               ON SIZE ERROR",
+                '                   MOVE "Y" TO WS-ERR',
+                "           END-MULTIPLY",
+                "           ADD 1 TO WS-C.",
+            )
+        )
+    )
+    assert [m.description for m in mutants] == ["ADD..TO -> SUBTRACT..FROM"]
+    assert mutants[0].line == 12  # the unterminated ADD, still mutated
+
+
+def test_verb_swap_ignores_a_nested_statements_terminator():
+    mutants = _swaps(
+        generate_mutants(
+            _procedure(
+                "           ADD 1 TO WS-A ADD 2 TO WS-B ON SIZE ERROR",
+                "               CONTINUE END-ADD.",
+            )
+        )
+    )
+    # Only the first ADD is a site; its END-ADD search sees the second ADD
+    # open a level that END-ADD closes, so it has no terminator of its own.
+    assert len(mutants) == 1
+    assert "END-ADD" not in mutants[0].mutated

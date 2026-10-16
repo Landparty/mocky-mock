@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass
 
 from mockymock.dsl.model import SUITE_PHASE_ID, HookStep, MockTestCase, MockTestSuite
-from mockymock.splicer.naming import TallyRegistry
+from mockymock.splicer.naming import TallyRegistry, assign, truth_set
 from mockymock.splicer.snapshot import StateSnapshot
 
 _SUITE_PARAGRAPH_NAME_RE = re.compile(r"[^A-Z0-9-]")
@@ -102,6 +102,35 @@ def _operand_lines(head: str, value: str, indent: str) -> list[str]:
     return [f"{head}{pieces[0]}"] + [f"{indent}{piece}" for piece in pieces[1:]]
 
 
+_MOVE_HEAD_RE = re.compile(r"MOVE\s+", re.IGNORECASE)
+
+
+def split_long_move(line: str, indent: str = "     ") -> list[str]:
+    """`line` -- a `MOVE <value> TO <target>` statement, with its own
+    leading indentation -- as one line, or, when `<value>` is one long
+    literal, as `MOVE <first piece>` plus `& <piece>` lines under it
+    (`_literal_pieces`), so no driver line passes cobc -free's 512-byte
+    limit (issue #322). Anything else is returned unchanged: the value is
+    whatever precedes the LAST ` TO `, and must be one whole literal, so a
+    ` TO ` inside a literal can never split it wrongly."""
+    stripped = line.lstrip()
+    head = _MOVE_HEAD_RE.match(stripped)
+    if head is None:
+        return [line]
+    to_at = stripped.upper().rfind(" TO ")
+    if to_at <= head.end():
+        return [line]
+    pieces = _literal_pieces(stripped[head.end() : to_at])
+    if pieces is None:
+        return [line]
+    lead = line[: len(line) - len(stripped)]
+    lines = [f"{lead}MOVE {pieces[0]}"] + [
+        f"{lead}{indent}{piece}" for piece in pieces[1:]
+    ]
+    lines[-1] += stripped[to_at:]
+    return lines
+
+
 def _display_operands(text: str) -> list[str]:
     """`text` as one or more quoted DISPLAY operands: one when short, else
     one per `_LITERAL_CHUNK` characters, so a long expected value never
@@ -112,6 +141,15 @@ def _display_operands(text: str) -> list[str]:
         f'"{_display_text(text[start : start + _LITERAL_CHUNK])}"'
         for start in range(0, len(text), _LITERAL_CHUNK)
     ]
+
+
+#: Closes a FAIL / RECORD marker that DISPLAYs a field's raw value (issue
+#: #285): a value holding byte X'0A' -- a binary halfword of 10 in a group,
+#: an LF in a PIC X -- splits its marker across lines, and every line
+#: before this one is that value's continuation (no program code runs
+#: between the two DISPLAYs). `report.results.parse_stdout` rejoins them.
+VALUE_END_MARKER = "__MOCKYMOCK__ VALUE-END"
+_VALUE_END_DISPLAY = f'               DISPLAY "{VALUE_END_MARKER}"'
 
 
 @dataclass
@@ -127,15 +165,19 @@ def build_driver(
     record_targets: dict[int, list[str]] | None = None,
     extra_working_storage_lines: list[str] | None = None,
     snapshot: StateSnapshot | None = None,
+    condition_names: frozenset[str] | set[str] = frozenset(),
 ) -> DriverArtifact:
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
     # yield "X--VIA-COPYBOOK-" -- a COBOL word cannot end with a hyphen and
-    # cobc rejects the paragraph header outright. Capped well under
-    # GnuCOBOL's 63-character word limit.
+    # cobc rejects the paragraph header outright. Capped at IBM Enterprise
+    # COBOL's 30-character user-defined-word limit (GnuCOBOL allows 63, but
+    # `export` writes source for the IBM compiler, and every other generated
+    # name already keeps to 30). Only its own header names this paragraph,
+    # and the TESTSUITE marker DISPLAY carries the full suite name.
     sanitized = _SUITE_PARAGRAPH_NAME_RE.sub("-", suite.name.upper())
     sanitized = re.sub(r"-{2,}", "-", sanitized).strip("-")
-    suite_paragraph = ("UT-TESTSUITE-" + sanitized)[:60].rstrip("-")
+    suite_paragraph = ("UT-TESTSUITE-" + sanitized)[:30].rstrip("-")
 
     # UT-CURRENT-CASE is X(9): case ids are zero-padded to 3 digits but grow
     # naturally past case 999 ("1000"), and a narrower field would truncate
@@ -233,6 +275,7 @@ def build_driver(
                 (record_targets or {}).get(index, []),
                 suite=suite,
                 restore_state=restore_state,
+                condition_names=condition_names,
             )
         )
         procedure.append("")
@@ -246,7 +289,9 @@ def _step_lines(steps: list[HookStep]) -> list[str]:
     lines: list[str] = []
     for step in steps:
         if step.kind == "MOVE":
-            lines.append(f"           MOVE {step.value} TO {step.target}")
+            lines.extend(
+                split_long_move(f"           {assign(step.value, step.target)}")
+            )
         else:
             thru = f" THRU {step.thru}" if step.thru else ""
             lines.append(f"           PERFORM {step.target}{thru}")
@@ -333,6 +378,7 @@ def _build_testcase_paragraph(
     record_names: list[str] | None = None,
     suite: MockTestSuite | None = None,
     restore_state: bool = False,
+    condition_names: frozenset[str] | set[str] = frozenset(),
 ) -> list[str]:
     case_id = f"{index:03d}"
     case_mocks = {(mock.category, mock.key) for mock in case.mocks}
@@ -367,6 +413,10 @@ def _build_testcase_paragraph(
             lines.append('           MOVE "N" TO UT-EARLY-EXIT')
 
     for value, target in case.setup_moves:
+        set_line = truth_set(value, target)
+        if set_line is not None:
+            lines.append(f"           {set_line}")
+            continue
         move = _operand_lines("           MOVE ", value, "                ")
         move[-1] += f" TO {target}"
         lines.extend(move)
@@ -401,11 +451,21 @@ def _build_testcase_paragraph(
             # `TO BE > 0 AND < 10` / `TO BE 7 OR 8`: an abbreviated combined
             # condition. Swapping the operator would negate only its first
             # relation (`X NOT > 0 AND < 10`), so negate the whole condition
-            # instead (issue #265).
-            lines.append(
-                f"           IF NOT ({expectation.data_name} "
-                f"{expectation.operator} {expectation.expected_value})"
-            )
+            # instead (issue #265). A negated operator (`NOT TO BE 7 OR 8`)
+            # would carry its NOT onto every abbreviated relation in the
+            # tail (`X NOT = 7 OR NOT = 8`, always true), so the failure
+            # guard is the un-negated condition itself (issue #339).
+            operator = expectation.operator
+            if operator.startswith("NOT "):
+                lines.append(
+                    f"           IF ({expectation.data_name} "
+                    f"{operator[len('NOT '):]} {expectation.expected_value})"
+                )
+            else:
+                lines.append(
+                    f"           IF NOT ({expectation.data_name} "
+                    f"{operator} {expectation.expected_value})"
+                )
         else:
             fail_operator = _expect_fail_condition(expectation.operator)
             lines.extend(
@@ -422,6 +482,7 @@ def _build_testcase_paragraph(
                 f"{_display_text(expectation.expected_value)}, "
                 f'got " {expectation.data_name}'
             )
+            lines.append(_VALUE_END_DISPLAY)
         else:
             lines.append(
                 f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: '
@@ -432,6 +493,7 @@ def _build_testcase_paragraph(
                 for operand in _display_operands(expectation.expected_value)
             )
             lines.append(f'                   ", got " {expectation.data_name}')
+            lines.append(_VALUE_END_DISPLAY)
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")
 
@@ -465,9 +527,21 @@ def _build_testcase_paragraph(
     # splice site), record_names is built here with case_id already known,
     # so this marker carries one and is attributed by id, not position.
     for name in record_names or []:
+        if name.partition("(")[0].strip().upper() in condition_names:
+            # A level-88 condition-name cannot be DISPLAYed ("condition-name
+            # not allowed here" failed the whole recording build, issue
+            # #237): record its truth value instead.
+            marker = f"__MOCKYMOCK__ RECORD {case_id} {name}: "
+            lines.append(f"           IF {name}")
+            lines.append(f'               DISPLAY "{marker}TRUE"')
+            lines.append("           ELSE")
+            lines.append(f'               DISPLAY "{marker}FALSE"')
+            lines.append("           END-IF")
+            continue
         lines.append(
             f'           DISPLAY "__MOCKYMOCK__ RECORD {case_id} {name}: " {name}'
         )
+        lines.append(_VALUE_END_DISPLAY.replace("               ", "           ", 1))
 
     if any(step.kind == "PERFORM" for step in after_each):
         # Nor may one the case's PERFORM reached cut AFTER-EACH short: a

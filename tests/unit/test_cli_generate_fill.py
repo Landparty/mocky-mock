@@ -185,15 +185,17 @@ def test_generate_fill_inserts_one_block_for_two_sites_sharing_a_key(tmp_path, c
 
 
 def test_generate_fill_skips_a_perform_inside_a_mock_body(tmp_path, capsys):
-    """A mock body is verbatim COBOL and may PERFORM a paragraph; the
-    inserted block must land before the case's own PERFORM, never
-    inside another mock's body."""
+    """A mock body is verbatim COBOL and may hold an inline PERFORM (a
+    PERFORM of a paragraph is refused, issue #287); the inserted block must
+    land before the case's own PERFORM, never inside another mock's body."""
     cut_text = (
         'TESTSUITE "s"\n'
         "\n"
         'TESTCASE "opens and closes"\n'
         "    MOCK OPEN INV-FILE\n"
-        "        PERFORM 1000-NEXT\n"
+        "        PERFORM 2 TIMES\n"
+        "            CONTINUE\n"
+        "        END-PERFORM\n"
         "    END-MOCK\n"
         "    MOCK CLOSE INV-FILE\n"
         "    END-MOCK\n"
@@ -206,7 +208,8 @@ def test_generate_fill_skips_a_perform_inside_a_mock_body(tmp_path, capsys):
     lines = cut.read_text().splitlines()
     read_at = lines.index("    MOCK READ INV-FILE")
     assert lines[read_at - 1] == "    END-MOCK"
-    assert lines[read_at + 2] == "    PERFORM 0000-MAIN-PROCESS"
+    read_end = lines.index("    END-MOCK", read_at)
+    assert lines[read_end + 1] == "    PERFORM 0000-MAIN-PROCESS"
     assert main(["lint", str(cbl), "--cut", str(cut)]) == 0
 
 

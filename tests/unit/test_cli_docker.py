@@ -44,13 +44,28 @@ def test_setup_fails_loudly_when_docker_unavailable(capsys):
 def test_write_report_file_reports_oserror_instead_of_tracebacking(tmp_path, capsys):
     from mockymock.cli.main import _write_report_file
 
-    bad_target = tmp_path / "does-not-exist" / "report.xml"
+    # A parent that is a regular file cannot be created as a directory
+    # (a merely missing one is created now, issue #257).
+    (tmp_path / "a-file").write_text("x")
+    bad_target = tmp_path / "a-file" / "report.xml"
     ok = _write_report_file("run", "--junit-xml", str(bad_target), "<testsuite/>")
     assert ok is False
     assert not bad_target.exists()
-    out = capsys.readouterr().out
-    assert "could not write --junit-xml" in out
-    assert str(bad_target) in out
+    captured = capsys.readouterr()
+    assert "could not write --junit-xml" in captured.err
+    assert str(bad_target) in captured.err
+    assert captured.out == ""
+
+
+def test_write_report_file_creates_missing_parent_directories(tmp_path, capsys):
+    """Issue #257: `--junit-xml reports/junit.xml` with no `reports/` yet
+    wrote nothing, printed a note on stdout and exited 0."""
+    from mockymock.cli.main import _write_report_file
+
+    target = tmp_path / "reports" / "nested" / "junit.xml"
+    assert _write_report_file("run", "--junit-xml", str(target), "<testsuite/>")
+    assert target.read_text(encoding="utf-8") == "<testsuite/>"
+    assert capsys.readouterr().err == ""
 
 
 def test_write_report_file_writes_content_on_success(tmp_path):

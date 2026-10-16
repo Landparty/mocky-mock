@@ -11,7 +11,7 @@ documented, runnable example.
 
 | Boundary | Statement in CUSTPROG | Mocked by |
 |----------|------------------------|-----------|
-| Cursor declare | `EXEC SQL DECLARE CUST_CURSOR CURSOR FOR SELECT ... END-EXEC` | `MOCK SQL "DECLARE CUST_CURSOR"` |
+| Cursor declare | `EXEC SQL DECLARE CUST_CURSOR CURSOR FOR SELECT ... END-EXEC` | nothing -- a precompiler declaration, spliced to `CONTINUE` (not a boundary) |
 | Cursor open | `EXEC SQL OPEN CUST_CURSOR END-EXEC` | `MOCK SQL "OPEN CUST_CURSOR"` |
 | Cursor fetch | `EXEC SQL FETCH CUST_CURSOR INTO :CUST-ID, :CUST-NAME END-EXEC` | `MOCK SQL "FETCH CUST_CURSOR" ROWS (...)` |
 | Cursor close | `EXEC SQL CLOSE CUST_CURSOR END-EXEC` | `MOCK SQL "CLOSE CUST_CURSOR"` |

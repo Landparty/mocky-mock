@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-16T12:00:00Z
+timestamp: 2026-10-16T20:00:00Z
 ---
 
 # Overview
@@ -123,7 +123,13 @@ from `_per_pair_report_path`, which folds the `.cut`'s path *relative to the
 test root* into the file name so `svc1/PROG.cut` and `svc2/PROG.cut` never
 share one report)
 — not a parallel implementation, so an explicit single-pair invocation is
-byte-for-byte unaffected.
+byte-for-byte unaffected. A `.cut` whose program cannot be resolved is
+skipped and listed; the command exits 1 when nothing ran, or (issue #303,
+option (b)) when a skipped `.cut` declares a `PROGRAM "..."` line, since
+that explicit claim is now broken (`_report_broken_claims`). A `.cut`
+whose program was only guessed is still just skipped. `run` also writes a
+failing per-pair `--junit-xml` / `--json-report` entry for every skipped
+suite (`_write_skipped_suite_reports`, via `_write_failure_reports`).
 
 `_apply_config_to_args()` fills `args.copybook_path`/`args.seed` from the
 loaded config when the CLI flag was left at its argparse default; an
@@ -140,12 +146,17 @@ missing; (2) sibling `<base>.cbl`/`.cob`; (3) a suite under the tests
 folder mirrors to the same relative folder under the source root; (4) the
 only `<base>.cbl` under the source root (two is a `DiscoveryError` asking
 for a PROGRAM line). `<base>` is the .cut name up to its first dot, so
-`PROG.errors.cut` is a second suite of PROG. `ProjectLayout`
+`PROG.errors.cut` is a second suite of PROG. Rules (2)-(4) all try the
+.cut's whole stem before `<base>` (issue #289: `generate` names a suite
+after the program's full stem, and `tests/pay/PAY.V2.cut` only paired
+with a `PAY.cbl` under the mirror and unique rules). `ProjectLayout`
 (`project_layout(config)`) supplies root (the deciding config file's
 folder, else cwd), `tests_dir` (`test_root` if a file set it, else
 `<root>/tests`) and `source_root` (new config key, default `<root>/src` when it exists, else root).
 `find_suites(program)` is the reverse direction (scans the root, plus the
-program's own folder when it lies outside it); `resolve_cut_path` errors
+tests folder when `test_root` points outside the root -- `project_cut_files`,
+shared with `mockymock suites`, issue #294: `generate` writes new suites
+there -- plus the program's own folder when it lies outside the root); `resolve_cut_path` errors
 naming the suites when there are several, except that `run`/`lint
 PROG.cbl` hand several suites to `_run_directory`/`_lint_directory`
 (`_several_suites`); their per-suite report files are named relative to
@@ -156,7 +167,10 @@ and a mirrored `tests/pay/PROG.cut` get `report-src-pay-PROG.json` and
 the second suite overwrote. `generate`/`init` write to
 `discovery.default_suite_path()` -- `<tests>/<folder>/PROG[.<name>].cut`,
 or beside the program when it already has a `PROG.cut` there or lies
-outside the source root -- and `--name` picks the topic.
+outside the source root -- and `--name` picks the topic. `--name`
+(generate, init, suites) is validated by the argparse `type=`
+`_suite_name` (#336): one word of `[A-Za-z0-9_-]+`, so a `/`, `\`, `..`,
+`.` or empty NAME exits 2 before any path is built.
 `mockymock suites [PROGRAM] [--name] [--json]` (`_cmd_suites`) prints the
 pairing with the rule that matched, or for one program its suites and
 `newSuitePath`; Docker-free and parse-free, it is what the VS Code
@@ -467,9 +481,25 @@ pre-toolchain check (steps 2-10 below) lives in
 `ensure_toolchain()` — a bad `.cut`/`.cbl` fails fast with the real problem
 even when Docker is down. `run` and `lint` share this function so they can
 never disagree about what refuses.
+Copybooks are expanded with `preserve_source_locations=True`
+(`StaticCheckResult.source_location_map`), and every `refused (...)`
+problem and note has its `line N` rewritten by
+`checks.source_line_relabeler` to the line of the `.cbl` the user has
+open, or `line M of CPY.CPY` for a statement a copybook brought in
+(issue #241: a WORKING-STORAGE COPY shifted every refusal's line).
+`.cut line N` is left alone. `generate`/`export`'s STOP RUN/GOBACK and
+unmockable-site warnings (`_report_unsupported_boundaries`) are relabeled
+the same way.
 
 Flags beyond the pipeline inputs:
 
+- Every output-file flag (`--junit-xml`, `--json-report`,
+  `--coverage-json`, `--coverage-out`, `--trace-json`, and `export`/
+  `generate`/`mutate`'s output) is written by `_write_report_file`, which
+  creates missing parent directories first (issue #257: `--junit-xml
+  reports/junit.xml` in a fresh checkout wrote nothing) and prints a write
+  that still fails on stderr. The exit code still follows the test
+  outcome, not the report write.
 - `--junit-xml PATH` — write `format_junit_xml(...)` there after a run that
   reaches execution. Each `<testcase>` carries `classname="<suite name>"`.
   A refusal or a compile failure (steps 5b/10 and 15 below) also writes
@@ -491,12 +521,28 @@ Flags beyond the pipeline inputs:
   could shorten or lengthen the bound a hung mocked CALL is killed by. The
   help text now points at the fix for that hang: `MOCK CALL "X" ROWS (
   ... ) TERMINAL ( ... )`, so the calls after the last row end the loop.
+  Values below 1 are refused on run / mutate / report (`_timeout_seconds`,
+  issue #306): coreutils `timeout 0` turns the container-side kill off, so
+  a hung binary outlived its `docker exec` as an orphan. `run_binary`
+  also clamps to at least 1 second for any other caller.
 - `--case NAME` (repeatable) / `--tag TAG` (repeatable) — run only the named
   or tagged TESTCASEs (union when both given). Selection happens in
   `run_static_checks` before any per-case refusal check, so a refused
-  sibling case no longer blocks running a clean one. An unknown name/tag is
-  a static problem listing what is available. The suite still runs as ONE
-  compile + binary — just with only the selected cases spliced in.
+  sibling case no longer blocks running a clean one. An unknown name is a
+  static problem listing what is available; tags are a union, so a suite
+  is refused for `--tag` only when it carries none of the requested tags
+  (`--tag a --tag b` on a suite with only `a` runs its `a` cases). The
+  suite still runs as ONE compile + binary — just with only the selected
+  cases spliced in. In directory mode (no program/--cut, or a program with
+  several suites) `_directory_selections` parses every suite first, like
+  `pytest -m`: a suite with no selected case is skipped (`skipped: no
+  selected TESTCASE`, no report file written, exit code untouched), each
+  run suite is passed only the selectors it matches, and only a selector
+  that matches nothing in ANY suite is an error (exit 1). A suite that
+  does not parse is left in, so its run reports the parse error. Before
+  (issue #254) every suite got the selectors unchanged, a suite without
+  the tag was refused, the run exited 1 and its JUnit file got a
+  synthetic failure.
 - `--coverage` — the console report leads with the ORIGINAL `.cbl`'s own
   percentage and lists its own uncovered lines by their original line
   numbers; the instrumented sandbox copy's higher number (it counts
@@ -589,6 +635,14 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
    this one guard covers all five instead of each needing its own).
    `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
    on a lossy copybook decode before the corrupted text is ever parsed.
+   Under `SOURCE-COMPUTER ... WITH DEBUGGING MODE` (a non-comment line),
+   `debugging_lines.activate_debugging_lines` then turns every column-7
+   `D` line into a code line (indicator -> space, no line moves), as the
+   compiler reads them: the AST, the gates and the compiled sandbox all see
+   them (issue #274; before it cobc compiled them as comments and a D-line
+   boundary went ungated). `generate`/`fixtures`/`collect --boundaries`
+   and `report` do the same before their own `parse_cobol`. cobol.yml's
+   `project.debug_lines` is not read.
 3. `parse_cobol` -> `check_whole_program_scoped(result)` refusals
    (PARSE_ERROR on a failed parse, PARSE_WARNING per `ParseResult.warnings`
    entry — dropped statements on an otherwise "clean" parse) are printed
@@ -788,7 +842,12 @@ captured MI transcripts and end-to-end tested against a live container
   from GnuCOBOL's internal `frame_stack`, since gdb's own backtrace is
   always exactly one frame (`PERFORM` is a computed-goto, not a real C
   call). `frame_stack[0]` is a sentinel, not a real caller — see the
-  design doc's Empirical basis for why. `synthesize_stack`'s per-frame
+  design doc's Empirical basis for why. `ParagraphIndex.build(ast,
+  to_original)` maps each paragraph/section start from the AST's
+  (copybook-expanded) lines to the original `.cbl`'s, the coordinates it is
+  queried in; `_cmd_debug` passes `build_original_line_map(normalized,
+  normalized, original)` (issue #256: a WORKING-STORAGE COPY shifted every
+  frame's paragraph name). `synthesize_stack`'s per-frame
   walk over `frame_stack[1..depth]` catches `GdbCommandError` on any one
   frame and skips it (`continue`) since 2026-08-10 (audit finding F14) —
   previously one unresolvable frame (gdb refusing the evaluate/
@@ -808,6 +867,17 @@ captured MI transcripts and end-to-end tested against a live container
   readable ones with the value `<unavailable: not materialized by cobc>`,
   and `evaluate` answers the same for them (issue #156). Items cobc
   declared only as a `b_NN` buffer are still read (issue #168 covers how).
+  An item gdb cannot read at this stop no longer fails the whole
+  `variables`/`evaluate` response (issue #318, `_read_display_value`): it
+  shows `UNREADABLE_VALUE` (`<unavailable: storage not bound at this
+  point>`), which is also what a field with a NULL `.data` (a
+  LOCAL-STORAGE item before cobc binds it) reads as. LOCAL-STORAGE is not
+  yet read through `cob_local_ptr`. An EXTERNAL item's `b_NN` is a
+  pointer; gdb's `0x... "text"` printing is reduced to the text.
+  The numeric decoders place the decimal point through `_place_point`,
+  which honours P scaling (issue #295): a negative cobc scale multiplies
+  (`9(3)PPP` storing 637 is 637000), and a scale larger than the stored
+  digits left-pads (`VPP99` storing 12 is 0.0012).
   `_handle_launch` closes any prior `self._session` and resets
   `self._breakpoint_numbers` before creating a new one (audit finding
   F16) — a second `launch` on one adapter (a client retry, or a bug) used
@@ -852,6 +922,13 @@ ordinary `MOVE` into `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...`.
 or a later line of it, `_statement_tail`) has a `REMAINDER` phrase:
 `MULTIPLY ... REMAINDER` is a cobc syntax error, so that mutant was a
 stillborn every time (2026-09-28).
+
+The swap also carries the statement's own scope terminator (#234):
+`_scope_terminator` finds the `END-<verb>` that closes it (a nested
+same-verb statement opens a level its own terminator closes; a period ends
+the search). On the mutated line it is rewritten with the verb
+(`SUBTRACT ... END-SUBTRACT`); on a later line the site is skipped, since a
+single-line mutant cannot touch it and `SUBTRACT ... END-ADD` never compiles.
 
 Three further stillborn classes closed on 2026-09-04, all in
 `mutation.operators` (see
@@ -935,7 +1012,11 @@ at most once per case (`_may_run_more_than_once`, issue #203): an
 ADD/SUBTRACT in a paragraph a looping PERFORM (UNTIL/VARYING/TIMES)
 reaches, or in a looping inline PERFORM body (`analysis/loops.py`), gets
 no hint -- a counter bumped n times ends at n while the swap alternates
-1, 0, 1, ..., so a plain EXPECT kills it. The verdict and score
+1, 0, 1, ..., so a plain EXPECT kills it. The AST is copybook-expanded
+and `mutant.line` is a line of the program itself, so the mutant's line
+is first mapped through `StaticCheckResult.source_location_map` (issue
+#342: a WORKING-STORAGE COPY shifted every PROCEDURE DIVISION line and
+the loop check never matched). The verdict and score
 are unchanged -- seeding the field is how the author kills it -- but the
 console prints a `!` line under the diff plus a count, `--json-report`
 carries a per-mutant `hint`, and `mockymock report` files it as
@@ -1001,17 +1082,57 @@ the `.cut` (`_cmd_lint` re-parses it quietly), since the check is
 `.cut`-only. The `.cut line N` wording is what lets the extension place the
 diagnostic on the TESTCASE header.
 
+**Untestable omitted-argument branch (issue #288, 2026-10-16).**
+`StaticCheckResult.warnings` carries program-side warnings, which lint
+prints (and counts) ahead of the NO_ASSERTION ones and `run` prints with
+its notes. The one producer so far: `warning (OMITTED_ARGUMENT_UNTESTABLE):
+paragraph P, line N: ...` for each `ADDRESS OF <folded LINKAGE item>`
+compared with `NULL`/`NULLS` (either side, `IS`/`NOT`/`EQUAL TO` allowed;
+a receiving `SET ADDRESS OF X TO NULL` is not a test) and each
+`NUMBER-OF-CALL-PARAMETERS`, in a paragraph the selected cases' reachability
+union (`union_executed_paragraphs`; None reports every one) can execute.
+The fold gives every parameter storage and the driver PERFORMs rather than
+CALLs, so the omitted-argument branch can never run. Items the program
+rebinds itself (BASED, issue #226) are skipped. Detection is
+`analysis.linkage.omitted_argument_tests`, the text is
+`omitted_argument_warnings`. A warning, not a refusal: the passed-argument
+branch is still testable. Issue #288's option 2; its option 1 (an `OMIT
+<item>` statement folding the item BASED and setting its address to NULL
+per case) is not built and shares the BASED work with #226.
+
 **Unknown data-names (issue #204, 2026-10-16).** `run_static_checks` step
 7b (`analysis.cut_names.check_cut_data_names`, cumulative with step 8)
 refuses `UNKNOWN_DATA_NAME` at the `.cut` line of every setup/hook MOVE
 target, EXPECT data-name and non-`UT-CAP-` `CAPTURE ... INTO` target, and
 every bare-word MOVE/EXPECT value (`TO BE Y`), that appears nowhere in the
 transformed program text (literals and `*>` comments stripped; generated
-SQLCA and `EXEC SQL INCLUDE` members count), is not a `UT-` harness item,
-DFHEIBLK/DLIDIB field, special register or figurative constant. Loose on
+SQLCA and `EXEC SQL INCLUDE` members count), is not a harness item this
+suite's driver declares (its fixed `UT-` fields, every tally with its
+`-BASE`/`-START` twin, every `UT-CAP-` target a CAPTURE line declares --
+not any `UT-` word, issue #296), DFHEIBLK/DLIDIB field, special register
+or figurative constant. The AST's own data-item and condition names
+(`cut_names.data_item_levels`) are known too: a name built through
+`REPLACE` pseudo-text appears in no word of the pre-REPLACE text the
+splicer compiles (issue #273). Loose on
 purpose: it only catches names cobc would certainly reject.
 `MockTestCase.setup_move_lines` / `MockDirective.capture_lines` carry the
-line numbers the model did not record before.
+line numbers the model did not record before. ROWS rows and the `TERMINAL`
+group are checked the same way, field and value (issue #299), at
+`MockDirective.row_lines` / `terminal_line`. A MOCK body is otherwise
+spliced unchecked, but each one-line `MOVE <value> TO <target>...` in it has
+its targets and bare-word value checked the same way, at its own line
+(`MockDirective.body_line_numbers`, issue #243 -- the lint half of that
+issue; cobc errors are still reported against the sandbox copy, not
+remapped to the `.cut`). The same step refuses
+`CONDITION_NAME_MISMATCH` when an EXPECT's kind does not match its item's
+level in the AST (issue #307): `TO BE TRUE|FALSE` on an item that is not a
+level 88 (the driver would emit `IF NOT X`), or any other value on an 88
+(`IF X NOT = v`, "condition-name not allowed here"). A name declared at both
+kinds, or not in the AST, is left alone. The same code covers a setup/hook
+MOVE or a ROWS/TERMINAL field assigned the wrong kind (issue #251, which
+splices TRUE/FALSE as `SET`): TRUE/FALSE to a non-88, any other value to
+an 88, FALSE to an 88 with no `WHEN SET TO FALSE`
+(`cut_names.conditions_without_false`).
 
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 
@@ -1020,7 +1141,9 @@ test cases with 1-based line numbers and tags. `--json` emits the
 machine-readable form (`{"version": 1, "cutFile", "suite": {name, line},
 "cases": [{name, line, tags}]}`) the VS Code extension uses for
 authoritative test discovery; a `CutParseError` yields `{"version": 1,
-"error": "..."}` and exit 1.
+"error": "..."}` and exit 1. So does every other `--json` failure: a
+missing `.cut` or program file, and `--boundaries` without a program, go
+through `_print_command_error` too (issue #309; they printed plain text).
 
 **`--boundaries` (2026-09-15)** additionally reports `boundaries: [{category,
 key, keys, directive, label, paragraph, line, matchText}]` -- every site in
@@ -1153,10 +1276,28 @@ pipeline as `run`, but without Docker or any GnuCOBOL step. The output is adjust
 under a real fixed-format (z/OS) COBOL compiler instead of GnuCOBOL-only: `PROCESS`/`CBL` directives
 are preserved (where `run`/`lint` strip them), columns are restored to z/OS fixed-format discipline
 (7-space prefix for Area A), and over-column-72 lines are fitted by `mainframe_export.fit_within_columns`.
-A provenance/disclaimer header is prepended, documenting that this is a
+The prefix is applied *before* splicing, so `splice_program(..., column_offset=SEQUENCE_AREA_WIDTH)`
+tells the one column-sensitive step, the clause-body lift, about the shift (issue #325): without it
+`lift_clause_bodies` found no word at its AST offsets and every mocked statement's AT END / NOT AT
+END / INVALID KEY / ON EXCEPTION body (and the `UT-MOCK-STATUS` bookkeeping) was dropped from the
+export while `run` kept them -- a read-until-EOF loop hung.
+`export` also passes `run_static_checks(..., model_rebinds=False)` (issue #321): a folded LINKAGE
+item `run` keeps as a real rebind (`mark_based`, #226) would put `BASED` and `SET ADDRESS OF` on a
+WORKING-STORAGE item into the output, both GnuCOBOL / Micro Focus only. Export keeps the IBM-legal
+`UT-ADDR-SINK` redirect instead, lists the items in `StaticCheckResult.unmodelled_rebinds`, prints a
+warning, and names them in the provenance header (`build_provenance_header(..., unmodelled_rebinds)`):
+a case that relies on the rebind may fail in the export although it passes under `run`.
+A provenance/disclaimer header is inserted directly before `IDENTIFICATION DIVISION` (or the IBM
+abbreviation `ID DIVISION`; with neither, after any leading `CBL`/`PROCESS` cards — IBM requires
+those before any comment line, #276), documenting that this is a
 mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
 to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.
+
+Every width in that module is measured in **UTF-8 bytes** (`_width()`), the unit a fixed-format
+compiler counts columns in, not characters: measured with `len()`, a non-ASCII TESTCASE name, EXPECT
+or MOVE literal (`é` is 2 bytes, `’` 3) shipped lines past column 72 that every check said fit (#298).
+Splits still fall only between characters, so a multibyte character is never cut in half.
 
 `fit_within_columns` is three passes, in this order:
 
@@ -1287,6 +1428,9 @@ of it -- the half of the story `report` cannot recompute. `--file` wins
 over `--cut`'s default path. `--command` is stored as `command` (argparse
 dest `command_text`, since `command` is the subparser dest). Unknown
 status or empty step/summary -> exit 2 with a message, nothing written.
+`read_journal` splits the file on `\n` only: entries are written with
+`ensure_ascii=False`, which leaves U+2028/U+2029/NEL raw inside a string,
+and `str.splitlines()` broke such an entry into unparseable pieces (#283).
 
 ## `mockymock skills plugin [DIRECTORY] [--force]` (2026-10-04)
 
@@ -1373,7 +1517,7 @@ restores `choices=` also restores the import.
 
 **`annotate_nested_sites` ordering is load-bearing in both `generate` and `run`.** It must run before anything inspects `surface.boundary_sites` for nested spliceability (`_report_unsupported_boundaries` in `generate`; every refusal check and `splice_program` in `run`). An unannotated nested site is indistinguishable from an unspliceable one, so calling this late produces false-positive refusals.
 
-**`_insert_driver` matches section/division headers by exact-prefix string match on the stripped, uppercased line** (`WORKING-STORAGE SECTION`, `PROCEDURE DIVISION`) and inserts only at the first match. A program with unusual formatting where these headers aren't isolated on their own line (unlikely post `normalize_fixed_format`, but not structurally prevented) would silently fail to get the driver inserted.
+**`_insert_driver` matches section/division headers with whitespace-tolerant regexes** (`_WS_HEADER_RE`, `_DATA_DIVISION_RE`, `_PROCEDURE_DIVISION_RE`: `^\s*WORD\s+WORD\b`, case-insensitive) and inserts only at the first match. They were literal single-space prefix checks until #305, so `WORKING-STORAGE  SECTION` (lint-clean, cobc-clean) got no driver fields while `has_ws` said the section existed, and `PROCEDURE  DIVISION` got no driver paragraphs (every case NOT RUN); the presence check and the insertion point now share one regex. A program with unusual formatting where these headers aren't isolated on their own line (unlikely post `normalize_fixed_format`, but not structurally prevented) would silently fail to get the driver inserted.
 
 # See Also
 

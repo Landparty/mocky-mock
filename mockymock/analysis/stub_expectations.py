@@ -39,6 +39,11 @@ _STUB_RE = re.compile(
     rf"(?:--\s*(?P<note>.*?)\s*)?$"
 )
 
+# Any `*> STUB EXPECT` comment at all, parseable or not: one `_STUB_RE`
+# rejects is reported skipped, never silently dropped (issue #255 -- older
+# scaffolds wrote `*> STUB EXPECT WRITE OUT-REC -- ...`).
+_ANY_STUB_RE = re.compile(r"^\s*\*>\s*STUB EXPECT\b\s*(?P<rest>.*?)\s*$")
+
 
 @dataclass
 class StubExpectation:
@@ -141,6 +146,17 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
 
         m = _STUB_RE.match(text)
         if m is None:
+            loose = _ANY_STUB_RE.match(text)
+            if loose is not None:
+                rest = loose.group("rest").partition("--")[0].strip()
+                skipped.append(
+                    SkippedStub(
+                        line_no,
+                        rest,
+                        "not a data name -- write `*> STUB EXPECT <data-name>` "
+                        "(for a WRITE, the record it writes)",
+                    )
+                )
             continue
         name = m.group("name")
         note = m.group("note") or None

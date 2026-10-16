@@ -33,7 +33,7 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 | `__MOCKYMOCK__ CASE <id> FAIL: <reason>` | `id`, `reason` | appends `reason` to the matching `TestResult.failure_reasons` (looked up by id); an unknown id is recorded in `suite.orphan_failures` as `(id, reason)` rather than dropped |
 | `__MOCKYMOCK__ CASE <id> END` | `id` | sets the matching `TestResult.ended = True`; an unknown id is recorded in `suite.orphan_ends` rather than dropped |
 | `__MOCKYMOCK__ SUMMARY: RUN=<n> FAILURES=<n>` | `run`, `failures` | sets `suite.tests_run` / `suite.failures` |
-| `__MOCKYMOCK__ MOCK: <label>` | `label` | appends to the most recently started case's `TestResult.mock_hits`. **Trace mode only** — emitted by the splicer's mock dispatch blocks when `run --trace` is used |
+| `__MOCKYMOCK__ MOCK: <label>` | `label` | appends to the `TestResult.mock_hits` of the case that is open (START seen, END not yet); a MOCK: between cases (BEFORE-ALL/AFTER-ALL) belongs to no case and is dropped (#334). **Trace mode only** — emitted by the splicer's mock dispatch blocks when `run --trace` is used |
 | `__MOCKYMOCK__ RECORD <id> <name>: <value>` | `id`, `name`, `value` | appends `(name, value)` to the matching `TestResult.recorded` (looked up by id, same as FAIL/END — **not** positional like `MOCK:`); an unknown id is recorded in `suite.orphan_records` as `(id, name, value)` rather than dropped. **`--record-expectations` mode only** — emitted by `splicer.driver.build_driver`'s `record_targets` addition (2026-08-04) |
 
 The `MOCK` marker is the one shape carrying no case id: it is attributed
@@ -139,7 +139,7 @@ purely from absence of a FAIL marker.
 
 | Function | Output | Notes |
 |---|---|---|
-| `format_console(suite, crash_detail=None)` | Plain text | `TESTSUITE: <name>` header, one `[PASS]`/`[FAIL]`/`[CRASH]` line per case (indented, failure reasons indented further below), trailing `<run> run, <failures> failed[, <n> crashed]` summary line (`<failures>` is the raw SUMMARY check-count as-is; `<run>` falls back to `len(suite.results)` when `suite.tests_run` is 0 -- see Gotchas; the `, <n> crashed` segment only appears when `<n> > 0`) |
+| `format_console(suite, crash_detail=None)` | Plain text | `TESTSUITE: <name>` header, one `[PASS]`/`[FAIL]`/`[CRASH]` line per case (indented, failure reasons indented further below), trailing `<run> run, <failed cases> failed[ (<checks> failed checks)][, <n> crashed]` summary line (`<failed cases>` counts cases, the parenthesised check count shows only when it differs, issue #235; `<run>` falls back to `len(suite.results)` when `suite.tests_run` is 0 -- see Gotchas; the `, <n> crashed` segment only appears when `<n> > 0`) |
 | `format_junit_xml(suite, crash_detail=None)` | Pretty-printed JUnit XML via `xml.etree.ElementTree` (`indent` + `tostring`; since 2026-09-30 no `minidom` -- `toprettyxml` wrote tab/LF/CR inside attribute values raw, which readers normalize to spaces; ElementTree escapes them as `&#09;`/`&#10;`/`&#13;`) | `<testsuite name tests failures errors>` with one `<testcase>` per result; failing cases get a `<failure message>` child per failure reason, crashed cases get a single `<error message>` child instead (JUnit's own failure-vs-error distinction); orphan failures each get their own `<testcase name="orphan-<id>">` with an `<error>` child and are counted into `errors=` and `tests=`; `tests` uses the same `len(suite.results)` fallback as the console `<run>` count. All names/reasons/messages pass through `_xml_safe` first (see Gotchas) |
 
 Both formatters take an optional `crash_detail: str | None`. The CLI passes
@@ -164,6 +164,15 @@ the console line and the JSON `crashDetail` are never blank/null there.
 - **Mid-line markers (#139).** `parse_stdout` finds `__MOCKYMOCK__ ` after
   leading text, so a program's `DISPLAY ... WITH NO ADVANCING` no longer
   hides the next marker (it used to drop a FAIL line and report a pass).
+- **Values split at X'0A' (#285, audit Finding 11).** Every FAIL /
+  RECORD marker that DISPLAYs a raw field value is followed by
+  `__MOCKYMOCK__ VALUE-END` (`splicer.driver.VALUE_END_MARKER`). A value
+  holding byte X'0A' (a binary halfword of 10 in a group, an LF in a
+  PIC X) splits its marker across lines; `parse_stdout` rejoins every
+  marker-less line between the marker and VALUE-END with LF, so a
+  `--record-expectations` golden is no longer cut (and failing the next
+  run) and a FAIL reason shows the whole actual value. Without VALUE-END
+  the continuation is dropped as before.
 - **Not-run cases (#150).** `json_report.not_run_case_names` lists the
   selected cases that never printed START; `format_console` shows each as
   `[NOT RUN]` (and `N not run` in the summary) and `format_junit_xml` adds
@@ -193,7 +202,9 @@ driver's failure-reason strings against the model: an EXPECT reason is
 first matched against each directive's exact rendered head
 `expected <name> <op> <value>, got `, since the runtime value after it may
 itself contain `", got "`; only a reason no directive renders to falls
-back to splitting on the LAST `", got "`), and a synthesized `"not_run"` entry for every selected case the
+back to splitting on the LAST `", got "`; `actual` is only `rstrip()`ped
+(#335) -- its leading spaces belong to the value, so a JUSTIFIED RIGHT
+or right-aligned edited field's whole difference stays visible), and a synthesized `"not_run"` entry for every selected case the
 binary never printed a START marker for. An EXPECT failure head is split
 into name/operator/expected by `_EXPECT_HEAD_RE` (the operator is one of
 `model.EXPECT_OPERATORS`, echoed verbatim by the driver's FAIL line;
@@ -231,7 +242,12 @@ independent channels compose into one report, and the split is load-bearing:
    explicit format, and two preamble lines carry no delimiters. Its line
    numbers are **instrumented**-source lines, remapped by
    `coverage.build_original_line_map` — which drops splicer-inserted lines,
-   so the path answers "which of MY lines ran".
+   so the path answers "which of MY lines ran". The trace file covers the
+   whole binary, so `case_entries(entries, instrumented, case_id)` first
+   cuts it to the selected case (#334): from the `UT-TESTCASE-<id>`
+   paragraph entry to the case's `CASE <id> END` DISPLAY line. BEFORE-EACH
+   and AFTER-EACH run inside that span and stay; BEFORE-ALL/AFTER-ALL,
+   which run in the suite paragraph, are dropped.
 2. **Mock timeline** — the `__MOCKYMOCK__ MOCK:` markers above. This channel
    exists *because* channel 1's remap drops inserted lines: the mock dispatch
    blocks are exactly those lines, so the trace file structurally cannot
@@ -245,6 +261,15 @@ lists are meant to be read together.
 the VS Code extension consumes; `format_trace_console` renders the same
 payload for a plain `--trace`. `TRACE_ENTRY_CAP` (50,000) bounds a runaway
 `PERFORM UNTIL`, setting `truncated: true` rather than streaming or sampling.
+
+Statements a procedure copybook brought in have no `.cbl` counterpart, so
+`build_original_line_map` drops them; `format_trace_json`'s
+`copybook_lines` (`coverage.build_copybook_line_map`, from
+`StaticCheckResult.source_location_map`) keeps them as path entries with
+an additive `file` key (the copybook's name) and their line in it, shown
+as `(CALCPERF.CPY)` on the console (issue #242: the shipped CPYPROC
+"direct" case reported 0 statements executed). An entry without `file`
+is a line of `programFile`.
 
 ## Record-expectations rewrite (`report/record_rewrite.py`)
 
@@ -284,6 +309,16 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   A stub on a POINTER-family or INDEX item is skipped, not recorded
   (`address_fields`, passed to `build_recording_report`, 2026-10-12): its
   DISPLAY text is an address, and `EXPECT P TO BE "0x..."` does not compile.
+  Issue #237: a stub on a level-88 condition-name (`record_rewrite.
+  condition_names`, from cobol-parser's data-item list, ambiguous names
+  included) is recorded by the driver as its truth value (`IF F-YES
+  DISPLAY "... F-YES: TRUE" ELSE ... FALSE END-IF`, `build_driver(...,
+  condition_names=...)`), since `DISPLAY F-YES` failed the whole recording
+  build, and rewritten as `EXPECT F-YES TO BE TRUE|FALSE`. A stub on an
+  INDEXED BY index-name (`splicer.reset.index_names`, not a USAGE INDEX
+  item) records its occurrence number bare (`EXPECT WS-IDX TO BE 3`, not
+  the quoted `"+000000003"` that did not compile). Both use
+  `RecordedExpectation.rendered`, which bypasses `render_expect_value`.
   Issue #194 (2026-10-16): only *spaces* are trimmed (`rstrip(" ")`), since
   X'09'-X'0D'/X'1C'-X'1F' are field data (X'0C' ends a positive packed
   zero) and go to the hex-literal path; `field_pictures` maps a group item
@@ -337,17 +372,43 @@ the `cobol-test` skill's hand-over.
   `scenario_coverage`), run, coverage, mutation, dialect
   (`analysis.dialect_risk.find_dialect_risks`), verdict.
 - Case reach: each case's PERFORM target(s) closed over flow edges except
-  `FALL_THROUGH`/`CALL`, intersected with paragraphs; synthetic nodes
+  `FALL_THROUGH`/`CALL`, plus, for every reached SECTION, its member
+  paragraphs (`_section_members` from the AST; the flow graph links them
+  only by FALL_THROUGH, so `PERFORM S2` reached `S2` alone and its
+  paragraphs read "No test reaches P2" while their dialect risks never
+  blocked L3, issue #292), intersected with paragraphs; synthetic nodes
   (`X__IF_1`) are dropped. Copybook-expanded programs map lines back via
   `coverage._matching_index_map`.
 - Mutation `score` in mutate's JSON is a 0..1 fraction; the report stores
-  `scorePercent`. A mutate run that wrote no report (no mutable
+  `scorePercent`, truncated (not rounded) to one decimal so a score
+  under the threshold never displays as the threshold. The threshold
+  itself (step status and L2) is compared exactly, as
+  `Fraction(100 * (killed + timeouts), scored) >= Fraction(str(threshold))`
+  from the totals (the `score` fraction only when totals lack the counts)
+  -- the same comparison `mutate --fail-under` makes, so the report and
+  the CI gate agree (issue #282). A mutate run that wrote no report (no mutable
   statements) is a `skipped` step carrying mutate's last output line.
+- Assertions per case come from `assertion_labels.scan_assertion_labels`
+  (raw `.cut` text, keyed by the TESTCASE line's name) joined to the parsed
+  suite by name -- for a PROVIDER row by `MockTestCase.template_name`
+  (#328): before, every expanded row (`"double [row 1: 1]"`) found nothing
+  under its own name, read as `no-assertion`, and a rule's `citedBy` named
+  the template, a case that does not exist. `citedBy` now lists each
+  expanded row instead (`expanded_names`).
 - Verification level per case: L0 static, L1 executed and passed, L2 also
   has at least one assertion and suite mutation >= threshold (default
   80%), L3 also no high/medium dialect risk inside its reach. L4
   (mainframe) is never computed -- shown as a reminder only.
-- `_findings` categories (severity-ordered): refused, test-failure,
+- Run step (issue #260): a `run.json` case whose name matches no TESTCASE
+  (`run`'s synthetic `"mockymock run"` entry for a failure before any case
+  started, e.g. a compile error) and every `orphanFailures` entry is
+  collected into `run_errors`, as is a `summary.casesFailed + casesCrashed`
+  larger than the matched failures. Any of them fails the step (its
+  summary names the first error line), adds one high `run-failure`
+  finding, and sets `summary.runFailed`, which makes `report` exit 1 and
+  changes the HTML verdict sentence. Before, the entry was dropped and a
+  suite that never compiled read as an ok run with exit 0.
+- `_findings` categories (severity-ordered): refused, run-failure, test-failure,
   suspected-bug (a failed INTENT assertion), no-assertion,
   missing-assertion (surviving mutant), dead-code, untested-paragraph,
   rule-without-intent, unlabelled, dialect, coverage, scenario-gap,
@@ -400,7 +461,10 @@ the `cobol-test` skill's hand-over.
   each with `mockedBy` from `refusal._gates.directive_matches_site` -- the
   rule `run` splices by -- and `reachedUnmockedBy` from case reach. Rendered
   as the "Boundaries" section after Test cases. Older report dicts without
-  the key render a note.
+  the key render a note. Its per-case MOCK lookup is keyed by `.cut` line,
+  and the run step matches `--run-json` entries to cases by `.cut` line,
+  then by name in order (issue #304): TESTCASE names may repeat, and a
+  dict keyed by name left one of two same-named cases "not run".
 - `scenario-gap` / `scenario-gap-covered-by-hand` findings carry `items`
   (one line per branch). `test_report._plain_arm_reason` strips the
   `EVALUATE@405/WHEN#1:` prefix and rewrites the generator's known reasons
@@ -462,8 +526,14 @@ would print `[FAIL] ...` with its reason and then "0 failed" directly
 beneath it). Both formatters now fall back to values reconstructed from
 `suite.results` whenever the SUMMARY-derived field is falsy:
 `run_count = suite.tests_run or len(suite.results)` and (console only)
-`failed_count = suite.failures or sum(len(r.failure_reasons) for r in
-suite.results)`. The two are mutually exclusive in practice — SUMMARY
+the check count `suite.failures or sum(len(r.failure_reasons) for r in
+suite.results if not r.crashed)`. Since issue #235 the console's
+`<n> failed` is a CASE count (`sum(1 for r in suite.results if
+r.failure_reasons and not r.crashed)`, as JUnit and `casesFailed` count
+it) -- printing the check count there gave "2 run, 2 failed" for one
+case failing two checks. The check count is appended as `(<n> failed
+checks)` only when it differs (several failed checks in one case, or
+orphan failures). The two SUMMARY/fallback sources are mutually exclusive in practice — SUMMARY
 printing means no crash occurred — so the `or` fallback never overwrites a
 real clean-run count of 0 with a reconstructed one. Do not touch
 `suite.tests_run`/`suite.failures` themselves to "fix" this —

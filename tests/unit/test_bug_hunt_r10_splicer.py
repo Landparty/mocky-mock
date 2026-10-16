@@ -177,6 +177,29 @@ def test_driver_fields_get_a_working_storage_section_when_there_is_none():
     assert any(line.startswith("01  UT-SUBPGM-TALLY") for line in data)
 
 
+@pytest.mark.parametrize("gap", ["  ", "\t"])
+def test_headers_with_any_whitespace_between_their_words_get_the_driver(gap):
+    """Issue #305: `WORKING-STORAGE  SECTION` / `PROCEDURE\tDIVISION` were
+    missed by literal single-space checks, so the driver fields (compile
+    failure) or paragraphs (every case NOT RUN) were never inserted."""
+    lines = [
+        "IDENTIFICATION DIVISION.",
+        "PROGRAM-ID. PROG.",
+        f"DATA{gap}DIVISION.",
+        f"WORKING-STORAGE{gap}SECTION.",
+        "01  WS-A PIC X.",
+        f"PROCEDURE{gap}DIVISION.",
+        "P1.",
+        '    CALL "SUBPGM".',
+    ]
+    instrumented = [line.strip() for line in _insert_driver(lines, _driver_artifact())]
+    ws = instrumented.index(f"WORKING-STORAGE{gap}SECTION.")
+    proc = instrumented.index(f"PROCEDURE{gap}DIVISION.")
+    assert instrumented.count("WORKING-STORAGE SECTION.") == 0
+    assert any(line.startswith("01  UT-CURRENT-CASE") for line in instrumented[ws:proc])
+    assert any(line.startswith("UT-TESTCASE-") for line in instrumented[proc:])
+
+
 def _after_driver(lines: list[str]) -> list[str]:
     """The instrumented lines after the last generated UT-TESTCASE body."""
     instrumented = [line.strip() for line in _insert_driver(lines, _driver_artifact())]

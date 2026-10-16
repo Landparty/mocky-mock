@@ -9,6 +9,8 @@ model -- this module must never import `mockymock.runtime.docker_toolchain`
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,6 +20,7 @@ from mockymock._lines import (
     read_utf8_source,
     split_source_lines,
 )
+from mockymock.debugging_lines import activate_debugging_lines
 
 if TYPE_CHECKING:
     from cobolparser import ParseResult
@@ -41,6 +44,9 @@ class StaticCheckResult:
     everything `_cmd_run` needs to proceed straight to splicing."""
 
     problems: list[str] = field(default_factory=list)
+    # Expanded line -> (file, line), "<main>" for the program itself; empty
+    # without copybook expansion (issue #241).
+    source_location_map: dict[int, tuple[str, int]] = field(default_factory=dict)
     parse_result: ParseResult | None = None
     surface: MockSurface | None = None
     suite: MockTestSuite | None = None
@@ -51,6 +57,10 @@ class StaticCheckResult:
     # rewritten in `lines`; non-empty means the driver must also declare the
     # scratch pointer they were redirected to (see splicer.linkage).
     linkage_address_of: list[AddressOfSite] = field(default_factory=list)
+    # LINKAGE items whose `SET ADDRESS OF` `run` keeps as a real rebind
+    # (BASED, issue #226) but `model_rebinds=False` redirected instead
+    # (export: IBM COBOL has no BASED clause, issue #321).
+    unmodelled_rebinds: list[str] = field(default_factory=list)
     cics_eib: CicsEibPlan | None = None
     file_status_fields: dict[str, str] | None = None
     # Synthesized `CAPTURE ARG ... INTO UT-CAP-...` targets: the driver must
@@ -63,6 +73,10 @@ class StaticCheckResult:
     # command prefix -- silently proceeding past a warning, or silently
     # editing source a .cut author didn't write, would both be surprises.
     notes: list[str] = field(default_factory=list)
+    # Pre-formatted, unprefixed "warning (CODE): ..." lines for things that
+    # pass every check but cannot behave as in production (issue #288).
+    # lint counts them alongside its NO_ASSERTION warnings; run prints them.
+    warnings: list[str] = field(default_factory=list)
     # Raw check_test_case() output per TESTCASE, keyed by the case's
     # index in `suite.test_cases` (not its name: duplicate TESTCASE names
     # are legal, and a name key would hand the last case's reasons to
@@ -208,9 +222,12 @@ def filter_suite_cases(
                 f"no TESTCASE named {name!r} in this suite " f"(available: {listing})"
             )
     available_tags = {tag for case in suite.test_cases for tag in case.tags}
-    for tag in tag_names or []:
-        if tag not in available_tags:
-            listing = ", ".join(sorted(repr(t) for t in available_tags)) or "none"
+    # Tags select a subset as a union, so `--tag a --tag b` on a suite with
+    # only `a` is a selection, not a typo; refuse only when no requested
+    # tag is carried at all (issue #254).
+    if tag_names and not available_tags & set(tag_names):
+        listing = ", ".join(sorted(repr(t) for t in available_tags)) or "none"
+        for tag in tag_names:
             problems.append(
                 f"no TESTCASE carries tag {tag!r} (tags in this suite: {listing})"
             )
@@ -227,6 +244,33 @@ def filter_suite_cases(
     return problems
 
 
+_SOURCE_LINE_RE = re.compile(r"(?<!\.cut )(?<![\w.-])line (\d+)\b")
+
+
+def source_line_relabeler(
+    source_map: dict[int, tuple[str, int]] | None,
+) -> Callable[[str], str]:
+    """A function rewriting every `line N` in a message (N a line of the
+    copybook-expanded source) into the file the user has open: `line M`
+    for a line of the program itself, `line M of CPY.CPY` for one a
+    copybook brought in. Every COPY above a site shifted the reported
+    line by the copybook's length (issue #241). `.cut line N` is left
+    alone, and so is everything when there is no source map."""
+    if not source_map:
+        return lambda text: text
+
+    def label(match: re.Match[str]) -> str:
+        origin = source_map.get(int(match.group(1)))
+        if origin is None:
+            return match.group(0)
+        origin_file, origin_line = origin
+        if origin_file == "<main>":
+            return f"line {origin_line}"
+        return f"line {origin_line} of {Path(origin_file).name}"
+
+    return lambda text: _SOURCE_LINE_RE.sub(label, text)
+
+
 def run_static_checks(
     source_path: Path,
     cut_path: Path,
@@ -234,11 +278,42 @@ def run_static_checks(
     case_names: list[str] | None = None,
     tag_names: list[str] | None = None,
     preserve_compiler_directives: bool = False,
+    model_rebinds: bool = True,
 ) -> StaticCheckResult:
     """Faithful transcription of `_cmd_run`'s pre-toolchain check sequence,
     including its short-circuit behavior: each numbered stage stops the
     pipeline if it finds problems, except the final per-test-case stage,
-    which accumulates across every case before returning."""
+    which accumulates across every case before returning.
+
+    Refusal problems and notes name lines of the `.cbl` (or copybook) the
+    user has open, not of the copybook-expanded source (issue #241)."""
+    out = _run_static_checks(
+        source_path,
+        cut_path,
+        copybook_paths,
+        case_names,
+        tag_names,
+        preserve_compiler_directives,
+        model_rebinds,
+    )
+    relabel = source_line_relabeler(out.source_location_map)
+    out.problems = [
+        relabel(problem) if problem.startswith("refused (") else problem
+        for problem in out.problems
+    ]
+    out.notes = [relabel(note) for note in out.notes]
+    return out
+
+
+def _run_static_checks(
+    source_path: Path,
+    cut_path: Path,
+    copybook_paths: list[str] | None,
+    case_names: list[str] | None,
+    tag_names: list[str] | None,
+    preserve_compiler_directives: bool,
+    model_rebinds: bool = True,
+) -> StaticCheckResult:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
         CopybookNotFoundError,
@@ -254,14 +329,22 @@ def run_static_checks(
     from mockymock.analysis.linkage import (
         address_of_sites,
         linkage_plan,
+        omitted_argument_tests,
+        omitted_argument_warnings,
         rebindable_sites,
     )
-    from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
+    from mockymock.analysis.mock_surface import (
+        analyze,
+        analyze_file_status_fields,
+        promote_clock_accepts,
+    )
     from mockymock.analysis.refusal import (
         CICS_MACRO_PLACEHOLDER,
         check_cics_eib_layout_scoped,
+        check_clause_bodies,
         check_expansion_warnings,
         check_linkage_layout,
+        check_mock_body_line_length,
         check_nested_exec,
         check_source_format,
         check_terminator_layout,
@@ -303,7 +386,11 @@ def run_static_checks(
         # reached six different subcommands (audit finding F6). Mirrors
         # _cmd_fixtures's existing broad catch for the same call.
         try:
-            expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
+            expansion = expand_copybooks(
+                raw_source,
+                copybook_paths=copybook_paths,
+                preserve_source_locations=True,
+            )
         except CopybookNotFoundError as exc:
             out.problems.append(f"copybook expansion failed: {exc}")
             out.problems.append(copybook_not_found_hint())
@@ -318,12 +405,15 @@ def run_static_checks(
             )
             return out
         raw_source = expansion.expanded_source
+        out.source_location_map = dict(expansion.source_location_map or {})
 
     # 2. Parse; whole-program refusals (hard errors + dropped-statement
     # warnings). The PARSE_ERROR reason only carries a count, so the
     # individual errors follow as indented lines, matching `run`'s output.
     # Warnings provably confined to one paragraph's own body are held back
     # (scoped_warnings) for the reachability-union gate in step 4b.
+    # WITH DEBUGGING MODE: D lines are code, as the compiler reads them.
+    raw_source = activate_debugging_lines(raw_source)
     parse_result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(parse_result.ast)
     out.parse_result = parse_result
@@ -411,8 +501,29 @@ def run_static_checks(
 
     # 5. Surface analysis, normalization, linkage layout + neutralization.
     surface = analyze(parse_result.ast)
+    # A clock ACCEPT (FROM DATE/TIME/DAY/DAY-OF-WEEK) is mockable only when
+    # a MOCK names it (issue #240): an opt-in site, spliced only then.
+    promote_clock_accepts(
+        surface,
+        [
+            *(d for case in suite.test_cases for d in case.mocks),
+            *suite.before_all_mocks,
+        ],
+    )
     out.surface = surface
     out.file_status_fields = analyze_file_status_fields(parse_result.ast)
+    # Items the between-case reset cannot put back carry one case's value
+    # into the next (issue #333): say so rather than skip them silently.
+    from mockymock.splicer.reset import unreset_items
+
+    unreset = unreset_items(parse_result.ast)
+    if unreset:
+        out.notes.append(
+            f"{len(unreset)} WORKING-STORAGE/LOCAL-STORAGE item(s) cannot be "
+            f"reset between test cases and keep the previous case's value "
+            f"({', '.join(unreset)}) -- a case may pass alone (--case) and "
+            f"fail in the full suite; set them in the test case if it reads them"
+        )
     # PROCESS/CBL precompiler directives (IBM mainframe compiler-directing
     # statements preceding IDENTIFICATION DIVISION) parse fine as far as
     # cobolparser is concerned -- CobolParser.parse() blanks them out for its
@@ -465,6 +576,14 @@ def run_static_checks(
         # instead (issue #226). Every other site -- above all a pointer a
         # mocked CALL fills in, NULL in a test run -- is still redirected.
         rebindable = rebindable_sites(lines, address_of)
+        if not model_rebinds:
+            # `export` (issue #321): BASED and SET ADDRESS OF a
+            # WORKING-STORAGE item are GnuCOBOL / Micro Focus only, so the
+            # IBM-legal redirect is kept and the caller says what it costs.
+            out.unmodelled_rebinds = sorted(
+                {site.item_name.upper() for site in rebindable}
+            )
+            rebindable = []
         lines, linkage.rebindings = mark_based(lines, linkage, rebindable)
         rebound = {r.item_name for r in linkage.rebindings}
         kept = [site for site in rebindable if site.item_name.upper() in rebound]
@@ -472,6 +591,17 @@ def run_static_checks(
         out.linkage_address_of = address_of
         if address_of:
             lines = redirect_address_of(lines, address_of)
+        # The fold gives every parameter storage, and the driver PERFORMs
+        # rather than CALLs, so an omitted-argument test the selected cases
+        # reach can never be true -- say so instead of letting that branch
+        # go silently untested (issue #288).
+        out.warnings.extend(
+            omitted_argument_warnings(
+                parse_result.ast,
+                omitted_argument_tests(lines, linkage, rebound),
+                executed_paragraphs(),
+            )
+        )
 
     # 5b. CICS implicit-linkage guardrails (DFHRESP/DFHVALUE macro calls,
     # an undeclared DFHCOMMAREA) -- independent of the LINKAGE guardrails
@@ -515,7 +645,14 @@ def run_static_checks(
             f"refused ({r.code}): {r.message}" for r in cics_eib_reasons
         )
         return out
-    out.cics_eib = cics_eib_plan(parse_result.ast, lines)
+    # The .cut's own text counts too: whatever it names is spliced into the
+    # same build (issue #269). Full-line comments are not spliced.
+    suite_lines = [
+        line
+        for line in read_utf8_source(cut_path).splitlines()
+        if not line.lstrip().startswith("*>")
+    ]
+    out.cics_eib = cics_eib_plan(parse_result.ast, lines, suite_lines)
     out.lines = lines
 
     # 6. Nested-site annotation (must precede any nested-site check), then
@@ -548,7 +685,10 @@ def run_static_checks(
     out.problems.extend(
         f"refused ({r.code}): {r.message}"
         for r in check_cut_data_names(
-            suite, transformed, getattr(parse_result.ast, "program_name", None)
+            suite,
+            transformed,
+            getattr(parse_result.ast, "program_name", None),
+            parse_result.ast,
         )
     )
 
@@ -660,6 +800,13 @@ def run_static_checks(
         for r in check_terminator_layout(
             surface, parse_result.ast, suite, scope_map, lines
         )
+    )
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}"
+        for r in check_clause_bodies(surface, suite, lines)
+    )
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}" for r in check_mock_body_line_length(suite)
     )
     # 9. Synthesized CAPTURE targets. Fail closed: an argument whose layout
     # cannot be mirrored exactly would otherwise reach the compiler as a

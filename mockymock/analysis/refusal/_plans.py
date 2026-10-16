@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from cobolparser.models.statements.control import GoStatement, PerformStatement
 
+from mockymock.analysis.cics_handle import raised_conditions
 from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
@@ -57,6 +58,7 @@ from ._reachability import (
     _is_exit_only_paragraph,
     _paragraph_safe_section_map,
     _plain_perform_edges_from,
+    _plain_perform_statements,
     _reachable_paragraphs,
     _safe_section_entry_points,
     _source_ordered_paragraphs,
@@ -83,6 +85,18 @@ class TerminatorPlan:
     site: BoundarySite
     chain_performs: list = field(default_factory=list)
     exit_kind: str = "PARAGRAPH"
+    # id(perform) -> the validated `nested_statement_span` of each chain
+    # PERFORM nested in an IF/EVALUATE branch or an inline PERFORM body
+    # (issue #337): the chain check is inserted after the span's end, i.e.
+    # right after the PERFORM inside its own branch. A top-level chain
+    # PERFORM has no entry here and keeps its `statement_span`.
+    chain_spans: dict[int, tuple[int, int]] = field(default_factory=dict)
+    # id(perform) -> "SECTION" for each chain PERFORM held by a SECTION's
+    # first paragraph entered via PERFORM <section-name> (issue #338): its
+    # check must leave the whole section, as the terminator's own
+    # `exit_kind` does, or control falls into the section's next
+    # paragraph. Absent means "PARAGRAPH".
+    chain_exit_kinds: dict[int, str] = field(default_factory=dict)
     # The operand of `STOP RUN RETURNING n` / `GOBACK RETURNING n` (issue
     # #219): the neutralization MOVEs it to RETURN-CODE before setting the
     # early-exit flag, since removing the statement removes the phrase too.
@@ -106,12 +120,14 @@ _RETURN_CODE_OPERAND_RE = re.compile(r"^(?:[+-]?\d+|[A-Z0-9][A-Z0-9-]*)$", re.I)
 
 _RESP_FIELD_RE = re.compile(r"\bRESP\s*\(\s*([A-Z0-9][A-Z0-9-]*)\s*\)", re.I)
 _RESP_OPTION_RE = re.compile(r"\bRESP\s*\(", re.I)
+_NOHANDLE_RE = re.compile(r"\bNOHANDLE\b", re.I)
 
 
 def _cics_resp_field(statement) -> tuple[str | None, str | None]:
     """(field, problem) for an EXEC CICS terminator's RESP option: the
-    single data name in `RESP(field)`, (None, None) when there is no RESP,
-    or a problem when RESP names something this can't test against 0."""
+    single data name in `RESP(field)`, `EIBRESP` for a NOHANDLE command
+    without RESP, (None, None) when there is neither, or a problem when
+    RESP names something this can't test against 0."""
     text = str(getattr(statement, "cics_text", "") or "")
     match = _RESP_FIELD_RE.search(text)
     if match is not None:
@@ -122,6 +138,10 @@ def _cics_resp_field(statement) -> tuple[str | None, str | None]:
             "name, so it can't tell a failed command (which returns "
             "control) from a successful one (which ends the program)"
         )
+    if _NOHANDLE_RE.search(text):
+        # NOHANDLE returns control on a failed command just as RESP does,
+        # with the condition in EIBRESP (issue #301).
+        return "EIBRESP", None
     return None, None
 
 
@@ -469,9 +489,9 @@ def find_goto_exit_plans(
                 if in_boundary:
                     problems.append(
                         f"line {statement.location.line}: nested inside another "
-                        f"boundary statement's clause body -- splicing the "
-                        f"enclosing statement would remove this GO TO along "
-                        f"with it"
+                        f"boundary statement's clause body -- a mock of the "
+                        f"enclosing statement re-runs it from a lifted body "
+                        f"this plan does not rewrite"
                     )
                     continue
 
@@ -634,6 +654,18 @@ def find_terminator_plans(
     neutralized_goto = neutralized_goto_targets(program, scope_map, lines)
     safe_section_entries = _safe_section_entry_points(program)
     safe_section_first_names = set(safe_section_entries.values())
+    # The restricted chain walk only ever enters a SECTION through its
+    # first paragraph, via PERFORM <section-name>, so a chain PERFORM held
+    # there must end with EXIT SECTION (issue #338).
+    section_chain_performs = {
+        id(perform)
+        for section in procedure._sections.values()
+        for paragraph in section.paragraphs
+        if paragraph.paragraph_name in safe_section_first_names
+        for perform, _nested, _in_boundary in _plain_perform_statements(
+            paragraph.statements
+        )
+    }
     # The GO TO fall-through hazard map is per case: a walk stops at the
     # end of a section entered only via `PERFORM <section-name>` -- unless
     # the case's own entry point names one of its members directly -- the
@@ -649,19 +681,27 @@ def find_terminator_plans(
     # case whose mocks can make the WHENEVER fire (issue #244): a success-
     # path case never takes the jump, so the handler's own terminator is
     # not its hazard. Each hazard-set variant is computed once.
-    target_sets: dict[bool, set[str]] = {}
-    fallthrough_cache: dict[tuple[bool, frozenset[str]], dict[str, str]] = {}
+    # Likewise a CICS HANDLE CONDITION label, for the conditions the case's
+    # mocks raise (issue #268).
+    target_sets: dict[tuple[bool, frozenset[str]], set[str]] = {}
+    fallthrough_cache: dict[
+        tuple[bool, frozenset[str], frozenset[str]], dict[str, str]
+    ] = {}
 
     def hazards(
-        include_whenever: bool, entry: frozenset[str]
+        include_whenever: bool, conditions: frozenset[str], entry: frozenset[str]
     ) -> tuple[set[str], dict[str, str]]:
-        if include_whenever not in target_sets:
-            target_sets[include_whenever] = (
-                _go_to_targets(program, include_whenever=include_whenever)
+        if (include_whenever, conditions) not in target_sets:
+            target_sets[(include_whenever, conditions)] = (
+                _go_to_targets(
+                    program,
+                    include_whenever=include_whenever,
+                    cics_conditions=conditions,
+                )
                 - neutralized_goto
             )
-        targets = target_sets[include_whenever]
-        key = (include_whenever, entry)
+        targets = target_sets[(include_whenever, conditions)]
+        key = (include_whenever, conditions, entry)
         if key not in fallthrough_cache:
             fallthrough_cache[key] = _go_to_fallthrough_targets(
                 program,
@@ -694,8 +734,10 @@ def find_terminator_plans(
         mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
         mocked_flow_names = mocked_paragraphs | mocked_sections
         can_fire = whenever_can_fire(program, case.mocks)
+        conditions = raised_conditions(case.mocks)
         go_to_targets, go_to_fallthrough = hazards(
             can_fire,
+            conditions,
             frozenset(
                 name for name in (case.perform_target, case.perform_thru) if name
             ),
@@ -707,6 +749,7 @@ def find_terminator_plans(
             skip_traversal=mocked_flow_names,
             neutralized_goto=neutralized_goto,
             follow_whenever=can_fire,
+            cics_conditions=conditions,
         )
         reachable -= mocked_flow_names
         safe_names, chain_performs = _plain_perform_edges_from(
@@ -717,7 +760,25 @@ def find_terminator_plans(
         chain_fallthrough_names = safe_names & go_to_fallthrough.keys()
 
         chain_problem: str | None = None
-        for perform, _nested in chain_performs:
+        chain_spans: dict[int, tuple[int, int]] = {}
+        for perform, nested in chain_performs:
+            if nested:
+                # The check must land right after the PERFORM inside its own
+                # IF/EVALUATE branch or inline PERFORM body (issue #337):
+                # after the enclosing END-IF/END-PERFORM, the rest of the
+                # branch would still run and an inline loop keep iterating.
+                span, line_problem = nested_statement_span(perform, scope_map, lines)
+                if span is not None:
+                    chain_spans[id(perform)] = span
+                    continue
+                chain_problem = (
+                    f"an intermediate PERFORM {perform.target_paragraph} at "
+                    f"line {perform.location.line} is nested inside a "
+                    f"conditional/loop body and {line_problem} -- the "
+                    f"early-exit check can't be placed right after it "
+                    f"inside its branch"
+                )
+                break
             line_problem = statement_top_level_problem(perform, scope_map, lines)
             if line_problem is not None:
                 chain_problem = (
@@ -900,6 +961,10 @@ def find_terminator_plans(
                 if id(perform) not in existing_ids:
                     plan.chain_performs.append(perform)
                     existing_ids.add(id(perform))
+            plan.chain_spans.update(chain_spans)
+            for perform, _nested in chain_performs:
+                if id(perform) in section_chain_performs:
+                    plan.chain_exit_kinds[id(perform)] = "SECTION"
 
     return list(plans_by_statement.values()), reasons
 

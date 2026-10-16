@@ -58,6 +58,14 @@ def is_whenever(text: str) -> bool:
     return " ".join(text.upper().split()).startswith("WHENEVER ")
 
 
+def is_sql_declaration(text: str) -> bool:
+    """A precompiler declaration other than WHENEVER -- `DECLARE ...
+    CURSOR/TABLE/STATEMENT`, `INCLUDE`, `BEGIN/END DECLARE SECTION`: DB2
+    generates no runtime call for it and never touches the SQLCA, so in
+    the PROCEDURE DIVISION it is not a boundary (issue #267)."""
+    return bool(_DECLARATIVE_RE.match(text.strip())) and not is_whenever(text)
+
+
 def parse_whenever(text: str) -> Whenever:
     normalized = " ".join(text.split())
     match = _WHENEVER_RE.match(normalized)

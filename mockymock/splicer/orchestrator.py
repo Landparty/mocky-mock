@@ -34,9 +34,10 @@ but one statement must get exactly one splice.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
-from mockymock.analysis.clause_bodies import lift_clause_bodies
+from mockymock.analysis.clause_bodies import lift_clause_bodies, scan_words
 from mockymock.analysis.flow_mocks import FlowMockPlan
 from mockymock.analysis.mock_surface import MockSurface
 from mockymock.analysis.refusal import (
@@ -46,6 +47,7 @@ from mockymock.analysis.refusal import (
 )
 from mockymock.analysis.sql_whenever import whenever_check_lines
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
+from mockymock.splicer.cics_resp import EIB_RESP_NAMES
 from mockymock.splicer.injector import (
     build_chain_check,
     build_cics_terminator_exit,
@@ -91,6 +93,10 @@ def _span_ends_sentence(lines: list[str], start: int, end: int) -> bool:
     return False
 
 
+#: A reference to SQLSTATE as a COBOL word (not RETURNED_SQLSTATE).
+_SQLSTATE_RE = re.compile(r"(?<![\w-])SQLSTATE(?![\w-])", re.IGNORECASE)
+
+
 def splice_program(
     lines: list[str],
     boundaries: list[int],
@@ -102,10 +108,22 @@ def splice_program(
     file_status_fields: dict[str, str] | None = None,
     trace: bool = False,
     goto_exit_plans: Sequence[GotoExitPlan] = (),
+    column_offset: int = 0,
 ) -> list[str]:
+    """`column_offset` is how many columns every line of `lines` has been
+    shifted right of the normalized source the AST's columns index --
+    `export` splices lines with the 7-column sequence area restored
+    (issue #325); the only column-sensitive step, the clause-body lift,
+    needs it."""
     last_line = len(lines)
+    # EIBRESP / EIBRESP2 exist only when the program has an EIB (declared,
+    # or synthesized because it references one); every CICS mock resets
+    # them only then (issue #320).
+    program_words = {word.strip(",;()") for _, _, word in scan_words("\n".join(lines))}
+    eib_resp_names = tuple(n for n in EIB_RESP_NAMES if n in program_words)
     spans: list[tuple[int, int, list[str]]] = []
     seen_statement_ids: set[int] = set()
+    sqlstate = any(_SQLSTATE_RE.search(line) for line in lines)
     # EXEC CICS RETURN/XCTL/ABEND plans (issue #215): the site keeps its
     # ordinary dispatch below, wrapped with the early exit.
     cics_terminators = {
@@ -172,7 +190,12 @@ def splice_program(
                 # A nested site with clauses of its own reaches here only
                 # with a span bounded by its own scope terminator (#258),
                 # so its bodies lift exactly like a top-level site's.
-                lifted_clauses=lift_clause_bodies(site.statement, lines),
+                lifted_clauses=lift_clause_bodies(site.statement, lines, column_offset),
+                sqlstate=sqlstate,
+                passthrough=(
+                    _statement_lines(lines, start, end) if site.opt_in else None
+                ),
+                eib_resp_names=eib_resp_names,
             )
             # What the DB2 precompiler puts after the statement for every
             # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).
@@ -312,8 +335,18 @@ def splice_program(
             if id(perform) in seen_perform_ids:
                 continue
             seen_perform_ids.add(id(perform))
-            start, end = statement_span(perform, boundaries, last_line, lines)
-            chain_check = build_chain_check()
+            # A PERFORM nested in an IF/EVALUATE branch or inline PERFORM
+            # body has a precomputed nested span (issue #337):
+            # statement_span would end at the next TOP-LEVEL statement, past
+            # the enclosing END-IF/END-PERFORM.
+            nested_span = plan.chain_spans.get(id(perform))
+            if nested_span is not None:
+                start, end = nested_span
+            else:
+                start, end = statement_span(perform, boundaries, last_line, lines)
+            chain_check = build_chain_check(
+                plan.chain_exit_kinds.get(id(perform), "PARAGRAPH")
+            )
             # If the PERFORM this follows ended its own sentence with a
             # period, the inserted IF/END-IF block is itself a brand-new,
             # unterminated sentence -- give it its own closing period, or
@@ -341,3 +374,15 @@ def splice_program(
         else:
             lines = insert_lines_after(lines, start, replacement)
     return lines
+
+
+def _statement_lines(lines: list[str], start: int, end: int) -> list[str]:
+    """The statement on `lines[start - 1 : end]`, one entry per source line
+    with its indentation and any sentence-ending period dropped -- the real
+    statement an opt-in site's dispatch runs for cases that do not mock it
+    (`build_site_dispatch`'s `passthrough`). The period goes because the
+    replacement block gets its own when the span ended the sentence."""
+    text = [line.strip() for line in lines[start - 1 : end] if line.strip()]
+    if text and text[-1].endswith("."):
+        text[-1] = text[-1][:-1].rstrip()
+    return [line for line in text if line]

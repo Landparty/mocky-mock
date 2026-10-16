@@ -110,7 +110,8 @@ def test_expect_period_inside_inline_comment_is_accepted():
     suite = parse_cut(
         'TESTSUITE "s"\nTESTCASE "c"\nPERFORM P\nEXPECT WS-X TO BE "A" *> done.\n'
     )
-    assert suite.test_cases[0].expectations[0].expected_value == '"A" *> done.'
+    # The trailing comment is stripped, never spliced (issue #236).
+    assert suite.test_cases[0].expectations[0].expected_value == '"A"'
 
 
 # --- comma inside a (...) group split ROWS / TERMINAL / PROVIDER values ---

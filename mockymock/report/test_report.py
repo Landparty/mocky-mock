@@ -43,17 +43,21 @@ Verification levels (per test case, the highest one reached in order):
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 from mockymock import __version__
+from mockymock.debugging_lines import activate_debugging_lines
 
 REPORT_VERSION = 1
 LEVELS = ("L0", "L1", "L2", "L3")
@@ -183,7 +187,9 @@ def _parse_program(options: ReportOptions) -> tuple[_Program | None, str | None]
             expanded = True
         except Exception as exc:  # noqa: BLE001 -- reported as the step's reason
             return None, f"copybook expansion failed: {exc}"
-    result = parse_cobol(source, filename=options.program.name)
+    result = parse_cobol(
+        activate_debugging_lines(source), filename=options.program.name
+    )
     normalize_flow_targets(result.ast)
     if result.ast is None or not result.success:
         errors = "; ".join(str(e) for e in result.errors[:3])
@@ -220,7 +226,8 @@ def _boundaries(
     from mockymock.analysis.refusal._gates import directive_matches_site
 
     surface = analyze(program.ast)
-    mocks = {tc.name: tc.mocks for tc in test_cases}
+    # Keyed by .cut line: TESTCASE names may repeat (issue #304).
+    mocks = {tc.line or None: tc.mocks for tc in test_cases}
     rows = []
     for site in sorted(surface.boundary_sites, key=lambda s: s.line):
         if site.category is None and site.label in _TERMINATOR_LABELS:
@@ -228,7 +235,7 @@ def _boundaries(
         mocked_by = [
             c["name"]
             for c in cases
-            if any(directive_matches_site(m, site) for m in mocks.get(c["name"], []))
+            if any(directive_matches_site(m, site) for m in mocks.get(c["line"], []))
         ]
         reached_by = [
             c["name"]
@@ -259,13 +266,31 @@ def _paragraph_of(node: str) -> str:
     return node.split("__", 1)[0]
 
 
+def _section_members(ast: Any) -> dict[str, list[str]]:
+    """SECTION name -> its named paragraphs, from the AST."""
+    procedure = ast.get_division("PROCEDURE") if ast is not None else None
+    if procedure is None:
+        return {}
+    return {
+        name: [p.paragraph_name for p in section.paragraphs if p.paragraph_name]
+        for name, section in getattr(procedure, "_sections", {}).items()
+    }
+
+
 def _reach(
-    start: str, thru: str | None, order: list[str], edges: dict[str, set[str]]
+    start: str,
+    thru: str | None,
+    order: list[str],
+    edges: dict[str, set[str]],
+    sections: dict[str, list[str]] | None = None,
 ) -> set[str]:
     """Paragraphs a `PERFORM start [THRU thru]` can execute: the range
     itself plus everything reachable from it over PERFORM/GO TO/branch
     edges (fall-through is excluded -- a PERFORMed paragraph returns at its
-    end instead of falling into the next one)."""
+    end instead of falling into the next one). A reached SECTION also
+    reaches every paragraph in it (`sections`, name -> member paragraphs):
+    the flow graph links those only by FALL_THROUGH edges, so `PERFORM S2`
+    reached `S2` alone (issue #292)."""
     seeds = [start]
     if thru and start in order and thru in order:
         i, j = order.index(start), order.index(thru)
@@ -279,6 +304,7 @@ def _reach(
             continue
         seen.add(node)
         stack.extend(edges.get(node, ()))
+        stack.extend((sections or {}).get(node, ()))
     return seen
 
 
@@ -299,6 +325,40 @@ def _run_cli(args: list[str], timeout: int | None) -> tuple[int, str]:
 
 def _tail(text: str, lines: int = 40) -> str:
     return "\n".join(text.rstrip().splitlines()[-lines:])
+
+
+def _failure_messages(entry: dict[str, Any]) -> list[str]:
+    return [
+        str(f.get("message"))
+        for f in entry.get("failures") or []
+        if isinstance(f, dict) and f.get("message")
+    ]
+
+
+def _first_line(text: str) -> str:
+    """The first line that names an error, else the first non-blank one:
+    cobc puts an "in paragraph 'X':" context line ahead of the error."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines:
+        if "error" in line.lower():
+            return line
+    return lines[0] if lines else text
+
+
+def _exact_mutation_percent(totals: dict[str, Any], raw_score: Any) -> Fraction | None:
+    """The mutation score as an exact percentage: from the killed /
+    timeout / survived counts when the report carries them (what
+    `MutationOutcome.score_below` compares), else from the 0..1 `score`
+    read as its decimal text. None when there is no score at all."""
+    counts = [totals.get(k) for k in ("killed", "timeouts", "survived")]
+    if all(type(c) is int for c in counts):
+        killed, timeouts, survived = (int(str(c)) for c in counts)
+        scored = killed + timeouts + survived
+        if scored > 0:
+            return Fraction(100 * (killed + timeouts), scored)
+    if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool):
+        return Fraction(str(raw_score)) * 100
+    return None
 
 
 def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
@@ -525,6 +585,8 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
     suite = None
     cases: list[dict[str, Any]] = []
     assertions: list[dict[str, Any]] = []
+    # PROVIDER template name -> the expanded rows' names (#328).
+    expanded_names: dict[str, list[str]] = {}
     with _Timer(inventory):
         from mockymock.analysis.assertion_labels import (
             scan_assertion_labels,
@@ -545,7 +607,12 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             for a in assertions:
                 by_case.setdefault(a["case"], []).append(a)
             for test_case in suite.test_cases:
-                own = by_case.get(test_case.name, [])
+                # A PROVIDER row's assertions are its template's: the text
+                # scan records them under the TESTCASE line's name (#328).
+                template = test_case.template_name or test_case.name
+                if test_case.template_name:
+                    expanded_names.setdefault(template, []).append(test_case.name)
+                own = by_case.get(template, [])
                 cases.append(
                     {
                         "name": test_case.name,
@@ -583,11 +650,14 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
     steps.append(inventory)
 
     # Case reach, paragraph test mapping, rule citations.
+    section_members = _section_members(program.ast) if program is not None else {}
     by_name = {p["name"]: p for p in paragraphs}
     for case in cases:
         if not case["perform"]:
             continue
-        reach = _reach(case["perform"], case["performThru"], order, edges)
+        reach = _reach(
+            case["perform"], case["performThru"], order, edges, section_members
+        )
         case["reach"] = sorted(reach)
         performed = by_name.get(case["perform"])
         if performed is not None:
@@ -610,8 +680,11 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             continue
         for rule_id in a["ruleIds"]:
             rule = rules_by_id.get(rule_id)
-            if rule is not None and a["case"] not in rule["citedBy"]:
-                rule["citedBy"].append(a["case"])
+            if rule is None:
+                continue
+            for case_name in expanded_names.get(a["case"], [a["case"]]):
+                if case_name not in rule["citedBy"]:
+                    rule["citedBy"].append(case_name)
 
     # 5. Lint -------------------------------------------------------------
     lint = Step(
@@ -708,6 +781,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         ),
     )
     coverage_step = Step("coverage", "Measure line coverage")
+    run_errors: list[str] = []
     run_report: dict[str, Any] | None = None
     coverage_report: dict[str, Any] | None = None
     workdir = Path(tempfile.mkdtemp(prefix="mockymock-report-"))
@@ -752,22 +826,60 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 "from an earlier `mockymock run --json-report`."
             )
         if run_report is not None:
-            cases_by_name = {c["name"]: c for c in cases}
+            # Matched by .cut line, then by name in order: TESTCASE names
+            # may repeat, and a dict keyed by name let the second result
+            # overwrite the first and left a case "not run" (issue #304).
+            cases_by_line = {c["line"]: c for c in cases if c.get("line")}
+            unmatched = list(cases)
             for entry in run_report.get("cases") or []:
-                matched = cases_by_name.get(entry.get("name"))
+                matched = cases_by_line.get(entry.get("line"))
+                if matched is None or matched not in unmatched:
+                    matched = next(
+                        (c for c in unmatched if c["name"] == entry.get("name")),
+                        None,
+                    )
                 if matched is None:
+                    # No TESTCASE of that name: `run`'s synthetic
+                    # "mockymock run" entry for a failure before any case
+                    # started (a compile error). Dropping it read a suite
+                    # that never compiled as an ok run (issue #260).
+                    if entry.get("status") in ("failed", "crashed"):
+                        run_errors.extend(
+                            _failure_messages(entry)
+                            or [f"{entry.get('name')} {entry.get('status')}"]
+                        )
                     continue
+                unmatched.remove(matched)
                 matched["status"] = entry.get("status", "not_run")
                 matched["failures"] = entry.get("failures") or []
+            for orphan in run_report.get("orphanFailures") or []:
+                run_errors.append(
+                    f"case id {orphan.get('caseId')}: {orphan.get('message', '')}"
+                )
             summary = run_report.get("summary") or {}
             passed = sum(1 for c in cases if c["status"] == "passed")
             failed = sum(1 for c in cases if c["status"] in ("failed", "crashed"))
+            reported = sum(
+                n
+                for n in (summary.get("casesFailed"), summary.get("casesCrashed"))
+                if isinstance(n, int)
+            )
+            if not run_errors and reported > failed:
+                run_errors.append(
+                    f"the run reports {reported} failed or crashed case(s) that "
+                    f"match no TESTCASE in {cut_rel}"
+                )
             run_step.summary = (
                 f"{passed} passed, {failed} failed or crashed, "
                 f"{sum(1 for c in cases if c['status'] == 'not_run')} not run."
             )
             run_step.details["summary"] = summary
-            run_step.status = "ok" if failed == 0 else "fail"
+            if run_errors:
+                run_step.details["runErrors"] = run_errors
+                run_step.summary += (
+                    f" The run itself failed: {_first_line(run_errors[0])}"
+                )
+            run_step.status = "ok" if failed == 0 and not run_errors else "fail"
     steps.append(run_step)
 
     with _Timer(coverage_step):
@@ -809,6 +921,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         command=f"mockymock mutate {program_rel} --cut {cut_rel}{cb} --json-report MUTATION.json",
     )
     mutation_report: dict[str, Any] | None = None
+    mutation_passes = False
     mutation_json = options.mutation_json
     with _Timer(mutation_step):
         if options.mutate:
@@ -853,12 +966,17 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             # `mutate --json-report` writes the score as a 0..1 fraction;
             # the report (and --mutation-threshold) speaks percent.
             raw_score = mutation_report.get("score")
-            score = (
-                round(raw_score * 100.0, 1)
-                if isinstance(raw_score, (int, float))
-                else None
-            )
+            exact = _exact_mutation_percent(totals, raw_score)
+            # Truncated, not rounded, for display: 79.96% must never read
+            # as 80.0% next to a threshold of 80 (issue #282).
+            score = None if exact is None else math.floor(exact * 10) / 10.0
             mutation_report["scorePercent"] = score
+            # Compared exactly, the way `mutate --fail-under` compares
+            # (`MutationOutcome.score_below`), so the report and the CI
+            # gate never disagree about the same mutants.
+            mutation_passes = exact is not None and exact >= Fraction(
+                str(options.mutation_threshold)
+            )
             survivors = [
                 m
                 for m in mutation_report.get("mutants") or []
@@ -875,7 +993,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 f"Mutation score {score_text}: {totals.get('killed', 0)} killed, "
                 f"{totals.get('survived', 0)} survived of {totals.get('generated', 0)}."
             )
-            if score is None or score < options.mutation_threshold:
+            if not mutation_passes:
                 mutation_step.status = "warn"
     steps.append(mutation_step)
 
@@ -915,11 +1033,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
 
     # 11. Verdict ---------------------------------------------------------
     verdict = Step("verdict", "Decide what each test proves")
-    mutation_ok = (
-        mutation_report is not None
-        and isinstance(mutation_report.get("scorePercent"), (int, float))
-        and mutation_report["scorePercent"] >= options.mutation_threshold
-    )
+    mutation_ok = mutation_report is not None and mutation_passes
     with _Timer(verdict):
         for case in cases:
             if lint_problems:
@@ -976,6 +1090,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         rules=rules,
         rules_available=rules_available,
         lint_problems=lint_problems,
+        run_errors=run_errors,
         risks=risks,
         coverage=coverage_step.details if coverage_report else None,
         mutation=mutation_step.details if mutation_report else None,
@@ -1023,6 +1138,8 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             "passed": sum(1 for c in cases if c["status"] == "passed"),
             "failed": sum(1 for c in cases if c["status"] in ("failed", "crashed")),
             "notRun": sum(1 for c in cases if c["status"] == "not_run"),
+            # The run failed before its cases started (issue #260).
+            "runFailed": bool(run_errors),
             "levels": verdict.details["levels"],
             "assertions": total_assertions,
             "intentShare": (
@@ -1100,6 +1217,7 @@ def _findings(  # noqa: C901
     rules: list[dict[str, Any]],
     rules_available: bool,
     lint_problems: list[str],
+    run_errors: Sequence[str] = (),
     risks: list[dict[str, Any]],
     coverage: dict[str, Any] | None,
     mutation: dict[str, Any] | None,
@@ -1124,6 +1242,14 @@ def _findings(  # noqa: C901
     for problem in lint_problems:
         if not problem.startswith("  "):
             add("high", "refused", "The suite is refused before it can run", problem)
+
+    for error in run_errors[:1]:
+        add(
+            "high",
+            "run-failure",
+            "The suite did not run: it failed before its test cases started",
+            error.strip(),
+        )
 
     label_by_line = {a["line"]: a for a in assertions}
     for case in cases:

@@ -155,6 +155,28 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "paragraph, or mock the whole paragraph/section instead (MOCK "
         "PARAGRAPH/MOCK SECTION)."
     ),
+    "CONDITION_NAME_MISMATCH": (
+        "A .cut line treats a level-88 condition-name as a value, or a "
+        "plain data item as a condition: EXPECT <item> TO BE TRUE on an "
+        "item that is not an 88, or EXPECT <88> TO BE <value>. cobc would "
+        "reject the generated driver. A condition-name is only ever TRUE "
+        "or FALSE; any other item is compared with a value."
+    ),
+    "UNSUPPORTED_CICS_CONDITION": (
+        "A MOCK CICS body says CONDITION IS <name>, but where the mocked "
+        "command would send that condition cannot be told: no EXEC CICS "
+        "HANDLE CONDITION label is in force for it (the real command would "
+        "take the system default action, usually an abend), the command is "
+        "written with RESP or NOHANDLE (HANDLE does not apply -- set the "
+        "RESP field in the mock body instead), or the program uses PUSH/POP "
+        "HANDLE, whose runtime stack mockymock does not model."
+    ),
+    "UNSUPPORTED_CICS_HANDLE": (
+        "An EXEC CICS HANDLE CONDITION or IGNORE CONDITION could not be "
+        "read. mockymock emulates it (spliced to CONTINUE, its labels "
+        "followed when a mock raises a condition), so one it cannot read "
+        "can neither be emulated nor dropped without changing control flow."
+    ),
     "UNKNOWN_DATA_NAME": (
         "A MOVE target, EXPECT data-name, CAPTURE INTO target or bare-word "
         "value in the .cut names nothing the program declares -- cobc "
@@ -173,6 +195,26 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "paragraph header, or another statement after it) -- splicing it "
         "would comment out that sibling code along with it. Put the "
         "statement on its own line(s)."
+    ),
+    "MOCK_LINE_TOO_LONG": (
+        "A MOCK body line is copied into the test program as written, and "
+        "GnuCOBOL truncates a free-format source line past 512 bytes, so "
+        "the build would fail with syntax errors that never mention the "
+        "truncation. A `MOVE <one long literal> TO <field>` is split "
+        "automatically; break any other long statement across several "
+        "lines of the mock body."
+    ),
+    "UNLIFTABLE_CLAUSE_BODY": (
+        "A MOCK directive matches a READ / RETURN / WRITE / REWRITE / "
+        "DELETE / START / CALL whose AT END / INVALID KEY / ON EXCEPTION "
+        "(or NOT ...) bodies cannot be re-run after the mock: one holds "
+        "GOBACK, STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE, CANCEL or "
+        "another boundary statement, a clause mockymock cannot guard "
+        "(AT END-OF-PAGE), a nested conditional phrase not closed by its "
+        "own END-<verb>, or an IF left open before the next clause. "
+        "Splicing the mock replaces the whole statement, so every body "
+        "would be deleted with it. Move that code out of the clause -- set "
+        "a flag in it and act on the flag after the statement."
     ),
     "UNSUPPORTED_FLOW_MOCK_TARGET": (
         "A MOCK PARAGRAPH/MOCK SECTION names this test case's own PERFORM "
@@ -257,10 +299,12 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
     ),
     "UNMOCKABLE_ACCEPT_SOURCE": (
         "A MOCK ACCEPT directive targets an ACCEPT ... FROM <system "
-        "source> (DATE, TIME, DAY, COMMAND-LINE, ...) that GnuCOBOL "
-        "resolves internally rather than reading a console -- there is "
-        "nothing for a mock to intercept. These are deliberately not "
-        "boundary sites; remove the MOCK ACCEPT for this target."
+        "source> (COMMAND-LINE, ENVIRONMENT, ARGUMENT-VALUE, ...) that "
+        "GnuCOBOL resolves internally rather than reading a console -- "
+        "there is nothing for a mock to intercept. These are deliberately "
+        "not boundary sites; remove the MOCK ACCEPT for this target. (FROM "
+        "DATE / TIME / DAY / DAY-OF-WEEK are the exception: a MOCK ACCEPT "
+        "naming one gives the test a fixed clock.)"
     ),
     "UNRESOLVED_FILE_STATUS_TARGET": (
         "A MOCK directive uses FILE-STATUS IS, but the named file has no "

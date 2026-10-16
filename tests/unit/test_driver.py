@@ -230,7 +230,7 @@ def test_suite_paragraph_name_is_a_valid_cobol_word():
     word = header[:-1]
     assert "--" not in word
     assert not word.endswith("-")
-    assert word == "UT-TESTSUITE-MAINPGM-DISCOUNT-CALCULATION-VIA-COPYBOOK"
+    assert word == "UT-TESTSUITE-MAINPGM-DISCOUNT"  # 30-char IBM cap (#279)
 
 
 def test_testcase_emits_perform_thru_when_set():
@@ -374,7 +374,12 @@ def test_expect_operator_compiles_to_its_negated_fail_condition(
         (">", "0 AND LESS THAN 10", "IF NOT (WS-X > 0 AND LESS THAN 10)"),
         (">", "0 AND < 10", "IF NOT (WS-X > 0 AND < 10)"),
         ("=", "7 OR 8", "IF NOT (WS-X = 7 OR 8)"),
-        ("NOT =", "7 or 8", "IF NOT (WS-X NOT = 7 or 8)"),
+        # A negated operator's guard is the un-negated condition (issue
+        # #339): `IF NOT (WS-X NOT = 7 OR 8)` carried the NOT onto the
+        # abbreviated `8` and could never fail.
+        ("NOT =", "7 or 8", "IF (WS-X = 7 or 8)"),
+        ("NOT >", "0 AND LESS THAN 10", "IF (WS-X > 0 AND LESS THAN 10)"),
+        ("NOT <=", "3 OR >= 9", "IF (WS-X <= 3 OR >= 9)"),
     ],
 )
 def test_expect_combined_condition_negates_the_whole_condition(

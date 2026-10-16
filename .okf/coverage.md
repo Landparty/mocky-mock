@@ -85,9 +85,17 @@ onto the ORIGINAL `.cbl`. Two difflib.SequenceMatcher alignments compose:
 instrumented -> normalized (splicer keeps untouched lines verbatim and in
 order) and normalized -> original (via a fixed-format column-8-72/comment-
 drop extraction mirroring `normalize_fixed_format`). Unmappable lines
-(driver/dispatch insertions, boundary-line replacements, continuation
-merges) are excluded — deliberately: the view answers "which of MY lines
-ran". `format_coverage_json` serializes both the instrumented totals and
+(driver code, splicer insertions, continuation merges) are excluded —
+deliberately: the view answers "which of MY lines ran". A statement the
+splicer *replaced* (a mocked boundary, a neutralized GOBACK / STOP RUN)
+is one of MY lines, though (issue #297): `build_original_line_map` aligns
+its commented-out copy (`stub_writer.comment_and_replace`'s
+`"      *> "` prefix stripped) and maps every indented line of the
+replacement block after it to the statement's first original line, so
+the statement is covered exactly when its replacement ran (an untaken
+CALL-only branch used to read 100%). The same map feeds `run --trace`.
+Lines rewritten in place (DFHRESP expansion, ADDRESS OF redirect) still
+drop out. `format_coverage_json` serializes both the instrumented totals and
 this mapped view; `run --coverage-json PATH` (implies `--coverage`) writes
 it.
 

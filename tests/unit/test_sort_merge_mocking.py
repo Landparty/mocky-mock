@@ -542,8 +542,31 @@ def test_mocked_release_and_return_clears_pure_procedure_case():
     assert reasons == []
 
 
-def test_mock_return_rows_without_terminal_refuses_unresolved_file_status():
+def test_mock_return_rows_without_terminal_is_accepted_with_at_end():
+    """Issue #341: an SD can never declare FILE STATUS, but exhausting the
+    ROWS runs the RETURN's own lifted AT END clause, which ends the loop."""
     result = _parse(PURE_PROCEDURE_SORT_SOURCE, "sortproc.cbl")
+    surface = analyze(result.ast)
+    file_status = analyze_file_status_fields(result.ast)
+    case = _case(
+        "MAIN-PARA",
+        mocks=[
+            MockDirective(MockCategory.RELEASE, "SORT-REC"),
+            MockDirective(
+                MockCategory.RETURN, "SORT-FILE", rows=[[("SORT-KEY", '"AAA"')]]
+            ),
+        ],
+    )
+    reasons = check_test_case(surface, result.ast, case, file_status)
+    assert not any(r.code == "UNRESOLVED_FILE_STATUS_TARGET" for r in reasons)
+
+
+def test_mock_return_rows_without_terminal_or_at_end_refuses_unresolved_status():
+    source = PURE_PROCEDURE_SORT_SOURCE.replace(
+        'RETURN SORT-FILE AT END MOVE "Y" TO WS-EOF-FLAG.', "RETURN SORT-FILE."
+    )
+    assert source != PURE_PROCEDURE_SORT_SOURCE
+    result = _parse(source, "sortproc.cbl")
     surface = analyze(result.ast)
     file_status = analyze_file_status_fields(result.ast)
     case = _case(

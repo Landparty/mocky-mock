@@ -146,8 +146,17 @@ CAPTURE_CATEGORIES = frozenset({MockCategory.CALL, MockCategory.DYNCALL})
 # would spin until `run --timeout`. MQ is CALL at parse time. CICS
 # (2026-10-13, #169) is the STARTBR/READNEXT browse loop's case: EXEC CICS
 # reports its end through RESP, which only the TERMINAL group can set.
+# ACCEPT (#263) is the SYSIN control-card loop's case: `PERFORM ... UNTIL
+# WS-IN = "END"` around `ACCEPT WS-IN` needs card 1, card 2, then the
+# sentinel, and the sentinel is what its TERMINAL group sets.
 SEQUENCED_CALL_CATEGORIES = frozenset(
-    {MockCategory.CALL, MockCategory.DYNCALL, MockCategory.DLI, MockCategory.CICS}
+    {
+        MockCategory.CALL,
+        MockCategory.DYNCALL,
+        MockCategory.DLI,
+        MockCategory.CICS,
+        MockCategory.ACCEPT,
+    }
 )
 
 # Every category ROWS is valid on. SQL ends with SQLCODE 100 (no TERMINAL),
@@ -182,6 +191,10 @@ class MockDirective:
     (the file may still get an implicit default-success MOVE at splice
     time if it declares a FILE STATUS field -- see
     injector.build_site_dispatch)."""
+    cics_condition: str | None = None
+    """`CONDITION IS <name>` inside a MOCK CICS body (issue #268): the
+    mocked command raises that condition, and the dispatch jumps to the
+    EXEC CICS HANDLE CONDITION label in force (analysis.cics_handle)."""
     terminal_row: list[tuple[str, str]] | None = None
     """Field assignments for the WHEN OTHER (rows-exhausted) branch of a
     READ/RETURN/CALL/DYNCALL/DLI/CICS `... ROWS` block, from its
@@ -198,6 +211,15 @@ class MockDirective:
     capture_lines: list[int] = field(default_factory=list)
     """1-based .cut line of each `captures` entry, same index alignment
     (empty when built outside the parser)."""
+    row_lines: list[int] = field(default_factory=list)
+    """1-based .cut line of each `rows` entry, same index alignment
+    (empty when built outside the parser)."""
+    body_line_numbers: list[int] = field(default_factory=list)
+    """1-based .cut line of each `body_lines` entry, same index alignment
+    (empty when built outside the parser) -- issue #243."""
+    terminal_line: int = 0
+    """1-based .cut line of the `TERMINAL` group (0 when absent or built
+    outside the parser)."""
 
     @property
     def program_name(self) -> str:
@@ -300,6 +322,11 @@ class MockTestCase:
     tags: list[str] = field(default_factory=list)
     """Tags from `TESTCASE "..." TAGS "a" "b"`, in declaration order.
     Selection (`run --tag`) and reporting only -- no runtime semantics."""
+    template_name: str | None = None
+    """The provider-bound TESTCASE this case was expanded from (one per
+    PROVIDER row), by its own name; None for an ordinary case. Lets the
+    report attribute the template's EXPECT/VERIFY labels, which the raw
+    `.cut` text records under the template's name, to each row (#328)."""
 
     @property
     def assertion_count(self) -> int:

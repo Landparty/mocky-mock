@@ -65,6 +65,9 @@ BEFORE-EACH
     MOVE ZERO TO WS-N
 END-BEFORE
 TESTCASE "a"
+    MOCK CALL "SVC"
+        CAPTURE ARG 1 INTO UT-CAP-X
+    END-MOCK
     MOVE "A" TO WS-EL (2)
     MOVE WS-N TO WS-EL(1)
     PERFORM 0000-MAIN
@@ -98,3 +101,80 @@ def test_refused_run_json_report_keeps_cut_and_program_files(tmp_path):
     assert payload["cutFile"] == str(cut)
     assert payload["programFile"] == str(program)
     assert payload["suite"]["line"] == 1
+
+
+def test_rows_and_terminal_names_are_checked_at_their_lines():
+    # Issue #299: ROWS rows and the TERMINAL group are spliced as MOVEs too.
+    suite = parse_cut(
+        'TESTSUITE "x"\n'
+        'TESTCASE "a"\n'
+        '    MOCK CALL "SVC" ROWS\n'
+        "        ( WS-N = 1, WS-NX = 10 )\n"
+        "        ( WS-N = 2, WS-FLAG = Q )\n"
+        '        TERMINAL ( WS-EOFF = "Y" )\n'
+        "    END-MOCK\n"
+        "    PERFORM 0000-MAIN\n"
+    )
+    reasons = check_cut_data_names(suite, PROGRAM.splitlines(), "MUT1")
+    assert [r.message for r in reasons] == [
+        ".cut line 4: ROWS field WS-NX is not a data item of MUT1",
+        ".cut line 5: ROWS value Q is neither a literal nor a data item of "
+        "MUT1 -- quote it if it is text",
+        ".cut line 6: TERMINAL field WS-EOFF is not a data item of MUT1",
+    ]
+
+
+def test_ut_names_are_known_only_when_this_suites_driver_declares_them():
+    # Issue #296: a typo'd UT-CAP- target was waved through by the blanket
+    # `UT-` exemption.
+    suite = parse_cut(
+        'TESTSUITE "x"\n'
+        'TESTCASE "a"\n'
+        '    MOCK CALL "RATESVC"\n'
+        "        CAPTURE ARG 1 INTO UT-CAP-RATESVC-1\n"
+        "    END-MOCK\n"
+        "    MOVE 0 TO UT-FAIL-COUNT\n"
+        "    PERFORM 0000-MAIN\n"
+        "    EXPECT UT-CAP-RATESVC-1 TO BE 12.5\n"
+        "    EXPECT UT-CAP-RATESVC1 TO BE 12.5\n"
+        "    EXPECT UT-RATESVC-TALLY TO BE 1\n"
+        "    EXPECT UT-NOPE TO BE 1\n"
+    )
+    reasons = check_cut_data_names(suite, PROGRAM.splitlines(), "MUT1")
+    assert [r.message for r in reasons] == [
+        ".cut line 9: EXPECT UT-CAP-RATESVC1 is not a data item of MUT1",
+        ".cut line 11: EXPECT UT-NOPE is not a data item of MUT1",
+    ]
+
+
+REPLACE_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. R2.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       REPLACE ==:PFX:== BY ==WS==.
+       01  :PFX:-AMT  PIC 9(5) VALUE 0.
+       01  :PFX:-OUT  PIC 9(5) VALUE 0.
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           COMPUTE :PFX:-OUT = :PFX:-AMT * 2
+           GOBACK.
+       REPLACE OFF.
+"""
+
+
+def test_names_built_through_replace_pseudo_text_are_known(tmp_path):
+    # Issue #273: the pre-REPLACE text never spells WS-AMT/WS-OUT.
+    program = tmp_path / "R2.cbl"
+    program.write_text(REPLACE_PROGRAM)
+    cut = tmp_path / "R2.cut"
+    cut.write_text(
+        'TESTSUITE "r2"\nTESTCASE "doubles"\n    MOVE 21 TO WS-AMT\n'
+        "    PERFORM 0000-MAIN\n    EXPECT WS-OUT TO BE 42\n"
+        "    EXPECT WS-NOPE TO BE 42\n"
+    )
+    problems = run_static_checks(program, cut, None).problems
+    assert problems == [
+        "refused (UNKNOWN_DATA_NAME): .cut line 6: EXPECT WS-NOPE is not a "
+        "data item of R2"
+    ]

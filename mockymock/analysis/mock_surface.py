@@ -84,8 +84,10 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
     ExecImsStatement,
 )
 
+from mockymock.analysis.cics_handle import handle_states, is_handle_declaration
 from mockymock.analysis.sql_whenever import (
     Whenever,
+    is_sql_declaration,
     is_whenever,
     parse_whenever,
     whenever_actions,
@@ -302,9 +304,22 @@ class BoundarySite:
     # parsed declaration. Never mocked -- the splicer replaces it with
     # CONTINUE (issue #195, see analysis.sql_whenever).
     whenever: Whenever | None = None
+    # A mockable CICS site: the EXEC CICS HANDLE/IGNORE CONDITION map in
+    # force at it (issue #268, analysis.cics_handle), for the GO TO a mock
+    # raising a condition (`CONDITION IS`) ends with.
+    cics_handle_state: dict[str, str | None] = field(default_factory=dict)
     # A mockable SQL site: the (condition, GO TO target) checks the WHENEVER
     # declarations above it in the source put after it, in DB2's order.
     whenever_checks: tuple[tuple[str, str], ...] = ()
+    # A console ACCEPT site: its whole target as written, subscript or
+    # qualifier included (`WS-ENT ( WS-I )`), while `keys` holds the
+    # data-name alone (issue #311).
+    accept_target: str | None = None
+    # An opt-in site (`promote_clock_accepts`, issue #240): an `ACCEPT x
+    # FROM DATE/TIME/DAY/DAY-OF-WEEK` some MOCK names. It is spliced, but a
+    # test case that does not mock it runs the real statement (the
+    # dispatch's WHEN OTHER), so it is never refused as unmocked.
+    opt_in: bool = False
 
 
 @dataclass
@@ -327,6 +342,18 @@ class NonInteractiveAccept:
     from_source: str
     paragraph_name: str
     line: int
+    # What `promote_clock_accepts` needs to turn a clock ACCEPT into an
+    # opt-in boundary site when a MOCK names it.
+    statement: object = None
+    nested: bool = False
+    nested_in_boundary: bool = False
+
+    @property
+    def reads_clock(self) -> bool:
+        """FROM DATE / TIME / DAY / DAY-OF-WEEK: a value that changes from
+        run to run, so a test can only pin it by mocking the ACCEPT."""
+        words = self.from_source.upper().split()
+        return bool(words) and words[0] in CLOCK_ACCEPT_SOURCES
 
 
 @dataclass
@@ -348,7 +375,10 @@ class MockSurface:
     #: `EXEC SQL WHENEVER` declarations (issue #195): SQL-category sites
     #: kept OUT of `boundary_sites`, since nothing mocks them -- they are
     #: spliced to CONTINUE, and their GO TO checks follow every later SQL
-    #: site (`BoundarySite.whenever_checks`).
+    #: site (`BoundarySite.whenever_checks`). The other precompiler
+    #: declarations (`DECLARE ... CURSOR`, `INCLUDE`, `BEGIN/END DECLARE
+    #: SECTION`, issue #267) are here too, with `whenever` None: spliced to
+    #: CONTINUE, nothing else.
     whenever_sites: list[BoundarySite] = field(default_factory=list)
 
     def static_call_sites(self) -> list[CallSite]:
@@ -475,6 +505,14 @@ _TERMINATOR_LABELS = frozenset({"STOP RUN", "GOBACK", "EXIT PROGRAM"})
 CICS_TERMINATOR_COMMANDS = frozenset({"RETURN", "XCTL", "ABEND"})
 
 
+def accept_key(target: str) -> str:
+    """The data-name an ACCEPT target is mocked by: its first word, cut at
+    a subscript / reference modification and before any `OF`/`IN`
+    qualifier (`WS-ENT ( WS-I )` -> `WS-ENT`, `FLD OF REC-B` -> `FLD`)."""
+    words = target.upper().split("(", 1)[0].split()
+    return words[0] if words else ""
+
+
 def is_cics_terminator(statement) -> bool:
     """True for an EXEC CICS RETURN/XCTL/ABEND statement."""
     return (
@@ -519,6 +557,9 @@ _BOUNDARY_STATEMENT_TYPES = (
 # all, FROM CONSOLE, or an unrecognized mnemonic -- fail closed) is console
 # input: at test runtime it would read whatever stdin happens to be attached,
 # making the run nondeterministic (or hang until the executor timeout).
+#: The `_NON_INTERACTIVE_ACCEPT_SOURCES` that read the system clock.
+CLOCK_ACCEPT_SOURCES = frozenset({"DATE", "DAY", "DAY-OF-WEEK", "TIME"})
+
 _NON_INTERACTIVE_ACCEPT_SOURCES = frozenset(
     {
         "DATE",
@@ -858,6 +899,12 @@ def _classify_statement(
             )
             site.whenever = parse_whenever(sql_text)
             return
+        if is_sql_declaration(sql_text):
+            # DECLARE CURSOR/TABLE, INCLUDE, BEGIN/END DECLARE SECTION: no
+            # runtime behavior and no SQLCA update, so not a boundary --
+            # spliced to CONTINUE alongside WHENEVER (issue #267).
+            add_site(MockCategory.SQL, "SQL DECLARATION", into=surface.whenever_sites)
+            return
         surface.exec_paragraphs.add(paragraph_name)
         add_site(
             MockCategory.SQL,
@@ -867,6 +914,12 @@ def _classify_statement(
         return
 
     if isinstance(statement, ExecCicsStatement):
+        if is_handle_declaration(statement):
+            # HANDLE/IGNORE CONDITION registers a label, it is not a
+            # boundary: spliced to CONTINUE, its jumps emulated after the
+            # mocked commands that raise a condition (issue #268).
+            add_site(MockCategory.CICS, "CICS HANDLE", into=surface.whenever_sites)
+            return
         surface.exec_paragraphs.add(paragraph_name)
         add_site(
             MockCategory.CICS,
@@ -889,7 +942,13 @@ def _classify_statement(
         return
 
     if isinstance(statement, IOAcceptStatement):
-        target = (statement.target or "").upper()
+        full_target = " ".join((statement.target or "").upper().split())
+        # Keyed on the data-name alone, like a dynamic CALL's identifier:
+        # `ACCEPT WS-ENT(WS-I)` / `ACCEPT FLD OF REC-B` kept the subscript or
+        # qualifier in the key, which `MOCK ACCEPT <name>` cannot express
+        # (issue #311). The full text stays on the site for the scaffold's
+        # `MOVE SPACES TO <target>` body.
+        target = accept_key(full_target)
         # cobolparser keeps a date-format qualifier in `from_source`
         # (`ACCEPT X FROM DATE YYYYMMDD` -> "DATE YYYYMMDD", `FROM DAY
         # YYYYDDD` -> "DAY YYYYDDD"), so the source is its first word --
@@ -899,7 +958,10 @@ def _classify_statement(
         source = source_words[0] if source_words else None
         if source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
             surface.console_accept_paragraphs.add(paragraph_name)
-            add_site(MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ())
+            site = add_site(
+                MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ()
+            )
+            site.accept_target = full_target or None
         elif target:
             # Not a boundary site (nothing to mock), but recorded so a
             # MOCK ACCEPT aimed at it can be refused with the real reason
@@ -911,6 +973,9 @@ def _classify_statement(
                     from_source=str(statement.from_source),
                     paragraph_name=paragraph_name,
                     line=line,
+                    statement=statement,
+                    nested=nested,
+                    nested_in_boundary=in_boundary,
                 )
             )
         return
@@ -973,6 +1038,12 @@ def analyze(program: CobolProgram) -> MockSurface:
     for paragraph in _all_paragraphs(procedure):
         _walk_statements(paragraph.statements, paragraph.paragraph_name, surface)
 
+    states = handle_states(program)
+    if states:
+        for site in surface.boundary_sites:
+            if site.category is MockCategory.CICS:
+                site.cics_handle_state = states.get(id(site.statement), {})
+
     if surface.whenever_sites:
         actions = whenever_actions(program)
         for site in surface.boundary_sites:
@@ -982,9 +1053,57 @@ def analyze(program: CobolProgram) -> MockSurface:
     return surface
 
 
+def promote_clock_accepts(surface: MockSurface, mocks) -> list[BoundarySite]:
+    """Make every clock ACCEPT (`ACCEPT x FROM DATE/TIME/DAY/DAY-OF-WEEK`)
+    that a MOCK ACCEPT in `mocks` names an opt-in boundary site (issue
+    #240), and return the new sites.
+
+    Such an ACCEPT reads the system clock, so a test asserting on anything
+    derived from it passes only on the day (or second) it was recorded.
+    Mocking it gives the test a fixed clock. Opt-in, so a program whose
+    tests never name one is spliced exactly as before: an unmocked case
+    runs the real statement through the dispatch's WHEN OTHER instead of
+    being refused UNMOCKED_CONSOLE_ACCEPT."""
+    named = {
+        directive.key.upper()
+        for directive in mocks
+        if directive.category is MockCategory.ACCEPT
+    }
+    promoted: list[BoundarySite] = []
+    kept: list[NonInteractiveAccept] = []
+    for accept in surface.non_interactive_accepts:
+        if not (accept.reads_clock and accept.target in named):
+            kept.append(accept)
+            continue
+        promoted.append(
+            BoundarySite(
+                category=MockCategory.ACCEPT,
+                label="ACCEPT",
+                keys=(accept.target,),
+                match_text=None,
+                paragraph_name=accept.paragraph_name,
+                line=accept.line,
+                nested=accept.nested,
+                statement=accept.statement,
+                nested_in_boundary=accept.nested_in_boundary,
+                opt_in=True,
+                # Keyed on the bare data-name like a console ACCEPT; the
+                # whole target, subscript included, rides along (#311).
+                accept_target=" ".join(
+                    str(getattr(accept.statement, "target", "") or "").upper().split()
+                )
+                or None,
+            )
+        )
+    surface.non_interactive_accepts = kept
+    surface.boundary_sites.extend(promoted)
+    surface.boundary_sites.sort(key=lambda site: site.line)
+    return promoted
+
+
 def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
-    """Uppercased file name -> its declared `FILE STATUS IS <field>` name,
-    read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT statements. A
+    """Uppercased file name -> its declared `FILE STATUS IS <field>` name
+    (qualified, `FS-CODE OF CUST-STAT`, when the clause qualifies it), read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT statements. A
     file whose SELECT entry has no FILE STATUS clause has no entry -- there
     is no WORKING-STORAGE field to default or target with FILE-STATUS IS
     sugar (see docs/2026-07-20-before-blocks-and-file-status-design.md).
@@ -1008,7 +1127,13 @@ def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
         if not isinstance(statement, SelectStatement):
             continue
         if statement.file_name and statement.file_status:
-            fields[statement.file_name.upper()] = statement.file_status
+            # `FILE STATUS IS FS-CODE OF CUST-STAT`: keep the qualifiers, or
+            # every generated MOVE to a status field declared under several
+            # groups (one copybook, many files) is ambiguous (issue #266).
+            qualifiers = getattr(statement, "file_status_qualifiers", None) or []
+            fields[statement.file_name.upper()] = " OF ".join(
+                [statement.file_status, *qualifiers]
+            )
     for record, file_name in _fd_records(program):
         status = fields.get(file_name)
         if status and record not in fields:

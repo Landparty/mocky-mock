@@ -390,7 +390,13 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
         mutants.extend(_relational_mutants(line, code, mask, line_no))
         mutants.extend(
             _arithmetic_verb_mutants(
-                line, code, mask, line_no, _statement_tail(lines, index, code)
+                line,
+                code,
+                mask,
+                line_no,
+                _statement_tail(lines, index, code),
+                lines,
+                index,
             )
         )
         mutants.extend(_move_literal_mutants(line, code, mask, line_no))
@@ -500,8 +506,66 @@ def _statement_tail(lines: list[str], index: int, code: str) -> str:
     return " ".join(parts)
 
 
+_WORD_OR_PERIOD = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*|\.(?=\s|$)")
+
+
+def _scope_terminator(
+    lines: list[str], index: int, start: int, verb: str
+) -> tuple[int, int] | None:
+    """Where the `END-<verb>` closing the `<verb>` statement whose text
+    starts at `lines[index][start:]` sits, as (line index, column), or
+    None when the statement has none -- it ends at a period first. A
+    nested `<verb>` opens one more level its own `END-<verb>` closes;
+    quoted literals, comments and continuation lines are skipped."""
+    terminator = "END-" + verb
+    depth = 0
+    position = start
+    for line_index in range(index, len(lines)):
+        line = lines[line_index]
+        if line_index != index and (_is_comment(line) or _is_continuation(line)):
+            continue
+        code = line[: _sequence_area_end(line)]
+        mask = _literal_mask(code)
+        comment_at = code.find("*>")
+        while comment_at != -1 and not _outside_literals(
+            mask, comment_at, comment_at + 2
+        ):
+            comment_at = code.find("*>", comment_at + 1)
+        if comment_at != -1:
+            code = code[:comment_at]
+        for match in _WORD_OR_PERIOD.finditer(code, position):
+            if not _outside_literals(mask, match.start(), match.end()):
+                continue
+            word = match.group(0).upper()
+            if word == ".":
+                return None
+            if word == verb:
+                depth += 1
+            elif word == terminator:
+                if depth == 0:
+                    return line_index, match.start()
+                depth -= 1
+        position = 0
+    return None
+
+
+#: The verb an arithmetic swap replaces, keyed by the verb it writes.
+_VERB_SWAP = {
+    "ADD": "SUBTRACT",
+    "SUBTRACT": "ADD",
+    "MULTIPLY": "DIVIDE",
+    "DIVIDE": "MULTIPLY",
+}
+
+
 def _arithmetic_verb_mutants(
-    line: str, code: str, mask: list[bool], line_no: int, statement: str = ""
+    line: str,
+    code: str,
+    mask: list[bool],
+    line_no: int,
+    statement: str = "",
+    lines: list[str] | None = None,
+    index: int = 0,
 ) -> list[Mutant]:
     swaps = [
         (_ADD_TO, "SUBTRACT", "FROM", "ADD..TO -> SUBTRACT..FROM"),
@@ -520,9 +584,24 @@ def _arithmetic_verb_mutants(
             # swap is a stillborn by construction. The phrase may sit on a
             # later line of the same statement, hence `statement`.
             continue
-        mutated = _rewrite_code(
-            line, match.start(), match.end(), verb + match.group("mid") + preposition
+        # The statement's own END-<verb> must follow the swap, or the
+        # mutant is a stillborn (`SUBTRACT ... END-ADD` does not compile).
+        # On the mutated line it is rewritten with the verb; on a later
+        # line the site is skipped, as a single-line mutant cannot touch it.
+        old_verb = _VERB_SWAP[verb]
+        end = (
+            _scope_terminator(lines, index, match.end(), old_verb)
+            if lines is not None
+            else None
         )
+        replacement = verb + match.group("mid") + preposition
+        span_end = match.end()
+        if end is not None:
+            if end[0] != index:
+                continue
+            span_end = end[1] + len("END-" + old_verb)
+            replacement += line[match.end() : end[1]] + "END-" + verb
+        mutated = _rewrite_code(line, match.start(), span_end, replacement)
         if mutated is None:
             continue
         mutants.append(

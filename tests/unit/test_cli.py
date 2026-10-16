@@ -58,12 +58,15 @@ def test_generate_bad_output_dir_reports_cleanly(tmp_path, capsys):
         "       0000-MAIN-PROCESS.\n"
         "           STOP RUN.\n"
     )
+    # A missing parent is created (issue #257); a parent that is a file
+    # still cannot be, and the failure goes to stderr.
+    (tmp_path / "no").write_text("x")
     bad_target = tmp_path / "no" / "such" / "dir" / "out.cut"
     exit_code = main(["generate", str(cbl), "-o", str(bad_target)])
     assert exit_code == 1
-    out = capsys.readouterr().out
-    assert "could not write" in out
-    assert str(bad_target) in out
+    err = capsys.readouterr().err
+    assert "could not write" in err
+    assert str(bad_target) in err
 
 
 def test_mutate_bad_json_report_dir_reports_cleanly(tmp_path, capsys, monkeypatch):
@@ -96,6 +99,7 @@ def test_mutate_bad_json_report_dir_reports_cleanly(tmp_path, capsys, monkeypatc
     cbl.write_text("           MOVE 1 TO WS-X.\n")
     cut = tmp_path / "P.cut"
     cut.write_text('TESTSUITE "s"\n')
+    (tmp_path / "no").write_text("x")  # a missing dir would be created (#257)
     bad_target = tmp_path / "no" / "such" / "dir" / "report.json"
     exit_code = main(
         [
@@ -107,8 +111,8 @@ def test_mutate_bad_json_report_dir_reports_cleanly(tmp_path, capsys, monkeypatc
             str(bad_target),
         ]
     )
-    out = capsys.readouterr().out
-    assert "could not write" in out
+    err = capsys.readouterr().err
+    assert "could not write" in err
     assert exit_code == 0  # outcome was clean; the report file is auxiliary
 
 

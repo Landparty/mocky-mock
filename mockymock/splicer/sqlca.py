@@ -58,7 +58,13 @@ SQLCA_FIELDS = [
     "        10  SQLWARN5         PIC X(1)  VALUE SPACE.",
     "        10  SQLWARN6         PIC X(1)  VALUE SPACE.",
     "        10  SQLWARN7         PIC X(1)  VALUE SPACE.",
-    "    05  SQLSTATE             PIC X(5)  VALUE SPACES.",
+    # DB2 for z/OS: SQLWARN8-A and SQLSTATE sit in the SQLEXT group, which
+    # makes the SQLCA the 136 bytes SQLCABC claims (issue #271).
+    "    05  SQLEXT.",
+    "        10  SQLWARN8         PIC X(1)  VALUE SPACE.",
+    "        10  SQLWARN9         PIC X(1)  VALUE SPACE.",
+    "        10  SQLWARNA         PIC X(1)  VALUE SPACE.",
+    "        10  SQLSTATE         PIC X(5)  VALUE SPACES.",
 ]
 
 _DATA_DIVISION_RE = re.compile(r"^\s*DATA\s+DIVISION\s*\.", re.IGNORECASE)

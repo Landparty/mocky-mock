@@ -165,6 +165,10 @@ class RecordedExpectation:
     #: Raw text as DISPLAY rendered it -- render_expect_value() does the
     #: bare-vs-quoted decision at rewrite time, not here.
     value: str
+    #: The EXPECT value text to write as-is, bypassing render_expect_value:
+    #: TRUE/FALSE for a level-88 name, the bare occurrence number for an
+    #: INDEXED BY index-name (issue #237).
+    rendered: str | None = None
 
 
 @dataclass
@@ -178,6 +182,10 @@ def build_recording_report(
     suite_result: TestSuiteResult,
     address_items: set[str] | frozenset[str] = frozenset(),
     pictures: dict[str, str] | None = None,
+    condition_names: set[str] | frozenset[str] = frozenset(),
+    index_names: set[str] | frozenset[str] = frozenset(),
+    clock_fields: dict[str, str] | None = None,
+    clock_pinned: set[tuple[int, str]] | frozenset[tuple[int, str]] = frozenset(),
 ) -> RecordingReport:
     """Match every stub the scanner found against this run's recorded
     values (by case id + data-name).
@@ -201,6 +209,12 @@ def build_recording_report(
     LAST value, corrupting the earlier golden (2026-08-12 audit Finding
     10). Emission order is stub line order: `record_targets` is built by
     appending stubs in scan order and the driver DISPLAYs in list order.
+
+    `clock_fields` (`clock_value_fields`, issue #240) names the items the
+    program fills from the system clock; a stub on one is skipped unless
+    its case pins the clock by mocking that ACCEPT (`clock_pinned`, pairs
+    of 1-based case index and uppercased item name): today's date or time
+    recorded as a golden fails on a later run.
     """
     recorded_by_case: dict[str, dict[str, list[str]]] = {}
     for result in suite_result.results:
@@ -231,7 +245,48 @@ def build_recording_report(
             report.skipped.append(SkippedStub(stub.line, stub.data_name, reason))
             continue
         value = queue.pop(0)
-        if stub.data_name.partition("(")[0].strip().upper() in address_items:
+        base_name = _leaf_name(stub.data_name)
+        clock_source = (clock_fields or {}).get(base_name)
+        if clock_source is not None and (
+            (stub.case_index, base_name) not in clock_pinned
+        ):
+            report.skipped.append(
+                SkippedStub(
+                    stub.line,
+                    stub.data_name,
+                    f"it is set by {clock_source}, so the value recorded now "
+                    f"fails on a later run -- mock that ACCEPT to give the "
+                    f"case a fixed clock (MOCK ACCEPT {base_name}), or "
+                    f"write this EXPECT by hand",
+                )
+            )
+            continue
+        if base_name in condition_names and value.strip() in ("TRUE", "FALSE"):
+            # The driver records an 88's truth value (issue #237).
+            report.recorded.append(
+                RecordedExpectation(stub=stub, value=value, rendered=value.strip())
+            )
+            continue
+        if base_name in index_names:
+            # An INDEXED BY index-name DISPLAYs its occurrence number
+            # (`+000000003`); quoted, the golden did not compile next run.
+            try:
+                occurrence = int(value.strip())
+            except ValueError:
+                report.skipped.append(
+                    SkippedStub(
+                        stub.line,
+                        stub.data_name,
+                        f"it is an INDEXED BY index-name whose DISPLAY text "
+                        f"{value.strip()!r} is not an occurrence number",
+                    )
+                )
+                continue
+            report.recorded.append(
+                RecordedExpectation(stub=stub, value=value, rendered=str(occurrence))
+            )
+            continue
+        if base_name in address_items:
             # DISPLAY of a POINTER-family item prints an address, of an
             # INDEX item an implementation-defined number: neither is a
             # value a golden can pin, and `EXPECT P TO BE "0x..."` does not
@@ -280,6 +335,35 @@ def build_recording_report(
             continue
         report.recorded.append(RecordedExpectation(stub=stub, value=value))
     return report
+
+
+def clock_value_fields(program) -> dict[str, str]:
+    """Uppercased data name -> what fills it from the system clock, for
+    every `ACCEPT x FROM DATE/TIME/DAY/DAY-OF-WEEK` and `MOVE FUNCTION
+    CURRENT-DATE TO x` in `program` (issue #240). Direct targets only: a
+    value computed from one of them is not traced."""
+    from mockymock.analysis.mock_surface import CLOCK_ACCEPT_SOURCES
+
+    fields: dict[str, str] = {}
+    try:
+        statements = program.get_all_statements()
+    except Exception:  # pragma: no cover - never break a run over this
+        return fields
+    for statement in statements:
+        kind = type(statement).__name__
+        if kind == "IOAcceptStatement":
+            words = str(getattr(statement, "from_source", "") or "").upper().split()
+            target = str(getattr(statement, "target", "") or "").upper()
+            if target and words and words[0] in CLOCK_ACCEPT_SOURCES:
+                fields.setdefault(target, f"ACCEPT {target} FROM {words[0]}")
+        elif kind == "MoveStatement":
+            source = str(getattr(statement, "source", "") or "").upper()
+            if re.search(r"(?<![A-Z0-9-])CURRENT-DATE(?![A-Z0-9-])", source):
+                for target in getattr(statement, "targets", None) or []:
+                    name = str(target).partition("(")[0].strip().upper()
+                    if name:
+                        fields.setdefault(name, "FUNCTION CURRENT-DATE")
+    return fields
 
 
 def field_pictures(program, captures=()) -> dict[str, str]:
@@ -333,6 +417,23 @@ def address_fields(program) -> set[str]:
     }
 
 
+def condition_names(program) -> set[str]:
+    """Names (uppercased, unqualified) of every level-88 condition-name in
+    `program`, declared once or under several parents alike (none of them
+    can be DISPLAYed). Best-effort like `field_pictures`."""
+    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+
+    try:
+        items = compute_program_data_items(program).get("items", [])
+    except Exception:  # pragma: no cover - never break a run over this
+        return set()
+    return {
+        str(item.get("name") or "").upper()
+        for item in items
+        if item.get("level") == 88 and item.get("name")
+    }
+
+
 def picture_for(data_name: str, pictures: dict[str, str] | None) -> str | None:
     """Look a stub's data-name up in a name (uppercased, unqualified) ->
     PICTURE map, ignoring any subscript/reference-modification group: a
@@ -343,7 +444,14 @@ def picture_for(data_name: str, pictures: dict[str, str] | None) -> str | None:
     base, paren, subscript = data_name.partition("(")
     if paren and ":" in subscript:
         return None
-    return pictures.get(base.strip().upper())
+    return pictures.get(_leaf_name(base))
+
+
+def _leaf_name(data_name: str) -> str:
+    """The item a (qualified, subscripted) data-name names, upper-cased:
+    `CUST-ID OF OUT-REC (1)` -> `CUST-ID` (issue #252)."""
+    words = data_name.partition("(")[0].split()
+    return words[0].upper() if words else ""
 
 
 def rewrite_cut_text(
@@ -391,7 +499,7 @@ def rewrite_cut_text(
         stub = item.stub
         original = lines[stub.line - 1]
         indent = original[: len(original) - len(original.lstrip())]
-        rendered = render_expect_value(
+        rendered = item.rendered or render_expect_value(
             item.value,
             picture_for(stub.data_name, pictures),
             decimal_comma=decimal_comma,

@@ -4,16 +4,21 @@ its `.cut` line instead of surfacing as a cobc error at a line of a
 sandbox copy that no longer exists (issue #204).
 
 Checked: every setup-MOVE / hook-MOVE target, every EXPECT data-name, every
-`CAPTURE ... INTO` target that is not a synthesized `UT-CAP-` field, and
-every MOVE/EXPECT value that is a single bare COBOL word (`EXPECT F TO BE
-Y` -- an unquoted `Y` is a data-name to cobc, not a literal).
+`CAPTURE ... INTO` target that is not a synthesized `UT-CAP-` field, every
+ROWS / TERMINAL field (issue #299), and every MOVE/EXPECT/ROWS/TERMINAL
+value that is a single bare COBOL word (`EXPECT F TO BE
+Y` -- an unquoted `Y` is a data-name to cobc, not a literal). In a MOCK
+body, which is otherwise spliced unchecked, every one-line `MOVE <value>
+TO <target>...` statement's targets and bare-word value (issue #243).
 
 Deliberately loose on the "known" side, so it can never refuse a name cobc
 would accept: a name is known when it appears as a COBOL word anywhere in
 the program text the splicer compiles (literals and inline comments
 removed) -- data items, copybook and `EXEC SQL INCLUDE` members, the
-generated SQLCA alike -- or is a harness item (`UT-` prefix, the
-synthesized DFHEIBLK/DLIDIB fields) or a special register. A misspelt data
+generated SQLCA alike -- or is a harness item this suite's driver declares
+(its fixed fields, tallies and `UT-CAP-` capture targets -- not any `UT-`
+word, issue #296 -- or the synthesized DFHEIBLK/DLIDIB fields) or a
+special register. A misspelt data
 name appears nowhere in the program, which is all this needs to catch.
 Anything that is not a plain (possibly qualified/subscripted) name --
 `LENGTH OF X`, `FUNCTION ...`, an expression -- is left unchecked.
@@ -25,11 +30,17 @@ import re
 
 from mockymock.analysis.refusal import RefusalReason
 from mockymock.dsl.model import MockTestSuite
+from mockymock.dsl.parser import _strip_inline_comment
 
 _LITERAL_RE = re.compile(r"\"(?:[^\"]|\"\")*\"?|'(?:[^']|'')*'?")
 _WORD_RE = re.compile(r"[A-Za-z0-9][\w-]*")
 _COBOL_WORD_RE = re.compile(r"^[A-Za-z0-9][\w-]*$")
 _PARENS_RE = re.compile(r"\([^()]*\)")
+#: A one-line `MOVE <value> TO <targets>` statement in a MOCK body.
+_BODY_MOVE_RE = re.compile(
+    r"^\s*MOVE\s+(?P<value>.+?)\s+TO\s+(?P<targets>[^.]+?)\s*\.?\s*$",
+    re.IGNORECASE,
+)
 _FLOAT_RE = re.compile(r"^\d+(?:\.\d+)?E[+-]?\d+$", re.IGNORECASE)
 
 #: Words that are values, not data-names, when written bare.
@@ -88,7 +99,57 @@ _SPECIAL_REGISTERS = frozenset(
 #: A name starting with one of these is not a plain data reference.
 _UNCHECKED_LEADS = frozenset({"LENGTH", "ADDRESS", "FUNCTION"})
 
-_HARNESS_PREFIX = "UT-"
+#: A CAPTURE target starting with this is synthesized (splicer.captures).
+_CAPTURE_PREFIX = "UT-CAP-"
+
+#: The driver's own fixed fields (splicer.driver.build_driver).
+_DRIVER_FIELDS = frozenset(
+    {
+        "UT-CURRENT-CASE",
+        "UT-FAIL-COUNT",
+        "UT-EARLY-EXIT",
+        "UT-MOCK-STATUS",
+        "UT-TALLY-EDITED",
+    }
+)
+
+
+def _suite_harness_words(suite: MockTestSuite) -> set[str]:
+    """The `UT-` names this suite's driver actually declares: the fixed
+    fields, every tally (with its -BASE/-START twins) and every `UT-CAP-`
+    target a CAPTURE line declares (issue #296)."""
+    from mockymock.splicer.naming import TallyRegistry
+
+    words = set(_DRIVER_FIELDS)
+    registry = TallyRegistry(suite)
+    for (category, key), tally in registry.items():
+        words.update(
+            {
+                tally,
+                registry.base_name(category, key),
+                registry.start_name(category, key),
+            }
+        )
+    for directive in _all_mocks(suite):
+        for _, target in directive.captures:
+            for word in _name_words(target) or []:
+                if word.startswith(_CAPTURE_PREFIX):
+                    words.add(word)
+    return words
+
+
+def _all_mocks(suite: MockTestSuite) -> list:
+    seen: set[int] = set()
+    found: list = []
+    for directive in [
+        *suite.before_all_mocks,
+        *suite.before_each_mocks,
+        *(d for case in suite.test_cases for d in case.mocks),
+    ]:
+        if id(directive) not in seen:
+            seen.add(id(directive))
+            found.append(directive)
+    return found
 
 
 def _program_words(lines: list[str]) -> set[str]:
@@ -100,6 +161,45 @@ def _program_words(lines: list[str]) -> set[str]:
             text = text[:comment]
         words.update(word.upper() for word in _WORD_RE.findall(text))
     return words
+
+
+def data_item_levels(program) -> dict[str, set[int]]:
+    """Upper-cased data-item name -> the level numbers it is declared at
+    (88 for a condition-name), from the AST: the names cobc compiles,
+    after REPLACE and COPY ... REPLACING (issue #273)."""
+    levels: dict[str, set[int]] = {}
+    data = program.get_division("DATA") if program is not None else None
+    if data is None:
+        return levels
+    for item in data.find_all_by_type("CobolDataItem"):
+        name = str(getattr(item, "name", "") or "").upper()
+        if name and name != "FILLER":
+            levels.setdefault(name, set()).add(int(getattr(item, "level", 0) or 0))
+    for condition in data.find_all_by_type("ConditionNameItem"):
+        name = str(getattr(condition, "name", "") or "").upper()
+        if name:
+            levels.setdefault(name, set()).add(88)
+    return levels
+
+
+def conditions_without_false(program) -> set[str]:
+    """Upper-cased level-88 names none of whose declarations carry a
+    `WHEN SET TO FALSE` value -- `SET <88> TO FALSE` does not compile for
+    them (issue #251)."""
+    data = program.get_division("DATA") if program is not None else None
+    if data is None:
+        return set()
+    without: set[str] = set()
+    with_false: set[str] = set()
+    for condition in data.find_all_by_type("ConditionNameItem"):
+        name = str(getattr(condition, "name", "") or "").upper()
+        if not name:
+            continue
+        if getattr(condition, "false_value", None) is None:
+            without.add(name)
+        else:
+            with_false.add(name)
+    return without - with_false
 
 
 def _harness_words() -> set[str]:
@@ -143,17 +243,29 @@ def _is_bare_word_value(value: str) -> bool:
 
 
 def check_cut_data_names(
-    suite: MockTestSuite, lines: list[str], program_name: str | None = None
+    suite: MockTestSuite,
+    lines: list[str],
+    program_name: str | None = None,
+    program=None,
 ) -> list[RefusalReason]:
     """UNKNOWN_DATA_NAME for each `.cut` data reference no program text
-    declares -- see the module docstring for what is checked."""
-    known = _program_words(lines) | _harness_words() | _SPECIAL_REGISTERS
+    declares -- see the module docstring for what is checked. `program`
+    (the AST) adds its own data-item names: a name built through REPLACE
+    pseudo-text appears in no word of the pre-REPLACE text (issue #273)."""
+    levels = data_item_levels(program)
+    known = (
+        _program_words(lines)
+        | set(levels)
+        | _harness_words()
+        | _SPECIAL_REGISTERS
+        | _suite_harness_words(suite)
+    )
     owner = f" of {program_name}" if program_name else ""
     reasons: list[RefusalReason] = []
     seen: set[tuple[int, str, str]] = set()
 
     def unknown(word: str) -> bool:
-        return word not in known and not word.startswith(_HARNESS_PREFIX)
+        return word not in known
 
     def name(line: int, role: str, text: str) -> None:
         for word in _name_words(text) or []:
@@ -186,6 +298,99 @@ def check_cut_data_names(
                 )
             )
 
+    def condition_level(text: str) -> bool | None:
+        """True when the (qualified/subscripted) name is a level-88
+        condition-name, False when it is some other data item, None when
+        the AST cannot say (undeclared, or declared at both kinds)."""
+        words = _name_words(text)
+        if not words or words[0] not in levels:
+            return None
+        found = levels[words[0]]
+        if found == {88}:
+            return True
+        if 88 in found:
+            return None
+        return False
+
+    def expect_level(line: int, data_name: str, expected: str) -> None:
+        # The driver picks `IF [NOT] X` for TRUE/FALSE and `IF X NOT = v`
+        # for everything else; each shape compiles only for its own kind
+        # of item (issue #307).
+        is_condition = condition_level(data_name)
+        if is_condition is None:
+            return
+        truth = expected.strip().upper() in ("TRUE", "FALSE")
+        if truth and not is_condition:
+            message = (
+                f".cut line {line}: EXPECT {data_name.strip()} TO BE "
+                f"{expected.strip()} -- TRUE/FALSE only applies to a level-88 "
+                f"condition-name, and {data_name.strip()} is not one; "
+                f"expect its value instead, or EXPECT one of its 88s TO BE TRUE"
+            )
+        elif not truth and is_condition:
+            message = (
+                f".cut line {line}: EXPECT {data_name.strip()} TO BE "
+                f"{expected.strip()} -- {data_name.strip()} is a level-88 "
+                f"condition-name, which can only be TRUE or FALSE; write "
+                f"EXPECT {data_name.strip()} TO BE TRUE, or expect the value "
+                f"of the item it belongs to"
+            )
+        else:
+            return
+        reasons.append(RefusalReason(code="CONDITION_NAME_MISMATCH", message=message))
+
+    no_false = conditions_without_false(program)
+
+    def body_move(line: int, where: str, text: str) -> None:
+        # A MOCK body is COBOL spliced verbatim; only the commonest
+        # hand-written statement, a one-line MOVE, is checked (issue #243).
+        m = _BODY_MOVE_RE.match(_strip_inline_comment(text))
+        if m is None:
+            return
+        targets = m.group("targets").strip()
+        if _name_words(targets) is not None:
+            name(line, f"{where} MOVE target", targets)
+        elif all(_COBOL_WORD_RE.match(word) for word in targets.split()):
+            for target in targets.split():
+                name(line, f"{where} MOVE target", target)
+        value(line, f"{where} MOVE value", m.group("value"))
+
+    def assign_level(line: int, role: str, target: str, assigned: str) -> None:
+        # A TRUE/FALSE assignment splices as SET <target> TO TRUE|FALSE,
+        # anything else as MOVE (splicer.naming.assign); each compiles only
+        # for its own kind of target (issue #251).
+        is_condition = condition_level(target)
+        if is_condition is None:
+            return
+        word = assigned.strip().upper()
+        shown = (
+            f"MOVE {assigned.strip()} TO {target.strip()}"
+            if role == "MOVE"
+            else f"{role} {target.strip()} = {assigned.strip()}"
+        )
+        if word in ("TRUE", "FALSE") and not is_condition:
+            message = (
+                f".cut line {line}: {shown} -- TRUE/FALSE can only be set on "
+                f"a level-88 condition-name, and {target.strip()} is not one; "
+                f"move a value instead, or name one of its 88s"
+            )
+        elif word not in ("TRUE", "FALSE") and is_condition:
+            message = (
+                f".cut line {line}: {shown} -- {target.strip()} is a level-88 "
+                f"condition-name, which cannot be moved to; assign it TRUE "
+                f"(spliced as SET {target.strip()} TO TRUE), or move the value "
+                f"to the item it belongs to"
+            )
+        elif word == "FALSE" and (_name_words(target) or [""])[0] in no_false:
+            message = (
+                f".cut line {line}: {shown} -- {target.strip()} has no "
+                f"WHEN SET TO FALSE value, so SET {target.strip()} TO FALSE "
+                f"does not compile; move a value to the item it belongs to"
+            )
+        else:
+            return
+        reasons.append(RefusalReason(code="CONDITION_NAME_MISMATCH", message=message))
+
     hook_steps = (
         suite.before_all_steps
         + suite.before_each_steps
@@ -196,6 +401,7 @@ def check_cut_data_names(
         if step.kind == "MOVE":
             name(step.line, "MOVE target", step.target)
             value(step.line, "MOVE value", step.value)
+            assign_level(step.line, "MOVE", step.target, step.value)
     mocks = list(suite.before_all_mocks) + list(suite.before_each_mocks)
     for case in suite.test_cases:
         move_lines = case.setup_move_lines or [case.line] * len(case.setup_moves)
@@ -204,10 +410,12 @@ def check_cut_data_names(
         ):
             name(line, "MOVE target", target)
             value(line, "MOVE value", move_value)
+            assign_level(line, "MOVE", target, move_value)
         for expectation in case.expectations:
             line = expectation.line or case.line
             name(line, "EXPECT", expectation.data_name)
             value(line, "EXPECT value", expectation.expected_value)
+            expect_level(line, expectation.data_name, expectation.expected_value)
         mocks.extend(case.mocks)
     seen_mocks: set[int] = set()
     for directive in mocks:
@@ -216,7 +424,22 @@ def check_cut_data_names(
         seen_mocks.add(id(directive))
         capture_lines = directive.capture_lines or [0] * len(directive.captures)
         for (_, target), line in zip(directive.captures, capture_lines, strict=False):
-            if target.upper().startswith(_HARNESS_PREFIX):
+            if target.upper().startswith(_CAPTURE_PREFIX):
                 continue
             name(line, "CAPTURE INTO target", target)
+        # ROWS rows and the TERMINAL group are spliced as `MOVE value TO
+        # field` too (issue #299).
+        row_lines = directive.row_lines or [0] * len(directive.rows or [])
+        for row, line in zip(directive.rows or [], row_lines, strict=False):
+            for row_field, row_value in row:
+                name(line, "ROWS field", row_field)
+                value(line, "ROWS value", row_value)
+                assign_level(line, "ROWS", row_field, row_value)
+        body_numbers = directive.body_line_numbers or [0] * len(directive.body_lines)
+        for body_line, line in zip(directive.body_lines, body_numbers, strict=False):
+            body_move(line, f"MOCK {directive.describe()} body", body_line)
+        for row_field, row_value in directive.terminal_row or []:
+            name(directive.terminal_line, "TERMINAL field", row_field)
+            value(directive.terminal_line, "TERMINAL value", row_value)
+            assign_level(directive.terminal_line, "TERMINAL", row_field, row_value)
     return reasons

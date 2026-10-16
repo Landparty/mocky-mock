@@ -245,7 +245,7 @@ def test_export_still_refuses_what_it_genuinely_cannot_fit(tmp_path, capsys):
     long for Area B (columns 12-72, so 61 characters) has no literal to
     continue AND no break point, so it still refuses with COLUMN_OVERFLOW
     and writes nothing."""
-    cbl, cut = _column_overflow_program(tmp_path, "MOVE 1 TO WS-" + "X" * 62)
+    cbl, cut = _column_overflow_program(tmp_path, "DISPLAY WS-" + "X" * 62)
 
     exit_code = main(["export", str(cbl), "--cut", str(cut)])
     out = capsys.readouterr().out
@@ -259,7 +259,7 @@ def test_a_refusal_names_where_the_line_actually_came_from(tmp_path, capsys):
     MOCK body text" whatever the real source was -- so a reader whose
     offending line was mockymock's own generated reset went to the wrong
     file first. It now names the actual source by exact text match."""
-    cbl, cut = _column_overflow_program(tmp_path, "MOVE 1 TO WS-" + "X" * 62)
+    cbl, cut = _column_overflow_program(tmp_path, "DISPLAY WS-" + "X" * 62)
 
     assert main(["export", str(cbl), "--cut", str(cut)]) == 1
     out = capsys.readouterr().out

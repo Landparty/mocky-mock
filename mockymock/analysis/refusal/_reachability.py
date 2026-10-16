@@ -57,7 +57,9 @@ from cobolparser.models.statements.misc import (
     MergeStatement,
     SortStatement,
 )
+from cobolparser.parsers.statements.ibm_exec_statements import ExecCicsStatement
 
+from mockymock.analysis.cics_handle import all_handler_labels, handler_labels
 from mockymock.analysis.mock_surface import (
     _BOUNDARY_STATEMENT_TYPES,
     _XML_JSON_TYPES,
@@ -200,6 +202,7 @@ def _reachable_paragraphs(
     skip_traversal: frozenset[str] | set[str] = frozenset(),
     neutralized_goto: frozenset[str] | set[str] = frozenset(),
     follow_whenever: bool = True,
+    cics_conditions: frozenset[str] | None = None,
 ) -> tuple[set[str], list[RefusalReason]]:
     """Return (reachable paragraph/section names, flow refusals), computed
     in a single BFS pass over PerformStatement and GoStatement edges, plus
@@ -285,7 +288,13 @@ def _reachable_paragraphs(
     `follow_whenever=False` drops the emulated `EXEC SQL WHENEVER ... GO
     TO` edges (and their targets from the fall-through seeds): only for a
     case whose mocks can never make one fire
-    (`sql_whenever.whenever_can_fire`, issue #244)."""
+    (`sql_whenever.whenever_can_fire`, issue #244).
+
+    `cics_conditions` names the CICS conditions this case's mocks raise
+    (`CONDITION IS`, issue #268): the walk follows the EXEC CICS HANDLE
+    CONDITION label each reached CICS command would jump to for them.
+    None (the default, for whole-program callers) follows every label in
+    force -- fail closed."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
@@ -358,9 +367,9 @@ def _reachable_paragraphs(
 
     seen: set[str] = set()
     whenever = whenever_actions(program) if follow_whenever else {}
-    go_to_targets = _go_to_targets(program, include_whenever=follow_whenever) - set(
-        neutralized_goto
-    )
+    go_to_targets = _go_to_targets(
+        program, include_whenever=follow_whenever, cics_conditions=cics_conditions
+    ) - set(neutralized_goto)
     index_by_name = (
         {p.paragraph_name: i for i, p in enumerate(ordered)} if ordered else {}
     )
@@ -417,6 +426,13 @@ def _reachable_paragraphs(
             ):
                 for _, target in whenever.get(id(sql), ()):
                     push_target(target, name, "EXEC SQL WHENEVER GO TO")
+            # The GO TO a mocked CICS command raising a condition takes to
+            # its EXEC CICS HANDLE CONDITION label (issue #268).
+            for cics in _find_statements_of_type(
+                by_name[name].statements, ExecCicsStatement
+            ):
+                for target in sorted(handler_labels(program, cics, cics_conditions)):
+                    push_target(target, name, "EXEC CICS HANDLE CONDITION")
             for statement in _find_flow_statements(by_name[name].statements):
                 if isinstance(statement, GoStatement):
                     single_target = _go_statement_target(statement)
@@ -605,7 +621,11 @@ def _reachable_paragraphs(
     return seen, reasons
 
 
-def _go_to_targets(program, include_whenever: bool = True) -> set[str]:
+def _go_to_targets(
+    program,
+    include_whenever: bool = True,
+    cics_conditions: frozenset[str] | None = None,
+) -> set[str]:
     """Every paragraph/section name that is EVER a GO TO target anywhere
     in the whole program, regardless of reachability from any one test
     case -- a categorical, whole-program exclusion list.
@@ -631,6 +651,9 @@ def _go_to_targets(program, include_whenever: bool = True) -> set[str]:
     # a case whose mocks can never make the WHENEVER fire (issue #244).
     if include_whenever:
         targets |= whenever_targets(program)
+    # An EXEC CICS HANDLE CONDITION label is entered by the GO TO a mocked
+    # command raising that condition ends with (issue #268); None = any.
+    targets |= all_handler_labels(program, cics_conditions)
     return targets
 
 

@@ -9,12 +9,15 @@ from mockymock.dsl.parser import _SUBSCRIPTED_NAME
 
 _MARKER = "__MOCKYMOCK__ "
 _TESTSUITE_RE = re.compile(r"^__MOCKYMOCK__ TESTSUITE: (?P<name>.+)$")
-_CASE_START_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) START: (?P<name>.+)$")
+# `.*`, not `.+`: a START marker the driver printed is never dropped, even
+# for a name the parser should have refused (issue #308).
+_CASE_START_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) START: ?(?P<name>.*)$")
 _CASE_FAIL_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) FAIL: (?P<reason>.+)$")
 _CASE_END_RE = re.compile(r"^__MOCKYMOCK__ CASE (?P<id>\S+) END$")
 # Emitted only in trace mode, by the splicer's mock dispatch blocks. Carries
 # no case id: it is attributed to the case whose START most recently
 # printed, which is exactly where the driver places it.
+_VALUE_END_RE = re.compile(r"^__MOCKYMOCK__ VALUE-END$")
 _MOCK_RE = re.compile(r"^__MOCKYMOCK__ MOCK: (?P<label>.+)$")
 # Emitted only by --record-expectations, by build_driver's per-case
 # record_targets addition. Unlike MOCK:, this DOES carry a case id (the
@@ -109,18 +112,38 @@ class TestSuiteResult:
         )
 
 
+def _append_continuation(pending: tuple[list, int], continuation: list[str]) -> None:
+    """Rejoin a raw value split at its X'0A' bytes (see `parse_stdout`)."""
+    values, index = pending
+    tail = "\n" + "\n".join(continuation)
+    current = values[index]
+    if isinstance(current, tuple):
+        values[index] = (*current[:-1], current[-1] + tail)
+    else:
+        values[index] = current + tail
+
+
 def parse_stdout(stdout: str) -> TestSuiteResult:
     """Parse a compiled test binary's captured stdout into a TestSuiteResult.
 
-    Known limitation (2026-08-12 audit Finding 11, open): the protocol is
-    line-oriented with no escaping, so a PIC X field whose value contains a
-    raw newline splits its own RECORD/FAIL marker across two physical
-    lines -- the continuation matches no marker and is silently dropped,
-    truncating the recorded value/reason at the newline. A real fix needs
-    the generated driver to escape control bytes before DISPLAYing
-    (a protocol change; see the audit doc), not a parser-side patch."""
+    A FAIL or RECORD marker that DISPLAYs a raw field value is followed by
+    a VALUE-END marker (issue #285, 2026-08-12 audit Finding 11): a value
+    holding byte X'0A' splits its marker across physical lines, and the
+    lines between the marker and VALUE-END are rejoined to it with LF, so
+    neither a recorded golden nor a failure reason is cut at the byte.
+    Without a VALUE-END (an older binary), the continuation is dropped as
+    before."""
     suite = TestSuiteResult(suite_name="")
     by_id: dict[str, TestResult] = {}
+    # Where the last raw-value marker's value lives -- (list, index), the
+    # value being a str or the second item of a tuple -- and the lines
+    # seen since it, pending a VALUE-END.
+    pending: tuple[list, int] | None = None
+    continuation: list[str] = []
+    # MOCK: carries no case id, so it belongs to the case whose START was
+    # seen and whose END was not; between cases (BEFORE-ALL/AFTER-ALL) it
+    # belongs to no case at all (issue #334).
+    open_case: TestResult | None = None
 
     # Split on LF only (dropping a CRLF's CR), never `str.splitlines()`:
     # that also breaks on form feed, VT, \x1c-\x1e, NEL and U+2028 -- bytes
@@ -139,8 +162,18 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
         # so parse from the first marker on the line; whatever precedes it
         # is the program's output.
         marker_at = line.find(_MARKER)
+        if marker_at < 0:
+            if pending is not None:
+                continuation.append(line)
+            continue
         if marker_at > 0:
             line = line[marker_at:]
+        if _VALUE_END_RE.match(line) is not None:
+            if pending is not None and continuation:
+                _append_continuation(pending, continuation)
+            pending, continuation = None, []
+            continue
+        pending, continuation = None, []
         if (m := _TESTSUITE_RE.match(line)) is not None:
             suite.suite_name = m.group("name")
         elif (m := _CASE_START_RE.match(line)) is not None:
@@ -154,23 +187,28 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
             result = TestResult(case_id=case_id, case_name=case_name)
             by_id[case_id] = result
             suite.results.append(result)
+            open_case = result
         elif (m := _CASE_FAIL_RE.match(line)) is not None:
             target = by_id.get(m.group("id"))
             if target is not None:
                 target.failure_reasons.append(m.group("reason"))
+                pending = (target.failure_reasons, len(target.failure_reasons) - 1)
             else:
                 suite.orphan_failures.append((m.group("id"), m.group("reason")))
+                pending = (suite.orphan_failures, len(suite.orphan_failures) - 1)
         elif (m := _MOCK_RE.match(line)) is not None:
-            if suite.results:
-                suite.results[-1].mock_hits.append(m.group("label"))
+            if open_case is not None:
+                open_case.mock_hits.append(m.group("label"))
         elif (m := _RECORD_RE.match(line)) is not None:
             target = by_id.get(m.group("id"))
             if target is not None:
                 target.recorded.append((m.group("name"), m.group("value")))
+                pending = (target.recorded, len(target.recorded) - 1)
             else:
                 suite.orphan_records.append(
                     (m.group("id"), m.group("name"), m.group("value"))
                 )
+                pending = (suite.orphan_records, len(suite.orphan_records) - 1)
         elif (m := _SUMMARY_RE.match(line)) is not None:
             suite.tests_run = int(m.group("run"))
             suite.failures = int(m.group("failures"))
@@ -179,6 +217,8 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
             target = by_id.get(case_id)
             if target is not None:
                 target.ended = True
+                if target is open_case:
+                    open_case = None
             else:
                 suite.orphan_ends.append(case_id)
 

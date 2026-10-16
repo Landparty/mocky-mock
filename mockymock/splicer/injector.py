@@ -21,6 +21,7 @@ import re
 
 from cobolparser.models.statements.call import CallStatement
 
+from mockymock.analysis.cics_handle import label_in_state
 from mockymock.analysis.clause_bodies import (
     OUTCOME_FIELD,
     LiftedClause,
@@ -35,8 +36,10 @@ from mockymock.dsl.model import (
     MockCategory,
     MockTestSuite,
 )
+from mockymock.splicer.cics_resp import cics_success_defaults
+from mockymock.splicer.driver import split_long_move
 from mockymock.splicer.io_copy import DataLayout, from_move, into_move
-from mockymock.splicer.naming import TallyRegistry
+from mockymock.splicer.naming import TallyRegistry, assign
 
 #: One token of a CALL statement's text: a (possibly X/N/G/Z/NX/U-prefixed)
 #: quoted literal with doubled quotes inside, a parenthesis, a period, or a
@@ -62,6 +65,13 @@ def _literal_inner(token: str) -> str:
     start = token.index(token[-1])
     quote = token[-1]
     return token[start + 1 : -1].replace(quote * 2, quote)
+
+
+def _operand_key(text: str) -> str:
+    """An operand's text for comparison with cobolparser's name for it,
+    which spaces out subscripts differently (`WS-ENT ( WS-I )`, `WS-I ( 1
+    : 1 )`): whitespace and subscript commas dropped, uppercased."""
+    return re.sub(r"[\s,]+", "", text.upper())
 
 
 def _call_using_literals(statement_text: str, names: list[str]) -> list[str | None]:
@@ -93,7 +103,7 @@ def _call_using_literals(statement_text: str, names: list[str]) -> list[str | No
             i += 1
             continue
         if tok.group("punct"):
-            return none  # a subscript/parenthesis this scan does not model
+            return none  # a parenthesis not after an operand: unmodelled
         if word in _USING_END_WORDS:
             break
         if word in _PASSING_WORDS:
@@ -112,6 +122,22 @@ def _call_using_literals(statement_text: str, names: list[str]) -> list[str | No
         while i + 1 < len(tokens) and upper[i] in _QUALIFIERS:
             text = f"{text} {words[i]} {words[i + 1]}"
             i += 2
+        # A subscript and/or reference modification belongs to the operand
+        # (`WS-ENT(WS-I)`, `WS-A(1:2)`): consume each balanced group. This
+        # scan used to give up on any parenthesis, so a literal next to a
+        # subscripted operand was captured as a data-name (issue #291).
+        while i < len(tokens) and tokens[i].group("punct") == "(":
+            depth = 0
+            while i < len(tokens):
+                punct = tokens[i].group("punct")
+                depth += punct == "("
+                depth -= punct == ")"
+                text = f"{text} {words[i]}"
+                i += 1
+                if depth == 0:
+                    break
+            if depth:
+                return none  # unbalanced: not a shape this scan models
         operands.append((text, False))
     if len(operands) != len(names):
         return none
@@ -122,7 +148,7 @@ def _call_using_literals(statement_text: str, names: list[str]) -> list[str | No
                 return none
             result.append(text)
         else:
-            if " ".join(text.upper().split()) != " ".join(name.upper().split()):
+            if _operand_key(text) != _operand_key(name):
                 return none
             result.append(None)
     return result
@@ -158,14 +184,14 @@ def build_rows_block(
     for index, row in enumerate(rows, start=1):
         lines.append(f"    WHEN {tally_name} = {index}")
         for move in row_prefix_moves or []:
-            lines.append(f"        {move}")
+            lines.extend(split_long_move(f"        {move}"))
         for field, value in row:
-            lines.append(f"        MOVE {value} TO {field}")
+            lines.extend(split_long_move(f"        {assign(value, field)}"))
         for move in row_suffix_moves:
-            lines.append(f"        {move}")
+            lines.extend(split_long_move(f"        {move}"))
     lines.append("    WHEN OTHER")
     for move in exhausted_moves:
-        lines.append(f"        {move}")
+        lines.extend(split_long_move(f"        {move}"))
     lines.append("END-EVALUATE")
     return lines
 
@@ -193,8 +219,26 @@ def build_site_dispatch(
     statement_text: str = "",
     layout: DataLayout | None = None,
     lifted_clauses: tuple[LiftedClause, ...] | None = None,
+    sqlstate: bool = False,
+    passthrough: list[str] | None = None,
+    eib_resp_names: tuple[str, ...] = (),
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    `sqlstate` (issue #313): the program references SQLSTATE, so a `MOCK
+    SQL ... ROWS` row also reports `"00000"` and its exhaustion `"02000"`
+    -- a cursor loop ended by `UNTIL SQLSTATE = '02000'` never ended on
+    SQLCODE alone. Off when the program never names SQLSTATE: its own
+    SQLCA copy may not declare one.
+
+    `passthrough`, for an opt-in site (`BoundarySite.opt_in`, issue #240:
+    a clock ACCEPT), is the original statement's text: WHEN OTHER runs it
+    for every case that does not mock the site, instead of the error trap.
+
+    An EXEC CICS mock starts by moving 0 (DFHRESP(NORMAL)) to the
+    command's own RESP / RESP2 items and to `eib_resp_names` (the
+    EIBRESP / EIBRESP2 the program has), as real CICS sets them on every
+    command; the body's own MOVEs still win (issue #320).
 
     `lifted_clauses` (issue #209, `analysis.clause_bodies`): the replaced
     statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY /
@@ -291,6 +335,11 @@ def build_site_dispatch(
             )
         if lifted_clauses:
             lines.append(f'                   MOVE "00" TO {OUTCOME_FIELD}')
+        if directive.category is MockCategory.CICS:
+            lines.extend(
+                f"                   {move}"
+                for move in cics_success_defaults(site.statement, eib_resp_names)
+            )
         if directive.category in FILE_STATUS_CATEGORIES:
             # A statement naming several files (`OPEN INPUT A OUTPUT B`,
             # `CLOSE A B`) is one site matched by ONE directive (a second
@@ -366,7 +415,14 @@ def build_site_dispatch(
             MockCategory.RETURN,
         ):
             status_field = file_status_fields.get(directive.key.upper())
-            if directive.terminal_row is None and status_field is None:
+            lifted_at_end = any(
+                clause.attr == "at_end_clause" for clause in lifted_clauses or ()
+            )
+            if (
+                directive.terminal_row is None
+                and status_field is None
+                and not lifted_at_end
+            ):
                 raise ValueError(
                     "refusal gate should have caught this "
                     "(UNRESOLVED_FILE_STATUS_TARGET)"
@@ -386,8 +442,7 @@ def build_site_dispatch(
                 exhausted_moves.append(f'MOVE "10" TO {status_field}')
             if directive.terminal_row is not None:
                 exhausted_moves.extend(
-                    f"MOVE {value} TO {field}"
-                    for field, value in directive.terminal_row
+                    assign(value, field) for field, value in directive.terminal_row
                 )
             lines.extend(
                 f"                   {body}"
@@ -419,8 +474,7 @@ def build_site_dispatch(
                     directive.rows,
                     row_suffix_moves=[],
                     exhausted_moves=[
-                        f"MOVE {value} TO {field}"
-                        for field, value in directive.terminal_row
+                        assign(value, field) for field, value in directive.terminal_row
                     ],
                 )
             )
@@ -432,15 +486,31 @@ def build_site_dispatch(
                     directive.rows,
                     # Before the row's own MOVEs, not after: a row that
                     # sets SQLCODE itself (an error mid-cursor) must win.
-                    row_prefix_moves=["MOVE 0 TO SQLCODE"],
+                    row_prefix_moves=["MOVE 0 TO SQLCODE"]
+                    + (['MOVE "00000" TO SQLSTATE'] if sqlstate else []),
                     row_suffix_moves=[],
-                    exhausted_moves=["MOVE 100 TO SQLCODE"],
+                    exhausted_moves=["MOVE 100 TO SQLCODE"]
+                    + (['MOVE "02000" TO SQLSTATE'] if sqlstate else []),
                 )
             )
         else:
-            lines.extend(f"                   {body}" for body in directive.body_lines)
+            lines.extend(
+                split
+                for body in directive.body_lines
+                for split in split_long_move(f"                   {body}")
+            )
             if copy_into is not None:
                 lines.append(f"                   {copy_into}")
+            if directive.cics_condition:
+                # `CONDITION IS X`: the command raised X, so control goes
+                # where EXEC CICS HANDLE CONDITION sent it (issue #268); an
+                # IGNOREd condition does nothing. A condition no handler
+                # covers was refused by lint (UNSUPPORTED_CICS_CONDITION).
+                label, _ = label_in_state(
+                    site.cics_handle_state, directive.cics_condition
+                )
+                if label:
+                    lines.append(f"                   GO TO {label}")
         if lifted_clauses:
             outcome_status = file_status_fields.get(directive.key.upper())
             if outcome_status and directive.category in FILE_STATUS_CATEGORIES:
@@ -449,17 +519,20 @@ def build_site_dispatch(
                 )
 
     lines.append("               WHEN OTHER")
-    lines.append(
-        f'                   DISPLAY "__MOCKYMOCK__ ERROR: {site.label} '
-        f'boundary (line {site.line}) reached "'
-    )
-    lines.append('                       "from unmocked test case " UT-CURRENT-CASE')
-    lines.append("                   ADD 1 TO UT-FAIL-COUNT")
+    if passthrough is not None:
+        lines.extend(f"                   {text}" for text in passthrough)
+    else:
+        lines.append(
+            f'                   DISPLAY "__MOCKYMOCK__ ERROR: {site.label} '
+            f'boundary (line {site.line}) reached "'
+        )
+        lines.append(
+            '                       "from unmocked test case " UT-CURRENT-CASE'
+        )
+        lines.append("                   ADD 1 TO UT-FAIL-COUNT")
     lines.append("           END-EVALUATE")
     if lifted_clauses:
-        lines.extend(
-            f"           {line}" for line in clause_guard_lines(lifted_clauses)
-        )
+        lines.extend(clause_guard_lines(lifted_clauses, indent="           "))
     return lines
 
 
@@ -500,7 +573,11 @@ def build_flow_dispatch(
                 f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
                 f'{"SECTION" if plan.is_section else "PARAGRAPH"} {plan.key}"'
             )
-        lines.extend(f"                   {body}" for body in directive.body_lines)
+        lines.extend(
+            split
+            for body in directive.body_lines
+            for split in split_long_move(f"                   {body}")
+        )
     lines.append("               WHEN OTHER")
     lines.append(f"                   PERFORM {plan.real_name}")
     lines.append("           END-EVALUATE.")
@@ -584,14 +661,17 @@ def build_goto_exit_replacement(exit_kind: str = "PARAGRAPH") -> list[str]:
     return [f"           EXIT {exit_kind}"]
 
 
-def build_chain_check() -> list[str]:
+def build_chain_check(exit_kind: str = "PARAGRAPH") -> list[str]:
     """Inserted immediately after an intermediate PERFORM statement lying
     on a safe chain toward a neutralized terminator: if the flag is set,
     stop this paragraph too instead of running whatever sibling code
     follows -- propagating the early exit one more level toward the test
-    driver. Identical every time it's used; no parameters needed."""
+    driver. `exit_kind` is `TerminatorPlan.chain_exit_kinds`' entry for
+    the PERFORM: "SECTION" when it sits in a SECTION's first paragraph
+    entered via PERFORM <section-name>, where EXIT PARAGRAPH would fall
+    into the section's next paragraph (issue #338)."""
     return [
         '           IF UT-EARLY-EXIT = "Y"',
-        "               EXIT PARAGRAPH",
+        f"               EXIT {exit_kind}",
         "           END-IF",
     ]

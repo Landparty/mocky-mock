@@ -440,6 +440,9 @@ def run_binary(
     keep burning CPU as an orphan in the persistent container. The
     host-side subprocess timeout is a wider guard against `docker exec`
     itself hanging."""
+    # `timeout 0` disables the container-side kill (issue #306): no caller
+    # may switch off what keeps a hung binary from becoming an orphan.
+    timeout_seconds = max(1, int(timeout_seconds))
     container_binary = to_container_path(binary_path, WORK_ROOT)
     container_dir = container_binary.rsplit("/", 1)[0]
     trace_env: list[str] = []

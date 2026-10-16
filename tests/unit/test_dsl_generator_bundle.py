@@ -179,29 +179,47 @@ def test_out_direction_write_stub_reaches_the_generated_file():
     bundle's own note."""
     surface, bundle = _surface_and_bundle(MULTI_FILE_SOURCE, "multifile.cbl")
     text = scaffold_cut("MULTIFILE", surface, bundle)
-    assert (
-        "*> STUB EXPECT WRITE RPT-REC -- value produced by the program "
-        "under test" in text
-    )
+    # Named by the record the WRITE writes, so `run --record-expectations`
+    # can fill it (issue #255); `STUB EXPECT WRITE RPT-REC` named no data.
+    assert "*> STUB EXPECT RPT-REC -- last record written by WRITE RPT-REC" in text
+    assert "STUB EXPECT WRITE RPT-REC" not in text
     # Rendered the way a MOCK/VERIFY for that boundary reads, never as the
     # raw `CATEGORY:KEY` bundle ref.
     assert "WRITE:RPT-REC" not in text
     assert "EXPECT WRITE:RPT-REC" not in text
 
 
-def test_boundary_level_stub_is_ignored_by_the_record_expectations_scanner():
+def test_write_stub_is_recordable_by_the_record_expectations_scanner():
     """`*> STUB EXPECT <data-name>` is a real feature -- `run
-    --record-expectations` rewrites those into `EXPECT` lines. A
-    boundary-level stub names a boundary, not a data item, so it must not
-    be picked up as one; its two-token shape simply does not match the
-    scanner's data-name grammar."""
+    --record-expectations` rewrites those into `EXPECT` lines. The WRITE
+    boundary's stub names its record, so the scanner picks it up (issue
+    #255: as `STUB EXPECT WRITE RPT-REC` it was silently dropped)."""
     from mockymock.analysis.stub_expectations import scan_stub_expectations
 
     surface, bundle = _surface_and_bundle(MULTI_FILE_SOURCE, "multifile.cbl")
     text = scaffold_cut("MULTIFILE", surface, bundle)
     scan = scan_stub_expectations(text, parse_cut(text))
-    assert [s.data_name for s in scan.stubs] == []
+    assert "RPT-REC" in [s.data_name for s in scan.stubs]
     assert scan.skipped == []
+
+
+def test_unparseable_stub_is_reported_skipped_not_dropped():
+    """Issue #255: a `*> STUB EXPECT` line that names no data item (an
+    older scaffold's `STUB EXPECT WRITE OUT-REC -- ...`, or a boundary-level
+    stub such as `STUB EXPECT READ INV-FILE`) is listed as skipped."""
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
+
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM MAIN-PARA\n"
+        "    *> STUB EXPECT WRITE OUT-REC -- value produced by the program\n"
+        "    *> STUB EXPECT OUT-REC -- last record written by WRITE OUT-REC\n"
+    )
+    scan = scan_stub_expectations(text, parse_cut(text))
+    assert [s.data_name for s in scan.stubs] == ["OUT-REC"]
+    assert [(s.line, s.data_name) for s in scan.skipped] == [(4, "WRITE OUT-REC")]
+    assert scan.skipped[0].reason.startswith("not a data name")
 
 
 def test_boundary_level_stub_is_dropped_when_a_real_verify_covers_it():

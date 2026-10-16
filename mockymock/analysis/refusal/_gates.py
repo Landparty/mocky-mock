@@ -53,6 +53,15 @@ from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock._lines import split_source_lines
+from mockymock.analysis.cics_handle import (
+    parse_handle,
+    raised_conditions,
+    resolve_condition,
+)
+from mockymock.analysis.clause_bodies import (
+    clause_bodies_liftable,
+    clause_lift_problem,
+)
 from mockymock.analysis.linkage import (
     address_of_sites,
     linkage_plan,
@@ -66,7 +75,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     normalize_exec_text,
 )
-from mockymock.analysis.sql_whenever import whenever_can_fire
+from mockymock.analysis.sql_whenever import is_sql_declaration, whenever_can_fire
 from mockymock.dsl.generator import directive_snippet
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
@@ -141,6 +150,20 @@ def _exec_prefix_matches(prefix: str, text: str) -> bool:
         return True
     return not (
         prefix[-1] in _EXEC_NAME_CHARS and text[len(prefix)] in _EXEC_NAME_CHARS
+    )
+
+
+def _at_end_ends_rows(directive: MockDirective, surface: MockSurface) -> bool:
+    """Whether exhausting a READ/RETURN ROWS mock with no TERMINAL group and
+    no FILE STATUS field still signals end-of-data (issue #341): every site
+    the directive matches has an AT END clause the splice lifts, and once
+    the rows run out the dispatch moves "10" to the outcome field, which
+    runs that clause -- what ends the loop in the real program too (#209)."""
+    sites = [s for s in surface.boundary_sites if directive_matches_site(directive, s)]
+    return bool(sites) and all(
+        getattr(site.statement, "at_end_clause", None)
+        and clause_bodies_liftable(site.statement)
+        for site in sites
     )
 
 
@@ -421,6 +444,13 @@ def _whole_program_reasons(
         # here as a generic PARSE_WARNING would only bury the specific code.
         text = str(warning)
         if text.startswith("COPY ") and "not expanded" in text:
+            continue
+        if text.startswith("REPLACE statement set was still active at end of source"):
+            # Standard COBOL: a REPLACE stays in force to the end of the
+            # compilation unit, so a closing REPLACE OFF is optional.
+            # cobol-parser applied it through EOF, as cobc does -- nothing
+            # was dropped (issue #272). The "could not be parsed and was
+            # ignored" REPLACE warning still refuses below.
             continue
         if text.startswith("Compilation unit contains "):
             # cobol-parser parses every program unit of a multi-program
@@ -733,6 +763,26 @@ def check_nested_exec(surface: MockSurface) -> list[RefusalReason]:
         for site in surface.whenever_sites
         if site.whenever is not None and site.whenever.problem
     )
+    # An EXEC CICS HANDLE/IGNORE CONDITION that cannot be read cannot be
+    # emulated, and dropping it would change where a condition goes (#268).
+    for site in surface.whenever_sites:
+        if site.category is not MockCategory.CICS:
+            continue
+        _, problem = parse_handle(site.statement)
+        if problem:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_CICS_HANDLE",
+                    message=(
+                        f"EXEC CICS "
+                        f"{getattr(site.statement, 'cics_command', 'HANDLE')} "
+                        f"CONDITION at "
+                        f"line {site.line} (paragraph '{site.paragraph_name}'):"
+                        f" {problem} -- mockymock emulates HANDLE/IGNORE "
+                        f"CONDITION only as condition(label) / condition lists"
+                    ),
+                )
+            )
     return reasons
 
 
@@ -1366,6 +1416,9 @@ def check_test_case(
         # A WHENEVER handler is reached only when this case's mocks can set
         # SQLCODE so that its check fires (issue #244).
         follow_whenever=whenever_can_fire(program, case.mocks),
+        # A HANDLE CONDITION label is reached only for the conditions this
+        # case's CICS mocks raise (issue #268).
+        cics_conditions=raised_conditions(case.mocks),
     )
 
     if case.perform_target not in reachable:
@@ -1559,6 +1612,10 @@ def check_test_case(
         for directive in matches:
             matched_directives.add(id(directive))
 
+        if not matches and site.opt_in:
+            # A clock ACCEPT another case mocks (issue #240): this case
+            # runs the real statement through the dispatch's WHEN OTHER.
+            continue
         if not matches:
             code = _UNMOCKED_CODES.get(site.category, _UNMOCKED_FILE_OP_CODE)
             # A site that cannot be spliced where it stands is not fixed by
@@ -1591,7 +1648,7 @@ def check_test_case(
                         )
                     ),
                     suggested_fix=(
-                        directive_snippet(site, surface)
+                        directive_snippet(site, surface, file_status_fields)
                         if unspliceable is None
                         else None
                     ),
@@ -1764,14 +1821,15 @@ def check_test_case(
                         f"{unmockable.target} FROM {unmockable.from_source}` "
                         f"at line {unmockable.line} (paragraph "
                         f"'{unmockable.paragraph_name}'), which is not "
-                        f"mockable at all: FROM {unmockable.from_source} "
-                        f"reads a runtime/system value, never the console, "
-                        f"so it is deterministic, never blocks, and has no "
-                        f"boundary for a mock to intercept. Drop this MOCK "
-                        f"directive; to control the value, assign the field "
-                        f"in the mock body of a boundary the test does "
-                        f"reach, or make the program take it as a CALL/file "
-                        f"input"
+                        f"mockable: FROM {unmockable.from_source} reads a "
+                        f"runtime/system value, never the console, so it "
+                        f"never blocks and has no boundary for a mock to "
+                        f"intercept (only FROM DATE/TIME/DAY/DAY-OF-WEEK "
+                        f"can be mocked, to give a test a fixed clock). "
+                        f"Drop this MOCK directive; to control the value, "
+                        f"assign the field in the mock body of a boundary "
+                        f"the test does reach, or make the program take it "
+                        f"as a CALL/file input"
                     ),
                 )
             )
@@ -1793,6 +1851,47 @@ def check_test_case(
                         f"IF SQLCODE ... GO TO check after every later SQL "
                         f"statement) and nothing mocks it. Drop this MOCK "
                         f"directive and its VERIFY"
+                    ),
+                )
+            )
+            continue
+        if (
+            directive.category is MockCategory.CICS
+            and any(
+                site.category is MockCategory.CICS for site in surface.whenever_sites
+            )
+            and _exec_match_form(directive.key).startswith(("HANDLE", "IGNORE"))
+        ):
+            reasons.append(
+                RefusalReason(
+                    code="UNMATCHED_MOCK",
+                    message=(
+                        f"MOCK {directive.describe()} targets an EXEC CICS "
+                        f"HANDLE/IGNORE CONDITION, which registers a label, "
+                        f"not a boundary: mockymock now emulates it (write "
+                        f"CONDITION IS <name> in the MOCK of the command that "
+                        f"raises it) and nothing mocks it. Drop this MOCK "
+                        f"directive and its VERIFY"
+                    ),
+                )
+            )
+            continue
+        if (
+            directive.category is MockCategory.SQL
+            and surface.whenever_sites
+            and is_sql_declaration(directive.key)
+        ):
+            # Before issue #267 lint asked for this mock too.
+            reasons.append(
+                RefusalReason(
+                    code="UNMATCHED_MOCK",
+                    message=(
+                        f"MOCK {directive.describe()} targets an EXEC SQL "
+                        f"declaration (DECLARE ... CURSOR, INCLUDE, BEGIN/END "
+                        f"DECLARE SECTION), not a boundary: DB2 runs nothing "
+                        f"for it and leaves SQLCODE alone, so mockymock "
+                        f"splices it to CONTINUE and nothing mocks it. Drop "
+                        f"this MOCK directive and its VERIFY"
                     ),
                 )
             )
@@ -1852,6 +1951,7 @@ def check_test_case(
             and directive.rows is not None
             and directive.terminal_row is None
             and missing_status_field
+            and not _at_end_ends_rows(directive, surface)
         ):
             reasons.append(
                 RefusalReason(
@@ -1924,6 +2024,32 @@ def check_test_case(
                         )
                     )
 
+    # `CONDITION IS X` (issue #268): the dispatch jumps to the HANDLE
+    # CONDITION label in force; a site where that cannot be told -- no
+    # handler (the real command would abend), RESP/NOHANDLE, PUSH/POP --
+    # is refused rather than guessed.
+    for directive in case.mocks:
+        if not directive.cics_condition:
+            continue
+        for site in surface.boundary_sites:
+            if not directive_matches_site(directive, site):
+                continue
+            _, problem = resolve_condition(
+                program, site.statement, directive.cics_condition
+            )
+            if problem:
+                reasons.append(
+                    RefusalReason(
+                        code="UNSUPPORTED_CICS_CONDITION",
+                        message=(
+                            f"MOCK {directive.describe()} raises "
+                            f"{directive.cics_condition.upper()} at the CICS "
+                            f"command at line {site.line} (paragraph "
+                            f"'{site.paragraph_name}'), but {problem}"
+                        ),
+                    )
+                )
+
     return reasons
 
 
@@ -1947,3 +2073,97 @@ def check_terminator_layout(
     a cheap, pure "plan" twice rather than threading it through every
     caller, e.g. analysis.linkage.linkage_plan)."""
     return find_terminator_plans(surface, program, suite, scope_map, lines)[1]
+
+
+def check_clause_bodies(
+    surface: MockSurface, suite: MockTestSuite, lines: list[str]
+) -> list[RefusalReason]:
+    """UNLIFTABLE_CLAUSE_BODY (issue #319): a mocked READ / RETURN / WRITE
+    / REWRITE / DELETE / START / CALL whose AT END / INVALID KEY / ON
+    EXCEPTION ... bodies cannot be re-run after the mock
+    (`analysis.clause_bodies.clause_lift_problem`). The splice replaces
+    the whole statement, so every body -- the liftable ones too -- would
+    be deleted with it and the case would run code the program does not
+    have. Whole-program, like the splicer's own site matching: any site
+    any directive of any selected case matches is spliced. A nested site
+    with no validated span is left to UNSUPPORTED_NESTED_MOCK_TARGET."""
+    reasons: list[RefusalReason] = []
+    seen: set[int] = set()
+    for site in surface.boundary_sites:
+        if site.category is None or id(site.statement) in seen:
+            continue
+        if site.nested and site.span is None:
+            continue
+        matches = [
+            directive
+            for case in suite.test_cases
+            for directive in case.mocks
+            if directive_matches_site(directive, site)
+        ]
+        if not matches:
+            continue
+        seen.add(id(site.statement))
+        problem = clause_lift_problem(site.statement, lines)
+        if problem is None:
+            continue
+        reasons.append(
+            RefusalReason(
+                code="UNLIFTABLE_CLAUSE_BODY",
+                message=(
+                    f"MOCK {matches[0].describe()} matches the {site.label} at "
+                    f"line {site.line} (paragraph '{site.paragraph_name}'), but "
+                    f"{problem} -- the splice would delete every clause body "
+                    f"of the statement with it; move that code out of the "
+                    f"clause (e.g. set a flag there and act on it after the "
+                    f"statement)"
+                ),
+            )
+        )
+    return reasons
+
+
+#: cobc -free truncates a source line past this many bytes.
+FREE_FORMAT_LINE_LIMIT = 512
+
+#: The indentation a mock body line is spliced at (injector).
+_BODY_INDENT = " " * 19
+
+
+def check_mock_body_line_length(suite: MockTestSuite) -> list[RefusalReason]:
+    """MOCK_LINE_TOO_LONG (issue #322): a mock body line is spliced
+    verbatim, and cobc -free truncates a line past 512 bytes -- the
+    suite would pass lint and then fail to compile with syntax errors
+    that never mention the truncation. A `MOVE <one long literal> TO ...`
+    is split into `&` pieces by the splicer and never refused."""
+    from mockymock.splicer.driver import split_long_move
+
+    reasons: list[RefusalReason] = []
+    seen: set[int] = set()
+    directives = [
+        *suite.before_all_mocks,
+        *(d for case in suite.test_cases for d in case.mocks),
+    ]
+    for directive in directives:
+        if id(directive) in seen:
+            continue
+        seen.add(id(directive))
+        for body in directive.body_lines:
+            longest = max(
+                len(line.encode("utf-8"))
+                for line in split_long_move(f"{_BODY_INDENT}{body}")
+            )
+            if longest <= FREE_FORMAT_LINE_LIMIT:
+                continue
+            reasons.append(
+                RefusalReason(
+                    code="MOCK_LINE_TOO_LONG",
+                    message=(
+                        f"MOCK {directive.describe()} has a body line of "
+                        f"{longest} bytes once spliced ({body[:40].strip()}"
+                        f"...) -- cobc truncates a line past "
+                        f"{FREE_FORMAT_LINE_LIMIT} bytes; break the "
+                        f"statement across several lines"
+                    ),
+                )
+            )
+    return reasons

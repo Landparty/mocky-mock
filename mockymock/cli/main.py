@@ -11,6 +11,7 @@ from pathlib import Path
 
 from mockymock import __version__
 from mockymock._lines import read_utf8_source, split_source_lines
+from mockymock.debugging_lines import activate_debugging_lines
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
@@ -104,6 +105,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     # would look like a real (if boring) program to the VS Code tree view.
     # Parse the (possibly copybook-expanded) source once up front so that
     # case is refused like every other command.
+    raw_source = activate_debugging_lines(raw_source)
     result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(result.ast)
     if not result.success:
@@ -195,6 +197,21 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     else:
         print(format_doctor_text(report))
     return 0 if report.ready else 1
+
+
+def _timeout_seconds(value: str) -> int:
+    """argparse `type=` for `--timeout`: a whole number of seconds, at
+    least 1. coreutils `timeout 0` disables the container-side kill, so a
+    hung binary outlived its `docker exec` as an orphan at 100% CPU, and a
+    negative value made `timeout` itself fail with exit 125 (issue
+    #306)."""
+    try:
+        seconds = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from None
+    if seconds < 1:
+        raise argparse.ArgumentTypeError("--timeout must be at least 1 second")
+    return seconds
 
 
 def _check_input_files(command: str, *paths: Path) -> bool:
@@ -329,11 +346,21 @@ def _write_report_file(command: str, flag: str, target: str, content: str) -> bo
     otherwise-successful run -- report it the same way
     `_check_input_files` reports a bad input path instead, and let the
     caller's own exit code stand on the actual outcome rather than on
-    whether a report file happened to be writable."""
+    whether a report file happened to be writable.
+
+    A missing parent directory is created first, as pytest and maven do
+    for `--junit-xml reports/junit.xml` in a fresh CI checkout, and a
+    write that still fails is reported on stderr, not mixed into the
+    test output on stdout (issue #257)."""
     try:
-        Path(target).write_text(content, encoding="utf-8")
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
     except OSError as exc:
-        print(f"mockymock {command}: could not write {flag} to {target}: {exc}")
+        print(
+            f"mockymock {command}: could not write {flag} to {target}: {exc}",
+            file=sys.stderr,
+        )
         return False
     return True
 
@@ -429,8 +456,8 @@ def _cmd_suites(args: argparse.Namespace) -> int:
     from mockymock.cli.discovery import (
         DiscoveryError,
         default_suite_path,
-        discover_cut_files,
         find_suites,
+        project_cut_files,
         resolve_program,
     )
 
@@ -465,7 +492,7 @@ def _cmd_suites(args: argparse.Namespace) -> int:
         return 0
 
     rows: list[dict[str, str | None]] = []
-    for cut in discover_cut_files(layout.root):
+    for cut in project_cut_files(layout):
         try:
             program, rule = resolve_program(cut, layout)
             rows.append(
@@ -1020,11 +1047,16 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     raw_source = read_utf8_source(source_path)
     program_source = raw_source
+    source_location_map: dict[int, tuple[str, int]] = {}
     if args.copybook_path:
         # See _cmd_fixtures's identical guard on the same call for why
         # this can raise on realistic inputs (audit finding F6).
         try:
-            expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+            expansion = expand_copybooks(
+                raw_source,
+                copybook_paths=args.copybook_path,
+                preserve_source_locations=True,
+            )
         except CopybookNotFoundError as exc:
             print(f"mockymock generate: {exc}")
             print(copybook_not_found_hint())
@@ -1038,6 +1070,8 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if expansion_reasons:
             return 1
         raw_source = expansion.expanded_source
+        source_location_map = dict(expansion.source_location_map or {})
+    raw_source = activate_debugging_lines(raw_source)
     result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(result.ast)
     if not result.success:
@@ -1190,7 +1224,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             f"mockymock generate: data-driven from a fixture bundle "
             f"(seed={bundle.seed})"
         )
-    _report_unsupported_boundaries(surface, "generate")
+    _report_unsupported_boundaries(surface, "generate", source_location_map)
     if bundle is None:
         # --per-paragraph writes one case per paragraph as a starting point
         # to prune, some of which are expected to be refused.
@@ -1344,7 +1378,9 @@ def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:
         )
 
 
-def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
+def _report_unsupported_boundaries(
+    surface, command: str = "generate", source_location_map=None
+) -> None:
     """Name every detected boundary point that stays unmockable (a SORT/
     MERGE mixing a USING/GIVING file with an INPUT/OUTPUT PROCEDURE on the
     other side -- a plain-file-form SORT/MERGE and a pure-procedure-form
@@ -1389,6 +1425,13 @@ def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
                 f"nested {site.label} in paragraph '{site.paragraph_name}' "
                 f"(line {site.line}) -- {site.unspliceable_reason}"
             )
+    # Lines of the .cbl the user has open, not of the copybook-expanded
+    # source (issue #241).
+    from mockymock.cli.checks import source_line_relabeler
+
+    relabel = source_line_relabeler(source_location_map)
+    findings = [relabel(finding) for finding in findings]
+    terminator_findings = [relabel(finding) for finding in terminator_findings]
     if findings:
         print(
             f"mockymock {command}: {len(findings)} boundary point(s) detected "
@@ -1494,6 +1537,7 @@ def _run_directory(
     from mockymock.cli.discovery import (
         DiscoveryError,
         discover_cut_files,
+        read_program_line,
         resolve_program_path,
     )
 
@@ -1506,20 +1550,42 @@ def _run_directory(
         print(f"mockymock run: no .cut files found under {test_root}")
         return 1
 
+    # --case/--tag pick a subset across the whole project, like `pytest
+    # -m`: a suite with no selected case is skipped (no report written), and
+    # only a selector that matches nothing in ANY suite is an error. Each
+    # suite then gets only the selectors it actually matches, so its own
+    # typo check never refuses it (issue #254).
+    selections = _directory_selections(args, cut_files)
+    if selections is None:
+        return 1
+
     exit_code = 0
     ran = 0
+    skipped_unselected = 0
     unresolved: list[str] = []
+    broken_claims = 0
     tag_root = _report_tag_root(cut_files, test_root)
     for cut_path in cut_files:
+        selection = selections.get(cut_path)
+        if selection is not None and not selection[0] and not selection[1]:
+            print(f"== {cut_path} == skipped: no selected TESTCASE")
+            skipped_unselected += 1
+            continue
         try:
             program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
             unresolved.append(str(exc))
+            if read_program_line(cut_path) is not None:
+                broken_claims += 1
+            _write_skipped_suite_reports(args, cut_path, tag_root, str(exc))
             continue
         ran += 1
         sub_args = copy.copy(args)
         sub_args.program = str(program_path)
         sub_args.cut = str(cut_path)
+        if selection is not None:
+            sub_args.case = selection[0] or None
+            sub_args.tag = selection[1] or None
         for flag in _RUN_OUTPUT_PATH_FLAGS:
             if getattr(args, flag, None):
                 setattr(
@@ -1532,13 +1598,108 @@ def _run_directory(
 
     for reason in unresolved:
         print(f"mockymock run: {reason}")
-    print(
+    summary = (
         f"mockymock run: {ran} suite(s) run, {len(unresolved)} .cut file(s) "
         f"skipped (no program found)"
     )
-    if ran == 0:
+    if skipped_unselected:
+        summary += f", {skipped_unselected} with no selected TESTCASE"
+    print(summary)
+    if ran == 0 or _report_broken_claims("run", broken_claims):
         return 1
     return exit_code
+
+
+def _report_broken_claims(command: str, broken_claims: int) -> bool:
+    """True (after saying so) when a skipped `.cut` declares a PROGRAM
+    "..." line that no longer resolves (issue #303, option (b)): an
+    explicit claim that is now broken is a renamed or moved program, and
+    exiting 0 dropped its suite from a green CI build. A `.cut` whose
+    program was only guessed from the folder is still just skipped."""
+    if not broken_claims:
+        return False
+    print(
+        f"mockymock {command}: {broken_claims} .cut file(s) name a PROGRAM "
+        f"that does not exist -- failing"
+    )
+    return True
+
+
+def _write_skipped_suite_reports(
+    args: argparse.Namespace, cut_path: Path, tag_root: Path, reason: str
+) -> None:
+    """A failing --junit-xml / --json-report entry for a directory-mode
+    suite skipped because its program was not found (issue #303), so a
+    CI collector sees the skip instead of a smaller, clean build."""
+    if not getattr(args, "junit_xml", None) and not getattr(args, "json_report", None):
+        return
+    import copy
+
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        cut_suite = parse_cut(read_utf8_source(cut_path))
+    except (CutParseError, OSError, UnicodeDecodeError):
+        cut_suite = None
+    sub_args = copy.copy(args)
+    for flag in ("junit_xml", "json_report"):
+        if getattr(args, flag, None):
+            setattr(
+                sub_args,
+                flag,
+                _per_pair_report_path(getattr(args, flag), cut_path, tag_root),
+            )
+    _write_failure_reports(
+        sub_args,
+        "run",
+        cut_suite.name if cut_suite is not None else cut_path.stem,
+        reason,
+        cut_suite=cut_suite,
+        cut_file=cut_path,
+    )
+
+
+def _directory_selections(
+    args: argparse.Namespace, cut_files: list[Path]
+) -> dict[Path, tuple[list[str], list[str]]] | None:
+    """Per .cut file, the --case names and --tag tags it matches, or an
+    empty dict when no selector was given. A file that cannot be read or
+    parsed is left out, so it still runs and reports its own problem. None
+    (after printing why) when a selector matches nothing in any suite."""
+    from mockymock.dsl.parser import parse_cut
+
+    case_names = list(getattr(args, "case", None) or [])
+    tag_names = list(getattr(args, "tag", None) or [])
+    if not case_names and not tag_names:
+        return {}
+    selections: dict[Path, tuple[list[str], list[str]]] = {}
+    for cut_path in cut_files:
+        try:
+            suite = parse_cut(read_utf8_source(cut_path))
+        except Exception:  # noqa: BLE001 -- the suite's own run reports it
+            continue
+        names = {case.name for case in suite.test_cases}
+        tags = {tag for case in suite.test_cases for tag in case.tags}
+        selections[cut_path] = (
+            [name for name in case_names if name in names],
+            [tag for tag in tag_names if tag in tags],
+        )
+    if len(selections) < len(cut_files):
+        return selections  # an unparsed suite might hold the selected case
+    unmatched = [
+        f"no TESTCASE named {name!r} in any suite"
+        for name in case_names
+        if not any(name in sel[0] for sel in selections.values())
+    ] + [
+        f"no TESTCASE carries tag {tag!r} in any suite"
+        for tag in tag_names
+        if not any(tag in sel[1] for sel in selections.values())
+    ]
+    if unmatched:
+        for problem in unmatched:
+            print(f"mockymock run: {problem}")
+        return None
+    return selections
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -1553,7 +1714,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         extra_working_storage,
         run_static_checks,
     )
+    from mockymock.dsl.model import MockCategory
     from mockymock.report.coverage import (
+        build_copybook_line_map,
         build_original_line_map,
         format_coverage_console,
         format_coverage_json,
@@ -1575,11 +1738,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.report.record_rewrite import (
         address_fields,
         build_recording_report,
+        clock_value_fields,
+        condition_names,
         field_pictures,
         rewrite_cut_text,
     )
     from mockymock.report.results import parse_stdout
     from mockymock.report.trace import (
+        case_entries,
         format_trace_console,
         format_trace_json,
         parse_trace,
@@ -1592,7 +1758,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.linkage import extra_reset_lines
     from mockymock.splicer.naming import TallyRegistry
     from mockymock.splicer.orchestrator import splice_program
-    from mockymock.splicer.reset import reset_move_lines
+    from mockymock.splicer.reset import index_names, reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
@@ -1654,6 +1820,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     for note in checked.notes:
         print(f"mockymock run: {note}")
+    for warning in checked.warnings:
+        print(f"mockymock run: {warning}")
     if checked.linkage is not None:
         _print_linkage_neutralization(
             "run",
@@ -1754,6 +1922,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         for stub in stub_scan.stubs:
             record_targets.setdefault(stub.case_index, []).append(stub.data_name)
 
+    record_conditions = condition_names(result.ast) if record_targets else set()
     artifact = build_driver(
         suite,
         reset_lines,
@@ -1761,6 +1930,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         record_targets=record_targets,
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
+        condition_names=record_conditions,
     )
 
     instrumented = _insert_driver(lines, artifact)
@@ -1890,7 +2060,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # file is only ever touched when at least one stub was recorded.
         pictures = field_pictures(result.ast, checked.captures)
         recording = build_recording_report(
-            stub_scan, suite_result, address_fields(result.ast), pictures
+            stub_scan,
+            suite_result,
+            address_fields(result.ast),
+            pictures,
+            condition_names=record_conditions,
+            index_names={name.upper() for name in index_names(result.ast)},
+            clock_fields=clock_value_fields(result.ast),
+            clock_pinned={
+                (index, directive.key.upper())
+                for index, case in enumerate(suite.test_cases, start=1)
+                for directive in case.mocks
+                if directive.category is MockCategory.ACCEPT
+            },
         )
         rewritten = rewrite_cut_text(
             cut_text,
@@ -2016,15 +2198,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 "single statement)"
             )
         else:
-            # Exactly one case is selected (enforced above), so the whole
-            # trace belongs to it -- no segmentation needed.
+            # Exactly one case is selected (enforced above), but the trace
+            # also holds the BEFORE-ALL/AFTER-ALL steps run around it, so
+            # it is cut to the case's own span (case_entries, #334).
             selected = args.case[0]
             case_result = next(
                 (r for r in suite_result.results if r.case_name == selected), None
             )
             model_case = next((c for c in suite.test_cases if c.name == selected), None)
             trace_json = format_trace_json(
-                parse_trace(trace_text),
+                case_entries(
+                    parse_trace(trace_text),
+                    instrumented,
+                    case_result.case_id if case_result is not None else None,
+                ),
                 build_original_line_map(
                     instrumented,
                     normalized_lines,
@@ -2035,6 +2222,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 model_case.line if model_case is not None else None,
                 str(cut_path),
                 str(source_path),
+                build_copybook_line_map(
+                    instrumented, normalized_lines, checked.source_location_map
+                ),
             )
             if args.trace_json:
                 _write_report_file("run", "--trace-json", args.trace_json, trace_json)
@@ -2091,6 +2281,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         parse_local_header,
         unavailable_names,
     )
+    from mockymock.report.coverage import build_original_line_map
     from mockymock.runtime import docker_toolchain
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.splicer import cics_eib
@@ -2233,7 +2424,12 @@ def _cmd_debug(args: argparse.Namespace) -> int:
                 instrumented_path.with_suffix(".c").read_text(encoding="utf-8")
             )
             line_map = LineMap.build(instrumented, normalized_lines, original_lines)
-            paragraph_index = ParagraphIndex.build(result.ast)
+            paragraph_index = ParagraphIndex.build(
+                result.ast,
+                build_original_line_map(
+                    normalized_lines, normalized_lines, original_lines
+                ),
+            )
             gdb = GdbSession(docker_toolchain.start_gdb_session(compiled.binary_path))
             return DebugSession(
                 gdb=gdb,
@@ -2376,6 +2572,7 @@ def _lint_directory(
     from mockymock.cli.discovery import (
         DiscoveryError,
         discover_cut_files,
+        read_program_line,
         resolve_program_path,
     )
 
@@ -2391,11 +2588,14 @@ def _lint_directory(
     exit_code = 0
     ran = 0
     unresolved: list[str] = []
+    broken_claims = 0
     for cut_path in cut_files:
         try:
             program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
             unresolved.append(str(exc))
+            if read_program_line(cut_path) is not None:
+                broken_claims += 1
             continue
         ran += 1
         sub_args = copy.copy(args)
@@ -2410,7 +2610,7 @@ def _lint_directory(
         f"mockymock lint: {ran} suite(s) checked, {len(unresolved)} .cut "
         f"file(s) skipped (no program found)"
     )
-    if ran == 0:
+    if ran == 0 or _report_broken_claims("lint", broken_claims):
         return 1
     return exit_code
 
@@ -2450,7 +2650,8 @@ def _cmd_lint(args: argparse.Namespace) -> int:
             suite = parse_cut(read_utf8_source(cut_path))
         except Exception:  # noqa: BLE001 -- already reported as a problem
             suite = None
-    warnings = no_assertion_warnings(suite) if suite is not None else []
+    warnings = list(result.warnings)
+    warnings += no_assertion_warnings(suite) if suite is not None else []
     for warning in warnings:
         print(f"mockymock lint: {warning}")
     if warnings:
@@ -2477,6 +2678,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         run_static_checks,
     )
     from mockymock.cli.mainframe_export import (
+        SEQUENCE_AREA_WIDTH,
         SourceAttribution,
         build_provenance_header,
         fit_within_columns,
@@ -2505,9 +2707,19 @@ def _cmd_export(args: argparse.Namespace) -> int:
         case_names=args.case,
         tag_names=args.tag,
         preserve_compiler_directives=True,
+        model_rebinds=False,
     )
     for note in checked.notes:
         print(f"mockymock export: {note}")
+    if checked.unmodelled_rebinds:
+        print(
+            f"mockymock export: warning: `SET ADDRESS OF` on "
+            f"{', '.join(checked.unmodelled_rebinds)} is not modelled in the "
+            f"export -- `run` keeps it as a real rebind with BASED, which IBM "
+            f"Enterprise COBOL does not have, so the export redirects it to a "
+            f"scratch pointer instead and a case relying on the rebind may "
+            f"fail there"
+        )
     if checked.linkage is not None:
         _print_linkage_neutralization(
             "export",
@@ -2541,10 +2753,12 @@ def _cmd_export(args: argparse.Namespace) -> int:
     )  # implied by checked.problems being empty
 
     # Restore the 7 columns normalize_fixed_format stripped BEFORE
-    # splicing: collect_boundaries/splice_program are line-granular, never
-    # column-position-sensitive (verified empirically during design), so
+    # splicing: collect_boundaries/splice_program are line-granular, so
     # this uniform prefix is transparent to them and matches the column
-    # convention splicer-generated lines already assume.
+    # convention splicer-generated lines already assume -- except the
+    # clause-body lift, which slices by AST column and is told the shift
+    # (`column_offset`, issue #325: without it every mocked statement's
+    # AT END / NOT AT END / INVALID KEY / ON EXCEPTION body was dropped).
     lines = restore_fixed_format_columns(lines)
 
     boundaries = collect_boundaries(result.ast)
@@ -2565,6 +2779,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         checked.file_status_fields,
         goto_exit_plans=goto_exit_plans,
         trace=False,
+        column_offset=SEQUENCE_AREA_WIDTH,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
@@ -2598,7 +2813,9 @@ def _cmd_export(args: argparse.Namespace) -> int:
             print(f"mockymock export: refused (COLUMN_OVERFLOW): {problem}")
         return 1
 
-    header = build_provenance_header(str(source_path), str(cut_path))
+    header = build_provenance_header(
+        str(source_path), str(cut_path), checked.unmodelled_rebinds
+    )
     instrumented = insert_provenance_header(instrumented, header)
 
     output_path = (
@@ -2613,7 +2830,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         f"mockymock export: wrote mainframe-compilable source "
         f"({len(suite.test_cases)} test case(s)) -> {output_path}"
     )
-    _report_unsupported_boundaries(surface, "export")
+    _report_unsupported_boundaries(surface, "export", checked.source_location_map)
     return 0
 
 
@@ -2649,6 +2866,7 @@ def _collect_boundaries(
         raw_source = expansion.expanded_source
         origin_line = _main_file_lines(expansion.source_location_map or {})
 
+    raw_source = activate_debugging_lines(raw_source)
     result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(result.ast)
     if result.errors or result.ast is None:
@@ -2771,7 +2989,9 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         print("mockymock collect: --boundaries requires --json")
         return 1
     if args.boundaries and not args.program:
-        print("mockymock collect: --boundaries requires a program argument")
+        # With --json every failure is a JSON error object on stdout: the
+        # VS Code extension parses it (issue #309).
+        _print_command_error(args, "--boundaries requires a program argument")
         return 1
 
     cut_path = Path(args.cut)
@@ -2779,7 +2999,14 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     program_path = Path(args.program) if args.program else None
     if program_path is not None:
         check_paths.append(program_path)
-    if not _check_input_files("mockymock collect", *check_paths):
+    if args.json:
+        missing = [path for path in check_paths if not path.is_file()]
+        if missing:
+            _print_command_error(
+                args, "; ".join(f"no such file: {path}" for path in missing)
+            )
+            return 1
+    elif not _check_input_files("mockymock collect", *check_paths):
         return 1
     try:
         suite = parse_cut(read_utf8_source(cut_path))
@@ -3023,7 +3250,8 @@ def _cmd_report(args: argparse.Namespace) -> int:
     print(f"mockymock report: wrote {html_path}")
     if args.json:
         print(f"mockymock report: wrote {args.json}")
-    return 1 if summary["failed"] or summary["levels"].get("none") else 0
+    failed = summary["failed"] or summary.get("runFailed")
+    return 1 if failed or summary["levels"].get("none") else 0
 
 
 def _cmd_journal(args: argparse.Namespace) -> int:
@@ -3121,7 +3349,6 @@ def _insert_driver_with_origins(
     entry_check_at: int | None = None
 
     for index, line in enumerate(lines):
-        upper = line.strip().upper()
         if index == entry_check_at and _starts_unnamed_code(lines, index):
             # Statements straight after the PROCEDURE DIVISION header, with
             # no paragraph name of their own, would otherwise read as more
@@ -3131,21 +3358,21 @@ def _insert_driver_with_origins(
             # performs.
             extend([f"       {_ORIGINAL_ENTRY_PARAGRAPH}."])
         if not inserted_ws and not has_ws:
-            if upper.startswith("DATA DIVISION"):
+            if _DATA_DIVISION_RE.match(line):
                 seen_data_division = True
             elif (
                 seen_data_division and _AFTER_WS_SECTION_RE.match(line)
-            ) or upper.startswith("PROCEDURE DIVISION"):
+            ) or _PROCEDURE_DIVISION_RE.match(line):
                 if not seen_data_division:
                     extend(["       DATA DIVISION."])
                 extend(["       WORKING-STORAGE SECTION."])
                 extend(ws_lines)
                 inserted_ws = True
         result.append(line)
-        if not inserted_ws and upper.startswith("WORKING-STORAGE SECTION"):
+        if not inserted_ws and _WS_HEADER_RE.match(line):
             extend(ws_lines)
             inserted_ws = True
-        if not inserted_proc and upper.startswith("PROCEDURE DIVISION"):
+        if not inserted_proc and _PROCEDURE_DIVISION_RE.match(line):
             extend([""])
             extend(artifact.procedure_lines)
             inserted_proc = True
@@ -3191,7 +3418,13 @@ def _starts_unnamed_code(lines: list[str], index: int) -> bool:
     return False
 
 
+# Any whitespace may separate a header's two words (`PROCEDURE  DIVISION`,
+# a tab): literal single-space checks missed them while cobc, cobolparser
+# and the `has_ws` check accepted them, so the driver's fields or
+# paragraphs were never inserted (issue #305).
 _WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\b", re.IGNORECASE)
+_DATA_DIVISION_RE = re.compile(r"^\s*DATA\s+DIVISION\b", re.IGNORECASE)
+_PROCEDURE_DIVISION_RE = re.compile(r"^\s*PROCEDURE\s+DIVISION\b", re.IGNORECASE)
 #: DATA DIVISION sections that must come AFTER WORKING-STORAGE -- including a
 #: LINKAGE SECTION header `splicer.linkage.neutralize` commented out, whose
 #: items then belong to whatever section precedes them.
@@ -3204,7 +3437,7 @@ _AFTER_WS_SECTION_RE = re.compile(
 
 def _first_procedure_index(lines: list[str]) -> int:
     for index, line in enumerate(lines):
-        if line.strip().upper().startswith("PROCEDURE DIVISION"):
+        if _PROCEDURE_DIVISION_RE.match(line):
             return index
     return len(lines)
 
@@ -3243,6 +3476,22 @@ commands, grouped by how often you'll reach for them:
 
 Run 'mockymock <command> --help' for a command's own options.
 """
+
+
+_SUITE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _suite_name(value: str) -> str:
+    """argparse `type=` for `--name` (#336): NAME becomes the middle of
+    `<program>.<NAME>.cut`, so it must be one plain word -- a `/` would
+    create folders no command pairs back to the program, and `..` would
+    write outside the tests folder."""
+    if not _SUITE_NAME_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            f"invalid suite name {value!r}: NAME becomes the middle of "
+            "<program>.<NAME>.cut, so use only letters, digits, '-' and '_'"
+        )
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3296,6 +3545,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init_parser.add_argument(
         "--name",
+        type=_suite_name,
         help="Name a second suite for the program: writes <program>.<NAME>.cut",
     )
     init_parser.add_argument(
@@ -3332,7 +3582,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     suites_parser.add_argument("program", nargs="?")
     suites_parser.add_argument(
-        "--name", help="With PROGRAM: report the path for <program>.<NAME>.cut"
+        "--name",
+        type=_suite_name,
+        help="With PROGRAM: report the path for <program>.<NAME>.cut",
     )
     suites_parser.add_argument(
         "--json", action="store_true", help="Machine-readable output"
@@ -3354,6 +3606,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument(
         "--name",
+        type=_suite_name,
         help="Name a second suite for the program: writes <program>.<NAME>.cut",
     )
     generate_parser.add_argument(
@@ -3604,7 +3857,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--timeout",
-        type=int,
+        type=_timeout_seconds,
         default=30,
         help=(
             "Binary execution timeout in seconds (default 30); a mocked "
@@ -3715,7 +3968,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mutate_parser.add_argument(
         "--timeout",
-        type=int,
+        type=_timeout_seconds,
         default=15,
         help=(
             "Per-mutant run timeout in seconds (default 15); a mutant that "
@@ -3930,7 +4183,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report_parser.add_argument("--seed", type=int, help="Seed for fixture generation")
     report_parser.add_argument(
-        "--timeout", type=int, help="Per-run timeout in seconds passed to 'run'"
+        "--timeout",
+        type=_timeout_seconds,
+        help="Per-run timeout in seconds passed to 'run'",
     )
     report_parser.add_argument(
         "--mutation-threshold",

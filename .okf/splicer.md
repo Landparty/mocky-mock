@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-16T14:00:00Z
+timestamp: 2026-10-16T20:00:00Z
 ---
 
 # Overview
@@ -199,8 +199,9 @@ terminator before the next statement that is not its own (the clause would
 run on to whatever closes the enclosing block -- not guessed), when a
 statement of its own kind sits in its clause bodies (which terminator is
 whose is ambiguous), or when anything but a period follows the terminator
-on its line. RETURN has no `_VERB_TERMINATORS` entry, so a nested `RETURN
-... END-RETURN` stays refused. Before #258 every nested site with clause
+on its line. RETURN maps to `END-RETURN` (issue #340), so the SORT
+OUTPUT PROCEDURE loop's nested `RETURN ... AT END ... END-RETURN` is
+spliced like the nested READ. Before #258 every nested site with clause
 bodies was refused, which made the standard inline read loop untestable.
 
 # Flow-Mock Header Dispatch (2026-07-20, MOCK PARAGRAPH/SECTION)
@@ -287,7 +288,12 @@ passes it as `statement_text`) and emits the literal token verbatim
 (`MOVE "ABC" TO target`). It trusts the text only when its operand list
 agrees with the parser's operand for operand; otherwise it falls back to
 the name (2026-09-28 -- before, the MOVE silently copied an unrelated item
-named ABC, or failed in cobc). `plan_captures` (given `lines` by
+named ABC, or failed in cobc). A subscript or reference modification after
+an operand (`WS-ENT(WS-I)`, `WS-A(1:2)`) is consumed as one balanced group
+and compared with cobolparser's spaced-out name (`WS-ENT ( WS-I )`) with
+whitespace and commas dropped (`_operand_key`); the scan used to give up
+on any parenthesis, which put a literal next to a subscripted operand back
+on the name fallback (#291). Only an unbalanced group still falls back. `plan_captures` (given `lines` by
 `cli.checks`) applies the same recognition via `_site_argument`, so a
 `UT-CAP-` target for a literal is declared from the literal itself
 (`_literal_declaration`: `PIC X(len)` for a quoted literal, `PIC [S]9(i)[V9(d)]`
@@ -335,6 +341,14 @@ contain, `build_rows_block` itself has no category knowledge. Both call
 sites live in `build_site_dispatch`, one per `directive.rows is not None`
 category:
 
+Every `.cut` `value -> field` assignment (ROWS rows, TERMINAL groups,
+setup and hook MOVEs) is spliced through `naming.assign(value, target)`:
+`SET <target> TO TRUE|FALSE` when the value is TRUE/FALSE (COBOL cannot
+MOVE to a level-88 condition-name, issue #251), `MOVE value TO target`
+otherwise. Lint (`cut_names`, `CONDITION_NAME_MISMATCH`) refuses
+TRUE/FALSE on a non-88 target, any other value on an 88, and FALSE on an
+88 with no `WHEN SET TO FALSE`.
+
 - **CALL / DYNCALL / DLI** (`SEQUENCED_CALL_CATEGORIES`, 2026-10-05):
   `row_suffix_moves=[]`, `exhausted_moves` = the directive's own
   (mandatory) `TERMINAL` group's MOVEs -- there is no implicit default for
@@ -345,6 +359,14 @@ category:
   own MOVEs so a row that sets `SQLCODE` (an error mid-cursor) wins (as a
   suffix it overwrote it, until 2026-10-13); `row_suffix_moves=[]`;
   `exhausted_moves=["MOVE 100 TO SQLCODE"]` -- fixed in v1.
+  When the program names `SQLSTATE` anywhere (`orchestrator._SQLSTATE_RE`
+  over the normalized lines, passed as `build_site_dispatch(sqlstate=True)`),
+  the prefix also carries `MOVE "00000" TO SQLSTATE` and the exhaustion
+  `MOVE "02000" TO SQLSTATE` (issue #313: a cursor loop ended by
+  `UNTIL SQLSTATE = '02000'` never ended); a program that never names it
+  gets neither, since its own SQLCA copy may not declare one. `generate
+  --placeholder`'s SQL downgrade adds the same `"02000"`. `TERMINAL` is
+  still not accepted on SQL ROWS.
 - **READ**: `row_suffix_moves=[]` (the ordinary FILE-STATUS
   default-success `MOVE "00"` above already covers every row when the
   file declares a status field, so there is nothing left to append per
@@ -363,7 +385,9 @@ category:
   call that triggered this WHEN OTHER path -- it gets the correct "10"
   instead. When the file has no status field, `exhausted_moves` is just
   the TERMINAL group's own MOVEs (nothing to default). When **neither** a
-  status field nor a TERMINAL group exists, `build_site_dispatch` raises
+  status field nor a TERMINAL group exists, and no lifted `AT END` clause
+  either (whose `"10"` in `UT-MOCK-STATUS` ends the loop, issue #341),
+  `build_site_dispatch` raises
   `ValueError` rather than emit a READ loop with no way to terminate --
   but every production call site gates on `refusal.check_test_case` first
   (same `UNRESOLVED_FILE_STATUS_TARGET` code as the `FILE-STATUS IS` case
@@ -381,6 +405,40 @@ test case mocks it. The refusal gate is supposed to guarantee such a site
 is unreachable from every test case; the trap exists so that if
 reachability analysis and reality ever disagree, the mismatch fails loudly
 at runtime instead of silently doing nothing.
+
+**`EXEC CICS HANDLE/IGNORE CONDITION` emulation (issue #268, option 1).**
+The CICS counterpart of WHENEVER, in `analysis.cics_handle`. A HANDLE or
+IGNORE CONDITION is a label registration, not a boundary: `mock_surface`
+puts it in `whenever_sites` (label `CICS HANDLE`), so it needs no mock and
+is spliced to `CONTINUE`; an unreadable one refuses
+`UNSUPPORTED_CICS_HANDLE`, a leftover `MOCK CICS "HANDLE"` is
+UNMATCHED_MOCK with the reason, and generate's `_known_unmockable_keys`
+drops the bundle's `CICS HANDLE`/`IGNORE` key. `handle_states` tracks the
+condition -> label / IGNORE / default map in *physical source order* (the
+approximation option 1 chose; HANDLE is really a runtime registration) and
+`analyze` stamps it on every CICS boundary site
+(`BoundarySite.cics_handle_state`). A mock with `CONDITION IS X` ends its
+dispatch branch with `GO TO <label>` (`label_in_state`; X's own entry,
+else ERROR's). `_reachable_paragraphs(cics_conditions=...)` and
+`_go_to_targets(cics_conditions=...)` follow/count the labels for the
+conditions the case's mocks raise (`raised_conditions(case.mocks)`, passed
+by `check_test_case` and `find_terminator_plans`); the default `None`
+(whole-program callers: warning waiving, exact counts, loops) follows every
+label in force, fail closed; generate passes an empty set (its mocks raise
+nothing). Not covered: HANDLE AID / HANDLE ABEND (still ordinary CICS
+boundaries), EIBRESP is not set by `CONDITION IS`, and PUSH/POP HANDLE
+refuses any raised condition.
+
+**PROCEDURE DIVISION SQL declarations (issue #267).** `EXEC SQL DECLARE
+... CURSOR/TABLE`, `INCLUDE` and `BEGIN/END DECLARE SECTION` in the
+PROCEDURE DIVISION (`sql_whenever.is_sql_declaration`) are not boundaries
+either: DB2 generates no call for them and never touches the SQLCA.
+`mock_surface` puts them in `whenever_sites` too (label `SQL DECLARATION`,
+`whenever` None), so they need no mock, get no VERIFY, never refuse
+UNMOCKED_SQL, and are spliced to `CONTINUE` like WHENEVER (so a mock can no
+longer clobber the SQLCODE the previous statement left). A leftover `MOCK
+SQL "DECLARE ..."` refuses UNMATCHED_MOCK saying why; `generate`'s
+`_known_unmockable_keys` drops the bundle's `SQL DECLARE` key.
 
 **`EXEC SQL WHENEVER` emulation (2026-10-16, issue #195).** WHENEVER is a
 precompiler declaration, so it is never a mockable site: `mock_surface`
@@ -452,15 +510,45 @@ that may reach another mock and rewrite the field): `(1:1) = "1"` AT END,
 EXCEPTION/ON OVERFLOW. A lifted body is the program's own text, sliced
 positionally (AST start of its first statement up to the next clause's
 header, or the verb's own `END-xxx` / the sentence period for the last).
+The bodies are emitted **verbatim** (`LiftedClause.source_lines`: each
+source line as it stands, the first keeping its indentation when the body
+starts its line) -- only the EVALUATE / WHEN / END-EVALUATE lines take the
+dispatch's indent (`clause_guard_lines(..., indent=...)`). Issue #332: the
+stripped, re-indented copies never equalled their source lines, so the
+text-equality `report.coverage.build_original_line_map` (behind `--trace`,
+`--coverage` and the debugger's breakpoints) left the code those clauses
+run unmapped. A body line that shares its source line with a header or a
+terminator still does not map (fails safe: no coverage, no breakpoint).
+The END-IF / END-EVALUATE / END-SEARCH closers #319 appends when the last
+body ends at the sentence period exist in no source line: they ride in
+`LiftedClause.closers` and are emitted after the verbatim lines.
 
-`lift_clause_bodies` returns None -- and the old whole-statement deletion
-stands -- when any body holds another boundary statement, GO TO, GOBACK,
-STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL; when a body has a
-nested conditional phrase (SIZE ERROR, OVERFLOW, a SEARCH's AT END, ...)
-or an IF/EVALUATE/SEARCH without its explicit terminator (either would
-swallow the next guard `WHEN`); when the statement has a clause outside
-the liftable set (`WRITE ... AT END-OF-PAGE`); or when a header cannot be
-matched exactly. `dsl.generator` asks the same function, so the scaffold
+`lift_clause_bodies` returns None when any body holds another boundary
+statement, GOBACK, STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL;
+when a body has a nested conditional phrase (SIZE ERROR, OVERFLOW, ON
+EXCEPTION, a SEARCH's AT END, ...) whose owning verb is not closed by its
+own `END-<verb>` after it, or an IF/EVALUATE/SEARCH left open before the
+next clause's header (either would swallow the next guard `WHEN`); when
+the statement has a clause outside the liftable set (`WRITE ... AT
+END-OF-PAGE`); or when a header cannot be matched exactly. Phrases, not
+words (#326): `_PHRASE_OWNERS` maps each opener to the verbs that may own
+it, `SIZE` counts only before `ERROR` (so `DELIMITED BY SIZE` is fine),
+and a terminated `COMPUTE ... ON SIZE ERROR ... END-COMPUTE` is lifted.
+
+Since #319 that is **refused**, not silently dropped:
+`clause_lift_problem(statement, lines)` says why, and
+`refusal.check_clause_bodies` (run in `cli.checks` step 8, whole-program
+like the splicer's own matching, skipping nested sites with no span)
+emits `UNLIFTABLE_CLAUSE_BODY` for every mocked site that has one. Before,
+every body of the statement -- the liftable ones too -- was deleted with
+it, with lint clean. #319 also widened the lift: a GO TO body is lifted
+(the dispatch sits in the same paragraph, so its target and PERFORM range
+are unchanged; `find_goto_exit_plans` still declines a GO TO inside a
+boundary body, which is the safe direction), and the last body, when it
+ends at the sentence period, gets the END-IF / END-EVALUATE / END-SEARCH
+the period closed appended, innermost first.
+
+`dsl.generator` asks the same function, so the scaffold
 stops copying an AT END clause the splice already re-runs (it reports end
 of file through the status field, or `MOVE "10" TO UT-MOCK-STATUS`).
 
@@ -535,7 +623,11 @@ differ in nothing but letter case or a space vs. a hyphen.
 `driver.py`'s `_SUITE_PARAGRAPH_NAME_RE` sanitization for the
 `UT-TESTSUITE-*` paragraph name follows the identical collapse-and-strip
 pattern (a title like `"X (via copybook)"` must not yield a
-trailing-hyphen COBOL word — cobc rejects that outright).
+trailing-hyphen COBOL word — cobc rejects that outright). The name is then capped at **30
+characters**, IBM Enterprise COBOL's user-defined-word limit (it was 60,
+so `export` shipped words like `UT-TESTSUITE-RATERTE-DYNAMIC-RATE-PROGRAM-ROUTING`
+that the IBM compiler rejects; #279). Nothing but its own header names the
+paragraph, and the TESTSUITE marker DISPLAY still carries the full suite name.
 
 **Field widths widened (2026-07-07 fix, audit findings 2.5, 2.7):**
 `UT-FAIL-COUNT` and every `UT-*-TALLY` field were `PIC 9(4)` and wrapped
@@ -614,9 +706,9 @@ comma spelling too (`injector`, read from the site's text).
 | Elementary, no `VALUE`, numeric or numeric-edited PIC | `MOVE 0 TO <name>` | numeric-edited PICs (e.g. `PIC ZZZ9`) reject `MOVE SPACES` — `_is_numeric` treats any of `9 V P Z * $ + -` in the (repeat-group-stripped) picture as numeric, not just `9`/`V`/`P` |
 | Elementary, no `VALUE`, alphanumeric PIC | `MOVE SPACES TO <name>` | COBOL's conventional type default, a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |
 | Elementary, no `PICTURE` (usage-typed), `USAGE POINTER`/`PROCEDURE-POINTER`/`FUNCTION-POINTER`/`PROGRAM-POINTER` | `SET <name> TO NULL` | pointers can only be assigned with `SET`; `NULL` is their only legal literal value — `MOVE SPACES` (the old picture-blind fallback) is rejected by cobc |
-| Elementary, no `PICTURE`, `USAGE COMP-1`/`COMP-2` (or `COMPUTATIONAL-1`/`-2`) | `MOVE 0 TO <name>` | floats have no `PICTURE`, so the old numeric test (`item.picture_clause is None → False`) misclassified them alphanumeric and emitted an illegal `MOVE SPACES` |
-| Elementary, no `PICTURE`, `USAGE INDEX` | *(skipped — no line emitted)* | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; skipping is the only reset that never emits illegal COBOL (documented fidelity limit) |
-| Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE |
+| Elementary, no `PICTURE`, `USAGE COMP-1`/`COMP-2` (or `COMPUTATIONAL-1`/`-2`), or (issue #333) `BINARY-CHAR`/`-SHORT`/`-LONG`/`-DOUBLE`/`BINARY-C-LONG`/`FLOAT-SHORT`/`-LONG`/`-EXTENDED` (`_PICLESS_NUMERIC_USAGES`) | `MOVE 0 TO <name>` | floats have no `PICTURE`, so the old numeric test (`item.picture_clause is None → False`) misclassified them alphanumeric and emitted an illegal `MOVE SPACES` |
+| Elementary, no `PICTURE`, `USAGE INDEX` | *(no MOVE line)* -- saved and restored by `SET` with the INDEXED BY names below (issue #333) | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; one inside a table or with a duplicated name is still skipped and reported (`unreset_items`) |
+| Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE; reported by `unreset_items` as a run/lint note, since its value carries between cases (issue #333) |
 | Group, no `VALUE` clause | `INITIALIZE <name>` | a `MOVE SPACES` over a group would write spaces across numeric children, corrupting them for the next case's arithmetic; `INITIALIZE` zeros numeric children and space-fills alphanumeric ones |
 | Any top-level item with a `REDEFINES` clause | *(skipped — no line emitted)* | it shares the redefined item's storage, which that item's own line already reset/restored; a second reset through the redefining view ran after it and overwrote it (2026-09-27 fix: `01 WS-CODE PIC X(4) VALUE "AB12".` + `01 WS-CODE-NUM REDEFINES WS-CODE PIC 9(4).` left `WS-CODE` = `"0000"` in every case, the first included). Skipping matches program start-up, where GnuCOBOL initializes the storage from the first description |
 
@@ -753,8 +845,14 @@ rejected the driver (#249). An index a BEFORE-ALL step SETs or SEARCHes
 keeps that position in every case: `plan_snapshot` adds one `01
 UT-SNAP-nnn USAGE INDEX.` per `index_names` entry, `SET`-saved in
 `UT-SAVE-STATE` and `SET` back in `UT-RESTORE-STATE`, which runs after the
-reset (#280; before, each case saw the start-up value). USAGE INDEX *data items* are
-still skipped (table above).
+reset (#280; before, each case saw the start-up value).
+Since issue #333 `index_names`
+also lists every WORKING-STORAGE / LOCAL-STORAGE `USAGE INDEX` *data item*
+outside any table whose name is declared once, so it gets the same save /
+restore (SET between index data items is legal); before, `SET WS-IX UP BY
+4` in one case left the next starting at 4. Whatever the reset still
+cannot put back is listed by `reset.unreset_items` and reported by
+`run_static_checks` as a note (printed by run/lint/debug/export).
 
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.
@@ -939,6 +1037,22 @@ Verified end to end against real GnuCOBOL 4.0: the rewritten program
 compiles, runs and passes its test case; the un-rewritten one does not
 compile at all.
 
+# CICS mocks default to NORMAL (cics_resp.py, issue #320, 2026-10-16)
+
+Every mocked EXEC CICS branch starts with `MOVE 0 TO <item>` for the
+command's own `RESP(item)` / `RESP2(item)` operands
+(`cics_resp.resp_operands`: single data names only, a subscripted operand
+is left to the body) and for `EIBRESP` / `EIBRESP2` when the program's
+text names them (declared, or synthesized by `cics_eib`; computed once per
+splice in `orchestrator.splice_program` and passed as
+`build_site_dispatch(..., eib_resp_names=...)`). Real CICS sets them on
+every command; before, an empty mock left the previous mock's condition
+(NOTFND = 13) in RESP and the next success check took its error branch.
+The body's own MOVEs follow, so they win -- the same contract as a file
+op's implicit `MOVE "00"` to its FILE STATUS. This is the splice-side
+default for hand-written mocks; #253 is the separate
+`generate` scaffold fix that stopped writing a random RESP value.
+
 # DFHRESP Expansion (cics_resp.py, 2026-09-28)
 
 `expand_dfhresp(lines)` does what the CICS translator does to
@@ -974,8 +1088,12 @@ pipeline ever sees -- an undeclared-data-name `cobc` compile error, not the
 IMS case's runtime SIGSEGV. See
 docs/2026-08-27-cics-eib-linkage-support-design.md.
 
-`analysis.cics_eib.cics_eib_plan(program, lines)` detects the shape (`None`
-when no EIB name is referenced anywhere in `lines`, or every referenced name
+`analysis.cics_eib.cics_eib_plan(program, lines, suite_lines=None)` detects
+the shape (`None` when no EIB/DIB name is referenced anywhere in `lines` or
+in `suite_lines` -- `run_static_checks` passes the `.cut` text minus
+full-line comments, since a test that sets EIBCALEN or asserts EIBRESP of
+a program that never names one splices that name into the same build,
+issue #269 -- or every referenced name
 is already declared somewhere in the program's own DATA DIVISION -- e.g. a
 hand-declared or `COPY DFHEIBLK`-expanded copy). `refusal.check_cics_eib_
 layout(program, lines)` guards the two situations this feature cannot
@@ -1060,7 +1178,22 @@ are replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH`
 PARAGRAPH END-IF` inserted immediately after it
 (`injector.build_chain_check`, via `stub_writer.insert_lines_after` --
 the only splice primitive in this codebase that preserves the original
-statement rather than replacing it). `driver.py` needs only one addition:
+statement rather than replacing it). A chain `PERFORM` nested in an
+IF/ELSE branch, an EVALUATE WHEN or an inline `PERFORM ... END-PERFORM`
+body gets its check right after itself, inside that branch, at the end of
+its `nested_statement_span` (`TerminatorPlan.chain_spans`, keyed by
+`id(perform)`; issue #337) -- `statement_span` would end at the next
+top-level statement, i.e. after the enclosing END-IF/END-PERFORM, so the
+rest of the branch still ran and an inline loop kept iterating. Inside an
+inline loop body the check's `EXIT PARAGRAPH` leaves the loop too. A
+nested chain `PERFORM` with no safe nested span (it shares its line, or
+the next scope word does) refuses every terminator the case reaches
+(`UNSUPPORTED_TERMINATOR_LAYOUT`). A chain `PERFORM` held by a
+SECTION's first paragraph -- the only section member the chain walk
+enters, via `PERFORM <section-name>` -- gets `EXIT SECTION` in its check
+instead (`TerminatorPlan.chain_exit_kinds`, the same rule as the
+terminator's own `exit_kind`; issue #338): `EXIT PARAGRAPH` fell into the
+section's next paragraph. `driver.py` needs only one addition:
 `UT-EARLY-EXIT` declared once, reset to `"N"` per test case. No paragraph
 restructuring -- `UT-TESTCASE-NNN`'s existing checks run automatically
 once the flag has propagated back via ordinary, unmodified `PERFORM`
@@ -1081,6 +1214,10 @@ GOBACK, and the orchestrator wraps the site's own dispatch block with
 field is preset to 0 before the dispatch (what a successful command
 leaves there; the mock body may set a failure code) and the exit is taken
 only `IF field = 0`. A RESP operand that is not one data name refuses.
+`NOHANDLE` without RESP is the same contract with the condition in
+EIBRESP, so `resp_field` is `EIBRESP` there (#301), and
+`analysis.cics_eib.cics_eib_plan` counts such a command as a reference to
+EIBRESP so DFHEIBLK is synthesized even when the program never names it.
 `_falls_through` and `exact_counts` treat these commands as path ends.
 
 **`RETURNING`/`GIVING` operands** (issue #219): `STOP RUN RETURNING n` /
@@ -1235,7 +1372,7 @@ Overview — this file previously and incorrectly said "before"):
 
 | DATA DIVISION construct | Transform |
 |---|---|
-| `EXEC SQL INCLUDE SQLCA END-EXEC` | replaced by the literal `SQLCA_FIELDS` group item (standard SQLCA layout: SQLCAID, SQLCABC, SQLCODE, SQLERRM/SQLERRML/SQLERRMC, SQLERRP, SQLERRD OCCURS 6, SQLWARN0-7, SQLSTATE) |
+| `EXEC SQL INCLUDE SQLCA END-EXEC` | replaced by the literal `SQLCA_FIELDS` group item (standard SQLCA layout: SQLCAID, SQLCABC, SQLCODE, SQLERRM/SQLERRML/SQLERRMC, SQLERRP, SQLERRD OCCURS 6, SQLWARN0-7, and the `SQLEXT` group of SQLWARN8/9/A and SQLSTATE -- 136 bytes, matching `SQLCABC`; before issue #271 SQLEXT was missing, so the group was 133 bytes and a reference to SQLWARN8 did not compile) |
 | `EXEC SQL BEGIN/END DECLARE SECTION END-EXEC` | commented out; host variables between the markers are plain COBOL and stay |
 | `EXEC SQL DECLARE ... TABLE ... END-EXEC` | commented out (declarative only, no runtime effect) |
 | `EXEC SQL DECLARE <cursor> CURSOR FOR SELECT ... END-EXEC` | commented out (declarative only; the standard `PERFORM ... UNTIL SQLCODE = 100` fetch-loop idiom's OPEN/FETCH/CLOSE are separate PROCEDURE DIVISION EXEC SQL statements the boundary-mocking machinery already handles) |
@@ -1335,7 +1472,9 @@ sync with `model.EXPECT_OPERATORS`; a value with an unquoted `AND`/`OR`
 tail, i.e. an abbreviated combined condition such as `TO BE > 0 AND < 10`
 or `TO BE 7 OR 8`, instead compiles to `IF NOT (<name> <op> <value>)`,
 because swapping the operator would negate only the first relation, issue
-#265) and `verifications` (tally-based
+#265 -- or, for a negated operator (`NOT =`, `NOT >`, ...), to the
+un-negated `IF (<name> <positive-op> <value>)`, because COBOL carries a
+NOT onto every abbreviated relation in the tail, issue #339) and `verifications` (tally-based
 `VERIFY ... WAS CALLED` conditions from `_verify_condition`: `ONCE` →
 `NOT = 1`, `NEVER` → `NOT = 0`, `AT LEAST ONCE` → `< 1`, `N TIMES` →
 `NOT = N`), incrementing `UT-FAIL-COUNT` and displaying a `CASE NNN
@@ -1369,6 +1508,17 @@ Concatenated literals are one literal to cobc (verified with
 `-free -std=mvs` on 3.1.2). The FAIL `DISPLAY` spells the expected value out
 as several quoted operands (`_display_operands`), so the stdout text is
 unchanged. Shorter values are emitted exactly as before.
+
+The same split now covers every other place a `.cut` value lands on a
+driver line (issue #322): hook `MOVE` steps (`_step_lines`), `ROWS` /
+`TERMINAL` values and every other row / exhausted MOVE (`build_rows_block`),
+and mock body lines -- boundary and flow-mock alike -- that are a
+`MOVE <one long literal> TO <target>` (`driver.split_long_move`: the value
+is whatever precedes the last ` TO ` and must be one whole literal, so a
+` TO ` inside a literal never splits it). A body line that still exceeds
+512 bytes once spliced at its 19-column indent is refused
+`MOCK_LINE_TOO_LONG` (`refusal.check_mock_body_line_length`, run in
+`cli.checks` step 8) instead of reaching cobc as a silent truncation.
 
 **`suite.name` escaping (2026-07-07 fix, audit finding 2.8):** the
 `__MOCKYMOCK__ TESTSUITE: <name>` `DISPLAY` line interpolated `suite.name`
