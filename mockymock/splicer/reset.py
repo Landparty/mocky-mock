@@ -26,6 +26,7 @@ overwrite it.
 from __future__ import annotations
 
 import re
+from collections import Counter
 
 from mockymock._decimal import decimal_point_is_comma, localize_move_line
 from mockymock.splicer.io_copy import longest_record_per_file
@@ -485,23 +486,52 @@ INDEX_SAVE_PREFIX = "UT-IDX-SAVE-"
 
 
 def index_names(program) -> list[str]:
-    """Every `INDEXED BY` index name declared in the program's DATA
-    DIVISION, in declaration order."""
+    """A reference to every `INDEXED BY` index the program's DATA DIVISION
+    declares, one per declaration, in declaration order.
+
+    A name declared once is returned bare. One declared by several tables
+    (one record copybook included under two 01s) is qualified through its
+    table's named ancestors, `IX OF ENT OF IN-REC`: a bare `SET ... TO IX`
+    is ambiguous and cobc rejected the whole driver (issue #249). FILLER
+    ancestors are left out of the chain (COBOL lets a qualifier skip
+    levels); a declaration still not told apart from another by its
+    qualified chain is left out, since nothing can name it."""
     data_division = program.get_division("DATA")
     if data_division is None:
         return []
-    names: list[str] = []
+    found: list[tuple[str, str]] = []  # (bare name, qualified reference)
 
     def walk(node) -> None:
         for child in _data_children(node):
             clause = getattr(child, "occurs_clause", None)
             for name in getattr(clause, "index_names", None) or []:
-                if name and name.upper() not in names:
-                    names.append(name.upper())
+                if name:
+                    chain = [name.upper(), *_named_ancestry(child, include_self=True)]
+                    found.append((name.upper(), " OF ".join(chain)))
             walk(child)
 
     for section in getattr(data_division, "sections", data_division.children):
         walk(section)
+    bare_counts = Counter(bare for bare, _ in found)
+    qualified_counts = Counter(qualified for _, qualified in found)
+    names: list[str] = []
+    for bare, qualified in found:
+        if bare_counts[bare] == 1:
+            names.append(bare)
+        elif qualified_counts[qualified] == 1:
+            names.append(qualified)
+    return names
+
+
+def _named_ancestry(item, include_self: bool = False) -> list[str]:
+    """The names of `item`'s enclosing data items, innermost first, FILLER
+    and nameless ones left out (a qualifier may skip levels)."""
+    names: list[str] = []
+    node = item if include_self else getattr(item, "parent", None)
+    while node is not None and getattr(node, "level", None) is not None:
+        if not _is_filler(node):
+            names.append(node.name.upper())
+        node = getattr(node, "parent", None)
     return names
 
 

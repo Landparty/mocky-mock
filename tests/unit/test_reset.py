@@ -658,3 +658,34 @@ def test_index_names_are_saved_once_and_restored_every_case():
     ]
     assert index_working_storage_lines([]) == []
     assert index_reset_lines([]) == []
+
+
+def test_index_declared_by_two_tables_is_qualified_per_declaration():
+    """Issue #249: one record copybook under two 01s declares IX twice; a
+    bare `SET ... TO IX` is ambiguous and cobc rejected the driver. Each
+    declaration gets its own save slot, qualified past FILLER levels."""
+    from mockymock.splicer.reset import index_names
+
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DUPIX.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  IN-REC.
+           05  ENT OCCURS 3 INDEXED BY IX.
+               10  VI    PIC X(2).
+       01  OUT-REC.
+           05  FILLER.
+               10  ENT OCCURS 3 INDEXED BY IX, IY.
+                   15  V     PIC X(2).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+    result = parse_cobol(source, filename="dupix.cbl")
+    assert result.success, result.errors
+    assert index_names(result.ast) == [
+        "IX OF ENT OF IN-REC",
+        "IX OF ENT OF OUT-REC",
+        "IY",
+    ]

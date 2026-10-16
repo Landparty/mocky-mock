@@ -679,7 +679,11 @@ declares `UT-IDX-SAVED` plus one `UT-IDX-SAVE-NNN USAGE INDEX` per name,
 and `index_reset_lines` makes the first reset (which runs before any
 program code) save each index and every reset restore it. Both are wired
 through `cli/checks.py`'s `extra_working_storage` / `extra_reset_lines_for`,
-so all four splice pipelines get them. An index a BEFORE-ALL step SETs is
+so all four splice pipelines get them. `index_names` returns one reference
+per *declaration*: a name declared by two tables (one copybook under two
+01s) is qualified through the table's named ancestors, FILLERs skipped
+(`IX OF ENT OF IN-REC`) -- the bare `SET ... TO IX` was ambiguous and cobc
+rejected the driver (#249). An index a BEFORE-ALL step SETs is
 put back to its start-up value at each case, not to the BEFORE-ALL value
 (the snapshot does not cover index names). USAGE INDEX *data items* are
 still skipped (table above).
