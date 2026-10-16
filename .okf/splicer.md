@@ -829,7 +829,7 @@ corpus evidence" section for the required follow-up.
 # Terminator Neutralization (GOBACK/STOP RUN, Approach B)
 
 `refusal.find_terminator_plans` finds every `StopStatement`(RUN-form)/
-`GobackStatement` reachable from at least one test case whose enclosing
+`GobackStatement`/`EXIT PROGRAM` (issue #212) reachable from at least one test case whose enclosing
 paragraph -- and every intermediate paragraph between it and the test's
 `perform_target` -- is reached exclusively via plain, unconditional,
 single-shot, top-level `PERFORM` statements (`refusal._plain_perform_edges_from`,
@@ -871,6 +871,36 @@ returns. An earlier design (`GO TO` redirect into a `PERFORM ... THRU
 before any of it shipped -- see
 [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md).
 
+**EXEC CICS RETURN/XCTL/ABEND** (issue #215, option (a)): these never
+give control back, so `mock_surface.is_terminator_site` counts a CICS site
+whose command is one of `CICS_TERMINATOR_COMMANDS` as a terminator too.
+It stays an ordinary mockable CICS site (the gates still demand its
+MOCK), but `find_terminator_plans` plans or refuses it exactly like
+GOBACK, and the orchestrator wraps the site's own dispatch block with
+`injector.build_cics_terminator_exit`: the flag + `EXIT PARAGRAPH` after
+`END-EVALUATE`, so the mock body runs first. With `RESP(field)`
+(`TerminatorPlan.resp_field`) a failed command returns control, so the
+field is preset to 0 before the dispatch (what a successful command
+leaves there; the mock body may set a failure code) and the exit is taken
+only `IF field = 0`. A RESP operand that is not one data name refuses.
+`_falls_through` and `exact_counts` treat these commands as path ends.
+
+**`RETURNING`/`GIVING` operands** (issue #219): `STOP RUN RETURNING n` /
+`GOBACK RETURNING n` (cobolparser's `StopStatement.returning` /
+`GobackStatement.returning_value`) set RETURN-CODE, so the replacement
+starts with `MOVE n TO RETURN-CODE` (`TerminatorPlan.return_code`). An
+operand that is not an integer literal or a single data name refuses
+`UNSUPPORTED_TERMINATOR_LAYOUT` rather than being dropped.
+
+**A test's (or hook step's) own `PERFORM X THRU Y`** (issue #211): the
+neutralization only ends `X`, after which the driver's THRU range falls
+through into the rest of the range. `_plans._thru_tail_problem` therefore
+refuses `UNSUPPORTED_TERMINATOR_LAYOUT` for every terminator such a case
+reaches unless every paragraph after `X` in the range is exit-only
+(`X-EXIT. EXIT.`) or a phantom `"."` -- so the common `PERFORM X THRU
+X-EXIT` idiom still plans, while a range covering real paragraphs refuses
+instead of running them on the early-exit path.
+
 # GO-TO-to-EXIT-PARAGRAPH Simplification
 
 **STATUS: implemented, not yet verified against real GnuCOBOL** -- see
@@ -899,7 +929,16 @@ enclosing paragraph must not itself be in `_go_to_targets`/
 `_go_to_fallthrough_targets`, and must be top-level -- `SECTION`-scoped
 enclosing paragraphs are declined, not supported (see below). The
 exit-only paragraph must also be the enclosing paragraph's immediate
-successor in source order, with nothing else between them. All-or-nothing
+successor in source order, with nothing else between them. And no
+in-program `PERFORM` (any form) or SORT/MERGE/XML PARSE procedure range may
+*end* at the enclosing paragraph (`_plans._in_program_range_ends`, issue
+#213): under a plain `PERFORM 1000-A` (no `THRU 1000-EXIT`) the real GO TO
+leaves the PERFORM range and never returns, which is the classic
+forgotten-THRU bug, and rewriting it into a clean return would hide that
+bug. A `.cut`/hook PERFORM of the enclosing paragraph without THRU is
+deliberately not checked: that THRU elision is the intended convenience
+(without the rewrite the GO TO would run off the end of the test driver).
+All-or-nothing
 per target paragraph -- `_go_to_targets` is a whole-program property, so
 neutralizing some but not all `GO TO`s naming one exit-only paragraph
 would leave it exactly as hazardous as before; a computed or multi-target

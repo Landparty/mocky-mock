@@ -63,6 +63,7 @@ from mockymock.analysis.mock_surface import (
     XML_PROCESSING_PROCEDURE_RE,
     _all_paragraphs,
     _nested_statement_lists,
+    is_cics_terminator,
 )
 
 from ._types import RefusalReason
@@ -679,6 +680,9 @@ def _falls_through(paragraph) -> bool:
     if isinstance(last, GobackStatement):
         return False
     if isinstance(last, StopStatement) and last.stop_type == "RUN":
+        return False
+    if is_cics_terminator(last):
+        # EXEC CICS RETURN/XCTL/ABEND never give control back (#215).
         return False
     if isinstance(last, GoStatement) and last.depending_on_variable is None:
         return False

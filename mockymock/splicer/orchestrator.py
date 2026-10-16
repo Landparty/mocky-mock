@@ -46,6 +46,7 @@ from mockymock.analysis.refusal import (
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
 from mockymock.splicer.injector import (
     build_chain_check,
+    build_cics_terminator_exit,
     build_exec_trap,
     build_flow_dispatch,
     build_goto_exit_replacement,
@@ -103,6 +104,11 @@ def splice_program(
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
     seen_statement_ids: set[int] = set()
+    # EXEC CICS RETURN/XCTL/ABEND plans (issue #215): the site keeps its
+    # ordinary dispatch below, wrapped with the early exit.
+    cics_terminators = {
+        id(plan.site.statement): plan for plan in terminator_plans if plan.is_cics
+    }
 
     for site in surface.boundary_sites:
         if site.category is None:
@@ -162,6 +168,12 @@ def splice_program(
                 statement_text=" ".join(lines[start - 1 : end]),
                 layout=surface.data_layout,
             )
+        cics_plan = cics_terminators.get(id(site.statement))
+        if cics_plan is not None:
+            prefix, suffix = build_cics_terminator_exit(
+                cics_plan.exit_kind, cics_plan.resp_field
+            )
+            replacement = prefix + replacement + suffix
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /
         # paragraph), the replacement block must terminate the sentence too
@@ -176,10 +188,10 @@ def splice_program(
     seen_terminator_ids: set[int] = set()
     for plan in terminator_plans:
         site = plan.site
-        if id(site.statement) in seen_terminator_ids:
+        if plan.is_cics or id(site.statement) in seen_terminator_ids:
             continue
         seen_terminator_ids.add(id(site.statement))
-        replacement = build_terminator_neutralization(plan.exit_kind)
+        replacement = build_terminator_neutralization(plan.exit_kind, plan.return_code)
         if site.nested:
             if site.span is None:
                 raise ValueError(

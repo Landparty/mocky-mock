@@ -476,7 +476,9 @@ def build_exec_trap(kind: str, line: int) -> list[str]:
     ]
 
 
-def build_terminator_neutralization(exit_kind: str = "PARAGRAPH") -> list[str]:
+def build_terminator_neutralization(
+    exit_kind: str = "PARAGRAPH", return_code: str | None = None
+) -> list[str]:
     """Replacement for a STOP RUN/GOBACK statement found safe to
     neutralize (see docs/2026-07-08-goback-stop-run-support-design.md):
     set the early-exit flag and return via EXIT PARAGRAPH/EXIT SECTION --
@@ -487,10 +489,43 @@ def build_terminator_neutralization(exit_kind: str = "PARAGRAPH") -> list[str]:
     docs/2026-07-10-section-scoped-terminator-support-design.md
     supports. Identical regardless of which test case is running --
     unlike build_site_dispatch, no per-case EVALUATE UT-CURRENT-CASE
-    dispatch is needed here."""
-    return [
+    dispatch is needed here. `return_code` is `TerminatorPlan.return_code`,
+    the operand of a `STOP RUN RETURNING n` / `GOBACK RETURNING n` the
+    replacement would otherwise drop (issue #219): it is MOVEd to
+    RETURN-CODE first, as the real statement would have set it."""
+    lines = []
+    if return_code is not None:
+        lines.append(f"           MOVE {return_code} TO RETURN-CODE")
+    return lines + [
         '           MOVE "Y" TO UT-EARLY-EXIT',
         f"           EXIT {exit_kind}",
+    ]
+
+
+def build_cics_terminator_exit(
+    exit_kind: str = "PARAGRAPH", resp_field: str | None = None
+) -> tuple[list[str], list[str]]:
+    """(prefix, suffix) wrapped around an EXEC CICS RETURN/XCTL/ABEND
+    site's own dispatch block when `refusal.find_terminator_plans` planned
+    it (issue #215): the mock body runs, then the run under test ends the
+    way a neutralized GOBACK does, instead of continuing past a command
+    that never gives control back.
+
+    `resp_field` is `TerminatorPlan.resp_field`. With RESP, a failed
+    command DOES return control, so the prefix presets the field to 0
+    (NORMAL, what a successful command leaves there -- the mock body may
+    then set a failure code) and the exit is taken only while it is still
+    0."""
+    exit_lines = [
+        '           MOVE "Y" TO UT-EARLY-EXIT',
+        f"           EXIT {exit_kind}",
+    ]
+    if resp_field is None:
+        return [], exit_lines
+    return [f"           MOVE 0 TO {resp_field}"], [
+        f"           IF {resp_field} = 0",
+        *(f"    {line}" for line in exit_lines),
+        "           END-IF",
     ]
 
 

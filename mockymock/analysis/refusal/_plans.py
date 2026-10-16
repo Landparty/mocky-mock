@@ -19,16 +19,17 @@ design history behind these two plan shapes.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
-from cobolparser.models.statements.control import GoStatement
+from cobolparser.models.statements.control import GoStatement, PerformStatement
 
 from mockymock.analysis.mock_surface import (
-    _TERMINATOR_LABELS,
     BoundarySite,
     MockSurface,
     _all_paragraphs,
     _nested_statement_lists,
+    is_terminator_site,
 )
 from mockymock.dsl.model import MockTestSuite
 from mockymock.splicer.source_map import (
@@ -39,6 +40,10 @@ from mockymock.splicer.source_map import (
 )
 
 from ._reachability import (
+    _expand_thru_range,
+    _find_sort_merge_statements,
+    _find_statements_of_type,
+    _find_xml_parse_statements,
     _go_statement_raw_targets,
     _go_statement_target,
     _go_statements_with_nesting,
@@ -72,6 +77,75 @@ class TerminatorPlan:
     site: BoundarySite
     chain_performs: list = field(default_factory=list)
     exit_kind: str = "PARAGRAPH"
+    # The operand of `STOP RUN RETURNING n` / `GOBACK RETURNING n` (issue
+    # #219): the neutralization MOVEs it to RETURN-CODE before setting the
+    # early-exit flag, since removing the statement removes the phrase too.
+    return_code: str | None = None
+    # EXEC CICS RETURN/XCTL/ABEND only (issue #215): the RESP(field) the
+    # command names, or None. With RESP, a failed command returns control
+    # to the next statement, so the early exit is taken only while the
+    # field holds NORMAL (0) -- the splicer presets it to 0 before the mock
+    # body, as a successful command would, and the body may override it.
+    resp_field: str | None = None
+
+    @property
+    def is_cics(self) -> bool:
+        return self.site.category is not None
+
+
+# A RETURNING/GIVING operand the neutralization can MOVE to RETURN-CODE
+# verbatim: a signed or unsigned integer literal, or one data name.
+_RETURN_CODE_OPERAND_RE = re.compile(r"^(?:[+-]?\d+|[A-Z0-9][A-Z0-9-]*)$", re.I)
+
+
+_RESP_FIELD_RE = re.compile(r"\bRESP\s*\(\s*([A-Z0-9][A-Z0-9-]*)\s*\)", re.I)
+_RESP_OPTION_RE = re.compile(r"\bRESP\s*\(", re.I)
+
+
+def _cics_resp_field(statement) -> tuple[str | None, str | None]:
+    """(field, problem) for an EXEC CICS terminator's RESP option: the
+    single data name in `RESP(field)`, (None, None) when there is no RESP,
+    or a problem when RESP names something this can't test against 0."""
+    text = str(getattr(statement, "cics_text", "") or "")
+    match = _RESP_FIELD_RE.search(text)
+    if match is not None:
+        return match.group(1).upper(), None
+    if _RESP_OPTION_RE.search(text):
+        return None, (
+            "has a RESP option mockymock can't read back as a single data "
+            "name, so it can't tell a failed command (which returns "
+            "control) from a successful one (which ends the program)"
+        )
+    return None, None
+
+
+def _terminator_name(site) -> str:
+    """How a refusal names the terminator: its label, or `EXEC CICS
+    RETURN` (etc.) for a CICS one, whose label is just "CICS"."""
+    if site.category is None:
+        return site.label
+    return f"EXEC CICS {str(site.statement.cics_command).upper()}"
+
+
+def _terminator_return_code(statement) -> tuple[str | None, str | None]:
+    """(operand, problem) for a terminator's RETURNING/GIVING phrase:
+    cobolparser keeps it as `StopStatement.returning` /
+    `GobackStatement.returning_value`. (None, None) when there is none;
+    a problem when the operand is not one this neutralization can copy to
+    RETURN-CODE as written."""
+    operand = getattr(statement, "returning", None) or getattr(
+        statement, "returning_value", None
+    )
+    if operand is None:
+        return None, None
+    text = str(operand).strip()
+    if not _RETURN_CODE_OPERAND_RE.match(text):
+        return None, (
+            f"has a RETURNING operand ({text!r}) mockymock can't copy to "
+            f"RETURN-CODE when it neutralizes the statement -- use an "
+            f"integer literal or a single data name"
+        )
+    return text, None
 
 
 @dataclass
@@ -107,6 +181,38 @@ class GotoExitPlan:
     paragraph_name: str
     exit_kind: str = "PARAGRAPH"
     span: tuple[int, int] | None = None
+
+
+def _in_program_range_ends(procedure) -> dict[str, int]:
+    """Paragraph name -> line of one in-program PERFORM (any form, at
+    any nesting depth), SORT/MERGE INPUT/OUTPUT PROCEDURE or XML PARSE
+    PROCESSING PROCEDURE whose range ENDS at that paragraph: `PERFORM A`
+    ends at A, `PERFORM A THRU B` at B. A GO TO out of such a paragraph
+    leaves that range (issue #213)."""
+    ends: dict[str, int] = {}
+    for paragraph in _all_paragraphs(procedure):
+        statements = paragraph.statements
+        for statement in _find_statements_of_type(statements, PerformStatement):
+            end = statement.thru_paragraph or statement.target_paragraph
+            if end:
+                ends.setdefault(end, statement.location.line)
+        for statement in _find_sort_merge_statements(statements):
+            for start_attr, thru_attr in (
+                ("input_procedure", "input_procedure_thru"),
+                ("output_procedure", "output_procedure_thru"),
+            ):
+                end = getattr(statement, thru_attr, None) or getattr(
+                    statement, start_attr, None
+                )
+                if end:
+                    ends.setdefault(end, statement.location.line)
+        for statement in _find_xml_parse_statements(statements):
+            end = getattr(statement, "processing_procedure_thru", None) or getattr(
+                statement, "processing_procedure", None
+            )
+            if end:
+                ends.setdefault(end, statement.location.line)
+    return ends
 
 
 # Shown when a nested site reaches a check before annotate_nested_sites ran
@@ -168,6 +274,17 @@ def find_goto_exit_plans(
       range's own fall-through would then run them on the early-exit path
       where it never did before. Confirmed empirically against this exact
       shape before this check existed (see the PR review that added it).
+    - no in-program PERFORM (or SORT/MERGE/XML PARSE procedure) range
+      ENDS at the enclosing paragraph (`_in_program_range_ends`, issue
+      #213): under `PERFORM <enclosing>` with no `THRU <exit-paragraph>`,
+      the original GO TO jumps OUT of the PERFORM range and control never
+      returns to the caller -- the classic forgotten-THRU bug. Rewriting
+      it into a clean return would certify behaviour the real program
+      does not have, so the GO TO is left alone and its edge stays
+      visible to the gates. A `.cut`/hook PERFORM of the enclosing
+      paragraph without THRU is deliberately NOT a disqualifier: that is
+      the THRU-elision convenience the design doc describes, and without
+      the rewrite the GO TO would run off the end of the test driver.
 
     SECTION-scoped enclosing paragraphs are NOT supported (unlike
     `find_terminator_plans`, which handles the one narrow safe-section-
@@ -232,6 +349,7 @@ def find_goto_exit_plans(
         return [], []
 
     top_level_names = {p.paragraph_name for p in procedure.paragraphs}
+    range_ends = _in_program_range_ends(procedure)
     base_go_to_targets = _go_to_targets(program)
     boundaries = collect_boundaries(program)
     last_line = len(lines)
@@ -331,6 +449,15 @@ def find_goto_exit_plans(
                         f"PERFORM ... THRU range ending at '{target_name}' "
                         f"could cover real paragraphs between them, whose "
                         f"early-exit-path behavior this splice would change"
+                    )
+                    continue
+                if enclosing in range_ends:
+                    problems.append(
+                        f"line {statement.location.line}: the PERFORM at line "
+                        f"{range_ends[enclosing]} ends its range at enclosing "
+                        f"paragraph '{enclosing}', not at '{target_name}' -- "
+                        f"the GO TO leaves that PERFORM's range for real, "
+                        f"so it is not an early return there"
                     )
                     continue
                 if in_boundary:
@@ -504,9 +631,7 @@ def find_terminator_plans(
     safe_section_first_names = set(safe_section_entries.values())
     go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
     terminator_sites = {
-        id(s.statement): s
-        for s in surface.boundary_sites
-        if s.category is None and s.label in _TERMINATOR_LABELS
+        id(s.statement): s for s in surface.boundary_sites if is_terminator_site(s)
     }
 
     plans_by_statement: dict[int, TerminatorPlan] = {}
@@ -550,6 +675,9 @@ def find_terminator_plans(
                     f"sibling code sharing its line"
                 )
                 break
+
+        if chain_problem is None:
+            chain_problem = _thru_tail_problem(program, case)
 
         qualified_keys: list[int] = []
 
@@ -666,13 +794,18 @@ def find_terminator_plans(
                 )
             elif chain_problem is not None:
                 problem = chain_problem
+            else:
+                problem = (
+                    _terminator_return_code(site.statement)[1]
+                    or _cics_resp_field(site.statement)[1]
+                )
 
             if problem is not None:
                 reasons.append(
                     RefusalReason(
                         code="UNSUPPORTED_TERMINATOR_LAYOUT",
                         message=(
-                            f"{site.label} at line {site.line} (paragraph "
+                            f"{_terminator_name(site)} at line {site.line} (paragraph "
                             f"'{paragraph_name}') {problem}"
                         ),
                     )
@@ -688,7 +821,10 @@ def find_terminator_plans(
                     else "PARAGRAPH"
                 )
                 plans_by_statement[key] = TerminatorPlan(
-                    site=terminator_sites[key], exit_kind=exit_kind
+                    site=terminator_sites[key],
+                    exit_kind=exit_kind,
+                    return_code=_terminator_return_code(site.statement)[0],
+                    resp_field=_cics_resp_field(site.statement)[0],
                 )
             qualified_keys.append(key)
 
@@ -701,3 +837,47 @@ def find_terminator_plans(
                     existing_ids.add(id(perform))
 
     return list(plans_by_statement.values()), reasons
+
+
+def _thru_tail_problem(program, case) -> str | None:
+    """Why a terminator this case reaches can't be neutralized because of
+    the case's own `PERFORM <target> THRU <thru>` (issue #211), or None.
+
+    The neutralization ends the case's perform target with EXIT PARAGRAPH
+    (directly, or through the chain checks). The driver's THRU range then
+    carries on into the next paragraph of the range by fall-through, which
+    the real program never reached. That is harmless only when every later
+    paragraph of the range does nothing: an exit-only `X-EXIT. EXIT.`
+    paragraph (the usual `PERFORM X THRU X-EXIT` idiom) or a phantom "."
+    paragraph. Any other paragraph would run on the early-exit path, so
+    the terminator is refused instead. A range that can't be expanded is
+    refused too (the reachability gate reports why)."""
+    thru = case.perform_thru
+    if not thru or thru == case.perform_target:
+        return None
+    procedure = program.get_division("PROCEDURE")
+    ordered = _source_ordered_paragraphs(procedure)
+    members, reason = _expand_thru_range(
+        ordered, case.perform_target, thru, "test case PERFORM"
+    )
+    if reason is not None:
+        return (
+            f"is reached through PERFORM {case.perform_target} THRU {thru}, "
+            f"whose range cannot be expanded -- {reason.message}"
+        )
+    by_name = {p.paragraph_name: p for p in ordered or []}
+    for name in members[1:]:
+        paragraph = by_name.get(name)
+        if name == "." or (
+            paragraph is not None and _is_exit_only_paragraph(paragraph)
+        ):
+            continue
+        return (
+            f"is reached through PERFORM {case.perform_target} THRU {thru}: "
+            f"once the terminator ends '{case.perform_target}', the THRU "
+            f"range would fall through into '{name}', which the real "
+            f"program never runs after the terminator -- PERFORM "
+            f"{case.perform_target} on its own (or THRU an exit-only "
+            f"paragraph right after it) to test this path"
+        )
+    return None

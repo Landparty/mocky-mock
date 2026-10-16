@@ -683,7 +683,7 @@ def test_stop_literal_is_not_a_terminator_site():
 
 
 def test_terminator_labels_constant_matches_classified_labels():
-    assert _TERMINATOR_LABELS == frozenset({"STOP RUN", "GOBACK"})
+    assert _TERMINATOR_LABELS == frozenset({"STOP RUN", "GOBACK", "EXIT PROGRAM"})
 
 
 def test_reachable_terminator_is_not_misreported_as_sort_merge():

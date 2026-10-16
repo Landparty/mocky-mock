@@ -71,6 +71,7 @@ from cobolparser.models.statements.io import (
 )
 from cobolparser.models.statements.misc import (
     CancelStatement,
+    ExitStatement,
     GobackStatement,
     MergeStatement,
     ReleaseStatement,
@@ -432,13 +433,44 @@ def _is_pure_procedure_sort(statement: SortStatement | MergeStatement) -> bool:
     )
 
 
-# STOP RUN/GOBACK are detected (category None, like CANCEL/SORT-MERGE) but
-# never spliced by directive-matching -- a .cut author never writes a MOCK
-# for these; the terminator-support feature neutralizes them automatically
-# when found safe (see docs/2026-07-08-goback-stop-run-support-design.md).
+# STOP RUN/GOBACK/EXIT PROGRAM are detected (category None, like
+# CANCEL/SORT-MERGE) but never spliced by directive-matching -- a .cut
+# author never writes a MOCK for these; the terminator-support feature
+# neutralizes them automatically when found safe (see
+# docs/2026-07-08-goback-stop-run-support-design.md). EXIT PROGRAM joined
+# them for issue #212: the driver makes the program under test the main
+# program of the run unit, where EXIT PROGRAM is a no-op, but the only
+# program it ever appears in for real is a called subprogram, where it
+# returns to the caller -- left alone, it silently fell through.
 # Exported so refusal.py can recognize these labels without duplicating
 # the literal set.
-_TERMINATOR_LABELS = frozenset({"STOP RUN", "GOBACK"})
+_TERMINATOR_LABELS = frozenset({"STOP RUN", "GOBACK", "EXIT PROGRAM"})
+
+# EXEC CICS commands that never give control back to the next statement
+# (issue #215): RETURN ends the task (or returns to the LINKing program),
+# XCTL transfers to another program for good, ABEND ends the task. They
+# stay ordinary, mockable CICS sites -- the mock body runs -- but the
+# splicer then ends the run under test the way a neutralized GOBACK does
+# (`refusal.find_terminator_plans`), instead of carrying on past them.
+CICS_TERMINATOR_COMMANDS = frozenset({"RETURN", "XCTL", "ABEND"})
+
+
+def is_cics_terminator(statement) -> bool:
+    """True for an EXEC CICS RETURN/XCTL/ABEND statement."""
+    return (
+        isinstance(statement, ExecCicsStatement)
+        and str(getattr(statement, "cics_command", "") or "").upper()
+        in CICS_TERMINATOR_COMMANDS
+    )
+
+
+def is_terminator_site(site) -> bool:
+    """A site whose statement ends the run under test: STOP RUN/GOBACK/
+    EXIT PROGRAM (category None) or an EXEC CICS RETURN/XCTL/ABEND."""
+    if site.category is None:
+        return site.label in _TERMINATOR_LABELS
+    return site.category is MockCategory.CICS and is_cics_terminator(site.statement)
+
 
 # Statement types whose nested clause bodies (AT END, INVALID KEY, ON
 # EXCEPTION, ...) belong to a *boundary* statement: sites found inside them
@@ -785,6 +817,14 @@ def _classify_statement(
 
     if isinstance(statement, GobackStatement):
         add_site(None, "GOBACK")
+        return
+
+    if isinstance(statement, ExitStatement) and statement.exit_type == "PROGRAM":
+        # Returns to the caller in a called subprogram (the only place it
+        # is ever written), so it ends the run under test exactly like
+        # GOBACK -- see _TERMINATOR_LABELS. Every other EXIT form
+        # (PARAGRAPH/SECTION/PERFORM, bare EXIT) stays a passthrough.
+        add_site(None, "EXIT PROGRAM")
         return
 
     if isinstance(statement, ExecSQLStatement):
