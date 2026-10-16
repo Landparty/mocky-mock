@@ -184,6 +184,8 @@ def build_recording_report(
     pictures: dict[str, str] | None = None,
     condition_names: set[str] | frozenset[str] = frozenset(),
     index_names: set[str] | frozenset[str] = frozenset(),
+    clock_fields: dict[str, str] | None = None,
+    clock_pinned: set[tuple[int, str]] | frozenset[tuple[int, str]] = frozenset(),
 ) -> RecordingReport:
     """Match every stub the scanner found against this run's recorded
     values (by case id + data-name).
@@ -207,6 +209,12 @@ def build_recording_report(
     LAST value, corrupting the earlier golden (2026-08-12 audit Finding
     10). Emission order is stub line order: `record_targets` is built by
     appending stubs in scan order and the driver DISPLAYs in list order.
+
+    `clock_fields` (`clock_value_fields`, issue #240) names the items the
+    program fills from the system clock; a stub on one is skipped unless
+    its case pins the clock by mocking that ACCEPT (`clock_pinned`, pairs
+    of 1-based case index and uppercased item name): today's date or time
+    recorded as a golden fails on a later run.
     """
     recorded_by_case: dict[str, dict[str, list[str]]] = {}
     for result in suite_result.results:
@@ -238,6 +246,21 @@ def build_recording_report(
             continue
         value = queue.pop(0)
         base_name = _leaf_name(stub.data_name)
+        clock_source = (clock_fields or {}).get(base_name)
+        if clock_source is not None and (
+            (stub.case_index, base_name) not in clock_pinned
+        ):
+            report.skipped.append(
+                SkippedStub(
+                    stub.line,
+                    stub.data_name,
+                    f"it is set by {clock_source}, so the value recorded now "
+                    f"fails on a later run -- mock that ACCEPT to give the "
+                    f"case a fixed clock (MOCK ACCEPT {base_name}), or "
+                    f"write this EXPECT by hand",
+                )
+            )
+            continue
         if base_name in condition_names and value.strip() in ("TRUE", "FALSE"):
             # The driver records an 88's truth value (issue #237).
             report.recorded.append(
@@ -312,6 +335,35 @@ def build_recording_report(
             continue
         report.recorded.append(RecordedExpectation(stub=stub, value=value))
     return report
+
+
+def clock_value_fields(program) -> dict[str, str]:
+    """Uppercased data name -> what fills it from the system clock, for
+    every `ACCEPT x FROM DATE/TIME/DAY/DAY-OF-WEEK` and `MOVE FUNCTION
+    CURRENT-DATE TO x` in `program` (issue #240). Direct targets only: a
+    value computed from one of them is not traced."""
+    from mockymock.analysis.mock_surface import CLOCK_ACCEPT_SOURCES
+
+    fields: dict[str, str] = {}
+    try:
+        statements = program.get_all_statements()
+    except Exception:  # pragma: no cover - never break a run over this
+        return fields
+    for statement in statements:
+        kind = type(statement).__name__
+        if kind == "IOAcceptStatement":
+            words = str(getattr(statement, "from_source", "") or "").upper().split()
+            target = str(getattr(statement, "target", "") or "").upper()
+            if target and words and words[0] in CLOCK_ACCEPT_SOURCES:
+                fields.setdefault(target, f"ACCEPT {target} FROM {words[0]}")
+        elif kind == "MoveStatement":
+            source = str(getattr(statement, "source", "") or "").upper()
+            if re.search(r"(?<![A-Z0-9-])CURRENT-DATE(?![A-Z0-9-])", source):
+                for target in getattr(statement, "targets", None) or []:
+                    name = str(target).partition("(")[0].strip().upper()
+                    if name:
+                        fields.setdefault(name, "FUNCTION CURRENT-DATE")
+    return fields
 
 
 def field_pictures(program, captures=()) -> dict[str, str]:

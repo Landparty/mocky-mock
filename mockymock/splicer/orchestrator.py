@@ -180,6 +180,9 @@ def splice_program(
                 # so its bodies lift exactly like a top-level site's.
                 lifted_clauses=lift_clause_bodies(site.statement, lines),
                 sqlstate=sqlstate,
+                passthrough=(
+                    _statement_lines(lines, start, end) if site.opt_in else None
+                ),
             )
             # What the DB2 precompiler puts after the statement for every
             # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).
@@ -348,3 +351,15 @@ def splice_program(
         else:
             lines = insert_lines_after(lines, start, replacement)
     return lines
+
+
+def _statement_lines(lines: list[str], start: int, end: int) -> list[str]:
+    """The statement on `lines[start - 1 : end]`, one entry per source line
+    with its indentation and any sentence-ending period dropped -- the real
+    statement an opt-in site's dispatch runs for cases that do not mock it
+    (`build_site_dispatch`'s `passthrough`). The period goes because the
+    replacement block gets its own when the span ended the sentence."""
+    text = [line.strip() for line in lines[start - 1 : end] if line.strip()]
+    if text and text[-1].endswith("."):
+        text[-1] = text[-1][:-1].rstrip()
+    return [line for line in text if line]

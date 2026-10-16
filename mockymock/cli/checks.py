@@ -9,6 +9,8 @@ model -- this module must never import `mockymock.runtime.docker_toolchain`
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -42,6 +44,9 @@ class StaticCheckResult:
     everything `_cmd_run` needs to proceed straight to splicing."""
 
     problems: list[str] = field(default_factory=list)
+    # Expanded line -> (file, line), "<main>" for the program itself; empty
+    # without copybook expansion (issue #241).
+    source_location_map: dict[int, tuple[str, int]] = field(default_factory=dict)
     parse_result: ParseResult | None = None
     surface: MockSurface | None = None
     suite: MockTestSuite | None = None
@@ -235,6 +240,33 @@ def filter_suite_cases(
     return problems
 
 
+_SOURCE_LINE_RE = re.compile(r"(?<!\.cut )(?<![\w.-])line (\d+)\b")
+
+
+def source_line_relabeler(
+    source_map: dict[int, tuple[str, int]] | None,
+) -> Callable[[str], str]:
+    """A function rewriting every `line N` in a message (N a line of the
+    copybook-expanded source) into the file the user has open: `line M`
+    for a line of the program itself, `line M of CPY.CPY` for one a
+    copybook brought in. Every COPY above a site shifted the reported
+    line by the copybook's length (issue #241). `.cut line N` is left
+    alone, and so is everything when there is no source map."""
+    if not source_map:
+        return lambda text: text
+
+    def label(match: re.Match[str]) -> str:
+        origin = source_map.get(int(match.group(1)))
+        if origin is None:
+            return match.group(0)
+        origin_file, origin_line = origin
+        if origin_file == "<main>":
+            return f"line {origin_line}"
+        return f"line {origin_line} of {Path(origin_file).name}"
+
+    return lambda text: _SOURCE_LINE_RE.sub(label, text)
+
+
 def run_static_checks(
     source_path: Path,
     cut_path: Path,
@@ -246,7 +278,35 @@ def run_static_checks(
     """Faithful transcription of `_cmd_run`'s pre-toolchain check sequence,
     including its short-circuit behavior: each numbered stage stops the
     pipeline if it finds problems, except the final per-test-case stage,
-    which accumulates across every case before returning."""
+    which accumulates across every case before returning.
+
+    Refusal problems and notes name lines of the `.cbl` (or copybook) the
+    user has open, not of the copybook-expanded source (issue #241)."""
+    out = _run_static_checks(
+        source_path,
+        cut_path,
+        copybook_paths,
+        case_names,
+        tag_names,
+        preserve_compiler_directives,
+    )
+    relabel = source_line_relabeler(out.source_location_map)
+    out.problems = [
+        relabel(problem) if problem.startswith("refused (") else problem
+        for problem in out.problems
+    ]
+    out.notes = [relabel(note) for note in out.notes]
+    return out
+
+
+def _run_static_checks(
+    source_path: Path,
+    cut_path: Path,
+    copybook_paths: list[str] | None,
+    case_names: list[str] | None,
+    tag_names: list[str] | None,
+    preserve_compiler_directives: bool,
+) -> StaticCheckResult:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
         CopybookNotFoundError,
@@ -266,7 +326,11 @@ def run_static_checks(
         omitted_argument_warnings,
         rebindable_sites,
     )
-    from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
+    from mockymock.analysis.mock_surface import (
+        analyze,
+        analyze_file_status_fields,
+        promote_clock_accepts,
+    )
     from mockymock.analysis.refusal import (
         CICS_MACRO_PLACEHOLDER,
         check_cics_eib_layout_scoped,
@@ -313,7 +377,11 @@ def run_static_checks(
         # reached six different subcommands (audit finding F6). Mirrors
         # _cmd_fixtures's existing broad catch for the same call.
         try:
-            expansion = expand_copybooks(raw_source, copybook_paths=copybook_paths)
+            expansion = expand_copybooks(
+                raw_source,
+                copybook_paths=copybook_paths,
+                preserve_source_locations=True,
+            )
         except CopybookNotFoundError as exc:
             out.problems.append(f"copybook expansion failed: {exc}")
             out.problems.append(copybook_not_found_hint())
@@ -328,6 +396,7 @@ def run_static_checks(
             )
             return out
         raw_source = expansion.expanded_source
+        out.source_location_map = dict(expansion.source_location_map or {})
 
     # 2. Parse; whole-program refusals (hard errors + dropped-statement
     # warnings). The PARSE_ERROR reason only carries a count, so the
@@ -423,6 +492,15 @@ def run_static_checks(
 
     # 5. Surface analysis, normalization, linkage layout + neutralization.
     surface = analyze(parse_result.ast)
+    # A clock ACCEPT (FROM DATE/TIME/DAY/DAY-OF-WEEK) is mockable only when
+    # a MOCK names it (issue #240): an opt-in site, spliced only then.
+    promote_clock_accepts(
+        surface,
+        [
+            *(d for case in suite.test_cases for d in case.mocks),
+            *suite.before_all_mocks,
+        ],
+    )
     out.surface = surface
     out.file_status_fields = analyze_file_status_fields(parse_result.ast)
     # PROCESS/CBL precompiler directives (IBM mainframe compiler-directing

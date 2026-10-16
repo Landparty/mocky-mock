@@ -590,7 +590,11 @@ differ in nothing but letter case or a space vs. a hyphen.
 `driver.py`'s `_SUITE_PARAGRAPH_NAME_RE` sanitization for the
 `UT-TESTSUITE-*` paragraph name follows the identical collapse-and-strip
 pattern (a title like `"X (via copybook)"` must not yield a
-trailing-hyphen COBOL word — cobc rejects that outright).
+trailing-hyphen COBOL word — cobc rejects that outright). The name is then capped at **30
+characters**, IBM Enterprise COBOL's user-defined-word limit (it was 60,
+so `export` shipped words like `UT-TESTSUITE-RATERTE-DYNAMIC-RATE-PROGRAM-ROUTING`
+that the IBM compiler rejects; #279). Nothing but its own header names the
+paragraph, and the TESTSUITE marker DISPLAY still carries the full suite name.
 
 **Field widths widened (2026-07-07 fix, audit findings 2.5, 2.7):**
 `UT-FAIL-COUNT` and every `UT-*-TALLY` field were `PIC 9(4)` and wrapped

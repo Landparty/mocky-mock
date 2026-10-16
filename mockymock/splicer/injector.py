@@ -218,6 +218,7 @@ def build_site_dispatch(
     layout: DataLayout | None = None,
     lifted_clauses: tuple[LiftedClause, ...] | None = None,
     sqlstate: bool = False,
+    passthrough: list[str] | None = None,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
 
@@ -226,6 +227,10 @@ def build_site_dispatch(
     -- a cursor loop ended by `UNTIL SQLSTATE = '02000'` never ended on
     SQLCODE alone. Off when the program never names SQLSTATE: its own
     SQLCA copy may not declare one.
+
+    `passthrough`, for an opt-in site (`BoundarySite.opt_in`, issue #240:
+    a clock ACCEPT), is the original statement's text: WHEN OTHER runs it
+    for every case that does not mock the site, instead of the error trap.
 
     `lifted_clauses` (issue #209, `analysis.clause_bodies`): the replaced
     statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY /
@@ -490,12 +495,17 @@ def build_site_dispatch(
                 )
 
     lines.append("               WHEN OTHER")
-    lines.append(
-        f'                   DISPLAY "__MOCKYMOCK__ ERROR: {site.label} '
-        f'boundary (line {site.line}) reached "'
-    )
-    lines.append('                       "from unmocked test case " UT-CURRENT-CASE')
-    lines.append("                   ADD 1 TO UT-FAIL-COUNT")
+    if passthrough is not None:
+        lines.extend(f"                   {text}" for text in passthrough)
+    else:
+        lines.append(
+            f'                   DISPLAY "__MOCKYMOCK__ ERROR: {site.label} '
+            f'boundary (line {site.line}) reached "'
+        )
+        lines.append(
+            '                       "from unmocked test case " UT-CURRENT-CASE'
+        )
+        lines.append("                   ADD 1 TO UT-FAIL-COUNT")
     lines.append("           END-EVALUATE")
     if lifted_clauses:
         lines.extend(

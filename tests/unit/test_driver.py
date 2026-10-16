@@ -230,7 +230,7 @@ def test_suite_paragraph_name_is_a_valid_cobol_word():
     word = header[:-1]
     assert "--" not in word
     assert not word.endswith("-")
-    assert word == "UT-TESTSUITE-MAINPGM-DISCOUNT-CALCULATION-VIA-COPYBOOK"
+    assert word == "UT-TESTSUITE-MAINPGM-DISCOUNT"  # 30-char IBM cap (#279)
 
 
 def test_testcase_emits_perform_thru_when_set():

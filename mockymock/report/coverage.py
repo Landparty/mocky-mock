@@ -29,6 +29,7 @@ from __future__ import annotations
 import difflib
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -262,6 +263,32 @@ def build_original_line_map(
         ):
             mapping[follower + 1] = original
             follower += 1
+    return mapping
+
+
+def build_copybook_line_map(
+    instrumented_lines: list[str],
+    normalized_lines: list[str],
+    source_location_map: dict[int, tuple[str, int]] | None,
+) -> dict[int, tuple[str, int]]:
+    """1-based instrumented line -> (copybook file name, line in it), for
+    the lines a COPY brought in. `build_original_line_map` drops them --
+    they have no counterpart in the `.cbl` -- so a paragraph living in a
+    procedure copybook vanished from `run --trace` (issue #242).
+    `source_location_map` is the expansion's own (expanded line, the
+    normalized text's numbering -> file, line), `"<main>"` entries being
+    the program's lines, which this leaves to `build_original_line_map`."""
+    if not source_location_map:
+        return {}
+    inst_to_norm = _matching_index_map(
+        [line.rstrip() for line in normalized_lines],
+        [line.rstrip() for line in instrumented_lines],
+    )
+    mapping: dict[int, tuple[str, int]] = {}
+    for inst_index, norm_index in inst_to_norm.items():
+        origin = source_location_map.get(norm_index + 1)
+        if origin is not None and origin[0] != "<main>":
+            mapping[inst_index + 1] = (Path(origin[0]).name, origin[1])
     return mapping
 
 

@@ -91,24 +91,40 @@ class ParagraphIndex:
         self._section_starts = sorted(section_starts)
 
     @classmethod
-    def build(cls, program) -> ParagraphIndex:
+    def build(
+        cls, program, to_original: dict[int, int] | None = None
+    ) -> ParagraphIndex:
+        """`to_original` maps the AST's line numbers (the normalized,
+        copybook-expanded text) to the original `.cbl`'s, the coordinates
+        `resolve` is queried in. Without it a WORKING-STORAGE COPY shifted
+        every paragraph name by the copybook's length (issue #256). A
+        paragraph with no original line (inside a copybook) is left out."""
         procedure = program.get_division("PROCEDURE")
         paragraph_starts: list[tuple[int, str]] = []
         section_starts: list[tuple[int, str]] = []
         if procedure is None:
             return cls([], [])
+
+        def add(starts: list[tuple[int, str]], line: int, name: str) -> None:
+            if to_original is not None:
+                mapped = to_original.get(line)
+                if mapped is None:
+                    return
+                line = mapped
+            starts.append((line, name))
+
         for paragraph in procedure.paragraphs:
             if paragraph.paragraph_name.strip("."):
-                paragraph_starts.append(
-                    (paragraph.location.line, paragraph.paragraph_name)
-                )
+                add(paragraph_starts, paragraph.location.line, paragraph.paragraph_name)
         for section in procedure._sections.values():
             if (section.section_name or "").strip("."):
-                section_starts.append((section.location.line, section.section_name))
+                add(section_starts, section.location.line, section.section_name)
             for paragraph in section.paragraphs:
                 if paragraph.paragraph_name.strip("."):
-                    paragraph_starts.append(
-                        (paragraph.location.line, paragraph.paragraph_name)
+                    add(
+                        paragraph_starts,
+                        paragraph.location.line,
+                        paragraph.paragraph_name,
                     )
         return cls(paragraph_starts, section_starts)
 

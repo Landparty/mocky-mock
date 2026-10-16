@@ -1047,11 +1047,16 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     raw_source = read_utf8_source(source_path)
     program_source = raw_source
+    source_location_map: dict[int, tuple[str, int]] = {}
     if args.copybook_path:
         # See _cmd_fixtures's identical guard on the same call for why
         # this can raise on realistic inputs (audit finding F6).
         try:
-            expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+            expansion = expand_copybooks(
+                raw_source,
+                copybook_paths=args.copybook_path,
+                preserve_source_locations=True,
+            )
         except CopybookNotFoundError as exc:
             print(f"mockymock generate: {exc}")
             print(copybook_not_found_hint())
@@ -1065,6 +1070,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if expansion_reasons:
             return 1
         raw_source = expansion.expanded_source
+        source_location_map = dict(expansion.source_location_map or {})
     raw_source = activate_debugging_lines(raw_source)
     result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(result.ast)
@@ -1218,7 +1224,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             f"mockymock generate: data-driven from a fixture bundle "
             f"(seed={bundle.seed})"
         )
-    _report_unsupported_boundaries(surface, "generate")
+    _report_unsupported_boundaries(surface, "generate", source_location_map)
     if bundle is None:
         # --per-paragraph writes one case per paragraph as a starting point
         # to prune, some of which are expected to be refused.
@@ -1372,7 +1378,9 @@ def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:
         )
 
 
-def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
+def _report_unsupported_boundaries(
+    surface, command: str = "generate", source_location_map=None
+) -> None:
     """Name every detected boundary point that stays unmockable (a SORT/
     MERGE mixing a USING/GIVING file with an INPUT/OUTPUT PROCEDURE on the
     other side -- a plain-file-form SORT/MERGE and a pure-procedure-form
@@ -1417,6 +1425,13 @@ def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
                 f"nested {site.label} in paragraph '{site.paragraph_name}' "
                 f"(line {site.line}) -- {site.unspliceable_reason}"
             )
+    # Lines of the .cbl the user has open, not of the copybook-expanded
+    # source (issue #241).
+    from mockymock.cli.checks import source_line_relabeler
+
+    relabel = source_line_relabeler(source_location_map)
+    findings = [relabel(finding) for finding in findings]
+    terminator_findings = [relabel(finding) for finding in terminator_findings]
     if findings:
         print(
             f"mockymock {command}: {len(findings)} boundary point(s) detected "
@@ -1699,7 +1714,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         extra_working_storage,
         run_static_checks,
     )
+    from mockymock.dsl.model import MockCategory
     from mockymock.report.coverage import (
+        build_copybook_line_map,
         build_original_line_map,
         format_coverage_console,
         format_coverage_json,
@@ -1721,6 +1738,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.report.record_rewrite import (
         address_fields,
         build_recording_report,
+        clock_value_fields,
         condition_names,
         field_pictures,
         rewrite_cut_text,
@@ -2047,6 +2065,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
             pictures,
             condition_names=record_conditions,
             index_names={name.upper() for name in index_names(result.ast)},
+            clock_fields=clock_value_fields(result.ast),
+            clock_pinned={
+                (index, directive.key.upper())
+                for index, case in enumerate(suite.test_cases, start=1)
+                for directive in case.mocks
+                if directive.category is MockCategory.ACCEPT
+            },
         )
         rewritten = rewrite_cut_text(
             cut_text,
@@ -2191,6 +2216,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 model_case.line if model_case is not None else None,
                 str(cut_path),
                 str(source_path),
+                build_copybook_line_map(
+                    instrumented, normalized_lines, checked.source_location_map
+                ),
             )
             if args.trace_json:
                 _write_report_file("run", "--trace-json", args.trace_json, trace_json)
@@ -2247,6 +2275,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         parse_local_header,
         unavailable_names,
     )
+    from mockymock.report.coverage import build_original_line_map
     from mockymock.runtime import docker_toolchain
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.splicer import cics_eib
@@ -2389,7 +2418,12 @@ def _cmd_debug(args: argparse.Namespace) -> int:
                 instrumented_path.with_suffix(".c").read_text(encoding="utf-8")
             )
             line_map = LineMap.build(instrumented, normalized_lines, original_lines)
-            paragraph_index = ParagraphIndex.build(result.ast)
+            paragraph_index = ParagraphIndex.build(
+                result.ast,
+                build_original_line_map(
+                    normalized_lines, normalized_lines, original_lines
+                ),
+            )
             gdb = GdbSession(docker_toolchain.start_gdb_session(compiled.binary_path))
             return DebugSession(
                 gdb=gdb,
@@ -2774,7 +2808,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         f"mockymock export: wrote mainframe-compilable source "
         f"({len(suite.test_cases)} test case(s)) -> {output_path}"
     )
-    _report_unsupported_boundaries(surface, "export")
+    _report_unsupported_boundaries(surface, "export", checked.source_location_map)
     return 0
 
 

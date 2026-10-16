@@ -478,6 +478,15 @@ pre-toolchain check (steps 2-10 below) lives in
 `ensure_toolchain()` — a bad `.cut`/`.cbl` fails fast with the real problem
 even when Docker is down. `run` and `lint` share this function so they can
 never disagree about what refuses.
+Copybooks are expanded with `preserve_source_locations=True`
+(`StaticCheckResult.source_location_map`), and every `refused (...)`
+problem and note has its `line N` rewritten by
+`checks.source_line_relabeler` to the line of the `.cbl` the user has
+open, or `line M of CPY.CPY` for a statement a copybook brought in
+(issue #241: a WORKING-STORAGE COPY shifted every refusal's line).
+`.cut line N` is left alone. `generate`/`export`'s STOP RUN/GOBACK and
+unmockable-site warnings (`_report_unsupported_boundaries`) are relabeled
+the same way.
 
 Flags beyond the pipeline inputs:
 
@@ -830,7 +839,12 @@ captured MI transcripts and end-to-end tested against a live container
   from GnuCOBOL's internal `frame_stack`, since gdb's own backtrace is
   always exactly one frame (`PERFORM` is a computed-goto, not a real C
   call). `frame_stack[0]` is a sentinel, not a real caller — see the
-  design doc's Empirical basis for why. `synthesize_stack`'s per-frame
+  design doc's Empirical basis for why. `ParagraphIndex.build(ast,
+  to_original)` maps each paragraph/section start from the AST's
+  (copybook-expanded) lines to the original `.cbl`'s, the coordinates it is
+  queried in; `_cmd_debug` passes `build_original_line_map(normalized,
+  normalized, original)` (issue #256: a WORKING-STORAGE COPY shifted every
+  frame's paragraph name). `synthesize_stack`'s per-frame
   walk over `frame_stack[1..depth]` catches `GdbCommandError` on any one
   frame and skips it (`continue`) since 2026-08-10 (audit finding F14) —
   previously one unresolvable frame (gdb refusing the evaluate/
@@ -850,6 +864,17 @@ captured MI transcripts and end-to-end tested against a live container
   readable ones with the value `<unavailable: not materialized by cobc>`,
   and `evaluate` answers the same for them (issue #156). Items cobc
   declared only as a `b_NN` buffer are still read (issue #168 covers how).
+  An item gdb cannot read at this stop no longer fails the whole
+  `variables`/`evaluate` response (issue #318, `_read_display_value`): it
+  shows `UNREADABLE_VALUE` (`<unavailable: storage not bound at this
+  point>`), which is also what a field with a NULL `.data` (a
+  LOCAL-STORAGE item before cobc binds it) reads as. LOCAL-STORAGE is not
+  yet read through `cob_local_ptr`. An EXTERNAL item's `b_NN` is a
+  pointer; gdb's `0x... "text"` printing is reduced to the text.
+  The numeric decoders place the decimal point through `_place_point`,
+  which honours P scaling (issue #295): a negative cobc scale multiplies
+  (`9(3)PPP` storing 637 is 637000), and a scale larger than the stored
+  digits left-pads (`VPP99` storing 12 is 0.0012).
   `_handle_launch` closes any prior `self._session` and resets
   `self._breakpoint_numbers` before creating a new one (audit finding
   F16) — a second `launch` on one adapter (a client retry, or a bug) used
@@ -894,6 +919,13 @@ ordinary `MOVE` into `MOVE GRP-FOR-SUBTRACT-CORR-R FROM ...`.
 or a later line of it, `_statement_tail`) has a `REMAINDER` phrase:
 `MULTIPLY ... REMAINDER` is a cobc syntax error, so that mutant was a
 stillborn every time (2026-09-28).
+
+The swap also carries the statement's own scope terminator (#234):
+`_scope_terminator` finds the `END-<verb>` that closes it (a nested
+same-verb statement opens a level its own terminator closes; a period ends
+the search). On the mutated line it is rewritten with the verb
+(`SUBTRACT ... END-SUBTRACT`); on a later line the site is skipped, since a
+single-line mutant cannot touch it and `SUBTRACT ... END-ADD` never compiles.
 
 Three further stillborn classes closed on 2026-09-04, all in
 `mutation.operators` (see
@@ -1237,10 +1269,17 @@ pipeline as `run`, but without Docker or any GnuCOBOL step. The output is adjust
 under a real fixed-format (z/OS) COBOL compiler instead of GnuCOBOL-only: `PROCESS`/`CBL` directives
 are preserved (where `run`/`lint` strip them), columns are restored to z/OS fixed-format discipline
 (7-space prefix for Area A), and over-column-72 lines are fitted by `mainframe_export.fit_within_columns`.
-A provenance/disclaimer header is prepended, documenting that this is a
+A provenance/disclaimer header is inserted directly before `IDENTIFICATION DIVISION` (or the IBM
+abbreviation `ID DIVISION`; with neither, after any leading `CBL`/`PROCESS` cards — IBM requires
+those before any comment line, #276), documenting that this is a
 mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
 to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.
+
+Every width in that module is measured in **UTF-8 bytes** (`_width()`), the unit a fixed-format
+compiler counts columns in, not characters: measured with `len()`, a non-ASCII TESTCASE name, EXPECT
+or MOVE literal (`é` is 2 bytes, `’` 3) shipped lines past column 72 that every check said fit (#298).
+Splits still fall only between characters, so a multibyte character is never cut in half.
 
 `fit_within_columns` is three passes, in this order:
 
@@ -1371,6 +1410,9 @@ of it -- the half of the story `report` cannot recompute. `--file` wins
 over `--cut`'s default path. `--command` is stored as `command` (argparse
 dest `command_text`, since `command` is the subparser dest). Unknown
 status or empty step/summary -> exit 2 with a message, nothing written.
+`read_journal` splits the file on `\n` only: entries are written with
+`ensure_ascii=False`, which leaves U+2028/U+2029/NEL raw inside a string,
+and `str.splitlines()` broke such an entry into unparseable pieces (#283).
 
 ## `mockymock skills plugin [DIRECTORY] [--force]` (2026-10-04)
 

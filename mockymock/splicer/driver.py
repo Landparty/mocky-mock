@@ -141,11 +141,14 @@ def build_driver(
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
     # yield "X--VIA-COPYBOOK-" -- a COBOL word cannot end with a hyphen and
-    # cobc rejects the paragraph header outright. Capped well under
-    # GnuCOBOL's 63-character word limit.
+    # cobc rejects the paragraph header outright. Capped at IBM Enterprise
+    # COBOL's 30-character user-defined-word limit (GnuCOBOL allows 63, but
+    # `export` writes source for the IBM compiler, and every other generated
+    # name already keeps to 30). Only its own header names this paragraph,
+    # and the TESTSUITE marker DISPLAY carries the full suite name.
     sanitized = _SUITE_PARAGRAPH_NAME_RE.sub("-", suite.name.upper())
     sanitized = re.sub(r"-{2,}", "-", sanitized).strip("-")
-    suite_paragraph = ("UT-TESTSUITE-" + sanitized)[:60].rstrip("-")
+    suite_paragraph = ("UT-TESTSUITE-" + sanitized)[:30].rstrip("-")
 
     # UT-CURRENT-CASE is X(9): case ids are zero-padded to 3 digits but grow
     # naturally past case 999 ("1000"), and a narrower field would truncate

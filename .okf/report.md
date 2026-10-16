@@ -255,6 +255,15 @@ the VS Code extension consumes; `format_trace_console` renders the same
 payload for a plain `--trace`. `TRACE_ENTRY_CAP` (50,000) bounds a runaway
 `PERFORM UNTIL`, setting `truncated: true` rather than streaming or sampling.
 
+Statements a procedure copybook brought in have no `.cbl` counterpart, so
+`build_original_line_map` drops them; `format_trace_json`'s
+`copybook_lines` (`coverage.build_copybook_line_map`, from
+`StaticCheckResult.source_location_map`) keeps them as path entries with
+an additive `file` key (the copybook's name) and their line in it, shown
+as `(CALCPERF.CPY)` on the console (issue #242: the shipped CPYPROC
+"direct" case reported 0 statements executed). An entry without `file`
+is a line of `programFile`.
+
 ## Record-expectations rewrite (`report/record_rewrite.py`)
 
 **`DECIMAL-POINT IS COMMA` (issue #230):** `rewrite_cut_text(...,

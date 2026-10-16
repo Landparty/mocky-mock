@@ -491,6 +491,8 @@ this feature can ever touch it again (there's no more `*> STUB EXPECT`
 text left to match). See
 docs/2026-08-04-record-expectations-design.md for the full design.
 
+A stub on an item the program fills from the system clock (`record_rewrite.clock_value_fields`: the target of `ACCEPT x FROM DATE/TIME/DAY/DAY-OF-WEEK` or `MOVE FUNCTION CURRENT-DATE TO x`, direct targets only) is **skipped, with the reason**, unless its case pins the clock with `MOCK ACCEPT x` (#240): today's value recorded as a golden fails on a later run.
+
 # AST Model (`model.py`)
 
 | Class | Fields | Notes |

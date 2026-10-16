@@ -40,6 +40,7 @@ from mockymock.debug.gdb_session import (
 from mockymock.debug.line_map import LineMap
 from mockymock.debug.variable_map import (
     UNAVAILABLE_VALUE,
+    UNREADABLE_VALUE,
     BufferLayout,
     VariableValue,
     read_variable,
@@ -442,12 +443,11 @@ class DapAdapter:
             return
         variables = []
         for name, expr in session.variable_table.items():
-            value = read_variable(
-                session.gdb, name, expr, session.buffer_layouts.get(name.upper())
-            )
-            variables.append(
-                {"name": name, "value": _display_value(value), "variablesReference": 0}
-            )
+            # One unreadable item (a LOCAL-STORAGE item whose storage is
+            # not bound yet) must not fail the whole response: it emptied
+            # the Variables pane for the rest of the session (issue #318).
+            shown = _read_display_value(session, name, expr)
+            variables.append({"name": name, "value": shown, "variablesReference": 0})
         for name in session.unavailable:
             variables.append(
                 {
@@ -497,16 +497,13 @@ class DapAdapter:
                 request, success=False, message=f"unknown variable: {expression}"
             )
             return
-        value = read_variable(
-            session.gdb,
-            expression,
-            expr,
-            session.buffer_layouts.get(expression.strip().upper()),
-        )
         self._send_response(
             request,
             success=True,
-            body={"result": _display_value(value), "variablesReference": 0},
+            body={
+                "result": _read_display_value(session, expression, expr),
+                "variablesReference": 0,
+            },
         )
 
     def _handle_continue(self, request: dict) -> None:
@@ -645,6 +642,18 @@ def _is_same_source(client_path: str, original_file: str | None) -> bool:
         return parts(os.path.realpath(client_path)) == original
     client = parts(client_path)
     return bool(client) and original[-len(client) :] == client
+
+
+def _read_display_value(session: DebugSession, name: str, expr: str) -> str:
+    """`name`'s value as the Variables pane / evaluate shows it, or
+    `UNREADABLE_VALUE` when gdb cannot read it (issue #318)."""
+    try:
+        value = read_variable(
+            session.gdb, name, expr, session.buffer_layouts.get(name.strip().upper())
+        )
+    except (GdbCommandError, ValueError):
+        return UNREADABLE_VALUE
+    return _display_value(value)
 
 
 def _display_value(value: VariableValue) -> str:

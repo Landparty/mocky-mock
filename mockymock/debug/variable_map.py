@@ -108,6 +108,15 @@ def parse_local_header(text: str) -> dict[str, str]:
 #: (issue #156): an absent row read as "this program has no such item".
 UNAVAILABLE_VALUE = "<unavailable: not materialized by cobc>"
 
+#: What the Variables view shows for an item gdb could not read at this
+#: stop -- a LOCAL-STORAGE item whose storage cobc has not bound yet (its
+#: `.data` is NULL until the program's first use of it), issue #318.
+UNREADABLE_VALUE = "<unavailable: storage not bound at this point>"
+
+#: gdb's printing of a `cob_u8_t *` (an EXTERNAL item's `b_NN`): the
+#: pointer, then the text it points at.
+_POINTER_REPR_RE = re.compile(r'^0x[0-9a-fA-F]+\s+(?P<text>".*")$', re.DOTALL)
+
 
 def declared_data_names(program) -> list[str]:
     """Every addressable data item the program declares, in declaration
@@ -313,13 +322,22 @@ def _decode_packed_decimal(raw: bytes, digits: int, scale: int, flags: int = 0) 
     if digits > 0:
         digit_nibbles = digit_nibbles[-digits:]
     digit_str = "".join(str(n) for n in digit_nibbles)
-    if scale > 0:
-        int_part = digit_str[:-scale] or "0"
-        frac_part = digit_str[-scale:]
-        value = f"{int_part}.{frac_part}"
-    else:
-        value = digit_str or "0"
+    value = _place_point(digit_str, scale) or "0"
     return f"-{value}" if sign_nibble in (0xB, 0xD) else value
+
+
+def _place_point(digit_str: str, scale: int) -> str:
+    """`digit_str` (the stored digits) as the value cobc's `scale` says
+    it holds. A PICTURE with P positions gives a negative scale (`9(3)PPP`:
+    scale -3, the stored 637 is 637000) or one larger than the stored
+    digit count (`VPP99`: scale 4, the stored 12 is 0.0012); reading
+    either as an ordinary scale showed another number (issue #295)."""
+    if scale < 0:
+        return str(int(digit_str or "0") * 10 ** (-scale))
+    if scale > 0:
+        digit_str = digit_str.rjust(scale, "0")
+        return f"{digit_str[:-scale] or '0'}.{digit_str[-scale:]}"
+    return digit_str
 
 
 def _decode_numeric_display(raw: bytes, scale: int, flags: int) -> str:
@@ -355,9 +373,7 @@ def _decode_numeric_display(raw: bytes, scale: int, flags: int) -> str:
             elif 0x41 <= byte <= 0x49:  # 'A'..'I'
                 data[index] = byte - 0x41 + 0x31
     digit_str = "".join(chr(b) for b in data if 0x30 <= b <= 0x39)
-    value = (
-        f"{digit_str[:-scale] or '0'}.{digit_str[-scale:]}" if scale > 0 else digit_str
-    )
+    value = _place_point(digit_str, scale)
     return f"-{value}" if negative else value
 
 
@@ -373,6 +389,8 @@ def _decode_binary(
     value = int.from_bytes(
         raw, byteorder="big" if big_endian else "little", signed=signed
     )
+    if scale < 0:  # P scaling: 9(3)PPP COMP stores 12 for 12000 (#295)
+        return str(value * 10 ** (-scale))
     if scale > 0:
         text = str(abs(value)).rjust(scale + 1, "0")
         sign = "-" if value < 0 else ""
@@ -403,6 +421,10 @@ def read_variable(
         # than reporting it as opaque.
         raw_repr = evaluate(session, expr)
         decoded = _unquote_c_string(raw_repr)
+        if decoded is None and (pointer := _POINTER_REPR_RE.match(raw_repr)):
+            # An EXTERNAL item: `b_NN` is a pointer to its storage, and gdb
+            # prints the address before the text (issue #318).
+            decoded = _unquote_c_string(pointer.group("text"))
         if decoded is not None:
             return VariableValue(
                 name=name, kind="alphanumeric", raw_repr=raw_repr, decoded=decoded
@@ -415,6 +437,11 @@ def read_variable(
     size = int(evaluate(session, f"({expr}).size"))
     address = int(evaluate(session, f"(long)({expr}).data"))
     raw_repr = evaluate(session, expr)
+    if address == 0:
+        # A LOCAL-STORAGE field before cobc binds its storage (issue #318).
+        return VariableValue(
+            name=name, kind="unavailable", raw_repr=raw_repr, decoded=UNREADABLE_VALUE
+        )
     raw_bytes = _read_raw_memory(session, address, size)
     return _decode_field(name, type_code, digits, scale, flags, raw_repr, raw_bytes)
 
