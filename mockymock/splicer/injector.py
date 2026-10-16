@@ -525,9 +525,7 @@ def build_site_dispatch(
         lines.append("                   ADD 1 TO UT-FAIL-COUNT")
     lines.append("           END-EVALUATE")
     if lifted_clauses:
-        lines.extend(
-            f"           {line}" for line in clause_guard_lines(lifted_clauses)
-        )
+        lines.extend(clause_guard_lines(lifted_clauses, indent="           "))
     return lines
 
 

@@ -512,6 +512,18 @@ def _run_static_checks(
     )
     out.surface = surface
     out.file_status_fields = analyze_file_status_fields(parse_result.ast)
+    # Items the between-case reset cannot put back carry one case's value
+    # into the next (issue #333): say so rather than skip them silently.
+    from mockymock.splicer.reset import unreset_items
+
+    unreset = unreset_items(parse_result.ast)
+    if unreset:
+        out.notes.append(
+            f"{len(unreset)} WORKING-STORAGE/LOCAL-STORAGE item(s) cannot be "
+            f"reset between test cases and keep the previous case's value "
+            f"({', '.join(unreset)}) -- a case may pass alone (--case) and "
+            f"fail in the full suite; set them in the test case if it reads them"
+        )
     # PROCESS/CBL precompiler directives (IBM mainframe compiler-directing
     # statements preceding IDENTIFICATION DIVISION) parse fine as far as
     # cobolparser is concerned -- CobolParser.parse() blanks them out for its

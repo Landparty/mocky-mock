@@ -195,11 +195,26 @@ _SCOPED_VERBS = {"IF": "END-IF", "EVALUATE": "END-EVALUATE", "SEARCH": "END-SEAR
 @dataclass(frozen=True)
 class LiftedClause:
     """One clause body: its AST attribute name, the `WHEN` condition that
-    selects it, and its source text as one stripped line per source line."""
+    selects it, and its source text as one stripped line per source line.
+
+    `source_lines` is the same body exactly as it stands in the source
+    (one line per entry, trailing blanks dropped; the first line keeps its
+    indentation when the body starts its line). The splice emits these, so
+    every whole body line stays text-equal to its source line and the
+    instrumented -> original line map (`report.coverage.
+    build_original_line_map`, used by trace, coverage and the debugger)
+    pairs it with the line it came from (issue #332).
+
+    `closers` are the END-IF / END-EVALUATE / END-SEARCH the sentence
+    period closed for the last body (issue #319). `lines` ends with them
+    too; `source_lines` does not (no source line holds them), so the splice
+    emits them after the verbatim lines."""
 
     attr: str
     guard: str
     lines: tuple[str, ...]
+    source_lines: tuple[str, ...] = ()
+    closers: tuple[str, ...] = ()
 
 
 def _spec(statement: object) -> tuple[tuple[str, ...], str] | None:
@@ -491,7 +506,19 @@ def _lift(
         body_lines = tuple(
             line.strip() for line in body_text.splitlines() if line.strip()
         ) + tuple(closers)
-        lifted.append(LiftedClause(attr, _GUARDS[attr], body_lines))
+        # The body exactly as it stands in the source (issue #332), so the
+        # line map pairs each emitted line with its source line. The
+        # END-IF / END-EVALUATE / END-SEARCH a sentence period closed
+        # (issue #319) exists in no source line; it rides separately.
+        line_start = text.rfind("\n", 0, offset) + 1
+        lead = text[line_start:offset]
+        verbatim = (lead if not lead.strip() else "") + body_text
+        source_lines = tuple(
+            line.rstrip() for line in verbatim.splitlines() if line.strip()
+        )
+        lifted.append(
+            LiftedClause(attr, _GUARDS[attr], body_lines, source_lines, tuple(closers))
+        )
     return tuple(lifted), None
 
 
@@ -522,18 +549,29 @@ def clause_lift_problem(statement: object, lines: list[str]) -> str | None:
     return _lift(statement, lines)[1]
 
 
-def clause_guard_lines(lifted: tuple[LiftedClause, ...]) -> list[str]:
+def clause_guard_lines(lifted: tuple[LiftedClause, ...], indent: str = "") -> list[str]:
     """The `EVALUATE TRUE` that runs the lifted clause selected by the
     mocked outcome. EVALUATE, not a chain of IFs: its selection is made
     once, before any body runs, so a body that PERFORMs code reaching
     another mock (which rewrites `UT-MOCK-STATUS`) cannot select a second
-    clause."""
-    lines = ["EVALUATE TRUE"]
+    clause.
+
+    The EVALUATE / WHEN / END-EVALUATE lines are indented by `indent`; the
+    bodies are the program's own lines verbatim (`source_lines`), so the
+    line map still pairs each with its source line (issue #332)."""
+    lines = [f"{indent}EVALUATE TRUE"]
     by_guard: dict[str, list[str]] = {}
     for clause in lifted:
-        by_guard.setdefault(clause.guard, []).extend(clause.lines)
-    for guard, body in by_guard.items():
-        lines.append(f"    WHEN {guard}")
-        lines.extend(f"        {line}" for line in body)
-    lines.append("END-EVALUATE")
+        if clause.source_lines:
+            # Verbatim, then the scope closers the period supplied (#319).
+            body = clause.source_lines + tuple(
+                f"{indent}        {closer}" for closer in clause.closers
+            )
+        else:
+            body = tuple(f"{indent}        {line}" for line in clause.lines)
+        by_guard.setdefault(clause.guard, []).extend(body)
+    for guard, guarded in by_guard.items():
+        lines.append(f"{indent}    WHEN {guard}")
+        lines.extend(guarded)
+    lines.append(f"{indent}END-EVALUATE")
     return lines

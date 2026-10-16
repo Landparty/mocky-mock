@@ -615,8 +615,11 @@ Rules:
   missing).
 - Placeholder bodies (`_PLACEHOLDER_BODIES`): `CALL`/`DYNCALL` →
   `MOVE 0 TO RETURN-CODE`; `SQL` → `MOVE 0 TO SQLCODE`; file-op categories →
-  empty body; `ACCEPT` → `MOVE SPACES TO <target>` (built per-site, not from
-  the static dict, since it needs the target name).
+  empty body; `ACCEPT` → `INITIALIZE <target>` (built per-site, not from
+  the static dict, since it needs the target name). `INITIALIZE`, not
+  `MOVE SPACES` (issue #330): cobc rejects MOVE SPACES to a numeric or
+  numeric-edited target, and this body is also lint's suggested fix and
+  what `--fill` / `--per-paragraph` / `--placeholder` insert.
 - Per-category directive-line shape (`_directive_for`):
   - `CALL`: `MOCK CALL "name"` normally, `MOCK MQ "name"` if `site.is_mq`;
     returns `None` (site skipped) if no key was captured — emitting
@@ -1100,6 +1103,15 @@ paragraph-grouped path described above, unchanged. A real
   mistaking `READ` for a data item or dropping it silently -- see
   `analysis.md`'s stub-expectation scanner for how a human promotes a real
   data-name stub comment to an `EXPECT`.
+- **Bundle `unresolved` notes** (issue #331): `FixtureBundle.unresolved` and
+  each `BoundaryFixture.unresolved` (what cobol-parser could not generate,
+  e.g. a header/detail FD generated through its first 01 record only) were
+  parsed and dropped. `_scaffold_with_bundle` now writes each fixture's
+  entries as `*> NOTE:` lines directly above its MOCK
+  (`_bundle_mock_directives`), the bundle-level entries not already shown
+  at a fixture under TESTSUITE, and prints every entry once on stderr
+  (`mockymock generate: note: ...`) -- `init` composes `generate`, so it
+  prints them too.
 - **Unverified-scenario notes** (`_verification_comment_lines`, 2026-09-04):
   cobol-parser's bundle now carries a `Scenario.verification` verdict --
   whether that scenario's own generated data actually satisfies the branch

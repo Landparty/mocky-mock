@@ -57,6 +57,21 @@ _NUMERIC_VALUE_RE = re.compile(
 
 # usage strings as cobolparser stores them (verified empirically).
 _FLOAT_USAGES = frozenset({"COMP-1", "COMP-2", "COMPUTATIONAL-1", "COMPUTATIONAL-2"})
+#: PICTURE-less numeric usages a `MOVE 0` resets: the floats above plus
+#: the COBOL 2002 binary / float types GnuCOBOL accepts under -std=mvs
+#: (issue #333 -- they used to be skipped and leaked between cases).
+_PICLESS_NUMERIC_USAGES = _FLOAT_USAGES | frozenset(
+    {
+        "BINARY-CHAR",
+        "BINARY-SHORT",
+        "BINARY-LONG",
+        "BINARY-DOUBLE",
+        "BINARY-C-LONG",
+        "FLOAT-SHORT",
+        "FLOAT-LONG",
+        "FLOAT-EXTENDED",
+    }
+)
 _POINTER_USAGES = frozenset(
     {"POINTER", "PROCEDURE-POINTER", "FUNCTION-POINTER", "PROGRAM-POINTER"}
 )
@@ -585,9 +600,10 @@ def _elementary_reset(item, target: str | None = None) -> str | None:
 
     POINTER-family items can only be assigned with SET, and NULL is their
     only legal VALUE, so `SET ... TO NULL` both resets and restores. USAGE
-    INDEX items are skipped: their content is implementation-defined and a
-    reset adds nothing a fresh SEARCH/SET in the test flow doesn't. A
-    PICTURE-less item of unrecognized usage is skipped fail-safe.
+    INDEX items get no line here: no MOVE is legal for them, so
+    `index_names` hands each one to the saved-start-up-value SET reset
+    (`index_reset_lines`, issue #333). A PICTURE-less item of unrecognized
+    usage is skipped fail-safe (`unreset_items` reports it).
 
     `target` is the reference the line writes to (a qualified name for a
     group child); it defaults to the item's own name."""
@@ -600,7 +616,7 @@ def _elementary_reset(item, target: str | None = None) -> str | None:
     if item.value_clause:
         return _value_restore(item, name)
     if item.picture_clause is None:
-        if usage in _FLOAT_USAGES:
+        if usage in _PICLESS_NUMERIC_USAGES:
             return f"MOVE 0 TO {name}"
         return None  # PIC-less, unrecognized usage: skip fail-safe
     return f"MOVE {'0' if _is_numeric(item) else 'SPACES'} TO {name}"
@@ -613,21 +629,28 @@ INDEX_SAVE_PREFIX = "UT-IDX-SAVE-"
 
 def index_names(program) -> list[str]:
     """A reference to every `INDEXED BY` index the program's DATA DIVISION
-    declares, one per declaration, in declaration order.
+    declares, one per declaration, in declaration order, followed by every
+    WORKING-STORAGE / LOCAL-STORAGE `USAGE INDEX` data item the reset can
+    SET by its bare name (issue #333: one outside any table, with a name
+    declared once). Both get the same save-at-start / restore-every-case
+    treatment.
 
-    A name declared once is returned bare. One declared by several tables
-    (one record copybook included under two 01s) is qualified through its
-    table's named ancestors, `IX OF ENT OF IN-REC`: a bare `SET ... TO IX`
-    is ambiguous and cobc rejected the whole driver (issue #249). FILLER
-    ancestors are left out of the chain (COBOL lets a qualifier skip
-    levels); a declaration still not told apart from another by its
-    qualified chain is left out, since nothing can name it."""
+    An INDEXED BY name declared once is returned bare. One declared by
+    several tables (one record copybook included under two 01s) is
+    qualified through its table's named ancestors, `IX OF ENT OF IN-REC`:
+    a bare `SET ... TO IX` is ambiguous and cobc rejected the whole driver
+    (issue #249). FILLER ancestors are left out of the chain (COBOL lets a
+    qualifier skip levels); a declaration still not told apart from
+    another by its qualified chain is left out, since nothing can name
+    it."""
     data_division = program.get_division("DATA")
     if data_division is None:
         return []
     found: list[tuple[str, str]] = []  # (bare name, qualified reference)
+    counts: dict[str, int] = {}
+    index_items: list[str] = []
 
-    def walk(node) -> None:
+    def walk(node, in_table: bool, storage: bool) -> None:
         for child in _data_children(node):
             clause = getattr(child, "occurs_clause", None)
             for name in getattr(clause, "index_names", None) or []:
@@ -635,10 +658,33 @@ def index_names(program) -> list[str]:
                     ancestry = _named_ancestry(child, include_self=True)
                     chain = [name.upper(), *(n.upper() for n in ancestry)]
                     found.append((name.upper(), " OF ".join(chain)))
-            walk(child)
+            item_name = (getattr(child, "name", None) or "").upper()
+            if item_name:
+                counts[item_name] = counts.get(item_name, 0) + 1
+            child_in_table = in_table or clause is not None
+            usage = (getattr(child, "usage", None) or "").upper()
+            if (
+                storage
+                and usage == "INDEX"
+                and not child_in_table
+                and not _is_group(child)
+                and not _is_filler(child)
+                and item_name
+            ):
+                index_items.append(item_name)
+            walk(child, child_in_table, storage)
 
     for section in getattr(data_division, "sections", data_division.children):
-        walk(section)
+        section_name = (
+            getattr(section, "_own_section_name", None)
+            or getattr(section, "section_name", None)
+            or ""
+        )
+        storage = section_name.upper().replace(" SECTION", "").strip() in (
+            "WORKING-STORAGE",
+            "LOCAL-STORAGE",
+        )
+        walk(section, False, storage)
     bare_counts = Counter(bare for bare, _ in found)
     qualified_counts = Counter(qualified for _, qualified in found)
     names: list[str] = []
@@ -647,6 +693,11 @@ def index_names(program) -> list[str]:
             names.append(bare)
         elif qualified_counts[qualified] == 1:
             names.append(qualified)
+    names.extend(
+        name
+        for name in dict.fromkeys(index_items)
+        if counts.get(name) == 1 and name not in names
+    )
     return names
 
 
@@ -660,6 +711,48 @@ def _named_ancestry(item, include_self: bool = False) -> list[str]:
             names.append(node.name)
         node = getattr(node, "parent", None)
     return names
+
+
+def unreset_items(program) -> list[str]:
+    """WORKING-STORAGE / LOCAL-STORAGE elementary items the between-case
+    reset cannot put back (issue #333): a `USAGE INDEX` item inside a
+    table or with a duplicated name, or a PICTURE-less item of a usage
+    `_elementary_reset` does not know. Their values carry from one case
+    into the next, so the caller reports them."""
+    data_division = program.get_division("DATA")
+    if data_division is None:
+        return []
+    saved = set(index_names(program))
+    skipped: list[str] = []
+
+    def walk(node) -> None:
+        for child in _data_children(node):
+            if getattr(child, "level", None) in (66, 88):
+                continue  # a RENAMES / condition name has no storage of its own
+            if _is_group(child):
+                walk(child)
+                continue
+            name = (getattr(child, "name", None) or "").upper()
+            if not name or _is_filler(child) or getattr(child, "redefines", None):
+                continue
+            usage = (getattr(child, "usage", None) or "").upper()
+            if usage == "INDEX":
+                if name not in saved:
+                    skipped.append(name)
+                continue
+            if (
+                child.picture_clause is None
+                and not child.value_clause
+                and usage not in _POINTER_USAGES
+                and usage not in _PICLESS_NUMERIC_USAGES
+                and not getattr(child, "occurs_clause", None)
+            ):
+                skipped.append(name)
+
+    for section_name in ("WORKING-STORAGE", "LOCAL-STORAGE"):
+        for section in _sections(data_division, section_name):
+            walk(section)
+    return list(dict.fromkeys(skipped))
 
 
 def index_working_storage_lines(names: list[str]) -> list[str]:

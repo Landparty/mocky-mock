@@ -121,7 +121,7 @@ def test_scaffold_covers_console_accept():
     surface, _ = _surface_and_ast(ALL_BOUND_SOURCE)
     text = scaffold_cut("ALLBOUND", surface)
     assert "MOCK ACCEPT WS-CHOICE" in text
-    assert "MOVE SPACES TO WS-CHOICE" in text
+    assert "INITIALIZE WS-CHOICE" in text
 
 
 def test_scaffold_passes_refusal_gate_for_every_generated_case():

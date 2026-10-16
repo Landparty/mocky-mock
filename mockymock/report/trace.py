@@ -71,6 +71,52 @@ def parse_trace(trace_text: str) -> list[TraceEntry]:
     return entries
 
 
+_CASE_PARAGRAPH_PREFIX = "UT-TESTCASE-"
+
+
+def case_entries(
+    entries: list[TraceEntry], instrumented: list[str], case_id: str | None
+) -> list[TraceEntry]:
+    """Only the entries the selected case ran (issue #334).
+
+    The trace file covers the whole binary, so BEFORE-ALL steps (run in
+    the suite paragraph before the case is PERFORMed) and AFTER-ALL steps
+    (after it returns) were reported as the case's path. A case runs from
+    the entry into its driver paragraph `UT-TESTCASE-<id>` up to its
+    `CASE <id> END` DISPLAY, the paragraph's last statement; BEFORE-EACH
+    and AFTER-EACH run between the two and stay in. Without the case id
+    (the case never printed START) the first case paragraph is used, and
+    without an END line in the source the span runs to the trace's end."""
+    paragraph = f"{_CASE_PARAGRAPH_PREFIX}{case_id}" if case_id else None
+    end_marker = f'__MOCKYMOCK__ CASE {case_id} END"' if case_id else None
+    end_lines = {
+        number
+        for number, text in enumerate(instrumented, start=1)
+        if end_marker is not None and end_marker in text
+    }
+    start = next(
+        (
+            index
+            for index, entry in enumerate(entries)
+            if entry.paragraph is not None
+            and (
+                entry.paragraph.upper() == paragraph
+                if paragraph is not None
+                else entry.paragraph.upper().startswith(_CASE_PARAGRAPH_PREFIX)
+            )
+        ),
+        None,
+    )
+    if start is None:
+        return []
+    scoped: list[TraceEntry] = []
+    for entry in entries[start:]:
+        scoped.append(entry)
+        if entry.paragraph is None and entry.line in end_lines:
+            break
+    return scoped
+
+
 def format_trace_json(
     entries: list[TraceEntry],
     line_map: dict[int, int],

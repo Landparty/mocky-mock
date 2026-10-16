@@ -1745,6 +1745,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     from mockymock.report.results import parse_stdout
     from mockymock.report.trace import (
+        case_entries,
         format_trace_console,
         format_trace_json,
         parse_trace,
@@ -2197,15 +2198,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 "single statement)"
             )
         else:
-            # Exactly one case is selected (enforced above), so the whole
-            # trace belongs to it -- no segmentation needed.
+            # Exactly one case is selected (enforced above), but the trace
+            # also holds the BEFORE-ALL/AFTER-ALL steps run around it, so
+            # it is cut to the case's own span (case_entries, #334).
             selected = args.case[0]
             case_result = next(
                 (r for r in suite_result.results if r.case_name == selected), None
             )
             model_case = next((c for c in suite.test_cases if c.name == selected), None)
             trace_json = format_trace_json(
-                parse_trace(trace_text),
+                case_entries(
+                    parse_trace(trace_text),
+                    instrumented,
+                    case_result.case_id if case_result is not None else None,
+                ),
                 build_original_line_map(
                     instrumented,
                     normalized_lines,
@@ -3472,6 +3478,22 @@ Run 'mockymock <command> --help' for a command's own options.
 """
 
 
+_SUITE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _suite_name(value: str) -> str:
+    """argparse `type=` for `--name` (#336): NAME becomes the middle of
+    `<program>.<NAME>.cut`, so it must be one plain word -- a `/` would
+    create folders no command pairs back to the program, and `..` would
+    write outside the tests folder."""
+    if not _SUITE_NAME_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            f"invalid suite name {value!r}: NAME becomes the middle of "
+            "<program>.<NAME>.cut, so use only letters, digits, '-' and '_'"
+        )
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mockymock",
@@ -3523,6 +3545,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init_parser.add_argument(
         "--name",
+        type=_suite_name,
         help="Name a second suite for the program: writes <program>.<NAME>.cut",
     )
     init_parser.add_argument(
@@ -3559,7 +3582,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     suites_parser.add_argument("program", nargs="?")
     suites_parser.add_argument(
-        "--name", help="With PROGRAM: report the path for <program>.<NAME>.cut"
+        "--name",
+        type=_suite_name,
+        help="With PROGRAM: report the path for <program>.<NAME>.cut",
     )
     suites_parser.add_argument(
         "--json", action="store_true", help="Machine-readable output"
@@ -3581,6 +3606,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument(
         "--name",
+        type=_suite_name,
         help="Name a second suite for the program: writes <program>.<NAME>.cut",
     )
     generate_parser.add_argument(

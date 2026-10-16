@@ -57,5 +57,5 @@ def test_generated_scaffolds_parse_and_lint_clean(tmp_path) -> None:
         cut = out.read_text()
         assert "MOCK ACCEPT WS-ENT\n" in cut
         assert "MOCK ACCEPT FLD\n" in cut
-        assert "MOVE SPACES TO WS-ENT ( WS-I )" in cut
+        assert "INITIALIZE WS-ENT ( WS-I )" in cut  # #330 + #311
         assert main(["lint", str(source), "--cut", str(out)]) == 0

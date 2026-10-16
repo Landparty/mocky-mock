@@ -223,15 +223,27 @@ def build_original_line_map(
     # the replacement right after it. Align those commented copies too, so
     # the statement keeps its place (issue #297: they dropped out of the
     # executable set, and an untaken CALL-only branch read 100%).
+    #
+    # A source line that ALSO survives as live code keeps that pairing: a
+    # mocked statement's AT END / ON EXCEPTION bodies are commented out with
+    # it but re-emitted verbatim after the dispatch (issue #332), and the
+    # live copy is the one that runs. Only a commented line whose source
+    # line has no live copy is aligned here.
     commented: set[int] = set()
+    commented_span: set[int] = set()
     if any(line.startswith(_COMMENTED_PREFIX) for line in instrumented_stripped):
         aligned = list(instrumented_stripped)
         for index, line in enumerate(instrumented_stripped):
             if index not in inst_to_norm and line.startswith(_COMMENTED_PREFIX):
                 aligned[index] = line[len(_COMMENTED_PREFIX) :]
+                commented_span.add(index)
+        realigned = _matching_index_map(normalized_stripped, aligned)
+        live = set(inst_to_norm.values())
+        for index in commented_span:
+            norm_index = realigned.get(index)
+            if norm_index is not None and norm_index not in live:
+                inst_to_norm[index] = norm_index
                 commented.add(index)
-        inst_to_norm = _matching_index_map(normalized_stripped, aligned)
-        commented &= set(inst_to_norm)
 
     extracted = _extract_fixed_format(original_lines)
     norm_to_orig = _matching_index_map(
@@ -248,11 +260,11 @@ def build_original_line_map(
     # first line: the statement counts as executed exactly when its
     # replacement ran.
     for index in sorted(commented):
-        if index - 1 in commented or index + 1 not in mapping:
+        if index - 1 in commented_span or index + 1 not in mapping:
             continue  # not the first line of its span, or unmapped
         original = mapping[index + 1]
         follower = index + 1
-        while follower in commented:
+        while follower in commented_span:
             follower += 1
         while (
             follower < len(instrumented_stripped)

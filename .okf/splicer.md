@@ -507,6 +507,18 @@ that may reach another mock and rewrite the field): `(1:1) = "1"` AT END,
 EXCEPTION/ON OVERFLOW. A lifted body is the program's own text, sliced
 positionally (AST start of its first statement up to the next clause's
 header, or the verb's own `END-xxx` / the sentence period for the last).
+The bodies are emitted **verbatim** (`LiftedClause.source_lines`: each
+source line as it stands, the first keeping its indentation when the body
+starts its line) -- only the EVALUATE / WHEN / END-EVALUATE lines take the
+dispatch's indent (`clause_guard_lines(..., indent=...)`). Issue #332: the
+stripped, re-indented copies never equalled their source lines, so the
+text-equality `report.coverage.build_original_line_map` (behind `--trace`,
+`--coverage` and the debugger's breakpoints) left the code those clauses
+run unmapped. A body line that shares its source line with a header or a
+terminator still does not map (fails safe: no coverage, no breakpoint).
+The END-IF / END-EVALUATE / END-SEARCH closers #319 appends when the last
+body ends at the sentence period exist in no source line: they ride in
+`LiftedClause.closers` and are emitted after the verbatim lines.
 
 `lift_clause_bodies` returns None when any body holds another boundary
 statement, GOBACK, STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL;
@@ -691,9 +703,9 @@ comma spelling too (`injector`, read from the site's text).
 | Elementary, no `VALUE`, numeric or numeric-edited PIC | `MOVE 0 TO <name>` | numeric-edited PICs (e.g. `PIC ZZZ9`) reject `MOVE SPACES` — `_is_numeric` treats any of `9 V P Z * $ + -` in the (repeat-group-stripped) picture as numeric, not just `9`/`V`/`P` |
 | Elementary, no `VALUE`, alphanumeric PIC | `MOVE SPACES TO <name>` | COBOL's conventional type default, a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |
 | Elementary, no `PICTURE` (usage-typed), `USAGE POINTER`/`PROCEDURE-POINTER`/`FUNCTION-POINTER`/`PROGRAM-POINTER` | `SET <name> TO NULL` | pointers can only be assigned with `SET`; `NULL` is their only legal literal value — `MOVE SPACES` (the old picture-blind fallback) is rejected by cobc |
-| Elementary, no `PICTURE`, `USAGE COMP-1`/`COMP-2` (or `COMPUTATIONAL-1`/`-2`) | `MOVE 0 TO <name>` | floats have no `PICTURE`, so the old numeric test (`item.picture_clause is None → False`) misclassified them alphanumeric and emitted an illegal `MOVE SPACES` |
-| Elementary, no `PICTURE`, `USAGE INDEX` | *(skipped — no line emitted)* | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; skipping is the only reset that never emits illegal COBOL (documented fidelity limit) |
-| Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE |
+| Elementary, no `PICTURE`, `USAGE COMP-1`/`COMP-2` (or `COMPUTATIONAL-1`/`-2`), or (issue #333) `BINARY-CHAR`/`-SHORT`/`-LONG`/`-DOUBLE`/`BINARY-C-LONG`/`FLOAT-SHORT`/`-LONG`/`-EXTENDED` (`_PICLESS_NUMERIC_USAGES`) | `MOVE 0 TO <name>` | floats have no `PICTURE`, so the old numeric test (`item.picture_clause is None → False`) misclassified them alphanumeric and emitted an illegal `MOVE SPACES` |
+| Elementary, no `PICTURE`, `USAGE INDEX` | *(no MOVE line)* -- saved and restored by `SET` with the INDEXED BY names below (issue #333) | INDEX items accept neither `MOVE SPACES` nor `MOVE 0`; one inside a table or with a duplicated name is still skipped and reported (`unreset_items`) |
+| Elementary, no `PICTURE`, any other/unrecognized `USAGE` | *(skipped, fail-safe)* | unknown usage — skip rather than guess at a possibly-illegal MOVE; reported by `unreset_items` as a run/lint note, since its value carries between cases (issue #333) |
 | Group, no `VALUE` clause | `INITIALIZE <name>` | a `MOVE SPACES` over a group would write spaces across numeric children, corrupting them for the next case's arithmetic; `INITIALIZE` zeros numeric children and space-fills alphanumeric ones |
 | Any top-level item with a `REDEFINES` clause | *(skipped — no line emitted)* | it shares the redefined item's storage, which that item's own line already reset/restored; a second reset through the redefining view ran after it and overwrote it (2026-09-27 fix: `01 WS-CODE PIC X(4) VALUE "AB12".` + `01 WS-CODE-NUM REDEFINES WS-CODE PIC 9(4).` left `WS-CODE` = `"0000"` in every case, the first included). Skipping matches program start-up, where GnuCOBOL initializes the storage from the first description |
 
@@ -830,8 +842,14 @@ rejected the driver (#249). An index a BEFORE-ALL step SETs or SEARCHes
 keeps that position in every case: `plan_snapshot` adds one `01
 UT-SNAP-nnn USAGE INDEX.` per `index_names` entry, `SET`-saved in
 `UT-SAVE-STATE` and `SET` back in `UT-RESTORE-STATE`, which runs after the
-reset (#280; before, each case saw the start-up value). USAGE INDEX *data items* are
-still skipped (table above).
+reset (#280; before, each case saw the start-up value).
+Since issue #333 `index_names`
+also lists every WORKING-STORAGE / LOCAL-STORAGE `USAGE INDEX` *data item*
+outside any table whose name is declared once, so it gets the same save /
+restore (SET between index data items is legal); before, `SET WS-IX UP BY
+4` in one case left the next starting at 4. Whatever the reset still
+cannot put back is listed by `reset.unreset_items` and reported by
+`run_static_checks` as a note (printed by run/lint/debug/export).
 
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.
