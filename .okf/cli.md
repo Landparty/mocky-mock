@@ -1001,6 +1001,24 @@ the `.cut` (`_cmd_lint` re-parses it quietly), since the check is
 `.cut`-only. The `.cut line N` wording is what lets the extension place the
 diagnostic on the TESTCASE header.
 
+**Untestable omitted-argument branch (issue #288, 2026-10-16).**
+`StaticCheckResult.warnings` carries program-side warnings, which lint
+prints (and counts) ahead of the NO_ASSERTION ones and `run` prints with
+its notes. The one producer so far: `warning (OMITTED_ARGUMENT_UNTESTABLE):
+paragraph P, line N: ...` for each `ADDRESS OF <folded LINKAGE item>`
+compared with `NULL`/`NULLS` (either side, `IS`/`NOT`/`EQUAL TO` allowed;
+a receiving `SET ADDRESS OF X TO NULL` is not a test) and each
+`NUMBER-OF-CALL-PARAMETERS`, in a paragraph the selected cases' reachability
+union (`union_executed_paragraphs`; None reports every one) can execute.
+The fold gives every parameter storage and the driver PERFORMs rather than
+CALLs, so the omitted-argument branch can never run. Items the program
+rebinds itself (BASED, issue #226) are skipped. Detection is
+`analysis.linkage.omitted_argument_tests`, the text is
+`omitted_argument_warnings`. A warning, not a refusal: the passed-argument
+branch is still testable. Issue #288's option 2; its option 1 (an `OMIT
+<item>` statement folding the item BASED and setting its address to NULL
+per case) is not built and shares the BASED work with #226.
+
 **Unknown data-names (issue #204, 2026-10-16).** `run_static_checks` step
 7b (`analysis.cut_names.check_cut_data_names`, cumulative with step 8)
 refuses `UNKNOWN_DATA_NAME` at the `.cut` line of every setup/hook MOVE

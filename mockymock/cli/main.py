@@ -1654,6 +1654,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     for note in checked.notes:
         print(f"mockymock run: {note}")
+    for warning in checked.warnings:
+        print(f"mockymock run: {warning}")
     if checked.linkage is not None:
         _print_linkage_neutralization(
             "run",
@@ -2450,7 +2452,8 @@ def _cmd_lint(args: argparse.Namespace) -> int:
             suite = parse_cut(read_utf8_source(cut_path))
         except Exception:  # noqa: BLE001 -- already reported as a problem
             suite = None
-    warnings = no_assertion_warnings(suite) if suite is not None else []
+    warnings = list(result.warnings)
+    warnings += no_assertion_warnings(suite) if suite is not None else []
     for warning in warnings:
         print(f"mockymock lint: {warning}")
     if warnings:
