@@ -1797,6 +1797,41 @@ def _cics_operand_roles(statement: object) -> tuple[set[str], set[str]]:
     return inputs, others
 
 
+def _cics_fixture_statements(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> list | None:
+    """The EXEC CICS statement(s) a CICS fixture stands for: the one on
+    the fixture's own line, else every statement its key prefixes. None
+    with no program to read them from."""
+    surface = source.surface if source is not None else None
+    if surface is None:
+        return None
+    key = " ".join(fixture.key.upper().split())
+    cics_sites = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.CICS
+        and (site.match_text or "").startswith(key)
+    ]
+    return [site.statement for site in cics_sites if site.line == fixture.line] or [
+        site.statement for site in cics_sites
+    ]
+
+
+def _cics_resp_names(statements: list) -> list[str]:
+    """The RESP and RESP2 operand names of `statements`, in order, once."""
+    names: list[str] = []
+    for statement in statements:
+        options = getattr(statement, "options", None) or {}
+        for option, value in options.items():
+            if str(option).upper() not in ("RESP", "RESP2"):
+                continue
+            name = _cics_operand_name(value)
+            if name is not None and name not in names:
+                names.append(name)
+    return names
+
+
 def _cics_output_layout(
     fixture: BoundaryFixture, source: ProgramContext | None
 ) -> list[FieldSpec]:
@@ -1807,19 +1842,9 @@ def _cics_output_layout(
     A field also named by a non-input operand of any statement for this
     key is kept. With no program to read the statements from, nothing is
     filtered."""
-    surface = source.surface if source is not None else None
-    if surface is None:
+    statements = _cics_fixture_statements(fixture, source)
+    if statements is None:
         return fixture.layout
-    key = " ".join(fixture.key.upper().split())
-    cics_sites = [
-        site
-        for site in surface.boundary_sites
-        if site.category is MockCategory.CICS
-        and (site.match_text or "").startswith(key)
-    ]
-    statements = [
-        site.statement for site in cics_sites if site.line == fixture.line
-    ] or [site.statement for site in cics_sites]
     inputs: set[str] = set()
     others: set[str] = set()
     for statement in statements:
@@ -1836,7 +1861,9 @@ def _cics_output_layout(
 
 
 def _single_row_body(
-    fixture: BoundaryFixture, source: ProgramContext | None = None
+    fixture: BoundaryFixture,
+    source: ProgramContext | None = None,
+    pinned: frozenset[str] = frozenset(),
 ) -> list[str]:
     """ACCEPT / CALL / DYNCALL / CICS / DLI (always single-invocation), and
     SQL's own single-row/status-override fallback (see `_sql_wants_rows`).
@@ -1845,10 +1872,26 @@ def _single_row_body(
     categories do: every existing hand-written SQL mock in this codebase
     sets SQLCODE itself, always)."""
     body: list[str] = []
+    normal_resp: list[str] = []
     if fixture.category == "CICS":
-        fixture = replace(fixture, layout=_cics_output_layout(fixture, source))
+        layout = _cics_output_layout(fixture, source)
+        # RESP/RESP2 answer DFHRESP(NORMAL) and 0 unless the scenario pins
+        # them: a random number sent every happy path down the error
+        # branch, and --record-expectations recorded it (issue #253).
+        normal_resp = [
+            name
+            for name in _cics_resp_names(_cics_fixture_statements(fixture, source) or [])
+            if name not in pinned
+        ]
+        layout = [
+            spec
+            for spec in layout
+            if not set(spec.qualified_name.upper().split(".")) & set(normal_resp)
+        ]
+        fixture = replace(fixture, layout=layout)
     if fixture.sequence:
         body.extend(_row_move_lines(fixture.sequence[0], fixture, source))
+    body.extend(f"MOVE 0 TO {name}" for name in normal_resp)
     if fixture.category == "SQL":
         body.extend(_sql_status_lines(fixture))
         return body
@@ -2127,6 +2170,7 @@ def _bundle_directive_for(
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
+    pinned: frozenset[str] = frozenset(),
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """The full `MOCK ... END-MOCK` (or `MOCK ... ROWS ... END-MOCK`) block
     for one scenario's boundary fixture, or None if this (category, key)
@@ -2259,7 +2303,7 @@ def _bundle_directive_for(
             override,
         )
     else:
-        body = _single_row_body(fixture, source)
+        body = _single_row_body(fixture, source, pinned)
         if category is MockCategory.CALL:
             body = _dli_success_reply(_mq_success_reply(body, site), site)
         if category is MockCategory.DLI and registry.known(category, fixture.key):
@@ -2307,6 +2351,7 @@ def _bundle_directive_for_group(
     registry: TallyRegistry,
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
+    pinned: frozenset[str] = frozenset(),
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """Like `_bundle_directive_for`, but for every fixture that resolves
     to the SAME physical mockymock `BoundarySite` (only possible for
@@ -2337,7 +2382,7 @@ def _bundle_directive_for_group(
     them as status-only left the READ mock empty and the loop endless."""
     if len(fixtures) == 1 or any(f.direction != "STATUS_ONLY" for f in fixtures):
         return _bundle_directive_for(
-            fixtures[0], mockymock_keys, registry, placeholder_keys, source
+            fixtures[0], mockymock_keys, registry, placeholder_keys, source, pinned
         )
     primary = fixtures[0]
     try:
@@ -2355,6 +2400,19 @@ def _bundle_directive_for_group(
     lines.extend(f"    {line}" for line in body)
     lines.append("END-MOCK")
     return lines, None
+
+
+def _pinned_fields(scenario: Scenario) -> frozenset[str]:
+    """Leaf names (uppercased) of the fields cobol-parser pinned to reach
+    the branch `scenario` is named for (`verification.fields`): their
+    generated values are the point of the scenario and are never replaced
+    by a success default. Empty for the happy path."""
+    fields = (scenario.verification or {}).get("fields") or []
+    return frozenset(
+        str(entry.get("field") or "").upper().rsplit(".", 1)[-1]
+        for entry in fields
+        if isinstance(entry, dict) and entry.get("field")
+    )
 
 
 def _bundle_mock_directives(
@@ -2400,6 +2458,7 @@ def _bundle_mock_directives(
     reads the SAME downgrade decision the body rendering above it just
     made instead of re-deriving it from `placeholder_keys` a second time.
     """
+    pinned = _pinned_fields(scenario)
     fixtures_by_site: dict[int, list[BoundaryFixture]] = {}
     site_order: list[int] = []
     for fixture in scenario.fixtures:
@@ -2423,7 +2482,7 @@ def _bundle_mock_directives(
     for site_id in site_order:
         group = fixtures_by_site[site_id]
         result = _bundle_directive_for_group(
-            group, mockymock_keys, registry, placeholder_keys, source
+            group, mockymock_keys, registry, placeholder_keys, source, pinned
         )
         if result is not None:
             directive, override = result

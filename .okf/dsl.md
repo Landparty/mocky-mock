@@ -913,6 +913,16 @@ paragraph-grouped path described above, unchanged. A real
   only ABSTIME on FORMATTIME; nothing on ASSIGN/INQUIRE/ADDRESS/ASKTIME.
   A field also named by a non-input operand of any statement for the key
   is kept.
+- **CICS RESP/RESP2 answer NORMAL** (issue #253): the bundle lays the
+  `RESP(item)`/`RESP2(item)` operands out as ordinary fields with random
+  values, which sent every happy path down `IF WS-RESP NOT =
+  DFHRESP(NORMAL)` and let `--record-expectations` record the error
+  branch. `_single_row_body` drops those fields from the row and writes
+  `MOVE 0 TO <item>` for each (`_cics_resp_names` over the fixture's
+  statements), unless the scenario pinned the field to reach its branch
+  (`_pinned_fields`: the leaf names in the scenario's
+  `verification.fields`, threaded through `_bundle_directive_for_group` /
+  `_bundle_directive_for` as `pinned`).
 - **An AT END clause the splice re-runs is not copied at all** (issue
   #209): `_at_end_handling` asks `analysis.clause_bodies.lift_clause_bodies`
   first; when the splice will run the READ's own AT END clause after the
