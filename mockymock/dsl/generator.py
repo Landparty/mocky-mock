@@ -1626,6 +1626,12 @@ def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
     return keys
 
 
+#: Categories cobol-parser's fixture bundle never lays out (issue #262).
+_BUNDLELESS_CATEGORIES = frozenset(
+    {MockCategory.RELEASE.value, MockCategory.RETURN.value}
+)
+
+
 def _warn_on_key_mismatch(
     mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
     bundle_keys: set[tuple[str, str]],
@@ -1642,7 +1648,14 @@ def _warn_on_key_mismatch(
     either without a matching MOCK directive would fail `mockymock lint`.
     """
     mockymock_set = {(category.value, key) for category, key in mockymock_keys}
-    only_in_mockymock = mockymock_set - bundle_keys
+    # The bundle has no fixtures for a SORT's RELEASE / RETURN (they
+    # touch the sort work file, not a mockable dataset): their placeholder
+    # bodies are the expected path, not a disagreement (issue #262).
+    only_in_mockymock = {
+        (category, key)
+        for category, key in mockymock_set - bundle_keys
+        if category not in _BUNDLELESS_CATEGORIES
+    }
     # A key mockymock already lists as "not mockable" is an expected gap,
     # not a disagreement between the two walks.
     only_in_bundle = bundle_keys - mockymock_set - unmockable_keys

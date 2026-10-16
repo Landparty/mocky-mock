@@ -1146,7 +1146,11 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   (`_at_end_handling` / `_read_exhaustion_lines`); without one (lint),
   `MOVE "10"` into the file's FILE STATUS field or else `UT-MOCK-STATUS`,
   plus the clause's replicable statements. `directive_snippet` takes the
-  program's `file_status_fields` (lint's gate passes them).
+  program's `file_status_fields` (lint's gate passes them). This is also
+  what ends a SORT OUTPUT PROCEDURE's `RETURN ... AT END` loop (#262): the
+  bundle never lays out RELEASE / RETURN, so they always take the
+  placeholder path, and `_warn_on_key_mismatch` no longer calls that a
+  "should not happen" mismatch (`_BUNDLELESS_CATEGORIES`).
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 
