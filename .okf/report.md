@@ -33,7 +33,7 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 | `__MOCKYMOCK__ CASE <id> FAIL: <reason>` | `id`, `reason` | appends `reason` to the matching `TestResult.failure_reasons` (looked up by id); an unknown id is recorded in `suite.orphan_failures` as `(id, reason)` rather than dropped |
 | `__MOCKYMOCK__ CASE <id> END` | `id` | sets the matching `TestResult.ended = True`; an unknown id is recorded in `suite.orphan_ends` rather than dropped |
 | `__MOCKYMOCK__ SUMMARY: RUN=<n> FAILURES=<n>` | `run`, `failures` | sets `suite.tests_run` / `suite.failures` |
-| `__MOCKYMOCK__ MOCK: <label>` | `label` | appends to the most recently started case's `TestResult.mock_hits`. **Trace mode only** — emitted by the splicer's mock dispatch blocks when `run --trace` is used |
+| `__MOCKYMOCK__ MOCK: <label>` | `label` | appends to the `TestResult.mock_hits` of the case that is open (START seen, END not yet); a MOCK: between cases (BEFORE-ALL/AFTER-ALL) belongs to no case and is dropped (#334). **Trace mode only** — emitted by the splicer's mock dispatch blocks when `run --trace` is used |
 | `__MOCKYMOCK__ RECORD <id> <name>: <value>` | `id`, `name`, `value` | appends `(name, value)` to the matching `TestResult.recorded` (looked up by id, same as FAIL/END — **not** positional like `MOCK:`); an unknown id is recorded in `suite.orphan_records` as `(id, name, value)` rather than dropped. **`--record-expectations` mode only** — emitted by `splicer.driver.build_driver`'s `record_targets` addition (2026-08-04) |
 
 The `MOCK` marker is the one shape carrying no case id: it is attributed
@@ -233,7 +233,12 @@ independent channels compose into one report, and the split is load-bearing:
    explicit format, and two preamble lines carry no delimiters. Its line
    numbers are **instrumented**-source lines, remapped by
    `coverage.build_original_line_map` — which drops splicer-inserted lines,
-   so the path answers "which of MY lines ran".
+   so the path answers "which of MY lines ran". The trace file covers the
+   whole binary, so `case_entries(entries, instrumented, case_id)` first
+   cuts it to the selected case (#334): from the `UT-TESTCASE-<id>`
+   paragraph entry to the case's `CASE <id> END` DISPLAY line. BEFORE-EACH
+   and AFTER-EACH run inside that span and stay; BEFORE-ALL/AFTER-ALL,
+   which run in the suite paragraph, are dropped.
 2. **Mock timeline** — the `__MOCKYMOCK__ MOCK:` markers above. This channel
    exists *because* channel 1's remap drops inserted lines: the mock dispatch
    blocks are exactly those lines, so the trace file structurally cannot

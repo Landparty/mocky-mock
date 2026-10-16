@@ -121,6 +121,10 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
     (a protocol change; see the audit doc), not a parser-side patch."""
     suite = TestSuiteResult(suite_name="")
     by_id: dict[str, TestResult] = {}
+    # MOCK: carries no case id, so it belongs to the case whose START was
+    # seen and whose END was not; between cases (BEFORE-ALL/AFTER-ALL) it
+    # belongs to no case at all (issue #334).
+    open_case: TestResult | None = None
 
     # Split on LF only (dropping a CRLF's CR), never `str.splitlines()`:
     # that also breaks on form feed, VT, \x1c-\x1e, NEL and U+2028 -- bytes
@@ -154,6 +158,7 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
             result = TestResult(case_id=case_id, case_name=case_name)
             by_id[case_id] = result
             suite.results.append(result)
+            open_case = result
         elif (m := _CASE_FAIL_RE.match(line)) is not None:
             target = by_id.get(m.group("id"))
             if target is not None:
@@ -161,8 +166,8 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
             else:
                 suite.orphan_failures.append((m.group("id"), m.group("reason")))
         elif (m := _MOCK_RE.match(line)) is not None:
-            if suite.results:
-                suite.results[-1].mock_hits.append(m.group("label"))
+            if open_case is not None:
+                open_case.mock_hits.append(m.group("label"))
         elif (m := _RECORD_RE.match(line)) is not None:
             target = by_id.get(m.group("id"))
             if target is not None:
@@ -179,6 +184,8 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
             target = by_id.get(case_id)
             if target is not None:
                 target.ended = True
+                if target is open_case:
+                    open_case = None
             else:
                 suite.orphan_ends.append(case_id)
 

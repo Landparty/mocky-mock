@@ -1580,6 +1580,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     from mockymock.report.results import parse_stdout
     from mockymock.report.trace import (
+        case_entries,
         format_trace_console,
         format_trace_json,
         parse_trace,
@@ -2016,15 +2017,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 "single statement)"
             )
         else:
-            # Exactly one case is selected (enforced above), so the whole
-            # trace belongs to it -- no segmentation needed.
+            # Exactly one case is selected (enforced above), but the trace
+            # also holds the BEFORE-ALL/AFTER-ALL steps run around it, so
+            # it is cut to the case's own span (case_entries, #334).
             selected = args.case[0]
             case_result = next(
                 (r for r in suite_result.results if r.case_name == selected), None
             )
             model_case = next((c for c in suite.test_cases if c.name == selected), None)
             trace_json = format_trace_json(
-                parse_trace(trace_text),
+                case_entries(
+                    parse_trace(trace_text),
+                    instrumented,
+                    case_result.case_id if case_result is not None else None,
+                ),
                 build_original_line_map(
                     instrumented,
                     normalized_lines,
