@@ -195,6 +195,9 @@ def test_143_no_generated_enterprise_cut_has_an_unmatched_mock(
             ]
         )
         != 0
+        # Since #231 generate exits 1 when lint refuses the scaffold it
+        # still wrote; that file must still carry no UNMATCHED_MOCK.
+        and not out.exists()
     ):
         pytest.skip("generate --with-data does not support this program")
     capsys.readouterr()
