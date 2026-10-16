@@ -84,6 +84,7 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
     ExecImsStatement,
 )
 
+from mockymock.analysis.cics_handle import handle_states, is_handle_declaration
 from mockymock.analysis.sql_whenever import (
     Whenever,
     is_sql_declaration,
@@ -303,6 +304,10 @@ class BoundarySite:
     # parsed declaration. Never mocked -- the splicer replaces it with
     # CONTINUE (issue #195, see analysis.sql_whenever).
     whenever: Whenever | None = None
+    # A mockable CICS site: the EXEC CICS HANDLE/IGNORE CONDITION map in
+    # force at it (issue #268, analysis.cics_handle), for the GO TO a mock
+    # raising a condition (`CONDITION IS`) ends with.
+    cics_handle_state: dict[str, str | None] = field(default_factory=dict)
     # A mockable SQL site: the (condition, GO TO target) checks the WHENEVER
     # declarations above it in the source put after it, in DB2's order.
     whenever_checks: tuple[tuple[str, str], ...] = ()
@@ -877,6 +882,12 @@ def _classify_statement(
         return
 
     if isinstance(statement, ExecCicsStatement):
+        if is_handle_declaration(statement):
+            # HANDLE/IGNORE CONDITION registers a label, it is not a
+            # boundary: spliced to CONTINUE, its jumps emulated after the
+            # mocked commands that raise a condition (issue #268).
+            add_site(MockCategory.CICS, "CICS HANDLE", into=surface.whenever_sites)
+            return
         surface.exec_paragraphs.add(paragraph_name)
         add_site(
             MockCategory.CICS,
@@ -982,6 +993,12 @@ def analyze(program: CobolProgram) -> MockSurface:
 
     for paragraph in _all_paragraphs(procedure):
         _walk_statements(paragraph.statements, paragraph.paragraph_name, surface)
+
+    states = handle_states(program)
+    if states:
+        for site in surface.boundary_sites:
+            if site.category is MockCategory.CICS:
+                site.cics_handle_state = states.get(id(site.statement), {})
 
     if surface.whenever_sites:
         actions = whenever_actions(program)

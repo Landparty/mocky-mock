@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from cobolparser.models.statements.control import GoStatement, PerformStatement
 
+from mockymock.analysis.cics_handle import raised_conditions
 from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
@@ -649,19 +650,27 @@ def find_terminator_plans(
     # case whose mocks can make the WHENEVER fire (issue #244): a success-
     # path case never takes the jump, so the handler's own terminator is
     # not its hazard. Each hazard-set variant is computed once.
-    target_sets: dict[bool, set[str]] = {}
-    fallthrough_cache: dict[tuple[bool, frozenset[str]], dict[str, str]] = {}
+    # Likewise a CICS HANDLE CONDITION label, for the conditions the case's
+    # mocks raise (issue #268).
+    target_sets: dict[tuple[bool, frozenset[str]], set[str]] = {}
+    fallthrough_cache: dict[
+        tuple[bool, frozenset[str], frozenset[str]], dict[str, str]
+    ] = {}
 
     def hazards(
-        include_whenever: bool, entry: frozenset[str]
+        include_whenever: bool, conditions: frozenset[str], entry: frozenset[str]
     ) -> tuple[set[str], dict[str, str]]:
-        if include_whenever not in target_sets:
-            target_sets[include_whenever] = (
-                _go_to_targets(program, include_whenever=include_whenever)
+        if (include_whenever, conditions) not in target_sets:
+            target_sets[(include_whenever, conditions)] = (
+                _go_to_targets(
+                    program,
+                    include_whenever=include_whenever,
+                    cics_conditions=conditions,
+                )
                 - neutralized_goto
             )
-        targets = target_sets[include_whenever]
-        key = (include_whenever, entry)
+        targets = target_sets[(include_whenever, conditions)]
+        key = (include_whenever, conditions, entry)
         if key not in fallthrough_cache:
             fallthrough_cache[key] = _go_to_fallthrough_targets(
                 program,
@@ -694,8 +703,10 @@ def find_terminator_plans(
         mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
         mocked_flow_names = mocked_paragraphs | mocked_sections
         can_fire = whenever_can_fire(program, case.mocks)
+        conditions = raised_conditions(case.mocks)
         go_to_targets, go_to_fallthrough = hazards(
             can_fire,
+            conditions,
             frozenset(
                 name for name in (case.perform_target, case.perform_thru) if name
             ),
@@ -707,6 +718,7 @@ def find_terminator_plans(
             skip_traversal=mocked_flow_names,
             neutralized_goto=neutralized_goto,
             follow_whenever=can_fire,
+            cics_conditions=conditions,
         )
         reachable -= mocked_flow_names
         safe_names, chain_performs = _plain_perform_edges_from(

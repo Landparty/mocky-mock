@@ -379,6 +379,29 @@ is unreachable from every test case; the trap exists so that if
 reachability analysis and reality ever disagree, the mismatch fails loudly
 at runtime instead of silently doing nothing.
 
+**`EXEC CICS HANDLE/IGNORE CONDITION` emulation (issue #268, option 1).**
+The CICS counterpart of WHENEVER, in `analysis.cics_handle`. A HANDLE or
+IGNORE CONDITION is a label registration, not a boundary: `mock_surface`
+puts it in `whenever_sites` (label `CICS HANDLE`), so it needs no mock and
+is spliced to `CONTINUE`; an unreadable one refuses
+`UNSUPPORTED_CICS_HANDLE`, a leftover `MOCK CICS "HANDLE"` is
+UNMATCHED_MOCK with the reason, and generate's `_known_unmockable_keys`
+drops the bundle's `CICS HANDLE`/`IGNORE` key. `handle_states` tracks the
+condition -> label / IGNORE / default map in *physical source order* (the
+approximation option 1 chose; HANDLE is really a runtime registration) and
+`analyze` stamps it on every CICS boundary site
+(`BoundarySite.cics_handle_state`). A mock with `CONDITION IS X` ends its
+dispatch branch with `GO TO <label>` (`label_in_state`; X's own entry,
+else ERROR's). `_reachable_paragraphs(cics_conditions=...)` and
+`_go_to_targets(cics_conditions=...)` follow/count the labels for the
+conditions the case's mocks raise (`raised_conditions(case.mocks)`, passed
+by `check_test_case` and `find_terminator_plans`); the default `None`
+(whole-program callers: warning waiving, exact counts, loops) follows every
+label in force, fail closed; generate passes an empty set (its mocks raise
+nothing). Not covered: HANDLE AID / HANDLE ABEND (still ordinary CICS
+boundaries), EIBRESP is not set by `CONDITION IS`, and PUSH/POP HANDLE
+refuses any raised condition.
+
 **PROCEDURE DIVISION SQL declarations (issue #267).** `EXEC SQL DECLARE
 ... CURSOR/TABLE`, `INCLUDE` and `BEGIN/END DECLARE SECTION` in the
 PROCEDURE DIVISION (`sql_whenever.is_sql_declaration`) are not boundaries

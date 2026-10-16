@@ -205,6 +205,9 @@ _FILE_STATUS_RE = re.compile(
 # spliced verbatim into the generated COBOL -- that produces a cobc compile
 # error pointing at generated code instead of a clear .cut-level refusal.
 _FILE_STATUS_PREFIX_RE = re.compile(r"^FILE-STATUS\b")
+# `CONDITION IS <name>` inside a MOCK CICS body (issue #268).
+_CICS_CONDITION_RE = re.compile(r"^CONDITION\s+IS\s+(?P<name>[A-Z][A-Z0-9]*)$")
+_CICS_CONDITION_PREFIX_RE = re.compile(r"^CONDITION\b")
 
 # CAPTURE ARG <n> INTO <target> -- n is a 1-based USING-parameter
 # position (never a COBOL variable name), resolved against the real call
@@ -925,6 +928,26 @@ def parse_cut(text: str) -> MockTestSuite:
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.terminal_row = terminal
+            elif (m := _CICS_CONDITION_RE.match(line)) is not None:
+                if (
+                    in_mock.category is not MockCategory.CICS
+                    or in_mock.rows is not None
+                ):
+                    raise CutParseError(
+                        f"line {line_no}: CONDITION IS is only supported in a "
+                        f"MOCK CICS body without ROWS, not MOCK "
+                        f"{in_mock.describe()}"
+                    )
+                if in_mock.cics_condition is not None:
+                    raise CutParseError(
+                        f"line {line_no}: duplicate CONDITION IS in one MOCK body"
+                    )
+                in_mock.cics_condition = m.group("name")
+            elif _CICS_CONDITION_PREFIX_RE.match(line) is not None:
+                raise CutParseError(
+                    f"line {line_no}: malformed CONDITION statement {line!r} -- "
+                    f"expected CONDITION IS <condition>, e.g. CONDITION IS NOTFND"
+                )
             elif (m := _FILE_STATUS_RE.match(line)) is not None:
                 if in_mock.category not in FILE_STATUS_CATEGORIES:
                     eligible = "/".join(

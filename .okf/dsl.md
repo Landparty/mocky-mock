@@ -213,6 +213,19 @@ FILE-STATUS IS / malformed-FILE-STATUS branches, so any `FILE-STATUS IS`
 line written inside a `ROWS` body fell into "malformed ROWS row" instead
 — reordered so the FILE-STATUS IS branches are checked first.
 
+### `CONDITION IS <condition>` (MOCK CICS only, issue #268)
+
+Inside a `MOCK CICS "..."` body without ROWS: the mocked command raises
+that CICS condition (`NOTFND`, `DUPREC`, ...), stored on
+`MockDirective.cics_condition`. The dispatch ends with `GO TO <label>` for
+the `EXEC CICS HANDLE CONDITION` label in force at the matched command
+(an IGNOREd condition does nothing; a condition with no entry falls to
+`ERROR`'s label) -- see [splicer](splicer.md). Anywhere else, a duplicate,
+or a malformed `CONDITION ...` line is a `CutParseError`. Lint refuses
+`UNSUPPORTED_CICS_CONDITION` when no handler covers the condition (the
+real command would abend), the command has RESP/NOHANDLE, or the program
+uses PUSH/POP HANDLE.
+
 ### `CAPTURE ARG <n> INTO <target>`
 
 Usable inside a `MOCK CALL "..."` / `MOCK MQ "..."` (category `CALL`) or
