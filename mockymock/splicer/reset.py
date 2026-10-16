@@ -41,6 +41,13 @@ _QUOTE_RUN_RE = re.compile(QUOTE + "+")
 # numeric-edited pictures; X/A/B pictures never contain them.
 _NUMERIC_PIC_CHARS = frozenset("9VPZ*$+-")
 
+# A VALUE clause a plain MOVE can store into a numeric(-edited) item: a
+# numeric literal or the figurative ZERO. Anything else (SPACES, an
+# alphanumeric literal, HIGH-VALUES, ALL "*") needs reference modification.
+_NUMERIC_VALUE_RE = re.compile(
+    r"^(?:[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)|ZERO|ZEROS|ZEROES)$", re.IGNORECASE
+)
+
 # usage strings as cobolparser stores them (verified empirically).
 _FLOAT_USAGES = frozenset({"COMP-1", "COMP-2", "COMPUTATIONAL-1", "COMPUTATIONAL-2"})
 _POINTER_USAGES = frozenset(
@@ -266,6 +273,48 @@ def _is_numeric(item) -> bool:
     return any(c in _NUMERIC_PIC_CHARS for c in stripped.upper())
 
 
+def _value_restore(item, name: str) -> str:
+    """`MOVE <VALUE literal> TO <name>`, adjusted where a plain MOVE would
+    not rebuild the bytes the VALUE clause put there (issue #218):
+
+    * a numeric or numeric-edited DISPLAY item whose VALUE is not a number
+      (`PIC ZZ,ZZ9.99 VALUE SPACES`, the report-line idiom) is moved through
+      reference modification, `MOVE SPACES TO <name>(1:)` -- cobc rejects a
+      figurative SPACE or an alphanumeric literal moved to a numeric item,
+      and the byte-wise move reproduces what VALUE stored;
+    * a JUSTIFIED item's literal is padded to the item's full length, since
+      VALUE ignores JUSTIFIED (`PIC X(6) JUST RIGHT VALUE "AB"` starts as
+      "AB    ") while a MOVE right-justifies. Reference modification does
+      not help there: GnuCOBOL still justified `WS-J(1:)`."""
+    literal = cobol_literal(item.value_clause)
+    picture = item.picture_clause
+    if picture is None:
+        return f"MOVE {literal} TO {name}"
+    usage = (getattr(item, "usage", None) or "DISPLAY").upper()
+    if (
+        _is_numeric(item)
+        and usage == "DISPLAY"
+        and not _NUMERIC_VALUE_RE.match(literal)
+    ):
+        return f"MOVE {literal} TO {name}(1:)"
+    if getattr(item, "justified", False):
+        literal = _pad_literal(literal, getattr(picture, "size", None))
+    return f"MOVE {literal} TO {name}"
+
+
+def _pad_literal(literal: str, size: int | None) -> str:
+    """Pad a plain quoted literal with trailing spaces to `size` characters
+    (an embedded doubled quote counts as one). Figurative constants, `ALL`
+    literals and anything else already fill the item and are returned as is."""
+    if not size or len(literal) < 2 or literal[0] != QUOTE or literal[-1] != QUOTE:
+        return literal
+    inner = literal[1:-1]
+    length = len(inner.replace(QUOTE * 2, QUOTE))
+    if length >= size:
+        return literal
+    return f"{QUOTE}{inner}{' ' * (size - length)}{QUOTE}"
+
+
 def _elementary_reset(item, target: str | None = None) -> str | None:
     """The reset line for one elementary (or VALUE-carrying group) item, or
     None when no legal reset exists (skip rather than emit illegal COBOL).
@@ -285,7 +334,7 @@ def _elementary_reset(item, target: str | None = None) -> str | None:
     if usage == "INDEX":
         return None  # no legal MOVE; fidelity limit
     if item.value_clause:
-        return f"MOVE {cobol_literal(item.value_clause)} TO {name}"
+        return _value_restore(item, name)
     if item.picture_clause is None:
         if usage in _FLOAT_USAGES:
             return f"MOVE 0 TO {name}"

@@ -493,3 +493,43 @@ def test_child_value_restores_are_fully_qualified():
         "INITIALIZE OUT-REC",
         'MOVE "N" TO REC-FLAG OF HDR OF OUT-REC',
     ]
+
+
+VALUE_NEEDS_MORE_THAN_A_MOVE_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NE.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-J                PIC X(6) JUSTIFIED RIGHT VALUE "AB".
+       01  WS-JQ               PIC X(4) JUST RIGHT VALUE "A\"\"\".
+       01  WS-JS               PIC X(4) JUST RIGHT VALUE SPACES.
+       01  RPT-LINE.
+           05  RPT-AMT         PIC ZZ,ZZ9.99 VALUE SPACES.
+           05  RPT-STAR        PIC ZZ9 VALUE ALL "*".
+           05  RPT-ZERO        PIC ZZ9 VALUE ZERO.
+       01  RPT-AMT2            PIC ZZ9 VALUE SPACES.
+       01  WS-NUM              PIC S9(3)V9 VALUE -1.5.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_value_restores_that_a_plain_move_would_get_wrong():
+    """Issue #218: `MOVE SPACES TO <numeric-edited>` does not compile, so a
+    non-numeric VALUE on a numeric(-edited) item is moved through reference
+    modification; and VALUE ignores JUSTIFIED while MOVE honours it, so a
+    JUSTIFIED item's literal is padded to the item's full length."""
+    result = parse_cobol(VALUE_NEEDS_MORE_THAN_A_MOVE_SOURCE, filename="ne.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        'MOVE "AB    " TO WS-J',
+        'MOVE "A""  " TO WS-JQ',
+        "MOVE SPACES TO WS-JS",
+        "INITIALIZE RPT-LINE",
+        "MOVE SPACES TO RPT-AMT OF RPT-LINE(1:)",
+        'MOVE ALL "*" TO RPT-STAR OF RPT-LINE(1:)',
+        "MOVE ZERO TO RPT-ZERO OF RPT-LINE",
+        "MOVE SPACES TO RPT-AMT2(1:)",
+        "MOVE -1.5 TO WS-NUM",
+    ]
