@@ -1024,7 +1024,11 @@ group are checked the same way, field and value (issue #299), at
 level in the AST (issue #307): `TO BE TRUE|FALSE` on an item that is not a
 level 88 (the driver would emit `IF NOT X`), or any other value on an 88
 (`IF X NOT = v`, "condition-name not allowed here"). A name declared at both
-kinds, or not in the AST, is left alone.
+kinds, or not in the AST, is left alone. The same code covers a setup/hook
+MOVE or a ROWS/TERMINAL field assigned the wrong kind (issue #251, which
+splices TRUE/FALSE as `SET`): TRUE/FALSE to a non-88, any other value to
+an 88, FALSE to an 88 with no `WHEN SET TO FALSE`
+(`cut_names.conditions_without_false`).
 
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 

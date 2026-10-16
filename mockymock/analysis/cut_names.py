@@ -174,6 +174,26 @@ def data_item_levels(program) -> dict[str, set[int]]:
     return levels
 
 
+def conditions_without_false(program) -> set[str]:
+    """Upper-cased level-88 names none of whose declarations carry a
+    `WHEN SET TO FALSE` value -- `SET <88> TO FALSE` does not compile for
+    them (issue #251)."""
+    data = program.get_division("DATA") if program is not None else None
+    if data is None:
+        return set()
+    without: set[str] = set()
+    with_false: set[str] = set()
+    for condition in data.find_all_by_type("ConditionNameItem"):
+        name = str(getattr(condition, "name", "") or "").upper()
+        if not name:
+            continue
+        if getattr(condition, "false_value", None) is None:
+            without.add(name)
+        else:
+            with_false.add(name)
+    return without - with_false
+
+
 def _harness_words() -> set[str]:
     from mockymock.splicer.cics_eib import _DFHEIBLK_LINES, _DLIDIB_LINES
 
@@ -311,6 +331,44 @@ def check_cut_data_names(
             return
         reasons.append(RefusalReason(code="CONDITION_NAME_MISMATCH", message=message))
 
+    no_false = conditions_without_false(program)
+
+    def assign_level(line: int, role: str, target: str, assigned: str) -> None:
+        # A TRUE/FALSE assignment splices as SET <target> TO TRUE|FALSE,
+        # anything else as MOVE (splicer.naming.assign); each compiles only
+        # for its own kind of target (issue #251).
+        is_condition = condition_level(target)
+        if is_condition is None:
+            return
+        word = assigned.strip().upper()
+        shown = (
+            f"MOVE {assigned.strip()} TO {target.strip()}"
+            if role == "MOVE"
+            else f"{role} {target.strip()} = {assigned.strip()}"
+        )
+        if word in ("TRUE", "FALSE") and not is_condition:
+            message = (
+                f".cut line {line}: {shown} -- TRUE/FALSE can only be set on "
+                f"a level-88 condition-name, and {target.strip()} is not one; "
+                f"move a value instead, or name one of its 88s"
+            )
+        elif word not in ("TRUE", "FALSE") and is_condition:
+            message = (
+                f".cut line {line}: {shown} -- {target.strip()} is a level-88 "
+                f"condition-name, which cannot be moved to; assign it TRUE "
+                f"(spliced as SET {target.strip()} TO TRUE), or move the value "
+                f"to the item it belongs to"
+            )
+        elif word == "FALSE" and (_name_words(target) or [""])[0] in no_false:
+            message = (
+                f".cut line {line}: {shown} -- {target.strip()} has no "
+                f"WHEN SET TO FALSE value, so SET {target.strip()} TO FALSE "
+                f"does not compile; move a value to the item it belongs to"
+            )
+        else:
+            return
+        reasons.append(RefusalReason(code="CONDITION_NAME_MISMATCH", message=message))
+
     hook_steps = (
         suite.before_all_steps
         + suite.before_each_steps
@@ -321,6 +379,7 @@ def check_cut_data_names(
         if step.kind == "MOVE":
             name(step.line, "MOVE target", step.target)
             value(step.line, "MOVE value", step.value)
+            assign_level(step.line, "MOVE", step.target, step.value)
     mocks = list(suite.before_all_mocks) + list(suite.before_each_mocks)
     for case in suite.test_cases:
         move_lines = case.setup_move_lines or [case.line] * len(case.setup_moves)
@@ -329,6 +388,7 @@ def check_cut_data_names(
         ):
             name(line, "MOVE target", target)
             value(line, "MOVE value", move_value)
+            assign_level(line, "MOVE", target, move_value)
         for expectation in case.expectations:
             line = expectation.line or case.line
             name(line, "EXPECT", expectation.data_name)
@@ -352,7 +412,9 @@ def check_cut_data_names(
             for row_field, row_value in row:
                 name(line, "ROWS field", row_field)
                 value(line, "ROWS value", row_value)
+                assign_level(line, "ROWS", row_field, row_value)
         for row_field, row_value in directive.terminal_row or []:
             name(directive.terminal_line, "TERMINAL field", row_field)
             value(directive.terminal_line, "TERMINAL value", row_value)
+            assign_level(directive.terminal_line, "TERMINAL", row_field, row_value)
     return reasons

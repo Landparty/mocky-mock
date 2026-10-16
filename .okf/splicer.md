@@ -332,6 +332,14 @@ contain, `build_rows_block` itself has no category knowledge. Both call
 sites live in `build_site_dispatch`, one per `directive.rows is not None`
 category:
 
+Every `.cut` `value -> field` assignment (ROWS rows, TERMINAL groups,
+setup and hook MOVEs) is spliced through `naming.assign(value, target)`:
+`SET <target> TO TRUE|FALSE` when the value is TRUE/FALSE (COBOL cannot
+MOVE to a level-88 condition-name, issue #251), `MOVE value TO target`
+otherwise. Lint (`cut_names`, `CONDITION_NAME_MISMATCH`) refuses
+TRUE/FALSE on a non-88 target, any other value on an 88, and FALSE on an
+88 with no `WHEN SET TO FALSE`.
+
 - **CALL / DYNCALL / DLI** (`SEQUENCED_CALL_CATEGORIES`, 2026-10-05):
   `row_suffix_moves=[]`, `exhausted_moves` = the directive's own
   (mandatory) `TERMINAL` group's MOVEs -- there is no implicit default for

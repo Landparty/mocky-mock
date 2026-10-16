@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass
 
 from mockymock.dsl.model import SUITE_PHASE_ID, HookStep, MockTestCase, MockTestSuite
-from mockymock.splicer.naming import TallyRegistry
+from mockymock.splicer.naming import TallyRegistry, assign, truth_set
 from mockymock.splicer.snapshot import StateSnapshot
 
 _SUITE_PARAGRAPH_NAME_RE = re.compile(r"[^A-Z0-9-]")
@@ -246,7 +246,7 @@ def _step_lines(steps: list[HookStep]) -> list[str]:
     lines: list[str] = []
     for step in steps:
         if step.kind == "MOVE":
-            lines.append(f"           MOVE {step.value} TO {step.target}")
+            lines.append(f"           {assign(step.value, step.target)}")
         else:
             thru = f" THRU {step.thru}" if step.thru else ""
             lines.append(f"           PERFORM {step.target}{thru}")
@@ -367,6 +367,10 @@ def _build_testcase_paragraph(
             lines.append('           MOVE "N" TO UT-EARLY-EXIT')
 
     for value, target in case.setup_moves:
+        set_line = truth_set(value, target)
+        if set_line is not None:
+            lines.append(f"           {set_line}")
+            continue
         move = _operand_lines("           MOVE ", value, "                ")
         move[-1] += f" TO {target}"
         lines.extend(move)
