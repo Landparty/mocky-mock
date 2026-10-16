@@ -199,8 +199,9 @@ terminator before the next statement that is not its own (the clause would
 run on to whatever closes the enclosing block -- not guessed), when a
 statement of its own kind sits in its clause bodies (which terminator is
 whose is ambiguous), or when anything but a period follows the terminator
-on its line. RETURN has no `_VERB_TERMINATORS` entry, so a nested `RETURN
-... END-RETURN` stays refused. Before #258 every nested site with clause
+on its line. RETURN maps to `END-RETURN` (issue #340), so the SORT
+OUTPUT PROCEDURE loop's nested `RETURN ... AT END ... END-RETURN` is
+spliced like the nested READ. Before #258 every nested site with clause
 bodies was refused, which made the standard inline read loop untestable.
 
 # Flow-Mock Header Dispatch (2026-07-20, MOCK PARAGRAPH/SECTION)

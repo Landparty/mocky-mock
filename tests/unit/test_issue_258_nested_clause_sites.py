@@ -137,3 +137,61 @@ def test_unmocked_site_no_mock_could_replace_offers_no_mock(tmp_path) -> None:
     reasons = [r for rs in checked.unmocked_reasons.values() for r in rs]
     unfixable = [r for r in reasons if "could not replace it" in r.message]
     assert unfixable and all(r.suggested_fix is None for r in unfixable)
+
+
+RETURN_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RT.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT SORT-WORK ASSIGN TO "SRTWK".
+       DATA DIVISION.
+       FILE SECTION.
+       SD SORT-WORK.
+       01 SORT-REC.
+          05 SR-KEY PIC X(5).
+          05 SR-AMT PIC 9(5).
+       WORKING-STORAGE SECTION.
+       01 WS-EOF   PIC X VALUE "N".
+       01 WS-COUNT PIC 9(3) VALUE 0.
+       01 WS-TOTAL PIC 9(7) VALUE 0.
+       PROCEDURE DIVISION.
+       3000-WRITE-REPORT.
+           PERFORM UNTIL WS-EOF = "Y"
+               RETURN SORT-WORK
+                   AT END MOVE "Y" TO WS-EOF
+                   NOT AT END
+                       ADD 1 TO WS-COUNT
+                       ADD SR-AMT TO WS-TOTAL
+               END-RETURN
+           END-PERFORM.
+"""
+
+RETURN_CUT = """\
+TESTSUITE "rt"
+TESTCASE "sums two sorted records"
+    MOCK RETURN SORT-WORK ROWS
+        ( SR-KEY = "A0001", SR-AMT = 10 )
+        ( SR-KEY = "A0002", SR-AMT = 32 )
+        TERMINAL ( SR-KEY = SPACES )
+    END-MOCK
+    PERFORM 3000-WRITE-REPORT
+    EXPECT WS-COUNT TO BE 2
+    EXPECT WS-TOTAL TO BE 42
+"""
+
+
+def test_nested_return_with_end_return_gets_a_span() -> None:
+    # Issue #340: the SORT OUTPUT PROCEDURE loop's RETURN ... END-RETURN
+    # is bounded by its own terminator exactly like a nested READ.
+    ret = _sites(RETURN_PROGRAM)["RETURN"]
+    assert ret.nested and ret.span == (20, 25), ret.unspliceable_reason
+
+
+def test_nested_return_loop_passes_the_static_checks(tmp_path) -> None:
+    program = tmp_path / "RT.cbl"
+    program.write_text(RETURN_PROGRAM)
+    cut = tmp_path / "RT.cut"
+    cut.write_text(RETURN_CUT)
+    assert run_static_checks(program, cut, None).problems == []
