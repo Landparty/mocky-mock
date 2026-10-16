@@ -339,7 +339,14 @@ def _write_report_file(command: str, flag: str, target: str, content: str) -> bo
 
 
 def _write_failure_reports(
-    args: argparse.Namespace, command: str, suite_name: str, reason: str
+    args: argparse.Namespace,
+    command: str,
+    suite_name: str,
+    reason: str,
+    *,
+    cut_suite=None,
+    cut_file: Path | None = None,
+    program_file: Path | None = None,
 ) -> None:
     """Write `run`'s --junit-xml/--json-report for an exit that never
     produced a TestSuiteResult at all -- a static refusal or a compile
@@ -350,7 +357,11 @@ def _write_failure_reports(
     read as "nothing ran" rather than "something failed" (carried-over open
     item from the 2026-08-10 framework audit). Reuses the ordinary
     formatters via one synthetic TestResult standing in for the whole run,
-    rather than a bespoke report shape only this path would exercise."""
+    rather than a bespoke report shape only this path would exercise.
+
+    `cut_suite`/`cut_file`/`program_file`, when known, go into the JSON
+    report so an editor can still place the failure (issue #204): without
+    them `cutFile`, `programFile` and the suite line were all null."""
     if not args.junit_xml and not args.json_report:
         return
 
@@ -380,7 +391,16 @@ def _write_failure_reports(
             command,
             "--json-report",
             args.json_report,
-            format_json_report(build_json_report(suite_result)),
+            format_json_report(
+                build_json_report(
+                    suite_result,
+                    cut_suite=cut_suite,
+                    cut_file=str(cut_file) if cut_file is not None else None,
+                    program_file=(
+                        str(program_file) if program_file is not None else None
+                    ),
+                )
+            ),
         )
 
 
@@ -525,6 +545,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         "--scenarios",
         args.scenarios,
     ]
+    if args.force:
+        # Already gated above with init's own message; generate refuses
+        # an existing output without it.
+        generate_argv.append("--force")
     if args.seed is not None:
         generate_argv += ["--seed", str(args.seed)]
     for path in copybook_paths:
@@ -785,10 +809,21 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
     # (a flow-mock target that doesn't exist, a terminator layout, an
     # UNMOCKED_* reason with no mechanical fix): print it and fail, so
     # `--fill` exiting 0 means the next `lint` exits 0 too.
+    # Only the per-TESTCASE UNMOCKED_* lines `--fill` read from
+    # `unmocked_reasons` count as handled: a hook PERFORM's refusal reads
+    # the same way ("refused (UNMOCKED_...)") but nothing here inserts
+    # into BEFORE-EACH/BEFORE-ALL, so matching on the prefix exited 0 with
+    # nothing filled and the next lint failed again (issue #208).
+    filled = {
+        f"refused ({r.code}): {r.message}"
+        for reasons in checked.unmocked_reasons.values()
+        for r in reasons
+        if r.code.startswith("UNMOCKED_")
+    }
     remaining = [
         problem
         for problem in checked.problems
-        if not problem.startswith("  ") and not _is_filled_problem(problem)
+        if not problem.startswith("  ") and problem not in filled
     ]
     for problem in remaining:
         print(f"mockymock generate: {problem}")
@@ -802,12 +837,6 @@ def _header_line(raw: str) -> str:
     stripped, so an existing `MOCK READ INV-FILE` (any indentation) is
     recognized as already present."""
     return raw.strip()
-
-
-def _is_filled_problem(problem: str) -> bool:
-    """True for the `refused (UNMOCKED_*): ...` lines `--fill` acts on
-    itself; every other problem line is one it cannot fix."""
-    return problem.startswith("refused (UNMOCKED_")
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
@@ -827,6 +856,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         check_cics_eib_layout,
         check_expansion_warnings,
         check_linkage_layout,
+        check_source_format,
         check_unresolved_copybooks,
         check_whole_program,
     )
@@ -864,6 +894,19 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             return 1
         _apply_config_to_args(args, source_path)
         return _fill_cut_file(source_path, Path(args.fill), args)
+
+    # The default path is the program's existing sibling PROG.cut when
+    # there is one, so writing unconditionally replaced a hand-written
+    # suite with a bare scaffold (issue #201). Refuse like `init` does,
+    # an explicit -o included, before any parsing.
+    existing = _default_output(args, source_path)
+    if existing.exists() and not args.force:
+        print(
+            f"mockymock generate: {existing} already exists -- pass --force "
+            f"to overwrite it, -o/--output to write somewhere else, or "
+            f"--fill {existing} to add only its missing mocks"
+        )
+        return 1
 
     if not _check_rows_non_negative("generate", args.rows):
         return 1
@@ -976,6 +1019,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 )
 
     raw_source = read_utf8_source(source_path)
+    program_source = raw_source
     if args.copybook_path:
         # See _cmd_fixtures's identical guard on the same call for why
         # this can raise on realistic inputs (audit finding F6).
@@ -1000,6 +1044,13 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         print(f"mockymock generate: {len(result.errors)} parse error(s):")
         for error in result.errors:
             print(f"  {error}")
+        return 1
+
+    # See run_static_checks: free-format source is column-chopped below.
+    format_reasons = check_source_format(program_source)
+    for reason in format_reasons:
+        print(f"mockymock generate: refused ({reason.code}): {reason.message}")
+    if format_reasons:
         return 1
 
     # success=True is not enough: cobolparser reports dropped statements
@@ -1140,7 +1191,59 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             f"(seed={bundle.seed})"
         )
     _report_unsupported_boundaries(surface, "generate")
-    return 0
+    if bundle is None:
+        # --per-paragraph writes one case per paragraph as a starting point
+        # to prune, some of which are expected to be refused.
+        return 0
+    return _refuse_unusable_scaffold(source_path, output_path, args)
+
+
+def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
+    """Lint what `generate` just wrote and fail on any refusal no MOCK
+    block can fix (issue #231): `generate` knows the PERFORM target of every
+    case it writes, so a happy-path case whose entry point reaches an
+    unsafe STOP RUN (UNSUPPORTED_TERMINATOR_LAYOUT) is known to be unusable
+    here, not only at the next `lint`/`run`. Mirrors `--fill`'s own closing
+    check; UNMOCKED_* refusals are left to `generate --fill`."""
+    from mockymock.cli.checks import run_static_checks
+
+    checked = run_static_checks(source_path, cut_path, args.copybook_path)
+    per_case = {
+        f"refused ({r.code}): {r.message}"
+        for reasons in checked.unmocked_reasons.values()
+        for r in reasons
+    }
+    remaining: list[str] = []
+    cases = checked.suite.test_cases if checked.suite is not None else []
+    for index, reasons in sorted(checked.unmocked_reasons.items()):
+        case = cases[index] if index < len(cases) else None
+        where = (
+            f'.cut line {case.line}: TESTCASE "{case.name}" '
+            if case is not None and case.line
+            else ""
+        )
+        remaining.extend(
+            f"{where}refused ({r.code}): {r.message}"
+            for r in reasons
+            # An UNMOCKED_* refusal with no suggested MOCK is one no MOCK
+            # can fix (a site that cannot be spliced where it stands).
+            if not (r.code.startswith("UNMOCKED_") and r.suggested_fix)
+        )
+    remaining.extend(
+        problem
+        for problem in checked.problems
+        if not problem.startswith("  ") and problem not in per_case
+    )
+    if not remaining:
+        return 0
+    for problem in remaining:
+        print(f"mockymock generate: {problem}")
+    print(
+        f"mockymock generate: {cut_path} was written, but `lint` refuses it "
+        f"for the reason(s) above -- no MOCK block can fix them",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _print_linkage_neutralization(
@@ -1197,6 +1300,14 @@ def _print_linkage_neutralization(
             f"pointer -- once folded into WORKING-STORAGE those items own "
             f"real storage, which GnuCOBOL will not let a program rebind"
         )
+    rebindings = getattr(plan, "rebindings", None) or []
+    if applied and rebindings:
+        names = ", ".join(r.item_name for r in rebindings)
+        print(
+            f"mockymock {command}: kept `SET ADDRESS OF` on {names} as a real "
+            f"rebind (BASED, over its own storage at the start of each case) "
+            f"-- every address it is set to is one the program itself takes"
+        )
 
 
 def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:
@@ -1248,10 +1359,9 @@ def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
     unlike the other category=None labels, `run` does not always refuse a
     test case reaching one -- check_terminator_layout (see
     docs/2026-07-08-goback-stop-run-support-design.md) may find it safe.
-    `generate` has no specific test case's PERFORM target to evaluate
-    reachability against, so it cannot know which outcome a future `.cut`
-    will get -- claiming "will be refused" here would be wrong as often as
-    it's right.
+    This report covers the program, not one case: a `.cut` written later
+    may reach a site through another PERFORM target. The cases `generate`
+    writes itself are linted right after (`_refuse_unusable_scaffold`).
 
     `command` names the caller in the printed output -- `generate` (the
     default, and this function's original and still most common caller)
@@ -1434,6 +1544,7 @@ def _run_directory(
 def _cmd_run(args: argparse.Namespace) -> int:
     import json
 
+    from mockymock._decimal import decimal_point_is_comma
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.analysis.stub_expectations import scan_stub_expectations
@@ -1450,7 +1561,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         parse_gcov,
         summarize_original,
     )
-    from mockymock.report.formatters import format_console, format_junit_xml
+    from mockymock.report.formatters import (
+        CLEAN_EXIT_CRASH_DETAIL,
+        format_console,
+        format_junit_xml,
+    )
     from mockymock.report.json_report import (
         build_json_report,
         format_json_report,
@@ -1559,6 +1674,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "run",
             checked.suite.name if checked.suite is not None else "",
             "\n".join(checked.problems),
+            cut_suite=checked.suite,
+            cut_file=cut_path,
+            program_file=source_path,
         )
         return 1
 
@@ -1624,7 +1742,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # run_static_checks) so a stub's case_index always means what
     # build_driver means by it. See
     # docs/2026-08-04-record-expectations-design.md.
-    cut_text = read_utf8_source(cut_path)
+    # Untranslated newlines, like `generate --fill`: the rewrite below
+    # must keep a CRLF .cut CRLF (issue #199), so it is written back with
+    # newline="" and rewrite_cut_text joins with the file's own newline.
+    cut_text = read_utf8_source(cut_path, keep_newlines=True)
     stub_scan = (
         scan_stub_expectations(cut_text, suite) if args.record_expectations else None
     )
@@ -1678,7 +1799,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
             # F10; a `return 1` from *this* branch used to be lumped in
             # with that same fix, which broke the documented, tested
             # --verbose-survives-a-compile-failure contract below).
-            _write_failure_reports(args, "run", suite.name, compiled.stderr)
+            _write_failure_reports(
+                args,
+                "run",
+                suite.name,
+                compiled.stderr,
+                cut_suite=suite,
+                cut_file=cut_path,
+                program_file=source_path,
+            )
             return 1
 
         # try/finally, not just a statement after the `with`: plain --verbose
@@ -1734,6 +1863,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
         crash_detail = "binary timed out (exit 124); see stderr below"
     elif executed.exit_code != 0:
         crash_detail = f"binary exited with code {executed.exit_code}"
+    elif any(result.crashed for result in suite_result.results):
+        # A clean exit with a case left unfinished: control never came back
+        # to the driver. Saying so beats a bare [CRASH] (issue #238).
+        crash_detail = CLEAN_EXIT_CRASH_DETAIL
     else:
         crash_detail = None
     not_run = not_run_case_names(suite_result, suite)
@@ -1755,14 +1888,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # "Never overwrite a hand-edited EXPECT" sections): every stub the
         # scanner found ends up in exactly one of recorded/skipped, and the
         # file is only ever touched when at least one stub was recorded.
+        pictures = field_pictures(result.ast, checked.captures)
         recording = build_recording_report(
-            stub_scan, suite_result, address_fields(result.ast)
+            stub_scan, suite_result, address_fields(result.ast), pictures
         )
         rewritten = rewrite_cut_text(
-            cut_text, recording, field_pictures(result.ast, checked.captures)
+            cut_text,
+            recording,
+            pictures,
+            decimal_comma=decimal_point_is_comma(result.ast),
         )
         if rewritten is not None:
-            cut_path.write_text(rewritten, encoding="utf-8", newline="\n")
+            cut_path.write_text(rewritten, encoding="utf-8", newline="")
         print(
             f"mockymock run: --record-expectations: recorded "
             f"{len(recording.recorded)}, skipped {len(recording.skipped)}"
@@ -1908,6 +2045,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # line, or the timeout killed a straggler). A tripped
     # --coverage-fail-under gate fails the command the same way, so a green
     # suite under an unmet coverage floor still exits nonzero in CI.
+    if (
+        suite_result.results
+        and suite_result.tests_run == 0
+        and all(result.passed for result in suite_result.results)
+    ):
+        # Every case printed a clean END, yet the driver never reached its
+        # SUMMARY line: something the program ran after the last case
+        # ended the binary before AFTER-ALL. Exiting 1 under an all-PASS
+        # report without saying why read as a mockymock bug (issue #264).
+        print(
+            "mockymock run: every case passed, but the test binary ended "
+            "without printing its SUMMARY line -- program code that ran "
+            "after the last case (a STOP RUN, GOBACK, or abend) stopped it "
+            "before AFTER-ALL, so the run is not counted as passed"
+        )
     if coverage_gate_failed:
         return 1
     return 0 if suite_result.all_passed and executed.exit_code == 0 else 1
@@ -2202,7 +2354,7 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
 
     score = outcome.score
     if args.fail_under is not None:
-        if score is None or score * 100 < args.fail_under:
+        if outcome.score_below(args.fail_under):
             shown = "n/a" if score is None else f"{score * 100:.1f}%"
             print(
                 f"mockymock mutate: mutation score {shown} is below "
@@ -2641,6 +2793,10 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     boundaries = None
     if args.boundaries:
         assert program_path is not None  # checked above
+        # Same copybook lookup lint/run use (config file + the program's
+        # copybooks/ folder): without it a site inside a copybook vanished
+        # from the list and completion offered nothing for it (issue #200).
+        _apply_config_to_args(args, program_path)
         try:
             boundaries = _collect_boundaries(program_path, args.copybook_path)
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
@@ -2962,9 +3118,18 @@ def _insert_driver_with_origins(
         _WS_HEADER_RE.match(line) for line in lines[: _first_procedure_index(lines)]
     )
     seen_data_division = False
+    entry_check_at: int | None = None
 
-    for line in lines:
+    for index, line in enumerate(lines):
         upper = line.strip().upper()
+        if index == entry_check_at and _starts_unnamed_code(lines, index):
+            # Statements straight after the PROCEDURE DIVISION header, with
+            # no paragraph name of their own, would otherwise read as more
+            # sentences of the last UT-TESTCASE paragraph -- the main line
+            # (and its STOP RUN) ran after the last case and SUMMARY never
+            # printed (issue #264). A header makes them a paragraph nothing
+            # performs.
+            extend([f"       {_ORIGINAL_ENTRY_PARAGRAPH}."])
         if not inserted_ws and not has_ws:
             if upper.startswith("DATA DIVISION"):
                 seen_data_division = True
@@ -2984,7 +3149,46 @@ def _insert_driver_with_origins(
             extend([""])
             extend(artifact.procedure_lines)
             inserted_proc = True
+            entry_check_at = index + 1
     return result, inserted
+
+
+#: The paragraph header `_insert_driver_with_origins` gives a PROCEDURE
+#: DIVISION main line that has no paragraph name of its own.
+_ORIGINAL_ENTRY_PARAGRAPH = "UT-ORIGINAL-ENTRY"
+#: A paragraph or SECTION header: one word (or `<word> SECTION`) and a
+#: period, optionally followed by the paragraph's first sentence.
+_PROCEDURE_HEADER_RE = re.compile(
+    r"^\s*(?P<name>[A-Z0-9][A-Z0-9-]*)(?:\s+SECTION(?:\s+\d+)?)?\s*\.(?:\s|$)",
+    re.IGNORECASE,
+)
+#: One-word statements that look like a header: `EXIT.`, `GOBACK.`, ...
+_HEADER_LOOKALIKE_VERBS = frozenset(
+    {"CONTINUE", "EJECT", "EXIT", "GOBACK", "SKIP1", "SKIP2", "SKIP3"}
+)
+
+
+def _starts_unnamed_code(lines: list[str], index: int) -> bool:
+    """Whether the first code line from `index` on (the line after the
+    PROCEDURE DIVISION header) is a statement rather than a paragraph or
+    SECTION header, DECLARATIVES, or END PROGRAM. A header missed here
+    only costs an empty extra paragraph; a statement missed would run
+    inside the last test case, so the check leans towards inserting.
+    False when the header line itself had no period (a USING list still
+    running onto the next lines: inserting there would split it)."""
+    header = lines[index - 1].split("*>", 1)[0]
+    if "." not in header:
+        return False
+    for line in lines[index:]:
+        text = line.split("*>", 1)[0].strip()
+        if not text:
+            continue
+        upper = text.upper()
+        if upper.startswith(("DECLARATIVES", "END PROGRAM")):
+            return False
+        m = _PROCEDURE_HEADER_RE.match(text)
+        return m is None or m.group("name").upper() in _HEADER_LOOKALIKE_VERBS
+    return False
 
 
 _WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\b", re.IGNORECASE)
@@ -3151,6 +3355,11 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument(
         "--name",
         help="Name a second suite for the program: writes <program>.<NAME>.cut",
+    )
+    generate_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output .cut file if it already exists",
     )
     generate_parser.add_argument(
         "--fill",

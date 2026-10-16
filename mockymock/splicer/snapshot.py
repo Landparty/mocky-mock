@@ -9,12 +9,14 @@ The driver therefore runs `UT-RESET-WORKING-STORAGE`, the BEFORE-ALL
 steps, then `UT-SAVE-STATE` once; each test case runs
 `UT-RESET-WORKING-STORAGE` followed by `UT-RESTORE-STATE`. Resetting first
 keeps everything outside this module's reach (harness fields, capture
-targets, the CICS EIB) at its usual per-case value; the restore then
-overwrites every item listed below with its saved copy.
+targets) at its usual per-case value; the restore then overwrites every
+item listed below with its saved copy.
 
 Covered items are exactly the ones `splicer.reset` covers: every
 top-level (01/77) WORKING-STORAGE and LOCAL-STORAGE item, each FD/SD's
-longest record, and LINKAGE items neutralized into WORKING-STORAGE.
+longest record, and LINKAGE items neutralized into WORKING-STORAGE --
+plus the blocks mockymock synthesizes (the CICS DFHEIBLK, DLIDIB and the
+generated SQLCA), which `reset` clears too.
 Top-level REDEFINES items are skipped (their storage is the redefined
 item's, which is saved), as are top-level FILLERs (not addressable).
 
@@ -28,10 +30,15 @@ exact:
   An upper bound (not an exact size) is deliberate: it only has to be big
   enough, so it can't be wrong in the dangerous direction across
   cobol-parser versions whose size arithmetic differed.
-- Elementary item with a PICTURE (or a PICTURE-less usage such as
-  COMP-1): into a field declared with the same PICTURE, USAGE and SIGN
-  clause. A MOVE between two identically described items preserves the
-  value.
+- Elementary item with an editing PICTURE (alphanumeric-, national- or
+  numeric-edited): the same group byte copy. A MOVE into an edited item
+  re-applies its editing mask to the sender's already-edited text, so a
+  same-PICTURE copy shifted the value (`PIC XX/XX` "AB/CD" came back
+  "AB///", issue #224).
+- Any other elementary item with a PICTURE (or a PICTURE-less usage such
+  as COMP-1): into a field declared with the same PICTURE, USAGE and SIGN
+  clause. A MOVE between two identically described non-edited items
+  preserves the value.
 - POINTER-family and INDEX items: `SET` into a field of the same usage
   (COBOL forbids MOVE on them).
 
@@ -69,18 +76,50 @@ class StateSnapshot:
     restore_lines: list[str] = field(default_factory=list)
 
 
+# Groups mockymock splices in after parsing, so `_state_items` never sees
+# them, with an upper bound of their size (DFHEIBLK is about 90 bytes,
+# DLIDIB 40, SQLCA 136): see splicer.cics_eib and splicer.sqlca.
+SYNTHESIZED_GROUP_BYTES = {"DFHEIBLK": 128, "DLIDIB": 64, "SQLCA": 256}
+
+
 def plan_snapshot(
-    program, linkage_items: list | None = None
+    program,
+    linkage_items: list | None = None,
+    synthesized_groups: list[str] | None = None,
+    rebound_items: list[str] | None = None,
 ) -> tuple[StateSnapshot, list[str]]:
     """The snapshot fields and the save/restore statements for `program`,
     plus one problem string per item that cannot be saved exactly (empty
     when everything can). Callers must refuse when problems is non-empty:
-    a partially restored state is a silently wrong test."""
+    a partially restored state is a silently wrong test.
+
+    `synthesized_groups` names the blocks mockymock itself adds after
+    parsing (DFHEIBLK, DLIDIB, SQLCA; keys of SYNTHESIZED_GROUP_BYTES).
+    They are reset before every case like any other storage, so without a
+    snapshot entry a BEFORE-ALL that set EIBCALEN or SQLCODE was wiped
+    before the first case (issue #225); each is byte-copied like a group.
+
+    `rebound_items` names folded LINKAGE items kept BASED
+    (`splicer.linkage.mark_based`, issue #226): the address BEFORE-ALL left
+    each one at is saved too, and restored before any data, because the
+    reset points it back at its own backing storage."""
     snapshot = StateSnapshot()
     problems: list[str] = []
+    for name in rebound_items or []:
+        snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
+        snapshot.working_storage_lines.append(f"01  {snap} USAGE POINTER.")
+        snapshot.save_lines.append(f"SET {snap} TO ADDRESS OF {name}")
+        snapshot.restore_lines.append(f"SET ADDRESS OF {name} TO {snap}")
+    for name in synthesized_groups or []:
+        snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
+        snapshot.working_storage_lines.extend(
+            [f"01  {snap}.", f"    05 FILLER PIC X({SYNTHESIZED_GROUP_BYTES[name]})."]
+        )
+        snapshot.save_lines.append(f"MOVE {name} TO {snap}")
+        snapshot.restore_lines.append(f"MOVE {snap} TO {name}")
     for item in _state_items(program, linkage_items or []):
         snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
-        if _is_group(item):
+        if _is_group(item) or _is_edited(item):
             reason = _odo_reason(item)
             size = None if reason else _max_bytes(item)
             if reason or size is None:
@@ -132,6 +171,15 @@ def _state_items(program, linkage_items: list) -> list:
         for item in items
         if not _is_filler(item) and not getattr(item, "redefines", None)
     ]
+
+
+def _is_edited(item) -> bool:
+    """An elementary item with an editing PICTURE (XX/XX, XXXBXXXX, NNBNN,
+    ZZ9.99). A MOVE into one re-applies the editing mask to the sender's
+    already-edited text, insertion characters included, so the value
+    shifts on every copy (issue #224); it is byte-copied like a group."""
+    picture = getattr(item, "picture_clause", None)
+    return bool(picture is not None and getattr(picture, "is_edited", False))
 
 
 def _children(item) -> list:

@@ -5,6 +5,21 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-16 -- bug-audit sweep (#188, #189, #194-#227, #230, #231)
+
+One commit per issue across #228 and #232; each commit body names the
+cause and, for [NEEDS DECISION] issues, the option taken. Behaviour that
+changed shape: a mocked READ/CALL/file op now runs the program's own
+AT END / INVALID KEY / NOT ... / ON EXCEPTION bodies by the mocked outcome
+(`UT-MOCK-STATUS`, #209); EXIT PROGRAM and EXEC CICS RETURN/XCTL/ABEND are
+terminators (#212, #215); EXEC SQL WHENEVER is emulated, not mocked
+(#195); free-format sources and unknown .cut data names are refused by
+lint (#210, #204); `generate` refuses to overwrite without `--force`
+(#201) and exits 1 when lint refuses its own scaffold (#231); ROWS cursors
+survive hook steps and VERIFY counts from a baseline (#223); DECIMAL-POINT
+IS COMMA programs get comma literals (#230). Updated [splicer](splicer.md),
+[dsl](dsl.md), [analysis](analysis.md), [cli](cli.md), [report](report.md).
+
 ## 2026-10-15 -- allow cobol-parser 3.x
 
 The dependency cap moves from `<3` to `<4` and `uv.lock` to cobol-parser

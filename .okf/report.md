@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-10-14T01:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 # Overview
 
@@ -152,7 +152,12 @@ reached `STOP RUN` does) do they fall back to the
 `_DEFAULT_CRASH_HYPOTHESIS` text `"PERFORM target reached STOP RUN?"`.
 Do not re-hardcode that hypothesis into the message: it was previously
 shown even for timeouts and aborts whose stderr evidence had been
-discarded (audit 2026-07-07, findings 4.2/5.1).
+discarded (audit 2026-07-07, findings 4.2/5.1). Since issue #238 `run`
+also passes `CLEAN_EXIT_CRASH_DETAIL` when the binary exited 0 with a
+case unfinished: it embeds the same STOP RUN hypothesis and adds the other
+clean-exit cause, a GO TO out of the PERFORMed range (e.g. into another
+paragraph of a SECTION, which the GO-TO-exit rewrite does not cover), so
+the console line and the JSON `crashDetail` are never blank/null there.
 
 ## Bug-hunt corrections (2026-10-05)
 
@@ -243,6 +248,12 @@ payload for a plain `--trace`. `TRACE_ENTRY_CAP` (50,000) bounds a runaway
 
 ## Record-expectations rewrite (`report/record_rewrite.py`)
 
+**`DECIMAL-POINT IS COMMA` (issue #230):** `rewrite_cut_text(...,
+decimal_comma=)` / `render_expect_value(..., decimal_comma=)` read a
+DISPLAYed `00125,00` as a number and write the golden back with a comma
+(`00589,00`); a period there is a sentence end and the next run did not
+compile. `_cmd_run` passes `decimal_point_is_comma(result.ast)`.
+
 Backs `mockymock run --record-expectations` (see [cli](cli.md) and
 docs/2026-08-04-record-expectations-design.md). The stage after
 `analysis.stub_expectations.scan_stub_expectations` (see
@@ -273,6 +284,13 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   A stub on a POINTER-family or INDEX item is skipped, not recorded
   (`address_fields`, passed to `build_recording_report`, 2026-10-12): its
   DISPLAY text is an address, and `EXPECT P TO BE "0x..."` does not compile.
+  Issue #194 (2026-10-16): only *spaces* are trimmed (`rstrip(" ")`), since
+  X'09'-X'0D'/X'1C'-X'1F' are field data (X'0C' ends a positive packed
+  zero) and go to the hex-literal path; `field_pictures` maps a group item
+  to `X(length)` so it is always quoted/hex, never bare; and a stub on a
+  P-scaled PICTURE (`has_p_scaling`: `9(3)PP`, `SVP9(2)`) is skipped by
+  `build_recording_report(..., pictures=...)`, because DISPLAY prints only
+  the stored digits (12300 shows as `00123`).
 - `build_recording_report(scan, suite_result)` — matches every
   `StubExpectation` the scanner found against `suite_result`'s recorded
   values by `f"{case_index:03d}"` (the same case-id convention

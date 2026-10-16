@@ -141,27 +141,36 @@ END-MOCK
 - `TERMINAL ( FIELD = value, ... )` answers every call after the last
   row. It is **required** for `CALL`/`MQ`/`DLI` (give the end-of-data
   response, e.g. `GB`, or the loop never ends), optional for `READ`, and
-  needed for `RETURN`. If a `READ` loop guard is a flag set by the
-  program's own `AT END` clause (not the file status), put that flag's
-  `MOVE` here too.
+  needed for `RETURN`. The program's own `AT END` clause runs once the
+  rows run out (see below), so its end-of-data flag needs no `MOVE`
+  here.
 - `SQL`'s exhausted branch is fixed (`SQLCODE = 100`, DB2's "not found"
   code) and takes no `TERMINAL` group.
 - `CAPTURE ARG` still works inside a `CALL ... ROWS` body.
 - `ROWS` on any other category is a parse error.
 
-### A mock replaces the whole statement, clauses included
+### A mock replaces the statement, not its clauses
 
-A `MOCK` on a statement replaces that statement *and every clause it
-owns*, not just the I/O. For `READ` that means the entire
-`READ ... AT END ... NOT AT END ... END-READ`: the program's own
-statements inside `AT END` and `NOT AT END` are commented out and never
-run, even when they are business logic rather than I/O handling. The
-same holds for `INVALID KEY` / `NOT INVALID KEY` on `READ`, `WRITE`,
-`REWRITE`, `DELETE` and `START`, and for `ON EXCEPTION` /
-`NOT ON EXCEPTION` on `CALL`.
+A `MOCK` replaces the I/O or the call itself. The program's own clause
+bodies still run after the mock body, picked by the outcome the mock
+reports, the way the real statement would pick them:
 
-So a mock that sets only the record field leaves anything the program
-derives from it inside the clause unset:
+| Clause | Runs when the mocked outcome is |
+|---|---|
+| `AT END` | end of file (status `1x`, e.g. `"10"`) |
+| `INVALID KEY` | invalid key (status `2x`, e.g. `"23"`) |
+| `NOT AT END` / `NOT INVALID KEY` | success (status `0x`, the default) |
+| `NOT ON EXCEPTION` (CALL) | success (the default) |
+| `ON EXCEPTION` (CALL) | `"EX"` |
+
+This covers `READ`, `RETURN`, `WRITE`, `REWRITE`, `DELETE`, `START` and
+`CALL`. The outcome is the file's own FILE STATUS field after the mock
+body, so `FILE-STATUS IS RECORD-NOT-FOUND` runs `INVALID KEY` and an
+exhausted `ROWS` mock runs `AT END`. A mock that sets nothing reports
+success.
+
+So a mock supplies the record, and the program's own `NOT AT END` does
+the rest:
 
 ```
        READ PURGE-PARM-FILE
@@ -174,25 +183,36 @@ derives from it inside the clause unset:
 
 ```
 MOCK READ PURGE-PARM-FILE
-    MOVE "20260101" TO PURG-CUTOFF-DATE    *> WS-CUTOFF-DATE stays unset
+    MOVE "20260101" TO PURG-CUTOFF-DATE    *> NOT AT END copies it on
 END-MOCK
 ```
 
-Set the field the rest of the program actually reads, doing in the mock
-body what the deleted clause would have done:
+When there is no FILE STATUS field to report through (a file without
+one, or a `CALL`), set the outcome field `UT-MOCK-STATUS` in the mock
+body instead. It starts at `"00"` in every mocked call:
 
 ```
-MOCK READ PURGE-PARM-FILE
-    MOVE "20260101" TO PURG-CUTOFF-DATE
-    MOVE "20260101" TO WS-CUTOFF-DATE      *> the NOT AT END's own MOVE
+MOCK READ PARM-FILE                *> no FILE STATUS clause
+    IF UT-READ-PARM-FILE-TALLY > 2
+        MOVE "10" TO UT-MOCK-STATUS    *> runs the program's AT END
+    ELSE
+        MOVE "ACME CORP" TO PARM-NAME
+    END-IF
+END-MOCK
+
+MOCK CALL "RATESUB"
+    MOVE "EX" TO UT-MOCK-STATUS        *> runs the CALL's ON EXCEPTION
 END-MOCK
 ```
 
-With `ROWS`, put those fields in each row group, and the `AT END`
-clause's own statements in `TERMINAL` (see above). `mockymock fixtures`
-and scaffolding copy the `AT END` clause's literal `MOVE`/`SET`
-statements into `TERMINAL` for you; nothing copies `NOT AT END`, because
-its statements usually read the record and depend on runtime values.
+A clause body is left out (deleted with the statement, as before) when
+it cannot run safely in place: when it holds another boundary statement
+(a `CALL`, file I/O, `EXEC`), `GO TO`, `GOBACK`, `STOP RUN`, `EXIT
+PROGRAM`, `ALTER`, `NEXT SENTENCE` or `CANCEL`, or a nested conditional
+phrase such as `ON SIZE ERROR`. `WRITE ... AT END-OF-PAGE` bodies are
+always left out, and so are a nested statement's own clauses (a nested
+statement with clauses cannot be mocked at all). In those cases, do in
+the mock body what the deleted clause would have done.
 
 ### `CAPTURE ARG <n> INTO <target>` -- argument capture (`CALL`/dynamic `CALL` only)
 

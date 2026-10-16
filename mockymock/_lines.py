@@ -77,10 +77,16 @@ def read_utf8_source(path: Path, *, keep_newlines: bool = False) -> str:
     """`path.read_text(encoding="utf-8")`, raising `SourceEncodingError`
     (not a bare UnicodeDecodeError) when the file is not UTF-8.
     `keep_newlines=True` skips universal-newline translation, so a caller
-    that rewrites the file in place can see (and keep) its CRLFs."""
+    that rewrites the file in place can see (and keep) its CRLFs.
+
+    A leading UTF-8 byte-order mark (Windows tools such as PowerShell 5's
+    `Out-File -Encoding utf8` write one) is dropped, so a `.cut` saved that
+    way parses (issue #198) -- except under `keep_newlines`, whose callers
+    rewrite the file and so keep the BOM to round-trip it; `parse_cut`
+    ignores a leading BOM itself."""
     try:
         if keep_newlines:
             return path.read_bytes().decode("utf-8")
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         raise SourceEncodingError(path, exc) from exc

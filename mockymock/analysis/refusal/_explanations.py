@@ -137,7 +137,9 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "of the PROCEDURE DIVISION is meant."
     ),
     "UNSUPPORTED_TERMINATOR_LAYOUT": (
-        "A STOP RUN or GOBACK sits in a shape mockymock's terminator "
+        "A STOP RUN, GOBACK or EXIT PROGRAM, or an EXEC CICS RETURN/"
+        "XCTL/ABEND (which never give control back), sits in a shape "
+        "mockymock's terminator "
         "neutralization cannot safely rewrite (so the suite's later test "
         "cases would never run). One narrow SECTION-scoped shape (a "
         "section's first paragraph, entered exclusively via PERFORM "
@@ -152,6 +154,18 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "control flow. Move the statement to the top level of its "
         "paragraph, or mock the whole paragraph/section instead (MOCK "
         "PARAGRAPH/MOCK SECTION)."
+    ),
+    "UNKNOWN_DATA_NAME": (
+        "A MOVE target, EXPECT data-name, CAPTURE INTO target or bare-word "
+        "value in the .cut names nothing the program declares -- cobc "
+        "would reject the generated driver. Fix the spelling, or quote the "
+        'value if it is meant as text (TO BE "Y", not TO BE Y).'
+    ),
+    "UNSUPPORTED_SOURCE_FORMAT": (
+        "The program is free-format COBOL. mockymock edits and compiles "
+        "fixed-format source only (code in columns 8-72), so a free-format "
+        "program would be cut apart before cobc ever saw it. Convert the "
+        "program to fixed format to test it."
     ),
     "UNSUPPORTED_MOCK_TARGET_LAYOUT": (
         "A MOCK directive matches a top-level statement that shares a "
@@ -265,6 +279,15 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "B`): nothing is passed there to capture. Fix the argument "
         "number."
     ),
+    "AMBIGUOUS_PARAGRAPH": (
+        "A paragraph this test case can reach shares its name with a "
+        "paragraph in another SECTION. COBOL resolves such a name by "
+        "section, but mockymock resolves paragraphs by name alone, so it "
+        "cannot tell which body runs or which boundaries the case "
+        "reaches -- a CALL only the other body makes would run for real. "
+        "Refused rather than guessed; rename the paragraphs so each name "
+        "is unique in the program."
+    ),
     "UNKNOWN_PARAGRAPH": (
         "A test case's own PERFORM target (or a driver-side PERFORM ... "
         "THRU endpoint) does not name a real paragraph or section in the "
@@ -368,5 +391,14 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "code -- stubbing it out (required for GnuCOBOL to compile, "
         "since it has no precompiler) would comment out that sibling "
         "code too. Put the EXEC block on its own line(s)."
+    ),
+    "UNSUPPORTED_SQL_WHENEVER": (
+        "An EXEC SQL WHENEVER is not in a form mockymock can emulate. "
+        "WHENEVER is a precompiler declaration: mockymock replaces it and "
+        "puts the precompiler's own `IF SQLCODE ... GO TO <paragraph>` "
+        "check after every later mocked SQL statement, for SQLERROR, "
+        "SQLWARNING and NOT FOUND with CONTINUE or GO TO <paragraph>. Any "
+        "other shape is refused rather than dropped, since dropping it "
+        "would run different control flow than DB2 does."
     ),
 }

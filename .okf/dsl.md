@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T14:00:00Z
 ---
 
 # Overview
@@ -88,7 +88,10 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   generated `IF` (the IF guards the failure branch; `>=`/`<=` negate to
   the equivalent plain `<`/`>` to keep emitted conditions to the
   simplest COBOL-85 relational forms) — keep that map in sync with
-  `EXPECT_OPERATORS`. The FAIL `DISPLAY` carries the operator between
+  `EXPECT_OPERATORS`. A value carrying an unquoted `AND`/`OR`
+  (`TO BE > 0 AND < 10`, `TO BE 7 OR 8`) is an abbreviated combined
+  condition; the driver negates it whole, `IF NOT (<name> <op> <value>)`
+  (issue #265). The FAIL `DISPLAY` carries the operator between
   name and value (`expected WS-X > 5, got ...`), and
   `report/json_report.py`'s `_EXPECT_HEAD_RE` splits attribution on it
   (`expected` field keeps the bare value for `=`, is operator-prefixed
@@ -101,8 +104,19 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   raises `CutParseError` (`_reject_sentence_period`, 2026-09-27) --
   spliced into the generated `IF`, the period ended the sentence mid-IF
   and `cobc` rejected the driver while `lint` passed; a PROVIDER row
-  substituting such a value is refused at its `ROW` line. Phrase words are case-sensitive
+  substituting such a value is refused at its `ROW` line. The same check
+  covers setup and BEFORE-*/AFTER-* hook `MOVE` values, and PROVIDER rows
+  substituted into them (issue #197, 2026-10-16). Phrase words are case-sensitive
   uppercase like every other keyword.
+- `EXPECT <88-name> [NOT] TO BE TRUE|FALSE` tests a level-88
+  condition-name (issue #189). TRUE/FALSE are not values any data item
+  compares with, so `driver._condition_name_truth` emits `IF NOT <name>`
+  / `IF <name>` instead of the relational `IF FLAG-ON NOT = TRUE`, which
+  cobc rejected ("condition-name not allowed here"); an 88 cannot be
+  DISPLAYed, so the FAIL line reports the truth value it had (`expected
+  FLAG-ON = TRUE, got FALSE`). TRUE/FALSE after an ordering phrase
+  (`TO BE GREATER THAN TRUE`) is a `CutParseError`. The target is not
+  checked statically: a non-88 name still fails at compile time.
 - `EXPECT <data-name> TO BE <value>`'s `<data-name>` and `MOVE <value> TO
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
   to an identifier — a table subscript (`WS-TABLE(1, 1)`, `WS-TABLE(1 1)`,
@@ -163,13 +177,18 @@ default: `check_test_case(shared=..., matched_out=...)` no longer
 refuses one a given case doesn't reach; `cli.checks` refuses it
 (`UNMATCHED_MOCK`, "not reached by any test case or hook step") only
 when nothing reaches it (2026-10-10; before, every case had to reach
-every shared mock). See
+every shared mock). "Nothing" means the whole suite, not a `--case`/`--tag`
+selection: when the selected cases leave a shared mock unmatched, the
+unselected cases are checked for their matches only (their own refusals
+are discarded), so selecting a case never refuses a clean suite (issue
+#250). See
 `docs/2026-07-20-before-blocks-and-file-status-design.md`.
 
 ### `FILE-STATUS IS <mnemonic-or-code>`
 
-Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK` body
-(not `WRITE`/`REWRITE`). `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`,
+Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK|WRITE|REWRITE`
+body. WRITE/REWRITE key on the record name, which resolves to its FD's
+status field (issue #221). `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`,
 `DUPLICATE-KEY`, `RECORD-NOT-FOUND`, `FILE-NOT-FOUND`, `ALREADY-OPEN`,
 `NOT-OPEN`, `NO-CURRENT-RECORD`; a quoted two-character literal (e.g.
 `"92"`) always works too. Every eligible category also gets an implicit
@@ -357,7 +376,12 @@ exempt) -- left verbatim it linted clean and failed cobc on
 `invalid symbol '{'`. The same token in a NAME position -- `MOVE` target,
 `EXPECT` data-name, `PERFORM` target/THRU -- is likewise a `CutParseError`
 (`_reject_name_placeholder`, 2026-09-28; the EXPECT form made cobc abort
-with "Please report this!"). An unknown `{Foo}` token is a
+with "Please report this!"). A token naming any PROVIDER's column in a
+hook step (`MOVE` in BEFORE-/AFTER-EACH/-ALL) or a hook `MOCK` body is a
+`CutParseError` at that line too (`_reject_hook_placeholders`, issue
+#227): a hook belongs to no single row, and the token reached cobc
+verbatim; checked after the whole file is read, since a PROVIDER may be
+declared after the hook block. An unknown `{Foo}` token is a
 `CutParseError` naming the provider's real columns; an undeclared/
 mistyped `USING PROVIDER` reference errors at the `TESTCASE` line.
 
@@ -666,7 +690,8 @@ DLET and loop GHN; `MQGET`; a DB2 access module) at its empty-input path.
 own tally reaches N. That tally is per `(category, key)`, so it counts
 calls across **every** site the key matches (a DLI tally is per quoted
 prefix key, since that is the directive's key), and `driver.py` zeroes it
-at the start of each case, so every case restarts at row 1. These
+at the start of each case, so every case restarts at row 1 (see the
+hook rule below). These
 categories have no implicit end-of-data value (no SQLCODE, no FILE
 STATUS), so **`TERMINAL` is mandatory** -- the parser raises
 `CutParseError` ("needs a TERMINAL ...") at `END-MOCK` when it is
@@ -681,6 +706,18 @@ SEQUENCED branch calls `build_rows_block(tally, rows, row_suffix_moves=[],
 exhausted_moves=<TERMINAL MOVEs>)`. Worked example:
 `examples/real-world/ACCTPRG/ACCTPRG.cut`'s two "then stops at GB" cases;
 tests: `tests/unit/test_call_sequencing.py`.
+
+**ROWS cursor across hooks (issue #223).** The tally is both the ROWS
+cursor and the VERIFY count. A case's tally starts at 0 -- or, for a key it
+inherits from BEFORE-ALL, at the count the BEFORE-ALL steps left
+(`UT-...-START`, saved right after them) -- and is never zeroed again
+inside the case: rows a priming READ/FETCH/CALL in BEFORE-EACH or
+BEFORE-ALL consumed are not handed out again, exactly like a real file.
+VERIFY counts only the case's own PERFORM through a per-key baseline
+(`UT-...-BASE`), set equal to the tally at case start and again after the
+BEFORE-EACH steps when they PERFORM; the generated check is
+`IF (<tally> - <base>) NOT = n`. A case's own MOCK for the key replaces
+the inherited one and starts its rows at 1.
 
 **This grammar is hand-authoring only.** It exists for a human (or an
 editor integration) writing a `.cut` file by hand against `mockymock
@@ -847,6 +884,54 @@ paragraph-grouped path described above, unchanged. A real
   the loop body still runs once per row, so the other boundaries in its
   paragraph keep their counts). A keyed/random READ is left alone: out of
   rows it would answer "23", not "10".
+- **`DECIMAL-POINT IS COMMA` (issue #230)**: `ProgramContext.decimal_comma`
+  (from `mockymock._decimal.decimal_point_is_comma`) makes
+  `_bundle_rendered_value` (mock-body MOVEs, SQL `ROWS` values) and the
+  Tier 2 `field_equals` EXPECTs write `9,99` instead of `9.99`. The parser's
+  `_split_top_level` treats a comma between two digits as a decimal comma,
+  not a separator, so `ROW 100,5, 125,62` and `( F = 1,25, G = 2 )` hold
+  the values the program means (a separator comma is always followed by a
+  space in COBOL).
+- **A READ of a `RECORD VARYING ... DEPENDING ON` file sets the length
+  item** (issue #214): `_row_move_lines` appends `MOVE <length> TO <item>`
+  to every READ row (`_record_length_move`, cached per file on
+  `ProgramContext.record_length_moves`), read from the FD record's
+  `fd_clauses` metadata through cobol-parser's
+  `VaryingLength.from_fd_clauses`. A real READ stores the length of the
+  record it read there; leaving it at its VALUE (usually 0) put every
+  generated record below the FD minimum. The bundle carries no per-row
+  length (`declared_lengths` is not surfaced upstream yet), so every row
+  reports the layout's full length clamped into the FD's range.
+- **A CICS mock writes only what the command returns** (issue #222):
+  cobol-parser marks every EXEC CICS boundary BIDIRECTIONAL and lays out
+  every resolved operand, so `_single_row_body` used to MOVE random text
+  into `WRITE ... FROM(rec)`, a WRITE's `RIDFLD` and `SEND TEXT FROM(msg)`
+  -- state the real transaction never touches, recorded as golden by
+  `--record-expectations`. `_cics_output_layout` drops a layout field that
+  only an input operand names (`_cics_operand_roles` over the statement's
+  `options`, found by the fixture's line among the key's CICS sites): FROM,
+  FILE/QUEUE/MAP/PROGRAM/TRANSID/... always; RIDFLD except on
+  READ/READNEXT/READPREV; LENGTH/FLENGTH except on the commands that
+  return a length (READ*, RECEIVE, READQ, RETRIEVE, GET, CONVERSE, WEB);
+  COMMAREA on RETURN/XCTL (LINK's stays: the callee may update it);
+  only ABSTIME on FORMATTIME; nothing on ASSIGN/INQUIRE/ADDRESS/ASKTIME.
+  A field also named by a non-input operand of any statement for the key
+  is kept.
+- **An AT END clause the splice re-runs is not copied at all** (issue
+  #209): `_at_end_handling` asks `analysis.clause_bodies.lift_clause_bodies`
+  first; when the splice will run the READ's own AT END clause after the
+  mock, the exhaustion branch only reports end of file -- `fixture.terminal`'s
+  status MOVE, or `MOVE "10" TO UT-MOCK-STATUS` for a file with no FILE
+  STATUS field -- plus a comment saying so. Copying it too would run it
+  twice. The replication / lift below is now the fallback for a clause the
+  splice cannot lift (or a scaffold built without a `ProgramContext`).
+- **AST replication is all or nothing** (issue #217): when any statement in
+  the `AT END` clause is not one of the two replicable shapes,
+  `_replicated_at_end_statements` returns nothing, so the whole clause is
+  lifted (below) or flagged with the TODO. It used to replicate the literal
+  `MOVE "Y" TO WS-EOF` and silently drop `MOVE WS-READ-CNT TO
+  WS-TRAILER-CNT` beside it, and `run --record-expectations` then recorded
+  goldens for behaviour the program does not have.
 - **When the AST-driven replication comes up empty, the clause's own source
   text is lifted verbatim instead** (`_lifted_at_end_lines`, 2026-09-04).
   The `*> TODO` comment that used to be emitted there is not a visible gap
@@ -939,13 +1024,23 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   every site of its key is in `analysis/exact_counts.py`'s
   `exact_count_scope` for the entry: top level of its paragraph (or an
   inline PERFORM body there), in a paragraph reached through top-level
-  PERFORMs only (looping ones included, since loop counts are the
-  bundle's row model) and by nothing else -- no PERFORM inside an
+  PERFORMs only (looping ones only for READ/RETURN -- see #290 below)
+  and by nothing else -- no PERFORM inside an
   IF/EVALUATE/AT END, no GO TO, SORT/XML procedure, or fall-through from
   a GO TO target. A PERFORM in a branch that ends with `STOP RUN`/`GOBACK`
   doesn't count against its target. Everything else is demoted the same
   way, including a per-row CALL behind a loop's own `IF NOT EOF` guard.
   Early exits (`IF ... GOBACK`) are not modeled.
+- **Sites that run more than once a pass (#290).** The bundle (cobol-parser
+  2.x) gives every site `call_count` 1 however often it runs, so for every
+  category but READ/RETURN `exact_count_scope` no longer treats a looping
+  PERFORM as a straight edge: its target, any PERFORM inside an inline
+  loop's body, the inline loop body's own statements, and a paragraph
+  PERFORMed by two or more straight statements are all out of scope, and
+  their counts are demoted with `_LOOPED_SITE_REASON`. READ/RETURN are
+  checked against `exact_count_scope(..., loops_exact=True)` (the older
+  scope, looping PERFORMs as straight edges), since their counts are the
+  bundle's row model of the read loop.
 - **Sites the entry never reaches (2026-10-14).** The bundle also counts
   a key's sites in paragraphs nothing PERFORMs from the entry (a CICS
   `HANDLE CONDITION` target, dead code), and #142's sum included them:
@@ -962,13 +1057,21 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
 - **SQL status-only bodies (#148).** OPEN/CLOSE/COMMIT-style bodies set
   `SQLCODE` to 0 when the fixture names no SQLCODE.
 - **No entry (#150).** A scenario with `entry=''` (IMS `ENTRY 'DLITCBL'`
-  programs) falls back to the first named PROCEDURE DIVISION paragraph
-  (`_first_paragraph`); `generate --with-data` exits 1 when no scenario
+  programs) falls back to the first named PROCEDURE DIVISION section
+  or paragraph by source line (`_first_paragraph`) -- sections count
+  since #238, so a section-structured program whose main line sits
+  unnamed under `A000-MAIN SECTION.` is entered with `PERFORM A000-MAIN`,
+  not with the first paragraph of a later section; `generate --with-data` exits 1 when no scenario
   became a TESTCASE. A `CALL 'CBLTDLI'` get loop is covered by #156 below.
 - **Looped MQGET / CBLTDLI get calls (#156).** When a CALL sits in a loop
   whose UNTIL reads the call's own reply (`analysis.loops.loop_guard_words`,
   matched against the argument and every name declared under it, 88s
-  included), the mock reports end of data after its row: `MOVE 2` /
+  included -- plus, one hop out (#188), any flag the CALL's own paragraph
+  writes by `SET ... TO TRUE` or `MOVE` inside an IF/EVALUATE whose
+  condition reads the reply, `analysis.loops.names_set_on_reply`, with an
+  88's own field and sibling 88s: DEPTMQC's `UNTIL NO-MORE-MSGS` set under
+  `WHEN MQ-REASON-CODE = MQRC-NO-MSG-AVAIL`), the mock reports end of data
+  after its row: `MOVE 2` /
   `MOVE 2033` into MQGET's CompCode/Reason (8th/9th USING arguments), or
   `GE`/`GB` into bytes 11-12 of a CBLTDLI/CEETDLI get call's PCB (GU/GHU/
   GNP/GHNP -> GE, GN/GHN -> GB; the function code is read from the first
@@ -978,6 +1081,19 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   answers every site of its key, so when the key's sites would need
   different replies (a GN loop plus an ISRT through the same CBLTDLI) the
   body gets a `*> TODO` comment instead.
+- **MQ calls answer MQCC_OK / MQRC_NONE (#205).** By the MQI's fixed
+  convention CompCode and Reason are an MQ call's last two USING
+  arguments; `_mq_success_reply` replaces the fixture row's random numbers
+  there with `MOVE 0` for every `site.is_mq` CALL. A random CompCode sent
+  the `IF WS-COMPCODE NOT = MQCC-OK ... GOBACK` idiom (MQCC-OK is a data
+  item the solver cannot see) down the failure exit on the first call, so
+  the happy path never ran and its later `VERIFY ... 1 TIMES` failed. With
+  success answered, an MQGET in any UNTIL loop also gets the #156 end
+  reply, whatever its guard reads: a drain loop's flag is set *from* the
+  2033 reply (`WHEN WS-REASON = MQRC-NO-MSG-AVAILABLE SET DRAIN-DONE`), so
+  without it the loop never ends. A `PERFORM n TIMES` loop (no guard
+  words) is still left alone. (The issue's option (b), demoting VERIFY
+  counts for sites after an `IF ... GOBACK`, is not implemented.)
 
 ### `--rows` / `--placeholder` on the bundle-driven scaffold (unify-with-data Task 4)
 

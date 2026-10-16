@@ -23,14 +23,12 @@ TESTCASE "1000-INITIALIZE primes the first segment when CBLTDLI succeeds"
     END-MOCK
     MOCK WRITE RPT-RECORD
     END-MOCK
-    *> Mocking the whole READ removes its NOT AT END clause body too (the
-    *> MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE it held is spliced out along
-    *> with it -- see docs/2026-07-05-nested-mock-targets-design.md), so
-    *> the mock body must set the WORKING-STORAGE targets directly, not the
-    *> file-record fields the removed code would have copied them from.
+    *> The mock supplies the record; the READ's own NOT AT END clause still
+    *> runs after it (the mocked status is success) and copies the record
+    *> fields into WS-CUTOFF-DATE / WS-TARGET-STATUS, as the real READ would.
     MOCK READ PURGEIN
-        MOVE "20260101" TO WS-CUTOFF-DATE
-        MOVE "CL" TO WS-TARGET-STATUS
+        MOVE "20260101" TO PURG-CUTOFF-DATE
+        MOVE "CL" TO PURG-ACCT-STATUS
     END-MOCK
     MOCK CALL "CBLTDLI"
         MOVE SPACES TO CUST-STATUS
@@ -112,8 +110,8 @@ TESTCASE "0000-MAIN-PROCESS runs end-to-end via its real entry point when CBLTDL
     MOCK WRITE RPT-RECORD
     END-MOCK
     MOCK READ PURGEIN
-        MOVE "20260101" TO WS-CUTOFF-DATE
-        MOVE "CL" TO WS-TARGET-STATUS
+        MOVE "20260101" TO PURG-CUTOFF-DATE
+        MOVE "CL" TO PURG-ACCT-STATUS
     END-MOCK
     MOCK CALL "CBLTDLI"
         MOVE "GB" TO CUST-STATUS
@@ -140,8 +138,8 @@ TESTCASE "0000-MAIN-PROCESS purges one stale closed account, then stops at GB"
     MOCK WRITE RPT-RECORD
     END-MOCK
     MOCK READ PURGEIN
-        MOVE "20260101" TO WS-CUTOFF-DATE
-        MOVE "CL" TO WS-TARGET-STATUS
+        MOVE "20260101" TO PURG-CUTOFF-DATE
+        MOVE "CL" TO PURG-ACCT-STATUS
     END-MOCK
     MOCK CALL "CBLTDLI" ROWS
         ( CUST-STATUS = SPACES, CUST-IO-CIF = "C000000001", CUST-IO-STATUS = "CL", CUST-IO-LAST-ACT = "20250101" )
@@ -172,8 +170,8 @@ TESTCASE "0000-MAIN-PROCESS skips an active account, then stops at GB"
     MOCK WRITE RPT-RECORD
     END-MOCK
     MOCK READ PURGEIN
-        MOVE "20260101" TO WS-CUTOFF-DATE
-        MOVE "CL" TO WS-TARGET-STATUS
+        MOVE "20260101" TO PURG-CUTOFF-DATE
+        MOVE "CL" TO PURG-ACCT-STATUS
     END-MOCK
     MOCK CALL "CBLTDLI" ROWS
         ( CUST-STATUS = SPACES, CUST-IO-CIF = "C000000002", CUST-IO-STATUS = "AC", CUST-IO-LAST-ACT = "20250101" )

@@ -55,7 +55,10 @@ def test_priming_read_loop_gets_a_body_that_ends_the_loop(tmp_path) -> None:
     cut = _generate(tmp_path, "PRIME", PRIME_CBL, "--seed", "3", "--rows", "3")
     body = _read_mock(cut)
     assert "WHEN OTHER" in body
-    assert "SET EOF-YES TO TRUE" in body
+    # The exhaustion branch reports end of file; the splice then runs the
+    # program's own `AT END SET EOF-YES TO TRUE` (issue #209).
+    assert 'MOVE "10" TO' in body
+    assert "the splice runs this READ's own AT END clause" in body
 
 
 def test_priming_read_loop_verify_counts_one_stream_not_each_site(

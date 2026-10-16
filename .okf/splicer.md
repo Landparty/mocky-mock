@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-13T22:00:00Z
+timestamp: 2026-10-16T14:00:00Z
 ---
 
 # Overview
@@ -89,6 +89,17 @@ program's last statement. `collect_boundaries` walks every SECTION header
 paragraph (including nested `_sections`), and every statement's
 `.location.line`.
 
+**Compiler-directing lines end every span (#310):** `normalize_fixed_format`
+keeps `>>IF`/`>>ELSE`/`>>END-IF`/`>>DEFINE` and `REPLACE ... .`/`REPLACE OFF.`
+lines, but they are not AST statements, so no boundary list has them.
+`_trim_trailing_blank_lines` (shared by `statement_span`, `nested_statement_span`
+and `_nested_site_span`, so mock splices and GOBACK/STOP RUN neutralization
+alike) first cuts the span before the first line after the start whose text
+begins with `>>` or `REPLACE\b`, then trims blank lines. Before this a
+directive directly after a mocked statement was commented out with it: a lost
+`REPLACE OFF.` silently kept the REPLACE active over later code, a lost
+`>>END-IF` failed cobc after a clean lint.
+
 **SECTION headers are boundaries (2026-07-07 fix, audit finding 2.2):**
 before this fix `collect_boundaries` collected only paragraph headers and
 statement starts, so a paragraph's last statement immediately followed by
@@ -170,12 +181,27 @@ a validated `.span` or a precise `.unspliceable_reason` string (fail
 closed) — see the spliceability rules in
 [docs/2026-07-05-nested-mock-targets-design.md](../docs/2026-07-05-nested-mock-targets-design.md).
 Key preconditions checked there: no ancestor is itself a boundary
-statement, the site has no clause bodies of its own, it owns its start
+statement, it owns its start
 line (own-verb terminators like END-CALL/END-READ are exempt — they
 belong to the statement per `_VERB_TERMINATORS`), the next boundary owns
 its line too, and (EXEC only) the span's text actually contains
 `END-EXEC`. This must run **before** the refusal gate and the splicer look
 at nested sites — it is idempotent.
+
+A nested site WITH clause bodies of its own (`READ ... AT END ... END-READ`
+in an inline PERFORM, `CALL ... ON EXCEPTION ... END-CALL` in an IF; issue
+#258) is spanned by `_nested_clause_site_span`: from its start line to the
+line of its own explicit `_VERB_TERMINATORS` word, found by walking the
+scope map past its own clause-body statement starts (every boundary in
+between must be one of those, or a scope word) and taking the first
+own-terminator after the last of them. Refused when there is no such
+terminator before the next statement that is not its own (the clause would
+run on to whatever closes the enclosing block -- not guessed), when a
+statement of its own kind sits in its clause bodies (which terminator is
+whose is ambiguous), or when anything but a period follows the terminator
+on its line. RETURN has no `_VERB_TERMINATORS` entry, so a nested `RETURN
+... END-RETURN` stays refused. Before #258 every nested site with clause
+bodies was refused, which made the standard inline read loop untestable.
 
 # Flow-Mock Header Dispatch (2026-07-20, MOCK PARAGRAPH/SECTION)
 
@@ -219,11 +245,14 @@ mock it, that's a hard, loud failure (`__MOCKYMOCK__ ERROR: ... reached
 from unmocked test case`), never a silent fall-through.
 
 **FILE-STATUS default-success/override injection.** For a directive whose
-category is in `FILE_STATUS_CATEGORIES` (the 6 eligible file ops --
-`OPEN`/`CLOSE`/`READ`/`DELETE`/`START`/`UNLOCK`; `WRITE`/`REWRITE` are not
-eligible), `build_site_dispatch` looks up `directive.key.upper()` in the
+category is in `FILE_STATUS_CATEGORIES` (the 8 eligible file ops --
+`OPEN`/`CLOSE`/`READ`/`DELETE`/`START`/`UNLOCK`/`WRITE`/`REWRITE`),
+`build_site_dispatch` looks up `directive.key.upper()` in the
 `file_status_fields` map (`mock_surface.analyze_file_status_fields`'s
-uppercased-file-name -> declared `FILE STATUS IS <field>` result, computed
+uppercased-file-name -> declared `FILE STATUS IS <field>` result, plus
+every FD record name -> its file's field so a WRITE/REWRITE keyed on the
+record resolves too -- issue #221; before, a mocked WRITE left the status
+at its reset value or the previous mock's code, computed
 once per program and threaded down from `run_static_checks`/`_cmd_run`
 through `splice_program`). If the file declares a status field, the `WHEN`
 branch always starts with an implicit `MOVE "00" TO <field>` (default
@@ -350,6 +379,88 @@ is unreachable from every test case; the trap exists so that if
 reachability analysis and reality ever disagree, the mismatch fails loudly
 at runtime instead of silently doing nothing.
 
+**`EXEC SQL WHENEVER` emulation (2026-10-16, issue #195).** WHENEVER is a
+precompiler declaration, so it is never a mockable site: `mock_surface`
+keeps it in `MockSurface.whenever_sites` (not `boundary_sites`, so no
+UNMOCKED_SQL, no scaffolded MOCK, no `collect --boundaries` entry), and
+`splice_program` replaces each one with `CONTINUE`. What DB2's precompiler
+would generate is put back instead: every mocked SQL dispatch is followed by
+`analysis.sql_whenever.whenever_check_lines(site.whenever_checks)` --
+`IF SQLCODE < 0 GO TO x END-IF` (SQLERROR), `IF SQLWARN0 = "W" OR (SQLCODE
+> 0 AND SQLCODE NOT = 100) ...` (SQLWARNING), `IF SQLCODE = 100 ...` (NOT
+FOUND), in that order -- for the WHENEVERs in force at that statement in
+*physical source order* (`whenever_actions`; `CONTINUE` switches a
+condition off; INCLUDE/DECLARE/BEGIN-END DECLARE get no checks). The trap
+of an unmocked site gets none. The reachability walk follows each check's
+GO TO like a written one, and `_go_to_targets` includes the handlers --
+but only for a test case whose mocks can make a WHENEVER fire (issue
+#244, option B). `sql_whenever.whenever_can_fire(program, case.mocks)` is
+fail closed: it is False only when every SQL mock provably leaves SQLCODE
+at a value no active condition fires on (a body with no IF/EVALUATE/
+PERFORM/... whose every SQLCODE/SQLCA reference is `MOVE <integer> TO
+SQLCODE`; a ROWS mock only while NOT FOUND is inactive and no row sets a
+firing SQLCODE; never while a WHENEVER SQLWARNING GO TO is active). For
+such a case `check_test_case` and `find_terminator_plans` walk with
+`_reachable_paragraphs(follow_whenever=False)` and judge terminators
+against `_go_to_targets(include_whenever=False)`, so the success path is
+neither refused for the handler's GOBACK nor asked to mock its ROLLBACK.
+A case that can fire it is still refused (UNSUPPORTED_TERMINATOR_LAYOUT),
+naming the WHENEVER's line instead of a GO TO the program never wrote.
+`generate` (bundle and `--per-paragraph`) asks the same question of the
+mocks it is about to write (`ProgramContext.whenever_quiet`, the lines
+read back through `parse_cut`) and narrows the reachable set to match.
+`check_nested_exec` validates WHENEVER spans like any EXEC and refuses an
+action it cannot read (`UNSUPPORTED_SQL_WHENEVER`); a leftover `MOCK SQL
+"WHENEVER"` is UNMATCHED_MOCK with a message saying why. CICS `HANDLE
+CONDITION`/`HANDLE ABEND` are not emulated.
+
+## Clause bodies re-run after the mock (issue #209, 2026-10-16)
+
+`build_site_dispatch(..., lifted_clauses=...)` takes the replaced
+statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY / ON
+EXCEPTION / NOT ON EXCEPTION (/ ON OVERFLOW) bodies, which
+`orchestrator.splice_program` gets from
+`analysis.clause_bodies.lift_clause_bodies(site.statement, lines)` for
+every mocked site -- top-level, or nested with a span bounded by its own
+scope terminator (#258; `dsl.generator._at_end_handling` mirrors this with
+`not site.nested or site.span is not None`). Before #209 the whole span was
+replaced and those bodies were deleted with it: a mocked READ fed rows the
+program's own `NOT AT END` never processed, `FILE-STATUS IS
+RECORD-NOT-FOUND` never reached `INVALID KEY`, and a mutant inside a
+clause could never be killed.
+
+The outcome lives in `UT-MOCK-STATUS` (`PIC XX`, declared by
+`driver.build_driver` for every suite):
+
+- `MOVE SPACES` before the `EVALUATE UT-CURRENT-CASE`, so the unmocked
+  case's trap selects no clause.
+- `MOVE "00"` at the top of each mocked case's branch (before the mock
+  body, so the body may override it: `"10"`, `"23"`, `"EX"`).
+- `MOVE "10"` first in a READ/RETURN `ROWS` exhaustion branch.
+- `MOVE <file status field> TO UT-MOCK-STATUS` last in the branch when the
+  directive is a FILE_STATUS category and the file declares one -- the
+  status field wins, so the implicit `"00"`, `FILE-STATUS IS` and a
+  hand-written `MOVE` to the field all select the right clause.
+
+After `END-EVALUATE`, `clause_guard_lines` emits one `EVALUATE TRUE` (not a
+chain of IFs: the selection is made once, before any body PERFORMs code
+that may reach another mock and rewrite the field): `(1:1) = "1"` AT END,
+`(1:1) = "2"` INVALID KEY, `(1:1) = "0"` every NOT-clause, `= "EX"` ON
+EXCEPTION/ON OVERFLOW. A lifted body is the program's own text, sliced
+positionally (AST start of its first statement up to the next clause's
+header, or the verb's own `END-xxx` / the sentence period for the last).
+
+`lift_clause_bodies` returns None -- and the old whole-statement deletion
+stands -- when any body holds another boundary statement, GO TO, GOBACK,
+STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL; when a body has a
+nested conditional phrase (SIZE ERROR, OVERFLOW, a SEARCH's AT END, ...)
+or an IF/EVALUATE/SEARCH without its explicit terminator (either would
+swallow the next guard `WHEN`); when the statement has a clause outside
+the liftable set (`WRITE ... AT END-OF-PAGE`); or when a header cannot be
+matched exactly. `dsl.generator` asks the same function, so the scaffold
+stops copying an AT END clause the splice already re-runs (it reports end
+of file through the status field, or `MOVE "10" TO UT-MOCK-STATUS`).
+
 # Orchestration and Ordering Invariant (orchestrator.py)
 
 `splice_program` computes every span **up front** against the original
@@ -386,8 +497,11 @@ Other invariants enforced here:
 # Tally-Field Naming (naming.py)
 
 `TallyRegistry` assigns one `UT-*-TALLY` WORKING-STORAGE field per
-`(category, key)` mocked anywhere in the suite, in first-appearance order,
-deterministically for a given `.cut` file.
+`(category, key)` mocked anywhere in the suite. Each name is
+`naming.tally_name(category, key)`, a pure function of that pair alone
+(#314) -- `generate` writes these names into mock bodies, so they must not
+move when a case is added, MOCK blocks are reordered, or `--case`/`--tag`
+filters the suite.
 
 | Category | Body format | Example |
 |---|---|---|
@@ -404,11 +518,16 @@ categories are always distinguishable by name.
 
 Body text is sanitized (non-COBOL-word chars → `-`, collapsed, trimmed)
 and capped at 21 chars so `"UT-" + body + "-TALLY"` stays a conservative
-30-char COBOL word (well under GnuCOBOL's 63-char limit). Sanitized keys
-can collide (two SQL prefixes differing only in punctuation, or only
-beyond the length cap) — collisions are resolved by suffixing `-2`, `-3`,
-... in first-appearance order, so naming is still fully deterministic per
-`.cut` file.
+30-char COBOL word (well under GnuCOBOL's 63-char limit). When that would
+lose information -- the body is over the cap, or sanitizing changed more
+than case and spaces (`sub.pgm 01`) -- the body is cut to 16 chars and a
+4-hex-digit SHA-1 of `"<category>:<key>"` appended:
+`READ CUSTOMER-MASTER-OLD` → `UT-READ-CUSTOMER-MA-66B4-TALLY`. Before #314
+such keys collided at the cap and took `-2`, `-3` suffixes in
+first-appearance order over the *selected* cases, so adding a case above a
+generated one swapped the two files' tallies and the happy path hung. A
+suffix is now only a last resort, for a hash collision or two keys that
+differ in nothing but letter case or a space vs. a hyphen.
 
 `driver.py`'s `_SUITE_PARAGRAPH_NAME_RE` sanitization for the
 `UT-TESTSUITE-*` paragraph name follows the identical collapse-and-strip
@@ -443,12 +562,19 @@ plus `UT-SAVE-STATE` / `UT-RESTORE-STATE` bodies, and one problem per
 item it can't copy exactly (`cli.checks` step 10 turns them into
 `UNSAVABLE_BEFORE_ALL_STATE`). The driver runs reset, BEFORE-ALL steps,
 save once; each case runs reset then restore -- the reset still handles
-harness fields, captures and the EIB.
+harness fields and captures. The blocks mockymock synthesizes after
+parsing -- `DFHEIBLK`, `DLIDIB` (`cics_eib`) and the generated `SQLCA`
+(`sqlca`) -- are snapshotted too, as group byte copies sized from
+`SYNTHESIZED_GROUP_BYTES` (`cli.checks._synthesized_groups` decides which
+the program gets): the reset clears them before every case, so a
+BEFORE-ALL that set `EIBCALEN` or `SQLCODE` was wiped before the first
+case (issue #225).
 
 | Item | Snapshot field | Copy |
 |---|---|---|
 | Group | `01 UT-SNAP-nnn.` + `05 FILLER PIC X(n)`, n an upper bound (`_max_bytes`: REDEFINES children summed, every elementary at least 16 bytes, national x4) | `MOVE` (group move = byte copy; restore copies back exactly the group's own bytes) |
-| Elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
+| Elementary with an editing PICTURE (`XX/XX`, `XXXBXXXX`, `NNBNN`, `ZZ9.99`) | as for a group | `MOVE` through the group snapshot (byte copy). A same-PICTURE MOVE re-applied the editing mask to already-edited text, so `"AB/CD"` came back `"AB///"` (issue #224) |
+| Other elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
 | POINTER family, INDEX | same USAGE | `SET` |
 | Group holding OCCURS ... DEPENDING ON, unreadable OCCURS bound, irreproducible description | -- | refused |
 
@@ -466,9 +592,20 @@ reset line per top-level (level `01` **or** `77`) WORKING-STORAGE item —
 `77`s are standalone items just like `01`s and would leak state if
 skipped.
 
+**`DECIMAL-POINT IS COMMA` (issue #230).** cobol-parser hands `VALUE 1,25`
+back as `1.25`, which under that clause is the literal 1 and a sentence
+period. `reset_move_lines` passes every line through
+`mockymock._decimal.localize_move_line` when `decimal_point_is_comma(program)`
+(the CONFIGURATION section's `special_names.decimal_point_is_comma`
+metadata), so `MOVE 1,25 TO WS-RATE` is what the reset paragraph says. A
+literal CALL argument captured with `CAPTURE ARG` keeps the program's own
+comma spelling too (`injector`, read from the site's text).
+
 | Item shape | Reset line | Why |
 |---|---|---|
 | Elementary, has `VALUE` clause | `MOVE <value> TO <name>` | restores the declared initial value (the clause first passes through `cobol_literal` -- see below) |
+| Elementary, numeric or numeric-edited `DISPLAY` PIC, `VALUE` that is not a number or `ZERO` (`PIC ZZ,ZZ9.99 VALUE SPACES`, `VALUE ALL "*"`) | `MOVE <value> TO <name>(1:)` | cobc rejects a figurative SPACE / alphanumeric literal moved to a numeric item (`move-figurative-space-to-numeric: error`), which broke the driver's compile for every suite (issue #218); the reference-modified byte move stores what VALUE stored |
+| Elementary, `JUSTIFIED`, quoted-literal `VALUE` | `MOVE "<literal padded to the item's size>" TO <name>` | VALUE ignores JUSTIFIED (`PIC X(6) JUST RIGHT VALUE "AB"` starts as `"AB    "`), a MOVE right-justifies; padding to full length makes the two agree. Reference modification does not: GnuCOBOL 3.1 still justified `WS-J(1:)` (issue #218) |
 | Elementary, no `VALUE`, numeric or numeric-edited PIC | `MOVE 0 TO <name>` | numeric-edited PICs (e.g. `PIC ZZZ9`) reject `MOVE SPACES` — `_is_numeric` treats any of `9 V P Z * $ + -` in the (repeat-group-stripped) picture as numeric, not just `9`/`V`/`P` |
 | Elementary, no `VALUE`, alphanumeric PIC | `MOVE SPACES TO <name>` | COBOL's conventional type default, a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |
 | Elementary, no `PICTURE` (usage-typed), `USAGE POINTER`/`PROCEDURE-POINTER`/`FUNCTION-POINTER`/`PROGRAM-POINTER` | `SET <name> TO NULL` | pointers can only be assigned with `SET`; `NULL` is their only legal literal value — `MOVE SPACES` (the old picture-blind fallback) is rejected by cobc |
@@ -528,6 +665,56 @@ zero/space-fills the rest (checked against GnuCOBOL 3.1's cobc). Before
 #156 those occurrences were left at INITIALIZE's zero/space default, so a
 test saw different starting data from the real program. Groups with no
 VALUE inside a table keep the plain INITIALIZE plus per-child restores.
+
+**OCCURS DEPENDING ON tables are cleared at full size (issue #216).**
+INITIALIZE of a variable-length group only covers the occurrences its ODO
+object currently names. The counter's own reset line usually ran first
+(declaration order) and left it at 0, so nothing in the table was cleared
+and one case's entries leaked into the next. For a VALUE-less group holding
+an ODO table, `_odo_counter_lines` brackets the group's reset: `MOVE <max>
+TO <counter>` before, the counter's own VALUE/default reset after (both
+fully qualified; the counter is found anywhere in the program by name and
+DEPENDING ON qualifiers). On the `ALL TO VALUE` path the group is first
+reset with a plain `INITIALIZE`, the counter set to its maximum again, then
+`INITIALIZE <group> ALL TO VALUE`: `ALL TO VALUE THEN TO DEFAULT` works item
+by item, so a counter declared inside the group dropped to 0 before its
+table was reached (checked on GnuCOBOL 3.1). A counter that cannot be
+resolved, one inside a table, and unbounded tables keep the old reset.
+
+**Child restores are fully qualified (issue #220).** Each per-child VALUE
+restore names the child through its whole chain of enclosing groups,
+intermediate levels included: `MOVE "N" TO REC-FLAG OF HDR OF OUT-REC`.
+COBOL lets one child name repeat under different groups (IN-REC/OUT-REC
+built from one copybook); the old unqualified `MOVE "N" TO REC-FLAG` was
+ambiguous there, and cobc rejected the whole driver, so no suite for the
+program could run. Full qualification is always legal, so nothing detects
+the ambiguity first. `_elementary_reset(item, target)` takes the reference
+to write to; top-level items still use their bare name.
+
+**FILLER VALUEs are restored (issue #196).** A FILLER cannot be named in
+a MOVE, and the old reset assumed its VALUE "survives INITIALIZE" -- true
+only until a case overwrote the whole group (`MOVE SPACES TO <report
+line>`, a group MOVE, READ INTO), after which every later case saw the
+changed bytes. A VALUE-less group with a FILLER VALUE anywhere under it
+(`_has_filler_value`) is now reset with `INITIALIZE <group> WITH FILLER ALL
+TO VALUE THEN TO DEFAULT`, which restores the FILLER's VALUE and every
+named child's in one statement (checked on GnuCOBOL 3.1). Combined with an
+ODO table it takes the two-step form above, each step `WITH FILLER`.
+
+**INDEXED BY index names are saved and restored (issue #189).** An index
+name is not a data item, so the reset never saw it: a case that did `SET
+IX UP BY 1` left the next case subscripting from 2. A fresh index's value
+is compiler-defined (GnuCOBOL 3.1 starts at 1; 3.2 under `-std=mvs` was
+seen at 0), so instead of picking a constant, `reset.index_names` lists
+every `INDEXED BY` name in the DATA DIVISION, `index_working_storage_lines`
+declares `UT-IDX-SAVED` plus one `UT-IDX-SAVE-NNN USAGE INDEX` per name,
+and `index_reset_lines` makes the first reset (which runs before any
+program code) save each index and every reset restore it. Both are wired
+through `cli/checks.py`'s `extra_working_storage` / `extra_reset_lines_for`,
+so all four splice pipelines get them. An index a BEFORE-ALL step SETs is
+put back to its start-up value at each case, not to the BEFORE-ALL value
+(the snapshot does not cover index names). USAGE INDEX *data items* are
+still skipped (table above).
 
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.
@@ -640,6 +827,29 @@ transform exists to prevent (the pointer would come from a mocked
 `splicer.linkage.redirect_address_of` overwrites each one with
 `DISCARD_POINTER` (`UT-ADDR-SINK`), space-padded to the identical width via
 `stub_writer.replace_columns`. Consequences worth knowing:
+
+**Real rebinds where the address is the program's own (issue #226,
+option 1 with the mocked-boundary exception).** The redirect made every
+read through a re-addressed item see its blank folded storage
+(`SET ADDRESS OF LK-VIEW TO ADDRESS OF WS-BUF` then `MOVE LK-VIEW ...`
+read spaces). `analysis.linkage.rebindable_sites` now keeps the rebind for
+a site whose sending operand is `ADDRESS OF <item>`, or a pointer the
+PROCEDURE DIVISION only ever writes with `SET <ptr> TO ADDRESS OF ...`
+(and otherwise only reads as another rebind's source). For those items
+`splicer.linkage.mark_based` inserts `BASED` after the name on the 01/77
+declaration line (widening that one DATA DIVISION line; no line moves),
+records a `Rebinding` on `LinkagePlan.rebindings`, and the item gets
+`UT-LKB-nnn PIC X(n)` backing storage (n from `snapshot._max_bytes`,
+declared through `cli.checks.extra_working_storage`).
+`extra_reset_lines` points it back at that storage *before* the folded
+items' own resets, so a previous case's alias is never written through;
+the BEFORE-ALL snapshot saves and restores its address (`SET`) ahead of
+any data. Every other site -- a pointer a CALL or EXEC fills in (the IMS
+`UIBPCBAL` idiom: NULL from a mocked `CBLTDLI`), one a MOVE touches,
+`NULL`, a qualified or subscripted source, or an item whose declaration
+line cannot be found -- keeps the redirect below, which can never
+dereference an address the test run does not have. `run` prints which
+items were kept as real rebinds.
 
 - **Column- and line-preserving**, like `neutralize` above and unlike
   `cics_eib`'s insertion: nothing any `SourceLocation` indexes into moves,
@@ -777,7 +987,7 @@ corpus evidence" section for the required follow-up.
 # Terminator Neutralization (GOBACK/STOP RUN, Approach B)
 
 `refusal.find_terminator_plans` finds every `StopStatement`(RUN-form)/
-`GobackStatement` reachable from at least one test case whose enclosing
+`GobackStatement`/`EXIT PROGRAM` (issue #212) reachable from at least one test case whose enclosing
 paragraph -- and every intermediate paragraph between it and the test's
 `perform_target` -- is reached exclusively via plain, unconditional,
 single-shot, top-level `PERFORM` statements (`refusal._plain_perform_edges_from`,
@@ -819,6 +1029,36 @@ returns. An earlier design (`GO TO` redirect into a `PERFORM ... THRU
 before any of it shipped -- see
 [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md).
 
+**EXEC CICS RETURN/XCTL/ABEND** (issue #215, option (a)): these never
+give control back, so `mock_surface.is_terminator_site` counts a CICS site
+whose command is one of `CICS_TERMINATOR_COMMANDS` as a terminator too.
+It stays an ordinary mockable CICS site (the gates still demand its
+MOCK), but `find_terminator_plans` plans or refuses it exactly like
+GOBACK, and the orchestrator wraps the site's own dispatch block with
+`injector.build_cics_terminator_exit`: the flag + `EXIT PARAGRAPH` after
+`END-EVALUATE`, so the mock body runs first. With `RESP(field)`
+(`TerminatorPlan.resp_field`) a failed command returns control, so the
+field is preset to 0 before the dispatch (what a successful command
+leaves there; the mock body may set a failure code) and the exit is taken
+only `IF field = 0`. A RESP operand that is not one data name refuses.
+`_falls_through` and `exact_counts` treat these commands as path ends.
+
+**`RETURNING`/`GIVING` operands** (issue #219): `STOP RUN RETURNING n` /
+`GOBACK RETURNING n` (cobolparser's `StopStatement.returning` /
+`GobackStatement.returning_value`) set RETURN-CODE, so the replacement
+starts with `MOVE n TO RETURN-CODE` (`TerminatorPlan.return_code`). An
+operand that is not an integer literal or a single data name refuses
+`UNSUPPORTED_TERMINATOR_LAYOUT` rather than being dropped.
+
+**A test's (or hook step's) own `PERFORM X THRU Y`** (issue #211): the
+neutralization only ends `X`, after which the driver's THRU range falls
+through into the rest of the range. `_plans._thru_tail_problem` therefore
+refuses `UNSUPPORTED_TERMINATOR_LAYOUT` for every terminator such a case
+reaches unless every paragraph after `X` in the range is exit-only
+(`X-EXIT. EXIT.`) or a phantom `"."` -- so the common `PERFORM X THRU
+X-EXIT` idiom still plans, while a range covering real paragraphs refuses
+instead of running them on the early-exit path.
+
 # GO-TO-to-EXIT-PARAGRAPH Simplification
 
 **STATUS: implemented, not yet verified against real GnuCOBOL** -- see
@@ -847,7 +1087,16 @@ enclosing paragraph must not itself be in `_go_to_targets`/
 `_go_to_fallthrough_targets`, and must be top-level -- `SECTION`-scoped
 enclosing paragraphs are declined, not supported (see below). The
 exit-only paragraph must also be the enclosing paragraph's immediate
-successor in source order, with nothing else between them. All-or-nothing
+successor in source order, with nothing else between them. And no
+in-program `PERFORM` (any form) or SORT/MERGE/XML PARSE procedure range may
+*end* at the enclosing paragraph (`_plans._in_program_range_ends`, issue
+#213): under a plain `PERFORM 1000-A` (no `THRU 1000-EXIT`) the real GO TO
+leaves the PERFORM range and never returns, which is the classic
+forgotten-THRU bug, and rewriting it into a clean return would hide that
+bug. A `.cut`/hook PERFORM of the enclosing paragraph without THRU is
+deliberately not checked: that THRU elision is the intended convenience
+(without the rewrite the GO TO would run off the end of the test driver).
+All-or-nothing
 per target paragraph -- `_go_to_targets` is a whole-program property, so
 neutralizing some but not all `GO TO`s naming one exit-only paragraph
 would leave it exactly as hazardous as before; a computed or multi-target
@@ -1032,8 +1281,9 @@ case's `perform_target` (with optional `perform_thru`).
 
 Each `UT-TESTCASE-NNN` paragraph: optionally performs the reset paragraph,
 moves the case ID into `UT-CURRENT-CASE` (this is what every injected
-EVALUATE dispatch block switches on), zeroes every tally this case's mocks
-touch, displays a `CASE NNN START` marker, runs any `setup_moves`,
+EVALUATE dispatch block switches on), starts every tally this case's mocks
+touch (0, or a BEFORE-ALL mock's saved `-START` count) and its VERIFY
+baseline `-BASE` (see dsl.md's "ROWS cursor across hooks"), displays a `CASE NNN START` marker, runs any `setup_moves`,
 performs the target paragraph, then checks `expectations` (the
 directive's own relation from `ExpectDirective.operator` — `=` for plain
 `TO BE`, plus `NOT =`/`>`/`<`/`>=`/`<=` and their negations from the
@@ -1041,7 +1291,11 @@ directive's own relation from `ExpectDirective.operator` — `=` for plain
 operator's *negation* via `_EXPECT_FAIL_CONDITIONS` since the generated
 IF guards the failure branch; `>=`/`<=` negate to plain `<`/`>` so every
 emitted condition stays a simple COBOL-85 relational — keep the map in
-sync with `model.EXPECT_OPERATORS`) and `verifications` (tally-based
+sync with `model.EXPECT_OPERATORS`; a value with an unquoted `AND`/`OR`
+tail, i.e. an abbreviated combined condition such as `TO BE > 0 AND < 10`
+or `TO BE 7 OR 8`, instead compiles to `IF NOT (<name> <op> <value>)`,
+because swapping the operator would negate only the first relation, issue
+#265) and `verifications` (tally-based
 `VERIFY ... WAS CALLED` conditions from `_verify_condition`: `ONCE` →
 `NOT = 1`, `NEVER` → `NOT = 0`, `AT LEAST ONCE` → `< 1`, `N TIMES` →
 `NOT = N`), incrementing `UT-FAIL-COUNT` and displaying a `CASE NNN
@@ -1062,6 +1316,19 @@ the count prints as `3` rather than `000000003`.
 in a generated `DISPLAY "..."` literal — without it, an EXPECT/VERIFY
 value containing a quote (e.g. an expected string `OK"`) would split the
 literal and cobc would read the remainder as undefined identifiers.
+
+**Long literals (2026-10-16, found while fixing #188).** cobc compiles the
+spliced copy `-free`, where a source line over 512 bytes is truncated. A
+recorded golden can be far longer (DEPTMQC's 336-byte MQMD is a 675-character
+`X"..."`), and one `IF MQMD NOT = X"..."` line was cut in half. A single
+alphanumeric or hexadecimal literal over `_LONG_LITERAL` (120) characters,
+in an EXPECT or a setup MOVE, is now emitted as `&`-concatenated pieces of
+`_LITERAL_CHUNK` (60) characters, one per line (`_literal_pieces`: a hex
+piece keeps whole bytes, and a quoted piece never splits a doubled quote).
+Concatenated literals are one literal to cobc (verified with
+`-free -std=mvs` on 3.1.2). The FAIL `DISPLAY` spells the expected value out
+as several quoted operands (`_display_operands`), so the stdout text is
+unchanged. Shorter values are emitted exactly as before.
 
 **`suite.name` escaping (2026-07-07 fix, audit finding 2.8):** the
 `__MOCKYMOCK__ TESTSUITE: <name>` `DISPLAY` line interpolated `suite.name`

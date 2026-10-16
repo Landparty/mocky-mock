@@ -52,12 +52,19 @@ import re
 import sys
 from dataclasses import dataclass, field, replace
 
+from mockymock._decimal import decimal_point_is_comma, localize_numeric
+from mockymock.analysis.clause_bodies import (
+    OUTCOME_FIELD,
+    lift_clause_bodies,
+    scan_words,
+)
 from mockymock.analysis.exact_counts import exact_count_scope
 from mockymock.analysis.loops import (
     LoopGuard,
     loop_guard_words,
     loop_guards,
     looped_paragraphs_and_statements,
+    names_set_on_reply,
     site_in_loop,
 )
 from mockymock.analysis.mock_surface import (
@@ -199,18 +206,29 @@ def _replicated_at_end_statements(statement: object) -> list[str]:
     `SET` (`_replicated_set_lines`) are replicated; anything else in the
     clause (a bare-identifier source, IF, PERFORM, ...) is left
     unreplicated -- a known, narrower gap than the one this closes, not
-    silently guessed at."""
+    silently guessed at. All or nothing: when any statement in the clause
+    is not one of those two shapes, nothing is replicated (issue #217)."""
     at_end = getattr(statement, "at_end_clause", None) or []
     lines: list[str] = []
     for clause_statement in at_end:
         if type(clause_statement).__name__ == "MoveStatement":
             source = getattr(clause_statement, "source", None)
-            if not source or not _is_safe_literal_source(source):
-                continue
-            for target in getattr(clause_statement, "targets", []):
+            targets = getattr(clause_statement, "targets", [])
+            if not source or not _is_safe_literal_source(source) or not targets:
+                return []
+            for target in targets:
                 lines.append(f"MOVE {source} TO {target}")
             continue
-        lines.extend(_replicated_set_lines(clause_statement))
+        replicated = _replicated_set_lines(clause_statement)
+        if not replicated:
+            # All or nothing (issue #217): a clause replicated only in
+            # part silently dropped its other statements -- `MOVE "Y" TO
+            # WS-EOF` kept, `MOVE WS-READ-CNT TO WS-TRAILER-CNT` lost --
+            # and `run --record-expectations` then recorded the wrong
+            # values as goldens. Returning nothing hands the clause to
+            # `_lifted_at_end_lines`, which copies it whole, or to the TODO.
+            return []
+        lines.extend(replicated)
     return lines
 
 
@@ -394,6 +412,11 @@ class ProgramContext:
     #: for the names under a CALL argument (a PCB's status field, an 88).
     data_items: list[dict] = field(default_factory=list)
     surface: MockSurface | None = None
+    #: `SPECIAL-NAMES. DECIMAL-POINT IS COMMA.`: every numeric literal the
+    #: scaffold writes uses a comma (issue #230).
+    decimal_comma: bool = False
+    #: File key -> `_record_length_move`'s answer, computed once per file.
+    record_length_moves: dict[str, str | None] = field(default_factory=dict)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -417,6 +440,7 @@ class ProgramContext:
             guards=loop_guards(program),
             data_items=_layout_items(program),
             surface=surface,
+            decimal_comma=decimal_point_is_comma(program),
         )
 
     def names_under(self, name: str) -> set[str]:
@@ -429,6 +453,32 @@ class ProgramContext:
             if wanted in parts[:-1]:
                 names.add(parts[-1])
         return names
+
+    def condition_owners(self, name: str) -> set[str]:
+        """The field(s) `name` is a level-88 condition of, uppercased."""
+        wanted = name.upper()
+        owners: set[str] = set()
+        for item in self.data_items:
+            parts = str(item.get("qualified_name") or "").upper().split(".")
+            if item.get("level") == 88 and parts[-1] == wanted and len(parts) > 1:
+                owners.add(parts[-2])
+        return owners
+
+    def paragraph_statements(self, name: str | None) -> list:
+        """The statements of the PROCEDURE DIVISION paragraph `name`, or
+        [] when there is none (or no parsed program)."""
+        procedure = (
+            self.program.get_division("PROCEDURE")  # type: ignore[attr-defined]
+            if self.program is not None
+            else None
+        )
+        if procedure is None or not name:
+            return []
+        wanted = name.upper()
+        for paragraph in _all_paragraphs(procedure):
+            if str(getattr(paragraph, "paragraph_name", "") or "").upper() == wanted:
+                return list(paragraph.statements)
+        return []
 
     def literal_value(self, name: str) -> str | None:
         """The alphanumeric VALUE literal `name` is declared with, read from
@@ -459,28 +509,65 @@ class ProgramContext:
         behavior: every name is treated as unique."""
         return self.name_counts.get(name.upper(), 1) <= 1
 
-    def reachable_from(self, entry: str) -> set[str] | None:
+    def reachable_from(
+        self, entry: str, follow_whenever: bool = True
+    ) -> set[str] | None:
         """Paragraph/section names a `PERFORM entry` can execute, or None
         when that can't be established (no program, unknown entry, or a
         flow the reachability model itself refuses) -- callers then keep
-        every site, as before."""
+        every site, as before. `follow_whenever=False` leaves out the
+        `EXEC SQL WHENEVER` handlers, as lint does for a case whose mocks
+        can never make one fire (issue #244)."""
         if self.program is None:
             return None
         from mockymock.analysis.refusal._reachability import _reachable_paragraphs
 
         reached, reasons = _reachable_paragraphs(
-            self.program, entry, neutralized_goto=self.neutralized_goto
+            self.program,
+            entry,
+            neutralized_goto=self.neutralized_goto,
+            follow_whenever=follow_whenever,
         )
         if reasons or entry not in reached:
             return None
         return reached
 
+    def whenever_quiet(self, directive_lines: list[str]) -> bool:
+        """True when a TESTCASE with these MOCK lines provably never makes
+        an emulated `EXEC SQL WHENEVER ... GO TO` fire -- the same
+        judgement lint makes (`sql_whenever.whenever_can_fire`), read off
+        the lines through the real .cut parser. False on any doubt."""
+        if self.program is None:
+            return False
+        from mockymock.analysis.sql_whenever import (
+            whenever_actions,
+            whenever_can_fire,
+        )
+        from mockymock.dsl.parser import CutParseError, parse_cut
+
+        if not whenever_actions(self.program):
+            return False
+        text = "\n".join(
+            ['TESTSUITE "x"', 'TESTCASE "x"']
+            + [f"    {line}" for line in directive_lines]
+            + ["    PERFORM X"]
+        )
+        try:
+            (case,) = parse_cut(text).test_cases
+        except (CutParseError, ValueError):
+            return False
+        return not whenever_can_fire(self.program, case.mocks)
+
     def exact_count_scope(
-        self, entry: str, reachable: set[str]
+        self, entry: str, reachable: set[str], loops_exact: bool = False
     ) -> tuple[set[str], set[int]] | None:
         """`analysis.exact_counts.exact_count_scope` for `PERFORM entry`."""
         return exact_count_scope(
-            self.program, entry, reachable, neutralized_goto=self.neutralized_goto
+            self.program,
+            entry,
+            reachable,
+            neutralized_goto=self.neutralized_goto,
+            loops_exact=loops_exact,
         )
 
     def captures_for(self, category: MockCategory, key: str) -> list[str]:
@@ -498,52 +585,7 @@ class ProgramContext:
         return "\n".join(self.lines[line - 1 : end])
 
 
-def _scan_words(text: str):
-    """Yield `(start, end, upper_word)` for every word OUTSIDE a quoted
-    literal, plus `(index, index + 1, ".")` for every sentence-terminating
-    period (a period followed by whitespace or end of text -- COBOL's own
-    rule, which is also what keeps a numeric literal's decimal point from
-    being mistaken for one)."""
-    index = 0
-    length = len(text)
-    while index < length:
-        char = text[index]
-        if char in ('"', "'"):
-            quote = char
-            index += 1
-            while index < length:
-                if text[index] == quote:
-                    if index + 1 < length and text[index + 1] == quote:
-                        index += 2
-                        continue
-                    index += 1
-                    break
-                index += 1
-            continue
-        if char.isspace():
-            index += 1
-            continue
-        if char == "." and (index + 1 >= length or text[index + 1].isspace()):
-            yield index, index + 1, "."
-            index += 1
-            continue
-        start = index
-        while (
-            index < length
-            and not text[index].isspace()
-            and text[index]
-            not in (
-                '"',
-                "'",
-            )
-        ):
-            index += 1
-        word = text[start:index]
-        if word.endswith(".") and (index >= length or text[index].isspace()):
-            yield start, index - 1, word[:-1].upper()
-            yield index - 1, index, "."
-            continue
-        yield start, index, word.upper()
+_scan_words = scan_words
 
 
 #: Word sequences that end a READ's AT END imperative. `NOT AT END` must be
@@ -894,7 +936,30 @@ def _scaffold_placeholder(
             continue
         sites_by_paragraph.setdefault(site.paragraph_name, []).append(site)
 
+    # A paragraph name defined in two SECTIONs: `PERFORM <name>` does not
+    # compile unqualified, and lint refuses any case reaching it
+    # (AMBIGUOUS_PARAGRAPH, issue #284), so no case is scaffolded for it.
+    ambiguous: list[str] = []
+    if context is not None and context.program is not None:
+        from mockymock.analysis.refusal import duplicated_paragraph_names
+
+        duplicated = duplicated_paragraph_names(context.program)
+        ambiguous = [name for name in sites_by_paragraph if name in duplicated]
+        for name in ambiguous:
+            del sites_by_paragraph[name]
+
     lines = [f'TESTSUITE "{_quote_safe(suite_name)}"', ""]
+    if ambiguous:
+        lines.append(
+            "*> Not scaffolded: these paragraph names are defined in more "
+            "than one SECTION,"
+        )
+        lines.append(
+            "*> which mockymock cannot tell apart. Rename them to test "
+            "their boundaries."
+        )
+        lines.extend(f"*>   {name}" for name in ambiguous)
+        lines.append("")
     if unnamed:
         lines.append(
             "*> Not scaffolded: these boundaries sit before the first "
@@ -914,6 +979,20 @@ def _scaffold_placeholder(
     for paragraph_name, own_sites in sites_by_paragraph.items():
         sites = _reachable_sites(paragraph_name, own_sites, sites_by_paragraph, context)
         directives = _directives_for(sites, surface, context)
+        if context is not None and context.whenever_quiet(
+            _directive_text_lines(directives)
+        ):
+            # Placeholder mocks that never make a WHENEVER fire never reach
+            # its handler: leave the handler's boundaries out, as lint does
+            # (issue #244).
+            sites = _reachable_sites(
+                paragraph_name,
+                own_sites,
+                sites_by_paragraph,
+                context,
+                follow_whenever=False,
+            )
+            directives = _directives_for(sites, surface, context)
         labels = ", ".join(dict.fromkeys(site.label for site in sites))
         lines.append(
             f'TESTCASE "{_quote_safe(f"{paragraph_name} boundaries: {labels}")}"'
@@ -935,6 +1014,7 @@ def _reachable_sites(
     own_sites: list[BoundarySite],
     sites_by_paragraph: dict[str, list[BoundarySite]],
     context: ProgramContext | None,
+    follow_whenever: bool = True,
 ) -> list[BoundarySite]:
     """Every boundary site a `PERFORM entry` can reach: the paragraph's own
     sites first, then those of every paragraph it reaches (PERFORM, GO TO,
@@ -945,7 +1025,11 @@ def _reachable_sites(
     opens its result-set cursor). Falls back to the own sites when
     reachability can't be established, as the bundle-driven scaffold does
     (issue #143)."""
-    reachable = context.reachable_from(entry) if context is not None else None
+    reachable = (
+        context.reachable_from(entry, follow_whenever=follow_whenever)
+        if context is not None
+        else None
+    )
     if reachable is None:
         return own_sites
     sites = list(own_sites)
@@ -953,6 +1037,16 @@ def _reachable_sites(
         if paragraph_name != entry and paragraph_name in reachable:
             sites.extend(paragraph_sites)
     return sites
+
+
+def _directive_text_lines(directives: list[tuple[str, list[str]]]) -> list[str]:
+    """`_directives_for`'s output as the .cut lines it is written as."""
+    lines: list[str] = []
+    for directive_line, body in directives:
+        lines.append(directive_line)
+        lines.extend(f"    {body_line}" for body_line in body)
+        lines.append("END-MOCK")
+    return lines
 
 
 def _directives_for(
@@ -1122,6 +1216,35 @@ _DLI_CALL_END = {
 }
 
 
+def _mq_success_reply(body: list[str], site: BoundarySite) -> list[str]:
+    """`body` with an MQI call's CompCode and Reason -- by the MQI's fixed
+    convention its last two USING arguments -- answered MQCC_OK (0) and
+    MQRC_NONE (0) instead of the random numbers the fixture row generated
+    (issue #205). A real CompCode is only ever 0, 1 or 2, and the standard
+    `IF WS-COMPCODE NOT = MQCC-OK ... GOBACK` idiom compares it against a
+    data item the constraint solver cannot see, so a random one sent every
+    generated happy path down the MQCONN-failed exit and failed its own
+    VERIFYs. The end-of-data reply MQGET's loop needs is added after this,
+    by `_call_loop_end_lines`, and still wins on the call that ends the
+    loop."""
+    if not site.is_mq:
+        return body
+    using = list(getattr(site.statement, "using_parameters", None) or [])
+    names = [str(getattr(param, "name", "") or "") for param in using]
+    if len(names) < 2 or not names[-1] or not names[-2]:
+        return body
+    targets = {name.upper() for name in names[-2:]}
+    kept = [
+        line
+        for line in body
+        if not (
+            line.upper().startswith("MOVE ")
+            and line.upper().rsplit(" TO ", 1)[-1].strip() in targets
+        )
+    ]
+    return kept + [f"MOVE 0 TO {name}" for name in names[-2:]]
+
+
 def _call_end_reply(
     site: BoundarySite, context: ProgramContext
 ) -> tuple[tuple[tuple[str, str], ...], set[str]] | None:
@@ -1199,7 +1322,7 @@ def _call_loop_end_lines(
         reply is not None
         and site_in_loop(other, context.looped)
         and loop_guard_words(other, context.guards)
-        & set().union(*(context.names_under(name) for name in reply[1]))
+        & _reply_watched_names(other, reply[1], context)
         for other, reply in zip(sites, replies, strict=True)
     )
     if not waits_on_reply:
@@ -1217,6 +1340,25 @@ def _call_loop_end_lines(
     if tally is None:
         return moves
     return [f"IF {tally} > 1", *(f"    {move}" for move in moves), "END-IF"]
+
+
+def _reply_watched_names(
+    site: BoundarySite, reply_args: set[str], context: ProgramContext
+) -> set[str]:
+    """Every data name that follows `site`'s reply: the reply arguments and
+    what is declared under them, plus -- one hop -- any flag the site's own
+    paragraph sets in a branch on that reply (issue #188: `PERFORM ...
+    UNTIL NO-MORE-MSGS` where `SET NO-MORE-MSGS TO TRUE` sits under `WHEN
+    MQ-REASON-CODE = MQRC-NO-MSG-AVAIL`). A flag that is an 88 brings its
+    own field (and the field's other 88s) along, so an UNTIL on either
+    spelling matches."""
+    watched = set().union(*(context.names_under(name) for name in reply_args))
+    statements = context.paragraph_statements(site.paragraph_name)
+    for flag in names_set_on_reply(statements, watched):
+        watched |= context.names_under(flag)
+        for owner in context.condition_owners(flag):
+            watched |= context.names_under(owner)
+    return watched
 
 
 def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
@@ -1336,11 +1478,17 @@ def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
     A non-interactive ACCEPT (`ACCEPT X FROM DATE YYYYMMDD`) is in the same
     position: mockymock records it as nothing to mock, while cobol-parser's
     bundle can still list it when a date-format qualifier follows the
-    source (BATCHSEQ)."""
+    source (BATCHSEQ).
+
+    So is `EXEC SQL WHENEVER`: a precompiler declaration mockymock emulates
+    instead of mocking (issue #195), which cobol-parser's bundle lists as
+    an SQL boundary keyed `WHENEVER`."""
     keys: set[tuple[str, str]] = {
         (MockCategory.ACCEPT.value, accept.target)
         for accept in surface.non_interactive_accepts
     }
+    if surface.whenever_sites:
+        keys.add((MockCategory.SQL.value, "WHENEVER"))
     for site in surface.boundary_sites:
         if site.category is None or not (site.nested and site.span is None):
             continue
@@ -1406,27 +1554,36 @@ def _warn_on_key_mismatch(
 
 
 def _first_paragraph(program) -> str | None:
-    """The first named PROCEDURE DIVISION paragraph, by source line.
+    """The first named PROCEDURE DIVISION section or paragraph, by source
+    line -- where the program itself enters.
 
     The fallback entry for a scenario cobol-parser left without one: an IMS
     program opening with `ENTRY 'DLITCBL' USING ...` comes back with
     `entry=''` because the ENTRY statement sits in an unnamed leading
-    paragraph (issue #150)."""
+    paragraph (issue #150). A section-structured program (`A000-MAIN
+    SECTION.` with its main line directly under the header) comes back the
+    same way; its first *paragraph* name belongs to a later section, so
+    the section headers count too (issue #238)."""
     procedure = program.get_division("PROCEDURE") if program is not None else None
     if procedure is None:
         return None
+
+    def line_of(node) -> int:
+        return int(getattr(getattr(node, "location", None), "line", 0) or 0)
+
     named = [
-        paragraph
+        (line_of(paragraph), str(paragraph.paragraph_name))
         for paragraph in _all_paragraphs(procedure)
         if getattr(paragraph, "paragraph_name", "")
     ]
+    named.extend(
+        (line_of(section), str(section.section_name))
+        for section in getattr(procedure, "_sections", {}).values()
+        if getattr(section, "section_name", "")
+    )
     if not named:
         return None
-    first = min(
-        named,
-        key=lambda paragraph: getattr(getattr(paragraph, "location", None), "line", 0),
-    )
-    return str(first.paragraph_name)
+    return min(named, key=lambda pair: pair[0])[1]
 
 
 def _build_shadow_tally_registry(
@@ -1467,7 +1624,9 @@ def _build_shadow_tally_registry(
     return TallyRegistry(suite)
 
 
-def _bundle_rendered_value(raw_value: str, field_category: str) -> str:
+def _bundle_rendered_value(
+    raw_value: str, field_category: str, decimal_comma: bool = False
+) -> str:
     """Bare for a numeric-family FieldSpec category (see cobol-parser's
     fixture-bundle-schema.md), quoted (with embedded `"` doubled,
     mirroring driver._display_text's escaping) otherwise. Unlike
@@ -1475,7 +1634,7 @@ def _bundle_rendered_value(raw_value: str, field_category: str) -> str:
     FieldSpec's own resolved category -- exact, not a text-shape guess --
     since a bundle row always carries one."""
     if field_category in _NUMERIC_FIELD_CATEGORIES:
-        return raw_value
+        return localize_numeric(raw_value, decimal_comma)
     escaped = raw_value.replace('"', '""')
     return f'"{escaped}"'
 
@@ -1491,13 +1650,58 @@ def _row_target(spec: FieldSpec, source: ProgramContext | None) -> str:
 # item (its content is implementation-defined). cobol-parser's bundle lays
 # them out as numeric fields holding "0", and `MOVE 0 TO <pointer>` is a
 # compile error ("invalid MOVE statement").
-def _row_move_line(row: dict[str, str], spec: FieldSpec, target: str) -> str | None:
+def _row_move_line(
+    row: dict[str, str], spec: FieldSpec, target: str, decimal_comma: bool = False
+) -> str | None:
     usage = (spec.usage or "").upper()
     if usage in _POINTER_USAGES:
         return f"SET {target} TO NULL"
     if usage == "INDEX":
         return None
-    return f"MOVE {_bundle_rendered_value(row.get(spec.column, ''), spec.category)} TO {target}"
+    value = _bundle_rendered_value(
+        row.get(spec.column, ""), spec.category, decimal_comma
+    )
+    return f"MOVE {value} TO {target}"
+
+
+def _record_length_move(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> str | None:
+    """`MOVE <length> TO <item>` for a READ of a file whose FD says `RECORD
+    VARYING FROM n TO m DEPENDING ON item` (issue #214): a real READ stores
+    the length of the record it just read there, and a mock that never
+    sets it left every generated record at the item's VALUE (usually 0),
+    below the FD's own minimum, so a program checking the length took its
+    short-record path for all the happy-path data. The bundle carries no
+    per-row length yet (cobol-parser's `declared_lengths` is not surfaced),
+    so every row reports the full length the record layout describes,
+    clamped into the FD's range. None for any other file."""
+    if fixture.category != "READ" or source is None or source.program is None:
+        return None
+    key = fixture.key.upper()
+    if key not in source.record_length_moves:
+        source.record_length_moves[key] = _compute_record_length_move(
+            key, source.program
+        )
+    return source.record_length_moves[key]
+
+
+def _compute_record_length_move(key: str, program) -> str | None:
+    from cobolparser.generators.data.layout import VaryingLength
+    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+
+    try:
+        records = ProgramLayoutIndex.build(program).records_for_file(key)
+    except Exception:  # noqa: BLE001 -- a layout the index cannot read: no MOVE
+        return None
+    for record in records or []:
+        size = int(record.calculate_size() or 0)
+        varying = VaryingLength.from_fd_clauses(
+            record.get_metadata("fd_clauses"), record_size=size
+        )
+        if varying is not None and varying.depending_on:
+            return f"MOVE {varying.maximum} TO {varying.depending_on}"
+    return None
 
 
 def _row_move_lines(
@@ -1505,10 +1709,23 @@ def _row_move_lines(
     fixture: BoundaryFixture,
     source: ProgramContext | None = None,
 ) -> list[str]:
-    lines = (
-        _row_move_line(row, spec, _row_target(spec, source)) for spec in fixture.layout
-    )
-    return [line for line in lines if line is not None]
+    lines = [
+        line
+        for line in (
+            _row_move_line(
+                row,
+                spec,
+                _row_target(spec, source),
+                source is not None and source.decimal_comma,
+            )
+            for spec in fixture.layout
+        )
+        if line is not None
+    ]
+    length_move = _record_length_move(fixture, source)
+    if length_move is not None:
+        lines.append(length_move)
+    return lines
 
 
 def _status_only_body(fixture: BoundaryFixture) -> list[str]:
@@ -1536,6 +1753,135 @@ def _sql_status_lines(fixture: BoundaryFixture) -> list[str]:
     return lines
 
 
+#: CICS options whose operand the command only READS, for every command
+#: `_cics_input_operand_names` filters (issue #222). cobol-parser marks every
+#: EXEC CICS boundary BIDIRECTIONAL and lays out every resolved operand, so
+#: without this a generated mock overwrote what the program had just put in
+#: `FROM(rec)` / `SEND TEXT FROM(msg)` with random text -- state the real
+#: transaction never touches, recorded as golden by `--record-expectations`.
+_CICS_INPUT_OPTIONS = frozenset(
+    {
+        "FROM",
+        "FILE",
+        "DATASET",
+        "QUEUE",
+        "QNAME",
+        "MAP",
+        "MAPSET",
+        "PROGRAM",
+        "TRANSID",
+        "CHANNEL",
+        "CONTAINER",
+        "SYSID",
+        "REQID",
+        "TERMID",
+        "INTERVAL",
+        "TIME",
+        "ABCODE",
+        "KEYLENGTH",
+        "FROMLENGTH",
+        "FROMFLENGTH",
+        "CURSOR",
+    }
+)
+#: Commands whose RIDFLD the command updates (a browse, or a generic READ).
+_CICS_RIDFLD_OUTPUT_COMMANDS = frozenset({"READ", "READNEXT", "READPREV"})
+#: Commands whose LENGTH/FLENGTH the command sets to the length it returned.
+_CICS_LENGTH_OUTPUT_COMMANDS = frozenset(
+    {
+        "READ",
+        "READNEXT",
+        "READPREV",
+        "RECEIVE",
+        "READQ",
+        "RETRIEVE",
+        "GET",
+        "CONVERSE",
+        "WEB",
+    }
+)
+#: Commands that pass COMMAREA to a program that cannot hand it back.
+_CICS_COMMAREA_INPUT_COMMANDS = frozenset({"RETURN", "XCTL"})
+#: Commands whose operands are all answers (ASSIGN USERID(x), ADDRESS
+#: COMMAREA(ptr), ...): nothing is filtered for them.
+_CICS_ALL_OUTPUT_COMMANDS = frozenset({"ASSIGN", "INQUIRE", "ADDRESS", "ASKTIME"})
+
+
+def _cics_operand_name(value: object) -> str | None:
+    """The data name an option's operand text starts with, or None for a
+    literal / figurative / empty operand."""
+    words = str(value or "").replace("(", " ").split()
+    if not words or words[0][0] in "\"'0123456789+-":
+        return None
+    return words[0].upper()
+
+
+def _cics_operand_roles(statement: object) -> tuple[set[str], set[str]]:
+    """(input-only operand names, other operand names) of one EXEC CICS
+    statement -- see `_CICS_INPUT_OPTIONS` and the per-command tables."""
+    command = str(getattr(statement, "_cics_command", "") or "").upper()
+    options = getattr(statement, "options", None) or {}
+    inputs: set[str] = set()
+    others: set[str] = set()
+    for option, value in options.items():
+        name = _cics_operand_name(value)
+        if name is None:
+            continue
+        option = str(option).upper()
+        if command in _CICS_ALL_OUTPUT_COMMANDS:
+            is_input = False
+        elif command == "FORMATTIME":
+            is_input = option == "ABSTIME"
+        elif option == "RIDFLD":
+            is_input = command not in _CICS_RIDFLD_OUTPUT_COMMANDS
+        elif option in ("LENGTH", "FLENGTH"):
+            is_input = command not in _CICS_LENGTH_OUTPUT_COMMANDS
+        elif option == "COMMAREA":
+            is_input = command in _CICS_COMMAREA_INPUT_COMMANDS
+        else:
+            is_input = option in _CICS_INPUT_OPTIONS
+        (inputs if is_input else others).add(name)
+    return inputs, others
+
+
+def _cics_output_layout(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> list[FieldSpec]:
+    """`fixture.layout` without the fields only an input operand of the
+    fixture's own EXEC CICS statement(s) names (issue #222): a CICS mock
+    writes what the command returns (INTO, SET, RESP, RESP2, a READ's
+    LENGTH/RIDFLD, ...), never what it reads (FROM, a WRITE's RIDFLD).
+    A field also named by a non-input operand of any statement for this
+    key is kept. With no program to read the statements from, nothing is
+    filtered."""
+    surface = source.surface if source is not None else None
+    if surface is None:
+        return fixture.layout
+    key = " ".join(fixture.key.upper().split())
+    cics_sites = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.CICS
+        and (site.match_text or "").startswith(key)
+    ]
+    statements = [
+        site.statement for site in cics_sites if site.line == fixture.line
+    ] or [site.statement for site in cics_sites]
+    inputs: set[str] = set()
+    others: set[str] = set()
+    for statement in statements:
+        statement_inputs, statement_others = _cics_operand_roles(statement)
+        inputs |= statement_inputs
+        others |= statement_others
+    kept = []
+    for spec in fixture.layout:
+        parts = set(spec.qualified_name.upper().split("."))
+        if parts & inputs and not parts & others:
+            continue
+        kept.append(spec)
+    return kept
+
+
 def _single_row_body(
     fixture: BoundaryFixture, source: ProgramContext | None = None
 ) -> list[str]:
@@ -1546,6 +1892,8 @@ def _single_row_body(
     categories do: every existing hand-written SQL mock in this codebase
     sets SQLCODE itself, always)."""
     body: list[str] = []
+    if fixture.category == "CICS":
+        fixture = replace(fixture, layout=_cics_output_layout(fixture, source))
     if fixture.sequence:
         body.extend(_row_move_lines(fixture.sequence[0], fixture, source))
     if fixture.category == "SQL":
@@ -1600,6 +1948,36 @@ def _read_exhaustion_lines(
                 "or this mock will never end the program's read loop"
             )
     return lines
+
+
+def _at_end_handling(
+    fixture: BoundaryFixture, site: BoundarySite, source: ProgramContext | None
+) -> tuple[list[str], list[object], list[str]]:
+    """(replicated, at_end, lifted) for a READ mock's exhaustion branch --
+    see `_read_exhaustion_lines`.
+
+    When the splicer itself re-runs this READ's own AT END clause after the
+    mock (`analysis.clause_bodies`, issue #209: it does for a top-level
+    READ whose clause bodies it can lift exactly), the branch must only
+    report end-of-file -- copying the clause in here too would run it
+    twice. A file with a FILE STATUS field reports it through
+    `fixture.terminal`'s MOVE; one without sets `UT-MOCK-STATUS`, the
+    splicer's own outcome field. Otherwise the clause is replicated or
+    lifted into the branch as before."""
+    at_end = getattr(site.statement, "at_end_clause", None) or []
+    if at_end and source is not None and (not site.nested or site.span is not None):
+        lifted_clauses = lift_clause_bodies(site.statement, source.lines)
+        if lifted_clauses and any(c.attr == "at_end_clause" for c in lifted_clauses):
+            signal = [
+                f"*> end of file: the splice runs this READ's own AT END "
+                f"clause (line {site.line}) after the mock"
+            ]
+            if not fixture.terminal:
+                signal.append(f'MOVE "10" TO {OUTCOME_FIELD}')
+            return signal, at_end, []
+    replicated = _replicated_at_end_statements(site.statement)
+    lifted = _lifted_at_end_lines(site, source) if at_end and not replicated else []
+    return replicated, at_end, lifted
 
 
 def _read_body(
@@ -1657,9 +2035,7 @@ def _read_body(
     the separate, unimplemented `ROWS FROM CSV` row-source extension for
     both `READ` and `SQL`)."""
     sequence = fixture.sequence
-    at_end = getattr(site.statement, "at_end_clause", None) or []
-    replicated = _replicated_at_end_statements(site.statement)
-    lifted = _lifted_at_end_lines(site, source) if at_end and not replicated else []
+    replicated, at_end, lifted = _at_end_handling(fixture, site, source)
     needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
 
     if not sequence:
@@ -1730,12 +2106,16 @@ _SQL_ROWS_EXHAUSTED_BODY = ["MOVE 100 TO SQLCODE"]
 
 
 def _sql_rows_directive(
-    category: MockCategory, key: str, fixture: BoundaryFixture
+    category: MockCategory,
+    key: str,
+    fixture: BoundaryFixture,
+    decimal_comma: bool = False,
 ) -> list[str]:
     lines = [f'MOCK {category.value} "{key}" ROWS']
     for row in fixture.sequence:
         pairs = ", ".join(
-            f"{spec.column} = {_bundle_rendered_value(row.get(spec.column, ''), spec.category)}"
+            f"{spec.column} = "
+            f"{_bundle_rendered_value(row.get(spec.column, ''), spec.category, decimal_comma)}"
             for spec in fixture.layout
         )
         lines.append(f"    ( {pairs} )")
@@ -1873,11 +2253,7 @@ def _bundle_directive_for(
     )
     if (fixture.category, fixture.key) in placeholder_keys:
         if category is MockCategory.READ:
-            at_end = getattr(site.statement, "at_end_clause", None) or []
-            replicated = _replicated_at_end_statements(site.statement)
-            lifted = (
-                _lifted_at_end_lines(site, source) if at_end and not replicated else []
-            )
+            replicated, at_end, lifted = _at_end_handling(fixture, site, source)
             body = _read_exhaustion_lines(fixture, replicated, at_end, lifted)
             if fixture.terminal or replicated or lifted:
                 call_count_override = CallCountOverride(count=1)
@@ -1918,9 +2294,19 @@ def _bundle_directive_for(
             if looped_fetch
             else None
         )
-        return _sql_rows_directive(category, fixture.key, fixture), override
+        return (
+            _sql_rows_directive(
+                category,
+                fixture.key,
+                fixture,
+                source is not None and source.decimal_comma,
+            ),
+            override,
+        )
     else:
         body = _single_row_body(fixture, source)
+        if category is MockCategory.CALL:
+            body = _mq_success_reply(body, site)
         if category is MockCategory.DLI and registry.known(category, fixture.key):
             body = body + _dli_loop_end_lines(
                 site, source, registry.name(category, fixture.key)
@@ -2318,7 +2704,11 @@ def _render_expectation(
         # first run (GnuCOBOL compares it as text). `A OF B` qualification
         # is looked up by its first word, the item itself.
         picture = picture_for(expectation.ref.split()[0], pictures)
-        rendered = render_expect_value(str(expectation.value), picture)
+        rendered = render_expect_value(
+            str(expectation.value),
+            picture,
+            decimal_comma=source is not None and source.decimal_comma,
+        )
         return [f"EXPECT {expectation.ref} TO BE {rendered}"]
     # kind == "stub"
     note = f" -- {expectation.note}" if expectation.note else ""
@@ -2409,6 +2799,10 @@ _CONDITIONAL_SITE_REASON = (
     "called only under an IF/EVALUATE, or from a paragraph PERFORMed "
     "conditionally, so whether this case reaches it is not known"
 )
+_LOOPED_SITE_REASON = (
+    "called inside a PERFORM loop (UNTIL/VARYING/TIMES) or from a paragraph "
+    "PERFORMed more than once, which the bundle counts once"
+)
 _UNREACHED_SITE_REASON = (
     "also called from a paragraph this case's PERFORM never reaches (a CICS "
     "HANDLE CONDITION target, or code nothing PERFORMs), which the bundle's "
@@ -2421,6 +2815,7 @@ def _conditional_call_count_keys(
     surface: MockSurface,
     reachable: set[str] | None = None,
     scope: tuple[set[str], set[int]] | None = None,
+    row_scope: tuple[set[str], set[int]] | None = None,
 ) -> list[tuple[tuple[MockCategory, str], str]]:
     """Keys whose bundle count (`_merged_call_counts`) is not exact, each
     with the reason. The bundle counts every site once per scenario whether
@@ -2434,7 +2829,13 @@ def _conditional_call_count_keys(
     site outside `reachable` (ACCTINQ's CICS RETURN in its HANDLE
     CONDITION NOTFND paragraph) carries a count this case cannot reach --
     READ/RETURN excepted, whose merged count is the largest one, not a
-    sum."""
+    sum.
+
+    `scope` takes a looping PERFORM's target (and a paragraph PERFORMed
+    twice) out, since the bundle counts such a site once however often it
+    runs (issue #290). READ/RETURN are checked against `row_scope` instead
+    (the scope with `loops_exact=True`, falling back to `scope`): their
+    counts come from the bundle's row data, which models the read loop."""
     keys: list[tuple[tuple[MockCategory, str], str]] = []
     for expectation in expectations:
         if expectation.kind != "call_count":
@@ -2456,8 +2857,19 @@ def _conditional_call_count_keys(
         elif scope is None:
             if any(site.nested for site in sites):
                 keys.append(((category, key), _CONDITIONAL_SITE_REASON))
+        elif category in (MockCategory.READ, MockCategory.RETURN):
+            if any(not _site_in_scope(site, row_scope or scope) for site in sites):
+                keys.append(((category, key), _CONDITIONAL_SITE_REASON))
         elif any(not _site_in_scope(site, scope) for site in sites):
-            keys.append(((category, key), _CONDITIONAL_SITE_REASON))
+            looped = row_scope is not None and all(
+                _site_in_scope(site, row_scope) for site in sites
+            )
+            keys.append(
+                (
+                    (category, key),
+                    _LOOPED_SITE_REASON if looped else _CONDITIONAL_SITE_REASON,
+                )
+            )
     return keys
 
 
@@ -2536,6 +2948,32 @@ def _scaffold_with_bundle(
         directive_lines, declared_keys, call_count_overrides = _bundle_mock_directives(
             scenario, surface, scenario_keys, registry, placeholder_keys, source
         )
+        if (
+            source is not None
+            and reachable is not None
+            and source.whenever_quiet(directive_lines)
+        ):
+            # Mocks that never make a WHENEVER fire never reach its handler
+            # either: lint then leaves the handler out of the reachable set
+            # and would refuse its boundaries' mocks as UNMATCHED (#244).
+            quiet = source.reachable_from(entry, follow_whenever=False)
+            if quiet is not None and quiet != reachable:
+                reachable = quiet
+                scenario_keys = {
+                    pair: site
+                    for pair, site in mockymock_keys.items()
+                    if site.paragraph_name in reachable
+                }
+                directive_lines, declared_keys, call_count_overrides = (
+                    _bundle_mock_directives(
+                        scenario,
+                        surface,
+                        scenario_keys,
+                        registry,
+                        placeholder_keys,
+                        source,
+                    )
+                )
         lines.extend(f"    {line}" for line in directive_lines)
         lines.append(f"    PERFORM {entry}")
         lines.extend(
@@ -2543,13 +2981,12 @@ def _scaffold_with_bundle(
             for line in _capture_stub_lines(_capture_targets(directive_lines))
         )
         expectations = _merged_call_counts(scenario.expectations)
-        scope = (
-            source.exact_count_scope(entry, reachable)
-            if source is not None and reachable is not None
-            else None
-        )
+        scope = row_scope = None
+        if source is not None and reachable is not None:
+            scope = source.exact_count_scope(entry, reachable)
+            row_scope = source.exact_count_scope(entry, reachable, loops_exact=True)
         for key_pair, reason in _conditional_call_count_keys(
-            expectations, surface, reachable, scope
+            expectations, surface, reachable, scope, row_scope
         ):
             call_count_overrides.setdefault(
                 key_pair,

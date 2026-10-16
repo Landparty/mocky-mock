@@ -887,3 +887,395 @@ def test_check_terminator_layout_is_reasons_only():
     reasons = check_terminator_layout(surface, program, _suite(), scope_map, lines)
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+
+
+# Issue #212: EXIT PROGRAM in a called subprogram returns to the caller, but
+# the driver makes the program under test the main program, where EXIT
+# PROGRAM is a no-op -- it has to be neutralized like GOBACK.
+EXIT_PROGRAM_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EXITPGM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-X                PIC 999 VALUE 0.
+       01  WS-CODE             PIC X.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-VALIDATE
+           ADD 100 TO WS-X
+           GOBACK.
+
+       1000-VALIDATE.
+           ADD 1 TO WS-X
+           IF WS-CODE = "E"
+               EXIT PROGRAM
+           END-IF
+           ADD 10 TO WS-X.
+"""
+
+
+def test_exit_program_is_a_terminator_site():
+    _, surface, _, _ = _analyze(EXIT_PROGRAM_SOURCE)
+    labels = [s.label for s in surface.boundary_sites if s.category is None]
+    assert "EXIT PROGRAM" in labels
+
+
+def test_exit_program_is_planned_and_spliced_like_goback():
+    from mockymock.splicer.naming import TallyRegistry
+    from mockymock.splicer.orchestrator import splice_program
+    from mockymock.splicer.source_map import collect_boundaries
+
+    program, surface, scope_map, lines = _analyze(EXIT_PROGRAM_SOURCE)
+    suite = _suite()
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert reasons == []
+    exit_plans = [p for p in plans if p.site.label == "EXIT PROGRAM"]
+    assert len(exit_plans) == 1
+    assert {p.target_paragraph for p in exit_plans[0].chain_performs} == {
+        "1000-VALIDATE"
+    }
+    spliced = "\n".join(
+        splice_program(
+            lines,
+            collect_boundaries(program),
+            surface,
+            suite,
+            TallyRegistry(suite),
+            plans,
+        )
+    )
+    assert "*>         EXIT PROGRAM" in spliced
+    assert 'IF UT-EARLY-EXIT = "Y"' in spliced
+
+
+# Issue #211: the .cut's own PERFORM X THRU Y. Neutralizing a terminator
+# ends X with EXIT PARAGRAPH, and the driver's THRU range then falls
+# through into the rest of the range -- code the real program never runs.
+THRU_TAIL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. THRUTAIL.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-X                PIC 999 VALUE 0.
+       01  WS-ERR              PIC X VALUE "N".
+
+       PROCEDURE DIVISION.
+       1000-A.
+           ADD 1 TO WS-X
+           IF WS-ERR = "Y"
+               GOBACK
+           END-IF.
+
+       1000-B.
+           ADD 10 TO WS-X.
+
+       1000-EXIT.
+           EXIT.
+"""
+
+
+def _thru_suite(target, thru):
+    case = MockTestCase(name="c", perform_target=target, perform_thru=thru)
+    return MockTestSuite(name="S", test_cases=[case])
+
+
+def test_terminator_under_a_cut_thru_range_with_real_tail_refuses():
+    program, surface, scope_map, lines = _analyze(THRU_TAIL_SOURCE)
+    suite = _thru_suite("1000-A", "1000-EXIT")
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert plans == []
+    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+    assert "fall through into '1000-B'" in reasons[0].message
+
+
+def test_terminator_under_a_cut_thru_range_with_exit_only_tail_is_planned():
+    source = THRU_TAIL_SOURCE.replace(
+        """       1000-B.
+           ADD 10 TO WS-X.
+
+""",
+        "",
+    )
+    program, surface, scope_map, lines = _analyze(source)
+    suite = _thru_suite("1000-A", "1000-EXIT")
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert reasons == []
+    assert [p.site.label for p in plans] == ["GOBACK"]
+
+
+def test_terminator_under_a_hook_thru_range_with_real_tail_refuses():
+    from mockymock.dsl.model import HookStep
+
+    program, surface, scope_map, lines = _analyze(THRU_TAIL_SOURCE)
+    suite = _thru_suite("1000-EXIT", None)
+    suite.before_each_steps = [
+        HookStep(kind="PERFORM", target="1000-A", thru="1000-EXIT")
+    ]
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert plans == []
+    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+
+
+# Issue #219: STOP RUN RETURNING n / GOBACK RETURNING n set RETURN-CODE,
+# and the neutralization used to drop the phrase with the statement.
+RETURNING_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RETCODE.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CODE             PIC X.
+       01  WS-RC               PIC 9 VALUE 4.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-CHECK
+           GOBACK RETURNING WS-RC.
+
+       1000-CHECK.
+           IF WS-CODE = "E"
+               STOP RUN RETURNING 8
+           END-IF.
+"""
+
+
+def test_terminator_plan_carries_its_returning_operand():
+    from mockymock.splicer.naming import TallyRegistry
+    from mockymock.splicer.orchestrator import splice_program
+    from mockymock.splicer.source_map import collect_boundaries
+
+    program, surface, scope_map, lines = _analyze(RETURNING_SOURCE)
+    suite = _suite()
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert reasons == []
+    assert sorted((p.site.label, p.return_code) for p in plans) == [
+        ("GOBACK", "WS-RC"),
+        ("STOP RUN", "8"),
+    ]
+    spliced = "\n".join(
+        splice_program(
+            lines,
+            collect_boundaries(program),
+            surface,
+            suite,
+            TallyRegistry(suite),
+            plans,
+        )
+    )
+    assert "MOVE 8 TO RETURN-CODE" in spliced
+    assert "MOVE WS-RC TO RETURN-CODE" in spliced
+
+
+def test_terminator_with_an_uncopyable_returning_operand_refuses():
+    from mockymock.analysis.refusal._plans import _terminator_return_code
+
+    class _Stop:
+        returning = "WS-RC OF WS-GROUP"
+
+    operand, problem = _terminator_return_code(_Stop())
+    assert operand is None
+    assert "RETURNING operand" in problem
+
+    class _Goback:
+        returning_value = "-8"
+
+    assert _terminator_return_code(_Goback()) == ("-8", None)
+
+
+# Issue #215: EXEC CICS RETURN/XCTL/ABEND never give control back, so a
+# planned one runs its mock body and then ends the run under test.
+CICS_TERMINATOR_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CICSTERM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESP             PIC S9(8) COMP.
+       01  WS-STEP             PIC X(10).
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-FIRST-TIME
+           MOVE "PROCESSED" TO WS-STEP
+           EXEC CICS RETURN END-EXEC.
+
+       1000-FIRST-TIME.
+           EXEC CICS XCTL PROGRAM('NEXT') RESP(WS-RESP)
+           END-EXEC
+           MOVE "XCTL-FAIL" TO WS-STEP.
+"""
+
+
+def _cics_suite():
+    from mockymock.dsl.model import MockCategory, MockDirective
+
+    case = MockTestCase(
+        name="c",
+        perform_target="0000-MAIN-PROCESS",
+        mocks=[
+            MockDirective(MockCategory.CICS, "RETURN"),
+            MockDirective(MockCategory.CICS, "XCTL"),
+        ],
+    )
+    return MockTestSuite(name="S", test_cases=[case])
+
+
+def test_cics_return_and_xctl_are_planned_as_terminators():
+    program, surface, scope_map, lines = _analyze(CICS_TERMINATOR_SOURCE)
+    plans, reasons = find_terminator_plans(
+        surface, program, _cics_suite(), scope_map, lines
+    )
+    assert reasons == []
+    by_command = {p.site.statement.cics_command: p for p in plans}
+    assert set(by_command) == {"RETURN", "XCTL"}
+    assert by_command["RETURN"].resp_field is None
+    assert by_command["XCTL"].resp_field == "WS-RESP"
+
+
+def test_cics_terminator_splice_wraps_the_mock_dispatch_with_the_early_exit():
+    from mockymock.splicer.naming import TallyRegistry
+    from mockymock.splicer.orchestrator import splice_program
+    from mockymock.splicer.source_map import collect_boundaries
+
+    program, surface, scope_map, lines = _analyze(CICS_TERMINATOR_SOURCE)
+    suite = _cics_suite()
+    plans, _ = find_terminator_plans(surface, program, suite, scope_map, lines)
+    spliced = [
+        line.strip()
+        for line in splice_program(
+            lines,
+            collect_boundaries(program),
+            surface,
+            suite,
+            TallyRegistry(suite),
+            plans,
+        )
+    ]
+    # XCTL with RESP: preset NORMAL, exit only while the field is still 0.
+    preset = spliced.index("MOVE 0 TO WS-RESP")
+    guard = spliced.index("IF WS-RESP = 0")
+    assert preset < spliced.index("ADD 1 TO UT-CICS-XCTL-TALLY") < guard
+    assert spliced[guard + 1 : guard + 4] == [
+        'MOVE "Y" TO UT-EARLY-EXIT',
+        "EXIT PARAGRAPH",
+        "END-IF",
+    ]
+    # RETURN without RESP: unconditional, after its own dispatch, keeping
+    # the sentence-ending period.
+    return_tally = spliced.index("ADD 1 TO UT-CICS-RETURN-TALLY")
+    tail = spliced[return_tally:]
+    assert tail[tail.index("END-EVALUATE") + 1 : tail.index("END-EVALUATE") + 3] == [
+        'MOVE "Y" TO UT-EARLY-EXIT',
+        "EXIT PARAGRAPH.",
+    ]
+    # The chain check after PERFORM 1000-FIRST-TIME propagates the exit.
+    assert 'IF UT-EARLY-EXIT = "Y"' in spliced
+
+
+def test_cics_terminator_off_a_plain_perform_chain_refuses():
+    source = CICS_TERMINATOR_SOURCE.replace(
+        "PERFORM 1000-FIRST-TIME\n", "PERFORM 1000-FIRST-TIME 2 TIMES\n"
+    )
+    program, surface, scope_map, lines = _analyze(source)
+    plans, reasons = find_terminator_plans(
+        surface, program, _cics_suite(), scope_map, lines
+    )
+    assert [p.site.statement.cics_command for p in plans] == ["RETURN"]
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert reasons[0].message.startswith("EXEC CICS XCTL at line")
+
+
+def test_falls_through_false_for_trailing_cics_return():
+    paragraph = _paragraph(CICS_TERMINATOR_SOURCE, "0000-MAIN-PROCESS")
+    assert _falls_through(paragraph) is False
+
+
+def test_cics_resp_option_that_is_not_a_data_name_refuses():
+    from mockymock.analysis.refusal._plans import _cics_resp_field
+
+    class _Xctl:
+        cics_text = "PROGRAM ( X ) RESP ( WS-R ( 1 ) )"
+
+    assert _cics_resp_field(_Xctl())[0] is None
+    assert "RESP option" in _cics_resp_field(_Xctl())[1]
+
+    class _Resp2Only:
+        cics_text = "PROGRAM ( X ) RESP2 ( WS-R2 )"
+
+    assert _cics_resp_field(_Resp2Only()) == (None, None)
+
+
+SECTION_GO_TO_EXIT_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECEXIT.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-RC  PIC 9(4) VALUE 0.
+       01 WS-AMT PIC S9(4) VALUE 0.
+       01 WS-I   PIC 9(4) VALUE 0.
+       01 WS-SUM PIC 9(4) VALUE 0.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A010-START.
+           PERFORM B000-VALIDATE
+           IF WS-RC = 0
+               PERFORM C000-SUM
+           END-IF
+           GOBACK.
+       B000-VALIDATE SECTION.
+       B010.
+           IF WS-AMT < 0
+               MOVE 8 TO WS-RC
+               GO TO B099-EXIT
+           END-IF
+           MOVE 0 TO WS-RC.
+       B099-EXIT.
+           EXIT.
+       C000-SUM SECTION.
+       C010.
+           PERFORM VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 3
+               ADD WS-I TO WS-SUM
+               CALL "TRACE" USING WS-I
+           END-PERFORM.
+"""
+
+
+def test_terminator_after_a_section_scoped_go_to_exit_is_planned():
+    """Issue #259: B099-EXIT ends a section entered only by PERFORM
+    B000-VALIDATE, so its implicit PERFORM return fires there and C010 is
+    never reached by falling through. The terminator planner treated C010
+    as a GO TO fall-through hazard while the reachability gate did not."""
+    program, surface, scope_map, lines = _analyze(SECTION_GO_TO_EXIT_SOURCE)
+    plans, reasons = find_terminator_plans(
+        surface, program, _suite("A000-MAIN"), scope_map, lines
+    )
+    assert reasons == []
+    assert [plan.site.label for plan in plans] == ["GOBACK"]
+
+
+def test_go_to_fallthrough_section_stop_is_dropped_for_a_member_entry():
+    """Naming a member paragraph directly bypasses PERFORM <section-name>,
+    so that section's end is no stop and the walk carries on."""
+    from mockymock.analysis.refusal._reachability import (
+        _fallthrough_safe_sections,
+        _paragraph_safe_section_map,
+    )
+
+    program, _, _, _ = _analyze(SECTION_GO_TO_EXIT_SOURCE)
+    members = {
+        "A000-MAIN": ["A010-START"],
+        "B000-VALIDATE": ["B010", "B099-EXIT"],
+        "C000-SUM": ["C010"],
+    }
+    safe = _fallthrough_safe_sections(program)
+    assert _go_to_fallthrough_targets(program, {"B099-EXIT"}) == {"C010": "B099-EXIT"}
+    stopped = _paragraph_safe_section_map(members, safe, {"A000-MAIN"})
+    assert _go_to_fallthrough_targets(program, {"B099-EXIT"}, stopped) == {}
+    bypassed = _paragraph_safe_section_map(members, safe, {"B010"})
+    assert _go_to_fallthrough_targets(program, {"B099-EXIT"}, bypassed) == {
+        "C010": "B099-EXIT"
+    }

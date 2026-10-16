@@ -1,7 +1,9 @@
-"""Pins the behaviour cut-dsl.md documents under "A mock replaces the whole
-statement, clauses included": mocking a READ comments out its AT END and
-NOT AT END bodies too, so the program's own statements in those clauses
-never run under the mock."""
+"""Pins the behaviour cut-dsl.md documents under "A mock replaces the
+statement, not its clauses" (issue #209): mocking a READ comments out the
+READ itself, and the program's own AT END / NOT AT END bodies are re-run
+after the mock, selected by the mocked outcome (`UT-MOCK-STATUS`). Before
+#209 both bodies were deleted with the statement, so a mocked READ fed
+records that the program's own NOT AT END logic never processed."""
 
 from cobolparser import parse_cobol
 from cobolparser.preprocess import normalize_fixed_format
@@ -49,13 +51,12 @@ TESTCASE "cutoff date"
 """
 
 
-def test_mocked_read_comments_out_its_at_end_and_not_at_end_bodies():
-    result = parse_cobol(PURGE_CBL, filename="PURGE.cbl")
+def _splice(cbl: str, cut: str) -> list[str]:
+    result = parse_cobol(cbl, filename="PURGE.cbl")
     assert result.success, result.errors
     surface = analyze(result.ast)
-    suite = parse_cut(PURGE_CUT)
-    lines = normalize_fixed_format(PURGE_CBL.splitlines()).splitlines()
-
+    suite = parse_cut(cut)
+    lines = normalize_fixed_format(cbl.splitlines()).splitlines()
     spliced = splice_program(
         lines,
         collect_boundaries(result.ast),
@@ -63,13 +64,40 @@ def test_mocked_read_comments_out_its_at_end_and_not_at_end_bodies():
         suite,
         TallyRegistry(suite),
     )
+    return [line for line in spliced if not line.lstrip().startswith("*>")]
 
-    live = [line for line in spliced if not line.lstrip().startswith("*>")]
+
+def test_mocked_read_reruns_its_own_clause_bodies_by_outcome():
+    live = _splice(PURGE_CBL, PURGE_CUT)
     live_text = "\n".join(live)
-    # Both clause bodies are gone from the live code, not just the READ verb.
-    assert "MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE" not in live_text
-    assert 'MOVE "Y" TO WS-EOF' not in live_text
+    # The READ verb itself is gone; the mock body runs instead.
     assert "END-READ" not in live_text
-    # The mock body is what runs instead.
     assert 'MOVE "20260101" TO PURG-CUTOFF-DATE' in live_text
     assert "GOBACK" in live_text
+    # Both clause bodies come back, after the mock, each under its outcome.
+    stripped = [line.strip() for line in live]
+    mock_at = stripped.index('MOVE "20260101" TO PURG-CUTOFF-DATE')
+    at_end = stripped.index('WHEN UT-MOCK-STATUS(1:1) = "1"')
+    not_at_end = stripped.index('WHEN UT-MOCK-STATUS(1:1) = "0"')
+    assert mock_at < at_end < not_at_end
+    assert stripped[at_end + 1] == 'MOVE "Y" TO WS-EOF'
+    assert stripped[not_at_end + 1] == "MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE"
+    # Every mocked branch starts from success; an unmocked case selects none.
+    assert 'MOVE "00" TO UT-MOCK-STATUS' in stripped
+    assert stripped.index("MOVE SPACES TO UT-MOCK-STATUS") < mock_at
+
+
+def test_a_clause_body_holding_a_go_to_is_still_dropped():
+    """Fail closed: a body that would leave the paragraph (GO TO), run
+    another boundary unmocked, or end the run is not lifted -- the
+    statement keeps the old whole-statement replacement."""
+    cbl = PURGE_CBL.replace(
+        '                   MOVE "Y" TO WS-EOF\n',
+        "                   GO TO MAIN-EXIT\n",
+    ).replace(
+        "           GOBACK.\n",
+        "           GOBACK.\n       MAIN-EXIT.\n           EXIT.\n",
+    )
+    live_text = "\n".join(_splice(cbl, PURGE_CUT))
+    assert "UT-MOCK-STATUS" not in live_text
+    assert "MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE" not in live_text

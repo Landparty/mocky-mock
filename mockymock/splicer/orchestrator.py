@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from mockymock.analysis.clause_bodies import lift_clause_bodies
 from mockymock.analysis.flow_mocks import FlowMockPlan
 from mockymock.analysis.mock_surface import MockSurface
 from mockymock.analysis.refusal import (
@@ -43,9 +44,11 @@ from mockymock.analysis.refusal import (
     TerminatorPlan,
     directive_matches_site,
 )
+from mockymock.analysis.sql_whenever import whenever_check_lines
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
 from mockymock.splicer.injector import (
     build_chain_check,
+    build_cics_terminator_exit,
     build_exec_trap,
     build_flow_dispatch,
     build_goto_exit_replacement,
@@ -103,6 +106,11 @@ def splice_program(
     last_line = len(lines)
     spans: list[tuple[int, int, list[str]]] = []
     seen_statement_ids: set[int] = set()
+    # EXEC CICS RETURN/XCTL/ABEND plans (issue #215): the site keeps its
+    # ordinary dispatch below, wrapped with the early exit.
+    cics_terminators = {
+        id(plan.site.statement): plan for plan in terminator_plans if plan.is_cics
+    }
 
     for site in surface.boundary_sites:
         if site.category is None:
@@ -161,7 +169,23 @@ def splice_program(
                 trace=trace,
                 statement_text=" ".join(lines[start - 1 : end]),
                 layout=surface.data_layout,
+                # A nested site with clauses of its own reaches here only
+                # with a span bounded by its own scope terminator (#258),
+                # so its bodies lift exactly like a top-level site's.
+                lifted_clauses=lift_clause_bodies(site.statement, lines),
             )
+            # What the DB2 precompiler puts after the statement for every
+            # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).
+            replacement += [
+                f"           {line}"
+                for line in whenever_check_lines(site.whenever_checks)
+            ]
+        cics_plan = cics_terminators.get(id(site.statement))
+        if cics_plan is not None:
+            prefix, suffix = build_cics_terminator_exit(
+                cics_plan.exit_kind, cics_plan.resp_field
+            )
+            replacement = prefix + replacement + suffix
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /
         # paragraph), the replacement block must terminate the sentence too
@@ -171,15 +195,41 @@ def splice_program(
             replacement = replacement[:-1] + [replacement[-1] + "."]
         spans.append((start, end, replacement))
 
+    # `EXEC SQL WHENEVER` declarations (issue #195): their effect is the
+    # checks appended to each SQL dispatch above; the statement itself has
+    # no runtime behavior, and cobc cannot compile it. check_nested_exec
+    # refuses one with no safe span before any splicing.
+    for site in surface.whenever_sites:
+        if site.nested:
+            if site.span is None:
+                raise ValueError(
+                    f"nested EXEC SQL WHENEVER at line {site.line} reached "
+                    f"the splicer without a validated span -- the refusal "
+                    f"gate (NESTED_EXEC) should have refused it"
+                )
+            start, end = site.span
+        else:
+            if site.unspliceable_reason:
+                raise ValueError(
+                    f"EXEC SQL WHENEVER at line {site.line} reached the "
+                    f"splicer although it {site.unspliceable_reason} -- the "
+                    f"refusal gate (UNSPLICEABLE_EXEC) should have refused it"
+                )
+            start, end = statement_span(site.statement, boundaries, last_line, lines)
+        replacement = ["           CONTINUE"]
+        if _span_ends_sentence(lines, start, end):
+            replacement = replacement[:-1] + [replacement[-1] + "."]
+        spans.append((start, end, replacement))
+
     # Terminator neutralization: replace the STOP RUN/GOBACK statement's
     # own span, exactly like any other boundary replacement above.
     seen_terminator_ids: set[int] = set()
     for plan in terminator_plans:
         site = plan.site
-        if id(site.statement) in seen_terminator_ids:
+        if plan.is_cics or id(site.statement) in seen_terminator_ids:
             continue
         seen_terminator_ids.add(id(site.statement))
-        replacement = build_terminator_neutralization(plan.exit_kind)
+        replacement = build_terminator_neutralization(plan.exit_kind, plan.return_code)
         if site.nested:
             if site.span is None:
                 raise ValueError(

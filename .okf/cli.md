@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -239,10 +239,17 @@ values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
 
 See `docs/2026-09-15-init-command-design.md`.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE] [--force]`
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
+
+**Refuses an existing output file without `--force` (2026-10-16, issue
+#201)**, checked right after the `--fill` dispatch and before any parsing,
+explicit `-o` included -- the same contract as `init`, which passes
+`--force` through to the `generate` it runs. Before, the default path (the
+program's existing sibling `PROG.cut`) was silently replaced by a bare
+scaffold.
 
 **Default unit is the scenario (2026-10-14).** With neither `--with-data`
 nor `--per-paragraph`, `generate` takes the `--with-data` path (one TESTCASE
@@ -269,7 +276,10 @@ PERFORM is the case's own, skipping any PERFORM inside a `MOCK ... END-MOCK`
 body; `directive_snippet` declines the sites the scaffold itself skips (a
 nested site with no span, an unspliceable top-level site). Every problem
 `--fill` cannot fix (a flow-mock target that does not exist, an `UNMOCKED_*`
-reason with no mechanical fix) is printed and exits 1, so `--fill` exiting 0
+reason with no mechanical fix, a `BEFORE-EACH`/`BEFORE-ALL` hook PERFORM's
+`UNMOCKED_*` refusal -- `--fill` inserts into TESTCASEs only, and only the
+per-case reason lines it read from `unmocked_reasons` count as handled,
+issue #208) is printed and exits 1, so `--fill` exiting 0
 means the next `lint` exits 0. Reported `file:line` is where each block
 landed in the written file. Every existing directive, `EXPECT`/`VERIFY`, and
 comment is left byte-for-byte untouched — insertion happens at known line
@@ -364,6 +374,22 @@ Flow (`_cmd_generate`):
     `(category, key)` set disagreed with `mock_surface`'s,
     `_warn_on_key_mismatch` already printed a loud stderr warning during
     step 10 — see `dsl.md`.
+12. When a bundle drove the scaffold (`--with-data`, `--scenarios`, and
+    plain `generate`, which builds a happy-path bundle by default),
+    `_refuse_unusable_scaffold` runs `run_static_checks` on the file just
+    written. Any refusal that is not `UNMOCKED_*` (e.g.
+    `UNSUPPORTED_TERMINATOR_LAYOUT`, `UNSUPPORTED_NESTED_MOCK_TARGET`) is
+    printed as `mockymock generate: .cut line N: TESTCASE "..." refused
+    (<code>): <message>` (or the program-level `refused (<code>)` line),
+    followed by a stderr note that the file was written but `lint` refuses
+    it, and generate exits 1 (#231 — it used to exit 0 on a case its own
+    lint rejects). The `.cut` is still written. `UNMOCKED_*` refusals are
+    left alone, since a MOCK block fixes those -- except one with no
+    `suggested_fix`: `check_test_case` gives none (and says why in the
+    message) when the site cannot be spliced where it stands (nested, no
+    span), because the MOCK would be refused in turn (#258). `--per-paragraph`
+    (`bundle=None`) is exempt: one case per paragraph is a starting point
+    to prune, and some of those cases are expected to be refused.
 
 `_report_unsupported_boundaries` is the only non-trivial logic in this module:
 it walks `surface.boundary_sites` and names every site that stays unmockable —
@@ -374,8 +400,9 @@ pure-procedure-form SORT [never even recorded as a site], and RELEASE/
 RETURN all have a category and never appear here, see `analysis.md`) or
 `site.nested and site.span is
 None` (a nested site the splicer couldn't isolate, printed with
-`site.unspliceable_reason`). This list is purely informational at `generate`
-time — the scaffold is emitted regardless — but it documents exactly which
+`site.unspliceable_reason`). This list covers the program, not one case, so it is informational —
+the scaffold is emitted regardless (step 12 is what judges the cases
+generate wrote itself) — but it documents exactly which
 test cases `run` will later refuse if a case's PERFORM reaches one of these
 sites. Comment in the source explicitly frames this as "so the scaffold is
 never mistaken for complete coverage of the program's outputs."
@@ -523,7 +550,12 @@ Flags beyond the pipeline inputs:
   on `invupdt`/`ordrproc`/`raterte`. The PICTURE comes from the program's
   own data items (subscripts stripped) and, for a synthesized `UT-CAP-`
   target, from its capture source; anything without one (alphanumeric,
-  numeric-edited, `P`-scaled, unresolved) keeps the old text-shape rule.
+  numeric-edited, unresolved) keeps the old text-shape rule. A group item
+  renders as alphanumeric and a stub on a `P`-scaled item is skipped
+  (issue #194). The file is read without newline translation and written
+  with `newline=""`, `rewrite_cut_text` joining with the file's own
+  newline, so a CRLF `.cut` stays CRLF (issue #199, the same fix
+  `generate --fill` already had).
 - `--keep-sandbox` — never delete the sandbox directory; its path is
   printed at the start of the run for inspection.
 - `--verbose` — on compile failure, print the path to the instrumented
@@ -598,8 +630,11 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     run), then exit 1 if any fired. See [analysis](analysis.md). Every
     refusal exit in `_cmd_run` (this step and every earlier one) calls
     `_write_failure_reports(args, "run", <suite name or "">, <joined
-    problems>)` before returning 1 — see the `--junit-xml`/`--json-report`
-    bullets above.
+    problems>, cut_suite=..., cut_file=..., program_file=...)` before
+    returning 1 — see the `--junit-xml`/`--json-report` bullets above. The
+    three keyword arguments (issue #204, 2026-10-16; also passed on the
+    compile-failure exit) keep the JSON report's `cutFile`, `programFile`
+    and `suite.line` populated, and list the suite's cases as `not_run`.
 11. `collect_boundaries(result.ast)`, `TallyRegistry(suite)`,
     `find_terminator_plans(...)`, `find_flow_mock_plans(...)`,
     `splice_program(lines, boundaries, surface, suite, registry,
@@ -624,6 +659,14 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     procedure lines go immediately after `PROCEDURE DIVISION` (matched via
     `line.strip().upper().startswith(...)`, first occurrence only — both
     insertions are one-shot via `inserted_ws`/`inserted_proc` flags).
+    When the first code line after the PROCEDURE DIVISION header is a
+    statement rather than a paragraph/SECTION header (an unnamed main
+    line), `_starts_unnamed_code` has a `UT-ORIGINAL-ENTRY.` header
+    inserted before it, so that code is a paragraph nothing performs
+    instead of more sentences of the last `UT-TESTCASE-<n>` paragraph
+    (issue #264: it ran after the last case and its STOP RUN hid
+    SUMMARY). A header line with no period (a `USING` list running on)
+    gets no synthetic header.
 14. Write the instrumented source into a fresh `sandbox_dir(root=docker_toolchain.WORK_ROOT)`
     as `<program-stem>.cbl` (LF newlines forced via `newline="\n"`).
 15. `docker_toolchain.compile_source(...)` — on failure, print stderr,
@@ -635,8 +678,9 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     code is translated into `crash_detail` evidence for the formatters:
     exit 124 (TIMEOUT_EXIT_CODE) -> `"binary timed out (exit 124); see
     stderr below"`; any other nonzero exit -> `"binary exited with code
-    <n>"`; exit 0 -> `None` (the formatters then fall back to the STOP RUN
-    hypothesis for crashed cases — a reached STOP RUN exits 0).
+    <n>"`; exit 0 with a crashed case -> `CLEAN_EXIT_CRASH_DETAIL` (the
+    STOP RUN hypothesis plus a GO TO out of the PERFORMed range, issue
+    #238); exit 0 otherwise -> `None`.
     `format_console(suite_result, crash_detail=...)` is printed always;
     then, if `executed.stderr` is non-empty, it is printed under a
     `mockymock run: binary stderr:` header — this is how run_binary's
@@ -650,7 +694,9 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     reason per skip) is printed. See [report](report.md).
 18. Exit 0 only if `suite_result.all_passed` **and** `executed.exit_code
     == 0` — a nonzero binary exit after the SUMMARY line still fails the
-    run. **Unaffected by `--record-expectations`** — recording outcomes
+    run. When every case passed but no SUMMARY line was printed
+    (`tests_run == 0`), `run` says so before exiting 1, rather than
+    failing silently under an all-PASS report (issue #264). **Unaffected by `--record-expectations`** — recording outcomes
     never change this; see the design doc's "Best-effort, cumulative
     reporting" section for why.
 
@@ -730,7 +776,12 @@ captured MI transcripts and end-to-end tested against a live container
   DISPLAY item's sign is overpunched (`-123` = `12s`, was shown `12`) or
   separate (`SIGN ... SEPARATE`); COMP-5 is host (little-endian) order,
   told apart from big-endian COMP by `COB_FLAG_BINARY_SWAP` (was `-257`
-  for `-2`). The table keeps the declaration's own spelling, so
+  for `-2`). Issue #207: a numeric-edited item (type 0x24) shows its
+  storage as text (`-  5.50`), like alphanumeric; COMP-1/COMP-2 (0x13/
+  0x14, and a `b_NN`-only one through `BufferLayout`) unpack as host-order
+  IEEE 754, a single at its shortest round-tripping precision (`0.1`, not
+  `0.100000001`); any other type code shows `<unsupported type 0xNN>`
+  instead of gdb's whole `cob_field` struct with its pointers. The table keeps the declaration's own spelling, so
   `evaluate` (hover/watch) falls back to a case-insensitive match. `_unquote_c_string` shares
   `gdb_session.py`'s `decode_c_escape` (see F15 above).
 - `call_stack.py` — synthesizes the COBOL paragraph/section call stack
@@ -879,7 +930,12 @@ incremented and DISPLAYed is a missing assertion first -- seeding alone
 would not kill it -- so it gets no hint and `mockymock report` files it as
 `missing-assertion`; it used to be labelled untestable. xref is new in
 cobol-parser 1.10 (floor 1.7.7): without it, or on any xref error, the
-field counts as observed and the hint stays. The verdict and score
+field counts as observed and the hint stays. The statement must also run
+at most once per case (`_may_run_more_than_once`, issue #203): an
+ADD/SUBTRACT in a paragraph a looping PERFORM (UNTIL/VARYING/TIMES)
+reaches, or in a looping inline PERFORM body (`analysis/loops.py`), gets
+no hint -- a counter bumped n times ends at n while the swap alternates
+1, 0, 1, ..., so a plain EXPECT kills it. The verdict and score
 are unchanged -- seeding the field is how the author kills it -- but the
 console prints a `!` line under the diff plus a count, `--json-report`
 carries a per-mutant `hint`, and `mockymock report` files it as
@@ -909,7 +965,9 @@ score identically, carry `ran: false` (and `totals.not_compiled`) in the
 JSON, and print as `uncovered`. `--json-report` writes the full
 machine-readable outcome (with `stillbornByReason` totals and a per-mutant
 `stillbornReason`); `--fail-under` exits 1 below the given
-percentage. Every baseline/mutant run's `StaticCheckResult.notes` (a
+percentage, compared exactly (`MutationOutcome.score_below`, as fractions:
+`score * 100` would put 29/50 at 57.99999999999999, printed `58.0%` yet
+under `--fail-under 58`). Every baseline/mutant run's `StaticCheckResult.notes` (a
 paragraph-scoped `PARSE_WARNING`/`UNRESOLVED_COPYBOOK` waived rather than
 refused — [analysis](analysis.md)) is collected (union, first-seen order,
 deduped) and printed as `mockymock mutate: <note>` lines before the
@@ -917,7 +975,10 @@ outcome — this path compiles doctored source (a waived COPY's line
 commented out) exactly like `run` does, so it keeps the same
 never-silent guarantee. Boundary statements (mocked) and terminators (rewritten by
 terminator plans) are never mutated — mutating them would test the
-harness, not the program.
+harness, not the program. For a multi-line `EXEC ... END-EXEC` that covers
+every line of the block, not just the `EXEC` line (`generate_mutants`
+tracks the open block): an SQL `WHEN BALANCE > 1000` or a CICS
+`SET(ADDRESS OF X)` inside it would otherwise be an unkillable survivor.
 
 ## `mockymock lint <program> --cut PATH [--copybook-path DIR ...]`
 
@@ -939,6 +1000,18 @@ They print even when a refusal stopped `run_static_checks` before it parsed
 the `.cut` (`_cmd_lint` re-parses it quietly), since the check is
 `.cut`-only. The `.cut line N` wording is what lets the extension place the
 diagnostic on the TESTCASE header.
+
+**Unknown data-names (issue #204, 2026-10-16).** `run_static_checks` step
+7b (`analysis.cut_names.check_cut_data_names`, cumulative with step 8)
+refuses `UNKNOWN_DATA_NAME` at the `.cut` line of every setup/hook MOVE
+target, EXPECT data-name and non-`UT-CAP-` `CAPTURE ... INTO` target, and
+every bare-word MOVE/EXPECT value (`TO BE Y`), that appears nowhere in the
+transformed program text (literals and `*>` comments stripped; generated
+SQLCA and `EXEC SQL INCLUDE` members count), is not a `UT-` harness item,
+DFHEIBLK/DLIDIB field, special register or figurative constant. Loose on
+purpose: it only catches names cobc would certainly reject.
+`MockTestCase.setup_move_lines` / `MockDirective.capture_lines` carry the
+line numbers the model did not record before.
 
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 
@@ -963,7 +1036,11 @@ would scaffold for the site (quoted where the DSL requires it, the
 shortest-unique prefix for SQL/CICS/DLI, `null` when the scaffold skips the
 site), so a consumer inserts what the parser accepts instead of re-deriving
 the quoting rules. `_collect_boundaries()` (`cli/main.py`) parses `program`
-directly (with `--copybook-path` expansion if given) -- it does not go
+directly, expanding COPY through the same copybook lookup lint/run use
+(`--copybook-path`, else the config file's `copybook_path`, plus the
+program's `copybooks/` folder via `_apply_config_to_args`; issue #200 --
+before, only an explicit flag expanded, so a site inside a copybook
+vanished from the list with exit 0) -- it does not go
 through `run_static_checks`, since it needs no `.cut`-specific analysis at
 all. Requires both `--json` and `program` (checked before any parsing);
 requesting it without either is a plain usage error, not a refusal. See
@@ -1288,7 +1365,7 @@ instead; `tests/unit/test_cli_skills.py` pins the help text against
 building the parser doesn't import the module. Any future "cleanup" that
 restores `choices=` also restores the import.
 
-**Every `.cbl`/`.cut` read goes through `_lines.read_utf8_source` (2026-09-30, bug hunt round 12).** A non-UTF-8 source (cp1252 etc.) raises `SourceEncodingError` (a `ValueError` naming the file, the byte offset and an `iconv` fix) instead of a `UnicodeDecodeError` traceback; `run_static_checks` reports it as a problem and `main()` prints it in each command's own error convention (JSON for `collect --json`, stderr otherwise). Policy is refuse, never guess a code page: the spliced copy is compiled as UTF-8, so a guessed cp1252 `PIC X` literal would silently change length. `keep_newlines=True` (used by `generate --fill`, which writes back with `newline=""`) skips universal-newline translation so a CRLF `.cut` stays CRLF. New file reads should use it, not `Path.read_text()`.
+**Every `.cbl`/`.cut` read goes through `_lines.read_utf8_source` (2026-09-30, bug hunt round 12).** A non-UTF-8 source (cp1252 etc.) raises `SourceEncodingError` (a `ValueError` naming the file, the byte offset and an `iconv` fix) instead of a `UnicodeDecodeError` traceback; `run_static_checks` reports it as a problem and `main()` prints it in each command's own error convention (JSON for `collect --json`, stderr otherwise). Policy is refuse, never guess a code page: the spliced copy is compiled as UTF-8, so a guessed cp1252 `PIC X` literal would silently change length. `keep_newlines=True` (used by `generate --fill`, which writes back with `newline=""`) skips universal-newline translation so a CRLF `.cut` stays CRLF. A leading UTF-8 BOM is dropped (`utf-8-sig`) except under `keep_newlines`, whose rewriting callers keep it to round-trip it; `parse_cut` ignores a leading BOM itself (issue #198, 2026-10-16). New file reads should use it, not `Path.read_text()`.
 
 **`transform_data_division_exec` is called twice, and the first call's return value is intentionally thrown away** (`_cmd_run`, step 9 vs 11). The first pass exists purely to surface `EXEC SQL INCLUDE SQLCA` refusal reasons *before* any splicing happens; running the real transform that early would shift line numbers/spans that `splice_program` and the boundary/nested-site analysis depend on. Any future edit that tries to "simplify" this into one call will silently break splice-target alignment.
 

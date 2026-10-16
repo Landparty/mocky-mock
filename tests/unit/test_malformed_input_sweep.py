@@ -48,7 +48,8 @@ MALFORMED_CUT_INPUTS = [
     pytest.param("", id="empty"),
     pytest.param("   \n\n\t\n", id="whitespace-only"),
     pytest.param("\x00" * 500, id="null-bytes"),
-    pytest.param('﻿TESTSUITE "x"\n', id="bom-prefixed"),
+    # A BOM alone is no longer malformed (issue #198); the rest still is.
+    pytest.param('﻿TESTSUITE "x"\nNOT-A-DIRECTIVE\n', id="bom-prefixed"),
     pytest.param('TESTSUITE "x"' * 100, id="one-giant-line-no-newlines"),
     pytest.param(
         'TESTSUITE "x"\n' + ('MOCK CALL "X"\n' * 500),

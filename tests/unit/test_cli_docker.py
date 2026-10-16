@@ -298,6 +298,23 @@ def test_run_zero_exit_crash_keeps_stop_run_hypothesis(tmp_path, capsys):
     assert "STOP RUN?" in junit_path.read_text()
 
 
+def test_run_zero_exit_crash_gives_a_reason_on_console_and_in_json(tmp_path, capsys):
+    """Issue #238: a GO TO out of the PERFORMed range runs off the end of the
+    program and exits 0 -- the [CRASH] line and crashDetail must say why
+    instead of being blank/null."""
+    truncated = (
+        "__MOCKYMOCK__ TESTSUITE: ORDRPROC\n"
+        "__MOCKYMOCK__ CASE 001 START: calls discrate\n"
+    )
+    json_path = tmp_path / "report.json"
+    executed = ExecutionResult(exit_code=0, stdout=truncated, stderr="")
+    assert _run_cli(tmp_path, executed, ["--json-report", str(json_path)]) == 1
+    out = capsys.readouterr().out
+    assert "control never returned to the test driver" in out
+    (case,) = json.loads(json_path.read_text())["cases"][:1]
+    assert "GO TO left the PERFORMed range" in case["crashDetail"]
+
+
 def test_run_reports_cut_parse_error_cleanly(tmp_path, capsys):
     """A .cut syntax error must print the parser's line-numbered message and
     exit 1 -- not a raw CutParseError traceback (finding 3.4)."""
@@ -1065,3 +1082,23 @@ def test_run_passes_timeout_flag_through_to_run_binary(tmp_path):
         exit_code = main(["run", str(program), "--cut", str(cut), "--timeout", "5"])
     assert exit_code == 0
     assert run_binary.call_args.kwargs["timeout_seconds"] == 5
+
+
+def test_run_explains_an_all_pass_run_that_never_printed_summary(tmp_path, capsys):
+    """Issue #264: every case printed a clean END but the binary stopped
+    before its SUMMARY line; the run exits 1 and must say why."""
+    executed = ExecutionResult(
+        exit_code=0,
+        stdout=CLEAN_STDOUT.rsplit("__MOCKYMOCK__ SUMMARY", 1)[0],
+        stderr="",
+    )
+    assert _run_cli(tmp_path, executed) == 1
+    out = capsys.readouterr().out
+    assert "[PASS] calls discrate" in out
+    assert "without printing its SUMMARY line" in out
+
+
+def test_run_with_summary_does_not_explain_a_missing_summary(tmp_path, capsys):
+    executed = ExecutionResult(exit_code=0, stdout=CLEAN_STDOUT, stderr="")
+    assert _run_cli(tmp_path, executed) == 0
+    assert "SUMMARY line" not in capsys.readouterr().out

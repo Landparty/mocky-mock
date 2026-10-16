@@ -231,8 +231,11 @@ What these cases are for -- assert on what a paragraph case *cannot* see:
 Mechanics worth knowing:
 
 - The `PERFORM` target is `entry_points[0]` from `program-flow`. A
-  `GOBACK`/`STOP RUN` reached through a plain `PERFORM` chain from there
-  is neutralized, not fatal -- that's exactly what makes an end-to-end
+  `GOBACK`/`STOP RUN`/`EXIT PROGRAM` reached through a plain `PERFORM`
+  chain from there is neutralized, not fatal; so is a mocked `EXEC CICS
+  RETURN`/`XCTL`/`ABEND`, which runs its mock body and then ends the
+  case (with `RESP(field)`, only while the field is still 0 -- set it in
+  the mock to simulate a failed command) -- that's exactly what makes an end-to-end
   case possible at all. A layout mockymock can't neutralize soundly
   refuses with `UNSUPPORTED_TERMINATOR_LAYOUT` instead of guessing;
   `mockymock explain UNSUPPORTED_TERMINATOR_LAYOUT` has the detail, and

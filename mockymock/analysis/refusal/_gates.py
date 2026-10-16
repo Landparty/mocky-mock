@@ -66,6 +66,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     normalize_exec_text,
 )
+from mockymock.analysis.sql_whenever import whenever_can_fire
 from mockymock.dsl.generator import directive_snippet
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
@@ -86,6 +87,7 @@ from ._reachability import (
     _reachable_paragraphs,
     _source_ordered_paragraphs,
     _walk_fallthrough_from,
+    duplicated_paragraph_names,
 )
 from ._types import (
     _UNANNOTATED,
@@ -310,6 +312,33 @@ def _paragraph_owning_line(
         if _has_unaccounted_label(normalized_lines, start + 1, end):
             return None
     return owner
+
+
+def check_source_format(raw_source: str) -> list[RefusalReason]:
+    """UNSUPPORTED_SOURCE_FORMAT when `raw_source` is free-format COBOL.
+
+    cobol-parser decides fixed vs. free itself
+    (`detect_fixed_format`), so a free-format program parses correctly --
+    but every text the splicer edits and cobc compiles is cut down to
+    columns 8-72 by `normalize_fixed_format`, which chops the first seven
+    characters off each free-format line. The AST's line/column facts
+    then describe text that no longer exists, and the run fails in cobc on
+    garbage (or with a false layout refusal). Refuse up front, using the
+    same decision cobol-parser parsed with (issue #210)."""
+    from cobolparser.preprocess.source_format import detect_fixed_format
+
+    if detect_fixed_format(raw_source):
+        return []
+    return [
+        RefusalReason(
+            code="UNSUPPORTED_SOURCE_FORMAT",
+            message=(
+                "the program is free-format COBOL; mockymock only splices "
+                "and compiles fixed-format source (sequence area in "
+                "columns 1-6, indicator in column 7, code in columns 8-72)"
+            ),
+        )
+    ]
 
 
 def check_whole_program(parse_result) -> list[RefusalReason]:
@@ -687,6 +716,22 @@ def check_nested_exec(surface: MockSurface) -> list[RefusalReason]:
         )
         for site in surface.exec_sites()
         if not site.nested and site.unspliceable_reason
+    )
+    # A WHENEVER whose action cannot be read cannot be emulated, and an
+    # EXEC that is not emulated cannot stay (cobc can't compile it) --
+    # dropping it would silently run different control flow (issue #195).
+    reasons.extend(
+        RefusalReason(
+            code="UNSUPPORTED_SQL_WHENEVER",
+            message=(
+                f"EXEC SQL WHENEVER at line {site.line} (paragraph "
+                f"'{site.paragraph_name}'): {site.whenever.problem} -- "
+                f"mockymock emulates the precompiler's checks only for "
+                f"those forms"
+            ),
+        )
+        for site in surface.whenever_sites
+        if site.whenever is not None and site.whenever.problem
     )
     return reasons
 
@@ -1318,6 +1363,9 @@ def check_test_case(
         case.perform_thru,
         skip_traversal=mocked_flow_names,
         neutralized_goto=neutralized_goto,
+        # A WHENEVER handler is reached only when this case's mocks can set
+        # SQLCODE so that its check fires (issue #244).
+        follow_whenever=whenever_can_fire(program, case.mocks),
     )
 
     if case.perform_target not in reachable:
@@ -1333,6 +1381,28 @@ def check_test_case(
         return reasons
 
     reasons.extend(thru_reasons)
+
+    ambiguous = sorted(reachable & duplicated_paragraph_names(program))
+    if ambiguous:
+        # Reachability, boundary-site matching and the splice plans all key
+        # paragraphs by bare name: for a name defined in two SECTIONs they
+        # walk one body and match sites in both, so a boundary only the
+        # other body reaches ran unmocked after a clean lint (issue #284).
+        # Fail closed until name resolution is section-aware.
+        reasons.append(
+            RefusalReason(
+                code="AMBIGUOUS_PARAGRAPH",
+                message=(
+                    f"paragraph name(s) {', '.join(repr(n) for n in ambiguous)} "
+                    f"reachable from '{case.perform_target}' are defined in "
+                    f"more than one SECTION -- mockymock resolves paragraphs "
+                    f"by name alone, so it cannot tell which definition runs "
+                    f"and cannot check this case's boundaries; rename the "
+                    f"paragraphs so each name is unique in the program"
+                ),
+            )
+        )
+        return reasons
 
     matched_directives: set[int] = set()
 
@@ -1491,6 +1561,14 @@ def check_test_case(
 
         if not matches:
             code = _UNMOCKED_CODES.get(site.category, _UNMOCKED_FILE_OP_CODE)
+            # A site that cannot be spliced where it stands is not fixed by
+            # adding a MOCK -- that MOCK would be refused in turn -- so it
+            # gets no suggested fix, and says why.
+            unspliceable = (
+                site.unspliceable_reason or _UNANNOTATED
+                if site.nested and site.span is None
+                else None
+            )
             reasons.append(
                 RefusalReason(
                     code=code,
@@ -1505,8 +1583,18 @@ def check_test_case(
                         )
                         + f") is reachable from '{case.perform_target}' but "
                         f"no MOCK directive in this test case matches it"
+                        + (
+                            f" -- and a MOCK could not replace it either "
+                            f"({unspliceable})"
+                            if unspliceable is not None
+                            else ""
+                        )
                     ),
-                    suggested_fix=directive_snippet(site, surface),
+                    suggested_fix=(
+                        directive_snippet(site, surface)
+                        if unspliceable is None
+                        else None
+                    ),
                 )
             )
         elif len(matches) > 1:
@@ -1684,6 +1772,27 @@ def check_test_case(
                         f"in the mock body of a boundary the test does "
                         f"reach, or make the program take it as a CALL/file "
                         f"input"
+                    ),
+                )
+            )
+            continue
+        if (
+            directive.category is MockCategory.SQL
+            and surface.whenever_sites
+            and _exec_match_form(directive.key).startswith("WHENEVER")
+        ):
+            # Before issue #195 lint asked for exactly this mock; say why
+            # it now goes rather than send the author after reachability.
+            reasons.append(
+                RefusalReason(
+                    code="UNMATCHED_MOCK",
+                    message=(
+                        f"MOCK {directive.describe()} targets an EXEC SQL "
+                        f"WHENEVER, which is a precompiler declaration, not "
+                        f"a boundary: mockymock now emulates it (the "
+                        f"IF SQLCODE ... GO TO check after every later SQL "
+                        f"statement) and nothing mocks it. Drop this MOCK "
+                        f"directive and its VERIFY"
                     ),
                 )
             )

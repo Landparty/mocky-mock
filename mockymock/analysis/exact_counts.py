@@ -12,10 +12,16 @@ from a GO TO target. A site behind `IF SQLCODE NOT = 0` (LOANPMT's ROLLBACK), or
 in a paragraph PERFORMed only from inside `IF RECORD-OK` (DEPTMQP's
 MQPUT), does not.
 
-Looping PERFORMs (UNTIL / VARYING / TIMES) count as top-level edges: how
-many times a loop runs is what the bundle's row data already models
-(`analysis.loops`), and is left to it. An early exit (`IF ... GOBACK`, or
-a GO TO the splicer turns into EXIT PARAGRAPH) is not modeled either: the
+A site also has to run exactly ONCE per pass (issue #290): the bundle
+gives every site `call_count` 1 however often it really runs. So a looping
+PERFORM (UNTIL / VARYING / TIMES) is not a straight edge -- its target, and
+everything an inline loop's body holds, is out of scope -- and neither is a
+paragraph PERFORMed by more than one straight statement (`PERFORM CALL-B`
+twice in a row). READ/RETURN are the exception: their counts come from the
+bundle's row data (`analysis.loops` models how many times a read loop runs),
+so a caller checking them asks for `loops_exact=True`, the older scope that
+treats looping PERFORMs as straight edges. An early exit (`IF ... GOBACK`,
+or a GO TO the splicer turns into EXIT PARAGRAPH) is not modeled either: the
 statements after it are still treated as running.
 """
 
@@ -28,18 +34,29 @@ from cobolparser.models.statements.control import (
     PerformStatement,
     StopStatement,
 )
-from cobolparser.models.statements.misc import GobackStatement
+from cobolparser.models.statements.misc import ExitStatement, GobackStatement
 
-from mockymock.analysis.mock_surface import _all_paragraphs, _nested_statement_lists
+from mockymock.analysis.mock_surface import (
+    _all_paragraphs,
+    _nested_statement_lists,
+    is_cics_terminator,
+)
 
 
-def _unconditional(statements: list):
+def _unconditional(statements: list, loops_exact: bool = True):
     """Statements in `statements` that run whenever the list does: the
-    list itself and, recursively, every inline PERFORM body in it."""
+    list itself and, recursively, every inline PERFORM body in it -- only
+    the non-looping ones unless `loops_exact`."""
     for statement in statements:
         yield statement
-        if isinstance(statement, PerformStatement):
-            yield from _unconditional(statement.inline_statements or [])
+        if isinstance(statement, PerformStatement) and (
+            loops_exact or not _is_loop(statement)
+        ):
+            yield from _unconditional(statement.inline_statements or [], loops_exact)
+
+
+def _is_loop(statement: PerformStatement) -> bool:
+    return getattr(statement, "perform_type", "SIMPLE") != "SIMPLE"
 
 
 def _conditional_performs(statements: list):
@@ -70,6 +87,10 @@ def _branch_performs(statements: list):
 def _stops_run(statement) -> bool:
     if isinstance(statement, GobackStatement):
         return True
+    if isinstance(statement, ExitStatement) and statement.exit_type == "PROGRAM":
+        return True
+    if is_cics_terminator(statement):
+        return True
     return isinstance(statement, StopStatement) and statement.stop_type == "RUN"
 
 
@@ -85,6 +106,7 @@ def exact_count_scope(
     entry: str,
     reachable: set[str],
     neutralized_goto: frozenset[str] = frozenset(),
+    loops_exact: bool = False,
 ) -> tuple[set[str], set[int]] | None:
     """(paragraph/section names, ids of statements) whose boundary sites
     run on every `PERFORM entry` -- see the module docstring -- or None
@@ -136,12 +158,29 @@ def exact_count_scope(
             continue
         targets: list[str] = []
         others: set[str] = set()
-        for statement in _unconditional(paragraph.statements):
+        for statement in _unconditional(paragraph.statements, loops_exact):
             if isinstance(statement, PerformStatement) and statement.target_paragraph:
                 names = members(statement.target_paragraph, statement.thru_paragraph)
                 if names is None:
                     return None
-                targets.extend(names)
+                if loops_exact or not _is_loop(statement):
+                    targets.extend(names)
+                else:
+                    others.update(names)
+        if not loops_exact:
+            # A PERFORM nested in an inline loop's body runs once per pass
+            # of the loop: whatever it reaches is not exact either.
+            for statement in _unconditional(paragraph.statements):
+                if isinstance(statement, PerformStatement) and _is_loop(statement):
+                    for inner in _walk(statement.inline_statements or []):
+                        if (
+                            isinstance(inner, PerformStatement)
+                            and inner.target_paragraph
+                        ):
+                            names = members(
+                                inner.target_paragraph, inner.thru_paragraph
+                            )
+                            others.update(names or [inner.target_paragraph])
         for statement in _walk(paragraph.statements):
             if isinstance(statement, PerformStatement) and statement.thru_paragraph:
                 range_ends.add(statement.thru_paragraph)
@@ -168,6 +207,14 @@ def exact_count_scope(
     # nnnn-EXIT` idiom), where the range's own return stops it.
     tainted: set[str] = set()
     stack = [target for targets in other.values() for target in targets]
+    if not loops_exact:
+        # Reached by two straight PERFORMs, a paragraph runs twice a pass.
+        seen: set[str] = set()
+        for targets in straight.values():
+            for target in targets:
+                if target in seen:
+                    stack.append(target)
+                seen.add(target)
     for target in go_to - range_ends:
         reached, _ = _reachable_paragraphs(
             program, target, neutralized_goto=neutralized_goto
@@ -195,7 +242,7 @@ def exact_count_scope(
         id(statement)
         for name in exact
         if name in by_name
-        for statement in _unconditional(by_name[name].statements)
+        for statement in _unconditional(by_name[name].statements, loops_exact)
     }
     return exact, statement_ids
 

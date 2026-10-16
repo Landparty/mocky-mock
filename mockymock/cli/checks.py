@@ -100,25 +100,61 @@ def extra_working_storage(checked: StaticCheckResult) -> list[str] | None:
     """
     from mockymock.splicer import cics_eib
     from mockymock.splicer.captures import capture_working_storage_lines
-    from mockymock.splicer.linkage import extra_working_storage_lines
+    from mockymock.splicer.linkage import (
+        extra_working_storage_lines,
+        rebinding_working_storage_lines,
+    )
+    from mockymock.splicer.reset import index_working_storage_lines
 
     lines: list[str] = []
     if checked.cics_eib is not None:
         lines.extend(cics_eib.working_storage_lines(checked.cics_eib))
     lines.extend(extra_working_storage_lines(checked.linkage_address_of))
+    if checked.linkage is not None:
+        lines.extend(rebinding_working_storage_lines(checked.linkage.rebindings))
     lines.extend(capture_working_storage_lines(checked.captures))
+    lines.extend(index_working_storage_lines(_index_names(checked)))
     return lines or None
 
 
 def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
-    """Reset lines the synthesized capture targets need between test cases.
-    Kept beside `extra_working_storage` so the declaration and the reset can
+    """Reset lines the synthesized capture targets need between test cases,
+    and the save/restore of every INDEXED BY index (issue #189). Kept
+    beside `extra_working_storage` so the declaration and the reset can
     never be added in one pipeline and forgotten in another -- the suite
     compiles to ONE binary, so a capture left unreset would let a case that
     never reached its CALL assert against the previous case's value."""
     from mockymock.splicer.captures import capture_reset_lines
+    from mockymock.splicer.reset import index_reset_lines
 
-    return capture_reset_lines(checked.captures)
+    return capture_reset_lines(checked.captures) + index_reset_lines(
+        _index_names(checked)
+    )
+
+
+def _synthesized_groups(cics_eib, transformed: list[str]) -> list[str]:
+    """The groups mockymock splices in after parsing that this program gets:
+    the CICS EIB and DL/I DIB blocks (`splicer.cics_eib`) and the generated
+    SQLCA (`splicer.sqlca`, present in the transformed text). The
+    BEFORE-ALL snapshot must cover them (issue #225)."""
+    from mockymock.splicer.sqlca import sqlca_reset_lines
+
+    groups: list[str] = []
+    if cics_eib is not None and cics_eib.referenced_names:
+        groups.append("DFHEIBLK")
+    if cics_eib is not None and cics_eib.dib_names:
+        groups.append("DLIDIB")
+    if sqlca_reset_lines(transformed):
+        groups.append("SQLCA")
+    return groups
+
+
+def _index_names(checked: StaticCheckResult) -> list[str]:
+    from mockymock.splicer.reset import index_names
+
+    if checked.parse_result is None or checked.parse_result.ast is None:
+        return []
+    return index_names(checked.parse_result.ast)
 
 
 NO_ASSERTION = "NO_ASSERTION"
@@ -212,9 +248,14 @@ def run_static_checks(
     )
 
     from mockymock.analysis.cics_eib import cics_eib_plan
+    from mockymock.analysis.cut_names import check_cut_data_names
     from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.flow_targets import normalize_flow_targets
-    from mockymock.analysis.linkage import address_of_sites, linkage_plan
+    from mockymock.analysis.linkage import (
+        address_of_sites,
+        linkage_plan,
+        rebindable_sites,
+    )
     from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
     from mockymock.analysis.refusal import (
         CICS_MACRO_PLACEHOLDER,
@@ -222,6 +263,7 @@ def run_static_checks(
         check_expansion_warnings,
         check_linkage_layout,
         check_nested_exec,
+        check_source_format,
         check_terminator_layout,
         check_test_case,
         check_unresolved_copybooks_scoped,
@@ -234,7 +276,11 @@ def run_static_checks(
     from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.splicer.captures import plan_captures
     from mockymock.splicer.cics_resp import expand_dfhresp, expansion_note
-    from mockymock.splicer.linkage import neutralize, redirect_address_of
+    from mockymock.splicer.linkage import (
+        mark_based,
+        neutralize,
+        redirect_address_of,
+    )
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
     from mockymock.splicer.sqlca import transform_data_division_exec
     from mockymock.splicer.stub_writer import comment_and_replace, replace_columns
@@ -247,6 +293,7 @@ def run_static_checks(
     except SourceEncodingError as exc:
         out.problems.append(str(exc))
         return out
+    program_source = raw_source
     if copybook_paths:
         # cobolparser genuinely raises for realistic inputs (a copybook
         # that COPYs itself, an oversized/deeply-nested chain, a
@@ -280,6 +327,17 @@ def run_static_checks(
     parse_result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(parse_result.ast)
     out.parse_result = parse_result
+    # Free-format source parses, but is column-chopped by everything below
+    # (issue #210). Checked once the parse succeeded, so unparseable text
+    # still reports PARSE_ERROR with its detail lines rather than a
+    # format guess; decided on the program's own text, before expansion.
+    if parse_result.success:
+        format_reasons = check_source_format(program_source)
+        if format_reasons:
+            out.problems.extend(
+                f"refused ({r.code}): {r.message}" for r in format_reasons
+            )
+            return out
     whole_program_reasons, scoped_warnings = check_whole_program_scoped(
         parse_result, raw_source
     )
@@ -313,6 +371,9 @@ def run_static_checks(
     except SourceEncodingError as exc:
         out.problems.append(str(exc))
         return out
+    # The unselected cases still count towards whether a BEFORE-EACH/
+    # BEFORE-ALL mock is reached at all (step 8's sweep, issue #250).
+    all_cases = list(suite.test_cases)
     selection_problems = filter_suite_cases(suite, case_names, tag_names)
     if selection_problems:
         out.problems.extend(selection_problems)
@@ -399,6 +460,15 @@ def run_static_checks(
         # shifts nothing the rest of the pipeline depends on. Anything
         # unclassifiable already refused above via `check_linkage_layout`.
         address_of, _ = address_of_sites(lines, linkage)
+        # A rebind to an address the program itself takes keeps its real
+        # meaning: the item is made BASED over its own backing storage
+        # instead (issue #226). Every other site -- above all a pointer a
+        # mocked CALL fills in, NULL in a test run -- is still redirected.
+        rebindable = rebindable_sites(lines, address_of)
+        lines, linkage.rebindings = mark_based(lines, linkage, rebindable)
+        rebound = {r.item_name for r in linkage.rebindings}
+        kept = [site for site in rebindable if site.item_name.upper() in rebound]
+        address_of = [site for site in address_of if site not in kept]
         out.linkage_address_of = address_of
         if address_of:
             lines = redirect_address_of(lines, address_of)
@@ -462,7 +532,7 @@ def run_static_checks(
 
     # 7. DATA DIVISION EXEC SQL pre-check (check-only: the transformed lines
     # are discarded -- the real transform runs after splicing).
-    _, data_exec_reasons = transform_data_division_exec(
+    transformed, data_exec_reasons = transform_data_division_exec(
         lines, copybook_paths=copybook_paths
     )
     if data_exec_reasons:
@@ -470,6 +540,17 @@ def run_static_checks(
             f"refused ({r.code}): {r.message}" for r in data_exec_reasons
         )
         return out
+
+    # 7b. Every data-name the .cut writes into the driver must exist in the
+    # program, or cobc rejects it at a line of a deleted sandbox copy
+    # (issue #204). Checked against the transformed text, so a generated
+    # SQLCA and EXEC SQL INCLUDE members count. Cumulative with step 8.
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}"
+        for r in check_cut_data_names(
+            suite, transformed, getattr(parse_result.ast, "program_name", None)
+        )
+    )
 
     # 8. Per-test-case checks, then flow-mock (MOCK PARAGRAPH/SECTION) and
     # terminator layout -- accumulated across all cases rather than
@@ -543,6 +624,22 @@ def run_static_checks(
                 out.problems.extend(
                     f"    {line}" for line in r.suggested_fix.splitlines()
                 )
+    # Whether a shared mock is reached is a property of the whole suite, not
+    # of a --case/--tag selection: a mock only an unselected case reaches
+    # just never fires in this run (issue #250). Only their matches are
+    # wanted here -- an unselected case's own refusals are not this run's.
+    unselected = [c for c in all_cases if not any(c is s for s in suite.test_cases)]
+    if unselected and any(id(d) not in matched_ids for d in shared_mocks):
+        for case in unselected:
+            check_test_case(
+                surface,
+                parse_result.ast,
+                case,
+                out.file_status_fields,
+                neutralized_goto=neutralized_goto,
+                shared=shared_ids,
+                matched_out=matched_ids,
+            )
     for directive in shared_mocks:
         if id(directive) not in matched_ids:
             block = (
@@ -584,6 +681,12 @@ def run_static_checks(
         out.snapshot, snapshot_problems = plan_snapshot(
             parse_result.ast,
             out.linkage.linkage_items if out.linkage is not None else None,
+            _synthesized_groups(out.cics_eib, transformed),
+            (
+                [r.item_name for r in out.linkage.rebindings]
+                if out.linkage is not None
+                else None
+            ),
         )
         out.problems.extend(
             f"refused (UNSAVABLE_BEFORE_ALL_STATE): {problem}"

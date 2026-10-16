@@ -116,7 +116,7 @@ not `all`).
 
 **If a `.cut` file already exists, write to a separate path** (`-o
 scenarios.cut`) and copy across the cases you want. `generate`
-overwrites its output without asking, and the paragraph cases in a file
+refuses an existing file without `--force`, and the paragraph cases in a file
 you've been editing are exactly what would be lost.
 
 ## 4. Read back the result

@@ -272,6 +272,7 @@ from ._gates import (
     check_expansion_warnings,
     check_linkage_layout,
     check_nested_exec,
+    check_source_format,
     check_terminator_layout,
     check_test_case,
     check_unresolved_copybooks,
@@ -311,6 +312,7 @@ from ._reachability import (
     _safe_section_entry_points,
     _source_ordered_paragraphs,
     _walk_fallthrough_from,
+    duplicated_paragraph_names,
 )
 from ._types import (
     _UNANNOTATED,
@@ -326,6 +328,7 @@ __all__ = [
     "TerminatorPlan",
     "GotoExitPlan",
     "directive_matches_site",
+    "check_source_format",
     "check_whole_program",
     "check_whole_program_scoped",
     "check_expansion_warnings",
@@ -346,4 +349,5 @@ __all__ = [
     "_fallthrough_flags",
     "_first_non_fallthrough",
     "REFUSAL_EXPLANATIONS",
+    "duplicated_paragraph_names",
 ]

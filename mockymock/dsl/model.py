@@ -104,13 +104,15 @@ REPORT_WRITER_CATEGORIES = frozenset(
 FLOW_CATEGORIES = frozenset({MockCategory.PARAGRAPH, MockCategory.SECTION})
 
 # FILE-STATUS IS sugar and the implicit default-success MOVE apply only
-# to these six file-op categories -- WRITE/REWRITE key on the *record*
-# name, not the file name, and resolving record -> owning FD -> file
-# name is out of scope (see
-# docs/2026-07-20-before-blocks-and-file-status-design.md). SORT/MERGE
-# are excluded for the same reason WRITE/REWRITE are: a SORT/MERGE's SD
-# has no FILE STATUS clause of its own (the status, if any, belongs to
-# the USING/GIVING FDs), so there is no single field to default/override.
+# to these eight file-op categories. WRITE/REWRITE key on the *record*
+# name, not the file name: `mock_surface.analyze_file_status_fields`
+# maps every FD record name to its file's status field too, so a mocked
+# WRITE/REWRITE sets "00" like the real statement does (issue #221 --
+# without it the status kept its reset value or the previous mock's
+# code, and the program's own success check took its error branch).
+# SORT/MERGE are excluded: a SORT/MERGE's SD has no FILE STATUS clause
+# of its own (the status, if any, belongs to the USING/GIVING FDs), so
+# there is no single field to default/override.
 # RELEASE/RETURN are excluded too, for the same reason -- a MOCK RETURN
 # ... ROWS block's rows-exhausted branch therefore always needs its own
 # TERMINAL group (there is no implicit-default fallback to lean on); see
@@ -124,6 +126,8 @@ FILE_STATUS_CATEGORIES = frozenset(
         MockCategory.DELETE,
         MockCategory.START,
         MockCategory.UNLOCK,
+        MockCategory.WRITE,
+        MockCategory.REWRITE,
     }
 )
 
@@ -191,6 +195,9 @@ class MockDirective:
     empty for every other category. Resolved against the real call site's
     CallStatement.using_parameters at splice time -- see
     injector.build_site_dispatch."""
+    capture_lines: list[int] = field(default_factory=list)
+    """1-based .cut line of each `captures` entry, same index alignment
+    (empty when built outside the parser)."""
 
     @property
     def program_name(self) -> str:
@@ -280,6 +287,9 @@ class MockTestCase:
     name: str
     mocks: list[MockDirective] = field(default_factory=list)
     setup_moves: list[tuple[str, str]] = field(default_factory=list)  # (value, target)
+    setup_move_lines: list[int] = field(default_factory=list)
+    """1-based .cut line of each `setup_moves` entry, same index alignment
+    (empty when built outside the parser)."""
     perform_target: str = ""
     perform_thru: str | None = None  # PERFORM <target> THRU <perform_thru>
     expectations: list[ExpectDirective] = field(default_factory=list)

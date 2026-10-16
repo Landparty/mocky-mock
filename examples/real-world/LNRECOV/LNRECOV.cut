@@ -25,13 +25,13 @@ TESTCASE "1000-INITIALIZE primes the first loan segment when CBLTDLI succeeds"
     END-MOCK
     MOCK WRITE RPT-RECORD
     END-MOCK
-    *> Mocking the whole READ removes its NOT AT END clause body too, so the
-    *> mock body must set the WORKING-STORAGE targets directly, not the
-    *> control-card record fields the removed code would have copied them
-    *> from.
+    *> The mock supplies the control-card record; the READ's own NOT AT END
+    *> clause still runs after it (the mocked status is success) and copies
+    *> the record fields into WS-DPD-THRESHOLD / WS-MIN-BAL, as the real
+    *> READ would.
     MOCK READ RECOVIN
-        MOVE 060 TO WS-DPD-THRESHOLD
-        MOVE 1000.00 TO WS-MIN-BAL
+        MOVE 060 TO RECOV-DPD-THRESHOLD
+        MOVE "1000.00" TO RECOV-MIN-BALANCE
     END-MOCK
     MOCK CALL "CBLTDLI"
         MOVE SPACES TO LOAN-STATUS
@@ -52,8 +52,8 @@ TESTCASE "1000-INITIALIZE flags EOF when CBLTDLI reports an empty database"
     MOCK WRITE RPT-RECORD
     END-MOCK
     MOCK READ RECOVIN
-        MOVE 090 TO WS-DPD-THRESHOLD
-        MOVE 0 TO WS-MIN-BAL
+        MOVE 090 TO RECOV-DPD-THRESHOLD
+        MOVE "0" TO RECOV-MIN-BALANCE
     END-MOCK
     MOCK CALL "CBLTDLI"
         MOVE "GB" TO LOAN-STATUS
@@ -69,8 +69,8 @@ TESTCASE "1000-INITIALIZE flags EOF on an unexpected CBLTDLI status while primin
     MOCK WRITE RPT-RECORD
     END-MOCK
     MOCK READ RECOVIN
-        MOVE 090 TO WS-DPD-THRESHOLD
-        MOVE 0 TO WS-MIN-BAL
+        MOVE 090 TO RECOV-DPD-THRESHOLD
+        MOVE "0" TO RECOV-MIN-BALANCE
     END-MOCK
     MOCK CALL "CBLTDLI"
         MOVE "AB" TO LOAN-STATUS
@@ -266,8 +266,8 @@ TESTCASE "0000-MAIN-PROCESS runs end-to-end via its real entry point across two 
     MOCK WRITE RPT-RECORD
     END-MOCK
     MOCK READ RECOVIN
-        MOVE 060 TO WS-DPD-THRESHOLD
-        MOVE 1000.00 TO WS-MIN-BAL
+        MOVE 060 TO RECOV-DPD-THRESHOLD
+        MOVE "1000.00" TO RECOV-MIN-BALANCE
     END-MOCK
     MOCK CALL "CBLTDLI"
         EVALUATE UT-CBLTDLI-TALLY

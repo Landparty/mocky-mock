@@ -75,7 +75,7 @@ and prints the next step.
 | `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path`. |
 | `--force` | off | Overwrite the output `.cut` file if it already exists. |
 
-Unlike `generate`, `init` **refuses to overwrite** an existing `.cut`
+Like `generate`, `init` **refuses to overwrite** an existing `.cut`
 without `--force`. Recorded expectations are characterization values
 (what the program does today), not verified intent -- read them back
 before treating them as assertions.
@@ -96,8 +96,9 @@ that. Never touches Docker.
 | Option | Default | Description |
 |---|---|---|
 | `program` (positional) | required | The `.cbl` source file to scaffold from. |
-| `-o`, `--output PATH` | `tests/<folder>/<program>.cut` | Where to write the generated `.cut` file: under the tests folder, mirroring the program's folder under the source root -- or beside the program when it already has a `<program>.cut` there or lies outside the source root. **Overwritten without asking** -- see `--fill` for an existing file. |
+| `-o`, `--output PATH` | `tests/<folder>/<program>.cut` | Where to write the generated `.cut` file: under the tests folder, mirroring the program's folder under the source root -- or beside the program when it already has a `<program>.cut` there or lies outside the source root. An existing file is refused without `--force` -- see `--fill` to add to it. |
 | `--name NAME` | none | Write another suite for the same program, `<program>.<NAME>.cut` (e.g. `--name errors`), in the same place. |
+| `--force` | off | Overwrite the output `.cut` file if it already exists. |
 | `--fill CUT_FILE` | none | Insert only the `MOCK` blocks `CUT_FILE`'s existing test cases are missing (from the same `UNMOCKED_*` analysis `lint` runs), writing back in place. Every existing directive, `EXPECT`, `VERIFY`, and comment is preserved byte for byte; an existing `MOCK` block is never edited, even if its body is empty. Mutually exclusive with `-o/--output`, `--with-data`, and `--fixtures`. |
 | `--copybook-path DIR` (repeatable) | none | A directory to search for `COPY`-referenced copybooks. |
 | `--with-data` | on (default mode) | Data-driven mode: one `TESTCASE` per scenario, with real generated mock data. This is the default; passing it explicitly makes a fixture-generator failure fatal instead of falling back to `--per-paragraph`. |

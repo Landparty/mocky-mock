@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from fractions import Fraction
 from typing import Any, Literal
 
 from mockymock.mutation.operators import Mutant
@@ -128,6 +129,20 @@ class MutationOutcome:
         if scored == 0:
             return None
         return (self.killed + self.timeouts) / scored
+
+    def score_below(self, percent: float) -> bool:
+        """True when the score is under `percent` (a 0-100 threshold, the
+        `--fail-under` value), or when there is no score at all. Compared
+        exactly, as fractions: `score * 100` divides before it multiplies,
+        so 29/50 comes out as 57.99999999999999 -- printed as 58.0% and
+        yet below a threshold of 58. The threshold goes through `str` so a
+        typed 57.3 means the decimal 57.3, not its nearest binary float."""
+        scored = self.killed + self.timeouts + self.survived
+        if scored == 0:
+            return True
+        return Fraction(100 * (self.killed + self.timeouts), scored) < Fraction(
+            str(percent)
+        )
 
 
 def format_console(outcome: MutationOutcome) -> str:

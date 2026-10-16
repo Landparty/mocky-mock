@@ -175,6 +175,17 @@ def test_terminator_neutralization_with_section_exit_kind_exits_section():
     ]
 
 
+def test_terminator_neutralization_keeps_a_returning_operand():
+    """Issue #219: STOP RUN/GOBACK RETURNING n sets RETURN-CODE; the
+    replacement must still do so before signalling the early exit."""
+    lines = build_terminator_neutralization("PARAGRAPH", "8")
+    assert lines == [
+        "           MOVE 8 TO RETURN-CODE",
+        '           MOVE "Y" TO UT-EARLY-EXIT',
+        "           EXIT PARAGRAPH",
+    ]
+
+
 def test_chain_check_exits_paragraph_when_flag_set():
     lines = build_chain_check()
     assert lines == [
@@ -536,13 +547,35 @@ def test_no_status_move_when_file_has_no_declared_field():
 
 def test_no_status_move_for_a_category_outside_file_status_categories():
     case = MockTestCase(name="c")
-    case.mocks.append(MockDirective(MockCategory.WRITE, "OUTREC"))
+    case.mocks.append(MockDirective(MockCategory.RELEASE, "SORTREC"))
     suite = MockTestSuite(name="S", test_cases=[case])
-    site = _site(category=MockCategory.WRITE, label="WRITE", keys=("OUTREC",))
+    site = _site(category=MockCategory.RELEASE, label="RELEASE", keys=("SORTREC",))
     lines = build_site_dispatch(
-        site, suite, TallyRegistry(suite), {"OUTREC": "WS-OUTREC-STATUS"}
+        site, suite, TallyRegistry(suite), {"SORTREC": "WS-SORT-STATUS"}
     )
     assert "STATUS" not in "\n".join(lines)
+
+
+@pytest.mark.parametrize("category", [MockCategory.WRITE, MockCategory.REWRITE])
+def test_mocked_write_and_rewrite_default_to_success_then_explicit_status(category):
+    """Issue #221: a real successful WRITE/REWRITE sets "00"; a mock that
+    left the status at its reset value (or the previous mock's "23") sent
+    the program's own success check down its error branch. The record key
+    resolves through analyze_file_status_fields' record -> field entries."""
+    case = MockTestCase(name="c")
+    directive = MockDirective(category, "OUTREC")
+    directive.file_status = "22"
+    case.mocks.append(directive)
+    suite = MockTestSuite(name="S", test_cases=[case])
+    site = _site(category=category, label=category.keyword, keys=("OUTREC",))
+    lines = [
+        line.strip()
+        for line in build_site_dispatch(
+            site, suite, TallyRegistry(suite), {"OUTREC": "WS-OUT-FS"}
+        )
+    ]
+    moves = [line for line in lines if line.startswith("MOVE")]
+    assert moves == ['MOVE "00" TO WS-OUT-FS', 'MOVE "22" TO WS-OUT-FS']
 
 
 def test_omitting_file_status_fields_keeps_todays_exact_output():

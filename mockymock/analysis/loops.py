@@ -14,7 +14,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from cobolparser.models.statements.control import PerformStatement
+from cobolparser.models.statements.control import (
+    EvaluateStatement,
+    IfStatement,
+    PerformStatement,
+)
+from cobolparser.models.statements.data import MoveStatement, SetStatement
 
 from mockymock.analysis.mock_surface import (
     BoundarySite,
@@ -123,3 +128,73 @@ def loop_guard_words(site: BoundarySite, guards: list[LoopGuard]) -> set[str]:
         ):
             words |= guard.words
     return words
+
+
+_EXPRESSION_ATTRS = (
+    "left_operand",
+    "right_operand",
+    "left_condition",
+    "right_condition",
+    "operands",
+    "condition_tree",
+)
+
+
+def _expression_words(node) -> set[str]:
+    """Data names an IF condition / EVALUATE subject or WHEN selector reads
+    (uppercased, literals and numbers dropped)."""
+    if node is None:
+        return set()
+    if isinstance(node, str):
+        text = _LITERAL_RE.sub(" ", node)
+        return {w.upper() for w in _WORD_RE.findall(text) if not w.isdigit()}
+    if isinstance(node, dict):
+        return _expression_words(node.get("text") or node.get("value"))
+    if isinstance(node, (list, tuple)):
+        return set().union(*(_expression_words(item) for item in node))
+    words: set[str] = set()
+    for attr in _EXPRESSION_ATTRS:
+        words |= _expression_words(getattr(node, attr, None))
+    metadata = getattr(node, "_metadata", None) or {}
+    words |= _expression_words(metadata.get("raw_condition"))
+    return words
+
+
+def _branch_condition_words(statement) -> set[str]:
+    if isinstance(statement, IfStatement):
+        return _expression_words(getattr(statement, "condition", None))
+    if isinstance(statement, EvaluateStatement):
+        words = _expression_words(list(getattr(statement, "subjects", None) or []))
+        for when in getattr(statement, "when_clauses", None) or []:
+            words |= _expression_words(list(getattr(when, "selectors", None) or []))
+        return words
+    return set()
+
+
+def names_set_on_reply(statements: list, reply_names: set[str]) -> set[str]:
+    """Data names a SET ... TO TRUE or MOVE writes inside an IF/EVALUATE
+    whose condition reads one of `reply_names` (uppercased base names).
+
+    The flag a loop's UNTIL reads is often set one PERFORM away from it,
+    in a branch on the CALL's reply (`WHEN MQ-REASON-CODE = MQRC-NO-MSG-
+    AVAIL  SET NO-MORE-MSGS TO TRUE`): that flag follows the reply as
+    surely as the reply itself (issue #188, a variant of #156)."""
+    written: set[str] = set()
+    for statement in _walk(statements):
+        if not _branch_condition_words(statement) & reply_names:
+            continue
+        for nested_list in _nested_statement_lists(statement):
+            for nested in _walk(nested_list):
+                if isinstance(nested, SetStatement) and (
+                    str(getattr(nested, "set_type", "") or "").upper() == "TRUE"
+                ):
+                    targets = getattr(nested, "targets", None) or []
+                elif isinstance(nested, MoveStatement):
+                    targets = getattr(nested, "targets", None) or []
+                else:
+                    continue
+                for target in targets:
+                    match = _WORD_RE.match(str(target).strip())
+                    if match:
+                        written.add(match.group(0).upper())
+    return written
