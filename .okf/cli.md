@@ -1373,7 +1373,7 @@ restores `choices=` also restores the import.
 
 **`annotate_nested_sites` ordering is load-bearing in both `generate` and `run`.** It must run before anything inspects `surface.boundary_sites` for nested spliceability (`_report_unsupported_boundaries` in `generate`; every refusal check and `splice_program` in `run`). An unannotated nested site is indistinguishable from an unspliceable one, so calling this late produces false-positive refusals.
 
-**`_insert_driver` matches section/division headers by exact-prefix string match on the stripped, uppercased line** (`WORKING-STORAGE SECTION`, `PROCEDURE DIVISION`) and inserts only at the first match. A program with unusual formatting where these headers aren't isolated on their own line (unlikely post `normalize_fixed_format`, but not structurally prevented) would silently fail to get the driver inserted.
+**`_insert_driver` matches section/division headers with whitespace-tolerant regexes** (`_WS_HEADER_RE`, `_DATA_DIVISION_RE`, `_PROCEDURE_DIVISION_RE`: `^\s*WORD\s+WORD\b`, case-insensitive) and inserts only at the first match. They were literal single-space prefix checks until #305, so `WORKING-STORAGE  SECTION` (lint-clean, cobc-clean) got no driver fields while `has_ws` said the section existed, and `PROCEDURE  DIVISION` got no driver paragraphs (every case NOT RUN); the presence check and the insertion point now share one regex. A program with unusual formatting where these headers aren't isolated on their own line (unlikely post `normalize_fixed_format`, but not structurally prevented) would silently fail to get the driver inserted.
 
 # See Also
 

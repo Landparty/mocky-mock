@@ -3121,7 +3121,6 @@ def _insert_driver_with_origins(
     entry_check_at: int | None = None
 
     for index, line in enumerate(lines):
-        upper = line.strip().upper()
         if index == entry_check_at and _starts_unnamed_code(lines, index):
             # Statements straight after the PROCEDURE DIVISION header, with
             # no paragraph name of their own, would otherwise read as more
@@ -3131,21 +3130,21 @@ def _insert_driver_with_origins(
             # performs.
             extend([f"       {_ORIGINAL_ENTRY_PARAGRAPH}."])
         if not inserted_ws and not has_ws:
-            if upper.startswith("DATA DIVISION"):
+            if _DATA_DIVISION_RE.match(line):
                 seen_data_division = True
             elif (
                 seen_data_division and _AFTER_WS_SECTION_RE.match(line)
-            ) or upper.startswith("PROCEDURE DIVISION"):
+            ) or _PROCEDURE_DIVISION_RE.match(line):
                 if not seen_data_division:
                     extend(["       DATA DIVISION."])
                 extend(["       WORKING-STORAGE SECTION."])
                 extend(ws_lines)
                 inserted_ws = True
         result.append(line)
-        if not inserted_ws and upper.startswith("WORKING-STORAGE SECTION"):
+        if not inserted_ws and _WS_HEADER_RE.match(line):
             extend(ws_lines)
             inserted_ws = True
-        if not inserted_proc and upper.startswith("PROCEDURE DIVISION"):
+        if not inserted_proc and _PROCEDURE_DIVISION_RE.match(line):
             extend([""])
             extend(artifact.procedure_lines)
             inserted_proc = True
@@ -3191,7 +3190,13 @@ def _starts_unnamed_code(lines: list[str], index: int) -> bool:
     return False
 
 
+# Any whitespace may separate a header's two words (`PROCEDURE  DIVISION`,
+# a tab): literal single-space checks missed them while cobc, cobolparser
+# and the `has_ws` check accepted them, so the driver's fields or
+# paragraphs were never inserted (issue #305).
 _WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\b", re.IGNORECASE)
+_DATA_DIVISION_RE = re.compile(r"^\s*DATA\s+DIVISION\b", re.IGNORECASE)
+_PROCEDURE_DIVISION_RE = re.compile(r"^\s*PROCEDURE\s+DIVISION\b", re.IGNORECASE)
 #: DATA DIVISION sections that must come AFTER WORKING-STORAGE -- including a
 #: LINKAGE SECTION header `splicer.linkage.neutralize` commented out, whose
 #: items then belong to whatever section precedes them.
@@ -3204,7 +3209,7 @@ _AFTER_WS_SECTION_RE = re.compile(
 
 def _first_procedure_index(lines: list[str]) -> int:
     for index, line in enumerate(lines):
-        if line.strip().upper().startswith("PROCEDURE DIVISION"):
+        if _PROCEDURE_DIVISION_RE.match(line):
             return index
     return len(lines)
 
