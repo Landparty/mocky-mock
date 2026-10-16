@@ -262,13 +262,31 @@ def _paragraph_of(node: str) -> str:
     return node.split("__", 1)[0]
 
 
+def _section_members(ast: Any) -> dict[str, list[str]]:
+    """SECTION name -> its named paragraphs, from the AST."""
+    procedure = ast.get_division("PROCEDURE") if ast is not None else None
+    if procedure is None:
+        return {}
+    return {
+        name: [p.paragraph_name for p in section.paragraphs if p.paragraph_name]
+        for name, section in getattr(procedure, "_sections", {}).items()
+    }
+
+
 def _reach(
-    start: str, thru: str | None, order: list[str], edges: dict[str, set[str]]
+    start: str,
+    thru: str | None,
+    order: list[str],
+    edges: dict[str, set[str]],
+    sections: dict[str, list[str]] | None = None,
 ) -> set[str]:
     """Paragraphs a `PERFORM start [THRU thru]` can execute: the range
     itself plus everything reachable from it over PERFORM/GO TO/branch
     edges (fall-through is excluded -- a PERFORMed paragraph returns at its
-    end instead of falling into the next one)."""
+    end instead of falling into the next one). A reached SECTION also
+    reaches every paragraph in it (`sections`, name -> member paragraphs):
+    the flow graph links those only by FALL_THROUGH edges, so `PERFORM S2`
+    reached `S2` alone (issue #292)."""
     seeds = [start]
     if thru and start in order and thru in order:
         i, j = order.index(start), order.index(thru)
@@ -282,6 +300,7 @@ def _reach(
             continue
         seen.add(node)
         stack.extend(edges.get(node, ()))
+        stack.extend((sections or {}).get(node, ()))
     return seen
 
 
@@ -620,11 +639,14 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
     steps.append(inventory)
 
     # Case reach, paragraph test mapping, rule citations.
+    section_members = _section_members(program.ast) if program is not None else {}
     by_name = {p["name"]: p for p in paragraphs}
     for case in cases:
         if not case["perform"]:
             continue
-        reach = _reach(case["perform"], case["performThru"], order, edges)
+        reach = _reach(
+            case["perform"], case["performThru"], order, edges, section_members
+        )
         case["reach"] = sorted(reach)
         performed = by_name.get(case["perform"])
         if performed is not None:

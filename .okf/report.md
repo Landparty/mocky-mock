@@ -347,7 +347,11 @@ the `cobol-test` skill's hand-over.
   `scenario_coverage`), run, coverage, mutation, dialect
   (`analysis.dialect_risk.find_dialect_risks`), verdict.
 - Case reach: each case's PERFORM target(s) closed over flow edges except
-  `FALL_THROUGH`/`CALL`, intersected with paragraphs; synthetic nodes
+  `FALL_THROUGH`/`CALL`, plus, for every reached SECTION, its member
+  paragraphs (`_section_members` from the AST; the flow graph links them
+  only by FALL_THROUGH, so `PERFORM S2` reached `S2` alone and its
+  paragraphs read "No test reaches P2" while their dialect risks never
+  blocked L3, issue #292), intersected with paragraphs; synthetic nodes
   (`X__IF_1`) are dropped. Copybook-expanded programs map lines back via
   `coverage._matching_index_map`.
 - Mutation `score` in mutate's JSON is a 0..1 fraction; the report stores

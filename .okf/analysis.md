@@ -495,7 +495,10 @@ neither part of the refusal gate:
   clock-dependent (medium); binary truncation, numeric-edited, intrinsic
   FUNCTIONs (low). `BLOCKING_SEVERITIES` (high, medium) is what keeps a
   case from L3. Heuristic by design: a finding is a place to look, not a
-  proven divergence.
+  proven divergence. Each risk's `paragraph` is the last paragraph OR
+  section header at or above it, so a statement written directly under a
+  `SECTION` header (cobol-parser's unnamed paragraph) belongs to that
+  section, not to the previous section's last paragraph (issue #292).
 
 # See Also
 
