@@ -193,7 +193,9 @@ driver's failure-reason strings against the model: an EXPECT reason is
 first matched against each directive's exact rendered head
 `expected <name> <op> <value>, got `, since the runtime value after it may
 itself contain `", got "`; only a reason no directive renders to falls
-back to splitting on the LAST `", got "`), and a synthesized `"not_run"` entry for every selected case the
+back to splitting on the LAST `", got "`; `actual` is only `rstrip()`ped
+(#335) -- its leading spaces belong to the value, so a JUSTIFIED RIGHT
+or right-aligned edited field's whole difference stays visible), and a synthesized `"not_run"` entry for every selected case the
 binary never printed a START marker for. An EXPECT failure head is split
 into name/operator/expected by `_EXPECT_HEAD_RE` (the operator is one of
 `model.EXPECT_OPERATORS`, echoed verbatim by the driver's FAIL line;

@@ -98,11 +98,11 @@ def _attribute_failure(reason: str, case: MockTestCase | None) -> AttributedFail
                         if expectation.operator == "="
                         else f"{expectation.operator} {expectation.expected_value}"
                     ),
-                    actual=reason[len(prefix) :].strip(),
+                    actual=reason[len(prefix) :].rstrip(),
                 )
     if _GOT_SEPARATOR in reason:
         head, actual = reason.rsplit(_GOT_SEPARATOR, 1)
-        actual = actual.strip()
+        actual = actual.rstrip()
         if (
             head.startswith(_EXPECT_PREFIX)
             and (m := _EXPECT_HEAD_RE.match(head[len(_EXPECT_PREFIX) :])) is not None
