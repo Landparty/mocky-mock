@@ -127,6 +127,15 @@ def test_format_console_lists_each_case_and_reasons():
     assert "VERIFY DISCRATE WAS CALLED ONCE" in output
 
 
+def test_format_console_summary_counts_failed_cases_not_checks():
+    """Issue #235: one case failing two checks next to a passing case
+    printed "2 run, 2 failed", while JUnit and --json-report counted one
+    failed case."""
+    suite = parse_stdout(SAMPLE_STDOUT)
+    summary_line = format_console(suite).splitlines()[-1]
+    assert summary_line == "2 run, 1 failed (2 failed checks)"
+
+
 def test_format_junit_xml_is_well_formed_and_has_failures():
     suite = parse_stdout(SAMPLE_STDOUT)
     xml_text = format_junit_xml(suite)

@@ -139,7 +139,7 @@ purely from absence of a FAIL marker.
 
 | Function | Output | Notes |
 |---|---|---|
-| `format_console(suite, crash_detail=None)` | Plain text | `TESTSUITE: <name>` header, one `[PASS]`/`[FAIL]`/`[CRASH]` line per case (indented, failure reasons indented further below), trailing `<run> run, <failures> failed[, <n> crashed]` summary line (`<failures>` is the raw SUMMARY check-count as-is; `<run>` falls back to `len(suite.results)` when `suite.tests_run` is 0 -- see Gotchas; the `, <n> crashed` segment only appears when `<n> > 0`) |
+| `format_console(suite, crash_detail=None)` | Plain text | `TESTSUITE: <name>` header, one `[PASS]`/`[FAIL]`/`[CRASH]` line per case (indented, failure reasons indented further below), trailing `<run> run, <failed cases> failed[ (<checks> failed checks)][, <n> crashed]` summary line (`<failed cases>` counts cases, the parenthesised check count shows only when it differs, issue #235; `<run>` falls back to `len(suite.results)` when `suite.tests_run` is 0 -- see Gotchas; the `, <n> crashed` segment only appears when `<n> > 0`) |
 | `format_junit_xml(suite, crash_detail=None)` | Pretty-printed JUnit XML via `xml.etree.ElementTree` (`indent` + `tostring`; since 2026-09-30 no `minidom` -- `toprettyxml` wrote tab/LF/CR inside attribute values raw, which readers normalize to spaces; ElementTree escapes them as `&#09;`/`&#10;`/`&#13;`) | `<testsuite name tests failures errors>` with one `<testcase>` per result; failing cases get a `<failure message>` child per failure reason, crashed cases get a single `<error message>` child instead (JUnit's own failure-vs-error distinction); orphan failures each get their own `<testcase name="orphan-<id>">` with an `<error>` child and are counted into `errors=` and `tests=`; `tests` uses the same `len(suite.results)` fallback as the console `<run>` count. All names/reasons/messages pass through `_xml_safe` first (see Gotchas) |
 
 Both formatters take an optional `crash_detail: str | None`. The CLI passes
@@ -477,8 +477,14 @@ would print `[FAIL] ...` with its reason and then "0 failed" directly
 beneath it). Both formatters now fall back to values reconstructed from
 `suite.results` whenever the SUMMARY-derived field is falsy:
 `run_count = suite.tests_run or len(suite.results)` and (console only)
-`failed_count = suite.failures or sum(len(r.failure_reasons) for r in
-suite.results)`. The two are mutually exclusive in practice — SUMMARY
+the check count `suite.failures or sum(len(r.failure_reasons) for r in
+suite.results if not r.crashed)`. Since issue #235 the console's
+`<n> failed` is a CASE count (`sum(1 for r in suite.results if
+r.failure_reasons and not r.crashed)`, as JUnit and `casesFailed` count
+it) -- printing the check count there gave "2 run, 2 failed" for one
+case failing two checks. The check count is appended as `(<n> failed
+checks)` only when it differs (several failed checks in one case, or
+orphan failures). The two SUMMARY/fallback sources are mutually exclusive in practice — SUMMARY
 printing means no crash occurred — so the `or` fallback never overwrites a
 real clean-run count of 0 with a reconstructed one. Do not touch
 `suite.tests_run`/`suite.failures` themselves to "fix" this —
