@@ -385,7 +385,9 @@ TRUE/FALSE on a non-88 target, any other value on an 88, and FALSE on an
   call that triggered this WHEN OTHER path -- it gets the correct "10"
   instead. When the file has no status field, `exhausted_moves` is just
   the TERMINAL group's own MOVEs (nothing to default). When **neither** a
-  status field nor a TERMINAL group exists, `build_site_dispatch` raises
+  status field nor a TERMINAL group exists, and no lifted `AT END` clause
+  either (whose `"10"` in `UT-MOCK-STATUS` ends the loop, issue #341),
+  `build_site_dispatch` raises
   `ValueError` rather than emit a READ loop with no way to terminate --
   but every production call site gates on `refusal.check_test_case` first
   (same `UNRESOLVED_FILE_STATUS_TARGET` code as the `FILE-STATUS IS` case

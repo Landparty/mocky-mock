@@ -724,9 +724,12 @@ never in `FILE_STATUS_CATEGORIES` (a SORT/MERGE's SD has no FILE STATUS
 clause of its own, same reasoning as WRITE/REWRITE, see
 [analysis](analysis.md)) — so `refusal.check_test_case`'s
 `UNRESOLVED_FILE_STATUS_TARGET` check refuses a `MOCK RETURN ... ROWS`
-with no `TERMINAL` group unconditionally, not just when a status field
-happens to be missing (unlike READ, where the same check only fires when
-BOTH the TERMINAL group and a FILE STATUS field are absent).
+with no `TERMINAL` group whenever the RETURN has no liftable `AT END`
+clause, not just when a status field happens to be missing (unlike READ,
+where the same check only fires when BOTH the TERMINAL group and a FILE
+STATUS field are absent). A RETURN or READ whose matched sites all have a
+liftable `AT END` clause is accepted without either (issue #341):
+exhausting the rows runs that clause, which ends the loop.
 
 A `PERFORM ... UNTIL <flag> = <value>` loop driven by the READ's own
 `AT END`-set flag (rather than the file's `FILE STATUS` field) needs that
@@ -828,7 +831,9 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
   With no `FILE STATUS` field, `exhausted_moves` is just the TERMINAL
   group's own MOVEs. See [analysis](analysis.md)'s
   `UNRESOLVED_FILE_STATUS_TARGET` refusal for the case where **neither**
-  exists — `check_test_case` refuses fail-closed before splicing is ever
+  exists and the READ has no liftable `AT END` clause either (with one,
+  the exhausted branch moves `"10"` to `UT-MOCK-STATUS` and the lifted
+  clause signals end-of-data, issue #341) — `check_test_case` refuses fail-closed before splicing is ever
   reached, so `build_site_dispatch` raising `ValueError` for that same
   gap is a should-be-unreachable production invariant, not a normal
   control path.

@@ -415,7 +415,14 @@ def build_site_dispatch(
             MockCategory.RETURN,
         ):
             status_field = file_status_fields.get(directive.key.upper())
-            if directive.terminal_row is None and status_field is None:
+            lifted_at_end = any(
+                clause.attr == "at_end_clause" for clause in lifted_clauses or ()
+            )
+            if (
+                directive.terminal_row is None
+                and status_field is None
+                and not lifted_at_end
+            ):
                 raise ValueError(
                     "refusal gate should have caught this "
                     "(UNRESOLVED_FILE_STATUS_TARGET)"
