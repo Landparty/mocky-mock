@@ -4,8 +4,9 @@ its `.cut` line instead of surfacing as a cobc error at a line of a
 sandbox copy that no longer exists (issue #204).
 
 Checked: every setup-MOVE / hook-MOVE target, every EXPECT data-name, every
-`CAPTURE ... INTO` target that is not a synthesized `UT-CAP-` field, and
-every MOVE/EXPECT value that is a single bare COBOL word (`EXPECT F TO BE
+`CAPTURE ... INTO` target that is not a synthesized `UT-CAP-` field, every
+ROWS / TERMINAL field (issue #299), and every MOVE/EXPECT/ROWS/TERMINAL
+value that is a single bare COBOL word (`EXPECT F TO BE
 Y` -- an unquoted `Y` is a data-name to cobc, not a literal).
 
 Deliberately loose on the "known" side, so it can never refuse a name cobc
@@ -219,4 +220,14 @@ def check_cut_data_names(
             if target.upper().startswith(_HARNESS_PREFIX):
                 continue
             name(line, "CAPTURE INTO target", target)
+        # ROWS rows and the TERMINAL group are spliced as `MOVE value TO
+        # field` too (issue #299).
+        row_lines = directive.row_lines or [0] * len(directive.rows or [])
+        for row, line in zip(directive.rows or [], row_lines, strict=False):
+            for row_field, row_value in row:
+                name(line, "ROWS field", row_field)
+                value(line, "ROWS value", row_value)
+        for row_field, row_value in directive.terminal_row or []:
+            name(directive.terminal_line, "TERMINAL field", row_field)
+            value(directive.terminal_line, "TERMINAL value", row_value)
     return reasons

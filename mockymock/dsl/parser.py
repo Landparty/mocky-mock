@@ -923,6 +923,7 @@ def parse_cut(text: str) -> MockTestSuite:
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.terminal_row = terminal
+                in_mock.terminal_line = line_no
             elif (m := _FILE_STATUS_RE.match(line)) is not None:
                 if in_mock.category not in FILE_STATUS_CATEGORIES:
                     eligible = "/".join(
@@ -1030,6 +1031,7 @@ def parse_cut(text: str) -> MockTestSuite:
                         (pair_match.group("field"), pair_match.group("value").strip())
                     )
                 in_mock.rows.append(row)
+                in_mock.row_lines.append(line_no)
             else:
                 _reject_body_sentence_period(line, line_no, in_mock.describe())
                 in_mock.body_lines.append(line)

@@ -1011,7 +1011,9 @@ SQLCA and `EXEC SQL INCLUDE` members count), is not a `UT-` harness item,
 DFHEIBLK/DLIDIB field, special register or figurative constant. Loose on
 purpose: it only catches names cobc would certainly reject.
 `MockTestCase.setup_move_lines` / `MockDirective.capture_lines` carry the
-line numbers the model did not record before.
+line numbers the model did not record before. ROWS rows and the `TERMINAL`
+group are checked the same way, field and value (issue #299), at
+`MockDirective.row_lines` / `terminal_line`.
 
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 

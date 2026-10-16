@@ -98,3 +98,24 @@ def test_refused_run_json_report_keeps_cut_and_program_files(tmp_path):
     assert payload["cutFile"] == str(cut)
     assert payload["programFile"] == str(program)
     assert payload["suite"]["line"] == 1
+
+
+def test_rows_and_terminal_names_are_checked_at_their_lines():
+    # Issue #299: ROWS rows and the TERMINAL group are spliced as MOVEs too.
+    suite = parse_cut(
+        'TESTSUITE "x"\n'
+        'TESTCASE "a"\n'
+        '    MOCK CALL "SVC" ROWS\n'
+        "        ( WS-N = 1, WS-NX = 10 )\n"
+        "        ( WS-N = 2, WS-FLAG = Q )\n"
+        '        TERMINAL ( WS-EOFF = "Y" )\n'
+        "    END-MOCK\n"
+        "    PERFORM 0000-MAIN\n"
+    )
+    reasons = check_cut_data_names(suite, PROGRAM.splitlines(), "MUT1")
+    assert [r.message for r in reasons] == [
+        ".cut line 4: ROWS field WS-NX is not a data item of MUT1",
+        ".cut line 5: ROWS value Q is neither a literal nor a data item of "
+        "MUT1 -- quote it if it is text",
+        ".cut line 6: TERMINAL field WS-EOFF is not a data item of MUT1",
+    ]
