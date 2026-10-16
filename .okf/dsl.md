@@ -581,7 +581,11 @@ Rules:
     program's sites of the same category (`_unique_prefix`), so the
     generator itself never emits an `AMBIGUOUS_MOCK` pair that the splicer
     would later reject. Falls back to the full text if no proper prefix is
-    unique.
+    unique. When another site's whole text is a prefix of this one
+    (`SYNCPOINT` / `SYNCPOINT ROLLBACK`, `RETURN` / `RETURN TRANSID(...)`),
+    the shorter text is the key for both (issue #248): the fallback full
+    text already matches the longer site, so a second key was
+    `AMBIGUOUS_MOCK`. One directive answers both sites.
 - **`directive_snippet(site, surface) -> str | None` (2026-09-15)** wraps
   `_directive_for` to render one site's full `MOCK ... END-MOCK` block as a
   single string (4-space header/footer, 8-space body — exactly what

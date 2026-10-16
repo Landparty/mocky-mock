@@ -1526,6 +1526,15 @@ def _reply_watched_names(
 
 
 def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
+    """The EXEC key for `site`: the shortest word prefix of its text no
+    other same-category site's text starts with, else its full text.
+
+    When another site's whole text is itself a prefix of this one
+    (`SYNCPOINT` beside `SYNCPOINT ROLLBACK`, a bare `RETURN` beside
+    `RETURN TRANSID(...)`), that site's key -- its full text -- already
+    matches this site too, so a second, longer key made the scaffold's
+    own directives AMBIGUOUS_MOCK (issue #248). Such a site takes the
+    shortest of those texts instead, so both share one directive."""
     words = (site.match_text or "").split()
     if not words:
         return ""
@@ -1534,12 +1543,29 @@ def _unique_prefix(site: BoundarySite, surface: MockSurface) -> str:
         for other in surface.boundary_sites
         if other.category is site.category and other is not site
     ]
+    key = " ".join(words)
     for length in range(1, len(words) + 1):
         prefix = " ".join(words[:length])
         collisions = [o for o in others if o.startswith(prefix)]
         if not collisions:
-            return prefix
-    return " ".join(words)
+            key = prefix
+            break
+    # Imported here: refusal imports the generator.
+    from mockymock.analysis.refusal._gates import (
+        _exec_match_form,
+        _exec_prefix_matches,
+    )
+
+    own = _exec_match_form(" ".join(words))
+    for other in others:
+        other_key = " ".join(other.split())
+        if (
+            other_key
+            and len(other_key) < len(key)
+            and _exec_prefix_matches(_exec_match_form(other_key), own)
+        ):
+            key = other_key
+    return key
 
 
 # --- bundle-driven scaffold (mockymock generate --with-data) -----------------
