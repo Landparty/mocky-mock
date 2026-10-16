@@ -449,6 +449,15 @@ that may reach another mock and rewrite the field): `(1:1) = "1"` AT END,
 EXCEPTION/ON OVERFLOW. A lifted body is the program's own text, sliced
 positionally (AST start of its first statement up to the next clause's
 header, or the verb's own `END-xxx` / the sentence period for the last).
+The bodies are emitted **verbatim** (`LiftedClause.source_lines`: each
+source line as it stands, the first keeping its indentation when the body
+starts its line) -- only the EVALUATE / WHEN / END-EVALUATE lines take the
+dispatch's indent (`clause_guard_lines(..., indent=...)`). Issue #332: the
+stripped, re-indented copies never equalled their source lines, so the
+text-equality `report.coverage.build_original_line_map` (behind `--trace`,
+`--coverage` and the debugger's breakpoints) left the code those clauses
+run unmapped. A body line that shares its source line with a header or a
+terminator still does not map (fails safe: no coverage, no breakpoint).
 
 `lift_clause_bodies` returns None -- and the old whole-statement deletion
 stands -- when any body holds another boundary statement, GO TO, GOBACK,
