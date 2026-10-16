@@ -983,8 +983,8 @@ def analyze(program: CobolProgram) -> MockSurface:
 
 
 def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
-    """Uppercased file name -> its declared `FILE STATUS IS <field>` name,
-    read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT statements. A
+    """Uppercased file name -> its declared `FILE STATUS IS <field>` name
+    (qualified, `FS-CODE OF CUST-STAT`, when the clause qualifies it), read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT statements. A
     file whose SELECT entry has no FILE STATUS clause has no entry -- there
     is no WORKING-STORAGE field to default or target with FILE-STATUS IS
     sugar (see docs/2026-07-20-before-blocks-and-file-status-design.md).
@@ -1008,7 +1008,13 @@ def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
         if not isinstance(statement, SelectStatement):
             continue
         if statement.file_name and statement.file_status:
-            fields[statement.file_name.upper()] = statement.file_status
+            # `FILE STATUS IS FS-CODE OF CUST-STAT`: keep the qualifiers, or
+            # every generated MOVE to a status field declared under several
+            # groups (one copybook, many files) is ambiguous (issue #266).
+            qualifiers = getattr(statement, "file_status_qualifiers", None) or []
+            fields[statement.file_name.upper()] = " OF ".join(
+                [statement.file_status, *qualifiers]
+            )
     for record, file_name in _fd_records(program):
         status = fields.get(file_name)
         if status and record not in fields:
