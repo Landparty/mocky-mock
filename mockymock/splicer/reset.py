@@ -16,8 +16,10 @@ SKIPPED rather than given illegal COBOL (documented fidelity limits, see
 usage. A group with a VALUE clause inside a table (an OCCURS item) is
 reset with `INITIALIZE <group> ALL TO VALUE THEN TO DEFAULT`, which
 restores every occurrence's VALUE without subscripted MOVEs; a group with
-a FILLER VALUE adds WITH FILLER, since a FILLER cannot be named in a MOVE.
-Top-level REDEFINES items are skipped on purpose: their
+a FILLER VALUE adds WITH FILLER, since a FILLER cannot be named in a MOVE,
+and so does the plain INITIALIZE of a group with any FILLER (issue #278).
+A FILLER group is transparent (its named children are reset in its
+place, issue #247). Top-level REDEFINES items are skipped on purpose: their
 storage is the redefined item's, which is reset (and its VALUE restored)
 by its own line -- a second reset through the redefining view would
 overwrite it.
@@ -26,6 +28,8 @@ overwrite it.
 from __future__ import annotations
 
 import re
+from collections import Counter
+from typing import Any
 
 from mockymock._decimal import decimal_point_is_comma, localize_move_line
 from mockymock.splicer.io_copy import longest_record_per_file
@@ -116,9 +120,7 @@ def reset_lines_for_items(items) -> list[str]:
     by `mockymock.splicer.linkage`) get the identical VALUE-restoring
     treatment without duplicating this logic."""
     lines: list[str] = []
-    for item in items:
-        if _is_filler(item):
-            continue  # a top-level FILLER cannot be a valid MOVE/INITIALIZE target
+    for item, ref in reset_targets(items):
         if getattr(item, "redefines", None):
             # A REDEFINES item shares the storage of the item it redefines,
             # which already got its own reset line just above. Resetting it
@@ -147,23 +149,112 @@ def reset_lines_for_items(items) -> list[str]:
                     # table is reached. Default-fill the whole group first,
                     # then restore VALUEs alone, which leaves a VALUE-less
                     # counter at its maximum (checked on GnuCOBOL 3.1).
-                    lines.append(f"INITIALIZE {item.name}{filler}")
+                    lines.append(f"INITIALIZE {ref}{filler}")
                     lines.extend(odo_max)
-                    lines.append(f"INITIALIZE {item.name}{filler} ALL TO VALUE")
+                    lines.append(f"INITIALIZE {ref}{filler} ALL TO VALUE")
                 else:
                     lines.append(
-                        f"INITIALIZE {item.name}{filler}"
-                        " ALL TO VALUE THEN TO DEFAULT"
+                        f"INITIALIZE {ref}{filler}" " ALL TO VALUE THEN TO DEFAULT"
                     )
             else:
-                lines.append(f"INITIALIZE {item.name}")
-                lines.extend(_child_value_restores(item, item.name))
+                # INITIALIZE skips FILLERs unless told WITH FILLER, so a
+                # VALUE-less padding FILLER kept whatever bytes a group MOVE
+                # or READ INTO left in it, in every later case (issue #278).
+                filler = " WITH FILLER" if _has_filler(item) else ""
+                lines.append(f"INITIALIZE {ref}{filler}")
+                lines.extend(_child_value_restores(item, ref))
             lines.extend(odo_restore)
         else:
-            reset = _elementary_reset(item)
+            reset = _elementary_reset(item, ref)
             if reset is not None:
                 lines.append(reset)
     return lines
+
+
+def reset_targets(items) -> list[tuple[Any, str]]:
+    """Each item of `items` the reset (and the BEFORE-ALL snapshot) can
+    name, paired with the reference that names it unambiguously.
+
+    * A FILLER cannot be the target of a MOVE or INITIALIZE, but a FILLER
+      *group* (`01 FILLER.` holding flags and counters) can still hold
+      named items, and skipping its subtree let their values leak from
+      one case to the next (issue #247). Such a group is transparent: its
+      named children stand in for it, recursively.
+    * A top-level item whose name is also declared elsewhere (a stray 01
+      sharing a copybook field's name) cannot be named at all -- a level-01
+      item cannot be qualified -- and its bare name made cobc reject the
+      whole reset paragraph (issue #281). A group is reset through its
+      children, each qualified by it (`X OF CUST-ID`) when that is unique;
+      an elementary item, or a child whose qualified name is still not
+      unique, is left out: no statement of the program can reference it
+      either.
+
+    A child with an OCCURS clause is left out (an unsubscripted reference
+    is illegal), as is an elementary FILLER."""
+    items = list(items)
+    if not items:
+        return []
+    index = _name_index(items[0])
+    out: list[tuple[Any, str]] = []
+
+    def visit(item, qualifiers: list[str], nested: bool) -> None:
+        if nested and getattr(item, "occurs_clause", None) is not None:
+            return
+        if _is_filler(item):
+            for child in _data_children(item):
+                visit(child, qualifiers, True)
+            return
+        chain = [item.name, *qualifiers]
+        if _unique_reference(index, chain):
+            out.append((item, " OF ".join(chain)))
+        elif _is_group(item) and not getattr(item, "redefines", None):
+            for child in _data_children(item):
+                visit(child, chain, True)
+
+    for item in items:
+        visit(item, [], False)
+    return out
+
+
+def _name_index(anchor) -> dict[str, list[list[str]]]:
+    """Uppercased name -> the named ancestry (innermost first, uppercased)
+    of every data item and condition name so called, in the whole program
+    `anchor` belongs to."""
+    root = anchor
+    while getattr(root, "parent", None) is not None:
+        root = root.parent
+    index: dict[str, list[list[str]]] = {}
+
+    def walk(node) -> None:
+        for child in getattr(node, "children", []):
+            named = getattr(child, "level", None) is not None or (
+                type(child).__name__ == "ConditionNameItem"
+            )
+            if named and not _is_filler(child):
+                ancestry = [n.upper() for n in _named_ancestry(child)]
+                index.setdefault(child.name.upper(), []).append(ancestry)
+            walk(child)
+
+    walk(root)
+    return index
+
+
+def _unique_reference(index: dict[str, list[list[str]]], chain: list[str]) -> bool:
+    """True when exactly one declared item matches `NAME OF Q1 OF Q2 ...`:
+    the qualifiers appear, in order, among its enclosing named groups."""
+    qualifiers = [q.upper() for q in chain[1:]]
+
+    def matches(ancestry: list[str]) -> bool:
+        position = 0
+        for name in ancestry:
+            if position < len(qualifiers) and name == qualifiers[position]:
+                position += 1
+        return position == len(qualifiers)
+
+    candidates = index.get(chain[0].upper(), [])
+    # An item the walk could not see (a synthesized block) is not in the
+    # index at all: nothing else declares its name either.
+    return not candidates or sum(matches(a) for a in candidates) == 1
 
 
 def _odo_counter_lines(group) -> tuple[list[str], list[str]]:
@@ -230,13 +321,11 @@ def _odo_clauses(group) -> list:
 
 
 def _qualified_name(item) -> str:
-    """`item`'s name qualified by every enclosing group: `CNT OF HDR OF REC`."""
-    names = [item.name]
-    parent = getattr(item, "parent", None)
-    while parent is not None and getattr(parent, "level", None) is not None:
-        names.append(parent.name)
-        parent = getattr(parent, "parent", None)
-    return " OF ".join(names)
+    """`item`'s name qualified by every enclosing named group: `CNT OF HDR
+    OF REC`. FILLER and nameless groups are left out of the chain -- `CNT
+    OF FILLER` is not COBOL and cobc rejected the whole driver (issue
+    #246); a qualifier may skip levels."""
+    return " OF ".join([item.name, *_named_ancestry(item)])
 
 
 def _find_data_item(anchor, name: str, qualifiers) -> object | None:
@@ -353,6 +442,14 @@ def _has_occurs_value(group) -> bool:
     return walk(group, False)
 
 
+def _has_filler(group) -> bool:
+    """True when any FILLER, with a VALUE or not, sits somewhere under
+    `group`."""
+    return any(
+        _is_filler(child) or _has_filler(child) for child in _data_children(group)
+    )
+
+
 def _has_filler_value(group) -> bool:
     """True when a FILLER somewhere under `group` declares a VALUE clause."""
     return any(
@@ -383,12 +480,15 @@ def _child_value_restores(group, qualifier: str) -> list[str]:
     for child in getattr(group, "children", []):
         if getattr(child, "level", None) is None:
             continue  # clause node, not a data item
-        if _is_filler(child):
-            # Unaddressable. A group with a FILLER VALUE never gets here:
-            # it is reset WITH FILLER ALL TO VALUE (see _has_filler_value).
-            continue
         if getattr(child, "occurs_clause", None) is not None:
             continue  # unsubscripted MOVE is illegal; see _has_occurs_value
+        if _is_filler(child):
+            # Unaddressable itself, but a FILLER group's named children
+            # are not: restore them through the named ancestors alone
+            # (issue #247). A group with a FILLER VALUE never gets here: it
+            # is reset WITH FILLER ALL TO VALUE (see _has_filler_value).
+            out.extend(_child_value_restores(child, qualifier))
+            continue
         target = f"{child.name} OF {qualifier}"
         if _is_group(child):
             out.extend(_child_value_restores(child, target))
@@ -427,6 +527,11 @@ def _value_restore(item, name: str) -> str:
     picture = item.picture_clause
     if picture is None:
         return f"MOVE {literal} TO {name}"
+    if is_text_edited(item):
+        # VALUE stores the literal's bytes as they are; a MOVE re-applies
+        # the editing mask to them ("12/31/99" into XX/XX/XX became
+        # "12//3/1/", issue #277). Reference modification is a byte copy.
+        return f"MOVE {literal} TO {name}(1:)"
     usage = (getattr(item, "usage", None) or "DISPLAY").upper()
     if (
         _is_numeric(item)
@@ -437,6 +542,28 @@ def _value_restore(item, name: str) -> str:
     if getattr(item, "justified", False):
         literal = _pad_literal(literal, getattr(picture, "size", None))
     return f"MOVE {literal} TO {name}"
+
+
+def is_text_edited(item) -> bool:
+    """An alphanumeric- or national-edited item (`PIC XX/XX/XX`,
+    `XXXBXXXX`, `NNBNN`): a MOVE into one edits the sending text again, so
+    a value that is already the item's bytes must be copied by reference
+    modification instead (issue #277)."""
+    picture = getattr(item, "picture_clause", None)
+    if picture is None:
+        return False
+    if getattr(picture, "is_alphanumeric_edited", False) or getattr(
+        picture, "is_national_edited", False
+    ):
+        return True
+    return is_alphanumeric_edited_picture(getattr(picture, "pattern", "") or "")
+
+
+def is_alphanumeric_edited_picture(pattern: str) -> bool:
+    """A PICTURE string holding an X or A plus a B, 0 or / insertion
+    symbol -- the definition of alphanumeric-edited."""
+    symbols = _REPEAT_GROUP_RE.sub("", pattern.upper())
+    return any(c in symbols for c in "XA") and any(c in symbols for c in "B0/")
 
 
 def _pad_literal(literal: str, size: int | None) -> str:
@@ -485,23 +612,53 @@ INDEX_SAVE_PREFIX = "UT-IDX-SAVE-"
 
 
 def index_names(program) -> list[str]:
-    """Every `INDEXED BY` index name declared in the program's DATA
-    DIVISION, in declaration order."""
+    """A reference to every `INDEXED BY` index the program's DATA DIVISION
+    declares, one per declaration, in declaration order.
+
+    A name declared once is returned bare. One declared by several tables
+    (one record copybook included under two 01s) is qualified through its
+    table's named ancestors, `IX OF ENT OF IN-REC`: a bare `SET ... TO IX`
+    is ambiguous and cobc rejected the whole driver (issue #249). FILLER
+    ancestors are left out of the chain (COBOL lets a qualifier skip
+    levels); a declaration still not told apart from another by its
+    qualified chain is left out, since nothing can name it."""
     data_division = program.get_division("DATA")
     if data_division is None:
         return []
-    names: list[str] = []
+    found: list[tuple[str, str]] = []  # (bare name, qualified reference)
 
     def walk(node) -> None:
         for child in _data_children(node):
             clause = getattr(child, "occurs_clause", None)
             for name in getattr(clause, "index_names", None) or []:
-                if name and name.upper() not in names:
-                    names.append(name.upper())
+                if name:
+                    ancestry = _named_ancestry(child, include_self=True)
+                    chain = [name.upper(), *(n.upper() for n in ancestry)]
+                    found.append((name.upper(), " OF ".join(chain)))
             walk(child)
 
     for section in getattr(data_division, "sections", data_division.children):
         walk(section)
+    bare_counts = Counter(bare for bare, _ in found)
+    qualified_counts = Counter(qualified for _, qualified in found)
+    names: list[str] = []
+    for bare, qualified in found:
+        if bare_counts[bare] == 1:
+            names.append(bare)
+        elif qualified_counts[qualified] == 1:
+            names.append(qualified)
+    return names
+
+
+def _named_ancestry(item, include_self: bool = False) -> list[str]:
+    """The names of `item`'s enclosing data items, innermost first, FILLER
+    and nameless ones left out (a qualifier may skip levels)."""
+    names: list[str] = []
+    node = item if include_self else getattr(item, "parent", None)
+    while node is not None and getattr(node, "level", None) is not None:
+        if not _is_filler(node):
+            names.append(node.name)
+        node = getattr(node, "parent", None)
     return names
 
 

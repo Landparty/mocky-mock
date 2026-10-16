@@ -218,13 +218,14 @@ NESTED_FILLER_VALUE_SOURCE = """\
 
 def test_nested_filler_value_restores_the_group_with_filler():
     """Issue #196: a FILLER VALUE nested at any depth makes the group reset
-    WITH FILLER; a group whose FILLERs carry no VALUE keeps the plain
-    INITIALIZE plus per-child restores."""
+    WITH FILLER ALL TO VALUE; a group whose FILLERs carry no VALUE keeps
+    the per-child restores, after an INITIALIZE that is still WITH FILLER
+    so the FILLER's bytes are cleared too (issue #278)."""
     result = parse_cobol(NESTED_FILLER_VALUE_SOURCE, filename="fil.cbl")
     assert result.success, result.errors
     assert reset_move_lines(result.ast) == [
         "INITIALIZE WS-HDR WITH FILLER ALL TO VALUE THEN TO DEFAULT",
-        "INITIALIZE WS-PLAIN",
+        "INITIALIZE WS-PLAIN WITH FILLER",
         'MOVE "P" TO WS-P1 OF WS-PLAIN',
     ]
 
@@ -658,3 +659,206 @@ def test_index_names_are_saved_once_and_restored_every_case():
     ]
     assert index_working_storage_lines([]) == []
     assert index_reset_lines([]) == []
+
+
+def test_index_declared_by_two_tables_is_qualified_per_declaration():
+    """Issue #249: one record copybook under two 01s declares IX twice; a
+    bare `SET ... TO IX` is ambiguous and cobc rejected the driver. Each
+    declaration gets its own save slot, qualified past FILLER levels."""
+    from mockymock.splicer.reset import index_names
+
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DUPIX.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  IN-REC.
+           05  ENT OCCURS 3 INDEXED BY IX.
+               10  VI    PIC X(2).
+       01  OUT-REC.
+           05  FILLER.
+               10  ENT OCCURS 3 INDEXED BY IX, IY.
+                   15  V     PIC X(2).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+    result = parse_cobol(source, filename="dupix.cbl")
+    assert result.success, result.errors
+    assert index_names(result.ast) == [
+        "IX OF ENT OF IN-REC",
+        "IX OF ENT OF OUT-REC",
+        "IY",
+    ]
+
+
+def test_odo_counter_under_a_filler_group_is_qualified_past_it():
+    """Issue #246: `WS-COUNT OF FILLER` is not COBOL; a counter under `01
+    FILLER` (or a `05 FILLER` group) is named without the FILLER level."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ODOF.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  FILLER.
+           05  WS-COUNT     PIC 9(2) VALUE 0.
+       01  WS-REC.
+           05  FILLER.
+               10  WS-N2    PIC 9(2) VALUE 1.
+           05  WS-T2 OCCURS 1 TO 5 DEPENDING ON WS-N2.
+               10  WS-V2    PIC X.
+       01  WS-TABLE.
+           05  WS-ENT OCCURS 1 TO 20 DEPENDING ON WS-COUNT.
+               10  WS-VAL   PIC X(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+    result = parse_cobol(source, filename="odof.cbl")
+    assert result.success, result.errors
+    lines = reset_move_lines(result.ast)
+    assert not any("FILLER" in line and "MOVE" in line for line in lines), lines
+    assert "MOVE 20 TO WS-COUNT" in lines
+    assert "MOVE 0 TO WS-COUNT" in lines
+    assert "MOVE 5 TO WS-N2 OF WS-REC" in lines
+    assert "MOVE 1 TO WS-N2 OF WS-REC" in lines
+
+
+FILLER_GROUP_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FG.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  FILLER.
+           05  WS-EOF       PIC X VALUE "N".
+           05  WS-CNT       PIC 9(3) VALUE 5.
+           05  FILLER.
+               10  WS-DEEP  PIC X(2) VALUE "DD".
+           05  WS-TAB       PIC X OCCURS 3.
+       01  WS-AREA.
+           05  FILLER.
+               10  WS-X     PIC X(3) VALUE "ABC".
+               10  WS-N     PIC 9(3) VALUE 7.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_filler_groups_are_transparent_to_the_reset():
+    """Issue #247: named items under `01 FILLER.` were never reset, and a
+    `05 FILLER.` group's named children lost their VALUEs."""
+    result = parse_cobol(FILLER_GROUP_SOURCE, filename="fg.cbl")
+    assert result.success, result.errors
+    lines = reset_move_lines(result.ast)
+    assert 'MOVE "N" TO WS-EOF' in lines
+    assert "MOVE 5 TO WS-CNT" in lines
+    assert 'MOVE "DD" TO WS-DEEP' in lines
+    assert not any("WS-TAB" in line for line in lines)
+    assert 'MOVE "ABC" TO WS-X OF WS-AREA' in lines
+    assert "MOVE 7 TO WS-N OF WS-AREA" in lines
+    assert not any("FILLER" in line for line in lines if "MOVE" in line)
+
+
+def test_snapshot_saves_the_named_children_of_a_filler_group():
+    from mockymock.splicer.snapshot import plan_snapshot
+
+    result = parse_cobol(FILLER_GROUP_SOURCE, filename="fg.cbl")
+    snapshot, problems = plan_snapshot(result.ast)
+    assert problems == []
+    targets = [line.rsplit(" TO ", 1)[1] for line in snapshot.restore_lines]
+    assert targets == ["WS-EOF", "WS-CNT", "WS-DEEP", "WS-AREA"]
+
+
+def test_value_less_filler_is_cleared_with_filler():
+    """Issue #278: a padding FILLER kept the bytes a whole-group MOVE left
+    in it, in every later case."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-LINE.
+           05  WS-A          PIC X(3).
+           05  FILLER        PIC X(2).
+           05  WS-B          PIC X(3).
+       01  WS-PLAIN.
+           05  WS-C          PIC X(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+    result = parse_cobol(source, filename="fl.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        "INITIALIZE WS-LINE WITH FILLER",
+        "INITIALIZE WS-PLAIN",
+    ]
+
+
+AMBIGUOUS_TOP_LEVEL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. AMB.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  CUST-ID           PIC X(5) VALUE "WS".
+       01  IN-REC.
+           05  CUST-ID       PIC X(5).
+           05  CUST-NAME     PIC X(10).
+       01  OUT-REC.
+           05  HDR.
+               10  FLAG      PIC X VALUE "N".
+       01  HDR.
+           05  FLAG          PIC X VALUE "Y".
+           05  CNT           PIC 9(3) VALUE 7.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_ambiguous_top_level_names_are_never_referenced_bare():
+    """Issue #281: a 01 whose name is also a subordinate item elsewhere
+    cannot be named; its bare reference broke the reset's compile. An
+    elementary one is skipped, a group is reset through children that are
+    unique when qualified by it."""
+    from mockymock.splicer.snapshot import plan_snapshot
+
+    result = parse_cobol(AMBIGUOUS_TOP_LEVEL_SOURCE, filename="amb.cbl")
+    assert result.success, result.errors
+    lines = reset_move_lines(result.ast)
+    assert lines == [
+        "INITIALIZE IN-REC",
+        "INITIALIZE OUT-REC",
+        'MOVE "N" TO FLAG OF HDR OF OUT-REC',
+        "MOVE 7 TO CNT OF HDR",
+    ]
+    snapshot, problems = plan_snapshot(result.ast)
+    assert problems == []
+    targets = [line.rsplit(" TO ", 1)[1] for line in snapshot.restore_lines]
+    assert targets == ["IN-REC", "OUT-REC", "CNT OF HDR"]
+
+
+def test_before_all_snapshot_saves_every_indexed_by_index():
+    """Issue #280: the reset puts each index back to its start-up value, so
+    the snapshot must carry the position BEFORE-ALL left it at."""
+    from mockymock.splicer.snapshot import plan_snapshot
+
+    result = parse_cobol(INDEXED_BY_SOURCE, filename="idx.cbl")
+    snapshot, problems = plan_snapshot(result.ast)
+    assert problems == []
+    assert snapshot.working_storage_lines[-3:] == [
+        "01  UT-SNAP-002 USAGE INDEX.",
+        "01  UT-SNAP-003 USAGE INDEX.",
+        "01  UT-SNAP-004 USAGE INDEX.",
+    ]
+    assert snapshot.save_lines[-3:] == [
+        "SET UT-SNAP-002 TO IX-ROW",
+        "SET UT-SNAP-003 TO IX",
+        "SET UT-SNAP-004 TO IX2",
+    ]
+    assert snapshot.restore_lines[-3:] == [
+        "SET IX-ROW TO UT-SNAP-002",
+        "SET IX TO UT-SNAP-003",
+        "SET IX2 TO UT-SNAP-004",
+    ]

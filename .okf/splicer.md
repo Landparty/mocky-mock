@@ -315,6 +315,9 @@ load-bearing and was briefly lost in `mutate` (2026-09-04): one binary
 serves the whole suite, so an unreset capture lets a case that never
 reached its CALL assert against the previous case's value — and in
 `mutate` that stale value can "kill" a mutant, inflating the score.
+An alphanumeric-edited argument (`PIC XX/XX/XX`) is not mirrored: its
+target is declared `PIC X(<byte length>)`, since a MOVE into the same
+editing PICTURE edits the captured value again (#277).
 Anything unmirrorable (a table, a PICTURE-less `COMP-1`/`POINTER`, a group
 holding non-DISPLAY bytes, or one directive matching two sites whose
 argument `n` names different items) fails closed as
@@ -557,7 +560,8 @@ a `.cut` has `BEFORE-ALL` steps, every case must start from the state
 they leave, not from the reset. `plan_snapshot(program, linkage_items)`
 covers exactly the items `reset.py` covers (top-level WORKING-STORAGE /
 LOCAL-STORAGE, each FD's longest record, neutralized LINKAGE items; no
-top-level REDEFINES or FILLER) and returns `UT-SNAP-nnn` declarations
+top-level REDEFINES or elementary FILLER, and a top-level FILLER group's
+named children in its place -- see #247 below) and returns `UT-SNAP-nnn` declarations
 plus `UT-SAVE-STATE` / `UT-RESTORE-STATE` bodies, and one problem per
 item it can't copy exactly (`cli.checks` step 10 turns them into
 `UNSAVABLE_BEFORE_ALL_STATE`). The driver runs reset, BEFORE-ALL steps,
@@ -605,6 +609,7 @@ comma spelling too (`injector`, read from the site's text).
 |---|---|---|
 | Elementary, has `VALUE` clause | `MOVE <value> TO <name>` | restores the declared initial value (the clause first passes through `cobol_literal` -- see below) |
 | Elementary, numeric or numeric-edited `DISPLAY` PIC, `VALUE` that is not a number or `ZERO` (`PIC ZZ,ZZ9.99 VALUE SPACES`, `VALUE ALL "*"`) | `MOVE <value> TO <name>(1:)` | cobc rejects a figurative SPACE / alphanumeric literal moved to a numeric item (`move-figurative-space-to-numeric: error`), which broke the driver's compile for every suite (issue #218); the reference-modified byte move stores what VALUE stored |
+| Elementary, alphanumeric- or national-edited PIC with a `VALUE` (`PIC XX/XX/XX VALUE "12/31/99"`) | `MOVE <value> TO <name>(1:)` | VALUE stores the literal's bytes; a MOVE re-applies the editing mask (`12//3/1/`), so the reset is a byte copy (`reset.is_text_edited`, issue #277) |
 | Elementary, `JUSTIFIED`, quoted-literal `VALUE` | `MOVE "<literal padded to the item's size>" TO <name>` | VALUE ignores JUSTIFIED (`PIC X(6) JUST RIGHT VALUE "AB"` starts as `"AB    "`), a MOVE right-justifies; padding to full length makes the two agree. Reference modification does not: GnuCOBOL 3.1 still justified `WS-J(1:)` (issue #218) |
 | Elementary, no `VALUE`, numeric or numeric-edited PIC | `MOVE 0 TO <name>` | numeric-edited PICs (e.g. `PIC ZZZ9`) reject `MOVE SPACES` — `_is_numeric` treats any of `9 V P Z * $ + -` in the (repeat-group-stripped) picture as numeric, not just `9`/`V`/`P` |
 | Elementary, no `VALUE`, alphanumeric PIC | `MOVE SPACES TO <name>` | COBOL's conventional type default, a deliberate divergence from "truly undefined" memory in exchange for deterministic tests |
@@ -673,8 +678,10 @@ object currently names. The counter's own reset line usually ran first
 and one case's entries leaked into the next. For a VALUE-less group holding
 an ODO table, `_odo_counter_lines` brackets the group's reset: `MOVE <max>
 TO <counter>` before, the counter's own VALUE/default reset after (both
-fully qualified; the counter is found anywhere in the program by name and
-DEPENDING ON qualifiers). On the `ALL TO VALUE` path the group is first
+qualified through every enclosing *named* group -- FILLER levels are left
+out, since `WS-COUNT OF FILLER` is not COBOL and broke the driver, #246;
+the counter is found anywhere in the program by name and DEPENDING ON
+qualifiers). On the `ALL TO VALUE` path the group is first
 reset with a plain `INITIALIZE`, the counter set to its maximum again, then
 `INITIALIZE <group> ALL TO VALUE`: `ALL TO VALUE THEN TO DEFAULT` works item
 by item, so a counter declared inside the group dropped to 0 before its
@@ -691,6 +698,28 @@ program could run. Full qualification is always legal, so nothing detects
 the ambiguity first. `_elementary_reset(item, target)` takes the reference
 to write to; top-level items still use their bare name.
 
+**FILLER groups are transparent (issue #247).** A FILLER group can still
+hold named items. `reset_targets` replaces a top-level `01 FILLER.`
+group with its named children (recursively through nested FILLER groups,
+OCCURS children left out), so each is reset as if it were top-level and
+saved by the BEFORE-ALL snapshot by its own name -- before, they were
+never reset and leaked between cases. `_child_value_restores` recurses
+into a `05 FILLER.` group inside a named record, qualifying each restore by
+the named ancestors alone (`MOVE "ABC" TO WS-X OF WS-AREA`); their VALUEs
+used to be lost to the record's INITIALIZE.
+
+**Ambiguous top-level names are never referenced bare (issue #281).**
+`reset_targets` pairs every item with the reference that names it, checked
+against an index of every data item and condition name in the program
+(`_name_index` / `_unique_reference`: the qualifiers must appear, in order,
+among exactly one candidate's named ancestors). A 01/77 whose name is also
+a subordinate item elsewhere cannot be qualified, and its bare name made
+cobc reject `UT-RESET-WORKING-STORAGE`: an elementary one is skipped (no
+program statement can reference it either), a group is reset through its
+children qualified by it (`CNT OF HDR`), recursively, skipping any child
+still not unique. The BEFORE-ALL snapshot saves the same (item, reference)
+pairs.
+
 **FILLER VALUEs are restored (issue #196).** A FILLER cannot be named in
 a MOVE, and the old reset assumed its VALUE "survives INITIALIZE" -- true
 only until a case overwrote the whole group (`MOVE SPACES TO <report
@@ -700,6 +729,11 @@ changed bytes. A VALUE-less group with a FILLER VALUE anywhere under it
 TO VALUE THEN TO DEFAULT`, which restores the FILLER's VALUE and every
 named child's in one statement (checked on GnuCOBOL 3.1). Combined with an
 ODO table it takes the two-step form above, each step `WITH FILLER`.
+A group whose FILLERs carry no VALUE (record padding) keeps the plain
+`INITIALIZE` plus per-child restores, but `WITH FILLER` whenever any FILLER
+sits under it (`_has_filler`, #278): INITIALIZE skips FILLERs otherwise, so
+the bytes a group MOVE / READ INTO left in the padding leaked into every
+later case.
 
 **INDEXED BY index names are saved and restored (issue #189).** An index
 name is not a data item, so the reset never saw it: a case that did `SET
@@ -711,9 +745,15 @@ declares `UT-IDX-SAVED` plus one `UT-IDX-SAVE-NNN USAGE INDEX` per name,
 and `index_reset_lines` makes the first reset (which runs before any
 program code) save each index and every reset restore it. Both are wired
 through `cli/checks.py`'s `extra_working_storage` / `extra_reset_lines_for`,
-so all four splice pipelines get them. An index a BEFORE-ALL step SETs is
-put back to its start-up value at each case, not to the BEFORE-ALL value
-(the snapshot does not cover index names). USAGE INDEX *data items* are
+so all four splice pipelines get them. `index_names` returns one reference
+per *declaration*: a name declared by two tables (one copybook under two
+01s) is qualified through the table's named ancestors, FILLERs skipped
+(`IX OF ENT OF IN-REC`) -- the bare `SET ... TO IX` was ambiguous and cobc
+rejected the driver (#249). An index a BEFORE-ALL step SETs or SEARCHes
+keeps that position in every case: `plan_snapshot` adds one `01
+UT-SNAP-nnn USAGE INDEX.` per `index_names` entry, `SET`-saved in
+`UT-SAVE-STATE` and `SET` back in `UT-RESTORE-STATE`, which runs after the
+reset (#280; before, each case saw the start-up value). USAGE INDEX *data items* are
 still skipped (table above).
 
 `_is_group` must only count children that carry a `level` attribute:
