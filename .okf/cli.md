@@ -467,6 +467,15 @@ pre-toolchain check (steps 2-10 below) lives in
 `ensure_toolchain()` — a bad `.cut`/`.cbl` fails fast with the real problem
 even when Docker is down. `run` and `lint` share this function so they can
 never disagree about what refuses.
+Copybooks are expanded with `preserve_source_locations=True`
+(`StaticCheckResult.source_location_map`), and every `refused (...)`
+problem and note has its `line N` rewritten by
+`checks.source_line_relabeler` to the line of the `.cbl` the user has
+open, or `line M of CPY.CPY` for a statement a copybook brought in
+(issue #241: a WORKING-STORAGE COPY shifted every refusal's line).
+`.cut line N` is left alone. `generate`/`export`'s STOP RUN/GOBACK and
+unmockable-site warnings (`_report_unsupported_boundaries`) are relabeled
+the same way.
 
 Flags beyond the pipeline inputs:
 

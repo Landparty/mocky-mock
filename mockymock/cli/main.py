@@ -1020,11 +1020,16 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     raw_source = read_utf8_source(source_path)
     program_source = raw_source
+    source_location_map: dict[int, tuple[str, int]] = {}
     if args.copybook_path:
         # See _cmd_fixtures's identical guard on the same call for why
         # this can raise on realistic inputs (audit finding F6).
         try:
-            expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
+            expansion = expand_copybooks(
+                raw_source,
+                copybook_paths=args.copybook_path,
+                preserve_source_locations=True,
+            )
         except CopybookNotFoundError as exc:
             print(f"mockymock generate: {exc}")
             print(copybook_not_found_hint())
@@ -1038,6 +1043,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if expansion_reasons:
             return 1
         raw_source = expansion.expanded_source
+        source_location_map = dict(expansion.source_location_map or {})
     result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(result.ast)
     if not result.success:
@@ -1190,7 +1196,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             f"mockymock generate: data-driven from a fixture bundle "
             f"(seed={bundle.seed})"
         )
-    _report_unsupported_boundaries(surface, "generate")
+    _report_unsupported_boundaries(surface, "generate", source_location_map)
     if bundle is None:
         # --per-paragraph writes one case per paragraph as a starting point
         # to prune, some of which are expected to be refused.
@@ -1344,7 +1350,9 @@ def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:
         )
 
 
-def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
+def _report_unsupported_boundaries(
+    surface, command: str = "generate", source_location_map=None
+) -> None:
     """Name every detected boundary point that stays unmockable (a SORT/
     MERGE mixing a USING/GIVING file with an INPUT/OUTPUT PROCEDURE on the
     other side -- a plain-file-form SORT/MERGE and a pure-procedure-form
@@ -1389,6 +1397,13 @@ def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
                 f"nested {site.label} in paragraph '{site.paragraph_name}' "
                 f"(line {site.line}) -- {site.unspliceable_reason}"
             )
+    # Lines of the .cbl the user has open, not of the copybook-expanded
+    # source (issue #241).
+    from mockymock.cli.checks import source_line_relabeler
+
+    relabel = source_line_relabeler(source_location_map)
+    findings = [relabel(finding) for finding in findings]
+    terminator_findings = [relabel(finding) for finding in terminator_findings]
     if findings:
         print(
             f"mockymock {command}: {len(findings)} boundary point(s) detected "
@@ -2619,7 +2634,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         f"mockymock export: wrote mainframe-compilable source "
         f"({len(suite.test_cases)} test case(s)) -> {output_path}"
     )
-    _report_unsupported_boundaries(surface, "export")
+    _report_unsupported_boundaries(surface, "export", checked.source_location_map)
     return 0
 
 
