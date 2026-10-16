@@ -51,6 +51,7 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass, field, replace
+from typing import Any, cast
 
 from mockymock._decimal import decimal_point_is_comma, localize_numeric
 from mockymock.analysis.clause_bodies import (
@@ -1318,9 +1319,7 @@ def _end_of_file_placeholder(
         return []
     key = site.keys[0]
     if file_status_fields is None and context is not None and context.program:
-        file_status_fields = analyze_file_status_fields(
-            context.program  # type: ignore[arg-type]
-        )
+        file_status_fields = analyze_file_status_fields(cast(Any, context.program))
     status = (
         (file_status_fields or {}).get(key.upper())
         if site.category is MockCategory.READ
