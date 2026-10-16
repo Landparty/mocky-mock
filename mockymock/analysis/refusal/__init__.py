@@ -116,6 +116,10 @@ surface.boundary_sites (unfiltered) below, and .okf/analysis.md's
   code before it, a one-line paragraph header, or another statement
   starting on the same line -- would silently delete that sibling code.
   annotate_nested_sites stamps the layout problem; the gate refuses it.
+- matched, with clause bodies (AT END, INVALID KEY, ON EXCEPTION, ...)
+  that `analysis.clause_bodies` cannot lift -> UNLIFTABLE_CLAUSE_BODY
+  (check_clause_bodies, issue #319): the splice would delete every body
+  of the statement with it.
 
 Detected-but-unmockable sites keep their own refusals: DYNAMIC_CALL (now
 only for a dynamic CALL whose target identifier cobolparser failed to
@@ -269,6 +273,7 @@ from ._gates import (
     _whole_program_reasons,
     check_cics_eib_layout,
     check_cics_eib_layout_scoped,
+    check_clause_bodies,
     check_expansion_warnings,
     check_linkage_layout,
     check_nested_exec,
@@ -345,6 +350,7 @@ __all__ = [
     "find_goto_exit_plans",
     "neutralized_goto_targets",
     "find_terminator_plans",
+    "check_clause_bodies",
     "check_terminator_layout",
     "_fallthrough_flags",
     "_first_non_fallthrough",

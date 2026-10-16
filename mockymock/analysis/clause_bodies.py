@@ -20,8 +20,9 @@ NOT ON EXCEPTION / NOT ON OVERFLOW starts with "0"
 ON EXCEPTION / ON OVERFLOW         is "EX"
 =================================  ===================================
 
-Fail closed: a statement whose clause bodies cannot be lifted exactly
-keeps the old behaviour (the bodies are dropped with the statement).
+Fail closed: a mocked statement whose clause bodies cannot be lifted
+exactly is refused (UNLIFTABLE_CLAUSE_BODY, issue #319) -- before, it
+silently lost every body with the statement.
 `clause_bodies_liftable` is the AST half of that decision and
 `lift_clause_bodies` adds the text half; see their docstrings for what
 refuses.
@@ -32,7 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from cobolparser.models.statements.call import CallStatement
-from cobolparser.models.statements.control import GoStatement, StopStatement
+from cobolparser.models.statements.control import StopStatement
 from cobolparser.models.statements.io import (
     IODeleteStatement,
     IOReadStatement,
@@ -120,18 +121,47 @@ _GUARDS: dict[str, str] = {
 }
 
 #: Statements that may not run from a lifted body: another boundary (it
-#: would run unmocked), and anything that leaves the enclosing paragraph
-#: or sentence -- the test driver's PERFORM would not get control back the
-#: way the splicer's other transforms guarantee.
+#: would run unmocked), and anything that leaves the program or rewrites
+#: its control flow -- the test driver's PERFORM would not get control back
+#: the way the splicer's terminator transforms guarantee. A GO TO may: the
+#: lifted body is spliced into the same paragraph, so its target and the
+#: PERFORM range it jumps within are unchanged (issue #319).
 _FORBIDDEN_TYPES: tuple[type, ...] = (
     *_BOUNDARY_STATEMENT_TYPES,
     GobackStatement,
     StopStatement,
-    GoStatement,
     AlterStatement,
     NextSentenceStatement,
     CancelStatement,
 )
+
+#: Clause attribute -> how a refusal names it.
+_CLAUSE_NAMES: dict[str, str] = {
+    "at_end_clause": "AT END",
+    "not_at_end_clause": "NOT AT END",
+    "invalid_key_clause": "INVALID KEY",
+    "not_invalid_key_clause": "NOT INVALID KEY",
+    "at_eop_clause": "AT END-OF-PAGE",
+    "not_at_eop_clause": "NOT AT END-OF-PAGE",
+    "on_exception": "ON EXCEPTION",
+    "not_on_exception": "NOT ON EXCEPTION",
+    "on_overflow": "ON OVERFLOW",
+    "not_on_overflow": "NOT ON OVERFLOW",
+    "on_size_error": "ON SIZE ERROR",
+    "not_on_size_error": "NOT ON SIZE ERROR",
+    "no_data_clause": "NO DATA",
+    "with_data_clause": "WITH DATA",
+}
+
+#: Statement type -> how a refusal names a forbidden statement.
+_FORBIDDEN_NAMES: tuple[tuple[type, str], ...] = (
+    (GobackStatement, "GOBACK"),
+    (StopStatement, "STOP"),
+    (AlterStatement, "ALTER"),
+    (NextSentenceStatement, "NEXT SENTENCE"),
+    (CancelStatement, "CANCEL"),
+)
+
 
 #: Conditional phrases a NESTED statement may carry (SIZE ERROR, ON
 #: OVERFLOW, a SEARCH's AT END, ...), keyed by the word that opens them,
@@ -186,30 +216,63 @@ def _walk(statements: list):
             yield from _walk(nested)
 
 
-def clause_bodies_liftable(statement: object) -> bool:
-    """True when `statement` has at least one clause body and every one of
-    them may be lifted: each clause is one this module knows how to guard,
-    and nothing in any body is another boundary, a terminator, a GO TO,
-    ALTER, NEXT SENTENCE or CANCEL (`_FORBIDDEN_TYPES`), or `EXIT PROGRAM`.
-    A statement with a clause outside that set (WRITE's AT END-OF-PAGE)
-    is not lifted at all -- lifting half its clauses would leave the other
-    half's header text inside the lifted body."""
+def _clause_name(attr: str) -> str:
+    return _CLAUSE_NAMES.get(attr, attr.upper())
+
+
+def _statement_name(statement: object) -> str:
+    for statement_type, name in _FORBIDDEN_NAMES:
+        if isinstance(statement, statement_type):
+            return name
+    return "another boundary"
+
+
+def _ast_problem(statement: object) -> str | None:
+    """Why the AST alone rules the lift out, or None. Assumes `_spec`
+    matched and at least one clause body is present."""
     spec = _spec(statement)
-    if spec is None:
-        return False
+    assert spec is not None
     attrs, _ = spec
     present = [
         attr for attr in _NESTED_STATEMENT_ATTRS if getattr(statement, attr, None)
     ]
-    if not present or any(attr not in attrs for attr in present):
-        return False
+    for attr in present:
+        if attr not in attrs:
+            return f"its {_clause_name(attr)} clause cannot be re-run after a mock"
     for attr in present:
         for nested in _walk(getattr(statement, attr)):
+            line = getattr(getattr(nested, "location", None), "line", None)
+            where = f" at line {line}" if line else ""
             if isinstance(nested, _FORBIDDEN_TYPES):
-                return False
+                return (
+                    f"its {_clause_name(attr)} body holds a "
+                    f"{_statement_name(nested)} statement{where}, which "
+                    f"cannot run from a lifted body"
+                )
             if isinstance(nested, ExitStatement) and nested.exit_type == "PROGRAM":
-                return False
-    return True
+                return (
+                    f"its {_clause_name(attr)} body holds an EXIT PROGRAM "
+                    f"statement{where}, which cannot run from a lifted body"
+                )
+    return None
+
+
+def _has_clause_bodies(statement: object) -> bool:
+    return _spec(statement) is not None and any(
+        getattr(statement, attr, None) for attr in _NESTED_STATEMENT_ATTRS
+    )
+
+
+def clause_bodies_liftable(statement: object) -> bool:
+    """True when `statement` has at least one clause body and every one of
+    them may be lifted: each clause is one this module knows how to guard,
+    and nothing in any body is another boundary, a terminator, ALTER, NEXT
+    SENTENCE or CANCEL (`_FORBIDDEN_TYPES`), or `EXIT PROGRAM`. A GO TO
+    is allowed (issue #319). A statement with a clause outside that set
+    (WRITE's AT END-OF-PAGE) is not lifted at all -- lifting half its
+    clauses would leave the other half's header text inside the lifted
+    body."""
+    return _has_clause_bodies(statement) and _ast_problem(statement) is None
 
 
 def scan_words(text: str):
@@ -297,38 +360,55 @@ def _nested_phrases_terminated(words: list[str]) -> bool:
     return not any(entry[1] for entry in stack)
 
 
-def _body_is_safe(words: list[str]) -> bool:
+def _body_problem(words: list[str], at_period: bool) -> tuple[str | None, list[str]]:
+    """Why a body's words cannot be lifted (None when they can), and the
+    explicit terminators to append to it. A body that ends at the sentence
+    period may leave IF / EVALUATE / SEARCH open -- the period closes them
+    -- so their END-xxx are appended, innermost first (issue #319); one
+    ended by the next clause's header may not."""
     if not words or "." in words:
-        return False
+        return "a sentence period ends it early", []
     if not _nested_phrases_terminated(words):
-        return False
-    return all(
-        words.count(verb) == words.count(terminator)
-        for verb, terminator in _SCOPED_VERBS.items()
-    )
+        return (
+            "it holds a nested conditional phrase (SIZE ERROR, OVERFLOW, "
+            "EXCEPTION, AT END, ...) not closed by its own END-<verb>",
+            [],
+        )
+    open_scopes: list[str] = []
+    for word in words:
+        if word in _SCOPED_VERBS:
+            open_scopes.append(word)
+        elif word in _SCOPED_VERBS.values():
+            if not open_scopes or _SCOPED_VERBS[open_scopes[-1]] != word:
+                return f"its {word} closes no open scope", []
+            open_scopes.pop()
+    if open_scopes and not at_period:
+        return (
+            f"an {open_scopes[-1]} in it has no {_SCOPED_VERBS[open_scopes[-1]]}"
+            f" before the next clause",
+            [],
+        )
+    return None, [_SCOPED_VERBS[verb] for verb in reversed(open_scopes)]
 
 
-def lift_clause_bodies(
+def _lift(
     statement: object, lines: list[str]
-) -> tuple[LiftedClause, ...] | None:
-    """Every clause body of `statement`, located in `lines` (the normalized
-    source the AST's line/column numbers index), or None when they cannot
-    all be lifted exactly -- the caller then keeps the old behaviour.
-
-    Purely positional: a body runs from its first statement's own
-    line/column (from the AST) to the header of the next clause, or to the
-    statement's own scope terminator / sentence period for the last one,
-    and each header must be one of that clause's own spellings
-    (`_HEADERS`). The answer is a slice of the source, never a re-render."""
-    if not clause_bodies_liftable(statement):
-        return None
+) -> tuple[tuple[LiftedClause, ...] | None, str | None]:
+    """The lifted clauses, or None and why not (None too when `statement`
+    has no clause bodies this module handles)."""
+    if not _has_clause_bodies(statement):
+        return None, None
+    problem = _ast_problem(statement)
+    if problem is not None:
+        return None, problem
     spec = _spec(statement)
     assert spec is not None
     attrs, terminator = spec
+    unlocated = "its clause bodies could not be located in the source"
     location = getattr(statement, "location", None)
     start_line = getattr(location, "line", None)
     if not start_line or start_line > len(lines):
-        return None
+        return None, unlocated
     window = lines[start_line - 1 :]
     offsets = [0]
     for line in window:
@@ -353,7 +433,7 @@ def lift_clause_bodies(
             continue
         first = offset_of(body[0])
         if first is None:
-            return None
+            return None, unlocated
         clauses.append((first, attr))
     clauses.sort()
 
@@ -373,7 +453,7 @@ def lift_clause_bodies(
     for offset, attr in clauses:
         index = word_index_at(offset)
         if index is None:
-            return None
+            return None, unlocated
         for header in _HEADERS[attr]:
             begin = index - len(header)
             if begin < 0:
@@ -385,11 +465,12 @@ def lift_clause_bodies(
             header_starts.append(words[begin][0])
             break
         else:
-            return None
+            return None, f"its {_clause_name(attr)} header could not be matched"
         body_word_indexes.append(index)
 
     lifted: list[LiftedClause] = []
     for position, (offset, attr) in enumerate(clauses):
+        at_period = False
         if position + 1 < len(clauses):
             end = header_starts[position + 1]
         else:
@@ -397,17 +478,46 @@ def lift_clause_bodies(
             for start, _, word in words[body_word_indexes[position] :]:
                 if word in (terminator, "."):
                     end = start
+                    at_period = word == "."
                     break
             if end is None:
-                return None
+                return None, f"its {_clause_name(attr)} body has no end"
         body_text = text[offset:end]
-        if not _body_is_safe([w for _, _, w in scan_words(body_text)]):
-            return None
+        problem, closers = _body_problem(
+            [w for _, _, w in scan_words(body_text)], at_period
+        )
+        if problem is not None:
+            return None, f"its {_clause_name(attr)} body cannot be lifted: {problem}"
         body_lines = tuple(
             line.strip() for line in body_text.splitlines() if line.strip()
-        )
+        ) + tuple(closers)
         lifted.append(LiftedClause(attr, _GUARDS[attr], body_lines))
-    return tuple(lifted)
+    return tuple(lifted), None
+
+
+def lift_clause_bodies(
+    statement: object, lines: list[str]
+) -> tuple[LiftedClause, ...] | None:
+    """Every clause body of `statement`, located in `lines` (the normalized
+    source the AST's line/column numbers index), or None when it has none
+    or they cannot all be lifted exactly (`clause_lift_problem` says why;
+    the refusal gate refuses a mocked site in that case, issue #319).
+
+    Purely positional: a body runs from its first statement's own
+    line/column (from the AST) to the header of the next clause, or to the
+    statement's own scope terminator / sentence period for the last one,
+    and each header must be one of that clause's own spellings
+    (`_HEADERS`). The answer is a slice of the source, never a re-render,
+    plus the END-IF / END-EVALUATE / END-SEARCH a sentence period closed."""
+    return _lift(statement, lines)[0]
+
+
+def clause_lift_problem(statement: object, lines: list[str]) -> str | None:
+    """Why `statement`'s clause bodies cannot be lifted, or None when they
+    can or it has none. A mocked site with a problem would lose its bodies
+    with the statement, so the refusal gate refuses it
+    (UNLIFTABLE_CLAUSE_BODY, issue #319)."""
+    return _lift(statement, lines)[1]
 
 
 def clause_guard_lines(lifted: tuple[LiftedClause, ...]) -> list[str]:

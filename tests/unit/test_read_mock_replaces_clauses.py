@@ -87,10 +87,21 @@ def test_mocked_read_reruns_its_own_clause_bodies_by_outcome():
     assert stripped.index("MOVE SPACES TO UT-MOCK-STATUS") < mock_at
 
 
-def test_a_clause_body_holding_a_go_to_is_still_dropped():
-    """Fail closed: a body that would leave the paragraph (GO TO), run
-    another boundary unmocked, or end the run is not lifted -- the
-    statement keeps the old whole-statement replacement."""
+def test_a_clause_body_holding_a_terminator_is_not_lifted():
+    """A body that would end the run (STOP RUN) or run another boundary
+    unmocked is not lifted; the refusal gate refuses such a mocked site
+    (UNLIFTABLE_CLAUSE_BODY, issue #319), and the splicer on its own keeps
+    the whole-statement replacement. A GO TO body is lifted since #319."""
+    cbl = PURGE_CBL.replace(
+        '                   MOVE "Y" TO WS-EOF\n',
+        "                   STOP RUN\n",
+    )
+    live_text = "\n".join(_splice(cbl, PURGE_CUT))
+    assert "UT-MOCK-STATUS" not in live_text
+    assert "MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE" not in live_text
+
+
+def test_a_clause_body_holding_a_go_to_is_lifted():
     cbl = PURGE_CBL.replace(
         '                   MOVE "Y" TO WS-EOF\n',
         "                   GO TO MAIN-EXIT\n",
@@ -98,6 +109,7 @@ def test_a_clause_body_holding_a_go_to_is_still_dropped():
         "           GOBACK.\n",
         "           GOBACK.\n       MAIN-EXIT.\n           EXIT.\n",
     )
-    live_text = "\n".join(_splice(cbl, PURGE_CUT))
-    assert "UT-MOCK-STATUS" not in live_text
-    assert "MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE" not in live_text
+    stripped = [line.strip() for line in _splice(cbl, PURGE_CUT)]
+    at_end = stripped.index('WHEN UT-MOCK-STATUS(1:1) = "1"')
+    assert stripped[at_end + 1] == "GO TO MAIN-EXIT"
+    assert "MOVE PURG-CUTOFF-DATE TO WS-CUTOFF-DATE" in stripped

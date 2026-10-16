@@ -260,6 +260,7 @@ def run_static_checks(
     from mockymock.analysis.refusal import (
         CICS_MACRO_PLACEHOLDER,
         check_cics_eib_layout_scoped,
+        check_clause_bodies,
         check_expansion_warnings,
         check_linkage_layout,
         check_nested_exec,
@@ -660,6 +661,10 @@ def run_static_checks(
         for r in check_terminator_layout(
             surface, parse_result.ast, suite, scope_map, lines
         )
+    )
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}"
+        for r in check_clause_bodies(surface, suite, lines)
     )
     # 9. Synthesized CAPTURE targets. Fail closed: an argument whose layout
     # cannot be mirrored exactly would otherwise reach the compiler as a

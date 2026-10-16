@@ -205,14 +205,19 @@ MOCK CALL "RATESUB"
 END-MOCK
 ```
 
-A clause body is left out (deleted with the statement, as before) when
-it cannot run safely in place: when it holds another boundary statement
-(a `CALL`, file I/O, `EXEC`), `GO TO`, `GOBACK`, `STOP RUN`, `EXIT
-PROGRAM`, `ALTER`, `NEXT SENTENCE` or `CANCEL`, or a nested conditional
-phrase such as `ON SIZE ERROR`. `WRITE ... AT END-OF-PAGE` bodies are
-always left out, and so are a nested statement's own clauses (a nested
-statement with clauses cannot be mocked at all). In those cases, do in
-the mock body what the deleted clause would have done.
+A body may hold a `GO TO`: it runs in the same paragraph, so it jumps
+where it always did. A body ended by the sentence period may leave an
+`IF` open; the period closes it, as in the program.
+
+A mocked statement is **refused** (`UNLIFTABLE_CLAUSE_BODY`) when one of
+its clause bodies cannot run safely in place: when it holds another
+boundary statement (a `CALL`, file I/O, `EXEC`), `GOBACK`, `STOP RUN`,
+`EXIT PROGRAM`, `ALTER`, `NEXT SENTENCE` or `CANCEL`, a nested
+conditional phrase such as `ON SIZE ERROR` not closed by its own
+`END-<verb>`, or an `IF` with no `END-IF` before the next clause; and for
+`WRITE ... AT END-OF-PAGE`. Splicing the mock would delete every body of
+the statement with it. Move that code out of the clause (set a flag in
+it and act on the flag after the statement).
 
 ### `CAPTURE ARG <n> INTO <target>` -- argument capture (`CALL`/dynamic `CALL` only)
 

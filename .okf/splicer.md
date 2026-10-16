@@ -450,18 +450,32 @@ EXCEPTION/ON OVERFLOW. A lifted body is the program's own text, sliced
 positionally (AST start of its first statement up to the next clause's
 header, or the verb's own `END-xxx` / the sentence period for the last).
 
-`lift_clause_bodies` returns None -- and the old whole-statement deletion
-stands -- when any body holds another boundary statement, GO TO, GOBACK,
-STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL; when a body has a
-nested conditional phrase (SIZE ERROR, OVERFLOW, ON EXCEPTION, a SEARCH's
-AT END, ...) whose owning verb is not closed by its own `END-<verb>` after
-it, or an IF/EVALUATE/SEARCH without its explicit terminator (either would
-swallow the next guard `WHEN`). Phrases, not words (#326): `_PHRASE_OWNERS`
-maps each opener to the verbs that may own it, `SIZE` counts only before
-`ERROR` (so `DELIMITED BY SIZE` is fine), and a terminated
-`COMPUTE ... ON SIZE ERROR ... END-COMPUTE` is lifted; when the statement has a clause outside
-the liftable set (`WRITE ... AT END-OF-PAGE`); or when a header cannot be
-matched exactly. `dsl.generator` asks the same function, so the scaffold
+`lift_clause_bodies` returns None when any body holds another boundary
+statement, GOBACK, STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL;
+when a body has a nested conditional phrase (SIZE ERROR, OVERFLOW, ON
+EXCEPTION, a SEARCH's AT END, ...) whose owning verb is not closed by its
+own `END-<verb>` after it, or an IF/EVALUATE/SEARCH left open before the
+next clause's header (either would swallow the next guard `WHEN`); when
+the statement has a clause outside the liftable set (`WRITE ... AT
+END-OF-PAGE`); or when a header cannot be matched exactly. Phrases, not
+words (#326): `_PHRASE_OWNERS` maps each opener to the verbs that may own
+it, `SIZE` counts only before `ERROR` (so `DELIMITED BY SIZE` is fine),
+and a terminated `COMPUTE ... ON SIZE ERROR ... END-COMPUTE` is lifted.
+
+Since #319 that is **refused**, not silently dropped:
+`clause_lift_problem(statement, lines)` says why, and
+`refusal.check_clause_bodies` (run in `cli.checks` step 8, whole-program
+like the splicer's own matching, skipping nested sites with no span)
+emits `UNLIFTABLE_CLAUSE_BODY` for every mocked site that has one. Before,
+every body of the statement -- the liftable ones too -- was deleted with
+it, with lint clean. #319 also widened the lift: a GO TO body is lifted
+(the dispatch sits in the same paragraph, so its target and PERFORM range
+are unchanged; `find_goto_exit_plans` still declines a GO TO inside a
+boundary body, which is the safe direction), and the last body, when it
+ends at the sentence period, gets the END-IF / END-EVALUATE / END-SEARCH
+the period closed appended, innermost first.
+
+`dsl.generator` asks the same function, so the scaffold
 stops copying an AT END clause the splice already re-runs (it reports end
 of file through the status field, or `MOVE "10" TO UT-MOCK-STATUS`).
 

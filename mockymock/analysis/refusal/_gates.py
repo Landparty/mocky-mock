@@ -53,6 +53,7 @@ from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock._lines import split_source_lines
+from mockymock.analysis.clause_bodies import clause_lift_problem
 from mockymock.analysis.linkage import (
     address_of_sites,
     linkage_plan,
@@ -1947,3 +1948,50 @@ def check_terminator_layout(
     a cheap, pure "plan" twice rather than threading it through every
     caller, e.g. analysis.linkage.linkage_plan)."""
     return find_terminator_plans(surface, program, suite, scope_map, lines)[1]
+
+
+def check_clause_bodies(
+    surface: MockSurface, suite: MockTestSuite, lines: list[str]
+) -> list[RefusalReason]:
+    """UNLIFTABLE_CLAUSE_BODY (issue #319): a mocked READ / RETURN / WRITE
+    / REWRITE / DELETE / START / CALL whose AT END / INVALID KEY / ON
+    EXCEPTION ... bodies cannot be re-run after the mock
+    (`analysis.clause_bodies.clause_lift_problem`). The splice replaces
+    the whole statement, so every body -- the liftable ones too -- would
+    be deleted with it and the case would run code the program does not
+    have. Whole-program, like the splicer's own site matching: any site
+    any directive of any selected case matches is spliced. A nested site
+    with no validated span is left to UNSUPPORTED_NESTED_MOCK_TARGET."""
+    reasons: list[RefusalReason] = []
+    seen: set[int] = set()
+    for site in surface.boundary_sites:
+        if site.category is None or id(site.statement) in seen:
+            continue
+        if site.nested and site.span is None:
+            continue
+        matches = [
+            directive
+            for case in suite.test_cases
+            for directive in case.mocks
+            if directive_matches_site(directive, site)
+        ]
+        if not matches:
+            continue
+        seen.add(id(site.statement))
+        problem = clause_lift_problem(site.statement, lines)
+        if problem is None:
+            continue
+        reasons.append(
+            RefusalReason(
+                code="UNLIFTABLE_CLAUSE_BODY",
+                message=(
+                    f"MOCK {matches[0].describe()} matches the {site.label} at "
+                    f"line {site.line} (paragraph '{site.paragraph_name}'), but "
+                    f"{problem} -- the splice would delete every clause body "
+                    f"of the statement with it; move that code out of the "
+                    f"clause (e.g. set a flag there and act on it after the "
+                    f"statement)"
+                ),
+            )
+        )
+    return reasons
