@@ -136,6 +136,19 @@ class CicsEibPlan:
     dib_names: list[str] = field(default_factory=list)
 
 
+def _has_nohandle_terminator(program) -> bool:
+    from mockymock.analysis.mock_surface import is_cics_terminator
+
+    if program is None:
+        return False
+    return any(
+        is_cics_terminator(statement)
+        and re.search(r"\bNOHANDLE\b", str(statement.cics_text or ""), re.I)
+        and not re.search(r"\bRESP\s*\(", str(statement.cics_text or ""), re.I)
+        for statement in program.find_all_by_type("ExecCicsStatement")
+    )
+
+
 def cics_eib_plan(program, lines: list[str]) -> CicsEibPlan | None:
     """`None` when there is nothing for this feature to do: no EIB name
     referenced anywhere in `lines`, or every referenced name is already
@@ -145,7 +158,12 @@ def cics_eib_plan(program, lines: list[str]) -> CicsEibPlan | None:
     storage for it).
     """
     text = "\n".join(lines)
-    referenced = sorted({m.group(0).upper() for m in _EIB_NAME_RE.finditer(text)})
+    found = {m.group(0).upper() for m in _EIB_NAME_RE.finditer(text)}
+    if _has_nohandle_terminator(program):
+        # The splice tests EIBRESP after a mocked NOHANDLE RETURN/XCTL/ABEND
+        # (issue #301), whether or not the program names it.
+        found.add("EIBRESP")
+    referenced = sorted(found)
     dib = sorted({m.group(0).upper() for m in _DIB_NAME_RE.finditer(text)})
     if not referenced and not dib:
         return None

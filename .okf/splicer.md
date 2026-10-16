@@ -1046,6 +1046,10 @@ GOBACK, and the orchestrator wraps the site's own dispatch block with
 field is preset to 0 before the dispatch (what a successful command
 leaves there; the mock body may set a failure code) and the exit is taken
 only `IF field = 0`. A RESP operand that is not one data name refuses.
+`NOHANDLE` without RESP is the same contract with the condition in
+EIBRESP, so `resp_field` is `EIBRESP` there (#301), and
+`analysis.cics_eib.cics_eib_plan` counts such a command as a reference to
+EIBRESP so DFHEIBLK is synthesized even when the program never names it.
 `_falls_through` and `exact_counts` treat these commands as path ends.
 
 **`RETURNING`/`GIVING` operands** (issue #219): `STOP RUN RETURNING n` /
