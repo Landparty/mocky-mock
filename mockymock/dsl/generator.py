@@ -526,11 +526,15 @@ class ProgramContext:
         return reached
 
     def exact_count_scope(
-        self, entry: str, reachable: set[str]
+        self, entry: str, reachable: set[str], loops_exact: bool = False
     ) -> tuple[set[str], set[int]] | None:
         """`analysis.exact_counts.exact_count_scope` for `PERFORM entry`."""
         return exact_count_scope(
-            self.program, entry, reachable, neutralized_goto=self.neutralized_goto
+            self.program,
+            entry,
+            reachable,
+            neutralized_goto=self.neutralized_goto,
+            loops_exact=loops_exact,
         )
 
     def captures_for(self, category: MockCategory, key: str) -> list[str]:
@@ -2701,6 +2705,10 @@ _CONDITIONAL_SITE_REASON = (
     "called only under an IF/EVALUATE, or from a paragraph PERFORMed "
     "conditionally, so whether this case reaches it is not known"
 )
+_LOOPED_SITE_REASON = (
+    "called inside a PERFORM loop (UNTIL/VARYING/TIMES) or from a paragraph "
+    "PERFORMed more than once, which the bundle counts once"
+)
 _UNREACHED_SITE_REASON = (
     "also called from a paragraph this case's PERFORM never reaches (a CICS "
     "HANDLE CONDITION target, or code nothing PERFORMs), which the bundle's "
@@ -2713,6 +2721,7 @@ def _conditional_call_count_keys(
     surface: MockSurface,
     reachable: set[str] | None = None,
     scope: tuple[set[str], set[int]] | None = None,
+    row_scope: tuple[set[str], set[int]] | None = None,
 ) -> list[tuple[tuple[MockCategory, str], str]]:
     """Keys whose bundle count (`_merged_call_counts`) is not exact, each
     with the reason. The bundle counts every site once per scenario whether
@@ -2726,7 +2735,13 @@ def _conditional_call_count_keys(
     site outside `reachable` (ACCTINQ's CICS RETURN in its HANDLE
     CONDITION NOTFND paragraph) carries a count this case cannot reach --
     READ/RETURN excepted, whose merged count is the largest one, not a
-    sum."""
+    sum.
+
+    `scope` takes a looping PERFORM's target (and a paragraph PERFORMed
+    twice) out, since the bundle counts such a site once however often it
+    runs (issue #290). READ/RETURN are checked against `row_scope` instead
+    (the scope with `loops_exact=True`, falling back to `scope`): their
+    counts come from the bundle's row data, which models the read loop."""
     keys: list[tuple[tuple[MockCategory, str], str]] = []
     for expectation in expectations:
         if expectation.kind != "call_count":
@@ -2748,8 +2763,19 @@ def _conditional_call_count_keys(
         elif scope is None:
             if any(site.nested for site in sites):
                 keys.append(((category, key), _CONDITIONAL_SITE_REASON))
+        elif category in (MockCategory.READ, MockCategory.RETURN):
+            if any(not _site_in_scope(site, row_scope or scope) for site in sites):
+                keys.append(((category, key), _CONDITIONAL_SITE_REASON))
         elif any(not _site_in_scope(site, scope) for site in sites):
-            keys.append(((category, key), _CONDITIONAL_SITE_REASON))
+            looped = row_scope is not None and all(
+                _site_in_scope(site, row_scope) for site in sites
+            )
+            keys.append(
+                (
+                    (category, key),
+                    _LOOPED_SITE_REASON if looped else _CONDITIONAL_SITE_REASON,
+                )
+            )
     return keys
 
 
@@ -2835,13 +2861,12 @@ def _scaffold_with_bundle(
             for line in _capture_stub_lines(_capture_targets(directive_lines))
         )
         expectations = _merged_call_counts(scenario.expectations)
-        scope = (
-            source.exact_count_scope(entry, reachable)
-            if source is not None and reachable is not None
-            else None
-        )
+        scope = row_scope = None
+        if source is not None and reachable is not None:
+            scope = source.exact_count_scope(entry, reachable)
+            row_scope = source.exact_count_scope(entry, reachable, loops_exact=True)
         for key_pair, reason in _conditional_call_count_keys(
-            expectations, surface, reachable, scope
+            expectations, surface, reachable, scope, row_scope
         ):
             call_count_overrides.setdefault(
                 key_pair,
