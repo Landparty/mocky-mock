@@ -1656,7 +1656,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # run_static_checks) so a stub's case_index always means what
     # build_driver means by it. See
     # docs/2026-08-04-record-expectations-design.md.
-    cut_text = read_utf8_source(cut_path)
+    # Untranslated newlines, like `generate --fill`: the rewrite below
+    # must keep a CRLF .cut CRLF (issue #199), so it is written back with
+    # newline="" and rewrite_cut_text joins with the file's own newline.
+    cut_text = read_utf8_source(cut_path, keep_newlines=True)
     stub_scan = (
         scan_stub_expectations(cut_text, suite) if args.record_expectations else None
     )
@@ -1801,7 +1804,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
         rewritten = rewrite_cut_text(cut_text, recording, pictures)
         if rewritten is not None:
-            cut_path.write_text(rewritten, encoding="utf-8", newline="\n")
+            cut_path.write_text(rewritten, encoding="utf-8", newline="")
         print(
             f"mockymock run: --record-expectations: recorded "
             f"{len(recording.recorded)}, skipped {len(recording.skipped)}"

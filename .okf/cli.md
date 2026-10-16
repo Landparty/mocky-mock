@@ -523,7 +523,12 @@ Flags beyond the pipeline inputs:
   on `invupdt`/`ordrproc`/`raterte`. The PICTURE comes from the program's
   own data items (subscripts stripped) and, for a synthesized `UT-CAP-`
   target, from its capture source; anything without one (alphanumeric,
-  numeric-edited, `P`-scaled, unresolved) keeps the old text-shape rule.
+  numeric-edited, unresolved) keeps the old text-shape rule. A group item
+  renders as alphanumeric and a stub on a `P`-scaled item is skipped
+  (issue #194). The file is read without newline translation and written
+  with `newline=""`, `rewrite_cut_text` joining with the file's own
+  newline, so a CRLF `.cut` stays CRLF (issue #199, the same fix
+  `generate --fill` already had).
 - `--keep-sandbox` — never delete the sandbox directory; its path is
   printed at the start of the run for inspection.
 - `--verbose` — on compile failure, print the path to the instrumented

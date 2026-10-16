@@ -364,7 +364,10 @@ def rewrite_cut_text(
     stays valid while the earlier ones are rewritten.
 
     Returns `None` (write nothing) when nothing was recorded -- a command
-    that recorded zero stubs must not touch the file at all.
+    that recorded zero stubs must not touch the file at all. Lines are
+    joined with `cut_text`'s own newline (`\r\n` when it has one), so the
+    caller must read without newline translation and write with
+    `newline=""`.
     """
     if not report.recorded:
         return None
@@ -411,5 +414,9 @@ def rewrite_cut_text(
                 indent_text = lines[first - 1]
                 indent = indent_text[: len(indent_text) - len(indent_text.lstrip())]
                 lines.insert(first - 1, f"{indent}{RECORDED_LABEL}")
-    text = "\n".join(lines)
-    return text + "\n" if cut_text.endswith("\n") else text
+    # The file's own newline convention, so a CRLF .cut is not rewritten
+    # as LF throughout (issue #199); splitlines() above already took the
+    # "\r" off every line.
+    newline = "\r\n" if "\r\n" in cut_text else "\n"
+    text = newline.join(lines)
+    return text + newline if cut_text.endswith("\n") else text

@@ -624,3 +624,22 @@ TESTCASE "calc"
     assert [r.stub.data_name for r in report.recorded] == ["WS-RC"]
     assert [s.data_name for s in report.skipped] == ["WS-PROC-PTR", "WS-IDX"]
     assert all("POINTER" in s.reason for s in report.skipped)
+
+
+def test_rewrite_keeps_a_crlf_file_crlf_throughout():
+    # Issue #199: the rewrite used to turn every CRLF into LF.
+    text = CUT_TEXT.replace("\n", "\r\n")
+    scan = _scan(text)
+    suite_result = _TestSuiteResult(
+        suite_name="S",
+        results=[
+            _TestResult(
+                case_id="001", case_name="calc", recorded=[("WS-NET-TOTAL", "5")]
+            )
+        ],
+    )
+    rewritten = rewrite_cut_text(text, build_recording_report(scan, suite_result))
+    assert rewritten is not None
+    assert "\r\r" not in rewritten
+    assert rewritten.count("\r\n") == rewritten.count("\n")
+    assert rewritten.endswith("EXPECT WS-NET-TOTAL TO BE 5\r\n")
