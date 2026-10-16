@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from cobolparser.models.statements.control import GoStatement
+from cobolparser.models.statements.control import GoStatement, PerformStatement
 
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
@@ -41,6 +41,9 @@ from mockymock.splicer.source_map import (
 
 from ._reachability import (
     _expand_thru_range,
+    _find_sort_merge_statements,
+    _find_statements_of_type,
+    _find_xml_parse_statements,
     _go_statement_raw_targets,
     _go_statement_target,
     _go_statements_with_nesting,
@@ -141,6 +144,38 @@ class GotoExitPlan:
     span: tuple[int, int] | None = None
 
 
+def _in_program_range_ends(procedure) -> dict[str, int]:
+    """Paragraph name -> line of one in-program PERFORM (any form, at
+    any nesting depth), SORT/MERGE INPUT/OUTPUT PROCEDURE or XML PARSE
+    PROCESSING PROCEDURE whose range ENDS at that paragraph: `PERFORM A`
+    ends at A, `PERFORM A THRU B` at B. A GO TO out of such a paragraph
+    leaves that range (issue #213)."""
+    ends: dict[str, int] = {}
+    for paragraph in _all_paragraphs(procedure):
+        statements = paragraph.statements
+        for statement in _find_statements_of_type(statements, PerformStatement):
+            end = statement.thru_paragraph or statement.target_paragraph
+            if end:
+                ends.setdefault(end, statement.location.line)
+        for statement in _find_sort_merge_statements(statements):
+            for start_attr, thru_attr in (
+                ("input_procedure", "input_procedure_thru"),
+                ("output_procedure", "output_procedure_thru"),
+            ):
+                end = getattr(statement, thru_attr, None) or getattr(
+                    statement, start_attr, None
+                )
+                if end:
+                    ends.setdefault(end, statement.location.line)
+        for statement in _find_xml_parse_statements(statements):
+            end = getattr(statement, "processing_procedure_thru", None) or getattr(
+                statement, "processing_procedure", None
+            )
+            if end:
+                ends.setdefault(end, statement.location.line)
+    return ends
+
+
 # Shown when a nested site reaches a check before annotate_nested_sites ran
 # (or was skipped): treat it as unspliceable rather than assume it is safe.
 def find_goto_exit_plans(
@@ -200,6 +235,17 @@ def find_goto_exit_plans(
       range's own fall-through would then run them on the early-exit path
       where it never did before. Confirmed empirically against this exact
       shape before this check existed (see the PR review that added it).
+    - no in-program PERFORM (or SORT/MERGE/XML PARSE procedure) range
+      ENDS at the enclosing paragraph (`_in_program_range_ends`, issue
+      #213): under `PERFORM <enclosing>` with no `THRU <exit-paragraph>`,
+      the original GO TO jumps OUT of the PERFORM range and control never
+      returns to the caller -- the classic forgotten-THRU bug. Rewriting
+      it into a clean return would certify behaviour the real program
+      does not have, so the GO TO is left alone and its edge stays
+      visible to the gates. A `.cut`/hook PERFORM of the enclosing
+      paragraph without THRU is deliberately NOT a disqualifier: that is
+      the THRU-elision convenience the design doc describes, and without
+      the rewrite the GO TO would run off the end of the test driver.
 
     SECTION-scoped enclosing paragraphs are NOT supported (unlike
     `find_terminator_plans`, which handles the one narrow safe-section-
@@ -264,6 +310,7 @@ def find_goto_exit_plans(
         return [], []
 
     top_level_names = {p.paragraph_name for p in procedure.paragraphs}
+    range_ends = _in_program_range_ends(procedure)
     base_go_to_targets = _go_to_targets(program)
     boundaries = collect_boundaries(program)
     last_line = len(lines)
@@ -363,6 +410,15 @@ def find_goto_exit_plans(
                         f"PERFORM ... THRU range ending at '{target_name}' "
                         f"could cover real paragraphs between them, whose "
                         f"early-exit-path behavior this splice would change"
+                    )
+                    continue
+                if enclosing in range_ends:
+                    problems.append(
+                        f"line {statement.location.line}: the PERFORM at line "
+                        f"{range_ends[enclosing]} ends its range at enclosing "
+                        f"paragraph '{enclosing}', not at '{target_name}' -- "
+                        f"the GO TO leaves that PERFORM's range for real, "
+                        f"so it is not an early return there"
                     )
                     continue
                 if in_boundary:

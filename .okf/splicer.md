@@ -863,7 +863,16 @@ enclosing paragraph must not itself be in `_go_to_targets`/
 `_go_to_fallthrough_targets`, and must be top-level -- `SECTION`-scoped
 enclosing paragraphs are declined, not supported (see below). The
 exit-only paragraph must also be the enclosing paragraph's immediate
-successor in source order, with nothing else between them. All-or-nothing
+successor in source order, with nothing else between them. And no
+in-program `PERFORM` (any form) or SORT/MERGE/XML PARSE procedure range may
+*end* at the enclosing paragraph (`_plans._in_program_range_ends`, issue
+#213): under a plain `PERFORM 1000-A` (no `THRU 1000-EXIT`) the real GO TO
+leaves the PERFORM range and never returns, which is the classic
+forgotten-THRU bug, and rewriting it into a clean return would hide that
+bug. A `.cut`/hook PERFORM of the enclosing paragraph without THRU is
+deliberately not checked: that THRU elision is the intended convenience
+(without the rewrite the GO TO would run off the end of the test driver).
+All-or-nothing
 per target paragraph -- `_go_to_targets` is a whole-program property, so
 neutralizing some but not all `GO TO`s naming one exit-only paragraph
 would leave it exactly as hazardous as before; a computed or multi-target
