@@ -287,7 +287,12 @@ passes it as `statement_text`) and emits the literal token verbatim
 (`MOVE "ABC" TO target`). It trusts the text only when its operand list
 agrees with the parser's operand for operand; otherwise it falls back to
 the name (2026-09-28 -- before, the MOVE silently copied an unrelated item
-named ABC, or failed in cobc). `plan_captures` (given `lines` by
+named ABC, or failed in cobc). A subscript or reference modification after
+an operand (`WS-ENT(WS-I)`, `WS-A(1:2)`) is consumed as one balanced group
+and compared with cobolparser's spaced-out name (`WS-ENT ( WS-I )`) with
+whitespace and commas dropped (`_operand_key`); the scan used to give up
+on any parenthesis, which put a literal next to a subscripted operand back
+on the name fallback (#291). Only an unbalanced group still falls back. `plan_captures` (given `lines` by
 `cli.checks`) applies the same recognition via `_site_argument`, so a
 `UT-CAP-` target for a literal is declared from the literal itself
 (`_literal_declaration`: `PIC X(len)` for a quoted literal, `PIC [S]9(i)[V9(d)]`
