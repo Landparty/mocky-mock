@@ -66,6 +66,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     normalize_exec_text,
 )
+from mockymock.analysis.sql_whenever import whenever_can_fire
 from mockymock.dsl.generator import directive_snippet
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
@@ -1361,6 +1362,9 @@ def check_test_case(
         case.perform_thru,
         skip_traversal=mocked_flow_names,
         neutralized_goto=neutralized_goto,
+        # A WHENEVER handler is reached only when this case's mocks can set
+        # SQLCODE so that its check fires (issue #244).
+        follow_whenever=whenever_can_fire(program, case.mocks),
     )
 
     if case.perform_target not in reachable:

@@ -173,3 +173,92 @@ def whenever_check_lines(checks: tuple[tuple[str, str], ...]) -> list[str]:
         lines.append(f"    GO TO {target}")
         lines.append("END-IF")
     return lines
+
+
+def whenever_lines(program) -> dict[str, int]:
+    """GO TO target -> the source line of the first `EXEC SQL WHENEVER ...
+    GO TO <target>` naming it, for messages."""
+    found: dict[str, int] = {}
+    for statement in _procedure_sql_statements(program):
+        text = _sql_text(statement)
+        if not is_whenever(text):
+            continue
+        parsed = parse_whenever(text)
+        if parsed.target and parsed.target not in found:
+            location = getattr(statement, "location", None)
+            found[parsed.target] = getattr(location, "line", 0) or 0
+    return found
+
+
+#: The SQLCA fields a WHENEVER check reads, and the SQLCA itself.
+_SQLCA_WORD_RE = re.compile(
+    r"(?<![A-Z0-9-])(?:SQLCODE|SQLCA|SQLWARN[0-9A-Z]?|SQLSTATE)(?![A-Z0-9-])"
+)
+_LITERAL_SQLCODE_MOVE_RE = re.compile(
+    r"(?<![A-Z0-9-])MOVE\s+([+-]?\d+)\s+TO\s+SQLCODE(?![A-Z0-9-])(?!\s+(?:OF|IN)\b)"
+)
+#: Words that make a mock body's last SQLCODE value depend on control flow.
+_CONDITIONAL_WORD_RE = re.compile(
+    r"(?<![A-Z0-9-])(?:IF|ELSE|EVALUATE|WHEN|PERFORM|GO|SEARCH|"
+    r"ON|AT|INVALID|NOT)(?![A-Z0-9-])"
+)
+_STRING_LITERAL_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def _fires(condition: str, sqlcode: int) -> bool:
+    if condition == "SQLERROR":
+        return sqlcode < 0
+    if condition == "NOT FOUND":
+        return sqlcode == 100
+    return True  # SQLWARNING also reads SQLWARN0: never proven quiet
+
+
+def whenever_can_fire(program, mocks) -> bool:
+    """Whether a test case with these MOCK directives in force can make any
+    emulated `EXEC SQL WHENEVER ... GO TO` jump (issue #244).
+
+    Fail closed: False only when every SQL mock provably leaves SQLCODE at
+    a value no active condition fires on -- a body with no control flow
+    whose every SQLCODE reference is `MOVE <integer> TO SQLCODE`, or a ROWS
+    mock (each row starts from SQLCODE 0, exhaustion sets 100) whose rows
+    set no firing SQLCODE while NOT FOUND is inactive. An active
+    SQLWARNING (it also reads SQLWARN0) always counts as able to fire."""
+    from mockymock.dsl.model import MockCategory
+
+    active = {
+        condition
+        for checks in whenever_actions(program).values()
+        for condition, _ in checks
+    }
+    if not active:
+        return False
+    if "SQLWARNING" in active:
+        return True
+    for directive in mocks:
+        if directive.category is not MockCategory.SQL:
+            continue
+        if directive.rows is not None:
+            if "NOT FOUND" in active:
+                return True
+            for row in directive.rows:
+                for name, value in row:
+                    if not _SQLCA_WORD_RE.fullmatch(" ".join(name.upper().split())):
+                        continue
+                    try:
+                        code = int(value.strip())
+                    except ValueError:
+                        return True
+                    if any(_fires(c, code) for c in active):
+                        return True
+            continue
+        body = _STRING_LITERAL_RE.sub(
+            "''", " ".join(" ".join(directive.body_lines).upper().split())
+        )
+        if _CONDITIONAL_WORD_RE.search(body):
+            return True
+        moves = _LITERAL_SQLCODE_MOVE_RE.findall(body)
+        if not moves or len(_SQLCA_WORD_RE.findall(body)) != len(moves):
+            return True
+        if any(_fires(c, int(code)) for code in moves for c in active):
+            return True
+    return False

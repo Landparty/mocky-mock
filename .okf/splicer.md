@@ -366,7 +366,23 @@ FOUND), in that order -- for the WHENEVERs in force at that statement in
 *physical source order* (`whenever_actions`; `CONTINUE` switches a
 condition off; INCLUDE/DECLARE/BEGIN-END DECLARE get no checks). The trap
 of an unmocked site gets none. The reachability walk follows each check's
-GO TO like a written one, and `_go_to_targets` includes the handlers.
+GO TO like a written one, and `_go_to_targets` includes the handlers --
+but only for a test case whose mocks can make a WHENEVER fire (issue
+#244, option B). `sql_whenever.whenever_can_fire(program, case.mocks)` is
+fail closed: it is False only when every SQL mock provably leaves SQLCODE
+at a value no active condition fires on (a body with no IF/EVALUATE/
+PERFORM/... whose every SQLCODE/SQLCA reference is `MOVE <integer> TO
+SQLCODE`; a ROWS mock only while NOT FOUND is inactive and no row sets a
+firing SQLCODE; never while a WHENEVER SQLWARNING GO TO is active). For
+such a case `check_test_case` and `find_terminator_plans` walk with
+`_reachable_paragraphs(follow_whenever=False)` and judge terminators
+against `_go_to_targets(include_whenever=False)`, so the success path is
+neither refused for the handler's GOBACK nor asked to mock its ROLLBACK.
+A case that can fire it is still refused (UNSUPPORTED_TERMINATOR_LAYOUT),
+naming the WHENEVER's line instead of a GO TO the program never wrote.
+`generate` (bundle and `--per-paragraph`) asks the same question of the
+mocks it is about to write (`ProgramContext.whenever_quiet`, the lines
+read back through `parse_cut`) and narrows the reachable set to match.
 `check_nested_exec` validates WHENEVER spans like any EXEC and refuses an
 action it cannot read (`UNSUPPORTED_SQL_WHENEVER`); a leftover `MOCK SQL
 "WHENEVER"` is UNMATCHED_MOCK with a message saying why. CICS `HANDLE
