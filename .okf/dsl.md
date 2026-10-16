@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T00:00:00Z
 ---
 
 # Overview
@@ -101,7 +101,9 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   raises `CutParseError` (`_reject_sentence_period`, 2026-09-27) --
   spliced into the generated `IF`, the period ended the sentence mid-IF
   and `cobc` rejected the driver while `lint` passed; a PROVIDER row
-  substituting such a value is refused at its `ROW` line. Phrase words are case-sensitive
+  substituting such a value is refused at its `ROW` line. The same check
+  covers setup and BEFORE-*/AFTER-* hook `MOVE` values, and PROVIDER rows
+  substituted into them (issue #197, 2026-10-16). Phrase words are case-sensitive
   uppercase like every other keyword.
 - `EXPECT <data-name> TO BE <value>`'s `<data-name>` and `MOVE <value> TO
   <target>`'s `<target>` both accept one non-nested `(...)` group appended
