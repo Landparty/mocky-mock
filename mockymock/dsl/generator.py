@@ -1227,20 +1227,8 @@ def _call_loop_end_lines(
     waits_on_reply = any(
         reply is not None
         and site_in_loop(other, context.looped)
-        and (
-            # An MQGET in an UNTIL loop drains its queue: whatever flag the
-            # guard tests, the program sets it from the MQRC_NO_MSG_AVAILABLE
-            # reply (`WHEN WS-REASON = MQRC-NO-MSG-AVAILABLE SET DRAIN-DONE`).
-            # Now that the row answers MQCC_OK (issue #205), a loop that
-            # never sees that reply never ends. (A `PERFORM n TIMES` loop has
-            # no guard words and is left alone.)
-            (
-                site.keys[0].upper() == "MQGET"
-                and bool(loop_guard_words(other, context.guards))
-            )
-            or loop_guard_words(other, context.guards)
-            & _reply_watched_names(other, reply[1], context)
-        )
+        and loop_guard_words(other, context.guards)
+        & _reply_watched_names(other, reply[1], context)
         for other, reply in zip(sites, replies, strict=True)
     )
     if not waits_on_reply:
