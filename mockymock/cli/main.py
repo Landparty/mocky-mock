@@ -1191,7 +1191,57 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             f"(seed={bundle.seed})"
         )
     _report_unsupported_boundaries(surface, "generate")
-    return 0
+    if bundle is None:
+        # --per-paragraph writes one case per paragraph as a starting point
+        # to prune, some of which are expected to be refused.
+        return 0
+    return _refuse_unusable_scaffold(source_path, output_path, args)
+
+
+def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
+    """Lint what `generate` just wrote and fail on any refusal no MOCK
+    block can fix (issue #231): `generate` knows the PERFORM target of every
+    case it writes, so a happy-path case whose entry point reaches an
+    unsafe STOP RUN (UNSUPPORTED_TERMINATOR_LAYOUT) is known to be unusable
+    here, not only at the next `lint`/`run`. Mirrors `--fill`'s own closing
+    check; UNMOCKED_* refusals are left to `generate --fill`."""
+    from mockymock.cli.checks import run_static_checks
+
+    checked = run_static_checks(source_path, cut_path, args.copybook_path)
+    per_case = {
+        f"refused ({r.code}): {r.message}"
+        for reasons in checked.unmocked_reasons.values()
+        for r in reasons
+    }
+    remaining: list[str] = []
+    cases = checked.suite.test_cases if checked.suite is not None else []
+    for index, reasons in sorted(checked.unmocked_reasons.items()):
+        case = cases[index] if index < len(cases) else None
+        where = (
+            f'.cut line {case.line}: TESTCASE "{case.name}" '
+            if case is not None and case.line
+            else ""
+        )
+        remaining.extend(
+            f"{where}refused ({r.code}): {r.message}"
+            for r in reasons
+            if not r.code.startswith("UNMOCKED_")
+        )
+    remaining.extend(
+        problem
+        for problem in checked.problems
+        if not problem.startswith("  ") and problem not in per_case
+    )
+    if not remaining:
+        return 0
+    for problem in remaining:
+        print(f"mockymock generate: {problem}")
+    print(
+        f"mockymock generate: {cut_path} was written, but `lint` refuses it "
+        f"for the reason(s) above -- no MOCK block can fix them",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _print_linkage_neutralization(
@@ -1299,10 +1349,9 @@ def _report_unsupported_boundaries(surface, command: str = "generate") -> None:
     unlike the other category=None labels, `run` does not always refuse a
     test case reaching one -- check_terminator_layout (see
     docs/2026-07-08-goback-stop-run-support-design.md) may find it safe.
-    `generate` has no specific test case's PERFORM target to evaluate
-    reachability against, so it cannot know which outcome a future `.cut`
-    will get -- claiming "will be refused" here would be wrong as often as
-    it's right.
+    This report covers the program, not one case: a `.cut` written later
+    may reach a site through another PERFORM target. The cases `generate`
+    writes itself are linted right after (`_refuse_unusable_scaffold`).
 
     `command` names the caller in the printed output -- `generate` (the
     default, and this function's original and still most common caller)
