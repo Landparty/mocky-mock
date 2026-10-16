@@ -1087,14 +1087,18 @@ def _with_captures(
 def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
     """The body `_directive_for` gives `(category, key)` outside a fixture
     bundle: `_PLACEHOLDER_BODIES`'s entry (CALL/DYNCALL/SQL), or ACCEPT's
-    own `MOVE SPACES TO <key>`, or empty for everything else (the file-op
+    own `INITIALIZE <key>`, or empty for everything else (the file-op
     verbs, CICS, DLI). Factored out of `_directive_for` so the
     bundle-driven scaffold's `--placeholder` downgrade (`_bundle_directive_for`)
     can reuse the exact same body a bundle-less scaffold would have
     emitted for this site, rather than a second, driftable copy of this
     per-category logic."""
     if category is MockCategory.ACCEPT:
-        return [f"MOVE SPACES TO {key}"]
+        # INITIALIZE, not MOVE SPACES: legal for an alphanumeric, numeric
+        # or numeric-edited target alike (cobc rejects MOVE SPACES to a
+        # numeric item), and sets each to its category's default -- this
+        # body is lint's suggested fix and `--fill`'s insert (issue #330).
+        return [f"INITIALIZE {key}"]
     return list(_PLACEHOLDER_BODIES.get(category, []))
 
 

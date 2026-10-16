@@ -568,8 +568,11 @@ Rules:
   missing).
 - Placeholder bodies (`_PLACEHOLDER_BODIES`): `CALL`/`DYNCALL` →
   `MOVE 0 TO RETURN-CODE`; `SQL` → `MOVE 0 TO SQLCODE`; file-op categories →
-  empty body; `ACCEPT` → `MOVE SPACES TO <target>` (built per-site, not from
-  the static dict, since it needs the target name).
+  empty body; `ACCEPT` → `INITIALIZE <target>` (built per-site, not from
+  the static dict, since it needs the target name). `INITIALIZE`, not
+  `MOVE SPACES` (issue #330): cobc rejects MOVE SPACES to a numeric or
+  numeric-edited target, and this body is also lint's suggested fix and
+  what `--fill` / `--per-paragraph` / `--placeholder` insert.
 - Per-category directive-line shape (`_directive_for`):
   - `CALL`: `MOCK CALL "name"` normally, `MOCK MQ "name"` if `site.is_mq`;
     returns `None` (site skipped) if no key was captured — emitting
