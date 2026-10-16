@@ -18,8 +18,10 @@ Decoding: for a `cob_field` (`f_NN`) expression, gdb can read its own
 `attr->type`/`attr->digits`/`attr->scale` directly -- GnuCOBOL's authoritative
 type constants (from the container's own /usr/include/libcob/common.h, not
 guessed) are COB_TYPE_NUMERIC_DISPLAY=0x10, COB_TYPE_NUMERIC_BINARY=0x11
-(COMP), COB_TYPE_NUMERIC_PACKED=0x12 (COMP-3), COB_TYPE_ALPHANUMERIC family
-=0x20-0x23. Raw bytes are read via MI `-data-read-memory-bytes` (NOT gdb's
+(COMP), COB_TYPE_NUMERIC_PACKED=0x12 (COMP-3), COB_TYPE_NUMERIC_FLOAT/DOUBLE
+=0x13/0x14 (COMP-1/COMP-2), COB_TYPE_ALPHANUMERIC family=0x20-0x23 and
+COB_TYPE_NUMERIC_EDITED=0x24 (both read as their text). Any other code is
+shown as `<unsupported type 0xNN>`, never as gdb's `cob_field` struct. Raw bytes are read via MI `-data-read-memory-bytes` (NOT gdb's
 default char-array print, which stops at the first embedded NUL byte and
 silently truncates/misrepresents binary numeric data -- confirmed
 empirically: a `PIC 9(5)V99 COMP-3` field's buffer printed as `""` via
@@ -29,6 +31,7 @@ empirically: a `PIC 9(5)V99 COMP-3` field's buffer printed as `""` via
 from __future__ import annotations
 
 import re
+import struct
 from dataclasses import dataclass
 from typing import Literal
 
@@ -47,6 +50,12 @@ from mockymock.debug.gdb_session import (
 _COB_TYPE_NUMERIC_DISPLAY = 0x10
 _COB_TYPE_NUMERIC_BINARY = 0x11
 _COB_TYPE_NUMERIC_PACKED = 0x12
+_COB_TYPE_NUMERIC_FLOAT = 0x13  # COMP-1: a host-order IEEE 754 single
+_COB_TYPE_NUMERIC_DOUBLE = 0x14  # COMP-2: a host-order IEEE 754 double
+# Numeric-edited: the storage IS the edited display text (`-  5.50`).
+_COB_TYPE_NUMERIC_EDITED = 0x24
+# 0x20 ALNUM, 0x21 ALPHANUMERIC, 0x22 ALPHANUMERIC_ALL, 0x23
+# ALPHANUMERIC_EDITED.
 _COB_TYPE_ALPHANUMERIC_FAMILY = {0x20, 0x21, 0x22, 0x23}
 _COB_FLAG_HAVE_SIGN = 0x0001
 _COB_FLAG_SIGN_SEPARATE = 0x0002
@@ -147,7 +156,7 @@ class BufferLayout:
     printed as text: PIC S9(8) COMP holding -70000 showed as
     `"\\377\\376", <incomplete sequence \\356\\220>`, a signed DISPLAY -1.05
     as `0010u` (issue #168). `type_code` None marks a numeric item this
-    module cannot decode (floating point, a PICTURE with P scaling, ...),
+    module cannot decode (a PICTURE with P scaling, ...),
     shown as unavailable rather than as garbage."""
 
     type_code: int | None
@@ -168,6 +177,8 @@ _BINARY_SWAPPED_USAGES = {
 _BINARY_NATIVE_USAGES = {"COMP-5", "COMPUTATIONAL-5"}
 _PACKED_USAGES = {"COMP-3", "COMPUTATIONAL-3", "PACKED-DECIMAL"}
 _COMP6_USAGES = {"COMP-6", "COMPUTATIONAL-6"}
+_FLOAT_USAGES = {"COMP-1", "COMPUTATIONAL-1", "FLOAT-SHORT"}
+_DOUBLE_USAGES = {"COMP-2", "COMPUTATIONAL-2", "FLOAT-LONG"}
 
 
 def _item_layout(item) -> BufferLayout | None:
@@ -176,6 +187,10 @@ def _item_layout(item) -> BufferLayout | None:
     for those."""
     usage = (getattr(item, "usage", None) or "DISPLAY").upper()
     picture = getattr(item, "picture_clause", None)
+    if usage in _FLOAT_USAGES:
+        return BufferLayout(_COB_TYPE_NUMERIC_FLOAT)
+    if usage in _DOUBLE_USAGES:
+        return BufferLayout(_COB_TYPE_NUMERIC_DOUBLE)
     if picture is None:
         return None if usage == "DISPLAY" else _UNDECODABLE
     digits = getattr(picture, "total_digits", None)
@@ -247,6 +262,10 @@ def _expected_buffer_size(layout: BufferLayout) -> set[int] | None:
         return {layout.digits // 2 + 1}
     if layout.type_code == _COB_TYPE_NUMERIC_BINARY:
         return {1, 2, 4, 8}
+    if layout.type_code == _COB_TYPE_NUMERIC_FLOAT:
+        return {4}
+    if layout.type_code == _COB_TYPE_NUMERIC_DOUBLE:
+        return {8}
     return None
 
 
@@ -258,6 +277,8 @@ class VariableValue:
         "numeric-display",
         "binary",
         "packed-decimal",
+        "numeric-edited",
+        "float",
         "opaque",
         "unavailable",
     ]
@@ -445,14 +466,20 @@ def _decode_field(
     raw_repr: str,
     raw_bytes: bytes,
 ) -> VariableValue:
-    if type_code in _COB_TYPE_ALPHANUMERIC_FAMILY:
+    if type_code in _COB_TYPE_ALPHANUMERIC_FAMILY | {_COB_TYPE_NUMERIC_EDITED}:
+        # A numeric-edited item's storage is its edited text, exactly
+        # like an alphanumeric one's: nothing to decode but the bytes.
         # Read as raw memory rather than gdb's own char-array printing of
         # `.data`, which renders as "<pointer> <string>" for a field's
         # data member (unlike a bare buffer expression) and would need
         # its own fragile parsing to extract just the string.
         return VariableValue(
             name=name,
-            kind="alphanumeric",
+            kind=(
+                "numeric-edited"
+                if type_code == _COB_TYPE_NUMERIC_EDITED
+                else "alphanumeric"
+            ),
             raw_repr=raw_repr,
             # UTF-8, not ASCII: a PIC X holding `Café` (the .cbl is read
             # and compiled as UTF-8) showed as `Caf\ufffd\ufffd`.
@@ -487,10 +514,42 @@ def _decode_field(
             decoded=_decode_numeric_display(raw_bytes, scale, flags),
         )
 
-    # An unrecognized/unhandled type code (COMP-5, floating point, edited
-    # pictures, ...): report the raw gdb representation rather than guess
-    # a decode.
-    return VariableValue(name=name, kind="opaque", raw_repr=raw_repr)
+    if type_code in (_COB_TYPE_NUMERIC_FLOAT, _COB_TYPE_NUMERIC_DOUBLE):
+        decoded = _decode_float(raw_bytes, double=type_code == _COB_TYPE_NUMERIC_DOUBLE)
+        if decoded is not None:
+            return VariableValue(
+                name=name, kind="float", raw_repr=raw_repr, decoded=decoded
+            )
+
+    # An unrecognized/unhandled type code (long double, decimal floating
+    # point, NATIONAL, ...): rather than guess a decode, a short marker --
+    # the raw repr is gdb's whole `cob_field` struct, pointers and all,
+    # which is no value at all to someone reading a COBOL variable.
+    return VariableValue(
+        name=name,
+        kind="opaque",
+        raw_repr=raw_repr,
+        decoded=f"<unsupported type 0x{type_code:02x}>",
+    )
+
+
+def _decode_float(raw: bytes, double: bool) -> str | None:
+    """COMP-1/COMP-2: an IEEE 754 single/double in the container's native
+    order -- little-endian on every architecture the toolchain image runs
+    on, as for COMP-5. Shown at the shortest precision that reads back as
+    the same stored value, so COMP-1 0.1 is `0.1`, not the float32's exact
+    0.100000001490116... None when the buffer is not the expected size."""
+    fmt = "<d" if double else "<f"
+    if len(raw) != struct.calcsize(fmt):
+        return None
+    (value,) = struct.unpack(fmt, raw)
+    if double:
+        return repr(value)
+    for digits in range(1, 10):
+        text = f"{value:.{digits}g}"
+        if struct.pack(fmt, float(text)) == raw:
+            return text
+    return repr(value)
 
 
 _REPEATS_RE = re.compile(r" <repeats (\d+) times>")

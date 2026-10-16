@@ -730,7 +730,12 @@ captured MI transcripts and end-to-end tested against a live container
   DISPLAY item's sign is overpunched (`-123` = `12s`, was shown `12`) or
   separate (`SIGN ... SEPARATE`); COMP-5 is host (little-endian) order,
   told apart from big-endian COMP by `COB_FLAG_BINARY_SWAP` (was `-257`
-  for `-2`). The table keeps the declaration's own spelling, so
+  for `-2`). Issue #207: a numeric-edited item (type 0x24) shows its
+  storage as text (`-  5.50`), like alphanumeric; COMP-1/COMP-2 (0x13/
+  0x14, and a `b_NN`-only one through `BufferLayout`) unpack as host-order
+  IEEE 754, a single at its shortest round-tripping precision (`0.1`, not
+  `0.100000001`); any other type code shows `<unsupported type 0xNN>`
+  instead of gdb's whole `cob_field` struct with its pointers. The table keeps the declaration's own spelling, so
   `evaluate` (hover/watch) falls back to a case-insensitive match. `_unquote_c_string` shares
   `gdb_session.py`'s `decode_c_escape` (see F15 above).
 - `call_stack.py` — synthesizes the COBOL paragraph/section call stack

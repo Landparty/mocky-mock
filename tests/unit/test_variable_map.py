@@ -268,6 +268,8 @@ _B_ONLY_PROGRAM = """\
        01 WS-L PIC S9(3) SIGN LEADING VALUE -12.
        01 WS-P PIC S9(5)V99 COMP-3.
        01 WS-F COMP-2.
+       01 WS-F1 COMP-1.
+       01 WS-S PIC 9(3)PP.
        01 WS-X PIC X(4).
        01 WS-GRP.
           05 WS-N PIC 9(2).
@@ -328,9 +330,16 @@ def test_b_only_packed_decimal():
 
 
 def test_b_only_numeric_without_a_decoder_is_unavailable_not_garbage():
-    value = _read_b_only("WS-F", "0000000000000000")
+    value = _read_b_only("WS-S", "303132")  # P scaling: no decoder
     assert value.kind == "unavailable"
     assert "unavailable" in value.decoded
+
+
+def test_b_only_comp1_and_comp2_decode_host_order_floats():
+    """Issue #207: COMP-1/COMP-2 decode from their raw IEEE 754 bytes."""
+    assert _read_b_only("WS-F", "0000000000000240").decoded == "2.25"
+    assert _read_b_only("WS-F1", "0000c03f").decoded == "1.5"
+    assert _read_b_only("WS-F", "0000c03f").kind == "unavailable"  # 4 != 8
 
 
 def test_b_only_buffer_of_unexpected_size_is_unavailable():
@@ -378,3 +387,80 @@ def test_declared_data_names_skip_filler_and_condition_names():
         filename="decl.cbl",
     )
     assert declared_data_names(result.ast) == ["WS-GRP", "WS-A", "WS-B"]
+
+
+def _typed_field_session(
+    expr: str, type_code: int, size: int, contents: str, raw_repr: str
+) -> _FakeSession:
+    address = "93937745629696"
+    return _FakeSession(
+        {
+            f"-data-evaluate-expression (int)({expr}).attr->type": _done(
+                str(type_code)
+            ),
+            f"-data-evaluate-expression (int)({expr}).attr->digits": _done("0"),
+            f"-data-evaluate-expression (int)({expr}).attr->scale": _done("0"),
+            f"-data-evaluate-expression (int)({expr}).attr->flags": _done("0"),
+            f"-data-evaluate-expression ({expr}).size": _done(str(size)),
+            f"-data-evaluate-expression (long)({expr}).data": _done(address),
+            f"-data-evaluate-expression {expr}": _done(raw_repr),
+            f"-data-read-memory-bytes {address} {size}": _done(
+                memory=[{"begin": "0x0", "contents": contents}]
+            ),
+        }
+    )
+
+
+def test_read_variable_shows_a_numeric_edited_item_as_its_text():
+    """PIC -ZZ9.99 after MOVE -5.5 (issue #207): the Variables pane showed
+    gdb's whole cob_field struct, pointers and all. The storage is the
+    edited text itself."""
+    session = _typed_field_session(
+        "f_11",
+        0x24,
+        7,
+        b"-  5.50".hex(),
+        '{size = 7, data = 0x555de026d1a0 <b_11> "-  5.50", '
+        "attr = 0x555de026cbb0 <a_3>}",
+    )
+    value = read_variable(session, "WS-ED", "f_11")
+    assert value.kind == "numeric-edited"
+    assert value.decoded == "-  5.50"
+
+
+def test_read_variable_decodes_comp1_and_comp2_floats():
+    single = _typed_field_session(
+        "f_13",
+        0x13,
+        4,
+        "0000c03f",  # 1.5f, little-endian
+        '{size = 4, data = 0x555de026d1f0 <b_13> "", attr = 0x555de026b0f0 <a_6>}',
+    )
+    double = _typed_field_session(
+        "f_14",
+        0x14,
+        8,
+        "0000000000000240",  # 2.25, little-endian
+        '{size = 8, data = 0x555de026d1e0 <b_14> "", attr = 0x555de026b100 <a_7>}',
+    )
+    tenth = _typed_field_session(
+        "f_15",
+        0x13,
+        4,
+        "cdcccc3d",  # 0.1f: shown at the precision it was stored with
+        '{size = 4, data = 0x555de026d1d0 <b_15> "\\315\\314\\314=", '
+        "attr = 0x555de026b0f0 <a_6>}",
+    )
+    assert read_variable(single, "WS-F1", "f_13").decoded == "1.5"
+    assert read_variable(double, "WS-F2", "f_14").decoded == "2.25"
+    value = read_variable(tenth, "WS-F3", "f_15")
+    assert (value.kind, value.decoded) == ("float", "0.1")
+
+
+def test_read_variable_marks_an_unknown_type_instead_of_dumping_the_struct():
+    raw_repr = '{size = 16, data = 0x1 <b_9> "", attr = 0x2 <a_9>}'
+    session = _typed_field_session("f_9", 0x15, 16, "00" * 16, raw_repr)
+    value = read_variable(session, "WS-LD", "f_9")
+    assert value.kind == "opaque"
+    assert value.decoded == "<unsupported type 0x15>"
+    assert value.raw_repr == raw_repr
