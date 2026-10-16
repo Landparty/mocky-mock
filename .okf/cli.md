@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T00:00:00Z
 ---
 
 # Overview
@@ -963,7 +963,11 @@ would scaffold for the site (quoted where the DSL requires it, the
 shortest-unique prefix for SQL/CICS/DLI, `null` when the scaffold skips the
 site), so a consumer inserts what the parser accepts instead of re-deriving
 the quoting rules. `_collect_boundaries()` (`cli/main.py`) parses `program`
-directly (with `--copybook-path` expansion if given) -- it does not go
+directly, expanding COPY through the same copybook lookup lint/run use
+(`--copybook-path`, else the config file's `copybook_path`, plus the
+program's `copybooks/` folder via `_apply_config_to_args`; issue #200 --
+before, only an explicit flag expanded, so a site inside a copybook
+vanished from the list with exit 0) -- it does not go
 through `run_static_checks`, since it needs no `.cut`-specific analysis at
 all. Requires both `--json` and `program` (checked before any parsing);
 requesting it without either is a plain usage error, not a refusal. See

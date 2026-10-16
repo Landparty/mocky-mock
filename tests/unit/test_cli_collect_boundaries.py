@@ -119,3 +119,65 @@ def test_explain_no_code_and_no_list_shows_every_code(capsys):
     out = capsys.readouterr().out
     assert exit_code == 0
     assert "UNMOCKED_CALL" in out
+
+
+_COPY_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PROG.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A PIC X(4).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           COPY CALLS.
+           GOBACK.
+"""
+_COPY_CUT = """\
+TESTSUITE "S"
+TESTCASE "T"
+    MOCK CALL "SUBPROG"
+    END-MOCK
+    PERFORM MAIN-PARA
+"""
+
+
+def _copy_project(root: Path, copybook_dir: str) -> tuple[Path, Path]:
+    (root / copybook_dir).mkdir()
+    (root / copybook_dir / "CALLS.cpy").write_text(
+        '           CALL "SUBPROG" USING WS-A.\n', encoding="utf-8"
+    )
+    program = root / "PROG.cbl"
+    program.write_text(_COPY_PROGRAM, encoding="utf-8")
+    cut = root / "PROG.cut"
+    cut.write_text(_COPY_CUT, encoding="utf-8")
+    return program, cut
+
+
+def _collected_keys(program: Path, cut: Path, capsys) -> list[str]:
+    exit_code = main(
+        ["collect", str(program), "--cut", str(cut), "--json", "--boundaries"]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    return [site["key"] for site in json.loads(out)["boundaries"]]
+
+
+def test_collect_boundaries_finds_a_site_in_the_default_copybooks_folder(
+    tmp_path, capsys, monkeypatch
+):
+    """Issue #200: collect skipped the copybook lookup lint/run use, so a
+    CALL inside copybooks/CALLS.cpy vanished (exit 0, empty list)."""
+    monkeypatch.chdir(tmp_path)
+    program, cut = _copy_project(tmp_path, "copybooks")
+    assert _collected_keys(program, cut, capsys) == ["SUBPROG"]
+
+
+def test_collect_boundaries_honours_the_config_copybook_path(
+    tmp_path, capsys, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    program, cut = _copy_project(tmp_path, "lib")
+    (tmp_path / "mockymock.toml").write_text(
+        'copybook_path = ["lib"]\n', encoding="utf-8"
+    )
+    assert _collected_keys(program, cut, capsys) == ["SUBPROG"]

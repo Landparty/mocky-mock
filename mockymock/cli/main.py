@@ -2641,6 +2641,10 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     boundaries = None
     if args.boundaries:
         assert program_path is not None  # checked above
+        # Same copybook lookup lint/run use (config file + the program's
+        # copybooks/ folder): without it a site inside a copybook vanished
+        # from the list and completion offered nothing for it (issue #200).
+        _apply_config_to_args(args, program_path)
         try:
             boundaries = _collect_boundaries(program_path, args.copybook_path)
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
