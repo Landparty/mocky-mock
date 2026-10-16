@@ -741,6 +741,14 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
   silently overwritten until 2026-10-13), `row_suffix_moves=[]`,
   `exhausted_moves=["MOVE 100 TO SQLCODE"]` (DB2's "not found" code) —
   fixed in v1.
+  When the program names `SQLSTATE` anywhere (`orchestrator._SQLSTATE_RE`
+  over the normalized lines, passed as `build_site_dispatch(sqlstate=True)`),
+  the prefix also carries `MOVE "00000" TO SQLSTATE` and the exhaustion
+  `MOVE "02000" TO SQLSTATE` (issue #313: a cursor loop ended by
+  `UNTIL SQLSTATE = '02000'` never ended); a program that never names it
+  gets neither, since its own SQLCA copy may not declare one. `generate
+  --placeholder`'s SQL downgrade adds the same `"02000"`. `TERMINAL` is
+  still not accepted on SQL ROWS.
 - **READ**: `row_suffix_moves=[]` (a file-op category's implicit
   default-success `MOVE "00"` already precedes the whole dispatch block
   when the file declares a `FILE STATUS` field — see the `FILE-STATUS IS`

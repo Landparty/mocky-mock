@@ -2356,6 +2356,10 @@ def _bundle_directive_for(
                 )
         elif category is MockCategory.SQL and _sql_wants_rows(fixture, looped_fetch):
             body = list(_SQL_ROWS_EXHAUSTED_BODY)
+            if source is not None and source.references("SQLSTATE"):
+                # The same "not found" SQLSTATE a ROWS mock's exhaustion
+                # reports (issue #313).
+                body.append('MOVE "02000" TO SQLSTATE')
             call_count_override = CallCountOverride(count=1)
         else:
             body = _dli_success_reply(

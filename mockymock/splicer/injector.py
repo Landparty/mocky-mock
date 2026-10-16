@@ -193,8 +193,15 @@ def build_site_dispatch(
     statement_text: str = "",
     layout: DataLayout | None = None,
     lifted_clauses: tuple[LiftedClause, ...] | None = None,
+    sqlstate: bool = False,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    `sqlstate` (issue #313): the program references SQLSTATE, so a `MOCK
+    SQL ... ROWS` row also reports `"00000"` and its exhaustion `"02000"`
+    -- a cursor loop ended by `UNTIL SQLSTATE = '02000'` never ended on
+    SQLCODE alone. Off when the program never names SQLSTATE: its own
+    SQLCA copy may not declare one.
 
     `lifted_clauses` (issue #209, `analysis.clause_bodies`): the replaced
     statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY /
@@ -432,9 +439,11 @@ def build_site_dispatch(
                     directive.rows,
                     # Before the row's own MOVEs, not after: a row that
                     # sets SQLCODE itself (an error mid-cursor) must win.
-                    row_prefix_moves=["MOVE 0 TO SQLCODE"],
+                    row_prefix_moves=["MOVE 0 TO SQLCODE"]
+                    + (['MOVE "00000" TO SQLSTATE'] if sqlstate else []),
                     row_suffix_moves=[],
-                    exhausted_moves=["MOVE 100 TO SQLCODE"],
+                    exhausted_moves=["MOVE 100 TO SQLCODE"]
+                    + (['MOVE "02000" TO SQLSTATE'] if sqlstate else []),
                 )
             )
         else:
