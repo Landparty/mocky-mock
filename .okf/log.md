@@ -5,6 +5,24 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-16 -- bug-audit sweep 2 (#233-#336)
+
+Highs in #323, the WORKING-STORAGE reset batch in #324, every other
+medium/low in one combined PR, one commit per issue (each commit body names
+the cause and, for [NEEDS DECISION] issues, the option taken). Behaviour that
+changed shape: a mocked site whose clause bodies can't be lifted is refused
+UNLIFTABLE_CLAUSE_BODY instead of silently losing them (#319), and lifted
+bodies keep their source text so --trace/coverage/debugger map them (#332);
+EXEC CICS HANDLE/IGNORE CONDITION is emulated with a `CONDITION IS` body line
+(#268), and a mocked CICS command defaults RESP to NORMAL (#320); TRUE/FALSE
+values become `SET ... TO TRUE|FALSE` and are checked against level 88s (#251,
+#307); qualified `OF`/`IN` names are accepted in .cut targets (#252); MOCK
+body lines may not transfer control (#287); ACCEPT FROM DATE/TIME is
+mockable opt-in (#240); export no longer drops clause bodies (#325) or emits
+BASED (#321). Skipped: #233 (not reproducible), #275 (needs cobol-parser).
+Updated [splicer](splicer.md), [dsl](dsl.md), [analysis](analysis.md),
+[cli](cli.md), [report](report.md).
+
 ## 2026-10-16 -- bug-audit sweep (#188, #189, #194-#227, #230, #231)
 
 One commit per issue across #228 and #232; each commit body names the
