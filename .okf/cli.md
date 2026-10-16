@@ -815,6 +815,10 @@ captured MI transcripts and end-to-end tested against a live container
   LOCAL-STORAGE item before cobc binds it) reads as. LOCAL-STORAGE is not
   yet read through `cob_local_ptr`. An EXTERNAL item's `b_NN` is a
   pointer; gdb's `0x... "text"` printing is reduced to the text.
+  The numeric decoders place the decimal point through `_place_point`,
+  which honours P scaling (issue #295): a negative cobc scale multiplies
+  (`9(3)PPP` storing 637 is 637000), and a scale larger than the stored
+  digits left-pads (`VPP99` storing 12 is 0.0012).
   `_handle_launch` closes any prior `self._session` and resets
   `self._breakpoint_numbers` before creating a new one (audit finding
   F16) — a second `launch` on one adapter (a client retry, or a bug) used
