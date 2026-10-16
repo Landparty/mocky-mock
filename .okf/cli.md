@@ -878,6 +878,13 @@ or a later line of it, `_statement_tail`) has a `REMAINDER` phrase:
 `MULTIPLY ... REMAINDER` is a cobc syntax error, so that mutant was a
 stillborn every time (2026-09-28).
 
+The swap also carries the statement's own scope terminator (#234):
+`_scope_terminator` finds the `END-<verb>` that closes it (a nested
+same-verb statement opens a level its own terminator closes; a period ends
+the search). On the mutated line it is rewritten with the verb
+(`SUBTRACT ... END-SUBTRACT`); on a later line the site is skipped, since a
+single-line mutant cannot touch it and `SUBTRACT ... END-ADD` never compiles.
+
 Three further stillborn classes closed on 2026-09-04, all in
 `mutation.operators` (see
 docs/2026-07-29-mutation-testing-design.md's "Column discipline"):
