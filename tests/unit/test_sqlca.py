@@ -33,7 +33,7 @@ def test_include_sqlca_is_replaced_with_generated_fields():
     joined = "\n".join(lines)
     assert "01  SQLCA." in joined
     assert "05  SQLCODE" in joined
-    assert "05  SQLSTATE" in joined
+    assert "10  SQLSTATE" in joined
     assert "EXEC SQL INCLUDE SQLCA END-EXEC." not in joined
 
 
@@ -375,3 +375,26 @@ def test_sqlca_include_still_uses_generated_fields_not_resolution(tmp_path):
     )
     assert reasons == []
     assert "01  SQLCA." in "\n".join(lines)
+
+
+def test_generated_sqlca_is_the_full_136_byte_db2_layout():
+    """Issue #271: SQLWARN8/9/A and SQLSTATE sit in SQLEXT, and the group
+    is the 136 bytes SQLCABC says -- not 133."""
+    from cobolparser import parse_cobol
+
+    from mockymock.splicer.sqlca import SQLCA_FIELDS
+
+    source = (
+        "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. S.\n"
+        "       DATA DIVISION.\n       WORKING-STORAGE SECTION.\n"
+        + "".join(f"       {line}\n" for line in SQLCA_FIELDS)
+        + "       PROCEDURE DIVISION.\n           GOBACK.\n"
+    )
+    result = parse_cobol(source)
+    items = {
+        item.name: item
+        for item in result.ast.get_division("DATA").find_all_by_type("CobolDataItem")
+    }
+    assert items["SQLCA"].calculate_size() == 136
+    assert {"SQLEXT", "SQLWARN8", "SQLWARN9", "SQLWARNA", "SQLSTATE"} <= set(items)
+    assert "VALUE 136." in SQLCA_FIELDS[2]

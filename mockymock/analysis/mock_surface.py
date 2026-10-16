@@ -84,8 +84,10 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
     ExecImsStatement,
 )
 
+from mockymock.analysis.cics_handle import handle_states, is_handle_declaration
 from mockymock.analysis.sql_whenever import (
     Whenever,
+    is_sql_declaration,
     is_whenever,
     parse_whenever,
     whenever_actions,
@@ -302,6 +304,10 @@ class BoundarySite:
     # parsed declaration. Never mocked -- the splicer replaces it with
     # CONTINUE (issue #195, see analysis.sql_whenever).
     whenever: Whenever | None = None
+    # A mockable CICS site: the EXEC CICS HANDLE/IGNORE CONDITION map in
+    # force at it (issue #268, analysis.cics_handle), for the GO TO a mock
+    # raising a condition (`CONDITION IS`) ends with.
+    cics_handle_state: dict[str, str | None] = field(default_factory=dict)
     # A mockable SQL site: the (condition, GO TO target) checks the WHENEVER
     # declarations above it in the source put after it, in DB2's order.
     whenever_checks: tuple[tuple[str, str], ...] = ()
@@ -352,7 +358,10 @@ class MockSurface:
     #: `EXEC SQL WHENEVER` declarations (issue #195): SQL-category sites
     #: kept OUT of `boundary_sites`, since nothing mocks them -- they are
     #: spliced to CONTINUE, and their GO TO checks follow every later SQL
-    #: site (`BoundarySite.whenever_checks`).
+    #: site (`BoundarySite.whenever_checks`). The other precompiler
+    #: declarations (`DECLARE ... CURSOR`, `INCLUDE`, `BEGIN/END DECLARE
+    #: SECTION`, issue #267) are here too, with `whenever` None: spliced to
+    #: CONTINUE, nothing else.
     whenever_sites: list[BoundarySite] = field(default_factory=list)
 
     def static_call_sites(self) -> list[CallSite]:
@@ -870,6 +879,12 @@ def _classify_statement(
             )
             site.whenever = parse_whenever(sql_text)
             return
+        if is_sql_declaration(sql_text):
+            # DECLARE CURSOR/TABLE, INCLUDE, BEGIN/END DECLARE SECTION: no
+            # runtime behavior and no SQLCA update, so not a boundary --
+            # spliced to CONTINUE alongside WHENEVER (issue #267).
+            add_site(MockCategory.SQL, "SQL DECLARATION", into=surface.whenever_sites)
+            return
         surface.exec_paragraphs.add(paragraph_name)
         add_site(
             MockCategory.SQL,
@@ -879,6 +894,12 @@ def _classify_statement(
         return
 
     if isinstance(statement, ExecCicsStatement):
+        if is_handle_declaration(statement):
+            # HANDLE/IGNORE CONDITION registers a label, it is not a
+            # boundary: spliced to CONTINUE, its jumps emulated after the
+            # mocked commands that raise a condition (issue #268).
+            add_site(MockCategory.CICS, "CICS HANDLE", into=surface.whenever_sites)
+            return
         surface.exec_paragraphs.add(paragraph_name)
         add_site(
             MockCategory.CICS,
@@ -994,6 +1015,12 @@ def analyze(program: CobolProgram) -> MockSurface:
     for paragraph in _all_paragraphs(procedure):
         _walk_statements(paragraph.statements, paragraph.paragraph_name, surface)
 
+    states = handle_states(program)
+    if states:
+        for site in surface.boundary_sites:
+            if site.category is MockCategory.CICS:
+                site.cics_handle_state = states.get(id(site.statement), {})
+
     if surface.whenever_sites:
         actions = whenever_actions(program)
         for site in surface.boundary_sites:
@@ -1004,8 +1031,8 @@ def analyze(program: CobolProgram) -> MockSurface:
 
 
 def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
-    """Uppercased file name -> its declared `FILE STATUS IS <field>` name,
-    read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT statements. A
+    """Uppercased file name -> its declared `FILE STATUS IS <field>` name
+    (qualified, `FS-CODE OF CUST-STAT`, when the clause qualifies it), read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT statements. A
     file whose SELECT entry has no FILE STATUS clause has no entry -- there
     is no WORKING-STORAGE field to default or target with FILE-STATUS IS
     sugar (see docs/2026-07-20-before-blocks-and-file-status-design.md).
@@ -1029,7 +1056,13 @@ def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
         if not isinstance(statement, SelectStatement):
             continue
         if statement.file_name and statement.file_status:
-            fields[statement.file_name.upper()] = statement.file_status
+            # `FILE STATUS IS FS-CODE OF CUST-STAT`: keep the qualifiers, or
+            # every generated MOVE to a status field declared under several
+            # groups (one copybook, many files) is ambiguous (issue #266).
+            qualifiers = getattr(statement, "file_status_qualifiers", None) or []
+            fields[statement.file_name.upper()] = " OF ".join(
+                [statement.file_status, *qualifiers]
+            )
     for record, file_name in _fd_records(program):
         status = fields.get(file_name)
         if status and record not in fields:

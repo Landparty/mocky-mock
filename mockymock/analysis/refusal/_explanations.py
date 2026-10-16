@@ -162,6 +162,21 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "reject the generated driver. A condition-name is only ever TRUE "
         "or FALSE; any other item is compared with a value."
     ),
+    "UNSUPPORTED_CICS_CONDITION": (
+        "A MOCK CICS body says CONDITION IS <name>, but where the mocked "
+        "command would send that condition cannot be told: no EXEC CICS "
+        "HANDLE CONDITION label is in force for it (the real command would "
+        "take the system default action, usually an abend), the command is "
+        "written with RESP or NOHANDLE (HANDLE does not apply -- set the "
+        "RESP field in the mock body instead), or the program uses PUSH/POP "
+        "HANDLE, whose runtime stack mockymock does not model."
+    ),
+    "UNSUPPORTED_CICS_HANDLE": (
+        "An EXEC CICS HANDLE CONDITION or IGNORE CONDITION could not be "
+        "read. mockymock emulates it (spliced to CONTINUE, its labels "
+        "followed when a mock raises a condition), so one it cannot read "
+        "can neither be emulated nor dropped without changing control flow."
+    ),
     "UNKNOWN_DATA_NAME": (
         "A MOVE target, EXPECT data-name, CAPTURE INTO target or bare-word "
         "value in the .cut names nothing the program declares -- cobc "

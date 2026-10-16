@@ -536,6 +536,9 @@ class ProgramContext:
             entry,
             neutralized_goto=self.neutralized_goto,
             follow_whenever=follow_whenever,
+            # Generated mocks never raise a CICS condition (issue #268), so
+            # no HANDLE CONDITION label is reached through one.
+            cics_conditions=frozenset(),
         )
         if reasons or entry not in reached:
             return None
@@ -1828,13 +1831,22 @@ def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
 
     So is `EXEC SQL WHENEVER`: a precompiler declaration mockymock emulates
     instead of mocking (issue #195), which cobol-parser's bundle lists as
-    an SQL boundary keyed `WHENEVER`."""
+    an SQL boundary keyed `WHENEVER` -- and a PROCEDURE DIVISION `DECLARE
+    ... CURSOR` / `INCLUDE` / `BEGIN DECLARE SECTION` (issue #267), keyed by
+    its first word."""
     keys: set[tuple[str, str]] = {
         (MockCategory.ACCEPT.value, accept.target)
         for accept in surface.non_interactive_accepts
     }
-    if surface.whenever_sites:
-        keys.add((MockCategory.SQL.value, "WHENEVER"))
+    for declaration in surface.whenever_sites:
+        # WHENEVER (#195), the other precompiler declarations (#267) and
+        # CICS HANDLE/IGNORE CONDITION (#268): keyed by their first word.
+        if declaration.category is MockCategory.CICS:
+            command = getattr(declaration.statement, "cics_command", "") or ""
+            keys.add((MockCategory.CICS.value, command.strip().upper()))
+            continue
+        words = (getattr(declaration.statement, "sql_text", "") or "").split()
+        keys.add((MockCategory.SQL.value, words[0].upper() if words else "WHENEVER"))
     for site in surface.boundary_sites:
         if site.category is None or not (site.nested and site.span is None):
             continue

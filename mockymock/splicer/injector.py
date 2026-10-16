@@ -21,6 +21,7 @@ import re
 
 from cobolparser.models.statements.call import CallStatement
 
+from mockymock.analysis.cics_handle import label_in_state
 from mockymock.analysis.clause_bodies import (
     OUTCOME_FIELD,
     LiftedClause,
@@ -471,6 +472,16 @@ def build_site_dispatch(
             lines.extend(f"                   {body}" for body in directive.body_lines)
             if copy_into is not None:
                 lines.append(f"                   {copy_into}")
+            if directive.cics_condition:
+                # `CONDITION IS X`: the command raised X, so control goes
+                # where EXEC CICS HANDLE CONDITION sent it (issue #268); an
+                # IGNOREd condition does nothing. A condition no handler
+                # covers was refused by lint (UNSUPPORTED_CICS_CONDITION).
+                label, _ = label_in_state(
+                    site.cics_handle_state, directive.cics_condition
+                )
+                if label:
+                    lines.append(f"                   GO TO {label}")
         if lifted_clauses:
             outcome_status = file_status_fields.get(directive.key.upper())
             if outcome_status and directive.category in FILE_STATUS_CATEGORIES:

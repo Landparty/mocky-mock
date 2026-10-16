@@ -173,9 +173,12 @@ def test_surface_and_bundle_agree_on_keys(path):
     # sites at all (prefix-matched by text instead), so join on line number
     # instead of the key set above, which EXEC keys were never a member of
     # in the first place.
+    # Precompiler declarations (WHENEVER #195, DECLARE CURSOR #267) are
+    # surface sites spliced to CONTINUE, not boundaries; the bundle lists
+    # them as SQL fixtures all the same.
     exec_surface_lines = {
         (s.category.value, str(s.line))
-        for s in surface.boundary_sites
+        for s in [*surface.boundary_sites, *surface.whenever_sites]
         if s.category is not None and s.category.value in _EXEC_CATEGORY_NAMES
     }
     exec_bundle_lines = {

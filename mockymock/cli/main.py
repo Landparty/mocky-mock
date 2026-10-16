@@ -11,6 +11,7 @@ from pathlib import Path
 
 from mockymock import __version__
 from mockymock._lines import read_utf8_source, split_source_lines
+from mockymock.debugging_lines import activate_debugging_lines
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
@@ -104,6 +105,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     # would look like a real (if boring) program to the VS Code tree view.
     # Parse the (possibly copybook-expanded) source once up front so that
     # case is refused like every other command.
+    raw_source = activate_debugging_lines(raw_source)
     result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(result.ast)
     if not result.success:
@@ -1038,6 +1040,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if expansion_reasons:
             return 1
         raw_source = expansion.expanded_source
+    raw_source = activate_debugging_lines(raw_source)
     result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(result.ast)
     if not result.success:
@@ -2652,6 +2655,7 @@ def _collect_boundaries(
         raw_source = expansion.expanded_source
         origin_line = _main_file_lines(expansion.source_location_map or {})
 
+    raw_source = activate_debugging_lines(raw_source)
     result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(result.ast)
     if result.errors or result.ast is None:

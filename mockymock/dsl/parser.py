@@ -210,6 +210,9 @@ _FILE_STATUS_RE = re.compile(
 # spliced verbatim into the generated COBOL -- that produces a cobc compile
 # error pointing at generated code instead of a clear .cut-level refusal.
 _FILE_STATUS_PREFIX_RE = re.compile(r"^FILE-STATUS\b")
+# `CONDITION IS <name>` inside a MOCK CICS body (issue #268).
+_CICS_CONDITION_RE = re.compile(r"^CONDITION\s+IS\s+(?P<name>[A-Z][A-Z0-9]*)$")
+_CICS_CONDITION_PREFIX_RE = re.compile(r"^CONDITION\b")
 
 # CAPTURE ARG <n> INTO <target> -- n is a 1-based USING-parameter
 # position (never a COBOL variable name), resolved against the real call
@@ -356,6 +359,61 @@ def _reject_unterminated_literal(value: str, line_no: int, what: str) -> None:
         raise CutParseError(
             f"line {line_no}: {what} {value!r} has an unterminated {quote} "
             f"literal -- close the quote"
+        )
+
+
+_BODY_LITERAL_RE = re.compile(r"\"(?:[^\"]|\"\")*\"?|'(?:[^']|'')*'?")
+_BODY_TERMINATOR_RE = re.compile(
+    r"(?<![\w-])(GOBACK|STOP\s+RUN|EXIT\s+PROGRAM)(?![\w-])", re.IGNORECASE
+)
+_BODY_GO_TO_RE = re.compile(r"(?<![\w-])GO(?:\s+TO)?\s+[A-Za-z0-9]", re.IGNORECASE)
+_BODY_PERFORM_RE = re.compile(
+    r"(?<![\w-])PERFORM(?![\w-])\s*(?P<next>\S*)\s*(?P<after>\S*)", re.IGNORECASE
+)
+#: Words that open an inline PERFORM (no procedure name, no edge out).
+_INLINE_PERFORM_WORDS = frozenset({"VARYING", "UNTIL", "WITH", "TEST"})
+
+
+def _reject_body_control_flow(line: str, line_no: int, directive: str) -> None:
+    """Refuse a MOCK body line that leaves the body (issue #287). A body is
+    spliced verbatim and never walked: a `PERFORM <paragraph>` or `GO TO`
+    reaches real code whose boundaries no gate checked (they would run for
+    real), and a GOBACK / STOP RUN / EXIT PROGRAM ends the whole test
+    binary -- the case shows CRASH and every later case NOT RUN. An inline
+    `PERFORM VARYING/UNTIL/n TIMES ... END-PERFORM` stays in the body and
+    is allowed."""
+    code = _BODY_LITERAL_RE.sub('""', line)
+    comment = code.find("*>")
+    if comment >= 0:
+        code = code[:comment]
+    terminator = _BODY_TERMINATOR_RE.search(code)
+    if terminator is not None:
+        raise CutParseError(
+            f"line {line_no}: {' '.join(terminator.group(1).upper().split())} "
+            f"in MOCK {directive} would end the whole test run, not just the "
+            f"mocked statement -- set a flag or MOVE a return code instead; "
+            f"the program's own terminators are handled by the harness"
+        )
+    if _BODY_GO_TO_RE.search(code):
+        raise CutParseError(
+            f"line {line_no}: GO TO in MOCK {directive} jumps into program "
+            f"code that no check follows, so its CALLs and file I/O would run "
+            f"for real -- set the data the program branches on instead"
+        )
+    for m in _BODY_PERFORM_RE.finditer(code):
+        following = m.group("next").upper()
+        if (
+            following in _INLINE_PERFORM_WORDS
+            or following.isdigit()
+            or (following and m.group("after").upper() == "TIMES")
+        ):
+            continue
+        name = following or "a paragraph on the next line"
+        raise CutParseError(
+            f"line {line_no}: PERFORM {name} in MOCK {directive} runs program "
+            f"code that no check follows, so its CALLs and file I/O would run "
+            f"for real -- write the effect in the mock body itself (an inline "
+            f"PERFORM ... END-PERFORM is fine)"
         )
 
 
@@ -773,6 +831,7 @@ def parse_cut(text: str) -> MockTestSuite:
     case: MockTestCase | None = None
     in_mock: MockDirective | None = None
     in_mock_line = 0
+    body_flow_error: CutParseError | None = None
     # (category, key) -> declaring line, reset per TESTCASE/BEFORE-EACH/
     # BEFORE-ALL: a duplicate MOCK would otherwise parse fine and surface
     # much later as an AMBIGUOUS_MOCK refusal with no line numbers and
@@ -891,6 +950,8 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"and without it a retrieve-and-loop program never "
                         f"sees its end condition"
                     )
+                if body_flow_error is not None:
+                    raise body_flow_error
                 in_mock = None
             elif (
                 in_mock.rows is not None
@@ -932,6 +993,26 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 in_mock.terminal_row = terminal
                 in_mock.terminal_line = line_no
+            elif (m := _CICS_CONDITION_RE.match(line)) is not None:
+                if (
+                    in_mock.category is not MockCategory.CICS
+                    or in_mock.rows is not None
+                ):
+                    raise CutParseError(
+                        f"line {line_no}: CONDITION IS is only supported in a "
+                        f"MOCK CICS body without ROWS, not MOCK "
+                        f"{in_mock.describe()}"
+                    )
+                if in_mock.cics_condition is not None:
+                    raise CutParseError(
+                        f"line {line_no}: duplicate CONDITION IS in one MOCK body"
+                    )
+                in_mock.cics_condition = m.group("name")
+            elif _CICS_CONDITION_PREFIX_RE.match(line) is not None:
+                raise CutParseError(
+                    f"line {line_no}: malformed CONDITION statement {line!r} -- "
+                    f"expected CONDITION IS <condition>, e.g. CONDITION IS NOTFND"
+                )
             elif (m := _FILE_STATUS_RE.match(line)) is not None:
                 if in_mock.category not in FILE_STATUS_CATEGORIES:
                     eligible = "/".join(
@@ -1042,6 +1123,14 @@ def parse_cut(text: str) -> MockTestSuite:
                 in_mock.row_lines.append(line_no)
             else:
                 _reject_body_sentence_period(line, line_no, in_mock.describe())
+                # Raised at END-MOCK, so a MOCK left unterminated (the
+                # case's own PERFORM swallowed into its body) still reports
+                # the missing END-MOCK first.
+                if body_flow_error is None:
+                    try:
+                        _reject_body_control_flow(line, line_no, in_mock.describe())
+                    except CutParseError as exc:
+                        body_flow_error = exc
                 in_mock.body_lines.append(line)
                 in_mock.body_line_numbers.append(line_no)
             continue
@@ -1287,6 +1376,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 line_no,
             )
             in_mock_line = line_no
+            body_flow_error = None
         elif (m := _MOCK_BARE_RE.match(line)) is not None:
             if mock_target is None:
                 _reject_mock_outside(in_before, line_no)
@@ -1304,6 +1394,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 line_no,
             )
             in_mock_line = line_no
+            body_flow_error = None
         elif line.startswith("MOCK"):
             raise CutParseError(
                 f"line {line_no}: malformed MOCK directive: {line!r} "

@@ -53,7 +53,11 @@ from cobolparser.preprocess import (
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.dsl.fixture_bundle import load_fixture_bundle
-from mockymock.dsl.generator import _bundle_boundary_keys, _mockymock_boundary_keys
+from mockymock.dsl.generator import (
+    _bundle_boundary_keys,
+    _known_unmockable_keys,
+    _mockymock_boundary_keys,
+)
 from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
 EXAMPLES_DIR = Path(__file__).parent.parent.parent / "examples"
@@ -141,7 +145,9 @@ def _key_sets(rel_path: str, copybook_dirs: list[str] | None):
     # variants which do their own expansion.
     cp_bundle = ProgramFixtureGenerator().generate(result.ast, index, report, seed=1)
     bundle = load_fixture_bundle(cp_bundle.to_dict())
-    bundle_set = _bundle_boundary_keys(bundle)
+    # Keys generate itself knows are not boundaries (a PROCEDURE DIVISION
+    # EXEC SQL DECLARE, issue #267; WHENEVER, #195; ...) -- as generate does.
+    bundle_set = _bundle_boundary_keys(bundle) - _known_unmockable_keys(surface)
 
     return mockymock_set, bundle_set
 

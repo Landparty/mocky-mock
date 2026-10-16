@@ -191,6 +191,10 @@ class MockDirective:
     (the file may still get an implicit default-success MOVE at splice
     time if it declares a FILE STATUS field -- see
     injector.build_site_dispatch)."""
+    cics_condition: str | None = None
+    """`CONDITION IS <name>` inside a MOCK CICS body (issue #268): the
+    mocked command raises that condition, and the dispatch jumps to the
+    EXEC CICS HANDLE CONDITION label in force (analysis.cics_handle)."""
     terminal_row: list[tuple[str, str]] | None = None
     """Field assignments for the WHEN OTHER (rows-exhausted) branch of a
     READ/RETURN/CALL/DYNCALL/DLI/CICS `... ROWS` block, from its

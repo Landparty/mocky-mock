@@ -218,6 +218,19 @@ FILE-STATUS IS / malformed-FILE-STATUS branches, so any `FILE-STATUS IS`
 line written inside a `ROWS` body fell into "malformed ROWS row" instead
 — reordered so the FILE-STATUS IS branches are checked first.
 
+### `CONDITION IS <condition>` (MOCK CICS only, issue #268)
+
+Inside a `MOCK CICS "..."` body without ROWS: the mocked command raises
+that CICS condition (`NOTFND`, `DUPREC`, ...), stored on
+`MockDirective.cics_condition`. The dispatch ends with `GO TO <label>` for
+the `EXEC CICS HANDLE CONDITION` label in force at the matched command
+(an IGNOREd condition does nothing; a condition with no entry falls to
+`ERROR`'s label) -- see [splicer](splicer.md). Anywhere else, a duplicate,
+or a malformed `CONDITION ...` line is a `CutParseError`. Lint refuses
+`UNSUPPORTED_CICS_CONDITION` when no handler covers the condition (the
+real command would abend), the command has RESP/NOHANDLE, or the program
+uses PUSH/POP HANDLE.
+
 ### `CAPTURE ARG <n> INTO <target>`
 
 Usable inside a `MOCK CALL "..."` / `MOCK MQ "..."` (category `CALL`) or
@@ -513,7 +526,18 @@ Key regexes, matched in this order per non-blank line:
    ends the sentence mid-EVALUATE -- `lint` used to pass and `cobc` then
    failed on generated code (`unexpected END-EVALUATE`). ROWS/`TERMINAL`
    field values get the same check. A decimal point (`1.5`), a period
-   inside a literal, or one in a comment is untouched.
+   inside a literal, or one in a comment is untouched. A second exception
+   (issue #287, `_reject_body_control_flow`): a body line that leaves the
+   body -- `PERFORM <paragraph>` (THRU/TIMES/UNTIL forms included), `GO
+   TO`, `GOBACK`, `STOP RUN`, `EXIT PROGRAM`, outside literals and `*>`
+   comments -- raises `CutParseError` at its line. Nothing walks a mock
+   body, so a performed paragraph's CALLs/file I/O ran for real after a
+   clean lint, and a terminator ended the whole binary (CRASH, every later
+   case NOT RUN). Inline `PERFORM VARYING/UNTIL/WITH TEST/n TIMES/<id> TIMES
+   ... END-PERFORM` is allowed. The error is held until the block's
+   END-MOCK, so a MOCK missing its END-MOCK (which swallows the case's own
+   PERFORM) still reports "unterminated MOCK". Following such edges instead
+   (pushing the targets into the case's reachable set) is not implemented.
 2. `*>` comment (only reachable when not inside a mock body). A
    *trailing* `*>` comment (outside quotes) is stripped from every line the
    DSL parses itself before matching -- outside MOCK blocks, and inside one

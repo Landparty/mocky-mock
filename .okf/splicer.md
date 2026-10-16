@@ -403,6 +403,40 @@ is unreachable from every test case; the trap exists so that if
 reachability analysis and reality ever disagree, the mismatch fails loudly
 at runtime instead of silently doing nothing.
 
+**`EXEC CICS HANDLE/IGNORE CONDITION` emulation (issue #268, option 1).**
+The CICS counterpart of WHENEVER, in `analysis.cics_handle`. A HANDLE or
+IGNORE CONDITION is a label registration, not a boundary: `mock_surface`
+puts it in `whenever_sites` (label `CICS HANDLE`), so it needs no mock and
+is spliced to `CONTINUE`; an unreadable one refuses
+`UNSUPPORTED_CICS_HANDLE`, a leftover `MOCK CICS "HANDLE"` is
+UNMATCHED_MOCK with the reason, and generate's `_known_unmockable_keys`
+drops the bundle's `CICS HANDLE`/`IGNORE` key. `handle_states` tracks the
+condition -> label / IGNORE / default map in *physical source order* (the
+approximation option 1 chose; HANDLE is really a runtime registration) and
+`analyze` stamps it on every CICS boundary site
+(`BoundarySite.cics_handle_state`). A mock with `CONDITION IS X` ends its
+dispatch branch with `GO TO <label>` (`label_in_state`; X's own entry,
+else ERROR's). `_reachable_paragraphs(cics_conditions=...)` and
+`_go_to_targets(cics_conditions=...)` follow/count the labels for the
+conditions the case's mocks raise (`raised_conditions(case.mocks)`, passed
+by `check_test_case` and `find_terminator_plans`); the default `None`
+(whole-program callers: warning waiving, exact counts, loops) follows every
+label in force, fail closed; generate passes an empty set (its mocks raise
+nothing). Not covered: HANDLE AID / HANDLE ABEND (still ordinary CICS
+boundaries), EIBRESP is not set by `CONDITION IS`, and PUSH/POP HANDLE
+refuses any raised condition.
+
+**PROCEDURE DIVISION SQL declarations (issue #267).** `EXEC SQL DECLARE
+... CURSOR/TABLE`, `INCLUDE` and `BEGIN/END DECLARE SECTION` in the
+PROCEDURE DIVISION (`sql_whenever.is_sql_declaration`) are not boundaries
+either: DB2 generates no call for them and never touches the SQLCA.
+`mock_surface` puts them in `whenever_sites` too (label `SQL DECLARATION`,
+`whenever` None), so they need no mock, get no VERIFY, never refuse
+UNMOCKED_SQL, and are spliced to `CONTINUE` like WHENEVER (so a mock can no
+longer clobber the SQLCODE the previous statement left). A leftover `MOCK
+SQL "DECLARE ..."` refuses UNMATCHED_MOCK saying why; `generate`'s
+`_known_unmockable_keys` drops the bundle's `SQL DECLARE` key.
+
 **`EXEC SQL WHENEVER` emulation (2026-10-16, issue #195).** WHENEVER is a
 precompiler declaration, so it is never a mockable site: `mock_surface`
 keeps it in `MockSurface.whenever_sites` (not `boundary_sites`, so no
@@ -1264,7 +1298,7 @@ Overview — this file previously and incorrectly said "before"):
 
 | DATA DIVISION construct | Transform |
 |---|---|
-| `EXEC SQL INCLUDE SQLCA END-EXEC` | replaced by the literal `SQLCA_FIELDS` group item (standard SQLCA layout: SQLCAID, SQLCABC, SQLCODE, SQLERRM/SQLERRML/SQLERRMC, SQLERRP, SQLERRD OCCURS 6, SQLWARN0-7, SQLSTATE) |
+| `EXEC SQL INCLUDE SQLCA END-EXEC` | replaced by the literal `SQLCA_FIELDS` group item (standard SQLCA layout: SQLCAID, SQLCABC, SQLCODE, SQLERRM/SQLERRML/SQLERRMC, SQLERRP, SQLERRD OCCURS 6, SQLWARN0-7, and the `SQLEXT` group of SQLWARN8/9/A and SQLSTATE -- 136 bytes, matching `SQLCABC`; before issue #271 SQLEXT was missing, so the group was 133 bytes and a reference to SQLWARN8 did not compile) |
 | `EXEC SQL BEGIN/END DECLARE SECTION END-EXEC` | commented out; host variables between the markers are plain COBOL and stay |
 | `EXEC SQL DECLARE ... TABLE ... END-EXEC` | commented out (declarative only, no runtime effect) |
 | `EXEC SQL DECLARE <cursor> CURSOR FOR SELECT ... END-EXEC` | commented out (declarative only; the standard `PERFORM ... UNTIL SQLCODE = 100` fetch-loop idiom's OPEN/FETCH/CLOSE are separate PROCEDURE DIVISION EXEC SQL statements the boundary-mocking machinery already handles) |

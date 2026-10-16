@@ -53,6 +53,11 @@ from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock._lines import split_source_lines
+from mockymock.analysis.cics_handle import (
+    parse_handle,
+    raised_conditions,
+    resolve_condition,
+)
 from mockymock.analysis.linkage import (
     address_of_sites,
     linkage_plan,
@@ -66,7 +71,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     normalize_exec_text,
 )
-from mockymock.analysis.sql_whenever import whenever_can_fire
+from mockymock.analysis.sql_whenever import is_sql_declaration, whenever_can_fire
 from mockymock.dsl.generator import directive_snippet
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
@@ -422,6 +427,13 @@ def _whole_program_reasons(
         text = str(warning)
         if text.startswith("COPY ") and "not expanded" in text:
             continue
+        if text.startswith("REPLACE statement set was still active at end of source"):
+            # Standard COBOL: a REPLACE stays in force to the end of the
+            # compilation unit, so a closing REPLACE OFF is optional.
+            # cobol-parser applied it through EOF, as cobc does -- nothing
+            # was dropped (issue #272). The "could not be parsed and was
+            # ignored" REPLACE warning still refuses below.
+            continue
         if text.startswith("Compilation unit contains "):
             # cobol-parser parses every program unit of a multi-program
             # compilation unit (nested and stacked PROGRAM-IDs, and an OO
@@ -733,6 +745,26 @@ def check_nested_exec(surface: MockSurface) -> list[RefusalReason]:
         for site in surface.whenever_sites
         if site.whenever is not None and site.whenever.problem
     )
+    # An EXEC CICS HANDLE/IGNORE CONDITION that cannot be read cannot be
+    # emulated, and dropping it would change where a condition goes (#268).
+    for site in surface.whenever_sites:
+        if site.category is not MockCategory.CICS:
+            continue
+        _, problem = parse_handle(site.statement)
+        if problem:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_CICS_HANDLE",
+                    message=(
+                        f"EXEC CICS "
+                        f"{getattr(site.statement, 'cics_command', 'HANDLE')} "
+                        f"CONDITION at "
+                        f"line {site.line} (paragraph '{site.paragraph_name}'):"
+                        f" {problem} -- mockymock emulates HANDLE/IGNORE "
+                        f"CONDITION only as condition(label) / condition lists"
+                    ),
+                )
+            )
     return reasons
 
 
@@ -1366,6 +1398,9 @@ def check_test_case(
         # A WHENEVER handler is reached only when this case's mocks can set
         # SQLCODE so that its check fires (issue #244).
         follow_whenever=whenever_can_fire(program, case.mocks),
+        # A HANDLE CONDITION label is reached only for the conditions this
+        # case's CICS mocks raise (issue #268).
+        cics_conditions=raised_conditions(case.mocks),
     )
 
     if case.perform_target not in reachable:
@@ -1797,6 +1832,47 @@ def check_test_case(
                 )
             )
             continue
+        if (
+            directive.category is MockCategory.CICS
+            and any(
+                site.category is MockCategory.CICS for site in surface.whenever_sites
+            )
+            and _exec_match_form(directive.key).startswith(("HANDLE", "IGNORE"))
+        ):
+            reasons.append(
+                RefusalReason(
+                    code="UNMATCHED_MOCK",
+                    message=(
+                        f"MOCK {directive.describe()} targets an EXEC CICS "
+                        f"HANDLE/IGNORE CONDITION, which registers a label, "
+                        f"not a boundary: mockymock now emulates it (write "
+                        f"CONDITION IS <name> in the MOCK of the command that "
+                        f"raises it) and nothing mocks it. Drop this MOCK "
+                        f"directive and its VERIFY"
+                    ),
+                )
+            )
+            continue
+        if (
+            directive.category is MockCategory.SQL
+            and surface.whenever_sites
+            and is_sql_declaration(directive.key)
+        ):
+            # Before issue #267 lint asked for this mock too.
+            reasons.append(
+                RefusalReason(
+                    code="UNMATCHED_MOCK",
+                    message=(
+                        f"MOCK {directive.describe()} targets an EXEC SQL "
+                        f"declaration (DECLARE ... CURSOR, INCLUDE, BEGIN/END "
+                        f"DECLARE SECTION), not a boundary: DB2 runs nothing "
+                        f"for it and leaves SQLCODE alone, so mockymock "
+                        f"splices it to CONTINUE and nothing mocks it. Drop "
+                        f"this MOCK directive and its VERIFY"
+                    ),
+                )
+            )
+            continue
         reasons.append(
             RefusalReason(
                 code="UNMATCHED_MOCK",
@@ -1923,6 +1999,32 @@ def check_test_case(
                             ),
                         )
                     )
+
+    # `CONDITION IS X` (issue #268): the dispatch jumps to the HANDLE
+    # CONDITION label in force; a site where that cannot be told -- no
+    # handler (the real command would abend), RESP/NOHANDLE, PUSH/POP --
+    # is refused rather than guessed.
+    for directive in case.mocks:
+        if not directive.cics_condition:
+            continue
+        for site in surface.boundary_sites:
+            if not directive_matches_site(directive, site):
+                continue
+            _, problem = resolve_condition(
+                program, site.statement, directive.cics_condition
+            )
+            if problem:
+                reasons.append(
+                    RefusalReason(
+                        code="UNSUPPORTED_CICS_CONDITION",
+                        message=(
+                            f"MOCK {directive.describe()} raises "
+                            f"{directive.cics_condition.upper()} at the CICS "
+                            f"command at line {site.line} (paragraph "
+                            f"'{site.paragraph_name}'), but {problem}"
+                        ),
+                    )
+                )
 
     return reasons
 

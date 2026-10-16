@@ -18,6 +18,7 @@ from mockymock._lines import (
     read_utf8_source,
     split_source_lines,
 )
+from mockymock.debugging_lines import activate_debugging_lines
 
 if TYPE_CHECKING:
     from cobolparser import ParseResult
@@ -330,6 +331,8 @@ def run_static_checks(
     # individual errors follow as indented lines, matching `run`'s output.
     # Warnings provably confined to one paragraph's own body are held back
     # (scoped_warnings) for the reachability-union gate in step 4b.
+    # WITH DEBUGGING MODE: D lines are code, as the compiler reads them.
+    raw_source = activate_debugging_lines(raw_source)
     parse_result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(parse_result.ast)
     out.parse_result = parse_result
