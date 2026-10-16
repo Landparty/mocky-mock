@@ -502,6 +502,33 @@ def build_terminator_neutralization(
     ]
 
 
+def build_cics_terminator_exit(
+    exit_kind: str = "PARAGRAPH", resp_field: str | None = None
+) -> tuple[list[str], list[str]]:
+    """(prefix, suffix) wrapped around an EXEC CICS RETURN/XCTL/ABEND
+    site's own dispatch block when `refusal.find_terminator_plans` planned
+    it (issue #215): the mock body runs, then the run under test ends the
+    way a neutralized GOBACK does, instead of continuing past a command
+    that never gives control back.
+
+    `resp_field` is `TerminatorPlan.resp_field`. With RESP, a failed
+    command DOES return control, so the prefix presets the field to 0
+    (NORMAL, what a successful command leaves there -- the mock body may
+    then set a failure code) and the exit is taken only while it is still
+    0."""
+    exit_lines = [
+        '           MOVE "Y" TO UT-EARLY-EXIT',
+        f"           EXIT {exit_kind}",
+    ]
+    if resp_field is None:
+        return [], exit_lines
+    return [f"           MOVE 0 TO {resp_field}"], [
+        f"           IF {resp_field} = 0",
+        *(f"    {line}" for line in exit_lines),
+        "           END-IF",
+    ]
+
+
 def build_goto_exit_replacement(exit_kind: str = "PARAGRAPH") -> list[str]:
     """Replacement for a GO TO statement found safe to splice directly
     into EXIT PARAGRAPH/EXIT SECTION at its own call site (see

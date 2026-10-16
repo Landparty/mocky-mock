@@ -25,11 +25,11 @@ from dataclasses import dataclass, field
 from cobolparser.models.statements.control import GoStatement, PerformStatement
 
 from mockymock.analysis.mock_surface import (
-    _TERMINATOR_LABELS,
     BoundarySite,
     MockSurface,
     _all_paragraphs,
     _nested_statement_lists,
+    is_terminator_site,
 )
 from mockymock.dsl.model import MockTestSuite
 from mockymock.splicer.source_map import (
@@ -81,11 +81,50 @@ class TerminatorPlan:
     # #219): the neutralization MOVEs it to RETURN-CODE before setting the
     # early-exit flag, since removing the statement removes the phrase too.
     return_code: str | None = None
+    # EXEC CICS RETURN/XCTL/ABEND only (issue #215): the RESP(field) the
+    # command names, or None. With RESP, a failed command returns control
+    # to the next statement, so the early exit is taken only while the
+    # field holds NORMAL (0) -- the splicer presets it to 0 before the mock
+    # body, as a successful command would, and the body may override it.
+    resp_field: str | None = None
+
+    @property
+    def is_cics(self) -> bool:
+        return self.site.category is not None
 
 
 # A RETURNING/GIVING operand the neutralization can MOVE to RETURN-CODE
 # verbatim: a signed or unsigned integer literal, or one data name.
 _RETURN_CODE_OPERAND_RE = re.compile(r"^(?:[+-]?\d+|[A-Z0-9][A-Z0-9-]*)$", re.I)
+
+
+_RESP_FIELD_RE = re.compile(r"\bRESP\s*\(\s*([A-Z0-9][A-Z0-9-]*)\s*\)", re.I)
+_RESP_OPTION_RE = re.compile(r"\bRESP\s*\(", re.I)
+
+
+def _cics_resp_field(statement) -> tuple[str | None, str | None]:
+    """(field, problem) for an EXEC CICS terminator's RESP option: the
+    single data name in `RESP(field)`, (None, None) when there is no RESP,
+    or a problem when RESP names something this can't test against 0."""
+    text = str(getattr(statement, "cics_text", "") or "")
+    match = _RESP_FIELD_RE.search(text)
+    if match is not None:
+        return match.group(1).upper(), None
+    if _RESP_OPTION_RE.search(text):
+        return None, (
+            "has a RESP option mockymock can't read back as a single data "
+            "name, so it can't tell a failed command (which returns "
+            "control) from a successful one (which ends the program)"
+        )
+    return None, None
+
+
+def _terminator_name(site) -> str:
+    """How a refusal names the terminator: its label, or `EXEC CICS
+    RETURN` (etc.) for a CICS one, whose label is just "CICS"."""
+    if site.category is None:
+        return site.label
+    return f"EXEC CICS {str(site.statement.cics_command).upper()}"
 
 
 def _terminator_return_code(statement) -> tuple[str | None, str | None]:
@@ -592,9 +631,7 @@ def find_terminator_plans(
     safe_section_first_names = set(safe_section_entries.values())
     go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
     terminator_sites = {
-        id(s.statement): s
-        for s in surface.boundary_sites
-        if s.category is None and s.label in _TERMINATOR_LABELS
+        id(s.statement): s for s in surface.boundary_sites if is_terminator_site(s)
     }
 
     plans_by_statement: dict[int, TerminatorPlan] = {}
@@ -758,14 +795,17 @@ def find_terminator_plans(
             elif chain_problem is not None:
                 problem = chain_problem
             else:
-                problem = _terminator_return_code(site.statement)[1]
+                problem = (
+                    _terminator_return_code(site.statement)[1]
+                    or _cics_resp_field(site.statement)[1]
+                )
 
             if problem is not None:
                 reasons.append(
                     RefusalReason(
                         code="UNSUPPORTED_TERMINATOR_LAYOUT",
                         message=(
-                            f"{site.label} at line {site.line} (paragraph "
+                            f"{_terminator_name(site)} at line {site.line} (paragraph "
                             f"'{paragraph_name}') {problem}"
                         ),
                     )
@@ -784,6 +824,7 @@ def find_terminator_plans(
                     site=terminator_sites[key],
                     exit_kind=exit_kind,
                     return_code=_terminator_return_code(site.statement)[0],
+                    resp_field=_cics_resp_field(site.statement)[0],
                 )
             qualified_keys.append(key)
 

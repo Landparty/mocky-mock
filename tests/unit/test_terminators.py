@@ -1083,3 +1083,127 @@ def test_terminator_with_an_uncopyable_returning_operand_refuses():
         returning_value = "-8"
 
     assert _terminator_return_code(_Goback()) == ("-8", None)
+
+
+# Issue #215: EXEC CICS RETURN/XCTL/ABEND never give control back, so a
+# planned one runs its mock body and then ends the run under test.
+CICS_TERMINATOR_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CICSTERM.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RESP             PIC S9(8) COMP.
+       01  WS-STEP             PIC X(10).
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-FIRST-TIME
+           MOVE "PROCESSED" TO WS-STEP
+           EXEC CICS RETURN END-EXEC.
+
+       1000-FIRST-TIME.
+           EXEC CICS XCTL PROGRAM('NEXT') RESP(WS-RESP)
+           END-EXEC
+           MOVE "XCTL-FAIL" TO WS-STEP.
+"""
+
+
+def _cics_suite():
+    from mockymock.dsl.model import MockCategory, MockDirective
+
+    case = MockTestCase(
+        name="c",
+        perform_target="0000-MAIN-PROCESS",
+        mocks=[
+            MockDirective(MockCategory.CICS, "RETURN"),
+            MockDirective(MockCategory.CICS, "XCTL"),
+        ],
+    )
+    return MockTestSuite(name="S", test_cases=[case])
+
+
+def test_cics_return_and_xctl_are_planned_as_terminators():
+    program, surface, scope_map, lines = _analyze(CICS_TERMINATOR_SOURCE)
+    plans, reasons = find_terminator_plans(
+        surface, program, _cics_suite(), scope_map, lines
+    )
+    assert reasons == []
+    by_command = {p.site.statement.cics_command: p for p in plans}
+    assert set(by_command) == {"RETURN", "XCTL"}
+    assert by_command["RETURN"].resp_field is None
+    assert by_command["XCTL"].resp_field == "WS-RESP"
+
+
+def test_cics_terminator_splice_wraps_the_mock_dispatch_with_the_early_exit():
+    from mockymock.splicer.naming import TallyRegistry
+    from mockymock.splicer.orchestrator import splice_program
+    from mockymock.splicer.source_map import collect_boundaries
+
+    program, surface, scope_map, lines = _analyze(CICS_TERMINATOR_SOURCE)
+    suite = _cics_suite()
+    plans, _ = find_terminator_plans(surface, program, suite, scope_map, lines)
+    spliced = [
+        line.strip()
+        for line in splice_program(
+            lines,
+            collect_boundaries(program),
+            surface,
+            suite,
+            TallyRegistry(suite),
+            plans,
+        )
+    ]
+    # XCTL with RESP: preset NORMAL, exit only while the field is still 0.
+    preset = spliced.index("MOVE 0 TO WS-RESP")
+    guard = spliced.index("IF WS-RESP = 0")
+    assert preset < spliced.index("ADD 1 TO UT-CICS-XCTL-TALLY") < guard
+    assert spliced[guard + 1 : guard + 4] == [
+        'MOVE "Y" TO UT-EARLY-EXIT',
+        "EXIT PARAGRAPH",
+        "END-IF",
+    ]
+    # RETURN without RESP: unconditional, after its own dispatch, keeping
+    # the sentence-ending period.
+    return_tally = spliced.index("ADD 1 TO UT-CICS-RETURN-TALLY")
+    tail = spliced[return_tally:]
+    assert tail[tail.index("END-EVALUATE") + 1 : tail.index("END-EVALUATE") + 3] == [
+        'MOVE "Y" TO UT-EARLY-EXIT',
+        "EXIT PARAGRAPH.",
+    ]
+    # The chain check after PERFORM 1000-FIRST-TIME propagates the exit.
+    assert 'IF UT-EARLY-EXIT = "Y"' in spliced
+
+
+def test_cics_terminator_off_a_plain_perform_chain_refuses():
+    source = CICS_TERMINATOR_SOURCE.replace(
+        "PERFORM 1000-FIRST-TIME\n", "PERFORM 1000-FIRST-TIME 2 TIMES\n"
+    )
+    program, surface, scope_map, lines = _analyze(source)
+    plans, reasons = find_terminator_plans(
+        surface, program, _cics_suite(), scope_map, lines
+    )
+    assert [p.site.statement.cics_command for p in plans] == ["RETURN"]
+    assert len(reasons) == 1
+    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert reasons[0].message.startswith("EXEC CICS XCTL at line")
+
+
+def test_falls_through_false_for_trailing_cics_return():
+    paragraph = _paragraph(CICS_TERMINATOR_SOURCE, "0000-MAIN-PROCESS")
+    assert _falls_through(paragraph) is False
+
+
+def test_cics_resp_option_that_is_not_a_data_name_refuses():
+    from mockymock.analysis.refusal._plans import _cics_resp_field
+
+    class _Xctl:
+        cics_text = "PROGRAM ( X ) RESP ( WS-R ( 1 ) )"
+
+    assert _cics_resp_field(_Xctl())[0] is None
+    assert "RESP option" in _cics_resp_field(_Xctl())[1]
+
+    class _Resp2Only:
+        cics_text = "PROGRAM ( X ) RESP2 ( WS-R2 )"
+
+    assert _cics_resp_field(_Resp2Only()) == (None, None)

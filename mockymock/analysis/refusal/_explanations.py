@@ -137,7 +137,9 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "of the PROCEDURE DIVISION is meant."
     ),
     "UNSUPPORTED_TERMINATOR_LAYOUT": (
-        "A STOP RUN or GOBACK sits in a shape mockymock's terminator "
+        "A STOP RUN, GOBACK or EXIT PROGRAM, or an EXEC CICS RETURN/"
+        "XCTL/ABEND (which never give control back), sits in a shape "
+        "mockymock's terminator "
         "neutralization cannot safely rewrite (so the suite's later test "
         "cases would never run). One narrow SECTION-scoped shape (a "
         "section's first paragraph, entered exclusively via PERFORM "

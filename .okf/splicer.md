@@ -819,6 +819,20 @@ returns. An earlier design (`GO TO` redirect into a `PERFORM ... THRU
 before any of it shipped -- see
 [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md).
 
+**EXEC CICS RETURN/XCTL/ABEND** (issue #215, option (a)): these never
+give control back, so `mock_surface.is_terminator_site` counts a CICS site
+whose command is one of `CICS_TERMINATOR_COMMANDS` as a terminator too.
+It stays an ordinary mockable CICS site (the gates still demand its
+MOCK), but `find_terminator_plans` plans or refuses it exactly like
+GOBACK, and the orchestrator wraps the site's own dispatch block with
+`injector.build_cics_terminator_exit`: the flag + `EXIT PARAGRAPH` after
+`END-EVALUATE`, so the mock body runs first. With `RESP(field)`
+(`TerminatorPlan.resp_field`) a failed command returns control, so the
+field is preset to 0 before the dispatch (what a successful command
+leaves there; the mock body may set a failure code) and the exit is taken
+only `IF field = 0`. A RESP operand that is not one data name refuses.
+`_falls_through` and `exact_counts` treat these commands as path ends.
+
 **`RETURNING`/`GIVING` operands** (issue #219): `STOP RUN RETURNING n` /
 `GOBACK RETURNING n` (cobolparser's `StopStatement.returning` /
 `GobackStatement.returning_value`) set RETURN-CODE, so the replacement
