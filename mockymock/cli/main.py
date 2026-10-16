@@ -545,6 +545,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         "--scenarios",
         args.scenarios,
     ]
+    if args.force:
+        # Already gated above with init's own message; generate refuses
+        # an existing output without it.
+        generate_argv.append("--force")
     if args.seed is not None:
         generate_argv += ["--seed", str(args.seed)]
     for path in copybook_paths:
@@ -805,10 +809,21 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
     # (a flow-mock target that doesn't exist, a terminator layout, an
     # UNMOCKED_* reason with no mechanical fix): print it and fail, so
     # `--fill` exiting 0 means the next `lint` exits 0 too.
+    # Only the per-TESTCASE UNMOCKED_* lines `--fill` read from
+    # `unmocked_reasons` count as handled: a hook PERFORM's refusal reads
+    # the same way ("refused (UNMOCKED_...)") but nothing here inserts
+    # into BEFORE-EACH/BEFORE-ALL, so matching on the prefix exited 0 with
+    # nothing filled and the next lint failed again (issue #208).
+    filled = {
+        f"refused ({r.code}): {r.message}"
+        for reasons in checked.unmocked_reasons.values()
+        for r in reasons
+        if r.code.startswith("UNMOCKED_")
+    }
     remaining = [
         problem
         for problem in checked.problems
-        if not problem.startswith("  ") and not _is_filled_problem(problem)
+        if not problem.startswith("  ") and problem not in filled
     ]
     for problem in remaining:
         print(f"mockymock generate: {problem}")
@@ -822,12 +837,6 @@ def _header_line(raw: str) -> str:
     stripped, so an existing `MOCK READ INV-FILE` (any indentation) is
     recognized as already present."""
     return raw.strip()
-
-
-def _is_filled_problem(problem: str) -> bool:
-    """True for the `refused (UNMOCKED_*): ...` lines `--fill` acts on
-    itself; every other problem line is one it cannot fix."""
-    return problem.startswith("refused (UNMOCKED_")
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
@@ -885,6 +894,19 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             return 1
         _apply_config_to_args(args, source_path)
         return _fill_cut_file(source_path, Path(args.fill), args)
+
+    # The default path is the program's existing sibling PROG.cut when
+    # there is one, so writing unconditionally replaced a hand-written
+    # suite with a bare scaffold (issue #201). Refuse like `init` does,
+    # an explicit -o included, before any parsing.
+    existing = _default_output(args, source_path)
+    if existing.exists() and not args.force:
+        print(
+            f"mockymock generate: {existing} already exists -- pass --force "
+            f"to overwrite it, -o/--output to write somewhere else, or "
+            f"--fill {existing} to add only its missing mocks"
+        )
+        return 1
 
     if not _check_rows_non_negative("generate", args.rows):
         return 1
@@ -2683,6 +2705,10 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     boundaries = None
     if args.boundaries:
         assert program_path is not None  # checked above
+        # Same copybook lookup lint/run use (config file + the program's
+        # copybooks/ folder): without it a site inside a copybook vanished
+        # from the list and completion offered nothing for it (issue #200).
+        _apply_config_to_args(args, program_path)
         try:
             boundaries = _collect_boundaries(program_path, args.copybook_path)
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
@@ -3193,6 +3219,11 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument(
         "--name",
         help="Name a second suite for the program: writes <program>.<NAME>.cut",
+    )
+    generate_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output .cut file if it already exists",
     )
     generate_parser.add_argument(
         "--fill",

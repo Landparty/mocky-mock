@@ -715,6 +715,22 @@ def check_nested_exec(surface: MockSurface) -> list[RefusalReason]:
         for site in surface.exec_sites()
         if not site.nested and site.unspliceable_reason
     )
+    # A WHENEVER whose action cannot be read cannot be emulated, and an
+    # EXEC that is not emulated cannot stay (cobc can't compile it) --
+    # dropping it would silently run different control flow (issue #195).
+    reasons.extend(
+        RefusalReason(
+            code="UNSUPPORTED_SQL_WHENEVER",
+            message=(
+                f"EXEC SQL WHENEVER at line {site.line} (paragraph "
+                f"'{site.paragraph_name}'): {site.whenever.problem} -- "
+                f"mockymock emulates the precompiler's checks only for "
+                f"those forms"
+            ),
+        )
+        for site in surface.whenever_sites
+        if site.whenever is not None and site.whenever.problem
+    )
     return reasons
 
 
@@ -1711,6 +1727,27 @@ def check_test_case(
                         f"in the mock body of a boundary the test does "
                         f"reach, or make the program take it as a CALL/file "
                         f"input"
+                    ),
+                )
+            )
+            continue
+        if (
+            directive.category is MockCategory.SQL
+            and surface.whenever_sites
+            and _exec_match_form(directive.key).startswith("WHENEVER")
+        ):
+            # Before issue #195 lint asked for exactly this mock; say why
+            # it now goes rather than send the author after reachability.
+            reasons.append(
+                RefusalReason(
+                    code="UNMATCHED_MOCK",
+                    message=(
+                        f"MOCK {directive.describe()} targets an EXEC SQL "
+                        f"WHENEVER, which is a precompiler declaration, not "
+                        f"a boundary: mockymock now emulates it (the "
+                        f"IF SQLCODE ... GO TO check after every later SQL "
+                        f"statement) and nothing mocks it. Drop this MOCK "
+                        f"directive and its VERIFY"
                     ),
                 )
             )

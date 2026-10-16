@@ -219,11 +219,14 @@ mock it, that's a hard, loud failure (`__MOCKYMOCK__ ERROR: ... reached
 from unmocked test case`), never a silent fall-through.
 
 **FILE-STATUS default-success/override injection.** For a directive whose
-category is in `FILE_STATUS_CATEGORIES` (the 6 eligible file ops --
-`OPEN`/`CLOSE`/`READ`/`DELETE`/`START`/`UNLOCK`; `WRITE`/`REWRITE` are not
-eligible), `build_site_dispatch` looks up `directive.key.upper()` in the
+category is in `FILE_STATUS_CATEGORIES` (the 8 eligible file ops --
+`OPEN`/`CLOSE`/`READ`/`DELETE`/`START`/`UNLOCK`/`WRITE`/`REWRITE`),
+`build_site_dispatch` looks up `directive.key.upper()` in the
 `file_status_fields` map (`mock_surface.analyze_file_status_fields`'s
-uppercased-file-name -> declared `FILE STATUS IS <field>` result, computed
+uppercased-file-name -> declared `FILE STATUS IS <field>` result, plus
+every FD record name -> its file's field so a WRITE/REWRITE keyed on the
+record resolves too -- issue #221; before, a mocked WRITE left the status
+at its reset value or the previous mock's code, computed
 once per program and threaded down from `run_static_checks`/`_cmd_run`
 through `splice_program`). If the file declares a status field, the `WHEN`
 branch always starts with an implicit `MOVE "00" TO <field>` (default
@@ -349,6 +352,25 @@ test case mocks it. The refusal gate is supposed to guarantee such a site
 is unreachable from every test case; the trap exists so that if
 reachability analysis and reality ever disagree, the mismatch fails loudly
 at runtime instead of silently doing nothing.
+
+**`EXEC SQL WHENEVER` emulation (2026-10-16, issue #195).** WHENEVER is a
+precompiler declaration, so it is never a mockable site: `mock_surface`
+keeps it in `MockSurface.whenever_sites` (not `boundary_sites`, so no
+UNMOCKED_SQL, no scaffolded MOCK, no `collect --boundaries` entry), and
+`splice_program` replaces each one with `CONTINUE`. What DB2's precompiler
+would generate is put back instead: every mocked SQL dispatch is followed by
+`analysis.sql_whenever.whenever_check_lines(site.whenever_checks)` --
+`IF SQLCODE < 0 GO TO x END-IF` (SQLERROR), `IF SQLWARN0 = "W" OR (SQLCODE
+> 0 AND SQLCODE NOT = 100) ...` (SQLWARNING), `IF SQLCODE = 100 ...` (NOT
+FOUND), in that order -- for the WHENEVERs in force at that statement in
+*physical source order* (`whenever_actions`; `CONTINUE` switches a
+condition off; INCLUDE/DECLARE/BEGIN-END DECLARE get no checks). The trap
+of an unmocked site gets none. The reachability walk follows each check's
+GO TO like a written one, and `_go_to_targets` includes the handlers.
+`check_nested_exec` validates WHENEVER spans like any EXEC and refuses an
+action it cannot read (`UNSUPPORTED_SQL_WHENEVER`); a leftover `MOCK SQL
+"WHENEVER"` is UNMATCHED_MOCK with a message saying why. CICS `HANDLE
+CONDITION`/`HANDLE ABEND` are not emulated.
 
 # Orchestration and Ordering Invariant (orchestrator.py)
 

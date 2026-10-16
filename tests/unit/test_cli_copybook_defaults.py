@@ -115,7 +115,7 @@ def test_generate_with_data_missing_copybook_gets_actionable_hint(
     monkeypatch.chdir(tmp_path)
     cbl, cut = _copy_bearing_pair(tmp_path, with_copybook=False)
     (tmp_path / "copybooks").mkdir()
-    exit_code = main(["generate", str(cbl), "--with-data", "-o", str(cut)])
+    exit_code = main(["generate", str(cbl), "--with-data", "-o", str(cut), "--force"])
     out = capsys.readouterr().out
     assert exit_code == 1
     assert "not found in search paths" in out

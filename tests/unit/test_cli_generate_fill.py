@@ -266,3 +266,72 @@ def test_generate_fill_reports_the_line_each_block_landed_on(tmp_path, capsys):
     lines = cut.read_text().splitlines()
     landed = lines.index("    MOCK READ INV-FILE") + 1
     assert f"{cut}:{landed}: MOCK READ INV-FILE" in out
+
+
+_HOOK_PROGRAM = (
+    "       IDENTIFICATION DIVISION.\n"
+    "       PROGRAM-ID. P.\n"
+    "       DATA DIVISION.\n"
+    "       WORKING-STORAGE SECTION.\n"
+    "       01 WS-EOF PIC X VALUE 'N'.\n"
+    "       PROCEDURE DIVISION.\n"
+    "       OPEN-FILE.\n"
+    "           OPEN INPUT INV-FILE.\n"
+    "       CLOSE-FILE.\n"
+    "           CLOSE INV-FILE.\n"
+)
+
+
+def test_generate_fill_fails_on_an_unmocked_hook_boundary_it_cannot_fill(
+    tmp_path, capsys
+):
+    """Issue #208: a BEFORE-EACH PERFORM's UNMOCKED_* refusal starts with
+    the same "refused (UNMOCKED_" prefix as a TESTCASE's own, so --fill
+    treated it as filled, inserted nothing, and exited 0 -- while the next
+    lint still failed."""
+    cut_text = (
+        'TESTSUITE "hooks"\n'
+        "BEFORE-EACH\n"
+        "    PERFORM OPEN-FILE\n"
+        "END-BEFORE\n"
+        "\n"
+        'TESTCASE "close only"\n'
+        "    MOCK CLOSE INV-FILE\n"
+        "    END-MOCK\n"
+        "    PERFORM CLOSE-FILE\n"
+    )
+    cbl = tmp_path / "P.cbl"
+    cbl.write_text(_HOOK_PROGRAM)
+    cut = tmp_path / "P.cut"
+    cut.write_text(cut_text)
+    exit_code = main(["generate", str(cbl), "--fill", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "BEFORE-EACH" in out and "UNMOCKED_FILE_OP" in out
+    assert cut.read_text() == cut_text
+
+
+def test_generate_refuses_to_overwrite_an_existing_sibling_cut(tmp_path, capsys):
+    """Issue #201: the default output is the program's existing sibling
+    PROG.cut, which plain `generate` replaced with a bare scaffold."""
+    cbl, cut = _write_pair(tmp_path, _FULLY_MOCKED_CUT)
+    exit_code = main(["generate", str(cbl), "--per-paragraph"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "already exists" in out and "--force" in out
+    assert cut.read_text() == _FULLY_MOCKED_CUT
+
+
+def test_generate_refuses_an_existing_explicit_output_too(tmp_path, capsys):
+    cbl, cut = _write_pair(tmp_path, _FULLY_MOCKED_CUT)
+    exit_code = main(["generate", str(cbl), "--per-paragraph", "-o", str(cut)])
+    assert exit_code == 1
+    assert "--force" in capsys.readouterr().out
+    assert cut.read_text() == _FULLY_MOCKED_CUT
+
+
+def test_generate_force_overwrites_an_existing_cut(tmp_path, capsys):
+    cbl, cut = _write_pair(tmp_path, _FULLY_MOCKED_CUT)
+    exit_code = main(["generate", str(cbl), "--per-paragraph", "--force"])
+    assert exit_code == 0, capsys.readouterr().out
+    assert cut.read_text() != _FULLY_MOCKED_CUT

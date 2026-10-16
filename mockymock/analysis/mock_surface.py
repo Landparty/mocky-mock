@@ -84,6 +84,12 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
     ExecImsStatement,
 )
 
+from mockymock.analysis.sql_whenever import (
+    Whenever,
+    is_whenever,
+    parse_whenever,
+    whenever_actions,
+)
 from mockymock.dsl.model import MockCategory
 from mockymock.splicer.io_copy import DataLayout, data_layout
 
@@ -292,6 +298,13 @@ class BoundarySite:
     # sites: a validated replacement span, or the reason none exists.
     span: tuple[int, int] | None = None
     unspliceable_reason: str | None = None
+    # An `EXEC SQL WHENEVER` site (`MockSurface.whenever_sites` only): its
+    # parsed declaration. Never mocked -- the splicer replaces it with
+    # CONTINUE (issue #195, see analysis.sql_whenever).
+    whenever: Whenever | None = None
+    # A mockable SQL site: the (condition, GO TO target) checks the WHENEVER
+    # declarations above it in the source put after it, in DB2's order.
+    whenever_checks: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -332,6 +345,11 @@ class MockSurface:
     #: FD records and data-item subtrees, for the implicit INTO/FROM MOVE a
     #: mocked READ ... INTO / WRITE ... FROM keeps (`splicer.io_copy`).
     data_layout: DataLayout | None = None
+    #: `EXEC SQL WHENEVER` declarations (issue #195): SQL-category sites
+    #: kept OUT of `boundary_sites`, since nothing mocks them -- they are
+    #: spliced to CONTINUE, and their GO TO checks follow every later SQL
+    #: site (`BoundarySite.whenever_checks`).
+    whenever_sites: list[BoundarySite] = field(default_factory=list)
 
     def static_call_sites(self) -> list[CallSite]:
         return [c for c in self.call_sites if c.kind is CallKind.STATIC]
@@ -343,9 +361,11 @@ class MockSurface:
         return [s for s in self.boundary_sites if s.paragraph_name in paragraph_names]
 
     def exec_sites(self) -> list[BoundarySite]:
+        """Every EXEC site, WHENEVER declarations included: each one must be
+        spliced out for cobc to compile the program."""
         return [
             s
-            for s in self.boundary_sites
+            for s in [*self.boundary_sites, *self.whenever_sites]
             if s.category in (MockCategory.SQL, MockCategory.CICS, MockCategory.DLI)
         ]
 
@@ -616,21 +636,22 @@ def _classify_statement(
         keys: tuple[str, ...] = (),
         match_text: str | None = None,
         is_mq: bool = False,
-    ) -> None:
-        surface.boundary_sites.append(
-            BoundarySite(
-                category=category,
-                label=label,
-                keys=keys,
-                match_text=match_text,
-                paragraph_name=paragraph_name,
-                line=line,
-                nested=nested,
-                statement=statement,
-                is_mq=is_mq,
-                nested_in_boundary=in_boundary,
-            )
+        into: list[BoundarySite] | None = None,
+    ) -> BoundarySite:
+        site = BoundarySite(
+            category=category,
+            label=label,
+            keys=keys,
+            match_text=match_text,
+            paragraph_name=paragraph_name,
+            line=line,
+            nested=nested,
+            statement=statement,
+            is_mq=is_mq,
+            nested_in_boundary=in_boundary,
         )
+        (surface.boundary_sites if into is None else into).append(site)
+        return site
 
     if isinstance(statement, CallStatement):
         kind = CallKind.DYNAMIC if statement.is_dynamic else CallKind.STATIC
@@ -828,11 +849,20 @@ def _classify_statement(
         return
 
     if isinstance(statement, ExecSQLStatement):
+        sql_text = getattr(statement, "sql_text", "") or ""
+        if is_whenever(sql_text):
+            # A precompiler declaration, not a boundary: never mocked, its
+            # checks are emulated after every later SQL site (issue #195).
+            site = add_site(
+                MockCategory.SQL, "SQL WHENEVER", into=surface.whenever_sites
+            )
+            site.whenever = parse_whenever(sql_text)
+            return
         surface.exec_paragraphs.add(paragraph_name)
         add_site(
             MockCategory.SQL,
             "SQL",
-            match_text=normalize_exec_text(getattr(statement, "sql_text", "") or ""),
+            match_text=normalize_exec_text(sql_text),
         )
         return
 
@@ -943,6 +973,12 @@ def analyze(program: CobolProgram) -> MockSurface:
     for paragraph in _all_paragraphs(procedure):
         _walk_statements(paragraph.statements, paragraph.paragraph_name, surface)
 
+    if surface.whenever_sites:
+        actions = whenever_actions(program)
+        for site in surface.boundary_sites:
+            if site.category is MockCategory.SQL:
+                site.whenever_checks = actions.get(id(site.statement), ())
+
     return surface
 
 
@@ -951,7 +987,13 @@ def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
     read from the ENVIRONMENT DIVISION's FILE-CONTROL SELECT statements. A
     file whose SELECT entry has no FILE STATUS clause has no entry -- there
     is no WORKING-STORAGE field to default or target with FILE-STATUS IS
-    sugar (see docs/2026-07-20-before-blocks-and-file-status-design.md)."""
+    sugar (see docs/2026-07-20-before-blocks-and-file-status-design.md).
+
+    Every record (01) declared under such a file's FD maps to the same
+    field, keyed by its own uppercased name: a WRITE/REWRITE site and its
+    MOCK key on the record, not the file, and a mocked WRITE/REWRITE must
+    set the status like the real statement does (issue #221). COBOL file
+    names and data names share one namespace, so the keys cannot clash."""
     fields: dict[str, str] = {}
     environment = program.get_division("ENVIRONMENT")
     if environment is None:
@@ -967,7 +1009,30 @@ def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:
             continue
         if statement.file_name and statement.file_status:
             fields[statement.file_name.upper()] = statement.file_status
+    for record, file_name in _fd_records(program):
+        status = fields.get(file_name)
+        if status and record not in fields:
+            fields[record] = status
     return fields
+
+
+def _fd_records(program: CobolProgram) -> list[tuple[str, str]]:
+    """(uppercased record name, uppercased FD file name) for every 01
+    declared under an FD/SD."""
+    data = program.get_division("DATA")
+    if data is None:
+        return []
+    records: list[tuple[str, str]] = []
+    for section in getattr(data, "sections", data.children):
+        for item in getattr(section, "children", []):
+            if getattr(item, "level", None) != 1:
+                continue
+            metadata = getattr(item, "_metadata", None) or {}
+            file_name = str(metadata.get("fd_file_name") or "").upper()
+            name = str(getattr(item, "name", "") or "").upper()
+            if file_name and name and name != "FILLER":
+                records.append((name, file_name))
+    return records
 
 
 def _all_paragraphs(procedure_division: CobolDivision) -> list[CobolParagraph]:

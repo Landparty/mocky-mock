@@ -371,8 +371,10 @@ def annotate_nested_sites(
     validates STOP RUN/GOBACK terminator sites (category None, but not
     skipped like other detected-but-unmockable categories) through the
     identical rules -- see
-    docs/2026-07-08-goback-stop-run-support-design.md."""
-    for site in surface.boundary_sites:
+    docs/2026-07-08-goback-stop-run-support-design.md. `EXEC SQL WHENEVER`
+    sites (`surface.whenever_sites`) are spliced too, so they get the same
+    validation."""
+    for site in [*surface.boundary_sites, *surface.whenever_sites]:
         if site.category is None and site.label not in _TERMINATOR_LABELS:
             continue
         if site.nested:

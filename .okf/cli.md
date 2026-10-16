@@ -239,10 +239,17 @@ values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
 
 See `docs/2026-09-15-init-command-design.md`.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE] [--force]`
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
+
+**Refuses an existing output file without `--force` (2026-10-16, issue
+#201)**, checked right after the `--fill` dispatch and before any parsing,
+explicit `-o` included -- the same contract as `init`, which passes
+`--force` through to the `generate` it runs. Before, the default path (the
+program's existing sibling `PROG.cut`) was silently replaced by a bare
+scaffold.
 
 **Default unit is the scenario (2026-10-14).** With neither `--with-data`
 nor `--per-paragraph`, `generate` takes the `--with-data` path (one TESTCASE
@@ -269,7 +276,10 @@ PERFORM is the case's own, skipping any PERFORM inside a `MOCK ... END-MOCK`
 body; `directive_snippet` declines the sites the scaffold itself skips (a
 nested site with no span, an unspliceable top-level site). Every problem
 `--fill` cannot fix (a flow-mock target that does not exist, an `UNMOCKED_*`
-reason with no mechanical fix) is printed and exits 1, so `--fill` exiting 0
+reason with no mechanical fix, a `BEFORE-EACH`/`BEFORE-ALL` hook PERFORM's
+`UNMOCKED_*` refusal -- `--fill` inserts into TESTCASEs only, and only the
+per-case reason lines it read from `unmocked_reasons` count as handled,
+issue #208) is printed and exits 1, so `--fill` exiting 0
 means the next `lint` exits 0. Reported `file:line` is where each block
 landed in the written file. Every existing directive, `EXPECT`/`VERIFY`, and
 comment is left byte-for-byte untouched — insertion happens at known line
@@ -998,7 +1008,11 @@ would scaffold for the site (quoted where the DSL requires it, the
 shortest-unique prefix for SQL/CICS/DLI, `null` when the scaffold skips the
 site), so a consumer inserts what the parser accepts instead of re-deriving
 the quoting rules. `_collect_boundaries()` (`cli/main.py`) parses `program`
-directly (with `--copybook-path` expansion if given) -- it does not go
+directly, expanding COPY through the same copybook lookup lint/run use
+(`--copybook-path`, else the config file's `copybook_path`, plus the
+program's `copybooks/` folder via `_apply_config_to_args`; issue #200 --
+before, only an explicit flag expanded, so a site inside a copybook
+vanished from the list with exit 0) -- it does not go
 through `run_static_checks`, since it needs no `.cut`-specific analysis at
 all. Requires both `--json` and `program` (checked before any parsing);
 requesting it without either is a plain usage error, not a refusal. See

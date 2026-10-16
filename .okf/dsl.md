@@ -179,8 +179,9 @@ every shared mock). See
 
 ### `FILE-STATUS IS <mnemonic-or-code>`
 
-Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK` body
-(not `WRITE`/`REWRITE`). `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`,
+Usable once inside a `MOCK OPEN|CLOSE|READ|DELETE|START|UNLOCK|WRITE|REWRITE`
+body. WRITE/REWRITE key on the record name, which resolves to its FD's
+status field (issue #221). `<mnemonic>` is one of `SUCCESS`, `END-OF-FILE`,
 `DUPLICATE-KEY`, `RECORD-NOT-FOUND`, `FILE-NOT-FOUND`, `ALREADY-OPEN`,
 `NOT-OPEN`, `NO-CURRENT-RECORD`; a quoted two-character literal (e.g.
 `"92"`) always works too. Every eligible category also gets an implicit
@@ -979,7 +980,12 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
 - **Looped MQGET / CBLTDLI get calls (#156).** When a CALL sits in a loop
   whose UNTIL reads the call's own reply (`analysis.loops.loop_guard_words`,
   matched against the argument and every name declared under it, 88s
-  included), the mock reports end of data after its row: `MOVE 2` /
+  included -- plus, one hop out (#188), any flag the CALL's own paragraph
+  writes by `SET ... TO TRUE` or `MOVE` inside an IF/EVALUATE whose
+  condition reads the reply, `analysis.loops.names_set_on_reply`, with an
+  88's own field and sibling 88s: DEPTMQC's `UNTIL NO-MORE-MSGS` set under
+  `WHEN MQ-REASON-CODE = MQRC-NO-MSG-AVAIL`), the mock reports end of data
+  after its row: `MOVE 2` /
   `MOVE 2033` into MQGET's CompCode/Reason (8th/9th USING arguments), or
   `GE`/`GB` into bytes 11-12 of a CBLTDLI/CEETDLI get call's PCB (GU/GHU/
   GNP/GHNP -> GE, GN/GHN -> GB; the function code is read from the first

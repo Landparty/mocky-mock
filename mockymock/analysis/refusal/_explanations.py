@@ -383,4 +383,13 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "since it has no precompiler) would comment out that sibling "
         "code too. Put the EXEC block on its own line(s)."
     ),
+    "UNSUPPORTED_SQL_WHENEVER": (
+        "An EXEC SQL WHENEVER is not in a form mockymock can emulate. "
+        "WHENEVER is a precompiler declaration: mockymock replaces it and "
+        "puts the precompiler's own `IF SQLCODE ... GO TO <paragraph>` "
+        "check after every later mocked SQL statement, for SQLERROR, "
+        "SQLWARNING and NOT FOUND with CONTINUE or GO TO <paragraph>. Any "
+        "other shape is refused rather than dropped, since dropping it "
+        "would run different control flow than DB2 does."
+    ),
 }
