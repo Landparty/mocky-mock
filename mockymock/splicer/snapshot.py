@@ -20,7 +20,8 @@ generated SQLCA), which `reset` clears too.
 Top-level REDEFINES items are skipped (their storage is the redefined
 item's, which is saved), as are elementary top-level FILLERs (not
 addressable); a top-level FILLER group is replaced by its named children
-(`reset.addressable_items`, issue #247).
+(`reset.reset_targets`, issue #247), and so is a top-level group whose
+name is ambiguous (each child saved through it, issue #281).
 
 How each item is copied, chosen so every MOVE is one COBOL defines as
 exact:
@@ -61,7 +62,7 @@ from mockymock.splicer.reset import (
     _is_group,
     _sections,
     _top_level_items,
-    addressable_items,
+    reset_targets,
 )
 
 SNAP_PREFIX = "UT-SNAP-"
@@ -124,14 +125,14 @@ def plan_snapshot(
         )
         snapshot.save_lines.append(f"MOVE {name} TO {snap}")
         snapshot.restore_lines.append(f"MOVE {snap} TO {name}")
-    for item in _state_items(program, linkage_items or []):
+    for item, ref in _state_items(program, linkage_items or []):
         snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
         if _is_group(item) or _is_edited(item):
             reason = _odo_reason(item)
             size = None if reason else _max_bytes(item)
             if reason or size is None:
                 problems.append(
-                    f"{item.name}: "
+                    f"{ref}: "
                     + (reason or "an OCCURS table's bound could not be read")
                     + " -- its state after BEFORE-ALL cannot be saved exactly"
                 )
@@ -139,33 +140,34 @@ def plan_snapshot(
             snapshot.working_storage_lines.extend(
                 [f"01  {snap}.", f"    05 FILLER PIC X({size})."]
             )
-            snapshot.save_lines.append(f"MOVE {item.name} TO {snap}")
-            snapshot.restore_lines.append(f"MOVE {snap} TO {item.name}")
+            snapshot.save_lines.append(f"MOVE {ref} TO {snap}")
+            snapshot.restore_lines.append(f"MOVE {snap} TO {ref}")
             continue
         usage = (getattr(item, "usage", None) or "").upper()
         if usage in _SET_USAGES and getattr(item, "picture_clause", None) is None:
             snapshot.working_storage_lines.append(f"01  {snap} USAGE {usage}.")
-            snapshot.save_lines.append(f"SET {snap} TO {item.name}")
-            snapshot.restore_lines.append(f"SET {item.name} TO {snap}")
+            snapshot.save_lines.append(f"SET {snap} TO {ref}")
+            snapshot.restore_lines.append(f"SET {ref} TO {snap}")
             continue
         description = _elementary_description(item)
         if description is None:
             problems.append(
-                f"{item.name}: its description (no PICTURE, usage "
+                f"{ref}: its description (no PICTURE, usage "
                 f"{usage or 'unknown'}) cannot be reproduced -- its state "
                 f"after BEFORE-ALL cannot be saved exactly"
             )
             continue
         snapshot.working_storage_lines.append(f"01  {snap} {description}.")
-        snapshot.save_lines.append(f"MOVE {item.name} TO {snap}")
-        snapshot.restore_lines.append(f"MOVE {snap} TO {item.name}")
+        snapshot.save_lines.append(f"MOVE {ref} TO {snap}")
+        snapshot.restore_lines.append(f"MOVE {snap} TO {ref}")
     return snapshot, problems
 
 
-def _state_items(program, linkage_items: list) -> list:
+def _state_items(program, linkage_items: list) -> list[tuple[object, str]]:
+    """(item, the reference naming it) for every item the snapshot saves."""
     data_division = program.get_division("DATA")
     if data_division is None:
-        return list(linkage_items)
+        return [(item, item.name) for item in linkage_items]
     items: list = []
     for section in _sections(data_division, "FILE"):
         items.extend(longest_record_per_file(_top_level_items(section)))
@@ -173,11 +175,11 @@ def _state_items(program, linkage_items: list) -> list:
         for section in _sections(data_division, name):
             items.extend(_top_level_items(section))
     items.extend(linkage_items)
-    # A FILLER group's named children are reset one by one (issue #247), so
-    # they are saved one by one too.
+    # A FILLER group's named children, and an ambiguous 01's (issues #247,
+    # #281), are reset one by one, so they are saved one by one too.
     return [
-        item
-        for item in addressable_items(items)
+        (item, ref)
+        for item, ref in reset_targets(items)
         if not getattr(item, "redefines", None)
     ]
 

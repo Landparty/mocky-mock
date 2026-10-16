@@ -667,7 +667,7 @@ the ambiguity first. `_elementary_reset(item, target)` takes the reference
 to write to; top-level items still use their bare name.
 
 **FILLER groups are transparent (issue #247).** A FILLER group can still
-hold named items. `addressable_items` replaces a top-level `01 FILLER.`
+hold named items. `reset_targets` replaces a top-level `01 FILLER.`
 group with its named children (recursively through nested FILLER groups,
 OCCURS children left out), so each is reset as if it were top-level and
 saved by the BEFORE-ALL snapshot by its own name -- before, they were
@@ -675,6 +675,18 @@ never reset and leaked between cases. `_child_value_restores` recurses
 into a `05 FILLER.` group inside a named record, qualifying each restore by
 the named ancestors alone (`MOVE "ABC" TO WS-X OF WS-AREA`); their VALUEs
 used to be lost to the record's INITIALIZE.
+
+**Ambiguous top-level names are never referenced bare (issue #281).**
+`reset_targets` pairs every item with the reference that names it, checked
+against an index of every data item and condition name in the program
+(`_name_index` / `_unique_reference`: the qualifiers must appear, in order,
+among exactly one candidate's named ancestors). A 01/77 whose name is also
+a subordinate item elsewhere cannot be qualified, and its bare name made
+cobc reject `UT-RESET-WORKING-STORAGE`: an elementary one is skipped (no
+program statement can reference it either), a group is reset through its
+children qualified by it (`CNT OF HDR`), recursively, skipping any child
+still not unique. The BEFORE-ALL snapshot saves the same (item, reference)
+pairs.
 
 **FILLER VALUEs are restored (issue #196).** A FILLER cannot be named in
 a MOVE, and the old reset assumed its VALUE "survives INITIALIZE" -- true

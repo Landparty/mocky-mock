@@ -794,3 +794,46 @@ def test_value_less_filler_is_cleared_with_filler():
         "INITIALIZE WS-LINE WITH FILLER",
         "INITIALIZE WS-PLAIN",
     ]
+
+
+AMBIGUOUS_TOP_LEVEL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. AMB.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  CUST-ID           PIC X(5) VALUE "WS".
+       01  IN-REC.
+           05  CUST-ID       PIC X(5).
+           05  CUST-NAME     PIC X(10).
+       01  OUT-REC.
+           05  HDR.
+               10  FLAG      PIC X VALUE "N".
+       01  HDR.
+           05  FLAG          PIC X VALUE "Y".
+           05  CNT           PIC 9(3) VALUE 7.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_ambiguous_top_level_names_are_never_referenced_bare():
+    """Issue #281: a 01 whose name is also a subordinate item elsewhere
+    cannot be named; its bare reference broke the reset's compile. An
+    elementary one is skipped, a group is reset through children that are
+    unique when qualified by it."""
+    from mockymock.splicer.snapshot import plan_snapshot
+
+    result = parse_cobol(AMBIGUOUS_TOP_LEVEL_SOURCE, filename="amb.cbl")
+    assert result.success, result.errors
+    lines = reset_move_lines(result.ast)
+    assert lines == [
+        "INITIALIZE IN-REC",
+        "INITIALIZE OUT-REC",
+        'MOVE "N" TO FLAG OF HDR OF OUT-REC',
+        "MOVE 7 TO CNT OF HDR",
+    ]
+    snapshot, problems = plan_snapshot(result.ast)
+    assert problems == []
+    targets = [line.rsplit(" TO ", 1)[1] for line in snapshot.restore_lines]
+    assert targets == ["IN-REC", "OUT-REC", "CNT OF HDR"]
