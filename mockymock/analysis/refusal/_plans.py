@@ -41,6 +41,7 @@ from mockymock.splicer.source_map import (
 
 from ._reachability import (
     _expand_thru_range,
+    _fallthrough_safe_sections,
     _find_sort_merge_statements,
     _find_statements_of_type,
     _find_xml_parse_statements,
@@ -50,6 +51,7 @@ from ._reachability import (
     _go_to_fallthrough_targets,
     _go_to_targets,
     _is_exit_only_paragraph,
+    _paragraph_safe_section_map,
     _plain_perform_edges_from,
     _reachable_paragraphs,
     _safe_section_entry_points,
@@ -629,7 +631,28 @@ def find_terminator_plans(
     go_to_targets = _go_to_targets(program) - neutralized_goto
     safe_section_entries = _safe_section_entry_points(program)
     safe_section_first_names = set(safe_section_entries.values())
-    go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
+    # The GO TO fall-through hazard map is per case: a walk stops at the
+    # end of a section entered only via `PERFORM <section-name>` -- unless
+    # the case's own entry point names one of its members directly -- the
+    # same stop `_reachable_paragraphs` applies (issue #259).
+    section_members: dict[str, list[str]] = {}
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        if section_name:
+            section_members.setdefault(
+                section_name, [p.paragraph_name for p in section.paragraphs]
+            )
+    safe_sections = _fallthrough_safe_sections(program)
+    fallthrough_by_entry: dict[frozenset[str], dict[str, str]] = {}
+
+    def go_to_fallthrough_for(entry: frozenset[str]) -> dict[str, str]:
+        if entry not in fallthrough_by_entry:
+            fallthrough_by_entry[entry] = _go_to_fallthrough_targets(
+                program,
+                go_to_targets,
+                _paragraph_safe_section_map(section_members, safe_sections, entry),
+            )
+        return fallthrough_by_entry[entry]
+
     terminator_sites = {
         id(s.statement): s for s in surface.boundary_sites if is_terminator_site(s)
     }
@@ -649,6 +672,9 @@ def find_terminator_plans(
         # refusal on this case's account. Other cases still evaluate it.
         mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
         mocked_flow_names = mocked_paragraphs | mocked_sections
+        go_to_fallthrough = go_to_fallthrough_for(
+            frozenset(name for name in (case.perform_target, case.perform_thru) if name)
+        )
         reachable, _ = _reachable_paragraphs(
             program,
             case.perform_target,

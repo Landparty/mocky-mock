@@ -1065,7 +1065,11 @@ def _walk_fallthrough_from(
     return reached
 
 
-def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, str]:
+def _go_to_fallthrough_targets(
+    program,
+    go_to_targets: set[str],
+    paragraph_safe_section: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Every paragraph reachable ONLY by falling through past a GO TO
     target's own end -- an unmodeled shape the reachability BFS does not
     represent as a flow edge (see the module docstring). Maps each such
@@ -1093,7 +1097,17 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
     source order -- the same pre-existing blind spot that already limits
     other checks in this module (e.g. _expand_thru_range) to refusing only
     the specific reachability question they were asked, not every
-    reachability question in the file."""
+    reachability question in the file.
+
+    `paragraph_safe_section` (`_paragraph_safe_section_map`, built for the
+    caller's own entry point) gives the walk the same section-end stop
+    `_walk_fallthrough_from` has: a walk from a GO TO target inside a
+    section entered only via `PERFORM <section-name>` stops at that
+    section's last paragraph, where the implicit PERFORM return fires
+    (issue #259 -- without it the terminator planner saw the paragraphs
+    of every LATER section as fall-through hazards, while the
+    reachability gate correctly did not). None keeps the whole-program,
+    stop-free walk."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return {}
@@ -1114,18 +1128,22 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
     last = len(ordered) - 1
 
     hazard: dict[str, str] = {}
-    # Indices already recorded by an earlier walk. Two walks that both pass
-    # through index k necessarily stop at the same index: the stop is
-    # `stops[start]`, and there is no non-fall-through paragraph strictly
-    # between two starts that both reach k. So hitting an already-recorded
-    # index means the whole rest of this walk is already recorded too, and
-    # the remaining `setdefault` calls would every one be a no-op -- which
-    # is what lets the walk break there and keeps the total linear rather
-    # than O(targets x paragraphs). Same keys, same first-writer-wins
-    # values as the unconditional walk it replaces.
-    recorded: set[int] = set()
+    # Index -> the end index of the earlier walk that recorded it. Without
+    # section stops, two walks that both pass through index k necessarily
+    # stop at the same index: the stop is `stops[start]`, and there is no
+    # non-fall-through paragraph strictly between two starts that both
+    # reach k. So hitting an index an earlier walk recorded with an end at
+    # least as far as this walk's means the whole rest of this walk is
+    # already recorded too, and the remaining `setdefault` calls would
+    # every one be a no-op -- which is what lets the walk break there and
+    # keeps the total linear rather than O(targets x paragraphs). A
+    # section stop can end an earlier walk sooner than this one, hence the
+    # end comparison. Same keys, same first-writer-wins values as the
+    # unconditional walk it replaces.
+    recorded: dict[int, int] = {}
     for name in go_to_targets:
         start = index_by_name.get(name)
+        anchor = name
         if start is None:
             members = section_members.get(name)
             if not members:
@@ -1133,12 +1151,18 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
             start = index_by_name.get(members[0])
             if start is None:
                 continue
+            anchor = members[0]
         stop = stops[start]
         end = last if stop is None else stop
+        section = (paragraph_safe_section or {}).get(anchor)
+        if section is not None:
+            section_end = index_by_name.get(section_members[section][-1])
+            if section_end is not None and start <= section_end < end:
+                end = section_end
         for cursor in range(start + 1, end + 1):
-            if cursor in recorded:
+            if recorded.get(cursor, -1) >= end:
                 break
-            recorded.add(cursor)
+            recorded[cursor] = max(recorded.get(cursor, -1), end)
             hazard.setdefault(ordered[cursor].paragraph_name, name)
     return hazard
 
