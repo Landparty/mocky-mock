@@ -501,9 +501,21 @@ Flags beyond the pipeline inputs:
 - `--case NAME` (repeatable) / `--tag TAG` (repeatable) — run only the named
   or tagged TESTCASEs (union when both given). Selection happens in
   `run_static_checks` before any per-case refusal check, so a refused
-  sibling case no longer blocks running a clean one. An unknown name/tag is
-  a static problem listing what is available. The suite still runs as ONE
-  compile + binary — just with only the selected cases spliced in.
+  sibling case no longer blocks running a clean one. An unknown name is a
+  static problem listing what is available; tags are a union, so a suite
+  is refused for `--tag` only when it carries none of the requested tags
+  (`--tag a --tag b` on a suite with only `a` runs its `a` cases). The
+  suite still runs as ONE compile + binary — just with only the selected
+  cases spliced in. In directory mode (no program/--cut, or a program with
+  several suites) `_directory_selections` parses every suite first, like
+  `pytest -m`: a suite with no selected case is skipped (`skipped: no
+  selected TESTCASE`, no report file written, exit code untouched), each
+  run suite is passed only the selectors it matches, and only a selector
+  that matches nothing in ANY suite is an error (exit 1). A suite that
+  does not parse is left in, so its run reports the parse error. Before
+  (issue #254) every suite got the selectors unchanged, a suite without
+  the tag was refused, the run exited 1 and its JUnit file got a
+  synthetic failure.
 - `--coverage` — the console report leads with the ORIGINAL `.cbl`'s own
   percentage and lists its own uncovered lines by their original line
   numbers; the instrumented sandbox copy's higher number (it counts

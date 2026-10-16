@@ -1516,11 +1516,26 @@ def _run_directory(
         print(f"mockymock run: no .cut files found under {test_root}")
         return 1
 
+    # --case/--tag pick a subset across the whole project, like `pytest
+    # -m`: a suite with no selected case is skipped (no report written), and
+    # only a selector that matches nothing in ANY suite is an error. Each
+    # suite then gets only the selectors it actually matches, so its own
+    # typo check never refuses it (issue #254).
+    selections = _directory_selections(args, cut_files)
+    if selections is None:
+        return 1
+
     exit_code = 0
     ran = 0
+    skipped_unselected = 0
     unresolved: list[str] = []
     tag_root = _report_tag_root(cut_files, test_root)
     for cut_path in cut_files:
+        selection = selections.get(cut_path)
+        if selection is not None and not selection[0] and not selection[1]:
+            print(f"== {cut_path} == skipped: no selected TESTCASE")
+            skipped_unselected += 1
+            continue
         try:
             program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
@@ -1530,6 +1545,9 @@ def _run_directory(
         sub_args = copy.copy(args)
         sub_args.program = str(program_path)
         sub_args.cut = str(cut_path)
+        if selection is not None:
+            sub_args.case = selection[0] or None
+            sub_args.tag = selection[1] or None
         for flag in _RUN_OUTPUT_PATH_FLAGS:
             if getattr(args, flag, None):
                 setattr(
@@ -1542,13 +1560,59 @@ def _run_directory(
 
     for reason in unresolved:
         print(f"mockymock run: {reason}")
-    print(
+    summary = (
         f"mockymock run: {ran} suite(s) run, {len(unresolved)} .cut file(s) "
         f"skipped (no program found)"
     )
+    if skipped_unselected:
+        summary += f", {skipped_unselected} with no selected TESTCASE"
+    print(summary)
     if ran == 0:
         return 1
     return exit_code
+
+
+def _directory_selections(
+    args: argparse.Namespace, cut_files: list[Path]
+) -> dict[Path, tuple[list[str], list[str]]] | None:
+    """Per .cut file, the --case names and --tag tags it matches, or an
+    empty dict when no selector was given. A file that cannot be read or
+    parsed is left out, so it still runs and reports its own problem. None
+    (after printing why) when a selector matches nothing in any suite."""
+    from mockymock.dsl.parser import parse_cut
+
+    case_names = list(getattr(args, "case", None) or [])
+    tag_names = list(getattr(args, "tag", None) or [])
+    if not case_names and not tag_names:
+        return {}
+    selections: dict[Path, tuple[list[str], list[str]]] = {}
+    for cut_path in cut_files:
+        try:
+            suite = parse_cut(read_utf8_source(cut_path))
+        except Exception:  # noqa: BLE001 -- the suite's own run reports it
+            continue
+        names = {case.name for case in suite.test_cases}
+        tags = {tag for case in suite.test_cases for tag in case.tags}
+        selections[cut_path] = (
+            [name for name in case_names if name in names],
+            [tag for tag in tag_names if tag in tags],
+        )
+    if len(selections) < len(cut_files):
+        return selections  # an unparsed suite might hold the selected case
+    unmatched = [
+        f"no TESTCASE named {name!r} in any suite"
+        for name in case_names
+        if not any(name in sel[0] for sel in selections.values())
+    ] + [
+        f"no TESTCASE carries tag {tag!r} in any suite"
+        for tag in tag_names
+        if not any(tag in sel[1] for sel in selections.values())
+    ]
+    if unmatched:
+        for problem in unmatched:
+            print(f"mockymock run: {problem}")
+        return None
+    return selections
 
 
 def _cmd_run(args: argparse.Namespace) -> int:

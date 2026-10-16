@@ -208,9 +208,12 @@ def filter_suite_cases(
                 f"no TESTCASE named {name!r} in this suite " f"(available: {listing})"
             )
     available_tags = {tag for case in suite.test_cases for tag in case.tags}
-    for tag in tag_names or []:
-        if tag not in available_tags:
-            listing = ", ".join(sorted(repr(t) for t in available_tags)) or "none"
+    # Tags select a subset as a union, so `--tag a --tag b` on a suite with
+    # only `a` is a selection, not a typo; refuse only when no requested
+    # tag is carried at all (issue #254).
+    if tag_names and not available_tags & set(tag_names):
+        listing = ", ".join(sorted(repr(t) for t in available_tags)) or "none"
+        for tag in tag_names:
             problems.append(
                 f"no TESTCASE carries tag {tag!r} (tags in this suite: {listing})"
             )
