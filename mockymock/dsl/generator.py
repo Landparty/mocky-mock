@@ -1105,6 +1105,27 @@ def _placeholder_body_for(
     return list(_PLACEHOLDER_BODIES.get(category, []))
 
 
+def file_op_key(site: BoundarySite, surface: MockSurface | None) -> str:
+    """The key a MOCK for this file-op site uses. A multi-file `OPEN A B`
+    is one site matched by a MOCK for any of its files, and two MOCKs
+    matching it are AMBIGUOUS_MOCK. When one of its files is also the only
+    file of another site of the same verb (`CLOSE B` / `OPEN OUTPUT B`
+    after it), keying both on that file lets one MOCK cover both sites;
+    keying the multi-file site on its first file left the other site
+    needing a second MOCK that the first site then also matched (issue
+    #312)."""
+    if len(site.keys) > 1 and surface is not None:
+        for key in site.keys:
+            if any(
+                other is not site
+                and other.category is site.category
+                and other.keys == (key,)
+                for other in surface.boundary_sites
+            ):
+                return key
+    return site.keys[0]
+
+
 def _directive_for(
     site: BoundarySite, surface: MockSurface, context: ProgramContext | None = None
 ) -> tuple[str, list[str]] | None:
@@ -1145,7 +1166,7 @@ def _directive_for(
     if category in FILE_OP_CATEGORIES:
         if not site.keys:
             return None  # no usable key parsed; run's refusal gate will name it
-        key = site.keys[0]
+        key = file_op_key(site, surface)
         return f"MOCK {category.value} {key}", _placeholder_body_for(category, key)
 
     if category is MockCategory.ACCEPT:
@@ -2409,6 +2430,13 @@ def _bundle_directive_for_group(
     return lines, None
 
 
+def _fixture_pair(fixture: BoundaryFixture) -> tuple[MockCategory, str] | None:
+    try:
+        return MockCategory(fixture.category), fixture.key
+    except ValueError:
+        return None
+
+
 def _bundle_mock_directives(
     scenario: Scenario,
     surface: MockSurface,
@@ -2474,6 +2502,14 @@ def _bundle_mock_directives(
     covered_site_ids: set[int] = set()
     for site_id in site_order:
         group = fixtures_by_site[site_id]
+        # A multi-file OPEN/CLOSE is keyed the way the bundle-less scaffold
+        # and lint's suggestion key it, so one MOCK can also cover a later
+        # single-file statement on the same file (issue #312).
+        pair = _fixture_pair(group[0])
+        group_site = mockymock_keys.get(pair) if pair is not None else None
+        if group_site is not None and len(group_site.keys) > 1:
+            preferred = file_op_key(group_site, surface)
+            group.sort(key=lambda f: f.key != preferred)
         result = _bundle_directive_for_group(
             group, mockymock_keys, registry, placeholder_keys, source
         )
