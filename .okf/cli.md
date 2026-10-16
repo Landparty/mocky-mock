@@ -1158,6 +1158,12 @@ tells the one column-sensitive step, the clause-body lift, about the shift (issu
 `lift_clause_bodies` found no word at its AST offsets and every mocked statement's AT END / NOT AT
 END / INVALID KEY / ON EXCEPTION body (and the `UT-MOCK-STATUS` bookkeeping) was dropped from the
 export while `run` kept them -- a read-until-EOF loop hung.
+`export` also passes `run_static_checks(..., model_rebinds=False)` (issue #321): a folded LINKAGE
+item `run` keeps as a real rebind (`mark_based`, #226) would put `BASED` and `SET ADDRESS OF` on a
+WORKING-STORAGE item into the output, both GnuCOBOL / Micro Focus only. Export keeps the IBM-legal
+`UT-ADDR-SINK` redirect instead, lists the items in `StaticCheckResult.unmodelled_rebinds`, prints a
+warning, and names them in the provenance header (`build_provenance_header(..., unmodelled_rebinds)`):
+a case that relies on the rebind may fail in the export although it passes under `run`.
 A provenance/disclaimer header is prepended, documenting that this is a
 mock-only build (every boundary is either mocked or fails loudly; no real I/O executes) and listing
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults

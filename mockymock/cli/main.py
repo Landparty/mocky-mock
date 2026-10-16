@@ -2506,9 +2506,19 @@ def _cmd_export(args: argparse.Namespace) -> int:
         case_names=args.case,
         tag_names=args.tag,
         preserve_compiler_directives=True,
+        model_rebinds=False,
     )
     for note in checked.notes:
         print(f"mockymock export: {note}")
+    if checked.unmodelled_rebinds:
+        print(
+            f"mockymock export: warning: `SET ADDRESS OF` on "
+            f"{', '.join(checked.unmodelled_rebinds)} is not modelled in the "
+            f"export -- `run` keeps it as a real rebind with BASED, which IBM "
+            f"Enterprise COBOL does not have, so the export redirects it to a "
+            f"scratch pointer instead and a case relying on the rebind may "
+            f"fail there"
+        )
     if checked.linkage is not None:
         _print_linkage_neutralization(
             "export",
@@ -2602,7 +2612,9 @@ def _cmd_export(args: argparse.Namespace) -> int:
             print(f"mockymock export: refused (COLUMN_OVERFLOW): {problem}")
         return 1
 
-    header = build_provenance_header(str(source_path), str(cut_path))
+    header = build_provenance_header(
+        str(source_path), str(cut_path), checked.unmodelled_rebinds
+    )
     instrumented = insert_provenance_header(instrumented, header)
 
     output_path = (
