@@ -312,6 +312,33 @@ def _paragraph_owning_line(
     return owner
 
 
+def check_source_format(raw_source: str) -> list[RefusalReason]:
+    """UNSUPPORTED_SOURCE_FORMAT when `raw_source` is free-format COBOL.
+
+    cobol-parser decides fixed vs. free itself
+    (`detect_fixed_format`), so a free-format program parses correctly --
+    but every text the splicer edits and cobc compiles is cut down to
+    columns 8-72 by `normalize_fixed_format`, which chops the first seven
+    characters off each free-format line. The AST's line/column facts
+    then describe text that no longer exists, and the run fails in cobc on
+    garbage (or with a false layout refusal). Refuse up front, using the
+    same decision cobol-parser parsed with (issue #210)."""
+    from cobolparser.preprocess.source_format import detect_fixed_format
+
+    if detect_fixed_format(raw_source):
+        return []
+    return [
+        RefusalReason(
+            code="UNSUPPORTED_SOURCE_FORMAT",
+            message=(
+                "the program is free-format COBOL; mockymock only splices "
+                "and compiles fixed-format source (sequence area in "
+                "columns 1-6, indicator in column 7, code in columns 8-72)"
+            ),
+        )
+    ]
+
+
 def check_whole_program(parse_result) -> list[RefusalReason]:
     """PARSE_ERROR for a failed parse; PARSE_WARNING for each entry in
     `ParseResult.warnings`. Since cobolparser's 2026-07-07 silent-drop fixes,

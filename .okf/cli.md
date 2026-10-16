@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T00:00:00Z
 ---
 
 # Overview
@@ -523,7 +523,12 @@ Flags beyond the pipeline inputs:
   on `invupdt`/`ordrproc`/`raterte`. The PICTURE comes from the program's
   own data items (subscripts stripped) and, for a synthesized `UT-CAP-`
   target, from its capture source; anything without one (alphanumeric,
-  numeric-edited, `P`-scaled, unresolved) keeps the old text-shape rule.
+  numeric-edited, unresolved) keeps the old text-shape rule. A group item
+  renders as alphanumeric and a stub on a `P`-scaled item is skipped
+  (issue #194). The file is read without newline translation and written
+  with `newline=""`, `rewrite_cut_text` joining with the file's own
+  newline, so a CRLF `.cut` stays CRLF (issue #199, the same fix
+  `generate --fill` already had).
 - `--keep-sandbox` — never delete the sandbox directory; its path is
   printed at the start of the run for inspection.
 - `--verbose` — on compile failure, print the path to the instrumented
@@ -598,8 +603,11 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     run), then exit 1 if any fired. See [analysis](analysis.md). Every
     refusal exit in `_cmd_run` (this step and every earlier one) calls
     `_write_failure_reports(args, "run", <suite name or "">, <joined
-    problems>)` before returning 1 — see the `--junit-xml`/`--json-report`
-    bullets above.
+    problems>, cut_suite=..., cut_file=..., program_file=...)` before
+    returning 1 — see the `--junit-xml`/`--json-report` bullets above. The
+    three keyword arguments (issue #204, 2026-10-16; also passed on the
+    compile-failure exit) keep the JSON report's `cutFile`, `programFile`
+    and `suite.line` populated, and list the suite's cases as `not_run`.
 11. `collect_boundaries(result.ast)`, `TallyRegistry(suite)`,
     `find_terminator_plans(...)`, `find_flow_mock_plans(...)`,
     `splice_program(lines, boundaries, surface, suite, registry,
@@ -955,6 +963,18 @@ the `.cut` (`_cmd_lint` re-parses it quietly), since the check is
 `.cut`-only. The `.cut line N` wording is what lets the extension place the
 diagnostic on the TESTCASE header.
 
+**Unknown data-names (issue #204, 2026-10-16).** `run_static_checks` step
+7b (`analysis.cut_names.check_cut_data_names`, cumulative with step 8)
+refuses `UNKNOWN_DATA_NAME` at the `.cut` line of every setup/hook MOVE
+target, EXPECT data-name and non-`UT-CAP-` `CAPTURE ... INTO` target, and
+every bare-word MOVE/EXPECT value (`TO BE Y`), that appears nowhere in the
+transformed program text (literals and `*>` comments stripped; generated
+SQLCA and `EXEC SQL INCLUDE` members count), is not a `UT-` harness item,
+DFHEIBLK/DLIDIB field, special register or figurative constant. Loose on
+purpose: it only catches names cobc would certainly reject.
+`MockTestCase.setup_move_lines` / `MockDirective.capture_lines` carry the
+line numbers the model did not record before.
+
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 
 Parses the `.cut` file only (no `.cbl`, no Docker) and lists the suite and
@@ -1303,7 +1323,7 @@ instead; `tests/unit/test_cli_skills.py` pins the help text against
 building the parser doesn't import the module. Any future "cleanup" that
 restores `choices=` also restores the import.
 
-**Every `.cbl`/`.cut` read goes through `_lines.read_utf8_source` (2026-09-30, bug hunt round 12).** A non-UTF-8 source (cp1252 etc.) raises `SourceEncodingError` (a `ValueError` naming the file, the byte offset and an `iconv` fix) instead of a `UnicodeDecodeError` traceback; `run_static_checks` reports it as a problem and `main()` prints it in each command's own error convention (JSON for `collect --json`, stderr otherwise). Policy is refuse, never guess a code page: the spliced copy is compiled as UTF-8, so a guessed cp1252 `PIC X` literal would silently change length. `keep_newlines=True` (used by `generate --fill`, which writes back with `newline=""`) skips universal-newline translation so a CRLF `.cut` stays CRLF. New file reads should use it, not `Path.read_text()`.
+**Every `.cbl`/`.cut` read goes through `_lines.read_utf8_source` (2026-09-30, bug hunt round 12).** A non-UTF-8 source (cp1252 etc.) raises `SourceEncodingError` (a `ValueError` naming the file, the byte offset and an `iconv` fix) instead of a `UnicodeDecodeError` traceback; `run_static_checks` reports it as a problem and `main()` prints it in each command's own error convention (JSON for `collect --json`, stderr otherwise). Policy is refuse, never guess a code page: the spliced copy is compiled as UTF-8, so a guessed cp1252 `PIC X` literal would silently change length. `keep_newlines=True` (used by `generate --fill`, which writes back with `newline=""`) skips universal-newline translation so a CRLF `.cut` stays CRLF. A leading UTF-8 BOM is dropped (`utf-8-sig`) except under `keep_newlines`, whose rewriting callers keep it to round-trip it; `parse_cut` ignores a leading BOM itself (issue #198, 2026-10-16). New file reads should use it, not `Path.read_text()`.
 
 **`transform_data_division_exec` is called twice, and the first call's return value is intentionally thrown away** (`_cmd_run`, step 9 vs 11). The first pass exists purely to surface `EXEC SQL INCLUDE SQLCA` refusal reasons *before* any splicing happens; running the real transform that early would shift line numbers/spans that `splice_program` and the boundary/nested-site analysis depend on. Any future edit that tries to "simplify" this into one call will silently break splice-target alignment.
 

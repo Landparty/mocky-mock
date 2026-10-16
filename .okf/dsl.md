@@ -101,7 +101,9 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   raises `CutParseError` (`_reject_sentence_period`, 2026-09-27) --
   spliced into the generated `IF`, the period ended the sentence mid-IF
   and `cobc` rejected the driver while `lint` passed; a PROVIDER row
-  substituting such a value is refused at its `ROW` line. Phrase words are case-sensitive
+  substituting such a value is refused at its `ROW` line. The same check
+  covers setup and BEFORE-*/AFTER-* hook `MOVE` values, and PROVIDER rows
+  substituted into them (issue #197, 2026-10-16). Phrase words are case-sensitive
   uppercase like every other keyword.
 - `EXPECT <88-name> [NOT] TO BE TRUE|FALSE` tests a level-88
   condition-name (issue #189). TRUE/FALSE are not values any data item

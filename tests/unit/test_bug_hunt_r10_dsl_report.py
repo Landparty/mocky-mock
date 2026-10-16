@@ -191,3 +191,32 @@ def test_stub_in_provider_case_with_extra_spaces_is_skipped_as_provider():
     scan = scan_stub_expectations(text, parse_cut(text))
     assert scan.stubs == []
     assert "PROVIDER-templated" in scan.skipped[0].reason
+
+
+# --- MOVE sentence period (issue #197) -------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'TESTSUITE "s"\nTESTCASE "c"\n    MOVE 5. TO WS-N\nPERFORM P\n',
+        'TESTSUITE "s"\nBEFORE-EACH\n    MOVE 5. TO WS-N\nEND-BEFORE\n'
+        'TESTCASE "c"\nPERFORM P\n',
+    ],
+)
+def test_setup_and_hook_move_value_ending_in_a_period_is_refused(text):
+    with pytest.raises(CutParseError, match="line 3: MOVE value '5.' ends with"):
+        parse_cut(text)
+
+
+def test_move_period_substituted_from_a_provider_row_is_refused():
+    with pytest.raises(CutParseError, match="line 4: MOVE value '5.' ends with"):
+        parse_cut(
+            'TESTSUITE "s"\nPROVIDER P1\nHEADER Src\nROW 5.\n'
+            'TESTCASE "c" USING PROVIDER P1\nMOVE {Src} TO WS-X\nPERFORM P\n'
+        )
+
+
+def test_move_period_inside_a_quoted_value_is_kept():
+    suite = parse_cut('TESTSUITE "s"\nTESTCASE "c"\nMOVE "A." TO WS-X\nPERFORM P\n')
+    assert suite.test_cases[0].setup_moves == [('"A."', "WS-X")]
