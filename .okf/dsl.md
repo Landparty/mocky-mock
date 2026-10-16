@@ -677,7 +677,8 @@ DLET and loop GHN; `MQGET`; a DB2 access module) at its empty-input path.
 own tally reaches N. That tally is per `(category, key)`, so it counts
 calls across **every** site the key matches (a DLI tally is per quoted
 prefix key, since that is the directive's key), and `driver.py` zeroes it
-at the start of each case, so every case restarts at row 1. These
+at the start of each case, so every case restarts at row 1 (see the
+hook rule below). These
 categories have no implicit end-of-data value (no SQLCODE, no FILE
 STATUS), so **`TERMINAL` is mandatory** -- the parser raises
 `CutParseError` ("needs a TERMINAL ...") at `END-MOCK` when it is
@@ -692,6 +693,18 @@ SEQUENCED branch calls `build_rows_block(tally, rows, row_suffix_moves=[],
 exhausted_moves=<TERMINAL MOVEs>)`. Worked example:
 `examples/real-world/ACCTPRG/ACCTPRG.cut`'s two "then stops at GB" cases;
 tests: `tests/unit/test_call_sequencing.py`.
+
+**ROWS cursor across hooks (issue #223).** The tally is both the ROWS
+cursor and the VERIFY count. A case's tally starts at 0 -- or, for a key it
+inherits from BEFORE-ALL, at the count the BEFORE-ALL steps left
+(`UT-...-START`, saved right after them) -- and is never zeroed again
+inside the case: rows a priming READ/FETCH/CALL in BEFORE-EACH or
+BEFORE-ALL consumed are not handed out again, exactly like a real file.
+VERIFY counts only the case's own PERFORM through a per-key baseline
+(`UT-...-BASE`), set equal to the tally at case start and again after the
+BEFORE-EACH steps when they PERFORM; the generated check is
+`IF (<tally> - <base>) NOT = n`. A case's own MOCK for the key replaces
+the inherited one and starts its rows at 1.
 
 **This grammar is hand-authoring only.** It exists for a human (or an
 editor integration) writing a `.cut` file by hand against `mockymock

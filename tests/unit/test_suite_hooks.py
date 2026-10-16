@@ -389,12 +389,14 @@ def test_driver_runs_before_all_once_saves_and_after_all_last():
     suite_start = proc.index('DISPLAY "__MOCKYMOCK__ TESTSUITE: hooks"')
     m = parse_cut(CUT).before_all_mocks[0]
     loadrate = registry.name(m.category, m.key)
-    assert proc[suite_start + 1 : suite_start + 8] == [
+    assert proc[suite_start + 1 : suite_start + 9] == [
         "PERFORM UT-RESET-WORKING-STORAGE",
         f'MOVE "{SUITE_PHASE_ID}" TO UT-CURRENT-CASE',
         'MOVE "N" TO UT-EARLY-EXIT',
         f"MOVE 0 TO {loadrate}",
         "PERFORM 0100-INIT",
+        # The ROWS cursor each case resumes from (issue #223).
+        f"MOVE {loadrate} TO {registry.start_name(m.category, m.key)}",
         "PERFORM UT-SAVE-STATE",
         "PERFORM UT-TESTCASE-001",
     ]
@@ -421,8 +423,13 @@ def test_driver_case_order_restore_before_each_case_body_after_each():
         suite.before_each_mocks[0].category, suite.before_each_mocks[0].key
     )
     clear = body.index("PERFORM 0200-CLEAR")
-    # A BEFORE-EACH PERFORM's own calls don't count toward the case's VERIFY.
-    assert f"MOVE 0 TO {audit}" in body[clear + 1 :]
+    # A BEFORE-EACH PERFORM's own calls don't count toward the case's VERIFY,
+    # but the tally (the ROWS cursor) keeps them (issue #223).
+    audit_base = registry.base_name(
+        suite.before_each_mocks[0].category, suite.before_each_mocks[0].key
+    )
+    assert f"MOVE {audit} TO {audit_base}" in body[clear + 1 :]
+    assert f"MOVE 0 TO {audit}" not in body[clear + 1 :]
     assert body.index("PERFORM 1000-CALC") > clear
     assert body[-1] == "MOVE SPACES TO WS-MSG"
     # Second case: its own MOVE runs after BEFORE-EACH, so it wins.
@@ -540,3 +547,61 @@ def test_entry_parameters_are_reset_and_saved_like_working_storage(files):
     assert result.snapshot is not None
     assert "MOVE LS-REQUEST TO UT-SNAP-002" in result.snapshot.save_lines
     assert "MOVE UT-SNAP-003 TO LS-LIMIT" in result.snapshot.restore_lines
+
+
+ROWS_HOOK_CUT = """\
+TESTSUITE "rows"
+BEFORE-ALL
+    MOCK READ IN-FILE ROWS
+        (IN-REC = "A")
+        (IN-REC = "B")
+    END-MOCK
+    PERFORM 1000-INIT
+END-BEFORE
+BEFORE-EACH
+    MOCK CALL "AUDIT"
+    END-MOCK
+    PERFORM 0200-CLEAR
+END-BEFORE
+TESTCASE "inherits the cursor"
+    PERFORM 3000-LOOP
+    VERIFY READ IN-FILE WAS CALLED 2 TIMES
+TESTCASE "own rows"
+    MOCK READ IN-FILE ROWS
+        (IN-REC = "Z")
+    END-MOCK
+    PERFORM 3000-LOOP
+"""
+
+
+def test_rows_cursor_survives_hook_steps_while_verify_counts_the_case():
+    """Issue #223: the tally is both the VERIFY count and the ROWS cursor.
+    Zeroing it after a BEFORE-EACH PERFORM, or at the start of a case that
+    inherits a BEFORE-ALL mock, handed out rows the hook's priming READ had
+    already consumed. The cursor now resumes (from 0, or from where
+    BEFORE-ALL left it); VERIFY counts against a per-key baseline."""
+    suite = parse_cut(ROWS_HOOK_CUT)
+    registry = TallyRegistry(suite)
+    artifact = build_driver(suite, ["MOVE SPACES TO WS-MSG"], registry)
+    proc = _stripped(artifact.procedure_lines)
+    read = (suite.before_all_mocks[0].category, suite.before_all_mocks[0].key)
+    audit = (suite.before_each_mocks[0].category, suite.before_each_mocks[0].key)
+    tally, base = registry.name(*read), registry.base_name(*read)
+    start = registry.start_name(*read)
+    assert f"01  {start}      PIC 9(9) VALUE 0." in artifact.working_storage_lines
+    assert f"MOVE {tally} TO {start}" in proc
+
+    first = proc[proc.index("UT-TESTCASE-001.") : proc.index("UT-TESTCASE-002.")]
+    assert f"MOVE {start} TO {tally}" in first
+    assert f"MOVE {tally} TO {base}" in first
+    assert f"MOVE 0 TO {registry.name(*audit)}" in first
+    clear = first.index("PERFORM 0200-CLEAR")
+    assert f"MOVE {registry.name(*audit)} TO {registry.base_name(*audit)}" in (
+        first[clear + 1 :]
+    )
+    assert f"IF ({tally} - {base}) NOT = 2" in first
+
+    # A case with its own MOCK for the key starts its own rows at 1.
+    second = proc[proc.index("UT-TESTCASE-002.") :]
+    assert f"MOVE 0 TO {tally}" in second
+    assert f"MOVE {start} TO {tally}" not in second

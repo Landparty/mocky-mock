@@ -122,12 +122,12 @@ def test_expect_failure_message_includes_actual_value():
 
 def test_testcase_emits_verify_check():
     joined = "\n".join(_build().procedure_lines)
-    assert "IF UT-DISCRATE-TALLY NOT = 1" in joined
+    assert "IF (UT-DISCRATE-TALLY - UT-DISCRATE-BASE) NOT = 1" in joined
 
 
 def test_verify_failure_message_includes_actual_tally():
     joined = "\n".join(_build().procedure_lines)
-    assert "MOVE UT-DISCRATE-TALLY TO UT-TALLY-EDITED" in joined
+    assert "COMPUTE UT-TALLY-EDITED = UT-DISCRATE-TALLY - UT-DISCRATE-BASE" in joined
     assert 'WAS CALLED ONCE, got " FUNCTION TRIM(UT-TALLY-EDITED)' in joined
 
 
@@ -146,7 +146,7 @@ def test_verify_on_file_op_uses_category_tally():
         VerifyDirective(MockCategory.READ, "INFILE", "3 TIMES")
     )
     joined = "\n".join(_build(suite).procedure_lines)
-    assert "IF UT-READ-INFILE-TALLY NOT = 3" in joined
+    assert "IF (UT-READ-INFILE-TALLY - UT-READ-INFILE-BASE) NOT = 3" in joined
 
 
 def test_verify_without_matching_mock_raises():

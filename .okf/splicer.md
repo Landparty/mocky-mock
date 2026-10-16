@@ -1091,8 +1091,9 @@ case's `perform_target` (with optional `perform_thru`).
 
 Each `UT-TESTCASE-NNN` paragraph: optionally performs the reset paragraph,
 moves the case ID into `UT-CURRENT-CASE` (this is what every injected
-EVALUATE dispatch block switches on), zeroes every tally this case's mocks
-touch, displays a `CASE NNN START` marker, runs any `setup_moves`,
+EVALUATE dispatch block switches on), starts every tally this case's mocks
+touch (0, or a BEFORE-ALL mock's saved `-START` count) and its VERIFY
+baseline `-BASE` (see dsl.md's "ROWS cursor across hooks"), displays a `CASE NNN START` marker, runs any `setup_moves`,
 performs the target paragraph, then checks `expectations` (the
 directive's own relation from `ExpectDirective.operator` — `=` for plain
 `TO BE`, plus `NOT =`/`>`/`<`/`>=`/`<=` and their negations from the
