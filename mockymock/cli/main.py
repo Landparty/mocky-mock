@@ -329,11 +329,21 @@ def _write_report_file(command: str, flag: str, target: str, content: str) -> bo
     otherwise-successful run -- report it the same way
     `_check_input_files` reports a bad input path instead, and let the
     caller's own exit code stand on the actual outcome rather than on
-    whether a report file happened to be writable."""
+    whether a report file happened to be writable.
+
+    A missing parent directory is created first, as pytest and maven do
+    for `--junit-xml reports/junit.xml` in a fresh CI checkout, and a
+    write that still fails is reported on stderr, not mixed into the
+    test output on stdout (issue #257)."""
     try:
-        Path(target).write_text(content, encoding="utf-8")
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
     except OSError as exc:
-        print(f"mockymock {command}: could not write {flag} to {target}: {exc}")
+        print(
+            f"mockymock {command}: could not write {flag} to {target}: {exc}",
+            file=sys.stderr,
+        )
         return False
     return True
 

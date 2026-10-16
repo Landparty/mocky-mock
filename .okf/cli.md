@@ -470,6 +470,13 @@ never disagree about what refuses.
 
 Flags beyond the pipeline inputs:
 
+- Every output-file flag (`--junit-xml`, `--json-report`,
+  `--coverage-json`, `--coverage-out`, `--trace-json`, and `export`/
+  `generate`/`mutate`'s output) is written by `_write_report_file`, which
+  creates missing parent directories first (issue #257: `--junit-xml
+  reports/junit.xml` in a fresh checkout wrote nothing) and prints a write
+  that still fails on stderr. The exit code still follows the test
+  outcome, not the report write.
 - `--junit-xml PATH` — write `format_junit_xml(...)` there after a run that
   reaches execution. Each `<testcase>` carries `classname="<suite name>"`.
   A refusal or a compile failure (steps 5b/10 and 15 below) also writes
