@@ -879,7 +879,12 @@ incremented and DISPLAYed is a missing assertion first -- seeding alone
 would not kill it -- so it gets no hint and `mockymock report` files it as
 `missing-assertion`; it used to be labelled untestable. xref is new in
 cobol-parser 1.10 (floor 1.7.7): without it, or on any xref error, the
-field counts as observed and the hint stays. The verdict and score
+field counts as observed and the hint stays. The statement must also run
+at most once per case (`_may_run_more_than_once`, issue #203): an
+ADD/SUBTRACT in a paragraph a looping PERFORM (UNTIL/VARYING/TIMES)
+reaches, or in a looping inline PERFORM body (`analysis/loops.py`), gets
+no hint -- a counter bumped n times ends at n while the swap alternates
+1, 0, 1, ..., so a plain EXPECT kills it. The verdict and score
 are unchanged -- seeding the field is how the author kills it -- but the
 console prints a `!` line under the diff plus a count, `--json-report`
 carries a per-mutant `hint`, and `mockymock report` files it as
