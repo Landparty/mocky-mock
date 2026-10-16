@@ -269,7 +269,10 @@ PERFORM is the case's own, skipping any PERFORM inside a `MOCK ... END-MOCK`
 body; `directive_snippet` declines the sites the scaffold itself skips (a
 nested site with no span, an unspliceable top-level site). Every problem
 `--fill` cannot fix (a flow-mock target that does not exist, an `UNMOCKED_*`
-reason with no mechanical fix) is printed and exits 1, so `--fill` exiting 0
+reason with no mechanical fix, a `BEFORE-EACH`/`BEFORE-ALL` hook PERFORM's
+`UNMOCKED_*` refusal -- `--fill` inserts into TESTCASEs only, and only the
+per-case reason lines it read from `unmocked_reasons` count as handled,
+issue #208) is printed and exits 1, so `--fill` exiting 0
 means the next `lint` exits 0. Reported `file:line` is where each block
 landed in the written file. Every existing directive, `EXPECT`/`VERIFY`, and
 comment is left byte-for-byte untouched — insertion happens at known line

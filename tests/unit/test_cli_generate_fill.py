@@ -266,3 +266,46 @@ def test_generate_fill_reports_the_line_each_block_landed_on(tmp_path, capsys):
     lines = cut.read_text().splitlines()
     landed = lines.index("    MOCK READ INV-FILE") + 1
     assert f"{cut}:{landed}: MOCK READ INV-FILE" in out
+
+
+_HOOK_PROGRAM = (
+    "       IDENTIFICATION DIVISION.\n"
+    "       PROGRAM-ID. P.\n"
+    "       DATA DIVISION.\n"
+    "       WORKING-STORAGE SECTION.\n"
+    "       01 WS-EOF PIC X VALUE 'N'.\n"
+    "       PROCEDURE DIVISION.\n"
+    "       OPEN-FILE.\n"
+    "           OPEN INPUT INV-FILE.\n"
+    "       CLOSE-FILE.\n"
+    "           CLOSE INV-FILE.\n"
+)
+
+
+def test_generate_fill_fails_on_an_unmocked_hook_boundary_it_cannot_fill(
+    tmp_path, capsys
+):
+    """Issue #208: a BEFORE-EACH PERFORM's UNMOCKED_* refusal starts with
+    the same "refused (UNMOCKED_" prefix as a TESTCASE's own, so --fill
+    treated it as filled, inserted nothing, and exited 0 -- while the next
+    lint still failed."""
+    cut_text = (
+        'TESTSUITE "hooks"\n'
+        "BEFORE-EACH\n"
+        "    PERFORM OPEN-FILE\n"
+        "END-BEFORE\n"
+        "\n"
+        'TESTCASE "close only"\n'
+        "    MOCK CLOSE INV-FILE\n"
+        "    END-MOCK\n"
+        "    PERFORM CLOSE-FILE\n"
+    )
+    cbl = tmp_path / "P.cbl"
+    cbl.write_text(_HOOK_PROGRAM)
+    cut = tmp_path / "P.cut"
+    cut.write_text(cut_text)
+    exit_code = main(["generate", str(cbl), "--fill", str(cut)])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "BEFORE-EACH" in out and "UNMOCKED_FILE_OP" in out
+    assert cut.read_text() == cut_text

@@ -785,10 +785,21 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
     # (a flow-mock target that doesn't exist, a terminator layout, an
     # UNMOCKED_* reason with no mechanical fix): print it and fail, so
     # `--fill` exiting 0 means the next `lint` exits 0 too.
+    # Only the per-TESTCASE UNMOCKED_* lines `--fill` read from
+    # `unmocked_reasons` count as handled: a hook PERFORM's refusal reads
+    # the same way ("refused (UNMOCKED_...)") but nothing here inserts
+    # into BEFORE-EACH/BEFORE-ALL, so matching on the prefix exited 0 with
+    # nothing filled and the next lint failed again (issue #208).
+    filled = {
+        f"refused ({r.code}): {r.message}"
+        for reasons in checked.unmocked_reasons.values()
+        for r in reasons
+        if r.code.startswith("UNMOCKED_")
+    }
     remaining = [
         problem
         for problem in checked.problems
-        if not problem.startswith("  ") and not _is_filled_problem(problem)
+        if not problem.startswith("  ") and problem not in filled
     ]
     for problem in remaining:
         print(f"mockymock generate: {problem}")
@@ -802,12 +813,6 @@ def _header_line(raw: str) -> str:
     stripped, so an existing `MOCK READ INV-FILE` (any indentation) is
     recognized as already present."""
     return raw.strip()
-
-
-def _is_filled_problem(problem: str) -> bool:
-    """True for the `refused (UNMOCKED_*): ...` lines `--fill` acts on
-    itself; every other problem line is one it cannot fix."""
-    return problem.startswith("refused (UNMOCKED_")
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
