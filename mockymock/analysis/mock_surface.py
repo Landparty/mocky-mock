@@ -305,6 +305,11 @@ class BoundarySite:
     # A mockable SQL site: the (condition, GO TO target) checks the WHENEVER
     # declarations above it in the source put after it, in DB2's order.
     whenever_checks: tuple[tuple[str, str], ...] = ()
+    # An opt-in site (`promote_clock_accepts`, issue #240): an `ACCEPT x
+    # FROM DATE/TIME/DAY/DAY-OF-WEEK` some MOCK names. It is spliced, but a
+    # test case that does not mock it runs the real statement (the
+    # dispatch's WHEN OTHER), so it is never refused as unmocked.
+    opt_in: bool = False
 
 
 @dataclass
@@ -327,6 +332,18 @@ class NonInteractiveAccept:
     from_source: str
     paragraph_name: str
     line: int
+    # What `promote_clock_accepts` needs to turn a clock ACCEPT into an
+    # opt-in boundary site when a MOCK names it.
+    statement: object = None
+    nested: bool = False
+    nested_in_boundary: bool = False
+
+    @property
+    def reads_clock(self) -> bool:
+        """FROM DATE / TIME / DAY / DAY-OF-WEEK: a value that changes from
+        run to run, so a test can only pin it by mocking the ACCEPT."""
+        words = self.from_source.upper().split()
+        return bool(words) and words[0] in CLOCK_ACCEPT_SOURCES
 
 
 @dataclass
@@ -519,6 +536,9 @@ _BOUNDARY_STATEMENT_TYPES = (
 # all, FROM CONSOLE, or an unrecognized mnemonic -- fail closed) is console
 # input: at test runtime it would read whatever stdin happens to be attached,
 # making the run nondeterministic (or hang until the executor timeout).
+#: The `_NON_INTERACTIVE_ACCEPT_SOURCES` that read the system clock.
+CLOCK_ACCEPT_SOURCES = frozenset({"DATE", "DAY", "DAY-OF-WEEK", "TIME"})
+
 _NON_INTERACTIVE_ACCEPT_SOURCES = frozenset(
     {
         "DATE",
@@ -911,6 +931,9 @@ def _classify_statement(
                     from_source=str(statement.from_source),
                     paragraph_name=paragraph_name,
                     line=line,
+                    statement=statement,
+                    nested=nested,
+                    nested_in_boundary=in_boundary,
                 )
             )
         return
@@ -980,6 +1003,48 @@ def analyze(program: CobolProgram) -> MockSurface:
                 site.whenever_checks = actions.get(id(site.statement), ())
 
     return surface
+
+
+def promote_clock_accepts(surface: MockSurface, mocks) -> list[BoundarySite]:
+    """Make every clock ACCEPT (`ACCEPT x FROM DATE/TIME/DAY/DAY-OF-WEEK`)
+    that a MOCK ACCEPT in `mocks` names an opt-in boundary site (issue
+    #240), and return the new sites.
+
+    Such an ACCEPT reads the system clock, so a test asserting on anything
+    derived from it passes only on the day (or second) it was recorded.
+    Mocking it gives the test a fixed clock. Opt-in, so a program whose
+    tests never name one is spliced exactly as before: an unmocked case
+    runs the real statement through the dispatch's WHEN OTHER instead of
+    being refused UNMOCKED_CONSOLE_ACCEPT."""
+    named = {
+        directive.key.upper()
+        for directive in mocks
+        if directive.category is MockCategory.ACCEPT
+    }
+    promoted: list[BoundarySite] = []
+    kept: list[NonInteractiveAccept] = []
+    for accept in surface.non_interactive_accepts:
+        if not (accept.reads_clock and accept.target in named):
+            kept.append(accept)
+            continue
+        promoted.append(
+            BoundarySite(
+                category=MockCategory.ACCEPT,
+                label="ACCEPT",
+                keys=(accept.target,),
+                match_text=None,
+                paragraph_name=accept.paragraph_name,
+                line=accept.line,
+                nested=accept.nested,
+                statement=accept.statement,
+                nested_in_boundary=accept.nested_in_boundary,
+                opt_in=True,
+            )
+        )
+    surface.non_interactive_accepts = kept
+    surface.boundary_sites.extend(promoted)
+    surface.boundary_sites.sort(key=lambda site: site.line)
+    return promoted
 
 
 def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:

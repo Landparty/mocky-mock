@@ -257,10 +257,12 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
     ),
     "UNMOCKABLE_ACCEPT_SOURCE": (
         "A MOCK ACCEPT directive targets an ACCEPT ... FROM <system "
-        "source> (DATE, TIME, DAY, COMMAND-LINE, ...) that GnuCOBOL "
-        "resolves internally rather than reading a console -- there is "
-        "nothing for a mock to intercept. These are deliberately not "
-        "boundary sites; remove the MOCK ACCEPT for this target."
+        "source> (COMMAND-LINE, ENVIRONMENT, ARGUMENT-VALUE, ...) that "
+        "GnuCOBOL resolves internally rather than reading a console -- "
+        "there is nothing for a mock to intercept. These are deliberately "
+        "not boundary sites; remove the MOCK ACCEPT for this target. (FROM "
+        "DATE / TIME / DAY / DAY-OF-WEEK are the exception: a MOCK ACCEPT "
+        "naming one gives the test a fixed clock.)"
     ),
     "UNRESOLVED_FILE_STATUS_TARGET": (
         "A MOCK directive uses FILE-STATUS IS, but the named file has no "

@@ -1559,6 +1559,10 @@ def check_test_case(
         for directive in matches:
             matched_directives.add(id(directive))
 
+        if not matches and site.opt_in:
+            # A clock ACCEPT another case mocks (issue #240): this case
+            # runs the real statement through the dispatch's WHEN OTHER.
+            continue
         if not matches:
             code = _UNMOCKED_CODES.get(site.category, _UNMOCKED_FILE_OP_CODE)
             # A site that cannot be spliced where it stands is not fixed by
@@ -1764,14 +1768,15 @@ def check_test_case(
                         f"{unmockable.target} FROM {unmockable.from_source}` "
                         f"at line {unmockable.line} (paragraph "
                         f"'{unmockable.paragraph_name}'), which is not "
-                        f"mockable at all: FROM {unmockable.from_source} "
-                        f"reads a runtime/system value, never the console, "
-                        f"so it is deterministic, never blocks, and has no "
-                        f"boundary for a mock to intercept. Drop this MOCK "
-                        f"directive; to control the value, assign the field "
-                        f"in the mock body of a boundary the test does "
-                        f"reach, or make the program take it as a CALL/file "
-                        f"input"
+                        f"mockable: FROM {unmockable.from_source} reads a "
+                        f"runtime/system value, never the console, so it "
+                        f"never blocks and has no boundary for a mock to "
+                        f"intercept (only FROM DATE/TIME/DAY/DAY-OF-WEEK "
+                        f"can be mocked, to give a test a fixed clock). "
+                        f"Drop this MOCK directive; to control the value, "
+                        f"assign the field in the mock body of a boundary "
+                        f"the test does reach, or make the program take it "
+                        f"as a CALL/file input"
                     ),
                 )
             )

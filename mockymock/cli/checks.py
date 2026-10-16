@@ -316,7 +316,11 @@ def _run_static_checks(
         linkage_plan,
         rebindable_sites,
     )
-    from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
+    from mockymock.analysis.mock_surface import (
+        analyze,
+        analyze_file_status_fields,
+        promote_clock_accepts,
+    )
     from mockymock.analysis.refusal import (
         CICS_MACRO_PLACEHOLDER,
         check_cics_eib_layout_scoped,
@@ -476,6 +480,15 @@ def _run_static_checks(
 
     # 5. Surface analysis, normalization, linkage layout + neutralization.
     surface = analyze(parse_result.ast)
+    # A clock ACCEPT (FROM DATE/TIME/DAY/DAY-OF-WEEK) is mockable only when
+    # a MOCK names it (issue #240): an opt-in site, spliced only then.
+    promote_clock_accepts(
+        surface,
+        [
+            *(d for case in suite.test_cases for d in case.mocks),
+            *suite.before_all_mocks,
+        ],
+    )
     out.surface = surface
     out.file_status_fields = analyze_file_status_fields(parse_result.ast)
     # PROCESS/CBL precompiler directives (IBM mainframe compiler-directing

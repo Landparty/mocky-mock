@@ -29,7 +29,7 @@ SOURCE = """\
 
        PROCEDURE DIVISION.
        START-HERE.
-           ACCEPT WS-TODAY FROM DATE.
+           ACCEPT WS-TODAY FROM COMMAND-LINE.
            ACCEPT WS-NAME.
 """
 
@@ -58,8 +58,10 @@ def test_mocking_a_system_source_accept_refuses_with_its_own_code():
     unmockable = [r for r in reasons if r.code == "UNMOCKABLE_ACCEPT_SOURCE"]
     assert len(unmockable) == 1
     message = unmockable[0].message
-    assert "ACCEPT WS-TODAY FROM DATE" in message
-    assert "not mockable at all" in message
+    assert "ACCEPT WS-TODAY FROM COMMAND-LINE" in message
+    assert "which is not mockable" in message
+    # It never claimed the truth for a clock source (#240).
+    assert "deterministic" not in message
     # The misleading half of the old message must not appear.
     assert "reachable from" not in message
     assert not [r for r in reasons if r.code == "UNMATCHED_MOCK"]

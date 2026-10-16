@@ -1568,6 +1568,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         extra_working_storage,
         run_static_checks,
     )
+    from mockymock.dsl.model import MockCategory
     from mockymock.report.coverage import (
         build_copybook_line_map,
         build_original_line_map,
@@ -1591,6 +1592,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.report.record_rewrite import (
         address_fields,
         build_recording_report,
+        clock_value_fields,
         field_pictures,
         rewrite_cut_text,
     )
@@ -1906,7 +1908,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # file is only ever touched when at least one stub was recorded.
         pictures = field_pictures(result.ast, checked.captures)
         recording = build_recording_report(
-            stub_scan, suite_result, address_fields(result.ast), pictures
+            stub_scan,
+            suite_result,
+            address_fields(result.ast),
+            pictures,
+            clock_fields=clock_value_fields(result.ast),
+            clock_pinned={
+                (index, directive.key.upper())
+                for index, case in enumerate(suite.test_cases, start=1)
+                for directive in case.mocks
+                if directive.category is MockCategory.ACCEPT
+            },
         )
         rewritten = rewrite_cut_text(
             cut_text,
