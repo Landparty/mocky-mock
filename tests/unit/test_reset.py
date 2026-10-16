@@ -218,13 +218,14 @@ NESTED_FILLER_VALUE_SOURCE = """\
 
 def test_nested_filler_value_restores_the_group_with_filler():
     """Issue #196: a FILLER VALUE nested at any depth makes the group reset
-    WITH FILLER; a group whose FILLERs carry no VALUE keeps the plain
-    INITIALIZE plus per-child restores."""
+    WITH FILLER ALL TO VALUE; a group whose FILLERs carry no VALUE keeps
+    the per-child restores, after an INITIALIZE that is still WITH FILLER
+    so the FILLER's bytes are cleared too (issue #278)."""
     result = parse_cobol(NESTED_FILLER_VALUE_SOURCE, filename="fil.cbl")
     assert result.success, result.errors
     assert reset_move_lines(result.ast) == [
         "INITIALIZE WS-HDR WITH FILLER ALL TO VALUE THEN TO DEFAULT",
-        "INITIALIZE WS-PLAIN",
+        "INITIALIZE WS-PLAIN WITH FILLER",
         'MOVE "P" TO WS-P1 OF WS-PLAIN',
     ]
 
@@ -767,3 +768,29 @@ def test_snapshot_saves_the_named_children_of_a_filler_group():
     assert problems == []
     targets = [line.rsplit(" TO ", 1)[1] for line in snapshot.restore_lines]
     assert targets == ["WS-EOF", "WS-CNT", "WS-DEEP", "WS-AREA"]
+
+
+def test_value_less_filler_is_cleared_with_filler():
+    """Issue #278: a padding FILLER kept the bytes a whole-group MOVE left
+    in it, in every later case."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-LINE.
+           05  WS-A          PIC X(3).
+           05  FILLER        PIC X(2).
+           05  WS-B          PIC X(3).
+       01  WS-PLAIN.
+           05  WS-C          PIC X(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+    result = parse_cobol(source, filename="fl.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        "INITIALIZE WS-LINE WITH FILLER",
+        "INITIALIZE WS-PLAIN",
+    ]

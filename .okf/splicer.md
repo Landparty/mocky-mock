@@ -681,6 +681,11 @@ changed bytes. A VALUE-less group with a FILLER VALUE anywhere under it
 TO VALUE THEN TO DEFAULT`, which restores the FILLER's VALUE and every
 named child's in one statement (checked on GnuCOBOL 3.1). Combined with an
 ODO table it takes the two-step form above, each step `WITH FILLER`.
+A group whose FILLERs carry no VALUE (record padding) keeps the plain
+`INITIALIZE` plus per-child restores, but `WITH FILLER` whenever any FILLER
+sits under it (`_has_filler`, #278): INITIALIZE skips FILLERs otherwise, so
+the bytes a group MOVE / READ INTO left in the padding leaked into every
+later case.
 
 **INDEXED BY index names are saved and restored (issue #189).** An index
 name is not a data item, so the reset never saw it: a case that did `SET

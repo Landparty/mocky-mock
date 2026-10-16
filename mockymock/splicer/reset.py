@@ -16,7 +16,8 @@ SKIPPED rather than given illegal COBOL (documented fidelity limits, see
 usage. A group with a VALUE clause inside a table (an OCCURS item) is
 reset with `INITIALIZE <group> ALL TO VALUE THEN TO DEFAULT`, which
 restores every occurrence's VALUE without subscripted MOVEs; a group with
-a FILLER VALUE adds WITH FILLER, since a FILLER cannot be named in a MOVE.
+a FILLER VALUE adds WITH FILLER, since a FILLER cannot be named in a MOVE,
+and so does the plain INITIALIZE of a group with any FILLER (issue #278).
 A FILLER group is transparent (its named children are reset in its
 place, issue #247). Top-level REDEFINES items are skipped on purpose: their
 storage is the redefined item's, which is reset (and its VALUE restored)
@@ -156,7 +157,11 @@ def reset_lines_for_items(items) -> list[str]:
                         " ALL TO VALUE THEN TO DEFAULT"
                     )
             else:
-                lines.append(f"INITIALIZE {item.name}")
+                # INITIALIZE skips FILLERs unless told WITH FILLER, so a
+                # VALUE-less padding FILLER kept whatever bytes a group MOVE
+                # or READ INTO left in it, in every later case (issue #278).
+                filler = " WITH FILLER" if _has_filler(item) else ""
+                lines.append(f"INITIALIZE {item.name}{filler}")
                 lines.extend(_child_value_restores(item, item.name))
             lines.extend(odo_restore)
         else:
@@ -375,6 +380,14 @@ def _has_occurs_value(group) -> bool:
         return False
 
     return walk(group, False)
+
+
+def _has_filler(group) -> bool:
+    """True when any FILLER, with a VALUE or not, sits somewhere under
+    `group`."""
+    return any(
+        _is_filler(child) or _has_filler(child) for child in _data_children(group)
+    )
 
 
 def _has_filler_value(group) -> bool:
