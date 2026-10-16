@@ -71,6 +71,7 @@ from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
     _all_paragraphs,
+    accept_key,
 )
 from mockymock.dsl.fixture_bundle import (
     BoundaryFixture,
@@ -1084,7 +1085,9 @@ def _with_captures(
     return context.captures_for(category, key) + body
 
 
-def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
+def _placeholder_body_for(
+    category: MockCategory, key: str, site: BoundarySite | None = None
+) -> list[str]:
     """The body `_directive_for` gives `(category, key)` outside a fixture
     bundle: `_PLACEHOLDER_BODIES`'s entry (CALL/DYNCALL/SQL), or ACCEPT's
     own `MOVE SPACES TO <key>`, or empty for everything else (the file-op
@@ -1094,7 +1097,11 @@ def _placeholder_body_for(category: MockCategory, key: str) -> list[str]:
     emitted for this site, rather than a second, driftable copy of this
     per-category logic."""
     if category is MockCategory.ACCEPT:
-        return [f"MOVE SPACES TO {key}"]
+        # The ACCEPT's own target, subscript/qualifier included: the key is
+        # its bare data-name (issue #311), which may name a table or an
+        # ambiguous field.
+        target = site.accept_target if site is not None else None
+        return [f"MOVE SPACES TO {target or key}"]
     return list(_PLACEHOLDER_BODIES.get(category, []))
 
 
@@ -1145,7 +1152,7 @@ def _directive_for(
         if not site.keys:
             return None
         key = site.keys[0]
-        return f"MOCK ACCEPT {key}", _placeholder_body_for(category, key)
+        return f"MOCK ACCEPT {key}", _placeholder_body_for(category, key, site)
 
     if category in REPORT_WRITER_CATEGORIES:
         # INITIATE/GENERATE/TERMINATE: bare report name, empty body (the
@@ -2271,7 +2278,7 @@ def _bundle_directive_for(
             body = list(_SQL_ROWS_EXHAUSTED_BODY)
             call_count_override = CallCountOverride(count=1)
         else:
-            body = _placeholder_body_for(category, fixture.key)
+            body = _placeholder_body_for(category, fixture.key, site)
             end_lines = _call_loop_end_lines(site, source, None)
             body = body + end_lines
             if end_lines and not end_lines[0].startswith("*>"):
@@ -2393,7 +2400,7 @@ def _bundle_directive_for_group(
     if site is None:
         return None
     if any((f.category, f.key) in placeholder_keys for f in fixtures):
-        body = _placeholder_body_for(category, primary.key)
+        body = _placeholder_body_for(category, primary.key, site)
     else:
         body = _merged_status_only_body(fixtures)
     lines = [_directive_header(category, primary.key, site)]
@@ -2902,6 +2909,40 @@ def _unlooped_read_counts(
     return counts
 
 
+def _with_accept_keys(bundle: FixtureBundle) -> FixtureBundle:
+    """`bundle` with every ACCEPT fixture and expectation keyed on the
+    target's data-name, as mockymock keys the site (issue #311):
+    cobol-parser keys it on the whole target (`FLD OF REC-B`, `WS-ENT ( WS-I
+    )`), which no `MOCK ACCEPT` line can spell. Two fixtures that now share
+    a key (`ACCEPT FLD OF REC-A` and `OF REC-B`) keep the first: one MOCK
+    answers both sites; their call counts are summed downstream."""
+    prefix = f"{MockCategory.ACCEPT.value}:"
+    scenarios = []
+    for scenario in bundle.scenarios:
+        fixtures: list[BoundaryFixture] = []
+        seen: set[str] = set()
+        for fixture in scenario.fixtures:
+            if fixture.category == MockCategory.ACCEPT.value:
+                key = accept_key(fixture.key)
+                if key in seen:
+                    continue
+                seen.add(key)
+                fixture = replace(fixture, key=key)
+            fixtures.append(fixture)
+        expectations = [
+            (
+                replace(e, ref=prefix + accept_key(e.ref[len(prefix) :]))
+                if e.ref.startswith(prefix)
+                else e
+            )
+            for e in scenario.expectations
+        ]
+        scenarios.append(
+            replace(scenario, fixtures=fixtures, expectations=expectations)
+        )
+    return replace(bundle, scenarios=scenarios)
+
+
 def _scaffold_with_bundle(
     suite_name: str,
     surface: MockSurface,
@@ -2909,6 +2950,7 @@ def _scaffold_with_bundle(
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
 ) -> str:
+    bundle = _with_accept_keys(bundle)
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(
         mockymock_keys,

@@ -305,6 +305,10 @@ class BoundarySite:
     # A mockable SQL site: the (condition, GO TO target) checks the WHENEVER
     # declarations above it in the source put after it, in DB2's order.
     whenever_checks: tuple[tuple[str, str], ...] = ()
+    # A console ACCEPT site: its whole target as written, subscript or
+    # qualifier included (`WS-ENT ( WS-I )`), while `keys` holds the
+    # data-name alone (issue #311).
+    accept_target: str | None = None
 
 
 @dataclass
@@ -473,6 +477,14 @@ _TERMINATOR_LABELS = frozenset({"STOP RUN", "GOBACK", "EXIT PROGRAM"})
 # splicer then ends the run under test the way a neutralized GOBACK does
 # (`refusal.find_terminator_plans`), instead of carrying on past them.
 CICS_TERMINATOR_COMMANDS = frozenset({"RETURN", "XCTL", "ABEND"})
+
+
+def accept_key(target: str) -> str:
+    """The data-name an ACCEPT target is mocked by: its first word, cut at
+    a subscript / reference modification and before any `OF`/`IN`
+    qualifier (`WS-ENT ( WS-I )` -> `WS-ENT`, `FLD OF REC-B` -> `FLD`)."""
+    words = target.upper().split("(", 1)[0].split()
+    return words[0] if words else ""
 
 
 def is_cics_terminator(statement) -> bool:
@@ -889,7 +901,13 @@ def _classify_statement(
         return
 
     if isinstance(statement, IOAcceptStatement):
-        target = (statement.target or "").upper()
+        full_target = " ".join((statement.target or "").upper().split())
+        # Keyed on the data-name alone, like a dynamic CALL's identifier:
+        # `ACCEPT WS-ENT(WS-I)` / `ACCEPT FLD OF REC-B` kept the subscript or
+        # qualifier in the key, which `MOCK ACCEPT <name>` cannot express
+        # (issue #311). The full text stays on the site for the scaffold's
+        # `MOVE SPACES TO <target>` body.
+        target = accept_key(full_target)
         # cobolparser keeps a date-format qualifier in `from_source`
         # (`ACCEPT X FROM DATE YYYYMMDD` -> "DATE YYYYMMDD", `FROM DAY
         # YYYYDDD` -> "DAY YYYYDDD"), so the source is its first word --
@@ -899,7 +917,10 @@ def _classify_statement(
         source = source_words[0] if source_words else None
         if source not in _NON_INTERACTIVE_ACCEPT_SOURCES:
             surface.console_accept_paragraphs.add(paragraph_name)
-            add_site(MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ())
+            site = add_site(
+                MockCategory.ACCEPT, "ACCEPT", keys=(target,) if target else ()
+            )
+            site.accept_target = full_target or None
         elif target:
             # Not a boundary site (nothing to mock), but recorded so a
             # MOCK ACCEPT aimed at it can be refused with the real reason
