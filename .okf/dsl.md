@@ -174,7 +174,11 @@ default: `check_test_case(shared=..., matched_out=...)` no longer
 refuses one a given case doesn't reach; `cli.checks` refuses it
 (`UNMATCHED_MOCK`, "not reached by any test case or hook step") only
 when nothing reaches it (2026-10-10; before, every case had to reach
-every shared mock). See
+every shared mock). "Nothing" means the whole suite, not a `--case`/`--tag`
+selection: when the selected cases leave a shared mock unmatched, the
+unselected cases are checked for their matches only (their own refusals
+are discarded), so selecting a case never refuses a clean suite (issue
+#250). See
 `docs/2026-07-20-before-blocks-and-file-status-design.md`.
 
 ### `FILE-STATUS IS <mnemonic-or-code>`

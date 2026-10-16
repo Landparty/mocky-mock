@@ -126,6 +126,36 @@ def test_shared_mock_reached_by_nothing_is_refused_once(files):
     ]
 
 
+CLEAR_ONLY_CASE = """
+TESTCASE "clears only"
+    PERFORM 0200-CLEAR
+    EXPECT WS-COUNT TO BE 0
+"""
+
+
+def test_case_selection_never_refuses_a_shared_mock_only_unselected_cases_reach(
+    files,
+):
+    # Issue #250: AUDIT (BEFORE-EACH) is reached only by the cases that
+    # PERFORM 1000-CALC. Selecting the one case that doesn't must not turn
+    # a clean suite into an UNMATCHED_MOCK refusal.
+    result = run_static_checks(*files(CUT + CLEAR_ONLY_CASE), None, ["clears only"])
+    assert result.problems == []
+    assert [c.name for c in result.suite.test_cases] == ["clears only"]
+
+
+def test_case_selection_still_refuses_a_shared_mock_no_case_reaches(files):
+    cut = CUT.replace(
+        '    MOCK CALL "AUDIT"\n    END-MOCK\n',
+        '    MOCK CALL "AUDIT"\n    END-MOCK\n    MOCK CALL "NOWHERE"\n    END-MOCK\n',
+    )
+    result = run_static_checks(*files(cut + CLEAR_ONLY_CASE), None, ["clears only"])
+    assert [p for p in result.problems if "UNMATCHED_MOCK" in p] == [
+        'refused (UNMATCHED_MOCK): BEFORE-EACH MOCK CALL "NOWHERE" is not '
+        "reached by any test case or hook step"
+    ]
+
+
 def test_unmocked_boundary_in_a_before_all_step_says_where_to_add_the_mock(files):
     cut = CUT.replace(
         '    MOCK CALL "LOADRATE"\n        MOVE 1.25 TO WS-RATE\n    END-MOCK\n', ""
