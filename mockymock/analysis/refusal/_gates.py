@@ -86,6 +86,7 @@ from ._reachability import (
     _reachable_paragraphs,
     _source_ordered_paragraphs,
     _walk_fallthrough_from,
+    duplicated_paragraph_names,
 )
 from ._types import (
     _UNANNOTATED,
@@ -1376,6 +1377,28 @@ def check_test_case(
         return reasons
 
     reasons.extend(thru_reasons)
+
+    ambiguous = sorted(reachable & duplicated_paragraph_names(program))
+    if ambiguous:
+        # Reachability, boundary-site matching and the splice plans all key
+        # paragraphs by bare name: for a name defined in two SECTIONs they
+        # walk one body and match sites in both, so a boundary only the
+        # other body reaches ran unmocked after a clean lint (issue #284).
+        # Fail closed until name resolution is section-aware.
+        reasons.append(
+            RefusalReason(
+                code="AMBIGUOUS_PARAGRAPH",
+                message=(
+                    f"paragraph name(s) {', '.join(repr(n) for n in ambiguous)} "
+                    f"reachable from '{case.perform_target}' are defined in "
+                    f"more than one SECTION -- mockymock resolves paragraphs "
+                    f"by name alone, so it cannot tell which definition runs "
+                    f"and cannot check this case's boundaries; rename the "
+                    f"paragraphs so each name is unique in the program"
+                ),
+            )
+        )
+        return reasons
 
     matched_directives: set[int] = set()
 

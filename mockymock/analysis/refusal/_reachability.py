@@ -739,6 +739,31 @@ def _first_non_fallthrough(falls: list[bool]) -> list[int | None]:
     return stops
 
 
+def duplicated_paragraph_names(program) -> set[str]:
+    """Paragraph names defined more than once in the PROCEDURE DIVISION
+    (one per SECTION, which COBOL allows: an unqualified reference
+    resolves to the current section's, `X IN S` names one explicitly).
+
+    Every analysis in this package keys paragraphs by bare name, so for
+    such a name it walks one definition's body and matches boundary sites
+    in either -- unsound both ways (issue #284). Callers refuse rather
+    than model it. Phantom "." paragraphs (cobolparser's empty END-EXEC
+    period nodes) and the nameless main-line holder never count."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return set()
+    seen: set[str] = set()
+    duplicated: set[str] = set()
+    for paragraph in _all_paragraphs(procedure):
+        name = paragraph.paragraph_name
+        if not (name or "").strip("."):
+            continue
+        if name in seen:
+            duplicated.add(name)
+        seen.add(name)
+    return duplicated
+
+
 def _fallthrough_safe_sections(program) -> set[str]:
     """SECTION names whose LAST paragraph a GO TO fall-through walk may
     treat as a hard stop (see `_walk_fallthrough_from`): reaching that
