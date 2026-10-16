@@ -76,9 +76,10 @@ def read_journal(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     problems: list[str] = []
     if not path.is_file():
         return entries, problems
-    for number, raw in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
+    # Split on "\n" only: `str.splitlines()` also breaks on U+2028/U+2029
+    # and NEL, which json.dumps(ensure_ascii=False) leaves raw inside a
+    # string, so one entry carrying them read back as unparseable pieces.
+    for number, raw in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         if not raw.strip():
             continue
         try:

@@ -1319,6 +1319,9 @@ of it -- the half of the story `report` cannot recompute. `--file` wins
 over `--cut`'s default path. `--command` is stored as `command` (argparse
 dest `command_text`, since `command` is the subparser dest). Unknown
 status or empty step/summary -> exit 2 with a message, nothing written.
+`read_journal` splits the file on `\n` only: entries are written with
+`ensure_ascii=False`, which leaves U+2028/U+2029/NEL raw inside a string,
+and `str.splitlines()` broke such an entry into unparseable pieces (#283).
 
 ## `mockymock skills plugin [DIRECTORY] [--force]` (2026-10-04)
 

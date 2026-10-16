@@ -88,3 +88,15 @@ def test_cli_rejects_an_unknown_status(tmp_path, capsys):
     )
     assert exit_code == 1
     assert "unknown status" in capsys.readouterr().out
+
+
+def test_entry_with_unicode_line_separators_reads_back_as_one_entry(tmp_path):
+    """#283: json.dumps(ensure_ascii=False) leaves U+2028/U+2029/NEL raw,
+    and read_journal's splitlines() broke the entry apart on them."""
+    path = tmp_path / "j.jsonl"
+    summary = "Parked 2000-CALC because of NEL\x85 here done"
+    append_entry(path, step="plan", summary=summary)
+    append_entry(path, step="next", summary="plain")
+    entries, problems = read_journal(path)
+    assert problems == []
+    assert [entry["summary"] for entry in entries] == [summary, "plain"]
