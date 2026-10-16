@@ -156,7 +156,10 @@ and a mirrored `tests/pay/PROG.cut` get `report-src-pay-PROG.json` and
 the second suite overwrote. `generate`/`init` write to
 `discovery.default_suite_path()` -- `<tests>/<folder>/PROG[.<name>].cut`,
 or beside the program when it already has a `PROG.cut` there or lies
-outside the source root -- and `--name` picks the topic.
+outside the source root -- and `--name` picks the topic. `--name`
+(generate, init, suites) is validated by the argparse `type=`
+`_suite_name` (#336): one word of `[A-Za-z0-9_-]+`, so a `/`, `\`, `..`,
+`.` or empty NAME exits 2 before any path is built.
 `mockymock suites [PROGRAM] [--name] [--json]` (`_cmd_suites`) prints the
 pairing with the rule that matched, or for one program its suites and
 `newSuitePath`; Docker-free and parse-free, it is what the VS Code
