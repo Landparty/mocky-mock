@@ -31,6 +31,10 @@ from mockymock.analysis.mock_surface import (
     _nested_statement_lists,
     is_terminator_site,
 )
+from mockymock.analysis.sql_whenever import (
+    whenever_can_fire,
+    whenever_lines,
+)
 from mockymock.dsl.model import MockTestSuite
 from mockymock.splicer.source_map import (
     collect_boundaries,
@@ -41,6 +45,7 @@ from mockymock.splicer.source_map import (
 
 from ._reachability import (
     _expand_thru_range,
+    _fallthrough_safe_sections,
     _find_sort_merge_statements,
     _find_statements_of_type,
     _find_xml_parse_statements,
@@ -50,6 +55,7 @@ from ._reachability import (
     _go_to_fallthrough_targets,
     _go_to_targets,
     _is_exit_only_paragraph,
+    _paragraph_safe_section_map,
     _plain_perform_edges_from,
     _reachable_paragraphs,
     _safe_section_entry_points,
@@ -626,10 +632,48 @@ def find_terminator_plans(
     # own internal go_to_targets check is deliberately left un-narrowed --
     # see find_goto_exit_plans' docstring.
     neutralized_goto = neutralized_goto_targets(program, scope_map, lines)
-    go_to_targets = _go_to_targets(program) - neutralized_goto
     safe_section_entries = _safe_section_entry_points(program)
     safe_section_first_names = set(safe_section_entries.values())
-    go_to_fallthrough = _go_to_fallthrough_targets(program, go_to_targets)
+    # The GO TO fall-through hazard map is per case: a walk stops at the
+    # end of a section entered only via `PERFORM <section-name>` -- unless
+    # the case's own entry point names one of its members directly -- the
+    # same stop `_reachable_paragraphs` applies (issue #259).
+    section_members: dict[str, list[str]] = {}
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        if section_name:
+            section_members.setdefault(
+                section_name, [p.paragraph_name for p in section.paragraphs]
+            )
+    safe_sections = _fallthrough_safe_sections(program)
+    # An `EXEC SQL WHENEVER ... GO TO` target is a GO TO target only for a
+    # case whose mocks can make the WHENEVER fire (issue #244): a success-
+    # path case never takes the jump, so the handler's own terminator is
+    # not its hazard. Each hazard-set variant is computed once.
+    target_sets: dict[bool, set[str]] = {}
+    fallthrough_cache: dict[tuple[bool, frozenset[str]], dict[str, str]] = {}
+
+    def hazards(
+        include_whenever: bool, entry: frozenset[str]
+    ) -> tuple[set[str], dict[str, str]]:
+        if include_whenever not in target_sets:
+            target_sets[include_whenever] = (
+                _go_to_targets(program, include_whenever=include_whenever)
+                - neutralized_goto
+            )
+        targets = target_sets[include_whenever]
+        key = (include_whenever, entry)
+        if key not in fallthrough_cache:
+            fallthrough_cache[key] = _go_to_fallthrough_targets(
+                program,
+                targets,
+                _paragraph_safe_section_map(section_members, safe_sections, entry),
+            )
+        return targets, fallthrough_cache[key]
+
+    whenever_only = _go_to_targets(program) - _go_to_targets(
+        program, include_whenever=False
+    )
+    whenever_line = whenever_lines(program) if whenever_only else {}
     terminator_sites = {
         id(s.statement): s for s in surface.boundary_sites if is_terminator_site(s)
     }
@@ -649,12 +693,20 @@ def find_terminator_plans(
         # refusal on this case's account. Other cases still evaluate it.
         mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
         mocked_flow_names = mocked_paragraphs | mocked_sections
+        can_fire = whenever_can_fire(program, case.mocks)
+        go_to_targets, go_to_fallthrough = hazards(
+            can_fire,
+            frozenset(
+                name for name in (case.perform_target, case.perform_thru) if name
+            ),
+        )
         reachable, _ = _reachable_paragraphs(
             program,
             case.perform_target,
             case.perform_thru,
             skip_traversal=mocked_flow_names,
             neutralized_goto=neutralized_goto,
+            follow_whenever=can_fire,
         )
         reachable -= mocked_flow_names
         safe_names, chain_performs = _plain_perform_edges_from(
@@ -704,6 +756,19 @@ def find_terminator_plans(
                 problem = (
                     "is inside a paragraph that belongs to a SECTION -- "
                     "SECTION-scoped terminators are not yet supported"
+                )
+            elif paragraph_name in go_to_targets and paragraph_name in whenever_only:
+                problem = (
+                    f"is unsafe to test automatically: paragraph "
+                    f"'{paragraph_name}' is the GO TO target of the EXEC SQL "
+                    f"WHENEVER at line {whenever_line.get(paragraph_name, 0)}, "
+                    f"and this test case's SQL mocks can set SQLCODE so that "
+                    f"it fires -- a paragraph entered via GO TO can't "
+                    f"reliably use EXIT PARAGRAPH to signal an early exit "
+                    f"back to its caller. A case whose SQL mocks only "
+                    f"`MOVE 0 TO SQLCODE` (no IF/EVALUATE, no ROWS when "
+                    f"NOT FOUND is active, no WHENEVER SQLWARNING) never "
+                    f"takes the jump and is not refused for it"
                 )
             elif paragraph_name in go_to_targets:
                 problem = (

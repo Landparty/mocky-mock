@@ -199,6 +199,7 @@ def _reachable_paragraphs(
     thru: str | None = None,
     skip_traversal: frozenset[str] | set[str] = frozenset(),
     neutralized_goto: frozenset[str] | set[str] = frozenset(),
+    follow_whenever: bool = True,
 ) -> tuple[set[str], list[RefusalReason]]:
     """Return (reachable paragraph/section names, flow refusals), computed
     in a single BFS pass over PerformStatement and GoStatement edges, plus
@@ -279,7 +280,12 @@ def _reachable_paragraphs(
     disqualifies any target also named by a computed/multi-target GO TO:
     a name in this set is therefore never reachable through any GO TO
     shape this walk would otherwise have to model. Callers that do not
-    splice (or predict a run that will not splice) must leave it empty."""
+    splice (or predict a run that will not splice) must leave it empty.
+
+    `follow_whenever=False` drops the emulated `EXEC SQL WHENEVER ... GO
+    TO` edges (and their targets from the fall-through seeds): only for a
+    case whose mocks can never make one fire
+    (`sql_whenever.whenever_can_fire`, issue #244)."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
@@ -351,8 +357,10 @@ def _reachable_paragraphs(
             )
 
     seen: set[str] = set()
-    whenever = whenever_actions(program)
-    go_to_targets = _go_to_targets(program) - set(neutralized_goto)
+    whenever = whenever_actions(program) if follow_whenever else {}
+    go_to_targets = _go_to_targets(program, include_whenever=follow_whenever) - set(
+        neutralized_goto
+    )
     index_by_name = (
         {p.paragraph_name: i for i, p in enumerate(ordered)} if ordered else {}
     )
@@ -597,7 +605,7 @@ def _reachable_paragraphs(
     return seen, reasons
 
 
-def _go_to_targets(program) -> set[str]:
+def _go_to_targets(program, include_whenever: bool = True) -> set[str]:
     """Every paragraph/section name that is EVER a GO TO target anywhere
     in the whole program, regardless of reachability from any one test
     case -- a categorical, whole-program exclusion list.
@@ -619,8 +627,10 @@ def _go_to_targets(program) -> set[str]:
             if statement.target_paragraph:
                 targets.add(statement.target_paragraph)
     # An `EXEC SQL WHENEVER ... GO TO` target is entered by a spliced GO TO
-    # (issue #195) exactly like a written one.
-    targets |= whenever_targets(program)
+    # (issue #195) exactly like a written one -- unless the caller is judging
+    # a case whose mocks can never make the WHENEVER fire (issue #244).
+    if include_whenever:
+        targets |= whenever_targets(program)
     return targets
 
 
@@ -737,6 +747,31 @@ def _first_non_fallthrough(falls: list[bool]) -> list[int | None]:
             nxt = i
         stops[i] = nxt
     return stops
+
+
+def duplicated_paragraph_names(program) -> set[str]:
+    """Paragraph names defined more than once in the PROCEDURE DIVISION
+    (one per SECTION, which COBOL allows: an unqualified reference
+    resolves to the current section's, `X IN S` names one explicitly).
+
+    Every analysis in this package keys paragraphs by bare name, so for
+    such a name it walks one definition's body and matches boundary sites
+    in either -- unsound both ways (issue #284). Callers refuse rather
+    than model it. Phantom "." paragraphs (cobolparser's empty END-EXEC
+    period nodes) and the nameless main-line holder never count."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return set()
+    seen: set[str] = set()
+    duplicated: set[str] = set()
+    for paragraph in _all_paragraphs(procedure):
+        name = paragraph.paragraph_name
+        if not (name or "").strip("."):
+            continue
+        if name in seen:
+            duplicated.add(name)
+        seen.add(name)
+    return duplicated
 
 
 def _fallthrough_safe_sections(program) -> set[str]:
@@ -1065,7 +1100,11 @@ def _walk_fallthrough_from(
     return reached
 
 
-def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, str]:
+def _go_to_fallthrough_targets(
+    program,
+    go_to_targets: set[str],
+    paragraph_safe_section: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Every paragraph reachable ONLY by falling through past a GO TO
     target's own end -- an unmodeled shape the reachability BFS does not
     represent as a flow edge (see the module docstring). Maps each such
@@ -1093,7 +1132,17 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
     source order -- the same pre-existing blind spot that already limits
     other checks in this module (e.g. _expand_thru_range) to refusing only
     the specific reachability question they were asked, not every
-    reachability question in the file."""
+    reachability question in the file.
+
+    `paragraph_safe_section` (`_paragraph_safe_section_map`, built for the
+    caller's own entry point) gives the walk the same section-end stop
+    `_walk_fallthrough_from` has: a walk from a GO TO target inside a
+    section entered only via `PERFORM <section-name>` stops at that
+    section's last paragraph, where the implicit PERFORM return fires
+    (issue #259 -- without it the terminator planner saw the paragraphs
+    of every LATER section as fall-through hazards, while the
+    reachability gate correctly did not). None keeps the whole-program,
+    stop-free walk."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return {}
@@ -1114,18 +1163,22 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
     last = len(ordered) - 1
 
     hazard: dict[str, str] = {}
-    # Indices already recorded by an earlier walk. Two walks that both pass
-    # through index k necessarily stop at the same index: the stop is
-    # `stops[start]`, and there is no non-fall-through paragraph strictly
-    # between two starts that both reach k. So hitting an already-recorded
-    # index means the whole rest of this walk is already recorded too, and
-    # the remaining `setdefault` calls would every one be a no-op -- which
-    # is what lets the walk break there and keeps the total linear rather
-    # than O(targets x paragraphs). Same keys, same first-writer-wins
-    # values as the unconditional walk it replaces.
-    recorded: set[int] = set()
+    # Index -> the end index of the earlier walk that recorded it. Without
+    # section stops, two walks that both pass through index k necessarily
+    # stop at the same index: the stop is `stops[start]`, and there is no
+    # non-fall-through paragraph strictly between two starts that both
+    # reach k. So hitting an index an earlier walk recorded with an end at
+    # least as far as this walk's means the whole rest of this walk is
+    # already recorded too, and the remaining `setdefault` calls would
+    # every one be a no-op -- which is what lets the walk break there and
+    # keeps the total linear rather than O(targets x paragraphs). A
+    # section stop can end an earlier walk sooner than this one, hence the
+    # end comparison. Same keys, same first-writer-wins values as the
+    # unconditional walk it replaces.
+    recorded: dict[int, int] = {}
     for name in go_to_targets:
         start = index_by_name.get(name)
+        anchor = name
         if start is None:
             members = section_members.get(name)
             if not members:
@@ -1133,12 +1186,18 @@ def _go_to_fallthrough_targets(program, go_to_targets: set[str]) -> dict[str, st
             start = index_by_name.get(members[0])
             if start is None:
                 continue
+            anchor = members[0]
         stop = stops[start]
         end = last if stop is None else stop
+        section = (paragraph_safe_section or {}).get(anchor)
+        if section is not None:
+            section_end = index_by_name.get(section_members[section][-1])
+            if section_end is not None and start <= section_end < end:
+                end = section_end
         for cursor in range(start + 1, end + 1):
-            if cursor in recorded:
+            if recorded.get(cursor, -1) >= end:
                 break
-            recorded.add(cursor)
+            recorded[cursor] = max(recorded.get(cursor, -1), end)
             hazard.setdefault(ordered[cursor].paragraph_name, name)
     return hazard
 

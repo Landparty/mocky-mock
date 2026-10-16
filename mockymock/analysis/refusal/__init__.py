@@ -312,6 +312,7 @@ from ._reachability import (
     _safe_section_entry_points,
     _source_ordered_paragraphs,
     _walk_fallthrough_from,
+    duplicated_paragraph_names,
 )
 from ._types import (
     _UNANNOTATED,
@@ -348,4 +349,5 @@ __all__ = [
     "_fallthrough_flags",
     "_first_non_fallthrough",
     "REFUSAL_EXPLANATIONS",
+    "duplicated_paragraph_names",
 ]

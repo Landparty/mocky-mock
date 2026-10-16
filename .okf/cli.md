@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-16T00:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -384,7 +384,10 @@ Flow (`_cmd_generate`):
     followed by a stderr note that the file was written but `lint` refuses
     it, and generate exits 1 (#231 — it used to exit 0 on a case its own
     lint rejects). The `.cut` is still written. `UNMOCKED_*` refusals are
-    left alone, since a MOCK block fixes those. `--per-paragraph`
+    left alone, since a MOCK block fixes those -- except one with no
+    `suggested_fix`: `check_test_case` gives none (and says why in the
+    message) when the site cannot be spliced where it stands (nested, no
+    span), because the MOCK would be refused in turn (#258). `--per-paragraph`
     (`bundle=None`) is exempt: one case per paragraph is a starting point
     to prune, and some of those cases are expected to be refused.
 
@@ -656,6 +659,14 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     procedure lines go immediately after `PROCEDURE DIVISION` (matched via
     `line.strip().upper().startswith(...)`, first occurrence only — both
     insertions are one-shot via `inserted_ws`/`inserted_proc` flags).
+    When the first code line after the PROCEDURE DIVISION header is a
+    statement rather than a paragraph/SECTION header (an unnamed main
+    line), `_starts_unnamed_code` has a `UT-ORIGINAL-ENTRY.` header
+    inserted before it, so that code is a paragraph nothing performs
+    instead of more sentences of the last `UT-TESTCASE-<n>` paragraph
+    (issue #264: it ran after the last case and its STOP RUN hid
+    SUMMARY). A header line with no period (a `USING` list running on)
+    gets no synthetic header.
 14. Write the instrumented source into a fresh `sandbox_dir(root=docker_toolchain.WORK_ROOT)`
     as `<program-stem>.cbl` (LF newlines forced via `newline="\n"`).
 15. `docker_toolchain.compile_source(...)` — on failure, print stderr,
@@ -667,8 +678,9 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     code is translated into `crash_detail` evidence for the formatters:
     exit 124 (TIMEOUT_EXIT_CODE) -> `"binary timed out (exit 124); see
     stderr below"`; any other nonzero exit -> `"binary exited with code
-    <n>"`; exit 0 -> `None` (the formatters then fall back to the STOP RUN
-    hypothesis for crashed cases — a reached STOP RUN exits 0).
+    <n>"`; exit 0 with a crashed case -> `CLEAN_EXIT_CRASH_DETAIL` (the
+    STOP RUN hypothesis plus a GO TO out of the PERFORMed range, issue
+    #238); exit 0 otherwise -> `None`.
     `format_console(suite_result, crash_detail=...)` is printed always;
     then, if `executed.stderr` is non-empty, it is printed under a
     `mockymock run: binary stderr:` header — this is how run_binary's
@@ -682,7 +694,9 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     reason per skip) is printed. See [report](report.md).
 18. Exit 0 only if `suite_result.all_passed` **and** `executed.exit_code
     == 0` — a nonzero binary exit after the SUMMARY line still fails the
-    run. **Unaffected by `--record-expectations`** — recording outcomes
+    run. When every case passed but no SUMMARY line was printed
+    (`tests_run == 0`), `run` says so before exiting 1, rather than
+    failing silently under an all-PASS report (issue #264). **Unaffected by `--record-expectations`** — recording outcomes
     never change this; see the design doc's "Best-effort, cumulative
     reporting" section for why.
 

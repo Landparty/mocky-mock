@@ -371,6 +371,9 @@ def run_static_checks(
     except SourceEncodingError as exc:
         out.problems.append(str(exc))
         return out
+    # The unselected cases still count towards whether a BEFORE-EACH/
+    # BEFORE-ALL mock is reached at all (step 8's sweep, issue #250).
+    all_cases = list(suite.test_cases)
     selection_problems = filter_suite_cases(suite, case_names, tag_names)
     if selection_problems:
         out.problems.extend(selection_problems)
@@ -621,6 +624,22 @@ def run_static_checks(
                 out.problems.extend(
                     f"    {line}" for line in r.suggested_fix.splitlines()
                 )
+    # Whether a shared mock is reached is a property of the whole suite, not
+    # of a --case/--tag selection: a mock only an unselected case reaches
+    # just never fires in this run (issue #250). Only their matches are
+    # wanted here -- an unselected case's own refusals are not this run's.
+    unselected = [c for c in all_cases if not any(c is s for s in suite.test_cases)]
+    if unselected and any(id(d) not in matched_ids for d in shared_mocks):
+        for case in unselected:
+            check_test_case(
+                surface,
+                parse_result.ast,
+                case,
+                out.file_status_fields,
+                neutralized_goto=neutralized_goto,
+                shared=shared_ids,
+                matched_out=matched_ids,
+            )
     for directive in shared_mocks:
         if id(directive) not in matched_ids:
             block = (

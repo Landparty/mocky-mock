@@ -8,14 +8,22 @@ DYNCALL prefixes its .cut keyword CALL, not the internal category name
 writing MOCK CALL WS-PGM-NAME, and it can never collide with a static
 CALL's un-prefixed shape for the same spelling.
 
-Sanitized keys can collide (two SQL prefixes that differ only in
-punctuation, or only beyond the length cap), so names are assigned through
-a suite-scoped registry that suffixes -2, -3, ... on collision in
-first-appearance order — deterministic for a given .cut file.
+A name is a pure function of (category, key) -- never of which other keys
+the suite (or the --case/--tag selection) happens to hold -- because
+generate writes these names into mock bodies (issue #314: an order-based
+-2 suffix moved to the other file's tally when a case was added above, and
+the happy path hung). When sanitizing the key would lose information (the
+body is cut at the length cap, or punctuation is folded to `-`), the body
+is cut shorter and a 4-hex-digit hash of the full (category, key) is
+appended: UT-READ-CUSTOMER-MA-7F3A-TALLY. Two keys can then still meet
+only by a hash collision or by differing in nothing but letter case or a
+space vs. a hyphen; the registry suffixes -2, -3, ... on such a residual
+collision, in first-appearance order, as a last resort.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from mockymock.dsl.model import MockCategory, MockTestSuite
@@ -25,12 +33,27 @@ _NON_COBOL_NAME_CHAR_RE = re.compile(r"[^A-Z0-9-]")
 # "UT-" + body + "-TALLY" must stay a valid COBOL word everywhere (30-char
 # conservative limit, well under GnuCOBOL's 63): cap the body at 21.
 _MAX_BODY = 21
+# Room left for the body before "-" + the 4-digit hash.
+_HASH_DIGITS = 4
+_HASHED_BODY = _MAX_BODY - _HASH_DIGITS - 1
 
 
 def _sanitize(text: str) -> str:
     sanitized = _NON_COBOL_NAME_CHAR_RE.sub("-", text.upper())
     sanitized = re.sub(r"-{2,}", "-", sanitized).strip("-")
     return sanitized
+
+
+def tally_name(category: MockCategory, key: str) -> str:
+    """The tally field for (category, key), independent of any other key."""
+    raw = key if category is MockCategory.CALL else f"{category.keyword} {key}"
+    body = _sanitize(raw)
+    lossless = body == raw.upper().replace(" ", "-")
+    if lossless and body and len(body) <= _MAX_BODY:
+        return f"UT-{body}-TALLY"
+    digest = hashlib.sha1(f"{category.value}:{key}".encode()).hexdigest()
+    stem = body[:_HASHED_BODY].rstrip("-") or "MOCK"
+    return f"UT-{stem}-{digest[:_HASH_DIGITS].upper()}-TALLY"
 
 
 class TallyRegistry:
@@ -41,13 +64,8 @@ class TallyRegistry:
         self._names: dict[tuple[MockCategory, str], str] = {}
         taken: set[str] = set()
         for category, key in suite.all_mock_keys():
-            body = (
-                _sanitize(key)
-                if category is MockCategory.CALL
-                else _sanitize(f"{category.keyword} {key}")
-            )
-            body = body[:_MAX_BODY].rstrip("-") or "MOCK"
-            name = f"UT-{body}-TALLY"
+            name = tally_name(category, key)
+            body = name.removeprefix("UT-").removesuffix("-TALLY")
             suffix = 2
             while name in taken:
                 trimmed = body[: _MAX_BODY - len(str(suffix)) - 1].rstrip("-")

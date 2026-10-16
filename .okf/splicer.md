@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-16T12:00:00Z
+timestamp: 2026-10-16T14:00:00Z
 ---
 
 # Overview
@@ -89,6 +89,17 @@ program's last statement. `collect_boundaries` walks every SECTION header
 paragraph (including nested `_sections`), and every statement's
 `.location.line`.
 
+**Compiler-directing lines end every span (#310):** `normalize_fixed_format`
+keeps `>>IF`/`>>ELSE`/`>>END-IF`/`>>DEFINE` and `REPLACE ... .`/`REPLACE OFF.`
+lines, but they are not AST statements, so no boundary list has them.
+`_trim_trailing_blank_lines` (shared by `statement_span`, `nested_statement_span`
+and `_nested_site_span`, so mock splices and GOBACK/STOP RUN neutralization
+alike) first cuts the span before the first line after the start whose text
+begins with `>>` or `REPLACE\b`, then trims blank lines. Before this a
+directive directly after a mocked statement was commented out with it: a lost
+`REPLACE OFF.` silently kept the REPLACE active over later code, a lost
+`>>END-IF` failed cobc after a clean lint.
+
 **SECTION headers are boundaries (2026-07-07 fix, audit finding 2.2):**
 before this fix `collect_boundaries` collected only paragraph headers and
 statement starts, so a paragraph's last statement immediately followed by
@@ -170,12 +181,27 @@ a validated `.span` or a precise `.unspliceable_reason` string (fail
 closed) — see the spliceability rules in
 [docs/2026-07-05-nested-mock-targets-design.md](../docs/2026-07-05-nested-mock-targets-design.md).
 Key preconditions checked there: no ancestor is itself a boundary
-statement, the site has no clause bodies of its own, it owns its start
+statement, it owns its start
 line (own-verb terminators like END-CALL/END-READ are exempt — they
 belong to the statement per `_VERB_TERMINATORS`), the next boundary owns
 its line too, and (EXEC only) the span's text actually contains
 `END-EXEC`. This must run **before** the refusal gate and the splicer look
 at nested sites — it is idempotent.
+
+A nested site WITH clause bodies of its own (`READ ... AT END ... END-READ`
+in an inline PERFORM, `CALL ... ON EXCEPTION ... END-CALL` in an IF; issue
+#258) is spanned by `_nested_clause_site_span`: from its start line to the
+line of its own explicit `_VERB_TERMINATORS` word, found by walking the
+scope map past its own clause-body statement starts (every boundary in
+between must be one of those, or a scope word) and taking the first
+own-terminator after the last of them. Refused when there is no such
+terminator before the next statement that is not its own (the clause would
+run on to whatever closes the enclosing block -- not guessed), when a
+statement of its own kind sits in its clause bodies (which terminator is
+whose is ambiguous), or when anything but a period follows the terminator
+on its line. RETURN has no `_VERB_TERMINATORS` entry, so a nested `RETURN
+... END-RETURN` stays refused. Before #258 every nested site with clause
+bodies was refused, which made the standard inline read loop untestable.
 
 # Flow-Mock Header Dispatch (2026-07-20, MOCK PARAGRAPH/SECTION)
 
@@ -366,7 +392,23 @@ FOUND), in that order -- for the WHENEVERs in force at that statement in
 *physical source order* (`whenever_actions`; `CONTINUE` switches a
 condition off; INCLUDE/DECLARE/BEGIN-END DECLARE get no checks). The trap
 of an unmocked site gets none. The reachability walk follows each check's
-GO TO like a written one, and `_go_to_targets` includes the handlers.
+GO TO like a written one, and `_go_to_targets` includes the handlers --
+but only for a test case whose mocks can make a WHENEVER fire (issue
+#244, option B). `sql_whenever.whenever_can_fire(program, case.mocks)` is
+fail closed: it is False only when every SQL mock provably leaves SQLCODE
+at a value no active condition fires on (a body with no IF/EVALUATE/
+PERFORM/... whose every SQLCODE/SQLCA reference is `MOVE <integer> TO
+SQLCODE`; a ROWS mock only while NOT FOUND is inactive and no row sets a
+firing SQLCODE; never while a WHENEVER SQLWARNING GO TO is active). For
+such a case `check_test_case` and `find_terminator_plans` walk with
+`_reachable_paragraphs(follow_whenever=False)` and judge terminators
+against `_go_to_targets(include_whenever=False)`, so the success path is
+neither refused for the handler's GOBACK nor asked to mock its ROLLBACK.
+A case that can fire it is still refused (UNSUPPORTED_TERMINATOR_LAYOUT),
+naming the WHENEVER's line instead of a GO TO the program never wrote.
+`generate` (bundle and `--per-paragraph`) asks the same question of the
+mocks it is about to write (`ProgramContext.whenever_quiet`, the lines
+read back through `parse_cut`) and narrows the reachable set to match.
 `check_nested_exec` validates WHENEVER spans like any EXEC and refuses an
 action it cannot read (`UNSUPPORTED_SQL_WHENEVER`); a leftover `MOCK SQL
 "WHENEVER"` is UNMATCHED_MOCK with a message saying why. CICS `HANDLE
@@ -379,8 +421,9 @@ statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY / ON
 EXCEPTION / NOT ON EXCEPTION (/ ON OVERFLOW) bodies, which
 `orchestrator.splice_program` gets from
 `analysis.clause_bodies.lift_clause_bodies(site.statement, lines)` for
-every mocked **top-level** site (a nested site with clauses is refused as
-unspliceable, so it never gets here). Before #209 the whole span was
+every mocked site -- top-level, or nested with a span bounded by its own
+scope terminator (#258; `dsl.generator._at_end_handling` mirrors this with
+`not site.nested or site.span is not None`). Before #209 the whole span was
 replaced and those bodies were deleted with it: a mocked READ fed rows the
 program's own `NOT AT END` never processed, `FILE-STATUS IS
 RECORD-NOT-FOUND` never reached `INVALID KEY`, and a mutant inside a
@@ -454,8 +497,11 @@ Other invariants enforced here:
 # Tally-Field Naming (naming.py)
 
 `TallyRegistry` assigns one `UT-*-TALLY` WORKING-STORAGE field per
-`(category, key)` mocked anywhere in the suite, in first-appearance order,
-deterministically for a given `.cut` file.
+`(category, key)` mocked anywhere in the suite. Each name is
+`naming.tally_name(category, key)`, a pure function of that pair alone
+(#314) -- `generate` writes these names into mock bodies, so they must not
+move when a case is added, MOCK blocks are reordered, or `--case`/`--tag`
+filters the suite.
 
 | Category | Body format | Example |
 |---|---|---|
@@ -472,11 +518,16 @@ categories are always distinguishable by name.
 
 Body text is sanitized (non-COBOL-word chars → `-`, collapsed, trimmed)
 and capped at 21 chars so `"UT-" + body + "-TALLY"` stays a conservative
-30-char COBOL word (well under GnuCOBOL's 63-char limit). Sanitized keys
-can collide (two SQL prefixes differing only in punctuation, or only
-beyond the length cap) — collisions are resolved by suffixing `-2`, `-3`,
-... in first-appearance order, so naming is still fully deterministic per
-`.cut` file.
+30-char COBOL word (well under GnuCOBOL's 63-char limit). When that would
+lose information -- the body is over the cap, or sanitizing changed more
+than case and spaces (`sub.pgm 01`) -- the body is cut to 16 chars and a
+4-hex-digit SHA-1 of `"<category>:<key>"` appended:
+`READ CUSTOMER-MASTER-OLD` → `UT-READ-CUSTOMER-MA-66B4-TALLY`. Before #314
+such keys collided at the cap and took `-2`, `-3` suffixes in
+first-appearance order over the *selected* cases, so adding a case above a
+generated one swapped the two files' tallies and the happy path hung. A
+suffix is now only a last resort, for a hash collision or two keys that
+differ in nothing but letter case or a space vs. a hyphen.
 
 `driver.py`'s `_SUITE_PARAGRAPH_NAME_RE` sanitization for the
 `UT-TESTSUITE-*` paragraph name follows the identical collapse-and-strip
@@ -1240,7 +1291,11 @@ directive's own relation from `ExpectDirective.operator` — `=` for plain
 operator's *negation* via `_EXPECT_FAIL_CONDITIONS` since the generated
 IF guards the failure branch; `>=`/`<=` negate to plain `<`/`>` so every
 emitted condition stays a simple COBOL-85 relational — keep the map in
-sync with `model.EXPECT_OPERATORS`) and `verifications` (tally-based
+sync with `model.EXPECT_OPERATORS`; a value with an unquoted `AND`/`OR`
+tail, i.e. an abbreviated combined condition such as `TO BE > 0 AND < 10`
+or `TO BE 7 OR 8`, instead compiles to `IF NOT (<name> <op> <value>)`,
+because swapping the operator would negate only the first relation, issue
+#265) and `verifications` (tally-based
 `VERIFY ... WAS CALLED` conditions from `_verify_condition`: `ONCE` →
 `NOT = 1`, `NEVER` → `NOT = 0`, `AT LEAST ONCE` → `< 1`, `N TIMES` →
 `NOT = N`), incrementing `UT-FAIL-COUNT` and displaying a `CASE NNN

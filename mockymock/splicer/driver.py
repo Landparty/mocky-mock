@@ -397,14 +397,24 @@ def _build_testcase_paragraph(
             lines.append("               ADD 1 TO UT-FAIL-COUNT")
             lines.append("           END-IF")
             continue
-        fail_operator = _expect_fail_condition(expectation.operator)
-        lines.extend(
-            _operand_lines(
-                f"           IF {expectation.data_name} {fail_operator} ",
-                expectation.expected_value,
-                "               ",
+        if _has_combined_tail(expectation.expected_value):
+            # `TO BE > 0 AND < 10` / `TO BE 7 OR 8`: an abbreviated combined
+            # condition. Swapping the operator would negate only its first
+            # relation (`X NOT > 0 AND < 10`), so negate the whole condition
+            # instead (issue #265).
+            lines.append(
+                f"           IF NOT ({expectation.data_name} "
+                f"{expectation.operator} {expectation.expected_value})"
             )
-        )
+        else:
+            fail_operator = _expect_fail_condition(expectation.operator)
+            lines.extend(
+                _operand_lines(
+                    f"           IF {expectation.data_name} {fail_operator} ",
+                    expectation.expected_value,
+                    "               ",
+                )
+            )
         if _literal_pieces(expectation.expected_value) is None:
             lines.append(
                 f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: '
@@ -499,6 +509,16 @@ def _condition_name_truth(expectation) -> bool | None:
     if value not in ("TRUE", "FALSE") or expectation.operator not in ("=", "NOT ="):
         return None
     return (value == "TRUE") != (expectation.operator == "NOT =")
+
+
+_QUOTED_LITERAL_RE = re.compile(r"\"(?:[^\"]|\"\")*\"|'(?:[^']|'')*'")
+_COMBINING_WORD_RE = re.compile(r"(?<![\w-])(?:AND|OR)(?![\w-])", re.IGNORECASE)
+
+
+def _has_combined_tail(value: str) -> bool:
+    """Whether an EXPECT value carries an unquoted AND/OR, i.e. the
+    assertion is an abbreviated combined condition (`> 0 AND < 10`)."""
+    return bool(_COMBINING_WORD_RE.search(_QUOTED_LITERAL_RE.sub('""', value)))
 
 
 def _expect_fail_condition(operator: str) -> str:

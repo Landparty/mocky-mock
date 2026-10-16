@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-16T12:00:00Z
+timestamp: 2026-10-16T14:00:00Z
 ---
 
 # Overview
@@ -88,7 +88,10 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   generated `IF` (the IF guards the failure branch; `>=`/`<=` negate to
   the equivalent plain `<`/`>` to keep emitted conditions to the
   simplest COBOL-85 relational forms) — keep that map in sync with
-  `EXPECT_OPERATORS`. The FAIL `DISPLAY` carries the operator between
+  `EXPECT_OPERATORS`. A value carrying an unquoted `AND`/`OR`
+  (`TO BE > 0 AND < 10`, `TO BE 7 OR 8`) is an abbreviated combined
+  condition; the driver negates it whole, `IF NOT (<name> <op> <value>)`
+  (issue #265). The FAIL `DISPLAY` carries the operator between
   name and value (`expected WS-X > 5, got ...`), and
   `report/json_report.py`'s `_EXPECT_HEAD_RE` splits attribution on it
   (`expected` field keeps the bare value for `=`, is operator-prefixed
@@ -174,7 +177,11 @@ default: `check_test_case(shared=..., matched_out=...)` no longer
 refuses one a given case doesn't reach; `cli.checks` refuses it
 (`UNMATCHED_MOCK`, "not reached by any test case or hook step") only
 when nothing reaches it (2026-10-10; before, every case had to reach
-every shared mock). See
+every shared mock). "Nothing" means the whole suite, not a `--case`/`--tag`
+selection: when the selected cases leave a shared mock unmatched, the
+unselected cases are checked for their matches only (their own refusals
+are discarded), so selecting a case never refuses a clean suite (issue
+#250). See
 `docs/2026-07-20-before-blocks-and-file-status-design.md`.
 
 ### `FILE-STATUS IS <mnemonic-or-code>`
@@ -1017,13 +1024,23 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   every site of its key is in `analysis/exact_counts.py`'s
   `exact_count_scope` for the entry: top level of its paragraph (or an
   inline PERFORM body there), in a paragraph reached through top-level
-  PERFORMs only (looping ones included, since loop counts are the
-  bundle's row model) and by nothing else -- no PERFORM inside an
+  PERFORMs only (looping ones only for READ/RETURN -- see #290 below)
+  and by nothing else -- no PERFORM inside an
   IF/EVALUATE/AT END, no GO TO, SORT/XML procedure, or fall-through from
   a GO TO target. A PERFORM in a branch that ends with `STOP RUN`/`GOBACK`
   doesn't count against its target. Everything else is demoted the same
   way, including a per-row CALL behind a loop's own `IF NOT EOF` guard.
   Early exits (`IF ... GOBACK`) are not modeled.
+- **Sites that run more than once a pass (#290).** The bundle (cobol-parser
+  2.x) gives every site `call_count` 1 however often it runs, so for every
+  category but READ/RETURN `exact_count_scope` no longer treats a looping
+  PERFORM as a straight edge: its target, any PERFORM inside an inline
+  loop's body, the inline loop body's own statements, and a paragraph
+  PERFORMed by two or more straight statements are all out of scope, and
+  their counts are demoted with `_LOOPED_SITE_REASON`. READ/RETURN are
+  checked against `exact_count_scope(..., loops_exact=True)` (the older
+  scope, looping PERFORMs as straight edges), since their counts are the
+  bundle's row model of the read loop.
 - **Sites the entry never reaches (2026-10-14).** The bundle also counts
   a key's sites in paragraphs nothing PERFORMs from the entry (a CICS
   `HANDLE CONDITION` target, dead code), and #142's sum included them:
@@ -1040,8 +1057,11 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
 - **SQL status-only bodies (#148).** OPEN/CLOSE/COMMIT-style bodies set
   `SQLCODE` to 0 when the fixture names no SQLCODE.
 - **No entry (#150).** A scenario with `entry=''` (IMS `ENTRY 'DLITCBL'`
-  programs) falls back to the first named PROCEDURE DIVISION paragraph
-  (`_first_paragraph`); `generate --with-data` exits 1 when no scenario
+  programs) falls back to the first named PROCEDURE DIVISION section
+  or paragraph by source line (`_first_paragraph`) -- sections count
+  since #238, so a section-structured program whose main line sits
+  unnamed under `A000-MAIN SECTION.` is entered with `PERFORM A000-MAIN`,
+  not with the first paragraph of a later section; `generate --with-data` exits 1 when no scenario
   became a TESTCASE. A `CALL 'CBLTDLI'` get loop is covered by #156 below.
 - **Looped MQGET / CBLTDLI get calls (#156).** When a CALL sits in a loop
   whose UNTIL reads the call's own reply (`analysis.loops.loop_guard_words`,

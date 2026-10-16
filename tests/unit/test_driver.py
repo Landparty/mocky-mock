@@ -368,6 +368,38 @@ def test_expect_operator_compiles_to_its_negated_fail_condition(
     assert f"IF WS-X {fail_condition} 5" in joined
 
 
+@pytest.mark.parametrize(
+    ("operator", "value", "condition"),
+    [
+        (">", "0 AND LESS THAN 10", "IF NOT (WS-X > 0 AND LESS THAN 10)"),
+        (">", "0 AND < 10", "IF NOT (WS-X > 0 AND < 10)"),
+        ("=", "7 OR 8", "IF NOT (WS-X = 7 OR 8)"),
+        ("NOT =", "7 or 8", "IF NOT (WS-X NOT = 7 or 8)"),
+    ],
+)
+def test_expect_combined_condition_negates_the_whole_condition(
+    operator, value, condition
+):
+    """Issue #265: swapping the operator of an abbreviated combined
+    condition negates only its first relation -- `IF WS-X NOT > 0 AND LESS
+    THAN 10` passed a value of 16, and `IF WS-X NOT = 7 OR 8` failed a
+    value of 7. The whole condition is negated instead."""
+    suite = _suite()
+    suite.test_cases[0].expectations = [
+        ExpectDirective("WS-X", value, operator=operator)
+    ]
+    lines = [line.strip() for line in _build(suite).procedure_lines]
+    assert condition in lines
+
+
+@pytest.mark.parametrize("value", ['"BLACK AND WHITE"', "WS-OR-FLAG", "WS-AND"])
+def test_expect_and_or_inside_a_literal_or_name_keeps_the_plain_guard(value):
+    suite = _suite()
+    suite.test_cases[0].expectations = [ExpectDirective("WS-X", value)]
+    lines = [line.strip() for line in _build(suite).procedure_lines]
+    assert f"IF WS-X NOT = {value}" in lines
+
+
 def test_expect_fail_message_carries_the_asserted_operator():
     suite = _suite()
     suite.test_cases[0].expectations = [ExpectDirective("WS-X", "5", operator="NOT =")]

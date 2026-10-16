@@ -66,6 +66,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     normalize_exec_text,
 )
+from mockymock.analysis.sql_whenever import whenever_can_fire
 from mockymock.dsl.generator import directive_snippet
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
@@ -86,6 +87,7 @@ from ._reachability import (
     _reachable_paragraphs,
     _source_ordered_paragraphs,
     _walk_fallthrough_from,
+    duplicated_paragraph_names,
 )
 from ._types import (
     _UNANNOTATED,
@@ -1361,6 +1363,9 @@ def check_test_case(
         case.perform_thru,
         skip_traversal=mocked_flow_names,
         neutralized_goto=neutralized_goto,
+        # A WHENEVER handler is reached only when this case's mocks can set
+        # SQLCODE so that its check fires (issue #244).
+        follow_whenever=whenever_can_fire(program, case.mocks),
     )
 
     if case.perform_target not in reachable:
@@ -1376,6 +1381,28 @@ def check_test_case(
         return reasons
 
     reasons.extend(thru_reasons)
+
+    ambiguous = sorted(reachable & duplicated_paragraph_names(program))
+    if ambiguous:
+        # Reachability, boundary-site matching and the splice plans all key
+        # paragraphs by bare name: for a name defined in two SECTIONs they
+        # walk one body and match sites in both, so a boundary only the
+        # other body reaches ran unmocked after a clean lint (issue #284).
+        # Fail closed until name resolution is section-aware.
+        reasons.append(
+            RefusalReason(
+                code="AMBIGUOUS_PARAGRAPH",
+                message=(
+                    f"paragraph name(s) {', '.join(repr(n) for n in ambiguous)} "
+                    f"reachable from '{case.perform_target}' are defined in "
+                    f"more than one SECTION -- mockymock resolves paragraphs "
+                    f"by name alone, so it cannot tell which definition runs "
+                    f"and cannot check this case's boundaries; rename the "
+                    f"paragraphs so each name is unique in the program"
+                ),
+            )
+        )
+        return reasons
 
     matched_directives: set[int] = set()
 
@@ -1534,6 +1561,14 @@ def check_test_case(
 
         if not matches:
             code = _UNMOCKED_CODES.get(site.category, _UNMOCKED_FILE_OP_CODE)
+            # A site that cannot be spliced where it stands is not fixed by
+            # adding a MOCK -- that MOCK would be refused in turn -- so it
+            # gets no suggested fix, and says why.
+            unspliceable = (
+                site.unspliceable_reason or _UNANNOTATED
+                if site.nested and site.span is None
+                else None
+            )
             reasons.append(
                 RefusalReason(
                     code=code,
@@ -1548,8 +1583,18 @@ def check_test_case(
                         )
                         + f") is reachable from '{case.perform_target}' but "
                         f"no MOCK directive in this test case matches it"
+                        + (
+                            f" -- and a MOCK could not replace it either "
+                            f"({unspliceable})"
+                            if unspliceable is not None
+                            else ""
+                        )
                     ),
-                    suggested_fix=directive_snippet(site, surface),
+                    suggested_fix=(
+                        directive_snippet(site, surface)
+                        if unspliceable is None
+                        else None
+                    ),
                 )
             )
         elif len(matches) > 1:

@@ -457,10 +457,12 @@ def test_known_unmockable_sites_do_not_raise_the_key_mismatch_warning(tmp_path, 
     differ from their bundles by sites mockymock already lists as not
     mockable, so the "should not happen" warning stays quiet.
 
-    VSAMKSDS's happy path itself reaches those nested sites, so `lint`
-    refuses the case `generate` wrote and generate exits 1 (issue #231);
-    the file is still written."""
-    for name, expected_rc in (("VSAMKSDS", 1), ("BATCHSEQ", 0)):
+    Both happy paths reach a site nested inside another boundary's clause
+    body (VSAMKSDS's DELETE, BATCHSEQ's RELEASE), which no MOCK can
+    replace, so `lint` refuses the case `generate` wrote and generate exits
+    1 (issues #231, #258); the file is still written. (VSAMKSDS's nested
+    READ/REWRITE ... END-xxx sites themselves are mockable since #258.)"""
+    for name, expected_rc in (("VSAMKSDS", 1), ("BATCHSEQ", 1)):
         out = tmp_path / f"{name}.cut"
         rc = main(
             [

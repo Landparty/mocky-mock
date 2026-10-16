@@ -169,11 +169,10 @@ def splice_program(
                 trace=trace,
                 statement_text=" ".join(lines[start - 1 : end]),
                 layout=surface.data_layout,
-                # Only a top-level site can carry clause bodies: a nested
-                # one with clauses of its own is refused as unspliceable.
-                lifted_clauses=(
-                    None if site.nested else lift_clause_bodies(site.statement, lines)
-                ),
+                # A nested site with clauses of its own reaches here only
+                # with a span bounded by its own scope terminator (#258),
+                # so its bodies lift exactly like a top-level site's.
+                lifted_clauses=lift_clause_bodies(site.statement, lines),
             )
             # What the DB2 precompiler puts after the statement for every
             # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).
