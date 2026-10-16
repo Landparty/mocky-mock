@@ -667,8 +667,9 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     code is translated into `crash_detail` evidence for the formatters:
     exit 124 (TIMEOUT_EXIT_CODE) -> `"binary timed out (exit 124); see
     stderr below"`; any other nonzero exit -> `"binary exited with code
-    <n>"`; exit 0 -> `None` (the formatters then fall back to the STOP RUN
-    hypothesis for crashed cases — a reached STOP RUN exits 0).
+    <n>"`; exit 0 with a crashed case -> `CLEAN_EXIT_CRASH_DETAIL` (the
+    STOP RUN hypothesis plus a GO TO out of the PERFORMed range, issue
+    #238); exit 0 otherwise -> `None`.
     `format_console(suite_result, crash_detail=...)` is printed always;
     then, if `executed.stderr` is non-empty, it is printed under a
     `mockymock run: binary stderr:` header — this is how run_binary's

@@ -1465,27 +1465,36 @@ def _warn_on_key_mismatch(
 
 
 def _first_paragraph(program) -> str | None:
-    """The first named PROCEDURE DIVISION paragraph, by source line.
+    """The first named PROCEDURE DIVISION section or paragraph, by source
+    line -- where the program itself enters.
 
     The fallback entry for a scenario cobol-parser left without one: an IMS
     program opening with `ENTRY 'DLITCBL' USING ...` comes back with
     `entry=''` because the ENTRY statement sits in an unnamed leading
-    paragraph (issue #150)."""
+    paragraph (issue #150). A section-structured program (`A000-MAIN
+    SECTION.` with its main line directly under the header) comes back the
+    same way; its first *paragraph* name belongs to a later section, so
+    the section headers count too (issue #238)."""
     procedure = program.get_division("PROCEDURE") if program is not None else None
     if procedure is None:
         return None
+
+    def line_of(node) -> int:
+        return int(getattr(getattr(node, "location", None), "line", 0) or 0)
+
     named = [
-        paragraph
+        (line_of(paragraph), str(paragraph.paragraph_name))
         for paragraph in _all_paragraphs(procedure)
         if getattr(paragraph, "paragraph_name", "")
     ]
+    named.extend(
+        (line_of(section), str(section.section_name))
+        for section in getattr(procedure, "_sections", {}).values()
+        if getattr(section, "section_name", "")
+    )
     if not named:
         return None
-    first = min(
-        named,
-        key=lambda paragraph: getattr(getattr(paragraph, "location", None), "line", 0),
-    )
-    return str(first.paragraph_name)
+    return min(named, key=lambda pair: pair[0])[1]
 
 
 def _build_shadow_tally_registry(
