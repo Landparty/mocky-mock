@@ -123,7 +123,7 @@ def reset_lines_for_items(items) -> list[str]:
                 lines.append(f"INITIALIZE {item.name} ALL TO VALUE THEN TO DEFAULT")
                 continue
             lines.append(f"INITIALIZE {item.name}")
-            lines.extend(_child_value_restores(item))
+            lines.extend(_child_value_restores(item, item.name))
         else:
             reset = _elementary_reset(item)
             if reset is not None:
@@ -220,9 +220,17 @@ def _has_occurs_value(group) -> bool:
     return walk(group, False)
 
 
-def _child_value_restores(group) -> list[str]:
+def _child_value_restores(group, qualifier: str) -> list[str]:
     """After INITIALIZE zeroes/space-fills a group, restore any child that
     declared its own VALUE clause (INITIALIZE does not honor those).
+
+    Every restore targets the child fully qualified through its enclosing
+    groups (`REC-FLAG OF HDR OF OUT-REC`; `qualifier` is the `OF ...` chain
+    for `group` itself). COBOL lets one child name repeat under different
+    groups -- IN-REC/OUT-REC built from one copybook -- and an unqualified
+    MOVE to such a name is ambiguous, which cobc rejects for the whole
+    driver (issue #220). Full qualification is always legal, so there is no
+    need to detect the ambiguity first.
 
     Children carrying an OCCURS clause are skipped entirely (subtree
     included): an unsubscripted `MOVE 7 TO WS-CELL` against an OCCURS item
@@ -237,10 +245,11 @@ def _child_value_restores(group) -> list[str]:
             continue  # FILLER is unaddressable; its VALUE already survives INITIALIZE
         if getattr(child, "occurs_clause", None) is not None:
             continue  # unsubscripted MOVE is illegal; see _has_occurs_value
+        target = f"{child.name} OF {qualifier}"
         if _is_group(child):
-            out.extend(_child_value_restores(child))
+            out.extend(_child_value_restores(child, target))
         elif getattr(child, "value_clause", None):
-            restore = _elementary_reset(child)
+            restore = _elementary_reset(child, target)
             if restore is not None:
                 out.append(restore)
     return out
@@ -257,7 +266,7 @@ def _is_numeric(item) -> bool:
     return any(c in _NUMERIC_PIC_CHARS for c in stripped.upper())
 
 
-def _elementary_reset(item) -> str | None:
+def _elementary_reset(item, target: str | None = None) -> str | None:
     """The reset line for one elementary (or VALUE-carrying group) item, or
     None when no legal reset exists (skip rather than emit illegal COBOL).
 
@@ -265,16 +274,20 @@ def _elementary_reset(item) -> str | None:
     only legal VALUE, so `SET ... TO NULL` both resets and restores. USAGE
     INDEX items are skipped: their content is implementation-defined and a
     reset adds nothing a fresh SEARCH/SET in the test flow doesn't. A
-    PICTURE-less item of unrecognized usage is skipped fail-safe."""
+    PICTURE-less item of unrecognized usage is skipped fail-safe.
+
+    `target` is the reference the line writes to (a qualified name for a
+    group child); it defaults to the item's own name."""
+    name = target or item.name
     usage = (getattr(item, "usage", None) or "").upper()
     if usage in _POINTER_USAGES:
-        return f"SET {item.name} TO NULL"
+        return f"SET {name} TO NULL"
     if usage == "INDEX":
         return None  # no legal MOVE; fidelity limit
     if item.value_clause:
-        return f"MOVE {cobol_literal(item.value_clause)} TO {item.name}"
+        return f"MOVE {cobol_literal(item.value_clause)} TO {name}"
     if item.picture_clause is None:
         if usage in _FLOAT_USAGES:
-            return f"MOVE 0 TO {item.name}"
+            return f"MOVE 0 TO {name}"
         return None  # PIC-less, unrecognized usage: skip fail-safe
-    return f"MOVE {'0' if _is_numeric(item) else 'SPACES'} TO {item.name}"
+    return f"MOVE {'0' if _is_numeric(item) else 'SPACES'} TO {name}"

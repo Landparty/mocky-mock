@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-13T22:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -528,6 +528,16 @@ zero/space-fills the rest (checked against GnuCOBOL 3.1's cobc). Before
 #156 those occurrences were left at INITIALIZE's zero/space default, so a
 test saw different starting data from the real program. Groups with no
 VALUE inside a table keep the plain INITIALIZE plus per-child restores.
+
+**Child restores are fully qualified (issue #220).** Each per-child VALUE
+restore names the child through its whole chain of enclosing groups,
+intermediate levels included: `MOVE "N" TO REC-FLAG OF HDR OF OUT-REC`.
+COBOL lets one child name repeat under different groups (IN-REC/OUT-REC
+built from one copybook); the old unqualified `MOVE "N" TO REC-FLAG` was
+ambiguous there, and cobc rejected the whole driver, so no suite for the
+program could run. Full qualification is always legal, so nothing detects
+the ambiguity first. `_elementary_reset(item, target)` takes the reference
+to write to; top-level items still use their bare name.
 
 `_is_group` must only count children that carry a `level` attribute:
 cobolparser's `children` list on a data item mixes in clause nodes (e.g.

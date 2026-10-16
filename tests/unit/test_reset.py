@@ -325,7 +325,7 @@ def test_value_under_an_occurs_group_uses_initialize_to_value():
     lines = reset_move_lines(result.ast)
     assert "INITIALIZE WS-TABLE ALL TO VALUE THEN TO DEFAULT" in lines
     assert "INITIALIZE WS-PLAIN-TABLE" in lines
-    assert 'MOVE "ABC" TO WS-LABEL' in lines
+    assert 'MOVE "ABC" TO WS-LABEL OF WS-PLAIN-TABLE' in lines
 
 
 # --- REDEFINES children (two REDEFINES of the same nested item) ---------------
@@ -396,8 +396,8 @@ def test_top_level_redefines_item_does_not_clobber_the_redefined_value():
     assert reset_move_lines(result.ast) == [
         'MOVE "AB12" TO WS-CODE',
         "INITIALIZE WS-DATE",
-        "MOVE 2026 TO WS-YYYY",
-        "MOVE 9 TO WS-MM",
+        "MOVE 2026 TO WS-YYYY OF WS-DATE",
+        "MOVE 9 TO WS-MM OF WS-DATE",
         "MOVE SPACES TO WS-AFTER",
     ]
 
@@ -460,3 +460,36 @@ def test_cobol_literal_handles_the_all_repetition_prefix():
     quote = chr(34)
     assert cobol_literal("ALL " + quote * 3) == "ALL " + quote * 4
     assert cobol_literal('ALL "="') == 'ALL "="'
+
+
+SHARED_CHILD_NAME_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. AMB.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  IN-REC.
+           05  REC-FLAG        PIC X VALUE "N".
+           05  REC-AMT         PIC 9(3).
+       01  OUT-REC.
+           05  HDR.
+               10  REC-FLAG    PIC X VALUE "N".
+           05  REC-AMT         PIC 9(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_child_value_restores_are_fully_qualified():
+    """Issue #220: two groups sharing a child name (IN-REC/OUT-REC from one
+    copybook) made an unqualified `MOVE "N" TO REC-FLAG` ambiguous, and cobc
+    rejected the whole driver. Every child restore names its full chain of
+    enclosing groups, intermediate levels included."""
+    result = parse_cobol(SHARED_CHILD_NAME_SOURCE, filename="amb.cbl")
+    assert result.success, result.errors
+    assert reset_move_lines(result.ast) == [
+        "INITIALIZE IN-REC",
+        'MOVE "N" TO REC-FLAG OF IN-REC',
+        "INITIALIZE OUT-REC",
+        'MOVE "N" TO REC-FLAG OF HDR OF OUT-REC',
+    ]

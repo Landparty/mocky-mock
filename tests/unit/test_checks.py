@@ -347,5 +347,5 @@ def test_corpus_shaped_program_resets_the_quote_literal_validly(tmp_path):
     # Four quote characters, not three: the three-quote form is an
     # unterminated literal that desynchronizes cobc for the rest of the file,
     # reported lines later as `invalid symbol '%'` against the NEXT reset line.
-    assert 'MOVE """" TO DFHTRIG' in reset
-    assert 'MOVE "%" TO DFHPA1' in reset
+    assert 'MOVE """" TO DFHTRIG OF DFHAID' in reset
+    assert 'MOVE "%" TO DFHPA1 OF DFHAID' in reset
