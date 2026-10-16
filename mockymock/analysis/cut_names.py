@@ -224,9 +224,10 @@ def check_cut_data_names(
     declares -- see the module docstring for what is checked. `program`
     (the AST) adds its own data-item names: a name built through REPLACE
     pseudo-text appears in no word of the pre-REPLACE text (issue #273)."""
+    levels = data_item_levels(program)
     known = (
         _program_words(lines)
-        | set(data_item_levels(program))
+        | set(levels)
         | _harness_words()
         | _SPECIAL_REGISTERS
         | _suite_harness_words(suite)
@@ -269,6 +270,47 @@ def check_cut_data_names(
                 )
             )
 
+    def condition_level(text: str) -> bool | None:
+        """True when the (qualified/subscripted) name is a level-88
+        condition-name, False when it is some other data item, None when
+        the AST cannot say (undeclared, or declared at both kinds)."""
+        words = _name_words(text)
+        if not words or words[0] not in levels:
+            return None
+        found = levels[words[0]]
+        if found == {88}:
+            return True
+        if 88 in found:
+            return None
+        return False
+
+    def expect_level(line: int, data_name: str, expected: str) -> None:
+        # The driver picks `IF [NOT] X` for TRUE/FALSE and `IF X NOT = v`
+        # for everything else; each shape compiles only for its own kind
+        # of item (issue #307).
+        is_condition = condition_level(data_name)
+        if is_condition is None:
+            return
+        truth = expected.strip().upper() in ("TRUE", "FALSE")
+        if truth and not is_condition:
+            message = (
+                f".cut line {line}: EXPECT {data_name.strip()} TO BE "
+                f"{expected.strip()} -- TRUE/FALSE only applies to a level-88 "
+                f"condition-name, and {data_name.strip()} is not one; "
+                f"expect its value instead, or EXPECT one of its 88s TO BE TRUE"
+            )
+        elif not truth and is_condition:
+            message = (
+                f".cut line {line}: EXPECT {data_name.strip()} TO BE "
+                f"{expected.strip()} -- {data_name.strip()} is a level-88 "
+                f"condition-name, which can only be TRUE or FALSE; write "
+                f"EXPECT {data_name.strip()} TO BE TRUE, or expect the value "
+                f"of the item it belongs to"
+            )
+        else:
+            return
+        reasons.append(RefusalReason(code="CONDITION_NAME_MISMATCH", message=message))
+
     hook_steps = (
         suite.before_all_steps
         + suite.before_each_steps
@@ -291,6 +333,7 @@ def check_cut_data_names(
             line = expectation.line or case.line
             name(line, "EXPECT", expectation.data_name)
             value(line, "EXPECT value", expectation.expected_value)
+            expect_level(line, expectation.data_name, expectation.expected_value)
         mocks.extend(case.mocks)
     seen_mocks: set[int] = set()
     for directive in mocks:

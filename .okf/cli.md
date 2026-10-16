@@ -1019,7 +1019,12 @@ purpose: it only catches names cobc would certainly reject.
 `MockTestCase.setup_move_lines` / `MockDirective.capture_lines` carry the
 line numbers the model did not record before. ROWS rows and the `TERMINAL`
 group are checked the same way, field and value (issue #299), at
-`MockDirective.row_lines` / `terminal_line`.
+`MockDirective.row_lines` / `terminal_line`. The same step refuses
+`CONDITION_NAME_MISMATCH` when an EXPECT's kind does not match its item's
+level in the AST (issue #307): `TO BE TRUE|FALSE` on an item that is not a
+level 88 (the driver would emit `IF NOT X`), or any other value on an 88
+(`IF X NOT = v`, "condition-name not allowed here"). A name declared at both
+kinds, or not in the AST, is left alone.
 
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 
