@@ -641,8 +641,10 @@ object currently names. The counter's own reset line usually ran first
 and one case's entries leaked into the next. For a VALUE-less group holding
 an ODO table, `_odo_counter_lines` brackets the group's reset: `MOVE <max>
 TO <counter>` before, the counter's own VALUE/default reset after (both
-fully qualified; the counter is found anywhere in the program by name and
-DEPENDING ON qualifiers). On the `ALL TO VALUE` path the group is first
+qualified through every enclosing *named* group -- FILLER levels are left
+out, since `WS-COUNT OF FILLER` is not COBOL and broke the driver, #246;
+the counter is found anywhere in the program by name and DEPENDING ON
+qualifiers). On the `ALL TO VALUE` path the group is first
 reset with a plain `INITIALIZE`, the counter set to its maximum again, then
 `INITIALIZE <group> ALL TO VALUE`: `ALL TO VALUE THEN TO DEFAULT` works item
 by item, so a counter declared inside the group dropped to 0 before its

@@ -231,13 +231,11 @@ def _odo_clauses(group) -> list:
 
 
 def _qualified_name(item) -> str:
-    """`item`'s name qualified by every enclosing group: `CNT OF HDR OF REC`."""
-    names = [item.name]
-    parent = getattr(item, "parent", None)
-    while parent is not None and getattr(parent, "level", None) is not None:
-        names.append(parent.name)
-        parent = getattr(parent, "parent", None)
-    return " OF ".join(names)
+    """`item`'s name qualified by every enclosing named group: `CNT OF HDR
+    OF REC`. FILLER and nameless groups are left out of the chain -- `CNT
+    OF FILLER` is not COBOL and cobc rejected the whole driver (issue
+    #246); a qualifier may skip levels."""
+    return " OF ".join([item.name, *_named_ancestry(item)])
 
 
 def _find_data_item(anchor, name: str, qualifiers) -> object | None:
@@ -506,7 +504,8 @@ def index_names(program) -> list[str]:
             clause = getattr(child, "occurs_clause", None)
             for name in getattr(clause, "index_names", None) or []:
                 if name:
-                    chain = [name.upper(), *_named_ancestry(child, include_self=True)]
+                    ancestry = _named_ancestry(child, include_self=True)
+                    chain = [name.upper(), *(n.upper() for n in ancestry)]
                     found.append((name.upper(), " OF ".join(chain)))
             walk(child)
 
@@ -530,7 +529,7 @@ def _named_ancestry(item, include_self: bool = False) -> list[str]:
     node = item if include_self else getattr(item, "parent", None)
     while node is not None and getattr(node, "level", None) is not None:
         if not _is_filler(node):
-            names.append(node.name.upper())
+            names.append(node.name)
         node = getattr(node, "parent", None)
     return names
 

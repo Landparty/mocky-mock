@@ -689,3 +689,35 @@ def test_index_declared_by_two_tables_is_qualified_per_declaration():
         "IX OF ENT OF OUT-REC",
         "IY",
     ]
+
+
+def test_odo_counter_under_a_filler_group_is_qualified_past_it():
+    """Issue #246: `WS-COUNT OF FILLER` is not COBOL; a counter under `01
+    FILLER` (or a `05 FILLER` group) is named without the FILLER level."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ODOF.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  FILLER.
+           05  WS-COUNT     PIC 9(2) VALUE 0.
+       01  WS-REC.
+           05  FILLER.
+               10  WS-N2    PIC 9(2) VALUE 1.
+           05  WS-T2 OCCURS 1 TO 5 DEPENDING ON WS-N2.
+               10  WS-V2    PIC X.
+       01  WS-TABLE.
+           05  WS-ENT OCCURS 1 TO 20 DEPENDING ON WS-COUNT.
+               10  WS-VAL   PIC X(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+    result = parse_cobol(source, filename="odof.cbl")
+    assert result.success, result.errors
+    lines = reset_move_lines(result.ast)
+    assert not any("FILLER" in line and "MOVE" in line for line in lines), lines
+    assert "MOVE 20 TO WS-COUNT" in lines
+    assert "MOVE 0 TO WS-COUNT" in lines
+    assert "MOVE 5 TO WS-N2 OF WS-REC" in lines
+    assert "MOVE 1 TO WS-N2 OF WS-REC" in lines
