@@ -220,7 +220,8 @@ def _boundaries(
     from mockymock.analysis.refusal._gates import directive_matches_site
 
     surface = analyze(program.ast)
-    mocks = {tc.name: tc.mocks for tc in test_cases}
+    # Keyed by .cut line: TESTCASE names may repeat (issue #304).
+    mocks = {tc.line or None: tc.mocks for tc in test_cases}
     rows = []
     for site in sorted(surface.boundary_sites, key=lambda s: s.line):
         if site.category is None and site.label in _TERMINATOR_LABELS:
@@ -228,7 +229,7 @@ def _boundaries(
         mocked_by = [
             c["name"]
             for c in cases
-            if any(directive_matches_site(m, site) for m in mocks.get(c["name"], []))
+            if any(directive_matches_site(m, site) for m in mocks.get(c["line"], []))
         ]
         reached_by = [
             c["name"]
@@ -752,11 +753,21 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 "from an earlier `mockymock run --json-report`."
             )
         if run_report is not None:
-            cases_by_name = {c["name"]: c for c in cases}
+            # Matched by .cut line, then by name in order: TESTCASE names
+            # may repeat, and a dict keyed by name let the second result
+            # overwrite the first and left a case "not run" (issue #304).
+            cases_by_line = {c["line"]: c for c in cases if c.get("line")}
+            unmatched = list(cases)
             for entry in run_report.get("cases") or []:
-                matched = cases_by_name.get(entry.get("name"))
+                matched = cases_by_line.get(entry.get("line"))
+                if matched is None or matched not in unmatched:
+                    matched = next(
+                        (c for c in unmatched if c["name"] == entry.get("name")),
+                        None,
+                    )
                 if matched is None:
                     continue
+                unmatched.remove(matched)
                 matched["status"] = entry.get("status", "not_run")
                 matched["failures"] = entry.get("failures") or []
             summary = run_report.get("summary") or {}

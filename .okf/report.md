@@ -400,7 +400,10 @@ the `cobol-test` skill's hand-over.
   each with `mockedBy` from `refusal._gates.directive_matches_site` -- the
   rule `run` splices by -- and `reachedUnmockedBy` from case reach. Rendered
   as the "Boundaries" section after Test cases. Older report dicts without
-  the key render a note.
+  the key render a note. Its per-case MOCK lookup is keyed by `.cut` line,
+  and the run step matches `--run-json` entries to cases by `.cut` line,
+  then by name in order (issue #304): TESTCASE names may repeat, and a
+  dict keyed by name left one of two same-named cases "not run".
 - `scenario-gap` / `scenario-gap-covered-by-hand` findings carry `items`
   (one line per branch). `test_report._plain_arm_reason` strips the
   `EVALUATE@405/WHEN#1:` prefix and rewrites the generator's known reasons
