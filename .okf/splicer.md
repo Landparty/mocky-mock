@@ -448,7 +448,8 @@ harness fields, captures and the EIB.
 | Item | Snapshot field | Copy |
 |---|---|---|
 | Group | `01 UT-SNAP-nnn.` + `05 FILLER PIC X(n)`, n an upper bound (`_max_bytes`: REDEFINES children summed, every elementary at least 16 bytes, national x4) | `MOVE` (group move = byte copy; restore copies back exactly the group's own bytes) |
-| Elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
+| Elementary with an editing PICTURE (`XX/XX`, `XXXBXXXX`, `NNBNN`, `ZZ9.99`) | as for a group | `MOVE` through the group snapshot (byte copy). A same-PICTURE MOVE re-applied the editing mask to already-edited text, so `"AB/CD"` came back `"AB///"` (issue #224) |
+| Other elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
 | POINTER family, INDEX | same USAGE | `SET` |
 | Group holding OCCURS ... DEPENDING ON, unreadable OCCURS bound, irreproducible description | -- | refused |
 

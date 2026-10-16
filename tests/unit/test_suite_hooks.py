@@ -241,6 +241,40 @@ def test_snapshot_copies_each_item_the_exact_way():
     assert snapshot.restore_lines[0] == "MOVE UT-SNAP-001 TO WS-RATE"
 
 
+EDITED_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SN3.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-PH                 PIC XXXBXXXX VALUE SPACES.
+       01  WS-D                  PIC XX/XX.
+       01  WS-AMT                PIC ZZ9.99.
+       01  WS-CNT                PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           GOBACK.
+"""
+
+
+def test_snapshot_byte_copies_edited_items():
+    """Issue #224: a MOVE into an edited item re-applies its editing mask to
+    the already-edited sender, so a same-PICTURE snapshot shifted the value
+    on every restore ("AB/CD" came back "AB///"). Edited items are copied
+    as bytes, like groups; plain items keep the same-PICTURE copy."""
+    snapshot, problems = plan_snapshot(parse_cobol(EDITED_PROGRAM).ast)
+    assert problems == []
+    ws = snapshot.working_storage_lines
+    for n in (1, 2, 3):
+        group = ws.index(f"01  UT-SNAP-00{n}.")
+        assert ws[group + 1].startswith("    05 FILLER PIC X(")
+    assert "01  UT-SNAP-004 PIC 9(3)." in ws
+    assert snapshot.save_lines[:2] == [
+        "MOVE WS-PH TO UT-SNAP-001",
+        "MOVE WS-D TO UT-SNAP-002",
+    ]
+    assert snapshot.restore_lines[1] == "MOVE UT-SNAP-002 TO WS-D"
+
+
 def _driver(cut: str = CUT, snapshot: StateSnapshot | None = None):
     suite = parse_cut(cut)
     registry = TallyRegistry(suite)

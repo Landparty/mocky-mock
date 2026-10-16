@@ -28,10 +28,15 @@ exact:
   An upper bound (not an exact size) is deliberate: it only has to be big
   enough, so it can't be wrong in the dangerous direction across
   cobol-parser versions whose size arithmetic differed.
-- Elementary item with a PICTURE (or a PICTURE-less usage such as
-  COMP-1): into a field declared with the same PICTURE, USAGE and SIGN
-  clause. A MOVE between two identically described items preserves the
-  value.
+- Elementary item with an editing PICTURE (alphanumeric-, national- or
+  numeric-edited): the same group byte copy. A MOVE into an edited item
+  re-applies its editing mask to the sender's already-edited text, so a
+  same-PICTURE copy shifted the value (`PIC XX/XX` "AB/CD" came back
+  "AB///", issue #224).
+- Any other elementary item with a PICTURE (or a PICTURE-less usage such
+  as COMP-1): into a field declared with the same PICTURE, USAGE and SIGN
+  clause. A MOVE between two identically described non-edited items
+  preserves the value.
 - POINTER-family and INDEX items: `SET` into a field of the same usage
   (COBOL forbids MOVE on them).
 
@@ -80,7 +85,7 @@ def plan_snapshot(
     problems: list[str] = []
     for item in _state_items(program, linkage_items or []):
         snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
-        if _is_group(item):
+        if _is_group(item) or _is_edited(item):
             reason = _odo_reason(item)
             size = None if reason else _max_bytes(item)
             if reason or size is None:
@@ -132,6 +137,15 @@ def _state_items(program, linkage_items: list) -> list:
         for item in items
         if not _is_filler(item) and not getattr(item, "redefines", None)
     ]
+
+
+def _is_edited(item) -> bool:
+    """An elementary item with an editing PICTURE (XX/XX, XXXBXXXX, NNBNN,
+    ZZ9.99). A MOVE into one re-applies the editing mask to the sender's
+    already-edited text, insertion characters included, so the value
+    shifts on every copy (issue #224); it is byte-copied like a group."""
+    picture = getattr(item, "picture_clause", None)
+    return bool(picture is not None and getattr(picture, "is_edited", False))
 
 
 def _children(item) -> list:
