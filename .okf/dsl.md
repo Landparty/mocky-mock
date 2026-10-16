@@ -368,7 +368,12 @@ exempt) -- left verbatim it linted clean and failed cobc on
 `invalid symbol '{'`. The same token in a NAME position -- `MOVE` target,
 `EXPECT` data-name, `PERFORM` target/THRU -- is likewise a `CutParseError`
 (`_reject_name_placeholder`, 2026-09-28; the EXPECT form made cobc abort
-with "Please report this!"). An unknown `{Foo}` token is a
+with "Please report this!"). A token naming any PROVIDER's column in a
+hook step (`MOVE` in BEFORE-/AFTER-EACH/-ALL) or a hook `MOCK` body is a
+`CutParseError` at that line too (`_reject_hook_placeholders`, issue
+#227): a hook belongs to no single row, and the token reached cobc
+verbatim; checked after the whole file is read, since a PROVIDER may be
+declared after the hook block. An unknown `{Foo}` token is a
 `CutParseError` naming the provider's real columns; an undeclared/
 mistyped `USING PROVIDER` reference errors at the `TESTCASE` line.
 
