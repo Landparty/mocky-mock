@@ -3,7 +3,7 @@ type: Module
 title: Test Result Reporting
 description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
 tags: [report, results, cli-output]
-timestamp: 2026-10-16T00:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 # Overview
 
@@ -242,6 +242,12 @@ payload for a plain `--trace`. `TRACE_ENTRY_CAP` (50,000) bounds a runaway
 `PERFORM UNTIL`, setting `truncated: true` rather than streaming or sampling.
 
 ## Record-expectations rewrite (`report/record_rewrite.py`)
+
+**`DECIMAL-POINT IS COMMA` (issue #230):** `rewrite_cut_text(...,
+decimal_comma=)` / `render_expect_value(..., decimal_comma=)` read a
+DISPLAYed `00125,00` as a number and write the golden back with a comma
+(`00589,00`); a period there is a sentence end and the next run did not
+compile. `_cmd_run` passes `decimal_point_is_comma(result.ast)`.
 
 Backs `mockymock run --record-expectations` (see [cli](cli.md) and
 docs/2026-08-04-record-expectations-design.md). The stage after

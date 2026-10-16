@@ -849,7 +849,11 @@ TESTCASE "region lookup" USING PROVIDER StateCodes
 ```
 
 This expands into three ordinary test cases, named
-`"region lookup [row 1: NY]"`, etc. `PROVIDER` must be declared before any
+`"region lookup [row 1: NY]"`, etc.
+
+A comma between two digits is read as a decimal comma, not a separator,
+for programs with `DECIMAL-POINT IS COMMA`: `ROW 100,5, 125,62` has two
+values. Separate values with a comma and a space. `PROVIDER` must be declared before any
 `TESTCASE` that references it.
 
 ### `*> STUB EXPECT <data-name> [-- <note>]`

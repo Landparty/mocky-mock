@@ -47,6 +47,7 @@ _CALL_TOKEN_RE = re.compile(
     r"|(?P<word>[^\s().,;\"']+)",
     re.IGNORECASE,
 )
+_PERIOD_DECIMAL_RE = re.compile(r"^([+-]?\d*)\.(\d+)$")
 _USING_END_WORDS = frozenset(
     {"RETURNING", "GIVING", "ON", "NOT", "EXCEPTION", "OVERFLOW", "END-CALL"}
 )
@@ -339,6 +340,13 @@ def build_site_dispatch(
                         f"(CAPTURE_ARG_OUT_OF_RANGE)"
                     )
                 source = literals[capture_index - 1] or using[capture_index - 1].name
+                # cobol-parser reports `USING 1,25` as `1.25` whatever the
+                # program's DECIMAL-POINT; under DECIMAL-POINT IS COMMA the
+                # period form is a sentence end (issue #230). The site's own
+                # text says which spelling the program uses.
+                comma_form = _PERIOD_DECIMAL_RE.sub(r"\1,\2", str(source))
+                if comma_form != source and comma_form in statement_text:
+                    source = comma_form
                 lines.append(f"                   MOVE {source} TO {target}")
         copy_from = from_move(site.statement)
         if copy_from is not None:

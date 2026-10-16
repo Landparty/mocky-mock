@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 
+from mockymock._decimal import decimal_point_is_comma, localize_move_line
 from mockymock.splicer.io_copy import longest_record_per_file
 
 _REPEAT_GROUP_RE = re.compile(r"\(\d+\)")
@@ -90,7 +91,11 @@ def reset_move_lines(program) -> list[str]:
     for section_name in ("WORKING-STORAGE", "LOCAL-STORAGE"):
         for section in _sections(data_division, section_name):
             lines.extend(reset_lines_for_items(_top_level_items(section)))
-    return lines
+    # cobol-parser hands `VALUE 1,25` back as `1.25`; under DECIMAL-POINT IS
+    # COMMA that is the literal 1 and a period, and cobc rejects the
+    # reset paragraph (issue #230).
+    comma = decimal_point_is_comma(program)
+    return [localize_move_line(line, comma) for line in lines]
 
 
 def _sections(data_division, wanted: str) -> list:

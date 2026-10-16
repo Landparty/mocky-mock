@@ -541,6 +541,15 @@ reset line per top-level (level `01` **or** `77`) WORKING-STORAGE item —
 `77`s are standalone items just like `01`s and would leak state if
 skipped.
 
+**`DECIMAL-POINT IS COMMA` (issue #230).** cobol-parser hands `VALUE 1,25`
+back as `1.25`, which under that clause is the literal 1 and a sentence
+period. `reset_move_lines` passes every line through
+`mockymock._decimal.localize_move_line` when `decimal_point_is_comma(program)`
+(the CONFIGURATION section's `special_names.decimal_point_is_comma`
+metadata), so `MOVE 1,25 TO WS-RATE` is what the reset paragraph says. A
+literal CALL argument captured with `CAPTURE ARG` keeps the program's own
+comma spelling too (`injector`, read from the site's text).
+
 | Item shape | Reset line | Why |
 |---|---|---|
 | Elementary, has `VALUE` clause | `MOVE <value> TO <name>` | restores the declared initial value (the clause first passes through `cobol_literal` -- see below) |

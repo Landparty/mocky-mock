@@ -423,12 +423,17 @@ def _split_top_level(text: str, sep: str) -> list[str]:
     group, so a subscripted value like `WS-TAB(1, 2)` (the comma-separated
     subscript form MOVE/EXPECT already accept) or `FUNCTION MAX(A, B)`
     stays one value instead of being refused as a malformed assignment or
-    a column-count mismatch."""
+    a column-count mismatch.
+
+    A comma between two digits is a decimal comma, not a separator: a
+    program with `DECIMAL-POINT IS COMMA` writes `1,25`, and COBOL's
+    separator comma is always followed by a space (issue #230). So
+    `ROW 100,5, 125,62` is two values."""
     parts: list[str] = []
     current: list[str] = []
     quote: str | None = None
     depth = 0
-    for char in text:
+    for index, char in enumerate(text):
         if quote is not None:
             current.append(char)
             if char == quote:
@@ -443,6 +448,14 @@ def _split_top_level(text: str, sep: str) -> list[str]:
         elif char == ")":
             depth = max(depth - 1, 0)
         elif char == sep and depth:
+            current.append(char)
+            continue
+        if (
+            char == sep == ","
+            and 0 < index < len(text) - 1
+            and text[index - 1].isdigit()
+            and text[index + 1].isdigit()
+        ):
             current.append(char)
             continue
         if char == sep:
