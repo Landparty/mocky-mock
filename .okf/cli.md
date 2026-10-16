@@ -919,7 +919,10 @@ outcome — this path compiles doctored source (a waived COPY's line
 commented out) exactly like `run` does, so it keeps the same
 never-silent guarantee. Boundary statements (mocked) and terminators (rewritten by
 terminator plans) are never mutated — mutating them would test the
-harness, not the program.
+harness, not the program. For a multi-line `EXEC ... END-EXEC` that covers
+every line of the block, not just the `EXEC` line (`generate_mutants`
+tracks the open block): an SQL `WHEN BALANCE > 1000` or a CICS
+`SET(ADDRESS OF X)` inside it would otherwise be an unkillable survivor.
 
 ## `mockymock lint <program> --cut PATH [--copybook-path DIR ...]`
 

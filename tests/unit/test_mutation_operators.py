@@ -118,6 +118,54 @@ def test_boundary_verbs_exclude_the_whole_line():
     assert mutants == []
 
 
+def test_no_line_inside_a_multi_line_exec_block_is_mutated():
+    # The splicer replaces a mocked EXEC wholesale, so a mutant on any of
+    # its continuation lines could never be killed (issue #202).
+    lines = _procedure(
+        "           EXEC SQL",
+        "               SELECT CASE",
+        "                   WHEN BALANCE > 1000 THEN 'GOLD'",
+        "                   ELSE 'STD' END",
+        "               INTO :WS-TIER FROM ACCOUNTS WHERE ACCT_ID = :WS-ACCT",
+        "           END-EXEC",
+        "           EXEC SQL",
+        "               UPDATE ACCOUNTS",
+        "               SET BALANCE = 0",
+        "           END-EXEC",
+        "           EXEC CICS READ FILE('CUST')",
+        "               SET(ADDRESS OF CUST-REC)",
+        "           END-EXEC",
+        "           IF WS-X > 1",
+        "               MOVE 5 TO WS-Y",
+        "           END-IF.",
+    )
+    mutants = generate_mutants(lines)
+    assert {m.line for m in mutants} == {
+        lines.index("           IF WS-X > 1") + 1,
+        lines.index("               MOVE 5 TO WS-Y") + 1,
+    }
+
+
+def test_single_line_exec_does_not_swallow_the_following_lines():
+    lines = _procedure(
+        "           EXEC SQL COMMIT END-EXEC",
+        "           IF WS-X > 1",
+        "               MOVE 5 TO WS-Y",
+        "           END-IF.",
+    )
+    assert {m.line for m in generate_mutants(lines)} == {6, 7}
+
+
+def test_exec_inside_a_literal_does_not_open_a_block():
+    lines = _procedure(
+        '           MOVE "EXEC" TO WS-Z',
+        "           IF WS-X > 1",
+        "               MOVE 5 TO WS-Y",
+        "           END-IF.",
+    )
+    assert {5, 6} <= {m.line for m in generate_mutants(lines)}
+
+
 def test_hyphenated_identifier_containing_a_boundary_verb_is_not_excluded():
     """Audit finding F8: _EXCLUDED_VERBS matched with `\\bREAD\\b`, and `-`
     is not a word character in regex, so it false-matched inside
