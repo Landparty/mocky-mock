@@ -199,25 +199,32 @@ def resolve_program(
             str(cut_path.parent / f"{stem}{ext}") for ext in COBOL_SOURCE_EXTENSIONS
         )
 
+    # The whole stem before the first-dot base in the mirror and unique
+    # rules too: `generate` names a suite after the program's full stem, so
+    # `tests/pay/PAY.V2.cut` is `src/pay/PAY.V2.cbl`'s (issue #289).
+    stems = tuple(dict.fromkeys((cut_path.stem, base)))
     if layout.tests_dir != layout.source_root and _is_within(
         cut_abs.parent, layout.tests_dir
     ):
         mirrored_dir = layout.source_root / cut_abs.parent.relative_to(layout.tests_dir)
-        mirrored = _first_existing(mirrored_dir, base)
-        if mirrored is not None:
-            return mirrored, "mirror"
-        tried.append(str(mirrored_dir / f"{base}.cbl") + " (and .cob)")
+        for stem in stems:
+            mirrored = _first_existing(mirrored_dir, stem)
+            if mirrored is not None:
+                return mirrored, "mirror"
+            tried.append(str(mirrored_dir / f"{stem}.cbl") + " (and .cob)")
 
-    matches = _programs_by_stem(str(layout.source_root)).get(base.upper(), ())
-    if len(matches) == 1:
-        return matches[0], "unique"
-    if len(matches) > 1:
-        listed = ", ".join(str(m) for m in matches)
-        raise DiscoveryError(
-            f"{cut_path}: {len(matches)} programs named {base} under "
-            f'{layout.source_root} ({listed}); add a PROGRAM "<path>" line '
-            f"after TESTSUITE to say which one this suite tests"
-        )
+    by_stem = _programs_by_stem(str(layout.source_root))
+    for stem in stems:
+        matches = by_stem.get(stem.upper(), ())
+        if len(matches) == 1:
+            return matches[0], "unique"
+        if len(matches) > 1:
+            listed = ", ".join(str(m) for m in matches)
+            raise DiscoveryError(
+                f"{cut_path}: {len(matches)} programs named {stem} under "
+                f'{layout.source_root} ({listed}); add a PROGRAM "<path>" line '
+                f"after TESTSUITE to say which one this suite tests"
+            )
     tried.append(f"any {base}.cbl under {layout.source_root}")
     raise DiscoveryError(
         f"no COBOL program found for {cut_path} (tried: {'; '.join(tried)}); "

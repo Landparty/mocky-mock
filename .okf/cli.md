@@ -146,7 +146,10 @@ missing; (2) sibling `<base>.cbl`/`.cob`; (3) a suite under the tests
 folder mirrors to the same relative folder under the source root; (4) the
 only `<base>.cbl` under the source root (two is a `DiscoveryError` asking
 for a PROGRAM line). `<base>` is the .cut name up to its first dot, so
-`PROG.errors.cut` is a second suite of PROG. `ProjectLayout`
+`PROG.errors.cut` is a second suite of PROG. Rules (2)-(4) all try the
+.cut's whole stem before `<base>` (issue #289: `generate` names a suite
+after the program's full stem, and `tests/pay/PAY.V2.cut` only paired
+with a `PAY.cbl` under the mirror and unique rules). `ProjectLayout`
 (`project_layout(config)`) supplies root (the deciding config file's
 folder, else cwd), `tests_dir` (`test_root` if a file set it, else
 `<root>/tests`) and `source_root` (new config key, default `<root>/src` when it exists, else root).
