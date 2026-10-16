@@ -17,6 +17,28 @@ from mockymock._lines import split_source_lines
 
 COLUMN_LIMIT = 72
 
+
+def _width(text: str) -> int:
+    """How many columns `text` takes in the exported file: its UTF-8 byte
+    count, not its character count. A fixed-format compiler reads columns
+    as bytes, so an accented character (2 bytes) or a typographic quote (3)
+    takes more than one column -- measured with `len()`, a line with a
+    non-ASCII TESTCASE name or literal ran past column 72 while every check
+    here said it fit. Callers still split only between characters (every
+    atomic unit is whole characters), so a multibyte character is never
+    cut in half."""
+    return len(text.encode("utf-8"))
+
+
+def _truncate_to_width(line: str, limit: int) -> str:
+    """`line` cut to at most `limit` bytes with a `...` marker, on a
+    character boundary."""
+    kept = line
+    while kept and _width(kept) + 3 > limit:
+        kept = kept[:-1]
+    return kept + "..."
+
+
 # Columns 1-6 (sequence area) + column 7 (indicator), both blank: what
 # normalize_fixed_format's "extract program text cols 8-72" strips away.
 _SEQUENCE_AREA = "       "
@@ -88,7 +110,7 @@ def build_provenance_header(program_path: str, cut_path: str) -> list[str]:
     # test_provenance_header_lines_all_fit_within_72_columns, but an
     # unusually long basename could still push a path line over.
     return [
-        line if len(line) <= COLUMN_LIMIT else line[: COLUMN_LIMIT - 3] + "..."
+        line if _width(line) <= COLUMN_LIMIT else _truncate_to_width(line, COLUMN_LIMIT)
         for line in lines
     ]
 
@@ -210,12 +232,12 @@ def _chunk_units(units: list[str], budget: int) -> list[str]:
     current: list[str] = []
     current_len = 0
     for unit in units:
-        if current and current_len + len(unit) > budget:
+        if current and current_len + _width(unit) > budget:
             chunks.append("".join(current))
             current = []
             current_len = 0
         current.append(unit)
-        current_len += len(unit)
+        current_len += _width(unit)
     if current:
         chunks.append("".join(current))
     return chunks
@@ -288,7 +310,7 @@ def wrap_long_display_lines(
     new_lines: list[str] = []
     problems: list[str] = []
     for line_no, line in enumerate(lines, start=1):
-        if len(line) <= max_col:
+        if _width(line) <= max_col:
             new_lines.append(line)
             continue
         if line.lstrip().startswith("*>"):
@@ -325,7 +347,9 @@ def wrap_long_display_lines(
             final_suffix += " " + trailing_expr
         if trailing_period:
             final_suffix += "."
-        final_overhead = len(indent) + len('DISPLAY "') + len('"') + len(final_suffix)
+        final_overhead = (
+            _width(indent) + len('DISPLAY "') + len('"') + _width(final_suffix)
+        )
         final_budget = max_col - final_overhead
         # final_budget < len(escaped) always holds at this point: `line`
         # is already known to exceed max_col, and final_overhead +
@@ -343,7 +367,7 @@ def wrap_long_display_lines(
             continue
 
         upon = _upon_clause(trailing_expr)
-        mid_overhead = len(indent) + len(f'DISPLAY ""{upon} WITH NO ADVANCING')
+        mid_overhead = _width(indent) + _width(f'DISPLAY ""{upon} WITH NO ADVANCING')
         mid_budget = max_col - mid_overhead
         if mid_budget <= 0:
             problems.append(
@@ -362,10 +386,10 @@ def wrap_long_display_lines(
         tail_units: list[str] = []
         tail_len = 0
         for unit in reversed(units):
-            if tail_len + len(unit) > final_budget:
+            if tail_len + _width(unit) > final_budget:
                 break
             tail_units.insert(0, unit)
-            tail_len += len(unit)
+            tail_len += _width(unit)
         head_units = units[: len(units) - len(tail_units)]
         tail = "".join(tail_units)
 
@@ -404,7 +428,7 @@ def wrap_long_display_lines(
         # non-empty, a plausible future simplification that would reopen
         # the second route) -- not dead code, a tripwire for a regression
         # that hasn't happened yet.
-        oversized = [f for f in fragments if len(f) > max_col]
+        oversized = [f for f in fragments if _width(f) > max_col]
         if oversized or not tail:
             problems.append(
                 f"line {line_no}: could not wrap under column {max_col} "
@@ -522,8 +546,8 @@ def _continue_literal(line: str, max_col: int) -> list[str] | None:
         remaining = units[pos:]
         # The final line re-closes the literal and carries whatever
         # followed it (` TO WS-FIELD`, a trailing period, ...).
-        final_budget = max_col - len(current_prefix) - 2 - len(suffix)
-        if 0 < sum(len(unit) for unit in remaining) <= final_budget:
+        final_budget = max_col - _width(current_prefix) - 2 - _width(suffix)
+        if 0 < sum(_width(unit) for unit in remaining) <= final_budget:
             out.append(
                 f"{current_prefix}{delimiter}{''.join(remaining)}"
                 f"{delimiter}{suffix}"
@@ -533,13 +557,13 @@ def _continue_literal(line: str, max_col: int) -> list[str] | None:
         # Otherwise emit one continued line: no closing delimiter, filled
         # to exactly max_col. Never consume the last unit here -- the
         # final line's literal must not come out empty (illegal COBOL).
-        continued_budget = max_col - len(current_prefix) - 1
+        continued_budget = max_col - _width(current_prefix) - 1
         taken = 0
         taken_len = 0
         for unit in remaining[:-1]:
-            if taken_len + len(unit) > continued_budget:
+            if taken_len + _width(unit) > continued_budget:
                 break
-            taken_len += len(unit)
+            taken_len += _width(unit)
             taken += 1
         if taken == 0:
             return None  # no progress possible: fail closed, caller reports
@@ -560,9 +584,9 @@ def _continue_literal(line: str, max_col: int) -> list[str] | None:
     # that fit, or nothing at all. Every continued line must sit exactly
     # on the column limit (short ones would pad the literal with blanks)
     # and the final one must not exceed it.
-    if any(len(emitted) != max_col for emitted in out[:-1]):
+    if any(_width(emitted) != max_col for emitted in out[:-1]):
         return None
-    if len(out[-1]) > max_col:
+    if _width(out[-1]) > max_col:
         return None
     return out
 
@@ -647,16 +671,16 @@ def _break_at_whitespace(line: str, max_col: int) -> list[str] | None:
     started = False
     for atom in atoms:
         candidate = (current + " " + atom) if started else (current + atom)
-        if len(candidate) <= max_col:
+        if _width(candidate) <= max_col:
             current, started = candidate, True
             continue
-        if not started or len(cont_indent) + len(atom) > max_col:
+        if not started or _width(cont_indent) + _width(atom) > max_col:
             return None  # this atom does not fit on a line of its own
         out.append(current)
         current, started = cont_indent + atom, True
     if started:
         out.append(current)
-    if any(len(rendered) > max_col for rendered in out):
+    if any(_width(rendered) > max_col for rendered in out):
         return None  # never ship what we just declined to build
     return out
 
@@ -691,7 +715,7 @@ def wrap_long_literal_lines(
     new_lines: list[str] = []
     problems: list[str] = []
     for line_no, line in enumerate(lines, start=1):
-        if len(line) <= max_col:
+        if _width(line) <= max_col:
             new_lines.append(line)
             continue
         if line.lstrip().startswith("*>"):
@@ -866,7 +890,7 @@ def _fitting_candidates(lines: list[str], max_col: int):
     were a literal."""
     for index, original in enumerate(lines):
         pieces = [original]
-        if len(original) > max_col and not original.lstrip().startswith("*>"):
+        if _width(original) > max_col and not original.lstrip().startswith("*>"):
             split = _split_inline_comment(original)
             if split is not None:
                 code, comment = split
@@ -911,7 +935,7 @@ def fit_within_columns(
     fitted: list[str] = []
     problems: list[str] = []
     for index, line in _fitting_candidates(lines, max_col):
-        if len(line) <= max_col or line.lstrip().startswith("*>"):
+        if _width(line) <= max_col or line.lstrip().startswith("*>"):
             fitted.append(line)
             continue
         if _DIRECTIVE_RE.match(line):

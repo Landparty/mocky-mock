@@ -1183,6 +1183,11 @@ mock-only build (every boundary is either mocked or fails loudly; no real I/O ex
 known GnuCOBOL-vs-IBM-COBOL gaps that a clean compile here does not rule out. Output path defaults
 to `<program-stem>.mainframe.cbl` next to the input `.cbl`, matching `generate`'s suffix-swap convention.
 
+Every width in that module is measured in **UTF-8 bytes** (`_width()`), the unit a fixed-format
+compiler counts columns in, not characters: measured with `len()`, a non-ASCII TESTCASE name, EXPECT
+or MOVE literal (`é` is 2 bytes, `’` 3) shipped lines past column 72 that every check said fit (#298).
+Splits still fall only between characters, so a multibyte character is never cut in half.
+
 `fit_within_columns` is three passes, in this order:
 
 1. `wrap_long_display_lines` — a generated `DISPLAY` becomes `DISPLAY "<chunk>" WITH NO ADVANCING`
