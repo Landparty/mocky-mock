@@ -66,7 +66,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     normalize_exec_text,
 )
-from mockymock.analysis.sql_whenever import whenever_can_fire
+from mockymock.analysis.sql_whenever import is_sql_declaration, whenever_can_fire
 from mockymock.dsl.generator import directive_snippet
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
@@ -1800,6 +1800,26 @@ def check_test_case(
                         f"IF SQLCODE ... GO TO check after every later SQL "
                         f"statement) and nothing mocks it. Drop this MOCK "
                         f"directive and its VERIFY"
+                    ),
+                )
+            )
+            continue
+        if (
+            directive.category is MockCategory.SQL
+            and surface.whenever_sites
+            and is_sql_declaration(directive.key)
+        ):
+            # Before issue #267 lint asked for this mock too.
+            reasons.append(
+                RefusalReason(
+                    code="UNMATCHED_MOCK",
+                    message=(
+                        f"MOCK {directive.describe()} targets an EXEC SQL "
+                        f"declaration (DECLARE ... CURSOR, INCLUDE, BEGIN/END "
+                        f"DECLARE SECTION), not a boundary: DB2 runs nothing "
+                        f"for it and leaves SQLCODE alone, so mockymock "
+                        f"splices it to CONTINUE and nothing mocks it. Drop "
+                        f"this MOCK directive and its VERIFY"
                     ),
                 )
             )

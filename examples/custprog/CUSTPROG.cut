@@ -1,8 +1,6 @@
 TESTSUITE "CUSTPROG cursor via ROWS"
 
 TESTCASE "fetches two customers then exhausts"
-    MOCK SQL "DECLARE CUST_CURSOR"
-    END-MOCK
     MOCK SQL "OPEN CUST_CURSOR"
     END-MOCK
     MOCK SQL "FETCH CUST_CURSOR" ROWS

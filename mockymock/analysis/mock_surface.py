@@ -86,6 +86,7 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
 
 from mockymock.analysis.sql_whenever import (
     Whenever,
+    is_sql_declaration,
     is_whenever,
     parse_whenever,
     whenever_actions,
@@ -348,7 +349,10 @@ class MockSurface:
     #: `EXEC SQL WHENEVER` declarations (issue #195): SQL-category sites
     #: kept OUT of `boundary_sites`, since nothing mocks them -- they are
     #: spliced to CONTINUE, and their GO TO checks follow every later SQL
-    #: site (`BoundarySite.whenever_checks`).
+    #: site (`BoundarySite.whenever_checks`). The other precompiler
+    #: declarations (`DECLARE ... CURSOR`, `INCLUDE`, `BEGIN/END DECLARE
+    #: SECTION`, issue #267) are here too, with `whenever` None: spliced to
+    #: CONTINUE, nothing else.
     whenever_sites: list[BoundarySite] = field(default_factory=list)
 
     def static_call_sites(self) -> list[CallSite]:
@@ -857,6 +861,12 @@ def _classify_statement(
                 MockCategory.SQL, "SQL WHENEVER", into=surface.whenever_sites
             )
             site.whenever = parse_whenever(sql_text)
+            return
+        if is_sql_declaration(sql_text):
+            # DECLARE CURSOR/TABLE, INCLUDE, BEGIN/END DECLARE SECTION: no
+            # runtime behavior and no SQLCA update, so not a boundary --
+            # spliced to CONTINUE alongside WHENEVER (issue #267).
+            add_site(MockCategory.SQL, "SQL DECLARATION", into=surface.whenever_sites)
             return
         surface.exec_paragraphs.add(paragraph_name)
         add_site(

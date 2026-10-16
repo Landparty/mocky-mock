@@ -1482,13 +1482,18 @@ def _known_unmockable_keys(surface: MockSurface) -> set[tuple[str, str]]:
 
     So is `EXEC SQL WHENEVER`: a precompiler declaration mockymock emulates
     instead of mocking (issue #195), which cobol-parser's bundle lists as
-    an SQL boundary keyed `WHENEVER`."""
+    an SQL boundary keyed `WHENEVER` -- and a PROCEDURE DIVISION `DECLARE
+    ... CURSOR` / `INCLUDE` / `BEGIN DECLARE SECTION` (issue #267), keyed by
+    its first word."""
     keys: set[tuple[str, str]] = {
         (MockCategory.ACCEPT.value, accept.target)
         for accept in surface.non_interactive_accepts
     }
-    if surface.whenever_sites:
-        keys.add((MockCategory.SQL.value, "WHENEVER"))
+    for declaration in surface.whenever_sites:
+        # WHENEVER (#195) and the other precompiler declarations (#267):
+        # the bundle keys each by its first word.
+        words = (getattr(declaration.statement, "sql_text", "") or "").split()
+        keys.add((MockCategory.SQL.value, words[0].upper() if words else "WHENEVER"))
     for site in surface.boundary_sites:
         if site.category is None or not (site.nested and site.span is None):
             continue

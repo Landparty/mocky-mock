@@ -379,6 +379,17 @@ is unreachable from every test case; the trap exists so that if
 reachability analysis and reality ever disagree, the mismatch fails loudly
 at runtime instead of silently doing nothing.
 
+**PROCEDURE DIVISION SQL declarations (issue #267).** `EXEC SQL DECLARE
+... CURSOR/TABLE`, `INCLUDE` and `BEGIN/END DECLARE SECTION` in the
+PROCEDURE DIVISION (`sql_whenever.is_sql_declaration`) are not boundaries
+either: DB2 generates no call for them and never touches the SQLCA.
+`mock_surface` puts them in `whenever_sites` too (label `SQL DECLARATION`,
+`whenever` None), so they need no mock, get no VERIFY, never refuse
+UNMOCKED_SQL, and are spliced to `CONTINUE` like WHENEVER (so a mock can no
+longer clobber the SQLCODE the previous statement left). A leftover `MOCK
+SQL "DECLARE ..."` refuses UNMATCHED_MOCK saying why; `generate`'s
+`_known_unmockable_keys` drops the bundle's `SQL DECLARE` key.
+
 **`EXEC SQL WHENEVER` emulation (2026-10-16, issue #195).** WHENEVER is a
 precompiler declaration, so it is never a mockable site: `mock_surface`
 keeps it in `MockSurface.whenever_sites` (not `boundary_sites`, so no
