@@ -1269,6 +1269,17 @@ pipeline as `run`, but without Docker or any GnuCOBOL step. The output is adjust
 under a real fixed-format (z/OS) COBOL compiler instead of GnuCOBOL-only: `PROCESS`/`CBL` directives
 are preserved (where `run`/`lint` strip them), columns are restored to z/OS fixed-format discipline
 (7-space prefix for Area A), and over-column-72 lines are fitted by `mainframe_export.fit_within_columns`.
+The prefix is applied *before* splicing, so `splice_program(..., column_offset=SEQUENCE_AREA_WIDTH)`
+tells the one column-sensitive step, the clause-body lift, about the shift (issue #325): without it
+`lift_clause_bodies` found no word at its AST offsets and every mocked statement's AT END / NOT AT
+END / INVALID KEY / ON EXCEPTION body (and the `UT-MOCK-STATUS` bookkeeping) was dropped from the
+export while `run` kept them -- a read-until-EOF loop hung.
+`export` also passes `run_static_checks(..., model_rebinds=False)` (issue #321): a folded LINKAGE
+item `run` keeps as a real rebind (`mark_based`, #226) would put `BASED` and `SET ADDRESS OF` on a
+WORKING-STORAGE item into the output, both GnuCOBOL / Micro Focus only. Export keeps the IBM-legal
+`UT-ADDR-SINK` redirect instead, lists the items in `StaticCheckResult.unmodelled_rebinds`, prints a
+warning, and names them in the provenance header (`build_provenance_header(..., unmodelled_rebinds)`):
+a case that relies on the rebind may fail in the export although it passes under `run`.
 A provenance/disclaimer header is inserted directly before `IDENTIFICATION DIVISION` (or the IBM
 abbreviation `ID DIVISION`; with neither, after any leading `CBL`/`PROCESS` cards — IBM requires
 those before any comment line, #276), documenting that this is a

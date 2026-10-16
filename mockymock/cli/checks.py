@@ -57,6 +57,10 @@ class StaticCheckResult:
     # rewritten in `lines`; non-empty means the driver must also declare the
     # scratch pointer they were redirected to (see splicer.linkage).
     linkage_address_of: list[AddressOfSite] = field(default_factory=list)
+    # LINKAGE items whose `SET ADDRESS OF` `run` keeps as a real rebind
+    # (BASED, issue #226) but `model_rebinds=False` redirected instead
+    # (export: IBM COBOL has no BASED clause, issue #321).
+    unmodelled_rebinds: list[str] = field(default_factory=list)
     cics_eib: CicsEibPlan | None = None
     file_status_fields: dict[str, str] | None = None
     # Synthesized `CAPTURE ARG ... INTO UT-CAP-...` targets: the driver must
@@ -274,6 +278,7 @@ def run_static_checks(
     case_names: list[str] | None = None,
     tag_names: list[str] | None = None,
     preserve_compiler_directives: bool = False,
+    model_rebinds: bool = True,
 ) -> StaticCheckResult:
     """Faithful transcription of `_cmd_run`'s pre-toolchain check sequence,
     including its short-circuit behavior: each numbered stage stops the
@@ -289,6 +294,7 @@ def run_static_checks(
         case_names,
         tag_names,
         preserve_compiler_directives,
+        model_rebinds,
     )
     relabel = source_line_relabeler(out.source_location_map)
     out.problems = [
@@ -306,6 +312,7 @@ def _run_static_checks(
     case_names: list[str] | None,
     tag_names: list[str] | None,
     preserve_compiler_directives: bool,
+    model_rebinds: bool = True,
 ) -> StaticCheckResult:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
@@ -334,8 +341,10 @@ def _run_static_checks(
     from mockymock.analysis.refusal import (
         CICS_MACRO_PLACEHOLDER,
         check_cics_eib_layout_scoped,
+        check_clause_bodies,
         check_expansion_warnings,
         check_linkage_layout,
+        check_mock_body_line_length,
         check_nested_exec,
         check_source_format,
         check_terminator_layout,
@@ -555,6 +564,14 @@ def _run_static_checks(
         # instead (issue #226). Every other site -- above all a pointer a
         # mocked CALL fills in, NULL in a test run -- is still redirected.
         rebindable = rebindable_sites(lines, address_of)
+        if not model_rebinds:
+            # `export` (issue #321): BASED and SET ADDRESS OF a
+            # WORKING-STORAGE item are GnuCOBOL / Micro Focus only, so the
+            # IBM-legal redirect is kept and the caller says what it costs.
+            out.unmodelled_rebinds = sorted(
+                {site.item_name.upper() for site in rebindable}
+            )
+            rebindable = []
         lines, linkage.rebindings = mark_based(lines, linkage, rebindable)
         rebound = {r.item_name for r in linkage.rebindings}
         kept = [site for site in rebindable if site.item_name.upper() in rebound]
@@ -771,6 +788,13 @@ def _run_static_checks(
         for r in check_terminator_layout(
             surface, parse_result.ast, suite, scope_map, lines
         )
+    )
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}"
+        for r in check_clause_bodies(surface, suite, lines)
+    )
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}" for r in check_mock_body_line_length(suite)
     )
     # 9. Synthesized CAPTURE targets. Fail closed: an argument whose layout
     # cannot be mirrored exactly would otherwise reach the compiler as a

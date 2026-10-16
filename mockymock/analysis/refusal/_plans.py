@@ -476,9 +476,9 @@ def find_goto_exit_plans(
                 if in_boundary:
                     problems.append(
                         f"line {statement.location.line}: nested inside another "
-                        f"boundary statement's clause body -- splicing the "
-                        f"enclosing statement would remove this GO TO along "
-                        f"with it"
+                        f"boundary statement's clause body -- a mock of the "
+                        f"enclosing statement re-runs it from a lifted body "
+                        f"this plan does not rewrite"
                     )
                     continue
 

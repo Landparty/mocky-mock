@@ -58,6 +58,7 @@ from mockymock.analysis.cics_handle import (
     raised_conditions,
     resolve_condition,
 )
+from mockymock.analysis.clause_bodies import clause_lift_problem
 from mockymock.analysis.linkage import (
     address_of_sites,
     linkage_plan,
@@ -2054,3 +2055,97 @@ def check_terminator_layout(
     a cheap, pure "plan" twice rather than threading it through every
     caller, e.g. analysis.linkage.linkage_plan)."""
     return find_terminator_plans(surface, program, suite, scope_map, lines)[1]
+
+
+def check_clause_bodies(
+    surface: MockSurface, suite: MockTestSuite, lines: list[str]
+) -> list[RefusalReason]:
+    """UNLIFTABLE_CLAUSE_BODY (issue #319): a mocked READ / RETURN / WRITE
+    / REWRITE / DELETE / START / CALL whose AT END / INVALID KEY / ON
+    EXCEPTION ... bodies cannot be re-run after the mock
+    (`analysis.clause_bodies.clause_lift_problem`). The splice replaces
+    the whole statement, so every body -- the liftable ones too -- would
+    be deleted with it and the case would run code the program does not
+    have. Whole-program, like the splicer's own site matching: any site
+    any directive of any selected case matches is spliced. A nested site
+    with no validated span is left to UNSUPPORTED_NESTED_MOCK_TARGET."""
+    reasons: list[RefusalReason] = []
+    seen: set[int] = set()
+    for site in surface.boundary_sites:
+        if site.category is None or id(site.statement) in seen:
+            continue
+        if site.nested and site.span is None:
+            continue
+        matches = [
+            directive
+            for case in suite.test_cases
+            for directive in case.mocks
+            if directive_matches_site(directive, site)
+        ]
+        if not matches:
+            continue
+        seen.add(id(site.statement))
+        problem = clause_lift_problem(site.statement, lines)
+        if problem is None:
+            continue
+        reasons.append(
+            RefusalReason(
+                code="UNLIFTABLE_CLAUSE_BODY",
+                message=(
+                    f"MOCK {matches[0].describe()} matches the {site.label} at "
+                    f"line {site.line} (paragraph '{site.paragraph_name}'), but "
+                    f"{problem} -- the splice would delete every clause body "
+                    f"of the statement with it; move that code out of the "
+                    f"clause (e.g. set a flag there and act on it after the "
+                    f"statement)"
+                ),
+            )
+        )
+    return reasons
+
+
+#: cobc -free truncates a source line past this many bytes.
+FREE_FORMAT_LINE_LIMIT = 512
+
+#: The indentation a mock body line is spliced at (injector).
+_BODY_INDENT = " " * 19
+
+
+def check_mock_body_line_length(suite: MockTestSuite) -> list[RefusalReason]:
+    """MOCK_LINE_TOO_LONG (issue #322): a mock body line is spliced
+    verbatim, and cobc -free truncates a line past 512 bytes -- the
+    suite would pass lint and then fail to compile with syntax errors
+    that never mention the truncation. A `MOVE <one long literal> TO ...`
+    is split into `&` pieces by the splicer and never refused."""
+    from mockymock.splicer.driver import split_long_move
+
+    reasons: list[RefusalReason] = []
+    seen: set[int] = set()
+    directives = [
+        *suite.before_all_mocks,
+        *(d for case in suite.test_cases for d in case.mocks),
+    ]
+    for directive in directives:
+        if id(directive) in seen:
+            continue
+        seen.add(id(directive))
+        for body in directive.body_lines:
+            longest = max(
+                len(line.encode("utf-8"))
+                for line in split_long_move(f"{_BODY_INDENT}{body}")
+            )
+            if longest <= FREE_FORMAT_LINE_LIMIT:
+                continue
+            reasons.append(
+                RefusalReason(
+                    code="MOCK_LINE_TOO_LONG",
+                    message=(
+                        f"MOCK {directive.describe()} has a body line of "
+                        f"{longest} bytes once spliced ({body[:40].strip()}"
+                        f"...) -- cobc truncates a line past "
+                        f"{FREE_FORMAT_LINE_LIMIT} bytes; break the "
+                        f"statement across several lines"
+                    ),
+                )
+            )
+    return reasons

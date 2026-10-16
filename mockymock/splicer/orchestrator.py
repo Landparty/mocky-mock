@@ -37,7 +37,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from mockymock.analysis.clause_bodies import lift_clause_bodies
+from mockymock.analysis.clause_bodies import lift_clause_bodies, scan_words
 from mockymock.analysis.flow_mocks import FlowMockPlan
 from mockymock.analysis.mock_surface import MockSurface
 from mockymock.analysis.refusal import (
@@ -47,6 +47,7 @@ from mockymock.analysis.refusal import (
 )
 from mockymock.analysis.sql_whenever import whenever_check_lines
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
+from mockymock.splicer.cics_resp import EIB_RESP_NAMES
 from mockymock.splicer.injector import (
     build_chain_check,
     build_cics_terminator_exit,
@@ -107,8 +108,19 @@ def splice_program(
     file_status_fields: dict[str, str] | None = None,
     trace: bool = False,
     goto_exit_plans: Sequence[GotoExitPlan] = (),
+    column_offset: int = 0,
 ) -> list[str]:
+    """`column_offset` is how many columns every line of `lines` has been
+    shifted right of the normalized source the AST's columns index --
+    `export` splices lines with the 7-column sequence area restored
+    (issue #325); the only column-sensitive step, the clause-body lift,
+    needs it."""
     last_line = len(lines)
+    # EIBRESP / EIBRESP2 exist only when the program has an EIB (declared,
+    # or synthesized because it references one); every CICS mock resets
+    # them only then (issue #320).
+    program_words = {word.strip(",;()") for _, _, word in scan_words("\n".join(lines))}
+    eib_resp_names = tuple(n for n in EIB_RESP_NAMES if n in program_words)
     spans: list[tuple[int, int, list[str]]] = []
     seen_statement_ids: set[int] = set()
     sqlstate = any(_SQLSTATE_RE.search(line) for line in lines)
@@ -178,11 +190,12 @@ def splice_program(
                 # A nested site with clauses of its own reaches here only
                 # with a span bounded by its own scope terminator (#258),
                 # so its bodies lift exactly like a top-level site's.
-                lifted_clauses=lift_clause_bodies(site.statement, lines),
+                lifted_clauses=lift_clause_bodies(site.statement, lines, column_offset),
                 sqlstate=sqlstate,
                 passthrough=(
                     _statement_lines(lines, start, end) if site.opt_in else None
                 ),
+                eib_resp_names=eib_resp_names,
             )
             # What the DB2 precompiler puts after the statement for every
             # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).

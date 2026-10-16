@@ -2672,6 +2672,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         run_static_checks,
     )
     from mockymock.cli.mainframe_export import (
+        SEQUENCE_AREA_WIDTH,
         SourceAttribution,
         build_provenance_header,
         fit_within_columns,
@@ -2700,9 +2701,19 @@ def _cmd_export(args: argparse.Namespace) -> int:
         case_names=args.case,
         tag_names=args.tag,
         preserve_compiler_directives=True,
+        model_rebinds=False,
     )
     for note in checked.notes:
         print(f"mockymock export: {note}")
+    if checked.unmodelled_rebinds:
+        print(
+            f"mockymock export: warning: `SET ADDRESS OF` on "
+            f"{', '.join(checked.unmodelled_rebinds)} is not modelled in the "
+            f"export -- `run` keeps it as a real rebind with BASED, which IBM "
+            f"Enterprise COBOL does not have, so the export redirects it to a "
+            f"scratch pointer instead and a case relying on the rebind may "
+            f"fail there"
+        )
     if checked.linkage is not None:
         _print_linkage_neutralization(
             "export",
@@ -2736,10 +2747,12 @@ def _cmd_export(args: argparse.Namespace) -> int:
     )  # implied by checked.problems being empty
 
     # Restore the 7 columns normalize_fixed_format stripped BEFORE
-    # splicing: collect_boundaries/splice_program are line-granular, never
-    # column-position-sensitive (verified empirically during design), so
+    # splicing: collect_boundaries/splice_program are line-granular, so
     # this uniform prefix is transparent to them and matches the column
-    # convention splicer-generated lines already assume.
+    # convention splicer-generated lines already assume -- except the
+    # clause-body lift, which slices by AST column and is told the shift
+    # (`column_offset`, issue #325: without it every mocked statement's
+    # AT END / NOT AT END / INVALID KEY / ON EXCEPTION body was dropped).
     lines = restore_fixed_format_columns(lines)
 
     boundaries = collect_boundaries(result.ast)
@@ -2760,6 +2773,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         checked.file_status_fields,
         goto_exit_plans=goto_exit_plans,
         trace=False,
+        column_offset=SEQUENCE_AREA_WIDTH,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
@@ -2793,7 +2807,9 @@ def _cmd_export(args: argparse.Namespace) -> int:
             print(f"mockymock export: refused (COLUMN_OVERFLOW): {problem}")
         return 1
 
-    header = build_provenance_header(str(source_path), str(cut_path))
+    header = build_provenance_header(
+        str(source_path), str(cut_path), checked.unmodelled_rebinds
+    )
     instrumented = insert_provenance_header(instrumented, header)
 
     output_path = (

@@ -508,14 +508,32 @@ EXCEPTION/ON OVERFLOW. A lifted body is the program's own text, sliced
 positionally (AST start of its first statement up to the next clause's
 header, or the verb's own `END-xxx` / the sentence period for the last).
 
-`lift_clause_bodies` returns None -- and the old whole-statement deletion
-stands -- when any body holds another boundary statement, GO TO, GOBACK,
-STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL; when a body has a
-nested conditional phrase (SIZE ERROR, OVERFLOW, a SEARCH's AT END, ...)
-or an IF/EVALUATE/SEARCH without its explicit terminator (either would
-swallow the next guard `WHEN`); when the statement has a clause outside
-the liftable set (`WRITE ... AT END-OF-PAGE`); or when a header cannot be
-matched exactly. `dsl.generator` asks the same function, so the scaffold
+`lift_clause_bodies` returns None when any body holds another boundary
+statement, GOBACK, STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL;
+when a body has a nested conditional phrase (SIZE ERROR, OVERFLOW, ON
+EXCEPTION, a SEARCH's AT END, ...) whose owning verb is not closed by its
+own `END-<verb>` after it, or an IF/EVALUATE/SEARCH left open before the
+next clause's header (either would swallow the next guard `WHEN`); when
+the statement has a clause outside the liftable set (`WRITE ... AT
+END-OF-PAGE`); or when a header cannot be matched exactly. Phrases, not
+words (#326): `_PHRASE_OWNERS` maps each opener to the verbs that may own
+it, `SIZE` counts only before `ERROR` (so `DELIMITED BY SIZE` is fine),
+and a terminated `COMPUTE ... ON SIZE ERROR ... END-COMPUTE` is lifted.
+
+Since #319 that is **refused**, not silently dropped:
+`clause_lift_problem(statement, lines)` says why, and
+`refusal.check_clause_bodies` (run in `cli.checks` step 8, whole-program
+like the splicer's own matching, skipping nested sites with no span)
+emits `UNLIFTABLE_CLAUSE_BODY` for every mocked site that has one. Before,
+every body of the statement -- the liftable ones too -- was deleted with
+it, with lint clean. #319 also widened the lift: a GO TO body is lifted
+(the dispatch sits in the same paragraph, so its target and PERFORM range
+are unchanged; `find_goto_exit_plans` still declines a GO TO inside a
+boundary body, which is the safe direction), and the last body, when it
+ends at the sentence period, gets the END-IF / END-EVALUATE / END-SEARCH
+the period closed appended, innermost first.
+
+`dsl.generator` asks the same function, so the scaffold
 stops copying an AT END clause the splice already re-runs (it reports end
 of file through the status field, or `MOVE "10" TO UT-MOCK-STATUS`).
 
@@ -998,6 +1016,22 @@ Verified end to end against real GnuCOBOL 4.0: the rewritten program
 compiles, runs and passes its test case; the un-rewritten one does not
 compile at all.
 
+# CICS mocks default to NORMAL (cics_resp.py, issue #320, 2026-10-16)
+
+Every mocked EXEC CICS branch starts with `MOVE 0 TO <item>` for the
+command's own `RESP(item)` / `RESP2(item)` operands
+(`cics_resp.resp_operands`: single data names only, a subscripted operand
+is left to the body) and for `EIBRESP` / `EIBRESP2` when the program's
+text names them (declared, or synthesized by `cics_eib`; computed once per
+splice in `orchestrator.splice_program` and passed as
+`build_site_dispatch(..., eib_resp_names=...)`). Real CICS sets them on
+every command; before, an empty mock left the previous mock's condition
+(NOTFND = 13) in RESP and the next success check took its error branch.
+The body's own MOVEs follow, so they win -- the same contract as a file
+op's implicit `MOVE "00"` to its FILE STATUS. This is the splice-side
+default for hand-written mocks; #253 is the separate
+`generate` scaffold fix that stopped writing a random RESP value.
+
 # DFHRESP Expansion (cics_resp.py, 2026-09-28)
 
 `expand_dfhresp(lines)` does what the CICS translator does to
@@ -1436,6 +1470,17 @@ Concatenated literals are one literal to cobc (verified with
 `-free -std=mvs` on 3.1.2). The FAIL `DISPLAY` spells the expected value out
 as several quoted operands (`_display_operands`), so the stdout text is
 unchanged. Shorter values are emitted exactly as before.
+
+The same split now covers every other place a `.cut` value lands on a
+driver line (issue #322): hook `MOVE` steps (`_step_lines`), `ROWS` /
+`TERMINAL` values and every other row / exhausted MOVE (`build_rows_block`),
+and mock body lines -- boundary and flow-mock alike -- that are a
+`MOVE <one long literal> TO <target>` (`driver.split_long_move`: the value
+is whatever precedes the last ` TO ` and must be one whole literal, so a
+` TO ` inside a literal never splits it). A body line that still exceeds
+512 bytes once spliced at its 19-column indent is refused
+`MOCK_LINE_TOO_LONG` (`refusal.check_mock_body_line_length`, run in
+`cli.checks` step 8) instead of reaching cobc as a silent truncation.
 
 **`suite.name` escaping (2026-07-07 fix, audit finding 2.8):** the
 `__MOCKYMOCK__ TESTSUITE: <name>` `DISPLAY` line interpolated `suite.name`

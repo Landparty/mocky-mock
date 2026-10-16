@@ -123,11 +123,13 @@ def test_a_body_with_another_boundary_is_not_liftable():
 
 
 def test_a_nested_conditional_phrase_or_unbalanced_if_is_not_lifted():
+    # Unterminated: the SIZE ERROR phrase runs to END-READ (issue #326
+    # keeps refusing this; a phrase closed by its own END-ADD is lifted).
     source = PROGRAM.replace(
         "                   IF WS-RATE > 1\n"
         "                       ADD 1 TO WS-N\n"
         "                   END-IF\n",
-        "                   ADD 1 TO WS-N ON SIZE ERROR MOVE 0 TO WS-N END-ADD\n",
+        "                   ADD 1 TO WS-N ON SIZE ERROR MOVE 0 TO WS-N\n",
     )
     ast, lines = _parse(source)
     assert lift_clause_bodies(_statement(ast, "IOReadStatement"), lines) is None

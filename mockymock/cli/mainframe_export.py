@@ -43,6 +43,9 @@ def _truncate_to_width(line: str, limit: int) -> str:
 # normalize_fixed_format's "extract program text cols 8-72" strips away.
 _SEQUENCE_AREA = "       "
 
+#: How many columns restore_fixed_format_columns shifts every line right.
+SEQUENCE_AREA_WIDTH = len(_SEQUENCE_AREA)
+
 
 def restore_fixed_format_columns(lines: list[str]) -> list[str]:
     """Undo normalize_fixed_format's column-8-72 extraction by prepending
@@ -53,11 +56,15 @@ def restore_fixed_format_columns(lines: list[str]) -> list[str]:
     `run_static_checks`'s returned `lines`, BEFORE collect_boundaries/
     splice_program -- both are line-granular, never column-position-
     sensitive (verified during design), so this uniform prefix is
-    transparent to them."""
+    transparent to them -- except the clause-body lift, which slices by
+    AST column: pass `column_offset=SEQUENCE_AREA_WIDTH` to splice_program
+    (issue #325)."""
     return [_SEQUENCE_AREA + line for line in lines]
 
 
-def build_provenance_header(program_path: str, cut_path: str) -> list[str]:
+def build_provenance_header(
+    program_path: str, cut_path: str, unmodelled_rebinds: list[str] | None = None
+) -> list[str]:
     """A comment block (real column-7 `*>` inline-comment markers, like
     splicer/sqlca.py's own generated comments) stating this build is
     mock-only and naming the GnuCOBOL-vs-IBM-COBOL gaps a clean compile
@@ -104,8 +111,20 @@ def build_provenance_header(program_path: str, cut_path: str) -> list[str]:
         "      *> pipeline ever sees the source. Unlike `run`'s throwaway",
         "      *> build, this file is a deliverable meant to be read and",
         "      *> maintained by a mainframe team.",
-        "",
     ]
+    if unmodelled_rebinds:
+        # Issue #321: `run` keeps these as real rebinds via BASED, which
+        # IBM Enterprise COBOL does not have.
+        lines += [
+            "      *>",
+            "      *> NOT MODELLED HERE: `SET ADDRESS OF` on these folded",
+            "      *> LINKAGE items is redirected to a scratch pointer (IBM",
+            "      *> COBOL has no BASED clause), so they keep their own",
+            "      *> storage; a case relying on the rebind may fail here",
+            "      *> although it passes under `mockymock run`:",
+            *(f"      *>   {name}" for name in unmodelled_rebinds),
+        ]
+    lines.append("")
     # Defensive: every line above is verified under 72 chars by
     # test_provenance_header_lines_all_fit_within_72_columns, but an
     # unusually long basename could still push a path line over.

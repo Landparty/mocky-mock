@@ -232,3 +232,40 @@ def expansion_note(expansions: list[RespExpansion]) -> str:
         f"expanded {len(expansions)} DFHRESP(...) call(s) "
         f"to their EIBRESP values ({listed}), as the CICS translator would"
     )
+
+
+_RESP_OPERAND_RE = re.compile(
+    r"\b(RESP2?)\s*\(\s*([A-Z][A-Z0-9-]*)\s*\)", re.IGNORECASE
+)
+
+#: The EIB response fields a CICS command sets on every call.
+EIB_RESP_NAMES = ("EIBRESP", "EIBRESP2")
+
+
+def resp_operands(statement: object) -> list[str]:
+    """The data names in an EXEC CICS command's `RESP(...)` and
+    `RESP2(...)` options, in that order, each once. A subscripted or
+    reference-modified operand is not a single data name and is left out
+    (the mock body can still set it)."""
+    text = str(getattr(statement, "cics_text", "") or "")
+    found: dict[str, None] = {}
+    for option in ("RESP", "RESP2"):
+        for match in _RESP_OPERAND_RE.finditer(text):
+            if match.group(1).upper() != option:
+                continue
+            tail = text[match.end() :].lstrip()
+            if tail.startswith("("):
+                continue
+            found.setdefault(match.group(2).upper(), None)
+    return list(found)
+
+
+def cics_success_defaults(
+    statement: object, eib_names: tuple[str, ...] = ()
+) -> list[str]:
+    """The MOVEs that make a mocked EXEC CICS command report NORMAL unless
+    its body says otherwise (issue #320): real CICS sets RESP / RESP2 and
+    EIBRESP / EIBRESP2 on every command, so an empty mock must not leave
+    the previous command's condition in them. `eib_names` is whichever of
+    `EIB_RESP_NAMES` the program has (declared, or synthesized)."""
+    return [f"MOVE 0 TO {name}" for name in [*resp_operands(statement), *eib_names]]

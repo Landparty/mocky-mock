@@ -36,6 +36,8 @@ from mockymock.dsl.model import (
     MockCategory,
     MockTestSuite,
 )
+from mockymock.splicer.cics_resp import cics_success_defaults
+from mockymock.splicer.driver import split_long_move
 from mockymock.splicer.io_copy import DataLayout, from_move, into_move
 from mockymock.splicer.naming import TallyRegistry, assign
 
@@ -182,14 +184,14 @@ def build_rows_block(
     for index, row in enumerate(rows, start=1):
         lines.append(f"    WHEN {tally_name} = {index}")
         for move in row_prefix_moves or []:
-            lines.append(f"        {move}")
+            lines.extend(split_long_move(f"        {move}"))
         for field, value in row:
-            lines.append(f"        {assign(value, field)}")
+            lines.extend(split_long_move(f"        {assign(value, field)}"))
         for move in row_suffix_moves:
-            lines.append(f"        {move}")
+            lines.extend(split_long_move(f"        {move}"))
     lines.append("    WHEN OTHER")
     for move in exhausted_moves:
-        lines.append(f"        {move}")
+        lines.extend(split_long_move(f"        {move}"))
     lines.append("END-EVALUATE")
     return lines
 
@@ -219,6 +221,7 @@ def build_site_dispatch(
     lifted_clauses: tuple[LiftedClause, ...] | None = None,
     sqlstate: bool = False,
     passthrough: list[str] | None = None,
+    eib_resp_names: tuple[str, ...] = (),
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
 
@@ -231,6 +234,11 @@ def build_site_dispatch(
     `passthrough`, for an opt-in site (`BoundarySite.opt_in`, issue #240:
     a clock ACCEPT), is the original statement's text: WHEN OTHER runs it
     for every case that does not mock the site, instead of the error trap.
+
+    An EXEC CICS mock starts by moving 0 (DFHRESP(NORMAL)) to the
+    command's own RESP / RESP2 items and to `eib_resp_names` (the
+    EIBRESP / EIBRESP2 the program has), as real CICS sets them on every
+    command; the body's own MOVEs still win (issue #320).
 
     `lifted_clauses` (issue #209, `analysis.clause_bodies`): the replaced
     statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY /
@@ -327,6 +335,11 @@ def build_site_dispatch(
             )
         if lifted_clauses:
             lines.append(f'                   MOVE "00" TO {OUTCOME_FIELD}')
+        if directive.category is MockCategory.CICS:
+            lines.extend(
+                f"                   {move}"
+                for move in cics_success_defaults(site.statement, eib_resp_names)
+            )
         if directive.category in FILE_STATUS_CATEGORIES:
             # A statement naming several files (`OPEN INPUT A OUTPUT B`,
             # `CLOSE A B`) is one site matched by ONE directive (a second
@@ -474,7 +487,11 @@ def build_site_dispatch(
                 )
             )
         else:
-            lines.extend(f"                   {body}" for body in directive.body_lines)
+            lines.extend(
+                split
+                for body in directive.body_lines
+                for split in split_long_move(f"                   {body}")
+            )
             if copy_into is not None:
                 lines.append(f"                   {copy_into}")
             if directive.cics_condition:
@@ -551,7 +568,11 @@ def build_flow_dispatch(
                 f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
                 f'{"SECTION" if plan.is_section else "PARAGRAPH"} {plan.key}"'
             )
-        lines.extend(f"                   {body}" for body in directive.body_lines)
+        lines.extend(
+            split
+            for body in directive.body_lines
+            for split in split_long_move(f"                   {body}")
+        )
     lines.append("               WHEN OTHER")
     lines.append(f"                   PERFORM {plan.real_name}")
     lines.append("           END-EVALUATE.")

@@ -196,6 +196,26 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "would comment out that sibling code along with it. Put the "
         "statement on its own line(s)."
     ),
+    "MOCK_LINE_TOO_LONG": (
+        "A MOCK body line is copied into the test program as written, and "
+        "GnuCOBOL truncates a free-format source line past 512 bytes, so "
+        "the build would fail with syntax errors that never mention the "
+        "truncation. A `MOVE <one long literal> TO <field>` is split "
+        "automatically; break any other long statement across several "
+        "lines of the mock body."
+    ),
+    "UNLIFTABLE_CLAUSE_BODY": (
+        "A MOCK directive matches a READ / RETURN / WRITE / REWRITE / "
+        "DELETE / START / CALL whose AT END / INVALID KEY / ON EXCEPTION "
+        "(or NOT ...) bodies cannot be re-run after the mock: one holds "
+        "GOBACK, STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE, CANCEL or "
+        "another boundary statement, a clause mockymock cannot guard "
+        "(AT END-OF-PAGE), a nested conditional phrase not closed by its "
+        "own END-<verb>, or an IF left open before the next clause. "
+        "Splicing the mock replaces the whole statement, so every body "
+        "would be deleted with it. Move that code out of the clause -- set "
+        "a flag in it and act on the flag after the statement."
+    ),
     "UNSUPPORTED_FLOW_MOCK_TARGET": (
         "A MOCK PARAGRAPH/MOCK SECTION names this test case's own PERFORM "
         "entry point. Mocking the entry point would replace the very "

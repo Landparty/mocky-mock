@@ -102,6 +102,35 @@ def _operand_lines(head: str, value: str, indent: str) -> list[str]:
     return [f"{head}{pieces[0]}"] + [f"{indent}{piece}" for piece in pieces[1:]]
 
 
+_MOVE_HEAD_RE = re.compile(r"MOVE\s+", re.IGNORECASE)
+
+
+def split_long_move(line: str, indent: str = "     ") -> list[str]:
+    """`line` -- a `MOVE <value> TO <target>` statement, with its own
+    leading indentation -- as one line, or, when `<value>` is one long
+    literal, as `MOVE <first piece>` plus `& <piece>` lines under it
+    (`_literal_pieces`), so no driver line passes cobc -free's 512-byte
+    limit (issue #322). Anything else is returned unchanged: the value is
+    whatever precedes the LAST ` TO `, and must be one whole literal, so a
+    ` TO ` inside a literal can never split it wrongly."""
+    stripped = line.lstrip()
+    head = _MOVE_HEAD_RE.match(stripped)
+    if head is None:
+        return [line]
+    to_at = stripped.upper().rfind(" TO ")
+    if to_at <= head.end():
+        return [line]
+    pieces = _literal_pieces(stripped[head.end() : to_at])
+    if pieces is None:
+        return [line]
+    lead = line[: len(line) - len(stripped)]
+    lines = [f"{lead}MOVE {pieces[0]}"] + [
+        f"{lead}{indent}{piece}" for piece in pieces[1:]
+    ]
+    lines[-1] += stripped[to_at:]
+    return lines
+
+
 def _display_operands(text: str) -> list[str]:
     """`text` as one or more quoted DISPLAY operands: one when short, else
     one per `_LITERAL_CHUNK` characters, so a long expected value never
@@ -260,7 +289,9 @@ def _step_lines(steps: list[HookStep]) -> list[str]:
     lines: list[str] = []
     for step in steps:
         if step.kind == "MOVE":
-            lines.append(f"           {assign(step.value, step.target)}")
+            lines.extend(
+                split_long_move(f"           {assign(step.value, step.target)}")
+            )
         else:
             thru = f" THRU {step.thru}" if step.thru else ""
             lines.append(f"           PERFORM {step.target}{thru}")
