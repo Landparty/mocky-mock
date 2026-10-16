@@ -525,6 +525,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         "--scenarios",
         args.scenarios,
     ]
+    if args.force:
+        # Already gated above with init's own message; generate refuses
+        # an existing output without it.
+        generate_argv.append("--force")
     if args.seed is not None:
         generate_argv += ["--seed", str(args.seed)]
     for path in copybook_paths:
@@ -869,6 +873,19 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             return 1
         _apply_config_to_args(args, source_path)
         return _fill_cut_file(source_path, Path(args.fill), args)
+
+    # The default path is the program's existing sibling PROG.cut when
+    # there is one, so writing unconditionally replaced a hand-written
+    # suite with a bare scaffold (issue #201). Refuse like `init` does,
+    # an explicit -o included, before any parsing.
+    existing = _default_output(args, source_path)
+    if existing.exists() and not args.force:
+        print(
+            f"mockymock generate: {existing} already exists -- pass --force "
+            f"to overwrite it, -o/--output to write somewhere else, or "
+            f"--fill {existing} to add only its missing mocks"
+        )
+        return 1
 
     if not _check_rows_non_negative("generate", args.rows):
         return 1
@@ -3160,6 +3177,11 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument(
         "--name",
         help="Name a second suite for the program: writes <program>.<NAME>.cut",
+    )
+    generate_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output .cut file if it already exists",
     )
     generate_parser.add_argument(
         "--fill",

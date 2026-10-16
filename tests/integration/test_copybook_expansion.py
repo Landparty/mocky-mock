@@ -279,6 +279,7 @@ def test_generate_with_copybook_path_expands_before_parsing(tmp_path: Path):
             str(program),
             "-o",
             str(output),
+            "--force",
         ]
     )
     assert "COPY ORDREC" in without_flag

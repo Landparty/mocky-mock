@@ -143,7 +143,8 @@ def run_generate(
     )
 
     output_path = tmp_dir / f"{program_path.stem}.cut"
-    argv = ["generate", str(program_path), "-o", str(output_path)]
+    # Scratch output: two programs sharing a stem reuse one path.
+    argv = ["generate", str(program_path), "-o", str(output_path), "--force"]
     if copybook_dir is not None:
         argv.extend(["--copybook-path", str(copybook_dir)])
 

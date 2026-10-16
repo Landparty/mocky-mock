@@ -239,10 +239,17 @@ values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
 
 See `docs/2026-09-15-init-command-design.md`.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE] [--force]`
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
+
+**Refuses an existing output file without `--force` (2026-10-16, issue
+#201)**, checked right after the `--fill` dispatch and before any parsing,
+explicit `-o` included -- the same contract as `init`, which passes
+`--force` through to the `generate` it runs. Before, the default path (the
+program's existing sibling `PROG.cut`) was silently replaced by a bare
+scaffold.
 
 **Default unit is the scenario (2026-10-14).** With neither `--with-data`
 nor `--per-paragraph`, `generate` takes the `--with-data` path (one TESTCASE

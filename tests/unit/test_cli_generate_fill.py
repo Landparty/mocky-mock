@@ -309,3 +309,29 @@ def test_generate_fill_fails_on_an_unmocked_hook_boundary_it_cannot_fill(
     assert exit_code == 1
     assert "BEFORE-EACH" in out and "UNMOCKED_FILE_OP" in out
     assert cut.read_text() == cut_text
+
+
+def test_generate_refuses_to_overwrite_an_existing_sibling_cut(tmp_path, capsys):
+    """Issue #201: the default output is the program's existing sibling
+    PROG.cut, which plain `generate` replaced with a bare scaffold."""
+    cbl, cut = _write_pair(tmp_path, _FULLY_MOCKED_CUT)
+    exit_code = main(["generate", str(cbl), "--per-paragraph"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "already exists" in out and "--force" in out
+    assert cut.read_text() == _FULLY_MOCKED_CUT
+
+
+def test_generate_refuses_an_existing_explicit_output_too(tmp_path, capsys):
+    cbl, cut = _write_pair(tmp_path, _FULLY_MOCKED_CUT)
+    exit_code = main(["generate", str(cbl), "--per-paragraph", "-o", str(cut)])
+    assert exit_code == 1
+    assert "--force" in capsys.readouterr().out
+    assert cut.read_text() == _FULLY_MOCKED_CUT
+
+
+def test_generate_force_overwrites_an_existing_cut(tmp_path, capsys):
+    cbl, cut = _write_pair(tmp_path, _FULLY_MOCKED_CUT)
+    exit_code = main(["generate", str(cbl), "--per-paragraph", "--force"])
+    assert exit_code == 0, capsys.readouterr().out
+    assert cut.read_text() != _FULLY_MOCKED_CUT

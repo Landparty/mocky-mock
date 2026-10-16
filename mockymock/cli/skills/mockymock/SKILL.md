@@ -155,8 +155,9 @@ mocking every boundary reachable from that paragraph.
   `program-flow` list, name the ones that were skipped, and hand-write a
   `PERFORM` + `EXPECT` case for each -- they're often the pure-computation
   paragraphs most worth testing.
-- `generate` **overwrites its output path without asking**. Run it once,
-  at the start. After that, use `mockymock generate PROGRAM.cbl --fill
+- `generate` **refuses to overwrite** an existing `.cut` without
+  `--force` (don't pass it on the developer's behalf). Run it once, at
+  the start. After that, use `mockymock generate PROGRAM.cbl --fill
   PROGRAM.cut`, which inserts only the missing `MOCK` blocks and never
   edits a line you wrote.
 - `mockymock init PROGRAM.cbl` is the data-first alternative (`generate
