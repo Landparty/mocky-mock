@@ -443,7 +443,13 @@ plus `UT-SAVE-STATE` / `UT-RESTORE-STATE` bodies, and one problem per
 item it can't copy exactly (`cli.checks` step 10 turns them into
 `UNSAVABLE_BEFORE_ALL_STATE`). The driver runs reset, BEFORE-ALL steps,
 save once; each case runs reset then restore -- the reset still handles
-harness fields, captures and the EIB.
+harness fields and captures. The blocks mockymock synthesizes after
+parsing -- `DFHEIBLK`, `DLIDIB` (`cics_eib`) and the generated `SQLCA`
+(`sqlca`) -- are snapshotted too, as group byte copies sized from
+`SYNTHESIZED_GROUP_BYTES` (`cli.checks._synthesized_groups` decides which
+the program gets): the reset clears them before every case, so a
+BEFORE-ALL that set `EIBCALEN` or `SQLCODE` was wiped before the first
+case (issue #225).
 
 | Item | Snapshot field | Copy |
 |---|---|---|

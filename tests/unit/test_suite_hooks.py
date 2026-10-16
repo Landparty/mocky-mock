@@ -14,7 +14,11 @@ from mockymock.dsl.parser import parse_cut
 from mockymock.splicer.driver import build_driver
 from mockymock.splicer.injector import dispatch_entries
 from mockymock.splicer.naming import TallyRegistry
-from mockymock.splicer.snapshot import StateSnapshot, plan_snapshot
+from mockymock.splicer.snapshot import (
+    SYNTHESIZED_GROUP_BYTES,
+    StateSnapshot,
+    plan_snapshot,
+)
 
 PROGRAM = """\
        IDENTIFICATION DIVISION.
@@ -273,6 +277,92 @@ def test_snapshot_byte_copies_edited_items():
         "MOVE WS-D TO UT-SNAP-002",
     ]
     assert snapshot.restore_lines[1] == "MOVE UT-SNAP-002 TO WS-D"
+
+
+CICS_EIB_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EB.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-MODE               PIC X(5).
+       01  WS-CA                 PIC X(10).
+       LINKAGE SECTION.
+       01  DFHCOMMAREA           PIC X(10).
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           IF EIBCALEN = 0
+               MOVE "FIRST" TO WS-MODE
+           ELSE
+               MOVE "NEXT" TO WS-MODE
+               MOVE DFHCOMMAREA TO WS-CA
+           END-IF
+           EXEC CICS RETURN END-EXEC.
+"""
+
+CICS_EIB_CUT = """\
+TESTSUITE "eb"
+BEFORE-ALL
+    MOVE 10 TO EIBCALEN
+    MOVE "STATE1" TO DFHCOMMAREA
+END-BEFORE
+TESTCASE "continuation"
+    MOCK CICS "RETURN"
+        CONTINUE
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-MODE TO BE "NEXT"
+    EXPECT WS-CA TO BE "STATE1"
+"""
+
+SQLCA_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SQ.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           EXEC SQL INCLUDE SQLCA END-EXEC.
+       01  WS-R                  PIC X(3).
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           IF SQLCODE NOT = 0
+               MOVE "ERR" TO WS-R
+           ELSE
+               MOVE "OK" TO WS-R
+           END-IF
+           GOBACK.
+"""
+
+SQLCA_CUT = """\
+TESTSUITE "sq"
+BEFORE-ALL
+    MOVE -911 TO SQLCODE
+END-BEFORE
+TESTCASE "err"
+    PERFORM 0000-MAIN
+    EXPECT WS-R TO BE "ERR"
+"""
+
+
+@pytest.mark.parametrize(
+    ("program", "cut", "group"),
+    [
+        (CICS_EIB_PROGRAM, CICS_EIB_CUT, "DFHEIBLK"),
+        (SQLCA_PROGRAM, SQLCA_CUT, "SQLCA"),
+    ],
+)
+def test_snapshot_covers_the_synthesized_blocks(files, program, cut, group):
+    """Issue #225: DFHEIBLK, DLIDIB and the generated SQLCA are spliced in
+    after parsing, so the snapshot never saved them while the per-case
+    reset still cleared them: a BEFORE-ALL that set EIBCALEN or SQLCODE was
+    wiped before the first case. Each is now saved as a group byte copy."""
+    result = run_static_checks(*files(cut, program), None)
+    assert result.problems == []
+    assert result.snapshot is not None
+    assert f"MOVE {group} TO UT-SNAP-001" in result.snapshot.save_lines
+    assert f"MOVE UT-SNAP-001 TO {group}" in result.snapshot.restore_lines
+    assert result.snapshot.working_storage_lines[:2] == [
+        "01  UT-SNAP-001.",
+        f"    05 FILLER PIC X({SYNTHESIZED_GROUP_BYTES[group]}).",
+    ]
 
 
 def _driver(cut: str = CUT, snapshot: StateSnapshot | None = None):

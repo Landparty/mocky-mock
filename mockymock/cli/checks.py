@@ -127,6 +127,23 @@ def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
     )
 
 
+def _synthesized_groups(cics_eib, transformed: list[str]) -> list[str]:
+    """The groups mockymock splices in after parsing that this program gets:
+    the CICS EIB and DL/I DIB blocks (`splicer.cics_eib`) and the generated
+    SQLCA (`splicer.sqlca`, present in the transformed text). The
+    BEFORE-ALL snapshot must cover them (issue #225)."""
+    from mockymock.splicer.sqlca import sqlca_reset_lines
+
+    groups: list[str] = []
+    if cics_eib is not None and cics_eib.referenced_names:
+        groups.append("DFHEIBLK")
+    if cics_eib is not None and cics_eib.dib_names:
+        groups.append("DLIDIB")
+    if sqlca_reset_lines(transformed):
+        groups.append("SQLCA")
+    return groups
+
+
 def _index_names(checked: StaticCheckResult) -> list[str]:
     from mockymock.splicer.reset import index_names
 
@@ -623,6 +640,7 @@ def run_static_checks(
         out.snapshot, snapshot_problems = plan_snapshot(
             parse_result.ast,
             out.linkage.linkage_items if out.linkage is not None else None,
+            _synthesized_groups(out.cics_eib, transformed),
         )
         out.problems.extend(
             f"refused (UNSAVABLE_BEFORE_ALL_STATE): {problem}"

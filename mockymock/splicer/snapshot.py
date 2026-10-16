@@ -9,12 +9,14 @@ The driver therefore runs `UT-RESET-WORKING-STORAGE`, the BEFORE-ALL
 steps, then `UT-SAVE-STATE` once; each test case runs
 `UT-RESET-WORKING-STORAGE` followed by `UT-RESTORE-STATE`. Resetting first
 keeps everything outside this module's reach (harness fields, capture
-targets, the CICS EIB) at its usual per-case value; the restore then
-overwrites every item listed below with its saved copy.
+targets) at its usual per-case value; the restore then overwrites every
+item listed below with its saved copy.
 
 Covered items are exactly the ones `splicer.reset` covers: every
 top-level (01/77) WORKING-STORAGE and LOCAL-STORAGE item, each FD/SD's
-longest record, and LINKAGE items neutralized into WORKING-STORAGE.
+longest record, and LINKAGE items neutralized into WORKING-STORAGE --
+plus the blocks mockymock synthesizes (the CICS DFHEIBLK, DLIDIB and the
+generated SQLCA), which `reset` clears too.
 Top-level REDEFINES items are skipped (their storage is the redefined
 item's, which is saved), as are top-level FILLERs (not addressable).
 
@@ -74,15 +76,36 @@ class StateSnapshot:
     restore_lines: list[str] = field(default_factory=list)
 
 
+# Groups mockymock splices in after parsing, so `_state_items` never sees
+# them, with an upper bound of their size (DFHEIBLK is about 90 bytes,
+# DLIDIB 40, SQLCA 136): see splicer.cics_eib and splicer.sqlca.
+SYNTHESIZED_GROUP_BYTES = {"DFHEIBLK": 128, "DLIDIB": 64, "SQLCA": 256}
+
+
 def plan_snapshot(
-    program, linkage_items: list | None = None
+    program,
+    linkage_items: list | None = None,
+    synthesized_groups: list[str] | None = None,
 ) -> tuple[StateSnapshot, list[str]]:
     """The snapshot fields and the save/restore statements for `program`,
     plus one problem string per item that cannot be saved exactly (empty
     when everything can). Callers must refuse when problems is non-empty:
-    a partially restored state is a silently wrong test."""
+    a partially restored state is a silently wrong test.
+
+    `synthesized_groups` names the blocks mockymock itself adds after
+    parsing (DFHEIBLK, DLIDIB, SQLCA; keys of SYNTHESIZED_GROUP_BYTES).
+    They are reset before every case like any other storage, so without a
+    snapshot entry a BEFORE-ALL that set EIBCALEN or SQLCODE was wiped
+    before the first case (issue #225); each is byte-copied like a group."""
     snapshot = StateSnapshot()
     problems: list[str] = []
+    for name in synthesized_groups or []:
+        snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
+        snapshot.working_storage_lines.extend(
+            [f"01  {snap}.", f"    05 FILLER PIC X({SYNTHESIZED_GROUP_BYTES[name]})."]
+        )
+        snapshot.save_lines.append(f"MOVE {name} TO {snap}")
+        snapshot.restore_lines.append(f"MOVE {snap} TO {name}")
     for item in _state_items(program, linkage_items or []):
         snap = f"{SNAP_PREFIX}{len(snapshot.save_lines) + 1:03d}"
         if _is_group(item) or _is_edited(item):
