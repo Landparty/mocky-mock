@@ -353,7 +353,16 @@ the `cobol-test` skill's hand-over.
   has at least one assertion and suite mutation >= threshold (default
   80%), L3 also no high/medium dialect risk inside its reach. L4
   (mainframe) is never computed -- shown as a reminder only.
-- `_findings` categories (severity-ordered): refused, test-failure,
+- Run step (issue #260): a `run.json` case whose name matches no TESTCASE
+  (`run`'s synthetic `"mockymock run"` entry for a failure before any case
+  started, e.g. a compile error) and every `orphanFailures` entry is
+  collected into `run_errors`, as is a `summary.casesFailed + casesCrashed`
+  larger than the matched failures. Any of them fails the step (its
+  summary names the first error line), adds one high `run-failure`
+  finding, and sets `summary.runFailed`, which makes `report` exit 1 and
+  changes the HTML verdict sentence. Before, the entry was dropped and a
+  suite that never compiled read as an ok run with exit 0.
+- `_findings` categories (severity-ordered): refused, run-failure, test-failure,
   suspected-bug (a failed INTENT assertion), no-assertion,
   missing-assertion (surviving mutant), dead-code, untested-paragraph,
   rule-without-intent, unlabelled, dialect, coverage, scenario-gap,

@@ -252,6 +252,7 @@ _SEVERITY_LABEL = {
 # JSON and in the tag's tooltip; the reader sees this.
 _CATEGORY_LABEL = {
     "refused": "Suite refused",
+    "run-failure": "Suite did not run",
     "test-failure": "Failing test",
     "suspected-bug": "Possible program bug",
     "no-assertion": "Test checks nothing",
@@ -272,6 +273,10 @@ _CATEGORY_LABEL = {
 # the finding's detail.
 _ADVICE = {
     "refused": "Mock the boundary it names, then run `mockymock lint` again.",
+    "run-failure": (
+        "Fix the error the run reports (often a mock body naming a field the "
+        "program does not declare), then run the suite again."
+    ),
     "test-failure": "Open the test case and compare the expected and actual values.",
     "suspected-bug": (
         "Check the program against the business rule: the test follows the "
@@ -306,6 +311,7 @@ _EVIDENCE_DETAIL = frozenset(
         "dialect",
         "coverage",
         "refused",
+        "run-failure",
     }
 )
 
@@ -384,7 +390,9 @@ def _summary_strip(report: dict[str, Any]) -> str:
         f'<span><i style="background:var(--{level.lower()})"></i>{level} {levels.get(level, 0)}</span>'
         for level in LEVELS
     )
-    if s["notRun"] == cases and cases:
+    if s.get("runFailed"):
+        passed_sub = "the run failed"
+    elif s["notRun"] == cases and cases:
         passed_sub = "not run yet"
     else:
         passed_sub = f"{s['failed']} failed, {s['notRun']} not run"
@@ -453,6 +461,12 @@ def _verdict_sentence(report: dict[str, Any]) -> str:
         return (
             "The suite is refused by the static checks, so none of its tests can "
             "run yet. Fix the issues marked “Fix first” below."
+        )
+    if s.get("runFailed"):
+        return (
+            "The suite was run but failed before any test case started (it did "
+            "not compile, or the program stopped first), so no test is proven by "
+            "execution. Fix the issue marked “Fix first” below."
         )
     if s["notRun"] == s["cases"]:
         return (

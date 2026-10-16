@@ -49,6 +49,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from fractions import Fraction
@@ -301,6 +302,24 @@ def _run_cli(args: list[str], timeout: int | None) -> tuple[int, str]:
 
 def _tail(text: str, lines: int = 40) -> str:
     return "\n".join(text.rstrip().splitlines()[-lines:])
+
+
+def _failure_messages(entry: dict[str, Any]) -> list[str]:
+    return [
+        str(f.get("message"))
+        for f in entry.get("failures") or []
+        if isinstance(f, dict) and f.get("message")
+    ]
+
+
+def _first_line(text: str) -> str:
+    """The first line that names an error, else the first non-blank one:
+    cobc puts an "in paragraph 'X':" context line ahead of the error."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines:
+        if "error" in line.lower():
+            return line
+    return lines[0] if lines else text
 
 
 def _exact_mutation_percent(totals: dict[str, Any], raw_score: Any) -> Fraction | None:
@@ -726,6 +745,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         ),
     )
     coverage_step = Step("coverage", "Measure line coverage")
+    run_errors: list[str] = []
     run_report: dict[str, Any] | None = None
     coverage_report: dict[str, Any] | None = None
     workdir = Path(tempfile.mkdtemp(prefix="mockymock-report-"))
@@ -774,18 +794,46 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             for entry in run_report.get("cases") or []:
                 matched = cases_by_name.get(entry.get("name"))
                 if matched is None:
+                    # No TESTCASE of that name: `run`'s synthetic
+                    # "mockymock run" entry for a failure before any case
+                    # started (a compile error). Dropping it read a suite
+                    # that never compiled as an ok run (issue #260).
+                    if entry.get("status") in ("failed", "crashed"):
+                        run_errors.extend(
+                            _failure_messages(entry)
+                            or [f"{entry.get('name')} {entry.get('status')}"]
+                        )
                     continue
                 matched["status"] = entry.get("status", "not_run")
                 matched["failures"] = entry.get("failures") or []
+            for orphan in run_report.get("orphanFailures") or []:
+                run_errors.append(
+                    f"case id {orphan.get('caseId')}: {orphan.get('message', '')}"
+                )
             summary = run_report.get("summary") or {}
             passed = sum(1 for c in cases if c["status"] == "passed")
             failed = sum(1 for c in cases if c["status"] in ("failed", "crashed"))
+            reported = sum(
+                n
+                for n in (summary.get("casesFailed"), summary.get("casesCrashed"))
+                if isinstance(n, int)
+            )
+            if not run_errors and reported > failed:
+                run_errors.append(
+                    f"the run reports {reported} failed or crashed case(s) that "
+                    f"match no TESTCASE in {cut_rel}"
+                )
             run_step.summary = (
                 f"{passed} passed, {failed} failed or crashed, "
                 f"{sum(1 for c in cases if c['status'] == 'not_run')} not run."
             )
             run_step.details["summary"] = summary
-            run_step.status = "ok" if failed == 0 else "fail"
+            if run_errors:
+                run_step.details["runErrors"] = run_errors
+                run_step.summary += (
+                    f" The run itself failed: {_first_line(run_errors[0])}"
+                )
+            run_step.status = "ok" if failed == 0 and not run_errors else "fail"
     steps.append(run_step)
 
     with _Timer(coverage_step):
@@ -996,6 +1044,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
         rules=rules,
         rules_available=rules_available,
         lint_problems=lint_problems,
+        run_errors=run_errors,
         risks=risks,
         coverage=coverage_step.details if coverage_report else None,
         mutation=mutation_step.details if mutation_report else None,
@@ -1043,6 +1092,8 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             "passed": sum(1 for c in cases if c["status"] == "passed"),
             "failed": sum(1 for c in cases if c["status"] in ("failed", "crashed")),
             "notRun": sum(1 for c in cases if c["status"] == "not_run"),
+            # The run failed before its cases started (issue #260).
+            "runFailed": bool(run_errors),
             "levels": verdict.details["levels"],
             "assertions": total_assertions,
             "intentShare": (
@@ -1120,6 +1171,7 @@ def _findings(  # noqa: C901
     rules: list[dict[str, Any]],
     rules_available: bool,
     lint_problems: list[str],
+    run_errors: Sequence[str] = (),
     risks: list[dict[str, Any]],
     coverage: dict[str, Any] | None,
     mutation: dict[str, Any] | None,
@@ -1144,6 +1196,14 @@ def _findings(  # noqa: C901
     for problem in lint_problems:
         if not problem.startswith("  "):
             add("high", "refused", "The suite is refused before it can run", problem)
+
+    for error in run_errors[:1]:
+        add(
+            "high",
+            "run-failure",
+            "The suite did not run: it failed before its test cases started",
+            error.strip(),
+        )
 
     label_by_line = {a["line"]: a for a in assertions}
     for case in cases:

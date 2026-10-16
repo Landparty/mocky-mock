@@ -3023,7 +3023,8 @@ def _cmd_report(args: argparse.Namespace) -> int:
     print(f"mockymock report: wrote {html_path}")
     if args.json:
         print(f"mockymock report: wrote {args.json}")
-    return 1 if summary["failed"] or summary["levels"].get("none") else 0
+    failed = summary["failed"] or summary.get("runFailed")
+    return 1 if failed or summary["levels"].get("none") else 0
 
 
 def _cmd_journal(args: argparse.Namespace) -> int:

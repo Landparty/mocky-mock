@@ -391,3 +391,57 @@ def test_mutation_threshold_is_applied_exactly_not_after_rounding(ordrproc):
     html = render_html(report)
     assert '<span class="value">79.9%</span>' in html
     assert '<span class="value">80%</span>' not in html
+
+
+def test_a_run_that_never_compiled_fails_the_run_step(ordrproc):
+    """Issue #260: `run` records a failure before any case started (a
+    compile error) as a synthetic "mockymock run" case. The report dropped
+    it, marked the run step ok and raised no finding."""
+    path = _write(
+        ordrproc / "run.json",
+        {
+            "version": 1,
+            "cases": [
+                {
+                    "name": "mockymock run",
+                    "line": None,
+                    "status": "failed",
+                    "failures": [
+                        {
+                            "message": "X.cbl: in paragraph 'P':\n"
+                            "X.cbl:47: error: 'WS-CAPX' is not defined\n"
+                        }
+                    ],
+                },
+                {
+                    "name": "10% discount reduces net amount correctly",
+                    "line": 3,
+                    "status": "not_run",
+                    "failures": [],
+                },
+                {
+                    "name": "Zero discount leaves amount unchanged",
+                    "line": 16,
+                    "status": "not_run",
+                    "failures": [],
+                },
+            ],
+            "orphanFailures": [],
+            "summary": {"testsRun": 1, "casesFailed": 1, "casesCrashed": 0},
+        },
+    )
+    report = build_report(_options(ordrproc, run_json=path))
+    step = _step(report, "run")
+    assert step["status"] == "fail"
+    assert "'WS-CAPX' is not defined" in step["summary"]
+    assert report["summary"]["runFailed"] is True
+    run_failures = [f for f in report["findings"] if f["category"] == "run-failure"]
+    assert len(run_failures) == 1
+    assert run_failures[0]["severity"] == "high"
+    assert "WS-CAPX" in run_failures[0]["detail"]
+
+
+def test_a_normal_run_is_not_a_run_failure(ordrproc):
+    report = build_report(_options(ordrproc, run_json=_run_json(ordrproc)))
+    assert _step(report, "run")["status"] == "ok"
+    assert report["summary"]["runFailed"] is False

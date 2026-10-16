@@ -64,6 +64,7 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
 | Category | Severity | Do this |
 |---|---|---|
 | `refused` | high | Fix the lint problem; nothing else is trustworthy until then. |
+| `run-failure` | high | The run failed before any test case started (usually a compile error, such as a mock body naming an undeclared field). Fix it and run again; no level above L0 is earned and `report` exits 1. |
 | `suspected-bug` | high | An INTENT assertion failed. Trace it; if the setup is right, report it. Never relabel it to get green. |
 | `test-failure` | high | A non-intent assertion failed or a case crashed. Usually the test; trace it. |
 | `missing-assertion` | medium | A mutant survived: add the assertion that would notice that line changing. |
