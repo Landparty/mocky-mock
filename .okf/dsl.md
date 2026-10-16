@@ -482,7 +482,7 @@ docs/2026-08-04-record-expectations-design.md for the full design.
 | `DataProvider` | `name, line, header: list[str], rows: list[list[str]], row_lines: list[int]` | Parser-internal only -- never stored on `MockTestSuite`/`MockTestCase`; consumed and discarded by `_expand_providers` before `parse_cut()` returns |
 | `ExpectDirective` | `data_name, expected_value, operator` | one `EXPECT` line; `operator` is the canonical relation asserted between the two (one of `EXPECT_OPERATORS`, default `"="`) |
 | `VerifyDirective` | `category, key, expectation` | `.program_name` same v1-compat alias as `MockDirective` |
-| `MockTestCase` | `name, mocks, setup_moves: list[(value,target)], perform_target, perform_thru: str\|None, expectations, verifications` | `perform_thru` is `None` unless `PERFORM X THRU Y` was used |
+| `MockTestCase` | `name, mocks, setup_moves: list[(value,target)], perform_target, perform_thru: str\|None, expectations, verifications, template_name: str\|None` | `perform_thru` is `None` unless `PERFORM X THRU Y` was used; `template_name` is the provider-bound TESTCASE's own name on each expanded row (`_instantiate_row`), `None` otherwise -- `report` keys a row's labelled assertions by it (#328) |
 | `MockTestSuite` | `name, test_cases` | `all_mock_keys()` returns every distinct `(category, key)` pair across all test cases, **first-appearance order** — this ordering is load-bearing: the tally registry, driver bookkeeping, and the splice loop all iterate this list, so first-appearance order determines codegen order |
 
 `FILE_OP_CATEGORIES` (frozenset of the 8 file-op categories) and

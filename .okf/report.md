@@ -343,6 +343,13 @@ the `cobol-test` skill's hand-over.
 - Mutation `score` in mutate's JSON is a 0..1 fraction; the report stores
   `scorePercent`. A mutate run that wrote no report (no mutable
   statements) is a `skipped` step carrying mutate's last output line.
+- Assertions per case come from `assertion_labels.scan_assertion_labels`
+  (raw `.cut` text, keyed by the TESTCASE line's name) joined to the parsed
+  suite by name -- for a PROVIDER row by `MockTestCase.template_name`
+  (#328): before, every expanded row (`"double [row 1: 1]"`) found nothing
+  under its own name, read as `no-assertion`, and a rule's `citedBy` named
+  the template, a case that does not exist. `citedBy` now lists each
+  expanded row instead (`expanded_names`).
 - Verification level per case: L0 static, L1 executed and passed, L2 also
   has at least one assertion and suite mutation >= threshold (default
   80%), L3 also no high/medium dialect risk inside its reach. L4

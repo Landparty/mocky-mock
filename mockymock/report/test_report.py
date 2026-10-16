@@ -525,6 +525,8 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
     suite = None
     cases: list[dict[str, Any]] = []
     assertions: list[dict[str, Any]] = []
+    # PROVIDER template name -> the expanded rows' names (#328).
+    expanded_names: dict[str, list[str]] = {}
     with _Timer(inventory):
         from mockymock.analysis.assertion_labels import (
             scan_assertion_labels,
@@ -545,7 +547,12 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             for a in assertions:
                 by_case.setdefault(a["case"], []).append(a)
             for test_case in suite.test_cases:
-                own = by_case.get(test_case.name, [])
+                # A PROVIDER row's assertions are its template's: the text
+                # scan records them under the TESTCASE line's name (#328).
+                template = test_case.template_name or test_case.name
+                if test_case.template_name:
+                    expanded_names.setdefault(template, []).append(test_case.name)
+                own = by_case.get(template, [])
                 cases.append(
                     {
                         "name": test_case.name,
@@ -610,8 +617,11 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             continue
         for rule_id in a["ruleIds"]:
             rule = rules_by_id.get(rule_id)
-            if rule is not None and a["case"] not in rule["citedBy"]:
-                rule["citedBy"].append(a["case"])
+            if rule is None:
+                continue
+            for case_name in expanded_names.get(a["case"], [a["case"]]):
+                if case_name not in rule["citedBy"]:
+                    rule["citedBy"].append(case_name)
 
     # 5. Lint -------------------------------------------------------------
     lint = Step(

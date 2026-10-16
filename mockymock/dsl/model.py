@@ -300,6 +300,11 @@ class MockTestCase:
     tags: list[str] = field(default_factory=list)
     """Tags from `TESTCASE "..." TAGS "a" "b"`, in declaration order.
     Selection (`run --tag`) and reporting only -- no runtime semantics."""
+    template_name: str | None = None
+    """The provider-bound TESTCASE this case was expanded from (one per
+    PROVIDER row), by its own name; None for an ordinary case. Lets the
+    report attribute the template's EXPECT/VERIFY labels, which the raw
+    `.cut` text records under the template's name, to each row (#328)."""
 
     @property
     def assertion_count(self) -> int:

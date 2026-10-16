@@ -640,6 +640,7 @@ def _instantiate_row(
         verifications=list(case.verifications),
         line=row_line,
         tags=list(case.tags),
+        template_name=case.name,
     )
 
 
