@@ -36,6 +36,7 @@ from mockymock.dsl.model import (
     MockTestSuite,
 )
 from mockymock.splicer.cics_resp import cics_success_defaults
+from mockymock.splicer.driver import split_long_move
 from mockymock.splicer.io_copy import DataLayout, from_move, into_move
 from mockymock.splicer.naming import TallyRegistry
 
@@ -159,14 +160,14 @@ def build_rows_block(
     for index, row in enumerate(rows, start=1):
         lines.append(f"    WHEN {tally_name} = {index}")
         for move in row_prefix_moves or []:
-            lines.append(f"        {move}")
+            lines.extend(split_long_move(f"        {move}"))
         for field, value in row:
-            lines.append(f"        MOVE {value} TO {field}")
+            lines.extend(split_long_move(f"        MOVE {value} TO {field}"))
         for move in row_suffix_moves:
-            lines.append(f"        {move}")
+            lines.extend(split_long_move(f"        {move}"))
     lines.append("    WHEN OTHER")
     for move in exhausted_moves:
-        lines.append(f"        {move}")
+        lines.extend(split_long_move(f"        {move}"))
     lines.append("END-EVALUATE")
     return lines
 
@@ -450,7 +451,11 @@ def build_site_dispatch(
                 )
             )
         else:
-            lines.extend(f"                   {body}" for body in directive.body_lines)
+            lines.extend(
+                split
+                for body in directive.body_lines
+                for split in split_long_move(f"                   {body}")
+            )
             if copy_into is not None:
                 lines.append(f"                   {copy_into}")
         if lifted_clauses:
@@ -512,7 +517,11 @@ def build_flow_dispatch(
                 f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
                 f'{"SECTION" if plan.is_section else "PARAGRAPH"} {plan.key}"'
             )
-        lines.extend(f"                   {body}" for body in directive.body_lines)
+        lines.extend(
+            split
+            for body in directive.body_lines
+            for split in split_long_move(f"                   {body}")
+        )
     lines.append("               WHEN OTHER")
     lines.append(f"                   PERFORM {plan.real_name}")
     lines.append("           END-EVALUATE.")

@@ -1364,6 +1364,17 @@ Concatenated literals are one literal to cobc (verified with
 as several quoted operands (`_display_operands`), so the stdout text is
 unchanged. Shorter values are emitted exactly as before.
 
+The same split now covers every other place a `.cut` value lands on a
+driver line (issue #322): hook `MOVE` steps (`_step_lines`), `ROWS` /
+`TERMINAL` values and every other row / exhausted MOVE (`build_rows_block`),
+and mock body lines -- boundary and flow-mock alike -- that are a
+`MOVE <one long literal> TO <target>` (`driver.split_long_move`: the value
+is whatever precedes the last ` TO ` and must be one whole literal, so a
+` TO ` inside a literal never splits it). A body line that still exceeds
+512 bytes once spliced at its 19-column indent is refused
+`MOCK_LINE_TOO_LONG` (`refusal.check_mock_body_line_length`, run in
+`cli.checks` step 8) instead of reaching cobc as a silent truncation.
+
 **`suite.name` escaping (2026-07-07 fix, audit finding 2.8):** the
 `__MOCKYMOCK__ TESTSUITE: <name>` `DISPLAY` line interpolated `suite.name`
 directly while `case.name` already went through `_display_text` — a

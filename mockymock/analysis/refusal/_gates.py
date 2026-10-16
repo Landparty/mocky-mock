@@ -1995,3 +1995,50 @@ def check_clause_bodies(
             )
         )
     return reasons
+
+
+#: cobc -free truncates a source line past this many bytes.
+FREE_FORMAT_LINE_LIMIT = 512
+
+#: The indentation a mock body line is spliced at (injector).
+_BODY_INDENT = " " * 19
+
+
+def check_mock_body_line_length(suite: MockTestSuite) -> list[RefusalReason]:
+    """MOCK_LINE_TOO_LONG (issue #322): a mock body line is spliced
+    verbatim, and cobc -free truncates a line past 512 bytes -- the
+    suite would pass lint and then fail to compile with syntax errors
+    that never mention the truncation. A `MOVE <one long literal> TO ...`
+    is split into `&` pieces by the splicer and never refused."""
+    from mockymock.splicer.driver import split_long_move
+
+    reasons: list[RefusalReason] = []
+    seen: set[int] = set()
+    directives = [
+        *suite.before_all_mocks,
+        *(d for case in suite.test_cases for d in case.mocks),
+    ]
+    for directive in directives:
+        if id(directive) in seen:
+            continue
+        seen.add(id(directive))
+        for body in directive.body_lines:
+            longest = max(
+                len(line.encode("utf-8"))
+                for line in split_long_move(f"{_BODY_INDENT}{body}")
+            )
+            if longest <= FREE_FORMAT_LINE_LIMIT:
+                continue
+            reasons.append(
+                RefusalReason(
+                    code="MOCK_LINE_TOO_LONG",
+                    message=(
+                        f"MOCK {directive.describe()} has a body line of "
+                        f"{longest} bytes once spliced ({body[:40].strip()}"
+                        f"...) -- cobc truncates a line past "
+                        f"{FREE_FORMAT_LINE_LIMIT} bytes; break the "
+                        f"statement across several lines"
+                    ),
+                )
+            )
+    return reasons

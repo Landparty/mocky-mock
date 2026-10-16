@@ -268,6 +268,7 @@ def run_static_checks(
         check_clause_bodies,
         check_expansion_warnings,
         check_linkage_layout,
+        check_mock_body_line_length,
         check_nested_exec,
         check_source_format,
         check_terminator_layout,
@@ -678,6 +679,9 @@ def run_static_checks(
     out.problems.extend(
         f"refused ({r.code}): {r.message}"
         for r in check_clause_bodies(surface, suite, lines)
+    )
+    out.problems.extend(
+        f"refused ({r.code}): {r.message}" for r in check_mock_body_line_length(suite)
     )
     # 9. Synthesized CAPTURE targets. Fail closed: an argument whose layout
     # cannot be mirrored exactly would otherwise reach the compiler as a

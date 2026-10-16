@@ -174,6 +174,14 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "would comment out that sibling code along with it. Put the "
         "statement on its own line(s)."
     ),
+    "MOCK_LINE_TOO_LONG": (
+        "A MOCK body line is copied into the test program as written, and "
+        "GnuCOBOL truncates a free-format source line past 512 bytes, so "
+        "the build would fail with syntax errors that never mention the "
+        "truncation. A `MOVE <one long literal> TO <field>` is split "
+        "automatically; break any other long statement across several "
+        "lines of the mock body."
+    ),
     "UNLIFTABLE_CLAUSE_BODY": (
         "A MOCK directive matches a READ / RETURN / WRITE / REWRITE / "
         "DELETE / START / CALL whose AT END / INVALID KEY / ON EXCEPTION "
