@@ -199,18 +199,29 @@ def _replicated_at_end_statements(statement: object) -> list[str]:
     `SET` (`_replicated_set_lines`) are replicated; anything else in the
     clause (a bare-identifier source, IF, PERFORM, ...) is left
     unreplicated -- a known, narrower gap than the one this closes, not
-    silently guessed at."""
+    silently guessed at. All or nothing: when any statement in the clause
+    is not one of those two shapes, nothing is replicated (issue #217)."""
     at_end = getattr(statement, "at_end_clause", None) or []
     lines: list[str] = []
     for clause_statement in at_end:
         if type(clause_statement).__name__ == "MoveStatement":
             source = getattr(clause_statement, "source", None)
-            if not source or not _is_safe_literal_source(source):
-                continue
-            for target in getattr(clause_statement, "targets", []):
+            targets = getattr(clause_statement, "targets", [])
+            if not source or not _is_safe_literal_source(source) or not targets:
+                return []
+            for target in targets:
                 lines.append(f"MOVE {source} TO {target}")
             continue
-        lines.extend(_replicated_set_lines(clause_statement))
+        replicated = _replicated_set_lines(clause_statement)
+        if not replicated:
+            # All or nothing (issue #217): a clause replicated only in
+            # part silently dropped its other statements -- `MOVE "Y" TO
+            # WS-EOF` kept, `MOVE WS-READ-CNT TO WS-TRAILER-CNT` lost --
+            # and `run --record-expectations` then recorded the wrong
+            # values as goldens. Returning nothing hands the clause to
+            # `_lifted_at_end_lines`, which copies it whole, or to the TODO.
+            return []
+        lines.extend(replicated)
     return lines
 
 

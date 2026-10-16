@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-14T06:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -847,6 +847,13 @@ paragraph-grouped path described above, unchanged. A real
   the loop body still runs once per row, so the other boundaries in its
   paragraph keep their counts). A keyed/random READ is left alone: out of
   rows it would answer "23", not "10".
+- **AST replication is all or nothing** (issue #217): when any statement in
+  the `AT END` clause is not one of the two replicable shapes,
+  `_replicated_at_end_statements` returns nothing, so the whole clause is
+  lifted (below) or flagged with the TODO. It used to replicate the literal
+  `MOVE "Y" TO WS-EOF` and silently drop `MOVE WS-READ-CNT TO
+  WS-TRAILER-CNT` beside it, and `run --record-expectations` then recorded
+  goldens for behaviour the program does not have.
 - **When the AST-driven replication comes up empty, the clause's own source
   text is lifted verbatim instead** (`_lifted_at_end_lines`, 2026-09-04).
   The `*> TODO` comment that used to be emitted there is not a visible gap

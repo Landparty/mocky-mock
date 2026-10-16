@@ -203,3 +203,29 @@ def test_a_period_terminates_the_clause_rather_than_being_lifted_into_it():
     lifted = _lifted_at_end_lines(site, context)
     assert lifted[1:] == ["MOVE WS-M TO WS-EOF"]
     assert not any("ADD 1 TO WS-N" in line for line in lifted)
+
+
+def test_a_partly_replicable_at_end_clause_is_lifted_whole():
+    """Issue #217: a literal MOVE next to an identifier-sourced one used to
+    be replicated alone -- `MOVE WS-READ-CNT TO WS-TRAILER-CNT` vanished
+    with no TODO, and `run --record-expectations` recorded the wrong value
+    as golden. Replication is all or nothing, so the whole clause is lifted."""
+    source = IDENTIFIER_AT_END_SOURCE.replace(
+        "                   MOVE WS-END-MARKER TO WS-EOF-FLAG\n",
+        '                   MOVE "Y" TO WS-EOF-FLAG\n',
+    )
+    text = _scaffold(source, "rdloop.cbl", with_source=True)
+    assert 'MOVE "Y" TO WS-EOF-FLAG' in text
+    assert "ADD 1 TO WS-TOTAL" in text
+
+
+def test_partial_replication_is_never_emitted():
+    from mockymock.dsl.generator import _replicated_at_end_statements
+
+    source = IDENTIFIER_AT_END_SOURCE.replace(
+        "                   MOVE WS-END-MARKER TO WS-EOF-FLAG\n",
+        '                   MOVE "Y" TO WS-EOF-FLAG\n',
+    )
+    result = parse_cobol(source, filename="rdloop.cbl")
+    (read,) = result.ast.find_all_by_type("IOReadStatement")
+    assert _replicated_at_end_statements(read) == []
