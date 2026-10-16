@@ -122,12 +122,12 @@ def test_expect_failure_message_includes_actual_value():
 
 def test_testcase_emits_verify_check():
     joined = "\n".join(_build().procedure_lines)
-    assert "IF UT-DISCRATE-TALLY NOT = 1" in joined
+    assert "IF (UT-DISCRATE-TALLY - UT-DISCRATE-BASE) NOT = 1" in joined
 
 
 def test_verify_failure_message_includes_actual_tally():
     joined = "\n".join(_build().procedure_lines)
-    assert "MOVE UT-DISCRATE-TALLY TO UT-TALLY-EDITED" in joined
+    assert "COMPUTE UT-TALLY-EDITED = UT-DISCRATE-TALLY - UT-DISCRATE-BASE" in joined
     assert 'WAS CALLED ONCE, got " FUNCTION TRIM(UT-TALLY-EDITED)' in joined
 
 
@@ -146,7 +146,7 @@ def test_verify_on_file_op_uses_category_tally():
         VerifyDirective(MockCategory.READ, "INFILE", "3 TIMES")
     )
     joined = "\n".join(_build(suite).procedure_lines)
-    assert "IF UT-READ-INFILE-TALLY NOT = 3" in joined
+    assert "IF (UT-READ-INFILE-TALLY - UT-READ-INFILE-BASE) NOT = 3" in joined
 
 
 def test_verify_without_matching_mock_raises():
@@ -416,3 +416,80 @@ def test_expect_condition_name_to_be_true_tests_the_condition(
         f'DISPLAY "__MOCKYMOCK__ CASE 001 FAIL: expected FLAG-ON {operator} '
         f'{value}, got {got}"'
     ) in lines
+
+
+# --- long literals (found while fixing #188: DEPTMQC's recorded MQMD) -------
+
+
+def _long_literal_case(value: str) -> MockTestSuite:
+    case = MockTestCase(
+        name="long",
+        setup_moves=[(value, "WS-IN")],
+        perform_target="P",
+        expectations=[ExpectDirective("MQMD", value)],
+    )
+    return MockTestSuite(name="S", test_cases=[case])
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        'X"' + "4D44" + "20" * 330 + '"',
+        '"' + 'AB""CD' * 60 + '"',
+    ],
+)
+def test_a_long_literal_is_split_into_concatenated_pieces(value):
+    # cobc compiles the spliced copy -free, where a line over 512 bytes is
+    # truncated: the whole golden on one IF line cut the IF in half.
+    lines = _build(_long_literal_case(value)).procedure_lines
+    assert max(len(line) for line in lines) < 200
+    prefix = value[: value.index(value[-1])]  # X or empty
+    quote = value[-1]
+
+    def rejoin(first: str, rest: list[str]) -> str:
+        pieces = [first] + [line.strip().removeprefix("& ") for line in rest]
+        body = "".join(p[len(prefix) + 1 : -1] for p in pieces)
+        return f"{prefix}{quote}{body}{quote}"
+
+    start = next(
+        i for i, line in enumerate(lines) if line.lstrip().startswith("IF MQMD")
+    )
+    first = lines[start].split("NOT = ", 1)[1]
+    rest = []
+    for line in lines[start + 1 :]:
+        if not line.strip().startswith("& "):
+            break
+        rest.append(line)
+    assert rest, "expected continuation pieces"
+    assert rejoin(first, rest) == value
+    # Every piece is a whole hex byte / never a split doubled quote.
+    for piece in [first] + [line.strip()[2:] for line in rest]:
+        body = piece[len(prefix) + 1 : -1]
+        if prefix:
+            assert len(body) % 2 == 0
+        else:
+            assert body.replace('""', "").count('"') == 0
+    # The FAIL DISPLAY spells out the whole expected value across operands.
+    display_at = next(
+        i for i, line in enumerate(lines) if "FAIL: expected MQMD" in line
+    )
+    operands = []
+    for line in lines[display_at + 1 :]:
+        text = line.strip()
+        if text.startswith('", got "'):
+            break
+        operands.append(text[1:-1].replace('""', '"'))
+    assert "".join(operands) == value
+    # The setup MOVE is split the same way.
+    move_at = next(
+        i
+        for i, line in enumerate(lines)
+        if line.lstrip().startswith("MOVE " + value[:4])
+    )
+    assert lines[move_at + 1].strip().startswith("& ")
+
+
+def test_a_short_literal_is_emitted_unchanged():
+    lines = _build(_long_literal_case('X"4D44"')).procedure_lines
+    assert '           IF MQMD NOT = X"4D44"' in lines
+    assert not any(line.strip().startswith("& ") for line in lines)

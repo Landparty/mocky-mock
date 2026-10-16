@@ -372,6 +372,52 @@ action it cannot read (`UNSUPPORTED_SQL_WHENEVER`); a leftover `MOCK SQL
 "WHENEVER"` is UNMATCHED_MOCK with a message saying why. CICS `HANDLE
 CONDITION`/`HANDLE ABEND` are not emulated.
 
+## Clause bodies re-run after the mock (issue #209, 2026-10-16)
+
+`build_site_dispatch(..., lifted_clauses=...)` takes the replaced
+statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY / ON
+EXCEPTION / NOT ON EXCEPTION (/ ON OVERFLOW) bodies, which
+`orchestrator.splice_program` gets from
+`analysis.clause_bodies.lift_clause_bodies(site.statement, lines)` for
+every mocked **top-level** site (a nested site with clauses is refused as
+unspliceable, so it never gets here). Before #209 the whole span was
+replaced and those bodies were deleted with it: a mocked READ fed rows the
+program's own `NOT AT END` never processed, `FILE-STATUS IS
+RECORD-NOT-FOUND` never reached `INVALID KEY`, and a mutant inside a
+clause could never be killed.
+
+The outcome lives in `UT-MOCK-STATUS` (`PIC XX`, declared by
+`driver.build_driver` for every suite):
+
+- `MOVE SPACES` before the `EVALUATE UT-CURRENT-CASE`, so the unmocked
+  case's trap selects no clause.
+- `MOVE "00"` at the top of each mocked case's branch (before the mock
+  body, so the body may override it: `"10"`, `"23"`, `"EX"`).
+- `MOVE "10"` first in a READ/RETURN `ROWS` exhaustion branch.
+- `MOVE <file status field> TO UT-MOCK-STATUS` last in the branch when the
+  directive is a FILE_STATUS category and the file declares one -- the
+  status field wins, so the implicit `"00"`, `FILE-STATUS IS` and a
+  hand-written `MOVE` to the field all select the right clause.
+
+After `END-EVALUATE`, `clause_guard_lines` emits one `EVALUATE TRUE` (not a
+chain of IFs: the selection is made once, before any body PERFORMs code
+that may reach another mock and rewrite the field): `(1:1) = "1"` AT END,
+`(1:1) = "2"` INVALID KEY, `(1:1) = "0"` every NOT-clause, `= "EX"` ON
+EXCEPTION/ON OVERFLOW. A lifted body is the program's own text, sliced
+positionally (AST start of its first statement up to the next clause's
+header, or the verb's own `END-xxx` / the sentence period for the last).
+
+`lift_clause_bodies` returns None -- and the old whole-statement deletion
+stands -- when any body holds another boundary statement, GO TO, GOBACK,
+STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL; when a body has a
+nested conditional phrase (SIZE ERROR, OVERFLOW, a SEARCH's AT END, ...)
+or an IF/EVALUATE/SEARCH without its explicit terminator (either would
+swallow the next guard `WHEN`); when the statement has a clause outside
+the liftable set (`WRITE ... AT END-OF-PAGE`); or when a header cannot be
+matched exactly. `dsl.generator` asks the same function, so the scaffold
+stops copying an AT END clause the splice already re-runs (it reports end
+of file through the status field, or `MOVE "10" TO UT-MOCK-STATUS`).
+
 # Orchestration and Ordering Invariant (orchestrator.py)
 
 `splice_program` computes every span **up front** against the original
@@ -465,12 +511,19 @@ plus `UT-SAVE-STATE` / `UT-RESTORE-STATE` bodies, and one problem per
 item it can't copy exactly (`cli.checks` step 10 turns them into
 `UNSAVABLE_BEFORE_ALL_STATE`). The driver runs reset, BEFORE-ALL steps,
 save once; each case runs reset then restore -- the reset still handles
-harness fields, captures and the EIB.
+harness fields and captures. The blocks mockymock synthesizes after
+parsing -- `DFHEIBLK`, `DLIDIB` (`cics_eib`) and the generated `SQLCA`
+(`sqlca`) -- are snapshotted too, as group byte copies sized from
+`SYNTHESIZED_GROUP_BYTES` (`cli.checks._synthesized_groups` decides which
+the program gets): the reset clears them before every case, so a
+BEFORE-ALL that set `EIBCALEN` or `SQLCODE` was wiped before the first
+case (issue #225).
 
 | Item | Snapshot field | Copy |
 |---|---|---|
 | Group | `01 UT-SNAP-nnn.` + `05 FILLER PIC X(n)`, n an upper bound (`_max_bytes`: REDEFINES children summed, every elementary at least 16 bytes, national x4) | `MOVE` (group move = byte copy; restore copies back exactly the group's own bytes) |
-| Elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
+| Elementary with an editing PICTURE (`XX/XX`, `XXXBXXXX`, `NNBNN`, `ZZ9.99`) | as for a group | `MOVE` through the group snapshot (byte copy). A same-PICTURE MOVE re-applied the editing mask to already-edited text, so `"AB/CD"` came back `"AB///"` (issue #224) |
+| Other elementary with PICTURE / PICTURE-less usage (COMP-1/2, BINARY-x) | same PIC + USAGE + SIGN | `MOVE` |
 | POINTER family, INDEX | same USAGE | `SET` |
 | Group holding OCCURS ... DEPENDING ON, unreadable OCCURS bound, irreproducible description | -- | refused |
 
@@ -487,6 +540,15 @@ otherwise leak into case N+1. `reset_move_lines(program)` produces one
 reset line per top-level (level `01` **or** `77`) WORKING-STORAGE item —
 `77`s are standalone items just like `01`s and would leak state if
 skipped.
+
+**`DECIMAL-POINT IS COMMA` (issue #230).** cobol-parser hands `VALUE 1,25`
+back as `1.25`, which under that clause is the literal 1 and a sentence
+period. `reset_move_lines` passes every line through
+`mockymock._decimal.localize_move_line` when `decimal_point_is_comma(program)`
+(the CONFIGURATION section's `special_names.decimal_point_is_comma`
+metadata), so `MOVE 1,25 TO WS-RATE` is what the reset paragraph says. A
+literal CALL argument captured with `CAPTURE ARG` keeps the program's own
+comma spelling too (`injector`, read from the site's text).
 
 | Item shape | Reset line | Why |
 |---|---|---|
@@ -714,6 +776,29 @@ transform exists to prevent (the pointer would come from a mocked
 `splicer.linkage.redirect_address_of` overwrites each one with
 `DISCARD_POINTER` (`UT-ADDR-SINK`), space-padded to the identical width via
 `stub_writer.replace_columns`. Consequences worth knowing:
+
+**Real rebinds where the address is the program's own (issue #226,
+option 1 with the mocked-boundary exception).** The redirect made every
+read through a re-addressed item see its blank folded storage
+(`SET ADDRESS OF LK-VIEW TO ADDRESS OF WS-BUF` then `MOVE LK-VIEW ...`
+read spaces). `analysis.linkage.rebindable_sites` now keeps the rebind for
+a site whose sending operand is `ADDRESS OF <item>`, or a pointer the
+PROCEDURE DIVISION only ever writes with `SET <ptr> TO ADDRESS OF ...`
+(and otherwise only reads as another rebind's source). For those items
+`splicer.linkage.mark_based` inserts `BASED` after the name on the 01/77
+declaration line (widening that one DATA DIVISION line; no line moves),
+records a `Rebinding` on `LinkagePlan.rebindings`, and the item gets
+`UT-LKB-nnn PIC X(n)` backing storage (n from `snapshot._max_bytes`,
+declared through `cli.checks.extra_working_storage`).
+`extra_reset_lines` points it back at that storage *before* the folded
+items' own resets, so a previous case's alias is never written through;
+the BEFORE-ALL snapshot saves and restores its address (`SET`) ahead of
+any data. Every other site -- a pointer a CALL or EXEC fills in (the IMS
+`UIBPCBAL` idiom: NULL from a mocked `CBLTDLI`), one a MOVE touches,
+`NULL`, a qualified or subscripted source, or an item whose declaration
+line cannot be found -- keeps the redirect below, which can never
+dereference an address the test run does not have. `run` prints which
+items were kept as real rebinds.
 
 - **Column- and line-preserving**, like `neutralize` above and unlike
   `cics_eib`'s insertion: nothing any `SourceLocation` indexes into moves,
@@ -1145,8 +1230,9 @@ case's `perform_target` (with optional `perform_thru`).
 
 Each `UT-TESTCASE-NNN` paragraph: optionally performs the reset paragraph,
 moves the case ID into `UT-CURRENT-CASE` (this is what every injected
-EVALUATE dispatch block switches on), zeroes every tally this case's mocks
-touch, displays a `CASE NNN START` marker, runs any `setup_moves`,
+EVALUATE dispatch block switches on), starts every tally this case's mocks
+touch (0, or a BEFORE-ALL mock's saved `-START` count) and its VERIFY
+baseline `-BASE` (see dsl.md's "ROWS cursor across hooks"), displays a `CASE NNN START` marker, runs any `setup_moves`,
 performs the target paragraph, then checks `expectations` (the
 directive's own relation from `ExpectDirective.operator` — `=` for plain
 `TO BE`, plus `NOT =`/`>`/`<`/`>=`/`<=` and their negations from the
@@ -1175,6 +1261,19 @@ the count prints as `3` rather than `000000003`.
 in a generated `DISPLAY "..."` literal — without it, an EXPECT/VERIFY
 value containing a quote (e.g. an expected string `OK"`) would split the
 literal and cobc would read the remainder as undefined identifiers.
+
+**Long literals (2026-10-16, found while fixing #188).** cobc compiles the
+spliced copy `-free`, where a source line over 512 bytes is truncated. A
+recorded golden can be far longer (DEPTMQC's 336-byte MQMD is a 675-character
+`X"..."`), and one `IF MQMD NOT = X"..."` line was cut in half. A single
+alphanumeric or hexadecimal literal over `_LONG_LITERAL` (120) characters,
+in an EXPECT or a setup MOVE, is now emitted as `&`-concatenated pieces of
+`_LITERAL_CHUNK` (60) characters, one per line (`_literal_pieces`: a hex
+piece keeps whole bytes, and a quoted piece never splits a doubled quote).
+Concatenated literals are one literal to cobc (verified with
+`-free -std=mvs` on 3.1.2). The FAIL `DISPLAY` spells the expected value out
+as several quoted operands (`_display_operands`), so the stdout text is
+unchanged. Shorter values are emitted exactly as before.
 
 **`suite.name` escaping (2026-07-07 fix, audit finding 2.8):** the
 `__MOCKYMOCK__ TESTSUITE: <name>` `DISPLAY` line interpolated `suite.name`

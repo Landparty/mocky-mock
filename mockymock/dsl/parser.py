@@ -423,12 +423,17 @@ def _split_top_level(text: str, sep: str) -> list[str]:
     group, so a subscripted value like `WS-TAB(1, 2)` (the comma-separated
     subscript form MOVE/EXPECT already accept) or `FUNCTION MAX(A, B)`
     stays one value instead of being refused as a malformed assignment or
-    a column-count mismatch."""
+    a column-count mismatch.
+
+    A comma between two digits is a decimal comma, not a separator: a
+    program with `DECIMAL-POINT IS COMMA` writes `1,25`, and COBOL's
+    separator comma is always followed by a space (issue #230). So
+    `ROW 100,5, 125,62` is two values."""
     parts: list[str] = []
     current: list[str] = []
     quote: str | None = None
     depth = 0
-    for char in text:
+    for index, char in enumerate(text):
         if quote is not None:
             current.append(char)
             if char == quote:
@@ -443,6 +448,14 @@ def _split_top_level(text: str, sep: str) -> list[str]:
         elif char == ")":
             depth = max(depth - 1, 0)
         elif char == sep and depth:
+            current.append(char)
+            continue
+        if (
+            char == sep == ","
+            and 0 < index < len(text) - 1
+            and text[index - 1].isdigit()
+            and text[index + 1].isdigit()
+        ):
             current.append(char)
             continue
         if char == sep:
@@ -474,6 +487,37 @@ def _reject_mock_body_placeholder(
                 f"case's MOVE and EXPECT values only; a MOCK body is "
                 f"spliced verbatim, so the token would reach the compiler"
             )
+
+
+def _reject_hook_placeholders(
+    hook_texts: list[tuple[int, str, str]], providers: dict[str, DataProvider]
+) -> None:
+    """Refuse a `{Column}` token for any PROVIDER's column in a hook step's
+    MOVE or a hook MOCK body (issue #227). Placeholders are substituted only
+    into a provider-bound case's own MOVE/EXPECT values; a hook belongs to
+    no single row (BEFORE-ALL runs once for the whole suite), so the token
+    reached cobc verbatim (`invalid symbol '{'`) after lint passed. Same
+    fail-closed rule as `_reject_mock_body_placeholder`."""
+    columns = {
+        column: provider.name
+        for provider in providers.values()
+        for column in provider.header
+    }
+    if not columns:
+        return
+    for line_no, text, hook in hook_texts:
+        if _COMMENT_RE.match(text):
+            continue
+        for match in _PLACEHOLDER_RE.finditer(text):
+            if match.group(1) in columns:
+                raise CutParseError(
+                    f"line {line_no}: placeholder {match.group(0)} inside "
+                    f"{hook} is not substituted -- PROVIDER "
+                    f"{columns[match.group(1)]!r} values are substituted into "
+                    f"a test case's own MOVE and EXPECT values only; a hook "
+                    f"runs for every case (or once for the suite), so move "
+                    f"the step into the TESTCASE"
+                )
 
 
 _COBOL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
@@ -707,6 +751,11 @@ def parse_cut(text: str) -> MockTestSuite:
     before_each: list[MockDirective] = []
     hook_mocks = {"BEFORE-ALL": before_all, "BEFORE-EACH": before_each}
     hook_steps: dict[str, list[HookStep]] = {}
+    # (line, text, hook) for every hook MOVE and hook MOCK body line, checked
+    # for unsubstituted PROVIDER placeholders once every PROVIDER is known
+    # (a PROVIDER may be declared after the hook block), see
+    # _reject_hook_placeholders.
+    hook_texts: list[tuple[int, str, str]] = []
     seen_testcase = False
     # None, or the open hook block: BEFORE-ALL/BEFORE-EACH/AFTER-EACH/AFTER-ALL.
     in_before: str | None = None
@@ -760,6 +809,8 @@ def parse_cut(text: str) -> MockTestSuite:
         if in_mock is not None:
             if case is not None and case_provider is not None:
                 _reject_mock_body_placeholder(line, line_no, case_provider, in_mock)
+            if case is None and in_before is not None:
+                hook_texts.append((line_no, line, in_before))
             if _END_MOCK_RE.match(line):
                 if in_mock.rows is not None and not in_mock.rows:
                     raise CutParseError(
@@ -1186,6 +1237,7 @@ def parse_cut(text: str) -> MockTestSuite:
             _reject_sentence_period(m.group("value"), line_no, "MOVE")
             if case is None and in_before is not None:
                 _reject_unbalanced_subscript(m.group("target"), line_no)
+                hook_texts.append((line_no, line, in_before))
                 hook_steps[in_before].append(
                     HookStep(
                         kind="MOVE",
@@ -1333,6 +1385,7 @@ def parse_cut(text: str) -> MockTestSuite:
     if suite is None:
         raise CutParseError("no TESTSUITE found")
 
+    _reject_hook_placeholders(hook_texts, providers)
     _apply_before_blocks(suite, before_all, before_each)
     suite.before_all_mocks = list(before_all)
     suite.before_each_mocks = list(before_each)

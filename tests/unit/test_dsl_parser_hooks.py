@@ -189,3 +189,49 @@ TESTCASE "t {A}" USING PROVIDER P
     suite = parse_cut(cut)
     assert len(suite.test_cases) == 2
     assert len(suite.hook_checks()) == 2
+
+
+@pytest.mark.parametrize(
+    ("hook", "body", "line"),
+    [
+        ("BEFORE-EACH", "    MOVE {val} TO WS-C", 3),
+        ("AFTER-EACH", "    MOVE SPACES TO {txt}", 3),
+        (
+            "BEFORE-ALL",
+            '    MOCK CALL "X"\n        MOVE {val} TO WS-C\n    END-MOCK',
+            4,
+        ),
+    ],
+)
+def test_provider_placeholder_in_a_hook_is_refused(hook, body, line):
+    """Issue #227: placeholders are substituted only into a provider-bound
+    case's own MOVE/EXPECT values, so one in a hook step or hook MOCK body
+    reached cobc verbatim after lint passed. Refused at the hook line, even
+    though the PROVIDER is declared after the hook block."""
+    end = "END-BEFORE" if hook.startswith("BEFORE") else "END-AFTER"
+    cut = (
+        'TESTSUITE "p1"\n'
+        f"{hook}\n{body}\n{end}\n"
+        "PROVIDER prv\n"
+        "    HEADER val, txt\n"
+        '    ROW 2, "A,B"\n'
+        'TESTCASE "neg" USING PROVIDER prv\n'
+        "    PERFORM 1000-CALC\n"
+        "    EXPECT WS-B TO BE {txt}\n"
+    )
+    with pytest.raises(
+        CutParseError, match=rf"line {line}: placeholder .* inside {hook}"
+    ):
+        parse_cut(cut)
+
+
+def test_brace_text_in_a_hook_without_a_matching_column_still_parses():
+    cut = (
+        'TESTSUITE "p1"\n'
+        "BEFORE-EACH\n"
+        '    MOVE "{note}" TO WS-C\n'
+        "END-BEFORE\n"
+        'TESTCASE "plain"\n'
+        "    PERFORM 1000-CALC\n"
+    )
+    assert parse_cut(cut).before_each_steps[0].value == '"{note}"'

@@ -374,6 +374,19 @@ Flow (`_cmd_generate`):
     `(category, key)` set disagreed with `mock_surface`'s,
     `_warn_on_key_mismatch` already printed a loud stderr warning during
     step 10 — see `dsl.md`.
+12. When a bundle drove the scaffold (`--with-data`, `--scenarios`, and
+    plain `generate`, which builds a happy-path bundle by default),
+    `_refuse_unusable_scaffold` runs `run_static_checks` on the file just
+    written. Any refusal that is not `UNMOCKED_*` (e.g.
+    `UNSUPPORTED_TERMINATOR_LAYOUT`, `UNSUPPORTED_NESTED_MOCK_TARGET`) is
+    printed as `mockymock generate: .cut line N: TESTCASE "..." refused
+    (<code>): <message>` (or the program-level `refused (<code>)` line),
+    followed by a stderr note that the file was written but `lint` refuses
+    it, and generate exits 1 (#231 — it used to exit 0 on a case its own
+    lint rejects). The `.cut` is still written. `UNMOCKED_*` refusals are
+    left alone, since a MOCK block fixes those. `--per-paragraph`
+    (`bundle=None`) is exempt: one case per paragraph is a starting point
+    to prune, and some of those cases are expected to be refused.
 
 `_report_unsupported_boundaries` is the only non-trivial logic in this module:
 it walks `surface.boundary_sites` and names every site that stays unmockable —
@@ -384,8 +397,9 @@ pure-procedure-form SORT [never even recorded as a site], and RELEASE/
 RETURN all have a category and never appear here, see `analysis.md`) or
 `site.nested and site.span is
 None` (a nested site the splicer couldn't isolate, printed with
-`site.unspliceable_reason`). This list is purely informational at `generate`
-time — the scaffold is emitted regardless — but it documents exactly which
+`site.unspliceable_reason`). This list covers the program, not one case, so it is informational —
+the scaffold is emitted regardless (step 12 is what judges the cases
+generate wrote itself) — but it documents exactly which
 test cases `run` will later refuse if a case's PERFORM reaches one of these
 sites. Comment in the source explicitly frames this as "so the scaffold is
 never mistaken for complete coverage of the program's outputs."

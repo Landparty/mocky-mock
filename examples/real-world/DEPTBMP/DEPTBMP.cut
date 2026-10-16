@@ -28,11 +28,10 @@ TESTCASE "1000-INITIALIZE opens files, registers the initial IMS checkpoint, and
     MOCK CALL "CBLTDLI"
         MOVE SPACES TO CUST-STATUS
     END-MOCK
-    *> Mocking the whole READ removes its AT END clause body too (the
-    *> SET WS-EOF TO TRUE it held is spliced out along with it), so a
-    *> success case must not touch WS-EOF-FLAG -- it stays "N" from its
-    *> own VALUE clause -- and must set the FILE SECTION record fields
-    *> directly since no real disk read happens.
+    *> The mocked status is success, so the READ's own AT END clause (SET
+    *> WS-EOF TO TRUE) does not run and WS-EOF-FLAG stays "N" from its own
+    *> VALUE clause; the mock sets the FILE SECTION record fields directly
+    *> since no real disk read happens.
     MOCK READ DEPTIN
         MOVE "1000000001" TO BATCH-CIF-NUMBER
         MOVE "100000000012" TO BATCH-ACCT-NUMBER

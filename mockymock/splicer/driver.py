@@ -40,6 +40,80 @@ def _display_text(text: str) -> str:
     return text.replace('"', '""')
 
 
+#: A literal longer than this is split across lines by the driver: cobc
+#: compiles the instrumented copy `-free`, where a source line over 512
+#: bytes is truncated -- a recorded golden like DEPTMQC's 336-byte MQMD
+#: (`X"4D44..."`, 675 characters) cut the generated IF in half.
+_LONG_LITERAL = 120
+#: Characters of literal content per continuation piece.
+_LITERAL_CHUNK = 60
+_SPLITTABLE_LITERAL_RE = re.compile(
+    r"^(?P<prefix>[Xx]?)(?P<quote>[\"'])(?P<body>.*)(?P=quote)$"
+)
+
+
+def _literal_pieces(value: str) -> list[str] | None:
+    """A long alphanumeric or hexadecimal literal as concatenated pieces
+    (`X"4D44..."` -> `X"4D44..."`, `& X"2020..."`, ...), one per source
+    line, or None when `value` is short or not one such literal. The `&`
+    concatenation of literals is a literal to cobc (verified under
+    `-free -std=mvs`, GnuCOBOL 3.1.2), so the comparison is unchanged. A
+    hex piece keeps whole bytes; a quoted piece never splits a doubled
+    quote."""
+    text = value.strip()
+    if len(text) <= _LONG_LITERAL:
+        return None
+    m = _SPLITTABLE_LITERAL_RE.match(text)
+    if m is None:
+        return None
+    prefix, quote, body = m.group("prefix"), m.group("quote"), m.group("body")
+    units: list[str] = []
+    index = 0
+    while index < len(body):
+        if body[index] == quote:
+            if body[index : index + 2] != quote * 2:
+                return None  # a lone quote: not one literal
+            units.append(quote * 2)
+            index += 2
+        elif prefix:
+            units.append(body[index : index + 2])
+            index += 2
+        else:
+            units.append(body[index])
+            index += 1
+    pieces: list[str] = []
+    current = ""
+    for unit in units:
+        if current and len(current) + len(unit) > _LITERAL_CHUNK:
+            pieces.append(f"{prefix}{quote}{current}{quote}")
+            current = ""
+        current += unit
+    pieces.append(f"{prefix}{quote}{current}{quote}")
+    return [pieces[0]] + [f"& {piece}" for piece in pieces[1:]]
+
+
+def _operand_lines(head: str, value: str, indent: str) -> list[str]:
+    """`head + value` as one line, or -- for a long literal -- the head with
+    the literal's first piece, then each further `& piece` on its own
+    line under `indent`."""
+    pieces = _literal_pieces(value)
+    if pieces is None:
+        return [f"{head}{value}"]
+    return [f"{head}{pieces[0]}"] + [f"{indent}{piece}" for piece in pieces[1:]]
+
+
+def _display_operands(text: str) -> list[str]:
+    """`text` as one or more quoted DISPLAY operands: one when short, else
+    one per `_LITERAL_CHUNK` characters, so a long expected value never
+    pushes the generated FAIL DISPLAY past cobc's line limit."""
+    if len(text) <= _LONG_LITERAL:
+        return [f'"{_display_text(text)}"']
+    return [
+        f'"{_display_text(text[start : start + _LITERAL_CHUNK])}"'
+        for start in range(0, len(text), _LITERAL_CHUNK)
+    ]
+
+
 @dataclass
 class DriverArtifact:
     working_storage_lines: list[str]
@@ -73,14 +147,24 @@ def build_driver(
         "01  UT-CURRENT-CASE        PIC X(9).",
         "01  UT-FAIL-COUNT          PIC 9(9) VALUE 0.",
         '01  UT-EARLY-EXIT          PIC X VALUE "N".',
+        # The mocked outcome a replaced statement's own clause bodies are
+        # selected by (analysis.clause_bodies, issue #209).
+        '01  UT-MOCK-STATUS         PIC XX VALUE "00".',
     ]
     # Scratch field for VERIFY failure messages: tallies are PIC 9(9), so
     # displaying one directly prints "000000003"; moving it through this
     # Z-edited field and TRIMming yields a plain "3" in the FAIL line.
     if any(case.verifications for case in suite.test_cases):
         working_storage.append("01  UT-TALLY-EDITED        PIC Z(8)9.")
-    for _, tally in registry.items():
+    for (category, key), tally in registry.items():
         working_storage.append(f"01  {tally}      PIC 9(9) VALUE 0.")
+        working_storage.append(
+            f"01  {registry.base_name(category, key)}      PIC 9(9) VALUE 0."
+        )
+    for category, key in _resumed_keys(suite):
+        working_storage.append(
+            f"01  {registry.start_name(category, key)}      PIC 9(9) VALUE 0."
+        )
     if extra_working_storage_lines:
         working_storage.extend(extra_working_storage_lines)
 
@@ -98,6 +182,10 @@ def build_driver(
         if reset_lines:
             procedure.append("           PERFORM UT-RESET-WORKING-STORAGE")
         procedure.extend(_suite_phase_lines(suite, registry, suite.before_all_steps))
+        procedure.extend(
+            f"           MOVE {registry.name(*key)} TO {registry.start_name(*key)}"
+            for key in _resumed_keys(suite)
+        )
         if restore_state:
             procedure.append("           PERFORM UT-SAVE-STATE")
     for index in range(1, len(suite.test_cases) + 1):
@@ -172,6 +260,56 @@ def _tally_zero_lines(mocks, registry: TallyRegistry) -> list[str]:
     ]
 
 
+def _resumed_keys(suite: MockTestSuite) -> list[tuple]:
+    """BEFORE-ALL mock keys whose ROWS cursor each case resumes from where
+    the BEFORE-ALL steps left it (only when there are steps to consume
+    rows)."""
+    if not suite.before_all_steps:
+        return []
+    return list(dict.fromkeys((m.category, m.key) for m in suite.before_all_mocks))
+
+
+def _case_tally_start_lines(
+    case: MockTestCase, registry: TallyRegistry, suite: MockTestSuite | None
+) -> list[str]:
+    """Case-start values of each mocked key's tally and VERIFY baseline.
+
+    The tally is also the ROWS cursor (injector.build_rows_block), so it
+    must continue across hook steps rather than restart: a row a priming
+    READ in BEFORE-EACH or BEFORE-ALL consumed was handed out again in the
+    case (issue #223). A key the case inherits from BEFORE-ALL resumes at
+    the count BEFORE-ALL left (its -START field); every other key starts at
+    0. The baseline starts equal to the tally, so VERIFY counts nothing
+    that happened before the case."""
+    resumed = set(_resumed_keys(suite)) if suite is not None else set()
+    inherited = {id(m) for m in suite.before_all_mocks} if suite is not None else set()
+    lines: list[str] = []
+    seen: set[tuple] = set()
+    for mock in case.mocks:
+        key = (mock.category, mock.key)
+        if key in seen:
+            continue
+        seen.add(key)
+        tally = registry.name(*key)
+        start = (
+            registry.start_name(*key)
+            if key in resumed and id(mock) in inherited
+            else "0"
+        )
+        lines.append(f"           MOVE {start} TO {tally}")
+        lines.append(f"           MOVE {tally} TO {registry.base_name(*key)}")
+    return lines
+
+
+def _tally_baseline_lines(mocks, registry: TallyRegistry) -> list[str]:
+    """After a BEFORE-EACH PERFORM: VERIFY counts from here on, while the
+    tally (the ROWS cursor) keeps the rows the hook consumed."""
+    return [
+        f"           MOVE {registry.name(*key)} TO {registry.base_name(*key)}"
+        for key in dict.fromkeys((m.category, m.key) for m in mocks)
+    ]
+
+
 def _suite_phase_lines(
     suite: MockTestSuite, registry: TallyRegistry, steps: list[HookStep]
 ) -> list[str]:
@@ -212,8 +350,7 @@ def _build_testcase_paragraph(
     # case's EXPECT RETURN-CODE (issue #140).
     lines.append("           MOVE 0 TO RETURN-CODE")
     lines.append('           MOVE "N" TO UT-EARLY-EXIT')
-    for category, key in dict.fromkeys((m.category, m.key) for m in case.mocks):
-        lines.append(f"           MOVE 0 TO {registry.name(category, key)}")
+    lines.extend(_case_tally_start_lines(case, registry, suite))
     lines.append(
         f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} START: '
         f'{_display_text(case.name)}"'
@@ -224,13 +361,15 @@ def _build_testcase_paragraph(
         # VERIFY counts what the test's own PERFORM did: calls a BEFORE-EACH
         # PERFORM made are not the code under test.
         if any(step.kind == "PERFORM" for step in before_each):
-            lines.extend(_tally_zero_lines(case.mocks, registry))
+            lines.extend(_tally_baseline_lines(case.mocks, registry))
             # A terminator a BEFORE-EACH PERFORM reached must not cut the
             # case's own PERFORM short.
             lines.append('           MOVE "N" TO UT-EARLY-EXIT')
 
     for value, target in case.setup_moves:
-        lines.append(f"           MOVE {value} TO {target}")
+        move = _operand_lines("           MOVE ", value, "                ")
+        move[-1] += f" TO {target}"
+        lines.extend(move)
 
     lines.append("")
     perform_line = f"           PERFORM {case.perform_target}"
@@ -259,16 +398,30 @@ def _build_testcase_paragraph(
             lines.append("           END-IF")
             continue
         fail_operator = _expect_fail_condition(expectation.operator)
-        lines.append(
-            f"           IF {expectation.data_name} {fail_operator} "
-            f"{expectation.expected_value}"
+        lines.extend(
+            _operand_lines(
+                f"           IF {expectation.data_name} {fail_operator} ",
+                expectation.expected_value,
+                "               ",
+            )
         )
-        lines.append(
-            f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: expected '
-            f"{expectation.data_name} {expectation.operator} "
-            f"{_display_text(expectation.expected_value)}, "
-            f'got " {expectation.data_name}'
-        )
+        if _literal_pieces(expectation.expected_value) is None:
+            lines.append(
+                f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: '
+                f"expected {expectation.data_name} {expectation.operator} "
+                f"{_display_text(expectation.expected_value)}, "
+                f'got " {expectation.data_name}'
+            )
+        else:
+            lines.append(
+                f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: '
+                f'expected {expectation.data_name} {expectation.operator} "'
+            )
+            lines.extend(
+                f"                   {operand}"
+                for operand in _display_operands(expectation.expected_value)
+            )
+            lines.append(f'                   ", got " {expectation.data_name}')
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")
 
@@ -280,9 +433,11 @@ def _build_testcase_paragraph(
                 f"declares (should have been refused before codegen)"
             )
         tally = registry.name(verification.category, verification.key)
-        condition = _verify_condition(verification.expectation, tally)
+        base = registry.base_name(verification.category, verification.key)
+        count = f"({tally} - {base})"
+        condition = _verify_condition(verification.expectation, count)
         lines.append(f"           IF {condition}")
-        lines.append(f"               MOVE {tally} TO UT-TALLY-EDITED")
+        lines.append(f"               COMPUTE UT-TALLY-EDITED = {tally} - {base}")
         lines.append(
             f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY '
             f"{verification.category.keyword} {_display_text(verification.key)} WAS CALLED "

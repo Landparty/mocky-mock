@@ -143,7 +143,7 @@ def _declaration_for(target: str, item: dict) -> tuple[str, str] | None:
 #: An unsigned/signed integer or decimal numeric literal as cobolparser
 #: reports it. A COBOL data-name must contain a letter, so a USING operand
 #: whose name matches this can only ever be a literal.
-_NUMERIC_LITERAL_RE = re.compile(r"[+-]?(\d+)(?:\.(\d+))?")
+_NUMERIC_LITERAL_RE = re.compile(r"[+-]?(\d+)(?:[.,](\d+))?")
 
 
 def _literal_declaration(target: str, source: str) -> tuple[str, str] | None:

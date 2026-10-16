@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from mockymock._decimal import delocalize_numeric, localize_numeric
 from mockymock.analysis.stub_expectations import (
     SkippedStub,
     StubExpectation,
@@ -69,7 +70,9 @@ def _render_numeric(raw_value: str, scale: int) -> str | None:
     return f"-{digits}" if negative else digits
 
 
-def render_expect_value(raw_value: str, picture: str | None = None) -> str:
+def render_expect_value(
+    raw_value: str, picture: str | None = None, *, decimal_comma: bool = False
+) -> str:
     """Render one RECORDed field's raw DISPLAY text as `.cut` `EXPECT`
     value text.
 
@@ -94,14 +97,19 @@ def render_expect_value(raw_value: str, picture: str | None = None) -> str:
     -3.50 in a `S9(3)V99`), which the text-shape check alone would turn
     into a quoted literal (or, for an unsigned `9(3)V99`, the bare but
     100x-too-large `00350`) -- a golden that fails on the very next run.
+
+    `decimal_comma` (`DECIMAL-POINT IS COMMA`, issue #230): the program
+    DISPLAYs `00125,00` and must be given `125,00` back -- a period there
+    is a sentence end and the next run does not compile.
     """
+    numeric_text = delocalize_numeric(raw_value, decimal_comma)
     scale = numeric_scale(picture)
     if scale is not None:
-        rendered = _render_numeric(raw_value, scale)
+        rendered = _render_numeric(numeric_text, scale)
         if rendered is not None:
-            return rendered
-    if _NUMERIC_RE.match(raw_value) and not is_alphanumeric_picture(picture):
-        return raw_value
+            return localize_numeric(rendered, decimal_comma)
+    if _NUMERIC_RE.match(numeric_text) and not is_alphanumeric_picture(picture):
+        return localize_numeric(numeric_text, decimal_comma)
     # Spaces only: str.rstrip() also strips X'09'-X'0D' and X'1C'-X'1F',
     # which are ordinary field data (X'0C' ends every positive packed
     # zero), and dropping them wrote a golden that failed the next run
@@ -344,6 +352,7 @@ def rewrite_cut_text(
     pictures: dict[str, str] | None = None,
     *,
     label: bool = True,
+    decimal_comma: bool = False,
 ) -> str | None:
     """Replace each recorded stub's comment line with a real `EXPECT` line,
     preserving that line's own leading whitespace.
@@ -383,7 +392,9 @@ def rewrite_cut_text(
         original = lines[stub.line - 1]
         indent = original[: len(original) - len(original.lstrip())]
         rendered = render_expect_value(
-            item.value, picture_for(stub.data_name, pictures)
+            item.value,
+            picture_for(stub.data_name, pictures),
+            decimal_comma=decimal_comma,
         )
         lines[stub.line - 1] = f"{indent}EXPECT {stub.data_name} TO BE {rendered}"
         recorded_lines.add(stub.line)

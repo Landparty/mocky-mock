@@ -59,6 +59,19 @@ class TallyRegistry:
     def name(self, category: MockCategory, key: str) -> str:
         return self._names[(category, key)]
 
+    def base_name(self, category: MockCategory, key: str) -> str:
+        """The field holding the tally's value when the case's own PERFORM
+        began, so VERIFY counts only that PERFORM's calls while the tally
+        itself keeps counting as the ROWS cursor (issue #223). A tally
+        always ends in -TALLY, so the -BASE twin can never collide with
+        another tally."""
+        return self.name(category, key).removesuffix("-TALLY") + "-BASE"
+
+    def start_name(self, category: MockCategory, key: str) -> str:
+        """The field holding a BEFORE-ALL mock's tally as BEFORE-ALL left it:
+        each case inheriting the mock resumes its ROWS cursor there."""
+        return self.name(category, key).removesuffix("-TALLY") + "-START"
+
     def known(self, category: MockCategory, key: str) -> bool:
         return (category, key) in self._names
 

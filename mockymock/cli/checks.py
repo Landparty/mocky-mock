@@ -100,13 +100,18 @@ def extra_working_storage(checked: StaticCheckResult) -> list[str] | None:
     """
     from mockymock.splicer import cics_eib
     from mockymock.splicer.captures import capture_working_storage_lines
-    from mockymock.splicer.linkage import extra_working_storage_lines
+    from mockymock.splicer.linkage import (
+        extra_working_storage_lines,
+        rebinding_working_storage_lines,
+    )
     from mockymock.splicer.reset import index_working_storage_lines
 
     lines: list[str] = []
     if checked.cics_eib is not None:
         lines.extend(cics_eib.working_storage_lines(checked.cics_eib))
     lines.extend(extra_working_storage_lines(checked.linkage_address_of))
+    if checked.linkage is not None:
+        lines.extend(rebinding_working_storage_lines(checked.linkage.rebindings))
     lines.extend(capture_working_storage_lines(checked.captures))
     lines.extend(index_working_storage_lines(_index_names(checked)))
     return lines or None
@@ -125,6 +130,23 @@ def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
     return capture_reset_lines(checked.captures) + index_reset_lines(
         _index_names(checked)
     )
+
+
+def _synthesized_groups(cics_eib, transformed: list[str]) -> list[str]:
+    """The groups mockymock splices in after parsing that this program gets:
+    the CICS EIB and DL/I DIB blocks (`splicer.cics_eib`) and the generated
+    SQLCA (`splicer.sqlca`, present in the transformed text). The
+    BEFORE-ALL snapshot must cover them (issue #225)."""
+    from mockymock.splicer.sqlca import sqlca_reset_lines
+
+    groups: list[str] = []
+    if cics_eib is not None and cics_eib.referenced_names:
+        groups.append("DFHEIBLK")
+    if cics_eib is not None and cics_eib.dib_names:
+        groups.append("DLIDIB")
+    if sqlca_reset_lines(transformed):
+        groups.append("SQLCA")
+    return groups
 
 
 def _index_names(checked: StaticCheckResult) -> list[str]:
@@ -229,7 +251,11 @@ def run_static_checks(
     from mockymock.analysis.cut_names import check_cut_data_names
     from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.flow_targets import normalize_flow_targets
-    from mockymock.analysis.linkage import address_of_sites, linkage_plan
+    from mockymock.analysis.linkage import (
+        address_of_sites,
+        linkage_plan,
+        rebindable_sites,
+    )
     from mockymock.analysis.mock_surface import analyze, analyze_file_status_fields
     from mockymock.analysis.refusal import (
         CICS_MACRO_PLACEHOLDER,
@@ -250,7 +276,11 @@ def run_static_checks(
     from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.splicer.captures import plan_captures
     from mockymock.splicer.cics_resp import expand_dfhresp, expansion_note
-    from mockymock.splicer.linkage import neutralize, redirect_address_of
+    from mockymock.splicer.linkage import (
+        mark_based,
+        neutralize,
+        redirect_address_of,
+    )
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
     from mockymock.splicer.sqlca import transform_data_division_exec
     from mockymock.splicer.stub_writer import comment_and_replace, replace_columns
@@ -427,6 +457,15 @@ def run_static_checks(
         # shifts nothing the rest of the pipeline depends on. Anything
         # unclassifiable already refused above via `check_linkage_layout`.
         address_of, _ = address_of_sites(lines, linkage)
+        # A rebind to an address the program itself takes keeps its real
+        # meaning: the item is made BASED over its own backing storage
+        # instead (issue #226). Every other site -- above all a pointer a
+        # mocked CALL fills in, NULL in a test run -- is still redirected.
+        rebindable = rebindable_sites(lines, address_of)
+        lines, linkage.rebindings = mark_based(lines, linkage, rebindable)
+        rebound = {r.item_name for r in linkage.rebindings}
+        kept = [site for site in rebindable if site.item_name.upper() in rebound]
+        address_of = [site for site in address_of if site not in kept]
         out.linkage_address_of = address_of
         if address_of:
             lines = redirect_address_of(lines, address_of)
@@ -623,6 +662,12 @@ def run_static_checks(
         out.snapshot, snapshot_problems = plan_snapshot(
             parse_result.ast,
             out.linkage.linkage_items if out.linkage is not None else None,
+            _synthesized_groups(out.cics_eib, transformed),
+            (
+                [r.item_name for r in out.linkage.rebindings]
+                if out.linkage is not None
+                else None
+            ),
         )
         out.problems.extend(
             f"refused (UNSAVABLE_BEFORE_ALL_STATE): {problem}"

@@ -30,7 +30,7 @@ list, so only this detection gate needed to change.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -53,6 +53,10 @@ class LinkagePlan:
     entry_statements: list
     linkage_items: list
     header_line: int
+    # Folded items whose `SET ADDRESS OF` keeps its real meaning (issue
+    # #226): `splicer.linkage.Rebinding`s, filled in by `cli.checks` once
+    # `splicer.linkage.mark_based` has made them BASED.
+    rebindings: list = field(default_factory=list)
 
 
 def linkage_plan(program) -> LinkagePlan | None:
@@ -355,3 +359,119 @@ def procedure_header_clause_spans(
             return spans
         start = 0
     return None
+
+
+def rebindable_sites(
+    lines: list[str], sites: list[AddressOfSite]
+) -> list[AddressOfSite]:
+    """The receiving `SET ADDRESS OF` sites that can keep their real meaning
+    (issue #226): the address they bind to is one the program itself takes,
+    so it is valid storage in a test run too.
+
+    A site qualifies when its sending operand is `ADDRESS OF <item>`, or a
+    pointer the program only ever writes with `SET <ptr> TO ADDRESS OF
+    <item>` (and only otherwise reads as the sending side of another
+    rebind). Any other source -- a pointer a CALL fills in (the IMS
+    `UIBPCBAL` idiom, NULL from a mocked CBLTDLI), one a MOVE or an EXEC
+    touches, `NULL` -- keeps the old redirect into `UT-ADDR-SINK`, which can
+    never dereference an address the test run does not have."""
+    tokens = _tokenize(lines)
+    procedure = _procedure_start(tokens)
+    by_position = {(t.line, t.start): i for i, t in enumerate(tokens)}
+    sources: dict[AddressOfSite, tuple[str, int] | None] = {}
+    for site in sites:
+        index = by_position.get((site.line, site.start_column))
+        sources[site] = None if index is None else _set_source(tokens, index)
+
+    rebind_source_positions = {
+        source[1]
+        for source in sources.values()
+        if source is not None and not source[0].startswith("ADDRESS OF ")
+    }
+    owned: dict[str, bool] = {}
+
+    def program_owned(pointer: str) -> bool:
+        if pointer not in owned:
+            owned[pointer] = _only_set_to_addresses(
+                tokens, procedure, pointer, rebind_source_positions
+            )
+        return owned[pointer]
+
+    out: list[AddressOfSite] = []
+    for site in sites:
+        source = sources[site]
+        if source is None:
+            continue
+        text = source[0]
+        if text.startswith("ADDRESS OF ") or (
+            text not in ("NULL", "NULLS") and program_owned(text)
+        ):
+            out.append(site)
+    return out
+
+
+def _procedure_start(tokens: list[_Token]) -> int:
+    for i in range(len(tokens) - 1):
+        if tokens[i].text == "PROCEDURE" and tokens[i + 1].text == "DIVISION":
+            return i
+    return len(tokens)
+
+
+def _set_source(tokens: list[_Token], index: int) -> tuple[str, int] | None:
+    """(`ADDRESS OF <NAME>` or `<NAME>`, token index of the source) for the
+    SET whose receiving `ADDRESS` token sits at `index`, or None when its
+    sending operand is anything else (qualified, subscripted, unreadable)."""
+    depth = 0
+    for i in range(index, len(tokens)):
+        text = tokens[i].text
+        if text == "(":
+            depth += 1
+        elif text == ")":
+            depth -= 1
+        elif depth == 0 and text == "TO":
+            rest = tokens[i + 1 : i + 5]
+            if (
+                len(rest) >= 3
+                and rest[0].text == "ADDRESS"
+                and rest[1].text == "OF"
+                and rest[2].is_word
+            ):
+                tail = rest[3:]
+                if tail and tail[0].text in ("OF", "IN", "("):
+                    return None
+                return f"ADDRESS OF {rest[2].text}", i + 1
+            if rest and rest[0].is_word and rest[0].text not in _STOP_WORDS:
+                if len(rest) > 1 and rest[1].text in ("OF", "IN", "("):
+                    return None
+                return rest[0].text, i + 1
+            return (rest[0].text, i + 1) if rest else None
+        elif depth == 0 and text in (".", "SET") and i != index:
+            return None
+    return None
+
+
+def _only_set_to_addresses(
+    tokens: list[_Token], procedure: int, pointer: str, rebind_sources: set[int]
+) -> bool:
+    """True when every PROCEDURE DIVISION occurrence of `pointer` is either
+    the receiving operand of `SET <pointer> TO ADDRESS OF <item>` or the
+    sending operand of a receiving `SET ADDRESS OF ... TO <pointer>` -- and
+    there is at least one of the first kind."""
+    assigned = False
+    for i in range(procedure, len(tokens)):
+        if tokens[i].text != pointer:
+            continue
+        if i in rebind_sources:
+            continue
+        previous = tokens[i - 1].text if i > 0 else ""
+        following = [t.text for t in tokens[i + 1 : i + 4]]
+        if (
+            previous == "SET"
+            and following[:3] == ["TO", "ADDRESS", "OF"]
+            and len(tokens) > i + 4
+            and tokens[i + 4].is_word
+        ):
+            assigned = True
+            continue
+        return False
+    return assigned

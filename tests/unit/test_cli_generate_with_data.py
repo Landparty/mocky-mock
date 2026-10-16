@@ -141,7 +141,10 @@ def test_rows_0_is_honored_not_treated_as_falsy(tmp_path):
     # replicated AT END MOVE, with no EVALUATE wrapper since there is no
     # row-selecting branch to choose between with zero rows.
     assert 'MOVE "10" TO WS-ORDER-STATUS' in text
-    assert 'MOVE "Y" TO WS-EOF' in text
+    # The AT END clause itself (`MOVE "Y" TO WS-EOF`) is no longer copied
+    # into the mock: the splice runs the program's own clause once the
+    # status reports end of file (issue #209).
+    assert "the splice runs this READ's own AT END clause" in text
     assert "VERIFY READ ORDER-FILE WAS CALLED 1 TIMES" in text
 
 
@@ -206,7 +209,8 @@ def test_fixtures_path_empty_read_sequence_still_emits_the_exhaustion_branch(
     text = out.read_text(encoding="utf-8")
     assert _tally_count(text) == 0
     assert 'MOVE "10" TO WS-ORDER-STATUS' in text
-    assert 'MOVE "Y" TO WS-EOF' in text
+    # Issue #209: the splice runs the program's own AT END clause.
+    assert "the splice runs this READ's own AT END clause" in text
 
 
 def test_rows_negative_is_rejected(tmp_path, capsys):
@@ -451,8 +455,12 @@ def test_known_unmockable_sites_do_not_raise_the_key_mismatch_warning(tmp_path, 
     """VSAMKSDS (READ/REWRITE/DELETE nested in a clause body) and BATCHSEQ
     (a READ nested in a clause body, `ACCEPT X FROM DATE YYYYMMDD`) only
     differ from their bundles by sites mockymock already lists as not
-    mockable, so the "should not happen" warning stays quiet."""
-    for name in ("VSAMKSDS", "BATCHSEQ"):
+    mockable, so the "should not happen" warning stays quiet.
+
+    VSAMKSDS's happy path itself reaches those nested sites, so `lint`
+    refuses the case `generate` wrote and generate exits 1 (issue #231);
+    the file is still written."""
+    for name, expected_rc in (("VSAMKSDS", 1), ("BATCHSEQ", 0)):
         out = tmp_path / f"{name}.cut"
         rc = main(
             [
@@ -465,5 +473,32 @@ def test_known_unmockable_sites_do_not_raise_the_key_mismatch_warning(tmp_path, 
                 str(out),
             ]
         )
-        assert rc == 0
+        assert rc == expected_rc, name
+        assert out.exists(), name
         assert "boundary key mismatch" not in capsys.readouterr().err, name
+
+
+_CHKCLR = Path(__file__).resolve().parents[2] / "examples" / "real-world" / "CHKCLR"
+
+
+def test_generate_fails_when_lint_refuses_the_scaffold_it_wrote(tmp_path, capsys):
+    """Issue #231: CHKCLR's STOP RUN can only propagate back to the test
+    through a paragraph reached by falling past a GO TO target, which lint
+    refuses as UNSUPPORTED_TERMINATOR_LAYOUT. No MOCK block can fix that, so generate says so and exits 1 instead of 0 --
+    while still writing the file."""
+    out = tmp_path / "CHKCLR.cut"
+    rc = main(
+        [
+            "generate",
+            str(_CHKCLR / "CHKCLR.cbl"),
+            "--copybook-path",
+            str(_CHKCLR / "copybooks"),
+            "-o",
+            str(out),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert out.exists()
+    assert "UNSUPPORTED_TERMINATOR_LAYOUT" in captured.out + captured.err
+    assert "lint` refuses it" in captured.err
