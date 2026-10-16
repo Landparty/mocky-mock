@@ -199,25 +199,32 @@ def resolve_program(
             str(cut_path.parent / f"{stem}{ext}") for ext in COBOL_SOURCE_EXTENSIONS
         )
 
+    # The whole stem before the first-dot base in the mirror and unique
+    # rules too: `generate` names a suite after the program's full stem, so
+    # `tests/pay/PAY.V2.cut` is `src/pay/PAY.V2.cbl`'s (issue #289).
+    stems = tuple(dict.fromkeys((cut_path.stem, base)))
     if layout.tests_dir != layout.source_root and _is_within(
         cut_abs.parent, layout.tests_dir
     ):
         mirrored_dir = layout.source_root / cut_abs.parent.relative_to(layout.tests_dir)
-        mirrored = _first_existing(mirrored_dir, base)
-        if mirrored is not None:
-            return mirrored, "mirror"
-        tried.append(str(mirrored_dir / f"{base}.cbl") + " (and .cob)")
+        for stem in stems:
+            mirrored = _first_existing(mirrored_dir, stem)
+            if mirrored is not None:
+                return mirrored, "mirror"
+            tried.append(str(mirrored_dir / f"{stem}.cbl") + " (and .cob)")
 
-    matches = _programs_by_stem(str(layout.source_root)).get(base.upper(), ())
-    if len(matches) == 1:
-        return matches[0], "unique"
-    if len(matches) > 1:
-        listed = ", ".join(str(m) for m in matches)
-        raise DiscoveryError(
-            f"{cut_path}: {len(matches)} programs named {base} under "
-            f'{layout.source_root} ({listed}); add a PROGRAM "<path>" line '
-            f"after TESTSUITE to say which one this suite tests"
-        )
+    by_stem = _programs_by_stem(str(layout.source_root))
+    for stem in stems:
+        matches = by_stem.get(stem.upper(), ())
+        if len(matches) == 1:
+            return matches[0], "unique"
+        if len(matches) > 1:
+            listed = ", ".join(str(m) for m in matches)
+            raise DiscoveryError(
+                f"{cut_path}: {len(matches)} programs named {stem} under "
+                f'{layout.source_root} ({listed}); add a PROGRAM "<path>" line '
+                f"after TESTSUITE to say which one this suite tests"
+            )
     tried.append(f"any {base}.cbl under {layout.source_root}")
     raise DiscoveryError(
         f"no COBOL program found for {cut_path} (tried: {'; '.join(tried)}); "
@@ -247,7 +254,7 @@ def find_suites(program_path: Path, layout: ProjectLayout | None = None) -> list
     sorted. Scans the project root, plus the program's own folder when it
     lies outside the root (a program passed by absolute path)."""
     layout = layout or project_layout()
-    candidates = set(discover_cut_files(layout.root))
+    candidates = set(project_cut_files(layout))
     if not _is_within(program_path.resolve().parent, layout.root):
         candidates.update(p for p in program_path.parent.glob("*.cut") if p.is_file())
     found = []
@@ -359,6 +366,19 @@ def copybook_not_found_hint() -> str:
         "set copybook_path under project: in cobol.yml (shared with "
         "cobol-parser) or in mockymock.toml / [tool.mockymock]."
     )
+
+
+def project_cut_files(layout: ProjectLayout) -> list[Path]:
+    """Every `.cut` file of the project: those under its root, plus those
+    under its tests folder when `test_root` points outside the root
+    (`test_root = "../qa-tests"`, an absolute CI path) -- the folder
+    `generate` writes new suites into, so a program-only command must find
+    them there too (issue #294). Sorted, each file once."""
+    found = {path.resolve(): path for path in discover_cut_files(layout.root)}
+    if not _is_within(layout.tests_dir.resolve(), layout.root.resolve()):
+        for path in discover_cut_files(layout.tests_dir):
+            found.setdefault(path.resolve(), path)
+    return sorted(found.values())
 
 
 def discover_cut_files(root: Path) -> list[Path]:

@@ -123,7 +123,13 @@ from `_per_pair_report_path`, which folds the `.cut`'s path *relative to the
 test root* into the file name so `svc1/PROG.cut` and `svc2/PROG.cut` never
 share one report)
 — not a parallel implementation, so an explicit single-pair invocation is
-byte-for-byte unaffected.
+byte-for-byte unaffected. A `.cut` whose program cannot be resolved is
+skipped and listed; the command exits 1 when nothing ran, or (issue #303,
+option (b)) when a skipped `.cut` declares a `PROGRAM "..."` line, since
+that explicit claim is now broken (`_report_broken_claims`). A `.cut`
+whose program was only guessed is still just skipped. `run` also writes a
+failing per-pair `--junit-xml` / `--json-report` entry for every skipped
+suite (`_write_skipped_suite_reports`, via `_write_failure_reports`).
 
 `_apply_config_to_args()` fills `args.copybook_path`/`args.seed` from the
 loaded config when the CLI flag was left at its argparse default; an
@@ -140,12 +146,17 @@ missing; (2) sibling `<base>.cbl`/`.cob`; (3) a suite under the tests
 folder mirrors to the same relative folder under the source root; (4) the
 only `<base>.cbl` under the source root (two is a `DiscoveryError` asking
 for a PROGRAM line). `<base>` is the .cut name up to its first dot, so
-`PROG.errors.cut` is a second suite of PROG. `ProjectLayout`
+`PROG.errors.cut` is a second suite of PROG. Rules (2)-(4) all try the
+.cut's whole stem before `<base>` (issue #289: `generate` names a suite
+after the program's full stem, and `tests/pay/PAY.V2.cut` only paired
+with a `PAY.cbl` under the mirror and unique rules). `ProjectLayout`
 (`project_layout(config)`) supplies root (the deciding config file's
 folder, else cwd), `tests_dir` (`test_root` if a file set it, else
 `<root>/tests`) and `source_root` (new config key, default `<root>/src` when it exists, else root).
 `find_suites(program)` is the reverse direction (scans the root, plus the
-program's own folder when it lies outside it); `resolve_cut_path` errors
+tests folder when `test_root` points outside the root -- `project_cut_files`,
+shared with `mockymock suites`, issue #294: `generate` writes new suites
+there -- plus the program's own folder when it lies outside the root); `resolve_cut_path` errors
 naming the suites when there are several, except that `run`/`lint
 PROG.cbl` hand several suites to `_run_directory`/`_lint_directory`
 (`_several_suites`); their per-suite report files are named relative to
@@ -491,6 +502,10 @@ Flags beyond the pipeline inputs:
   could shorten or lengthen the bound a hung mocked CALL is killed by. The
   help text now points at the fix for that hang: `MOCK CALL "X" ROWS (
   ... ) TERMINAL ( ... )`, so the calls after the last row end the loop.
+  Values below 1 are refused on run / mutate / report (`_timeout_seconds`,
+  issue #306): coreutils `timeout 0` turns the container-side kill off, so
+  a hung binary outlived its `docker exec` as an orphan. `run_binary`
+  also clamps to at least 1 second for any other caller.
 - `--case NAME` (repeatable) / `--tag TAG` (repeatable) — run only the named
   or tagged TESTCASEs (union when both given). Selection happens in
   `run_static_checks` before any per-case refusal check, so a refused
@@ -1068,7 +1083,9 @@ test cases with 1-based line numbers and tags. `--json` emits the
 machine-readable form (`{"version": 1, "cutFile", "suite": {name, line},
 "cases": [{name, line, tags}]}`) the VS Code extension uses for
 authoritative test discovery; a `CutParseError` yields `{"version": 1,
-"error": "..."}` and exit 1.
+"error": "..."}` and exit 1. So does every other `--json` failure: a
+missing `.cut` or program file, and `--boundaries` without a program, go
+through `_print_command_error` too (issue #309; they printed plain text).
 
 **`--boundaries` (2026-09-15)** additionally reports `boundaries: [{category,
 key, keys, directive, label, paragraph, line, matchText}]` -- every site in

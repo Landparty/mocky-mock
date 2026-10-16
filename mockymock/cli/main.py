@@ -199,6 +199,21 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if report.ready else 1
 
 
+def _timeout_seconds(value: str) -> int:
+    """argparse `type=` for `--timeout`: a whole number of seconds, at
+    least 1. coreutils `timeout 0` disables the container-side kill, so a
+    hung binary outlived its `docker exec` as an orphan at 100% CPU, and a
+    negative value made `timeout` itself fail with exit 125 (issue
+    #306)."""
+    try:
+        seconds = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from None
+    if seconds < 1:
+        raise argparse.ArgumentTypeError("--timeout must be at least 1 second")
+    return seconds
+
+
 def _check_input_files(command: str, *paths: Path) -> bool:
     """Print a clean error for every input path that doesn't exist. Runs
     before any toolchain/parse work so a typo'd path fails in milliseconds
@@ -431,8 +446,8 @@ def _cmd_suites(args: argparse.Namespace) -> int:
     from mockymock.cli.discovery import (
         DiscoveryError,
         default_suite_path,
-        discover_cut_files,
         find_suites,
+        project_cut_files,
         resolve_program,
     )
 
@@ -467,7 +482,7 @@ def _cmd_suites(args: argparse.Namespace) -> int:
         return 0
 
     rows: list[dict[str, str | None]] = []
-    for cut in discover_cut_files(layout.root):
+    for cut in project_cut_files(layout):
         try:
             program, rule = resolve_program(cut, layout)
             rows.append(
@@ -1497,6 +1512,7 @@ def _run_directory(
     from mockymock.cli.discovery import (
         DiscoveryError,
         discover_cut_files,
+        read_program_line,
         resolve_program_path,
     )
 
@@ -1512,12 +1528,16 @@ def _run_directory(
     exit_code = 0
     ran = 0
     unresolved: list[str] = []
+    broken_claims = 0
     tag_root = _report_tag_root(cut_files, test_root)
     for cut_path in cut_files:
         try:
             program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
             unresolved.append(str(exc))
+            if read_program_line(cut_path) is not None:
+                broken_claims += 1
+            _write_skipped_suite_reports(args, cut_path, tag_root, str(exc))
             continue
         ran += 1
         sub_args = copy.copy(args)
@@ -1539,9 +1559,58 @@ def _run_directory(
         f"mockymock run: {ran} suite(s) run, {len(unresolved)} .cut file(s) "
         f"skipped (no program found)"
     )
-    if ran == 0:
+    if ran == 0 or _report_broken_claims("run", broken_claims):
         return 1
     return exit_code
+
+
+def _report_broken_claims(command: str, broken_claims: int) -> bool:
+    """True (after saying so) when a skipped `.cut` declares a PROGRAM
+    "..." line that no longer resolves (issue #303, option (b)): an
+    explicit claim that is now broken is a renamed or moved program, and
+    exiting 0 dropped its suite from a green CI build. A `.cut` whose
+    program was only guessed from the folder is still just skipped."""
+    if not broken_claims:
+        return False
+    print(
+        f"mockymock {command}: {broken_claims} .cut file(s) name a PROGRAM "
+        f"that does not exist -- failing"
+    )
+    return True
+
+
+def _write_skipped_suite_reports(
+    args: argparse.Namespace, cut_path: Path, tag_root: Path, reason: str
+) -> None:
+    """A failing --junit-xml / --json-report entry for a directory-mode
+    suite skipped because its program was not found (issue #303), so a
+    CI collector sees the skip instead of a smaller, clean build."""
+    if not getattr(args, "junit_xml", None) and not getattr(args, "json_report", None):
+        return
+    import copy
+
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        cut_suite = parse_cut(read_utf8_source(cut_path))
+    except (CutParseError, OSError, UnicodeDecodeError):
+        cut_suite = None
+    sub_args = copy.copy(args)
+    for flag in ("junit_xml", "json_report"):
+        if getattr(args, flag, None):
+            setattr(
+                sub_args,
+                flag,
+                _per_pair_report_path(getattr(args, flag), cut_path, tag_root),
+            )
+    _write_failure_reports(
+        sub_args,
+        "run",
+        cut_suite.name if cut_suite is not None else cut_path.stem,
+        reason,
+        cut_suite=cut_suite,
+        cut_file=cut_path,
+    )
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -2381,6 +2450,7 @@ def _lint_directory(
     from mockymock.cli.discovery import (
         DiscoveryError,
         discover_cut_files,
+        read_program_line,
         resolve_program_path,
     )
 
@@ -2396,11 +2466,14 @@ def _lint_directory(
     exit_code = 0
     ran = 0
     unresolved: list[str] = []
+    broken_claims = 0
     for cut_path in cut_files:
         try:
             program_path = resolve_program_path(None, cut_path, layout)
         except DiscoveryError as exc:
             unresolved.append(str(exc))
+            if read_program_line(cut_path) is not None:
+                broken_claims += 1
             continue
         ran += 1
         sub_args = copy.copy(args)
@@ -2415,7 +2488,7 @@ def _lint_directory(
         f"mockymock lint: {ran} suite(s) checked, {len(unresolved)} .cut "
         f"file(s) skipped (no program found)"
     )
-    if ran == 0:
+    if ran == 0 or _report_broken_claims("lint", broken_claims):
         return 1
     return exit_code
 
@@ -2778,7 +2851,9 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         print("mockymock collect: --boundaries requires --json")
         return 1
     if args.boundaries and not args.program:
-        print("mockymock collect: --boundaries requires a program argument")
+        # With --json every failure is a JSON error object on stdout: the
+        # VS Code extension parses it (issue #309).
+        _print_command_error(args, "--boundaries requires a program argument")
         return 1
 
     cut_path = Path(args.cut)
@@ -2786,7 +2861,14 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     program_path = Path(args.program) if args.program else None
     if program_path is not None:
         check_paths.append(program_path)
-    if not _check_input_files("mockymock collect", *check_paths):
+    if args.json:
+        missing = [path for path in check_paths if not path.is_file()]
+        if missing:
+            _print_command_error(
+                args, "; ".join(f"no such file: {path}" for path in missing)
+            )
+            return 1
+    elif not _check_input_files("mockymock collect", *check_paths):
         return 1
     try:
         suite = parse_cut(read_utf8_source(cut_path))
@@ -3616,7 +3698,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--timeout",
-        type=int,
+        type=_timeout_seconds,
         default=30,
         help=(
             "Binary execution timeout in seconds (default 30); a mocked "
@@ -3727,7 +3809,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mutate_parser.add_argument(
         "--timeout",
-        type=int,
+        type=_timeout_seconds,
         default=15,
         help=(
             "Per-mutant run timeout in seconds (default 15); a mutant that "
@@ -3942,7 +4024,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report_parser.add_argument("--seed", type=int, help="Seed for fixture generation")
     report_parser.add_argument(
-        "--timeout", type=int, help="Per-run timeout in seconds passed to 'run'"
+        "--timeout",
+        type=_timeout_seconds,
+        help="Per-run timeout in seconds passed to 'run'",
     )
     report_parser.add_argument(
         "--mutation-threshold",

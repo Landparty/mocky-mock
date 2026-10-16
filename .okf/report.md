@@ -164,6 +164,15 @@ the console line and the JSON `crashDetail` are never blank/null there.
 - **Mid-line markers (#139).** `parse_stdout` finds `__MOCKYMOCK__ ` after
   leading text, so a program's `DISPLAY ... WITH NO ADVANCING` no longer
   hides the next marker (it used to drop a FAIL line and report a pass).
+- **Values split at X'0A' (#285, audit Finding 11).** Every FAIL /
+  RECORD marker that DISPLAYs a raw field value is followed by
+  `__MOCKYMOCK__ VALUE-END` (`splicer.driver.VALUE_END_MARKER`). A value
+  holding byte X'0A' (a binary halfword of 10 in a group, an LF in a
+  PIC X) splits its marker across lines; `parse_stdout` rejoins every
+  marker-less line between the marker and VALUE-END with LF, so a
+  `--record-expectations` golden is no longer cut (and failing the next
+  run) and a FAIL reason shows the whole actual value. Without VALUE-END
+  the continuation is dropped as before.
 - **Not-run cases (#150).** `json_report.not_run_case_names` lists the
   selected cases that never printed START; `format_console` shows each as
   `[NOT RUN]` (and `N not run` in the summary) and `format_junit_xml` adds
@@ -400,7 +409,10 @@ the `cobol-test` skill's hand-over.
   each with `mockedBy` from `refusal._gates.directive_matches_site` -- the
   rule `run` splices by -- and `reachedUnmockedBy` from case reach. Rendered
   as the "Boundaries" section after Test cases. Older report dicts without
-  the key render a note.
+  the key render a note. Its per-case MOCK lookup is keyed by `.cut` line,
+  and the run step matches `--run-json` entries to cases by `.cut` line,
+  then by name in order (issue #304): TESTCASE names may repeat, and a
+  dict keyed by name left one of two same-named cases "not run".
 - `scenario-gap` / `scenario-gap-covered-by-hand` findings carry `items`
   (one line per branch). `test_report._plain_arm_reason` strips the
   `EVALUATE@405/WHEN#1:` prefix and rewrites the generator's known reasons

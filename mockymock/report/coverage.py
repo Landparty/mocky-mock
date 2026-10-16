@@ -216,6 +216,22 @@ def build_original_line_map(
     instrumented_stripped = [line.rstrip() for line in instrumented_lines]
     inst_to_norm = _matching_index_map(normalized_stripped, instrumented_stripped)
 
+    # A statement the splicer replaced (a mocked boundary, a neutralized
+    # GOBACK / STOP RUN) stays in the instrumented source commented out,
+    # `stub_writer.comment_and_replace`'s prefix before its own text, with
+    # the replacement right after it. Align those commented copies too, so
+    # the statement keeps its place (issue #297: they dropped out of the
+    # executable set, and an untaken CALL-only branch read 100%).
+    commented: set[int] = set()
+    if any(line.startswith(_COMMENTED_PREFIX) for line in instrumented_stripped):
+        aligned = list(instrumented_stripped)
+        for index, line in enumerate(instrumented_stripped):
+            if index not in inst_to_norm and line.startswith(_COMMENTED_PREFIX):
+                aligned[index] = line[len(_COMMENTED_PREFIX) :]
+                commented.add(index)
+        inst_to_norm = _matching_index_map(normalized_stripped, aligned)
+        commented &= set(inst_to_norm)
+
     extracted = _extract_fixed_format(original_lines)
     norm_to_orig = _matching_index_map(
         [content for _, content in extracted], normalized_stripped
@@ -226,7 +242,32 @@ def build_original_line_map(
         extracted_index = norm_to_orig.get(norm_index)
         if extracted_index is not None:
             mapping[inst_index + 1] = extracted[extracted_index][0]
+
+    # The replacement block after a commented span stands for the span's
+    # first line: the statement counts as executed exactly when its
+    # replacement ran.
+    for index in sorted(commented):
+        if index - 1 in commented or index + 1 not in mapping:
+            continue  # not the first line of its span, or unmapped
+        original = mapping[index + 1]
+        follower = index + 1
+        while follower in commented:
+            follower += 1
+        while (
+            follower < len(instrumented_stripped)
+            and follower not in inst_to_norm
+            # A replacement is indented statements; a line starting in
+            # column 1 is a paragraph header the splicer added after it.
+            and not instrumented_stripped[follower][:1].strip()
+        ):
+            mapping[follower + 1] = original
+            follower += 1
     return mapping
+
+
+#: The prefix `splicer.stub_writer.comment_and_replace` puts before each
+#: line of a statement span it replaces.
+_COMMENTED_PREFIX = "      *> "
 
 
 def map_coverage_to_original(
