@@ -35,6 +35,7 @@ from mockymock.dsl.model import (
     MockCategory,
     MockTestSuite,
 )
+from mockymock.splicer.cics_resp import cics_success_defaults
 from mockymock.splicer.io_copy import DataLayout, from_move, into_move
 from mockymock.splicer.naming import TallyRegistry
 
@@ -193,8 +194,14 @@ def build_site_dispatch(
     statement_text: str = "",
     layout: DataLayout | None = None,
     lifted_clauses: tuple[LiftedClause, ...] | None = None,
+    eib_resp_names: tuple[str, ...] = (),
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    An EXEC CICS mock starts by moving 0 (DFHRESP(NORMAL)) to the
+    command's own RESP / RESP2 items and to `eib_resp_names` (the
+    EIBRESP / EIBRESP2 the program has), as real CICS sets them on every
+    command; the body's own MOVEs still win (issue #320).
 
     `lifted_clauses` (issue #209, `analysis.clause_bodies`): the replaced
     statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY /
@@ -291,6 +298,11 @@ def build_site_dispatch(
             )
         if lifted_clauses:
             lines.append(f'                   MOVE "00" TO {OUTCOME_FIELD}')
+        if directive.category is MockCategory.CICS:
+            lines.extend(
+                f"                   {move}"
+                for move in cics_success_defaults(site.statement, eib_resp_names)
+            )
         if directive.category in FILE_STATUS_CATEGORIES:
             # A statement naming several files (`OPEN INPUT A OUTPUT B`,
             # `CLOSE A B`) is one site matched by ONE directive (a second

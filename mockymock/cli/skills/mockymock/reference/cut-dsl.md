@@ -338,6 +338,12 @@ Every eligible category gets an implicit `MOVE "00"` (success) before its
 own body automatically, whether or not `FILE-STATUS IS` is used -- you
 only need this directive to signal something *other* than success.
 
+`MOCK CICS` works the same way: the command's own `RESP(item)` and
+`RESP2(item)`, and `EIBRESP` / `EIBRESP2` when the program uses them, get
+an implicit `MOVE 0` (`DFHRESP(NORMAL)`) before the body, as real CICS
+sets them on every command. Set them in the body to signal a condition,
+e.g. `MOVE DFHRESP(NOTFND) TO WS-RESP`.
+
 ```
 MOCK OPEN INV-FILE
     FILE-STATUS IS FILE-NOT-FOUND

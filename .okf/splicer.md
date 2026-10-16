@@ -917,6 +917,22 @@ Verified end to end against real GnuCOBOL 4.0: the rewritten program
 compiles, runs and passes its test case; the un-rewritten one does not
 compile at all.
 
+# CICS mocks default to NORMAL (cics_resp.py, issue #320, 2026-10-16)
+
+Every mocked EXEC CICS branch starts with `MOVE 0 TO <item>` for the
+command's own `RESP(item)` / `RESP2(item)` operands
+(`cics_resp.resp_operands`: single data names only, a subscripted operand
+is left to the body) and for `EIBRESP` / `EIBRESP2` when the program's
+text names them (declared, or synthesized by `cics_eib`; computed once per
+splice in `orchestrator.splice_program` and passed as
+`build_site_dispatch(..., eib_resp_names=...)`). Real CICS sets them on
+every command; before, an empty mock left the previous mock's condition
+(NOTFND = 13) in RESP and the next success check took its error branch.
+The body's own MOVEs follow, so they win -- the same contract as a file
+op's implicit `MOVE "00"` to its FILE STATUS. This is the splice-side
+default for hand-written mocks; #253 is the separate
+`generate` scaffold fix that stopped writing a random RESP value.
+
 # DFHRESP Expansion (cics_resp.py, 2026-09-28)
 
 `expand_dfhresp(lines)` does what the CICS translator does to
