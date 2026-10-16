@@ -909,7 +909,9 @@ score identically, carry `ran: false` (and `totals.not_compiled`) in the
 JSON, and print as `uncovered`. `--json-report` writes the full
 machine-readable outcome (with `stillbornByReason` totals and a per-mutant
 `stillbornReason`); `--fail-under` exits 1 below the given
-percentage. Every baseline/mutant run's `StaticCheckResult.notes` (a
+percentage, compared exactly (`MutationOutcome.score_below`, as fractions:
+`score * 100` would put 29/50 at 57.99999999999999, printed `58.0%` yet
+under `--fail-under 58`). Every baseline/mutant run's `StaticCheckResult.notes` (a
 paragraph-scoped `PARSE_WARNING`/`UNRESOLVED_COPYBOOK` waived rather than
 refused — [analysis](analysis.md)) is collected (union, first-seen order,
 deduped) and printed as `mockymock mutate: <note>` lines before the

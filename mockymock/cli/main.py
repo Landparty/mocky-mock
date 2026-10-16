@@ -2202,7 +2202,7 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
 
     score = outcome.score
     if args.fail_under is not None:
-        if score is None or score * 100 < args.fail_under:
+        if outcome.score_below(args.fail_under):
             shown = "n/a" if score is None else f"{score * 100:.1f}%"
             print(
                 f"mockymock mutate: mutation score {shown} is below "
