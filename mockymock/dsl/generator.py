@@ -1105,6 +1105,8 @@ def _directive_for(
     body = _placeholder_body_for(category, prefix)
     if category is MockCategory.DLI:
         body = body + _dli_loop_end_lines(site, context, None)
+    if category is MockCategory.CICS:
+        body = body + _cics_loop_end_lines(site, context, None)
     return f'MOCK {category.value} "{prefix}"', body
 
 
@@ -1302,6 +1304,78 @@ def _call_loop_end_lines(
     if tally is None:
         return moves
     return [f"IF {tally} > 1", *(f"    {move}" for move in moves), "END-IF"]
+
+
+#: The EIBRESP a CICS get-next command answers once nothing is left:
+#: ENDFILE (20) for a browse, ITEMERR (26) for a TS queue, QZERO (23) for
+#: a TD queue.
+_CICS_GET_NEXT_END = {"READNEXT": 20, "READPREV": 20, "READQ TS": 26, "READQ TD": 23}
+
+
+def _cics_get_next_command(site: BoundarySite) -> str | None:
+    """`site`'s key in `_CICS_GET_NEXT_END`, or None. A READQ with no TD
+    is a TS queue, CICS's own default."""
+    words = (site.match_text or "").upper().split()
+    if not words:
+        return None
+    if words[0] == "READQ":
+        return "READQ TD" if "TD" in words[1:2] else "READQ TS"
+    return words[0] if words[0] in _CICS_GET_NEXT_END else None
+
+
+def _cics_loop_end_lines(
+    site: BoundarySite,
+    context: ProgramContext | None,
+    tally: str | None,
+) -> list[str]:
+    """A READNEXT/READPREV/READQ in a loop whose UNTIL reads the command's
+    own RESP field (`PERFORM UNTIL WS-RESP NOT = DFHRESP(NORMAL)`, or a
+    flag set from it): a mock answering NORMAL on every call never ends
+    the browse, so the scaffold hung until --timeout (issue #316). Report
+    ENDFILE / ITEMERR / QZERO after the first call -- gated on the tally,
+    so the row is still returned once -- the way `_call_loop_end_lines`
+    ends an MQGET loop. Every site the key's MOCK answers is checked (a
+    priming READNEXT before the loop is the usual shape); sites needing
+    different end replies get a TODO comment instead."""
+    if context is None or context.surface is None or site.category is not (
+        MockCategory.CICS
+    ):
+        return []
+    key = _unique_prefix(site, context.surface)
+    sites = [
+        other
+        for other in context.surface.boundary_sites
+        if other.category is MockCategory.CICS
+        and (other.match_text or "").startswith(key)
+    ] or [site]
+    waits = False
+    replies: set[tuple[int, str] | None] = set()
+    for other in sites:
+        command = _cics_get_next_command(other)
+        resp = _cics_resp_names([other.statement])
+        if command is None or not resp:
+            replies.add(None)
+            continue
+        replies.add((_CICS_GET_NEXT_END[command], resp[0]))
+        if site_in_loop(other, context.looped) and loop_guard_words(
+            other, context.guards
+        ) & _reply_watched_names(other, {resp[0]}, context):
+            waits = True
+    if not waits:
+        return []
+    if len(replies) != 1 or None in replies:
+        return [
+            f"*> TODO: a loop waits on this command's RESP, but its "
+            f"{len(sites)} sites need different end replies -- end the "
+            f"loop by hand (e.g. MOCK CICS ... ROWS ... TERMINAL), or this "
+            f"mock never ends it"
+        ]
+    reply = replies.pop()
+    assert reply is not None  # one distinct reply, and None was excluded
+    move = f"MOVE {reply[0]} TO {reply[1]}"
+    if tally is None:
+        return [move]
+    return [f"IF {tally} > 1", f"    {move}", "END-IF"]
 
 
 def _reply_watched_names(
@@ -2271,7 +2345,9 @@ def _bundle_directive_for(
             body = _dli_success_reply(
                 _placeholder_body_for(category, fixture.key), site
             )
-            end_lines = _call_loop_end_lines(site, source, None)
+            end_lines = _call_loop_end_lines(
+                site, source, None
+            ) + _cics_loop_end_lines(site, source, None)
             body = body + end_lines
             if end_lines and not end_lines[0].startswith("*>"):
                 call_count_override = CallCountOverride(count=1)
@@ -2310,6 +2386,14 @@ def _bundle_directive_for(
             body = body + _dli_loop_end_lines(
                 site, source, registry.name(category, fixture.key)
             )
+        if category is MockCategory.CICS and registry.known(category, fixture.key):
+            end_lines = _cics_loop_end_lines(
+                site, source, registry.name(category, fixture.key)
+            )
+            if end_lines and not end_lines[0].startswith("*>"):
+                # The row answers the first call, ENDFILE the second.
+                call_count_override = CallCountOverride(count=2, from_placeholder=False)
+            body = body + end_lines
         if category is MockCategory.CALL and registry.known(category, fixture.key):
             end_lines = _call_loop_end_lines(
                 site, source, registry.name(category, fixture.key)
@@ -2510,6 +2594,10 @@ def _bundle_mock_directives(
             )
         if category is MockCategory.CALL and registry.known(category, key):
             body = body + _call_loop_end_lines(
+                site, source, registry.name(category, key)
+            )
+        if category is MockCategory.CICS and registry.known(category, key):
+            body = body + _cics_loop_end_lines(
                 site, source, registry.name(category, key)
             )
         lines.append(directive_line)

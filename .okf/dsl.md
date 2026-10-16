@@ -923,6 +923,15 @@ paragraph-grouped path described above, unchanged. A real
   (`_pinned_fields`: the leaf names in the scenario's
   `verification.fields`, threaded through `_bundle_directive_for_group` /
   `_bundle_directive_for` as `pinned`).
+- **CICS browse loops end (#316).** A READNEXT/READPREV/READQ whose key
+  has a site inside a loop whose UNTIL reads the command's own RESP field
+  (or, one hop, a flag set from it: `_reply_watched_names`) gets
+  `_cics_loop_end_lines`: `IF <tally> > 1 / MOVE 20 TO <resp>` (ENDFILE;
+  26 ITEMERR for READQ TS, 23 QZERO for READQ TD), unconditional without
+  a tally, and a `VERIFY ... 2 TIMES` (`CallCountOverride(count=2)`).
+  Every site the key's MOCK answers is checked, so a priming READNEXT
+  before the loop works; sites needing different replies get a TODO.
+  Applied in the bundle row, the placeholder bodies and `--placeholder`.
 - **An AT END clause the splice re-runs is not copied at all** (issue
   #209): `_at_end_handling` asks `analysis.clause_bodies.lift_clause_bodies`
   first; when the splice will run the READ's own AT END clause after the
