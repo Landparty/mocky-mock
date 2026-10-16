@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-16T14:00:00Z
+timestamp: 2026-10-16T20:00:00Z
 ---
 
 # Overview
@@ -1175,7 +1175,17 @@ are replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH`
 PARAGRAPH END-IF` inserted immediately after it
 (`injector.build_chain_check`, via `stub_writer.insert_lines_after` --
 the only splice primitive in this codebase that preserves the original
-statement rather than replacing it). `driver.py` needs only one addition:
+statement rather than replacing it). A chain `PERFORM` nested in an
+IF/ELSE branch, an EVALUATE WHEN or an inline `PERFORM ... END-PERFORM`
+body gets its check right after itself, inside that branch, at the end of
+its `nested_statement_span` (`TerminatorPlan.chain_spans`, keyed by
+`id(perform)`; issue #337) -- `statement_span` would end at the next
+top-level statement, i.e. after the enclosing END-IF/END-PERFORM, so the
+rest of the branch still ran and an inline loop kept iterating. Inside an
+inline loop body the check's `EXIT PARAGRAPH` leaves the loop too. A
+nested chain `PERFORM` with no safe nested span (it shares its line, or
+the next scope word does) refuses every terminator the case reaches
+(`UNSUPPORTED_TERMINATOR_LAYOUT`). `driver.py` needs only one addition:
 `UT-EARLY-EXIT` declared once, reset to `"N"` per test case. No paragraph
 restructuring -- `UT-TESTCASE-NNN`'s existing checks run automatically
 once the flag has propagated back via ordinary, unmodified `PERFORM`

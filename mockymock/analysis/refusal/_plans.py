@@ -84,6 +84,12 @@ class TerminatorPlan:
     site: BoundarySite
     chain_performs: list = field(default_factory=list)
     exit_kind: str = "PARAGRAPH"
+    # id(perform) -> the validated `nested_statement_span` of each chain
+    # PERFORM nested in an IF/EVALUATE branch or an inline PERFORM body
+    # (issue #337): the chain check is inserted after the span's end, i.e.
+    # right after the PERFORM inside its own branch. A top-level chain
+    # PERFORM has no entry here and keeps its `statement_span`.
+    chain_spans: dict[int, tuple[int, int]] = field(default_factory=dict)
     # The operand of `STOP RUN RETURNING n` / `GOBACK RETURNING n` (issue
     # #219): the neutralization MOVEs it to RETURN-CODE before setting the
     # early-exit flag, since removing the statement removes the phrase too.
@@ -735,7 +741,25 @@ def find_terminator_plans(
         chain_fallthrough_names = safe_names & go_to_fallthrough.keys()
 
         chain_problem: str | None = None
-        for perform, _nested in chain_performs:
+        chain_spans: dict[int, tuple[int, int]] = {}
+        for perform, nested in chain_performs:
+            if nested:
+                # The check must land right after the PERFORM inside its own
+                # IF/EVALUATE branch or inline PERFORM body (issue #337):
+                # after the enclosing END-IF/END-PERFORM, the rest of the
+                # branch would still run and an inline loop keep iterating.
+                span, line_problem = nested_statement_span(perform, scope_map, lines)
+                if span is not None:
+                    chain_spans[id(perform)] = span
+                    continue
+                chain_problem = (
+                    f"an intermediate PERFORM {perform.target_paragraph} at "
+                    f"line {perform.location.line} is nested inside a "
+                    f"conditional/loop body and {line_problem} -- the "
+                    f"early-exit check can't be placed right after it "
+                    f"inside its branch"
+                )
+                break
             line_problem = statement_top_level_problem(perform, scope_map, lines)
             if line_problem is not None:
                 chain_problem = (
@@ -918,6 +942,7 @@ def find_terminator_plans(
                 if id(perform) not in existing_ids:
                     plan.chain_performs.append(perform)
                     existing_ids.add(id(perform))
+            plan.chain_spans.update(chain_spans)
 
     return list(plans_by_statement.values()), reasons
 
