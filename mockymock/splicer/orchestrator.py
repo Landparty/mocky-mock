@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from mockymock.analysis.clause_bodies import lift_clause_bodies
 from mockymock.analysis.flow_mocks import FlowMockPlan
 from mockymock.analysis.mock_surface import MockSurface
 from mockymock.analysis.refusal import (
@@ -161,6 +162,11 @@ def splice_program(
                 trace=trace,
                 statement_text=" ".join(lines[start - 1 : end]),
                 layout=surface.data_layout,
+                # Only a top-level site can carry clause bodies: a nested
+                # one with clauses of its own is refused as unspliceable.
+                lifted_clauses=(
+                    None if site.nested else lift_clause_bodies(site.statement, lines)
+                ),
             )
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /

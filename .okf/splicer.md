@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-13T22:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -349,6 +349,52 @@ test case mocks it. The refusal gate is supposed to guarantee such a site
 is unreachable from every test case; the trap exists so that if
 reachability analysis and reality ever disagree, the mismatch fails loudly
 at runtime instead of silently doing nothing.
+
+## Clause bodies re-run after the mock (issue #209, 2026-10-16)
+
+`build_site_dispatch(..., lifted_clauses=...)` takes the replaced
+statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY / ON
+EXCEPTION / NOT ON EXCEPTION (/ ON OVERFLOW) bodies, which
+`orchestrator.splice_program` gets from
+`analysis.clause_bodies.lift_clause_bodies(site.statement, lines)` for
+every mocked **top-level** site (a nested site with clauses is refused as
+unspliceable, so it never gets here). Before #209 the whole span was
+replaced and those bodies were deleted with it: a mocked READ fed rows the
+program's own `NOT AT END` never processed, `FILE-STATUS IS
+RECORD-NOT-FOUND` never reached `INVALID KEY`, and a mutant inside a
+clause could never be killed.
+
+The outcome lives in `UT-MOCK-STATUS` (`PIC XX`, declared by
+`driver.build_driver` for every suite):
+
+- `MOVE SPACES` before the `EVALUATE UT-CURRENT-CASE`, so the unmocked
+  case's trap selects no clause.
+- `MOVE "00"` at the top of each mocked case's branch (before the mock
+  body, so the body may override it: `"10"`, `"23"`, `"EX"`).
+- `MOVE "10"` first in a READ/RETURN `ROWS` exhaustion branch.
+- `MOVE <file status field> TO UT-MOCK-STATUS` last in the branch when the
+  directive is a FILE_STATUS category and the file declares one -- the
+  status field wins, so the implicit `"00"`, `FILE-STATUS IS` and a
+  hand-written `MOVE` to the field all select the right clause.
+
+After `END-EVALUATE`, `clause_guard_lines` emits one `EVALUATE TRUE` (not a
+chain of IFs: the selection is made once, before any body PERFORMs code
+that may reach another mock and rewrite the field): `(1:1) = "1"` AT END,
+`(1:1) = "2"` INVALID KEY, `(1:1) = "0"` every NOT-clause, `= "EX"` ON
+EXCEPTION/ON OVERFLOW. A lifted body is the program's own text, sliced
+positionally (AST start of its first statement up to the next clause's
+header, or the verb's own `END-xxx` / the sentence period for the last).
+
+`lift_clause_bodies` returns None -- and the old whole-statement deletion
+stands -- when any body holds another boundary statement, GO TO, GOBACK,
+STOP RUN, EXIT PROGRAM, ALTER, NEXT SENTENCE or CANCEL; when a body has a
+nested conditional phrase (SIZE ERROR, OVERFLOW, a SEARCH's AT END, ...)
+or an IF/EVALUATE/SEARCH without its explicit terminator (either would
+swallow the next guard `WHEN`); when the statement has a clause outside
+the liftable set (`WRITE ... AT END-OF-PAGE`); or when a header cannot be
+matched exactly. `dsl.generator` asks the same function, so the scaffold
+stops copying an AT END clause the splice already re-runs (it reports end
+of file through the status field, or `MOVE "10" TO UT-MOCK-STATUS`).
 
 # Orchestration and Ordering Invariant (orchestrator.py)
 

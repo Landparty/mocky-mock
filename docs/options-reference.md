@@ -792,6 +792,14 @@ Every eligible category gets an implicit `MOVE "00"` (success) before its
 own body automatically, whether or not `FILE-STATUS IS` is used — you
 only need this directive to signal something *other* than success.
 
+The status also picks which of the program's own clause bodies run after
+the mock: `END-OF-FILE` runs `AT END`, `RECORD-NOT-FOUND` (any `2x`) runs
+`INVALID KEY`, and success runs `NOT AT END` / `NOT INVALID KEY`. A mocked
+`CALL` runs `NOT ON EXCEPTION` unless its body does `MOVE "EX" TO
+UT-MOCK-STATUS`. See "A mock replaces the statement, not its clauses" in
+the `.cut` DSL reference for the full rules and the cases where a clause
+body cannot run and is left out.
+
 ```
 MOCK OPEN INV-FILE
     FILE-STATUS IS FILE-NOT-FOUND

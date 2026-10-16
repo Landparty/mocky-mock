@@ -21,6 +21,11 @@ import re
 
 from cobolparser.models.statements.call import CallStatement
 
+from mockymock.analysis.clause_bodies import (
+    OUTCOME_FIELD,
+    LiftedClause,
+    clause_guard_lines,
+)
 from mockymock.analysis.mock_surface import BoundarySite
 from mockymock.analysis.refusal import directive_matches_site
 from mockymock.dsl.model import (
@@ -186,8 +191,21 @@ def build_site_dispatch(
     trace: bool = False,
     statement_text: str = "",
     layout: DataLayout | None = None,
+    lifted_clauses: tuple[LiftedClause, ...] | None = None,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    `lifted_clauses` (issue #209, `analysis.clause_bodies`): the replaced
+    statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY /
+    ON EXCEPTION / NOT ON EXCEPTION bodies. When given, every matching
+    case's branch records the mocked outcome in `UT-MOCK-STATUS` -- "00"
+    first, "10" once a ROWS mock is exhausted, and the file's own FILE
+    STATUS field's value last when it declares one -- and an `EVALUATE`
+    after the dispatch runs the clause that outcome selects, exactly as
+    the real statement would have. The mock body may set `UT-MOCK-STATUS`
+    itself (`"10"`, `"23"`, `"EX"` for a CALL's ON EXCEPTION) for a file
+    with no FILE STATUS field or a CALL. An unmocked case's trap leaves it
+    at SPACES, which selects no clause.
 
     `READ ... INTO` / `RETURN ... INTO` and `WRITE`/`REWRITE`/`RELEASE ...
     FROM` keep their implicit MOVE (`splicer.io_copy`, issue #149): the FROM
@@ -233,7 +251,10 @@ def build_site_dispatch(
     practice.
     """
     file_status_fields = file_status_fields or {}
-    lines = ["           EVALUATE UT-CURRENT-CASE"]
+    lines = []
+    if lifted_clauses:
+        lines.append(f"           MOVE SPACES TO {OUTCOME_FIELD}")
+    lines.append("           EVALUATE UT-CURRENT-CASE")
 
     for case_id, mocks in dispatch_entries(suite):
         matches = [d for d in mocks if directive_matches_site(d, site)]
@@ -267,6 +288,8 @@ def build_site_dispatch(
                 f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
                 f'{site.label} {directive.key}"'
             )
+        if lifted_clauses:
+            lines.append(f'                   MOVE "00" TO {OUTCOME_FIELD}')
         if directive.category in FILE_STATUS_CATEGORIES:
             # A statement naming several files (`OPEN INPUT A OUTPUT B`,
             # `CLOSE A B`) is one site matched by ONE directive (a second
@@ -349,6 +372,8 @@ def build_site_dispatch(
             # WHEN OTHER path -- an EOF flag/status-field inconsistency a
             # program checking both would see.
             exhausted_moves: list[str] = []
+            if lifted_clauses:
+                exhausted_moves.append(f'MOVE "10" TO {OUTCOME_FIELD}')
             if status_field is not None:
                 exhausted_moves.append(f'MOVE "10" TO {status_field}')
             if directive.terminal_row is not None:
@@ -408,6 +433,12 @@ def build_site_dispatch(
             lines.extend(f"                   {body}" for body in directive.body_lines)
             if copy_into is not None:
                 lines.append(f"                   {copy_into}")
+        if lifted_clauses:
+            outcome_status = file_status_fields.get(directive.key.upper())
+            if outcome_status and directive.category in FILE_STATUS_CATEGORIES:
+                lines.append(
+                    f"                   MOVE {outcome_status} TO {OUTCOME_FIELD}"
+                )
 
     lines.append("               WHEN OTHER")
     lines.append(
@@ -417,6 +448,10 @@ def build_site_dispatch(
     lines.append('                       "from unmocked test case " UT-CURRENT-CASE')
     lines.append("                   ADD 1 TO UT-FAIL-COUNT")
     lines.append("           END-EVALUATE")
+    if lifted_clauses:
+        lines.extend(
+            f"           {line}" for line in clause_guard_lines(lifted_clauses)
+        )
     return lines
 
 

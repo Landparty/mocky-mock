@@ -847,6 +847,14 @@ paragraph-grouped path described above, unchanged. A real
   the loop body still runs once per row, so the other boundaries in its
   paragraph keep their counts). A keyed/random READ is left alone: out of
   rows it would answer "23", not "10".
+- **An AT END clause the splice re-runs is not copied at all** (issue
+  #209): `_at_end_handling` asks `analysis.clause_bodies.lift_clause_bodies`
+  first; when the splice will run the READ's own AT END clause after the
+  mock, the exhaustion branch only reports end of file -- `fixture.terminal`'s
+  status MOVE, or `MOVE "10" TO UT-MOCK-STATUS` for a file with no FILE
+  STATUS field -- plus a comment saying so. Copying it too would run it
+  twice. The replication / lift below is now the fallback for a clause the
+  splice cannot lift (or a scaffold built without a `ProgramContext`).
 - **AST replication is all or nothing** (issue #217): when any statement in
   the `AT END` clause is not one of the two replicable shapes,
   `_replicated_at_end_statements` returns nothing, so the whole clause is

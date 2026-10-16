@@ -52,6 +52,11 @@ import re
 import sys
 from dataclasses import dataclass, field, replace
 
+from mockymock.analysis.clause_bodies import (
+    OUTCOME_FIELD,
+    lift_clause_bodies,
+    scan_words,
+)
 from mockymock.analysis.exact_counts import exact_count_scope
 from mockymock.analysis.loops import (
     LoopGuard,
@@ -509,52 +514,7 @@ class ProgramContext:
         return "\n".join(self.lines[line - 1 : end])
 
 
-def _scan_words(text: str):
-    """Yield `(start, end, upper_word)` for every word OUTSIDE a quoted
-    literal, plus `(index, index + 1, ".")` for every sentence-terminating
-    period (a period followed by whitespace or end of text -- COBOL's own
-    rule, which is also what keeps a numeric literal's decimal point from
-    being mistaken for one)."""
-    index = 0
-    length = len(text)
-    while index < length:
-        char = text[index]
-        if char in ('"', "'"):
-            quote = char
-            index += 1
-            while index < length:
-                if text[index] == quote:
-                    if index + 1 < length and text[index + 1] == quote:
-                        index += 2
-                        continue
-                    index += 1
-                    break
-                index += 1
-            continue
-        if char.isspace():
-            index += 1
-            continue
-        if char == "." and (index + 1 >= length or text[index + 1].isspace()):
-            yield index, index + 1, "."
-            index += 1
-            continue
-        start = index
-        while (
-            index < length
-            and not text[index].isspace()
-            and text[index]
-            not in (
-                '"',
-                "'",
-            )
-        ):
-            index += 1
-        word = text[start:index]
-        if word.endswith(".") and (index >= length or text[index].isspace()):
-            yield start, index - 1, word[:-1].upper()
-            yield index - 1, index, "."
-            continue
-        yield start, index, word.upper()
+_scan_words = scan_words
 
 
 #: Word sequences that end a READ's AT END imperative. `NOT AT END` must be
@@ -1613,6 +1573,36 @@ def _read_exhaustion_lines(
     return lines
 
 
+def _at_end_handling(
+    fixture: BoundaryFixture, site: BoundarySite, source: ProgramContext | None
+) -> tuple[list[str], list[object], list[str]]:
+    """(replicated, at_end, lifted) for a READ mock's exhaustion branch --
+    see `_read_exhaustion_lines`.
+
+    When the splicer itself re-runs this READ's own AT END clause after the
+    mock (`analysis.clause_bodies`, issue #209: it does for a top-level
+    READ whose clause bodies it can lift exactly), the branch must only
+    report end-of-file -- copying the clause in here too would run it
+    twice. A file with a FILE STATUS field reports it through
+    `fixture.terminal`'s MOVE; one without sets `UT-MOCK-STATUS`, the
+    splicer's own outcome field. Otherwise the clause is replicated or
+    lifted into the branch as before."""
+    at_end = getattr(site.statement, "at_end_clause", None) or []
+    if at_end and source is not None and not site.nested:
+        lifted_clauses = lift_clause_bodies(site.statement, source.lines)
+        if lifted_clauses and any(c.attr == "at_end_clause" for c in lifted_clauses):
+            signal = [
+                f"*> end of file: the splice runs this READ's own AT END "
+                f"clause (line {site.line}) after the mock"
+            ]
+            if not fixture.terminal:
+                signal.append(f'MOVE "10" TO {OUTCOME_FIELD}')
+            return signal, at_end, []
+    replicated = _replicated_at_end_statements(site.statement)
+    lifted = _lifted_at_end_lines(site, source) if at_end and not replicated else []
+    return replicated, at_end, lifted
+
+
 def _read_body(
     fixture: BoundaryFixture,
     registry: TallyRegistry,
@@ -1668,9 +1658,7 @@ def _read_body(
     the separate, unimplemented `ROWS FROM CSV` row-source extension for
     both `READ` and `SQL`)."""
     sequence = fixture.sequence
-    at_end = getattr(site.statement, "at_end_clause", None) or []
-    replicated = _replicated_at_end_statements(site.statement)
-    lifted = _lifted_at_end_lines(site, source) if at_end and not replicated else []
+    replicated, at_end, lifted = _at_end_handling(fixture, site, source)
     needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
 
     if not sequence:
@@ -1884,11 +1872,7 @@ def _bundle_directive_for(
     )
     if (fixture.category, fixture.key) in placeholder_keys:
         if category is MockCategory.READ:
-            at_end = getattr(site.statement, "at_end_clause", None) or []
-            replicated = _replicated_at_end_statements(site.statement)
-            lifted = (
-                _lifted_at_end_lines(site, source) if at_end and not replicated else []
-            )
+            replicated, at_end, lifted = _at_end_handling(fixture, site, source)
             body = _read_exhaustion_lines(fixture, replicated, at_end, lifted)
             if fixture.terminal or replicated or lifted:
                 call_count_override = CallCountOverride(count=1)

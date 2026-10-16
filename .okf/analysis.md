@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; the refusal/ package decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-10-13T12:00:00Z
+timestamp: 2026-10-16T12:00:00Z
 ---
 
 # Overview
@@ -215,6 +215,21 @@ The same audit's Finding 2 fixed a THRU-seed hole in `_reachable_paragraphs`: th
 `_BOUNDARY_STATEMENT_TYPES` = `CallStatement` + all 8 file-op types + the 4 SORT/MERGE types (`SortStatement`/`MergeStatement`/`ReleaseStatement`/`ReturnStatement` — regardless of whether a given SORT/MERGE site turns out mockable or not) + `ExecSQLStatement`/`ExecCicsStatement`/`ExecImsStatement` + `IOAcceptStatement`.
 
 Paragraph attribution is depth-independent: nested statements stay attributed to the *enclosing paragraph name*, since that's the granularity the refusal gate's reachability check cares about.
+
+## `clause_bodies.py` — a mocked statement's own clause bodies (issue #209)
+
+`clause_bodies_liftable(statement)` (AST only) and
+`lift_clause_bodies(statement, lines)` (positional slice of the normalized
+source) decide whether the splicer re-runs a mocked READ / RETURN / WRITE /
+REWRITE / DELETE / START / CALL's clause bodies after the mock, guarded by
+the mocked outcome in `UT-MOCK-STATUS`. Fail closed: anything they cannot
+lift exactly keeps the old deletion. Reachability needed no change: the
+BFS already followed PERFORMs inside boundary clause bodies (the
+`in_boundary` skip applies only to terminator chain edges and GO TO exit
+plans, and a body holding a GO TO or terminator is never lifted). See
+[splicer](splicer.md#clause-bodies-re-run-after-the-mock-issue-209-2026-10-16).
+`scan_words` (words outside quoted literals, plus sentence periods) moved
+here from `dsl.generator`, which still uses it for its own AT END lift.
 
 ## `BoundarySite` fields relevant to refusal
 
