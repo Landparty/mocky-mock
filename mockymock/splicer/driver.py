@@ -40,6 +40,80 @@ def _display_text(text: str) -> str:
     return text.replace('"', '""')
 
 
+#: A literal longer than this is split across lines by the driver: cobc
+#: compiles the instrumented copy `-free`, where a source line over 512
+#: bytes is truncated -- a recorded golden like DEPTMQC's 336-byte MQMD
+#: (`X"4D44..."`, 675 characters) cut the generated IF in half.
+_LONG_LITERAL = 120
+#: Characters of literal content per continuation piece.
+_LITERAL_CHUNK = 60
+_SPLITTABLE_LITERAL_RE = re.compile(
+    r"^(?P<prefix>[Xx]?)(?P<quote>[\"'])(?P<body>.*)(?P=quote)$"
+)
+
+
+def _literal_pieces(value: str) -> list[str] | None:
+    """A long alphanumeric or hexadecimal literal as concatenated pieces
+    (`X"4D44..."` -> `X"4D44..."`, `& X"2020..."`, ...), one per source
+    line, or None when `value` is short or not one such literal. The `&`
+    concatenation of literals is a literal to cobc (verified under
+    `-free -std=mvs`, GnuCOBOL 3.1.2), so the comparison is unchanged. A
+    hex piece keeps whole bytes; a quoted piece never splits a doubled
+    quote."""
+    text = value.strip()
+    if len(text) <= _LONG_LITERAL:
+        return None
+    m = _SPLITTABLE_LITERAL_RE.match(text)
+    if m is None:
+        return None
+    prefix, quote, body = m.group("prefix"), m.group("quote"), m.group("body")
+    units: list[str] = []
+    index = 0
+    while index < len(body):
+        if body[index] == quote:
+            if body[index : index + 2] != quote * 2:
+                return None  # a lone quote: not one literal
+            units.append(quote * 2)
+            index += 2
+        elif prefix:
+            units.append(body[index : index + 2])
+            index += 2
+        else:
+            units.append(body[index])
+            index += 1
+    pieces: list[str] = []
+    current = ""
+    for unit in units:
+        if current and len(current) + len(unit) > _LITERAL_CHUNK:
+            pieces.append(f"{prefix}{quote}{current}{quote}")
+            current = ""
+        current += unit
+    pieces.append(f"{prefix}{quote}{current}{quote}")
+    return [pieces[0]] + [f"& {piece}" for piece in pieces[1:]]
+
+
+def _operand_lines(head: str, value: str, indent: str) -> list[str]:
+    """`head + value` as one line, or -- for a long literal -- the head with
+    the literal's first piece, then each further `& piece` on its own
+    line under `indent`."""
+    pieces = _literal_pieces(value)
+    if pieces is None:
+        return [f"{head}{value}"]
+    return [f"{head}{pieces[0]}"] + [f"{indent}{piece}" for piece in pieces[1:]]
+
+
+def _display_operands(text: str) -> list[str]:
+    """`text` as one or more quoted DISPLAY operands: one when short, else
+    one per `_LITERAL_CHUNK` characters, so a long expected value never
+    pushes the generated FAIL DISPLAY past cobc's line limit."""
+    if len(text) <= _LONG_LITERAL:
+        return [f'"{_display_text(text)}"']
+    return [
+        f'"{_display_text(text[start : start + _LITERAL_CHUNK])}"'
+        for start in range(0, len(text), _LITERAL_CHUNK)
+    ]
+
+
 @dataclass
 class DriverArtifact:
     working_storage_lines: list[str]
@@ -230,7 +304,9 @@ def _build_testcase_paragraph(
             lines.append('           MOVE "N" TO UT-EARLY-EXIT')
 
     for value, target in case.setup_moves:
-        lines.append(f"           MOVE {value} TO {target}")
+        move = _operand_lines("           MOVE ", value, "                ")
+        move[-1] += f" TO {target}"
+        lines.extend(move)
 
     lines.append("")
     perform_line = f"           PERFORM {case.perform_target}"
@@ -259,16 +335,30 @@ def _build_testcase_paragraph(
             lines.append("           END-IF")
             continue
         fail_operator = _expect_fail_condition(expectation.operator)
-        lines.append(
-            f"           IF {expectation.data_name} {fail_operator} "
-            f"{expectation.expected_value}"
+        lines.extend(
+            _operand_lines(
+                f"           IF {expectation.data_name} {fail_operator} ",
+                expectation.expected_value,
+                "               ",
+            )
         )
-        lines.append(
-            f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: expected '
-            f"{expectation.data_name} {expectation.operator} "
-            f"{_display_text(expectation.expected_value)}, "
-            f'got " {expectation.data_name}'
-        )
+        if _literal_pieces(expectation.expected_value) is None:
+            lines.append(
+                f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: '
+                f"expected {expectation.data_name} {expectation.operator} "
+                f"{_display_text(expectation.expected_value)}, "
+                f'got " {expectation.data_name}'
+            )
+        else:
+            lines.append(
+                f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: '
+                f'expected {expectation.data_name} {expectation.operator} "'
+            )
+            lines.extend(
+                f"                   {operand}"
+                for operand in _display_operands(expectation.expected_value)
+            )
+            lines.append(f'                   ", got " {expectation.data_name}')
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")
 
