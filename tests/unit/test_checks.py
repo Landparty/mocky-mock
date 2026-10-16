@@ -349,3 +349,36 @@ def test_corpus_shaped_program_resets_the_quote_literal_validly(tmp_path):
     # reported lines later as `invalid symbol '%'` against the NEXT reset line.
     assert 'MOVE """" TO DFHTRIG' in reset
     assert 'MOVE "%" TO DFHPA1' in reset
+
+
+FREE_FORMAT_PROGRAM = """\
+IDENTIFICATION DIVISION.
+PROGRAM-ID. FN.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 WS-X PIC 9(3) VALUE 0.
+PROCEDURE DIVISION.
+MAIN-PARA.
+    PERFORM ADD-PARA
+    GOBACK.
+ADD-PARA.
+    ADD 5 TO WS-X
+    ADD 1 TO WS-X.
+"""
+
+
+def test_free_format_program_is_refused_not_column_chopped(tmp_path):
+    # Issue #210: the splicer's text is cut to columns 8-72, so a
+    # free-format program linted clean and then failed in cobc on garbage.
+    program = tmp_path / "FN.cbl"
+    program.write_text(FREE_FORMAT_PROGRAM)
+    cut = tmp_path / "FN.cut"
+    cut.write_text('TESTSUITE "s"\nTESTCASE "add"\n    PERFORM ADD-PARA\n')
+    result = run_static_checks(program, cut, None)
+    assert not result.ok
+    assert result.problems[0].startswith("refused (UNSUPPORTED_SOURCE_FORMAT)")
+
+
+def test_fixed_format_program_is_not_refused_as_free_format():
+    result = run_static_checks(ORDRPROC_CBL, ORDRPROC_CUT, None)
+    assert not any("UNSUPPORTED_SOURCE_FORMAT" in p for p in result.problems)

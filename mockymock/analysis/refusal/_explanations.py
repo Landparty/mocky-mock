@@ -153,6 +153,12 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "paragraph, or mock the whole paragraph/section instead (MOCK "
         "PARAGRAPH/MOCK SECTION)."
     ),
+    "UNSUPPORTED_SOURCE_FORMAT": (
+        "The program is free-format COBOL. mockymock edits and compiles "
+        "fixed-format source only (code in columns 8-72), so a free-format "
+        "program would be cut apart before cobc ever saw it. Convert the "
+        "program to fixed format to test it."
+    ),
     "UNSUPPORTED_MOCK_TARGET_LAYOUT": (
         "A MOCK directive matches a top-level statement that shares a "
         "source line with other code (sibling code before it, a one-line "

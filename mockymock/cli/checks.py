@@ -222,6 +222,7 @@ def run_static_checks(
         check_expansion_warnings,
         check_linkage_layout,
         check_nested_exec,
+        check_source_format,
         check_terminator_layout,
         check_test_case,
         check_unresolved_copybooks_scoped,
@@ -247,6 +248,7 @@ def run_static_checks(
     except SourceEncodingError as exc:
         out.problems.append(str(exc))
         return out
+    program_source = raw_source
     if copybook_paths:
         # cobolparser genuinely raises for realistic inputs (a copybook
         # that COPYs itself, an oversized/deeply-nested chain, a
@@ -280,6 +282,17 @@ def run_static_checks(
     parse_result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(parse_result.ast)
     out.parse_result = parse_result
+    # Free-format source parses, but is column-chopped by everything below
+    # (issue #210). Checked once the parse succeeded, so unparseable text
+    # still reports PARSE_ERROR with its detail lines rather than a
+    # format guess; decided on the program's own text, before expansion.
+    if parse_result.success:
+        format_reasons = check_source_format(program_source)
+        if format_reasons:
+            out.problems.extend(
+                f"refused ({r.code}): {r.message}" for r in format_reasons
+            )
+            return out
     whole_program_reasons, scoped_warnings = check_whole_program_scoped(
         parse_result, raw_source
     )

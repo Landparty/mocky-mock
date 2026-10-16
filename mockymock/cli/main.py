@@ -827,6 +827,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         check_cics_eib_layout,
         check_expansion_warnings,
         check_linkage_layout,
+        check_source_format,
         check_unresolved_copybooks,
         check_whole_program,
     )
@@ -976,6 +977,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 )
 
     raw_source = read_utf8_source(source_path)
+    program_source = raw_source
     if args.copybook_path:
         # See _cmd_fixtures's identical guard on the same call for why
         # this can raise on realistic inputs (audit finding F6).
@@ -1000,6 +1002,13 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         print(f"mockymock generate: {len(result.errors)} parse error(s):")
         for error in result.errors:
             print(f"  {error}")
+        return 1
+
+    # See run_static_checks: free-format source is column-chopped below.
+    format_reasons = check_source_format(program_source)
+    for reason in format_reasons:
+        print(f"mockymock generate: refused ({reason.code}): {reason.message}")
+    if format_reasons:
         return 1
 
     # success=True is not enough: cobolparser reports dropped statements
