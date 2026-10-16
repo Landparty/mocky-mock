@@ -808,6 +808,13 @@ captured MI transcripts and end-to-end tested against a live container
   readable ones with the value `<unavailable: not materialized by cobc>`,
   and `evaluate` answers the same for them (issue #156). Items cobc
   declared only as a `b_NN` buffer are still read (issue #168 covers how).
+  An item gdb cannot read at this stop no longer fails the whole
+  `variables`/`evaluate` response (issue #318, `_read_display_value`): it
+  shows `UNREADABLE_VALUE` (`<unavailable: storage not bound at this
+  point>`), which is also what a field with a NULL `.data` (a
+  LOCAL-STORAGE item before cobc binds it) reads as. LOCAL-STORAGE is not
+  yet read through `cob_local_ptr`. An EXTERNAL item's `b_NN` is a
+  pointer; gdb's `0x... "text"` printing is reduced to the text.
   `_handle_launch` closes any prior `self._session` and resets
   `self._breakpoint_numbers` before creating a new one (audit finding
   F16) — a second `launch` on one adapter (a client retry, or a bug) used
