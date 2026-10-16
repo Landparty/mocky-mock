@@ -63,7 +63,7 @@ One test case. Options:
 
 - `TAGS "<tag>" ["<tag>" ...]` -- attaches selection tags, used by
   `run --tag` and shown in `collect`'s output. Purely for selection; no
-  runtime effect.
+  runtime effect. It may also follow `USING PROVIDER <name>`; give it once.
 - `USING PROVIDER <name>` -- binds this case as a template that gets
   expanded once per row of the named `PROVIDER` block (see below).
 

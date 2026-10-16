@@ -101,9 +101,15 @@ _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
 # anywhere and be called anything (cli/discovery.py reads it). Only legal
 # between TESTSUITE and the first TESTCASE/hook/PROVIDER.
 PROGRAM_RE = re.compile(r'^PROGRAM\s+"(?P<path>[^"]*)"$')
+_TAG_LIST = r'"[^"]*"(?:\s+"[^"]*")*'
+# TAGS may come before or after USING PROVIDER (issue #329): written after
+# it, the line used to match nothing and, under an open PROVIDER, was
+# reported as a statement not allowed inside the PROVIDER. Both groups
+# filled at once (TAGS given twice) is rejected by the parser.
 _TESTCASE_RE = re.compile(
-    r'^TESTCASE\s+"(?P<name>[^"]*)"(?:\s+TAGS\s+(?P<tags>"[^"]*"(?:\s+"[^"]*")*))?'
-    r"(?:\s+USING\s+PROVIDER\s+(?P<provider>[A-Za-z0-9][A-Za-z0-9-]*))?$"
+    rf'^TESTCASE\s+"(?P<name>[^"]*)"(?:\s+TAGS\s+(?P<tags>{_TAG_LIST}))?'
+    r"(?:\s+USING\s+PROVIDER\s+(?P<provider>[A-Za-z0-9][A-Za-z0-9-]*))?"
+    rf"(?:\s+TAGS\s+(?P<tags_after>{_TAG_LIST}))?$"
 )
 _TAG_RE = re.compile(r'"([^"]*)"')
 _HOOK_RE = re.compile(r"^(?P<hook>BEFORE-ALL|BEFORE-EACH|AFTER-EACH|AFTER-ALL)$")
@@ -1121,7 +1127,12 @@ def parse_cut(text: str) -> MockTestSuite:
                     f"line {line_no}: TESTCASE inside {in_before} -- "
                     f"missing {_hook_end(in_before)}"
                 )
-            tags = _TAG_RE.findall(m.group("tags") or "")
+            if m.group("tags") is not None and m.group("tags_after") is not None:
+                raise CutParseError(
+                    f"line {line_no}: TESTCASE {m.group('name')!r} has two "
+                    f"TAGS lists -- give every tag in one TAGS list"
+                )
+            tags = _TAG_RE.findall(m.group("tags") or m.group("tags_after") or "")
             for tag in tags:
                 if not tag.strip():
                     raise CutParseError(

@@ -72,6 +72,10 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
 - `TAGS "<tag>" ["<tag>" ...]` after the TESTCASE name attaches selection
   tags (`run --tag`, `collect --json`, the JSON run report). Tags have no
   runtime semantics; an empty (`""`/blank) tag raises `CutParseError`.
+  `TAGS` may come before or after `USING PROVIDER` (`_TESTCASE_RE`'s
+  `tags` / `tags_after` groups, #329) -- written after it, the line used to
+  match nothing and, under an open PROVIDER, was reported as "not allowed
+  inside PROVIDER"; two TAGS lists on one line raise `CutParseError`.
 - The parser records 1-based `.cut` line numbers on the model: `MockTestSuite
   .line`, `MockTestCase.line`, `ExpectDirective.line`, `VerifyDirective.line`
   (all default 0 for hand-built models). Editor integrations rely on these
