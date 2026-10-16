@@ -2091,6 +2091,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         parse_local_header,
         unavailable_names,
     )
+    from mockymock.report.coverage import build_original_line_map
     from mockymock.runtime import docker_toolchain
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.splicer import cics_eib
@@ -2233,7 +2234,12 @@ def _cmd_debug(args: argparse.Namespace) -> int:
                 instrumented_path.with_suffix(".c").read_text(encoding="utf-8")
             )
             line_map = LineMap.build(instrumented, normalized_lines, original_lines)
-            paragraph_index = ParagraphIndex.build(result.ast)
+            paragraph_index = ParagraphIndex.build(
+                result.ast,
+                build_original_line_map(
+                    normalized_lines, normalized_lines, original_lines
+                ),
+            )
             gdb = GdbSession(docker_toolchain.start_gdb_session(compiled.binary_path))
             return DebugSession(
                 gdb=gdb,

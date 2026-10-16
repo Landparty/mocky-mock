@@ -788,7 +788,12 @@ captured MI transcripts and end-to-end tested against a live container
   from GnuCOBOL's internal `frame_stack`, since gdb's own backtrace is
   always exactly one frame (`PERFORM` is a computed-goto, not a real C
   call). `frame_stack[0]` is a sentinel, not a real caller — see the
-  design doc's Empirical basis for why. `synthesize_stack`'s per-frame
+  design doc's Empirical basis for why. `ParagraphIndex.build(ast,
+  to_original)` maps each paragraph/section start from the AST's
+  (copybook-expanded) lines to the original `.cbl`'s, the coordinates it is
+  queried in; `_cmd_debug` passes `build_original_line_map(normalized,
+  normalized, original)` (issue #256: a WORKING-STORAGE COPY shifted every
+  frame's paragraph name). `synthesize_stack`'s per-frame
   walk over `frame_stack[1..depth]` catches `GdbCommandError` on any one
   frame and skips it (`continue`) since 2026-08-10 (audit finding F14) —
   previously one unresolvable frame (gdb refusing the evaluate/
