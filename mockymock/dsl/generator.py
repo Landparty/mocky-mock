@@ -903,7 +903,30 @@ def _scaffold_placeholder(
             continue
         sites_by_paragraph.setdefault(site.paragraph_name, []).append(site)
 
+    # A paragraph name defined in two SECTIONs: `PERFORM <name>` does not
+    # compile unqualified, and lint refuses any case reaching it
+    # (AMBIGUOUS_PARAGRAPH, issue #284), so no case is scaffolded for it.
+    ambiguous: list[str] = []
+    if context is not None and context.program is not None:
+        from mockymock.analysis.refusal import duplicated_paragraph_names
+
+        duplicated = duplicated_paragraph_names(context.program)
+        ambiguous = [name for name in sites_by_paragraph if name in duplicated]
+        for name in ambiguous:
+            del sites_by_paragraph[name]
+
     lines = [f'TESTSUITE "{_quote_safe(suite_name)}"', ""]
+    if ambiguous:
+        lines.append(
+            "*> Not scaffolded: these paragraph names are defined in more "
+            "than one SECTION,"
+        )
+        lines.append(
+            "*> which mockymock cannot tell apart. Rename them to test "
+            "their boundaries."
+        )
+        lines.extend(f"*>   {name}" for name in ambiguous)
+        lines.append("")
     if unnamed:
         lines.append(
             "*> Not scaffolded: these boundaries sit before the first "

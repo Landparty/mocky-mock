@@ -1207,3 +1207,75 @@ def test_cics_resp_option_that_is_not_a_data_name_refuses():
         cics_text = "PROGRAM ( X ) RESP2 ( WS-R2 )"
 
     assert _cics_resp_field(_Resp2Only()) == (None, None)
+
+
+SECTION_GO_TO_EXIT_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECEXIT.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-RC  PIC 9(4) VALUE 0.
+       01 WS-AMT PIC S9(4) VALUE 0.
+       01 WS-I   PIC 9(4) VALUE 0.
+       01 WS-SUM PIC 9(4) VALUE 0.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A010-START.
+           PERFORM B000-VALIDATE
+           IF WS-RC = 0
+               PERFORM C000-SUM
+           END-IF
+           GOBACK.
+       B000-VALIDATE SECTION.
+       B010.
+           IF WS-AMT < 0
+               MOVE 8 TO WS-RC
+               GO TO B099-EXIT
+           END-IF
+           MOVE 0 TO WS-RC.
+       B099-EXIT.
+           EXIT.
+       C000-SUM SECTION.
+       C010.
+           PERFORM VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 3
+               ADD WS-I TO WS-SUM
+               CALL "TRACE" USING WS-I
+           END-PERFORM.
+"""
+
+
+def test_terminator_after_a_section_scoped_go_to_exit_is_planned():
+    """Issue #259: B099-EXIT ends a section entered only by PERFORM
+    B000-VALIDATE, so its implicit PERFORM return fires there and C010 is
+    never reached by falling through. The terminator planner treated C010
+    as a GO TO fall-through hazard while the reachability gate did not."""
+    program, surface, scope_map, lines = _analyze(SECTION_GO_TO_EXIT_SOURCE)
+    plans, reasons = find_terminator_plans(
+        surface, program, _suite("A000-MAIN"), scope_map, lines
+    )
+    assert reasons == []
+    assert [plan.site.label for plan in plans] == ["GOBACK"]
+
+
+def test_go_to_fallthrough_section_stop_is_dropped_for_a_member_entry():
+    """Naming a member paragraph directly bypasses PERFORM <section-name>,
+    so that section's end is no stop and the walk carries on."""
+    from mockymock.analysis.refusal._reachability import (
+        _fallthrough_safe_sections,
+        _paragraph_safe_section_map,
+    )
+
+    program, _, _, _ = _analyze(SECTION_GO_TO_EXIT_SOURCE)
+    members = {
+        "A000-MAIN": ["A010-START"],
+        "B000-VALIDATE": ["B010", "B099-EXIT"],
+        "C000-SUM": ["C010"],
+    }
+    safe = _fallthrough_safe_sections(program)
+    assert _go_to_fallthrough_targets(program, {"B099-EXIT"}) == {"C010": "B099-EXIT"}
+    stopped = _paragraph_safe_section_map(members, safe, {"A000-MAIN"})
+    assert _go_to_fallthrough_targets(program, {"B099-EXIT"}, stopped) == {}
+    bypassed = _paragraph_safe_section_map(members, safe, {"B010"})
+    assert _go_to_fallthrough_targets(program, {"B099-EXIT"}, bypassed) == {
+        "C010": "B099-EXIT"
+    }

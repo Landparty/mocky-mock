@@ -88,7 +88,10 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   generated `IF` (the IF guards the failure branch; `>=`/`<=` negate to
   the equivalent plain `<`/`>` to keep emitted conditions to the
   simplest COBOL-85 relational forms) — keep that map in sync with
-  `EXPECT_OPERATORS`. The FAIL `DISPLAY` carries the operator between
+  `EXPECT_OPERATORS`. A value carrying an unquoted `AND`/`OR`
+  (`TO BE > 0 AND < 10`, `TO BE 7 OR 8`) is an abbreviated combined
+  condition; the driver negates it whole, `IF NOT (<name> <op> <value>)`
+  (issue #265). The FAIL `DISPLAY` carries the operator between
   name and value (`expected WS-X > 5, got ...`), and
   `report/json_report.py`'s `_EXPECT_HEAD_RE` splits attribution on it
   (`expected` field keeps the bare value for `=`, is operator-prefixed

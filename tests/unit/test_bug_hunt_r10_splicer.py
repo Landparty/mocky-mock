@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from cobolparser import parse_cobol
 from cobolparser.preprocess import normalize_fixed_format
 
@@ -174,6 +175,71 @@ def test_driver_fields_get_a_working_storage_section_when_there_is_none():
     assert data[2:4] == ["DATA DIVISION.", "WORKING-STORAGE SECTION."]
     assert any(line.startswith("01  UT-CURRENT-CASE") for line in data)
     assert any(line.startswith("01  UT-SUBPGM-TALLY") for line in data)
+
+
+def _after_driver(lines: list[str]) -> list[str]:
+    """The instrumented lines after the last generated UT-TESTCASE body."""
+    instrumented = [line.strip() for line in _insert_driver(lines, _driver_artifact())]
+    last_case = max(
+        i for i, line in enumerate(instrumented) if line.startswith("UT-TESTCASE-")
+    )
+    return [line for line in instrumented[last_case:] if line][1:]
+
+
+@pytest.mark.parametrize(
+    "first",
+    ["MOVE 1 TO WS-ZZ", "GOBACK.", "EXIT.", 'DISPLAY "X".', "*> note", ""],
+)
+def test_unnamed_main_line_gets_its_own_paragraph_header(first):
+    """Issue #264: statements straight after the PROCEDURE DIVISION header
+    became more sentences of the last UT-TESTCASE paragraph, so the main
+    line ran after the last case and its STOP RUN hid SUMMARY."""
+    lines = [
+        "IDENTIFICATION DIVISION.",
+        "PROGRAM-ID. PROG.",
+        "PROCEDURE DIVISION.",
+        first,
+        "    STOP RUN.",
+        "P1.",
+        '    CALL "SUBPGM".',
+    ]
+    after = _after_driver(lines)
+    # The last case's own body, then the synthetic header before any
+    # original line.
+    header = after.index("UT-ORIGINAL-ENTRY.")
+    original = [line for line in lines[3:] if line.strip()]
+    assert after[header + 1 :][: len(original)] == [line.strip() for line in original]
+    assert not any(line.strip() in after[:header] for line in original)
+
+
+@pytest.mark.parametrize(
+    "first",
+    ["P0.", 'MAIN-PARA. DISPLAY "X".', "A000-MAIN SECTION.", "0100-START."],
+)
+def test_named_main_line_gets_no_synthetic_header(first):
+    lines = [
+        "IDENTIFICATION DIVISION.",
+        "PROGRAM-ID. PROG.",
+        "PROCEDURE DIVISION.",
+        "*> comment",
+        first,
+        "    PERFORM P1.",
+        "P1.",
+        '    CALL "SUBPGM".',
+    ]
+    assert "UT-ORIGINAL-ENTRY." not in _after_driver(lines)
+
+
+def test_procedure_division_using_list_running_on_gets_no_header():
+    lines = [
+        "IDENTIFICATION DIVISION.",
+        "PROGRAM-ID. PROG.",
+        "PROCEDURE DIVISION USING LK-A",
+        "    LK-B.",
+        "P1.",
+        '    CALL "SUBPGM".',
+    ]
+    assert "UT-ORIGINAL-ENTRY." not in _after_driver(lines)
 
 
 def test_driver_working_storage_goes_before_local_storage_and_linkage():

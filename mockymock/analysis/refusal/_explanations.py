@@ -279,6 +279,15 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "B`): nothing is passed there to capture. Fix the argument "
         "number."
     ),
+    "AMBIGUOUS_PARAGRAPH": (
+        "A paragraph this test case can reach shares its name with a "
+        "paragraph in another SECTION. COBOL resolves such a name by "
+        "section, but mockymock resolves paragraphs by name alone, so it "
+        "cannot tell which body runs or which boundaries the case "
+        "reaches -- a CALL only the other body makes would run for real. "
+        "Refused rather than guessed; rename the paragraphs so each name "
+        "is unique in the program."
+    ),
     "UNKNOWN_PARAGRAPH": (
         "A test case's own PERFORM target (or a driver-side PERFORM ... "
         "THRU endpoint) does not name a real paragraph or section in the "
