@@ -1043,6 +1043,7 @@ def parse_cut(text: str) -> MockTestSuite:
             else:
                 _reject_body_sentence_period(line, line_no, in_mock.describe())
                 in_mock.body_lines.append(line)
+                in_mock.body_line_numbers.append(line_no)
             continue
 
         if _COMMENT_RE.match(line):

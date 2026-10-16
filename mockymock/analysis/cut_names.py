@@ -7,7 +7,9 @@ Checked: every setup-MOVE / hook-MOVE target, every EXPECT data-name, every
 `CAPTURE ... INTO` target that is not a synthesized `UT-CAP-` field, every
 ROWS / TERMINAL field (issue #299), and every MOVE/EXPECT/ROWS/TERMINAL
 value that is a single bare COBOL word (`EXPECT F TO BE
-Y` -- an unquoted `Y` is a data-name to cobc, not a literal).
+Y` -- an unquoted `Y` is a data-name to cobc, not a literal). In a MOCK
+body, which is otherwise spliced unchecked, every one-line `MOVE <value>
+TO <target>...` statement's targets and bare-word value (issue #243).
 
 Deliberately loose on the "known" side, so it can never refuse a name cobc
 would accept: a name is known when it appears as a COBOL word anywhere in
@@ -28,11 +30,17 @@ import re
 
 from mockymock.analysis.refusal import RefusalReason
 from mockymock.dsl.model import MockTestSuite
+from mockymock.dsl.parser import _strip_inline_comment
 
 _LITERAL_RE = re.compile(r"\"(?:[^\"]|\"\")*\"?|'(?:[^']|'')*'?")
 _WORD_RE = re.compile(r"[A-Za-z0-9][\w-]*")
 _COBOL_WORD_RE = re.compile(r"^[A-Za-z0-9][\w-]*$")
 _PARENS_RE = re.compile(r"\([^()]*\)")
+#: A one-line `MOVE <value> TO <targets>` statement in a MOCK body.
+_BODY_MOVE_RE = re.compile(
+    r"^\s*MOVE\s+(?P<value>.+?)\s+TO\s+(?P<targets>[^.]+?)\s*\.?\s*$",
+    re.IGNORECASE,
+)
 _FLOAT_RE = re.compile(r"^\d+(?:\.\d+)?E[+-]?\d+$", re.IGNORECASE)
 
 #: Words that are values, not data-names, when written bare.
@@ -333,6 +341,20 @@ def check_cut_data_names(
 
     no_false = conditions_without_false(program)
 
+    def body_move(line: int, where: str, text: str) -> None:
+        # A MOCK body is COBOL spliced verbatim; only the commonest
+        # hand-written statement, a one-line MOVE, is checked (issue #243).
+        m = _BODY_MOVE_RE.match(_strip_inline_comment(text))
+        if m is None:
+            return
+        targets = m.group("targets").strip()
+        if _name_words(targets) is not None:
+            name(line, f"{where} MOVE target", targets)
+        elif all(_COBOL_WORD_RE.match(word) for word in targets.split()):
+            for target in targets.split():
+                name(line, f"{where} MOVE target", target)
+        value(line, f"{where} MOVE value", m.group("value"))
+
     def assign_level(line: int, role: str, target: str, assigned: str) -> None:
         # A TRUE/FALSE assignment splices as SET <target> TO TRUE|FALSE,
         # anything else as MOVE (splicer.naming.assign); each compiles only
@@ -413,6 +435,9 @@ def check_cut_data_names(
                 name(line, "ROWS field", row_field)
                 value(line, "ROWS value", row_value)
                 assign_level(line, "ROWS", row_field, row_value)
+        body_numbers = directive.body_line_numbers or [0] * len(directive.body_lines)
+        for body_line, line in zip(directive.body_lines, body_numbers, strict=False):
+            body_move(line, f"MOCK {directive.describe()} body", body_line)
         for row_field, row_value in directive.terminal_row or []:
             name(directive.terminal_line, "TERMINAL field", row_field)
             value(directive.terminal_line, "TERMINAL value", row_value)

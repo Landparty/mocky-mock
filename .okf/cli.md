@@ -1019,7 +1019,12 @@ purpose: it only catches names cobc would certainly reject.
 `MockTestCase.setup_move_lines` / `MockDirective.capture_lines` carry the
 line numbers the model did not record before. ROWS rows and the `TERMINAL`
 group are checked the same way, field and value (issue #299), at
-`MockDirective.row_lines` / `terminal_line`. The same step refuses
+`MockDirective.row_lines` / `terminal_line`. A MOCK body is otherwise
+spliced unchecked, but each one-line `MOVE <value> TO <target>...` in it has
+its targets and bare-word value checked the same way, at its own line
+(`MockDirective.body_line_numbers`, issue #243 -- the lint half of that
+issue; cobc errors are still reported against the sandbox copy, not
+remapped to the `.cut`). The same step refuses
 `CONDITION_NAME_MISMATCH` when an EXPECT's kind does not match its item's
 level in the AST (issue #307): `TO BE TRUE|FALSE` on an item that is not a
 level 88 (the driver would emit `IF NOT X`), or any other value on an 88
