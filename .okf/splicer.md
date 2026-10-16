@@ -1222,6 +1222,19 @@ in a generated `DISPLAY "..."` literal — without it, an EXPECT/VERIFY
 value containing a quote (e.g. an expected string `OK"`) would split the
 literal and cobc would read the remainder as undefined identifiers.
 
+**Long literals (2026-10-16, found while fixing #188).** cobc compiles the
+spliced copy `-free`, where a source line over 512 bytes is truncated. A
+recorded golden can be far longer (DEPTMQC's 336-byte MQMD is a 675-character
+`X"..."`), and one `IF MQMD NOT = X"..."` line was cut in half. A single
+alphanumeric or hexadecimal literal over `_LONG_LITERAL` (120) characters,
+in an EXPECT or a setup MOVE, is now emitted as `&`-concatenated pieces of
+`_LITERAL_CHUNK` (60) characters, one per line (`_literal_pieces`: a hex
+piece keeps whole bytes, and a quoted piece never splits a doubled quote).
+Concatenated literals are one literal to cobc (verified with
+`-free -std=mvs` on 3.1.2). The FAIL `DISPLAY` spells the expected value out
+as several quoted operands (`_display_operands`), so the stdout text is
+unchanged. Shorter values are emitted exactly as before.
+
 **`suite.name` escaping (2026-07-07 fix, audit finding 2.8):** the
 `__MOCKYMOCK__ TESTSUITE: <name>` `DISPLAY` line interpolated `suite.name`
 directly while `case.name` already went through `_display_text` — a
