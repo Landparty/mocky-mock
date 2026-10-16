@@ -589,6 +589,14 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
    this one guard covers all five instead of each needing its own).
    `check_expansion_warnings(expansion)` refuses (EXPANSION_WARNING, exit 1)
    on a lossy copybook decode before the corrupted text is ever parsed.
+   Under `SOURCE-COMPUTER ... WITH DEBUGGING MODE` (a non-comment line),
+   `debugging_lines.activate_debugging_lines` then turns every column-7
+   `D` line into a code line (indicator -> space, no line moves), as the
+   compiler reads them: the AST, the gates and the compiled sandbox all see
+   them (issue #274; before it cobc compiled them as comments and a D-line
+   boundary went ungated). `generate`/`fixtures`/`collect --boundaries`
+   and `report` do the same before their own `parse_cobol`. cobol.yml's
+   `project.debug_lines` is not read.
 3. `parse_cobol` -> `check_whole_program_scoped(result)` refusals
    (PARSE_ERROR on a failed parse, PARSE_WARNING per `ParseResult.warnings`
    entry — dropped statements on an otherwise "clean" parse) are printed

@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from mockymock import __version__
+from mockymock.debugging_lines import activate_debugging_lines
 
 REPORT_VERSION = 1
 LEVELS = ("L0", "L1", "L2", "L3")
@@ -183,7 +184,9 @@ def _parse_program(options: ReportOptions) -> tuple[_Program | None, str | None]
             expanded = True
         except Exception as exc:  # noqa: BLE001 -- reported as the step's reason
             return None, f"copybook expansion failed: {exc}"
-    result = parse_cobol(source, filename=options.program.name)
+    result = parse_cobol(
+        activate_debugging_lines(source), filename=options.program.name
+    )
     normalize_flow_targets(result.ast)
     if result.ast is None or not result.success:
         errors = "; ".join(str(e) for e in result.errors[:3])
