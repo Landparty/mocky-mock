@@ -1538,6 +1538,14 @@ def check_test_case(
 
         if not matches:
             code = _UNMOCKED_CODES.get(site.category, _UNMOCKED_FILE_OP_CODE)
+            # A site that cannot be spliced where it stands is not fixed by
+            # adding a MOCK -- that MOCK would be refused in turn -- so it
+            # gets no suggested fix, and says why.
+            unspliceable = (
+                site.unspliceable_reason or _UNANNOTATED
+                if site.nested and site.span is None
+                else None
+            )
             reasons.append(
                 RefusalReason(
                     code=code,
@@ -1552,8 +1560,18 @@ def check_test_case(
                         )
                         + f") is reachable from '{case.perform_target}' but "
                         f"no MOCK directive in this test case matches it"
+                        + (
+                            f" -- and a MOCK could not replace it either "
+                            f"({unspliceable})"
+                            if unspliceable is not None
+                            else ""
+                        )
                     ),
-                    suggested_fix=directive_snippet(site, surface),
+                    suggested_fix=(
+                        directive_snippet(site, surface)
+                        if unspliceable is None
+                        else None
+                    ),
                 )
             )
         elif len(matches) > 1:

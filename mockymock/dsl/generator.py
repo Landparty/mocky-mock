@@ -1938,7 +1938,7 @@ def _at_end_handling(
     splicer's own outcome field. Otherwise the clause is replicated or
     lifted into the branch as before."""
     at_end = getattr(site.statement, "at_end_clause", None) or []
-    if at_end and source is not None and not site.nested:
+    if at_end and source is not None and (not site.nested or site.span is not None):
         lifted_clauses = lift_clause_bodies(site.statement, source.lines)
         if lifted_clauses and any(c.attr == "at_end_clause" for c in lifted_clauses):
             signal = [

@@ -170,12 +170,27 @@ a validated `.span` or a precise `.unspliceable_reason` string (fail
 closed) — see the spliceability rules in
 [docs/2026-07-05-nested-mock-targets-design.md](../docs/2026-07-05-nested-mock-targets-design.md).
 Key preconditions checked there: no ancestor is itself a boundary
-statement, the site has no clause bodies of its own, it owns its start
+statement, it owns its start
 line (own-verb terminators like END-CALL/END-READ are exempt — they
 belong to the statement per `_VERB_TERMINATORS`), the next boundary owns
 its line too, and (EXEC only) the span's text actually contains
 `END-EXEC`. This must run **before** the refusal gate and the splicer look
 at nested sites — it is idempotent.
+
+A nested site WITH clause bodies of its own (`READ ... AT END ... END-READ`
+in an inline PERFORM, `CALL ... ON EXCEPTION ... END-CALL` in an IF; issue
+#258) is spanned by `_nested_clause_site_span`: from its start line to the
+line of its own explicit `_VERB_TERMINATORS` word, found by walking the
+scope map past its own clause-body statement starts (every boundary in
+between must be one of those, or a scope word) and taking the first
+own-terminator after the last of them. Refused when there is no such
+terminator before the next statement that is not its own (the clause would
+run on to whatever closes the enclosing block -- not guessed), when a
+statement of its own kind sits in its clause bodies (which terminator is
+whose is ambiguous), or when anything but a period follows the terminator
+on its line. RETURN has no `_VERB_TERMINATORS` entry, so a nested `RETURN
+... END-RETURN` stays refused. Before #258 every nested site with clause
+bodies was refused, which made the standard inline read loop untestable.
 
 # Flow-Mock Header Dispatch (2026-07-20, MOCK PARAGRAPH/SECTION)
 
@@ -395,8 +410,9 @@ statement's own AT END / NOT AT END / INVALID KEY / NOT INVALID KEY / ON
 EXCEPTION / NOT ON EXCEPTION (/ ON OVERFLOW) bodies, which
 `orchestrator.splice_program` gets from
 `analysis.clause_bodies.lift_clause_bodies(site.statement, lines)` for
-every mocked **top-level** site (a nested site with clauses is refused as
-unspliceable, so it never gets here). Before #209 the whole span was
+every mocked site -- top-level, or nested with a span bounded by its own
+scope terminator (#258; `dsl.generator._at_end_handling` mirrors this with
+`not site.nested or site.span is not None`). Before #209 the whole span was
 replaced and those bodies were deleted with it: a mocked READ fed rows the
 program's own `NOT AT END` never processed, `FILE-STATUS IS
 RECORD-NOT-FOUND` never reached `INVALID KEY`, and a mutant inside a

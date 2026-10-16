@@ -384,7 +384,10 @@ Flow (`_cmd_generate`):
     followed by a stderr note that the file was written but `lint` refuses
     it, and generate exits 1 (#231 — it used to exit 0 on a case its own
     lint rejects). The `.cut` is still written. `UNMOCKED_*` refusals are
-    left alone, since a MOCK block fixes those. `--per-paragraph`
+    left alone, since a MOCK block fixes those -- except one with no
+    `suggested_fix`: `check_test_case` gives none (and says why in the
+    message) when the site cannot be spliced where it stands (nested, no
+    span), because the MOCK would be refused in turn (#258). `--per-paragraph`
     (`bundle=None`) is exempt: one case per paragraph is a starting point
     to prune, and some of those cases are expected to be refused.
 

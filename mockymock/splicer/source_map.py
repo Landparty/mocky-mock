@@ -487,10 +487,7 @@ def _nested_site_span(
             "splicing the enclosing statement removes this site"
         )
     if _nested_statement_lists(statement):
-        return None, (
-            "has conditional clause bodies of its own (AT END/INVALID KEY/"
-            "ON EXCEPTION/...) whose extent cannot be determined"
-        )
+        return _nested_clause_site_span(site, scope_map, lines)
 
     start = statement.location.line
     column = statement.location.column
@@ -530,3 +527,99 @@ def _nested_site_span(
         ):
             return None, "its END-EXEC terminator falls outside the computed span"
     return (start, end), None
+
+
+def _descendants(statement) -> list:
+    """Every statement inside `statement`'s own clause bodies, any depth."""
+    found: list = []
+    stack = list(_nested_statement_lists(statement))
+    while stack:
+        for child in stack.pop():
+            found.append(child)
+            stack.extend(_nested_statement_lists(child))
+    return found
+
+
+def _nested_clause_site_span(
+    site: BoundarySite, scope_map: ScopeMap, lines: list[str]
+) -> tuple[tuple[int, int] | None, str | None]:
+    """The span of a nested statement WITH clause bodies of its own (READ
+    ... AT END ... END-READ inside an inline PERFORM, CALL ... ON EXCEPTION
+    ... END-CALL inside an IF; issue #258): from its first line to the
+    line of its own explicit scope terminator, which is what makes its
+    extent certain. Every boundary in between must belong to the
+    statement itself -- a start of one of its own clause-body statements,
+    or a scope word -- and the terminator must close its line. Without an
+    explicit terminator the clause runs on to whatever closes the
+    enclosing block, which is refused rather than guessed."""
+    statement = cast(ASTNode, site.statement)
+    start = statement.location.line
+    column = statement.location.column
+    if lines[start - 1][: column - 1].strip():
+        return None, "does not start its own line"
+    own_terminator = (
+        _VERB_TERMINATORS.get(site.category, "") if site.category is not None else ""
+    )
+    if not own_terminator:
+        return None, (
+            "has conditional clause bodies of its own (AT END/INVALID KEY/"
+            "ON EXCEPTION/...) whose extent cannot be determined"
+        )
+    inner = _descendants(statement)
+    if any(type(child) is type(statement) for child in inner):
+        # Its own terminator word could then close the inner statement.
+        return None, (
+            f"has a statement of its own kind inside its clause bodies, so "
+            f"which {own_terminator} closes it cannot be determined"
+        )
+    descendants = {
+        (child.location.line, child.location.column)
+        for child in inner
+        if getattr(child, "location", None) is not None
+    }
+    last_descendant = max(descendants, default=(start, column))
+
+    terminator: ScopeBoundary | None = None
+    candidates = [
+        *(b for b in scope_map.at_line(start) if b.column > column),
+        *scope_map.iter_after_line(start),
+    ]
+    for boundary in candidates:
+        if boundary.word == "":
+            if (boundary.line, boundary.column) in descendants:
+                continue
+            break  # a statement that is not part of this one
+        if (
+            boundary.word == own_terminator
+            and (
+                boundary.line,
+                boundary.column,
+            )
+            > last_descendant
+        ):
+            terminator = boundary
+            break
+    if terminator is None:
+        return None, (
+            f"has conditional clause bodies of its own (AT END/INVALID KEY/"
+            f"ON EXCEPTION/...) but no {own_terminator} of its own before the "
+            f"next statement to bound them -- add {own_terminator} so its "
+            f"extent is certain"
+        )
+    if any(
+        b.line == terminator.line and b.column > terminator.column
+        for b in scope_map.at_line(terminator.line)
+    ):
+        return None, (
+            f"its {own_terminator} (line {terminator.line}) shares its line "
+            f"with another statement or scope word"
+        )
+    after = lines[terminator.line - 1][
+        terminator.column - 1 + len(own_terminator) :
+    ].strip()
+    if after not in ("", "."):
+        return None, (
+            f"its {own_terminator} (line {terminator.line}) is followed by "
+            f"other code on the same line"
+        )
+    return (start, terminator.line), None

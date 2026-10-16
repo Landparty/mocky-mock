@@ -1225,7 +1225,9 @@ def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
         remaining.extend(
             f"{where}refused ({r.code}): {r.message}"
             for r in reasons
-            if not r.code.startswith("UNMOCKED_")
+            # An UNMOCKED_* refusal with no suggested MOCK is one no MOCK
+            # can fix (a site that cannot be spliced where it stands).
+            if not (r.code.startswith("UNMOCKED_") and r.suggested_fix)
         )
     remaining.extend(
         problem
