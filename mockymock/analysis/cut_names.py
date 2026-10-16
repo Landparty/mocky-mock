@@ -155,6 +155,25 @@ def _program_words(lines: list[str]) -> set[str]:
     return words
 
 
+def data_item_levels(program) -> dict[str, set[int]]:
+    """Upper-cased data-item name -> the level numbers it is declared at
+    (88 for a condition-name), from the AST: the names cobc compiles,
+    after REPLACE and COPY ... REPLACING (issue #273)."""
+    levels: dict[str, set[int]] = {}
+    data = program.get_division("DATA") if program is not None else None
+    if data is None:
+        return levels
+    for item in data.find_all_by_type("CobolDataItem"):
+        name = str(getattr(item, "name", "") or "").upper()
+        if name and name != "FILLER":
+            levels.setdefault(name, set()).add(int(getattr(item, "level", 0) or 0))
+    for condition in data.find_all_by_type("ConditionNameItem"):
+        name = str(getattr(condition, "name", "") or "").upper()
+        if name:
+            levels.setdefault(name, set()).add(88)
+    return levels
+
+
 def _harness_words() -> set[str]:
     from mockymock.splicer.cics_eib import _DFHEIBLK_LINES, _DLIDIB_LINES
 
@@ -196,12 +215,18 @@ def _is_bare_word_value(value: str) -> bool:
 
 
 def check_cut_data_names(
-    suite: MockTestSuite, lines: list[str], program_name: str | None = None
+    suite: MockTestSuite,
+    lines: list[str],
+    program_name: str | None = None,
+    program=None,
 ) -> list[RefusalReason]:
     """UNKNOWN_DATA_NAME for each `.cut` data reference no program text
-    declares -- see the module docstring for what is checked."""
+    declares -- see the module docstring for what is checked. `program`
+    (the AST) adds its own data-item names: a name built through REPLACE
+    pseudo-text appears in no word of the pre-REPLACE text (issue #273)."""
     known = (
         _program_words(lines)
+        | set(data_item_levels(program))
         | _harness_words()
         | _SPECIAL_REGISTERS
         | _suite_harness_words(suite)

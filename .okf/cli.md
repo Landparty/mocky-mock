@@ -1011,7 +1011,10 @@ SQLCA and `EXEC SQL INCLUDE` members count), is not a harness item this
 suite's driver declares (its fixed `UT-` fields, every tally with its
 `-BASE`/`-START` twin, every `UT-CAP-` target a CAPTURE line declares --
 not any `UT-` word, issue #296), DFHEIBLK/DLIDIB field, special register
-or figurative constant. Loose on
+or figurative constant. The AST's own data-item and condition names
+(`cut_names.data_item_levels`) are known too: a name built through
+`REPLACE` pseudo-text appears in no word of the pre-REPLACE text the
+splicer compiles (issue #273). Loose on
 purpose: it only catches names cobc would certainly reject.
 `MockTestCase.setup_move_lines` / `MockDirective.capture_lines` carry the
 line numbers the model did not record before. ROWS rows and the `TERMINAL`

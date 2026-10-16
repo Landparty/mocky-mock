@@ -548,7 +548,10 @@ def run_static_checks(
     out.problems.extend(
         f"refused ({r.code}): {r.message}"
         for r in check_cut_data_names(
-            suite, transformed, getattr(parse_result.ast, "program_name", None)
+            suite,
+            transformed,
+            getattr(parse_result.ast, "program_name", None),
+            parse_result.ast,
         )
     )
 
