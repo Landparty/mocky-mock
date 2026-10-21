@@ -535,6 +535,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     external behavior, since neither _cmd_generate nor _cmd_run's
     existing code changes at all."""
     from mockymock.cli.doctor import gather_full_status
+    from mockymock.runtime.status import OK
 
     source_path = Path(args.program)
     if not _check_input_files("mockymock init", source_path):
@@ -597,8 +598,14 @@ def _cmd_init(args: argparse.Namespace) -> int:
             "correctness-critical."
         )
 
+    # Gate on the Docker daemon alone (mocky-mock-vscode#103): a toolchain
+    # image or container that isn't built yet is what `run` builds on
+    # demand (`ensure_toolchain`), so a fresh install with Docker running
+    # used to skip recording and say Docker wasn't available.
     report = gather_full_status()
-    if not report.ready:
+    daemon = next((c for c in report.toolchain.checks if c.id == "daemon"), None)
+    docker_up = daemon.state == OK if daemon is not None else report.ready
+    if not docker_up:
         print(
             "mockymock init: Docker isn't available, so I generated a "
             "suite with real test data but could not run it to record "
@@ -618,6 +625,11 @@ def _cmd_init(args: argparse.Namespace) -> int:
     for path in copybook_paths:
         run_argv += ["--copybook-path", path]
 
+    if not report.ready:
+        print(
+            "mockymock init: the GnuCOBOL toolchain isn't set up yet -- "
+            "building it first (one time; this can take a few minutes)"
+        )
     print(f"mockymock init: running {output_path} to record expected values")
     run_args = build_parser().parse_args(run_argv)
     run_args._config = config

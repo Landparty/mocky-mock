@@ -20,7 +20,7 @@ parser install to resolve.
 
 ```
 mockymock setup     -> runtime.docker_toolchain only (build image, start container)
-mockymock init      -> _cmd_generate(--with-data) then _cmd_run(--record-expectations), reentrant  (Docker iff doctor reports ready)
+mockymock init      -> _cmd_generate(--with-data) then _cmd_run(--record-expectations), reentrant  (records iff the Docker daemon is up; run builds a missing toolchain image -- vscode#103)
 mockymock generate  -> parse -> analysis.mock_surface -> dsl.generator  (no Docker)
 mockymock fixtures  -> parse -> cobolparser.ProgramFixtureGenerator -> JSON on stdout  (no Docker, no mockymock analysis at all)
 mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
@@ -243,7 +243,10 @@ values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
    caveat (`docs/2026-09-04-scenario-branch-verification.md`) -- a
    scenario named for an arm is not yet verified to reach it.
 4. `doctor.gather_full_status()` (read-only, mutates nothing) decides
-   whether to attempt a run at all. Not ready: prints a fallback message
+   whether to attempt a run at all, from its Docker *daemon* check alone
+   (vscode#103, 2026-10-21): a missing toolchain image/container is what
+   `run`'s `ensure_toolchain()` builds, so init says it is building it and
+   goes on. Daemon down: prints a fallback message
    naming the exact `run --cut ... --record-expectations` command to run
    later, and returns 0 (the scaffold with real data is still a
    strictly better outcome than plain `generate`, even unrecorded).
