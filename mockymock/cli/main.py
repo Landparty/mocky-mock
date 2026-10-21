@@ -3046,7 +3046,10 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     --boundaries (2026-09-15) additionally reports every mockable boundary
     site in the paired program -- see docs/2026-09-15-cut-editor-intelligence-design.md.
     Requires --json and a program argument (no human-readable form is
-    planned for it)."""
+    planned for it). The boundaries are the program's, whatever state the
+    suite is in: --cut may be omitted, and a .cut that fails to parse (a
+    half-written MOCK block in an editor) still gets them, beside the
+    `error` (mocky-mock-vscode#100)."""
     import json
 
     from mockymock.dsl.parser import CutParseError, parse_cut
@@ -3059,9 +3062,12 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         # VS Code extension parses it (issue #309).
         _print_command_error(args, "--boundaries requires a program argument")
         return 1
+    if args.cut is None and not args.boundaries:
+        _print_command_error(args, "--cut is required (it may be omitted only with --boundaries)")
+        return 1
 
-    cut_path = Path(args.cut)
-    check_paths = [cut_path]
+    cut_path = Path(args.cut) if args.cut is not None else None
+    check_paths = [cut_path] if cut_path is not None else []
     program_path = Path(args.program) if args.program else None
     if program_path is not None:
         check_paths.append(program_path)
@@ -3074,14 +3080,19 @@ def _cmd_collect(args: argparse.Namespace) -> int:
             return 1
     elif not _check_input_files("mockymock collect", *check_paths):
         return 1
-    try:
-        suite = parse_cut(read_utf8_source(cut_path))
-    except CutParseError as exc:
-        if args.json:
-            print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
-        else:
-            print(f"mockymock collect: invalid .cut file {cut_path}: {exc}")
-        return 1
+    suite = None
+    suite_error: str | None = None
+    if cut_path is not None:
+        try:
+            suite = parse_cut(read_utf8_source(cut_path))
+        except CutParseError as exc:
+            if not args.boundaries:
+                if args.json:
+                    print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
+                else:
+                    print(f"mockymock collect: invalid .cut file {cut_path}: {exc}")
+                return 1
+            suite_error = str(exc)
 
     boundaries = None
     if args.boundaries:
@@ -3097,19 +3108,25 @@ def _cmd_collect(args: argparse.Namespace) -> int:
             return 1
 
     if args.json:
-        payload = {
+        payload: dict[str, object] = {
             "version": 1,
-            "cutFile": str(cut_path),
-            "suite": {"name": suite.name, "line": suite.line},
+            "cutFile": str(cut_path) if cut_path is not None else None,
+            "suite": (
+                {"name": suite.name, "line": suite.line} if suite is not None else None
+            ),
             "cases": [
                 {"name": case.name, "line": case.line, "tags": list(case.tags)}
-                for case in suite.test_cases
+                for case in (suite.test_cases if suite is not None else [])
             ],
         }
+        if suite_error is not None:
+            payload["error"] = suite_error
         if boundaries is not None:
             payload["boundaries"] = boundaries
         print(json.dumps(payload, indent=2))
+        return 1 if suite_error is not None else 0
     else:
+        assert suite is not None  # --cut is required without --boundaries
         print(f"TESTSUITE {suite.name!r} (line {suite.line})")
         for case in suite.test_cases:
             tag_note = f"  [tags: {', '.join(case.tags)}]" if case.tags else ""
@@ -4101,7 +4118,10 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         help="Required only with --boundaries",
     )
-    collect_parser.add_argument("--cut", required=True)
+    collect_parser.add_argument(
+        "--cut",
+        help="The .cut file to list (required, except with --boundaries)",
+    )
     collect_parser.add_argument(
         "--json",
         action="store_true",

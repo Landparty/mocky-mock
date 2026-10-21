@@ -297,7 +297,7 @@ given.
 
 | Option | Default | Description |
 |---|---|---|
-| `--cut PATH` | required | The `.cut` test file. |
+| `--cut PATH` | required (optional with `--boundaries`) | The `.cut` test file. |
 | `--json` | off | Emit machine-readable JSON instead of a human-readable listing. |
 | `program` (positional) | none | Required only with `--boundaries`. |
 | `--boundaries` | off | Also report every mockable boundary site in `program` (category, key, paragraph, line, and the `MOCK` directive that would cover it). Requires `--json` and `program`. |
@@ -306,6 +306,8 @@ given.
 `--boundaries` is the cheapest way to answer "what can I mock here, and
 what is this suite already covering?" for a program that already has a
 `.cut` file -- no fixture generation, no Docker.
+The boundaries come back even when the `.cut` doesn't parse (beside the
+`error`, exit 1) or when `--cut` is omitted: they are the program's.
 
 ## `mockymock explain`
 
