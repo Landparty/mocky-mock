@@ -39,6 +39,10 @@ Most subcommands can work out their own arguments:
   key is an error rather than silently ignored. `mockymock doctor`
   reports which config file (if any) is in effect.
 
+`--extra-copybook-path DIR` (repeatable) is accepted wherever
+`--copybook-path` is: it is searched after the config file's (or the
+`--copybook-path`) list instead of replacing it.
+
 ## `mockymock setup`
 
 ```bash

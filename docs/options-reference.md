@@ -48,6 +48,14 @@ Running `mockymock` with no subcommand prints help and exits with status 1.
 A repeatable flag (noted below as "repeatable") can be passed more than
 once: `--copybook-path a/ --copybook-path b/` searches both directories.
 
+Every subcommand that takes `--copybook-path` also takes
+`--extra-copybook-path DIR` (repeatable). `--copybook-path` *replaces* the
+config file's `copybook_path` list; `--extra-copybook-path` is searched
+*after* that list (or after the `--copybook-path` list when both are
+given), so a tool can add directories without dropping the project's own.
+The VS Code extension passes directories it found itself (zapp.yml,
+`cobolAnalyzer.copybookPaths`) this way.
+
 `mockymock run` and `mockymock setup` are the only subcommands that need a
 running Docker daemon — COBOL is compiled and executed inside a GnuCOBOL
 container. Every other subcommand is pure parse-and-analyze and needs

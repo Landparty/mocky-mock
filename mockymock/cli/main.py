@@ -311,6 +311,12 @@ def _apply_config_to_args(
     config: MockymockConfig = getattr(args, "_config", None) or MockymockConfig()
     if hasattr(args, "copybook_path"):
         resolved = resolve_copybook_paths(args.copybook_path, config)
+        # --extra-copybook-path adds to whichever list won instead of
+        # replacing it, so an editor can pass directories it found on its
+        # own (zapp.yml, another extension's settings) without dropping
+        # the project's cobol.yml / mockymock.toml list (vscode#130).
+        extra = getattr(args, "extra_copybook_path", None) or []
+        resolved = resolved + [path for path in extra if path not in resolved]
         if program_path is not None:
             from mockymock.cli.discovery import effective_copybook_paths
 
@@ -563,6 +569,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
     config = getattr(args, "_config", None)
     copybook_paths = args.copybook_path or []
+    extra_copybook_paths = args.extra_copybook_path or []
 
     generate_argv = [
         "generate",
@@ -581,6 +588,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
         generate_argv += ["--seed", str(args.seed)]
     for path in copybook_paths:
         generate_argv += ["--copybook-path", path]
+    for path in extra_copybook_paths:
+        generate_argv += ["--extra-copybook-path", path]
 
     print(f"mockymock init: scaffolding {output_path} from {source_path} (--with-data)")
     generate_args = build_parser().parse_args(generate_argv)
@@ -624,6 +633,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
     ]
     for path in copybook_paths:
         run_argv += ["--copybook-path", path]
+    for path in extra_copybook_paths:
+        run_argv += ["--extra-copybook-path", path]
 
     if not report.ready:
         print(
@@ -3654,6 +3665,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to search for copybooks (repeatable)",
     )
     init_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    init_parser.add_argument(
         "--force",
         action="store_true",
         help="Overwrite the output .cut file if it already exists",
@@ -3723,6 +3742,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    generate_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     generate_parser.add_argument(
         "--with-data",
@@ -3835,6 +3862,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Directory to search for copybooks (repeatable)",
     )
+    fixtures_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
     fixtures_parser.set_defaults(func=_cmd_fixtures)
 
     run_parser = subparsers.add_parser(
@@ -3884,6 +3919,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    run_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     run_parser.add_argument(
         "--keep-sandbox",
@@ -4001,6 +4044,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to search for copybooks (repeatable)",
     )
     debug_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    debug_parser.add_argument(
         "--dap-stdio",
         action="store_true",
         help="Run the DAP adapter on stdio (the mode the VS Code extension spawns)",
@@ -4030,6 +4081,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    lint_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     lint_parser.add_argument(
         "--case",
@@ -4067,6 +4126,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    mutate_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     mutate_parser.add_argument(
         "--list",
@@ -4153,6 +4220,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable; --boundaries only)",
+    )
+    collect_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     collect_parser.set_defaults(func=_cmd_collect)
 
@@ -4263,6 +4338,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to search for copybooks (repeatable)",
     )
     report_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    report_parser.add_argument(
         "--execute",
         action="store_true",
         help="Run the suite (with coverage) now; needs Docker",
@@ -4368,6 +4451,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    export_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     export_parser.add_argument(
         "--case",
