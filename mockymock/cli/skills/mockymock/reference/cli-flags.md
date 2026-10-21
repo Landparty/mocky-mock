@@ -425,7 +425,7 @@ unlabelled), and findings ranked by severity.
 
 | Option | Default | Description |
 |---|---|---|
-| `-o`, `--output` | `<program>.report.html` | HTML path. |
+| `-o`, `--output` | `<cut stem>.report.html` next to the `.cut` | HTML path (one report per suite). |
 | `--json` | none | Also write the report as JSON. |
 | `--execute` | off | Run the suite with coverage now (Docker). |
 | `--mutate` | off | Run mutation testing now (Docker, slower). |

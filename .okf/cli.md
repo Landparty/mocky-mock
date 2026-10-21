@@ -1398,7 +1398,8 @@ orphan.
 
 ## `mockymock report <program> [--cut PATH] [-o/--output PATH] [--json PATH] [--copybook-path DIR ...] [--execute] [--mutate] [--run-json PATH] [--coverage-json PATH] [--mutation-json PATH] [--journal PATH] [--scenarios happy|branches|all|none] [--seed N] [--timeout S] [--mutation-threshold PCT]` (2026-10-04)
 
-One self-contained HTML page (default `<program stem>.report.html`;
+One self-contained HTML page (default `<cut stem>.report.html` next to
+the `.cut`, beside its journal, so each suite has its own -- issue #192;
 `--json` also writes the underlying dict) of every step of testing a
 program and what each test proves. Backs the `cobol-test` skill's final
 step. Builder is `report/test_report.py` (`ReportOptions` ->

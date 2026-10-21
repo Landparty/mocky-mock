@@ -3197,7 +3197,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     import json
 
     from mockymock.report.html_report import render_html
-    from mockymock.report.journal import default_journal_path
+    from mockymock.report.journal import default_journal_path, default_report_path
     from mockymock.report.test_report import ReportOptions, build_report
 
     pair = _resolve_program_and_cut("mockymock report", args)
@@ -3225,11 +3225,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
         mutation_threshold=args.mutation_threshold,
     )
     report = build_report(options)
-    html_path = (
-        Path(args.output)
-        if args.output
-        else source_path.with_name(f"{source_path.stem}.report.html")
-    )
+    html_path = Path(args.output) if args.output else default_report_path(cut_path)
     html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(render_html(report), encoding="utf-8")
     if args.json:
@@ -4144,7 +4140,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument(
         "-o",
         "--output",
-        help="HTML report path (default: <program>.report.html next to the program)",
+        help="HTML report path (default: <cut stem>.report.html next to the .cut)",
     )
     report_parser.add_argument("--json", help="Also write the report as JSON here")
     report_parser.add_argument(
