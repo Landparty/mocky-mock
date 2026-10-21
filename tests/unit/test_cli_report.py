@@ -75,12 +75,13 @@ def test_each_suite_of_a_program_gets_its_own_report(ordrproc, capsys):
     shutil.copy(ordrproc / "ORDRPROC.cut", tests_dir / "ORDRPROC.cut")
     for cut in ("ORDRPROC.cut", "ORDRPROC.errors.cut"):
         assert (
-            main(["report", "ORDRPROC.cbl", "--cut", cut, "--scenarios", "none"])
-            == 0
+            main(["report", "ORDRPROC.cbl", "--cut", cut, "--scenarios", "none"]) == 0
         )
     assert (ordrproc / "ORDRPROC.report.html").is_file()
     assert (ordrproc / "ORDRPROC.errors.report.html").is_file()
-    main(["report", "ORDRPROC.cbl", "--cut", "tests/ORDRPROC.cut", "--scenarios", "none"])
+    main(
+        ["report", "ORDRPROC.cbl", "--cut", "tests/ORDRPROC.cut", "--scenarios", "none"]
+    )
     assert (tests_dir / "ORDRPROC.report.html").is_file()
 
 

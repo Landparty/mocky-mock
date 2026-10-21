@@ -96,6 +96,12 @@ class Scenario:
     #: existed (or a happy-path scenario, which targets no branch). Read
     #: defensively -- an older bundle is still a valid v1 bundle.
     verification: dict[str, Any] | None = None
+    #: The values a caller passes through the program's own PROCEDURE
+    #: DIVISION USING items (category "ENTRY", key = PROGRAM-ID), one row
+    #: over their elementary fields; None when the program takes none or
+    #: the bundle predates them (issue #275). The scaffold MOVEs the row
+    #: into the parameters before its PERFORM.
+    entry_parameters: BoundaryFixture | None = None
 
 
 @dataclass
@@ -177,6 +183,11 @@ def _load_scenario(data: dict[str, Any]) -> Scenario:
         expectations=[_load_expectation(e) for e in data.get("expectations") or []],
         unconstrained=list(data.get("unconstrained") or []),
         verification=data.get("verification"),
+        entry_parameters=(
+            _load_fixture(_object(data["entry_parameters"], "entry_parameters"))
+            if data.get("entry_parameters") is not None
+            else None
+        ),
     )
 
 

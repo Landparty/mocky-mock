@@ -268,6 +268,25 @@ explicit `-o` included -- the same contract as `init`, which passes
 program's existing sibling `PROG.cut`) was silently replaced by a bare
 scaffold.
 
+**A subprogram's USING parameters are its interface (2026-10-21, issue
+#275).** `dsl/entry_parameters.py`: `fixture_generator()` builds
+`ProgramFixtureGenerator(entry_parameters=True)` when the installed
+cobol-parser knows the keyword (it then also targets branches on the
+parameters); otherwise `add_entry_parameters()` gives every scenario of the
+bundle dict the same `entry_parameters` fixture (category `ENTRY`, one
+PICTURE-valid row over the USING items' elementary fields) plus a `stub`
+expectation per LINKAGE field xref says the program writes, without the
+branch targeting. DFHEIBLK/DFHCOMMAREA are dropped (`without_cics_parameters`;
+CICS supplies them, #245 handles the commarea). The scaffold MOVEs the row
+before the PERFORM (`generator._entry_parameter_lines`), so `run
+--record-expectations` fills the stubs. After writing, `generate` warns on
+every case with no EXPECT/VERIFY/STUB EXPECT
+(`checks.cases_asserting_nothing`), refuses to write a `--per-paragraph`
+suite with zero cases (exit 1), and `init` exits 1 when recording left no
+case asserting anything. `run_static_checks` refuses a `.cut` with no
+TESTCASE, so `lint` fails it and `run` says why instead of "0 run, 0
+failed".
+
 **Default unit is the scenario (2026-10-14).** With neither `--with-data`
 nor `--per-paragraph`, `generate` takes the `--with-data` path (one TESTCASE
 per scenario through the entry point; 17 cases for the 17

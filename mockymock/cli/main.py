@@ -47,7 +47,6 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     claiming everything resolved -- exactly the input `generate` refuses
     with UNRESOLVED_COPYBOOK, so the two commands must agree."""
     from cobolparser import parse_cobol
-    from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
     from cobolparser.preprocess import CopybookNotFoundError, expand_copybooks
 
     from mockymock.analysis.flow_targets import normalize_flow_targets
@@ -139,11 +138,9 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     if copybook_reasons:
         return 1
 
-    generator = (
-        ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))
-        if args.rows is not None
-        else ProgramFixtureGenerator()
-    )
+    from mockymock.dsl.entry_parameters import fixture_generator
+
+    generator, _ = fixture_generator(args.rows)
     try:
         bundle = generator.generate_with_scenarios_from_file(
             str(source_path),
@@ -646,6 +643,19 @@ def _cmd_init(args: argparse.Namespace) -> int:
     run_args._config = config
     run_exit_code = _cmd_run(run_args)
     if run_exit_code == 0:
+        # Recording can leave a case with nothing to assert (a program
+        # whose result the scaffold could not see, issue #275): such a
+        # suite passes whatever the program does, so it is not "done".
+        cut_text = read_utf8_source(output_path)
+        case_count = _distinct_case_count(cut_text)
+        empty = _warn_asserting_nothing("init", cut_text, stubs_count=False)
+        if case_count and empty == case_count:
+            print(
+                f"mockymock init: {output_path} was written, but none of its "
+                f"test cases asserts anything -- add an EXPECT on what the "
+                f"program writes before relying on it"
+            )
+            return 1
         print(
             f"mockymock init: next, run 'mockymock run {source_path} "
             f"--cut {output_path}'"
@@ -1019,21 +1029,28 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         # of failing the command: an editor's "new test suite" button
         # should still produce a suite on a program the generator can't
         # handle. An explicit --with-data keeps the hard failure.
-        from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
+        from mockymock.dsl.entry_parameters import (
+            add_entry_parameters,
+            fixture_generator,
+            without_cics_parameters,
+        )
 
         try:
-            generator = (
-                ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))
-                if args.rows is not None
-                else ProgramFixtureGenerator()
-            )
+            # A subprogram's USING parameters are its interface (#275): the
+            # scaffold sets them and stubs what the program hands back.
+            generator, native_parameters = fixture_generator(args.rows)
             cp_bundle = generator.generate_with_scenarios_from_file(
                 str(source_path),
                 mode=args.scenarios,
                 seed=args.seed,
                 copybook_paths=args.copybook_path,
             )
-            bundle = load_fixture_bundle(cp_bundle.to_dict())
+            bundle_data = cp_bundle.to_dict()
+            if not native_parameters:
+                bundle_data = add_entry_parameters(
+                    bundle_data, str(source_path), args.copybook_path
+                )
+            bundle = load_fixture_bundle(without_cics_parameters(bundle_data))
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
             # cobol-parser wraps the not-found error in a ProgramLayoutError;
@@ -1224,12 +1241,23 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             )
 
     output_path = _default_output(args, source_path)
+    case_count = cut_text.count("TESTCASE ")
+    if case_count == 0 and bundle is None:
+        # A suite with no TESTCASE runs as "0 run, 0 failed" and fails;
+        # writing it and exiting 0 read as success (issue #275).
+        print(
+            f"mockymock generate: no test case to write -- no paragraph of "
+            f"{source_path} touches a boundary to mock, so {output_path} was "
+            f"not written. Write a TESTCASE by hand (PERFORM the paragraph, "
+            f"EXPECT what it computes), or try --scenarios"
+        )
+        return 1
     # Unlike run's auxiliary report flags, this file IS the deliverable:
     # a failed write is a failed command (same convention as export).
     if not _write_report_file("generate", "-o/--output", str(output_path), cut_text):
         return 1
-    case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
+    _warn_asserting_nothing("generate", cut_text, stubs_count=True)
     if case_count == 0 and bundle is not None:
         # The bundle had scenarios (zero is refused above) yet none became
         # a TESTCASE; the empty suite would run as "0 run, 0 failed" and
@@ -1253,6 +1281,38 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         # to prune, some of which are expected to be refused.
         return 0
     return _refuse_unusable_scaffold(source_path, output_path, args)
+
+
+def _distinct_case_count(cut_text: str) -> int:
+    """How many cases `cut_text` holds, counted the way
+    `cases_asserting_nothing` labels them (PROVIDER rows share their header
+    line); 0 when the text does not parse."""
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        suite = parse_cut(cut_text)
+    except CutParseError:
+        return 0
+    return len({case.line or case.name for case in suite.test_cases})
+
+
+def _warn_asserting_nothing(command: str, cut_text: str, *, stubs_count: bool) -> int:
+    """Print one warning naming every case with nothing to assert (see
+    `checks.cases_asserting_nothing`); returns how many there are."""
+    from mockymock.cli.checks import cases_asserting_nothing
+
+    empty = cases_asserting_nothing(cut_text, stubs_count=stubs_count)
+    if not empty:
+        return 0
+    what = "no EXPECT, VERIFY or STUB EXPECT" if stubs_count else "no EXPECT or VERIFY"
+    print(
+        f"mockymock {command}: warning: {len(empty)} test case(s) assert "
+        f"nothing ({what}), so they pass whatever the program does -- add an "
+        f"EXPECT on what each one writes:"
+    )
+    for label in empty:
+        print(f"  {label}")
+    return len(empty)
 
 
 def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
@@ -3086,7 +3146,9 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         _print_command_error(args, "--boundaries requires a program argument")
         return 1
     if args.cut is None and not args.boundaries:
-        _print_command_error(args, "--cut is required (it may be omitted only with --boundaries)")
+        _print_command_error(
+            args, "--cut is required (it may be omitted only with --boundaries)"
+        )
         return 1
 
     cut_path = Path(args.cut) if args.cut is not None else None
