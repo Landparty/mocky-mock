@@ -2589,6 +2589,15 @@ def _lint_directory(
     ran = 0
     unresolved: list[str] = []
     broken_claims = 0
+    # --case/--tag over several suites: each suite is linted for the selected
+    # cases it has, a suite with none is skipped, and only a name or tag no
+    # suite has is an error.
+    case_names = list(getattr(args, "case", None) or [])
+    tag_names = list(getattr(args, "tag", None) or [])
+    selecting = bool(case_names or tag_names)
+    matched_cases: set[str] = set()
+    matched_tags: set[str] = set()
+    not_selected = 0
     for cut_path in cut_files:
         try:
             program_path = resolve_program_path(None, cut_path, layout)
@@ -2597,8 +2606,21 @@ def _lint_directory(
             if read_program_line(cut_path) is not None:
                 broken_claims += 1
             continue
-        ran += 1
         sub_args = copy.copy(args)
+        if selecting:
+            selection = _lint_selection_in_suite(cut_path, case_names, tag_names)
+            if selection is not None:
+                cases, tags = selection
+                if not cases and not tags:
+                    not_selected += 1
+                    continue
+                sub_args.case, sub_args.tag = cases or None, tags or None
+                matched_cases.update(cases)
+                matched_tags.update(tags)
+            else:
+                matched_cases.update(case_names)
+                matched_tags.update(tag_names)
+        ran += 1
         sub_args.program = str(program_path)
         sub_args.cut = str(cut_path)
         print(f"== {cut_path} ==")
@@ -2606,13 +2628,48 @@ def _lint_directory(
 
     for reason in unresolved:
         print(f"mockymock lint: {reason}")
+    missing = [
+        f"no TESTCASE named {name!r} in any suite"
+        for name in case_names
+        if name not in matched_cases
+    ] + [
+        f"no TESTCASE carries tag {tag!r} in any suite"
+        for tag in tag_names
+        if tag not in matched_tags
+    ]
+    for problem in missing:
+        print(f"mockymock lint: {problem}")
+    skipped_note = (
+        f", {not_selected} suite(s) without a selected TESTCASE skipped"
+        if not_selected
+        else ""
+    )
     print(
         f"mockymock lint: {ran} suite(s) checked, {len(unresolved)} .cut "
-        f"file(s) skipped (no program found)"
+        f"file(s) skipped (no program found){skipped_note}"
     )
-    if ran == 0 or _report_broken_claims("lint", broken_claims):
+    if ran == 0 or missing or _report_broken_claims("lint", broken_claims):
         return 1
     return exit_code
+
+
+def _lint_selection_in_suite(
+    cut_path: Path, case_names: list[str], tag_names: list[str]
+) -> tuple[list[str], list[str]] | None:
+    """The `--case` names and `--tag`s that `cut_path`'s suite has; None
+    when the suite can't be read or parsed (its own lint then says why)."""
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        suite = parse_cut(read_utf8_source(cut_path))
+    except (OSError, UnicodeDecodeError, CutParseError):
+        return None
+    names = {case.name for case in suite.test_cases}
+    tags = {tag for case in suite.test_cases for tag in case.tags}
+    return (
+        [name for name in case_names if name in names],
+        [tag for tag in tag_names if tag in tags],
+    )
 
 
 def _cmd_lint(args: argparse.Namespace) -> int:
@@ -2632,7 +2689,16 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         return 1
     source_path, cut_path = pair
     _apply_config_to_args(args, source_path)
-    result = run_static_checks(source_path, cut_path, args.copybook_path)
+    # --case/--tag scope the per-case refusals to the selection, exactly as
+    # `debug --case` and `run --case` do, so a refusal in one TESTCASE no
+    # longer fails a lint of another (issue: vscode#95's debug preflight).
+    result = run_static_checks(
+        source_path,
+        cut_path,
+        args.copybook_path,
+        case_names=getattr(args, "case", None),
+        tag_names=getattr(args, "tag", None),
+    )
     for note in result.notes:
         print(f"mockymock lint: {note}")
     for problem in result.problems:
@@ -3935,6 +4001,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    lint_parser.add_argument(
+        "--case",
+        action="append",
+        help=(
+            "Check only this TESTCASE (repeatable; combines with --tag as a "
+            "union). File-wide problems are still reported"
+        ),
+    )
+    lint_parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Check only TESTCASEs carrying this tag (repeatable; combines "
+            "with --case as a union)"
+        ),
     )
     lint_parser.set_defaults(func=_cmd_lint)
 

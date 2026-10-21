@@ -307,6 +307,8 @@ don't have (or don't want to pay for) a Docker daemon.
 | `program` (positional) | required | The `.cbl` source file. |
 | `--cut PATH` | required | The `.cut` test file. |
 | `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path`. |
+| `--case NAME` (repeatable) | all cases | Check only this TESTCASE: another case's per-case refusals (UNMOCKED_*, ...) no longer fail the lint. File-wide problems are still reported. Across several suites, a suite without the case is skipped. |
+| `--tag TAG` (repeatable) | none | Check only TESTCASEs carrying this tag (union with `--case`). |
 
 Prints `mockymock lint: no problems found.` and exits 0 if the `.cut` file
 is clean, or one `mockymock lint: <problem>` line per problem plus a count,
