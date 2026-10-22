@@ -398,6 +398,7 @@ def _summary_strip(report: dict[str, Any]) -> str:
         passed_sub = f"{s['failed']} failed, {s['notRun']} not run"
     coverage = "—" if s["coverage"] is None else f"{s['coverage']:.0f}%"
     mutation = "—" if s["mutationScore"] is None else f"{s['mutationScore']:g}%"
+    unevaluated = s.get("mutationUnevaluated") or 0
     intent = "—" if s["intentShare"] is None else f"{s['intentShare']:.0f}%"
     f = s["findings"]
     urgent = f["high"] + f["medium"]
@@ -441,7 +442,11 @@ def _summary_strip(report: dict[str, Any]) -> str:
         + _tile(
             "Planted bugs caught",
             mutation,
-            f"aim for {s['mutationThreshold']:.0f}% or more",
+            (
+                f"incomplete: {_plural(unevaluated, 'mutant')} not evaluated"
+                if unevaluated
+                else f"aim for {s['mutationThreshold']:.0f}% or more"
+            ),
             title="Mutation score: small deliberate changes a test noticed",
         )
         + _tile(

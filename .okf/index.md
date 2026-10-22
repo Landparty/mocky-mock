@@ -21,7 +21,7 @@ and reports pass/fail. Version 0.8.0 (`mockymock/__init__.py`, kept in step with
 
 ## Entry Point
 
-* [CLI](cli.md) — the seventeen subcommands (`setup` / `init` / `generate` / `fixtures` / `run` / `debug` / `lint` / `mutate` / `collect` / `explain` / `dashboard` / `doctor` / `export` / `analyze` / `skills` / `report` / `journal`), how argument resolution and the project config file work, and how each subcommand orchestrates the modules above. Also the home of the `debug` DAP adapter (`mockymock/debug/`), `mutate` (`mockymock/mutation/`), and `export` (`cli/mainframe_export.py`) write-ups.
+* [CLI](cli.md) — the subcommands (`setup` / `init` / `generate` / `fixtures` / `run` / `debug` / `lint` / `mutate` / `collect` / `explain` / `dashboard` / `doctor` / `export` / `analyze` / `skills` / `report` / `journal` / `clean`), how argument resolution and the project config file work, and how each subcommand orchestrates the modules above. Also the home of the `debug` DAP adapter (`mockymock/debug/`), `mutate` (`mockymock/mutation/`), and `export` (`cli/mainframe_export.py`) write-ups.
 * [Dashboard](dashboard.md) — `mockymock dashboard` (loopback static page) and `mockymock doctor` (terminal-native), plus the read-only `runtime.status` Docker health probe both sit on
 
 ## Integration & Testing

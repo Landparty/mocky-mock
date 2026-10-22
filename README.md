@@ -121,8 +121,7 @@ Then ask the assistant to "test ORDRPROC.cbl". It finishes with:
 mockymock report ORDRPROC.cbl --cut ORDRPROC.cut --execute --mutate
 ```
 
-which writes `ORDRPROC.report.html` next to the `.cut` (one report per
-suite): a summary, what needs attention
+which writes `.mockymock/ORDRPROC.report.html`: a summary, what needs attention
 (suspected bugs, missing assertions, untested paragraphs, GnuCOBOL vs IBM
 dialect risks), every test case with its verification level (L0 static to
 L3 dialect-checked), and a numbered account of every step, including the

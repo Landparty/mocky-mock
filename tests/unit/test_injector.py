@@ -139,17 +139,59 @@ def test_sql_site_dispatch_matches_by_prefix():
 
 
 def test_ambiguous_match_raises():
-    site = _site(MockCategory.OPEN, "OPEN", keys=("IN-FILE", "OUT-FILE"))
+    site = _site(MockCategory.SQL, "SQL", keys=(), match_text="UPDATE ORDERS SET A")
     case = MockTestCase(
         name="a",
         mocks=[
-            MockDirective(MockCategory.OPEN, "IN-FILE"),
-            MockDirective(MockCategory.OPEN, "OUT-FILE"),
+            MockDirective(MockCategory.SQL, "UPDATE ORDERS"),
+            MockDirective(MockCategory.SQL, "UPDATE"),
         ],
     )
     suite = MockTestSuite(name="S", test_cases=[case])
     with pytest.raises(ValueError, match="AMBIGUOUS_MOCK"):
         _dispatch(suite, site)
+
+
+def test_one_mock_per_file_of_a_multi_file_close_all_answer_it():
+    """Issue #348: `CLOSE CHKFILE STOPPAY CHKRETURNS CHKRPT` with a MOCK
+    per file -- every file's tally counts the one statement, and each
+    file's own status and body apply, in the statement's file order."""
+    site = _site(MockCategory.CLOSE, "CLOSE", keys=("CHKFILE", "STOPPAY", "CHKRPT"))
+    case = MockTestCase(
+        name="a",
+        mocks=[
+            MockDirective(MockCategory.CLOSE, "CHKRPT", body_lines=["MOVE 3 TO WS-C"]),
+            MockDirective(
+                MockCategory.CLOSE,
+                "CHKFILE",
+                body_lines=["MOVE 1 TO WS-A"],
+                file_status="30",
+            ),
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    registry = TallyRegistry(suite)
+    lines = [
+        line.strip()
+        for line in build_site_dispatch(
+            site,
+            suite,
+            registry,
+            file_status_fields={
+                "CHKFILE": "WS-CHK-ST",
+                "STOPPAY": "WS-STOP-ST",
+                "CHKRPT": "WS-RPT-ST",
+            },
+        )
+    ]
+    chk = registry.name(MockCategory.CLOSE, "CHKFILE")
+    rpt = registry.name(MockCategory.CLOSE, "CHKRPT")
+    assert lines.index(f"ADD 1 TO {chk}") < lines.index(f"ADD 1 TO {rpt}")
+    # Every file the statement names defaults to success, then overrides.
+    for field in ("WS-CHK-ST", "WS-STOP-ST", "WS-RPT-ST"):
+        assert f'MOVE "00" TO {field}' in lines
+    assert lines.index('MOVE "30" TO WS-CHK-ST') > lines.index('MOVE "00" TO WS-CHK-ST')
+    assert lines.index("MOVE 1 TO WS-A") < lines.index("MOVE 3 TO WS-C")
 
 
 def test_exec_trap_displays_and_fails():

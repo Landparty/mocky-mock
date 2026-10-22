@@ -19,7 +19,19 @@ behavior and proves nothing about correctness.
 A label covers every EXPECT/VERIFY line that follows it, up to the first
 blank line, the next label, the next TESTCASE, or any other directive.
 Other comment lines in between (a `*> STUB EXPECT`, a note) do not end it.
-An assertion no label covers is reported as unlabelled.
+
+A label written at the top of a test case -- directly above its TESTCASE
+line, or inside it before its first assertion, where a MOCK block or a
+setup MOVE ends it before it reaches any EXPECT/VERIFY -- is the case's
+label instead: it covers every assertion in that case that no label of its
+own sits directly above (issue #346). Labels at the top of the case are
+what people naturally write, and reading them as covering nothing turned
+whole suites written with intent into "0 intent, N unlabelled".
+
+An assertion no label covers is reported as unlabelled, and a label that
+still covers nothing (one after the case's last assertion, a second label
+at the top of a case that already has one) is reported as an orphan --
+lint warns about it, so a label is never silently ignored.
 
 Pure text analysis: works on any `.cut` that `parse_cut` accepts, needs no
 program and no Docker.
@@ -31,6 +43,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+ORPHAN_ASSERTION_LABEL = "ORPHAN_ASSERTION_LABEL"
 INTENT = "intent"
 CHARACTERIZATION = "characterization"
 
@@ -58,6 +71,9 @@ class LabelledAssertion:
     note: str = ""
     label_line: int | None = None
     rule_ids: list[str] = field(default_factory=list)
+    #: "adjacent" (the label sits directly above) or "case" (the case's
+    #: label from the top of the TESTCASE); None when unlabelled.
+    label_scope: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,7 +84,26 @@ class LabelledAssertion:
             "label": self.label,
             "note": self.note,
             "labelLine": self.label_line,
+            "labelScope": self.label_scope,
             "ruleIds": list(self.rule_ids),
+        }
+
+
+@dataclass
+class OrphanLabel:
+    """An INTENT/CHARACTERIZATION line that covers no assertion."""
+
+    line: int
+    label: str
+    note: str
+    case_name: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "line": self.line,
+            "label": self.label,
+            "note": self.note,
+            "case": self.case_name,
         }
 
 
@@ -76,50 +111,111 @@ def scan_assertion_labels(cut_text: str) -> list[LabelledAssertion]:
     """Every EXPECT/VERIFY inside a TESTCASE, in file order, with the label
     covering it (if any). Assertions outside any TESTCASE (a malformed file)
     are skipped -- they belong to no case the report could attribute."""
+    return scan_label_placement(cut_text)[0]
+
+
+def scan_label_placement(
+    cut_text: str,
+) -> tuple[list[LabelledAssertion], list[OrphanLabel]]:
+    """`scan_assertion_labels`, plus every label that covers nothing."""
     results: list[LabelledAssertion] = []
+    labels: list[OrphanLabel] = []
+    covered: set[int] = set()
     case_name: str | None = None
-    label: tuple[str, str, int] | None = None  # (kind, note, line)
+    # The label directly above whatever comes next, and the case's own
+    # label (from its top), each as an index into `labels`.
+    label: int | None = None
+    case_label: int | None = None
+    case_asserted = False
+
+    def end_adjacent() -> None:
+        # A label at the top of the case that ran into a MOCK, a setup
+        # line or a blank line before any assertion: the case's label.
+        nonlocal label, case_label
+        if (
+            label is not None
+            and case_name is not None
+            and not case_asserted
+            and labels[label].line not in covered
+        ):
+            case_label = label
+        label = None
 
     for line_no, raw in enumerate(cut_text.splitlines(), start=1):
         stripped = raw.strip()
         if not stripped:
-            label = None
+            end_adjacent()
             continue
         testcase = _TESTCASE_RE.match(stripped)
         if testcase:
+            # A label directly above the TESTCASE line labels that case.
+            above = (
+                label
+                if label is not None and labels[label].line not in covered
+                else None
+            )
             case_name = testcase.group("name").replace('""', '"')
+            case_asserted = False
+            case_label = above
+            if above is not None:
+                labels[above].case_name = case_name
             label = None
             continue
         labelled = _LABEL_RE.match(stripped)
         if labelled:
+            end_adjacent()
             kind = labelled.group("kind").upper()
-            label = (
-                INTENT if kind == "INTENT" else CHARACTERIZATION,
-                labelled.group("note").strip(),
-                line_no,
+            labels.append(
+                OrphanLabel(
+                    line=line_no,
+                    label=INTENT if kind == "INTENT" else CHARACTERIZATION,
+                    note=labelled.group("note").strip(),
+                    case_name=case_name,
+                )
             )
+            label = len(labels) - 1
             continue
         if stripped.startswith("*>"):
             continue
         assertion = _ASSERTION_RE.match(stripped)
         if assertion is None:
-            label = None
+            end_adjacent()
             continue
         if case_name is None:
             continue
+        case_asserted = True
         item = LabelledAssertion(
             case_name=case_name,
             line=line_no,
             kind=assertion.group("kind").lower(),
             text=stripped,
         )
-        if label is not None:
-            item.label, item.note, item.label_line = label
+        source = label if label is not None else case_label
+        if source is not None:
+            found = labels[source]
+            item.label, item.note, item.label_line = found.label, found.note, found.line
+            item.label_scope = "adjacent" if source == label else "case"
             item.rule_ids = sorted(
                 {match.upper() for match in _RULE_ID_RE.findall(item.note)}
             )
+            covered.add(found.line)
         results.append(item)
-    return results
+    orphans = [found for found in labels if found.line not in covered]
+    return results, orphans
+
+
+def orphan_label_warnings(cut_text: str) -> list[str]:
+    """One lint warning line per label that covers no assertion (#346)."""
+    warnings: list[str] = []
+    for orphan in scan_label_placement(cut_text)[1]:
+        where = f' in TESTCASE "{orphan.case_name}"' if orphan.case_name else ""
+        warnings.append(
+            f"warning ({ORPHAN_ASSERTION_LABEL}): .cut line {orphan.line}: the "
+            f"{orphan.label.upper()} label{where} covers no EXPECT/VERIFY -- "
+            "put it directly above the assertions it is about, or at the top "
+            "of the test case to cover all of them"
+        )
+    return warnings
 
 
 def summarize_labels(items: list[LabelledAssertion]) -> dict[str, int]:

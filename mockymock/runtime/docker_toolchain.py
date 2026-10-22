@@ -306,6 +306,46 @@ def ensure_toolchain(force_rebuild: bool = False) -> None:
         _start_container()
 
 
+#: Text the docker CLI (or this module, on its own client-side failures)
+#: writes to stderr when the toolchain itself failed rather than the COBOL
+#: it was asked to compile or run. A compile or run carrying one of these
+#: says nothing about the program, so a caller that scores verdicts
+#: (`mockymock mutate`) must not read it as one (issue #347).
+DOCKER_FAILURE_MARKERS: tuple[str, ...] = (
+    "Error response from daemon",
+    "Cannot connect to the Docker daemon",
+    "No such container",
+    "mockymock: could not run docker exec",
+    "the docker daemon may be wedged",
+)
+
+
+def docker_failure_line(stderr: str) -> str | None:
+    """The first stderr line that says the toolchain failed, or None."""
+    for line in stderr.splitlines():
+        if any(marker in line for marker in DOCKER_FAILURE_MARKERS):
+            return line.strip()
+    return None
+
+
+def toolchain_failure(timeout: int = 30) -> str | None:
+    """Why the toolchain container cannot run anything right now, or None
+    when it is up. Read-only: unlike `ensure_toolchain` it never starts,
+    builds or recreates anything, so it is cheap enough to ask after every
+    compile or run whose outcome could have been the container dying under
+    it rather than the program's own doing."""
+    try:
+        found = _inspect_container(timeout=timeout)
+    except DockerNotAvailableError as exc:
+        return str(exc).splitlines()[0]
+    if found is None:
+        return f"container {CONTAINER} no longer exists"
+    running, _ = found
+    if not running:
+        return f"container {CONTAINER} stopped"
+    return None
+
+
 def cobc_version(timeout: int = 30) -> str:
     """First line of `cobc --version` from inside the container.
     `timeout` is overridable for the dashboard probe (Finding 18)."""

@@ -185,6 +185,50 @@ def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool
     return directive.key.upper() in site.keys
 
 
+#: Statements that can name several files or reports at once (`OPEN INPUT
+#: A OUTPUT B`, `CLOSE A B C`, `INITIATE R1 R2`): one site, one key each.
+_MULTI_FILE_CATEGORIES = frozenset(
+    {
+        MockCategory.OPEN,
+        MockCategory.CLOSE,
+        MockCategory.INITIATE,
+        MockCategory.TERMINATE,
+    }
+)
+
+
+def per_file_matches(directives: list[MockDirective], site: BoundarySite) -> bool:
+    """Whether several directives matching one site each answer a
+    different file of a multi-file OPEN/CLOSE (issue #348), or a different
+    report of a multi-report INITIATE/TERMINATE. The statement
+    still runs once, so the splicer applies every one of them -- each
+    file's tally counts it, each file's status and body apply -- and each
+    file can be VERIFY'd on its own. Two directives naming the same file
+    remain AMBIGUOUS_MOCK: which body would answer it is undefined."""
+    if site.category not in _MULTI_FILE_CATEGORIES or len(directives) < 2:
+        return False
+    keys = [d.key.upper() for d in directives]
+    return len(set(keys)) == len(keys) and all(key in site.keys for key in keys)
+
+
+def _ambiguity_hint(directives: list[MockDirective]) -> str:
+    """What to do about an AMBIGUOUS_MOCK: name the actual clash rather
+    than "make the keys unambiguous", which was the wrong fix for a
+    multi-file statement (issue #348)."""
+    keys = [d.key.upper() for d in directives]
+    if len(set(keys)) < len(keys):
+        return (
+            "the same key is mocked more than once for this test case (check "
+            "BEFORE-EACH/BEFORE-ALL too) -- keep one MOCK per key"
+        )
+    return (
+        "one statement can be answered by only one MOCK unless it is an "
+        "OPEN/CLOSE (or INITIATE/TERMINATE) naming several files, one MOCK "
+        "per file -- keep the MOCK whose key names this statement and "
+        "remove the others"
+    )
+
+
 # The line reference cobolparser embeds in dropped-content warning text.
 # Deliberately strict: a warning that carries no recognizable line number
 # cannot be located, so it stays a whole-program refusal (fail closed).
@@ -1383,8 +1427,19 @@ def check_test_case(
     neutralized_goto: frozenset[str] | set[str] = frozenset(),
     shared: frozenset[int] | set[int] = frozenset(),
     matched_out: set[int] | None = None,
+    warnings_out: list[RefusalReason] | None = None,
+    traps_out: set[int] | None = None,
 ) -> list[RefusalReason]:
-    """`shared` holds the ids of BEFORE-ALL/BEFORE-EACH directives (aliased
+    """`warnings_out` / `traps_out` (issue #351): when given, an unmocked
+    boundary this case reaches ONLY by falling off the end of a GO TO
+    target (`_reachable_paragraphs`' fall-through closure, a deliberate
+    over-approximation) is not refused but reported in `warnings_out`
+    (FALLTHROUGH_BOUNDARY), and its statement's id goes into `traps_out`:
+    the splicer replaces it with a trap that fails the running case if it
+    is ever actually reached, so nothing real executes either way. Without
+    them every such boundary is refused, as before.
+
+    `shared` holds the ids of BEFORE-ALL/BEFORE-EACH directives (aliased
     into every case by the parser): one of them that this case never
     reaches is NOT refused here, because a shared mock is a default -- it
     is refused only when no test case and no hook step reaches it, which
@@ -1407,6 +1462,7 @@ def check_test_case(
     reasons: list[RefusalReason] = []
     mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
     mocked_flow_names = mocked_paragraphs | mocked_sections
+    direct: set[str] = set()
     reachable, thru_reasons = _reachable_paragraphs(
         program,
         case.perform_target,
@@ -1419,7 +1475,9 @@ def check_test_case(
         # A HANDLE CONDITION label is reached only for the conditions this
         # case's CICS mocks raise (issue #268).
         cics_conditions=raised_conditions(case.mocks),
+        direct_out=direct,
     )
+    fallthrough_only = reachable - direct
 
     if case.perform_target not in reachable:
         reasons.append(
@@ -1626,6 +1684,32 @@ def check_test_case(
                 if site.nested and site.span is None
                 else None
             )
+            if (
+                warnings_out is not None
+                and traps_out is not None
+                and site.paragraph_name in fallthrough_only
+                and unspliceable is None
+                and not (not site.nested and site.unspliceable_reason)
+            ):
+                warnings_out.append(
+                    RefusalReason(
+                        code="FALLTHROUGH_BOUNDARY",
+                        message=(
+                            f"{site.label} boundary at line {site.line} "
+                            f"(paragraph '{site.paragraph_name}'"
+                            + (f", keys {'/'.join(site.keys)}" if site.keys else "")
+                            + ") is reachable only by falling through from a "
+                            "GO TO target, and no MOCK matches it -- not "
+                            "required; if a test case does reach it, that "
+                            "case fails with 'unmocked ... reached'"
+                        ),
+                        suggested_fix=directive_snippet(
+                            site, surface, file_status_fields
+                        ),
+                    )
+                )
+                traps_out.add(id(site.statement))
+                continue
             reasons.append(
                 RefusalReason(
                     code=code,
@@ -1654,7 +1738,7 @@ def check_test_case(
                     ),
                 )
             )
-        elif len(matches) > 1:
+        elif len(matches) > 1 and not per_file_matches(matches, site):
             described = ", ".join(d.describe() for d in matches)
             reasons.append(
                 RefusalReason(
@@ -1662,8 +1746,7 @@ def check_test_case(
                     message=(
                         f"{site.label} boundary at line {site.line} (paragraph "
                         f"'{site.paragraph_name}') is matched by more than one "
-                        f"MOCK directive ({described}) -- make the keys "
-                        f"unambiguous"
+                        f"MOCK directive ({described}) -- " + _ambiguity_hint(matches)
                     ),
                 )
             )
@@ -1732,7 +1815,7 @@ def check_test_case(
         matches = [d for d in case.mocks if directive_matches_site(d, site)]
         if not matches:
             continue
-        if len(matches) > 1:
+        if len(matches) > 1 and not per_file_matches(matches, site):
             described = ", ".join(d.describe() for d in matches)
             reasons.append(
                 RefusalReason(
@@ -1744,7 +1827,7 @@ def check_test_case(
                         f"one of this test case's own MOCK directives "
                         f"({described}) -- the splicer matches directives to "
                         f"sites program-wide, independent of reachability, so "
-                        f"this is refused too; make the keys unambiguous"
+                        f"this is refused too; " + _ambiguity_hint(matches)
                     ),
                 )
             )

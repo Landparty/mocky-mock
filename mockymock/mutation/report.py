@@ -8,7 +8,20 @@ from typing import Any, Literal
 
 from mockymock.mutation.operators import Mutant
 
-MutantStatus = Literal["killed", "survived", "stillborn", "timeout"]
+MutantStatus = Literal[
+    "killed", "survived", "stillborn", "timeout", "error", "equivalent"
+]
+
+#: What an `error` mutant means, for the console and the JSON report: the
+#: toolchain failed under it, even after one restart and retry, so the suite
+#: never ran against it. Excluded from the score like a stillborn, but never
+#: silently -- a score computed without them is a score over fewer mutants
+#: than were generated, and reads as complete otherwise (issue #347).
+ERROR_LABEL = (
+    "the Docker toolchain failed while this mutant was being built or run "
+    "(the container stopped, the daemon went away) -- the suite never ran "
+    "against it, so it is left out of the score"
+)
 
 #: Why a mutant never reached a scorable run -- `SuiteRun.phase`'s two
 #: pre-run values, carried through to the report. Reported per mutant and
@@ -108,6 +121,24 @@ class MutationOutcome:
         return grouped
 
     @property
+    def equivalent(self) -> int:
+        """Mutants proven not to change the program (issue #349): no test
+        can kill them, so they are reported but never scored."""
+        return self._count("equivalent")
+
+    @property
+    def errors(self) -> int:
+        """Mutants the toolchain failed under: never tested, never scored."""
+        return self._count("error")
+
+    @property
+    def complete(self) -> bool:
+        """False when some mutant could not be evaluated, so the score
+        covers fewer mutants than it should and must not be trusted as the
+        suite's own (`mutate` exits non-zero, `report` refuses to pass it)."""
+        return self.errors == 0
+
+    @property
     def timeouts(self) -> int:
         return self._count("timeout")
 
@@ -116,7 +147,7 @@ class MutationOutcome:
         """Mutants the baseline's coverage classified without building
         them. Scored like any other survivor -- the saving is wall-clock,
         not a change of verdict."""
-        return sum(1 for r in self.results if not r.ran)
+        return sum(1 for r in self.results if not r.ran and r.status == "survived")
 
     @property
     def score(self) -> float | None:
@@ -181,11 +212,32 @@ def format_console(outcome: MutationOutcome) -> str:
                 lines.append(
                     f"    line {m.line} [{m.operator}] {m.description}{detail}"
                 )
+    equivalent = [r for r in outcome.results if r.status == "equivalent"]
+    if equivalent:
+        lines.append(
+            "equivalent mutants (provably cannot change the program, so no "
+            "test can kill them -- not scored):"
+        )
+        for result in equivalent:
+            m = result.mutant
+            lines.append(f"  line {m.line} [{m.operator}] {m.description}")
+            lines.append(f"    {result.detail}")
+    errored = [r for r in outcome.results if r.status == "error"]
+    if errored:
+        lines.append(f"mutants that could not be evaluated: {ERROR_LABEL}")
+        for result in errored:
+            m = result.mutant
+            detail = f" -- {result.detail}" if result.detail else ""
+            lines.append(f"  line {m.line} [{m.operator}] {m.description}{detail}")
     scored = outcome.killed + outcome.timeouts + outcome.survived
+    error_part = f", {outcome.errors} not evaluated" if outcome.errors else ""
+    if outcome.equivalent:
+        error_part = f", {outcome.equivalent} equivalent" + error_part
     lines.append(
         f"mutants: {len(outcome.results)} generated, {scored} scored "
         f"({outcome.killed} killed, {outcome.timeouts} timed out, "
-        f"{outcome.survived} survived, {outcome.stillborn} stillborn)"
+        f"{outcome.survived} survived, {outcome.stillborn} stillborn"
+        f"{error_part})"
     )
     hinted = sum(1 for r in survivors if r.hint)
     if hinted:
@@ -200,7 +252,13 @@ def format_console(outcome: MutationOutcome) -> str:
             "never executes -- decided from the baseline's coverage, never built"
         )
     score = outcome.score
-    if score is not None:
+    if score is not None and not outcome.complete:
+        lines.append(
+            f"mutation score: {score * 100:.1f}% -- INCOMPLETE: "
+            f"{outcome.errors} mutant(s) could not be evaluated, so this is "
+            "not the suite's score; fix Docker and re-run"
+        )
+    elif score is not None:
         lines.append(f"mutation score: {score * 100:.1f}%")
     else:
         lines.append("mutation score: n/a (no scorable mutants)")
@@ -212,12 +270,15 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
         "program": outcome.program,
         "cut": outcome.cut,
         "score": outcome.score,
+        "complete": outcome.complete,
         "totals": {
             "generated": len(outcome.results),
             "killed": outcome.killed,
             "timeouts": outcome.timeouts,
             "survived": outcome.survived,
             "stillborn": outcome.stillborn,
+            "errors": outcome.errors,
+            "equivalent": outcome.equivalent,
             "not_compiled": outcome.not_compiled,
         },
         "stillbornByReason": {

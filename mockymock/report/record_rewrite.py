@@ -434,6 +434,35 @@ def condition_names(program) -> set[str]:
     }
 
 
+_REPEAT_RE = re.compile(r"(.)\((\d+)\)")
+#: Symbols only a numeric-edited PICTURE holds (with `CR`/`DB`).
+_NUMERIC_EDITING = frozenset("Z*+-$,./B0")
+
+
+def is_numeric_edited_picture(picture: str) -> bool:
+    """Whether `picture` is numeric-edited: digit positions plus editing
+    symbols, with no alphanumeric, alphabetic or national symbol. `9(10)`
+    is expanded first, so its repeat count is not read as an inserted 0."""
+    text = _REPEAT_RE.sub(lambda m: m.group(1) * int(m.group(2)), picture.upper())
+    if not text or any(c in text for c in "XANGUE"):
+        return False
+    if "CR" in text or "DB" in text:
+        return True
+    return any(c in _NUMERIC_EDITING for c in text)
+
+
+def numeric_edited_fields(program, captures=()) -> set[str]:
+    """Names (uppercased, unqualified) of every numeric-edited item in
+    `program` (and capture target mirroring one): an EXPECT on one with an
+    unquoted number compares the de-edited value (issue #350).
+    Best-effort like `field_pictures`."""
+    return {
+        name
+        for name, picture in field_pictures(program, captures).items()
+        if is_numeric_edited_picture(picture)
+    }
+
+
 def picture_for(data_name: str, pictures: dict[str, str] | None) -> str | None:
     """Look a stub's data-name up in a name (uppercased, unqualified) ->
     PICTURE map, ignoring any subscript/reference-modification group: a

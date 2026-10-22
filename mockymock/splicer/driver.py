@@ -166,6 +166,7 @@ def build_driver(
     extra_working_storage_lines: list[str] | None = None,
     snapshot: StateSnapshot | None = None,
     condition_names: frozenset[str] | set[str] = frozenset(),
+    numeric_edited: frozenset[str] | set[str] = frozenset(),
 ) -> DriverArtifact:
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
@@ -198,6 +199,12 @@ def build_driver(
     # Z-edited field and TRIMming yields a plain "3" in the FAIL line.
     if any(case.verifications for case in suite.test_cases):
         working_storage.append("01  UT-TALLY-EDITED        PIC Z(8)9.")
+    if any(
+        _compares_by_value(expectation, numeric_edited)
+        for case in suite.test_cases
+        for expectation in case.expectations
+    ):
+        working_storage.append(f"01  {_DEEDIT_FIELD}            PIC S9(18)V9(13).")
     for (category, key), tally in registry.items():
         working_storage.append(f"01  {tally}      PIC 9(9) VALUE 0.")
         working_storage.append(
@@ -276,6 +283,7 @@ def build_driver(
                 suite=suite,
                 restore_state=restore_state,
                 condition_names=condition_names,
+                numeric_edited=numeric_edited,
             )
         )
         procedure.append("")
@@ -379,6 +387,7 @@ def _build_testcase_paragraph(
     suite: MockTestSuite | None = None,
     restore_state: bool = False,
     condition_names: frozenset[str] | set[str] = frozenset(),
+    numeric_edited: frozenset[str] | set[str] = frozenset(),
 ) -> list[str]:
     case_id = f"{index:03d}"
     case_mocks = {(mock.category, mock.key) for mock in case.mocks}
@@ -447,7 +456,20 @@ def _build_testcase_paragraph(
             lines.append("               ADD 1 TO UT-FAIL-COUNT")
             lines.append("           END-IF")
             continue
-        if _has_combined_tail(expectation.expected_value):
+        if _compares_by_value(expectation, numeric_edited):
+            # `EXPECT WS-BAL TO BE 100.00` on `PIC Z,ZZZ,ZZ9.99`: a
+            # numeric-edited item compares as its edited text, so the bare
+            # number never matched `"      100.00"` (issue #350). A MOVE
+            # to a numeric item de-edits it -- the standard de-editing
+            # MOVE, CR/DB, `*` and currency included -- and the value is
+            # compared as a number. A quoted string stays byte-exact.
+            lines.append(f"           MOVE {expectation.data_name} TO {_DEEDIT_FIELD}")
+            lines.append(
+                f"           IF {_DEEDIT_FIELD} "
+                f"{_expect_fail_condition(expectation.operator)} "
+                f"{expectation.expected_value.strip()}"
+            )
+        elif _has_combined_tail(expectation.expected_value):
             # `TO BE > 0 AND < 10` / `TO BE 7 OR 8`: an abbreviated combined
             # condition. Swapping the operator would negate only its first
             # relation (`X NOT > 0 AND < 10`), so negate the whole condition
@@ -571,6 +593,28 @@ _EXPECT_FAIL_CONDITIONS = {
     "<=": ">",
     "NOT <=": "<=",
 }
+
+
+#: The numeric item an EXPECT on a numeric-edited field de-edits into: 31
+#: digits, Enterprise COBOL's ARITH(EXTEND) maximum, so `export` stays
+#: compilable there too.
+_DEEDIT_FIELD = "UT-DEEDIT-VALUE"
+_NUMERIC_LITERAL_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$")
+
+
+def _compares_by_value(expectation, numeric_edited: frozenset[str] | set[str]) -> bool:
+    """Whether an EXPECT compares a numeric-edited field with an unquoted
+    number, i.e. by de-edited value rather than as edited text (issue
+    #350). A reference-modified name is alphanumeric, so it never does."""
+    if not numeric_edited:
+        return False
+    if not _NUMERIC_LITERAL_RE.match(expectation.expected_value.strip()):
+        return False
+    base, paren, subscript = expectation.data_name.partition("(")
+    if paren and ":" in subscript:
+        return False
+    words = base.split()
+    return bool(words) and words[0].upper() in numeric_edited
 
 
 def _condition_name_truth(expectation) -> bool | None:

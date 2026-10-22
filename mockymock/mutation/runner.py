@@ -1,5 +1,7 @@
 """The mutation kill loop: baseline run, then patch/splice/compile/run per
-mutant, classifying each as killed / survived / stillborn / timeout.
+mutant, classifying each as killed / survived / stillborn / timeout, or
+error when the Docker toolchain failed under it, or equivalent when it
+provably cannot change the program (neither is scored).
 
 Two cost levers sit on top of that loop, both from
 docs/2026-07-29-mutation-testing-design.md's deferred list:
@@ -38,13 +40,17 @@ from mockymock.mutation.report import (
     MutationOutcome,
     StillbornReason,
 )
+from mockymock.report.record_rewrite import numeric_edited_fields
 
 
 @dataclass(frozen=True)
 class SuiteRun:
     """One full splice/compile/run pass reduced to a verdict.
 
-    `status` is one of "passed" / "failed" / "stillborn" / "timeout";
+    `status` is one of "passed" / "failed" / "stillborn" / "timeout" /
+    "error" -- the last meaning the toolchain failed under the pass (the
+    container died, the daemon went away), so it says nothing about the
+    program or the suite (issue #347);
     `detail` carries the first refusal/compile/failure line for
     diagnostics. `notes` is `StaticCheckResult.notes` (e.g. a
     paragraph-scoped PARSE_WARNING/UNRESOLVED_COPYBOOK waived and, for a
@@ -167,6 +173,7 @@ def _run_suite_once(
             checked.file_status_fields,
             goto_exit_plans=goto_exit_plans,
             trace=False,
+            fallthrough_traps=checked.fallthrough_traps,
         )
         lines, _ = transform_data_division_exec(lines, copybook_paths=copybook_paths)
 
@@ -188,6 +195,7 @@ def _run_suite_once(
             registry,
             extra_working_storage_lines=extra_working_storage(checked),
             snapshot=checked.snapshot,
+            numeric_edited=numeric_edited_fields(result.ast, checked.captures),
         )
         instrumented = _insert_driver(lines, artifact)
 
@@ -199,6 +207,9 @@ def _run_suite_once(
             instrumented_path, coverage=collect_coverage
         )
         if not compiled.success:
+            fault = _toolchain_fault(compiled.stderr or "")
+            if fault is not None:
+                return SuiteRun("error", fault, notes, phase="compile")
             return SuiteRun(
                 "stillborn",
                 _compile_error_detail(compiled.stderr or compiled.stdout),
@@ -210,9 +221,13 @@ def _run_suite_once(
         execution = docker_toolchain.run_binary(
             compiled.binary_path, timeout_seconds=timeout_seconds
         )
+        suite_result = parse_stdout(execution.stdout)
+        if not _verdict_is_the_programs(execution, suite_result):
+            fault = _toolchain_fault(execution.stderr)
+            if fault is not None:
+                return SuiteRun("error", fault, notes)
         if execution.exit_code == TIMEOUT_EXIT_CODE:
             return SuiteRun("timeout", f"no exit within {timeout_seconds}s", notes)
-        suite_result = parse_stdout(execution.stdout)
         status, detail = _classify_execution(execution, suite_result)
 
         coverage: dict[int, bool] | None = None
@@ -237,6 +252,44 @@ def _run_suite_once(
                     "every mutant will be compiled and run"
                 )
         return SuiteRun(status, detail, notes, coverage)
+
+
+def _restart_toolchain() -> bool:
+    """Bring the toolchain container back up after a failure; whether it
+    is up. Safe from several worker processes at once -- ensure_toolchain
+    already settles the races on `docker run --name`."""
+    from mockymock.runtime import docker_toolchain
+
+    try:
+        docker_toolchain.ensure_toolchain()
+    except docker_toolchain.DockerNotAvailableError:
+        return False
+    return True
+
+
+def _verdict_is_the_programs(execution, suite_result) -> bool:
+    """Whether a run's outcome is certainly the program's own: a clean
+    green run, or a case that reported an assertion failure. Anything else
+    -- a crash, a timeout, no case output, a bare non-zero exit -- is also
+    exactly what a container dying mid-run looks like, so the caller asks
+    the toolchain before believing it."""
+    if execution.exit_code == 0 and suite_result.all_passed:
+        return True
+    return any(case.failure_reasons for case in suite_result.results)
+
+
+def _toolchain_fault(stderr: str) -> str | None:
+    """Why a compile or run failed because of the toolchain rather than the
+    COBOL, or None when the toolchain is fine. The docker CLI's own error
+    text is the direct evidence; failing that, the container is asked
+    whether it is still up, since a binary killed by the container going
+    away leaves no message of its own."""
+    from mockymock.runtime import docker_toolchain
+
+    line = docker_toolchain.docker_failure_line(stderr)
+    if line is None:
+        line = docker_toolchain.toolchain_failure()
+    return None if line is None else f"toolchain failure: {line}"
 
 
 def _compile_error_detail(output: str | None) -> str:
@@ -386,6 +439,16 @@ def run_mutation(
                 ],
             )
     _merge_notes(baseline.notes)
+    if baseline.status == "error":
+        return (
+            [
+                f"the baseline run could not be evaluated ({baseline.detail}) "
+                "-- the Docker toolchain failed, not the suite; check Docker "
+                "and re-run"
+            ],
+            None,
+            all_notes,
+        )
     if baseline.status != "passed":
         return (
             [
@@ -416,13 +479,25 @@ def run_mutation(
     coverage = baseline.coverage if coverage_gate else None
     # False, not falsy: a line absent from the map is unknown (it did not
     # remap unambiguously), and unknown must always be compiled.
-    decided = {
-        index: MutantResult(
-            mutant=mutant, status="survived", detail=NOT_COMPILED_DETAIL, ran=False
-        )
-        for index, mutant in enumerate(mutants)
-        if coverage is not None and coverage.get(mutant.line) is False
-    }
+    # Provably equivalent mutants (issue #349) are never built: no test can
+    # kill them, so they are reported, with why, and left out of the score.
+    decided = _equivalent_mutants(
+        mutants, original_lines, source_path, cut_path, copybook_paths
+    )
+    decided.update(
+        {
+            index: MutantResult(
+                mutant=mutant,
+                status="survived",
+                detail=NOT_COMPILED_DETAIL,
+                ran=False,
+            )
+            for index, mutant in enumerate(mutants)
+            if index not in decided
+            and coverage is not None
+            and coverage.get(mutant.line) is False
+        }
+    )
     to_run = [(index, m) for index, m in enumerate(mutants) if index not in decided]
 
     outcome = MutationOutcome(program=str(source_path), cut=str(cut_path))
@@ -461,6 +536,43 @@ def run_mutation(
         if on_progress is not None:
             on_progress(outcome.results[-1])
     return [], outcome, all_notes
+
+
+def _equivalent_mutants(
+    mutants: list[Mutant],
+    original_lines: list[str],
+    source_path: Path,
+    cut_path: Path,
+    copybook_paths: list[str] | None,
+) -> dict[int, MutantResult]:
+    """Index -> `equivalent` result for every mutant
+    `equivalence.equivalence_reason` proves cannot change the program.
+    Best effort: when the static pass that supplies the data-item facts
+    fails, every mutant is built and scored as before."""
+    candidates = [
+        (index, m)
+        for index, m in enumerate(mutants)
+        if m.operator in ("stmt-delete", "arith-verb-swap")
+    ]
+    if not candidates:
+        return {}
+    from mockymock.cli.checks import run_static_checks
+    from mockymock.mutation.equivalence import equivalence_reason
+
+    try:
+        checked = run_static_checks(source_path, cut_path, copybook_paths)
+    except Exception:  # noqa: BLE001 -- no facts, no proof
+        return {}
+    if checked.parse_result is None:
+        return {}
+    decided: dict[int, MutantResult] = {}
+    for index, mutant in candidates:
+        reason = equivalence_reason(mutant, original_lines, checked.parse_result.ast)
+        if reason:
+            decided[index] = MutantResult(
+                mutant=mutant, status="equivalent", detail=reason, ran=False
+            )
+    return decided
 
 
 def _attach_zero_baseline_hints(
@@ -587,13 +699,24 @@ def _run_one_mutant(
     assumed stable from the baseline."""
     patched = list(original_lines)
     patched[mutant.line - 1] = mutant.mutated
+    patched_text = "\n".join(patched) + "\n"
     run = _run_suite_once(
-        "\n".join(patched) + "\n",
-        source_name,
-        cut_path,
-        copybook_paths,
-        timeout_seconds,
+        patched_text, source_name, cut_path, copybook_paths, timeout_seconds
     )
+    if run.status == "error" and _restart_toolchain():
+        # One retry once the container is back: a container that died
+        # once in a long run should cost that mutant a re-run, not its
+        # verdict.
+        run = _run_suite_once(
+            patched_text, source_name, cut_path, copybook_paths, timeout_seconds
+        )
+    if run.status == "error":
+        # Never scored as anything: a mutant the toolchain failed under was
+        # not tested, and calling it a survivor (or a kill) would move the
+        # score by a number that is the container's, not the suite's.
+        return MutantResult(mutant=mutant, status="error", detail=run.detail), (
+            run.notes
+        )
     if run.status == "passed":
         return MutantResult(mutant=mutant, status="survived"), run.notes
     if run.status == "failed":

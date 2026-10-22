@@ -4,7 +4,9 @@ INTENT or CHARACTERIZATION label, and which rule ids an INTENT label cites."""
 from mockymock.analysis.assertion_labels import (
     CHARACTERIZATION,
     INTENT,
+    orphan_label_warnings,
     scan_assertion_labels,
+    scan_label_placement,
     summarize_labels,
 )
 
@@ -52,8 +54,13 @@ def test_a_blank_line_ends_a_label():
     assert _by_text()["EXPECT WS-AFTER-BLANK TO BE 2"].label is None
 
 
-def test_any_other_directive_ends_a_label():
-    assert _by_text()["EXPECT WS-A TO BE 1"].label is None
+def test_a_label_ended_before_any_assertion_labels_the_whole_case():
+    """Issue #346: a label at the top of the case used to cover nothing."""
+    item = _by_text()["EXPECT WS-A TO BE 1"]
+    assert item.label == INTENT
+    assert item.label_line == 15
+    assert item.label_scope == "case"
+    assert _by_text()["EXPECT WS-NET TO BE 90.00"].label_scope == "adjacent"
 
 
 def test_rule_ids_are_collected_upper_cased_and_sorted():
@@ -64,9 +71,9 @@ def test_summary_counts_each_label():
     counts = summarize_labels(scan_assertion_labels(CUT))
     assert counts == {
         "total": 5,
-        INTENT: 2,
+        INTENT: 3,
         CHARACTERIZATION: 1,
-        "unlabelled": 2,
+        "unlabelled": 1,
     }
 
 
@@ -79,3 +86,84 @@ def test_to_dict_is_json_ready():
     assert item["label"] == "intent"
     assert item["ruleIds"] == ["BR-001", "BR-7"]
     assert item["case"] == "first"
+
+
+TOP_OF_CASE = """\
+TESTSUITE "S"
+
+*> INTENT: BR-9 above the TESTCASE line
+TESTCASE "above"
+    MOCK CALL "X"
+        MOVE 1 TO WS-B
+    END-MOCK
+    PERFORM CALC
+    EXPECT WS-A TO BE 1
+    *> CHARACTERIZATION: this one is recorded
+    EXPECT WS-B TO BE 2
+
+TESTCASE "mocks first"
+    *> INTENT: BR-3 above the MOCK blocks
+    MOCK CALL "X"
+        MOVE 1 TO WS-B
+    END-MOCK
+    PERFORM CALC
+    EXPECT WS-A TO BE 1
+    VERIFY "X" WAS CALLED ONCE
+    *> INTENT: after every assertion
+"""
+
+
+def test_labels_above_the_mock_blocks_cover_the_case():
+    """The DEPTMQC shape from the field run: 0 intent, 170 unlabelled."""
+    items, _ = scan_label_placement(TOP_OF_CASE)
+    mocks_first = [a for a in items if a.case_name == "mocks first"]
+    assert [(a.label, a.rule_ids) for a in mocks_first] == [
+        (INTENT, ["BR-3"]),
+        (INTENT, ["BR-3"]),
+    ]
+
+
+def test_a_label_above_the_testcase_line_labels_that_case():
+    items, _ = scan_label_placement(TOP_OF_CASE)
+    above = [a for a in items if a.case_name == "above"]
+    assert [(a.label, a.label_scope) for a in above] == [
+        (INTENT, "case"),
+        (CHARACTERIZATION, "adjacent"),
+    ]
+
+
+def test_a_label_that_covers_nothing_is_an_orphan():
+    _, orphans = scan_label_placement(TOP_OF_CASE)
+    assert [(o.line, o.case_name) for o in orphans] == [(21, "mocks first")]
+    (warning,) = orphan_label_warnings(TOP_OF_CASE)
+    assert "ORPHAN_ASSERTION_LABEL" in warning
+    assert ".cut line 21" in warning
+
+
+def test_a_label_mid_case_before_a_directive_is_an_orphan():
+    cut = (
+        'TESTSUITE "S"\n'
+        'TESTCASE "c"\n'
+        "    EXPECT WS-A TO BE 1\n"
+        "    *> INTENT: too late, a MOVE follows\n"
+        "    MOVE 2 TO WS-A\n"
+        "    EXPECT WS-A TO BE 2\n"
+    )
+    items, orphans = scan_label_placement(cut)
+    assert [a.label for a in items] == [None, None]
+    assert [o.line for o in orphans] == [4]
+
+
+def test_a_second_label_at_the_top_replaces_the_first():
+    cut = (
+        'TESTSUITE "S"\n'
+        'TESTCASE "c"\n'
+        "    *> INTENT: first\n"
+        "\n"
+        "    *> CHARACTERIZATION: second\n"
+        "    MOVE 2 TO WS-A\n"
+        "    EXPECT WS-A TO BE 2\n"
+    )
+    items, orphans = scan_label_placement(cut)
+    assert [a.label for a in items] == [CHARACTERIZATION]
+    assert [o.line for o in orphans] == [3]

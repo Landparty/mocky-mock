@@ -14,10 +14,17 @@ from mockymock.report.journal import (
 )
 
 
-def test_default_path_sits_next_to_the_cut(tmp_path):
+def test_default_path_sits_in_the_artifact_folder_next_to_the_cut(tmp_path):
     assert (
-        default_journal_path(tmp_path / "PROG.cut") == tmp_path / "PROG.journal.jsonl"
+        default_journal_path(tmp_path / "PROG.cut")
+        == tmp_path / ".mockymock" / "PROG.journal.jsonl"
     )
+
+
+def test_a_journal_at_the_old_place_keeps_being_used(tmp_path):
+    legacy = tmp_path / "PROG.journal.jsonl"
+    legacy.write_text("", encoding="utf-8")
+    assert default_journal_path(tmp_path / "PROG.cut") == legacy
 
 
 def test_append_writes_one_json_line_per_entry(tmp_path):
@@ -62,9 +69,60 @@ def test_cli_appends_next_to_the_cut(tmp_path, capsys):
         ["journal", "--cut", str(cut), "--step", "plan", "--summary", "did it"]
     )
     assert exit_code == 0
-    entries, _ = read_journal(tmp_path / "PROG.journal.jsonl")
+    entries, _ = read_journal(tmp_path / ".mockymock" / "PROG.journal.jsonl")
     assert entries[0]["summary"] == "did it"
     assert "appended to" in capsys.readouterr().out
+
+
+def test_cli_appends_a_batch_in_one_process(tmp_path, capsys):
+    """Issue #353: one invocation per program instead of one per step."""
+    batch = tmp_path / "steps.jsonl"
+    batch.write_text(
+        '{"step": "plan", "summary": "s1"}\n'
+        '{"step": "run", "summary": "s2", "status": "warn", "command": "x"}\n',
+        encoding="utf-8",
+    )
+    file = tmp_path / "j.jsonl"
+    assert main(["journal", "--file", str(file), "--from", str(batch)]) == 0
+    entries, _ = read_journal(file)
+    assert [(e["step"], e["status"]) for e in entries] == [
+        ("plan", "ok"),
+        ("run", "warn"),
+    ]
+    assert "appended 2 entries" in capsys.readouterr().out
+
+
+def test_cli_batch_accepts_a_json_array_from_stdin(tmp_path, monkeypatch):
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO('[{"step": "a", "summary": "b"}]'))
+    file = tmp_path / "j.jsonl"
+    assert main(["journal", "--file", str(file), "--from", "-"]) == 0
+    assert read_journal(file)[0][0]["step"] == "a"
+
+
+def test_a_bad_entry_appends_nothing(tmp_path, capsys):
+    batch = tmp_path / "steps.jsonl"
+    batch.write_text(
+        '{"step": "plan", "summary": "s1"}\n{"step": "run", "status": "great"}\n',
+        encoding="utf-8",
+    )
+    file = tmp_path / "j.jsonl"
+    assert main(["journal", "--file", str(file), "--from", str(batch)]) == 1
+    assert not file.exists()
+    assert "entry 2" in capsys.readouterr().out
+
+
+def test_batch_and_single_entry_flags_do_not_mix(tmp_path, capsys):
+    file = tmp_path / "j.jsonl"
+    code = main(["journal", "--file", str(file), "--from", "-", "--step", "x"])
+    assert code == 1
+    assert "drop --step" in capsys.readouterr().out
+
+
+def test_single_entry_needs_step_and_summary(tmp_path, capsys):
+    assert main(["journal", "--file", str(tmp_path / "j"), "--step", "x"]) == 1
+    assert "--step and --summary" in capsys.readouterr().out
 
 
 def test_cli_needs_a_cut_or_a_file(capsys):

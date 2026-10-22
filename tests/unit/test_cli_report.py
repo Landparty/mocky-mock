@@ -56,14 +56,17 @@ def _run_json(path, status="passed"):
     return path
 
 
-def test_writes_html_next_to_the_suite_by_default(ordrproc, capsys):
+def test_writes_html_into_the_artifact_folder_by_default(ordrproc, capsys):
     exit_code = main(["report", "ORDRPROC.cbl", "--scenarios", "none"])
     assert exit_code == 0
-    page = (ordrproc / "ORDRPROC.report.html").read_text(encoding="utf-8")
+    page = (ordrproc / ".mockymock" / "ORDRPROC.report.html").read_text(
+        encoding="utf-8"
+    )
     assert "<title>ORDRPROC test report</title>" in page
+    assert not (ordrproc / "ORDRPROC.report.html").exists()
     out = capsys.readouterr().out
     assert "[skipped] Run the suite under GnuCOBOL" in out
-    assert "ORDRPROC.report.html" in out
+    assert ".mockymock/ORDRPROC.report.html" in out
 
 
 def test_each_suite_of_a_program_gets_its_own_report(ordrproc, capsys):
@@ -77,12 +80,12 @@ def test_each_suite_of_a_program_gets_its_own_report(ordrproc, capsys):
         assert (
             main(["report", "ORDRPROC.cbl", "--cut", cut, "--scenarios", "none"]) == 0
         )
-    assert (ordrproc / "ORDRPROC.report.html").is_file()
-    assert (ordrproc / "ORDRPROC.errors.report.html").is_file()
+    assert (ordrproc / ".mockymock" / "ORDRPROC.report.html").is_file()
+    assert (ordrproc / ".mockymock" / "ORDRPROC.errors.report.html").is_file()
     main(
         ["report", "ORDRPROC.cbl", "--cut", "tests/ORDRPROC.cut", "--scenarios", "none"]
     )
-    assert (tests_dir / "ORDRPROC.report.html").is_file()
+    assert (tests_dir / ".mockymock" / "ORDRPROC.report.html").is_file()
 
 
 def test_json_and_output_paths(ordrproc):

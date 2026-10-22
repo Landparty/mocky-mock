@@ -96,6 +96,13 @@ END-MOCK
 `PARAGRAPH`/`SECTION` mocks replace the whole body of that paragraph or
 section, letting you isolate a caller from its own collaborators.
 
+A statement naming several files (`CLOSE CHKFILE STOPPAY CHKRPT`,
+`OPEN INPUT A OUTPUT B`) or reports (`INITIATE R1 R2`) takes one `MOCK`
+per file, all applied when the statement runs: each file gets its own
+`FILE-STATUS IS` and body, and each can be checked with its own
+`VERIFY CLOSE CHKFILE WAS CALLED ONCE`. Mocking only one of them is fine
+too; the others then cannot be VERIFY'd.
+
 ### `ROWS` -- one response per call (`SQL`, `READ`, `RETURN`, `CALL`, `MQ`, `DLI`)
 
 For a `SQL` cursor `FETCH` loop or a sequential `READ` loop that should
@@ -290,6 +297,19 @@ e.g. `NOT TO BE GREATER THAN` asserts `<=`):
 | `TO BE LESS THAN` | `<` |
 | `TO BE GREATER THAN OR EQUAL TO` | `>=` |
 | `TO BE LESS THAN OR EQUAL TO` | `<=` |
+
+A **numeric-edited** field (`PIC Z,ZZZ,ZZ9.99`, `ZZ9.99CR`, `$***9.99`)
+compares by value when the expected value is an unquoted number, and by
+its exact edited bytes when it is a quoted string:
+
+```
+EXPECT WS-DET-BAL TO BE 100.00                  *> the value: 100, 100.0 also pass
+EXPECT WS-DET-BAL TO BE "          100.00"      *> the edited text, byte for byte
+```
+
+The value form de-edits the field the way a COBOL `MOVE` from an edited
+item to a numeric one does (signs, `CR`/`DB`, `*` and currency symbols
+removed), so every comparison phrase works on it too.
 
 Subscripts (`FIELD(1, 2)` or `FIELD(1:5)` reference modification) are
 supported for both the data-name and the `MOVE` target above; qualified

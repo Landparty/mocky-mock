@@ -1,13 +1,15 @@
 """Finds the `mockymock report` HTML pages the dashboard lists and serves.
 
-`mockymock report` writes `<cut stem>.report.html` next to the suite by
-default, so the dashboard looks for that suffix under one root directory
+`mockymock report` writes `.mockymock/<suite>.report.html` next to the
+suite by default (older versions wrote `<program>.report.html` next to the
+program), so the dashboard looks for that suffix under one root directory
 (the directory the dashboard was started in, or `--reports-dir`). Nothing
 here writes: the page lists what is on disk and shows it.
 
 Two bounds keep a dashboard started in a large tree (a home directory, a
 monorepo) responsive: hidden directories and well-known dependency/build
-folders are skipped, and the walk stops at MAX_DEPTH levels and
+folders are skipped (except `.mockymock/`, where the reports live), and
+the walk stops at MAX_DEPTH levels and
 MAX_REPORTS hits. A truncated listing says so (`truncated`), so a missing
 report is never mistaken for one that was not written.
 """
@@ -19,6 +21,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from mockymock.report.artifacts import ARTIFACT_DIR
 
 REPORT_SUFFIX = ".report.html"
 MAX_DEPTH = 6
@@ -57,7 +61,10 @@ def find_reports(root: Path) -> tuple[list[ReportFile], bool]:
             dirnames[:] = []
         else:
             dirnames[:] = sorted(
-                d for d in dirnames if not d.startswith(".") and d not in _SKIPPED_DIRS
+                d
+                for d in dirnames
+                if (not d.startswith(".") or d == ARTIFACT_DIR)
+                and d not in _SKIPPED_DIRS
             )
         for name in sorted(filenames):
             if not name.endswith(REPORT_SUFFIX):

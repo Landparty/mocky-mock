@@ -140,3 +140,41 @@ class TestGateRefusesUnmockedFallenBoundary:
         case = MockTestCase(name="c1", perform_target="MAIN-PARA")
         codes = {r.code for r in check_test_case(surface, program, case)}
         assert "UNMOCKED_CALL" not in codes
+
+
+class TestFallThroughOnlyBoundaryIsAWarning:
+    """Issue #351: with `warnings_out`/`traps_out`, an unmocked boundary
+    reached only through the fall-through closure warns and is trapped."""
+
+    def test_direct_set_excludes_the_fallen_paragraphs(self):
+        program = _program(CHAINED_FALLTHROUGH_SOURCE)
+        direct: set[str] = set()
+        reachable, _ = _reachable_paragraphs(program, "MAIN-PARA", direct_out=direct)
+        assert direct == {"MAIN-PARA", "HOP-PARA"}
+        assert reachable - direct == {"STEP-PARA", "DEEP-PARA"}
+
+    def test_fallen_boundary_warns_and_is_trapped(self):
+        program = _program(FALLTHROUGH_SOURCE)
+        surface = analyze(program)
+        case = MockTestCase(name="c1", perform_target="MAIN-PARA")
+        warnings: list = []
+        traps: set[int] = set()
+        reasons = check_test_case(
+            surface, program, case, warnings_out=warnings, traps_out=traps
+        )
+        assert [r.code for r in reasons] == []
+        assert [w.code for w in warnings] == ["FALLTHROUGH_BOUNDARY"]
+        assert "line 17" in warnings[0].message
+        (site,) = [s for s in surface.boundary_sites if "SUBPROG" in s.keys]
+        assert traps == {id(site.statement)}
+
+    def test_a_directly_reached_boundary_is_still_refused(self):
+        program = _program(FALLTHROUGH_SOURCE)
+        surface = analyze(program)
+        case = MockTestCase(name="c1", perform_target="FALLEN-PARA")
+        warnings: list = []
+        reasons = check_test_case(
+            surface, program, case, warnings_out=warnings, traps_out=set()
+        )
+        assert [r.code for r in reasons] == ["UNMOCKED_CALL"]
+        assert warnings == []

@@ -199,6 +199,11 @@ mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --record-expectations
 binary itself exited 0 -- a crash after the summary line still fails the
 run.
 
+A run of the whole suite (no `--case`/`--tag`) also saves its result, and
+its coverage when measured, as `.mockymock/<cut stem>.run.json` /
+`.coverage.json` next to the `.cut`, so `mockymock report --execute` can
+reuse them instead of running everything again.
+
 ## `mockymock debug`
 
 ```bash
@@ -240,10 +245,19 @@ CI lanes without a daemon.
 Prints `mockymock lint: no problems found.` and exits 0 if clean, or one
 `mockymock lint: <problem>` line per problem plus a count, exiting 1.
 
-Warnings never change the exit code. Today there is one:
-`mockymock lint: warning (NO_ASSERTION): .cut line N: TESTCASE "X" asserts
-nothing ...` for a test case with no `EXPECT` or `VERIFY`. It passes
-whenever its `PERFORM` runs, and `run` reports it as risky.
+Warnings never change the exit code. The main ones:
+
+- `warning (NO_ASSERTION): .cut line N: TESTCASE "X" asserts nothing ...`
+  for a test case with no `EXPECT` or `VERIFY`. It passes whenever its
+  `PERFORM` runs, and `run` reports it as risky.
+- `warning (FALLTHROUGH_BOUNDARY): CALL boundary at line N ... is reachable
+  only by falling through from a GO TO target ...`: a boundary the case
+  could only reach by falling off the end of a paragraph some `GO TO`
+  jumps to. No `MOCK` is required for it. It never runs for real: if a
+  case does reach it, that case fails with `unmocked CALL boundary (line
+  N) reached -- add a MOCK for it`.
+- `warning (ORPHAN_ASSERTION_LABEL)`: a `*> INTENT` / `*> CHARACTERIZATION`
+  label that covers no assertion.
 
 ## `mockymock mutate`
 
@@ -268,6 +282,22 @@ notices ("killed") or doesn't ("survived" -- a gap in the assertions).
 | `--fail-under PERCENT` | none | Exit 1 if the mutation score is below this percentage. |
 
 Mock bodies and terminator statements are never mutated.
+
+Mutants that provably cannot change the program are reported as
+`equivalent`, with the reason, never built and never scored: deleting a
+MOVE / `SET <88> TO TRUE` whose fields the very next statement overwrites
+in full with a literal or another `SET <88> TO TRUE` (a dead store), and
+swapping `ADD n TO f` / `SUBTRACT n FROM f` on an unsigned field the
+statement right before sets to zero (0 + n and 0 - n store the same
+magnitude). Only adjacent, single-line statements with plain operands
+qualify, so a real gap is never hidden.
+
+A mutant the Docker toolchain failed under (the container stopped, the
+daemon went away) is restarted and retried once, then reported as
+`error`: never scored, listed separately, and `mutate` exits 1 because the
+score covers fewer mutants than were generated. A complete run also saves
+its result as `.mockymock/<cut stem>.mutation.json` for
+`mockymock report --mutate` to reuse.
 
 ## `mockymock suites`
 
@@ -415,8 +445,8 @@ mockymock analyze program-flow ORDRPROC.cbl
 ## `mockymock report`
 
 ```bash
-mockymock report [PROGRAM.cbl] [--cut PROGRAM.cut] [-o PROGRAM.report.html]
-    [--json PATH] [--execute] [--mutate]
+mockymock report [PROGRAM.cbl] [--cut PROGRAM.cut] [-o PATH]
+    [--json PATH] [--execute] [--mutate] [--rerun]
     [--run-json PATH] [--coverage-json PATH] [--mutation-json PATH]
     [--journal PATH] [--scenarios happy|branches|all|none] [--seed N]
     [--timeout S] [--mutation-threshold PCT] [--copybook-path DIR ...]
@@ -433,12 +463,13 @@ unlabelled), and findings ranked by severity.
 
 | Option | Default | Description |
 |---|---|---|
-| `-o`, `--output` | `<cut stem>.report.html` next to the `.cut` | HTML path (one report per suite). |
-| `--json` | none | Also write the report as JSON. |
-| `--execute` | off | Run the suite with coverage now (Docker). |
-| `--mutate` | off | Run mutation testing now (Docker, slower). |
+| `-o`, `--output` | `.mockymock/<cut stem>.report.html` next to the `.cut` | HTML path (one report per suite). |
+| `--json` | none | Also write the report as JSON (by convention `.mockymock/<cut stem>.report.json`). |
+| `--execute` | off | Run the suite with coverage now (Docker) -- unless `run` already saved a result for this exact program, suite and copybooks, which is reused. |
+| `--mutate` | off | Run mutation testing now (Docker, slower) -- unless `mutate` already saved a complete result for this exact program, suite and copybooks, which is reused. |
+| `--rerun` | off | With `--execute`/`--mutate`, run again even when a saved result could be reused. |
 | `--run-json` / `--coverage-json` / `--mutation-json` | none | Reuse results an earlier `run --json-report` / `run --coverage-json` / `mutate --json-report` wrote, instead of re-running. |
-| `--journal` | `<cut>.journal.jsonl` if present | The assistant's step journal (see `mockymock journal`). |
+| `--journal` | `.mockymock/<cut stem>.journal.jsonl` if present | The assistant's step journal (see `mockymock journal`). |
 | `--scenarios` | `branches` | How to measure reachable branch arms; `none` skips the fixture step. |
 | `--seed` | none | Seed for that fixture generation. |
 | `--timeout` | `run`'s own | Per-run timeout passed to `run`. |
@@ -453,11 +484,30 @@ else 0. Without `--execute`/`--run-json`, nothing is claimed beyond L0.
 ```bash
 mockymock journal (--cut PROGRAM.cut | --file PATH) --step NAME --summary TEXT
     [--status ok|warn|fail|skipped|info] [--command TEXT] [--decision TEXT]
+mockymock journal (--cut PROGRAM.cut | --file PATH) --from FILE|-
 ```
 
-Appends one JSON line to the suite's journal (`<cut stem>.journal.jsonl`
-next to the `.cut`, or `--file`), which `mockymock report` shows as a
-timeline: what the assistant did at each step and why.
+Appends one JSON line to the suite's journal
+(`.mockymock/<cut stem>.journal.jsonl` next to the `.cut`, or `--file`;
+a journal still at its old place, `<cut stem>.journal.jsonl` next to the
+`.cut`, keeps being used), which `mockymock report` shows as a timeline:
+what the assistant did at each step and why. `--from` appends several
+entries in one invocation, from a file or stdin (`-`): a JSON array of
+objects, or one object per line, each with `step` and `summary` and
+optionally `status`, `command` and `decision`. Every entry is checked
+before any is written.
+
+## `mockymock clean`
+
+```bash
+mockymock clean [PROGRAM.cbl | PROGRAM.cut | DIR] [--all] [--dry-run]
+```
+
+Removes what mockymock wrote for a suite (a `.cut`), for every suite of a
+program, or for everything under a directory (default: the current one):
+the `.mockymock/` folders' reports and saved results, plus report files
+the older layout left next to programs. Journals are the assistant's own
+record and are kept unless `--all`. `--dry-run` lists without removing.
 
 ## `mockymock skills install`
 

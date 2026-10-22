@@ -32,16 +32,22 @@ class JournalError(Exception):
 
 
 def default_journal_path(cut_path: Path) -> Path:
-    """`<cut stem>.journal.jsonl` next to the `.cut`: one journal per
-    suite, found by `mockymock report` without any flag."""
-    return cut_path.with_name(f"{cut_path.stem}.journal.jsonl")
+    """`.mockymock/<cut stem>.journal.jsonl` next to the `.cut`: one
+    journal per suite, found by `mockymock report` without any flag (see
+    `report.artifacts`; a journal still at its old place next to the
+    `.cut` keeps being used)."""
+    from mockymock.report.artifacts import journal_path
+
+    return journal_path(cut_path)
 
 
 def default_report_path(cut_path: Path) -> Path:
-    """`<cut stem>.report.html` next to the `.cut`, the same place as the
+    """`.mockymock/<cut stem>.report.html` next to the `.cut`, beside the
     journal: one report per suite, so a program's second suite never
-    overwrites the first one's report (issue #192)."""
-    return cut_path.with_name(f"{cut_path.stem}.report.html")
+    overwrites the first one's report (issues #192, #353)."""
+    from mockymock.report.artifacts import artifact_path
+
+    return artifact_path(cut_path, "report")
 
 
 def append_entry(
@@ -74,6 +80,62 @@ def append_entry(
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry
+
+
+_ENTRY_FIELDS = ("step", "summary", "status", "command", "decision")
+
+
+def parse_batch(text: str) -> list[dict[str, Any]]:
+    """Entries for `mockymock journal --from`: a JSON array of objects, or
+    one object per line (the journal's own format). Every entry is checked
+    before any is written, so a bad line appends nothing rather than half a
+    batch; each must carry `step` and `summary`, and may carry `status`,
+    `command` and `decision` (issue #353: one process per program instead of
+    one per step)."""
+    stripped = text.strip()
+    if not stripped:
+        raise JournalError("no entries to append")
+    raw: list[Any]
+    if stripped.startswith("["):
+        try:
+            loaded = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise JournalError(f"not a JSON array ({exc.msg})") from exc
+        raw = loaded if isinstance(loaded, list) else [loaded]
+    else:
+        raw = []
+        for number, line in enumerate(stripped.split("\n"), start=1):
+            if not line.strip():
+                continue
+            try:
+                raw.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise JournalError(f"line {number}: not JSON ({exc.msg})") from exc
+    entries: list[dict[str, Any]] = []
+    for number, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise JournalError(f"entry {number}: not a JSON object")
+        unknown = sorted(set(item) - set(_ENTRY_FIELDS))
+        if unknown:
+            raise JournalError(
+                f"entry {number}: unknown field(s) {', '.join(unknown)} "
+                f"(expected: {', '.join(_ENTRY_FIELDS)})"
+            )
+        if not all(isinstance(item.get(k, ""), str) for k in _ENTRY_FIELDS):
+            raise JournalError(f"entry {number}: every field must be a string")
+        if (
+            not str(item.get("step", "")).strip()
+            or not str(item.get("summary", "")).strip()
+        ):
+            raise JournalError(f"entry {number}: step and summary must not be empty")
+        status = item.get("status", "ok")
+        if status not in STATUSES:
+            raise JournalError(
+                f"entry {number}: unknown status {status!r} "
+                f"(expected one of: {', '.join(STATUSES)})"
+            )
+        entries.append(item)
+    return entries
 
 
 def read_journal(path: Path) -> tuple[list[dict[str, Any]], list[str]]:

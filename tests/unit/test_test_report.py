@@ -393,6 +393,43 @@ def test_mutation_threshold_is_applied_exactly_not_after_rounding(ordrproc):
     assert '<span class="value">80%</span>' not in html
 
 
+def test_an_incomplete_mutation_score_neither_passes_nor_earns_l2(ordrproc):
+    """Issue #347: mutants the Docker toolchain failed under are left out
+    of the score, so a high score over the rest must not pass the
+    threshold or read as complete."""
+    path = _write(
+        ordrproc / "mutation.json",
+        {
+            "score": 1.0,
+            "complete": False,
+            "totals": {
+                "generated": 10,
+                "killed": 9,
+                "timeouts": 0,
+                "survived": 0,
+                "errors": 1,
+            },
+            "mutants": [],
+        },
+    )
+    report = build_report(
+        _options(
+            ordrproc,
+            run_json=_run_json(ordrproc),
+            coverage_json=_coverage_json(ordrproc),
+            mutation_json=path,
+        )
+    )
+    step = _step(report, "mutation")
+    assert step["status"] == "warn"
+    assert "INCOMPLETE: 1 mutant(s) could not be evaluated" in step["summary"]
+    assert {c["level"] for c in report["cases"]} <= {"L0", "L1"}
+    assert report["summary"]["mutationUnevaluated"] == 1
+    from mockymock.report.html_report import render_html
+
+    assert "incomplete: 1 mutant not evaluated" in render_html(report)
+
+
 def test_a_run_that_never_compiled_fails_the_run_step(ordrproc):
     """Issue #260: `run` records a failure before any case started (a
     compile error) as a synthetic "mockymock run" case. The report dropped
@@ -445,3 +482,109 @@ def test_a_normal_run_is_not_a_run_failure(ordrproc):
     report = build_report(_options(ordrproc, run_json=_run_json(ordrproc)))
     assert _step(report, "run")["status"] == "ok"
     assert report["summary"]["runFailed"] is False
+
+
+# -- reuse of saved run/mutate results (issue #352) --------------------------
+
+
+def _save(ordrproc, kind, path):
+    from mockymock.report.artifacts import save_result
+
+    save_result(
+        ordrproc / "ORDRPROC.cut",
+        ordrproc / "ORDRPROC.cbl",
+        kind,
+        path.read_text(encoding="utf-8"),
+        [],
+    )
+
+
+def _never_run(monkeypatch):
+    import mockymock.report.test_report as test_report
+
+    def boom(args, timeout):
+        raise AssertionError(f"re-ran {args[0]}")
+
+    monkeypatch.setattr(test_report, "_run_cli", boom)
+
+
+def test_execute_and_mutate_reuse_saved_results(ordrproc, monkeypatch):
+    _save(ordrproc, "run", _run_json(ordrproc))
+    _save(ordrproc, "coverage", _coverage_json(ordrproc))
+    _save(ordrproc, "mutation", _mutation_json(ordrproc))
+    _never_run(monkeypatch)
+    report = build_report(
+        _options(ordrproc, execute=True, mutate=True, probe_toolchain=False)
+    )
+    run = _step(report, "run")
+    assert "Reused the saved result of `mockymock run`" in run["summary"]
+    assert run["status"] == "ok"
+    assert report["summary"]["coverage"] == pytest.approx(83.33)
+    assert "Reused the saved result of `mockymock mutate`" in (
+        _step(report, "mutation")["summary"]
+    )
+    assert [c["level"] for c in report["cases"]] == ["L3", "L3"]
+
+
+def test_a_saved_run_without_coverage_says_so(ordrproc, monkeypatch):
+    _save(ordrproc, "run", _run_json(ordrproc))
+    _never_run(monkeypatch)
+    report = build_report(_options(ordrproc, execute=True, probe_toolchain=False))
+    coverage = _step(report, "coverage")
+    assert coverage["status"] == "skipped"
+    assert "was not a --coverage run" in coverage["summary"]
+
+
+def test_a_changed_suite_or_program_is_run_again(ordrproc, monkeypatch):
+    from mockymock.report.artifacts import fresh_result
+
+    _save(ordrproc, "run", _run_json(ordrproc))
+    cut, program = ordrproc / "ORDRPROC.cut", ordrproc / "ORDRPROC.cbl"
+    assert fresh_result(cut, program, "run", []) is not None
+    cut.write_text(LABELLED_CUT + "\n", encoding="utf-8")
+    assert fresh_result(cut, program, "run", []) is None
+    _save(ordrproc, "run", _run_json(ordrproc))
+    program.write_text(program.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    assert fresh_result(cut, program, "run", []) is None
+
+
+def test_a_changed_copybook_directory_is_run_again(ordrproc):
+    from mockymock.report.artifacts import fresh_result, save_result
+
+    books = ordrproc / "copybooks"
+    books.mkdir()
+    (books / "A.cpy").write_text("01 A PIC X.\n", encoding="utf-8")
+    cut, program = ordrproc / "ORDRPROC.cut", ordrproc / "ORDRPROC.cbl"
+    save_result(cut, program, "run", "{}", [str(books)])
+    assert fresh_result(cut, program, "run", [str(books)]) is not None
+    (books / "A.cpy").write_text("01 A PIC XX.\n", encoding="utf-8")
+    assert fresh_result(cut, program, "run", [str(books)]) is None
+
+
+def test_rerun_ignores_saved_results(ordrproc, monkeypatch):
+    import mockymock.report.test_report as test_report
+
+    _save(ordrproc, "run", _run_json(ordrproc))
+    calls: list[str] = []
+
+    def fake(args, timeout):
+        calls.append(args[0])
+        return 1, "no docker"
+
+    monkeypatch.setattr(test_report, "_run_cli", fake)
+    build_report(_options(ordrproc, execute=True, reuse=False, probe_toolchain=False))
+    assert calls == ["run"]
+
+
+def test_orphan_labels_are_named_in_the_inventory(ordrproc):
+    """Issue #346: a label covering nothing is reported with its line."""
+    (ordrproc / "ORDRPROC.cut").write_text(
+        LABELLED_CUT + "    *> INTENT: after the last assertion\n",
+        encoding="utf-8",
+    )
+    inventory = _step(build_report(_options(ordrproc)), "inventory")
+    assert inventory["status"] == "warn"
+    assert "1 INTENT/CHARACTERIZATION label(s) cover no assertion" in (
+        inventory["summary"]
+    )
+    assert inventory["details"]["orphanLabels"][0]["line"] == 23
