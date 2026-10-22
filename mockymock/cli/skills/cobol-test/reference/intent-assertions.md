@@ -25,6 +25,14 @@ TESTCASE "2000-CALC-DISCOUNT gives 5% over 1000.00"
 - A label covers every EXPECT/VERIFY after it until the first blank line,
   the next label, the next TESTCASE, or any other directive. Plain comment
   lines in between (like the arithmetic above) do not end it.
+- A label at the top of a test case (directly above its TESTCASE line, or
+  before its MOCK blocks and setup) is the case's label: it covers every
+  assertion in the case that has no label directly above it. Use it when
+  one label is true of the whole case; label groups individually when they
+  differ.
+- A label that covers no assertion (one after the last assertion, a second
+  label at the top of a case) is a lint warning,
+  `ORPHAN_ASSERTION_LABEL`, and the report names its line.
 - `*> INTENT:` -- the value follows from the program's intent: a business
   rule from `business-rules` (cite its id, `BR-004`), a spec, a copybook
   comment, or the developer's own words. If it fails, the program is the

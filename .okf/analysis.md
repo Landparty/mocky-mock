@@ -495,6 +495,14 @@ neither part of the refusal gate:
   EXPECT/VERIFY line. A label covers lines until a blank line, the next
   label, a TESTCASE, or any other directive; `BR-\d+` ids in the note
   become `rule_ids`. `RECORDED_LABEL` is what `record_rewrite` inserts.
+  Since issue #346 (2026-10-22) a label that ends before reaching any
+  assertion while still at the top of its case (directly above the
+  TESTCASE line, or above the MOCK blocks/setup) becomes the case's label
+  and covers every assertion that has no adjacent label
+  (`label_scope == "case"`); `scan_label_placement` also returns the
+  labels that still cover nothing (`OrphanLabel`), which `lint` warns
+  about (`ORPHAN_ASSERTION_LABEL`, `orphan_label_warnings`) and the
+  report's inventory step names by line.
 - `dialect_risk.py` -- `find_dialect_risks(ast, original_lines,
   line_map=None)` lists statements whose result can differ between
   GnuCOBOL and IBM Enterprise COBOL: HEX_LITERAL (high, a source scan of

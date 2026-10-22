@@ -574,3 +574,17 @@ def test_rerun_ignores_saved_results(ordrproc, monkeypatch):
     monkeypatch.setattr(test_report, "_run_cli", fake)
     build_report(_options(ordrproc, execute=True, reuse=False, probe_toolchain=False))
     assert calls == ["run"]
+
+
+def test_orphan_labels_are_named_in_the_inventory(ordrproc):
+    """Issue #346: a label covering nothing is reported with its line."""
+    (ordrproc / "ORDRPROC.cut").write_text(
+        LABELLED_CUT + "    *> INTENT: after the last assertion\n",
+        encoding="utf-8",
+    )
+    inventory = _step(build_report(_options(ordrproc)), "inventory")
+    assert inventory["status"] == "warn"
+    assert "1 INTENT/CHARACTERIZATION label(s) cover no assertion" in (
+        inventory["summary"]
+    )
+    assert inventory["details"]["orphanLabels"][0]["line"] == 23

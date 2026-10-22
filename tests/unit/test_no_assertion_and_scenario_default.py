@@ -195,3 +195,18 @@ def test_explicit_with_data_still_fails_when_the_generator_fails(
     assert main(["generate", str(_FIXTUREDEMO_CBL), "--with-data", "-o", str(out)]) == 1
     assert "falling back" not in capsys.readouterr().out
     assert not out.exists()
+
+
+def test_lint_warns_on_a_label_that_covers_no_assertion(tmp_path, capsys):
+    """Issue #346: a misplaced INTENT/CHARACTERIZATION label is a lint
+    warning, not a silent no-op."""
+    cut = tmp_path / "ORDRPROC.cut"
+    cut.write_text(
+        (_EXAMPLES / "ordrproc" / "ORDRPROC.cut").read_text()
+        + "\n    *> INTENT: dangling after the last assertion\n"
+    )
+    line = len(cut.read_text().splitlines())
+    assert main(["lint", str(_ORDRPROC_CBL), "--cut", str(cut)]) == 0
+    out = capsys.readouterr().out
+    assert f"warning (ORPHAN_ASSERTION_LABEL): .cut line {line}:" in out
+    assert "mockymock lint: no problems found." in out

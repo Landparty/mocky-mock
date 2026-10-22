@@ -594,13 +594,13 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
     expanded_names: dict[str, list[str]] = {}
     with _Timer(inventory):
         from mockymock.analysis.assertion_labels import (
-            scan_assertion_labels,
+            scan_label_placement,
             summarize_labels,
         )
         from mockymock.dsl.parser import CutParseError, parse_cut
 
         cut_text = options.cut.read_text(encoding="utf-8")
-        labelled = scan_assertion_labels(cut_text)
+        labelled, orphan_labels = scan_label_placement(cut_text)
         assertions = [a.to_dict() for a in labelled]
         try:
             suite = parse_cut(cut_text)
@@ -643,13 +643,27 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                     }
                 )
             counts = summarize_labels(labelled)
-            inventory.details = {"labels": counts}
+            inventory.details = {
+                "labels": counts,
+                "orphanLabels": [o.to_dict() for o in orphan_labels],
+            }
             inventory.summary = (
                 f"{len(cases)} test case(s), {counts['total']} assertion(s): "
                 f"{counts['intent']} intent, {counts['characterization']} "
                 f"characterization, {counts['unlabelled']} unlabelled."
             )
-            if counts["unlabelled"]:
+            if orphan_labels:
+                # Issue #346: a label in the wrong place used to vanish into
+                # the unlabelled count with no hint that it existed at all.
+                where = ", ".join(str(o.line) for o in orphan_labels[:10])
+                more = "" if len(orphan_labels) <= 10 else ", ..."
+                inventory.summary += (
+                    f" {len(orphan_labels)} INTENT/CHARACTERIZATION label(s) "
+                    f"cover no assertion ({cut_rel} line {where}{more}): put "
+                    "each directly above its assertions or at the top of the "
+                    "test case."
+                )
+            if counts["unlabelled"] or orphan_labels:
                 inventory.status = "warn"
     inventory.command = f"mockymock collect {program_rel} --cut {cut_rel} --json"
     steps.append(inventory)

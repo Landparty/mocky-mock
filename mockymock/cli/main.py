@@ -2692,6 +2692,7 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     function must never import mockymock.runtime.docker_toolchain -- that
     structural guarantee (not just documentation) is what makes `lint`
     usable in editors, pre-commit hooks, and CI lanes with no daemon."""
+    from mockymock.analysis.assertion_labels import orphan_label_warnings
     from mockymock.cli.checks import no_assertion_warnings, run_static_checks
 
     if args.program is None and args.cut is None:
@@ -2724,6 +2725,10 @@ def _cmd_lint(args: argparse.Namespace) -> int:
             suite = None
     warnings = list(result.warnings)
     warnings += no_assertion_warnings(suite) if suite is not None else []
+    try:
+        warnings += orphan_label_warnings(read_utf8_source(cut_path))
+    except (OSError, UnicodeDecodeError):
+        pass  # an unreadable .cut is already reported as a problem
     for warning in warnings:
         print(f"mockymock lint: {warning}")
     if warnings:
