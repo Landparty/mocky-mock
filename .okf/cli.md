@@ -988,6 +988,25 @@ clean-looking number. The two names are `SuiteRun.phase`'s own values,
 carried straight onto `MutantResult.stillborn_reason` rather than
 re-derived afterwards by pattern-matching the raw `detail` line.
 
+**Toolchain failures are never scored (issue #347, 2026-10-22).** A
+container that died mid-run used to leave its mutants classified by
+whatever the dead `docker exec` happened to return (a compile failure read
+as `stillborn`, an empty run as a kill or a survivor), so the score moved
+by a number that was Docker's, not the suite's. `_run_suite_once` now
+returns status `error` when a compile fails or a run ends in anything but
+a green run or a case's own assertion failure
+(`_verdict_is_the_programs`) AND the toolchain is at fault: docker CLI
+error text on stderr (`docker_toolchain.docker_failure_line`), or a
+read-only `docker inspect` saying the container is gone or stopped
+(`docker_toolchain.toolchain_failure`). `_run_one_mutant` restarts the
+toolchain (`ensure_toolchain`) and retries such a mutant once; a second
+`error` becomes `MutantResult.status == "error"`: excluded from the score,
+listed in the console, `totals.errors` and `complete: false` in the JSON,
+and `mutate` exits 1 on an incomplete outcome whatever `--fail-under` says.
+`report` never passes the threshold on an incomplete score and says so in
+the step summary and the summary tile. A baseline `error` aborts with a
+message blaming Docker, not the suite.
+
 **Zero-baseline hints (2026-10-04).** An `ADD..TO <-> SUBTRACT..FROM`
 swap on an unsigned numeric field that every case starts at zero is
 indistinguishable from the original (0 + n and 0 - n both store n), so it

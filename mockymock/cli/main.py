@@ -2509,6 +2509,7 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
             "survived": "SURVIVED ",
             "stillborn": "stillborn",
             "timeout": "timeout  ",
+            "error": "ERROR    ",
         }[result.status]
         if not result.ran:
             # Same verdict, different evidence: say so rather than letting
@@ -2549,6 +2550,17 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
             print(f"mockymock mutate: wrote JSON report -> {args.json_report}")
 
     score = outcome.score
+    if not outcome.complete:
+        # Whatever --fail-under says: a score over only the mutants the
+        # toolchain happened to finish is not the suite's score, and
+        # exiting 0 on it would let a dying container pass (or fail) a
+        # gate on a number it made up (issue #347).
+        print(
+            f"mockymock mutate: {outcome.errors} mutant(s) could not be "
+            "evaluated because the Docker toolchain failed -- the score is "
+            "incomplete; re-run once Docker is healthy"
+        )
+        return 1
     if args.fail_under is not None:
         if outcome.score_below(args.fail_under):
             shown = "n/a" if score is None else f"{score * 100:.1f}%"

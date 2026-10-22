@@ -974,8 +974,15 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             # Compared exactly, the way `mutate --fail-under` compares
             # (`MutationOutcome.score_below`), so the report and the CI
             # gate never disagree about the same mutants.
-            mutation_passes = exact is not None and exact >= Fraction(
-                str(options.mutation_threshold)
+            # A score that left mutants unevaluated (the toolchain failed
+            # under them) covers fewer mutants than were generated, so it
+            # can neither pass nor fail the threshold (issue #347).
+            errors = totals.get("errors")
+            unevaluated = errors if type(errors) is int and errors > 0 else 0
+            mutation_passes = (
+                exact is not None
+                and not unevaluated
+                and exact >= Fraction(str(options.mutation_threshold))
             )
             survivors = [
                 m
@@ -993,6 +1000,13 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 f"Mutation score {score_text}: {totals.get('killed', 0)} killed, "
                 f"{totals.get('survived', 0)} survived of {totals.get('generated', 0)}."
             )
+            if unevaluated:
+                mutation_step.summary += (
+                    f" INCOMPLETE: {unevaluated} mutant(s) could not be "
+                    "evaluated (the Docker toolchain failed), so this is not "
+                    "the suite's score; re-run once Docker is healthy."
+                )
+                mutation_step.details["unevaluated"] = unevaluated
             if not mutation_passes:
                 mutation_step.status = "warn"
     steps.append(mutation_step)
@@ -1156,6 +1170,9 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 mutation_report.get("scorePercent") if mutation_report else None
             ),
             "mutationThreshold": options.mutation_threshold,
+            # Mutants the toolchain failed under (issue #347): when > 0 the
+            # score above covers fewer mutants than were generated.
+            "mutationUnevaluated": mutation_step.details.get("unevaluated", 0),
             "findings": {
                 sev: sum(1 for f in findings if f["severity"] == sev)
                 for sev in ("high", "medium", "low", "info")

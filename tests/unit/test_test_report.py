@@ -393,6 +393,43 @@ def test_mutation_threshold_is_applied_exactly_not_after_rounding(ordrproc):
     assert '<span class="value">80%</span>' not in html
 
 
+def test_an_incomplete_mutation_score_neither_passes_nor_earns_l2(ordrproc):
+    """Issue #347: mutants the Docker toolchain failed under are left out
+    of the score, so a high score over the rest must not pass the
+    threshold or read as complete."""
+    path = _write(
+        ordrproc / "mutation.json",
+        {
+            "score": 1.0,
+            "complete": False,
+            "totals": {
+                "generated": 10,
+                "killed": 9,
+                "timeouts": 0,
+                "survived": 0,
+                "errors": 1,
+            },
+            "mutants": [],
+        },
+    )
+    report = build_report(
+        _options(
+            ordrproc,
+            run_json=_run_json(ordrproc),
+            coverage_json=_coverage_json(ordrproc),
+            mutation_json=path,
+        )
+    )
+    step = _step(report, "mutation")
+    assert step["status"] == "warn"
+    assert "INCOMPLETE: 1 mutant(s) could not be evaluated" in step["summary"]
+    assert {c["level"] for c in report["cases"]} <= {"L0", "L1"}
+    assert report["summary"]["mutationUnevaluated"] == 1
+    from mockymock.report.html_report import render_html
+
+    assert "incomplete: 1 mutant not evaluated" in render_html(report)
+
+
 def test_a_run_that_never_compiled_fails_the_run_step(ordrproc):
     """Issue #260: `run` records a failure before any case started (a
     compile error) as a synthetic "mockymock run" case. The report dropped
