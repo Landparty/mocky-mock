@@ -69,6 +69,25 @@ def test_writes_html_into_the_artifact_folder_by_default(ordrproc, capsys):
     assert ".mockymock/ORDRPROC.report.html" in out
 
 
+def test_each_suite_of_a_program_gets_its_own_report(ordrproc, capsys):
+    # Issue #192: two suites of one program used to both write
+    # ORDRPROC.report.html, so the second silently replaced the first.
+    tests_dir = ordrproc / "tests"
+    tests_dir.mkdir()
+    shutil.copy(ordrproc / "ORDRPROC.cut", ordrproc / "ORDRPROC.errors.cut")
+    shutil.copy(ordrproc / "ORDRPROC.cut", tests_dir / "ORDRPROC.cut")
+    for cut in ("ORDRPROC.cut", "ORDRPROC.errors.cut"):
+        assert (
+            main(["report", "ORDRPROC.cbl", "--cut", cut, "--scenarios", "none"]) == 0
+        )
+    assert (ordrproc / ".mockymock" / "ORDRPROC.report.html").is_file()
+    assert (ordrproc / ".mockymock" / "ORDRPROC.errors.report.html").is_file()
+    main(
+        ["report", "ORDRPROC.cbl", "--cut", "tests/ORDRPROC.cut", "--scenarios", "none"]
+    )
+    assert (tests_dir / ".mockymock" / "ORDRPROC.report.html").is_file()
+
+
 def test_json_and_output_paths(ordrproc):
     exit_code = main(
         [

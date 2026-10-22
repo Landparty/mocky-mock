@@ -204,6 +204,39 @@ def no_assertion_warnings(suite: MockTestSuite) -> list[str]:
     return warnings
 
 
+def cases_asserting_nothing(cut_text: str, *, stubs_count: bool) -> list[str]:
+    """`TESTCASE "X"` labels (with their .cut line) of every case in
+    `cut_text` with no EXPECT and no VERIFY -- and, when `stubs_count`, no
+    `*> STUB EXPECT` comment either, i.e. nothing `run
+    --record-expectations` could turn into one. What `generate`/`init` warn
+    about instead of reporting such a suite as done (issue #275). A suite
+    that does not parse yields nothing here: lint reports that."""
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        suite = parse_cut(cut_text)
+    except CutParseError:
+        return []
+    lines = cut_text.splitlines()
+    starts = sorted({case.line for case in suite.test_cases if case.line})
+    found: list[str] = []
+    seen: set[int] = set()
+    for case in suite.test_cases:
+        if case.assertion_count or case.line in seen:
+            continue
+        if case.line:
+            seen.add(case.line)
+        if stubs_count and case.line:
+            following = [s for s in starts if s > case.line]
+            end = following[0] - 1 if following else len(lines)
+            block = lines[case.line - 1 : end]
+            if any("*> STUB EXPECT" in line for line in block):
+                continue
+        where = f".cut line {case.line}: " if case.line else ""
+        found.append(f'{where}TESTCASE "{case.name}"')
+    return found
+
+
 def filter_suite_cases(
     suite: MockTestSuite,
     case_names: list[str] | None,
@@ -464,6 +497,14 @@ def _run_static_checks(
         return out
     except SourceEncodingError as exc:
         out.problems.append(str(exc))
+        return out
+    if not suite.test_cases:
+        # `run` would build, run nothing, and fail with only "0 run, 0
+        # failed"; say why up front, in lint too (issue #275).
+        out.problems.append(
+            f"{cut_path} has no TESTCASE -- there is nothing to run. Add one, "
+            f"or scaffold the suite with 'mockymock generate'"
+        )
         return out
     # The unselected cases still count towards whether a BEFORE-EACH/
     # BEFORE-ALL mock is reached at all (step 8's sweep, issue #250).

@@ -20,7 +20,7 @@ parser install to resolve.
 
 ```
 mockymock setup     -> runtime.docker_toolchain only (build image, start container)
-mockymock init      -> _cmd_generate(--with-data) then _cmd_run(--record-expectations), reentrant  (Docker iff doctor reports ready)
+mockymock init      -> _cmd_generate(--with-data) then _cmd_run(--record-expectations), reentrant  (records iff the Docker daemon is up; run builds a missing toolchain image -- vscode#103)
 mockymock generate  -> parse -> analysis.mock_surface -> dsl.generator  (no Docker)
 mockymock fixtures  -> parse -> cobolparser.ProgramFixtureGenerator -> JSON on stdout  (no Docker, no mockymock analysis at all)
 mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
@@ -244,7 +244,10 @@ values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
    caveat (`docs/2026-09-04-scenario-branch-verification.md`) -- a
    scenario named for an arm is not yet verified to reach it.
 4. `doctor.gather_full_status()` (read-only, mutates nothing) decides
-   whether to attempt a run at all. Not ready: prints a fallback message
+   whether to attempt a run at all, from its Docker *daemon* check alone
+   (vscode#103, 2026-10-21): a missing toolchain image/container is what
+   `run`'s `ensure_toolchain()` builds, so init says it is building it and
+   goes on. Daemon down: prints a fallback message
    naming the exact `run --cut ... --record-expectations` command to run
    later, and returns 0 (the scaffold with real data is still a
    strictly better outcome than plain `generate`, even unrecorded).
@@ -265,6 +268,25 @@ explicit `-o` included -- the same contract as `init`, which passes
 `--force` through to the `generate` it runs. Before, the default path (the
 program's existing sibling `PROG.cut`) was silently replaced by a bare
 scaffold.
+
+**A subprogram's USING parameters are its interface (2026-10-21, issue
+#275).** `dsl/entry_parameters.py`: `fixture_generator()` builds
+`ProgramFixtureGenerator(entry_parameters=True)` when the installed
+cobol-parser knows the keyword (it then also targets branches on the
+parameters); otherwise `add_entry_parameters()` gives every scenario of the
+bundle dict the same `entry_parameters` fixture (category `ENTRY`, one
+PICTURE-valid row over the USING items' elementary fields) plus a `stub`
+expectation per LINKAGE field xref says the program writes, without the
+branch targeting. DFHEIBLK/DFHCOMMAREA are dropped (`without_cics_parameters`;
+CICS supplies them, #245 handles the commarea). The scaffold MOVEs the row
+before the PERFORM (`generator._entry_parameter_lines`), so `run
+--record-expectations` fills the stubs. After writing, `generate` warns on
+every case with no EXPECT/VERIFY/STUB EXPECT
+(`checks.cases_asserting_nothing`), refuses to write a `--per-paragraph`
+suite with zero cases (exit 1), and `init` exits 1 when recording left no
+case asserting anything. `run_static_checks` refuses a `.cut` with no
+TESTCASE, so `lint` fails it and `run` says why instead of "0 run, 0
+failed".
 
 **Default unit is the scenario (2026-10-14).** With neither `--with-data`
 nor `--per-paragraph`, `generate` takes the `--with-data` path (one TESTCASE
@@ -1438,7 +1460,7 @@ orphan.
 ## `mockymock report <program> [--cut PATH] [-o/--output PATH] [--json PATH] [--copybook-path DIR ...] [--execute] [--mutate] [--run-json PATH] [--coverage-json PATH] [--mutation-json PATH] [--journal PATH] [--scenarios happy|branches|all|none] [--seed N] [--timeout S] [--mutation-threshold PCT]` (2026-10-04)
 
 One self-contained HTML page (default `.mockymock/<cut stem>.report.html`
-next to the `.cut`, issue #353;
+next to the `.cut`, one per suite -- issues #192, #353;
 `--json` also writes the underlying dict) of every step of testing a
 program and what each test proves. Backs the `cobol-test` skill's final
 step. Builder is `report/test_report.py` (`ReportOptions` ->

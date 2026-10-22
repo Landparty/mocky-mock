@@ -39,6 +39,10 @@ Most subcommands can work out their own arguments:
   key is an error rather than silently ignored. `mockymock doctor`
   reports which config file (if any) is in effect.
 
+`--extra-copybook-path DIR` (repeatable) is accepted wherever
+`--copybook-path` is: it is searched after the config file's (or the
+`--copybook-path`) list instead of replacing it.
+
 ## `mockymock setup`
 
 ```bash
@@ -235,6 +239,8 @@ CI lanes without a daemon.
 | `program` (positional) | required | The `.cbl` source file. |
 | `--cut PATH` | required | The `.cut` test file. |
 | `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path`. |
+| `--case NAME` (repeatable) | all cases | Check only this TESTCASE: another case's per-case refusals (UNMOCKED_*, ...) no longer fail the lint. File-wide problems are still reported. Across several suites, a suite without the case is skipped. |
+| `--tag TAG` (repeatable) | none | Check only TESTCASEs carrying this tag (union with `--case`). |
 
 Prints `mockymock lint: no problems found.` and exits 0 if clean, or one
 `mockymock lint: <problem>` line per problem plus a count, exiting 1.
@@ -325,7 +331,7 @@ given.
 
 | Option | Default | Description |
 |---|---|---|
-| `--cut PATH` | required | The `.cut` test file. |
+| `--cut PATH` | required (optional with `--boundaries`) | The `.cut` test file. |
 | `--json` | off | Emit machine-readable JSON instead of a human-readable listing. |
 | `program` (positional) | none | Required only with `--boundaries`. |
 | `--boundaries` | off | Also report every mockable boundary site in `program` (category, key, paragraph, line, and the `MOCK` directive that would cover it). Requires `--json` and `program`. |
@@ -334,6 +340,8 @@ given.
 `--boundaries` is the cheapest way to answer "what can I mock here, and
 what is this suite already covering?" for a program that already has a
 `.cut` file -- no fixture generation, no Docker.
+The boundaries come back even when the `.cut` doesn't parse (beside the
+`error`, exit 1) or when `--cut` is omitted: they are the program's.
 
 ## `mockymock explain`
 
@@ -455,7 +463,7 @@ unlabelled), and findings ranked by severity.
 
 | Option | Default | Description |
 |---|---|---|
-| `-o`, `--output` | `.mockymock/<cut stem>.report.html` next to the `.cut` | HTML path. |
+| `-o`, `--output` | `.mockymock/<cut stem>.report.html` next to the `.cut` | HTML path (one report per suite). |
 | `--json` | none | Also write the report as JSON (by convention `.mockymock/<cut stem>.report.json`). |
 | `--execute` | off | Run the suite with coverage now (Docker) -- unless `run` already saved a result for this exact program, suite and copybooks, which is reused. |
 | `--mutate` | off | Run mutation testing now (Docker, slower) -- unless `mutate` already saved a complete result for this exact program, suite and copybooks, which is reused. |

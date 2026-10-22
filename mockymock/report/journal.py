@@ -41,6 +41,15 @@ def default_journal_path(cut_path: Path) -> Path:
     return journal_path(cut_path)
 
 
+def default_report_path(cut_path: Path) -> Path:
+    """`.mockymock/<cut stem>.report.html` next to the `.cut`, beside the
+    journal: one report per suite, so a program's second suite never
+    overwrites the first one's report (issues #192, #353)."""
+    from mockymock.report.artifacts import artifact_path
+
+    return artifact_path(cut_path, "report")
+
+
 def append_entry(
     path: Path,
     *,
