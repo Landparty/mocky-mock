@@ -90,6 +90,10 @@ class StaticCheckResult:
     # None unless the suite has BEFORE-ALL steps. Every splice-and-compile
     # pipeline passes it to build_driver.
     snapshot: StateSnapshot | None = None
+    # Ids of unmocked boundary statements some case reaches only by GO TO
+    # fall-through (issue #351): not refused, but every splicing pipeline
+    # replaces each with a trap that fails the case reaching it.
+    fallthrough_traps: set[int] = field(default_factory=set)
 
     @property
     def ok(self) -> bool:
@@ -707,6 +711,7 @@ def _run_static_checks(
     shared_mocks = suite.before_each_mocks + suite.before_all_mocks
     shared_ids = frozenset(id(d) for d in shared_mocks)
     matched_ids: set[int] = set()
+    fallthrough_warnings: list[RefusalReason] = []
     for case_index, case in enumerate(suite.test_cases):
         case_reasons = check_test_case(
             surface,
@@ -716,6 +721,8 @@ def _run_static_checks(
             neutralized_goto=neutralized_goto,
             shared=shared_ids,
             matched_out=matched_ids,
+            warnings_out=fallthrough_warnings,
+            traps_out=out.fallthrough_traps,
         )
         for r in case_reasons:
             out.problems.append(f"refused ({r.code}): {r.message}")
@@ -744,6 +751,8 @@ def _run_static_checks(
             # below -- a hook PERFORM that doesn't reach it proves nothing.
             shared=shared_ids | {id(d) for d in check.case.mocks},
             matched_out=matched_ids,
+            warnings_out=fallthrough_warnings,
+            traps_out=out.fallthrough_traps,
         ):
             where = (
                 check.hook
@@ -780,6 +789,10 @@ def _run_static_checks(
                 shared=shared_ids,
                 matched_out=matched_ids,
             )
+    # One warning per boundary, however many cases fall through to it.
+    out.warnings.extend(
+        dict.fromkeys(f"warning ({r.code}): {r.message}" for r in fallthrough_warnings)
+    )
     for directive in shared_mocks:
         if id(directive) not in matched_ids:
             block = (

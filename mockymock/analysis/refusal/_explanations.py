@@ -29,6 +29,14 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "the call has nowhere to link inside the sandbox. Add a MOCK CALL "
         '"<name>" (or MOCK CALL <identifier> for a dynamic call) block.'
     ),
+    "FALLTHROUGH_BOUNDARY": (
+        "A warning, not a refusal. The boundary is reachable from this "
+        "test case only by falling off the end of a paragraph some GO TO "
+        "jumps to -- a conservative path that most runs never take -- so "
+        "no MOCK is required for it. It is never executed for real: if a "
+        "case does reach it, that case fails with 'unmocked ... boundary "
+        "reached'. Add a MOCK only for a case that is meant to go there."
+    ),
     "UNMOCKED_FILE_OP": (
         "A file operation (OPEN/CLOSE/READ/WRITE/REWRITE/DELETE/START/"
         "UNLOCK, or a plain-file-form SORT/MERGE/RELEASE/RETURN) is "

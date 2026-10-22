@@ -203,6 +203,7 @@ def _reachable_paragraphs(
     neutralized_goto: frozenset[str] | set[str] = frozenset(),
     follow_whenever: bool = True,
     cics_conditions: frozenset[str] | None = None,
+    direct_out: set[str] | None = None,
 ) -> tuple[set[str], list[RefusalReason]]:
     """Return (reachable paragraph/section names, flow refusals), computed
     in a single BFS pass over PerformStatement and GoStatement edges, plus
@@ -294,7 +295,12 @@ def _reachable_paragraphs(
     (`CONDITION IS`, issue #268): the walk follows the EXEC CICS HANDLE
     CONDITION label each reached CICS command would jump to for them.
     None (the default, for whole-program callers) follows every label in
-    force -- fail closed."""
+    force -- fail closed.
+
+    `direct_out`, when given, receives the names reached through PERFORM /
+    GO TO / implicit-PERFORM edges alone, before the fall-through closure
+    adds anything: the rest of the returned set is reachable only by
+    falling off the end of a GO TO target (issue #351)."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
@@ -397,6 +403,7 @@ def _reachable_paragraphs(
         driver_range=(start, thru or start) if start in by_name else None,
         exclude_seeds={start} | ({thru} if thru else set()),
     )
+    closure_started = False
     while True:
         while stack:
             name = stack.pop()
@@ -549,6 +556,9 @@ def _reachable_paragraphs(
         # PERFORMed here and GO-TO'd elsewhere still triggers the walk),
         # which is the fail-closed direction: at worst an extra required
         # mock, never a silently executing unmocked boundary.
+        if direct_out is not None and not closure_started:
+            direct_out |= seen
+        closure_started = True
         hazard_sources = seen & go_to_targets
         if not hazard_sources:
             break

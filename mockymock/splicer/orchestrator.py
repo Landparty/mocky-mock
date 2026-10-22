@@ -56,6 +56,7 @@ from mockymock.splicer.injector import (
     build_goto_exit_replacement,
     build_site_dispatch,
     build_terminator_neutralization,
+    build_unmocked_trap,
 )
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.source_map import statement_span
@@ -109,8 +110,14 @@ def splice_program(
     trace: bool = False,
     goto_exit_plans: Sequence[GotoExitPlan] = (),
     column_offset: int = 0,
+    fallthrough_traps: frozenset[int] | set[int] = frozenset(),
 ) -> list[str]:
-    """`column_offset` is how many columns every line of `lines` has been
+    """`fallthrough_traps` (`StaticCheckResult.fallthrough_traps`, issue
+    #351): ids of unmocked boundary statements a case reaches only by GO
+    TO fall-through. Each is replaced by `build_unmocked_trap` instead of
+    being left to run for real.
+
+    `column_offset` is how many columns every line of `lines` has been
     shifted right of the normalized source the AST's columns index --
     `export` splices lines with the 7-column sequence area restored
     (issue #325); the only column-sensitive step, the clause-body lift,
@@ -152,6 +159,8 @@ def splice_program(
             # program), so the trap only fires if reachability analysis and
             # reality disagree -- and then it fails loudly.
             replacement = build_exec_trap(site.label, site.line)
+        elif id(site.statement) in fallthrough_traps:
+            replacement = build_unmocked_trap(site.label, site.line)
         else:
             # Unmocked non-EXEC sites are plain COBOL: leave them alone.
             # (If one were reachable, the refusal gate already fired.)

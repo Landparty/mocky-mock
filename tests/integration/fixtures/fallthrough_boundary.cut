@@ -1,0 +1,11 @@
+TESTSUITE "fall-through boundary"
+
+TESTCASE "the ordinary path needs only the CALL it makes"
+    MOVE 0 TO WS-X
+    MOVE 0 TO WS-Y
+    MOCK CALL "CALC"
+        MOVE 5 TO WS-Y
+    END-MOCK
+    PERFORM PROCESS-REC
+    EXPECT WS-Y TO BE 5
+    VERIFY CALL "CALC" WAS CALLED ONCE

@@ -246,6 +246,8 @@ def test_call_rows_dispatch_sequences_on_the_key_tally():
         "WHEN OTHER",
         'DISPLAY "__MOCKYMOCK__ ERROR: CALL boundary (line 10) reached "',
         '"from unmocked test case " UT-CURRENT-CASE',
+        'DISPLAY "__MOCKYMOCK__ CASE " FUNCTION TRIM(UT-CURRENT-CASE)',
+        '" FAIL: unmocked CALL boundary (line 10) reached -- add a MOCK for it"',
         "ADD 1 TO UT-FAIL-COUNT",
         "END-EVALUATE",
     ]

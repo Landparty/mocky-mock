@@ -545,7 +545,9 @@ def build_site_dispatch(
         lines.append(
             '                       "from unmocked test case " UT-CURRENT-CASE'
         )
-        lines.append("                   ADD 1 TO UT-FAIL-COUNT")
+        # The ERROR line names no case the result parser can attribute;
+        # this marker makes the failure the running case's own (#351).
+        lines.extend(unmocked_fail_lines(site.label, site.line, "                   "))
     lines.append("           END-EVALUATE")
     if lifted_clauses:
         lines.extend(clause_guard_lines(lifted_clauses, indent="           "))
@@ -599,6 +601,25 @@ def build_flow_dispatch(
     lines.append("           END-EVALUATE.")
     lines.append(f"       {plan.real_name}{suffix}.")
     return lines
+
+
+def unmocked_fail_lines(label: str, line: int, indent: str) -> list[str]:
+    """A FAIL marker for the running case: an unmocked boundary was
+    reached. Carries the case id, so the failure is the case's own."""
+    return [
+        f'{indent}DISPLAY "__MOCKYMOCK__ CASE " FUNCTION TRIM(UT-CURRENT-CASE)',
+        f'{indent}    " FAIL: unmocked {label} boundary (line {line}) reached'
+        f' -- add a MOCK for it"',
+        f"{indent}ADD 1 TO UT-FAIL-COUNT",
+    ]
+
+
+def build_unmocked_trap(label: str, line: int) -> list[str]:
+    """Replacement for a boundary no test case mocks and some case reaches
+    only by GO TO fall-through (issue #351): lint warns rather than
+    demanding a MOCK, so the statement must not run for real if a case
+    does reach it -- the case fails instead, naming the boundary."""
+    return unmocked_fail_lines(label, line, "           ")
 
 
 def build_exec_trap(kind: str, line: int) -> list[str]:

@@ -1930,6 +1930,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         checked.file_status_fields,
         goto_exit_plans=goto_exit_plans,
         trace=args.trace,
+        fallthrough_traps=checked.fallthrough_traps,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
@@ -2430,6 +2431,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         checked.file_status_fields,
         goto_exit_plans=goto_exit_plans,
         trace=False,
+        fallthrough_traps=checked.fallthrough_traps,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
@@ -2861,6 +2863,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         goto_exit_plans=goto_exit_plans,
         trace=False,
         column_offset=SEQUENCE_AREA_WIDTH,
+        fallthrough_traps=checked.fallthrough_traps,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 

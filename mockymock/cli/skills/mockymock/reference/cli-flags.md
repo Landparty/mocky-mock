@@ -239,10 +239,19 @@ CI lanes without a daemon.
 Prints `mockymock lint: no problems found.` and exits 0 if clean, or one
 `mockymock lint: <problem>` line per problem plus a count, exiting 1.
 
-Warnings never change the exit code. Today there is one:
-`mockymock lint: warning (NO_ASSERTION): .cut line N: TESTCASE "X" asserts
-nothing ...` for a test case with no `EXPECT` or `VERIFY`. It passes
-whenever its `PERFORM` runs, and `run` reports it as risky.
+Warnings never change the exit code. The main ones:
+
+- `warning (NO_ASSERTION): .cut line N: TESTCASE "X" asserts nothing ...`
+  for a test case with no `EXPECT` or `VERIFY`. It passes whenever its
+  `PERFORM` runs, and `run` reports it as risky.
+- `warning (FALLTHROUGH_BOUNDARY): CALL boundary at line N ... is reachable
+  only by falling through from a GO TO target ...`: a boundary the case
+  could only reach by falling off the end of a paragraph some `GO TO`
+  jumps to. No `MOCK` is required for it. It never runs for real: if a
+  case does reach it, that case fails with `unmocked CALL boundary (line
+  N) reached -- add a MOCK for it`.
+- `warning (ORPHAN_ASSERTION_LABEL)`: a `*> INTENT` / `*> CHARACTERIZATION`
+  label that covers no assertion.
 
 ## `mockymock mutate`
 

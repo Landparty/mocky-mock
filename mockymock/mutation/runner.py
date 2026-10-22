@@ -173,6 +173,7 @@ def _run_suite_once(
             checked.file_status_fields,
             goto_exit_plans=goto_exit_plans,
             trace=False,
+            fallthrough_traps=checked.fallthrough_traps,
         )
         lines, _ = transform_data_division_exec(lines, copybook_paths=copybook_paths)
 

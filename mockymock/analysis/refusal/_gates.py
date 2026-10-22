@@ -1427,8 +1427,19 @@ def check_test_case(
     neutralized_goto: frozenset[str] | set[str] = frozenset(),
     shared: frozenset[int] | set[int] = frozenset(),
     matched_out: set[int] | None = None,
+    warnings_out: list[RefusalReason] | None = None,
+    traps_out: set[int] | None = None,
 ) -> list[RefusalReason]:
-    """`shared` holds the ids of BEFORE-ALL/BEFORE-EACH directives (aliased
+    """`warnings_out` / `traps_out` (issue #351): when given, an unmocked
+    boundary this case reaches ONLY by falling off the end of a GO TO
+    target (`_reachable_paragraphs`' fall-through closure, a deliberate
+    over-approximation) is not refused but reported in `warnings_out`
+    (FALLTHROUGH_BOUNDARY), and its statement's id goes into `traps_out`:
+    the splicer replaces it with a trap that fails the running case if it
+    is ever actually reached, so nothing real executes either way. Without
+    them every such boundary is refused, as before.
+
+    `shared` holds the ids of BEFORE-ALL/BEFORE-EACH directives (aliased
     into every case by the parser): one of them that this case never
     reaches is NOT refused here, because a shared mock is a default -- it
     is refused only when no test case and no hook step reaches it, which
@@ -1451,6 +1462,7 @@ def check_test_case(
     reasons: list[RefusalReason] = []
     mocked_paragraphs, mocked_sections = resolved_flow_targets(program, case)
     mocked_flow_names = mocked_paragraphs | mocked_sections
+    direct: set[str] = set()
     reachable, thru_reasons = _reachable_paragraphs(
         program,
         case.perform_target,
@@ -1463,7 +1475,9 @@ def check_test_case(
         # A HANDLE CONDITION label is reached only for the conditions this
         # case's CICS mocks raise (issue #268).
         cics_conditions=raised_conditions(case.mocks),
+        direct_out=direct,
     )
+    fallthrough_only = reachable - direct
 
     if case.perform_target not in reachable:
         reasons.append(
@@ -1670,6 +1684,32 @@ def check_test_case(
                 if site.nested and site.span is None
                 else None
             )
+            if (
+                warnings_out is not None
+                and traps_out is not None
+                and site.paragraph_name in fallthrough_only
+                and unspliceable is None
+                and not (not site.nested and site.unspliceable_reason)
+            ):
+                warnings_out.append(
+                    RefusalReason(
+                        code="FALLTHROUGH_BOUNDARY",
+                        message=(
+                            f"{site.label} boundary at line {site.line} "
+                            f"(paragraph '{site.paragraph_name}'"
+                            + (f", keys {'/'.join(site.keys)}" if site.keys else "")
+                            + ") is reachable only by falling through from a "
+                            "GO TO target, and no MOCK matches it -- not "
+                            "required; if a test case does reach it, that "
+                            "case fails with 'unmocked ... reached'"
+                        ),
+                        suggested_fix=directive_snippet(
+                            site, surface, file_status_fields
+                        ),
+                    )
+                )
+                traps_out.add(id(site.statement))
+                continue
             reasons.append(
                 RefusalReason(
                     code=code,
