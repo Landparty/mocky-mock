@@ -1,7 +1,7 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
 timestamp: 2026-10-16T20:00:00Z
 ---
@@ -10,7 +10,7 @@ timestamp: 2026-10-16T20:00:00Z
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
 `--version` from `mockymock.__version__`). It defines eighteen subcommands —
-`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `suites`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal` — each wired via `set_defaults(func=...)` and
+`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `suites`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal`, `clean` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -37,6 +37,7 @@ mockymock skills    -> skills_cmd (install: no Docker, no parsing -- a copytree)
                        cli.ai_mode (mode: reads/writes the config file's ai_mode key)
 mockymock report    -> report.test_report.build_report (parse + cobolparser analyzers + cli.checks; --execute/--mutate re-invoke run/mutate as subprocesses) -> report.html_report
 mockymock journal   -> report.journal.append_entry only  (no Docker, no parsing)
+mockymock clean     -> report.artifacts (removes .mockymock/ reports and saved results)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -1417,7 +1418,8 @@ orphan.
 
 ## `mockymock report <program> [--cut PATH] [-o/--output PATH] [--json PATH] [--copybook-path DIR ...] [--execute] [--mutate] [--run-json PATH] [--coverage-json PATH] [--mutation-json PATH] [--journal PATH] [--scenarios happy|branches|all|none] [--seed N] [--timeout S] [--mutation-threshold PCT]` (2026-10-04)
 
-One self-contained HTML page (default `<program stem>.report.html`;
+One self-contained HTML page (default `.mockymock/<cut stem>.report.html`
+next to the `.cut`, issue #353;
 `--json` also writes the underlying dict) of every step of testing a
 program and what each test proves. Backs the `cobol-test` skill's final
 step. Builder is `report/test_report.py` (`ReportOptions` ->
@@ -1430,12 +1432,22 @@ or the suite was refused, else 0.
 subprocesses into a temp dir rather than calling `_cmd_run` in-process,
 so a toolchain failure is one step's `fail`, not a crashed report.
 Passing `--run-json` / `--coverage-json` / `--mutation-json` reuses
-reports from an earlier run instead. Without any of them the report is
+reports from an earlier run instead. Without them, `--execute` / `--mutate`
+first look for results `run` (whole suite, no `--case`/`--tag`) and
+`mutate` (complete outcomes only) saved in `.mockymock/` and reuse them
+while `report.artifacts.fresh_result` says they were computed from the same
+program, `.cut`, copybook directories (name/size/mtime of each file) and
+mockymock version (issue #352); the step summary says it reused them.
+`--rerun` (`ReportOptions.reuse=False`) always runs. A reused run with no
+saved coverage leaves the coverage step `skipped` with that reason. Without any of them the report is
 static: lint (`cli.checks.run_static_checks`), flow, rules, scenarios,
 dialect risks, and a verification level no higher than L0.
 
 `--cut` defaults to `<program stem>.cut`; `--journal` to
-`<cut stem>.journal.jsonl` (`report.journal.default_journal_path`).
+`.mockymock/<cut stem>.journal.jsonl` (`report.journal.default_journal_path`
+-> `report.artifacts.journal_path`, which keeps using a pre-#353
+`<cut stem>.journal.jsonl` next to the `.cut` when one exists and the new
+one does not).
 `--scenarios none` skips the cobol-parser `ProgramFixtureGenerator`
 step (slow on large programs).
 
@@ -1450,6 +1462,27 @@ status or empty step/summary -> exit 2 with a message, nothing written.
 `read_journal` splits the file on `\n` only: entries are written with
 `ensure_ascii=False`, which leaves U+2028/U+2029/NEL raw inside a string,
 and `str.splitlines()` broke such an entry into unparseable pieces (#283).
+`--from FILE|-` (issue #353) appends a batch in one process: a JSON array
+or JSON lines, each object with `step`/`summary` and optional
+`status`/`command`/`decision` (`journal.parse_batch` validates every entry
+before any is written; unknown keys are refused); it cannot be combined
+with the single-entry flags, which are no longer `required=True` so the
+check is `_cmd_journal`'s own.
+
+## `mockymock clean [PROGRAM.cbl | PROGRAM.cut | DIR] [--all] [--dry-run]` (2026-10-22)
+
+Issue #353. Every artifact mockymock writes for a suite lives in one
+folder, `.mockymock/` next to the `.cut`, named `<cut stem>.<kind>`
+(`report/artifacts.py`'s `KINDS`: `report.html`, `report.json`,
+`run.json`, `coverage.json`, `mutation.json`, `journal.jsonl`, and
+`inputs.json`, the fingerprints `fresh_result` checks). Keyed by the
+`.cut` stem, not the program's, since a program can have several suites.
+`clean` removes them for one suite, every `PROG*.cut` suite of a program,
+or everything under a directory (`os.walk`, entering `.mockymock` but no
+other hidden or dependency folder), plus the pre-#353 files
+(`<stem>.report.html` / `.report.json` / `.mutation.json` beside a
+same-stem `.cbl`/`.cut`). Journals are kept unless `--all`; an emptied
+`.mockymock/` is removed.
 
 ## `mockymock skills plugin [DIRECTORY] [--force]` (2026-10-04)
 

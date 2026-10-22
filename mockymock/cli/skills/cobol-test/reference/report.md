@@ -3,9 +3,8 @@
 ## Writing the report
 
 ```bash
-mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
-    [--json PROGRAM.report.json]
-    [--execute] [--mutate]                      # run now (Docker)
+mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PATH] [--json PATH]
+    [--execute] [--mutate] [--rerun]            # run now (Docker)
     [--run-json R] [--coverage-json C] [--mutation-json M]   # or reuse results
     [--journal FILE] [--scenarios happy|branches|all|none] [--seed N]
     [--timeout S] [--mutation-threshold PCT] [--copybook-path DIR ...]
@@ -15,7 +14,14 @@ mockymock report PROGRAM.cbl [--cut PROGRAM.cut] [-o PROGRAM.report.html]
   with `--json`, the same data as JSON.
 - Exit code 1 when a test failed or the suite is refused, else 0, so it
   can gate CI.
-- The journal defaults to `<cut stem>.journal.jsonl` next to the `.cut`.
+- Everything lands in `.mockymock/` next to the `.cut`, named
+  `<cut stem>.<kind>`: `report.html` (default `-o`), `run.json` /
+  `coverage.json` / `mutation.json` (saved by `run` and `mutate`, reused by
+  `--execute` / `--mutate` while the program, suite and copybooks are
+  unchanged), `journal.jsonl`. `mockymock clean` removes them; journals are
+  kept unless `--all`.
+- The journal defaults to `.mockymock/<cut stem>.journal.jsonl` (an older
+  `<cut stem>.journal.jsonl` next to the `.cut` keeps being used).
 - Without `--execute`/`--run-json`, the run, coverage and verdict steps say
   "not run" instead of guessing; every case stays at L0.
 

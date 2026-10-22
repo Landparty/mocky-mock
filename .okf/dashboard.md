@@ -45,7 +45,7 @@ panel is a new render function plus a new key in the payload.
 
 ```
 GET  /api/reports           -> web/reports.py reports_payload(root)
-GET  /reports/<path>        -> one *.report.html under root (CSP sandbox)
+GET  /reports/<path>        -> one *.report.html under root, .mockymock/ included (CSP sandbox)
 GET  /api/plugin            -> web/plugin.py verify()
 POST /api/plugin/install    -> web/plugin.py install(force)
 ```

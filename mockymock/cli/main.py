@@ -11,6 +11,7 @@ from pathlib import Path
 
 from mockymock import __version__
 from mockymock._lines import read_utf8_source, split_source_lines
+from mockymock.report.artifacts import fingerprint
 from mockymock.debugging_lines import activate_debugging_lines
 
 
@@ -363,6 +364,37 @@ def _write_report_file(command: str, flag: str, target: str, content: str) -> bo
         )
         return False
     return True
+
+
+def _save_result(
+    command: str,
+    cut_path: Path,
+    program_path: Path,
+    kind: str,
+    content: str,
+    args: argparse.Namespace,
+    inputs: dict[str, object] | None = None,
+) -> None:
+    """Save a whole-suite run/coverage/mutation result in `.mockymock/` for
+    `report --execute --mutate` to reuse (issue #352). Never fails the
+    command: a read-only checkout only costs the reuse."""
+    from mockymock.report.artifacts import save_result
+
+    try:
+        save_result(
+            cut_path,
+            program_path,
+            kind,
+            content,
+            getattr(args, "copybook_path", None),
+            inputs,
+        )
+    except OSError as exc:
+        print(
+            f"mockymock {command}: could not save the {kind} result for "
+            f"'mockymock report' to reuse: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _write_failure_reports(
@@ -1778,6 +1810,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
     source_path, cut_path = pair
 
     _apply_config_to_args(args, source_path)
+    # Taken before anything runs: `--record-expectations` rewrites the .cut,
+    # and the saved result belongs to the suite as it ran (issue #352).
+    saved_inputs = (
+        fingerprint(source_path, cut_path, args.copybook_path)
+        if not args.case and not args.tag
+        else None
+    )
 
     # Asking for the coverage JSON, or a coverage report file, is asking
     # for coverage.
@@ -2104,20 +2143,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
             format_junit_xml(suite_result, crash_detail=crash_detail, not_run=not_run),
         )
 
+    run_json_text = format_json_report(
+        build_json_report(
+            suite_result,
+            cut_suite=suite,
+            crash_detail=crash_detail,
+            cut_file=str(cut_path),
+            program_file=str(source_path),
+        )
+    )
     if args.json_report:
-        _write_report_file(
-            "run",
-            "--json-report",
-            args.json_report,
-            format_json_report(
-                build_json_report(
-                    suite_result,
-                    cut_suite=suite,
-                    crash_detail=crash_detail,
-                    cut_file=str(cut_path),
-                    program_file=str(source_path),
-                )
-            ),
+        _write_report_file("run", "--json-report", args.json_report, run_json_text)
+    if saved_inputs is not None:
+        _save_result(
+            "run", cut_path, source_path, "run", run_json_text, args, saved_inputs
         )
 
     # The original-.cbl remap is what BOTH the console headline and the
@@ -2140,17 +2179,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
             original=original_coverage,
             program_name=source_path.name,
         )
+        coverage_json_text = format_coverage_json(
+            coverage_report,
+            mapped,
+            program_file=str(source_path),
+            instrumented_name=instrumented_name,
+        )
         if args.coverage_json:
             _write_report_file(
+                "run", "--coverage-json", args.coverage_json, coverage_json_text
+            )
+        if saved_inputs is not None:
+            _save_result(
                 "run",
-                "--coverage-json",
-                args.coverage_json,
-                format_coverage_json(
-                    coverage_report,
-                    mapped,
-                    program_file=str(source_path),
-                    instrumented_name=instrumented_name,
-                ),
+                cut_path,
+                source_path,
+                "coverage",
+                coverage_json_text,
+                args,
+                saved_inputs,
             )
     elif args.coverage_json:
         print(
@@ -2520,6 +2567,7 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
             f"[{result.mutant.operator}] {result.mutant.description}"
         )
 
+    mutation_inputs = fingerprint(source_path, cut_path, args.copybook_path)
     problems, outcome, notes = run_mutation(
         source_path,
         cut_path,
@@ -2537,6 +2585,18 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
         return 1
 
     print(format_console(outcome))
+    mutation_text = json.dumps(to_json_dict(outcome), indent=2) + "\n"
+    if outcome.complete:
+        # An incomplete outcome (#347) is not a result worth reusing.
+        _save_result(
+            "mutate",
+            cut_path,
+            source_path,
+            "mutation",
+            mutation_text,
+            args,
+            mutation_inputs,
+        )
     if args.json_report:
         # Same convention as run's report flags: an auxiliary report file
         # that can't be written is reported cleanly, and the exit code
@@ -2545,7 +2605,7 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
             "mutate",
             "--json-report",
             args.json_report,
-            json.dumps(to_json_dict(outcome), indent=2) + "\n",
+            mutation_text,
         ):
             print(f"mockymock mutate: wrote JSON report -> {args.json_report}")
 
@@ -3208,6 +3268,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     and/or a self-contained HTML page. See report/test_report.py."""
     import json
 
+    from mockymock.report.artifacts import artifact_path
     from mockymock.report.html_report import render_html
     from mockymock.report.journal import default_journal_path
     from mockymock.report.test_report import ReportOptions, build_report
@@ -3235,12 +3296,11 @@ def _cmd_report(args: argparse.Namespace) -> int:
         seed=args.seed,
         timeout=args.timeout,
         mutation_threshold=args.mutation_threshold,
+        reuse=not args.rerun,
     )
     report = build_report(options)
     html_path = (
-        Path(args.output)
-        if args.output
-        else source_path.with_name(f"{source_path.stem}.report.html")
+        Path(args.output) if args.output else artifact_path(cut_path, "report")
     )
     html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(render_html(report), encoding="utf-8")
@@ -3273,6 +3333,7 @@ def _cmd_journal(args: argparse.Namespace) -> int:
         JournalError,
         append_entry,
         default_journal_path,
+        parse_batch,
     )
 
     if args.file:
@@ -3281,6 +3342,42 @@ def _cmd_journal(args: argparse.Namespace) -> int:
         path = default_journal_path(Path(args.cut))
     else:
         print("mockymock journal: pass --cut (journal next to it) or --file")
+        return 1
+    single = (args.step, args.summary, args.command_text, args.decision)
+    if args.from_file is not None:
+        if any(value is not None for value in single):
+            print(
+                "mockymock journal: --from takes every entry from its input -- "
+                "drop --step/--summary/--command/--decision"
+            )
+            return 1
+        try:
+            text = (
+                sys.stdin.read()
+                if args.from_file == "-"
+                else read_utf8_source(Path(args.from_file))
+            )
+        except OSError as exc:
+            print(f"mockymock journal: could not read {args.from_file}: {exc}")
+            return 1
+        try:
+            entries = parse_batch(text)
+            for entry in entries:
+                append_entry(
+                    path,
+                    step=entry["step"],
+                    summary=entry["summary"],
+                    status=entry.get("status", "ok"),
+                    command=entry.get("command"),
+                    decision=entry.get("decision"),
+                )
+        except JournalError as exc:
+            print(f"mockymock journal: {exc}")
+            return 1
+        print(f"mockymock journal: appended {len(entries)} entries to {path}")
+        return 0
+    if args.step is None or args.summary is None:
+        print("mockymock journal: pass --step and --summary, or --from FILE")
         return 1
     try:
         append_entry(
@@ -3296,6 +3393,104 @@ def _cmd_journal(args: argparse.Namespace) -> int:
         return 1
     print(f"mockymock journal: appended to {path}")
     return 0
+
+
+#: Dependency/build folders `clean` never walks into, as the dashboard.
+_CLEAN_SKIPPED_DIRS = frozenset(
+    {"node_modules", "__pycache__", "venv", ".venv", ".git", "build", "dist"}
+)
+
+
+def _clean_candidates(target: Path, include_journal: bool) -> list[Path]:
+    """Every artifact `clean` would remove under `target` (a `.cut`, a
+    program, or a directory): `.mockymock/` contents, plus files the
+    pre-#353 layout left next to a program or suite."""
+    from mockymock.cli.discovery import COBOL_SOURCE_EXTENSIONS
+    from mockymock.report.artifacts import (
+        ARTIFACT_DIR,
+        KINDS,
+        legacy_paths,
+        suite_artifacts,
+    )
+
+    if target.is_file():
+        if target.suffix == ".cut":
+            return suite_artifacts(target, None, include_journal=include_journal)
+        # A program: every suite named after it, plus its old report files.
+        found: list[Path] = []
+        for cut in sorted(target.parent.glob(f"{target.stem}*.cut")):
+            if cut.stem == target.stem or cut.stem.startswith(f"{target.stem}."):
+                found += suite_artifacts(cut, None, include_journal=include_journal)
+        found += [
+            p
+            for p in legacy_paths(target, target.with_suffix(".cut"))[1:]
+            if p.is_file()
+        ]
+        return sorted(set(found))
+    found = []
+    journal_suffix = "." + KINDS["journal"]
+    for dirpath, dirnames, filenames in os.walk(target):
+        current = Path(dirpath)
+        dirnames[:] = sorted(
+            d
+            for d in dirnames
+            if d not in _CLEAN_SKIPPED_DIRS
+            and (not d.startswith(".") or d == ARTIFACT_DIR)
+        )
+        if current.name == ARTIFACT_DIR:
+            found += [
+                current / name
+                for name in filenames
+                if include_journal or not name.endswith(journal_suffix)
+            ]
+            continue
+        stems = {
+            Path(name).stem
+            for name in filenames
+            if name.endswith(".cut") or name.endswith(COBOL_SOURCE_EXTENSIONS)
+        }
+        for name in filenames:
+            for suffix in (".report.html", ".report.json", ".mutation.json") + (
+                (".journal.jsonl",) if include_journal else ()
+            ):
+                if name.endswith(suffix) and name[: -len(suffix)] in stems:
+                    found.append(current / name)
+    return sorted(found)
+
+
+def _cmd_clean(args: argparse.Namespace) -> int:
+    """Remove the reports and saved results mockymock wrote (issue #353).
+    Journals are the assistant's own record, not something a command can
+    recompute, so they stay unless --all."""
+    target = Path(args.target) if args.target else Path.cwd()
+    if not target.exists():
+        print(f"mockymock clean: {target} does not exist")
+        return 1
+    candidates = _clean_candidates(target, include_journal=args.all)
+    if not candidates:
+        print("mockymock clean: nothing to remove")
+        return 0
+    failed = 0
+    for path in candidates:
+        if args.dry_run:
+            print(f"would remove {path}")
+            continue
+        try:
+            path.unlink()
+        except OSError as exc:
+            print(f"mockymock clean: could not remove {path}: {exc}")
+            failed += 1
+            continue
+        print(f"removed {path}")
+        parent = path.parent
+        if parent.name == ".mockymock":
+            try:
+                parent.rmdir()  # only succeeds once it is empty
+            except OSError:
+                pass
+    verb = "would remove" if args.dry_run else "removed"
+    print(f"mockymock clean: {verb} {len(candidates) - failed} file(s)")
+    return 1 if failed else 0
 
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
@@ -4156,9 +4351,27 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument(
         "-o",
         "--output",
-        help="HTML report path (default: <program>.report.html next to the program)",
+        help=(
+            "HTML report path (default: .mockymock/<cut stem>.report.html "
+            "next to the .cut)"
+        ),
     )
-    report_parser.add_argument("--json", help="Also write the report as JSON here")
+    report_parser.add_argument(
+        "--json",
+        help=(
+            "Also write the report as JSON here (the convention is "
+            ".mockymock/<cut stem>.report.json, next to the HTML)"
+        ),
+    )
+    report_parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help=(
+            "With --execute/--mutate, run the suite and the mutants again even "
+            "when 'run'/'mutate' already saved results for this exact program, "
+            "suite and copybooks"
+        ),
+    )
     report_parser.add_argument(
         "--copybook-path",
         action="append",
@@ -4185,7 +4398,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report_parser.add_argument(
         "--journal",
-        help="Assistant journal to include (default: <cut>.journal.jsonl if present)",
+        help=(
+            "Assistant journal to include (default: "
+            ".mockymock/<cut stem>.journal.jsonl if present)"
+        ),
     )
     report_parser.add_argument(
         "--scenarios",
@@ -4212,12 +4428,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Append one assistant step to a suite's journal for 'mockymock report'",
     )
     journal_parser.add_argument(
-        "--cut", help="The suite; the journal is <cut>.journal.jsonl next to it"
+        "--cut",
+        help="The suite; the journal is .mockymock/<cut stem>.journal.jsonl next to it",
     )
     journal_parser.add_argument("--file", help="Explicit journal path instead")
-    journal_parser.add_argument("--step", required=True, help="Step name, e.g. plan")
+    journal_parser.add_argument("--step", help="Step name, e.g. plan")
     journal_parser.add_argument(
-        "--summary", required=True, help="What was done and what came of it"
+        "--summary", help="What was done and what came of it"
+    )
+    journal_parser.add_argument(
+        "--from",
+        dest="from_file",
+        metavar="FILE",
+        help=(
+            "Append several entries at once from FILE ('-' for stdin): a JSON "
+            "array of objects, or one object per line, each with step and "
+            "summary and optionally status, command and decision"
+        ),
     )
     journal_parser.add_argument(
         "--status",
@@ -4231,6 +4458,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     journal_parser.add_argument("--decision", help="A decision taken, and why")
     journal_parser.set_defaults(func=_cmd_journal)
+
+    clean_parser = subparsers.add_parser(
+        "clean",
+        help=(
+            "Remove the reports and saved run/mutation results mockymock "
+            "wrote (the .mockymock/ folders); journals are kept unless --all"
+        ),
+    )
+    clean_parser.add_argument(
+        "target",
+        nargs="?",
+        help=(
+            "A .cut (that suite), a program (all its suites) or a directory "
+            "(everything under it); default: the current directory"
+        ),
+    )
+    clean_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Also remove the assistant journals",
+    )
+    clean_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List what would be removed without removing it",
+    )
+    clean_parser.set_defaults(func=_cmd_clean)
 
     analyze_parser = subparsers.add_parser(
         "analyze",

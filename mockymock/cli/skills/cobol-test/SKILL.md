@@ -64,7 +64,10 @@ mockymock journal --cut PROGRAM.cut --step plan \
 ```
 
 `--status ok|warn|fail|skipped|info`, `--command "<what you ran>"`. The
-journal is `PROGRAM.journal.jsonl` next to the `.cut`, append-only.
+journal is `.mockymock/PROGRAM.journal.jsonl` next to the `.cut`,
+append-only. Several steps at once take one call: write them as JSON lines
+(`{"step": ..., "summary": ..., "decision": ...}`) and pass
+`--from steps.jsonl` (or `--from -` for stdin).
 
 ## Workflow
 
@@ -144,15 +147,19 @@ counts.
 ### 7. Prove the suite, then report
 
 ```bash
-mockymock report PROGRAM.cbl --cut PROGRAM.cut --execute --mutate \
-  --json PROGRAM.report.json            # writes PROGRAM.report.html
+mockymock report PROGRAM.cbl --cut PROGRAM.cut --execute --mutate
+# writes .mockymock/PROGRAM.report.html next to the .cut
 ```
 
 `--execute` runs the suite with coverage, `--mutate` runs mutation testing
 (slower; skip it while iterating and pass it for the final report). Without
 Docker, pass neither: the report still covers every static step (including
-the program analysis) and says what it could not run. If you already ran them, pass `--run-json`,
-`--coverage-json`, `--mutation-json` instead of re-running.
+the program analysis) and says what it could not run. If you already ran
+`mockymock run` (whole suite) and `mockymock mutate` on this exact program
+and suite, `--execute --mutate` reuse their saved results instead of
+running them again; `--rerun` forces a fresh run. `mockymock clean` removes
+the `.mockymock/` reports and saved results when you are done (journals are
+kept).
 
 Act on what it finds before you hand over, within the mode's limits:
 a surviving mutant is a missing assertion (add it), "no test reaches X" is
@@ -175,7 +182,7 @@ Suspected bug: BR-004 says orders over 1000.00 get 5% off; the program
 gives it from 1000.00 (line 212 uses >=). Assertion left failing.
 Mutation score 91% (1 survivor at line 230: nothing checks the audit count).
 Program health B (debt 18/100); 3000-RECONCILE has complexity 14 and no test.
-Report: ORDRPROC.report.html
+Report: .mockymock/ORDRPROC.report.html
 ```
 
 Attach or link the HTML report. Never paste raw JSON at the developer.

@@ -58,6 +58,7 @@ from typing import Any
 
 from mockymock import __version__
 from mockymock.debugging_lines import activate_debugging_lines
+from mockymock.report.artifacts import fresh_result
 
 REPORT_VERSION = 1
 LEVELS = ("L0", "L1", "L2", "L3")
@@ -91,6 +92,10 @@ class ReportOptions:
     timeout: int | None = None
     mutation_threshold: float = DEFAULT_MUTATION_THRESHOLD
     probe_toolchain: bool = True
+    #: With --execute/--mutate, reuse the results `run`/`mutate` saved in
+    #: `.mockymock/` when they were computed from exactly this program,
+    #: suite and copybooks (issue #352); False re-runs them (`--rerun`).
+    reuse: bool = True
 
 
 @dataclass
@@ -786,8 +791,29 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
     coverage_report: dict[str, Any] | None = None
     workdir = Path(tempfile.mkdtemp(prefix="mockymock-report-"))
     run_json, coverage_json = options.run_json, options.coverage_json
+    reused_note = ""
     with _Timer(run_step):
-        if options.execute:
+        saved_run = (
+            fresh_result(options.cut, options.program, "run", options.copybook_paths)
+            if options.execute and options.reuse and not lint_problems
+            else None
+        )
+        if saved_run is not None:
+            # The natural run -> mutate -> report flow already ran this
+            # exact suite: reading its saved result instead of compiling
+            # and executing everything again is the whole point (#352).
+            run_json = saved_run[0]
+            saved_coverage = fresh_result(
+                options.cut, options.program, "coverage", options.copybook_paths
+            )
+            coverage_json = saved_coverage[0] if saved_coverage else None
+            reused_note = (
+                f" Reused the saved result of `mockymock run` ({saved_run[1]}); "
+                "the program, suite and copybooks are unchanged. Pass --rerun "
+                "to run again."
+            )
+            run_step.details["reused"] = str(saved_run[0])
+        elif options.execute:
             if lint_problems:
                 run_step.status = "skipped"
                 run_step.summary = "Skipped: lint problems would refuse the run."
@@ -873,6 +899,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 f"{passed} passed, {failed} failed or crashed, "
                 f"{sum(1 for c in cases if c['status'] == 'not_run')} not run."
             )
+            run_step.summary += reused_note
             run_step.details["summary"] = summary
             if run_errors:
                 run_step.details["runErrors"] = run_errors
@@ -889,6 +916,13 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             if coverage_report is None:
                 coverage_step.status = "skipped"
                 coverage_step.summary = f"No coverage data: {error}."
+        elif reused_note:
+            coverage_step.status = "skipped"
+            coverage_step.summary = (
+                "Not measured: the saved `mockymock run` result was not a "
+                "--coverage run. Run `mockymock run --coverage` (or report "
+                "--execute --rerun) to include it."
+            )
         else:
             coverage_step.status = "skipped"
             coverage_step.summary = "Not measured (needs a run with --coverage-json)."
@@ -923,8 +957,23 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
     mutation_report: dict[str, Any] | None = None
     mutation_passes = False
     mutation_json = options.mutation_json
+    mutation_reused = ""
     with _Timer(mutation_step):
-        if options.mutate:
+        saved_mutation = (
+            fresh_result(
+                options.cut, options.program, "mutation", options.copybook_paths
+            )
+            if options.mutate and options.reuse and not lint_problems
+            else None
+        )
+        if saved_mutation is not None:
+            mutation_json = saved_mutation[0]
+            mutation_reused = (
+                " Reused the saved result of `mockymock mutate` "
+                f"({saved_mutation[1]}); pass --rerun to mutate again."
+            )
+            mutation_step.details["reused"] = str(saved_mutation[0])
+        elif options.mutate:
             if lint_problems:
                 mutation_step.status = "skipped"
                 mutation_step.summary = "Skipped: lint problems."
@@ -1000,6 +1049,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 f"Mutation score {score_text}: {totals.get('killed', 0)} killed, "
                 f"{totals.get('survived', 0)} survived of {totals.get('generated', 0)}."
             )
+            mutation_step.summary += mutation_reused
             if unevaluated:
                 mutation_step.summary += (
                     f" INCOMPLETE: {unevaluated} mutant(s) could not be "

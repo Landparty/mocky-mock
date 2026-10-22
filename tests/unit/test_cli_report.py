@@ -56,14 +56,17 @@ def _run_json(path, status="passed"):
     return path
 
 
-def test_writes_html_next_to_the_program_by_default(ordrproc, capsys):
+def test_writes_html_into_the_artifact_folder_by_default(ordrproc, capsys):
     exit_code = main(["report", "ORDRPROC.cbl", "--scenarios", "none"])
     assert exit_code == 0
-    page = (ordrproc / "ORDRPROC.report.html").read_text(encoding="utf-8")
+    page = (ordrproc / ".mockymock" / "ORDRPROC.report.html").read_text(
+        encoding="utf-8"
+    )
     assert "<title>ORDRPROC test report</title>" in page
+    assert not (ordrproc / "ORDRPROC.report.html").exists()
     out = capsys.readouterr().out
     assert "[skipped] Run the suite under GnuCOBOL" in out
-    assert "wrote ORDRPROC.report.html" in out
+    assert ".mockymock/ORDRPROC.report.html" in out
 
 
 def test_json_and_output_paths(ordrproc):
