@@ -2557,8 +2557,9 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
             "stillborn": "stillborn",
             "timeout": "timeout  ",
             "error": "ERROR    ",
+            "equivalent": "equiv    ",
         }[result.status]
-        if not result.ran:
+        if not result.ran and result.status == "survived":
             # Same verdict, different evidence: say so rather than letting
             # it read as a mutant that was built and beat the suite.
             marker = "uncovered"

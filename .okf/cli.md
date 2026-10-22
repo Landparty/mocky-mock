@@ -1008,6 +1008,25 @@ and `mutate` exits 1 on an incomplete outcome whatever `--fail-under` says.
 the step summary and the summary tile. A baseline `error` aborts with a
 message blaming Docker, not the suite.
 
+**Equivalent mutants (issue #349, 2026-10-22).** `mutation/equivalence.py`'s
+`equivalence_reason(mutant, original_lines, ast)` proves two shapes
+cannot change the program, and `runner._equivalent_mutants` (one extra
+`run_static_checks` pass, for the data-item facts) marks them
+`status == "equivalent"`, `ran=False`, before anything is built: a
+`stmt-delete` of a MOVE / `SET <88> TO TRUE` / INITIALIZE whose every
+target (or an enclosing group) the next code line overwrites in full with
+a literal MOVE or a `SET <88> TO TRUE` (88 owners resolved from the
+parent's `ConditionNameItem` children), and an `arith-verb-swap` of
+`ADD/SUBTRACT n` on an unsigned, non-edited numeric field the previous
+code line zeroes (`MOVE ZERO/0 TO f`, `INITIALIZE f`). Both statements
+must be single-line and complete, operands plain names or literals, and a
+statement ending a sentence it did not start (its period may close an IF)
+disqualifies. Excluded from the score like stillborns, listed in the
+console with the reason, `totals.equivalent` in the JSON, and named in the
+report's mutation step. This complements the zero-baseline hint below,
+which covers the swap when the zero comes from the test data rather than
+the program.
+
 **Zero-baseline hints (2026-10-04).** An `ADD..TO <-> SUBTRACT..FROM`
 swap on an unsigned numeric field that every case starts at zero is
 indistinguishable from the original (0 + n and 0 - n both store n), so it

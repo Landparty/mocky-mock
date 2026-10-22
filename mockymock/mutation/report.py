@@ -8,7 +8,9 @@ from typing import Any, Literal
 
 from mockymock.mutation.operators import Mutant
 
-MutantStatus = Literal["killed", "survived", "stillborn", "timeout", "error"]
+MutantStatus = Literal[
+    "killed", "survived", "stillborn", "timeout", "error", "equivalent"
+]
 
 #: What an `error` mutant means, for the console and the JSON report: the
 #: toolchain failed under it, even after one restart and retry, so the suite
@@ -119,6 +121,12 @@ class MutationOutcome:
         return grouped
 
     @property
+    def equivalent(self) -> int:
+        """Mutants proven not to change the program (issue #349): no test
+        can kill them, so they are reported but never scored."""
+        return self._count("equivalent")
+
+    @property
     def errors(self) -> int:
         """Mutants the toolchain failed under: never tested, never scored."""
         return self._count("error")
@@ -139,7 +147,7 @@ class MutationOutcome:
         """Mutants the baseline's coverage classified without building
         them. Scored like any other survivor -- the saving is wall-clock,
         not a change of verdict."""
-        return sum(1 for r in self.results if not r.ran)
+        return sum(1 for r in self.results if not r.ran and r.status == "survived")
 
     @property
     def score(self) -> float | None:
@@ -204,6 +212,16 @@ def format_console(outcome: MutationOutcome) -> str:
                 lines.append(
                     f"    line {m.line} [{m.operator}] {m.description}{detail}"
                 )
+    equivalent = [r for r in outcome.results if r.status == "equivalent"]
+    if equivalent:
+        lines.append(
+            "equivalent mutants (provably cannot change the program, so no "
+            "test can kill them -- not scored):"
+        )
+        for result in equivalent:
+            m = result.mutant
+            lines.append(f"  line {m.line} [{m.operator}] {m.description}")
+            lines.append(f"    {result.detail}")
     errored = [r for r in outcome.results if r.status == "error"]
     if errored:
         lines.append(f"mutants that could not be evaluated: {ERROR_LABEL}")
@@ -213,6 +231,8 @@ def format_console(outcome: MutationOutcome) -> str:
             lines.append(f"  line {m.line} [{m.operator}] {m.description}{detail}")
     scored = outcome.killed + outcome.timeouts + outcome.survived
     error_part = f", {outcome.errors} not evaluated" if outcome.errors else ""
+    if outcome.equivalent:
+        error_part = f", {outcome.equivalent} equivalent" + error_part
     lines.append(
         f"mutants: {len(outcome.results)} generated, {scored} scored "
         f"({outcome.killed} killed, {outcome.timeouts} timed out, "
@@ -258,6 +278,7 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
             "survived": outcome.survived,
             "stillborn": outcome.stillborn,
             "errors": outcome.errors,
+            "equivalent": outcome.equivalent,
             "not_compiled": outcome.not_compiled,
         },
         "stillbornByReason": {

@@ -1063,6 +1063,12 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 f"Mutation score {score_text}: {totals.get('killed', 0)} killed, "
                 f"{totals.get('survived', 0)} survived of {totals.get('generated', 0)}."
             )
+            equivalent = totals.get("equivalent")
+            if type(equivalent) is int and equivalent > 0:
+                mutation_step.summary += (
+                    f" {equivalent} equivalent mutant(s), which no test can "
+                    "kill, are left out of the score."
+                )
             mutation_step.summary += mutation_reused
             if unevaluated:
                 mutation_step.summary += (

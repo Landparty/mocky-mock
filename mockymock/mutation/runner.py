@@ -1,6 +1,7 @@
 """The mutation kill loop: baseline run, then patch/splice/compile/run per
 mutant, classifying each as killed / survived / stillborn / timeout, or
-error when the Docker toolchain failed under it (never scored).
+error when the Docker toolchain failed under it, or equivalent when it
+provably cannot change the program (neither is scored).
 
 Two cost levers sit on top of that loop, both from
 docs/2026-07-29-mutation-testing-design.md's deferred list:
@@ -475,13 +476,25 @@ def run_mutation(
     coverage = baseline.coverage if coverage_gate else None
     # False, not falsy: a line absent from the map is unknown (it did not
     # remap unambiguously), and unknown must always be compiled.
-    decided = {
-        index: MutantResult(
-            mutant=mutant, status="survived", detail=NOT_COMPILED_DETAIL, ran=False
-        )
-        for index, mutant in enumerate(mutants)
-        if coverage is not None and coverage.get(mutant.line) is False
-    }
+    # Provably equivalent mutants (issue #349) are never built: no test can
+    # kill them, so they are reported, with why, and left out of the score.
+    decided = _equivalent_mutants(
+        mutants, original_lines, source_path, cut_path, copybook_paths
+    )
+    decided.update(
+        {
+            index: MutantResult(
+                mutant=mutant,
+                status="survived",
+                detail=NOT_COMPILED_DETAIL,
+                ran=False,
+            )
+            for index, mutant in enumerate(mutants)
+            if index not in decided
+            and coverage is not None
+            and coverage.get(mutant.line) is False
+        }
+    )
     to_run = [(index, m) for index, m in enumerate(mutants) if index not in decided]
 
     outcome = MutationOutcome(program=str(source_path), cut=str(cut_path))
@@ -520,6 +533,43 @@ def run_mutation(
         if on_progress is not None:
             on_progress(outcome.results[-1])
     return [], outcome, all_notes
+
+
+def _equivalent_mutants(
+    mutants: list[Mutant],
+    original_lines: list[str],
+    source_path: Path,
+    cut_path: Path,
+    copybook_paths: list[str] | None,
+) -> dict[int, MutantResult]:
+    """Index -> `equivalent` result for every mutant
+    `equivalence.equivalence_reason` proves cannot change the program.
+    Best effort: when the static pass that supplies the data-item facts
+    fails, every mutant is built and scored as before."""
+    candidates = [
+        (index, m)
+        for index, m in enumerate(mutants)
+        if m.operator in ("stmt-delete", "arith-verb-swap")
+    ]
+    if not candidates:
+        return {}
+    from mockymock.cli.checks import run_static_checks
+    from mockymock.mutation.equivalence import equivalence_reason
+
+    try:
+        checked = run_static_checks(source_path, cut_path, copybook_paths)
+    except Exception:  # noqa: BLE001 -- no facts, no proof
+        return {}
+    if checked.parse_result is None:
+        return {}
+    decided: dict[int, MutantResult] = {}
+    for index, mutant in candidates:
+        reason = equivalence_reason(mutant, original_lines, checked.parse_result.ast)
+        if reason:
+            decided[index] = MutantResult(
+                mutant=mutant, status="equivalent", detail=reason, ran=False
+            )
+    return decided
 
 
 def _attach_zero_baseline_hints(

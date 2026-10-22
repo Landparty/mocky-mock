@@ -268,6 +268,15 @@ notices ("killed") or doesn't ("survived" -- a gap in the assertions).
 
 Mock bodies and terminator statements are never mutated.
 
+Mutants that provably cannot change the program are reported as
+`equivalent`, with the reason, never built and never scored: deleting a
+MOVE / `SET <88> TO TRUE` whose fields the very next statement overwrites
+in full with a literal or another `SET <88> TO TRUE` (a dead store), and
+swapping `ADD n TO f` / `SUBTRACT n FROM f` on an unsigned field the
+statement right before sets to zero (0 + n and 0 - n store the same
+magnitude). Only adjacent, single-line statements with plain operands
+qualify, so a real gap is never hidden.
+
 A mutant the Docker toolchain failed under (the container stopped, the
 daemon went away) is restarted and retried once, then reported as
 `error`: never scored, listed separately, and `mutate` exits 1 because the
