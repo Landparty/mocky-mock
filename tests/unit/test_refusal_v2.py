@@ -131,12 +131,31 @@ def test_open_site_matches_by_either_file_name():
     assert check_test_case(surface, ast, case) == []
 
 
-def test_ambiguous_open_mock_refuses():
+def test_one_open_mock_per_file_of_a_multi_file_open_is_accepted():
+    """Issue #348: each file of `OPEN INPUT IN-FILE OUTPUT OUT-FILE` can
+    have its own MOCK, so each can be VERIFY'd."""
     surface, ast = _surface_and_ast()
     mocks = _file_mocks() + [MockDirective(MockCategory.OPEN, "OUT-FILE")]
     case = MockTestCase(name="c", mocks=mocks, perform_target="DO-FILE-WORK")
     reasons = check_test_case(surface, ast, case)
-    assert any(r.code == "AMBIGUOUS_MOCK" for r in reasons)
+    assert not any(r.code == "AMBIGUOUS_MOCK" for r in reasons)
+
+
+def test_per_file_matches_needs_distinct_files_of_an_open_or_close():
+    from mockymock.analysis.refusal import per_file_matches
+
+    surface, _ = _surface_and_ast()
+    (site,) = [
+        s
+        for s in surface.boundary_sites
+        if s.category is MockCategory.OPEN and len(s.keys) > 1
+    ]
+    first, second = (MockDirective(MockCategory.OPEN, key) for key in site.keys[:2])
+    assert per_file_matches([first, second], site)
+    assert not per_file_matches([first], site)
+    assert not per_file_matches(
+        [first, MockDirective(MockCategory.OPEN, first.key)], site
+    )
 
 
 def test_mocked_sql_passes_and_unmocked_sql_refuses():

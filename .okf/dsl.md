@@ -886,7 +886,7 @@ paragraph-grouped path described above, unchanged. A real
   generated suite refused `AMBIGUOUS_MOCK` (issue #312). One `MOCK OPEN B`
   now covers both sites. Shapes where no single key covers every site
   (`OPEN A B` plus separate `OPEN A` and `OPEN B`) still need hand
-  editing; per-file dispatch for one multi-file site is not built. It returns `(lines, declared_keys,
+  editing by adding one MOCK per file, which the splicer applies together since issue #348. It returns `(lines, declared_keys,
   call_count_overrides)` — the third element covers `--placeholder`'s
   effect on VERIFY counts, see below. `declared_keys` is only the
   literally-emitted primary keys and gates

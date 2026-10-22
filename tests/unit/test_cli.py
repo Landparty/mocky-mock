@@ -310,6 +310,32 @@ _AMBIGUOUS_REPRO_CBL = """\
            CLOSE IN-FILE OUT-FILE.
 """
 
+# Same shape with an EXEC SQL statement both of the case's prefixes match:
+# still AMBIGUOUS_MOCK (only a multi-file OPEN/CLOSE takes one MOCK per
+# key, issue #348), and on a site no case reaches.
+_AMBIGUOUS_SQL_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. REPRO.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-X PIC 9.
+       PROCEDURE DIVISION.
+       MAIN-BOTH.
+           EXEC SQL UPDATE ORDERS SET C = 1 END-EXEC.
+       DEAD-CODE-PATH.
+           EXEC SQL UPDATE ORDERS SET B = 2 END-EXEC.
+"""
+
+_AMBIGUOUS_SQL_CUT = """\
+TESTSUITE "repro"
+TESTCASE "both"
+    MOCK SQL "UPDATE ORDERS"
+    END-MOCK
+    MOCK SQL "UPDATE ORDERS SET B"
+    END-MOCK
+    PERFORM MAIN-BOTH
+"""
+
 # One test case, mocking IN-FILE and OUT-FILE separately for its own
 # reachable single-file OPEN/CLOSE sites (CASE-A-PATH, CASE-B-PATH) -- no
 # ambiguity there. DEAD-CODE-PATH's multi-file OPEN/CLOSE is never PERFORMed
@@ -334,12 +360,25 @@ TESTCASE "both"
 """
 
 
-def _write_ambiguous_repro(tmp_path):
+def _write_ambiguous_repro(tmp_path, cbl_text=None, cut_text=None):
     cbl = tmp_path / "REPRO.cbl"
-    cbl.write_text(_AMBIGUOUS_REPRO_CBL)
+    cbl.write_text(cbl_text or _AMBIGUOUS_SQL_CBL)
     cut = tmp_path / "REPRO.cut"
-    cut.write_text(_AMBIGUOUS_REPRO_CUT)
+    cut.write_text(cut_text or _AMBIGUOUS_SQL_CUT)
     return cbl, cut
+
+
+def test_one_mock_per_file_of_an_unreached_multi_file_open_close_is_accepted(
+    tmp_path, capsys
+):
+    """Issue #348: the per-file MOCKs that answer the single-file OPEN/CLOSE
+    sites also both match DEAD-CODE-PATH's multi-file ones -- one MOCK per
+    file of a multi-file statement is now how it is mocked, not a clash."""
+    cbl, cut = _write_ambiguous_repro(
+        tmp_path, _AMBIGUOUS_REPRO_CBL, _AMBIGUOUS_REPRO_CUT
+    )
+    assert main(["lint", str(cbl), "--cut", str(cut)]) == 0
+    assert "AMBIGUOUS_MOCK" not in capsys.readouterr().out
 
 
 def test_lint_refuses_ambiguous_mock_against_a_site_unreachable_by_any_case(
@@ -359,6 +398,7 @@ def test_lint_refuses_ambiguous_mock_against_a_site_unreachable_by_any_case(
     assert exit_code == 1
     assert "mockymock lint: refused (AMBIGUOUS_MOCK)" in out
     assert "DEAD-CODE-PATH" in out
+    assert "make the keys unambiguous" not in out
 
 
 def test_export_refuses_the_ambiguous_mock_shape_instead_of_raising(tmp_path, capsys):

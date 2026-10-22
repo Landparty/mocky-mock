@@ -28,7 +28,7 @@ from mockymock.analysis.clause_bodies import (
     clause_guard_lines,
 )
 from mockymock.analysis.mock_surface import BoundarySite
-from mockymock.analysis.refusal import directive_matches_site
+from mockymock.analysis.refusal import directive_matches_site, per_file_matches
 from mockymock.dsl.model import (
     FILE_STATUS_CATEGORIES,
     SEQUENCED_CALL_CATEGORIES,
@@ -303,7 +303,14 @@ def build_site_dispatch(
 
     for case_id, mocks in dispatch_entries(suite):
         matches = [d for d in mocks if directive_matches_site(d, site)]
-        if len(matches) > 1:
+        if len(matches) > 1 and per_file_matches(matches, site):
+            # A multi-file OPEN/CLOSE with one MOCK per file (issue #348):
+            # the statement runs once and every file's directive answers
+            # it, in the order the statement names the files. The first
+            # one drives the branch; the others add their tally, status
+            # and body below.
+            matches.sort(key=lambda d: site.keys.index(d.key.upper()))
+        elif len(matches) > 1:
             raise ValueError(
                 f"site at line {site.line} matched by multiple directives of "
                 f"test case {case_id} -- refusal gate should have caught this "
@@ -312,9 +319,15 @@ def build_site_dispatch(
         if not matches:
             continue
         directive = matches[0]
+        also = matches[1:]
         tally_name = registry.name(directive.category, directive.key)
         lines.append(f'               WHEN "{case_id}"')
         lines.append(f"                   ADD 1 TO {tally_name}")
+        for other in also:
+            lines.append(
+                f"                   ADD 1 TO "
+                f"{registry.name(other.category, other.key)}"
+            )
         if trace:
             # Mock firing ORDER cannot be recovered from the GnuCOBOL trace
             # file: this dispatch block is splicer-inserted, and the trace's
@@ -329,10 +342,11 @@ def build_site_dispatch(
             # timeline. directive.key is what the author actually wrote in
             # the .cut, so the pair names the firing unambiguously and
             # points straight back at the directive that caused it.
-            lines.append(
-                f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
-                f'{site.label} {directive.key}"'
-            )
+            for fired in matches:
+                lines.append(
+                    f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
+                    f'{site.label} {fired.key}"'
+                )
         if lifted_clauses:
             lines.append(f'                   MOVE "00" TO {OUTCOME_FIELD}')
         if directive.category is MockCategory.CICS:
@@ -357,12 +371,13 @@ def build_site_dispatch(
             )
             for default_field in default_fields:
                 lines.append(f'                   MOVE "00" TO {default_field}')
-            status_field = file_status_fields.get(directive.key.upper())
-            if status_field and directive.file_status is not None:
-                lines.append(
-                    f'                   MOVE "{directive.file_status}" '
-                    f"TO {status_field}"
-                )
+            for answering in matches:
+                status_field = file_status_fields.get(answering.key.upper())
+                if status_field and answering.file_status is not None:
+                    lines.append(
+                        f'                   MOVE "{answering.file_status}" '
+                        f"TO {status_field}"
+                    )
         if directive.captures:
             if not isinstance(site.statement, CallStatement):
                 raise ValueError(
@@ -496,7 +511,8 @@ def build_site_dispatch(
         else:
             lines.extend(
                 split
-                for body in directive.body_lines
+                for answering in matches
+                for body in answering.body_lines
                 for split in split_long_move(f"                   {body}")
             )
             if copy_into is not None:

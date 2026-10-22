@@ -96,6 +96,13 @@ END-MOCK
 `PARAGRAPH`/`SECTION` mocks replace the whole body of that paragraph or
 section, letting you isolate a caller from its own collaborators.
 
+A statement naming several files (`CLOSE CHKFILE STOPPAY CHKRPT`,
+`OPEN INPUT A OUTPUT B`) or reports (`INITIATE R1 R2`) takes one `MOCK`
+per file, all applied when the statement runs: each file gets its own
+`FILE-STATUS IS` and body, and each can be checked with its own
+`VERIFY CLOSE CHKFILE WAS CALLED ONCE`. Mocking only one of them is fine
+too; the others then cannot be VERIFY'd.
+
 ### `ROWS` -- one response per call (`SQL`, `READ`, `RETURN`, `CALL`, `MQ`, `DLI`)
 
 For a `SQL` cursor `FETCH` loop or a sequential `READ` loop that should
