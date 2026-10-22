@@ -63,7 +63,7 @@ EXPECTED: dict[str, tuple[str, str | None]] = {
     # CICSCHNL's only DFHVALUE sits inside an EXEC block the splicer replaces
     "CICSONLN": ("scaffold", None),
     "CICSCHNL": ("scaffold", None),
-    # -- scaffolds with nothing to mock -------------------------------------
+    # -- nothing to scaffold per paragraph (refused, no file written) --------
     # no CALL / file I/O / EXEC / console ACCEPT boundary at all: pure
     # computation (COMPDIR, MODERN63), XML/JSON handling (XMLJSON) and
     # INVOKE (OOCLIENT -- not a boundary category mockymock knows)
@@ -125,9 +125,11 @@ def test_generate_outcome_per_program_type(name, tmp_path, capsys):
         assert out_path.exists(), text
         assert "TESTCASE" in out_path.read_text(encoding="utf-8")
     elif outcome == "empty":
-        assert rc == 0, text
-        assert out_path.exists(), text
-        assert "wrote 0 test case(s)" in text
+        # A suite with no TESTCASE asserts nothing and fails `run` with
+        # "0 run, 0 failed"; it is no longer written (issue #275).
+        assert rc == 1, text
+        assert not out_path.exists(), text
+        assert "no test case to write" in text
     else:
         assert rc != 0, text
         assert not out_path.exists()

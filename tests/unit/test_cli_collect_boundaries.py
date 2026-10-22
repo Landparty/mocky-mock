@@ -181,3 +181,33 @@ def test_collect_boundaries_honours_the_config_copybook_path(
         'copybook_path = ["lib"]\n', encoding="utf-8"
     )
     assert _collected_keys(program, cut, capsys) == ["SUBPROG"]
+
+
+def test_collect_boundaries_survive_a_cut_that_does_not_parse(tmp_path, capsys):
+    # mocky-mock-vscode#100: completion asks for the program's boundaries
+    # while the user is mid-way through a MOCK block, so the saved .cut
+    # often does not parse. The boundaries are the program's, not the
+    # suite's: they come back beside the error.
+    broken = tmp_path / "broken.cut"
+    broken.write_text('TESTSUITE "x"\nTESTCASE "a"\n    MOCK SQL "OPEN\n')
+    exit_code = main(
+        ["collect", str(_ORDRPROC_CBL), "--cut", str(broken), "--json", "--boundaries"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert "malformed MOCK directive" in payload["error"]
+    assert [site["key"] for site in payload["boundaries"]] == ["DISCRATE"]
+    assert payload["suite"] is None and payload["cases"] == []
+
+
+def test_collect_boundaries_without_a_cut(capsys):
+    exit_code = main(["collect", str(_ORDRPROC_CBL), "--json", "--boundaries"])
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["cutFile"] is None
+    assert [site["key"] for site in payload["boundaries"]] == ["DISCRATE"]
+
+
+def test_collect_without_boundaries_still_needs_a_cut(capsys):
+    assert main(["collect", "--json"]) == 1
+    assert "--cut is required" in json.loads(capsys.readouterr().out)["error"]

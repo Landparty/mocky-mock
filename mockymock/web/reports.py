@@ -1,6 +1,6 @@
 """Finds the `mockymock report` HTML pages the dashboard lists and serves.
 
-`mockymock report` writes `<program>.report.html` next to the program by
+`mockymock report` writes `<cut stem>.report.html` next to the suite by
 default, so the dashboard looks for that suffix under one root directory
 (the directory the dashboard was started in, or `--reports-dir`). Nothing
 here writes: the page lists what is on disk and shows it.

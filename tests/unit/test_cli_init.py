@@ -169,3 +169,62 @@ def test_init_refuses_a_cut_file_passed_as_the_program(tmp_path, capsys):
     assert "is the .cut file, not the COBOL program" in out
     assert "--force" not in out
     assert cut.read_text() == 'TESTSUITE "s"\n'
+
+
+def test_init_records_when_only_the_toolchain_image_is_missing(
+    tmp_path, capsys, monkeypatch
+):
+    # mocky-mock-vscode#103: a fresh install with Docker running has no
+    # toolchain image yet. `run` builds it on demand, so init must not
+    # report "Docker isn't available" and skip recording.
+    report = doctor_mod.DoctorReport(
+        toolchain=status.ToolchainStatus(
+            ready=False,
+            checked_at="2026-10-21T00:00:00+00:00",
+            image="img",
+            container="ctr",
+            cobc_version=None,
+            checks=(
+                status.Check("daemon", "Docker daemon", status.OK, "reachable"),
+                status.Check("image", "Toolchain image", status.DOWN, "not built"),
+                status.Check("container", "Toolchain container", status.DOWN, "none"),
+                status.Check("cobc", "GnuCOBOL compiler", status.UNKNOWN, "-"),
+            ),
+        ),
+        extra_checks=(),
+        ready=False,
+    )
+    monkeypatch.setattr(doctor_mod, "gather_full_status", lambda: report)
+    run_calls = []
+    monkeypatch.setattr(main_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
+    out_cut = tmp_path / "o.cut"
+
+    assert main(["init", str(_ORDRPROC_CBL), "-o", str(out_cut)]) == 0
+    out = capsys.readouterr().out
+    assert len(run_calls) == 1
+    assert "Docker isn't available" not in out
+    assert "building it first" in out
+
+
+def test_init_without_the_docker_daemon_still_skips_recording(
+    tmp_path, capsys, monkeypatch
+):
+    report = doctor_mod.DoctorReport(
+        toolchain=status.ToolchainStatus(
+            ready=False,
+            checked_at="2026-10-21T00:00:00+00:00",
+            image="img",
+            container="ctr",
+            cobc_version=None,
+            checks=(status.Check("daemon", "Docker daemon", status.DOWN, "no"),),
+        ),
+        extra_checks=(),
+        ready=False,
+    )
+    monkeypatch.setattr(doctor_mod, "gather_full_status", lambda: report)
+    run_calls = []
+    monkeypatch.setattr(main_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
+
+    assert main(["init", str(_ORDRPROC_CBL), "-o", str(tmp_path / "o.cut")]) == 0
+    assert run_calls == []
+    assert "Docker isn't available" in capsys.readouterr().out

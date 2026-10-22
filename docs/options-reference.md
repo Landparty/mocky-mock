@@ -48,6 +48,14 @@ Running `mockymock` with no subcommand prints help and exits with status 1.
 A repeatable flag (noted below as "repeatable") can be passed more than
 once: `--copybook-path a/ --copybook-path b/` searches both directories.
 
+Every subcommand that takes `--copybook-path` also takes
+`--extra-copybook-path DIR` (repeatable). `--copybook-path` *replaces* the
+config file's `copybook_path` list; `--extra-copybook-path` is searched
+*after* that list (or after the `--copybook-path` list when both are
+given), so a tool can add directories without dropping the project's own.
+The VS Code extension passes directories it found itself (zapp.yml,
+`cobolAnalyzer.copybookPaths`) this way.
+
 `mockymock run` and `mockymock setup` are the only subcommands that need a
 running Docker daemon — COBOL is compiled and executed inside a GnuCOBOL
 container. Every other subcommand is pure parse-and-analyze and needs
@@ -307,6 +315,8 @@ don't have (or don't want to pay for) a Docker daemon.
 | `program` (positional) | required | The `.cbl` source file. |
 | `--cut PATH` | required | The `.cut` test file. |
 | `--copybook-path DIR` (repeatable) | none | Same meaning as `generate --copybook-path`. |
+| `--case NAME` (repeatable) | all cases | Check only this TESTCASE: another case's per-case refusals (UNMOCKED_*, ...) no longer fail the lint. File-wide problems are still reported. Across several suites, a suite without the case is skipped. |
+| `--tag TAG` (repeatable) | none | Check only TESTCASEs carrying this tag (union with `--case`). |
 
 Prints `mockymock lint: no problems found.` and exits 0 if the `.cut` file
 is clean, or one `mockymock lint: <problem>` line per problem plus a count,
@@ -488,7 +498,7 @@ unlabelled), and findings ranked by severity.
 
 | Option | Default | Description |
 |---|---|---|
-| `-o`, `--output` | `<program>.report.html` | HTML path. |
+| `-o`, `--output` | `<cut stem>.report.html` next to the `.cut` | HTML path (one report per suite). |
 | `--json` | none | Also write the report as JSON. |
 | `--execute` | off | Run the suite with coverage now (Docker). |
 | `--mutate` | off | Run mutation testing now (Docker, slower). |

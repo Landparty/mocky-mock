@@ -3563,6 +3563,21 @@ def _comment_text(text: str) -> str:
     return " ".join(text.split())
 
 
+def _entry_parameter_lines(
+    scenario: Scenario, source: ProgramContext | None
+) -> list[str]:
+    """`MOVE`s of the values a caller passes through the program's own
+    PROCEDURE DIVISION USING items (issue #275), before the PERFORM: for a
+    called subprogram they are its whole input."""
+    parameters = scenario.entry_parameters
+    if parameters is None or not parameters.sequence:
+        return []
+    moves = _row_move_lines(parameters.sequence[0], parameters, source)
+    if not moves:
+        return []
+    return [f"*> what the caller of {parameters.key} passes (USING)", *moves]
+
+
 def _scaffold_with_bundle(
     suite_name: str,
     surface: MockSurface,
@@ -3663,6 +3678,7 @@ def _scaffold_with_bundle(
         lines.extend(f"    {line}" for line in directive_lines)
         if source is not None:
             lines.extend(f"    {line}" for line in source.setup_lines)
+        lines.extend(f"    {line}" for line in _entry_parameter_lines(scenario, source))
         lines.append(f"    PERFORM {entry}")
         lines.extend(
             f"    {line}"

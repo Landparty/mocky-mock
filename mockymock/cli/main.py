@@ -47,7 +47,6 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     claiming everything resolved -- exactly the input `generate` refuses
     with UNRESOLVED_COPYBOOK, so the two commands must agree."""
     from cobolparser import parse_cobol
-    from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
     from cobolparser.preprocess import CopybookNotFoundError, expand_copybooks
 
     from mockymock.analysis.flow_targets import normalize_flow_targets
@@ -139,11 +138,9 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     if copybook_reasons:
         return 1
 
-    generator = (
-        ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))
-        if args.rows is not None
-        else ProgramFixtureGenerator()
-    )
+    from mockymock.dsl.entry_parameters import fixture_generator
+
+    generator, _ = fixture_generator(args.rows)
     try:
         bundle = generator.generate_with_scenarios_from_file(
             str(source_path),
@@ -311,6 +308,12 @@ def _apply_config_to_args(
     config: MockymockConfig = getattr(args, "_config", None) or MockymockConfig()
     if hasattr(args, "copybook_path"):
         resolved = resolve_copybook_paths(args.copybook_path, config)
+        # --extra-copybook-path adds to whichever list won instead of
+        # replacing it, so an editor can pass directories it found on its
+        # own (zapp.yml, another extension's settings) without dropping
+        # the project's cobol.yml / mockymock.toml list (vscode#130).
+        extra = getattr(args, "extra_copybook_path", None) or []
+        resolved = resolved + [path for path in extra if path not in resolved]
         if program_path is not None:
             from mockymock.cli.discovery import effective_copybook_paths
 
@@ -535,6 +538,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     external behavior, since neither _cmd_generate nor _cmd_run's
     existing code changes at all."""
     from mockymock.cli.doctor import gather_full_status
+    from mockymock.runtime.status import OK
 
     source_path = Path(args.program)
     if not _check_input_files("mockymock init", source_path):
@@ -562,6 +566,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
     config = getattr(args, "_config", None)
     copybook_paths = args.copybook_path or []
+    extra_copybook_paths = args.extra_copybook_path or []
 
     generate_argv = [
         "generate",
@@ -580,6 +585,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
         generate_argv += ["--seed", str(args.seed)]
     for path in copybook_paths:
         generate_argv += ["--copybook-path", path]
+    for path in extra_copybook_paths:
+        generate_argv += ["--extra-copybook-path", path]
 
     print(f"mockymock init: scaffolding {output_path} from {source_path} (--with-data)")
     generate_args = build_parser().parse_args(generate_argv)
@@ -597,8 +604,14 @@ def _cmd_init(args: argparse.Namespace) -> int:
             "correctness-critical."
         )
 
+    # Gate on the Docker daemon alone (mocky-mock-vscode#103): a toolchain
+    # image or container that isn't built yet is what `run` builds on
+    # demand (`ensure_toolchain`), so a fresh install with Docker running
+    # used to skip recording and say Docker wasn't available.
     report = gather_full_status()
-    if not report.ready:
+    daemon = next((c for c in report.toolchain.checks if c.id == "daemon"), None)
+    docker_up = daemon.state == OK if daemon is not None else report.ready
+    if not docker_up:
         print(
             "mockymock init: Docker isn't available, so I generated a "
             "suite with real test data but could not run it to record "
@@ -617,12 +630,32 @@ def _cmd_init(args: argparse.Namespace) -> int:
     ]
     for path in copybook_paths:
         run_argv += ["--copybook-path", path]
+    for path in extra_copybook_paths:
+        run_argv += ["--extra-copybook-path", path]
 
+    if not report.ready:
+        print(
+            "mockymock init: the GnuCOBOL toolchain isn't set up yet -- "
+            "building it first (one time; this can take a few minutes)"
+        )
     print(f"mockymock init: running {output_path} to record expected values")
     run_args = build_parser().parse_args(run_argv)
     run_args._config = config
     run_exit_code = _cmd_run(run_args)
     if run_exit_code == 0:
+        # Recording can leave a case with nothing to assert (a program
+        # whose result the scaffold could not see, issue #275): such a
+        # suite passes whatever the program does, so it is not "done".
+        cut_text = read_utf8_source(output_path)
+        case_count = _distinct_case_count(cut_text)
+        empty = _warn_asserting_nothing("init", cut_text, stubs_count=False)
+        if case_count and empty == case_count:
+            print(
+                f"mockymock init: {output_path} was written, but none of its "
+                f"test cases asserts anything -- add an EXPECT on what the "
+                f"program writes before relying on it"
+            )
+            return 1
         print(
             f"mockymock init: next, run 'mockymock run {source_path} "
             f"--cut {output_path}'"
@@ -996,21 +1029,28 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         # of failing the command: an editor's "new test suite" button
         # should still produce a suite on a program the generator can't
         # handle. An explicit --with-data keeps the hard failure.
-        from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
+        from mockymock.dsl.entry_parameters import (
+            add_entry_parameters,
+            fixture_generator,
+            without_cics_parameters,
+        )
 
         try:
-            generator = (
-                ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))
-                if args.rows is not None
-                else ProgramFixtureGenerator()
-            )
+            # A subprogram's USING parameters are its interface (#275): the
+            # scaffold sets them and stubs what the program hands back.
+            generator, native_parameters = fixture_generator(args.rows)
             cp_bundle = generator.generate_with_scenarios_from_file(
                 str(source_path),
                 mode=args.scenarios,
                 seed=args.seed,
                 copybook_paths=args.copybook_path,
             )
-            bundle = load_fixture_bundle(cp_bundle.to_dict())
+            bundle_data = cp_bundle.to_dict()
+            if not native_parameters:
+                bundle_data = add_entry_parameters(
+                    bundle_data, str(source_path), args.copybook_path
+                )
+            bundle = load_fixture_bundle(without_cics_parameters(bundle_data))
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
             # cobol-parser wraps the not-found error in a ProgramLayoutError;
@@ -1201,12 +1241,23 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             )
 
     output_path = _default_output(args, source_path)
+    case_count = cut_text.count("TESTCASE ")
+    if case_count == 0 and bundle is None:
+        # A suite with no TESTCASE runs as "0 run, 0 failed" and fails;
+        # writing it and exiting 0 read as success (issue #275).
+        print(
+            f"mockymock generate: no test case to write -- no paragraph of "
+            f"{source_path} touches a boundary to mock, so {output_path} was "
+            f"not written. Write a TESTCASE by hand (PERFORM the paragraph, "
+            f"EXPECT what it computes), or try --scenarios"
+        )
+        return 1
     # Unlike run's auxiliary report flags, this file IS the deliverable:
     # a failed write is a failed command (same convention as export).
     if not _write_report_file("generate", "-o/--output", str(output_path), cut_text):
         return 1
-    case_count = cut_text.count("TESTCASE ")
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
+    _warn_asserting_nothing("generate", cut_text, stubs_count=True)
     if case_count == 0 and bundle is not None:
         # The bundle had scenarios (zero is refused above) yet none became
         # a TESTCASE; the empty suite would run as "0 run, 0 failed" and
@@ -1230,6 +1281,38 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         # to prune, some of which are expected to be refused.
         return 0
     return _refuse_unusable_scaffold(source_path, output_path, args)
+
+
+def _distinct_case_count(cut_text: str) -> int:
+    """How many cases `cut_text` holds, counted the way
+    `cases_asserting_nothing` labels them (PROVIDER rows share their header
+    line); 0 when the text does not parse."""
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        suite = parse_cut(cut_text)
+    except CutParseError:
+        return 0
+    return len({case.line or case.name for case in suite.test_cases})
+
+
+def _warn_asserting_nothing(command: str, cut_text: str, *, stubs_count: bool) -> int:
+    """Print one warning naming every case with nothing to assert (see
+    `checks.cases_asserting_nothing`); returns how many there are."""
+    from mockymock.cli.checks import cases_asserting_nothing
+
+    empty = cases_asserting_nothing(cut_text, stubs_count=stubs_count)
+    if not empty:
+        return 0
+    what = "no EXPECT, VERIFY or STUB EXPECT" if stubs_count else "no EXPECT or VERIFY"
+    print(
+        f"mockymock {command}: warning: {len(empty)} test case(s) assert "
+        f"nothing ({what}), so they pass whatever the program does -- add an "
+        f"EXPECT on what each one writes:"
+    )
+    for label in empty:
+        print(f"  {label}")
+    return len(empty)
 
 
 def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
@@ -2589,6 +2672,15 @@ def _lint_directory(
     ran = 0
     unresolved: list[str] = []
     broken_claims = 0
+    # --case/--tag over several suites: each suite is linted for the selected
+    # cases it has, a suite with none is skipped, and only a name or tag no
+    # suite has is an error.
+    case_names = list(getattr(args, "case", None) or [])
+    tag_names = list(getattr(args, "tag", None) or [])
+    selecting = bool(case_names or tag_names)
+    matched_cases: set[str] = set()
+    matched_tags: set[str] = set()
+    not_selected = 0
     for cut_path in cut_files:
         try:
             program_path = resolve_program_path(None, cut_path, layout)
@@ -2597,8 +2689,21 @@ def _lint_directory(
             if read_program_line(cut_path) is not None:
                 broken_claims += 1
             continue
-        ran += 1
         sub_args = copy.copy(args)
+        if selecting:
+            selection = _lint_selection_in_suite(cut_path, case_names, tag_names)
+            if selection is not None:
+                cases, tags = selection
+                if not cases and not tags:
+                    not_selected += 1
+                    continue
+                sub_args.case, sub_args.tag = cases or None, tags or None
+                matched_cases.update(cases)
+                matched_tags.update(tags)
+            else:
+                matched_cases.update(case_names)
+                matched_tags.update(tag_names)
+        ran += 1
         sub_args.program = str(program_path)
         sub_args.cut = str(cut_path)
         print(f"== {cut_path} ==")
@@ -2606,13 +2711,48 @@ def _lint_directory(
 
     for reason in unresolved:
         print(f"mockymock lint: {reason}")
+    missing = [
+        f"no TESTCASE named {name!r} in any suite"
+        for name in case_names
+        if name not in matched_cases
+    ] + [
+        f"no TESTCASE carries tag {tag!r} in any suite"
+        for tag in tag_names
+        if tag not in matched_tags
+    ]
+    for problem in missing:
+        print(f"mockymock lint: {problem}")
+    skipped_note = (
+        f", {not_selected} suite(s) without a selected TESTCASE skipped"
+        if not_selected
+        else ""
+    )
     print(
         f"mockymock lint: {ran} suite(s) checked, {len(unresolved)} .cut "
-        f"file(s) skipped (no program found)"
+        f"file(s) skipped (no program found){skipped_note}"
     )
-    if ran == 0 or _report_broken_claims("lint", broken_claims):
+    if ran == 0 or missing or _report_broken_claims("lint", broken_claims):
         return 1
     return exit_code
+
+
+def _lint_selection_in_suite(
+    cut_path: Path, case_names: list[str], tag_names: list[str]
+) -> tuple[list[str], list[str]] | None:
+    """The `--case` names and `--tag`s that `cut_path`'s suite has; None
+    when the suite can't be read or parsed (its own lint then says why)."""
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        suite = parse_cut(read_utf8_source(cut_path))
+    except (OSError, UnicodeDecodeError, CutParseError):
+        return None
+    names = {case.name for case in suite.test_cases}
+    tags = {tag for case in suite.test_cases for tag in case.tags}
+    return (
+        [name for name in case_names if name in names],
+        [tag for tag in tag_names if tag in tags],
+    )
 
 
 def _cmd_lint(args: argparse.Namespace) -> int:
@@ -2632,7 +2772,16 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         return 1
     source_path, cut_path = pair
     _apply_config_to_args(args, source_path)
-    result = run_static_checks(source_path, cut_path, args.copybook_path)
+    # --case/--tag scope the per-case refusals to the selection, exactly as
+    # `debug --case` and `run --case` do, so a refusal in one TESTCASE no
+    # longer fails a lint of another (issue: vscode#95's debug preflight).
+    result = run_static_checks(
+        source_path,
+        cut_path,
+        args.copybook_path,
+        case_names=getattr(args, "case", None),
+        tag_names=getattr(args, "tag", None),
+    )
     for note in result.notes:
         print(f"mockymock lint: {note}")
     for problem in result.problems:
@@ -2980,7 +3129,10 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     --boundaries (2026-09-15) additionally reports every mockable boundary
     site in the paired program -- see docs/2026-09-15-cut-editor-intelligence-design.md.
     Requires --json and a program argument (no human-readable form is
-    planned for it)."""
+    planned for it). The boundaries are the program's, whatever state the
+    suite is in: --cut may be omitted, and a .cut that fails to parse (a
+    half-written MOCK block in an editor) still gets them, beside the
+    `error` (mocky-mock-vscode#100)."""
     import json
 
     from mockymock.dsl.parser import CutParseError, parse_cut
@@ -2993,9 +3145,14 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         # VS Code extension parses it (issue #309).
         _print_command_error(args, "--boundaries requires a program argument")
         return 1
+    if args.cut is None and not args.boundaries:
+        _print_command_error(
+            args, "--cut is required (it may be omitted only with --boundaries)"
+        )
+        return 1
 
-    cut_path = Path(args.cut)
-    check_paths = [cut_path]
+    cut_path = Path(args.cut) if args.cut is not None else None
+    check_paths = [cut_path] if cut_path is not None else []
     program_path = Path(args.program) if args.program else None
     if program_path is not None:
         check_paths.append(program_path)
@@ -3008,14 +3165,19 @@ def _cmd_collect(args: argparse.Namespace) -> int:
             return 1
     elif not _check_input_files("mockymock collect", *check_paths):
         return 1
-    try:
-        suite = parse_cut(read_utf8_source(cut_path))
-    except CutParseError as exc:
-        if args.json:
-            print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
-        else:
-            print(f"mockymock collect: invalid .cut file {cut_path}: {exc}")
-        return 1
+    suite = None
+    suite_error: str | None = None
+    if cut_path is not None:
+        try:
+            suite = parse_cut(read_utf8_source(cut_path))
+        except CutParseError as exc:
+            if not args.boundaries:
+                if args.json:
+                    print(json.dumps({"version": 1, "error": str(exc)}, indent=2))
+                else:
+                    print(f"mockymock collect: invalid .cut file {cut_path}: {exc}")
+                return 1
+            suite_error = str(exc)
 
     boundaries = None
     if args.boundaries:
@@ -3031,19 +3193,25 @@ def _cmd_collect(args: argparse.Namespace) -> int:
             return 1
 
     if args.json:
-        payload = {
+        payload: dict[str, object] = {
             "version": 1,
-            "cutFile": str(cut_path),
-            "suite": {"name": suite.name, "line": suite.line},
+            "cutFile": str(cut_path) if cut_path is not None else None,
+            "suite": (
+                {"name": suite.name, "line": suite.line} if suite is not None else None
+            ),
             "cases": [
                 {"name": case.name, "line": case.line, "tags": list(case.tags)}
-                for case in suite.test_cases
+                for case in (suite.test_cases if suite is not None else [])
             ],
         }
+        if suite_error is not None:
+            payload["error"] = suite_error
         if boundaries is not None:
             payload["boundaries"] = boundaries
         print(json.dumps(payload, indent=2))
+        return 1 if suite_error is not None else 0
     else:
+        assert suite is not None  # --cut is required without --boundaries
         print(f"TESTSUITE {suite.name!r} (line {suite.line})")
         for case in suite.test_cases:
             tag_note = f"  [tags: {', '.join(case.tags)}]" if case.tags else ""
@@ -3197,7 +3365,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     import json
 
     from mockymock.report.html_report import render_html
-    from mockymock.report.journal import default_journal_path
+    from mockymock.report.journal import default_journal_path, default_report_path
     from mockymock.report.test_report import ReportOptions, build_report
 
     pair = _resolve_program_and_cut("mockymock report", args)
@@ -3225,11 +3393,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
         mutation_threshold=args.mutation_threshold,
     )
     report = build_report(options)
-    html_path = (
-        Path(args.output)
-        if args.output
-        else source_path.with_name(f"{source_path.stem}.report.html")
-    )
+    html_path = Path(args.output) if args.output else default_report_path(cut_path)
     html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(render_html(report), encoding="utf-8")
     if args.json:
@@ -3563,6 +3727,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to search for copybooks (repeatable)",
     )
     init_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    init_parser.add_argument(
         "--force",
         action="store_true",
         help="Overwrite the output .cut file if it already exists",
@@ -3632,6 +3804,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    generate_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     generate_parser.add_argument(
         "--with-data",
@@ -3744,6 +3924,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Directory to search for copybooks (repeatable)",
     )
+    fixtures_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
     fixtures_parser.set_defaults(func=_cmd_fixtures)
 
     run_parser = subparsers.add_parser(
@@ -3793,6 +3981,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    run_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     run_parser.add_argument(
         "--keep-sandbox",
@@ -3910,6 +4106,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to search for copybooks (repeatable)",
     )
     debug_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    debug_parser.add_argument(
         "--dap-stdio",
         action="store_true",
         help="Run the DAP adapter on stdio (the mode the VS Code extension spawns)",
@@ -3940,6 +4144,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Directory to search for copybooks (repeatable)",
     )
+    lint_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    lint_parser.add_argument(
+        "--case",
+        action="append",
+        help=(
+            "Check only this TESTCASE (repeatable; combines with --tag as a "
+            "union). File-wide problems are still reported"
+        ),
+    )
+    lint_parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Check only TESTCASEs carrying this tag (repeatable; combines "
+            "with --case as a union)"
+        ),
+    )
     lint_parser.set_defaults(func=_cmd_lint)
 
     mutate_parser = subparsers.add_parser(
@@ -3960,6 +4188,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    mutate_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     mutate_parser.add_argument(
         "--list",
@@ -4023,7 +4259,10 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         help="Required only with --boundaries",
     )
-    collect_parser.add_argument("--cut", required=True)
+    collect_parser.add_argument(
+        "--cut",
+        help="The .cut file to list (required, except with --boundaries)",
+    )
     collect_parser.add_argument(
         "--json",
         action="store_true",
@@ -4043,6 +4282,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable; --boundaries only)",
+    )
+    collect_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     collect_parser.set_defaults(func=_cmd_collect)
 
@@ -4144,13 +4391,21 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument(
         "-o",
         "--output",
-        help="HTML report path (default: <program>.report.html next to the program)",
+        help="HTML report path (default: <cut stem>.report.html next to the .cut)",
     )
     report_parser.add_argument("--json", help="Also write the report as JSON here")
     report_parser.add_argument(
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    report_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     report_parser.add_argument(
         "--execute",
@@ -4258,6 +4513,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--copybook-path",
         action="append",
         help="Directory to search for copybooks (repeatable)",
+    )
+    export_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
     )
     export_parser.add_argument(
         "--case",

@@ -145,7 +145,7 @@ counts.
 
 ```bash
 mockymock report PROGRAM.cbl --cut PROGRAM.cut --execute --mutate \
-  --json PROGRAM.report.json            # writes PROGRAM.report.html
+  --json PROGRAM.report.json            # writes PROGRAM.report.html next to the .cut
 ```
 
 `--execute` runs the suite with coverage, `--mutate` runs mutation testing

@@ -37,6 +37,13 @@ def default_journal_path(cut_path: Path) -> Path:
     return cut_path.with_name(f"{cut_path.stem}.journal.jsonl")
 
 
+def default_report_path(cut_path: Path) -> Path:
+    """`<cut stem>.report.html` next to the `.cut`, the same place as the
+    journal: one report per suite, so a program's second suite never
+    overwrites the first one's report (issue #192)."""
+    return cut_path.with_name(f"{cut_path.stem}.report.html")
+
+
 def append_entry(
     path: Path,
     *,
