@@ -11,8 +11,8 @@ from pathlib import Path
 
 from mockymock import __version__
 from mockymock._lines import read_utf8_source, split_source_lines
-from mockymock.report.artifacts import fingerprint
 from mockymock.debugging_lines import activate_debugging_lines
+from mockymock.report.artifacts import fingerprint
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
@@ -3299,9 +3299,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
         reuse=not args.rerun,
     )
     report = build_report(options)
-    html_path = (
-        Path(args.output) if args.output else artifact_path(cut_path, "report")
-    )
+    html_path = Path(args.output) if args.output else artifact_path(cut_path, "report")
     html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(render_html(report), encoding="utf-8")
     if args.json:
@@ -4433,9 +4431,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     journal_parser.add_argument("--file", help="Explicit journal path instead")
     journal_parser.add_argument("--step", help="Step name, e.g. plan")
-    journal_parser.add_argument(
-        "--summary", help="What was done and what came of it"
-    )
+    journal_parser.add_argument("--summary", help="What was done and what came of it")
     journal_parser.add_argument(
         "--from",
         dest="from_file",

@@ -572,7 +572,5 @@ def test_rerun_ignores_saved_results(ordrproc, monkeypatch):
         return 1, "no docker"
 
     monkeypatch.setattr(test_report, "_run_cli", fake)
-    build_report(
-        _options(ordrproc, execute=True, reuse=False, probe_toolchain=False)
-    )
+    build_report(_options(ordrproc, execute=True, reuse=False, probe_toolchain=False))
     assert calls == ["run"]

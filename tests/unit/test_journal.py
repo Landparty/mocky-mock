@@ -95,9 +95,7 @@ def test_cli_appends_a_batch_in_one_process(tmp_path, capsys):
 def test_cli_batch_accepts_a_json_array_from_stdin(tmp_path, monkeypatch):
     import io
 
-    monkeypatch.setattr(
-        "sys.stdin", io.StringIO('[{"step": "a", "summary": "b"}]')
-    )
+    monkeypatch.setattr("sys.stdin", io.StringIO('[{"step": "a", "summary": "b"}]'))
     file = tmp_path / "j.jsonl"
     assert main(["journal", "--file", str(file), "--from", "-"]) == 0
     assert read_journal(file)[0][0]["step"] == "a"
@@ -117,9 +115,7 @@ def test_a_bad_entry_appends_nothing(tmp_path, capsys):
 
 def test_batch_and_single_entry_flags_do_not_mix(tmp_path, capsys):
     file = tmp_path / "j.jsonl"
-    code = main(
-        ["journal", "--file", str(file), "--from", "-", "--step", "x"]
-    )
+    code = main(["journal", "--file", str(file), "--from", "-", "--step", "x"])
     assert code == 1
     assert "drop --step" in capsys.readouterr().out
 

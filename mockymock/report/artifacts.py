@@ -117,9 +117,7 @@ def fingerprint(
     return {
         "program": _sha256(program_path),
         "cut": _sha256(cut_path),
-        "copybooks": hashlib.sha256(
-            json.dumps(copybooks).encode("utf-8")
-        ).hexdigest(),
+        "copybooks": hashlib.sha256(json.dumps(copybooks).encode("utf-8")).hexdigest(),
         "mockymock": __version__,
     }
 

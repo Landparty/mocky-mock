@@ -114,9 +114,10 @@ def parse_batch(text: str) -> list[dict[str, Any]]:
             )
         if not all(isinstance(item.get(k, ""), str) for k in _ENTRY_FIELDS):
             raise JournalError(f"entry {number}: every field must be a string")
-        if not str(item.get("step", "")).strip() or not str(
-            item.get("summary", "")
-        ).strip():
+        if (
+            not str(item.get("step", "")).strip()
+            or not str(item.get("summary", "")).strip()
+        ):
             raise JournalError(f"entry {number}: step and summary must not be empty")
         status = item.get("status", "ok")
         if status not in STATUSES:
