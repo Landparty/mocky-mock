@@ -13,6 +13,7 @@ from mockymock import __version__
 from mockymock._lines import read_utf8_source, split_source_lines
 from mockymock.debugging_lines import activate_debugging_lines
 from mockymock.report.artifacts import fingerprint
+from mockymock.report.record_rewrite import numeric_edited_fields
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
@@ -1969,6 +1970,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         record_targets=record_targets,
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
+        numeric_edited=numeric_edited_fields(result.ast, checked.captures),
         condition_names=record_conditions,
     )
 
@@ -2443,6 +2445,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         registry,
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
+        numeric_edited=numeric_edited_fields(result.ast, checked.captures),
     )
     instrumented = _insert_driver(lines, artifact)
 
@@ -2873,6 +2876,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         registry,
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
+        numeric_edited=numeric_edited_fields(result.ast, checked.captures),
     )
     instrumented, driver_line_indices = _insert_driver_with_origins(lines, artifact)
 

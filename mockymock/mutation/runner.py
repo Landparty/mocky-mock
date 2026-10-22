@@ -40,6 +40,7 @@ from mockymock.mutation.report import (
     MutationOutcome,
     StillbornReason,
 )
+from mockymock.report.record_rewrite import numeric_edited_fields
 
 
 @dataclass(frozen=True)
@@ -193,6 +194,7 @@ def _run_suite_once(
             registry,
             extra_working_storage_lines=extra_working_storage(checked),
             snapshot=checked.snapshot,
+            numeric_edited=numeric_edited_fields(result.ast, checked.captures),
         )
         instrumented = _insert_driver(lines, artifact)
 

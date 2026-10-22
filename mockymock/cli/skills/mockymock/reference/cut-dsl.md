@@ -298,6 +298,19 @@ e.g. `NOT TO BE GREATER THAN` asserts `<=`):
 | `TO BE GREATER THAN OR EQUAL TO` | `>=` |
 | `TO BE LESS THAN OR EQUAL TO` | `<=` |
 
+A **numeric-edited** field (`PIC Z,ZZZ,ZZ9.99`, `ZZ9.99CR`, `$***9.99`)
+compares by value when the expected value is an unquoted number, and by
+its exact edited bytes when it is a quoted string:
+
+```
+EXPECT WS-DET-BAL TO BE 100.00                  *> the value: 100, 100.0 also pass
+EXPECT WS-DET-BAL TO BE "          100.00"      *> the edited text, byte for byte
+```
+
+The value form de-edits the field the way a COBOL `MOVE` from an edited
+item to a numeric one does (signs, `CR`/`DB`, `*` and currency symbols
+removed), so every comparison phrase works on it too.
+
 Subscripts (`FIELD(1, 2)` or `FIELD(1:5)` reference modification) are
 supported for both the data-name and the `MOVE` target above; qualified
 names (`FIELD OF RECORD`) are not.

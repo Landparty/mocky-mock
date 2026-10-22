@@ -1,0 +1,15 @@
+TESTSUITE "numeric-edited EXPECT"
+
+TESTCASE "an unquoted number compares the de-edited value"
+    PERFORM MAIN-PARA
+    EXPECT WS-DET-BAL TO BE 100.00
+    EXPECT WS-DET-BAL TO BE 100
+    EXPECT WS-DET-BAL TO BE GREATER THAN 99.99
+    EXPECT WS-DET-NET TO BE -1234.50
+    EXPECT WS-DET-CHK TO BE 42.1
+    EXPECT WS-ROW-AMT (2) TO BE -7.25
+
+TESTCASE "a quoted string stays a byte-exact compare"
+    PERFORM MAIN-PARA
+    EXPECT WS-DET-BAL TO BE "          100.00"
+    EXPECT WS-DET-NET TO BE " 1,234.50CR"

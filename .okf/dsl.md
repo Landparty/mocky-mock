@@ -115,6 +115,17 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   covers setup and BEFORE-*/AFTER-* hook `MOVE` values, and PROVIDER rows
   substituted into them (issue #197, 2026-10-16). Phrase words are case-sensitive
   uppercase like every other keyword.
+- `EXPECT <numeric-edited field> [NOT] TO BE [<comparison>] <unquoted
+  number>` compares the de-edited value (issue #350): a numeric-edited
+  item compares as its edited text, so `TO BE 100.00` never matched
+  `"      100.00"`. `driver._compares_by_value` picks these (the leaf name
+  is in `record_rewrite.numeric_edited_fields`, from the PICTURE via
+  `is_numeric_edited_picture`; the value is a plain signed decimal; no
+  reference modification), and the driver emits `MOVE <field> TO
+  UT-DEEDIT-VALUE` (`PIC S9(18)V9(13)`, the de-editing MOVE, verified
+  under GnuCOBOL with CR/DB, `*` and `$`) then the relation on that.
+  A quoted value, a data-name or a combined condition keeps the direct
+  compare. The FAIL line still shows the edited text.
 - `EXPECT <88-name> [NOT] TO BE TRUE|FALSE` tests a level-88
   condition-name (issue #189). TRUE/FALSE are not values any data item
   compares with, so `driver._condition_name_truth` emits `IF NOT <name>`
