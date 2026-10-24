@@ -519,8 +519,45 @@ class ProgramContext:
         behavior: every name is treated as unique."""
         return self.name_counts.get(name.upper(), 1) <= 1
 
+    def thru_exit(self, entry: str) -> str | None:
+        """The paragraph every `PERFORM entry THRU <exit>` in the program
+        names, or None when the program PERFORMs `entry` bare anywhere, with
+        two different exits, or not at all. A scaffold PERFORMing such a
+        paragraph bare tested a flow the program never runs: its GO TO
+        <exit> left the PERFORM, fell through every paragraph below, and ran
+        off the end of the program, so the case crashed and every later case
+        never ran (INTCALC's 2200-CALCULATE-INTEREST THRU 2200-EXIT)."""
+        procedure = (
+            self.program.get_division("PROCEDURE")  # type: ignore[attr-defined]
+            if self.program is not None
+            else None
+        )
+        if procedure is None:
+            return None
+
+        def walk(statements):
+            for statement in statements:
+                yield statement
+                for nested in _nested_statement_lists(statement):
+                    yield from walk(nested)
+
+        wanted = entry.upper()
+        exits: dict[str | None, str | None] = {}
+        for paragraph in _all_paragraphs(procedure):
+            for statement in walk(paragraph.statements):
+                if type(statement).__name__ != "PerformStatement":
+                    continue
+                target = str(getattr(statement, "target_paragraph", "") or "")
+                if target.upper() != wanted:
+                    continue
+                thru = getattr(statement, "thru_paragraph", None)
+                exits[str(thru).upper() if thru else None] = str(thru) if thru else None
+        if len(exits) != 1:
+            return None
+        return next(iter(exits.values()))
+
     def reachable_from(
-        self, entry: str, follow_whenever: bool = True
+        self, entry: str, follow_whenever: bool = True, thru: str | None = None
     ) -> set[str] | None:
         """Paragraph/section names a `PERFORM entry` can execute, or None
         when that can't be established (no program, unknown entry, or a
@@ -535,6 +572,7 @@ class ProgramContext:
         reached, reasons = _reachable_paragraphs(
             self.program,
             entry,
+            thru,
             neutralized_goto=self.neutralized_goto,
             follow_whenever=follow_whenever,
             # Generated mocks never raise a CICS condition (issue #268), so
@@ -1055,7 +1093,10 @@ def _scaffold_placeholder(
         )
         lines.append("")
     for paragraph_name, own_sites in sites_by_paragraph.items():
-        sites = _reachable_sites(paragraph_name, own_sites, sites_by_paragraph, context)
+        thru = context.thru_exit(paragraph_name) if context is not None else None
+        sites = _reachable_sites(
+            paragraph_name, own_sites, sites_by_paragraph, context, thru=thru
+        )
         directives = _directives_for(sites, surface, context)
         if context is not None and context.whenever_quiet(
             _directive_text_lines(directives)
@@ -1069,6 +1110,7 @@ def _scaffold_placeholder(
                 sites_by_paragraph,
                 context,
                 follow_whenever=False,
+                thru=thru,
             )
             directives = _directives_for(sites, surface, context)
         labels = ", ".join(dict.fromkeys(site.label for site in sites))
@@ -1083,7 +1125,8 @@ def _scaffold_placeholder(
             captured.extend(_capture_targets(body))
         if context is not None:
             lines.extend(f"    {line}" for line in context.setup_lines)
-        lines.append(f"    PERFORM {paragraph_name}")
+        perform = f"PERFORM {paragraph_name}" + (f" THRU {thru}" if thru else "")
+        lines.append(f"    {perform}")
         lines.extend(f"    {line}" for line in _capture_stub_lines(captured))
         lines.append("")
     return "\n".join(lines)
@@ -1095,6 +1138,7 @@ def _reachable_sites(
     sites_by_paragraph: dict[str, list[BoundarySite]],
     context: ProgramContext | None,
     follow_whenever: bool = True,
+    thru: str | None = None,
 ) -> list[BoundarySite]:
     """Every boundary site a `PERFORM entry` can reach: the paragraph's own
     sites first, then those of every paragraph it reaches (PERFORM, GO TO,
@@ -1106,7 +1150,7 @@ def _reachable_sites(
     reachability can't be established, as the bundle-driven scaffold does
     (issue #143)."""
     reachable = (
-        context.reachable_from(entry, follow_whenever=follow_whenever)
+        context.reachable_from(entry, follow_whenever=follow_whenever, thru=thru)
         if context is not None
         else None
     )

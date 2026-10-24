@@ -318,7 +318,9 @@ def effective_copybook_paths(
     program_path: Path, resolved_paths: list[str]
 ) -> list[str]:
     """Append `program_path`'s own `copybooks/` subdirectory -- the
-    layout every example under `examples/real-world/` uses -- to
+    layout every example under `examples/real-world/` uses -- and the
+    other conventional copybook folders beside it or beside its folder
+    (`_default_copybook_dirs`) to
     `resolved_paths` (already resolved from an explicit `--copybook-path`
     flag or the project config file, see `config.resolve_copybook_paths`),
     when it exists and isn't already present. Never reorders or removes
@@ -344,12 +346,33 @@ def effective_copybook_paths(
             seen.add(Path(entry).resolve())
         except OSError:  # pragma: no cover - unresolvable path, leave as-is
             continue
-    default_dir = program_path.parent / "copybooks"
-    if default_dir.is_dir():
-        resolved_default = default_dir.resolve()
-        if resolved_default not in seen:
-            result.append(str(default_dir))
+    for default_dir in _default_copybook_dirs(program_path):
+        if default_dir.is_dir():
+            resolved_default = default_dir.resolve()
+            if resolved_default not in seen:
+                seen.add(resolved_default)
+                result.append(str(default_dir))
     return result
+
+
+#: Copybook directory names a source tree conventionally uses, beside the
+#: program (`copybooks/`, the examples' layout) or beside the program's
+#: own folder (`cobol/` + `copybook/`, the usual mainframe export --
+#: legacy-application's INTCALC was refused UNRESOLVED_COPYBOOK until
+#: `--copybook-path ../copybook` was passed).
+_COPYBOOK_DIR_NAMES = ("copybooks", "copybook", "copylib", "copy", "cpy")
+
+
+def _default_copybook_dirs(program_path: Path) -> list[Path]:
+    """Where `effective_copybook_paths` looks unasked: each of
+    `_COPYBOOK_DIR_NAMES` under the program's folder, then beside it. A
+    directory only counts when it exists, so neither the program's own
+    folder nor its parent is ever searched itself (see the docstring
+    above)."""
+    folder = program_path.parent
+    return [folder / name for name in _COPYBOOK_DIR_NAMES] + [
+        folder.parent / name for name in _COPYBOOK_DIR_NAMES
+    ]
 
 
 def copybook_not_found_hint() -> str:

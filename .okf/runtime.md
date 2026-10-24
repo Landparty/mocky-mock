@@ -260,6 +260,10 @@ re-mounted per run. Consequences:
   container. `-k 5` escalates to SIGKILL five seconds after the SIGTERM,
   so a binary that ignores SIGTERM cannot keep burning CPU as an orphan
   inside the persistent container.
+- Drops libxml2's own `Warning: program compiled against libxml N using
+  older M` line from the binary's stderr (`_LIBXML_VERSION_WARNING_RE`):
+  the Debian image's GnuCOBOL build prints it on every run and it is
+  harmless (2026-10-24).
 - **Output is captured as bytes**, then decoded UTF-8 with
   `errors="replace"` and no newline translation (2026-09-30, bug hunt round
   11). `text=True` decoded strictly, so one DISPLAY of a non-UTF-8 byte

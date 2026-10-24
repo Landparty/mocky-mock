@@ -152,6 +152,34 @@ VALUE_END_MARKER = "__MOCKYMOCK__ VALUE-END"
 _VALUE_END_DISPLAY = f'               DISPLAY "{VALUE_END_MARKER}"'
 
 
+#: The SECTION `cli.main._insert_driver` appends after the program's last
+#: paragraph. Nothing PERFORMs it and the driver STOP RUNs before reaching
+#: it, so control only arrives by running past the end of the program's
+#: own code: a GO TO that left the PERFORMed range (a bare `PERFORM X`
+#: whose GO TO X-EXIT then fell through every paragraph below). Before
+#: it, the binary just ended -- `[CRASH] binary exited with code 4`, every
+#: later case NOT RUN, and nothing saying why whenever the program had
+#: set RETURN-CODE on the way (INTCALC). A SECTION, not a paragraph, so a
+#: sectioned program's last SECTION still ends where it did.
+END_OF_PROGRAM_TRAP = "UT-END-OF-PROGRAM"
+
+
+def end_of_program_trap_lines() -> list[str]:
+    """The `END_OF_PROGRAM_TRAP` section: fails the case that was running
+    and names the likely cause, then lets the program end as before."""
+    return [
+        "",
+        f"       {END_OF_PROGRAM_TRAP} SECTION.",
+        f"       {END_OF_PROGRAM_TRAP}-PARA.",
+        '           DISPLAY "__MOCKYMOCK__ CASE " FUNCTION TRIM(UT-CURRENT-CASE)',
+        '               " FAIL: control ran past the last paragraph of the "',
+        '               "program, so the binary ended mid-case -- a GO TO "',
+        '               "left the PERFORMed range (PERFORM the paragraph "',
+        '               "THRU its exit paragraph, as the program does?)"',
+        "           ADD 1 TO UT-FAIL-COUNT.",
+    ]
+
+
 @dataclass
 class DriverArtifact:
     working_storage_lines: list[str]

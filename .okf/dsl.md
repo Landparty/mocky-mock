@@ -627,6 +627,11 @@ Rules:
   transitively via `PERFORM` are not auto-mocked; those still need manual
   `.cut` edits (the run command's refusal gate names them precisely when
   missing).
+- `--per-paragraph` PERFORMs a paragraph `THRU` the exit the program
+  itself names (`ProgramContext.thru_exit`: every `PERFORM X` in the
+  program says `THRU` the same paragraph), and computes its mocks from that
+  range. A bare `PERFORM X` let X's `GO TO X-EXIT` leave the PERFORM and
+  fall through to the end of the program (INTCALC, 2026-10-24).
 - Placeholder bodies (`_PLACEHOLDER_BODIES`): `CALL`/`DYNCALL` →
   `MOVE 0 TO RETURN-CODE`; `SQL` → `MOVE 0 TO SQLCODE`; file-op categories →
   empty body; `ACCEPT` → `INITIALIZE <target>` (built per-site, not from
