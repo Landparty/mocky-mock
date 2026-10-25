@@ -752,6 +752,7 @@ def _run_static_checks(
     shared_mocks = suite.before_each_mocks + suite.before_all_mocks
     shared_ids = frozenset(id(d) for d in shared_mocks)
     matched_ids: set[int] = set()
+    direct_ids: set[int] = set()
     fallthrough_warnings: list[RefusalReason] = []
     for case_index, case in enumerate(suite.test_cases):
         case_reasons = check_test_case(
@@ -764,6 +765,7 @@ def _run_static_checks(
             matched_out=matched_ids,
             warnings_out=fallthrough_warnings,
             traps_out=out.fallthrough_traps,
+            direct_matched_out=direct_ids,
         )
         for r in case_reasons:
             out.problems.append(f"refused ({r.code}): {r.message}")
@@ -794,6 +796,7 @@ def _run_static_checks(
             matched_out=matched_ids,
             warnings_out=fallthrough_warnings,
             traps_out=out.fallthrough_traps,
+            direct_matched_out=direct_ids,
         ):
             where = (
                 check.hook
@@ -829,11 +832,29 @@ def _run_static_checks(
                 neutralized_goto=neutralized_goto,
                 shared=shared_ids,
                 matched_out=matched_ids,
+                direct_matched_out=direct_ids,
             )
     # One warning per boundary, however many cases fall through to it.
     out.warnings.extend(
         dict.fromkeys(f"warning ({r.code}): {r.message}" for r in fallthrough_warnings)
     )
+    for directive in shared_mocks:
+        if id(directive) in matched_ids and id(directive) not in direct_ids:
+            # Reached, but only by GO TO fall-through: an unmocked boundary
+            # there is trapped now (FALLTHROUGH_BOUNDARY), so this default
+            # mock no longer has to be declared (issue #351's follow-up).
+            block = (
+                "BEFORE-EACH"
+                if any(directive is d for d in suite.before_each_mocks)
+                else "BEFORE-ALL"
+            )
+            out.warnings.append(
+                f"warning (FALLTHROUGH_ONLY_MOCK): {block} MOCK "
+                f"{directive.describe()} is reached only by falling through "
+                "from a GO TO target -- it can be removed; an unmocked "
+                "boundary there is trapped and fails the case only if a test "
+                "really reaches it"
+            )
     for directive in shared_mocks:
         if id(directive) not in matched_ids:
             block = (

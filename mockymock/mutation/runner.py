@@ -29,6 +29,7 @@ program.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -203,6 +204,7 @@ def _run_suite_once(
         instrumented_path.write_text(
             "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
         )
+        identity = docker_toolchain.container_identity()
         compiled = docker_toolchain.compile_source(
             instrumented_path, coverage=collect_coverage
         )
@@ -218,15 +220,23 @@ def _run_suite_once(
             )
         assert compiled.binary_path is not None  # implied by compiled.success
 
+        started = time.monotonic()
         execution = docker_toolchain.run_binary(
             compiled.binary_path, timeout_seconds=timeout_seconds
         )
+        elapsed = time.monotonic() - started
         suite_result = parse_stdout(execution.stdout)
         if not _verdict_is_the_programs(execution, suite_result):
-            fault = _toolchain_fault(execution.stderr)
+            fault = _run_fault(execution, identity, elapsed, timeout_seconds)
             if fault is not None:
                 return SuiteRun("error", fault, notes)
-        if execution.exit_code == TIMEOUT_EXIT_CODE:
+        if execution.exit_code == TIMEOUT_EXIT_CODE or (
+            execution.exit_code == SIGKILL_EXIT_CODE
+            and not _verdict_is_the_programs(execution, suite_result)
+        ):
+            # 137 past the deadline is `timeout -k` escalating to SIGKILL
+            # on a binary that ignored the SIGTERM: still a timeout (the
+            # early 137 was ruled out by _run_fault above).
             return SuiteRun("timeout", f"no exit within {timeout_seconds}s", notes)
         status, detail = _classify_execution(execution, suite_result)
 
@@ -276,6 +286,45 @@ def _verdict_is_the_programs(execution, suite_result) -> bool:
     if execution.exit_code == 0 and suite_result.all_passed:
         return True
     return any(case.failure_reasons for case in suite_result.results)
+
+
+#: A process killed by SIGKILL (128 + 9): the kernel's out-of-memory
+#: killer inside the container's `--memory 1g`, or `timeout -k`
+#: escalating once the deadline has passed.
+SIGKILL_EXIT_CODE = 137
+
+
+def _run_fault(
+    execution, identity_before: str | None, elapsed: float, timeout_seconds: int
+) -> str | None:
+    """Why a run with no verdict of the program's own was the toolchain's
+    doing, or None. Asked only when `_verdict_is_the_programs` said no.
+
+    Two causes leave the container up afterwards, so `_toolchain_fault`
+    alone scored them as kills: another worker restarted the container
+    mid-run (its identity changed), or the binary was SIGKILLed before its
+    deadline, which in a container nothing else signals means the
+    out-of-memory killer. Scored, either one moves the mutation score by a
+    number that is Docker's, not the suite's."""
+    from mockymock.runtime import docker_toolchain
+
+    fault = _toolchain_fault(execution.stderr)
+    if fault is not None:
+        return fault
+    if identity_before is not None:
+        now = docker_toolchain.container_identity()
+        if now is not None and now != identity_before:
+            return (
+                f"toolchain failure: container {docker_toolchain.CONTAINER} "
+                "was restarted during the run"
+            )
+    if execution.exit_code == SIGKILL_EXIT_CODE and elapsed < timeout_seconds:
+        return (
+            "toolchain failure: binary killed by SIGKILL (exit 137) before its "
+            "timeout -- most likely the container's 1 GB memory limit; "
+            "re-run with --jobs 1"
+        )
+    return None
 
 
 def _toolchain_fault(stderr: str) -> str | None:
@@ -484,6 +533,7 @@ def run_mutation(
     decided = _equivalent_mutants(
         mutants, original_lines, source_path, cut_path, copybook_paths
     )
+    decided.update(_declared_equivalents(mutants, cut_path, decided, _merge_notes))
     decided.update(
         {
             index: MutantResult(
@@ -573,6 +623,38 @@ def _equivalent_mutants(
                 mutant=mutant, status="equivalent", detail=reason, ran=False
             )
     return decided
+
+
+def _declared_equivalents(
+    mutants: list[Mutant],
+    cut_path: Path,
+    decided: dict[int, MutantResult],
+    report: Callable[[list[str]], None],
+) -> dict[int, MutantResult]:
+    """Index -> `equivalent` result for every mutant the suite's
+    `<stem>.equivalent.json` declares (see `mutation.declared`) that the
+    static proof has not already decided. Every ignored or stale entry is
+    passed to `report` as a note."""
+    from mockymock.mutation.declared import (
+        DECLARED_PREFIX,
+        declared_equivalents_path,
+        load_declarations,
+        match_declarations,
+    )
+
+    declarations, notes = load_declarations(declared_equivalents_path(cut_path))
+    matched, stale = match_declarations(mutants, declarations)
+    report(notes + stale)
+    return {
+        index: MutantResult(
+            mutant=mutants[index],
+            status="equivalent",
+            detail=DECLARED_PREFIX + reason,
+            ran=False,
+        )
+        for index, reason in matched.items()
+        if index not in decided
+    }
 
 
 def _attach_zero_baseline_hints(

@@ -346,6 +346,20 @@ def toolchain_failure(timeout: int = 30) -> str | None:
     return None
 
 
+def container_identity(timeout: int = 30) -> str | None:
+    """The toolchain container's ID and start time, or None when it cannot
+    be inspected. Two reads around a compile+run that differ mean the
+    container was restarted in between -- by another `mutate --jobs`
+    worker, typically -- so the run was cut off even though the container
+    is up again by the time anyone asks `toolchain_failure()`."""
+    state = _docker(
+        "inspect", "-f", "{{.Id}} {{.State.StartedAt}}", CONTAINER, timeout=timeout
+    )
+    if state.returncode != 0:
+        return None
+    return state.stdout.strip() or None
+
+
 def cobc_version(timeout: int = 30) -> str:
     """First line of `cobc --version` from inside the container.
     `timeout` is overridable for the dashboard probe (Finding 18)."""
