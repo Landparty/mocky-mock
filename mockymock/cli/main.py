@@ -1878,6 +1878,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
+    # `mockymock run PROG.cut` is the natural mistake: the positional is the
+    # COBOL source, so a .cut there is the suite. Take it as --cut and let the
+    # program be inferred from it, rather than failing on a missing file.
+    if args.program and args.program.lower().endswith(".cut") and args.cut is None:
+        args.cut, args.program = args.program, None
+
     # Directory-wide mode: no program, no --cut -- discover every .cut
     # file under the test root and run each against its sibling program.
     # See docs/2026-09-15-cli-ergonomics-design.md.
