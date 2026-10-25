@@ -178,6 +178,15 @@ pairing with the rule that matched, or for one program its suites and
 extension pairs files with. `_programs_by_stem` is `lru_cache`d per
 process. Design: docs/2026-10-14-multi-suite-layout-design.md.
 
+**Conventional copybook folders (2026-10-24):** `effective_copybook_paths`
+now walks `_default_copybook_dirs(program)`: each of `copybooks`,
+`copybook`, `copylib`, `copy`, `cpy` under the program's folder, then the
+same names beside that folder (`cobol/` + `copybook/`, the usual mainframe
+export and legacy-application's layout, where INTCALC was refused
+UNRESOLVED_COPYBOOK until `--copybook-path ../copybook` was passed). Same
+rules as below: additive, after everything explicit, only directories that
+exist, never the program's folder or its parent themselves.
+
 **Default copybook search directories (2026-09-15):** once a
 single-pair `program`/`.cut` is resolved, `_apply_config_to_args(args,
 source_path)` additionally runs `discovery.effective_copybook_paths()`,

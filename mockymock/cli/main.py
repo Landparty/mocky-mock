@@ -3763,7 +3763,39 @@ def _insert_driver_with_origins(
             extend(artifact.procedure_lines)
             inserted_proc = True
             entry_check_at = index + 1
+    if inserted_proc:
+        _insert_end_of_program_trap(result, inserted)
     return result, inserted
+
+
+def _insert_end_of_program_trap(result: list[str], inserted: set[int]) -> None:
+    """Put `driver.end_of_program_trap_lines()` after the program's last
+    line of code: before its `END PROGRAM`, or at the end of the source.
+    `inserted` is renumbered for the lines it pushes down."""
+    from mockymock.splicer.driver import end_of_program_trap_lines
+
+    start = _first_procedure_index(result)
+    at = len(result)
+    for index in range(start, len(result)):
+        if _END_PROGRAM_RE.match(result[index]):
+            at = index
+            break
+    trap = end_of_program_trap_lines()
+    # A program may end on a sentence with no period (cobc accepts that at
+    # the end of the source); the trap's header would then read as more of
+    # that statement. Close it -- only then, as a redundant period warns.
+    for line in reversed(result[start + 1 : at]):
+        code = line.split("*>", 1)[0].rstrip()
+        fixed_comment = len(line) > 6 and line[6] in "*/"
+        if code.strip() and not fixed_comment and not code.lstrip().startswith("*"):
+            if not code.endswith("."):
+                trap = ["           ."] + trap
+            break
+    shifted = {i + len(trap) if i >= at else i for i in inserted}
+    inserted.clear()
+    inserted.update(shifted)
+    inserted.update(range(at, at + len(trap)))
+    result[at:at] = trap
 
 
 #: The paragraph header `_insert_driver_with_origins` gives a PROCEDURE
@@ -3811,6 +3843,7 @@ def _starts_unnamed_code(lines: list[str], index: int) -> bool:
 _WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\b", re.IGNORECASE)
 _DATA_DIVISION_RE = re.compile(r"^\s*DATA\s+DIVISION\b", re.IGNORECASE)
 _PROCEDURE_DIVISION_RE = re.compile(r"^\s*PROCEDURE\s+DIVISION\b", re.IGNORECASE)
+_END_PROGRAM_RE = re.compile(r"^\s*END\s+PROGRAM\b", re.IGNORECASE)
 #: DATA DIVISION sections that must come AFTER WORKING-STORAGE -- including a
 #: LINKAGE SECTION header `splicer.linkage.neutralize` commented out, whose
 #: items then belong to whatever section precedes them.

@@ -152,7 +152,18 @@ reached `STOP RUN` does) do they fall back to the
 `_DEFAULT_CRASH_HYPOTHESIS` text `"PERFORM target reached STOP RUN?"`.
 Do not re-hardcode that hypothesis into the message: it was previously
 shown even for timeouts and aborts whose stderr evidence had been
-discarded (audit 2026-07-07, findings 4.2/5.1). Since issue #238 `run`
+discarded (audit 2026-07-07, findings 4.2/5.1). A nonzero exit says nothing about *why* the case was cut short, so the
+driver also catches the commonest cause itself: `cli.main._insert_driver`
+appends `driver.END_OF_PROGRAM_TRAP` (`UT-END-OF-PROGRAM SECTION`) after
+the program's last paragraph (before its `END PROGRAM`, closing an
+unterminated last sentence with a lone period), which nothing PERFORMs and
+the driver never reaches. Control only arrives there by running past the
+end of the program -- a GO TO that left a bare PERFORM's paragraph -- and
+it then prints a `CASE <id> FAIL:` line saying so (2026-10-24, INTCALC's
+`GO TO 2200-EXIT` under `PERFORM 2200-CALCULATE-INTEREST`, which had shown
+only `binary exited with code 4` because the program set RETURN-CODE on
+its way out). The binary still ends there; later cases stay NOT RUN.
+Since issue #238 `run`
 also passes `CLEAN_EXIT_CRASH_DETAIL` when the binary exited 0 with a
 case unfinished: it embeds the same STOP RUN hypothesis and adds the other
 clean-exit cause, a GO TO out of the PERFORMed range (e.g. into another

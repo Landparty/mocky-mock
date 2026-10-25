@@ -1998,7 +1998,10 @@ def check_test_case(
                 code="UNMATCHED_MOCK",
                 message=(
                     f"MOCK {directive.describe()} does not match any "
-                    f"boundary site reachable from '{case.perform_target}'"
+                    f"boundary site reachable from '{case.perform_target}' "
+                    f"-- drop it from this TESTCASE (a mock several cases "
+                    f"share belongs in BEFORE-EACH, which refuses it only "
+                    f"when no case at all reaches it)"
                 ),
             )
         )

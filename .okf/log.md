@@ -14,6 +14,20 @@ reads reviewed equivalent mutants from `<stem>.equivalent.json`
 BEFORE-EACH, and lint warns `FALLTHROUGH_ONLY_MOCK` on hook mocks only the
 fall-through closure reaches ([analysis](analysis.md)).
 
+## 2026-10-24 -- field-run framework limits (INTCALC, DEPTIMSM, copybooks)
+
+`generate --per-paragraph` mirrors the program's `PERFORM X THRU X-EXIT`
+([dsl](dsl.md)); a case that runs past the program's last paragraph fails
+with a message naming the cause instead of a bare nonzero exit
+([report](report.md)); copybook folders beside the program's folder are
+searched unasked ([cli](cli.md)); the libxml2 version line is dropped from
+binary stderr ([runtime](runtime.md)); the generic UNMATCHED_MOCK message
+points at BEFORE-EACH for shared mocks. Not changed: one MOCK per key
+answers every site of that key, so a generated DL/I scaffold whose GU on
+the IOPCB and GU on a DB PCB share `MOCK CALL "CBLTDLI"` still cannot end
+its message loop (DEPTIMSM's times out). Its TODO points at `ROWS ...
+TERMINAL`, which scripts the calls in order and does end it.
+
 ## 2026-10-16 -- bug-audit sweep 2 (#233-#336)
 
 Highs in #323, the WORKING-STORAGE reset batch in #324, every other

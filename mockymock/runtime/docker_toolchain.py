@@ -11,6 +11,7 @@ there is no local-cobc fallback.
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -482,6 +483,17 @@ def compile_source(
     )
 
 
+#: libxml2's own startup check, printed by every binary the image's Debian
+#: GnuCOBOL build links (`Warning: program compiled against libxml 212
+#: using older 209`). Harmless -- libcob runs fine against the older
+#: library -- but it reached the console on every run, passing ones
+#: included, and read as something broken.
+_LIBXML_VERSION_WARNING_RE = re.compile(
+    r"^Warning: program compiled against libxml \d+ using older \d+\r?\n?",
+    re.MULTILINE,
+)
+
+
 def run_binary(
     binary_path: Path,
     timeout_seconds: int = 30,
@@ -557,7 +569,7 @@ def run_binary(
             stdout="",
             stderr=f"mockymock: could not run docker exec: {exc}\n",
         )
-    stderr = _coerce_output(result.stderr)
+    stderr = _LIBXML_VERSION_WARNING_RE.sub("", _coerce_output(result.stderr))
     if result.returncode == TIMEOUT_EXIT_CODE:
         stderr += (
             f"mockymock: binary timed out after {timeout_seconds}s "
