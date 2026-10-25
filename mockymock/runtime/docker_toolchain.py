@@ -438,6 +438,15 @@ def compile_source(
         # real z/OS mainframe sources use between paragraphs/sections --
         # `-std=mvs` is what makes those compile instead of erroring out.
         "-std=mvs",
+        # ...but -std=mvs also turns on `arithmetic-osvs`, GnuCOBOL's OS/VS
+        # intermediate-result emulation, and GnuCOBOL 3.2's implementation
+        # of it is wrong: `COMPUTE X = P * (1 - D)` gives 0 whenever D is
+        # zero (also `P * (1 + D)`, `(1 - D) * P`, `P * (ONE - D)`). A
+        # differential run of 2,283 random +, - and * expressions got 393
+        # wrong with it on and none with it off. Enterprise COBOL does not
+        # use the OS/VS rules anyway, and divisions come out the same both
+        # ways, so the setting buys nothing and costs false failures.
+        "-fno-arithmetic-osvs",
     ]
     if coverage:
         cmd.append("--coverage")

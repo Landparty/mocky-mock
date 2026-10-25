@@ -29,7 +29,7 @@ mockymock setup / mockymock run
    ├─ sandbox_dir_maybe_kept(root=WORK_ROOT, keep=...)   ~/.mockymock/work/mockymock-XXXX/
    │     instrumented .cbl written with newline="\n" (cobc runs Linux-side)
    │
-   ├─ compile_source()   docker exec mockymock-cobc cobc -free -std=mvs -x /work/<sb>/PROG.cbl -o /work/<sb>/PROG
+   ├─ compile_source()   docker exec mockymock-cobc cobc -free -std=mvs -fno-arithmetic-osvs -x /work/<sb>/PROG.cbl -o /work/<sb>/PROG
    │
    └─ run_binary()       docker exec -w /work/<sb> mockymock-cobc timeout -k 5 30 /work/<sb>/PROG
                             stdout parsed by report/results.py, unchanged
@@ -231,7 +231,7 @@ re-mounted per run. Consequences:
 
 `compile_source(source_path: Path) -> CompileResult`:
 - Maps source and binary paths to container paths via `to_container_path`.
-- Runs `docker exec mockymock-cobc timeout -k 5 585 cobc -free -std=mvs -x <container_source> -o <container_binary>`
+- Runs `docker exec mockymock-cobc timeout -k 5 585 cobc -free -std=mvs -fno-arithmetic-osvs -x <container_source> -o <container_binary>`
   (fixed 2026-08-10, audit finding F1 — previously unwrapped: a `cobc`
   invocation that hung inside the shared container had no container-side
   bound at all and outlived even the host's own 600s `subprocess.run`
@@ -244,6 +244,15 @@ re-mounted per run. Consequences:
   `SKIP1`/`SKIP2`/`SKIP3`) that real z/OS mainframe sources use between
   paragraphs/sections — those otherwise fail to compile even though
   cobol-parser itself already treats them as no-ops.
+- `-fno-arithmetic-osvs` undoes one setting `-std=mvs` brings with it.
+  GnuCOBOL 3.2's OS/VS intermediate-result emulation is wrong:
+  `COMPUTE X = P * (1 - D)` (and `P * (1 + D)`, `(1 - D) * P`,
+  `P * (ONE - D)`) gives 0 whenever `D` is zero. Found 2026-10-25 from
+  PREMCALC's 18 false failures; a differential run of 2,283 random `+ - *`
+  COMPUTEs had 393 wrong with the setting on and none with it off, and
+  divisions came out the same either way. Enterprise COBOL does not use
+  the OS/VS rules, so nothing is lost. Pinned by
+  `tests/integration/test_osvs_arithmetic.py`.
 - Success requires **both** `returncode == 0` **and** `binary_path.exists()`
   on the host side — a zero exit with no binary materializing (e.g. a stale
   mount) is treated as failure, not a phantom success.
