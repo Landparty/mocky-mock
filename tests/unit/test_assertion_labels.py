@@ -167,3 +167,72 @@ def test_a_second_label_at_the_top_replaces_the_first():
     items, orphans = scan_label_placement(cut)
     assert [a.label for a in items] == [CHARACTERIZATION]
     assert [o.line for o in orphans] == [3]
+
+
+def test_a_label_above_the_testcase_counts_across_blank_lines():
+    cut = (
+        'TESTSUITE "S"\n'
+        "*> INTENT: BR-7 rejected accounts are skipped\n"
+        "\n"
+        'TESTCASE "c"\n'
+        "    PERFORM P\n"
+        "    EXPECT WS-A TO BE 1\n"
+    )
+    items, orphans = scan_label_placement(cut)
+    assert [(a.label, a.label_scope, a.rule_ids) for a in items] == [
+        (INTENT, "case", ["BR-7"])
+    ]
+    assert orphans == []
+
+
+def test_a_label_before_a_blank_line_and_a_mock_still_covers_nothing():
+    cut = (
+        'TESTSUITE "S"\n'
+        "*> INTENT: dangling\n"
+        "\n"
+        "MOVE 1 TO WS-A\n"
+        'TESTCASE "c"\n'
+        "    EXPECT WS-A TO BE 1\n"
+    )
+    items, orphans = scan_label_placement(cut)
+    assert [a.label for a in items] == [None]
+    assert [o.line for o in orphans] == [2]
+
+
+SUITE_LABEL = (
+    'TESTSUITE "S"\n'
+    "BEFORE-EACH\n"
+    "    *> CHARACTERIZATION: recorded from the March batch run\n"
+    '    MOCK CALL "X"\n'
+    "    END-MOCK\n"
+    "END-BEFORE\n"
+    "\n"
+    'TESTCASE "plain"\n'
+    "    PERFORM P\n"
+    "    EXPECT WS-A TO BE 1\n"
+    "\n"
+    'TESTCASE "own label"\n'
+    "    PERFORM P\n"
+    "    *> INTENT: BR-2\n"
+    "    EXPECT WS-B TO BE 2\n"
+    "    EXPECT WS-C TO BE 3\n"
+    "AFTER-EACH\n"
+    "    PERFORM CLEANUP\n"
+    "END-AFTER\n"
+)
+
+
+def test_a_before_each_label_covers_the_suite():
+    items, orphans = scan_label_placement(SUITE_LABEL)
+    assert [(a.case_name, a.label, a.label_scope) for a in items] == [
+        ("plain", CHARACTERIZATION, "suite"),
+        ("own label", INTENT, "adjacent"),
+        ("own label", INTENT, "adjacent"),
+    ]
+    assert orphans == []
+
+
+def test_assertions_after_a_hook_are_not_given_to_the_previous_case():
+    cut = SUITE_LABEL.replace("    PERFORM CLEANUP\n", "    EXPECT WS-Z TO BE 0\n")
+    items, _ = scan_label_placement(cut)
+    assert [a.case_name for a in items] == ["plain", "own label", "own label"]

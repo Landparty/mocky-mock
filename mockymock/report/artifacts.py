@@ -119,6 +119,8 @@ def fingerprint(
         "cut": _sha256(cut_path),
         "copybooks": hashlib.sha256(json.dumps(copybooks).encode("utf-8")).hexdigest(),
         "mockymock": __version__,
+        # Declared equivalent mutants change the mutation score.
+        "equivalent": _sha256(cut_path.with_name(f"{cut_path.stem}.equivalent.json")),
     }
 
 

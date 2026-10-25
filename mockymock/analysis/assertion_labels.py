@@ -28,6 +28,12 @@ own sits directly above (issue #346). Labels at the top of the case are
 what people naturally write, and reading them as covering nothing turned
 whole suites written with intent into "0 intent, N unlabelled".
 
+A label written directly above a TESTCASE line still labels that case
+when blank lines separate the two -- the commonest way to lay a suite out.
+
+A label inside BEFORE-EACH is the suite's label: it covers every assertion,
+in every case, that neither a label of its own nor its case's label covers.
+
 An assertion no label covers is reported as unlabelled, and a label that
 still covers nothing (one after the case's last assertion, a second label
 at the top of a case that already has one) is reported as an orphan --
@@ -53,6 +59,10 @@ _LABEL_RE = re.compile(
 )
 _TESTCASE_RE = re.compile(r'^TESTCASE\s+"(?P<name>(?:[^"]|"")*)"', re.IGNORECASE)
 _ASSERTION_RE = re.compile(r"^(?P<kind>EXPECT|VERIFY)\b", re.IGNORECASE)
+_HOOK_RE = re.compile(
+    r"^(?P<hook>BEFORE-ALL|BEFORE-EACH|AFTER-EACH|AFTER-ALL)\.?$", re.IGNORECASE
+)
+_HOOK_END_RE = re.compile(r"^END-(?:BEFORE|AFTER)\.?$", re.IGNORECASE)
 _RULE_ID_RE = re.compile(r"\bBR-\d+\b", re.IGNORECASE)
 
 # The comment line `--record-expectations` writes above the EXPECTs it
@@ -71,8 +81,9 @@ class LabelledAssertion:
     note: str = ""
     label_line: int | None = None
     rule_ids: list[str] = field(default_factory=list)
-    #: "adjacent" (the label sits directly above) or "case" (the case's
-    #: label from the top of the TESTCASE); None when unlabelled.
+    #: "adjacent" (the label sits directly above), "case" (the case's
+    #: label from the top of the TESTCASE) or "suite" (the BEFORE-EACH
+    #: label); None when unlabelled.
     label_scope: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -127,6 +138,11 @@ def scan_label_placement(
     label: int | None = None
     case_label: int | None = None
     case_asserted = False
+    # A label separated from what follows by blank lines: kept only in case
+    # the next line turns out to be a TESTCASE header.
+    detached: int | None = None
+    hook: str | None = None
+    suite_label: int | None = None
 
     def end_adjacent() -> None:
         # A label at the top of the case that ran into a MOCK, a setup
@@ -144,16 +160,34 @@ def scan_label_placement(
     for line_no, raw in enumerate(cut_text.splitlines(), start=1):
         stripped = raw.strip()
         if not stripped:
+            if label is not None and labels[label].line not in covered:
+                detached = label
             end_adjacent()
+            if case_label == detached:
+                detached = None
+            continue
+        opened = _HOOK_RE.match(stripped)
+        if opened:
+            end_adjacent()
+            hook = opened.group("hook").upper()
+            case_name, case_label, case_asserted, detached = None, None, False, None
+            continue
+        if _HOOK_END_RE.match(stripped):
+            end_adjacent()
+            hook, detached = None, None
             continue
         testcase = _TESTCASE_RE.match(stripped)
         if testcase:
-            # A label directly above the TESTCASE line labels that case.
+            # A label directly above the TESTCASE line labels that case,
+            # blank lines between them or not.
+            candidate = label if label is not None else detached
             above = (
-                label
-                if label is not None and labels[label].line not in covered
+                candidate
+                if candidate is not None and labels[candidate].line not in covered
                 else None
             )
+            detached = None
+            hook = None
             case_name = testcase.group("name").replace('""', '"')
             case_asserted = False
             case_label = above
@@ -173,10 +207,15 @@ def scan_label_placement(
                     case_name=case_name,
                 )
             )
+            if hook == "BEFORE-EACH" and suite_label is None:
+                suite_label = len(labels) - 1
+                continue
             label = len(labels) - 1
+            detached = None
             continue
         if stripped.startswith("*>"):
             continue
+        detached = None
         assertion = _ASSERTION_RE.match(stripped)
         if assertion is None:
             end_adjacent()
@@ -200,6 +239,20 @@ def scan_label_placement(
             )
             covered.add(found.line)
         results.append(item)
+    if suite_label is not None:
+        found = labels[suite_label]
+        for item in results:
+            if item.label is None:
+                item.label, item.note, item.label_line = (
+                    found.label,
+                    found.note,
+                    found.line,
+                )
+                item.label_scope = "suite"
+                item.rule_ids = sorted(
+                    {match.upper() for match in _RULE_ID_RE.findall(found.note)}
+                )
+                covered.add(found.line)
     orphans = [found for found in labels if found.line not in covered]
     return results, orphans
 
@@ -212,8 +265,9 @@ def orphan_label_warnings(cut_text: str) -> list[str]:
         warnings.append(
             f"warning ({ORPHAN_ASSERTION_LABEL}): .cut line {orphan.line}: the "
             f"{orphan.label.upper()} label{where} covers no EXPECT/VERIFY -- "
-            "put it directly above the assertions it is about, or at the top "
-            "of the test case to cover all of them"
+            "put it directly above the assertions it is about, at the top "
+            "of the test case to cover all of them, or in BEFORE-EACH to "
+            "cover the whole suite"
         )
     return warnings
 

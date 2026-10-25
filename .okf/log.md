@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-25 -- field-run follow-ups to #346, #347, #349, #351
+
+`mutate` no longer scores a run cut off while the container is up again
+afterwards (another worker restarted it, or the OOM killer's exit 137) and
+reads reviewed equivalent mutants from `<stem>.equivalent.json`
+([cli](cli.md)); labels count across blank lines above TESTCASE and from
+BEFORE-EACH, and lint warns `FALLTHROUGH_ONLY_MOCK` on hook mocks only the
+fall-through closure reaches ([analysis](analysis.md)).
+
 ## 2026-10-16 -- bug-audit sweep 2 (#233-#336)
 
 Highs in #323, the WORKING-STORAGE reset batch in #324, every other
