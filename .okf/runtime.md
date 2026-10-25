@@ -272,7 +272,8 @@ re-mounted per run. Consequences:
 - Drops libxml2's own `Warning: program compiled against libxml N using
   older M` line from the binary's stderr (`_LIBXML_VERSION_WARNING_RE`):
   the Debian image's GnuCOBOL build prints it on every run and it is
-  harmless (2026-10-24).
+  harmless (2026-10-24). `compile_source` drops it from cobc's stderr
+  too (2026-10-25).
 - **Output is captured as bytes**, then decoded UTF-8 with
   `errors="replace"` and no newline translation (2026-09-30, bug hunt round
   11). `text=True` decoded strictly, so one DISPLAY of a non-UTF-8 byte

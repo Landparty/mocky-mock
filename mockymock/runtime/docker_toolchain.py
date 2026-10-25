@@ -488,7 +488,9 @@ def compile_source(
         success=success,
         binary_path=binary_path if success else None,
         stdout=result.stdout,
-        stderr=result.stderr,
+        # cobc links the same libxml2, so the warning run_binary drops can
+        # reach the console from the compile too.
+        stderr=_LIBXML_VERSION_WARNING_RE.sub("", result.stderr or ""),
     )
 
 
