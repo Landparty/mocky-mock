@@ -1316,6 +1316,32 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     return _refuse_unusable_scaffold(source_path, output_path, args)
 
 
+def _hint_pending_stubs(cut_text: str, suite, suite_result, risky: list[str]) -> None:
+    """Point a risky case that still holds `*> STUB EXPECT` comments (the
+    ones `generate` writes for what a program returns) at the run that
+    turns them into EXPECTs: those cases are risky only because nobody ran
+    it yet."""
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
+
+    try:
+        scan = scan_stub_expectations(cut_text, suite)
+    except Exception:  # noqa: BLE001 -- a hint, never a failure
+        return
+    stubbed = {f"{stub.case_index:03d}" for stub in scan.stubs}
+    pending = [
+        result.case_name
+        for result in suite_result.results
+        if result.case_id in risky and result.case_id in stubbed
+    ]
+    if pending:
+        print(
+            f"mockymock run: {len(pending)} risky case(s) still hold "
+            "`*> STUB EXPECT` comments -- re-run with --record-expectations "
+            "to turn them into EXPECTs, then check the values recorded: "
+            + ", ".join(repr(name) for name in pending)
+        )
+
+
 def _distinct_case_count(cut_text: str) -> int:
     """How many cases `cut_text` holds, counted the way
     `cases_asserting_nothing` labels them (PROVIDER rows share their header
@@ -2179,6 +2205,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             suite_result, crash_detail=crash_detail, not_run=not_run, risky=risky
         )
     )
+    if risky:
+        _hint_pending_stubs(cut_text, suite, suite_result, risky)
     if executed.stderr:
         print("mockymock run: binary stderr:")
         print(executed.stderr.rstrip("\n"))

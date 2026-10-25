@@ -1018,6 +1018,15 @@ paragraph-grouped path described above, unchanged. A real
   generated record below the FD minimum. The bundle carries no per-row
   length (`declared_lengths` is not surfaced upstream yet), so every row
   reports the layout's full length clamped into the FD's range.
+- **A field the program UNSTRINGs gets the delimiters it splits on**
+  (2026-10-25, the RECFMT field run): `ProgramContext.unstring_layouts`
+  (`_unstring_layouts`) maps each field split by exactly one
+  `UNSTRING <field> DELIMITED BY "<literal>" INTO t1 ... tn` to that
+  shape, and `_row_move_line` rebuilds the bundle's random value as one
+  part per INTO target (`_delimited_value`): each sized to its target's
+  PICTURE (shrunk to fit the field), digits for a numeric one, characters
+  drawn from the seeded value. A field split two ways, or by a variable /
+  several delimiters, keeps the bundle's value.
 - **A SELECT / FETCH mock writes only its INTO targets** (issue #239):
   the bundle lays out every host variable of an EXEC SQL, the WHERE
   clause's input key included, so a SELECT mock overwrote the key the
