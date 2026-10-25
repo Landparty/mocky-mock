@@ -1197,6 +1197,18 @@ branch is still testable. Issue #288's option 2; its option 1 (an `OMIT
 <item>` statement folding the item BASED and setting its address to NULL
 per case) is not built and shares the BASED work with #226.
 
+**Undeclared program names (2026-10-25).** Step 7c
+(`cut_names.undeclared_program_names`) warns `UNDECLARED_NAME` at the
+program line of a data item or procedure name the PROCEDURE DIVISION uses
+and nothing declares (cobol-parser's `XrefAnalyzer.undefined`, minus any
+word that appears before PROCEDURE DIVISION, AST data items, special
+registers and harness words). It is the program's bug, not the `.cut`'s,
+which cobc would otherwise report against a sandbox copy. It is a warning,
+since the xref cannot see every declaration, and there are no findings at
+all while an unexpanded COPY remains above PROCEDURE DIVISION.
+`mockymock analyze lint` is cobol-parser's own lint and still has no such
+rule.
+
 **Unknown data-names (issue #204, 2026-10-16).** `run_static_checks` step
 7b (`analysis.cut_names.check_cut_data_names`, cumulative with step 8)
 refuses `UNKNOWN_DATA_NAME` at the `.cut` line of every setup/hook MOVE

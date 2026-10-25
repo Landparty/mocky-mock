@@ -178,3 +178,57 @@ def test_names_built_through_replace_pseudo_text_are_known(tmp_path):
         "refused (UNKNOWN_DATA_NAME): .cut line 6: EXPECT WS-NOPE is not a "
         "data item of R2"
     ]
+
+
+UNDECLARED_PROGRAM = PROGRAM.replace(
+    '           MOVE "Y" TO WS-FLAG\n',
+    '           MOVE "Y" TO WS-FLAG\n           MOVE 1 TO WS-TYPE-INDEX\n',
+)
+
+PLAIN_CUT = """\
+TESTSUITE "x"
+TESTCASE "a"
+    PERFORM 0000-MAIN
+    EXPECT WS-N TO BE 1
+"""
+
+
+def test_a_name_the_program_never_declares_is_a_lint_warning(tmp_path):
+    """The LEDGRPT field run: `MOVE 1 TO WS-TYPE-INDEX` with no such item
+    passed lint and failed only at cobc."""
+    program = tmp_path / "MUT1.cbl"
+    program.write_text(UNDECLARED_PROGRAM)
+    cut = tmp_path / "MUT1.cut"
+    cut.write_text(PLAIN_CUT)
+    result = run_static_checks(program, cut, None)
+    assert [w for w in result.warnings if "UNDECLARED_NAME" in w] == [
+        "warning (UNDECLARED_NAME): line 14: WS-TYPE-INDEX is used as a data "
+        "item but the program declares none -- cobc will reject the compile "
+        "unless a copybook it could not see declares it"
+    ]
+
+
+def test_declared_names_and_unexpanded_copies_raise_no_undeclared_warning(
+    tmp_path,
+):
+    program = tmp_path / "MUT1.cbl"
+    program.write_text(PROGRAM)
+    cut = tmp_path / "MUT1.cut"
+    cut.write_text(PLAIN_CUT)
+    assert not [
+        w
+        for w in run_static_checks(program, cut, None).warnings
+        if "UNDECLARED_NAME" in w
+    ]
+    # An unresolved COPY may declare the name: no guess either way.
+    program.write_text(
+        UNDECLARED_PROGRAM.replace(
+            "       PROCEDURE DIVISION.\n",
+            "       COPY MISSING.\n       PROCEDURE DIVISION.\n",
+        )
+    )
+    assert not [
+        w
+        for w in run_static_checks(program, cut, None).warnings
+        if "UNDECLARED_NAME" in w
+    ]

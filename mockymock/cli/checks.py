@@ -360,7 +360,10 @@ def _run_static_checks(
     )
 
     from mockymock.analysis.cics_eib import cics_eib_plan
-    from mockymock.analysis.cut_names import check_cut_data_names
+    from mockymock.analysis.cut_names import (
+        check_cut_data_names,
+        undeclared_program_names,
+    )
     from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.flow_targets import normalize_flow_targets
     from mockymock.analysis.linkage import (
@@ -736,6 +739,21 @@ def _run_static_checks(
             parse_result.ast,
         )
     )
+
+    # 7c. A name the program uses and nothing declares (the program's own
+    # bug, not the .cut's): cobc will reject the compile, so lint says so
+    # first. A warning, not a refusal -- the xref cannot see every kind of
+    # declaration.
+    relabel = source_line_relabeler(out.source_location_map)
+    for line, kind, word in undeclared_program_names(parse_result.ast, transformed):
+        what = "paragraph or section" if kind == "procedure" else "data item"
+        out.warnings.append(
+            relabel(
+                f"warning (UNDECLARED_NAME): line {line}: {word} is used as a "
+                f"{what} but the program declares none -- cobc will reject "
+                "the compile unless a copybook it could not see declares it"
+            )
+        )
 
     # 8. Per-test-case checks, then flow-mock (MOCK PARAGRAPH/SECTION) and
     # terminator layout -- accumulated across all cases rather than
