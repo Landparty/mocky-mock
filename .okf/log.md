@@ -10,7 +10,7 @@ prevent.
 `cobc` gets `-fno-arithmetic-osvs`: GnuCOBOL 3.2's OS/VS arithmetic, which
 `-std=mvs` turns on, gives 0 for `P * (1 - D)` when D is zero
 ([runtime](runtime.md)). `mutate` scores a suite with known-failing cases
-against its passing ones ([cli](cli.md)). A terminator chain through a paragraph after a closed `PERFORM X THRU X-EXIT` range's end is no longer refused as GO TO fall-through ([analysis](analysis.md)). A TESTCASE may hold several PERFORMs, with MOVEs between them, for a sequence of calls ([dsl](dsl.md)). `generate` writes UNSTRING-delimited records for a field the program splits ([dsl](dsl.md)), and `run` points a risky case still holding `*> STUB EXPECT` lines at `--record-expectations`. Lint warns `UNDECLARED_NAME` for a name the program uses and never declares ([cli](cli.md)).
+against its passing ones ([cli](cli.md)). A terminator chain through a paragraph after a closed `PERFORM X THRU X-EXIT` range's end is no longer refused as GO TO fall-through ([analysis](analysis.md)). A TESTCASE may hold several PERFORMs, with MOVEs between them, for a sequence of calls ([dsl](dsl.md)). `generate` writes UNSTRING-delimited records for a field the program splits ([dsl](dsl.md)), and `run` points a risky case still holding `*> STUB EXPECT` lines at `--record-expectations`. Lint warns `UNDECLARED_NAME` for a name the program uses and never declares ([cli](cli.md)). `mutate` prints a ready `equivalent.json` body for zero-baseline survivors ([cli](cli.md)).
 
 ## 2026-10-25 -- field-run follow-ups to #346, #347, #349, #351
 

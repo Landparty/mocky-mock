@@ -1083,7 +1083,14 @@ each match `equivalent` with detail `declared equivalent: <reason>`
 before anything is built; ignored entries (no reason, no target, bad
 JSON) and entries matching no mutant come back as `notes`. The file's
 hash is part of `report/artifacts.fingerprint`, so a saved mutation
-result is not reused across an edit to it.
+result is not reused across an edit to it. When survivors carry the
+zero-baseline hint below, the console ends with a ready `equivalent.json`
+body for them (`report._declaration_snippet`), every `reason` left empty:
+it declares nothing until a reviewer says why the program never reaches
+the field with a non-zero value (the first-reject counters of the
+2026-10-25 field run). Not proven automatically: a case that seeds the
+field, a second reject, or a second PERFORM in a multi-call case kills
+such a mutant.
 
 **Zero-baseline hints (2026-10-04).** An `ADD..TO <-> SUBTRACT..FROM`
 swap on an unsigned numeric field that every case starts at zero is

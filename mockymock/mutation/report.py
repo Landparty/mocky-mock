@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass, field
 from fractions import Fraction
+from pathlib import PurePath
 from typing import Any, Literal
 
+from mockymock.mutation.declared import _code
 from mockymock.mutation.operators import Mutant
 
 MutantStatus = Literal[
@@ -179,6 +183,29 @@ class MutationOutcome:
         )
 
 
+def _equivalent_file(outcome: MutationOutcome) -> str:
+    stem = PurePath(outcome.cut).stem if outcome.cut else ""
+    return f"{stem}.equivalent.json" if stem else "<cut stem>.equivalent.json"
+
+
+def _declaration_snippet(survivors: list[MutantResult]) -> str:
+    """A `<cut stem>.equivalent.json` body (see `mutation.declared`) for
+    every hinted survivor. Each `reason` is left empty, so the file does
+    nothing until a reviewer states why the field is always zero there: a
+    declaration is a claim about the program only they can check."""
+    entries = [
+        {
+            "operator": r.mutant.operator,
+            "original": _code(r.mutant.original),
+            "line": r.mutant.line,
+            "reason": "",
+        }
+        for r in survivors
+        if r.hint
+    ]
+    return json.dumps({"equivalent": entries}, indent=2)
+
+
 def format_console(outcome: MutationOutcome) -> str:
     lines: list[str] = []
     survivors = [r for r in outcome.results if r.status == "survived"]
@@ -248,6 +275,15 @@ def format_console(outcome: MutationOutcome) -> str:
             f"{hinted} of those survivors cannot be killed from the test data "
             "as written (see the ! lines) -- change the starting values, not "
             "the assertions"
+        )
+        lines.append(
+            "  if the program itself never reaches one of them with a non-zero "
+            f"value, it is equivalent: declare it in {_equivalent_file(outcome)} "
+            "beside the .cut, with the reason filled in (an entry without one "
+            "is ignored), and it leaves the score:"
+        )
+        lines.extend(
+            "    " + line for line in _declaration_snippet(survivors).splitlines()
         )
     if outcome.not_compiled:
         lines.append(
