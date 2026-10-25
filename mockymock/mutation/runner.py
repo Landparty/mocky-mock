@@ -883,14 +883,14 @@ def _run_one_mutant(
     patched = list(original_lines)
     patched[mutant.line - 1] = mutant.mutated
     patched_text = "\n".join(patched) + "\n"
-    exclusions = {"excluded_cases": excluded_cases, "expected_cases": expected_cases}
     run = _run_suite_once(
         patched_text,
         source_name,
         cut_path,
         copybook_paths,
         timeout_seconds,
-        **exclusions,
+        excluded_cases=excluded_cases,
+        expected_cases=expected_cases,
     )
     if run.status == "error" and _restart_toolchain():
         # One retry once the container is back: a container that died
@@ -902,7 +902,8 @@ def _run_one_mutant(
             cut_path,
             copybook_paths,
             timeout_seconds,
-            **exclusions,
+            excluded_cases=excluded_cases,
+            expected_cases=expected_cases,
         )
     if run.status == "error":
         # Never scored as anything: a mutant the toolchain failed under was
