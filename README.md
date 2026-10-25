@@ -50,6 +50,13 @@ Upgrade with `uv tool upgrade mockymock`; remove with
 inside a GnuCOBOL container, so nothing else needs installing on the
 host.
 
+The VS Code extension can skip Docker: it ships a GnuCOBOL 3.2 tree and
+points the CLI at it with `MOCKYMOCK_GNUCOBOL_HOME`, and mockymock then
+compiles and runs on the host from that tree (a C compiler, `gcc` or
+Xcode's command line tools, is the one host requirement).
+`MOCKYMOCK_TOOLCHAIN=docker` forces the container even then. See
+[runtime](.okf/runtime.md#native-toolchain).
+
 ### Contributing (local dev setup)
 
 ```bash

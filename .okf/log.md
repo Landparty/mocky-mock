@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-25 -- native toolchain backend
+
+- [runtime](runtime.md): new **Native toolchain** section. `runtime/toolchain.py`
+  selects `docker_toolchain` or the new `native_toolchain` (a relocatable
+  GnuCOBOL tree named by `MOCKYMOCK_GNUCOBOL_HOME`, which the VS Code
+  extension bundles); `run`, `debug`, `mutate`, `setup` and `status.probe()`
+  go through it. Overview no longer says Docker-only.
+- [index](index.md): Runtime line updated.
+
 ## 2026-10-25 -- field-run follow-ups to #346, #347, #349, #351
 
 `mutate` no longer scores a run cut off while the container is up again

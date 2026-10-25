@@ -115,6 +115,11 @@ class DockerNotAvailableError(RuntimeError):
     toolchain image/container cannot be brought up."""
 
 
+#: The backend-neutral name `runtime/toolchain.py` documents; the native
+#: backend raises the same class.
+ToolchainNotAvailableError = DockerNotAvailableError
+
+
 def to_container_path(host_path: Path, work_root: Path = WORK_ROOT) -> str:
     """Map a host path under `work_root` to its /work path inside the
     container. The bind mount is `work_root -> /work`, established once at

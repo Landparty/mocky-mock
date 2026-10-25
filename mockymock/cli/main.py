@@ -17,17 +17,23 @@ from mockymock.report.record_rewrite import numeric_edited_fields
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
-    from mockymock.runtime import docker_toolchain
+    from mockymock.runtime.toolchain import active as active_toolchain
+
+    toolchain = active_toolchain()
 
     try:
-        docker_toolchain.ensure_toolchain(force_rebuild=args.rebuild)
-        version = docker_toolchain.cobc_version()
-    except docker_toolchain.DockerNotAvailableError as exc:
+        toolchain.ensure_toolchain(force_rebuild=args.rebuild)
+        version = toolchain.cobc_version()
+    except toolchain.ToolchainNotAvailableError as exc:
         print(f"mockymock setup: {exc}")
         return 1
-    print(
-        f"mockymock setup: container {docker_toolchain.CONTAINER} ready " f"({version})"
-    )
+    if toolchain.CONTAINER == "native":
+        print(
+            f"mockymock setup: bundled GnuCOBOL at "
+            f"{toolchain.gnucobol_home()} ready ({version})"
+        )
+    else:
+        print(f"mockymock setup: container {toolchain.CONTAINER} ready ({version})")
     return 0
 
 
@@ -1866,9 +1872,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         format_trace_json,
         parse_trace,
     )
-    from mockymock.runtime import docker_toolchain
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
+    from mockymock.runtime.toolchain import active as active_toolchain
     from mockymock.splicer import cics_eib
     from mockymock.splicer.driver import build_driver
     from mockymock.splicer.linkage import extra_reset_lines
@@ -1877,6 +1883,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.reset import index_names, reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
+
+    toolchain = active_toolchain()
 
     # `mockymock run PROG.cut` is the natural mistake: the positional is the
     # COBOL source, so a .cut there is the suite. Take it as --cut and let the
@@ -1978,8 +1986,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        docker_toolchain.ensure_toolchain()
-    except docker_toolchain.DockerNotAvailableError as exc:
+        toolchain.ensure_toolchain()
+    except toolchain.ToolchainNotAvailableError as exc:
         print(f"mockymock run: {exc}")
         return 1
 
@@ -2072,7 +2080,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # cruft behind after a run that actually succeeds -- see the explicit
     # cleanup below.
     with sandbox_dir_maybe_kept(
-        root=docker_toolchain.WORK_ROOT, keep=args.keep_sandbox or args.verbose
+        root=toolchain.WORK_ROOT, keep=args.keep_sandbox or args.verbose
     ) as tmp:
         if args.keep_sandbox:
             print(f"mockymock run: keeping sandbox {tmp}")
@@ -2082,7 +2090,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
         )
 
-        compiled = docker_toolchain.compile_source(
+        compiled = toolchain.compile_source(
             instrumented_path, coverage=args.coverage, trace=args.trace
         )
         if not compiled.success:
@@ -2122,7 +2130,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         try:
             assert compiled.binary_path is not None  # implied by compiled.success
             trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
-            executed = docker_toolchain.run_binary(
+            executed = toolchain.run_binary(
                 compiled.binary_path,
                 timeout_seconds=args.timeout,
                 trace_path=trace_path,
@@ -2138,7 +2146,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             coverage_report = None
             instrumented_name = instrumented_path.name
             if args.coverage:
-                gcov_result = docker_toolchain.run_gcov(instrumented_path)
+                gcov_result = toolchain.run_gcov(instrumented_path)
                 if gcov_result.success:
                     # Only the raw gcov parse happens inside the sandbox
                     # (the .gcov file dies with it); the console text is
@@ -2421,8 +2429,8 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         unavailable_names,
     )
     from mockymock.report.coverage import build_original_line_map
-    from mockymock.runtime import docker_toolchain
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
+    from mockymock.runtime.toolchain import active as active_toolchain
     from mockymock.splicer import cics_eib
     from mockymock.splicer.driver import build_driver
     from mockymock.splicer.linkage import extra_reset_lines
@@ -2431,6 +2439,8 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
+
+    toolchain = active_toolchain()
 
     # Unlike --trace's plain-text mode, there is no useful human-facing
     # equivalent of a DAP session at a terminal -- refuse rather than
@@ -2481,8 +2491,8 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        docker_toolchain.ensure_toolchain()
-    except docker_toolchain.DockerNotAvailableError as exc:
+        toolchain.ensure_toolchain()
+    except toolchain.ToolchainNotAvailableError as exc:
         print(f"mockymock debug: {exc}")
         return 1
 
@@ -2546,14 +2556,14 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     # conversation, unlike run/trace/coverage's "compile, run, collect,
     # clean up" shape) -- it is only torn down once adapter.run() returns,
     # after the client disconnects.
-    with sandbox_dir_maybe_kept(root=docker_toolchain.WORK_ROOT, keep=False) as tmp:
+    with sandbox_dir_maybe_kept(root=toolchain.WORK_ROOT, keep=False) as tmp:
         instrumented_path = tmp / source_path.with_suffix(".cbl").name
         instrumented_path.write_text(
             "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
         )
 
         def launch_session(_dap_arguments: dict) -> DebugSession:
-            compiled = docker_toolchain.compile_source(instrumented_path, debug=True)
+            compiled = toolchain.compile_source(instrumented_path, debug=True)
             if not compiled.success:
                 raise RuntimeError(f"compile failed:\n{compiled.stderr}")
             assert compiled.binary_path is not None  # implied by compiled.success
@@ -2571,7 +2581,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
                     normalized_lines, normalized_lines, original_lines
                 ),
             )
-            gdb = GdbSession(docker_toolchain.start_gdb_session(compiled.binary_path))
+            gdb = GdbSession(toolchain.start_gdb_session(compiled.binary_path))
             return DebugSession(
                 gdb=gdb,
                 line_map=line_map,
