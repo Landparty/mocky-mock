@@ -47,9 +47,38 @@ def test_mutation_kill_loop_classifies_every_mutant():
 
 
 @requires_docker
+def test_mutation_scores_the_passing_cases_of_a_partly_red_suite(tmp_path):
+    """One known-failing case no longer leaves the whole suite unscored:
+    it is left out, and the passing case decides every mutant exactly as
+    it does on its own."""
+    cut = tmp_path / "mutation_target.cut"
+    cut.write_text(
+        (FIXTURE_DIR / "mutation_target.cut").read_text(encoding="utf-8") + "\n"
+        'TESTCASE "expects the wrong total"\n'
+        "    PERFORM MAIN-PARA\n"
+        "    EXPECT WS-TOTAL TO BE 9\n",
+        encoding="utf-8",
+    )
+    problems, outcome, notes = run_mutation(
+        FIXTURE_DIR / "mutation_target.cbl", cut, copybook_paths=None
+    )
+    assert problems == []
+    assert outcome is not None
+    assert outcome.excluded_cases == ["expects the wrong total"]
+    assert any("expects the wrong total" in note for note in notes)
+    _, alone, _ = run_mutation(
+        FIXTURE_DIR / "mutation_target.cbl",
+        FIXTURE_DIR / "mutation_target.cut",
+        copybook_paths=None,
+    )
+    assert alone is not None
+    assert [r.status for r in outcome.results] == [r.status for r in alone.results]
+
+
+@requires_docker
 def test_mutation_refuses_red_baseline():
-    """A suite that fails on the unmutated program must abort scoring --
-    every verdict would be noise."""
+    """A suite with no passing case on the unmutated program must abort
+    scoring -- every verdict would be noise."""
     wrong_cut = FIXTURE_DIR / "mutation_target_wrong.cut"
     wrong_cut.write_text(
         'TESTSUITE "wrong baseline"\n\n'

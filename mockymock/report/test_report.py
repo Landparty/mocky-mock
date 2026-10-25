@@ -1069,6 +1069,15 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                     f" {equivalent} equivalent mutant(s), which no test can "
                     "kill, are left out of the score."
                 )
+            excluded = mutation_report.get("excludedCases") or []
+            if excluded:
+                mutation_step.summary += (
+                    f" Scored without {len(excluded)} case(s) that fail on the "
+                    "unmutated program ("
+                    + ", ".join(str(name) for name in excluded)
+                    + "): only the passing cases could kill a mutant."
+                )
+                mutation_step.details["excludedCases"] = list(excluded)
             mutation_step.summary += mutation_reused
             if unevaluated:
                 mutation_step.summary += (

@@ -78,6 +78,9 @@ class MutationOutcome:
     program: str
     cut: str
     results: list[MutantResult] = field(default_factory=list)
+    #: Cases that fail on the unmutated program and so were left out of
+    #: the scoring: only the other cases could kill a mutant.
+    excluded_cases: list[str] = field(default_factory=list)
 
     def _count(self, status: MutantStatus) -> int:
         return sum(1 for r in self.results if r.status == status)
@@ -251,6 +254,12 @@ def format_console(outcome: MutationOutcome) -> str:
             f"{outcome.not_compiled} of those survivors sit on lines the suite "
             "never executes -- decided from the baseline's coverage, never built"
         )
+    if outcome.excluded_cases:
+        lines.append(
+            f"scored without {len(outcome.excluded_cases)} case(s) that fail on "
+            "the unmutated program: "
+            + ", ".join(repr(name) for name in outcome.excluded_cases)
+        )
     score = outcome.score
     if score is not None and not outcome.complete:
         lines.append(
@@ -280,6 +289,7 @@ def to_json_dict(outcome: MutationOutcome) -> dict[str, Any]:
         "cut": outcome.cut,
         "score": outcome.score,
         "complete": outcome.complete,
+        "excludedCases": list(outcome.excluded_cases),
         "totals": {
             "generated": len(outcome.results),
             "killed": outcome.killed,

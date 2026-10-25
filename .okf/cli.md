@@ -997,7 +997,13 @@ statements deletes both (over-strong, not stillborn), and `stillborn`
 still lumps refusal-gate rejections in with compile errors.
 
 A real run baseline-checks the suite
-(red/empty baseline aborts with exit 1: every verdict would be noise),
+(an empty baseline, one with no passing case, or one where a case crashed
+aborts with exit 1: every verdict would be noise; since 2026-10-25 a
+baseline whose failing cases only failed an EXPECT/VERIFY is scored
+against its passing cases instead -- `SuiteRun.failing_cases`,
+`runner._classify_without`, `MutationOutcome.excluded_cases` /
+`excludedCases` in the JSON, and a sentence in `report`'s mutation step;
+a mutant that cuts the run short of the baseline's cases is killed),
 then for each mutant patches one original line and re-runs the exact
 `run` pipeline (static checks → splice → compile → run) in its own
 sandbox, classifying `killed` / `survived` / `timeout` (counts as a

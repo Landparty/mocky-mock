@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-25 -- second field run (PREMCALC, RECFMT, LEDGRPT, DATECHK)
+
+`cobc` gets `-fno-arithmetic-osvs`: GnuCOBOL 3.2's OS/VS arithmetic, which
+`-std=mvs` turns on, gives 0 for `P * (1 - D)` when D is zero
+([runtime](runtime.md)). `mutate` scores a suite with known-failing cases
+against its passing ones ([cli](cli.md)).
+
 ## 2026-10-25 -- field-run follow-ups to #346, #347, #349, #351
 
 `mutate` no longer scores a run cut off while the container is up again
