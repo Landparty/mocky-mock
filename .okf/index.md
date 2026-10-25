@@ -16,7 +16,7 @@ and reports pass/fail. Version 0.8.0 (`mockymock/__init__.py`, kept in step with
 * [DSL](dsl.md) — `.cut` test-file grammar, `MockTestSuite`/`MockTestCase`/`MockDirective` model, parser, and the `generate` scaffolder
 * [Analysis](analysis.md) — `mock_surface` boundary-site detection (CALL/file-I-O/EXEC SQL·CICS·DLI/ACCEPT) + the `refusal/` package's fail-closed reachability gate; `assertion_labels` (INTENT/CHARACTERIZATION labels on EXPECT/VERIFY) and `dialect_risk` (GnuCOBOL-vs-IBM divergence hotspots) for `mockymock report`
 * [Splicer](splicer.md) — turns boundary sites + a parsed `.cut` into spliced COBOL: dispatch blocks, tally fields, WORKING-STORAGE reset, synthesized `UT-CAP-` capture targets, generated SQLCA
-* [Runtime](runtime.md) — Docker-only GnuCOBOL toolchain (`mockymock-cobc` container), compile/run, sandbox model
+* [Runtime](runtime.md) — GnuCOBOL toolchain: the `mockymock-cobc` container (default) or a bundled native tree (`MOCKYMOCK_GNUCOBOL_HOME`), compile/run, sandbox model
 * [Report](report.md) — `__MOCKYMOCK__` stdout protocol, `TestResult`/`TestSuiteResult` model, console + JUnit XML + JSON formatters, execution trace; the `mockymock report` builder/HTML renderer and the assistant step journal
 
 ## Entry Point

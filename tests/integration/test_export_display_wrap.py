@@ -6,8 +6,8 @@ must not change what actually prints, or the __MOCKYMOCK__ stdout
 protocol silently breaks."""
 
 from mockymock.cli.mainframe_export import wrap_long_display_lines
-from mockymock.runtime import docker_toolchain
 from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
+from mockymock.runtime.toolchain import active
 from tests.integration._docker import requires_docker
 
 UNWRAPPED_LINE = (
@@ -41,13 +41,14 @@ def test_wrapped_display_produces_byte_identical_stdout():
     ]
     source = "\n".join(program_lines) + "\n"
 
-    docker_toolchain.ensure_toolchain()
-    with sandbox_dir_maybe_kept(root=docker_toolchain.WORK_ROOT, keep=False) as tmp:
+    toolchain = active()
+    toolchain.ensure_toolchain()
+    with sandbox_dir_maybe_kept(root=toolchain.WORK_ROOT, keep=False) as tmp:
         src = tmp / "WRAPCHK.cbl"
         src.write_text(source, encoding="utf-8", newline="\n")
-        compiled = docker_toolchain.compile_source(src)
+        compiled = toolchain.compile_source(src)
         assert compiled.success, compiled.stderr
-        executed = docker_toolchain.run_binary(compiled.binary_path)
+        executed = toolchain.run_binary(compiled.binary_path)
         assert executed.exit_code == 0
 
     stdout_lines = executed.stdout.splitlines()

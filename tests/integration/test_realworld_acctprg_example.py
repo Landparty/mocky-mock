@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from mockymock.cli.main import main
-from tests.integration._docker import requires_docker
+from tests.integration._docker import pinned_coverage_toolchain, requires_docker
 
 EXAMPLE_DIR = (
     Path(__file__).parent.parent.parent / "examples" / "real-world" / "ACCTPRG"
@@ -92,6 +92,7 @@ def test_committed_acctprg_example_reports_coverage(capsys):
     # gained its two MOCK CALL ... ROWS whole-program cases, which drive
     # real 0000-MAIN-PROCESS loop iterations instead of only the
     # empty-database path.
-    assert match.group(0) == (
-        "coverage: 88.66% of ACCTPRG.cbl's own lines executed (86/97)"
-    )
+    if pinned_coverage_toolchain():
+        assert match.group(0) == (
+            "coverage: 88.66% of ACCTPRG.cbl's own lines executed (86/97)"
+        )

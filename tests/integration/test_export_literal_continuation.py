@@ -20,9 +20,12 @@ and so no continuation lines at all. This test drives cobc directly, in
 fixed format, rather than widening the production toolchain's API for a
 test."""
 
+import subprocess
+
 from mockymock.cli.mainframe_export import wrap_long_literal_lines
-from mockymock.runtime import docker_toolchain
+from mockymock.runtime import docker_toolchain, native_toolchain
 from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
+from mockymock.runtime.toolchain import active
 from tests.integration._docker import requires_docker
 
 # The shape from the bug report: splicer/reset.py re-serializes a wide
@@ -34,6 +37,18 @@ UNWRAPPED_LINE = f'           MOVE "{LITERAL}" TO WS-MARKER'
 
 def _compile_fixed_format(source_path):
     """cobc in FIXED format (`-fixed`), the format `export` writes for."""
+    if active() is native_toolchain:
+        home = native_toolchain.gnucobol_home()
+        assert home is not None
+        return subprocess.run(
+            [str(home / "bin" / "cobc"), "-x", "-fixed", "-std=mvs", source_path.name]
+            + ["-o", source_path.with_suffix("").name],
+            cwd=source_path.parent,
+            env=native_toolchain._env(home),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     container_source = docker_toolchain.to_container_path(source_path)
     container_binary = docker_toolchain.to_container_path(source_path.with_suffix(""))
     return docker_toolchain._docker(
@@ -87,13 +102,14 @@ def test_continued_literal_holds_the_exact_original_value():
     ]
     source = "\n".join(program_lines) + "\n"
 
-    docker_toolchain.ensure_toolchain()
-    with sandbox_dir_maybe_kept(root=docker_toolchain.WORK_ROOT, keep=False) as tmp:
+    toolchain = active()
+    toolchain.ensure_toolchain()
+    with sandbox_dir_maybe_kept(root=toolchain.WORK_ROOT, keep=False) as tmp:
         src = tmp / "CONTCHK.cbl"
         src.write_text(source, encoding="utf-8", newline="\n")
         compiled = _compile_fixed_format(src)
         assert compiled.returncode == 0, compiled.stderr
-        executed = docker_toolchain.run_binary(src.with_suffix(""))
+        executed = toolchain.run_binary(src.with_suffix(""))
         assert executed.exit_code == 0, executed.stderr
 
     stdout_lines = executed.stdout.splitlines()
