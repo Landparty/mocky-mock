@@ -37,7 +37,7 @@ def test_report_executes_the_suite_and_grades_every_case(tmp_path):
     assert steps["mutation"]["details"]["score"] is not None
     assert report["summary"]["passed"] == len(report["cases"]) == 5
     assert all(c["level"] in ("L1", "L2", "L3") for c in report["cases"])
-    assert (tmp_path / "CLAIMSEG.report.html").is_file()
+    assert (tmp_path / ".mockymock" / "CLAIMSEG.report.html").is_file()
 
 
 @requires_docker

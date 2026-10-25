@@ -258,6 +258,9 @@ Warnings never change the exit code. The main ones:
   N) reached -- add a MOCK for it`.
 - `warning (ORPHAN_ASSERTION_LABEL)`: a `*> INTENT` / `*> CHARACTERIZATION`
   label that covers no assertion.
+- `warning (FALLTHROUGH_ONLY_MOCK)`: a BEFORE-EACH / BEFORE-ALL mock that
+  cases reach only through GO TO fall-through. It can be removed: the
+  boundary is trapped like any other `FALLTHROUGH_BOUNDARY`.
 
 ## `mockymock mutate`
 
@@ -292,8 +295,28 @@ statement right before sets to zero (0 + n and 0 - n store the same
 magnitude). Only adjacent, single-line statements with plain operands
 qualify, so a real gap is never hidden.
 
+For any other mutant no test can kill, declare it in
+`<cut stem>.equivalent.json` next to the `.cut`, with a reason:
+
+```json
+{"equivalent": [
+  {"operator": "arith-verb-swap", "original": "ADD 1 TO WS-RETRY-COUNT",
+   "line": 212, "reason": "WS-RETRY-COUNT is unsigned and always 0 here"}
+]}
+```
+
+`original` (the statement, whitespace-insensitive) keeps the declaration
+attached when lines move; `line` picks one when the statement repeats;
+`mutated` narrows it to one mutation on the line. A declared mutant is
+reported as `equivalent` ("declared equivalent: <reason>"), never built
+and never scored. An entry with no reason, or one that matches no mutant
+any more, is ignored and printed as a note. `mutate --list` shows each
+mutant's line and operator.
+
 A mutant the Docker toolchain failed under (the container stopped, the
-daemon went away) is restarted and retried once, then reported as
+daemon went away, another `--jobs` worker restarted it mid-run, or the
+out-of-memory killer ended the binary with exit 137 before its timeout) is
+restarted and retried once, then reported as
 `error`: never scored, listed separately, and `mutate` exits 1 because the
 score covers fewer mutants than were generated. A complete run also saves
 its result as `.mockymock/<cut stem>.mutation.json` for

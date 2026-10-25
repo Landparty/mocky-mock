@@ -256,7 +256,16 @@ def format_console(outcome: MutationOutcome) -> str:
         lines.append(
             f"mutation score: {score * 100:.1f}% -- INCOMPLETE: "
             f"{outcome.errors} mutant(s) could not be evaluated, so this is "
-            "not the suite's score; fix Docker and re-run"
+            "not the suite's score; "
+            + (
+                "the container ran out of memory -- re-run with --jobs 1"
+                if any(
+                    "exit 137" in (r.detail or "")
+                    for r in outcome.results
+                    if r.status == "error"
+                )
+                else "fix Docker and re-run"
+            )
         )
     elif score is not None:
         lines.append(f"mutation score: {score * 100:.1f}%")

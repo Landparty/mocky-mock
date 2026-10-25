@@ -178,3 +178,80 @@ class TestFallThroughOnlyBoundaryIsAWarning:
         )
         assert [r.code for r in reasons] == ["UNMOCKED_CALL"]
         assert warnings == []
+
+
+class TestSharedMockReachedOnlyByFallThrough:
+    """Follow-up to #351: a BEFORE-EACH mock reached only through the
+    fall-through closure is no longer needed, and lint says so."""
+
+    def _directive(self):
+        return MockDirective(
+            category=MockCategory.CALL,
+            key="SUBPROG",
+            body_lines=['MOVE "OK" TO WS-RESULT'],
+        )
+
+    def test_a_fallen_match_is_not_a_direct_match(self):
+        program = _program(FALLTHROUGH_SOURCE)
+        surface = analyze(program)
+        directive = self._directive()
+        case = MockTestCase(name="c1", perform_target="MAIN-PARA", mocks=[directive])
+        matched: set[int] = set()
+        direct: set[int] = set()
+        check_test_case(
+            surface,
+            program,
+            case,
+            matched_out=matched,
+            direct_matched_out=direct,
+        )
+        assert id(directive) in matched
+        assert id(directive) not in direct
+
+    def test_a_directly_reached_match_is_direct(self):
+        program = _program(FALLTHROUGH_SOURCE)
+        surface = analyze(program)
+        directive = self._directive()
+        case = MockTestCase(name="c1", perform_target="FALLEN-PARA", mocks=[directive])
+        direct: set[int] = set()
+        check_test_case(surface, program, case, direct_matched_out=direct)
+        assert id(directive) in direct
+
+    def _lint(self, tmp_path, cases: str):
+        from pathlib import Path
+
+        from mockymock.cli.checks import run_static_checks
+
+        program = (
+            Path(__file__).parents[1]
+            / "integration"
+            / "fixtures"
+            / "fallthrough_boundary.cbl"
+        )
+        cut = tmp_path / "fallthrough_boundary.cut"
+        cut.write_text(
+            'TESTSUITE "fall"\n'
+            "BEFORE-EACH\n"
+            '    MOCK CALL "REPORTER"\n'
+            "    END-MOCK\n"
+            "END-BEFORE\n\n"
+            'TESTCASE "process"\n'
+            '    MOCK CALL "CALC"\n'
+            "    END-MOCK\n"
+            "    PERFORM PROCESS-REC\n" + cases
+        )
+        return run_static_checks(program, cut, None)
+
+    def test_lint_warns_that_the_shared_mock_can_go(self, tmp_path):
+        checked = self._lint(tmp_path, "")
+        assert checked.problems == []
+        (warning,) = [w for w in checked.warnings if "FALLTHROUGH_ONLY_MOCK" in w]
+        assert 'BEFORE-EACH MOCK CALL "REPORTER"' in warning
+
+    def test_no_warning_when_a_case_reaches_it_directly(self, tmp_path):
+        checked = self._lint(
+            tmp_path,
+            '\nTESTCASE "report"\n    PERFORM WRITE-REPORT\n',
+        )
+        assert checked.problems == []
+        assert not any("FALLTHROUGH_ONLY_MOCK" in w for w in checked.warnings)

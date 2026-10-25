@@ -1037,7 +1037,15 @@ listed in the console, `totals.errors` and `complete: false` in the JSON,
 and `mutate` exits 1 on an incomplete outcome whatever `--fail-under` says.
 `report` never passes the threshold on an incomplete score and says so in
 the step summary and the summary tile. A baseline `error` aborts with a
-message blaming Docker, not the suite.
+message blaming Docker, not the suite. Two faults leave the container up
+afterwards, so the inspect alone missed them and scored a kill
+(2026-10-25): `_run_suite_once` reads `docker_toolchain.container_identity()`
+(ID + StartedAt) before the compile and `_run_fault` compares it after a
+run with no verdict of its own -- a change means another `--jobs` worker
+restarted the container mid-run; and exit 137 (`SIGKILL_EXIT_CODE`) before
+the deadline is the out-of-memory killer in the shared `--memory 1g`
+container, whose INCOMPLETE line then says to re-run with `--jobs 1`. A 137
+after the deadline is `timeout -k` escalating, classified `timeout`.
 
 **Equivalent mutants (issue #349, 2026-10-22).** `mutation/equivalence.py`'s
 `equivalence_reason(mutant, original_lines, ast)` proves two shapes
@@ -1057,6 +1065,19 @@ console with the reason, `totals.equivalent` in the JSON, and named in the
 report's mutation step. This complements the zero-baseline hint below,
 which covers the swap when the zero comes from the test data rather than
 the program.
+
+**Declared equivalent mutants (2026-10-25).** For what no static proof
+covers, `mutation/declared.py` reads `<cut stem>.equivalent.json` beside
+the `.cut` (committed with the suite, deliberately not under
+`.mockymock/`, which `clean` empties): entries name a mutant by `operator`
+plus `original` statement text (columns 8-72, whitespace and case
+collapsed, so a moved line keeps its entry) and/or `line`, optionally
+`mutated`, and require a `reason`. `runner._declared_equivalents` marks
+each match `equivalent` with detail `declared equivalent: <reason>`
+before anything is built; ignored entries (no reason, no target, bad
+JSON) and entries matching no mutant come back as `notes`. The file's
+hash is part of `report/artifacts.fingerprint`, so a saved mutation
+result is not reused across an edit to it.
 
 **Zero-baseline hints (2026-10-04).** An `ADD..TO <-> SUBTRACT..FROM`
 swap on an unsigned numeric field that every case starts at zero is

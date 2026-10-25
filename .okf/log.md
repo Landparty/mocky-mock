@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-25 -- field-run follow-ups to #346, #347, #349, #351
+
+`mutate` no longer scores a run cut off while the container is up again
+afterwards (another worker restarted it, or the OOM killer's exit 137) and
+reads reviewed equivalent mutants from `<stem>.equivalent.json`
+([cli](cli.md)); labels count across blank lines above TESTCASE and from
+BEFORE-EACH, and lint warns `FALLTHROUGH_ONLY_MOCK` on hook mocks only the
+fall-through closure reaches ([analysis](analysis.md)).
+
 ## 2026-10-24 -- field-run framework limits (INTCALC, DEPTIMSM, copybooks)
 
 `generate --per-paragraph` mirrors the program's `PERFORM X THRU X-EXIT`
@@ -14,9 +23,10 @@ with a message naming the cause instead of a bare nonzero exit
 searched unasked ([cli](cli.md)); the libxml2 version line is dropped from
 binary stderr ([runtime](runtime.md)); the generic UNMATCHED_MOCK message
 points at BEFORE-EACH for shared mocks. Not changed: one MOCK per key
-answers every site of that key, so a DL/I scaffold whose GU on the IOPCB
-and GU on a DB PCB share `MOCK CALL "CBLTDLI"` still cannot end its
-message loop (DEPTIMSM's scaffold times out; it carries a TODO).
+answers every site of that key, so a generated DL/I scaffold whose GU on
+the IOPCB and GU on a DB PCB share `MOCK CALL "CBLTDLI"` still cannot end
+its message loop (DEPTIMSM's times out). Its TODO points at `ROWS ...
+TERMINAL`, which scripts the calls in order and does end it.
 
 ## 2026-10-16 -- bug-audit sweep 2 (#233-#336)
 

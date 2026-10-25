@@ -1429,6 +1429,7 @@ def check_test_case(
     matched_out: set[int] | None = None,
     warnings_out: list[RefusalReason] | None = None,
     traps_out: set[int] | None = None,
+    direct_matched_out: set[int] | None = None,
 ) -> list[RefusalReason]:
     """`warnings_out` / `traps_out` (issue #351): when given, an unmocked
     boundary this case reaches ONLY by falling off the end of a GO TO
@@ -1438,6 +1439,10 @@ def check_test_case(
     the splicer replaces it with a trap that fails the running case if it
     is ever actually reached, so nothing real executes either way. Without
     them every such boundary is refused, as before.
+    `direct_matched_out` collects the ids of the directives this case
+    matches somewhere it reaches other than through that fall-through
+    closure -- a shared mock matched only through it is no longer needed,
+    since the boundary would be trapped instead (see cli.checks).
 
     `shared` holds the ids of BEFORE-ALL/BEFORE-EACH directives (aliased
     into every case by the parser): one of them that this case never
@@ -1516,6 +1521,7 @@ def check_test_case(
         return reasons
 
     matched_directives: set[int] = set()
+    direct_matched: set[int] = set()
 
     # Flow-target directives (MOCK PARAGRAPH/SECTION) don't match boundary
     # sites -- they match the paragraph/section itself. Matched when the
@@ -1540,6 +1546,8 @@ def check_test_case(
             )
         elif directive.key in reachable:
             matched_directives.add(id(directive))
+            if directive.key not in fallthrough_only:
+                direct_matched.add(id(directive))
 
     # Boundary sites inside a flow-mocked paragraph/section are unreachable
     # for this case (the dispatch replaces the body), so they need no mocks
@@ -1571,6 +1579,8 @@ def check_test_case(
                 if site.keys and not uncovered:
                     for directive in covering:
                         matched_directives.add(id(directive))
+                        if site.paragraph_name not in fallthrough_only:
+                            direct_matched.add(id(directive))
                 else:
                     reasons.append(
                         RefusalReason(
@@ -1669,6 +1679,8 @@ def check_test_case(
         matches = [d for d in case.mocks if directive_matches_site(d, site)]
         for directive in matches:
             matched_directives.add(id(directive))
+            if site.paragraph_name not in fallthrough_only:
+                direct_matched.add(id(directive))
 
         if not matches and site.opt_in:
             # A clock ACCEPT another case mocks (issue #240): this case
@@ -1863,6 +1875,8 @@ def check_test_case(
 
     if matched_out is not None:
         matched_out.update(matched_directives)
+    if direct_matched_out is not None:
+        direct_matched_out.update(direct_matched)
     for directive in case.mocks:
         if id(directive) in matched_directives:
             continue
