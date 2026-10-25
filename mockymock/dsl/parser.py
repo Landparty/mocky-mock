@@ -290,6 +290,43 @@ def _reject_before_perform(case, keyword: str, line_no: int) -> None:
         )
 
 
+def _reject_after_assertions(case, keyword: str, line_no: int) -> None:
+    """A MOVE or PERFORM below an EXPECT/VERIFY: assertions are checked
+    after the case's last PERFORM, so the EXPECT would silently assert on
+    the state after this later call instead."""
+    if case.expectations or case.verifications:
+        raise CutParseError(
+            f"line {line_no}: {keyword} after an EXPECT/VERIFY -- assertions "
+            f"are checked after the test case's last PERFORM, so write every "
+            f"MOVE and PERFORM above them"
+        )
+
+
+def _close_call(case, perform_line: int) -> None:
+    """Move the case's setup MOVEs and PERFORM so far into `case.steps`:
+    a later MOVE or PERFORM starts the case's next call."""
+    for (value, target), move_line in zip(
+        case.setup_moves,
+        case.setup_move_lines or [0] * len(case.setup_moves),
+        strict=True,
+    ):
+        case.steps.append(
+            HookStep(kind="MOVE", target=target, value=value, line=move_line)
+        )
+    case.steps.append(
+        HookStep(
+            kind="PERFORM",
+            target=case.perform_target,
+            thru=case.perform_thru,
+            line=perform_line,
+        )
+    )
+    case.setup_moves = []
+    case.setup_move_lines = []
+    case.perform_target = ""
+    case.perform_thru = None
+
+
 def _reject_unbalanced_subscript(token: str, line_no: int) -> None:
     """Refuse a data-name token with a stray/unclosed paren that the `\\S+`
     fallback of _SUBSCRIPTED_NAME would otherwise pass through verbatim."""
@@ -714,6 +751,25 @@ def _instantiate_row(
         )
     _reject_name_placeholder(case.perform_target, case.line, provider, "PERFORM target")
     _reject_name_placeholder(case.perform_thru, case.line, provider, "PERFORM THRU")
+    for step in case.steps:
+        _reject_name_placeholder(
+            step.target, step.line, provider, f"{step.kind} target"
+        )
+        _reject_name_placeholder(step.thru, step.line, provider, "PERFORM THRU")
+    steps = [
+        HookStep(
+            kind=step.kind,
+            target=step.target,
+            value=(
+                _substitute(step.value, provider, row, case.name, step.line)
+                if step.kind == "MOVE"
+                else step.value
+            ),
+            thru=step.thru,
+            line=step.line,
+        )
+        for step in case.steps
+    ]
     setup_moves = [
         (_substitute(value, provider, row, case.name, case.line), target)
         for value, target in case.setup_moves
@@ -752,6 +808,7 @@ def _instantiate_row(
         setup_move_lines=list(case.setup_move_lines),
         perform_target=case.perform_target,
         perform_thru=case.perform_thru,
+        steps=steps,
         expectations=expectations,
         verifications=list(case.verifications),
         line=row_line,
@@ -869,6 +926,8 @@ def parse_cut(text: str) -> MockTestSuite:
     before_each: list[MockDirective] = []
     hook_mocks = {"BEFORE-ALL": before_all, "BEFORE-EACH": before_each}
     hook_steps: dict[str, list[HookStep]] = {}
+    # id(case) -> .cut line of its current (last) PERFORM
+    perform_lines: dict[int, int] = {}
     # (line, text, hook) for every hook MOVE and hook MOCK body line, checked
     # for unsubstituted PROVIDER placeholders once every PROVIDER is known
     # (a PROVIDER may be declared after the hook block), see
@@ -1433,13 +1492,10 @@ def parse_cut(text: str) -> MockTestSuite:
                 raise CutParseError(f"line {line_no}: MOVE outside TESTCASE")
             _reject_unbalanced_subscript(m.group("target"), line_no)
             if case.perform_target:
-                # Every setup MOVE runs before the PERFORM whatever its
-                # position, so a MOVE written after it would silently run
-                # first (issue #150).
-                raise CutParseError(
-                    f"line {line_no}: MOVE after the PERFORM -- setup MOVEs "
-                    f"run before it, so write them above the PERFORM"
-                )
+                # A MOVE below a PERFORM sets up the case's next call: the
+                # calls so far become steps (a multi-call case).
+                _reject_after_assertions(case, "MOVE", line_no)
+                _close_call(case, perform_lines.get(id(case), case.line))
             case.setup_moves.append((m.group("value"), m.group("target")))
             case.setup_move_lines.append(line_no)
         elif (m := _PERFORM_RE.match(line)) is not None:
@@ -1465,11 +1521,9 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
                 continue
             if case.perform_target:
-                raise CutParseError(
-                    f"line {line_no}: TESTCASE {case.name!r} already has a "
-                    f"PERFORM target {case.perform_target!r}; one PERFORM "
-                    f"per test case"
-                )
+                _reject_after_assertions(case, "PERFORM", line_no)
+                _close_call(case, perform_lines.get(id(case), case.line))
+            perform_lines[id(case)] = line_no
             case.perform_target = _upper_cobol_name(m.group("target"))
             case.perform_thru = _upper_cobol_name(thru) if thru else thru
         elif (m := _EXPECT_RE.match(line)) is not None:
@@ -1566,6 +1620,14 @@ def parse_cut(text: str) -> MockTestSuite:
 
     if suite is None:
         raise CutParseError("no TESTSUITE found")
+
+    for case in suite.test_cases:
+        if case.steps and not case.perform_target:
+            raise CutParseError(
+                f"line {case.setup_move_lines[-1]}: MOVE after the last "
+                f"PERFORM of TESTCASE {case.name!r} -- nothing runs after "
+                f"it, so drop it or add the PERFORM it sets up"
+            )
 
     _reject_hook_placeholders(hook_texts, providers)
     _apply_before_blocks(suite, before_all, before_each)

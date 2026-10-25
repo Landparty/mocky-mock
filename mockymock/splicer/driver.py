@@ -449,6 +449,14 @@ def _build_testcase_paragraph(
             # case's own PERFORM short.
             lines.append('           MOVE "N" TO UT-EARLY-EXIT')
 
+    # A multi-call case's earlier calls. VERIFY counts these too: they are
+    # the case's own code under test, unlike a BEFORE-EACH PERFORM's.
+    for step in case.steps:
+        lines.extend(_step_lines([step]))
+        if step.kind == "PERFORM":
+            # A terminator one call reached must not cut the next short.
+            lines.append('           MOVE "N" TO UT-EARLY-EXIT')
+
     for value, target in case.setup_moves:
         set_line = truth_set(value, target)
         if set_line is not None:

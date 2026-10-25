@@ -322,6 +322,12 @@ class MockTestCase:
     tags: list[str] = field(default_factory=list)
     """Tags from `TESTCASE "..." TAGS "a" "b"`, in declaration order.
     Selection (`run --tag`) and reporting only -- no runtime semantics."""
+    steps: list[HookStep] = field(default_factory=list)
+    """Earlier calls of a multi-call case, in order: every `MOVE`/`PERFORM`
+    written above the case's last PERFORM (`PERFORM A`, `MOVE 2 TO X`,
+    `PERFORM A`). They run, with the case's mocks, after BEFORE-EACH and
+    before `setup_moves`; `perform_target` is the last PERFORM. VERIFY
+    counts the calls of every PERFORM of the case."""
     template_name: str | None = None
     """The provider-bound TESTCASE this case was expanded from (one per
     PROVIDER row), by its own name; None for an ordinary case. Lets the
@@ -365,7 +371,7 @@ class HookCheck:
     the ones in force while the step runs -- the test case's own (EACH
     hooks, one HookCheck per test case) or BEFORE-ALL's (ALL hooks)."""
 
-    hook: str  # one of HOOK_NAMES
+    hook: str  # one of HOOK_NAMES, or "TESTCASE" for a case's earlier PERFORM
     step: HookStep
     case: MockTestCase
     for_case: MockTestCase | None  # the real test case (EACH hooks), else None
@@ -445,6 +451,16 @@ class MockTestSuite:
                         line=step.line,
                     )
                     checks.append(HookCheck(hook, step, synthetic, case))
+        for case in self.test_cases:
+            for step in performs(case.steps):
+                synthetic = MockTestCase(
+                    name=f"TESTCASE {case.name!r} PERFORM {step.target}",
+                    mocks=case.mocks,
+                    perform_target=step.target,
+                    perform_thru=step.thru,
+                    line=step.line,
+                )
+                checks.append(HookCheck("TESTCASE", step, synthetic, case))
         return checks
 
     def analysis_cases(self) -> list[MockTestCase]:

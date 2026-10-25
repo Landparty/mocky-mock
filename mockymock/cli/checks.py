@@ -754,14 +754,29 @@ def _run_static_checks(
     matched_ids: set[int] = set()
     direct_ids: set[int] = set()
     fallthrough_warnings: list[RefusalReason] = []
+    # A multi-call case's own mocks need to be reached by one of its calls,
+    # not necessarily the last: its earlier PERFORMs are checked as hook
+    # steps below, and its unreached mocks refused after them.
+    stepped_ids = {
+        id(d)
+        for case in suite.test_cases
+        if any(step.kind == "PERFORM" for step in case.steps)
+        for d in case.mocks
+        if id(d) not in shared_ids
+    }
     for case_index, case in enumerate(suite.test_cases):
+        own_shared = (
+            shared_ids | {id(d) for d in case.mocks}
+            if any(step.kind == "PERFORM" for step in case.steps)
+            else shared_ids
+        )
         case_reasons = check_test_case(
             surface,
             parse_result.ast,
             case,
             out.file_status_fields,
             neutralized_goto=neutralized_goto,
-            shared=shared_ids,
+            shared=own_shared,
             matched_out=matched_ids,
             warnings_out=fallthrough_warnings,
             traps_out=out.fallthrough_traps,
@@ -798,11 +813,12 @@ def _run_static_checks(
             traps_out=out.fallthrough_traps,
             direct_matched_out=direct_ids,
         ):
-            where = (
-                check.hook
-                if check.for_case is None
-                else (f"{check.hook} (TESTCASE {check.for_case.name!r})")
-            )
+            if check.for_case is None:
+                where = check.hook
+            elif check.hook == "TESTCASE":
+                where = f"TESTCASE {check.for_case.name!r}"
+            else:
+                where = f"{check.hook} (TESTCASE {check.for_case.name!r})"
             problem = (
                 f"refused ({r.code}): {where} PERFORM {check.step.target}: {r.message}"
             )
@@ -812,7 +828,11 @@ def _run_static_checks(
             seen_hook_problems.add(key)
             out.problems.append(problem)
             if r.suggested_fix:
-                block = "BEFORE-ALL" if check.for_case is None else "BEFORE-EACH"
+                block = (
+                    "BEFORE-ALL"
+                    if check.for_case is None
+                    else "this TESTCASE" if check.hook == "TESTCASE" else "BEFORE-EACH"
+                )
                 out.problems.append(f"    Add to {block}:")
                 out.problems.extend(
                     f"    {line}" for line in r.suggested_fix.splitlines()
@@ -855,6 +875,15 @@ def _run_static_checks(
                 "boundary there is trapped and fails the case only if a test "
                 "really reaches it"
             )
+    for case in suite.test_cases:
+        for directive in case.mocks:
+            if id(directive) in stepped_ids and id(directive) not in matched_ids:
+                out.problems.append(
+                    f"refused (UNMATCHED_MOCK): TESTCASE {case.name!r}: MOCK "
+                    f"{directive.describe()} is not reached by any of its "
+                    "PERFORMs"
+                )
+                stepped_ids.discard(id(directive))
     for directive in shared_mocks:
         if id(directive) not in matched_ids:
             block = (

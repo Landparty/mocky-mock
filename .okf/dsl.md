@@ -38,6 +38,8 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
     [ MOCK <category> <key>
           <COBOL statement lines, passed through verbatim>
       END-MOCK ]*
+    [ [ MOVE <value> TO <target> ]*
+      PERFORM <paragraph> [ THRU|THROUGH <paragraph> ] ]*   (earlier calls)
     [ MOVE <value> TO <target> ]*
     PERFORM <paragraph> [ THRU|THROUGH <paragraph> ]
     [ EXPECT <data-name> [NOT] TO BE [GREATER|LESS THAN [OR EQUAL TO]] <value> ]*
@@ -57,8 +59,16 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
 - `TESTCASE` must follow a `TESTSUITE`; `MOCK`/`MOVE`/`PERFORM`/`EXPECT`/`VERIFY`
   must all be inside a `TESTCASE`. Violating order raises `CutParseError` at
   the offending line.
-- One `PERFORM` per test case — a second `PERFORM` line raises
-  `CutParseError` (`already has a PERFORM target`).
+- Several `PERFORM`s make a multi-call case (2026-10-25): every `MOVE` and
+  `PERFORM` above the last `PERFORM` becomes a `HookStep` on
+  `MockTestCase.steps` (`parser._close_call`), run in order after
+  BEFORE-EACH and before the case's own `setup_moves`, with the case's
+  mocks; `UT-EARLY-EXIT` is reset after each step PERFORM. VERIFY counts
+  every call of the case. `hook_checks()` gates each step PERFORM as hook
+  `"TESTCASE"`, and a case mock no call reaches is refused
+  `UNMATCHED_MOCK` after all of them (`cli.checks`). A `MOVE` or
+  `PERFORM` below an `EXPECT`/`VERIFY` raises (`after an EXPECT/VERIFY`),
+  as does a `MOVE` after the last `PERFORM`.
 - `<expectation>` is validated **at parse time**: `ONCE`, `NEVER`,
   `AT LEAST ONCE`, or `<n> TIMES` (case-insensitive), matching exactly what
   `splicer/driver.py`'s `_verify_condition` compiles — anything else raises
@@ -370,10 +380,12 @@ any case (`PERFORM read-one` finds `READ-ONE`, #164).
 ### Statement order inside a TESTCASE (2026-10-05, #150)
 
 Setup `MOVE`s always run before the `PERFORM` and `EXPECT`/`VERIFY` always
-after it, whatever their position in the file. So the parser refuses the
-two orders that would mean something else: an `EXPECT`/`VERIFY` above the
-`PERFORM` (`EXPECT before the PERFORM`) and a `MOVE` below it (`MOVE after
-the PERFORM`). `MOCK` directives may sit anywhere. Data names containing a
+after the last one, whatever their position in the file. So the parser
+refuses the orders that would mean something else: an `EXPECT`/`VERIFY`
+above the first `PERFORM` (`EXPECT before the PERFORM`), a `MOVE` or
+`PERFORM` below an assertion, and a `MOVE` after the last `PERFORM`
+(`MOVE after the last PERFORM`). A `MOVE` between two `PERFORM`s sets up
+the second call (multi-call case, see above). `MOCK` directives may sit anywhere. Data names containing a
 `.` (`IN-REC.CUST-ID`) are refused too (#144) -- COBOL qualifies with
 `CUST-ID OF IN-REC`, which the refusal now suggests (#252).
 
@@ -590,7 +602,7 @@ Key regexes, matched in this order per non-blank line:
    file order (order matters: later `MOVE`s to the same target win at
    runtime, same as COBOL).
 8. `PERFORM <target> [THRU|THROUGH <thru>]` — a second PERFORM in the
-   same TESTCASE raises `CutParseError`.
+   same TESTCASE moves the first one and its MOVEs to `case.steps`.
 9. `EXPECT <name> TO BE <value>`.
 10. `VERIFY` quoted then bare (mirrors step 5's two-family split, plus the
     no-category-means-CALL back-compat case). The expectation phrase is

@@ -224,10 +224,52 @@ def test_unterminated_mock_body_raises():
         parse_cut(text)
 
 
-def test_duplicate_perform_raises():
-    text = 'TESTSUITE "s"\n' 'TESTCASE "c"\n' "    PERFORM ONE\n" "    PERFORM TWO\n"
-    with pytest.raises(CutParseError, match="already has a PERFORM"):
+def test_several_performs_make_a_multi_call_case():
+    """Every PERFORM above the last, with the MOVEs before it, becomes a
+    step; the last PERFORM and the MOVEs since the one before it are the
+    case's own."""
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    MOVE 1 TO WS-A\n"
+        "    PERFORM ONE\n"
+        "    MOVE 2 TO WS-A\n"
+        "    PERFORM ONE THRU ONE-EXIT\n"
+        "    MOVE 3 TO WS-A\n"
+        "    PERFORM TWO\n"
+        "    EXPECT WS-A TO BE 3\n"
+    )
+    case = parse_cut(text).test_cases[0]
+    assert [(s.kind, s.target, s.value, s.thru, s.line) for s in case.steps] == [
+        ("MOVE", "WS-A", "1", None, 3),
+        ("PERFORM", "ONE", "", None, 4),
+        ("MOVE", "WS-A", "2", None, 5),
+        ("PERFORM", "ONE", "", "ONE-EXIT", 6),
+    ]
+    assert case.setup_moves == [("3", "WS-A")]
+    assert case.perform_target == "TWO"
+
+
+@pytest.mark.parametrize("keyword", ["PERFORM TWO", "MOVE 1 TO WS-A"])
+def test_a_call_after_an_assertion_raises(keyword):
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    PERFORM ONE\n"
+        "    EXPECT WS-A TO BE 1\n"
+        f"    {keyword}\n"
+        "    PERFORM ONE\n"
+    )
+    with pytest.raises(CutParseError, match="after an EXPECT/VERIFY"):
         parse_cut(text)
+
+
+def test_multi_call_steps_are_checked_as_entry_points():
+    suite = parse_cut('TESTSUITE "s"\nTESTCASE "c"\n    PERFORM ONE\n    PERFORM TWO\n')
+    checks = suite.hook_checks()
+    assert [(c.hook, c.step.target, c.for_case.name) for c in checks] == [
+        ("TESTCASE", "ONE", "c")
+    ]
 
 
 # --- audit 3.1: a second TESTSUITE must be an error --------------------------

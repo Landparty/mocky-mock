@@ -396,6 +396,7 @@ def check_cut_data_names(
         + suite.before_each_steps
         + suite.after_each_steps
         + suite.after_all_steps
+        + [step for case in suite.test_cases for step in case.steps]
     )
     for step in hook_steps:
         if step.kind == "MOVE":

@@ -305,6 +305,9 @@ def _seeded_names(suite: object) -> set[str]:
     for case in getattr(suite, "test_cases", []) or []:
         for _value, target in getattr(case, "setup_moves", []) or []:
             names.add(str(target).upper())
+        for step in getattr(case, "steps", []) or []:
+            if step.kind == "MOVE":
+                names.add(str(step.target).upper())
         for mock in getattr(case, "mocks", []) or []:
             for row in (getattr(mock, "rows", None) or []) + [
                 getattr(mock, "terminal_row", None) or []

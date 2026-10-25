@@ -710,10 +710,10 @@ def test_150_an_expect_or_verify_above_the_perform_is_refused() -> None:
             parse_cut(head + body)
 
 
-def test_150_a_setup_move_below_the_perform_is_refused() -> None:
+def test_150_a_setup_move_below_the_last_perform_is_refused() -> None:
     from mockymock.dsl.parser import CutParseError, parse_cut
 
-    with pytest.raises(CutParseError, match="MOVE after the PERFORM"):
+    with pytest.raises(CutParseError, match="MOVE after the last PERFORM"):
         parse_cut('TESTSUITE "s"\nTESTCASE "c"\nPERFORM MAIN-PARA\nMOVE 4 TO WS-A\n')
 
 
