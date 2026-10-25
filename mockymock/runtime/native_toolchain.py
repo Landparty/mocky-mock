@@ -81,7 +81,7 @@ _COBC_DIALECT_FLAGS: tuple[str, ...] = ("-free", "-std=mvs")
 NATIVE_FAILURE_MARKERS: tuple[str, ...] = (
     "mockymock: could not run cobc",
     "mockymock: cobc timed out",
-    "mockymock: GnuCOBOL toolchain missing",
+    "GnuCOBOL toolchain missing",
 )
 
 
@@ -101,7 +101,7 @@ def _require_home() -> Path:
     cobc = home / "bin" / f"cobc{_EXE}"
     if not cobc.is_file():
         raise ToolchainNotAvailableError(
-            f"mockymock: GnuCOBOL toolchain missing: no {cobc} " f"({HOME_ENV}={home})"
+            f"GnuCOBOL toolchain missing: no {cobc} ({HOME_ENV}={home})"
         )
     return home
 
@@ -243,7 +243,7 @@ def ensure_toolchain(force_rebuild: bool = False) -> None:
     program = compiler.split()[0]
     if shutil.which(program, path=_env(home)["PATH"]) is None:
         raise ToolchainNotAvailableError(
-            f"mockymock: GnuCOBOL toolchain missing a C compiler: cobc "
+            f"GnuCOBOL toolchain missing a C compiler: cobc "
             f"compiles through `{program}`, which is not on PATH -- "
             f"{_c_compiler_hint()}"
         )
@@ -446,7 +446,7 @@ def start_gdb_session(binary_path: Path) -> subprocess.Popen:
     env = _env(home)
     if shutil.which("gdb", path=env["PATH"]) is None:
         raise ToolchainNotAvailableError(
-            "mockymock: GnuCOBOL toolchain missing gdb: the debugger drives "
+            "GnuCOBOL toolchain missing gdb: the debugger drives "
             "gdb, which is not on PATH"
         )
     return subprocess.Popen(

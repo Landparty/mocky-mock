@@ -3947,7 +3947,10 @@ def build_parser() -> argparse.ArgumentParser:
             "mockymock-cobc container every other command compiles and runs "
             "against. Safe to re-run: a current image/container is left "
             "alone. See 'mockymock doctor' to check readiness without "
-            "building or starting anything."
+            "building or starting anything. With MOCKYMOCK_GNUCOBOL_HOME set "
+            "(a bundled GnuCOBOL tree; MOCKYMOCK_TOOLCHAIN=auto|docker|native "
+            "picks the backend) nothing is built: setup checks that tree and "
+            "its C compiler instead."
         ),
     )
     setup_parser.add_argument(
