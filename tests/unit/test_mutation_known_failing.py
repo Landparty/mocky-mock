@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from mockymock.mutation import runner
 from mockymock.mutation.report import MutationOutcome, format_console, to_json_dict
-from mockymock.report.results import TestResult, TestSuiteResult
+from mockymock.report.results import TestResult as CaseResult
+from mockymock.report.results import TestSuiteResult as SuiteResult
 
 
-def _suite(*cases: tuple[str, bool, bool]) -> TestSuiteResult:
+def _suite(*cases: tuple[str, bool, bool]) -> SuiteResult:
     """(name, failed, ended) per case."""
     results = [
-        TestResult(
+        CaseResult(
             case_id=str(i),
             case_name=name,
             failure_reasons=["expected X = 1, got 2"] if failed else [],
@@ -18,7 +19,7 @@ def _suite(*cases: tuple[str, bool, bool]) -> TestSuiteResult:
         )
         for i, (name, failed, ended) in enumerate(cases, start=1)
     ]
-    return TestSuiteResult(
+    return SuiteResult(
         suite_name="s",
         results=results,
         tests_run=len(results),

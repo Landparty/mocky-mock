@@ -45,6 +45,7 @@ from mockymock.splicer.source_map import (
 )
 
 from ._reachability import (
+    _closed_perform_ranges,
     _expand_thru_range,
     _fallthrough_safe_sections,
     _find_sort_merge_statements,
@@ -685,12 +686,18 @@ def find_terminator_plans(
     # mocks raise (issue #268).
     target_sets: dict[tuple[bool, frozenset[str]], set[str]] = {}
     fallthrough_cache: dict[
-        tuple[bool, frozenset[str], frozenset[str]], dict[str, str]
+        tuple[bool, frozenset[str], tuple[str, str | None]], dict[str, str]
     ] = {}
+    ordered = _source_ordered_paragraphs(procedure)
+    paragraph_names = {p.paragraph_name for p in _all_paragraphs(procedure)}
 
     def hazards(
-        include_whenever: bool, conditions: frozenset[str], entry: frozenset[str]
+        include_whenever: bool,
+        conditions: frozenset[str],
+        target: str,
+        thru: str | None,
     ) -> tuple[set[str], dict[str, str]]:
+        entry = frozenset(name for name in (target, thru) if name)
         if (include_whenever, conditions) not in target_sets:
             target_sets[(include_whenever, conditions)] = (
                 _go_to_targets(
@@ -701,12 +708,24 @@ def find_terminator_plans(
                 - neutralized_goto
             )
         targets = target_sets[(include_whenever, conditions)]
-        key = (include_whenever, conditions, entry)
+        key = (include_whenever, conditions, (target, thru))
         if key not in fallthrough_cache:
+            # A GO TO to the end of a closed `PERFORM X THRU X-EXIT` range
+            # returns from that PERFORM; it never falls past X-EXIT.
+            closed = _closed_perform_ranges(
+                program,
+                ordered,
+                section_members,
+                driver_range=(
+                    (target, thru or target) if target in paragraph_names else None
+                ),
+                exclude_seeds=entry,
+            )
             fallthrough_cache[key] = _go_to_fallthrough_targets(
                 program,
                 targets,
                 _paragraph_safe_section_map(section_members, safe_sections, entry),
+                closed,
             )
         return targets, fallthrough_cache[key]
 
@@ -736,11 +755,7 @@ def find_terminator_plans(
         can_fire = whenever_can_fire(program, case.mocks)
         conditions = raised_conditions(case.mocks)
         go_to_targets, go_to_fallthrough = hazards(
-            can_fire,
-            conditions,
-            frozenset(
-                name for name in (case.perform_target, case.perform_thru) if name
-            ),
+            can_fire, conditions, case.perform_target, case.perform_thru
         )
         reachable, _ = _reachable_paragraphs(
             program,

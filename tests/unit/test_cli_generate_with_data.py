@@ -483,11 +483,49 @@ def test_known_unmockable_sites_do_not_raise_the_key_mismatch_warning(tmp_path, 
 _CHKCLR = Path(__file__).resolve().parents[2] / "examples" / "real-world" / "CHKCLR"
 
 
+_GOTO_MAIN = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOMAIN.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-X PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           PERFORM 1000-STEP
+           STOP RUN.
+       1000-STEP.
+           ADD 1 TO WS-X
+           IF WS-X < 3
+               GO TO 0000-MAIN
+           END-IF.
+"""
+
+
 def test_generate_fails_when_lint_refuses_the_scaffold_it_wrote(tmp_path, capsys):
-    """Issue #231: CHKCLR's STOP RUN can only propagate back to the test
-    through a paragraph reached by falling past a GO TO target, which lint
-    refuses as UNSUPPORTED_TERMINATOR_LAYOUT. No MOCK block can fix that, so generate says so and exits 1 instead of 0 --
-    while still writing the file."""
+    """Issue #231: a STOP RUN whose paragraph is itself a GO TO target
+    can't be neutralized, which lint refuses as
+    UNSUPPORTED_TERMINATOR_LAYOUT. No MOCK block can fix that, so generate
+    says so and exits 1 instead of 0 -- while still writing the file.
+    (CHKCLR, this test's first subject, became testable once a GO TO to
+    the end of a closed `PERFORM ... THRU 2000-EXIT` range stopped counting
+    as falling past 2000-EXIT: see the next test.)"""
+    program = tmp_path / "GOTOMAIN.cbl"
+    program.write_text(_GOTO_MAIN, encoding="utf-8")
+    out = tmp_path / "GOTOMAIN.cut"
+    rc = main(["generate", str(program), "-o", str(out)])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert out.exists()
+    assert "UNSUPPORTED_TERMINATOR_LAYOUT" in captured.out + captured.err
+    assert "lint` refuses it" in captured.err
+
+
+def test_generate_scaffolds_chkclr_through_its_closed_thru_range(tmp_path, capsys):
+    """CHKCLR's STOP RUN propagates back through 3000-FINALIZE, which sits
+    after 2000-EXIT, the target of every GO TO in 2000-PROCESS-CHECKS. Those
+    GO TOs only run inside `PERFORM 2000-PROCESS-CHECKS THRU 2000-EXIT`, so
+    they return from it and never fall into 3000-FINALIZE: the scaffold is
+    not refused."""
     out = tmp_path / "CHKCLR.cut"
     rc = main(
         [
@@ -500,7 +538,5 @@ def test_generate_fails_when_lint_refuses_the_scaffold_it_wrote(tmp_path, capsys
         ]
     )
     captured = capsys.readouterr()
-    assert rc == 1
-    assert out.exists()
-    assert "UNSUPPORTED_TERMINATOR_LAYOUT" in captured.out + captured.err
-    assert "lint` refuses it" in captured.err
+    assert rc == 0
+    assert "UNSUPPORTED_TERMINATOR_LAYOUT" not in captured.out + captured.err

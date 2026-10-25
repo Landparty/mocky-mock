@@ -10,7 +10,7 @@ prevent.
 `cobc` gets `-fno-arithmetic-osvs`: GnuCOBOL 3.2's OS/VS arithmetic, which
 `-std=mvs` turns on, gives 0 for `P * (1 - D)` when D is zero
 ([runtime](runtime.md)). `mutate` scores a suite with known-failing cases
-against its passing ones ([cli](cli.md)).
+against its passing ones ([cli](cli.md)). A terminator chain through a paragraph after a closed `PERFORM X THRU X-EXIT` range's end is no longer refused as GO TO fall-through ([analysis](analysis.md)).
 
 ## 2026-10-25 -- field-run follow-ups to #346, #347, #349, #351
 
