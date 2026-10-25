@@ -1543,7 +1543,10 @@ dialect risks, and a verification level no higher than L0.
 `.mockymock/<cut stem>.journal.jsonl` (`report.journal.default_journal_path`
 -> `report.artifacts.journal_path`, which keeps using a pre-#353
 `<cut stem>.journal.jsonl` next to the `.cut` when one exists and the new
-one does not).
+one does not). The JSON is always written, to `--json` or else beside
+the HTML (`html_path.with_suffix(".json")`, so
+`.mockymock/<cut stem>.report.json` by default; 2026-10-25, the field run
+found the two in different folders).
 `--scenarios none` skips the cobol-parser `ProgramFixtureGenerator`
 step (slow on large programs).
 
@@ -1564,6 +1567,14 @@ or JSON lines, each object with `step`/`summary` and optional
 before any is written; unknown keys are refused); it cannot be combined
 with the single-entry flags, which are no longer `required=True` so the
 check is `_cmd_journal`'s own.
+`--cut` goes through `main._journal_suite` (2026-10-25): an existing
+`.cut` is used as is; a program path resolves to its one suite
+(`discovery.find_suites`) or, before there is one, to
+`discovery.default_suite_path`, where `generate` will write it; a `.cut`
+that does not exist yet beside a same-stem program is redirected the same
+way and the console says so. A journal written before `generate` used to
+land beside the typed path while `report` read the one beside the suite.
+Several suites, or a path that is neither, exits 1.
 
 ## `mockymock clean [PROGRAM.cbl | PROGRAM.cut | DIR] [--all] [--dry-run]` (2026-10-22)
 

@@ -158,3 +158,45 @@ def test_entry_with_unicode_line_separators_reads_back_as_one_entry(tmp_path):
     entries, problems = read_journal(path)
     assert problems == []
     assert [entry["summary"] for entry in entries] == [summary, "plain"]
+
+
+def test_cli_puts_an_early_journal_where_generate_will_put_the_suite(
+    tmp_path, monkeypatch, capsys
+):
+    """The 2026-10-25 field run: a plan step journaled before `generate`
+    with `--cut PROG.cut` beside the program landed in the program's
+    folder, while `generate` then wrote tests/PROG.cut and `report` read
+    the journal from tests/.mockymock/."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "PROG.cbl").write_text("       PROGRAM-ID. PROG.\n")
+    (tmp_path / "src").mkdir()  # the program lies outside it: no mirror
+    src = tmp_path / "src" / "PAY.cbl"
+    src.write_text("       PROGRAM-ID. PAY.\n")
+    for typed in ("src/PAY.cut", "src/PAY.cbl"):
+        assert (
+            main(["journal", "--cut", typed, "--step", "plan", "--summary", "s"]) == 0
+        )
+    out = capsys.readouterr().out
+    assert "using the suite" in out
+    entries, _ = read_journal(tmp_path / "tests" / ".mockymock" / "PAY.journal.jsonl")
+    assert len(entries) == 2
+    assert not (tmp_path / "src" / ".mockymock").exists()
+
+
+def test_cli_resolves_a_program_to_its_existing_suite(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "PROG.cbl").write_text("       PROGRAM-ID. PROG.\n")
+    (tmp_path / "PROG.cut").write_text('TESTSUITE "s"\n')
+    assert (
+        main(["journal", "--cut", "PROG.cbl", "--step", "plan", "--summary", "s"]) == 0
+    )
+    entries, _ = read_journal(tmp_path / ".mockymock" / "PROG.journal.jsonl")
+    assert len(entries) == 1
+
+
+def test_cli_refuses_a_path_that_is_neither_a_cut_nor_a_program(tmp_path, capsys):
+    missing = tmp_path / "NOPE.cbl"
+    assert (
+        main(["journal", "--cut", str(missing), "--step", "p", "--summary", "s"]) == 1
+    )
+    assert "does not exist" in capsys.readouterr().out

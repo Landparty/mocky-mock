@@ -166,3 +166,16 @@ def test_building_the_parser_does_not_import_the_report_modules():
         [sys.executable, "-c", code], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stdout
+
+
+def test_json_is_written_next_to_the_html_unasked(ordrproc, capsys):
+    """2026-10-25 field run: the HTML and JSON landed in different
+    folders. With no --json the JSON now sits beside the HTML, wherever
+    -o puts it."""
+    assert main(["report", "ORDRPROC.cbl", "--scenarios", "none"]) == 0
+    folder = ordrproc / ".mockymock"
+    assert json.loads((folder / "ORDRPROC.report.json").read_text("utf-8"))
+    assert (
+        main(["report", "ORDRPROC.cbl", "-o", "out/r.html", "--scenarios", "none"]) == 0
+    )
+    assert (ordrproc / "out" / "r.json").is_file()

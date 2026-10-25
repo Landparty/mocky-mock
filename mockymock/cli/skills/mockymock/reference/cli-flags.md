@@ -487,7 +487,7 @@ unlabelled), and findings ranked by severity.
 | Option | Default | Description |
 |---|---|---|
 | `-o`, `--output` | `.mockymock/<cut stem>.report.html` next to the `.cut` | HTML path (one report per suite). |
-| `--json` | none | Also write the report as JSON (by convention `.mockymock/<cut stem>.report.json`). |
+| `--json` | next to the HTML (`.mockymock/<cut stem>.report.json`) | Where the report is also written as JSON; it always is. |
 | `--execute` | off | Run the suite with coverage now (Docker) -- unless `run` already saved a result for this exact program, suite and copybooks, which is reused. |
 | `--mutate` | off | Run mutation testing now (Docker, slower) -- unless `mutate` already saved a complete result for this exact program, suite and copybooks, which is reused. |
 | `--rerun` | off | With `--execute`/`--mutate`, run again even when a saved result could be reused. |
