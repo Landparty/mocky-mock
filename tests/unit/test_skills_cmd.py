@@ -76,6 +76,26 @@ def test_install_skill_force_overwrites_a_plain_file_target(tmp_path):
     assert (target / "SKILL.md").is_file()
 
 
+def _can_create_symlinks() -> bool:
+    """Windows needs Developer Mode or an elevated shell to create a
+    symlink (WinError 1314); probe once rather than guess from the OS."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            (Path(tmp) / "link").symlink_to(Path(tmp))
+        except OSError:
+            return False
+    return True
+
+
+needs_symlinks = pytest.mark.skipif(
+    not _can_create_symlinks(),
+    reason="creating a symlink needs Developer Mode or an elevated shell on Windows",
+)
+
+
+@needs_symlinks
 def test_install_skill_refuses_dangling_symlink_target_without_force(tmp_path):
     # 2026-08-12 audit Finding 5: Path.exists() follows symlinks, so a
     # dangling symlink (e.g. left behind by a moved skill checkout) looked
@@ -90,6 +110,7 @@ def test_install_skill_refuses_dangling_symlink_target_without_force(tmp_path):
     assert target.is_symlink()  # left untouched
 
 
+@needs_symlinks
 def test_install_skill_force_replaces_a_dangling_symlink_target(tmp_path):
     target = tmp_path / "dest"
     target.symlink_to(tmp_path / "no" / "such" / "path")
