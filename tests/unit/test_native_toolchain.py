@@ -28,6 +28,8 @@ def _fake_home(tmp_path: Path, monkeypatch, info: str = "COB_CC : gcc\n") -> Pat
     """A GnuCOBOL tree whose cobc is a script answering --info/--version."""
     home = tmp_path / "gnucobol"
     (home / "bin").mkdir(parents=True)
+    (home / "share" / "gnucobol" / "config").mkdir(parents=True)
+    (home / "share" / "gnucobol" / "config" / "default.conf").write_text("")
     cobc = home / "bin" / "cobc"
     cobc.write_text(
         "#!/bin/sh\n"
@@ -167,3 +169,25 @@ def test_failure_line_reads_native_markers():
         "mockymock: could not run cobc: [Errno 2]"
     )
     assert native_toolchain.docker_failure_line("RNF.cbl:3: error: x") is None
+
+
+def test_flat_windows_layout_is_found(tmp_path):
+    """Arnold Trembley's MinGW trees keep config/, copy/ and extras/ at the
+    root rather than under share/gnucobol/."""
+    for name in ("config", "copy", "extras"):
+        (tmp_path / name).mkdir()
+    env = native_toolchain._env(tmp_path)
+    assert env["COB_CONFIG_DIR"] == str(tmp_path / "config")
+    assert env["COB_COPY_DIR"] == str(tmp_path / "copy")
+    assert env["COB_LIBRARY_PATH"] == str(tmp_path / "extras")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell fake cobc")
+def test_missing_dialect_files_are_reported(monkeypatch, tmp_path):
+    home = _fake_home(tmp_path, monkeypatch, "COB_CC : sh\n")
+    (home / "share" / "gnucobol" / "config" / "default.conf").unlink()
+    monkeypatch.setenv(native_toolchain.HOME_ENV, str(home))
+    with pytest.raises(
+        native_toolchain.ToolchainNotAvailableError, match="default.conf"
+    ):
+        native_toolchain.ensure_toolchain()

@@ -114,6 +114,16 @@ def _path_prepend(var: str, *entries: Path) -> str:
     return os.pathsep.join(parts)
 
 
+def _tree_dir(home: Path, name: str) -> Path:
+    """`<home>/share/gnucobol/<name>`, an installed prefix's layout, or
+    `<home>/<name>` when only that exists: the Windows MinGW distributions
+    (Arnold Trembley's) keep `config/` and `copy/` at the root, with the
+    runtime modules in `extras/`."""
+    installed = home / "share" / "gnucobol" / name
+    flat = home / name
+    return flat if not installed.is_dir() and flat.is_dir() else installed
+
+
 def _env(home: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
     """The process environment with every path cobc and libcob baked in at
     build time pointed back into `home`. A variable the user already set
@@ -131,14 +141,16 @@ def _env(home: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
     elif not _WINDOWS:
         env["LD_LIBRARY_PATH"] = _path_prepend("LD_LIBRARY_PATH", lib_dir)
     defaults = {
-        "COB_CONFIG_DIR": str(home / "share" / "gnucobol" / "config"),
-        "COB_COPY_DIR": str(home / "share" / "gnucobol" / "copy"),
+        "COB_CONFIG_DIR": str(_tree_dir(home, "config")),
+        "COB_COPY_DIR": str(_tree_dir(home, "copy")),
         "COB_CFLAGS": (
             f'-pipe -I"{include_dir}" -Wno-unused -fsigned-char -Wno-pointer-sign'
         ),
         "COB_LDFLAGS": f'-L"{lib_dir}"',
         "COB_LIBS": f'-L"{lib_dir}" -lcob',
-        "COB_LIBRARY_PATH": str(lib_dir / "gnucobol"),
+        "COB_LIBRARY_PATH": str(
+            home / "extras" if (home / "extras").is_dir() else lib_dir / "gnucobol"
+        ),
     }
     for name, value in defaults.items():
         env.setdefault(name, value)
@@ -238,6 +250,12 @@ def ensure_toolchain(force_rebuild: bool = False) -> None:
     built or started, so `force_rebuild` has nothing to rebuild."""
     del force_rebuild
     home = _require_home()
+    config_dir = Path(_env(home)["COB_CONFIG_DIR"])
+    if not (config_dir / "default.conf").is_file():
+        raise ToolchainNotAvailableError(
+            f"GnuCOBOL toolchain missing its dialect files: no default.conf in "
+            f"{config_dir} (set COB_CONFIG_DIR to the tree's config folder)"
+        )
     info = _cobc_info(home)
     compiler = os.environ.get("COB_CC") or info.get("COB_CC") or "gcc"
     program = compiler.split()[0]
