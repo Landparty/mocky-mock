@@ -416,7 +416,17 @@ DLLs). A variable the user already exported wins (`setdefault`).
 or macOS tree does not carry one: `ensure_toolchain` reads `COB_CC` (env,
 else `cobc --info`, cached per process) and fails with what to install when
 it is not on `PATH`. A Windows tree is expected to be a MinGW build with gcc
-in `bin/`.
+in `bin/`. gcov (`MOCKYMOCK_GCOV`, default `gcov`) and gdb are resolved to a
+full path on the child environment's `PATH` (`_resolve`) before they are
+spawned: Windows' CreateProcess looks a bare name up on the *parent's* `PATH`
+and ignores `env=`, so the tree's own `gcov.exe` / `gdb.exe` were not found
+(`[WinError 2]`). cobc is always spawned by full path.
+
+**Windows tree.** Verified 2026-10-25 with the build the Chocolatey
+`gnucobol` package (3.2.0.20240515) downloads: Arnold Trembley's 32-bit MinGW
+GC32-BDB (gcc 9.2, gcov, gdb, BDB, GMP, cJSON; no libxml2). It keeps
+`config/`, `copy/`, `extras/` at the root (no `share/`); `_tree_dir` finds
+both layouts. Smart App Control did not block compiled binaries there.
 
 **Behaviour kept from the container.** Same cobc flags (`-free -std=mvs`,
 `--coverage`, `-ftraceall`, `-g`); the compiler runs from the sandbox

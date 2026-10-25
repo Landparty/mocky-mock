@@ -191,3 +191,15 @@ def test_missing_dialect_files_are_reported(monkeypatch, tmp_path):
         native_toolchain.ToolchainNotAvailableError, match="default.conf"
     ):
         native_toolchain.ensure_toolchain()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell fake gcov")
+def test_gcov_is_resolved_on_the_trees_path(monkeypatch, tmp_path):
+    """Windows looks a bare program name up on the parent's PATH, not the
+    child's `env=`, so gcov/gdb are resolved to a full path first."""
+    home = _fake_home(tmp_path, monkeypatch)
+    gcov = home / "bin" / "gcov"
+    gcov.write_text("#!/bin/sh\nexit 0\n")
+    gcov.chmod(gcov.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", "/nonexistent")
+    assert native_toolchain._gcov_program(native_toolchain._env(home)) == str(gcov)

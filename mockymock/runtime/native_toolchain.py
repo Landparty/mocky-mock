@@ -412,8 +412,16 @@ def run_binary(
     )
 
 
-def _gcov_program() -> str:
-    return os.environ.get("MOCKYMOCK_GCOV") or "gcov"
+def _resolve(program: str, env: dict[str, str]) -> str | None:
+    """`program` looked up on the PATH of `env`, the one the child gets.
+    Windows' CreateProcess searches the *parent's* PATH for a bare name and
+    ignores `env=`, so the tree's own gcov/gdb are only found this way."""
+    return shutil.which(program, path=env["PATH"])
+
+
+def _gcov_program(env: dict[str, str]) -> str:
+    program = os.environ.get("MOCKYMOCK_GCOV") or "gcov"
+    return _resolve(program, env) or program
 
 
 def run_gcov(source_path: Path) -> GcovResult:
@@ -430,11 +438,11 @@ def run_gcov(source_path: Path) -> GcovResult:
             ),
         )
     try:
-        home = _require_home()
+        env = _env(_require_home())
         result = _run(
-            [_gcov_program(), gcda_path.name],
+            [_gcov_program(env), gcda_path.name],
             cwd=source_path.parent,
-            env=_env(home),
+            env=env,
             timeout=60,
             text=True,
         )
@@ -462,13 +470,14 @@ def start_gdb_session(binary_path: Path) -> subprocess.Popen:
     ships lldb, not gdb, so debugging there needs `brew install gdb`)."""
     home = _require_home()
     env = _env(home)
-    if shutil.which("gdb", path=env["PATH"]) is None:
+    gdb = _resolve("gdb", env)
+    if gdb is None:
         raise ToolchainNotAvailableError(
             "GnuCOBOL toolchain missing gdb: the debugger drives "
             "gdb, which is not on PATH"
         )
     return subprocess.Popen(
-        ["gdb", "-q", "--interpreter=mi2", str(binary_path)],
+        [gdb, "-q", "--interpreter=mi2", str(binary_path)],
         cwd=binary_path.parent,
         env=env,
         stdin=subprocess.PIPE,
