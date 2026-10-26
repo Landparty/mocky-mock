@@ -1056,7 +1056,8 @@ cannot change the program, and `runner._equivalent_mutants` (one extra
 target (or an enclosing group) the next code line overwrites in full with
 a literal MOVE or a `SET <88> TO TRUE` (88 owners resolved from the
 parent's `ConditionNameItem` children), and an `arith-verb-swap` of
-`ADD/SUBTRACT n` on an unsigned, non-edited numeric field the previous
+`ADD/SUBTRACT n` on an unsigned, non-edited zoned or packed numeric field
+(not binary: GnuCOBOL wraps `0 - 5` in a `PIC 9(4) COMP` to 65531) the previous
 code line zeroes (`MOVE ZERO/0 TO f`, `INITIALIZE f`). Both statements
 must be single-line and complete, operands plain names or literals, and a
 statement ending a sentence it did not start (its period may close an IF)
@@ -1086,7 +1087,7 @@ survives however good the assertions are. After the kill loop,
 `runner._attach_zero_baseline_hints` re-runs `run_static_checks` once and
 `mutation.zero_baseline.zero_baseline_hint` sets `MutantResult.hint` on
 each *built* survivor where every receiving name on the mutated line is an
-unsigned, non-edited, non-OCCURS WORKING-STORAGE/LOCAL-STORAGE item whose
+unsigned, non-edited, non-OCCURS, non-binary WORKING-STORAGE/LOCAL-STORAGE item whose
 reset value is zero (VALUE zero, or no VALUE -- `splicer/reset.py`'s
 default) and no test case writes it (setup MOVE, mock ROWS/TERMINAL, `TO
 <name>` in a mock body). GIVING forms are skipped. Since 2026-10-09 at
