@@ -54,7 +54,15 @@ dependencies = [
     # ABCMeta" from BoundaryInventoryAnalyzer._classify on every program,
     # which breaks `generate` (whose default is now the data-driven path)
     # and `init`. 1.8.0 and 1.8.4 are fine.
-    "cobol-parser>=1.7.7,!=1.8.2,<4",
+    #
+    # <3.1 because cobol-parser 3.1.0 changed two things this project
+    # reads (21 unit tests fail on 3.1.1): the bundle's tier-1 `call_count`
+    # is now one per (category, key) and only when exact (cobol-parser
+    # #363), where `generate` expects one count-1 entry per site and
+    # demotes or sums them itself; and a literal CALL USING argument now
+    # keeps its quotes ("ABC", not ABC). Lift the cap once both are
+    # adopted.
+    "cobol-parser>=1.7.7,!=1.8.2,<3.1",
 ]
 
 [project.optional-dependencies]

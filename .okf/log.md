@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-26 -- cobol-parser capped below 3.1
+
+- [integration](integration.md), [testing](testing.md), [publishing](publishing.md):
+  the dependency is now `cobol-parser>=1.7.7,!=1.8.2,<3.1`. The scheduled
+  `cobol-parser-compat` job went red on 3.1.0/3.1.1 (21 unit tests): the
+  bundle's tier-1 `call_count` is now one per (category, key) and only when
+  exact (cobol-parser #363), and a literal CALL USING argument keeps its
+  quotes. The unit suite passes unchanged on 3.0.0.
+
 ## 2026-10-25 -- native toolchain backend
 
 - [runtime](runtime.md): new **Native toolchain** section. `runtime/toolchain.py`

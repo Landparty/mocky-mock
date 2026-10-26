@@ -358,7 +358,7 @@ print a path inside the sibling `cobol-parser` checkout, not
 `site-packages`.
 
 *(Historical, from the git-SHA-pin era: since cobol-parser moved to PyPI,
-`pyproject.toml` declares a version floor (`cobol-parser>=1.7.7,!=1.8.2,<4`) and
+`pyproject.toml` declares a version floor (`cobol-parser>=1.7.7,!=1.8.2,<3.1`) and
 `requirements-dev.txt` is just `-e .[dev]`, so a fresh dev install resolves
 the newest published release, not a sibling checkout. The same lesson
 holds with "the floor" in place of "the pin": to check behaviour at the
@@ -431,7 +431,7 @@ reports 4 mypy errors this job calls success.
 
 `ubuntu-latest`, Python 3.13, `pip install -r requirements-dev.txt`, then
 `pytest tests/unit -v`. Added after the 2026-08-26 audit finding that
-`pyproject.toml` pins only a floor (`cobol-parser>=1.7.7,!=1.8.2,<4`), so any
+`pyproject.toml` pins only a floor (`cobol-parser>=1.7.7,!=1.8.2,<3.1`), so any
 install resolves whatever cobol-parser most recently published inside that
 range. This job installs the **published** package -- no sibling checkout,
 no local build, exactly what `pip install mockymock` gets -- and runs the

@@ -297,7 +297,7 @@ wheels = [
 
 [[package]]
 name = "mockymock"
-version = "0.10.1"
+version = "0.11.0"
 source = { editable = "." }
 dependencies = [
     { name = "cobol-parser" },
@@ -315,7 +315,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "cobol-parser", specifier = ">=1.7.7,!=1.8.2,<4" },
+    { name = "cobol-parser", specifier = ">=1.7.7,!=1.8.2,<3.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
