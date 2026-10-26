@@ -171,7 +171,13 @@ _EXPECT_RE = re.compile(
 # identifier like OR-FLAG or GREATER-VALUE parsing as an ordinary value.
 # NOT belongs here too: `TO BE NOT 5` (NOT after TO BE rather than before
 # it) otherwise parsed as the value `NOT 5` and generated `IF X NOT = NOT 5`.
-_EXPECT_DANGLING_PHRASE_RE = re.compile(r"^(?:GREATER|LESS|THAN|OR|EQUAL|NOT)(?:\s|$)")
+# A leading relational symbol too: `TO BE > 0 AND < 10` read as the value
+# `> 0 AND < 10` under plain `TO BE` and generated `IF NOT (X = > 0 ...)`,
+# which lint passed and cobc rejected. The phrase is `TO BE GREATER THAN
+# 0 AND < 10`; symbols are only for the abbreviated tail.
+_EXPECT_DANGLING_PHRASE_RE = re.compile(
+    r"^(?:(?:GREATER|LESS|THAN|OR|EQUAL|NOT)(?:\s|$)|[<>=])"
+)
 _VERIFY_QUOTED_RE = re.compile(
     rf'^VERIFY\s+(?:(?P<cat>{_QUOTED_CATS})\s+)?"(?P<key>[^"]*)"'
     rf"\s+WAS\s+(?:CALLED|PERFORMED)\s+(?P<expectation>.+)$"
@@ -420,6 +426,19 @@ def _reject_body_control_flow(line: str, line_no: int, directive: str) -> None:
             f"code that no check follows, so its CALLs and file I/O would run "
             f"for real -- write the effect in the mock body itself (an inline "
             f"PERFORM ... END-PERFORM is fine)"
+        )
+
+
+def _reject_dangling_phrase(value: str, line_no: int, line: str) -> None:
+    """Refuse an EXPECT value that starts with a comparison word or a
+    relational symbol (see `_EXPECT_DANGLING_PHRASE_RE`)."""
+    if _EXPECT_DANGLING_PHRASE_RE.match(value.lstrip()):
+        raise CutParseError(
+            f"line {line_no}: malformed EXPECT comparison: {line!r} "
+            f"(expected [NOT] TO BE, [NOT] TO BE GREATER THAN "
+            f"[OR EQUAL TO], or [NOT] TO BE LESS THAN [OR EQUAL TO], "
+            f"followed by the value; write `TO BE GREATER THAN 0 AND < 10`, "
+            f"not `TO BE > 0 AND < 10`)"
         )
 
 
@@ -736,6 +755,11 @@ def _instantiate_row(
     # A {Placeholder} substituted from a ROW like `5.` reaches the same
     # generated IF as a literal one -- checked against the row's own line.
     for expectation in expectations:
+        _reject_dangling_phrase(
+            expectation.expected_value,
+            row_line,
+            f"EXPECT {expectation.data_name} ... {expectation.expected_value}",
+        )
         _reject_sentence_period(expectation.expected_value, row_line)
     for value, _ in setup_moves:
         _reject_sentence_period(value, row_line, "MOVE")
@@ -1481,13 +1505,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 raise CutParseError(f"line {line_no}: EXPECT outside TESTCASE")
             _reject_unbalanced_subscript(m.group("name"), line_no)
-            if _EXPECT_DANGLING_PHRASE_RE.match(m.group("value")):
-                raise CutParseError(
-                    f"line {line_no}: malformed EXPECT comparison: {line!r} "
-                    f"(expected [NOT] TO BE, [NOT] TO BE GREATER THAN "
-                    f"[OR EQUAL TO], or [NOT] TO BE LESS THAN [OR EQUAL TO], "
-                    f"followed by the value)"
-                )
+            _reject_dangling_phrase(m.group("value"), line_no, line)
             _reject_sentence_period(m.group("value"), line_no)
             _reject_before_perform(case, "EXPECT", line_no)
             if m.group("comparison") and m.group("value").strip().upper() in (
