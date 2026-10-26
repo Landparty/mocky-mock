@@ -111,7 +111,9 @@ suites as from the project root.
 `--cut`: `_resolve_program_and_cut()` (`cli/main.py`) fills in whichever one
 is missing from its same-stem sibling file via
 `mockymock/cli/discovery.py`'s `resolve_program_path`/`resolve_cut_path`
-(mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). `run`/`lint`
+(mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). A `.cut`
+passed as the program positional is taken as `--cut` (2026-10-26; `run`
+alone did this from b96e91a). `run`/`lint`
 with *neither* given fall into `_run_directory`/`_lint_directory`:
 `discover_cut_files()` walks the test root (config's `test_root`, default
 `.`; the exclude list applies to directories *below* the root only, so an
