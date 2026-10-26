@@ -1,0 +1,15 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NUMEDITC.
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SPECIAL-NAMES.
+           DECIMAL-POINT IS COMMA.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AMT                 PIC S9(5)V99 VALUE 0.
+       01  WS-OUT                 PIC ZZ.ZZ9,99.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 1234,5 TO WS-AMT
+           MOVE WS-AMT TO WS-OUT
+           GOBACK.

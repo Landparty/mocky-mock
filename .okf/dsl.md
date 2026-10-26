@@ -123,7 +123,8 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   item compares as its edited text, so `TO BE 100.00` never matched
   `"      100.00"`. `driver._compares_by_value` picks these (the leaf name
   is in `record_rewrite.numeric_edited_fields`, from the PICTURE via
-  `is_numeric_edited_picture`; the value is a plain signed decimal; no
+  `is_numeric_edited_picture`; the value is a plain signed decimal, its
+  point a period or, for a `DECIMAL-POINT IS COMMA` program, a comma; no
   reference modification), and the driver emits `MOVE <field> TO
   UT-DEEDIT-VALUE` (`PIC S9(18)V9(13)`, the de-editing MOVE, verified
   under GnuCOBOL with CR/DB, `*` and `$`) then the relation on that.

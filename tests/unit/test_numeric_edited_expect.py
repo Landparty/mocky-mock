@@ -37,6 +37,13 @@ def test_unquoted_number_on_a_numeric_edited_field_compares_by_value():
     )
 
 
+def test_a_decimal_comma_number_compares_by_value():
+    """Under DECIMAL-POINT IS COMMA the number is written `1234,50`."""
+    procedure = "\n".join(_build(ExpectDirective("WS-BAL", "1234,50")).procedure_lines)
+    assert "MOVE WS-BAL TO UT-DEEDIT-VALUE" in procedure
+    assert "IF UT-DEEDIT-VALUE NOT = 1234,50" in procedure
+
+
 def test_operators_and_subscripts_carry_over():
     procedure = "\n".join(
         _build(

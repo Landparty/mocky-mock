@@ -627,7 +627,7 @@ _EXPECT_FAIL_CONDITIONS = {
 #: digits, Enterprise COBOL's ARITH(EXTEND) maximum, so `export` stays
 #: compilable there too.
 _DEEDIT_FIELD = "UT-DEEDIT-VALUE"
-_NUMERIC_LITERAL_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$")
+_NUMERIC_LITERAL_RE = re.compile(r"^[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)$")
 
 
 def _compares_by_value(expectation, numeric_edited: frozenset[str] | set[str]) -> bool:
