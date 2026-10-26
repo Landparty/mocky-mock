@@ -264,9 +264,9 @@ it raw.
   the `BEFORE-ALL`/`BEFORE-EACH`/`AFTER-EACH`/`AFTER-ALL` suite hooks,
   `PROVIDER`/`HEADER`/`ROW`, `*> STUB EXPECT`.
 - `reference/cli-flags.md` -- every subcommand and flag: `setup`, `init`,
-  `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`,
-  `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`,
-  `report`, `journal`.
+  `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `suites`,
+  `collect`, `explain`, `dashboard`, `doctor`, `export`, `analyze`,
+  `skills`, `report`, `journal`, `clean`.
 - `reference/scenario-generation.md` -- how to read a `mockymock
   fixtures` bundle (boundary inventory, branch-arm coverage, unresolved
   gaps), how to recommend a `--scenarios` mode, and how to phrase a

@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-26 -- cobol-analysis skill: one source, in cobol-parser
+
+`mockymock/cli/skills/cobol-analysis/` was a hand-edited copy of
+cobol-parser's skill and had drifted (no MCP paragraph). It is now
+cobol-parser's file byte for byte, copied by
+`scripts/sync_cobol_analysis_skill.py`; `test_cobol_analysis_skill_sync.py`
+compares the two when a cobol-parser checkout is next to this repo. The
+`mockymock` skill's reference list now names `suites` and `clean`.
+Updated [cli](cli.md).
+
 ## 2026-10-26 -- debug: setBreakpoints reports the bound line
 
 A breakpoint on `END-IF` (or `ELSE`, or a statement's second line) was
