@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## [0.11.0](https://github.com/Landparty/mocky-mock/compare/v0.10.2...v0.11.0) (2026-10-26)
 
 ### Added
+
+- **Native GnuCOBOL backend (no Docker).** `MOCKYMOCK_GNUCOBOL_HOME` names a self-contained GnuCOBOL 3.2 tree and every command (`setup`, `doctor`, `run`, coverage, `mutate`, `debug`) compiles and runs with it on the host instead of in the `mockymock-cobc` container; `MOCKYMOCK_TOOLCHAIN=auto|docker|native` picks the backend explicitly (`auto`, the default, means native when the home is set). Verified on Linux and on Windows with the MinGW build the Chocolatey `gnucobol` package installs; the VS Code extension bundles a tree and sets both variables. Docker stays the default, and the only backend with the container's hardening. See `.okf/runtime.md`, "Native toolchain".
 
 - **`MOCK CALL "X" ROWS ( ... ) TERMINAL ( ... )` -- one response per call.** A plain `MOCK CALL` answers every call of its key the same way, so a program calling one routine for several purposes (IMS `CBLTDLI` as priming GHN, DLET and loop GHN; `MQGET` loops; a DB2 access module) could only be driven end to end down its empty-input path. `ROWS` now works on `MOCK CALL` (static and dynamic), `MOCK MQ` and `MOCK DLI`, with the same grammar `READ` already has: row N answers that key's Nth call within the test case (counted across every call site), and `TERMINAL` answers every call after the last row. `TERMINAL` is required for these categories, since a CALL has no implicit end-of-data value and the last answer would otherwise repeat until `run --timeout` kills the loop. A `MOCK CALL` without `ROWS` splices exactly as before. `examples/real-world/ACCTPRG` gains two whole-program cases that run real purge-loop iterations.
 
