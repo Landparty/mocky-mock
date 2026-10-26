@@ -491,13 +491,16 @@ def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "not mockable" in out
-    assert "SORT/MERGE" in out
-    assert "SORTS-DATA-WITH-PROCEDURE" in out
-    assert "FEEDS-THE-SORT" not in out  # its RELEASE is independently mockable
-    assert "SORTS-DATA'" not in out  # the plain USING/GIVING form
-    assert "dynamic CALL" not in out
-    assert "file I/O" not in out
-    assert "console ACCEPT" not in out
+    # Only the not-mockable report: other warnings name test cases, and a
+    # test case is named after its paragraph (FEEDS-THE-SORT included).
+    report = out.split("not mockable", 1)[1]
+    assert "SORT/MERGE" in report
+    assert "SORTS-DATA-WITH-PROCEDURE" in report
+    assert "FEEDS-THE-SORT" not in report  # its RELEASE is independently mockable
+    assert "SORTS-DATA'" not in report  # the plain USING/GIVING form
+    assert "dynamic CALL" not in report
+    assert "file I/O" not in report
+    assert "console ACCEPT" not in report
     # The scaffold covers the static CALL, the dynamic CALL (bare key),
     # the READ, and the ACCEPT.
     scaffold = output.read_text()
