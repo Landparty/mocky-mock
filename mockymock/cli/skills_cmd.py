@@ -3,8 +3,9 @@
 mockymock ships three skills under mockymock/cli/skills/ as package data:
 `mockymock` (a SKILL.md plus reference/ files teaching an AI assistant how
 to scaffold and run .cut tests), `cobol-test` (the end-to-end job:
-understand, plan, intent assertions, report) and `cobol-analysis` (a copy
-of cobol-parser's analysis skill). They ride along under mockymock.cli -- setuptools only applies
+understand, plan, intent assertions, report) and `cobol-analysis`
+(cobol-parser's analysis skill, shipped unchanged: edit it in cobol-parser
+and copy it with scripts/sync_cobol_analysis_skill.py). They ride along under mockymock.cli -- setuptools only applies
 package-data globs under an already-discovered package, and this
 directory has no __init__.py of its own, so it rides along with
 mockymock.cli the same way mockymock/runtime/docker/ and

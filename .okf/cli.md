@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-16T20:00:00Z
+timestamp: 2026-10-26T00:00:00Z
 ---
 
 # Overview
@@ -1451,7 +1451,11 @@ Full design, including empirical validation of the wrapping algorithm and the th
 ## `mockymock skills install [--project] [--force] [--skill NAME ...] [--target claude|copilot|all]`
 
 Copies the packaged agent skills (`SKILL_NAMES`: `mockymock`,
-`cobol-analysis`, `cobol-test`, each under `mockymock/cli/skills/<name>/`)
+`cobol-analysis`, `cobol-test`, each under `mockymock/cli/skills/<name>/`;
+`cobol-analysis` is cobol-parser's `.claude/skills/cobol-analysis/` copied
+byte for byte by `scripts/sync_cobol_analysis_skill.py`, never edited here,
+and `tests/unit/test_cobol_analysis_skill_sync.py` fails on drift when a
+cobol-parser checkout sits next to this repo)
 to `~/.claude/skills/<name>` (default) or `./.claude/skills/<name>`
 (`--project`). `--skill` (repeatable) narrows the set; without it all
 three are installed. `--target` (2026-10-04) picks the assistant:
