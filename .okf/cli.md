@@ -285,7 +285,9 @@ cobol-parser knows the keyword (it then also targets branches on the
 parameters); otherwise `add_entry_parameters()` gives every scenario of the
 bundle dict the same `entry_parameters` fixture (category `ENTRY`, one
 PICTURE-valid row over the USING items' elementary fields) plus a `stub`
-expectation per LINKAGE field xref says the program writes, without the
+expectation per LINKAGE field xref says the program writes (a level-88
+xref files as written -- `SET LK-NEG TO TRUE` -- counts for its
+conditional variable, resolved through the layout index), without the
 branch targeting. DFHEIBLK/DFHCOMMAREA are dropped (`without_cics_parameters`;
 CICS supplies them, #245 handles the commarea). The scaffold MOVEs the row
 before the PERFORM (`generator._entry_parameter_lines`), so `run
