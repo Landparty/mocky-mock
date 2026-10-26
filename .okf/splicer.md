@@ -1469,7 +1469,7 @@ operator's *negation* via `_EXPECT_FAIL_CONDITIONS` since the generated
 IF guards the failure branch; `>=`/`<=` negate to plain `<`/`>` so every
 emitted condition stays a simple COBOL-85 relational — keep the map in
 sync with `model.EXPECT_OPERATORS`; a value with an unquoted `AND`/`OR`
-tail, i.e. an abbreviated combined condition such as `TO BE > 0 AND < 10`
+tail, i.e. an abbreviated combined condition such as `TO BE GREATER THAN 0 AND < 10`
 or `TO BE 7 OR 8`, instead compiles to `IF NOT (<name> <op> <value>)`,
 because swapping the operator would negate only the first relation, issue
 #265 -- or, for a negated operator (`NOT =`, `NOT >`, ...), to the

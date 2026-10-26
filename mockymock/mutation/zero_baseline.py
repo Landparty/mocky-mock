@@ -196,8 +196,26 @@ def _items_by_name(ast: object) -> dict[str, list[object]]:
     return items
 
 
+#: Usages where storing a negative result in an unsigned item keeps its
+#: magnitude. A binary one does not under GnuCOBOL -std=mvs: 0 - 5 in a
+#: `PIC 9(4) COMP` (or BINARY, COMP-4, COMP-5) leaves 65531, not 5, so a
+#: test asserting the field tells the ADD/SUBTRACT swap apart.
+_MAGNITUDE_USAGES = frozenset(
+    {"DISPLAY", "COMP-3", "COMPUTATIONAL-3", "PACKED-DECIMAL"}
+)
+
+
+def keeps_magnitude(item: object) -> bool:
+    """Whether `item`'s usage (inherited from its group, as cobol-parser
+    records it) stores |n| when a negative n lands in it unsigned."""
+    usage = str(getattr(item, "usage", None) or "DISPLAY").upper()
+    return usage in _MAGNITUDE_USAGES
+
+
 def _starts_at_zero_unsigned(item: object) -> bool:
     if getattr(item, "section_name", None) not in _RESET_SECTIONS:
+        return False
+    if not keeps_magnitude(item):
         return False
     picture = getattr(item, "picture_clause", None)
     if picture is None or getattr(picture, "is_edited", False):

@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-26 -- debug: setBreakpoints reports the bound line
+
+A breakpoint on `END-IF` (or `ELSE`, or a statement's second line) was
+answered as verified on that line, while gdb had bound it to the next
+line with code and the program stopped there. The response now carries
+the bound line, mapped back to the original source. Updated [cli](cli.md).
+
 ## 2026-10-26 -- cobol-parser capped below 3.1
 
 - [integration](integration.md), [testing](testing.md), [publishing](publishing.md):

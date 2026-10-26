@@ -378,7 +378,8 @@ class DapAdapter:
             )
             number = int(bkpt["number"])
             inserted_numbers.append(number)
-            breakpoints.append({"verified": True, "line": original_line, "id": number})
+            bound_line = _bound_original_line(bkpt, session) or original_line
+            breakpoints.append({"verified": True, "line": bound_line, "id": number})
         if not inserted_numbers:
             del self._breakpoint_numbers[source_path]
         self._breakpoint_original_file = source_path
@@ -622,6 +623,26 @@ class DapAdapter:
         if self._session is not None:
             self._session.gdb.close()
             self._session = None
+
+
+def _bound_original_line(bkpt: dict, session: DebugSession) -> int | None:
+    """The original line gdb actually bound a breakpoint to, or None when
+    that cannot be told. gdb moves a breakpoint on a line with no code of
+    its own (`ELSE`, `END-IF`, the second line of a statement) to the next
+    line that has some, and the program stops THERE: answering with the
+    requested line left the editor's marker on a line execution never
+    stops at. A bound line with no original counterpart (splicer-inserted
+    code) keeps the requested one -- there is nothing truer to show."""
+    try:
+        line = int(bkpt["line"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    file = bkpt.get("file")
+    if isinstance(file, str) and posixpath.basename(
+        file.replace("\\", "/")
+    ) != posixpath.basename(session.instrumented_file.replace("\\", "/")):
+        return None
+    return session.line_map.to_original(line)
 
 
 def _is_same_source(client_path: str, original_file: str | None) -> bool:

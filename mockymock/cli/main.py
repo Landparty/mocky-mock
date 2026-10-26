@@ -256,6 +256,11 @@ def _resolve_program_and_cut(
 
     program_arg = getattr(args, "program", None)
     cut_arg = getattr(args, "cut", None)
+    if program_arg and program_arg.lower().endswith(".cut") and cut_arg is None:
+        # `mockymock mutate PROG.cut`: the suite in the program's place, as
+        # `run` already accepts. Take it as --cut and infer the program,
+        # rather than "no .cut file found for PROG.cut".
+        cut_arg, program_arg = program_arg, None
     if program_arg is None and cut_arg is None:
         print(
             f"{command}: pass a program (and/or --cut) -- give at least "

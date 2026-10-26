@@ -111,7 +111,9 @@ suites as from the project root.
 `--cut`: `_resolve_program_and_cut()` (`cli/main.py`) fills in whichever one
 is missing from its same-stem sibling file via
 `mockymock/cli/discovery.py`'s `resolve_program_path`/`resolve_cut_path`
-(mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). `run`/`lint`
+(mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). A `.cut`
+passed as the program positional is taken as `--cut` (2026-10-26; `run`
+alone did this from b96e91a). `run`/`lint`
 with *neither* given fall into `_run_directory`/`_lint_directory`:
 `discover_cut_files()` walks the test root (config's `test_root`, default
 `.`; the exclude list applies to directories *below* the root only, so an
@@ -285,7 +287,9 @@ cobol-parser knows the keyword (it then also targets branches on the
 parameters); otherwise `add_entry_parameters()` gives every scenario of the
 bundle dict the same `entry_parameters` fixture (category `ENTRY`, one
 PICTURE-valid row over the USING items' elementary fields) plus a `stub`
-expectation per LINKAGE field xref says the program writes, without the
+expectation per LINKAGE field xref says the program writes (a level-88
+xref files as written -- `SET LK-NEG TO TRUE` -- counts for its
+conditional variable, resolved through the layout index), without the
 branch targeting. DFHEIBLK/DFHCOMMAREA are dropped (`without_cics_parameters`;
 CICS supplies them, #245 handles the commarea). The scaffold MOVEs the row
 before the PERFORM (`generator._entry_parameter_lines`), so `run
@@ -930,6 +934,13 @@ captured MI transcripts and end-to-end tested against a live container
   line N of a copybook became a live breakpoint on line N of the
   program. `stackTrace` frames fall back to `original_file` when no
   breakpoint has been set in the program.
+  A verified breakpoint reports the line gdb actually bound it to
+  (2026-10-14, `_bound_original_line`): gdb moves a breakpoint on a line
+  with no code of its own (`ELSE`, `END-IF`, a statement's second line)
+  to the next line that has some, and the program stops there. The
+  `bkpt` record's `line` is mapped back through `line_map`; the
+  requested line is kept only when the bound line is splicer-inserted
+  code with no original counterpart.
 
 Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
@@ -1056,7 +1067,8 @@ cannot change the program, and `runner._equivalent_mutants` (one extra
 target (or an enclosing group) the next code line overwrites in full with
 a literal MOVE or a `SET <88> TO TRUE` (88 owners resolved from the
 parent's `ConditionNameItem` children), and an `arith-verb-swap` of
-`ADD/SUBTRACT n` on an unsigned, non-edited numeric field the previous
+`ADD/SUBTRACT n` on an unsigned, non-edited zoned or packed numeric field
+(not binary: GnuCOBOL wraps `0 - 5` in a `PIC 9(4) COMP` to 65531) the previous
 code line zeroes (`MOVE ZERO/0 TO f`, `INITIALIZE f`). Both statements
 must be single-line and complete, operands plain names or literals, and a
 statement ending a sentence it did not start (its period may close an IF)
@@ -1086,7 +1098,7 @@ survives however good the assertions are. After the kill loop,
 `runner._attach_zero_baseline_hints` re-runs `run_static_checks` once and
 `mutation.zero_baseline.zero_baseline_hint` sets `MutantResult.hint` on
 each *built* survivor where every receiving name on the mutated line is an
-unsigned, non-edited, non-OCCURS WORKING-STORAGE/LOCAL-STORAGE item whose
+unsigned, non-edited, non-OCCURS, non-binary WORKING-STORAGE/LOCAL-STORAGE item whose
 reset value is zero (VALUE zero, or no VALUE -- `splicer/reset.py`'s
 default) and no test case writes it (setup MOVE, mock ROWS/TERMINAL, `TO
 <name>` in a mock body). GIVING forms are skipped. Since 2026-10-09 at

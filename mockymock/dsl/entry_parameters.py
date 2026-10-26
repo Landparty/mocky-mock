@@ -163,6 +163,13 @@ def _entry_parameter_layout(
         if entry.section == "LINKAGE"
         and any(ref.role == "write" for ref in entry.references)
     }
+    # `SET LK-NEG TO TRUE` is a write of the level-88's conditional
+    # variable, which xref files under the 88's own name: map it back, or
+    # a return code set only through its 88s gets no stub.
+    for name in list(written):
+        resolved = index.resolve(name)
+        if resolved is not None:
+            written.add(str(resolved.spec.name).upper())
     outputs = list(
         dict.fromkeys(
             spec.qualified_name

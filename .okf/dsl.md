@@ -93,7 +93,7 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   the equivalent plain `<`/`>` to keep emitted conditions to the
   simplest COBOL-85 relational forms) — keep that map in sync with
   `EXPECT_OPERATORS`. A value carrying an unquoted `AND`/`OR`
-  (`TO BE > 0 AND < 10`, `TO BE 7 OR 8`) is an abbreviated combined
+  (`TO BE GREATER THAN 0 AND < 10`, `TO BE 7 OR 8`) is an abbreviated combined
   condition; the driver negates it whole, `IF NOT (<name> <op> <value>)`
   (issue #265) -- except for a negated operator (`NOT TO BE 7 OR 8`),
   whose NOT COBOL would carry onto every abbreviated relation in the
@@ -106,7 +106,10 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   `... OR EQUAL 5`) raises `CutParseError` at the line instead of
   splicing leftover words into the generated IF
   (`_EXPECT_DANGLING_PHRASE_RE`, whole-word so `GREATER-VALUE` still
-  parses as an ordinary value). Likewise an EXPECT value ending in a
+  parses as an ordinary value). A value starting with a relational symbol
+  (`TO BE > 0 AND < 10`, which plain `TO BE` read as `= > 0 ...`) is
+  refused the same way, also when a PROVIDER row substitutes it
+  (`_reject_dangling_phrase`, 2026-10-26); symbols stay legal in the tail. Likewise an EXPECT value ending in a
   period outside quotes (`EXPECT WS-X TO BE 5.`, the COBOL sentence habit)
   raises `CutParseError` (`_reject_sentence_period`, 2026-09-27) --
   spliced into the generated `IF`, the period ended the sentence mid-IF
@@ -120,7 +123,8 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   item compares as its edited text, so `TO BE 100.00` never matched
   `"      100.00"`. `driver._compares_by_value` picks these (the leaf name
   is in `record_rewrite.numeric_edited_fields`, from the PICTURE via
-  `is_numeric_edited_picture`; the value is a plain signed decimal; no
+  `is_numeric_edited_picture`; the value is a plain signed decimal, its
+  point a period or, for a `DECIMAL-POINT IS COMMA` program, a comma; no
   reference modification), and the driver emits `MOVE <field> TO
   UT-DEEDIT-VALUE` (`PIC S9(18)V9(13)`, the de-editing MOVE, verified
   under GnuCOBOL with CR/DB, `*` and `$`) then the relation on that.
