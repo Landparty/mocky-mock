@@ -105,6 +105,8 @@
 * **debug:** decode P-scaled numeric items to the value they hold ([d85743b](https://github.com/Landparty/mocky-mock/commit/d85743b70f934e34df12f9d946731fdccb92d07b)), closes [#295](https://github.com/Landparty/mocky-mock/issues/295)
 * **debug:** name call-stack paragraphs in original-file lines ([6fe6958](https://github.com/Landparty/mocky-mock/commit/6fe695851d76e7615a34dcbb7cf70ce9c2504ac3)), closes [#256](https://github.com/Landparty/mocky-mock/issues/256)
 * **debug:** show an unreadable item instead of failing Variables ([460fcec](https://github.com/Landparty/mocky-mock/commit/460fcecc4aa0f3e0d202c4b2ecc383e01f9c30ed)), closes [#318](https://github.com/Landparty/mocky-mock/issues/318)
+* **deps:** allow cobol-parser 3.x and lock to 3.0.0 ([7df54d1](https://github.com/Landparty/mocky-mock/commit/7df54d1a960f87403f0f7aaac9ea2501238fc7ed))
+* **deps:** allow cobol-parser 3.x and lock to 3.0.0 ([5daf46d](https://github.com/Landparty/mocky-mock/commit/5daf46d366d1e21472e98376f99bdeb4550b30d1))
 * **driver:** cap the UT-TESTSUITE- paragraph name at 30 characters ([95d4197](https://github.com/Landparty/mocky-mock/commit/95d4197e1bc5706709174b6736fdbb73ad6f0fa3)), closes [#279](https://github.com/Landparty/mocky-mock/issues/279)
 * **driver:** guard a negated EXPECT with an AND/OR tail on the un-negated condition ([5437711](https://github.com/Landparty/mocky-mock/commit/5437711290957af40a7df78d35c00a1389e418c4)), closes [#339](https://github.com/Landparty/mocky-mock/issues/339)
 * **dsl:** accept a .cut file saved with a UTF-8 BOM ([ed64adf](https://github.com/Landparty/mocky-mock/commit/ed64adf06513a186be903e3d446fcfc0cdcfed73)), closes [#198](https://github.com/Landparty/mocky-mock/issues/198)
