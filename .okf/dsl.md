@@ -1188,7 +1188,20 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   a GO TO target. A PERFORM in a branch that ends with `STOP RUN`/`GOBACK`
   doesn't count against its target. Everything else is demoted the same
   way, including a per-row CALL behind a loop's own `IF NOT EOF` guard.
-  Early exits (`IF ... GOBACK`) are not modeled.
+  A site after a statement that may end the run (a STOP RUN/GOBACK/EXIT
+  PROGRAM/CICS RETURN in an IF/EVALUATE/AT END body, or a conditional or
+  looping PERFORM of code holding one) is out of scope too, since the
+  error-status scenarios take that branch (2026-10-27); a paragraph the
+  stopping branch itself PERFORMs first keeps its count. A `PERFORM
+  <section>` counts only its range (`_section_range`: not the members
+  after an EXIT SECTION / GOBACK / GO TO), and a member the entry's
+  section range falls into that a straight PERFORM also names runs twice.
+- **READ with no AT END in a loop (2026-10-27).** The bundle's READ count
+  is its row count, right only for a read-until-end-of-file loop. A READ
+  with no AT END clause read inside a loop or under a condition (a keyed
+  READ in `PERFORM X 3 TIMES`, NIST IX301M) is demoted
+  (`_NO_END_READ_REASON`); a FILE STATUS loop keeps the count
+  `_status_read_eof` gives it.
 - **Sites that run more than once a pass (#290).** The bundle (cobol-parser
   2.x) gives every site `call_count` 1 however often it runs, so for every
   category but READ/RETURN `exact_count_scope` no longer treats a looping
