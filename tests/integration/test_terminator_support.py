@@ -6,6 +6,8 @@ docs/2026-07-06-real-world-readiness-audit.md."""
 
 from pathlib import Path
 
+import pytest
+
 from mockymock.cli.main import main
 from tests.integration._docker import requires_docker
 
@@ -353,3 +355,145 @@ def test_section_scoped_terminator_neutralized_and_second_paragraph_does_not_run
     )
     assert "FAIL" not in out
     assert "CRASH" not in out
+
+
+# Whole program in one SECTION, members PERFORMed by name; an abort
+# paragraph in a second section, PERFORMed conditionally (2026-10-27,
+# docs/2026-10-27-section-member-terminators-design.md).
+SECTIONED_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECPGM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RC      PIC 99 VALUE 0.
+       01  WS-STEP    PIC X(10) VALUE SPACES.
+       01  WS-AFTER   PIC X VALUE 'N'.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           PERFORM A100-INIT
+           PERFORM A200-WORK
+           MOVE 'DONE' TO WS-STEP
+           GOBACK.
+       A100-INIT.
+           MOVE 'INIT' TO WS-STEP.
+       A200-WORK.
+           CALL 'CHKSUB' USING WS-RC
+           IF WS-RC NOT = 0
+               PERFORM Z900-ABORT
+           END-IF
+           MOVE 'WORKED' TO WS-STEP.
+       Z000-ERRORS SECTION.
+       Z900-ABORT.
+           MOVE 'ABORT' TO WS-STEP
+           STOP RUN.
+       Z910-NEVER.
+           MOVE 'Y' TO WS-AFTER.
+"""
+
+
+def _sectioned_cut(target: str) -> str:
+    return f"""\
+TESTSUITE "SECPGM"
+
+TESTCASE "abort"
+    MOCK CALL "CHKSUB"
+        MOVE 8 TO WS-RC
+    END-MOCK
+    PERFORM {target}
+    EXPECT WS-STEP TO BE "ABORT"
+    EXPECT WS-AFTER TO BE "N"
+
+TESTCASE "happy"
+    MOCK CALL "CHKSUB"
+        MOVE 0 TO WS-RC
+    END-MOCK
+    PERFORM {target}
+    EXPECT WS-STEP TO BE "DONE"
+"""
+
+
+@requires_docker
+@pytest.mark.parametrize("target", ["A000-START", "A000-MAIN"])
+def test_terminators_in_section_members_return_to_the_driver(
+    tmp_path: Path, capsys, target: str
+):
+    """By name (A000-START: EXIT PARAGRAPH everywhere) or as the section's
+    range (A000-MAIN: EXIT SECTION in A000-START and after its PERFORMs),
+    both terminators return to the case: the abort stops before 'WORKED'
+    and 'DONE' and never falls into Z910-NEVER, and the next case runs."""
+    cbl_path = tmp_path / "SECPGM.cbl"
+    cbl_path.write_text(SECTIONED_CBL)
+    cut_path = tmp_path / "SECPGM.cut"
+    cut_path.write_text(_sectioned_cut(target))
+
+    exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0, out
+    assert "[PASS] abort" in out
+    assert "[PASS] happy" in out
+
+
+FALL_THROUGH_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECEX.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RC      PIC 99 VALUE 0.
+       01  WS-STEP    PIC X(10) VALUE SPACES.
+       01  WS-AFTER   PIC X VALUE 'N'.
+       PROCEDURE DIVISION.
+       0000-MAIN SECTION.
+       0000-START.
+           CALL 'CHKSUB' USING WS-RC
+           IF WS-RC NOT = 0
+               MOVE 'EARLY' TO WS-STEP
+               GOBACK
+           END-IF
+           MOVE 'MAIN' TO WS-STEP.
+       0000-EXIT.
+           GOBACK.
+       0000-TAIL.
+           MOVE 'Y' TO WS-AFTER.
+"""
+
+FALL_THROUGH_CUT = """\
+TESTSUITE "SECEX"
+
+TESTCASE "early"
+    MOCK CALL "CHKSUB"
+        MOVE 8 TO WS-RC
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-STEP TO BE "EARLY"
+    EXPECT WS-AFTER TO BE "N"
+
+TESTCASE "normal"
+    MOCK CALL "CHKSUB"
+        MOVE 0 TO WS-RC
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-STEP TO BE "MAIN"
+    EXPECT WS-AFTER TO BE "N"
+"""
+
+
+@requires_docker
+def test_terminator_in_an_exit_paragraph_reached_by_fall_through(
+    tmp_path: Path, capsys
+):
+    """The `0000-EXIT. GOBACK.` idiom: the exit paragraph runs inside the
+    `PERFORM 0000-MAIN` section range by falling through, and its EXIT
+    SECTION stops before 0000-TAIL."""
+    cbl_path = tmp_path / "SECEX.cbl"
+    cbl_path.write_text(FALL_THROUGH_CBL)
+    cut_path = tmp_path / "SECEX.cut"
+    cut_path.write_text(FALL_THROUGH_CUT)
+
+    exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0, out
+    assert "[PASS] early" in out
+    assert "[PASS] normal" in out

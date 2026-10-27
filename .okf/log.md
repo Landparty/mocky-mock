@@ -5,6 +5,19 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-27 -- GOBACK / STOP RUN in SECTION members
+
+A terminator in a SECTION member was refused unless it sat in the
+section's first paragraph entered via `PERFORM <section-name>`, so the
+common "whole program in one MAIN SECTION" layout could not be tested.
+`refusal._section_member_modes` now gives each member one entry mode:
+section mode (inside a `PERFORM <section>` range, including later members
+reached by fall-through) leaves with EXIT SECTION, paragraph mode (only
+PERFORMed by its own name) with EXIT PARAGRAPH. Members entered both ways,
+inside a THRU range, or GO TO targets still refuse. Verified on GnuCOBOL
+3.2; `docs/2026-10-27-section-member-terminators-design.md`. Updated
+[analysis](analysis.md), [splicer](splicer.md).
+
 ## 2026-10-27 -- generate: no SET in case setup; driver after a wrapped header
 
 Two defects from a sweep over a real corpus. `generate` scaffolded a

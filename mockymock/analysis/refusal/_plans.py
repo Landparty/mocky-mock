@@ -61,6 +61,7 @@ from ._reachability import (
     _plain_perform_statements,
     _reachable_paragraphs,
     _safe_section_entry_points,
+    _section_member_modes,
     _source_ordered_paragraphs,
 )
 from ._types import _UNANNOTATED, RefusalReason
@@ -592,14 +593,11 @@ def find_terminator_plans(
     unmocked boundary).
 
     Safe means: the terminator's enclosing paragraph is a top-level
-    paragraph (not a SECTION member) -- or is the first paragraph of a
-    SECTION whose only entry point, whole-program, is `PERFORM
-    <section-name>` (`_safe_section_entry_points`; see
-    docs/2026-07-10-section-scoped-terminator-support-design.md; notably,
-    for a SECTION-scoped terminator, the test's own perform_target must name
-    the SECTION itself, not the paragraph directly, as direct paragraph
-    naming (shape 3 of the design doc) bypasses the section entry point and
-    remains unverified) -- is reachable from the test's own
+    paragraph -- or a SECTION member entered one way only
+    (`_section_member_modes`: inside a `PERFORM <section-name>` range, or
+    only ever PERFORMed by its own name, counting every case's own
+    perform_target; see docs/2026-10-27-section-member-terminators-design.md)
+    -- is reachable from the test's own
     perform_target via `_plain_perform_edges_from` (a chain of nothing but
     plain, unconditional, top-level PERFORM statements), and no paragraph
     anywhere on that whole restricted-reachable chain -- not just the
@@ -653,15 +651,36 @@ def find_terminator_plans(
     # see find_goto_exit_plans' docstring.
     neutralized_goto = neutralized_goto_targets(program, scope_map, lines)
     safe_section_entries = _safe_section_entry_points(program)
-    safe_section_first_names = set(safe_section_entries.values())
-    # The restricted chain walk only ever enters a SECTION through its
-    # first paragraph, via PERFORM <section-name>, so a chain PERFORM held
-    # there must end with EXIT SECTION (issue #338).
+    # How each SECTION member is entered, across the whole program and
+    # every case's own PERFORM target: a member running inside a `PERFORM
+    # <section-name>` range leaves with EXIT SECTION, one only ever
+    # PERFORMed by its own name with EXIT PARAGRAPH; one entered both ways
+    # has no mode and is refused (2026-10-27; before, only a section's
+    # first paragraph, entered via its section name, was supported).
+    section_names = {name for name in getattr(procedure, "_sections", {}) if name}
+    case_entries = {
+        name
+        for case in suite.analysis_cases()
+        for name in (case.perform_target, case.perform_thru)
+        if name
+    }
+    member_modes = _section_member_modes(
+        program,
+        paragraph_entries=case_entries - section_names,
+        section_entries=case_entries & section_names,
+    )
+    member_names = {
+        paragraph.paragraph_name
+        for section in procedure._sections.values()
+        for paragraph in section.paragraphs
+    }
+    # A chain PERFORM held in a member running in section mode must end
+    # with EXIT SECTION too (issue #338).
     section_chain_performs = {
         id(perform)
         for section in procedure._sections.values()
         for paragraph in section.paragraphs
-        if paragraph.paragraph_name in safe_section_first_names
+        if member_modes.get(paragraph.paragraph_name) == "SECTION"
         for perform, _nested, _in_boundary in _plain_perform_statements(
             paragraph.statements
         )
@@ -753,9 +772,9 @@ def find_terminator_plans(
         )
         reachable -= mocked_flow_names
         safe_names, chain_performs = _plain_perform_edges_from(
-            program, case.perform_target, safe_section_entries
+            program, case.perform_target, safe_section_entries, member_modes
         )
-        chain_section_names = safe_names - (top_level_names | safe_section_first_names)
+        chain_section_names = safe_names - (top_level_names | member_modes.keys())
         chain_go_to_names = safe_names & go_to_targets
         chain_fallthrough_names = safe_names & go_to_fallthrough.keys()
 
@@ -801,22 +820,16 @@ def find_terminator_plans(
 
             paragraph_name = site.paragraph_name
             problem = None
-            if paragraph_name not in top_level_names and (
-                paragraph_name not in safe_section_first_names
-                # A safe_section_first_names entry is only genuinely safe
-                # when reached via PERFORM <section-name> (an intermediate
-                # chain edge, or perform_target naming the section itself).
-                # _safe_section_entry_points already excludes any paragraph
-                # that is a PERFORM target anywhere -- so the only other way
-                # to land here is the test's own perform_target naming this
-                # paragraph directly, bypassing the section name entirely.
-                # That's shape 3 (docs/2026-07-10-section-scoped-terminator-
-                # support-design.md), still out of scope and unverified.
-                or paragraph_name == case.perform_target
+            if (
+                paragraph_name not in top_level_names
+                and paragraph_name not in member_modes
             ):
                 problem = (
-                    "is inside a paragraph that belongs to a SECTION -- "
-                    "SECTION-scoped terminators are not yet supported"
+                    "is inside a paragraph that belongs to a SECTION and is "
+                    "entered more than one way (by its own name and as part "
+                    "of its section's range, through a PERFORM ... THRU, or "
+                    "by GO TO) -- no single EXIT PARAGRAPH/SECTION returns "
+                    "correctly from it"
                 )
             elif paragraph_name in go_to_targets and paragraph_name in whenever_only:
                 problem = (
@@ -868,11 +881,16 @@ def find_terminator_plans(
                 )
             elif chain_section_names:
                 bad_name = sorted(chain_section_names)[0]
+                what = (
+                    "a SECTION or SECTION member that is entered more than "
+                    "one way (or a section whose first paragraph is) -- no "
+                    "single EXIT PARAGRAPH/SECTION returns correctly from it"
+                    if bad_name in section_names or bad_name in member_names
+                    else "not a paragraph or SECTION of this program"
+                )
                 problem = (
                     f"is only reachable through this test's own early-exit "
-                    f"propagation chain by way of '{bad_name}', which is "
-                    f"not a top-level paragraph (it belongs to a SECTION) "
-                    f"-- SECTION-scoped chains are not yet supported"
+                    f"propagation chain by way of '{bad_name}', {what}"
                 )
             elif chain_go_to_names:
                 # paragraph_name can't be a member here: the preceding elif
@@ -941,11 +959,7 @@ def find_terminator_plans(
                 continue
 
             if key not in plans_by_statement:
-                exit_kind = (
-                    "SECTION"
-                    if paragraph_name in safe_section_first_names
-                    else "PARAGRAPH"
-                )
+                exit_kind = member_modes.get(paragraph_name, "PARAGRAPH")
                 plans_by_statement[key] = TerminatorPlan(
                     site=terminator_sites[key],
                     exit_kind=exit_kind,

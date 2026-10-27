@@ -317,6 +317,7 @@ from ._reachability import (
     _plain_perform_statements,
     _reachable_paragraphs,
     _safe_section_entry_points,
+    _section_member_modes,
     _source_ordered_paragraphs,
     _walk_fallthrough_from,
     duplicated_paragraph_names,

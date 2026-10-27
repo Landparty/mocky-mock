@@ -1165,12 +1165,16 @@ future cobolparser fix that silences the warning without also fixing
 See `docs/2026-07-08-goback-stop-run-support-design.md`'s "Out of scope"
 section for the full writeup),
 never a `GO TO` target anywhere in the program
-(`refusal._go_to_targets`), never a `SECTION` member — except the one
-narrow, whole-program-verified shape: a `SECTION`'s own first paragraph,
-entered exclusively via `PERFORM <section-name>`
-(`refusal._safe_section_entry_points`), replaced with `EXIT SECTION`
-instead of `EXIT PARAGRAPH` (`TerminatorPlan.exit_kind`) — see
-`docs/2026-07-10-section-scoped-terminator-support-design.md`. Safe
+(`refusal._go_to_targets`), and, for a `SECTION` member, entered in
+only one way (`refusal._section_member_modes`, 2026-10-27): inside a
+`PERFORM <section-name>` range (the section's first paragraph, or a later
+one reached from it by fall-through) it leaves with `EXIT SECTION`;
+PERFORMed only by its own name it leaves with `EXIT PARAGRAPH`
+(`TerminatorPlan.exit_kind`, and `chain_exit_kinds` for a chain PERFORM
+held in a section-mode member). A member entered both ways, inside a
+THRU range, or a GO TO target is refused — see
+`docs/2026-10-27-section-member-terminators-design.md` (which extends
+`docs/2026-07-10-section-scoped-terminator-support-design.md`). Safe
 terminators
 are replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH`
 (`injector.build_terminator_neutralization`); every intermediate
