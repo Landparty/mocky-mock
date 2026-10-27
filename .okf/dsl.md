@@ -937,7 +937,11 @@ paragraph-grouped path described above, unchanged. A real
   via `_sql_rows_directive` (`_sql_wants_rows` decides single vs. multi).
   Values render through `_bundle_rendered_value`: numeric-family
   `FieldSpec` categories render bare, everything else quoted and escaped.
-  A POINTER-family field gets `SET <field> TO NULL` and an INDEX field no
+  A POINTER-family field gets `SET <field> TO NULL` in a mock body, and
+  a comment instead among a TESTCASE's own setup lines (the caller's USING
+  values, `_entry_parameter_lines`), which take only MOVE: the `.cut`
+  parser refused the SET there (TPMSA000, 2026-10-27), and the per-case
+  reset already sets it to NULL. An INDEX field gets no
   line at all (`_row_move_line`, 2026-10-12): the bundle lays both out as
   numeric fields holding `0`, and `MOVE 0 TO <pointer>` is a cobc compile
   error (LESERV's `CALL 'CEEHDLR' USING HANDLER-ROUTINE ...`). An

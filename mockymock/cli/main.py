@@ -3754,6 +3754,7 @@ def _insert_driver_with_origins(
     )
     seen_data_division = False
     entry_check_at: int | None = None
+    header_open = False
 
     for index, line in enumerate(lines):
         if index == entry_check_at and _starts_unnamed_code(lines, index):
@@ -3780,6 +3781,11 @@ def _insert_driver_with_origins(
             extend(ws_lines)
             inserted_ws = True
         if not inserted_proc and _PROCEDURE_DIVISION_RE.match(line):
+            header_open = True
+        if header_open and not inserted_proc and _ends_sentence(line):
+            # After the header's period, not its first line: a header
+            # wrapped onto later lines (`PROCEDURE DIVISION` / `USING
+            # LK-A.`) had the driver spliced into it (cobc: syntax error).
             extend([""])
             extend(artifact.procedure_lines)
             inserted_proc = True
@@ -3787,6 +3793,12 @@ def _insert_driver_with_origins(
     if inserted_proc:
         _insert_end_of_program_trap(result, inserted)
     return result, inserted
+
+
+def _ends_sentence(line: str) -> bool:
+    """Whether `line`'s code (before a `*>` comment) holds a period that
+    ends a sentence."""
+    return re.search(r"\.(?=\s|$)", line.split("*>", 1)[0]) is not None
 
 
 def _insert_end_of_program_trap(result: list[str], inserted: set[int]) -> None:

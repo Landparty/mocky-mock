@@ -253,6 +253,36 @@ def test_named_main_line_gets_no_synthetic_header(first):
     assert "UT-ORIGINAL-ENTRY." not in _after_driver(lines)
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        ["PROCEDURE DIVISION", "    USING LK-A", "    LK-B."],
+        ["PROCEDURE DIVISION USING LK-A", "    LK-B."],
+        ["PROCEDURE DIVISION", "    ."],
+    ],
+)
+def test_driver_goes_after_a_wrapped_header_and_before_its_unnamed_body(header):
+    """TPCTBIT1: the driver was spliced in after the header's first line,
+    inside a header wrapped onto later lines (cobc: syntax error), and the
+    unnamed entry body then got no paragraph of its own."""
+    lines = [
+        "IDENTIFICATION DIVISION.",
+        "PROGRAM-ID. PROG.",
+        *header,
+        "    PERFORM P1",
+        "    GOBACK.",
+        "P1.",
+        '    CALL "SUBPGM".',
+    ]
+    instrumented = [line.strip() for line in _insert_driver(lines, _driver_artifact())]
+    start = instrumented.index(header[0])
+    end = start + len(header) - 1
+    assert instrumented[start : end + 1] == [line.strip() for line in header]
+    assert any(line.startswith("UT-TESTCASE-") for line in instrumented[end:])
+    after = _after_driver(lines)
+    assert after[after.index("UT-ORIGINAL-ENTRY.") + 1] == "PERFORM P1"
+
+
 def test_procedure_division_using_list_running_on_gets_no_header():
     lines = [
         "IDENTIFICATION DIVISION.",

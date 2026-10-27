@@ -325,9 +325,10 @@ def procedure_header_clause_spans(
     holding the default entry's `USING` / `RETURNING` clause, from the
     keyword through the header's closing period, across as many lines as
     the list wraps. `splicer.linkage.neutralize` writes the period back at
-    the start of the first span, so the header always ends on its first
-    line: the driver is inserted right after that line, and a period left
-    on a later line put the driver inside the header (cobc: syntax error). `[]` when the header has no such
+    the start of the first span, so the header ends on the line its clause
+    starts on (the first line, unless the clause is wrapped onto a later
+    one); the driver is inserted after the header's period
+    (`cli.main._insert_driver`). `[]` when the header has no such
     clause. None when it cannot be blanked safely: a `CHAINING` clause (a
     different mechanism, never neutralized) or no closing period within
     `_HEADER_MAX_LINES` lines."""
@@ -340,12 +341,25 @@ def procedure_header_clause_spans(
     division = _DIVISION_RE.search(lines[first])
     if division is None:
         return []
-    clause = _HEADER_CLAUSE_RE.search(lines[first], division.end())
-    if clause is None:
+    # The clause may start on a later line than the header's own
+    # (`PROCEDURE DIVISION` / `    USING LK-A.`): look for it up to the
+    # header's period.
+    clause_line: int | None = None
+    start = division.end()
+    for idx in range(first, min(first + _HEADER_MAX_LINES, len(lines))):
+        code = lines[idx].split("*>", 1)[0]
+        clause = _HEADER_CLAUSE_RE.search(code, start)
+        period = _PERIOD_RE.search(code, start)
+        if clause is not None and (period is None or clause.start() < period.start()):
+            clause_line, start = idx, clause.start()
+            break
+        if period is not None:
+            return []
+        start = 0
+    if clause_line is None:
         return []
     spans: list[tuple[int, int, int]] = []
-    start = clause.start()
-    for idx in range(first, min(first + _HEADER_MAX_LINES, len(lines))):
+    for idx in range(clause_line, min(first + _HEADER_MAX_LINES, len(lines))):
         text = lines[idx]
         segment = text[start:]
         if any(

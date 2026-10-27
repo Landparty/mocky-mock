@@ -715,6 +715,152 @@ def _safe_section_entry_points(program) -> dict[str, str]:
     return safe_entries
 
 
+def _ends_section_range(paragraph) -> bool:
+    """Whether control cannot fall from `paragraph` into the next member
+    while running inside a `PERFORM <section-name>` range. Narrower than
+    `_falls_through`: there a trailing EXIT PARAGRAPH ends only this
+    paragraph and control continues into the next member, and EXIT
+    PROGRAM is a no-op under PERFORM (GnuCOBOL 3.2, both checked)."""
+    statements = paragraph.statements
+    if not statements:
+        return False
+    last = statements[-1]
+    if isinstance(last, ExitStatement):
+        return last.exit_type == "SECTION"
+    return not _falls_through(paragraph)
+
+
+def _section_range(section) -> list:
+    """The members that run when `section` is PERFORMed by name: its
+    first paragraph and each later one reached by falling through."""
+    members = []
+    for paragraph in section.paragraphs:
+        members.append(paragraph)
+        if _ends_section_range(paragraph):
+            break
+    return members
+
+
+def _section_member_modes(
+    program,
+    paragraph_entries: frozenset[str] | set[str] = frozenset(),
+    section_entries: frozenset[str] | set[str] = frozenset(),
+) -> dict[str, str]:
+    """SECTION member paragraph name -> how it is entered, for every member
+    entered in exactly one way: "SECTION" when it runs inside a `PERFORM
+    <section-name>` range -- the section's first paragraph, and each later
+    member reached by falling through from one that does not provably
+    divert (`_falls_through`) -- or "PARAGRAPH" when it is only ever
+    PERFORMed by its own name, so its range is the paragraph alone.
+
+    The early-exit propagation leaves such a member with `EXIT SECTION`
+    or `EXIT PARAGRAPH` respectively; both were verified against GnuCOBOL
+    3.2 (docs/2026-10-27-section-member-terminators-design.md). A member
+    entered both ways, a GO TO target, one inside a PERFORM ... THRU
+    range, or a name defined twice gets no entry: no single EXIT verb
+    returns correctly from it. `paragraph_entries` / `section_entries` are
+    the DSL-level entry points (a case's PERFORM target naming a member or
+    a section), invisible to the whole-program scan here.
+
+    When a THRU range cannot be expanded, the result falls back to the
+    2026-07-10 rule: only a safe section's first paragraph, entered via its
+    section name, as "SECTION"."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return {}
+    sections = {
+        name: section
+        for name, section in getattr(procedure, "_sections", {}).items()
+        if name and section.paragraphs
+    }
+    if not sections:
+        return {}
+    go_to_targets = _go_to_targets(program)
+    duplicated = duplicated_paragraph_names(program)
+    performed_names: set[str] = set(paragraph_entries)
+    entered_sections: set[str] = set(section_entries)
+    thru_ranges: list[tuple[str, str]] = []
+    for paragraph in _all_paragraphs(procedure):
+        for statement in _find_statements_of_type(
+            paragraph.statements, PerformStatement
+        ):
+            target = statement.target_paragraph
+            if not target:
+                continue
+            if statement.thru_paragraph:
+                thru_ranges.append((target, statement.thru_paragraph))
+            elif target in sections:
+                entered_sections.add(target)
+            else:
+                performed_names.add(target)
+        # A SORT/MERGE INPUT/OUTPUT PROCEDURE is an implicit PERFORM, run
+        # with no early-exit check after it: its members get no mode.
+        for statement in _find_sort_merge_statements(paragraph.statements):
+            for procedure_attr, thru_attr in (
+                ("input_procedure", "input_procedure_thru"),
+                ("output_procedure", "output_procedure_thru"),
+            ):
+                start = getattr(statement, procedure_attr, None)
+                if start is None:
+                    continue
+                thru = getattr(statement, thru_attr, None) or start
+                thru_ranges.append((start, thru))
+        # So is an XML PARSE PROCESSING PROCEDURE.
+        for statement in _find_xml_parse_statements(paragraph.statements):
+            start = getattr(statement, "processing_procedure", None)
+            if start is None:
+                continue
+            thru = getattr(statement, "processing_procedure_thru", None) or start
+            thru_ranges.append((start, thru))
+
+    def fallback() -> dict[str, str]:
+        return {
+            first: "SECTION"
+            for section_name, first in _safe_section_entry_points(program).items()
+            if section_name in entered_sections and first not in paragraph_entries
+        }
+
+    in_thru: set[str] = set()
+    if thru_ranges:
+        ordered = _source_ordered_paragraphs(procedure)
+        for start, thru in thru_ranges:
+            if start in sections:
+                start = sections[start].paragraphs[0].paragraph_name
+            if thru in sections:
+                thru = sections[thru].paragraphs[-1].paragraph_name
+            names, reason = _expand_thru_range(ordered, start, thru, "mode scan")
+            if reason is not None:
+                return fallback()
+            in_thru.update(names)
+
+    section_mode: set[str] = set()
+    for section_name in entered_sections & sections.keys():
+        if section_name in go_to_targets:
+            continue
+        for paragraph in _section_range(sections[section_name]):
+            section_mode.add(paragraph.paragraph_name)
+
+    modes: dict[str, str] = {}
+    for section in sections.values():
+        for paragraph in section.paragraphs:
+            name = paragraph.paragraph_name
+            if not (name or "").strip("."):
+                # A section's nameless main line (or a phantom "." node)
+                # can only run inside its section's range.
+                if name in section_mode:
+                    modes[name] = "SECTION"
+                continue
+            if name in duplicated or name in go_to_targets or name in in_thru:
+                continue
+            by_section = name in section_mode
+            by_name = name in performed_names
+            if by_section and not by_name:
+                modes[name] = "SECTION"
+            elif by_name and not by_section:
+                modes[name] = "PARAGRAPH"
+    return modes
+
+
 def _falls_through(paragraph) -> bool:
     """True unless `paragraph`'s last top-level statement provably diverts
     control away -- GOBACK, STOP RUN (not STOP <literal>, which only
@@ -1286,7 +1432,10 @@ def _plain_perform_statements(
 
 
 def _plain_perform_edges_from(
-    program, start: str, safe_section_entries: dict[str, str] | None = None
+    program,
+    start: str,
+    safe_section_entries: dict[str, str] | None = None,
+    member_modes: dict[str, str] | None = None,
 ) -> tuple[set[str], list[tuple[PerformStatement, bool]]]:
     """BFS from `start` following plain (non-THRU), unconditional,
     single-shot PERFORM statements -- PerformStatement nodes with
@@ -1346,7 +1495,13 @@ def _plain_perform_edges_from(
     insertion-point computation applies. Deliberately NOT the same as
     `_reachable_paragraphs`: that function also follows GO TO and
     section/THRU fall-through edges, exactly the unsafe shapes this
-    restricted variant must exclude."""
+    restricted variant must exclude.
+
+    `member_modes` (`_section_member_modes`), when given, replaces the
+    first-paragraph-only SECTION rule: a PERFORM of a section resolves to
+    every member that runs in its range ("SECTION" mode: the first one and
+    those reached from it by fall-through), and a PERFORM naming a member
+    entered only that way ("PARAGRAPH" mode) resolves to it."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
@@ -1357,22 +1512,56 @@ def _plain_perform_edges_from(
         for section in procedure._sections.values()
         for paragraph in section.paragraphs
     }
+    sections = {
+        name: section
+        for name, section in getattr(procedure, "_sections", {}).items()
+        if name and section.paragraphs
+    }
 
-    def resolve(name):
+    def resolve(name) -> list[tuple[str, CobolParagraph | None]]:
         if name in by_name:
-            return name, by_name[name]
+            return [(name, by_name[name])]
+        if member_modes is not None:
+            if name in sections:
+                # Every member the range runs must be instrumentable, or
+                # PERFORM nothing: one without a mode still runs, and a
+                # PERFORM in it would get no early-exit check (a dead end
+                # refuses). A mode-less member holding no PERFORM -- a GO
+                # TO's exit label, say -- has nothing to check.
+                members = []
+                for paragraph in _section_range(sections[name]):
+                    if member_modes.get(paragraph.paragraph_name) == "SECTION":
+                        members.append((paragraph.paragraph_name, paragraph))
+                    elif _find_statements_of_type(
+                        paragraph.statements,
+                        (PerformStatement, SortStatement, MergeStatement),
+                    ):
+                        return [(name, None)]
+                if members:
+                    return members
+                return [(name, None)]
+            if member_modes.get(name) == "PARAGRAPH":
+                return [(name, section_member_by_name.get(name))]
+            return [(name, None)]
         first_name = safe_section_entries.get(name)
         if first_name is not None:
-            return first_name, section_member_by_name.get(first_name)
-        return name, None
+            return [(first_name, section_member_by_name.get(first_name))]
+        return [(name, None)]
 
-    start_name, start_paragraph = resolve(start)
-    seen = {start_name}
+    seen: set[str] = set()
     resolved = {}
     stack = []
-    if start_paragraph is not None:
-        resolved[start_name] = start_paragraph
-        stack.append(start_name)
+
+    def visit(name) -> None:
+        for target_name, target_paragraph in resolve(name):
+            if target_name in seen:
+                continue
+            seen.add(target_name)
+            if target_paragraph is not None:
+                resolved[target_name] = target_paragraph
+                stack.append(target_name)
+
+    visit(start)
     edges: list[tuple[PerformStatement, bool]] = []
     while stack:
         name = stack.pop()
@@ -1385,12 +1574,7 @@ def _plain_perform_edges_from(
             if in_boundary:
                 continue
             edges.append((statement, nested))
-            target_name, target_paragraph = resolve(statement.target_paragraph)
-            if target_name not in seen:
-                seen.add(target_name)
-                if target_paragraph is not None:
-                    resolved[target_name] = target_paragraph
-                    stack.append(target_name)
+            visit(statement.target_paragraph)
     return seen, edges
 
 
