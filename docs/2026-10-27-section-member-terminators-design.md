@@ -19,10 +19,12 @@ PERFORM range it runs in, not where it sits in the source:
 
 * **Section mode.** It runs inside a `PERFORM <section-name>` range: the
   section's first paragraph, and each later member reached by falling
-  through from one that does not provably divert (`_falls_through`: last
-  statement GOBACK / STOP RUN / a plain GO TO / EXIT PARAGRAPH-SECTION-
-  PROGRAM / EXEC CICS RETURN). Its terminator, and the flag check after
-  each chain PERFORM it holds, use `EXIT SECTION`.
+  through from one that does not provably end the range
+  (`_ends_section_range`: last statement GOBACK / STOP RUN / a plain GO TO
+  / EXIT SECTION / EXEC CICS RETURN -- not EXIT PARAGRAPH, which inside
+  the range only ends that paragraph, and not EXIT PROGRAM, a no-op under
+  PERFORM). Its terminator, and the flag check after each chain PERFORM
+  it holds, use `EXIT SECTION`.
 * **Paragraph mode.** It is only ever PERFORMed by its own name, so its
   range is the paragraph alone. Its terminator and checks use `EXIT
   PARAGRAPH`, exactly like a top-level paragraph.
@@ -39,7 +41,13 @@ refused, when it is:
   first / last member);
 * a GO TO target (written, EXEC SQL WHENEVER, CICS HANDLE label), or in a
   section that is one;
-* a name defined in more than one section.
+* a name defined in more than one section;
+* named by a SORT/MERGE INPUT or OUTPUT PROCEDURE (an implicit PERFORM
+  with no early-exit check after it).
+
+A `PERFORM <section>` is followed only when every member its range runs
+has section mode or PERFORMs nothing (a GO TO's exit label): a mode-less
+member holding a PERFORM would still run, with no check after it.
 
 A section's nameless main line (and phantom `.` nodes) can only be in
 section mode. When a THRU range cannot be expanded, the result falls back

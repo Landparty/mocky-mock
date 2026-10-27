@@ -715,6 +715,32 @@ def _safe_section_entry_points(program) -> dict[str, str]:
     return safe_entries
 
 
+def _ends_section_range(paragraph) -> bool:
+    """Whether control cannot fall from `paragraph` into the next member
+    while running inside a `PERFORM <section-name>` range. Narrower than
+    `_falls_through`: there a trailing EXIT PARAGRAPH ends only this
+    paragraph and control continues into the next member, and EXIT
+    PROGRAM is a no-op under PERFORM (GnuCOBOL 3.2, both checked)."""
+    statements = paragraph.statements
+    if not statements:
+        return False
+    last = statements[-1]
+    if isinstance(last, ExitStatement):
+        return last.exit_type == "SECTION"
+    return not _falls_through(paragraph)
+
+
+def _section_range(section) -> list:
+    """The members that run when `section` is PERFORMed by name: its
+    first paragraph and each later one reached by falling through."""
+    members = []
+    for paragraph in section.paragraphs:
+        members.append(paragraph)
+        if _ends_section_range(paragraph):
+            break
+    return members
+
+
 def _section_member_modes(
     program,
     paragraph_entries: frozenset[str] | set[str] = frozenset(),
@@ -767,6 +793,18 @@ def _section_member_modes(
                 entered_sections.add(target)
             else:
                 performed_names.add(target)
+        # A SORT/MERGE INPUT/OUTPUT PROCEDURE is an implicit PERFORM, run
+        # with no early-exit check after it: its members get no mode.
+        for statement in _find_sort_merge_statements(paragraph.statements):
+            for procedure_attr, thru_attr in (
+                ("input_procedure", "input_procedure_thru"),
+                ("output_procedure", "output_procedure_thru"),
+            ):
+                start = getattr(statement, procedure_attr, None)
+                if start is None:
+                    continue
+                thru = getattr(statement, thru_attr, None) or start
+                thru_ranges.append((start, thru))
 
     def fallback() -> dict[str, str]:
         return {
@@ -792,10 +830,8 @@ def _section_member_modes(
     for section_name in entered_sections & sections.keys():
         if section_name in go_to_targets:
             continue
-        for paragraph in sections[section_name].paragraphs:
+        for paragraph in _section_range(sections[section_name]):
             section_mode.add(paragraph.paragraph_name)
-            if not _falls_through(paragraph):
-                break
 
     modes: dict[str, str] = {}
     for section in sections.values():
@@ -1480,11 +1516,20 @@ def _plain_perform_edges_from(
             return [(name, by_name[name])]
         if member_modes is not None:
             if name in sections:
+                # Every member the range runs must be instrumentable, or
+                # PERFORM nothing: one without a mode still runs, and a
+                # PERFORM in it would get no early-exit check (a dead end
+                # refuses). A mode-less member holding no PERFORM -- a GO
+                # TO's exit label, say -- has nothing to check.
                 members = []
-                for paragraph in sections[name].paragraphs:
-                    if member_modes.get(paragraph.paragraph_name) != "SECTION":
-                        break
-                    members.append((paragraph.paragraph_name, paragraph))
+                for paragraph in _section_range(sections[name]):
+                    if member_modes.get(paragraph.paragraph_name) == "SECTION":
+                        members.append((paragraph.paragraph_name, paragraph))
+                    elif _find_statements_of_type(
+                        paragraph.statements,
+                        (PerformStatement, SortStatement, MergeStatement),
+                    ):
+                        return [(name, None)]
                 if members:
                     return members
                 return [(name, None)]

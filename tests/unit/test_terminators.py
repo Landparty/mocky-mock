@@ -920,6 +920,116 @@ def test_section_member_inside_a_thru_range_still_refuses():
     assert any(r.code == "UNSUPPORTED_TERMINATOR_LAYOUT" for r in reasons)
 
 
+def _section_refusals(source, perform_target):
+    program, surface, scope_map, lines = _analyze(source)
+    plans, reasons = find_terminator_plans(
+        surface, program, _suite(perform_target), scope_map, lines
+    )
+    return plans, reasons
+
+
+def test_section_range_running_an_unmoded_member_refuses():
+    """`PERFORM A000-MAIN` falls into A010-MID, which is also PERFORMed by
+    name elsewhere and so has no mode: its PERFORM X100-CHK would run
+    with no early-exit check after it, and A020-END would still run after
+    the GOBACK (review of 2026-10-27, reproduced on GnuCOBOL 3.2)."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SEC1.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N       PIC 99 VALUE 0.
+       01  WS-STEP    PIC X(10) VALUE SPACES.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           PERFORM X100-CHK
+           MOVE 'ONE' TO WS-STEP.
+       A010-MID.
+           PERFORM X100-CHK
+           MOVE 'AFTER' TO WS-STEP.
+       A020-END.
+           MOVE 'END' TO WS-STEP.
+       Q000-OTHER SECTION.
+       Q000-P.
+           PERFORM A010-MID.
+       X000-SUBS SECTION.
+       X100-CHK.
+           ADD 1 TO WS-N
+           IF WS-N = 2
+               MOVE 'STOPPED' TO WS-STEP
+               GOBACK
+           END-IF.
+"""
+    plans, reasons = _section_refusals(source, "A000-MAIN")
+    assert plans == []
+    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+
+
+def test_trailing_exit_paragraph_does_not_end_a_section_range():
+    """Inside `PERFORM A000-MAIN`, A000-START's trailing EXIT PARAGRAPH
+    only ends that paragraph: control falls into A010-CHK, which is also
+    PERFORMed by name -- entered two ways, so it refuses rather than get
+    an EXIT PARAGRAPH that would let A020-END run."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SEC3.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N       PIC 99 VALUE 0.
+       01  WS-STEP    PIC X(10) VALUE SPACES.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           PERFORM A010-CHK
+           MOVE 'ONE' TO WS-STEP
+           EXIT PARAGRAPH.
+       A010-CHK.
+           ADD 1 TO WS-N
+           IF WS-N = 2
+               MOVE 'STOPPED' TO WS-STEP
+               GOBACK
+           END-IF.
+       A020-END.
+           MOVE 'END' TO WS-STEP.
+"""
+    plans, reasons = _section_refusals(source, "A000-MAIN")
+    assert plans == []
+    assert "entered more than one way" in reasons[0].message
+
+
+def test_sort_procedure_members_get_no_mode():
+    from mockymock.analysis.refusal import _section_member_modes
+
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECSORT.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT SORT-FILE ASSIGN TO SORTWK.
+       DATA DIVISION.
+       FILE SECTION.
+       SD  SORT-FILE.
+       01  SORT-REC PIC X(10).
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           SORT SORT-FILE ON ASCENDING KEY SORT-REC
+               INPUT PROCEDURE B000-IN
+               GIVING SORT-FILE
+           PERFORM B010-FEED
+           GOBACK.
+       B000-IN SECTION.
+       B010-FEED.
+           RELEASE SORT-REC.
+"""
+    program, _, _, _ = _analyze(source)
+    modes = _section_member_modes(program, paragraph_entries={"A000-START"})
+    assert modes.get("A000-START") == "PARAGRAPH"
+    assert "B010-FEED" not in modes
+
+
 def test_section_own_paragraph_reached_by_name_is_accepted():
     """Shape 3, supported since 2026-10-27: the terminator's own paragraph
     is a SECTION member PERFORMed by its own name (here the case's own
