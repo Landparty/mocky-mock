@@ -142,3 +142,36 @@ def test_lint_and_run_say_why_a_suite_without_testcases_fails(calcsub, capsys):
     assert "has no TESTCASE" in capsys.readouterr().out
     assert main(["run", "CALCSUB.cbl", "--cut", "CALCSUB.cut"]) == 1
     assert "has no TESTCASE" in capsys.readouterr().out
+
+
+PTRSUB = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PTRSUB.
+       DATA DIVISION.
+       LINKAGE SECTION.
+       01  LK-PARMS.
+           05  LK-ADDR    USAGE POINTER.
+           05  LK-RC      PIC 99.
+       PROCEDURE DIVISION USING LK-PARMS.
+       0000-MAIN.
+           IF LK-ADDR = NULL
+               MOVE 8 TO LK-RC
+           ELSE
+               MOVE 0 TO LK-RC
+           END-IF
+           GOBACK.
+"""
+
+
+def test_pointer_parameter_is_not_set_in_case_setup(tmp_path, monkeypatch):
+    """TPMSA000: a POINTER USING item was scaffolded as `SET ... TO NULL`
+    among the case's setup lines, which take only MOVE, so the .cut file
+    `generate` wrote was refused by its own parser."""
+    (tmp_path / "PTRSUB.cbl").write_text(PTRSUB, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert main(["generate", "PTRSUB.cbl", "-o", "PTRSUB.cut"]) == 0
+    text = (tmp_path / "PTRSUB.cut").read_text(encoding="utf-8")
+    assert "SET LK-ADDR" not in text
+    assert "*> LK-ADDR (POINTER) starts NULL" in text
+    assert " TO LK-RC\n" in text
+    assert main(["lint", "PTRSUB.cbl", "--cut", "PTRSUB.cut"]) == 0

@@ -2099,12 +2099,21 @@ def _row_target(spec: FieldSpec, source: ProgramContext | None) -> str:
 # (it takes only SET, and NULL is its only data-free value) or an INDEX
 # item (its content is implementation-defined). cobol-parser's bundle lays
 # them out as numeric fields holding "0", and `MOVE 0 TO <pointer>` is a
-# compile error ("invalid MOVE statement").
+# compile error ("invalid MOVE statement"). A TESTCASE's own setup lines
+# (`in_mock_body=False`) take only MOVE, so there the pointer is left out:
+# the per-case WORKING-STORAGE reset (splicer/reset.py) already sets it to
+# NULL, and `SET ... TO NULL` there was refused by the .cut parser.
 def _row_move_line(
-    row: dict[str, str], spec: FieldSpec, target: str, decimal_comma: bool = False
+    row: dict[str, str],
+    spec: FieldSpec,
+    target: str,
+    decimal_comma: bool = False,
+    in_mock_body: bool = True,
 ) -> str | None:
     usage = (spec.usage or "").upper()
     if usage in _POINTER_USAGES:
+        if not in_mock_body:
+            return f"*> {target} ({usage}) starts NULL: the per-case reset sets it"
         return f"SET {target} TO NULL"
     if usage == "INDEX":
         return None
@@ -2163,6 +2172,7 @@ def _row_move_lines(
     row: dict[str, str],
     fixture: BoundaryFixture,
     source: ProgramContext | None = None,
+    in_mock_body: bool = True,
 ) -> list[str]:
     lines = [
         line
@@ -2172,6 +2182,7 @@ def _row_move_lines(
                 spec,
                 _row_target(spec, source),
                 source is not None and source.decimal_comma,
+                in_mock_body,
             )
             for spec in fixture.layout
         )
@@ -3616,7 +3627,9 @@ def _entry_parameter_lines(
     parameters = scenario.entry_parameters
     if parameters is None or not parameters.sequence:
         return []
-    moves = _row_move_lines(parameters.sequence[0], parameters, source)
+    moves = _row_move_lines(
+        parameters.sequence[0], parameters, source, in_mock_body=False
+    )
     if not moves:
         return []
     return [f"*> what the caller of {parameters.key} passes (USING)", *moves]

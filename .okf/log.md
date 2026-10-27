@@ -5,6 +5,19 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-27 -- generate: no SET in case setup; driver after a wrapped header
+
+Two defects from a sweep over a real corpus. `generate` scaffolded a
+POINTER `PROCEDURE DIVISION USING` item as `SET <item> TO NULL` among the
+TESTCASE's setup lines, which the `.cut` parser refuses (TPMSA000); it is
+now a comment, the per-case reset already making it NULL. And a header
+wrapped as `PROCEDURE DIVISION` / `USING LK-A.` failed to compile under
+`run` though `lint` passed (TPCTBIT1): `procedure_header_clause_spans`
+searched only the header's first line for the clause, and
+`_insert_driver` put the driver after that first line, inside the header.
+The clause is now found on any header line and the driver goes after the
+header's period. Updated [dsl](dsl.md), [cli](cli.md).
+
 ## 2026-10-26 -- cobol-analysis skill: one source, in cobol-parser
 
 `mockymock/cli/skills/cobol-analysis/` was a hand-edited copy of
