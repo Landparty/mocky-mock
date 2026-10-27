@@ -42,7 +42,8 @@ refused, when it is:
 * a GO TO target (written, EXEC SQL WHENEVER, CICS HANDLE label), or in a
   section that is one;
 * a name defined in more than one section;
-* named by a SORT/MERGE INPUT or OUTPUT PROCEDURE (an implicit PERFORM
+* named by a SORT/MERGE INPUT or OUTPUT PROCEDURE or an XML PARSE
+  PROCESSING PROCEDURE (an implicit PERFORM
   with no early-exit check after it).
 
 A `PERFORM <section>` is followed only when every member its range runs

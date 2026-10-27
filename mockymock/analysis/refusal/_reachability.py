@@ -805,6 +805,13 @@ def _section_member_modes(
                     continue
                 thru = getattr(statement, thru_attr, None) or start
                 thru_ranges.append((start, thru))
+        # So is an XML PARSE PROCESSING PROCEDURE.
+        for statement in _find_xml_parse_statements(paragraph.statements):
+            start = getattr(statement, "processing_procedure", None)
+            if start is None:
+                continue
+            thru = getattr(statement, "processing_procedure_thru", None) or start
+            thru_ranges.append((start, thru))
 
     def fallback() -> dict[str, str]:
         return {

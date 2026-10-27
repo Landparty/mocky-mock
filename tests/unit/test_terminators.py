@@ -1030,6 +1030,32 @@ def test_sort_procedure_members_get_no_mode():
     assert "B010-FEED" not in modes
 
 
+def test_xml_parse_processing_procedure_members_get_no_mode():
+    from mockymock.analysis.refusal import _section_member_modes
+
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. XMLP.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DOC     PIC X(20) VALUE '<a>1</a>'.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           PERFORM B010-HND
+           XML PARSE WS-DOC PROCESSING PROCEDURE B010-HND
+           END-XML
+           GOBACK.
+       B000-H SECTION.
+       B010-HND.
+           GOBACK.
+"""
+    program, _, _, _ = _analyze(source)
+    modes = _section_member_modes(program, paragraph_entries={"A000-START"})
+    assert modes.get("A000-START") == "PARAGRAPH"
+    assert "B010-HND" not in modes
+
+
 def test_section_own_paragraph_reached_by_name_is_accepted():
     """Shape 3, supported since 2026-10-27: the terminator's own paragraph
     is a SECTION member PERFORMed by its own name (here the case's own
