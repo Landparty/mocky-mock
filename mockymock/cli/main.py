@@ -8,12 +8,16 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mockymock import __version__
 from mockymock._lines import read_utf8_source, split_source_lines
 from mockymock.debugging_lines import activate_debugging_lines
 from mockymock.report.artifacts import fingerprint
 from mockymock.report.record_rewrite import numeric_edited_fields
+
+if TYPE_CHECKING:
+    from mockymock.cli.config import MockymockConfig
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
@@ -331,9 +335,36 @@ def _apply_config_to_args(
             from mockymock.cli.discovery import effective_copybook_paths
 
             resolved = effective_copybook_paths(program_path, resolved)
+        resolved = _with_copybook_aliases(resolved, config)
         args.copybook_path = resolved
     if hasattr(args, "seed"):
         args.seed = resolve(args.seed, config.seed)
+
+
+def _with_copybook_aliases(paths: list[str], config: MockymockConfig) -> list[str]:
+    """`paths` plus, last, the staging directory that gives each copybook
+    the search cannot match as written (`gttlbi0a.copy` for member
+    GTTLBI0A) the name it does try -- see cli/copybook_aliases.py. Last,
+    so a file that already matches anywhere in `paths` still wins."""
+    from mockymock.cli.copybook_aliases import (
+        DEFAULT_COPYBOOK_EXTENSIONS,
+        stage_copybook_aliases,
+    )
+
+    extensions = config.copybook_extensions
+    if extensions is None:
+        extensions = DEFAULT_COPYBOOK_EXTENSIONS
+    try:
+        staged = stage_copybook_aliases(paths, config.copybook_aliases, extensions)
+    except OSError as exc:
+        # Aliasing is a convenience: a copylib that cannot be staged
+        # leaves the search exactly as configured, and a member it would
+        # have supplied still fails with the usual not-found hint.
+        print(f"mockymock: could not stage copybook aliases: {exc}", file=sys.stderr)
+        return paths
+    if staged is None or str(staged) in paths:
+        return paths
+    return [*paths, str(staged)]
 
 
 def _check_rows_non_negative(command: str, rows: int | None) -> bool:

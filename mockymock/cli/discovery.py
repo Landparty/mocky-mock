@@ -416,8 +416,11 @@ def copybook_not_found_hint(exc: BaseException | None = None) -> str:
             f"\n    Found {', '.join(str(p) for p in near)}, named like "
             f"'{member}' but not matched: the member is looked up as "
             f"written, with extension {', '.join(_MATCHED_EXTENSIONS)} or "
-            f"none -- copy or rename it to {member}.cpy in a searched "
-            f"directory."
+            f"none, or any case of an extension in copybook_extensions -- "
+            f'map it with copybook_aliases ({member} = "<file>") or add '
+            f"its extension to copybook_extensions in mockymock.toml (or "
+            f"cobol.yml's mockymock: section), or rename it to {member}.cpy "
+            f"in a searched directory."
         )
     return hint
 

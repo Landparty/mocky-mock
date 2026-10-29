@@ -52,8 +52,8 @@ If no subcommand is given, `main()` prints help and returns 1 (`args` has no
    whole tool family reads (this CLI, `cobol-parser`, the COBOL Analyzer
    extension). Its `project:` section supplies the settings shared with every
    other tool (`copybook_path`, `seed`); its `mockymock:` section supplies
-   this CLI's own (`test_root`, `ai_mode`) and overrides anything `project:`
-   said. Schema reference: `docs/project-config.md` in the cobol-parser repo.
+   this CLI's own (`test_root`, `ai_mode`, `copybook_aliases`,
+   `copybook_extensions`) and overrides anything `project:` said. Schema reference: `docs/project-config.md` in the cobol-parser repo.
 2. **`mockymock.toml`** / `pyproject.toml`'s `[tool.mockymock]` -- the
    tool-specific file, unchanged.
 
@@ -179,6 +179,29 @@ pairing with the rule that matched, or for one program its suites and
 `newSuitePath`; Docker-free and parse-free, it is what the VS Code
 extension pairs files with. `_programs_by_stem` is `lru_cache`d per
 process. Design: docs/2026-10-14-multi-suite-layout-design.md.
+
+**Copybook member-name aliasing (2026-10-29):** a mainframe export
+rarely lands as `GTTLBI0A.cpy`; it is `gttlbi0a.copy`, `DMTREN0A.dcl`,
+`Gttlbi0a.txt`, which cobol-parser's search (member as written, upper
+case first, `.cpy`/`.cbl`/`.cob` or none) never matches on a
+case-sensitive filesystem. `_apply_config_to_args` ends by calling
+`_with_copybook_aliases`, which appends one more directory, last, from
+`cli/copybook_aliases.stage_copybook_aliases`: `MEMBER.cpy` for every file
+in a searched directory (one level) whose extension is in
+`copybook_extensions` in any case (default `.cpy .cbl .cob .copy .cblcpy
+.dcl .dclgen .inc .txt` and none) but that the search would miss, plus
+each explicit `copybook_aliases` entry (`GTTLBI0A = "export/m0042.txt"`,
+relative to its config file, must exist; wins over an automatic match).
+`copybook_extensions = []` turns the automatic part off. The staging
+directory lives under `$TMPDIR/mockymock-copybook-aliases/<digest>`, keyed
+by member, path, size and mtime, so an unchanged copylib is staged once;
+files are hard-linked or copied, never symlinked (cobol-parser's
+traversal check rejects a link that resolves outside its directory). Being
+last, a real `GTTLBI0A.cpy` anywhere earlier still wins, and every
+consumer of `args.copybook_path` sees the alias with no change of its own.
+A staging failure (`OSError`) prints a warning and leaves the list as it
+was. Both keys are read from `mockymock.toml` / `[tool.mockymock]` or
+`cobol.yml`'s `mockymock:` section; the near-miss hint now names them.
 
 **Conventional copybook folders (2026-10-24):** `effective_copybook_paths`
 now walks `_default_copybook_dirs(program)`: each of `copybooks`,
