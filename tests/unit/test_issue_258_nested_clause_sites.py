@@ -120,14 +120,14 @@ def test_the_nested_reads_clause_bodies_are_lifted_into_the_splice() -> None:
 
 
 def test_unmocked_site_no_mock_could_replace_offers_no_mock(tmp_path) -> None:
-    # A READ nested in another READ's clause body cannot be spliced: adding
-    # a MOCK for it would be refused in turn, so none is suggested.
+    # A READ nested in another READ's clause body without an END-READ of
+    # its own takes the outer READ's, so the outer one cannot be spliced:
+    # adding a MOCK for it would be refused in turn, so none is suggested.
     source = PROGRAM.replace(
         "                   NOT AT END ADD 1 TO WS-COUNT\n",
         "                   NOT AT END\n"
         "                       READ IN-FILE\n"
-        "                           AT END SET EOF TO TRUE\n"
-        "                       END-READ\n",
+        "                           AT END SET EOF TO TRUE\n",
     )
     program = tmp_path / "RDLOOP.cbl"
     program.write_text(source)

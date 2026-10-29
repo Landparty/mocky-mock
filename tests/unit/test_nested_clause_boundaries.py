@@ -20,6 +20,7 @@ from mockymock._lines import split_source_lines
 from mockymock.analysis.clause_bodies import (
     clause_header_positions,
     clause_lift_problem,
+    lift_clause_bodies,
 )
 from mockymock.analysis.mock_surface import analyze
 from mockymock.cli.checks import run_static_checks
@@ -190,15 +191,37 @@ def test_unmocked_inner_site_reached_is_still_refused(tmp_path) -> None:
     assert any("WRITE" in r.message and "line 34" in r.message for r in reasons)
 
 
-def test_statement_of_its_own_kind_in_a_clause_body_is_not_lifted() -> None:
+def test_statement_of_its_own_kind_closed_by_its_own_terminator_is_lifted() -> None:
+    # The first END-CALL closes the inner CALL, the second the outer one.
     source = PROGRAM.replace(
         "                               WRITE ERR-REC\n",
         '                               CALL "ERRLOG" USING ERR-REC\n'
         "                               END-CALL\n",
     )
     _, lines, surface = _analyzed(source)
-    problem = clause_lift_problem(_site(surface, "VALIDATE").statement, lines)
-    assert problem is not None and "of its own kind" in problem
+    validate = _site(surface, "VALIDATE")
+    assert clause_lift_problem(validate.statement, lines) is None
+    assert validate.span is not None, validate.unspliceable_reason
+    lifted = lift_clause_bodies(validate.statement, lines)
+    assert lifted is not None
+    body = "\n".join(lifted[0].source_lines)
+    assert 'CALL "ERRLOG" USING ERR-REC' in body
+    assert body.count("END-CALL") == 1
+
+
+def test_statement_of_its_own_kind_without_its_own_terminator_is_not_lifted() -> None:
+    # The inner CALL takes the only END-CALL, so the outer one has none.
+    source = PROGRAM.replace(
+        "                               WRITE ERR-REC\n",
+        '                               CALL "ERRLOG" USING ERR-REC\n'
+        '                                   ON EXCEPTION DISPLAY "X"\n',
+    )
+    _, lines, surface = _analyzed(source)
+    validate = _site(surface, "VALIDATE")
+    problem = clause_lift_problem(validate.statement, lines)
+    assert problem is not None and "of its own kind" in problem, problem
+    assert validate.span is None
+    assert "of its own kind" in (validate.unspliceable_reason or "")
 
 
 def test_site_in_a_clause_body_on_the_terminator_line_stays_refused() -> None:

@@ -705,16 +705,21 @@ def _nested_clause_site_span(
             "ON EXCEPTION/...) whose extent cannot be determined"
         )
     inner = _descendants(statement)
-    if any(type(child) is type(statement) for child in inner):
-        # Its own terminator word could then close the inner statement.
-        return None, (
-            f"has a statement of its own kind inside its clause bodies, so "
-            f"which {own_terminator} closes it cannot be determined"
-        )
     descendants = {
         (child.location.line, child.location.column)
         for child in inner
         if getattr(child, "location", None) is not None
+    }
+    # A statement of its own kind in a clause body (CALL ... ON EXCEPTION
+    # CALL "ERRLOG" ... END-CALL END-CALL): a terminator word closes the
+    # nearest statement it has not closed yet, so each one opened inside
+    # takes the next END-<verb> first. One that has none of its own takes
+    # this statement's, which then has none and is refused below.
+    same_kind = {
+        (child.location.line, child.location.column)
+        for child in inner
+        if type(child) is type(statement)
+        and getattr(child, "location", None) is not None
     }
     last_descendant = max(descendants, default=(start, column))
 
@@ -723,11 +728,16 @@ def _nested_clause_site_span(
         *(b for b in scope_map.at_line(start) if b.column > column),
         *scope_map.iter_after_line(start),
     ]
+    open_inner = 0
     for boundary in candidates:
         if boundary.word == "":
             if (boundary.line, boundary.column) in descendants:
+                open_inner += (boundary.line, boundary.column) in same_kind
                 continue
             break  # a statement that is not part of this one
+        if boundary.word == own_terminator and open_inner:
+            open_inner -= 1
+            continue
         if (
             boundary.word == own_terminator
             and (
@@ -738,6 +748,12 @@ def _nested_clause_site_span(
         ):
             terminator = boundary
             break
+    if terminator is None and same_kind:
+        return None, (
+            f"has a statement of its own kind inside its clause bodies "
+            f"without an {own_terminator} of its own, so which "
+            f"{own_terminator} closes it cannot be determined"
+        )
     if terminator is None:
         return None, (
             f"has conditional clause bodies of its own (AT END/INVALID KEY/"

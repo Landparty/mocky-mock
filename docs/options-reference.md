@@ -562,8 +562,11 @@ mockymock clean [PROGRAM.cbl | PROGRAM.cut | DIR] [--all] [--dry-run]
 Removes what mockymock wrote for a suite (a `.cut`), for every suite of a
 program, or for everything under a directory (default: the current one):
 the `.mockymock/` folders' reports and saved results, plus report files
-the older layout left next to programs. Journals are the assistant's own
-record and are kept unless `--all`. `--dry-run` lists without removing.
+the older layout left next to programs, and the temporary copies mockymock
+made of copybooks whose file names do not match their member names (see
+`copybook_aliases`) when they come from that folder or from the configured
+`copybook_path`. Journals are the assistant's own record and are kept
+unless `--all`. `--dry-run` lists without removing.
 
 ### `mockymock skills install`
 
