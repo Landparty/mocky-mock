@@ -28,6 +28,10 @@ digest of what it holds, so an unchanged copylib is staged once and
 reused. Files are hard-linked where the filesystem allows and copied
 otherwise: a symlink would resolve outside the staging directory, which
 cobol-parser's path-traversal check rejects.
+
+Beside each staging directory, `<digest>.sources` lists the files it was
+staged from, so `mockymock clean` can remove the copies of one project's
+copybooks (`staged_directories_for`) without touching another's.
 """
 
 from __future__ import annotations
@@ -63,6 +67,15 @@ _RESOLVER_EXTENSIONS = frozenset({".cpy", ".CPY", ".cbl", ".CBL", ".cob", ".COB"
 #: Where staging directories live. A module attribute so tests can point
 #: it at a temporary folder.
 STAGING_ROOT = Path(tempfile.gettempdir()) / "mockymock-copybook-aliases"
+
+
+#: Suffix of the manifest written beside each staging directory.
+MANIFEST_SUFFIX = ".sources"
+
+
+def manifest_path(staged: Path) -> Path:
+    """The `<digest>.sources` file listing what `staged` was built from."""
+    return staged.with_name(staged.name + MANIFEST_SUFFIX)
 
 
 def _split_name(name: str) -> tuple[str, str]:
@@ -135,7 +148,9 @@ def stage_copybook_aliases(
             f"{member}\0{source.resolve()}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode()
         )
     target = STAGING_ROOT / digest.hexdigest()[:16]
+    sources = sorted({str(source.resolve()) for source in members.values()})
     if target.is_dir():
+        _write_manifest(target, sources)
         return target
 
     STAGING_ROOT.mkdir(parents=True, exist_ok=True)
@@ -154,4 +169,38 @@ def stage_copybook_aliases(
     finally:
         if building.exists():
             shutil.rmtree(building, ignore_errors=True)
+    _write_manifest(target, sources)
     return target
+
+
+def _write_manifest(staged: Path, sources: list[str]) -> None:
+    manifest = manifest_path(staged)
+    if not manifest.is_file():
+        manifest.write_text("".join(f"{source}\n" for source in sources))
+
+
+def _is_under(path: Path, roots: list[Path]) -> bool:
+    return any(path == root or root in path.parents for root in roots)
+
+
+def staged_directories_for(roots: list[Path]) -> list[Path]:
+    """The staging directories holding a copy of any file under one of
+    `roots`, for `mockymock clean`. A directory whose manifest is missing
+    or unreadable (staged before manifests existed) belongs to no one we
+    can name, and is only a cache, so it is listed too; `.building-`
+    directories of a run in progress never are."""
+    if not STAGING_ROOT.is_dir():
+        return []
+    resolved = [root.resolve() for root in roots]
+    found: list[Path] = []
+    for staged in sorted(STAGING_ROOT.iterdir()):
+        if staged.name.startswith(".") or not staged.is_dir():
+            continue
+        try:
+            lines = manifest_path(staged).read_text().splitlines()
+        except OSError:
+            found.append(staged)
+            continue
+        if any(_is_under(Path(line), resolved) for line in lines if line):
+            found.append(staged)
+    return found

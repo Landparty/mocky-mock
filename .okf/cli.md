@@ -196,7 +196,9 @@ relative to its config file, must exist; wins over an automatic match).
 directory lives under `$TMPDIR/mockymock-copybook-aliases/<digest>`, keyed
 by member, path, size and mtime, so an unchanged copylib is staged once;
 files are hard-linked or copied, never symlinked (cobol-parser's
-traversal check rejects a link that resolves outside its directory). Being
+traversal check rejects a link that resolves outside its directory), and a
+`<digest>.sources` manifest beside it lists the files it came from, which
+`mockymock clean` reads. Being
 last, a real `GTTLBI0A.cpy` anywhere earlier still wins, and every
 consumer of `args.copybook_path` sees the alias with no change of its own.
 A staging failure (`OSError`) prints a warning and leaves the list as it
@@ -1615,7 +1617,14 @@ or everything under a directory (`os.walk`, entering `.mockymock` but no
 other hidden or dependency folder), plus the pre-#353 files
 (`<stem>.report.html` / `.report.json` / `.mutation.json` beside a
 same-stem `.cbl`/`.cut`). Journals are kept unless `--all`; an emptied
-`.mockymock/` is removed.
+`.mockymock/` is removed. It also removes the copybook-alias staging
+directories (`$TMPDIR/mockymock-copybook-aliases/<digest>`, see the
+copybook search above) built from files under the target (a program's or
+`.cut`'s folder) or under the config's `copybook_path` / `copybook_aliases`
+(`_clean_staged_aliases`): each has a `<digest>.sources` manifest beside
+it listing its source files (`copybook_aliases.staged_directories_for`).
+A staging directory with no manifest is removed by any `clean`; one being
+built (`.building-*`) never is (2026-10-29).
 
 ## `mockymock skills plugin [DIRECTORY] [--force]` (2026-10-04)
 

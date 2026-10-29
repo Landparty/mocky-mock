@@ -300,16 +300,6 @@ def _ast_problem(statement: object) -> str | None:
         if attr not in attrs:
             return f"its {_clause_name(attr)} clause cannot be re-run after a mock"
     for attr in present:
-        for nested in _walk_all(getattr(statement, attr)):
-            if type(nested) is type(statement):
-                line = getattr(getattr(nested, "location", None), "line", None)
-                where = f" at line {line}" if line else ""
-                return (
-                    f"its {_clause_name(attr)} body holds a statement of its "
-                    f"own kind{where}, so which {spec[1]} closes which "
-                    f"cannot be determined"
-                )
-    for attr in present:
         for nested in _walk(getattr(statement, attr)):
             line = getattr(getattr(nested, "location", None), "line", None)
             where = f" at line {line}" if line else ""
@@ -541,6 +531,12 @@ def _lift(
     spec = _spec(statement)
     assert spec is not None
     attrs, terminator = spec
+    verb = terminator.removeprefix("END-")
+    same_kind = any(
+        type(nested) is type(statement)
+        for attr in attrs
+        for nested in _walk_all(getattr(statement, attr, None) or [])
+    )
     unlocated = "its clause bodies could not be located in the source"
     location = getattr(statement, "location", None)
     start_line = getattr(location, "line", None)
@@ -604,13 +600,28 @@ def _lift(
             end = header_starts[position + 1]
         else:
             end = None
+            # A statement of its own kind in a body (CALL ... ON EXCEPTION
+            # CALL "ERRLOG" ... END-CALL END-CALL) takes the next
+            # terminator first: a terminator closes the nearest statement
+            # it has not closed yet.
+            open_inner = 0
             for start, _, word in words[body_word_indexes[position] :]:
-                if word in (terminator, "."):
+                if word == verb:
+                    open_inner += 1
+                elif word == terminator and open_inner:
+                    open_inner -= 1
+                elif word in (terminator, "."):
                     end = start
                     at_period = word == "."
                     break
             if end is None:
                 return None, f"its {_clause_name(attr)} body has no end"
+            if same_kind and (at_period or open_inner):
+                return None, (
+                    f"its {_clause_name(attr)} body holds a statement of its "
+                    f"own kind without a {terminator} of its own, so which "
+                    f"{terminator} closes which cannot be determined"
+                )
         body_text = text[offset:end]
         problem, closers = _body_problem(
             [w for _, _, w in scan_words(body_text)], at_period

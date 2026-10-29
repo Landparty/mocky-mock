@@ -5,6 +5,22 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-29 -- same-kind nesting in clause bodies; `clean` removes staged copybook copies
+
+A boundary whose clause body holds a statement of its own kind (`CALL ...
+ON EXCEPTION CALL "ERRLOG" ... END-CALL END-CALL`, `READ ... NOT AT END
+READ REF-FILE ... END-READ END-READ`) was refused outright, both for its
+span (`source_map._nested_clause_site_span`) and for the lift
+(`clause_bodies._lift`). Both now pair verbs with terminators the COBOL
+way, a terminator closing the nearest statement it has not closed yet, and
+refuse only when an inner one has no terminator of its own. Fixture:
+`tests/integration/fixtures/same_kind_nested_clauses.cbl`.
+
+`mockymock clean` now also removes the copybook-alias staging directories
+built from the target's files or the configured copybook path: each has a
+`<digest>.sources` manifest (`copybook_aliases.staged_directories_for`).
+Updated [splicer](splicer.md), [cli](cli.md).
+
 ## 2026-10-29 -- corpus-sweep report with a diff against the last run
 
 `scripts/corpus_sweep.py` now tallies blockers per category and saves

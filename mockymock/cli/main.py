@@ -3705,10 +3705,11 @@ def _cmd_clean(args: argparse.Namespace) -> int:
         print(f"mockymock clean: {target} does not exist")
         return 1
     candidates = _clean_candidates(target, include_journal=args.all)
-    if not candidates:
+    staged = _clean_staged_aliases(target, getattr(args, "_config", None))
+    if not candidates and not staged:
         print("mockymock clean: nothing to remove")
         return 0
-    failed = 0
+    failed = _remove_staged_aliases(staged, args.dry_run)
     for path in candidates:
         if args.dry_run:
             print(f"would remove {path}")
@@ -3727,8 +3728,45 @@ def _cmd_clean(args: argparse.Namespace) -> int:
             except OSError:
                 pass
     verb = "would remove" if args.dry_run else "removed"
-    print(f"mockymock clean: {verb} {len(candidates) - failed} file(s)")
+    summary = f"{len(candidates) + len(staged) - failed} file(s)"
+    if staged:
+        summary += f", {len(staged)} of them folder(s) of staged copybook copies"
+    print(f"mockymock clean: {verb} {summary}")
     return 1 if failed else 0
+
+
+def _clean_staged_aliases(target: Path, config) -> list[Path]:
+    """The copybook-alias staging directories (cli/copybook_aliases.py)
+    built from files under `target` (a program or `.cut`: its folder), or
+    under the config's copybook_path and copybook_aliases: copies of
+    renamed copybooks in the system temp folder that outlive every run."""
+    from mockymock.cli.copybook_aliases import staged_directories_for
+
+    roots = [target if target.is_dir() else target.parent]
+    if config is not None:
+        roots += [Path(entry) for entry in config.copybook_path]
+        roots += [Path(entry) for entry in config.copybook_aliases.values()]
+    return staged_directories_for(roots)
+
+
+def _remove_staged_aliases(staged: list[Path], dry_run: bool) -> int:
+    """Remove each staging directory and its manifest; the failure count."""
+    from mockymock.cli.copybook_aliases import manifest_path
+
+    failed = 0
+    for directory in staged:
+        if dry_run:
+            print(f"would remove {directory}")
+            continue
+        try:
+            shutil.rmtree(directory)
+            manifest_path(directory).unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"mockymock clean: could not remove {directory}: {exc}")
+            failed += 1
+            continue
+        print(f"removed {directory}")
+    return failed
 
 
 def _cmd_analyze(args: argparse.Namespace) -> int:

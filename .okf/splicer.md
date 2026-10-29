@@ -196,10 +196,13 @@ scope map past its own clause-body statement starts (every boundary in
 between must be one of those, or a scope word) and taking the first
 own-terminator after the last of them. Refused when there is no such
 terminator before the next statement that is not its own (the clause would
-run on to whatever closes the enclosing block -- not guessed), when a
-statement of its own kind sits in its clause bodies (which terminator is
-whose is ambiguous), or when anything but a period follows the terminator
-on its line. RETURN maps to `END-RETURN` (issue #340), so the SORT
+run on to whatever closes the enclosing block -- not guessed), or when
+anything but a period follows the terminator on its line. A statement of
+its own kind in its clause bodies (`CALL ... ON EXCEPTION CALL "ERRLOG"
+... END-CALL END-CALL`) is paired the COBOL way: a terminator closes the
+nearest statement it has not closed yet, so each inner one takes the next
+own-terminator first; one without a terminator of its own takes the
+outer's, which is then refused (2026-10-29; before, any such nesting was). RETURN maps to `END-RETURN` (issue #340), so the SORT
 OUTPUT PROCEDURE loop's nested `RETURN ... AT END ... END-RETURN` is
 spliced like the nested READ. Before #258 every nested site with clause
 bodies was refused, which made the standard inline read loop untestable.
@@ -571,8 +574,9 @@ A boundary in another boundary's clause body (`READ ... NOT AT END CALL
   body (`_walk` does not descend into their own bodies; `_PHRASE_OWNERS`
   lets READ/RETURN own AT END and the file ops INVALID KEY /
   END-OF-PAGE). EXEC, SORT/MERGE, RECEIVE, INVOKE and report-writer verbs
-  still are. A statement of the outer's own kind anywhere in its bodies
-  refuses the lift: which END-xxx closes which is ambiguous.
+  still are. A statement of the outer's own kind in its bodies is fine
+  when each one is closed by its own END-xxx (the last body's end is found
+  by pairing verbs with terminators); one without refuses the lift.
 - **Splice.** `splice_program` decides every site's splice first, then
   `boundary_parents` finds each spliced site's nearest spliced ancestor.
   With none, it is spliced in place (the `span_lead` header re-emitted on
