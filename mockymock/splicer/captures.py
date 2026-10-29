@@ -188,12 +188,14 @@ def _site_argument(site, arg_index: int, lines, boundaries) -> tuple[str, str] |
     `injector.build_site_dispatch` MOVEs from -- or None when the site has
     no such operand.
 
-    cobolparser reports a quoted literal by its value with the quotes
-    stripped, indistinguishable from a data-name: without the CALL's own
-    text (`lines`), `CALL "X" USING "ABC"` looked like an argument named
-    ABC, so a `UT-CAP-` target mirrored an unrelated item ABC's layout
-    (while the injector MOVEd the literal "ABC" into it), or refused
-    because no item ABC exists."""
+    cobolparser before 3.1 reports a quoted literal by its value with the
+    quotes stripped, indistinguishable from a data-name: without the CALL's
+    own text (`lines`), `CALL "X" USING "ABC"` looked like an argument
+    named ABC, so a `UT-CAP-` target mirrored an unrelated item ABC's
+    layout (while the injector MOVEd the literal "ABC" into it), or refused
+    because no item ABC exists. From 3.1 the name keeps its quotes; the
+    text's own token is still preferred, since it keeps the source's
+    spelling (`'D''E'`, not `"D'E"`)."""
     using = getattr(site.statement, "using_parameters", None)
     if not using or len(using) < arg_index:
         return None
@@ -215,6 +217,10 @@ def _site_argument(site, arg_index: int, lines, boundaries) -> tuple[str, str] |
         )
         if literals[arg_index - 1] is not None:
             return ("literal", str(literals[arg_index - 1]))
+    from mockymock.splicer.injector import reported_literal
+
+    if reported_literal(name) is not None:
+        return ("literal", name)
     return ("item", name.upper())
 
 

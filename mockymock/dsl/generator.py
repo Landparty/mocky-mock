@@ -1541,7 +1541,14 @@ def _call_end_reply(
     if key in _DLI_CALL_INTERFACES:
         if len(names) < 2 or not names[0] or not names[1]:
             return None
-        function = context.literal_value(names[0]) or names[0]
+        from mockymock.splicer.injector import _literal_inner, reported_literal
+
+        quoted = reported_literal(names[0])
+        function = (
+            _literal_inner(quoted)
+            if quoted is not None
+            else context.literal_value(names[0]) or names[0]
+        )
         end_status = _DLI_CALL_END.get(function.strip().upper())
         if end_status is None:
             return None
@@ -3629,6 +3636,74 @@ def _endless_read_keys(
     return keys
 
 
+#: The fixed scenario family whose failure path cobol-parser (3.1+) leaves
+#: uncounted on purpose: the program's error path may skip the READ loop or
+#: the CLOSE, so only the failed boundary's own count is known.
+_ERROR_STATUS_SCENARIO_PREFIX = "error status:"
+
+
+def _with_site_call_counts(
+    bundle: FixtureBundle, surface: MockSurface
+) -> FixtureBundle:
+    """`bundle` with one `call_count` per fixture (per call site) for every
+    mocked (category, key) the bundle gave none.
+
+    Before 3.1, cobol-parser counted every fixture: 1 for a CALL or a
+    status-only boundary, and the row count (plus the call that hits end of
+    file, when the statement has AT END) for one that is fed rows. Since
+    3.1 (cobol-parser #363) it writes one count per (category, key), and
+    only when control flow makes it exact. `generate` does that exactness
+    analysis itself, per case and entry (`_conditional_call_count_keys`),
+    and adds counts the bundle cannot know (the extra MQGET or DL/I call
+    that ends a drain loop, a FILE STATUS read loop's end-of-file read), so
+    it needs a count to start from for every mocked key: a key the bundle
+    left uncounted gets the per-site counts back, and the analysis demotes
+    them to a commented VERIFY or corrects them as before. A count the
+    bundle did write is kept as it is. An "error status" scenario is left
+    alone: there the bundle drops counts because the failure path makes
+    them untrue, which no per-site count can repair."""
+    scenarios = []
+    for scenario in bundle.scenarios:
+        if scenario.name.lower().startswith(_ERROR_STATUS_SCENARIO_PREFIX):
+            scenarios.append(scenario)
+            continue
+        counted = {e.ref for e in scenario.expectations if e.kind == "call_count"}
+        added = [
+            Expectation(
+                kind="call_count",
+                ref=f"{fixture.category}:{fixture.key}",
+                value=_site_call_count(fixture, surface),
+                note="one per call site, restored by mockymock",
+            )
+            for fixture in scenario.fixtures
+            if f"{fixture.category}:{fixture.key}" not in counted
+        ]
+        if added:
+            scenario = replace(scenario, expectations=[*scenario.expectations, *added])
+        scenarios.append(scenario)
+    return replace(bundle, scenarios=scenarios)
+
+
+def _site_call_count(fixture: BoundaryFixture, surface: MockSurface) -> int:
+    """The count cobol-parser before 3.1 gave one fixture (see
+    `_with_site_call_counts`)."""
+    if fixture.direction == "STATUS_ONLY" or fixture.category in (
+        MockCategory.CALL.value,
+        MockCategory.DYNCALL.value,
+    ):
+        return 1
+    at_end = fixture.terminal is not None
+    for site in surface.boundary_sites:
+        if (
+            site.category is not None
+            and site.category.value == fixture.category
+            and site.line == fixture.line
+        ):
+            at_end = bool(getattr(site.statement, "at_end_clause", None))
+            break
+    return len(fixture.sequence) + (1 if at_end else 0)
+
+
 def _with_accept_keys(bundle: FixtureBundle) -> FixtureBundle:
     """`bundle` with every ACCEPT fixture and expectation keyed on the
     target's data-name, as mockymock keys the site (issue #311):
@@ -3692,7 +3767,7 @@ def _scaffold_with_bundle(
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
 ) -> str:
-    bundle = _with_accept_keys(bundle)
+    bundle = _with_accept_keys(_with_site_call_counts(bundle, surface))
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(
         mockymock_keys,

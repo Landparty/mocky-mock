@@ -56,7 +56,11 @@ def test_happy_path_answers_resp_and_resp2_normal(tmp_path) -> None:
 
 
 def test_a_branch_scenario_keeps_the_resp_it_pinned(tmp_path) -> None:
-    cut = _generate(tmp_path, "CRD", READ_CBL, "--seed", "1", "--scenarios", "branches")
+    # `WHEN 0`, not `WHEN DFHRESP(NORMAL)`: from cobol-parser 3.1 a computed
+    # WHEN selector leaves the whole EVALUATE untargeted (no WHEN OTHER
+    # scenario at all), where 3.0 planned WHEN OTHER around it.
+    cbl = READ_CBL.replace("WHEN DFHRESP(NORMAL)", "WHEN 0")
+    cut = _generate(tmp_path, "CRD", cbl, "--seed", "1", "--scenarios", "branches")
     branch = cut.index("WHEN OTHER")
     body = _mock(cut, 'MOCK CICS "READ"', branch)
     pinned = [line for line in body if line.endswith(" TO WS-RESP")]

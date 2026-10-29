@@ -347,7 +347,10 @@ over the normalized lines, so a quoted literal is never captured (its
 value is fixed by the source) -- comparing bare names instead scaffolded a
 capture of `"ABC"` whenever an item ABC existed, and a refused one when one
 site passed the literal and another the item (fixed 2026-09-28, round 6).
-Under cobol-parser 1.8.x a CALL with a numeric literal operand loses it
+From cobol-parser 3.1 a quoted literal operand keeps its quotes in
+`using_parameters` (`'D''E'` reports as `"D'E"`); `injector.reported_literal`
+recognizes that spelling, the text re-scan accepts either one, and the
+text's own token is still the one moved. Under cobol-parser 1.8.x a CALL with a numeric literal operand loses it
 from `using_parameters`, the text re-scan then trusts nothing, and a quoted
 literal on that CALL still reads as a data-name -- consistently in both
 the generator and the splicer, so no refusal.
@@ -1098,6 +1101,19 @@ paragraph-grouped path described above, unchanged. A real
   human reads should not silently contain code that did not come from the
   fixture data. The `*> TODO` remains the fallback when no `ProgramContext`
   was supplied or the clause could not be located.
+- **Per-site counts from a 3.1 bundle.** cobol-parser before 3.1 gave
+  every fixture its own `call_count` (1 for a CALL or a status-only
+  boundary; the row count, plus one for the end-of-file call when the
+  statement has AT END, for a fed one). From 3.1 (#363) it writes one per
+  `(category, key)` and only when control flow makes it exact. Everything
+  below (`_merged_call_counts`, `_conditional_call_count_keys`, the
+  MQGET/DL/I loop-end and FILE STATUS end-of-file overrides) starts from a
+  count per mocked key, so `_with_site_call_counts` first gives each key
+  the bundle left uncounted its per-site counts back; the analysis then
+  demotes or corrects them as it always did. A count the bundle wrote is
+  kept, and an `error status:` scenario is left alone (the bundle drops
+  its counts because the failure path makes them untrue). On an older
+  bundle every key is counted already, so nothing is added.
 - **Expectations** render via `_render_expectation(expectation,
   declared_keys, call_count_overrides=None, counted_boundaries=None)`:
   tier 1 (`call_count`) →
