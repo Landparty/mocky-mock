@@ -31,6 +31,7 @@ universal layer.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,12 +56,22 @@ UNIVERSAL_FILE_NAMES = ("cobol.yml", "cobol.yaml")
 _STRING_LIST_KEY = "copybook_path"
 _INT_KEYS = ("seed",)
 _STRING_KEYS = ("test_root", "source_root", _AI_MODE_KEY)
+# Member-name aliasing (cli/copybook_aliases.py): a table of member name ->
+# file, and the extensions a differently-cased file may carry.
+_ALIASES_KEY = "copybook_aliases"
+_EXTENSIONS_KEY = "copybook_extensions"
+# A COBOL text-name: letters, digits, hyphens, and the national characters a
+# PDS member name allows. Never a path, so an alias cannot name a member
+# like `../x`.
+_MEMBER_NAME = re.compile(r"[A-Za-z0-9@#$][A-Za-z0-9@#$_-]*")
 # Every key a config file may carry. Anything else is rejected rather
 # than ignored: a typo'd `copybook-path` (hyphen) or a `timeout` key
 # (deliberately not config-overridable -- see `_apply_config_to_args` in
 # cli/main.py) that quietly did nothing would be a config the user
 # believes is in effect and isn't.
-_KNOWN_KEYS = frozenset({_STRING_LIST_KEY, *_INT_KEYS, *_STRING_KEYS})
+_KNOWN_KEYS = frozenset(
+    {_STRING_LIST_KEY, *_INT_KEYS, *_STRING_KEYS, _ALIASES_KEY, _EXTENSIONS_KEY}
+)
 
 
 class ConfigError(Exception):
@@ -99,6 +110,12 @@ class MockymockConfig:
     # cobol.yml's `mockymock: ai_mode:` under a mockymock.toml that only
     # sets a seed was reported as coming from the mockymock.toml.
     ai_mode_source: Path | None = None
+    # Member name (upper case) -> absolute file, relative entries resolved
+    # against the config file that declared them, like copybook_path.
+    copybook_aliases: dict[str, str] = field(default_factory=dict)
+    # None means "not configured": copybook_aliases.DEFAULT_COPYBOOK_EXTENSIONS.
+    # An empty tuple turns the automatic matching off.
+    copybook_extensions: tuple[str, ...] | None = None
 
 
 def _read_toml(path: Path) -> dict:
@@ -131,6 +148,54 @@ def _normalize_copybook_path(value: object, source: Path) -> tuple[str, ...]:
     return tuple(resolved)
 
 
+def _normalize_copybook_aliases(value: object, source: Path) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ConfigError(
+            f"mockymock: {source}: '{_ALIASES_KEY}' must be a table of "
+            f"member name = file"
+        )
+    aliases: dict[str, str] = {}
+    for member, file_name in value.items():
+        if not isinstance(member, str) or not _MEMBER_NAME.fullmatch(member):
+            raise ConfigError(
+                f"mockymock: {source}: '{_ALIASES_KEY}' key {member!r} is not "
+                f"a copybook member name"
+            )
+        if not isinstance(file_name, str):
+            raise ConfigError(
+                f"mockymock: {source}: '{_ALIASES_KEY}.{member}' must be a "
+                f"file path string"
+            )
+        path = Path(file_name)
+        if not path.is_absolute():
+            path = source.parent / path
+        if not path.is_file():
+            raise ConfigError(
+                f"mockymock: {source}: '{_ALIASES_KEY}.{member}' names "
+                f"{path}, which is not a file"
+            )
+        aliases[member.upper()] = str(path)
+    return aliases
+
+
+def _normalize_copybook_extensions(value: object, source: Path) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ConfigError(
+            f"mockymock: {source}: '{_EXTENSIONS_KEY}' must be a list of " f"strings"
+        )
+    extensions = []
+    for ext in value:
+        if ext and not ext.startswith("."):
+            ext = f".{ext}"
+        if "/" in ext or "\\" in ext:
+            raise ConfigError(
+                f"mockymock: {source}: '{_EXTENSIONS_KEY}' entry {ext!r} is "
+                f"not a file extension"
+            )
+        extensions.append(ext)
+    return tuple(extensions)
+
+
 def _validated_values(data: dict, source: Path) -> dict[str, Any]:
     """Validate one config table and return only the keys it actually sets.
 
@@ -161,6 +226,14 @@ def _validated_values(data: dict, source: Path) -> dict[str, Any]:
         )
     if "seed" in data:
         values["seed"] = data["seed"]
+    if _ALIASES_KEY in data:
+        values["copybook_aliases"] = _normalize_copybook_aliases(
+            data[_ALIASES_KEY], source
+        )
+    if _EXTENSIONS_KEY in data:
+        values["copybook_extensions"] = _normalize_copybook_extensions(
+            data[_EXTENSIONS_KEY], source
+        )
     if _AI_MODE_KEY in data:
         ai_mode = data[_AI_MODE_KEY]
         if ai_mode not in _AI_MODES:
