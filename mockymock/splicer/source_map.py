@@ -45,6 +45,11 @@ from cobolparser.parsers.statements.ibm_exec_statements import (
     ExecImsStatement,
 )
 
+from mockymock.analysis.clause_bodies import (
+    _NESTABLE_BOUNDARY_TYPES,
+    _spec,
+    clause_header_positions,
+)
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
     BoundarySite,
@@ -200,6 +205,10 @@ class ScopeBoundary:
     # True for paragraph/SECTION headers and depth-0 statement starts --
     # the entries the top-level "owns its line" guard checks against.
     top_level: bool = False
+    # A boundary statement's clause header (`AT END`, `NOT INVALID KEY`,
+    # `ON EXCEPTION`, ...; `word` holds its name): the AST locates none, but
+    # a statement nested in a clause body must stop before the next one.
+    clause_header: bool = False
 
 
 @dataclass
@@ -261,10 +270,13 @@ def collect_scope_map(program, lines: list[str]) -> ScopeMap:
     paragraph headers, statement starts at EVERY depth, and scope-word token
     locations from re-lexing `lines`. Tokens inside EXEC ... END-EXEC ranges
     are excluded: embedded SQL/CICS text may legally contain WHEN/ELSE/CASE
-    words that are not COBOL block words.
+    words that are not COBOL block words. Clause headers of every READ /
+    WRITE / CALL / ... with clause bodies are boundaries too
+    (`ScopeBoundary.clause_header`).
     """
     boundaries: list[ScopeBoundary] = []
     exec_starts: list[int] = []
+    with_clauses: list = []
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return ScopeMap([])
@@ -292,7 +304,12 @@ def collect_scope_map(program, lines: list[str]) -> ScopeMap:
                     top_level=True,
                 )
             )
-        _collect_statement_starts(paragraph.statements, boundaries, exec_starts)
+        _collect_statement_starts(
+            paragraph.statements, boundaries, exec_starts, with_clauses
+        )
+    for statement in with_clauses:
+        for line, column, name in clause_header_positions(statement, lines):
+            boundaries.append(ScopeBoundary(line, column, name, clause_header=True))
 
     exec_index = _exec_line_index([_exec_range(lines, start) for start in exec_starts])
     lexer = CobolLexer("\n".join(lines), free_form=True)
@@ -314,6 +331,7 @@ def _collect_statement_starts(
     statements,
     boundaries: list[ScopeBoundary],
     exec_starts: list[int],
+    with_clauses: list,
     top_level: bool = True,
 ) -> None:
     for statement in statements:
@@ -327,8 +345,13 @@ def _collect_statement_starts(
         )
         if isinstance(statement, _EXEC_STATEMENT_TYPES):
             exec_starts.append(statement.location.line)
-        for nested in _nested_statement_lists(statement):
-            _collect_statement_starts(nested, boundaries, exec_starts, top_level=False)
+        nested_lists = _nested_statement_lists(statement)
+        if nested_lists and _spec(statement) is not None:
+            with_clauses.append(statement)
+        for nested in nested_lists:
+            _collect_statement_starts(
+                nested, boundaries, exec_starts, with_clauses, top_level=False
+            )
 
 
 def _exec_range(lines: list[str], start: int) -> tuple[int, int, int]:
@@ -391,16 +414,72 @@ def annotate_nested_sites(
     identical rules -- see
     docs/2026-07-08-goback-stop-run-support-design.md. `EXEC SQL WHENEVER`
     sites (`surface.whenever_sites`) are spliced too, so they get the same
-    validation."""
+    validation.
+
+    A site nested in another boundary's clause body (`READ ... NOT AT END
+    CALL "X"`) gets a span too when that is safe (`_in_boundary_problem`):
+    the splicer splices it in place when nothing replaces the enclosing
+    statement, or inside the enclosing statement's lifted clause body when
+    a mock does (`orchestrator.splice_program`)."""
+    parents = boundary_parents(surface)
     for site in [*surface.boundary_sites, *surface.whenever_sites]:
         if site.category is None and site.label not in _TERMINATOR_LABELS:
             continue
         if site.nested:
-            span, reason = _nested_site_span(site, scope_map, lines)
+            span, reason, lead = _nested_site_span(site, scope_map, lines, parents)
             site.span = span
             site.unspliceable_reason = reason
+            site.span_lead = lead
         else:
             site.unspliceable_reason = _top_level_site_problem(site, scope_map, lines)
+
+
+def boundary_parents(surface: MockSurface) -> dict[int, BoundarySite]:
+    """`id(statement)` of every boundary site nested in another boundary's
+    clause body -> the nearest enclosing boundary site."""
+    sites = {id(site.statement): site for site in surface.boundary_sites}
+    parents: dict[int, BoundarySite] = {}
+    for site in sites.values():
+        stack = list(_nested_statement_lists(site.statement))
+        while stack:
+            for child in stack.pop():
+                if id(child) in sites:
+                    # Its own walk covers what is nested in it.
+                    parents[id(child)] = site
+                    continue
+                stack.extend(_nested_statement_lists(child))
+    return parents
+
+
+def _in_boundary_problem(
+    site: BoundarySite, parents: dict[int, BoundarySite]
+) -> str | None:
+    """Why a site nested in another boundary's clause body cannot get a
+    span of its own, or None when it can: a mockable, non-EXEC site whose
+    every enclosing boundary is a READ / RETURN / WRITE / REWRITE / DELETE
+    / START / CALL, the statements whose clause bodies the splice lifts
+    and re-runs (`analysis.clause_bodies`) -- so the site survives a mock
+    of the enclosing statement inside the lifted copy."""
+    removed = (
+        "nested inside another boundary statement's clause body -- "
+        "splicing the enclosing statement removes this site"
+    )
+    if site.category is None or site.category in EXEC_CATEGORIES:
+        return removed
+    if not isinstance(site.statement, _NESTABLE_BOUNDARY_TYPES):
+        return removed
+    parent = parents.get(id(site.statement))
+    seen: set[int] = set()
+    while parent is not None and id(parent.statement) not in seen:
+        seen.add(id(parent.statement))
+        if _spec(parent.statement) is None:
+            return (
+                f"nested inside the clause body of the {parent.label} at line "
+                f"{parent.line}, whose clause bodies are not re-run after a "
+                f"mock -- splicing that statement removes this site"
+            )
+        parent = parents.get(id(parent.statement))
+    return None
 
 
 def _top_level_site_problem(
@@ -495,22 +574,51 @@ def nested_statement_span(
     return (start, end), None
 
 
+def _start_line_lead(
+    statement, scope_map: ScopeMap, lines: list[str]
+) -> tuple[str, ScopeBoundary | None] | None:
+    """What precedes `statement` on its start line: `("", None)` when
+    nothing does, `(header text, its boundary)` when only the clause header
+    whose body it opens does (`AT END CALL "X"`), None when anything else
+    does. A splice in place re-emits that header on a line of its own
+    (`BoundarySite.span_lead`)."""
+    start = statement.location.line
+    column = statement.location.column
+    prefix = lines[start - 1][: column - 1]
+    if not prefix.strip():
+        return "", None
+    before = [b for b in scope_map.at_line(start) if b.column < column]
+    if (
+        len(before) == 1
+        and before[0].clause_header
+        and not prefix[: before[0].column - 1].strip()
+    ):
+        return prefix.rstrip(), before[0]
+    return None
+
+
 def _nested_site_span(
-    site: BoundarySite, scope_map: ScopeMap, lines: list[str]
-) -> tuple[tuple[int, int] | None, str | None]:
+    site: BoundarySite,
+    scope_map: ScopeMap,
+    lines: list[str],
+    parents: dict[int, BoundarySite] | None = None,
+) -> tuple[tuple[int, int] | None, str | None, str | None]:
+    """(span, reason there is none, header lead -- see `_start_line_lead`)."""
     statement = cast(ASTNode, site.statement)
     if site.nested_in_boundary:
-        return None, (
-            "nested inside another boundary statement's clause body -- "
-            "splicing the enclosing statement removes this site"
-        )
+        problem = _in_boundary_problem(site, parents or {})
+        if problem is not None:
+            return None, problem, None
+    lead = _start_line_lead(statement, scope_map, lines)
+    if lead is None:
+        return None, "does not start its own line", None
+    lead_text, lead_boundary = lead
     if _nested_statement_lists(statement):
-        return _nested_clause_site_span(site, scope_map, lines)
+        span, reason = _nested_clause_site_span(site, scope_map, lines, lead_boundary)
+        return span, reason, (lead_text or None) if span else None
 
     start = statement.location.line
     column = statement.location.column
-    if lines[start - 1][: column - 1].strip():
-        return None, "does not start its own line"
 
     own_terminator = (
         _VERB_TERMINATORS.get(site.category, "") if site.category is not None else ""
@@ -520,21 +628,27 @@ def _nested_site_span(
         return not (own_terminator and boundary.word == own_terminator)
 
     if any(
-        relevant(b) and not (b.column == column and b.word == "")
+        relevant(b)
+        and b is not lead_boundary
+        and not (b.column == column and b.word == "")
         for b in scope_map.at_line(start)
     ):
-        return None, "shares its start line with another statement or scope word"
+        return None, "shares its start line with another statement or scope word", None
 
     nxt = next(
         (b for b in scope_map.iter_after_line(start) if relevant(b)),
         None,
     )
     if nxt is None:
-        return None, "no following statement or scope word to bound the span"
+        return None, "no following statement or scope word to bound the span", None
     if lines[nxt.line - 1][: nxt.column - 1].strip():
-        return None, (
-            f"the next scope word or statement (line {nxt.line}) does not "
-            f"start its own line"
+        return (
+            None,
+            (
+                f"the next scope word or statement (line {nxt.line}) does not "
+                f"start its own line"
+            ),
+            None,
         )
 
     end = _trim_trailing_blank_lines(start, nxt.line - 1, lines)
@@ -543,8 +657,12 @@ def _nested_site_span(
             "END-EXEC" in lines[line_no - 1].upper()
             for line_no in range(start, end + 1)
         ):
-            return None, "its END-EXEC terminator falls outside the computed span"
-    return (start, end), None
+            return (
+                None,
+                "its END-EXEC terminator falls outside the computed span",
+                None,
+            )
+    return (start, end), None, lead_text or None
 
 
 def _descendants(statement) -> list:
@@ -559,7 +677,10 @@ def _descendants(statement) -> list:
 
 
 def _nested_clause_site_span(
-    site: BoundarySite, scope_map: ScopeMap, lines: list[str]
+    site: BoundarySite,
+    scope_map: ScopeMap,
+    lines: list[str],
+    lead_boundary: ScopeBoundary | None = None,
 ) -> tuple[tuple[int, int] | None, str | None]:
     """The span of a nested statement WITH clause bodies of its own (READ
     ... AT END ... END-READ inside an inline PERFORM, CALL ... ON EXCEPTION
@@ -573,7 +694,7 @@ def _nested_clause_site_span(
     statement = cast(ASTNode, site.statement)
     start = statement.location.line
     column = statement.location.column
-    if lines[start - 1][: column - 1].strip():
+    if lead_boundary is None and lines[start - 1][: column - 1].strip():
         return None, "does not start its own line"
     own_terminator = (
         _VERB_TERMINATORS.get(site.category, "") if site.category is not None else ""

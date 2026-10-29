@@ -5,6 +5,26 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-29 -- boundaries nested in another boundary's clause body
+
+A CALL / file op / RELEASE / RETURN / console ACCEPT inside a READ /
+RETURN / WRITE / REWRITE / DELETE / START / CALL clause body (`READ ...
+NOT AT END CALL "X"`, `CALL ... ON EXCEPTION WRITE ERR-REC`) was refused
+both ways: the inner site got no span (`nested_in_boundary`), and mocking
+the outer statement refused UNLIFTABLE_CLAUSE_BODY. Clause headers are now
+scope-map boundaries (`clause_bodies.clause_header_positions`,
+`ScopeBoundary.clause_header`), such an inner site gets a span of its own
+(`source_map._in_boundary_problem`; `BoundarySite.span_lead` keeps an
+`AT END` that shares its line), and the lift accepts those boundaries
+(`_NESTABLE_BOUNDARY_TYPES`). The splicer splices the inner site in place
+when the outer is left alone, or into the outer's lifted clause body when
+the outer is mocked (`orchestrator._splice_into_lifted`), at any depth.
+EXEC blocks, terminators and other boundaries in a clause body stay
+refused; a statement of the outer's own kind in its bodies now refuses
+the lift (which END-xxx closes which is ambiguous). VSAMKSDS and BATCHSEQ
+generate clean; verified on GnuCOBOL 3.1.2. Updated [splicer](splicer.md),
+[analysis](analysis.md).
+
 ## 2026-10-29 -- CALL arguments and dynamic CALL targets in `generate`
 
 A CALL argument cobol-parser's layout index cannot hold (a group below
