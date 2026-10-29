@@ -360,7 +360,17 @@ def effective_copybook_paths(
 #: own folder (`cobol/` + `copybook/`, the usual mainframe export --
 #: legacy-application's INTCALC was refused UNRESOLVED_COPYBOOK until
 #: `--copybook-path ../copybook` was passed).
-_COPYBOOK_DIR_NAMES = ("copybooks", "copybook", "copylib", "copy", "cpy")
+#: `dclgen/` and `include/` hold the members `EXEC SQL INCLUDE` names (the
+#: DCLGEN output a DB2 shop exports beside its copylib).
+_COPYBOOK_DIR_NAMES = (
+    "copybooks",
+    "copybook",
+    "copylib",
+    "copy",
+    "cpy",
+    "dclgen",
+    "include",
+)
 
 
 def _default_copybook_dirs(program_path: Path) -> list[Path]:
@@ -375,20 +385,84 @@ def _default_copybook_dirs(program_path: Path) -> list[Path]:
     ]
 
 
-def copybook_not_found_hint() -> str:
+def copybook_not_found_hint(exc: BaseException | None = None) -> str:
     """The actionable follow-up line appended after a
     cobolparser.preprocess.CopybookNotFoundError's own message (which
     already names every path it searched). Formatted as a 4-space
     continuation line, matching how the rest of this CLI already renders
-    a multi-line problem (see `_cmd_lint`'s "  " prefix convention)."""
+    a multi-line problem (see `_cmd_lint`'s "  " prefix convention).
+
+    Given the error itself, a second line names any file that looks like
+    the member but that the search cannot match (`near_miss_copybooks`):
+    a mainframe export often lands as `gttlbi0a.copy` or `DMTREN0A.dcl`,
+    and on a case-sensitive filesystem with an extension cobol-parser
+    does not try, no search path would ever find it."""
     # Names cobol.yml first: it is the file the rest of the tool family
     # (cobol-parser, the COBOL Analyzer extension) reads too, so one entry
     # there fixes every tool at once -- see `config.py`'s module docstring.
-    return (
+    hint = (
         "    Pass its location with --copybook-path <dir> (repeatable), or "
         "set copybook_path under project: in cobol.yml (shared with "
         "cobol-parser) or in mockymock.toml / [tool.mockymock]."
     )
+    if exc is not None and not hasattr(exc, "copybook_name"):
+        exc = exc.__cause__
+    member = getattr(exc, "copybook_name", None)
+    if not member:
+        return hint
+    near = near_miss_copybooks(member, list(getattr(exc, "search_paths", [])))
+    if near:
+        hint += (
+            f"\n    Found {', '.join(str(p) for p in near)}, named like "
+            f"'{member}' but not matched: the member is looked up as "
+            f"written, with extension {', '.join(_MATCHED_EXTENSIONS)} or "
+            f"none -- copy or rename it to {member}.cpy in a searched "
+            f"directory."
+        )
+    return hint
+
+
+#: The extensions cobol-parser's copybook search tries, after the bare
+#: member name (cobolparser.preprocess's path resolver).
+_MATCHED_EXTENSIONS = (".cpy", ".cbl", ".cob")
+_SEARCHED_SUFFIXES = frozenset(
+    _MATCHED_EXTENSIONS + tuple(e.upper() for e in _MATCHED_EXTENSIONS)
+)
+#: How many files `near_miss_copybooks` lists before it stops looking.
+_NEAR_MISS_LIMIT = 5
+
+
+def near_miss_copybooks(member: str, search_paths: list[str]) -> list[Path]:
+    """Files whose stem is `member` in any letter case, under each
+    searched directory or a conventional copybook folder beside it
+    (`_COPYBOOK_DIR_NAMES`), that the search did not match: a different
+    case, or an extension cobol-parser does not try (`.copy`, `.dcl`,
+    `.txt`). One directory level only, so a large tree is never walked;
+    at most `_NEAR_MISS_LIMIT` results, sorted."""
+    wanted = member.casefold()
+    dirs: dict[Path, None] = {}
+    for entry in search_paths:
+        base = Path(entry)
+        dirs[base] = None
+        for name in _COPYBOOK_DIR_NAMES:
+            dirs[base.parent / name] = None
+    found: list[Path] = []
+    for folder in dirs:
+        try:
+            children = sorted(folder.iterdir()) if folder.is_dir() else []
+        except OSError:  # pragma: no cover - unreadable folder
+            continue
+        for child in children:
+            name = child.name
+            stem, dot, ext = name.partition(".")
+            if stem.casefold() != wanted or not child.is_file():
+                continue
+            if stem == member and (not dot or f".{ext}" in _SEARCHED_SUFFIXES):
+                continue  # the search would have matched this one
+            found.append(child)
+            if len(found) >= _NEAR_MISS_LIMIT:
+                return found
+    return found
 
 
 def project_cut_files(layout: ProjectLayout) -> list[Path]:

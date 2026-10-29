@@ -639,6 +639,13 @@ def test_check_unresolved_copybooks_flags_unexpanded_copy_statement():
     assert any(r.code == "UNRESOLVED_COPYBOOK" for r in reasons)
 
 
+def test_unresolved_copybook_refusal_names_the_member():
+    """The sweep's missing-copybook rows (DMTREN0A, GTTLBI0A) had to be
+    traced back to a line number; the refusal now names the member."""
+    (reason,) = check_unresolved_copybooks(UNRESOLVED_COPY_SOURCE)
+    assert "unresolved COPY ORDREC at line" in reason.message
+
+
 def test_check_unresolved_copybooks_passes_clean_source():
     assert check_unresolved_copybooks(SOURCE) == []
 

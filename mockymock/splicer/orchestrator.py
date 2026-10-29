@@ -57,6 +57,7 @@ from mockymock.splicer.injector import (
     build_site_dispatch,
     build_terminator_neutralization,
     build_unmocked_trap,
+    prefix_loop_conditions,
 )
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.source_map import statement_span
@@ -368,6 +369,22 @@ def splice_program(
             if _span_ends_sentence(lines, start, end):
                 chain_check = chain_check[:-1] + [chain_check[-1] + "."]
             insertions.append((end, chain_check))
+
+    # Loop PERFORMs on a chain get their UNTIL extended in place first: the
+    # line count does not change, so every span and insertion point above
+    # stays valid.
+    seen_loop_ids: set[int] = set()
+    for plan in terminator_plans:
+        for perform in plan.loop_performs:
+            if id(perform) in seen_loop_ids:
+                continue
+            seen_loop_ids.add(id(perform))
+            nested_span = plan.chain_spans.get(id(perform))
+            if nested_span is not None:
+                start, end = nested_span
+            else:
+                start, end = statement_span(perform, boundaries, last_line, lines)
+            lines = prefix_loop_conditions(lines, start, end)
 
     ops: list[tuple[int, str, int, int, list[str]]] = [
         (start, "replace", start, end, replacement) for start, end, replacement in spans

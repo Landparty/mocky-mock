@@ -698,6 +698,60 @@ def build_goto_exit_replacement(exit_kind: str = "PARAGRAPH") -> list[str]:
     return [f"           EXIT {exit_kind}"]
 
 
+_UNTIL_PREFIX = 'UNTIL UT-EARLY-EXIT = "Y" OR'
+
+
+def prefix_loop_conditions(lines: list[str], start: int, end: int) -> list[str]:
+    """Return a NEW list with every `UNTIL` keyword of the PERFORM statement
+    on lines [start, end] (1-indexed, inclusive) followed by
+    `UT-EARLY-EXIT = "Y" OR` -- a loop on the chain toward a neutralized
+    terminator (`TerminatorPlan.loop_performs`) then stops on the next test
+    of its condition instead of running again after the early exit. OR
+    binds loosest, so `UNTIL A AND B` becomes `flag OR (A AND B)`, and an
+    abbreviated `UNTIL X = 1 OR 2` keeps its own subject. Words inside
+    literals and `*>` comments are left alone; the line count never
+    changes, so other planned spans stay valid."""
+    result = list(lines)
+    quote: str | None = None
+    for index in range(start - 1, min(end, len(result))):
+        line = result[index]
+        out: list[str] = []
+        pos = 0
+        while pos < len(line):
+            char = line[pos]
+            if quote is not None:
+                out.append(char)
+                if char == quote:
+                    quote = None
+                pos += 1
+                continue
+            if char in "\"'":
+                quote = char
+                out.append(char)
+                pos += 1
+                continue
+            if line.startswith("*>", pos):
+                out.append(line[pos:])
+                break
+            if (
+                line[pos : pos + 5].upper() == "UNTIL"
+                and (pos == 0 or not (line[pos - 1].isalnum() or line[pos - 1] in "-_"))
+                and (
+                    pos + 5 == len(line)
+                    or not (line[pos + 5].isalnum() or line[pos + 5] in "-_")
+                )
+            ):
+                out.append(_UNTIL_PREFIX)
+                pos += 5
+                continue
+            out.append(char)
+            pos += 1
+        result[index] = "".join(out)
+        # A literal never continues past its line in normalized source.
+        quote = None
+    return result
+
+
 def build_chain_check(exit_kind: str = "PARAGRAPH") -> list[str]:
     """Inserted immediately after an intermediate PERFORM statement lying
     on a safe chain toward a neutralized terminator: if the flag is set,

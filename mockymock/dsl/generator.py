@@ -690,6 +690,21 @@ def _extract_at_end_imperative(statement_text: str) -> str | None:
     return lifted or None
 
 
+def _body_lines_parse(body: list[str]) -> bool:
+    """Whether the `.cut` parser takes `body` as MOCK body lines: it refuses
+    one that leaves the body (`PERFORM <paragraph>`, GO TO, GOBACK, STOP
+    RUN, EXIT PROGRAM -- issue #287), and an `AT END PERFORM 9000-EOF`
+    copied in verbatim made the whole generated `.cut` unreadable."""
+    from mockymock.dsl.parser import CutParseError, _reject_body_control_flow
+
+    try:
+        for line_no, line in enumerate(body, 1):
+            _reject_body_control_flow(line, line_no, "READ")
+    except CutParseError:
+        return False
+    return True
+
+
 def _lifted_at_end_lines(
     site: BoundarySite, source: ProgramContext | None
 ) -> list[str]:
@@ -707,6 +722,8 @@ def _lifted_at_end_lines(
     lifted text carries a sentence-terminating period of its own: a period
     inside the spliced `EVALUATE` branch would close the enclosing sentence
     early and silently restructure the generated program's control flow.
+    Likewise when a line of it would not parse as a MOCK body line
+    (`_body_lines_parse`).
     """
     if source is None:
         return []
@@ -719,7 +736,7 @@ def _lifted_at_end_lines(
     if any(word == "." for _, _, word in _scan_words(lifted)):
         return []
     body = [line.strip() for line in lifted.splitlines() if line.strip()]
-    if not body:
+    if not body or not _body_lines_parse(body):
         return []
     return [
         f"*> replicated verbatim from this program's own READ ... AT END "

@@ -285,35 +285,54 @@ def test_find_terminator_plans_includes_intermediate_perform_in_chain():
     }
 
 
-def test_looping_perform_is_excluded_from_the_safe_chain():
-    """A PERFORM ... UNTIL used as an intermediate chain link is NOT a
-    "plain, unconditional" PERFORM: EXIT PARAGRAPH from inside its target
-    only ends the current iteration, not the loop, so its target must not
-    be treated as safely reachable. Here the terminator sits directly in
-    the perform_target paragraph (always in safe_names), so it's still
-    accepted -- but the loop's own PERFORM must NOT appear in
-    chain_performs, since instrumenting it would insert a chain-check that
-    fires on every iteration rather than once after the whole loop."""
+def test_looping_perform_is_a_chain_link_with_its_condition_extended():
+    """An out-of-line PERFORM ... UNTIL on the chain gets a check after it
+    like any chain PERFORM (it runs once, after the whole loop), and is
+    listed in loop_performs so the splicer extends its UNTIL: without that
+    an early exit inside the loop would just start the next iteration."""
     program, surface, scope_map, lines = _analyze(LOOP_SAFE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert reasons == []
     assert len(plans) == 1
-    assert plans[0].chain_performs == []
+    assert [p.target_paragraph for p in plans[0].chain_performs] == ["1000-LOOP-BODY"]
+    assert [p.target_paragraph for p in plans[0].loop_performs] == ["1000-LOOP-BODY"]
 
 
-def test_terminator_reached_only_through_a_loop_body_refuses():
-    """The terminator (STOP RUN) lives inside 1000-LOOP-BODY, which is
-    reachable ONLY as the target of a PERFORM ... UNTIL -- not a plain,
-    unconditional PERFORM. Confirmed empirically (a synthetic spliced
-    program with this shape kept iterating past a real STOP RUN instead
-    of stopping) that treating this as safe is a genuine correctness bug;
-    this must refuse instead."""
+def test_terminator_reached_through_a_loop_body_is_planned():
+    """STOP RUN inside 1000-LOOP-BODY, reached only as the target of a
+    PERFORM ... UNTIL. It used to refuse: the neutralized STOP RUN returned
+    into the loop, which kept iterating instead of stopping. The loop's
+    UNTIL now also tests UT-EARLY-EXIT (loop_performs), so the loop ends on
+    its next test and the check after it carries the exit on."""
     program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].site.paragraph_name == "1000-LOOP-BODY"
+    assert [p.target_paragraph for p in plans[0].loop_performs] == ["1000-LOOP-BODY"]
+
+
+LOOP_TERMINATOR_TIMES_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOOPTIMES.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-LOOP-BODY 3 TIMES.
+
+       1000-LOOP-BODY.
+           STOP RUN.
+"""
+
+
+def test_terminator_reached_only_through_a_times_loop_refuses():
+    """PERFORM ... TIMES has no condition to extend with the early-exit
+    flag, so it stays off the chain and its target's terminator refuses."""
+    program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_TIMES_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "not via a chain of plain, unconditional" in reasons[0].message
 
 
 LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE = """\
@@ -335,19 +354,10 @@ LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE = """\
 
 
 def test_terminator_reached_only_through_a_varying_loop_body_refuses():
-    """Same hazard as test_terminator_reached_only_through_a_loop_body_refuses
-    above, but for the out-of-line PERFORM ... VARYING form specifically --
-    a distinct cobolparser codepath from UNTIL/TIMES. This shape's VARYING
-    clause used to be silently dropped, mistagging perform_type "SIMPLE"
-    (indistinguishable from a safe plain PERFORM to
-    _plain_perform_edges_from); what protected it then was an unrelated
-    PARSE_WARNING refusal for the dropped clause -- see
-    tests/unit/test_refusal.py's OUT_OF_LINE_PERFORM_VARYING_SOURCE comment.
-    cobolparser now parses this correctly (perform_type == "VARYING", no
-    warnings -- test_refusal.py::test_out_of_line_perform_varying_parses_correctly),
-    so this pins that the *intended* mechanism -- the perform_type guard in
-    _plain_perform_edges_from -- independently still excludes it, rather
-    than relying on the parser bug's accidental safety net."""
+    """The out-of-line PERFORM ... VARYING form is not extended like UNTIL:
+    the counter is stepped before the condition is tested again, so the
+    test would see it one step past where the real run stops. Still a dead
+    end, still refused."""
     program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
