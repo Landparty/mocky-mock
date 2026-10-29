@@ -5,6 +5,18 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-29 -- corpus-sweep report with a diff against the last run
+
+`scripts/corpus_sweep.py` now tallies blockers per category and saves
+each run as a JSON snapshot (`--json`); `--baseline` diffs against an
+earlier one per category and names the programs that regressed or
+cleared, and `--fail-on-regression` exits 1 on a regression. It also
+takes `--corpus`, `--copybook-path`, `--timeout` and `--jobs`, so it can
+sweep a corpus outside this repo. The logic moved to
+`mockymock/report/sweep.py`. `docs/corpus-sweep-report.md` was not
+regenerated (the legacy-application checkout was not available).
+Updated [report](report.md).
+
 ## 2026-10-29 -- boundaries nested in another boundary's clause body
 
 A CALL / file op / RELEASE / RETURN / console ACCEPT inside a READ /
