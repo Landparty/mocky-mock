@@ -16,6 +16,17 @@ body branches on the program names its identifier is known to hold
 `tests/unit/test_call_argument_resolution.py` and its integration twin.
 Updated [cli](cli.md), [dsl](dsl.md), [integration](integration.md).
 
+## 2026-10-29 -- cobol-parser 3.1 adopted
+
+- The `<3.1` cap is lifted: `cobol-parser>=1.7.7,!=1.8.2,<4`. The 22 unit
+  tests 3.1 broke pass again, on 3.0.0, 3.1.1 and cobol-parser main.
+  [dsl](dsl.md): `generate` restores per-site `call_count`s for the keys a
+  3.1 bundle leaves uncounted (`_with_site_call_counts`), and reads a
+  quoted literal CALL argument. [cli](cli.md): `add_entry_parameters` tops
+  up the native entry-parameter stubs (a field set only through its 88s).
+  [integration](integration.md), [testing](testing.md),
+  [publishing](publishing.md): the pin.
+
 ## 2026-10-27 -- bug hunt after the SECTION-member support
 
 Six fixes, each reproduced on GnuCOBOL 3.2 and pinned by

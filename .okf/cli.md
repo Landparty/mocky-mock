@@ -310,7 +310,9 @@ PICTURE-valid row over the USING items' elementary fields) plus a `stub`
 expectation per LINKAGE field xref says the program writes (a level-88
 xref files as written -- `SET LK-NEG TO TRUE` -- counts for its
 conditional variable, resolved through the layout index), without the
-branch targeting. DFHEIBLK/DFHCOMMAREA are dropped (`without_cics_parameters`;
+branch targeting. It runs on a native bundle too, adding only the stubs it
+lacks: cobol-parser 3.1's own list misses a field written only through its
+88s. DFHEIBLK/DFHCOMMAREA are dropped (`without_cics_parameters`;
 CICS supplies them, #245 handles the commarea). The scaffold MOVEs the row
 before the PERFORM (`generator._entry_parameter_lines`), so `run
 --record-expectations` fills the stubs. After writing, `generate` warns on

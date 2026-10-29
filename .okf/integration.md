@@ -14,7 +14,7 @@ publishing to PyPI as `cobol-parser` (see [publishing.md](publishing.md);
 first as closed-source wheels, source-visible since its 2026-10-03
 relicense to AGPL-3.0-or-later),
 `cobolparser` resolves as an ordinary versioned PyPI dependency
-(`pyproject.toml`'s `dependencies`: currently `cobol-parser>=1.7.7,!=1.8.2,<3.1`) — no sibling
+(`pyproject.toml`'s `dependencies`: currently `cobol-parser>=1.7.7,!=1.8.2,<4`) — no sibling
 checkout, no separate CI cross-repo checkout step, one place to bump. That
 pin is a floor, not a substitute for the interface contract below — any
 change to a symbol below is still a breaking change for this repo even
