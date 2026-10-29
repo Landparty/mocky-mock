@@ -458,11 +458,10 @@ def test_known_unmockable_sites_do_not_raise_the_key_mismatch_warning(tmp_path, 
     mockable, so the "should not happen" warning stays quiet.
 
     Both happy paths reach a site nested inside another boundary's clause
-    body (VSAMKSDS's DELETE, BATCHSEQ's RELEASE), which no MOCK can
-    replace, so `lint` refuses the case `generate` wrote and generate exits
-    1 (issues #231, #258); the file is still written. (VSAMKSDS's nested
-    READ/REWRITE ... END-xxx sites themselves are mockable since #258.)"""
-    for name, expected_rc in (("VSAMKSDS", 1), ("BATCHSEQ", 1)):
+    body (VSAMKSDS's DELETE, BATCHSEQ's RELEASE). Those used to be refused
+    (generate exited 1, issues #231, #258); they are now spliced inside the
+    enclosing statement's lifted clause body, so the scaffold lints clean."""
+    for name, expected_rc in (("VSAMKSDS", 0), ("BATCHSEQ", 0)):
         out = tmp_path / f"{name}.cut"
         rc = main(
             [

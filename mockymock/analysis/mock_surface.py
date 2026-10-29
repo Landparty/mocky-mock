@@ -293,13 +293,19 @@ class BoundarySite:
     statement: object
     is_mq: bool = False
     # True when an ancestor statement is itself a boundary statement (a
-    # CALL/file-op clause body): the ancestor's splice would remove this
-    # site, so it can never be spliced independently.
+    # CALL/file-op clause body). Such a site still gets a span when every
+    # such ancestor's clause bodies are lifted and re-run after a mock: the
+    # splicer then splices it inside the lifted copy
+    # (splicer.source_map._in_boundary_problem).
     nested_in_boundary: bool = False
     # Filled in by splicer.source_map.annotate_nested_sites for nested
     # sites: a validated replacement span, or the reason none exists.
     span: tuple[int, int] | None = None
     unspliceable_reason: str | None = None
+    # The clause header the span's first line opens with, before the
+    # statement (`AT END` of `AT END CALL "X"`): a splice in place emits it
+    # back on its own line ahead of the replacement.
+    span_lead: str | None = None
     # An `EXEC SQL WHENEVER` site (`MockSurface.whenever_sites` only): its
     # parsed declaration. Never mocked -- the splicer replaces it with
     # CONTINUE (issue #195, see analysis.sql_whenever).
