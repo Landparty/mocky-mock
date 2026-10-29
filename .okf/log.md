@@ -5,6 +5,17 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-29 -- copybook member-name aliasing
+
+The sweep's missing-copybook rows were mostly exports named
+`gttlbi0a.copy` / `DMTREN0A.dcl`: the files were on the search path but
+under a case or extension cobol-parser does not try. New
+`mockymock/cli/copybook_aliases.py` stages them as `MEMBER.cpy` in a
+directory appended last to every command's copybook path list, and two
+config keys tune it: `copybook_extensions` (which extensions count) and
+`copybook_aliases` (member = file, for names that match nothing). Tests:
+`tests/unit/test_copybook_aliases.py`. Updated [cli](cli.md).
+
 ## 2026-10-29 -- cobol-parser 3.1 adopted
 
 - The `<3.1` cap is lifted: `cobol-parser>=1.7.7,!=1.8.2,<4`. The 22 unit
