@@ -664,11 +664,19 @@ def find_terminator_plans(
         for name in (case.perform_target, case.perform_thru)
         if name
     }
+    member_why_not: dict[str, str] = {}
     member_modes = _section_member_modes(
         program,
         paragraph_entries=case_entries - section_names,
         section_entries=case_entries & section_names,
+        why_not=member_why_not,
     )
+
+    def no_mode_reason(name: str) -> str:
+        return member_why_not.get(
+            name, "it is not entered one single way the analysis can verify"
+        )
+
     member_names = {
         paragraph.paragraph_name
         for section in procedure._sections.values()
@@ -825,11 +833,9 @@ def find_terminator_plans(
                 and paragraph_name not in member_modes
             ):
                 problem = (
-                    "is inside a paragraph that belongs to a SECTION and is "
-                    "entered more than one way (by its own name and as part "
-                    "of its section's range, through a PERFORM ... THRU, or "
-                    "by GO TO) -- no single EXIT PARAGRAPH/SECTION returns "
-                    "correctly from it"
+                    f"is inside SECTION member '{paragraph_name}', and "
+                    f"{no_mode_reason(paragraph_name)} -- no single EXIT "
+                    f"PARAGRAPH/SECTION is known to return correctly from it"
                 )
             elif paragraph_name in go_to_targets and paragraph_name in whenever_only:
                 problem = (
@@ -881,13 +887,21 @@ def find_terminator_plans(
                 )
             elif chain_section_names:
                 bad_name = sorted(chain_section_names)[0]
-                what = (
-                    "a SECTION or SECTION member that is entered more than "
-                    "one way (or a section whose first paragraph is) -- no "
-                    "single EXIT PARAGRAPH/SECTION returns correctly from it"
-                    if bad_name in section_names or bad_name in member_names
-                    else "not a paragraph or SECTION of this program"
-                )
+                if bad_name in member_names:
+                    what = (
+                        f"a SECTION member, and {no_mode_reason(bad_name)} "
+                        f"-- no single EXIT "
+                        f"PARAGRAPH/SECTION is known to return correctly "
+                        f"from it"
+                    )
+                elif bad_name in section_names:
+                    what = (
+                        "a SECTION whose PERFORM range runs a member that "
+                        "cannot carry the early-exit check (it is entered "
+                        "another way too, or holds a PERFORM with no mode)"
+                    )
+                else:
+                    what = "not a paragraph or SECTION of this program"
                 problem = (
                     f"is only reachable through this test's own early-exit "
                     f"propagation chain by way of '{bad_name}', {what}"

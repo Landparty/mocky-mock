@@ -21,9 +21,10 @@ PERFORM range it runs in, not where it sits in the source:
   section's first paragraph, and each later member reached by falling
   through from one that does not provably end the range
   (`_ends_section_range`: last statement GOBACK / STOP RUN / a plain GO TO
-  / EXIT SECTION / EXEC CICS RETURN -- not EXIT PARAGRAPH, which inside
-  the range only ends that paragraph, and not EXIT PROGRAM, a no-op under
-  PERFORM). Its terminator, and the flag check after each chain PERFORM
+  / EXIT SECTION / EXIT PROGRAM / EXEC CICS RETURN -- not EXIT PARAGRAPH,
+  which inside the range only ends that paragraph. EXIT PROGRAM is a no-op
+  under PERFORM only in a main program; the subprogram it is written for
+  returns, and a test neutralizes it like GOBACK). Its terminator, and the flag check after each chain PERFORM
   it holds, use `EXIT SECTION`.
 * **Paragraph mode.** It is only ever PERFORMed by its own name, so its
   range is the paragraph alone. Its terminator and checks use `EXIT

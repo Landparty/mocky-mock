@@ -897,7 +897,7 @@ def test_section_member_entered_both_ways_still_refuses():
     plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
-    assert "entered more than one way" in reasons[0].message
+    assert "entered both by its own name and as part of" in reasons[0].message
 
 
 def test_section_member_inside_a_thru_range_still_refuses():
@@ -995,7 +995,7 @@ def test_trailing_exit_paragraph_does_not_end_a_section_range():
 """
     plans, reasons = _section_refusals(source, "A000-MAIN")
     assert plans == []
-    assert "entered more than one way" in reasons[0].message
+    assert "entered both by its own name and as part of" in reasons[0].message
 
 
 def test_sort_procedure_members_get_no_mode():

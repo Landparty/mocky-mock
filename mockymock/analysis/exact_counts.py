@@ -20,9 +20,15 @@ paragraph PERFORMed by more than one straight statement (`PERFORM CALL-B`
 twice in a row). READ/RETURN are the exception: their counts come from the
 bundle's row data (`analysis.loops` models how many times a read loop runs),
 so a caller checking them asks for `loops_exact=True`, the older scope that
-treats looping PERFORMs as straight edges. An early exit (`IF ... GOBACK`,
-or a GO TO the splicer turns into EXIT PARAGRAPH) is not modeled either: the
-statements after it are still treated as running.
+treats looping PERFORMs as straight edges.
+
+A site after a statement that may end the run -- one holding a STOP RUN /
+GOBACK / EXIT PROGRAM / CICS RETURN in an IF/EVALUATE/AT END body, or a
+conditional or looping PERFORM of code that holds one -- is out of scope
+too: the scenarios that take that branch (`gen-fixtures`' error-status
+family is built to) never reach it. A GO TO the splicer turns into EXIT
+PARAGRAPH is still not modeled: the statements after it are treated as
+running.
 """
 
 from __future__ import annotations
@@ -118,6 +124,7 @@ def exact_count_scope(
         _find_xml_parse_statements,
         _go_statement_target,
         _reachable_paragraphs,
+        _section_range,
         _source_ordered_paragraphs,
     )
 
@@ -133,6 +140,14 @@ def exact_count_scope(
         for name, section in getattr(procedure, "_sections", {}).items()
         if name
     }
+    # What one `PERFORM <section>` runs: its first paragraph and the ones
+    # reached from it by fall-through, not a member after an EXIT SECTION
+    # / GOBACK / GO TO that ends the range.
+    section_ranges: dict[str, list[str]] = {
+        name: [p.paragraph_name for p in _section_range(section)]
+        for name, section in getattr(procedure, "_sections", {}).items()
+        if name
+    }
 
     def members(target: str | None, thru: str | None) -> list[str] | None:
         """Paragraph names one PERFORM of `target` [THRU `thru`] executes
@@ -142,8 +157,8 @@ def exact_count_scope(
         if thru:
             names, problem = _expand_thru_range(ordered, target, thru, "")
             return None if problem is not None else names
-        if target in section_members:
-            return list(section_members[target])
+        if target in section_ranges:
+            return list(section_ranges[target])
         return [target] if target in by_name else None
 
     # Edges out of every reachable paragraph: the top-level PERFORMs, and
@@ -207,10 +222,13 @@ def exact_count_scope(
     # nnnn-EXIT` idiom), where the range's own return stops it.
     tainted: set[str] = set()
     stack = [target for targets in other.values() for target in targets]
+    start = members(entry, None) or []
     if not loops_exact:
-        # Reached by two straight PERFORMs, a paragraph runs twice a pass.
+        # Reached by two straight PERFORMs, a paragraph runs twice a pass --
+        # and so does one the entry's own section range falls into that a
+        # straight PERFORM also names.
         seen: set[str] = set()
-        for targets in straight.values():
+        for targets in [start, *straight.values()]:
             for target in targets:
                 if target in seen:
                     stack.append(target)
@@ -229,7 +247,6 @@ def exact_count_scope(
         stack.extend(straight.get(name, []))
         stack.extend(other.get(name, set()))
 
-    start = members(entry, None) or []
     exact: set[str] = set()
     stack = [name for name in start if name not in tainted]
     while stack:
@@ -244,7 +261,136 @@ def exact_count_scope(
         if name in by_name
         for statement in _unconditional(by_name[name].statements, loops_exact)
     }
-    return exact, statement_ids
+    before_stop = _before_first_conditional_stop(
+        start, exact, by_name, members, loops_exact
+    )
+    return exact, statement_ids & before_stop
+
+
+def _before_first_conditional_stop(
+    start: list[str],
+    exact: set[str],
+    by_name: dict[str, Any],
+    members,
+    loops_exact: bool,
+) -> set[int]:
+    """Ids of the straight-path statements that run before the first one
+    that may end the run on some pass (see the module docstring), in
+    execution order: the entry's statements, each straight PERFORM's
+    target expanded in place."""
+    stops_cache: dict[str, bool] = {}
+
+    def may_stop_in(name: str, visiting: frozenset[str]) -> bool:
+        """Whether running `name` can reach a terminator at all."""
+        if name in stops_cache:
+            return stops_cache[name]
+        paragraph = by_name.get(name)
+        if paragraph is None or name in visiting:
+            return False
+        found = False
+        for statement in _walk(paragraph.statements):
+            if _stops_run(statement):
+                found = True
+            elif isinstance(statement, PerformStatement) and statement.target_paragraph:
+                names = members(statement.target_paragraph, statement.thru_paragraph)
+                found = any(
+                    may_stop_in(t, visiting | {name})
+                    for t in names or [statement.target_paragraph]
+                )
+            if found:
+                break
+        stops_cache[name] = found
+        return found
+
+    def may_stop(statement, straight_targets: list[str]) -> set[str] | None:
+        """None when `statement` cannot end the run other than through a
+        straight PERFORM (walked in place instead). Otherwise the
+        paragraphs every stopping branch PERFORMs at its top level before
+        its own terminator: they run once on either path (DEPTMQP's `IF NOT
+        MQ-CONNECTED PERFORM 3000-FINALIZE STOP RUN`), so their counts
+        stay exact."""
+        stops = False
+        rescued: set[str] | None = None
+        for nested in _nested_statement_lists(statement):
+            top_stop = next(
+                (k for k, inner in enumerate(nested) if _stops_run(inner)), None
+            )
+            if top_stop is not None:
+                stops = True
+                ran = {
+                    t
+                    for inner in nested[:top_stop]
+                    if isinstance(inner, PerformStatement)
+                    and inner.target_paragraph
+                    and not inner.inline_statements
+                    and not _is_loop(inner)
+                    for t in members(inner.target_paragraph, inner.thru_paragraph) or []
+                }
+                rescued = ran if rescued is None else rescued & ran
+                nested = nested[:top_stop]
+            for inner in _walk(nested):
+                if _stops_run(inner) or (
+                    isinstance(inner, PerformStatement)
+                    and inner.target_paragraph
+                    and any(
+                        may_stop_in(t, frozenset())
+                        for t in members(inner.target_paragraph, inner.thru_paragraph)
+                        or [inner.target_paragraph]
+                    )
+                ):
+                    return set()
+        if (
+            isinstance(statement, PerformStatement)
+            and statement.target_paragraph
+            and not straight_targets
+            and any(
+                may_stop_in(t, frozenset())
+                for t in members(statement.target_paragraph, statement.thru_paragraph)
+                or [statement.target_paragraph]
+            )
+        ):
+            return set()
+        return (rescued or set()) if stops else None
+
+    kept: set[int] = set()
+    # None until the first statement that may end the run; then the
+    # paragraphs whose statements still count (see may_stop).
+    rescue: set[str] | None = None
+
+    def visit(name: str, path: frozenset[str]) -> None:
+        nonlocal rescue
+        paragraph = by_name.get(name)
+        if paragraph is None or name in path:
+            return
+        for statement in _unconditional(paragraph.statements, loops_exact):
+            if rescue is None or name in rescue:
+                kept.add(id(statement))
+            straight_targets: list[str] = []
+            if (
+                isinstance(statement, PerformStatement)
+                and statement.target_paragraph
+                and not statement.inline_statements
+                and (loops_exact or not _is_loop(statement))
+            ):
+                straight_targets = [
+                    t
+                    for t in members(
+                        statement.target_paragraph, statement.thru_paragraph
+                    )
+                    or []
+                    if t in exact
+                ]
+            if rescue is None:
+                rescued = may_stop(statement, straight_targets)
+                if rescued is not None:
+                    rescue = rescued
+            for target in straight_targets:
+                visit(target, path | {name})
+
+    for name in start:
+        if name in exact:
+            visit(name, frozenset())
+    return kept
 
 
 def _go_targets(statement, neutralized_goto, single_target) -> set[str]:

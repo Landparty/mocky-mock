@@ -582,6 +582,7 @@ def _reachable_paragraphs(
             for member in members
         }
         exposed: set[tuple[str, str]] = set()
+        walked: set[str] = set()
         for name in sorted(hazard_sources):
             reached = _walk_fallthrough_from(
                 name,
@@ -613,16 +614,23 @@ def _reachable_paragraphs(
                 )
                 anchor_failed = True
                 continue
+            walked.update(reached)
             for fallen in reached:
                 if fallen not in seen and fallen not in additions:
                     additions.append(fallen)
         if anchor_failed:
             break
-        if exposed:
-            # Walks stopped at an exposed range's end are no longer
-            # trustworthy: drop it and walk everything again.
+        exposed_sections = _exposed_sections(
+            paragraph_safe_section, section_members, walked
+        )
+        if exposed or exposed_sections:
+            # Walks stopped at an exposed range's or section's end are no
+            # longer trustworthy: drop it and walk everything again.
             for key in exposed:
                 del active_ranges[key]
+            paragraph_safe_section = _without_sections(
+                paragraph_safe_section, exposed_sections
+            )
             stack.extend(additions)
             continue
         if not additions:
@@ -719,14 +727,18 @@ def _ends_section_range(paragraph) -> bool:
     """Whether control cannot fall from `paragraph` into the next member
     while running inside a `PERFORM <section-name>` range. Narrower than
     `_falls_through`: there a trailing EXIT PARAGRAPH ends only this
-    paragraph and control continues into the next member, and EXIT
-    PROGRAM is a no-op under PERFORM (GnuCOBOL 3.2, both checked)."""
+    paragraph and control continues into the next member (GnuCOBOL 3.2).
+    A trailing EXIT PROGRAM does end the range: in the called subprogram it
+    is written for it returns to the caller, and in a test it is
+    neutralized like GOBACK (MOVE "Y" + EXIT SECTION). Only when the
+    program runs as the main program is it a no-op, and mockymock never
+    runs it that way unneutralized."""
     statements = paragraph.statements
     if not statements:
         return False
     last = statements[-1]
     if isinstance(last, ExitStatement):
-        return last.exit_type == "SECTION"
+        return last.exit_type in ("SECTION", "PROGRAM")
     return not _falls_through(paragraph)
 
 
@@ -745,6 +757,7 @@ def _section_member_modes(
     program,
     paragraph_entries: frozenset[str] | set[str] = frozenset(),
     section_entries: frozenset[str] | set[str] = frozenset(),
+    why_not: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """SECTION member paragraph name -> how it is entered, for every member
     entered in exactly one way: "SECTION" when it runs inside a `PERFORM
@@ -764,7 +777,10 @@ def _section_member_modes(
 
     When a THRU range cannot be expanded, the result falls back to the
     2026-07-10 rule: only a safe section's first paragraph, entered via its
-    section name, as "SECTION"."""
+    section name, as "SECTION".
+
+    `why_not`, when given, receives a short reason for each named member
+    left without a mode, for refusal messages."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return {}
@@ -841,7 +857,7 @@ def _section_member_modes(
             section_mode.add(paragraph.paragraph_name)
 
     modes: dict[str, str] = {}
-    for section in sections.values():
+    for section_name, section in sections.items():
         for paragraph in section.paragraphs:
             name = paragraph.paragraph_name
             if not (name or "").strip("."):
@@ -850,14 +866,37 @@ def _section_member_modes(
                 if name in section_mode:
                     modes[name] = "SECTION"
                 continue
-            if name in duplicated or name in go_to_targets or name in in_thru:
-                continue
             by_section = name in section_mode
             by_name = name in performed_names
-            if by_section and not by_name:
+            if name in duplicated:
+                why = "its name is defined in more than one SECTION"
+            elif name in go_to_targets:
+                why = "it is a GO TO target"
+            elif section_name in go_to_targets:
+                why = f"its SECTION '{section_name}' is a GO TO target"
+            elif name in in_thru:
+                why = (
+                    "it lies inside a PERFORM ... THRU range or a SORT/MERGE/"
+                    "XML PARSE procedure, run with no early-exit check after it"
+                )
+            elif by_section and not by_name:
                 modes[name] = "SECTION"
+                continue
             elif by_name and not by_section:
                 modes[name] = "PARAGRAPH"
+                continue
+            elif by_name:
+                why = (
+                    "it is entered both by its own name and as part of its "
+                    "section's PERFORM range"
+                )
+            else:
+                why = (
+                    "it is never PERFORMed, by its own name or as part of a "
+                    "PERFORMed section's range: control only falls into it"
+                )
+            if why_not is not None:
+                why_not[name] = why
     return modes
 
 
@@ -1069,6 +1108,38 @@ def _paragraph_safe_section_map(
         for section, members in section_members.items()
         if section in safe_sections and section not in excluded
         for member in members
+    }
+
+
+def _exposed_sections(
+    paragraph_safe_section: dict[str, str],
+    section_members: dict[str, list[str]],
+    walked: set[str],
+) -> set[str]:
+    """The sections of `paragraph_safe_section` whose FIRST paragraph a
+    fall-through walk reached. A walk only reports paragraphs after its
+    own start, so that walk came from outside the section: control falls
+    into it off the end of the code before it, with no `PERFORM
+    <section-name>` active, and its last paragraph is no stop. The
+    whole-program scan in `_fallthrough_safe_sections` cannot see this
+    route."""
+    return {
+        section
+        for section in set(paragraph_safe_section.values())
+        if section_members.get(section) and section_members[section][0] in walked
+    }
+
+
+def _without_sections(
+    paragraph_safe_section: dict[str, str], sections: set[str]
+) -> dict[str, str]:
+    """`paragraph_safe_section` less every member of `sections`."""
+    if not sections:
+        return paragraph_safe_section
+    return {
+        member: section
+        for member, section in paragraph_safe_section.items()
+        if section not in sections
     }
 
 
@@ -1341,6 +1412,29 @@ def _go_to_fallthrough_targets(
     stops = _first_non_fallthrough(falls)
     last = len(ordered) - 1
 
+    safe = paragraph_safe_section or {}
+    while True:
+        hazard = _fallthrough_hazards(
+            go_to_targets, ordered, index_by_name, section_members, stops, last, safe
+        )
+        # A section fallen into from outside has no return marker at its
+        # end (see `_exposed_sections`): walk again without stopping there.
+        exposed = _exposed_sections(safe, section_members, set(hazard))
+        if not exposed:
+            return hazard
+        safe = _without_sections(safe, exposed)
+
+
+def _fallthrough_hazards(
+    go_to_targets: set[str],
+    ordered: list,
+    index_by_name: dict[str, int],
+    section_members: dict[str, list[str]],
+    stops: list[int | None],
+    last: int,
+    paragraph_safe_section: dict[str, str],
+) -> dict[str, str]:
+    """One pass of `_go_to_fallthrough_targets`' walks."""
     hazard: dict[str, str] = {}
     # Index -> the end index of the earlier walk that recorded it. Without
     # section stops, two walks that both pass through index k necessarily
@@ -1368,7 +1462,7 @@ def _go_to_fallthrough_targets(
             anchor = members[0]
         stop = stops[start]
         end = last if stop is None else stop
-        section = (paragraph_safe_section or {}).get(anchor)
+        section = paragraph_safe_section.get(anchor)
         if section is not None:
             section_end = index_by_name.get(section_members[section][-1])
             if section_end is not None and start <= section_end < end:

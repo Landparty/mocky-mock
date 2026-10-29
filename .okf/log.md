@@ -5,6 +5,20 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-27 -- bug hunt after the SECTION-member support
+
+Six fixes, each reproduced on GnuCOBOL 3.2 and pinned by
+`tests/unit/test_bug_hunt_20261027.py` (+ the integration twin). The GO TO
+fall-through walk no longer stops at the end of a "safe" section it fell
+into from outside (`_exposed_sections`; lint missed unmocked code that
+then ran). `exact_count_scope` counts a `PERFORM <section>` as its range
+only, a member run by PERFORM and by falling in as running twice, and
+nothing after a statement that may end the run (error-status scenarios).
+`generate` demotes a looped READ with no AT END (bundle row count). A
+trailing EXIT PROGRAM ends a section range (`_ends_section_range`), and
+the no-mode refusal message names the real reason (`why_not`). Updated
+[analysis](analysis.md), [dsl](dsl.md).
+
 ## 2026-10-27 -- GOBACK / STOP RUN in SECTION members
 
 A terminator in a SECTION member was refused unless it sat in the

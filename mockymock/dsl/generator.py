@@ -3480,6 +3480,11 @@ _LOOPED_SITE_REASON = (
     "called inside a PERFORM loop (UNTIL/VARYING/TIMES) or from a paragraph "
     "PERFORMed more than once, which the bundle counts once"
 )
+_NO_END_READ_REASON = (
+    "read inside a loop that its AT END does not end (the READ has no AT "
+    "END clause: a keyed/random READ, or a loop run a fixed number of "
+    "TIMES), so the number of generated rows is not the number of reads"
+)
 _UNREACHED_SITE_REASON = (
     "also called from a paragraph this case's PERFORM never reaches (a CICS "
     "HANDLE CONDITION target, or code nothing PERFORMs), which the bundle's "
@@ -3577,6 +3582,34 @@ def _unlooped_read_counts(
         ):
             counts[(MockCategory.READ, key)] = len(sites)
     return counts
+
+
+def _endless_read_keys(
+    expectations: list[Expectation],
+    surface: MockSurface,
+    reachable: set[str] | None,
+    source: ProgramContext,
+) -> list[tuple[MockCategory, str]]:
+    """READ keys read inside a loop by a READ with no AT END clause. The
+    bundle's count for a READ is its row count, which is the number of
+    reads only when the loop runs until the read hits end of file (the
+    AT END, or a FILE STATUS loop, which `_status_read_eof` counts
+    itself). A keyed READ in `PERFORM X 3 TIMES` reads 3 times, not 10."""
+    keys: list[tuple[MockCategory, str]] = []
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        if category_str != MockCategory.READ.value:
+            continue
+        sites = _sites_for_key(MockCategory.READ, key, surface, reachable)
+        if any(
+            (site.nested or site_in_loop(site, source.looped))
+            and not getattr(site.statement, "at_end_clause", None)
+            for site in sites
+        ):
+            keys.append((MockCategory.READ, key))
+    return keys
 
 
 def _with_accept_keys(bundle: FixtureBundle) -> FixtureBundle:
@@ -3754,6 +3787,15 @@ def _scaffold_with_bundle(
                 CallCountOverride(demote_reason=reason, from_placeholder=False),
             )
         if source is not None:
+            for key_pair in _endless_read_keys(
+                expectations, surface, reachable, source
+            ):
+                call_count_overrides.setdefault(
+                    key_pair,
+                    CallCountOverride(
+                        demote_reason=_NO_END_READ_REASON, from_placeholder=False
+                    ),
+                )
             for key_pair, count in _unlooped_read_counts(
                 expectations, surface, reachable, source
             ).items():

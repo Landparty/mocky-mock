@@ -88,6 +88,7 @@ from mockymock.dsl.model import (
 
 from ._plans import find_terminator_plans
 from ._reachability import (
+    _exposed_sections,
     _fallthrough_flags,
     _fallthrough_safe_sections,
     _find_statements_of_type,
@@ -96,6 +97,7 @@ from ._reachability import (
     _reachable_paragraphs,
     _source_ordered_paragraphs,
     _walk_fallthrough_from,
+    _without_sections,
     duplicated_paragraph_names,
 )
 from ._types import (
@@ -1043,6 +1045,7 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
     changed = True
     while changed:
         changed = False
+        walked: set[str] = set()
         for name in sorted(union & go_to_targets):
             reached = _walk_fallthrough_from(
                 name,
@@ -1057,6 +1060,7 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
                 # (e.g. an empty section): the closure is incomplete, so the
                 # union cannot be trusted to waive anything.
                 return None
+            walked.update(reached)
             for fallen in reached:
                 if fallen in union:
                     continue
@@ -1065,6 +1069,12 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
                     return None
                 union |= fallen_seen
                 changed = True
+        # A section fallen into from outside has no return marker at its
+        # end: walk again without stopping there.
+        exposed = _exposed_sections(paragraph_safe_section, section_members, walked)
+        if exposed:
+            paragraph_safe_section = _without_sections(paragraph_safe_section, exposed)
+            changed = True
     return union
 
 
