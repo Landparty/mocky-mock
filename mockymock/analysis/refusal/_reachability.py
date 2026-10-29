@@ -44,6 +44,8 @@ See `.okf/analysis.md` for the full refusal-package overview.
 
 from __future__ import annotations
 
+from bisect import bisect_left
+
 from cobolparser.models.program import CobolParagraph
 from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.models.statements.control import (
@@ -80,13 +82,69 @@ def _find_statements_of_type(
     nested inside IF/EVALUATE/SEARCH branches, inline PERFORM bodies, and
     IO clause bodies -- reusing mock_surface.py's `_nested_statement_lists`
     rather than reimplementing nested-statement detection."""
-    found = []
+    return [s for s in _flattened(statements) if isinstance(s, statement_type)]
+
+
+#: id(statement list) -> (that list, its length, every statement in it and
+#: its clause bodies, pre-order). The analyses walk the same paragraph
+#: bodies once per BFS, and a BFS runs once per paragraph in generate's
+#: exact-count pass: on a 400-section program the repeated walk was 90% of
+#: a 66 s generate (sweep 2026-10-29's 90 s timeouts). The list itself is
+#: kept so its id cannot be reused while the entry lives; the AST is never
+#: mutated after parsing, and a length change still invalidates the entry.
+_FLATTENED: dict[int, tuple[list, int, list]] = {}
+_FLATTENED_LIMIT = 50_000
+
+
+def _flattened(statements: list) -> list:
+    """Every statement in `statements` and, recursively, in each one's
+    clause bodies (`_nested_statement_lists`), pre-order -- cached per
+    list, see `_FLATTENED`."""
+    key = id(statements)
+    hit = _FLATTENED.get(key)
+    if hit is not None and hit[0] is statements and hit[1] == len(statements):
+        return hit[2]
+    found: list = []
     for statement in statements:
-        if isinstance(statement, statement_type):
-            found.append(statement)
+        found.append(statement)
         for nested in _nested_statement_lists(statement):
-            found.extend(_find_statements_of_type(nested, statement_type))
+            found.extend(_flattened(nested))
+    if len(_FLATTENED) >= _FLATTENED_LIMIT:
+        _FLATTENED.clear()
+    _FLATTENED[key] = (statements, len(statements), found)
     return found
+
+
+#: The last program `_per_program` memoized for, and its results keyed by
+#: (function name, arguments). One program at a time: generate and run
+#: analyze one AST, so keeping only the latest bounds the memory and holds
+#: the AST alive only until the next program is analyzed.
+_PROGRAM_MEMO: dict = {"program": None, "results": {}}
+
+
+def _per_program(function):
+    """Memoize a whole-program analysis `function(program, *args)` whose
+    result depends only on the (never mutated) AST and its hashable
+    arguments: `_reachable_paragraphs` runs once per paragraph in
+    generate's exact-count pass and recomputed these each time (sweep
+    2026-10-29's 90 s timeouts). A set result is copied on the way out so
+    a caller that mutates it cannot poison the memo."""
+
+    def wrapper(program, *args, **kwargs):
+        if _PROGRAM_MEMO["program"] is not program:
+            _PROGRAM_MEMO["program"] = program
+            _PROGRAM_MEMO["results"] = {}
+        key = (function.__name__, args, tuple(sorted(kwargs.items())))
+        results = _PROGRAM_MEMO["results"]
+        if key not in results:
+            results[key] = function(program, *args, **kwargs)
+        value = results[key]
+        return set(value) if isinstance(value, set) else value
+
+    wrapper.__wrapped__ = function  # type: ignore[attr-defined]
+    wrapper.__name__ = function.__name__
+    wrapper.__doc__ = function.__doc__
+    return wrapper
 
 
 def _find_flow_statements(statements: list) -> list:
@@ -196,6 +254,47 @@ def _expand_thru_range(
 
 
 def _reachable_paragraphs(
+    program,
+    start: str,
+    thru: str | None = None,
+    skip_traversal: frozenset[str] | set[str] = frozenset(),
+    neutralized_goto: frozenset[str] | set[str] = frozenset(),
+    follow_whenever: bool = True,
+    cics_conditions: frozenset[str] | None = None,
+    direct_out: set[str] | None = None,
+) -> tuple[set[str], list[RefusalReason]]:
+    """`_reachable_bfs`, memoized per program (`_per_program`) unless the
+    caller wants `direct_out` filled: generate's exact-count pass and the
+    per-case gates ask for the same entry points again and again."""
+    if direct_out is not None:
+        return _reachable_bfs(
+            program,
+            start,
+            thru,
+            skip_traversal,
+            neutralized_goto,
+            follow_whenever,
+            cics_conditions,
+            direct_out,
+        )
+    seen, reasons = _reachable_bfs_memo(
+        program,
+        start,
+        thru,
+        frozenset(skip_traversal),
+        frozenset(neutralized_goto),
+        follow_whenever,
+        cics_conditions,
+    )
+    return set(seen), list(reasons)
+
+
+@_per_program
+def _reachable_bfs_memo(program, *args) -> tuple[set[str], list[RefusalReason]]:
+    return _reachable_bfs(program, *args)
+
+
+def _reachable_bfs(
     program,
     start: str,
     thru: str | None = None,
@@ -404,6 +503,13 @@ def _reachable_paragraphs(
         exclude_seeds={start} | ({thru} if thru else set()),
     )
     closure_started = False
+    # GO TO fall-through walks by origin name: a walk depends only on
+    # `paragraph_safe_section` and `active_ranges`, which change only when
+    # an exposed range or section is dropped (the cache is cleared then),
+    # so later fixpoint passes reuse the earlier passes' walks instead of
+    # re-walking every target each time.
+    walks: dict[str, list[str] | None] = {}
+    range_of: dict[str, str] | None = None
     while True:
         while stack:
             name = stack.pop()
@@ -576,23 +682,27 @@ def _reachable_paragraphs(
             break
         anchor_failed = False
         additions: list[str] = []
-        range_of = {
-            member: members[-1]
-            for members in active_ranges.values()
-            for member in members
-        }
+        if range_of is None:
+            range_of = {
+                member: members[-1]
+                for members in active_ranges.values()
+                for member in members
+            }
         exposed: set[tuple[str, str]] = set()
         walked: set[str] = set()
+        added: set[str] = set()
         for name in sorted(hazard_sources):
-            reached = _walk_fallthrough_from(
-                name,
-                ordered,
-                index_by_name,
-                section_members,
-                paragraph_safe_section,
-                falls=falls,
-                range_of=range_of,
-            )
+            if name not in walks:
+                walks[name] = _walk_fallthrough_from(
+                    name,
+                    ordered,
+                    index_by_name,
+                    section_members,
+                    paragraph_safe_section,
+                    falls=falls,
+                    range_of=range_of,
+                )
+            reached = walks[name]
             if reached:
                 exposed.update(
                     key
@@ -616,7 +726,8 @@ def _reachable_paragraphs(
                 continue
             walked.update(reached)
             for fallen in reached:
-                if fallen not in seen and fallen not in additions:
+                if fallen not in seen and fallen not in added:
+                    added.add(fallen)
                     additions.append(fallen)
         if anchor_failed:
             break
@@ -631,6 +742,8 @@ def _reachable_paragraphs(
             paragraph_safe_section = _without_sections(
                 paragraph_safe_section, exposed_sections
             )
+            walks.clear()
+            range_of = None
             stack.extend(additions)
             continue
         if not additions:
@@ -639,6 +752,7 @@ def _reachable_paragraphs(
     return seen, reasons
 
 
+@_per_program
 def _go_to_targets(
     program,
     include_whenever: bool = True,
@@ -1017,6 +1131,7 @@ def duplicated_paragraph_names(program) -> set[str]:
     return duplicated
 
 
+@_per_program
 def _fallthrough_safe_sections(program) -> set[str]:
     """SECTION names whose LAST paragraph a GO TO fall-through walk may
     treat as a hard stop (see `_walk_fallthrough_from`): reaching that
@@ -1375,15 +1490,52 @@ def _walk_fallthrough_from(
         if section_paragraphs:
             stop_before = section_paragraphs[-1]
     range_end = (range_of or {}).get(anchor_name)
-    reached: list[str] = []
-    cursor = start
-    while falls[cursor] and cursor + 1 < len(ordered):
-        here = ordered[cursor].paragraph_name
-        if here in (stop_before, range_end):
-            break
-        cursor += 1
-        reached.append(ordered[cursor].paragraph_name)
-    return reached
+    # The walk advances while the paragraph at the cursor falls through and
+    # is not named `stop_before`/`range_end`, so it ends at the first of:
+    # a paragraph that does not fall through, the first paragraph at or
+    # after `start` bearing either name (by name, as nameless main lines
+    # share ''), or the last paragraph. Found by table lookups instead of
+    # a step-by-step walk: the closure re-walks every GO TO target once
+    # per pass, which made generate cubic in the paragraph count.
+    names, next_stop, positions = _walk_tables(ordered, falls)
+    stop = next_stop[start]
+    for limit in (stop_before, range_end):
+        if limit is None:
+            continue
+        at = positions.get(limit)
+        if at:
+            k = bisect_left(at, start)
+            if k < len(at) and at[k] < stop:
+                stop = at[k]
+    return names[start + 1 : stop + 1]
+
+
+#: (ordered, falls, tables) for the last `_walk_tables` call: one BFS
+#: walks many targets over the same `ordered`/`falls` lists.
+_WALK_TABLES: list = [None, None, None]
+
+
+def _walk_tables(
+    ordered: list, falls: list[bool]
+) -> tuple[list[str], list[int], dict[str, list[int]]]:
+    """For `_walk_fallthrough_from`: the paragraph names in source order;
+    for each index, the first index at or after it that does not fall
+    through (or the last index); and each name's indices, ascending."""
+    if _WALK_TABLES[0] is ordered and _WALK_TABLES[1] is falls:
+        return _WALK_TABLES[2]
+    names = [p.paragraph_name for p in ordered]
+    next_stop = [len(ordered) - 1] * len(ordered)
+    following = len(ordered) - 1
+    for index in range(len(ordered) - 1, -1, -1):
+        if not falls[index]:
+            following = index
+        next_stop[index] = following
+    positions: dict[str, list[int]] = {}
+    for index, name in enumerate(names):
+        positions.setdefault(name, []).append(index)
+    tables = (names, next_stop, positions)
+    _WALK_TABLES[:] = [ordered, falls, tables]
+    return tables
 
 
 def _go_to_fallthrough_targets(

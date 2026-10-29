@@ -187,3 +187,79 @@ def test_prefix_loop_conditions_extends_each_until():
     assert out[3] == lines[3]
     assert prefix_loop_conditions(lines, 4, 4) == lines
     assert len(out) == len(lines)
+
+
+# --- generation timeouts (the sweep's > 90 s rows) --------------------------
+
+
+def _stepwise_walk(name, ordered, index_by_name, section_members, safe, falls, ranges):
+    """The fall-through walk as it was written before the table lookup:
+    one paragraph per step."""
+    start = index_by_name.get(name)
+    anchor = name
+    if start is None:
+        members = section_members.get(name)
+        if not members or index_by_name.get(members[0]) is None:
+            return None
+        start, anchor = index_by_name[members[0]], members[0]
+    stop_before = None
+    if safe.get(anchor) is not None and section_members.get(safe[anchor]):
+        stop_before = section_members[safe[anchor]][-1]
+    range_end = ranges.get(anchor)
+    reached, cursor = [], start
+    while falls[cursor] and cursor + 1 < len(ordered):
+        if ordered[cursor].paragraph_name in (stop_before, range_end):
+            break
+        cursor += 1
+        reached.append(ordered[cursor].paragraph_name)
+    return reached
+
+
+def test_fallthrough_walk_table_lookup_matches_the_stepwise_walk():
+    import random
+    from types import SimpleNamespace
+
+    from mockymock.analysis.refusal._reachability import _walk_fallthrough_from
+
+    rng = random.Random(20261029)
+    for _ in range(300):
+        size = rng.randint(1, 12)
+        # Nameless main lines ('') repeat, like a sectioned program's.
+        names = [rng.choice(["", f"P{i}"]) for i in range(size)]
+        ordered = [SimpleNamespace(paragraph_name=n) for n in names]
+        falls = [rng.random() < 0.8 for _ in names]
+        index_by_name = {n: i for i, n in enumerate(names)}
+        section_members = {"S": names[: rng.randint(1, size)]}
+        safe = {n: "S" for n in names if rng.random() < 0.5}
+        ranges = {n: rng.choice(names) for n in names if rng.random() < 0.3}
+        for name in [*names, "S", "MISSING"]:
+            assert _walk_fallthrough_from(
+                name, ordered, index_by_name, section_members, safe, falls, ranges
+            ) == _stepwise_walk(
+                name, ordered, index_by_name, section_members, safe, falls, ranges
+            ), (
+                names,
+                falls,
+                name,
+            )
+
+
+def test_memoized_reachability_hands_out_copies():
+    from mockymock.analysis.refusal._reachability import _reachable_paragraphs
+
+    program = parse_cobol(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. MEMO.\n"
+        "       PROCEDURE DIVISION.\n"
+        "       A-PARA.\n"
+        "           PERFORM B-PARA.\n"
+        "       B-PARA.\n"
+        "           DISPLAY 'B'.\n"
+    ).ast
+    first, _ = _reachable_paragraphs(program, "A-PARA")
+    first.add("POISON")
+    again, _ = _reachable_paragraphs(program, "A-PARA")
+    assert again == {"A-PARA", "B-PARA"}
+    direct: set[str] = set()
+    _reachable_paragraphs(program, "A-PARA", direct_out=direct)
+    assert direct == {"A-PARA", "B-PARA"}
