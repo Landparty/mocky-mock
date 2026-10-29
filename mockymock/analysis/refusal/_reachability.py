@@ -119,7 +119,9 @@ def _flattened(statements: list) -> list:
 #: (function name, arguments). One program at a time: generate and run
 #: analyze one AST, so keeping only the latest bounds the memory and holds
 #: the AST alive only until the next program is analyzed.
-_PROGRAM_MEMO: dict = {"program": None, "results": {}}
+#: Swapped as one tuple, so a call always reads the results of its own
+#: program even if another thread analyzes a different one meanwhile.
+_PROGRAM_MEMO: list[tuple[object, dict]] = [(None, {})]
 
 
 def _per_program(function):
@@ -131,11 +133,12 @@ def _per_program(function):
     a caller that mutates it cannot poison the memo."""
 
     def wrapper(program, *args, **kwargs):
-        if _PROGRAM_MEMO["program"] is not program:
-            _PROGRAM_MEMO["program"] = program
-            _PROGRAM_MEMO["results"] = {}
+        memo = _PROGRAM_MEMO[0]
+        if memo[0] is not program:
+            memo = (program, {})
+            _PROGRAM_MEMO[0] = memo
+        results = memo[1]
         key = (function.__name__, args, tuple(sorted(kwargs.items())))
-        results = _PROGRAM_MEMO["results"]
         if key not in results:
             results[key] = function(program, *args, **kwargs)
         value = results[key]
@@ -1512,7 +1515,7 @@ def _walk_fallthrough_from(
 
 #: (ordered, falls, tables) for the last `_walk_tables` call: one BFS
 #: walks many targets over the same `ordered`/`falls` lists.
-_WALK_TABLES: list = [None, None, None]
+_WALK_TABLES: list = [(None, None, None)]
 
 
 def _walk_tables(
@@ -1521,8 +1524,9 @@ def _walk_tables(
     """For `_walk_fallthrough_from`: the paragraph names in source order;
     for each index, the first index at or after it that does not fall
     through (or the last index); and each name's indices, ascending."""
-    if _WALK_TABLES[0] is ordered and _WALK_TABLES[1] is falls:
-        return _WALK_TABLES[2]
+    cached_ordered, cached_falls, cached = _WALK_TABLES[0]
+    if cached_ordered is ordered and cached_falls is falls:
+        return cached
     names = [p.paragraph_name for p in ordered]
     next_stop = [len(ordered) - 1] * len(ordered)
     following = len(ordered) - 1
@@ -1534,7 +1538,7 @@ def _walk_tables(
     for index, name in enumerate(names):
         positions.setdefault(name, []).append(index)
     tables = (names, next_stop, positions)
-    _WALK_TABLES[:] = [ordered, falls, tables]
+    _WALK_TABLES[0] = (ordered, falls, tables)
     return tables
 
 
