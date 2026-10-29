@@ -758,6 +758,7 @@ def _section_member_modes(
     paragraph_entries: frozenset[str] | set[str] = frozenset(),
     section_entries: frozenset[str] | set[str] = frozenset(),
     why_not: dict[str, str] | None = None,
+    main_line_sections: set[str] | None = None,
 ) -> dict[str, str]:
     """SECTION member paragraph name -> how it is entered, for every member
     entered in exactly one way: "SECTION" when it runs inside a `PERFORM
@@ -780,7 +781,13 @@ def _section_member_modes(
     section name, as "SECTION".
 
     `why_not`, when given, receives a short reason for each named member
-    left without a mode, for refusal messages."""
+    left without a mode, for refusal messages.
+
+    Every section's nameless main line (and every phantom "." node) shares
+    one key here, so its "SECTION" entry only says that SOME section's main
+    line runs in section mode. `main_line_sections`, when given, receives
+    the names of the sections whose own main line does -- the per-section
+    answer a caller needs before trusting that shared key for one site."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return {}
@@ -830,11 +837,20 @@ def _section_member_modes(
             thru_ranges.append((start, thru))
 
     def fallback() -> dict[str, str]:
-        return {
+        modes = {
             first: "SECTION"
             for section_name, first in _safe_section_entry_points(program).items()
             if section_name in entered_sections and first not in paragraph_entries
         }
+        if main_line_sections is not None:
+            main_line_sections.update(
+                section_name
+                for section_name, first in _safe_section_entry_points(program).items()
+                if section_name in entered_sections
+                and first not in paragraph_entries
+                and not (first or "").strip(".")
+            )
+        return modes
 
     in_thru: set[str] = set()
     if thru_ranges:
@@ -849,12 +865,21 @@ def _section_member_modes(
                 return fallback()
             in_thru.update(names)
 
+    # A section named as a THRU endpoint or a SORT/MERGE/XML PARSE
+    # procedure also runs with no early-exit check after it.
+    thru_endpoints = {name for pair in thru_ranges for name in pair}
     section_mode: set[str] = set()
     for section_name in entered_sections & sections.keys():
         if section_name in go_to_targets:
             continue
         for paragraph in _section_range(sections[section_name]):
             section_mode.add(paragraph.paragraph_name)
+            if (
+                main_line_sections is not None
+                and not (paragraph.paragraph_name or "").strip(".")
+                and section_name not in thru_endpoints
+            ):
+                main_line_sections.add(section_name)
 
     modes: dict[str, str] = {}
     for section_name, section in sections.items():
@@ -1049,10 +1074,21 @@ def _fallthrough_safe_sections(program) -> set[str]:
         for paragraph in section.paragraphs:
             section_of[paragraph.paragraph_name] = section_name
 
+    # The enclosing section comes from the paragraph object, not its name:
+    # every section's nameless main line is named '', so a name lookup
+    # gave all of them the LAST such section, and a `GO TO <own-exit>` in
+    # one section's main line read as a jump in from outside.
+    enclosing_of: dict[int, str | None] = {}
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        for paragraph in section.paragraphs:
+            enclosing_of[id(paragraph)] = section_name or None
+
     external_go_to_targets: set[str] = set()
     external_performed_names: set[str] = set()
     for paragraph in _all_paragraphs(procedure):
-        enclosing_section = section_of.get(paragraph.paragraph_name)
+        enclosing_section = enclosing_of.get(
+            id(paragraph), section_of.get(paragraph.paragraph_name)
+        )
         for statement in _find_statements_of_type(
             paragraph.statements, PerformStatement
         ):
@@ -1476,7 +1512,10 @@ def _fallthrough_hazards(
 
 
 def _plain_perform_statements(
-    statements: list, nested: bool = False, in_boundary: bool = False
+    statements: list,
+    nested: bool = False,
+    in_boundary: bool = False,
+    include_loops: bool = False,
 ) -> list[tuple[PerformStatement, bool, bool]]:
     """Recursively collect every plain, unconditional, single-shot,
     out-of-line PerformStatement in `statements` -- thru_paragraph is
@@ -1503,6 +1542,9 @@ def _plain_perform_statements(
     so a PERFORM is marked nested at every depth >= 1 while a genuinely
     top-level one (the initial call, nested defaults to False) stays
     unmarked. See docs/2026-07-10-conditionally-nested-intermediate-perform-design.md.
+
+    `include_loops` also collects an out-of-line `PERFORM <name> UNTIL`
+    (never VARYING, TIMES or THRU): see `_is_loop_perform`.
     """
     found: list[tuple[PerformStatement, bool, bool]] = []
     for statement in statements:
@@ -1510,7 +1552,10 @@ def _plain_perform_statements(
             isinstance(statement, PerformStatement)
             and statement.thru_paragraph is None
             and statement.target_paragraph
-            and statement.perform_type == "SIMPLE"
+            and (
+                statement.perform_type == "SIMPLE"
+                or (include_loops and _is_loop_perform(statement))
+            )
         ):
             found.append((statement, nested, in_boundary))
         child_in_boundary = in_boundary or isinstance(
@@ -1519,10 +1564,34 @@ def _plain_perform_statements(
         for nested_list in _nested_statement_lists(statement):
             found.extend(
                 _plain_perform_statements(
-                    nested_list, nested=True, in_boundary=child_in_boundary
+                    nested_list,
+                    nested=True,
+                    in_boundary=child_in_boundary,
+                    include_loops=include_loops,
                 )
             )
     return found
+
+
+def _is_loop_perform(statement) -> bool:
+    """An out-of-line `PERFORM <name> UNTIL ...` (no THRU). A terminator
+    neutralized under one leaves the loop with `UT-EARLY-EXIT` set but its
+    own condition unchanged, so the loop would run again, forever (a STOP
+    RUN in an error paragraph PERFORMed from the read loop). The splicer
+    prefixes its UNTIL with `UT-EARLY-EXIT = "Y" OR`
+    (`TerminatorPlan.loop_performs`), which ends it on the next test of its
+    condition, before or after the iteration, with nothing else run.
+
+    Not VARYING: its counter is stepped before the condition is tested
+    again, so the test would see it one step further than the real run
+    leaves it. Not TIMES: no condition to extend. Both stay dead ends."""
+    return (
+        isinstance(statement, PerformStatement)
+        and statement.thru_paragraph is None
+        and bool(statement.target_paragraph)
+        and statement.perform_type == "UNTIL"
+        and not getattr(statement, "inline_statements", None)
+    )
 
 
 def _plain_perform_edges_from(
@@ -1530,6 +1599,9 @@ def _plain_perform_edges_from(
     start: str,
     safe_section_entries: dict[str, str] | None = None,
     member_modes: dict[str, str] | None = None,
+    main_line_sections: set[str] | None = None,
+    entered_sections: set[str] | None = None,
+    loop_edges: list[PerformStatement] | None = None,
 ) -> tuple[set[str], list[tuple[PerformStatement, bool]]]:
     """BFS from `start` following plain (non-THRU), unconditional,
     single-shot PERFORM statements -- PerformStatement nodes with
@@ -1595,7 +1667,20 @@ def _plain_perform_edges_from(
     first-paragraph-only SECTION rule: a PERFORM of a section resolves to
     every member that runs in its range ("SECTION" mode: the first one and
     those reached from it by fall-through), and a PERFORM naming a member
-    entered only that way ("PARAGRAPH" mode) resolves to it."""
+    entered only that way ("PARAGRAPH" mode) resolves to it.
+
+    A section's nameless main line shares the key '' with every other
+    one, so `member_modes['']` cannot say which: `main_line_sections`
+    (from `_section_member_modes`), when given, limits a section's main
+    line to the sections whose own main line runs in section mode. The
+    walk itself keys each nameless member by identity, so every PERFORMed
+    section's main line is followed, not just the first one seen, and
+    `entered_sections`, when given, receives each section whose range the
+    walk entered -- the per-section answer for a site in a main line.
+
+    `loop_edges`, when given, makes the walk follow an out-of-line
+    `PERFORM <name> UNTIL` too (`_is_loop_perform`); each such
+    PERFORM is returned among the edges and also appended to it."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
@@ -1624,7 +1709,12 @@ def _plain_perform_edges_from(
                 # TO's exit label, say -- has nothing to check.
                 members = []
                 for paragraph in _section_range(sections[name]):
-                    if member_modes.get(paragraph.paragraph_name) == "SECTION":
+                    main_line = not (paragraph.paragraph_name or "").strip(".")
+                    if member_modes.get(paragraph.paragraph_name) == "SECTION" and (
+                        not main_line
+                        or main_line_sections is None
+                        or name in main_line_sections
+                    ):
                         members.append((paragraph.paragraph_name, paragraph))
                     elif _find_statements_of_type(
                         paragraph.statements,
@@ -1632,6 +1722,8 @@ def _plain_perform_edges_from(
                     ):
                         return [(name, None)]
                 if members:
+                    if entered_sections is not None:
+                        entered_sections.add(name)
                     return members
                 return [(name, None)]
             if member_modes.get(name) == "PARAGRAPH":
@@ -1643,31 +1735,34 @@ def _plain_perform_edges_from(
         return [(name, None)]
 
     seen: set[str] = set()
-    resolved = {}
-    stack = []
+    walked: set[object] = set()
+    stack: list[CobolParagraph] = []
 
     def visit(name) -> None:
         for target_name, target_paragraph in resolve(name):
-            if target_name in seen:
-                continue
             seen.add(target_name)
+            # By identity for a nameless main line ('' in every section).
+            key = (
+                target_name if (target_name or "").strip(".") else id(target_paragraph)
+            )
+            if key in walked:
+                continue
+            walked.add(key)
             if target_paragraph is not None:
-                resolved[target_name] = target_paragraph
-                stack.append(target_name)
+                stack.append(target_paragraph)
 
     visit(start)
     edges: list[tuple[PerformStatement, bool]] = []
     while stack:
-        name = stack.pop()
-        paragraph = resolved.get(name)
-        if paragraph is None:
-            continue
+        paragraph = stack.pop()
         for statement, nested, in_boundary in _plain_perform_statements(
-            paragraph.statements
+            paragraph.statements, include_loops=loop_edges is not None
         ):
             if in_boundary:
                 continue
             edges.append((statement, nested))
+            if loop_edges is not None and statement.perform_type != "SIMPLE":
+                loop_edges.append(statement)
             visit(statement.target_paragraph)
     return seen, edges
 

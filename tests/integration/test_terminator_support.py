@@ -120,17 +120,12 @@ def test_go_to_reachable_terminator_refuses_before_compiling(tmp_path: Path, cap
 
 
 @requires_docker
-def test_terminator_inside_a_loop_body_refuses_before_compiling(tmp_path: Path, capsys):
-    """Permanent regression fixture for the looping-PERFORM safety gap
-    fixed 2026-07-09 (see .okf/log.md): a STOP RUN reachable only through
-    the target of a PERFORM ... UNTIL must refuse, not be silently
-    neutralized. Before the fix, a synthetic spike with this exact shape
-    was accepted as safe and the compiled/spliced binary ran 3 extra
-    unwanted loop iterations past the point the real STOP RUN would have
-    stopped it (iterations 3-5, when the real program would have stopped
-    at iteration 2) -- a silent correctness bug, not a crash, so this test
-    checks for the refusal itself rather than trying to observe the
-    absence of extra output."""
+def test_terminator_inside_a_loop_body_stops_the_loop(tmp_path: Path, capsys):
+    """A STOP RUN reachable only through the target of a PERFORM ... UNTIL
+    (the looping-PERFORM gap of 2026-07-09, refused since then): the
+    loop's UNTIL now also tests the early-exit flag, so the test stops at
+    iteration 2, where the real STOP RUN stops the program, instead of
+    running iterations 3-5."""
     cbl_path = tmp_path / "LOOPTERM.cbl"
     cbl_path.write_text(
         "       IDENTIFICATION DIVISION.\n"
@@ -160,13 +155,18 @@ def test_terminator_inside_a_loop_body_refuses_before_compiling(tmp_path: Path, 
         "\n"
         'TESTCASE "reaches terminator only via a looping PERFORM"\n'
         "    PERFORM 0000-MAIN-PROCESS\n"
+        "    EXPECT WS-COUNT TO BE 2\n"
+        'TESTCASE "the next case still runs"\n'
+        "    PERFORM 0000-MAIN-PROCESS\n"
+        "    EXPECT WS-COUNT TO BE 2\n"
     )
 
     exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
     out = capsys.readouterr().out
 
-    assert exit_code == 1
-    assert "UNSUPPORTED_TERMINATOR_LAYOUT" in out
+    assert exit_code == 0, out
+    assert "[PASS] reaches terminator only via a looping PERFORM" in out
+    assert "[PASS] the next case still runs" in out
 
 
 @requires_docker
@@ -190,7 +190,8 @@ def test_terminator_via_out_of_line_perform_varying_refuses_via_terminator_layou
     perform_type guard in `_plain_perform_edges_from`, pinned at the unit
     level in
     tests/unit/test_terminators.py::test_terminator_reached_only_through_a_varying_loop_body_refuses
-    -- independently refuses this shape via `UNSUPPORTED_TERMINATOR_LAYOUT`
+    (UNTIL loops are extended with the early-exit flag since 2026-10-29;
+    VARYING is not, its counter would step once more) -- independently refuses this shape via `UNSUPPORTED_TERMINATOR_LAYOUT`
     against the real GnuCOBOL/Docker toolchain, rather than relying on the
     old parser bug's accidental PARSE_WARNING safety net."""
     cbl_path = tmp_path / "VARYOUT.cbl"
