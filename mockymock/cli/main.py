@@ -148,7 +148,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
 
     from mockymock.dsl.entry_parameters import fixture_generator
 
-    generator, _ = fixture_generator(args.rows)
+    generator = fixture_generator(args.rows)
     try:
         bundle = generator.generate_with_scenarios_from_file(
             str(source_path),
@@ -1082,18 +1082,16 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         try:
             # A subprogram's USING parameters are its interface (#275): the
             # scaffold sets them and stubs what the program hands back.
-            generator, native_parameters = fixture_generator(args.rows)
+            generator = fixture_generator(args.rows)
             cp_bundle = generator.generate_with_scenarios_from_file(
                 str(source_path),
                 mode=args.scenarios,
                 seed=args.seed,
                 copybook_paths=args.copybook_path,
             )
-            bundle_data = cp_bundle.to_dict()
-            if not native_parameters:
-                bundle_data = add_entry_parameters(
-                    bundle_data, str(source_path), args.copybook_path
-                )
+            bundle_data = add_entry_parameters(
+                cp_bundle.to_dict(), str(source_path), args.copybook_path
+            )
             bundle = load_fixture_bundle(without_cics_parameters(bundle_data))
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
