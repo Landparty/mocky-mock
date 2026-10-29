@@ -9,7 +9,8 @@ itself (`ProgramFixtureGenerator(entry_parameters=True)`: a value row per
 scenario, a stub per field the program writes, and branch scenarios on the
 parameters). `fixture_generator` asks for that when the installed
 cobol-parser supports it; `add_entry_parameters` gives an older one's
-bundle the same shape for every scenario, without the branch targeting.
+bundle the same shape for every scenario, without the branch targeting,
+and tops up the stubs a newer one's misses.
 """
 
 from __future__ import annotations
@@ -19,16 +20,16 @@ import zlib
 from typing import Any
 
 
-def fixture_generator(rows: int | None) -> tuple[Any, bool]:
-    """A `ProgramFixtureGenerator`, and whether it generates the entry
-    parameters itself (cobol-parser releases that know the keyword)."""
+def fixture_generator(rows: int | None) -> Any:
+    """A `ProgramFixtureGenerator` that generates the entry parameters
+    itself when the installed cobol-parser knows the keyword."""
     from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
 
     options = DataGeneratorOptions(rows=rows) if rows is not None else None
     try:
-        return ProgramFixtureGenerator(options, entry_parameters=True), True
+        return ProgramFixtureGenerator(options, entry_parameters=True)
     except TypeError:
-        return ProgramFixtureGenerator(options), False
+        return ProgramFixtureGenerator(options)
 
 
 #: The parameters of a CICS-translated program: CICS itself supplies them.
@@ -73,7 +74,9 @@ def add_entry_parameters(
     """Give every scenario of `bundle` (a `FixtureBundle.to_dict()`) an
     `entry_parameters` fixture and a `stub` expectation per USING field the
     program writes, the shape newer cobol-parser releases emit themselves.
-    A scenario that already has one is left alone. Best effort: a program
+    A scenario that already has its fixture keeps it and only gets the
+    stubs it lacks: cobol-parser's own (3.1) misses a field written only
+    through its level-88s (`SET LK-NEG TO TRUE`). Best effort: a program
     the layout index or xref cannot read keeps the bundle unchanged."""
     try:
         parameters = _entry_parameter_layout(program_path, copybook_paths)
@@ -88,6 +91,16 @@ def add_entry_parameters(
     seed = int(bundle.get("seed") or 0)
     for scenario in bundle.get("scenarios") or []:
         if scenario.get("entry_parameters") is not None:
+            stubbed = {
+                e.get("ref")
+                for e in scenario.get("expectations") or []
+                if e.get("kind") == "stub"
+            }
+            scenario.setdefault("expectations", []).extend(
+                _output_stub(qualified_name, program)
+                for qualified_name in outputs
+                if qualified_name not in stubbed
+            )
             continue
         name = str(scenario.get("name") or "")
         rng = random.Random(zlib.crc32(f"{seed}:{name}:ENTRY:{program}".encode()))
@@ -106,15 +119,18 @@ def add_entry_parameters(
             "unresolved": [],
         }
         scenario.setdefault("expectations", []).extend(
-            {
-                "kind": "stub",
-                "ref": qualified_name,
-                "value": None,
-                "note": f"returned to the caller of {program}",
-            }
-            for qualified_name in outputs
+            _output_stub(qualified_name, program) for qualified_name in outputs
         )
     return bundle
+
+
+def _output_stub(qualified_name: str, program: str) -> dict[str, Any]:
+    return {
+        "kind": "stub",
+        "ref": qualified_name,
+        "value": None,
+        "note": f"returned to the caller of {program}",
+    }
 
 
 def _entry_parameter_layout(

@@ -60,11 +60,30 @@ _ADDRESS_WORDS = frozenset({"ADDRESS", "LENGTH"})
 
 
 def _literal_inner(token: str) -> str:
-    """The value cobolparser reports for a quoted literal token: prefix and
-    quotes removed, doubled quotes collapsed."""
+    """The value cobolparser before 3.1 reports for a quoted literal token:
+    prefix and quotes removed, doubled quotes collapsed."""
     start = token.index(token[-1])
     quote = token[-1]
     return token[start + 1 : -1].replace(quote * 2, quote)
+
+
+def reported_literal(name: str) -> str | None:
+    """`name` when cobolparser reported a CALL USING operand as a quoted
+    literal, else None. From cobol-parser 3.1 a literal operand keeps its
+    quotes, re-quoted with double quotes (`'D''E'` is `"D'E"`); earlier
+    releases stripped them, so there such a name is never quoted and the
+    statement text (`_call_using_literals`) is the only way to tell."""
+    match = _CALL_TOKEN_RE.fullmatch(name)
+    return name if match is not None and match.group("lit") else None
+
+
+def _same_literal(token: str, name: str) -> bool:
+    """True when the literal `token` from the statement text is the operand
+    cobolparser reported as `name`, in either release's spelling."""
+    inner = _literal_inner(token)
+    if inner == name:
+        return True
+    return reported_literal(name) is not None and _literal_inner(name) == inner
 
 
 def _operand_key(text: str) -> str:
@@ -144,7 +163,7 @@ def _call_using_literals(statement_text: str, names: list[str]) -> list[str | No
     result: list[str | None] = []
     for (text, is_literal), name in zip(operands, names, strict=True):
         if is_literal:
-            if _literal_inner(text) != name:
+            if not _same_literal(text, name):
                 return none
             result.append(text)
         else:

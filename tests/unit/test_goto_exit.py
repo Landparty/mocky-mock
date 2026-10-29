@@ -273,12 +273,14 @@ def test_find_goto_exit_plans_tolerates_a_phantom_paragraph_before_the_target():
     paragraph's header -- source-order adjacency between the enclosing
     paragraph and the exit-only target must tolerate that phantom the same
     way _expand_thru_range already does, instead of treating it as a real
-    intervening paragraph and declining the splice."""
+    intervening paragraph and declining the splice. cobol-parser 3.1 no
+    longer inserts the phantom; the plan is found either way."""
     program, _, scope_map, lines = _analyze(PHANTOM_PARAGRAPH_SOURCE)
     procedure = program.get_division("PROCEDURE")
-    assert [p.paragraph_name for p in procedure.paragraphs] == [
+    assert [
+        p.paragraph_name for p in procedure.paragraphs if p.paragraph_name != "."
+    ] == [
         "0000-MAIN-PROCESS",
-        ".",
         "0000-MAIN-EXIT",
         "1000-DO-WORK",
         "2000-TERMINATE",
