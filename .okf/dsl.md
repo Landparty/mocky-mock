@@ -643,6 +643,18 @@ Rules:
   `MOVE SPACES` (issue #330): cobc rejects MOVE SPACES to a numeric or
   numeric-edited target, and this body is also lint's suggested fix and
   what `--fill` / `--per-paragraph` / `--placeholder` insert.
+- Dynamic CALL targets (`_per_target_body`, 2026-10-29): a `MOCK CALL
+  <identifier>` body, bundle-driven or placeholder, is wrapped in
+  `EVALUATE <identifier>` with one `WHEN "<program>"` per program name
+  `ProgramContext.dynamic_targets` knows for it (cobol-parser's
+  `DynamicCallAnalyzer`: VALUE clauses and literal MOVEs; SPACES / LOW- /
+  HIGH-VALUES / ZERO and all-digit values are dropped) and a `WHEN OTHER`,
+  each holding the same body, so the unedited mock behaves exactly as before
+  and a test edits one branch per callee. A comment above it lists the
+  targets (`..., and values this analysis cannot follow` when
+  `possible_values_incomplete`). One complete target, more than
+  `_MAX_TARGET_BRANCHES` (5), or an identifier declared twice gets the
+  comment only; no known target leaves the body untouched.
 - Per-category directive-line shape (`_directive_for`):
   - `CALL`: `MOCK CALL "name"` normally, `MOCK MQ "name"` if `site.is_mq`;
     returns `None` (site skipped) if no key was captured — emitting

@@ -86,6 +86,8 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 | `cobolparser.analysis.unused_variables.collect_declared_items(program)` | declared-name set for the CICS EIB check (`analysis/cics_eib.py`) and the matching gate in `refusal/_gates.py` |
 | `cobolparser.generators.data.layout_offsets.compute_program_data_items(program)` | per-item layout facts (usage, length) behind `CAPTURE` source checks and `UT-CAP-` target sizing (`splicer/captures.py`) |
 | `cobolparser.generators.ProgramFixtureGenerator`, `DataGeneratorOptions` | `generate --with-data` / `fixtures` (serialized `FixtureBundle` JSON only -- see Overview) |
+| `cobolparser.analysis.value_tracker.DynamicCallAnalyzer().analyze(program)` → `CallStatement.possible_values`, metadata `possible_values_incomplete` | the program names a dynamic CALL's identifier can hold, which `generate` branches the `MOCK CALL <identifier>` body on (`generator._dynamic_call_targets`) |
+| `ProgramLayoutIndex.from_file`, `BoundaryInventoryAnalyzer().analyze(ast, index)` (`Boundary.call_args[].name/.direction/.provenance`), `generators.data.layout.flatten_record`, `generators.data.values.ValueFactory` | `dsl/call_arguments.py` lays out a CALL argument the fixture bundle reported unresolvable (see [cli](cli.md)) |
 | `cobolparser.config.load_project_config`, `ConfigError` | the universal `cobol.yml` (soft-imported in `cli/config.py`; absent from every tagged release up to v1.9.0 -- see [cli](cli.md)) |
 | `cobolparser.cli.parse.main` | `mockymock analyze` delegates in-process, `sys.argv` patched around the call |
 | (v2) `IOOpenStatement.file_names` / `IOCloseStatement.file_names` | multi-file OPEN/CLOSE mock key matching |

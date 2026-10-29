@@ -280,6 +280,26 @@ explicit `-o` included -- the same contract as `init`, which passes
 program's existing sibling `PROG.cut`) was silently replaced by a bare
 scaffold.
 
+**CALL arguments the layout index cannot hold (2026-10-29).**
+`dsl/call_arguments.py`: `fill_call_arguments()` runs on the self-generated
+bundle dict right after `add_entry_parameters()`. It reads cobol-parser's
+per-argument notes (`<CALL|DYNCALL> <key>: argument <arg> not resolvable in
+layout index`, and 3.1's `... is subscripted or reference-modified ...`),
+looks each argument up in the DATA DIVISION (`_find_item`, qualifiers
+honored, a name declared twice is not guessed) and lays it out with
+`flatten_record`: a group below level 01 as its elementary fields, a
+single-subscript table element as one occurrence whose `column` is the
+argument's own reference (`WS-CODE(WS-I)`), so the mock MOVEs into exactly
+the element the CALL passes. Values come from `ValueFactory`, seeded per
+(scenario, boundary, argument). A missing fixture is created (the CALL used
+to fall back to a placeholder with a key-mismatch warning); a BIDIRECTIONAL
+argument also gets the generator's own `stub`, an OUT-only one only the
+stub. Literal / figurative / `OMITTED` / `LENGTH OF` / `ADDRESS OF` /
+`FUNCTION` arguments have their note dropped (nothing to generate, as in
+cobol-parser 3.1); reference modification, several subscripts, a table
+nested in the element, or a column clash keep the note. Each fill prints a
+`note:` line on stderr.
+
 **A subprogram's USING parameters are its interface (2026-10-21, issue
 #275).** `dsl/entry_parameters.py`: `fixture_generator()` builds
 `ProgramFixtureGenerator(entry_parameters=True)` when the installed

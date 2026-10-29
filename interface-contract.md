@@ -154,9 +154,18 @@ mockymock too.
   line reference simply stays a whole-program PARSE_WARNING refusal.
   `tests/unit/test_scoped_refusals.py` pins the format so an upstream change
   fails loudly instead of silently disabling the narrowing.
-- (`cobolparser.analysis.DynamicCallAnalyzer` was listed here historically;
-  no mockymock module imports it -- dynamic CALLs are keyed directly on
-  `CallStatement.called_program` / `.is_dynamic`.)
+- `cobolparser.analysis.value_tracker.DynamicCallAnalyzer().analyze(program)`
+  fills `CallStatement.possible_values` (and the `possible_values_incomplete`
+  metadata flag); `generate` reads them to branch a dynamic CALL's mock body
+  per target program (`dsl/generator._dynamic_call_targets`). Matching
+  still keys on `CallStatement.called_program` / `.is_dynamic` alone.
+- `ProgramLayoutIndex.from_file`, `BoundaryInventoryAnalyzer().analyze(ast,
+  index)` (each `Boundary.call_args` entry's `.name`, `.direction`,
+  `.provenance`), `generators.data.layout.flatten_record` and
+  `generators.data.values.ValueFactory`: `dsl/call_arguments.py` lays out a
+  CALL argument the fixture bundle reported as unresolvable, reading the
+  bundle note texts `<CALL|DYNCALL> <key>: argument <arg> not resolvable in
+  layout index` and `... is subscripted or reference-modified ...`.
 - Other imports, outside the AST walk: `cobolparser.preprocess.strip_compiler_directives`
   and `CopybookNotFoundError`; `cobolparser.analysis.unused_variables.collect_declared_items`
   (CICS EIB declared-name check); `cobolparser.generators.data.layout_offsets.compute_program_data_items`
