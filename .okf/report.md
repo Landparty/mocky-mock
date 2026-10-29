@@ -1,9 +1,9 @@
 ---
 type: Module
 title: Test Result Reporting
-description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
+description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines; sweep.py snapshots and diffs corpus sweeps.
 tags: [report, results, cli-output]
-timestamp: 2026-10-16T12:00:00Z
+timestamp: 2026-10-29T16:00:00Z
 ---
 # Overview
 
@@ -363,6 +363,33 @@ found by matching the `*> STUB EXPECT` pattern — once a stub becomes a
 real `EXPECT` line (by this feature or by hand), it structurally cannot
 match that pattern again, so a second `--record-expectations` run finds
 nothing left to touch there. No provenance tracking needed.
+
+## Corpus-sweep snapshots and diffs (`report/sweep.py`) (2026-10-29)
+
+`scripts/corpus_sweep.py` runs `mockymock generate` over a corpus (the
+default corpus, or any `--corpus DIR`, repeatable, with `--copybook-path`
+for every program) and hands each run's stdout to
+`sweep.classify_output`, which turns it into a `ProgramResult`: a
+program is *blocked* when generate exited non-zero, raised (`EXCEPTION`)
+or ran past `--timeout` (`TIMEOUT`; that and `--jobs` run each program in
+a child process). Its blocker categories are the `refused (<CODE>)`
+codes, `PARSE_ERROR`, `UNRESOLVED_COPYBOOK` (also for the
+`--copybook-path` hint path, which prints no code), `NO_TEST_CASE`,
+`NO_SCENARIO`, or `OTHER` with the first printed line as `detail`, so a
+CLI wording change shows up as `OTHER` rather than silently zeroing a
+category. Refusal lines on a clean exit are not blockers. Unmockable
+boundary points are tallied apart, for clean programs too.
+
+`SweepSnapshot` saves as JSON (`--json`; `format: "mockymock-sweep"`,
+`version: 1`, programs keyed by a label relative to the corpus dir's
+parent, which must stay stable for the diff). `--baseline` loads an
+earlier one before sweeping and appends `render_diff`: per category the
+programs before/after and which programs gained or lost it; newly clean,
+newly blocked, blocked for a different reason, added, removed. A
+*regression* is a program in both runs blocked by a category it was not
+blocked by before; `--fail-on-regression` exits 1 on one. Blocker tallies
+count programs, boundary tallies count sites. Tests:
+`tests/unit/test_sweep_report.py`.
 
 ## Test report (`report/test_report.py`, `report/html_report.py`, `report/journal.py`) (2026-10-04)
 
