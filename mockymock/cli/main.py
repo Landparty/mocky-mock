@@ -89,7 +89,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
             expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
         except CopybookNotFoundError as exc:
             print(f"mockymock fixtures: {exc}", file=sys.stderr)
-            print(copybook_not_found_hint(), file=sys.stderr)
+            print(copybook_not_found_hint(exc), file=sys.stderr)
             return 1
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             print(f"mockymock fixtures: {exc}", file=sys.stderr)
@@ -158,7 +158,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
         )
     except CopybookNotFoundError as exc:
         print(f"mockymock fixtures: {exc}", file=sys.stderr)
-        print(copybook_not_found_hint(), file=sys.stderr)
+        print(copybook_not_found_hint(exc), file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
         print(f"mockymock fixtures: {exc}", file=sys.stderr)
@@ -1102,7 +1102,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             if isinstance(exc, CopybookNotFoundError) or isinstance(
                 exc.__cause__, CopybookNotFoundError
             ):
-                print(copybook_not_found_hint())
+                print(copybook_not_found_hint(exc))
                 return 1
             if args.with_data:
                 return 1
@@ -1143,7 +1143,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             )
         except CopybookNotFoundError as exc:
             print(f"mockymock generate: {exc}")
-            print(copybook_not_found_hint())
+            print(copybook_not_found_hint(exc))
             return 1
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             print(f"mockymock generate: {exc}")

@@ -430,7 +430,7 @@ def _run_static_checks(
             )
         except CopybookNotFoundError as exc:
             out.problems.append(f"copybook expansion failed: {exc}")
-            out.problems.append(copybook_not_found_hint())
+            out.problems.append(copybook_not_found_hint(exc))
             return out
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             out.problems.append(f"copybook expansion failed: {exc}")

@@ -120,3 +120,54 @@ def test_generate_with_data_missing_copybook_gets_actionable_hint(
     assert exit_code == 1
     assert "not found in search paths" in out
     assert "--copybook-path" in out
+
+
+def test_dclgen_and_include_folders_are_searched_by_default(tmp_path):
+    """`EXEC SQL INCLUDE` members usually ship in a DCLGEN folder beside
+    the copylib (sweep 2026-10-29: DMTREN0A)."""
+    (tmp_path / "src").mkdir()
+    program = tmp_path / "src" / "PROG.cbl"
+    program.write_text("")
+    (tmp_path / "dclgen").mkdir()
+    (tmp_path / "src" / "include").mkdir()
+    assert effective_copybook_paths(program, []) == [
+        str(tmp_path / "src" / "include"),
+        str(tmp_path / "dclgen"),
+    ]
+
+
+def test_hint_names_a_file_the_search_cannot_match(tmp_path):
+    """A mainframe export spelled `gttlbi0a.copy`: wrong case and an
+    extension cobol-parser never tries, so no search path finds it."""
+    from cobolparser.preprocess import CopybookNotFoundError
+
+    (tmp_path / "copylib").mkdir()
+    (tmp_path / "copylib" / "gttlbi0a.copy").write_text("")
+    (tmp_path / "dclgen").mkdir()
+    (tmp_path / "dclgen" / "GTTLBI0A.dcl").write_text("")
+    (tmp_path / "copylib" / "OTHER.cpy").write_text("")
+    error = CopybookNotFoundError("GTTLBI0A", [str(tmp_path / "copylib")])
+    hint = copybook_not_found_hint(error)
+    assert "gttlbi0a.copy" in hint
+    assert "GTTLBI0A.dcl" in hint
+    assert "OTHER" not in hint
+    assert "GTTLBI0A.cpy" in hint
+
+
+def test_hint_follows_a_wrapped_not_found_error(tmp_path):
+    from cobolparser.preprocess import CopybookNotFoundError
+
+    (tmp_path / "copybooks").mkdir()
+    (tmp_path / "copybooks" / "Greeting.CPY").write_text("")
+    cause = CopybookNotFoundError("GREETING", [str(tmp_path / "copybooks")])
+    wrapper = RuntimeError("unresolved copybook dependency")
+    wrapper.__cause__ = cause
+    assert "Greeting.CPY" in copybook_not_found_hint(wrapper)
+
+
+def test_hint_stays_one_line_when_nothing_looks_like_the_member(tmp_path):
+    from cobolparser.preprocess import CopybookNotFoundError
+
+    (tmp_path / "copybooks").mkdir()
+    error = CopybookNotFoundError("GREETING", [str(tmp_path / "copybooks")])
+    assert copybook_not_found_hint(error) == copybook_not_found_hint()
