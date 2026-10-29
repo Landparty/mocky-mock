@@ -552,6 +552,37 @@ the period closed appended, innermost first.
 stops copying an AT END clause the splice already re-runs (it reports end
 of file through the status field, or `MOVE "10" TO UT-MOCK-STATUS`).
 
+## Boundaries inside clause bodies (2026-10-29)
+
+A boundary in another boundary's clause body (`READ ... NOT AT END CALL
+"X"`, `CALL ... ON EXCEPTION WRITE ERR-REC`, any depth) is spliced:
+
+- **Spans.** `collect_scope_map` records every clause header of a
+  READ / RETURN / WRITE / REWRITE / DELETE / START / CALL as a boundary
+  (`ScopeBoundary.clause_header`, located by
+  `clause_bodies.clause_header_positions`; the AST has none). A
+  `nested_in_boundary` site whose category is not None and not EXEC, of a
+  `_NESTABLE_BOUNDARY_TYPES` type, under enclosing boundaries that are all
+  liftable types (`_in_boundary_problem`), then gets an ordinary nested
+  span that stops before the next header. When only its own clause header
+  precedes it on its first line (`AT END CALL "X"`), the span still starts
+  there and `BoundarySite.span_lead` holds the header text.
+- **Lift.** `_NESTABLE_BOUNDARY_TYPES` are no longer forbidden in a lifted
+  body (`_walk` does not descend into their own bodies; `_PHRASE_OWNERS`
+  lets READ/RETURN own AT END and the file ops INVALID KEY /
+  END-OF-PAGE). EXEC, SORT/MERGE, RECEIVE, INVOKE and report-writer verbs
+  still are. A statement of the outer's own kind anywhere in its bodies
+  refuses the lift: which END-xxx closes which is ambiguous.
+- **Splice.** `splice_program` decides every site's splice first, then
+  `boundary_parents` finds each spliced site's nearest spliced ancestor.
+  With none, it is spliced in place (the `span_lead` header re-emitted on
+  its own line first). Under a mocked ancestor, its replacement is spliced
+  into the ancestor's lifted copy (`_splice_into_lifted`, by
+  `LiftedClause.source_line_numbers`), recursively; under a trap it goes
+  with the ancestor. Its lines are never spliced twice.
+- An unmocked inner site is copied with the body and runs for real, so the
+  gate refuses any case reaching it (UNMOCKED_*), as anywhere else.
+
 # Orchestration and Ordering Invariant (orchestrator.py)
 
 `splice_program` computes every span **up front** against the original
