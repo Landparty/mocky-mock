@@ -16,6 +16,7 @@ sweep a corpus outside this repo. The logic moved to
 `mockymock/report/sweep.py`. `docs/corpus-sweep-report.md` was not
 regenerated (the legacy-application checkout was not available).
 Updated [report](report.md).
+
 ## 2026-10-29 -- cobol-parser 3.1 adopted
 
 - The `<3.1` cap is lifted: `cobol-parser>=1.7.7,!=1.8.2,<4`. The 22 unit
