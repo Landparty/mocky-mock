@@ -1104,6 +1104,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         # of failing the command: an editor's "new test suite" button
         # should still produce a suite on a program the generator can't
         # handle. An explicit --with-data keeps the hard failure.
+        from mockymock.dsl.call_arguments import fill_call_arguments
         from mockymock.dsl.entry_parameters import (
             add_entry_parameters,
             fixture_generator,
@@ -1123,6 +1124,14 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             bundle_data = add_entry_parameters(
                 cp_bundle.to_dict(), str(source_path), args.copybook_path
             )
+            # A CALL argument the layout index cannot hold (a 05-level
+            # group, one table element) gets its fields from the DATA
+            # DIVISION instead of no value at all.
+            bundle_data, filled_arguments = fill_call_arguments(
+                bundle_data, str(source_path), args.copybook_path
+            )
+            for line in filled_arguments:
+                print(f"mockymock generate: note: {line}", file=sys.stderr)
             bundle = load_fixture_bundle(without_cics_parameters(bundle_data))
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
