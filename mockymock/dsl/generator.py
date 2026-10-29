@@ -426,6 +426,9 @@ class ProgramContext:
     #: Steps every generated case runs before its PERFORM so the program
     #: starts the way a real invocation would -- see `_commarea_setup_lines`.
     setup_lines: list[str] = field(default_factory=list)
+    #: Dynamic CALL identifier -> (the program names it can hold, whether
+    #: that list is complete) -- see `_dynamic_call_targets`.
+    dynamic_targets: dict[str, tuple[list[str], bool]] = field(default_factory=dict)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -451,6 +454,7 @@ class ProgramContext:
             surface=surface,
             decimal_comma=decimal_point_is_comma(program),
             setup_lines=_commarea_setup_lines(program, lines),
+            dynamic_targets=_dynamic_call_targets(program, surface),
         )
 
     def names_under(self, name: str) -> set[str]:
@@ -1225,6 +1229,84 @@ def _with_captures(
     return context.captures_for(category, key) + body
 
 
+#: Above this many known targets a per-target EVALUATE repeats the body
+#: too often to help; the targets are listed in a comment instead.
+_MAX_TARGET_BRANCHES = 5
+
+
+def _per_target_body(
+    key: str, body: list[str], context: ProgramContext | None
+) -> list[str]:
+    """A dynamic CALL's mock body, given the program names its identifier
+    is known to hold (`ProgramContext.dynamic_targets`): one `WHEN` per
+    target, each starting from the same generated body, so a test can make
+    each callee answer differently. `WHEN OTHER` keeps the body too, so a
+    value the analysis did not see behaves exactly as the unbranched mock.
+    A single target, too many, or an identifier the body cannot name
+    unqualified gets a comment naming the targets instead."""
+    if context is None:
+        return body
+    known = context.dynamic_targets.get(key.upper())
+    if not known:
+        return body
+    targets, complete = known
+    listed = ", ".join(f'"{target}"' for target in targets)
+    more = "" if complete else ", and values this analysis cannot follow"
+    comment = f"*> {key} can name {listed}{more}"
+    if (
+        len(targets) + (0 if complete else 1) < 2
+        or len(targets) > _MAX_TARGET_BRANCHES
+        or not context.is_unique_name(key)
+    ):
+        return [comment, *body]
+    lines = [comment, f"EVALUATE {key}"]
+    for target in targets:
+        lines.append(f'    WHEN "{target}"')
+        lines.extend(f"        {line}" for line in body or ["CONTINUE"])
+    lines.append("    WHEN OTHER")
+    lines.extend(f"        {line}" for line in body or ["CONTINUE"])
+    lines.append("END-EVALUATE")
+    return lines
+
+
+def _dynamic_call_targets(
+    program, surface: MockSurface
+) -> dict[str, tuple[list[str], bool]]:
+    """Identifier (uppercased) -> (the program names a dynamic CALL through
+    it can reach, whether that list is complete), from cobol-parser's
+    `DynamicCallAnalyzer` (VALUE clauses and MOVEs of literals). The
+    no-program sentinels a dispatcher tests first (SPACES, LOW-VALUES,
+    ZERO) and all-digit values are not program names and are left out."""
+    sites = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.DYNCALL and site.keys
+    ]
+    if not sites:
+        return {}
+    try:
+        from cobolparser.analysis.value_tracker import DynamicCallAnalyzer
+
+        DynamicCallAnalyzer().analyze(program)
+    except Exception:  # noqa: BLE001 -- an analysis gap never breaks generate
+        return {}
+    targets: dict[str, tuple[list[str], bool]] = {}
+    for site in sites:
+        statement = site.statement
+        names = list(targets.get(site.keys[0], ([], True))[0])
+        for value in getattr(statement, "possible_values", None) or []:
+            name = str(value).strip(" '\"\x00\xff").upper()
+            if name and not name.isdigit() and '"' not in name and name not in names:
+                names.append(name)
+        get_metadata = getattr(statement, "get_metadata", None)
+        incomplete = bool(
+            get_metadata("possible_values_incomplete") if get_metadata else False
+        )
+        complete = targets.get(site.keys[0], ([], True))[1] and not incomplete
+        targets[site.keys[0]] = (names, complete)
+    return {key: value for key, value in targets.items() if value[0]}
+
+
 def _placeholder_body_for(
     category: MockCategory, key: str, site: BoundarySite | None = None
 ) -> list[str]:
@@ -1305,9 +1387,8 @@ def _directive_for(
         # bare key = dynamic CALL through this identifier; quoting it would
         # turn the directive into a static-literal mock that never matches
         key = site.keys[0]
-        return f"MOCK CALL {key}", _with_captures(
-            category, key, _placeholder_body_for(category, key), context
-        )
+        body = _per_target_body(key, _placeholder_body_for(category, key), context)
+        return f"MOCK CALL {key}", _with_captures(category, key, body, context)
 
     if category in FILE_OP_CATEGORIES:
         if not site.keys:
@@ -2973,6 +3054,8 @@ def _bundle_directive_for(
                 call_count_override = CallCountOverride(count=2, from_placeholder=False)
             body = body + end_lines
 
+    if category is MockCategory.DYNCALL:
+        body = _per_target_body(fixture.key, body, source)
     body = _with_captures(category, fixture.key, body, source)
     lines = [_directive_header(category, fixture.key, site)]
     lines.extend(f"    {line}" for line in body)

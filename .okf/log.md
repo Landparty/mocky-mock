@@ -17,6 +17,17 @@ sweep a corpus outside this repo. The logic moved to
 regenerated (the legacy-application checkout was not available).
 Updated [report](report.md).
 
+## 2026-10-29 -- CALL arguments and dynamic CALL targets in `generate`
+
+A CALL argument cobol-parser's layout index cannot hold (a group below
+level 01, one table element) is laid out from the DATA DIVISION instead of
+left as a "not resolvable" note with no value (`dsl/call_arguments.py`,
+wired in `cli/main.py` after `add_entry_parameters`). A dynamic CALL's mock
+body branches on the program names its identifier is known to hold
+(`generator._per_target_body`). Pinned by
+`tests/unit/test_call_argument_resolution.py` and its integration twin.
+Updated [cli](cli.md), [dsl](dsl.md), [integration](integration.md).
+
 ## 2026-10-29 -- copybook member-name aliasing
 
 The sweep's missing-copybook rows were mostly exports named
