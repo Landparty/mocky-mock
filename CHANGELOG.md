@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.12.0](https://github.com/Landparty/mocky-mock/compare/v0.11.0...v0.12.0) (2026-10-29)
+
+
+### Features
+
+* **copybooks:** find exports named gttlbi0a.copy and other near-misses ([cf600d1](https://github.com/Landparty/mocky-mock/commit/cf600d1a2d75ca1ba87a55fb4ac47d36b7938fa5))
+* **copybooks:** stage exports the search cannot match under their member name ([3c4aae5](https://github.com/Landparty/mocky-mock/commit/3c4aae57fba0bd2a6672d8a739d2b9869363c8f3))
+* **generate:** fill CALL arguments the layout index misses; branch dynamic CALL mocks per target ([03d863c](https://github.com/Landparty/mocky-mock/commit/03d863cd1a6888fed950e628da786d679ed994e0))
+* **generate:** fill CALL arguments the layout index misses; branch dynamic CALL mocks per target ([983dd40](https://github.com/Landparty/mocky-mock/commit/983dd40d39d383826063e785598187270aa17698))
+* same-kind nesting in clause bodies; clean removes staged copybook copies ([0829769](https://github.com/Landparty/mocky-mock/commit/0829769cdf0b0f4ac88d2ef5f81ca1a88ab555f3))
+* same-kind nesting in clause bodies; clean removes staged copybook copies ([7cb8399](https://github.com/Landparty/mocky-mock/commit/7cb83996adcb2f9ae1b77dd40bbc9c29c020a004))
+* **splicer:** mock boundaries nested in another boundary's clause body ([546a3c8](https://github.com/Landparty/mocky-mock/commit/546a3c840c17ffa816653d9c71046ee4fc3fe828))
+* **splicer:** mock boundaries nested in another boundary's clause body ([d831283](https://github.com/Landparty/mocky-mock/commit/d83128375b6502f566492cfcc1eb9e9b6663c1cb))
+* support GOBACK/STOP RUN inside SECTION members ([b720411](https://github.com/Landparty/mocky-mock/commit/b7204114464cde498cfea94ac4c56745546a3764))
+* **sweep:** per-category sweep report with a diff against the last run ([1e05273](https://github.com/Landparty/mocky-mock/commit/1e05273ea715e35fe2ffd4db2f19fe9f576bcf9f))
+* **sweep:** per-category sweep report with a diff against the last run ([68c7b43](https://github.com/Landparty/mocky-mock/commit/68c7b43f5121bb46302f2006a9fcc8672d92ef2a))
+
+
+### Bug Fixes
+
+* **cli:** take a .cut program argument as the suite in every command ([bca0815](https://github.com/Landparty/mocky-mock/commit/bca0815f2373a52d848bd1242ed4aa34eb2a947f))
+* close six gaps found in the post-[#367](https://github.com/Landparty/mocky-mock/issues/367) bug hunt ([ccb25fd](https://github.com/Landparty/mocky-mock/commit/ccb25fdc8e9a6393951467256d9b08bd498ccdd1))
+* close six gaps found in the post-[#367](https://github.com/Landparty/mocky-mock/issues/367) bug hunt ([85ebca9](https://github.com/Landparty/mocky-mock/commit/85ebca9d49a0f293594b8d2c4cd18d412d46162b))
+* **copybooks:** name the missing member and point at near-miss files ([4d37941](https://github.com/Landparty/mocky-mock/commit/4d37941d93aa94622cbc34b58218c2ee15b724b7))
+* **debug:** report the line a breakpoint was bound to ([fd3cd20](https://github.com/Landparty/mocky-mock/commit/fd3cd206abc2060eec2454b0557d0c887db7cf16))
+* **deps:** adopt cobol-parser 3.1 and lift the &lt;3.1 cap ([f366dc5](https://github.com/Landparty/mocky-mock/commit/f366dc547806e7a5c69b78a3ccdcf8c61903c502))
+* **deps:** adopt cobol-parser 3.1 and lift the &lt;3.1 cap ([d1ef44a](https://github.com/Landparty/mocky-mock/commit/d1ef44a236f6f45181d23d09fdd5856dad6558ea))
+* **dsl:** refuse an EXPECT value that starts with a relational symbol ([cc23034](https://github.com/Landparty/mocky-mock/commit/cc2303492b70eca6ac9a32804c46c9e7869665f1))
+* **expect:** compare a numeric-edited field by value under DECIMAL-POINT IS COMMA ([f5a0487](https://github.com/Landparty/mocky-mock/commit/f5a048704c01031ef58109cc63ed6fca80812a13))
+* **generate:** don't copy an AT END clause that PERFORMs into a MOCK READ body ([783e144](https://github.com/Landparty/mocky-mock/commit/783e144bcd0f3ee014ba5d4f6141ce70222d1572))
+* **generate:** stub a subprogram output set only through its 88s ([2d3ae92](https://github.com/Landparty/mocky-mock/commit/2d3ae92baa4181955764f130a98a979f8ef94211))
+* **mutate:** don't call a zero-then-add swap on a binary field equivalent ([2025f40](https://github.com/Landparty/mocky-mock/commit/2025f4079026eec2cc7e946fe41f85dc9a7fb338))
+* no SET in generated case setup; splice driver after a wrapped PROCEDURE DIVISION header ([dbc8114](https://github.com/Landparty/mocky-mock/commit/dbc8114cb1d76e7515ca2f443aecbd3fed41b8ab))
+* **reachability:** swap the per-program memo as one tuple ([54d0679](https://github.com/Landparty/mocky-mock/commit/54d0679a17e72fcc3271b896acec2a20b66c059e))
+* refuse section ranges that run an unchecked member ([2f7f35e](https://github.com/Landparty/mocky-mock/commit/2f7f35e4607854757ee883ced55586a51c346ba9))
+* sweep blockers: sectioned terminators, UNTIL loops, copybook hints, generate speed ([1504ae9](https://github.com/Landparty/mocky-mock/commit/1504ae94ca6e8e94a6ab4388e69d3c22aaaec1b6))
+* sweep defects (SET in case setup, wrapped PROCEDURE DIVISION header); support GOBACK/STOP RUN in SECTION members ([3599dcb](https://github.com/Landparty/mocky-mock/commit/3599dcb3d2168f9115c25d7cc6a9ad916a6fc906))
+* **terminators:** plan the sectioned GO TO-exit layout and PERFORM UNTIL loops ([05c649f](https://github.com/Landparty/mocky-mock/commit/05c649f5ddcd5983071a43c783995ef458e1555b))
+* XML PARSE processing procedure members get no section mode ([2a86c00](https://github.com/Landparty/mocky-mock/commit/2a86c00af6a3b73eeada70167c33e955fe6cb4ea))
+
+
+### Performance Improvements
+
+* **reachability:** memoize whole-program walks so generate stays near-linear ([8d5c470](https://github.com/Landparty/mocky-mock/commit/8d5c47097112b0f1ca125bcef235eb636d4c8558))
+
+
+### Documentation
+
+* **okf:** separate the two 2026-10-29 log entries ([09d5378](https://github.com/Landparty/mocky-mock/commit/09d5378ec2ec000f38177359d86d6d125af297a4))
+* **skills:** ship cobol-parser's cobol-analysis skill unchanged ([e15b58b](https://github.com/Landparty/mocky-mock/commit/e15b58b7546f12f16372f19792781d2f5a8569ad))
+
 ## [0.11.0](https://github.com/Landparty/mocky-mock/compare/v0.11.0...v0.11.0) (2026-10-26)
 
 
