@@ -624,6 +624,13 @@ died with an `ExpatError` (verified with `\x01`). Every name/reason/message
 now passes through `_xml_safe`, which replaces XML-1.0-illegal characters
 (controls other than tab/LF/CR, lone surrogates) with a visible `\xNN`
 escape so the document stays well-formed without hiding the evidence.
+
+**The console listing escapes terminal control characters (issue #375):**
+`format_console` passes the suite name, case names and failure reasons
+through `_console_safe`, which shows C0 controls (except tab) and DEL as
+`\xNN`, so an ESC sequence held in a failing field cannot clear or garble
+the terminal. Only the printed line is escaped; the parsed result, and the
+JSON report built from it, keep the real value.
 The console formatter deliberately does not sanitize.
 
 **No `time` attributes:** neither `<testsuite>` nor `<testcase>` carries

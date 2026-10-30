@@ -5,6 +5,10 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-31 -- open-issue sweep
+
+* **#375** `format_console` escapes terminal control characters (C0 except tab, DEL) as `\xNN` in names and failure reasons (`_console_safe`); the JSON report keeps the value. Updated [report](report.md). Test: `tests/unit/test_report.py::test_format_console_escapes_terminal_control_characters`.
+
 ## 2026-10-29 -- same-kind nesting in clause bodies; `clean` removes staged copybook copies
 
 A boundary whose clause body holds a statement of its own kind (`CALL ...
