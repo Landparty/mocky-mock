@@ -761,7 +761,7 @@ def test_format_console_escapes_terminal_control_characters():
     suite = parse_stdout(stdout)
     text = format_console(suite)
     assert "\x1b" not in text and "\x07" not in text and "\x7f" not in text
-    assert 'got \\x1b[2J\\x1b[HABC\tx\\x7f' in text
+    assert "got \\x1b[2J\\x1b[HABC\tx\\x7f" in text
     assert "TESTSUITE: e\\x1bsuite" in text
     assert "[FAIL] esc\\x07case" in text
     # The parsed result (what the JSON report is built from) keeps the bytes.

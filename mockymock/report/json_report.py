@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from mockymock.dsl.model import MockTestCase, MockTestSuite
+from mockymock.report.record_rewrite import display_numeric_value, picture_for
 from mockymock.report.results import TestResult, TestSuiteResult
 
 JSON_REPORT_VERSION = 1
@@ -57,15 +58,72 @@ class AttributedFailure:
     line: int | None = None
     expected: str | None = None
     actual: str | None = None
+    #: The EXPECT's data-name (not in the report; for rendering `actual`).
+    data_name: str | None = None
+    #: The raw DISPLAY image when `actual` was rendered from it (#374).
+    actual_raw: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "message": self.message,
             "kind": self.kind,
             "line": self.line,
             "expected": self.expected,
             "actual": self.actual,
         }
+        if self.actual_raw is not None:
+            out["actualRaw"] = self.actual_raw
+        return out
+
+    def rendered(
+        self, pictures: dict[str, str] | None, decimal_comma: bool = False
+    ) -> AttributedFailure:
+        """This failure with a numeric `actual` shown as the value the field
+        holds, not its raw DISPLAY image (`0001234-` in a `S9(5)V99` is
+        -12.34, `123` in a `9(3)PP` is 12300; issue #374). The raw image
+        moves to `actual_raw`; `message` gets the value too."""
+        if self.kind != "expect" or self.actual is None or not self.data_name:
+            return self
+        value = display_numeric_value(
+            self.actual.strip(),
+            picture_for(self.data_name, pictures),
+            decimal_comma=decimal_comma,
+        )
+        if value is None or value == self.actual:
+            return self
+        message = self.message.rstrip()
+        if message.endswith(self.actual):
+            message = (
+                f"{message[: len(message) - len(self.actual)]}{value} "
+                f"(displayed as {self.actual})"
+            )
+        return replace(self, message=message, actual=value, actual_raw=self.actual)
+
+
+def readable_suite(
+    suite_result: TestSuiteResult,
+    cut_suite: MockTestSuite | None,
+    pictures: dict[str, str] | None,
+    decimal_comma: bool = False,
+) -> TestSuiteResult:
+    """A copy of *suite_result* whose numeric EXPECT failures show the value
+    the field holds (see :meth:`AttributedFailure.rendered`), for the
+    console listing; the result itself keeps the driver's text."""
+    if not pictures:
+        return suite_result
+    cases = list(cut_suite.test_cases) if cut_suite is not None else []
+    results = []
+    for result in suite_result.results:
+        index = _case_index(result.case_id)
+        case = (
+            cases[index - 1] if index is not None and 0 < index <= len(cases) else None
+        )
+        reasons = [
+            _attribute_failure(reason, case).rendered(pictures, decimal_comma).message
+            for reason in result.failure_reasons
+        ]
+        results.append(replace(result, failure_reasons=reasons))
+    return replace(suite_result, results=results)
 
 
 def _attribute_failure(reason: str, case: MockTestCase | None) -> AttributedFailure:
@@ -92,6 +150,7 @@ def _attribute_failure(reason: str, case: MockTestCase | None) -> AttributedFail
                 return AttributedFailure(
                     message=reason,
                     kind="expect",
+                    data_name=expectation.data_name,
                     line=expectation.line or None,
                     expected=(
                         expectation.expected_value
@@ -126,6 +185,7 @@ def _attribute_failure(reason: str, case: MockTestCase | None) -> AttributedFail
             return AttributedFailure(
                 message=reason,
                 kind="expect",
+                data_name=data_name,
                 line=line,
                 expected=expected,
                 actual=actual,
@@ -221,6 +281,8 @@ def build_json_report(
     crash_detail: str | None = None,
     cut_file: str | None = None,
     program_file: str | None = None,
+    pictures: dict[str, str] | None = None,
+    decimal_comma: bool = False,
 ) -> dict[str, Any]:
     """Assemble the report dict. `cut_suite` is the parsed (and, under
     --case/--tag, already filtered) .cut model; when provided it supplies
@@ -228,7 +290,11 @@ def build_json_report(
     entry for every selected case the binary never printed a START marker
     for (a mid-suite crash ate them). Matched by position (case_id), not
     name: TESTCASE names are not required to be unique, and a name-keyed
-    match would drop or misattribute duplicate-named cases."""
+    match would drop or misattribute duplicate-named cases.
+
+    `pictures` (name -> PICTURE, `record_rewrite.field_pictures`) renders a
+    numeric EXPECT's `actual` as the value the field holds, with the raw
+    DISPLAY image under `actualRaw` (issue #374)."""
     cut_cases_by_index: dict[int, MockTestCase] = {}
     if cut_suite is not None:
         for position, cut_case in enumerate(cut_suite.test_cases, start=1):
@@ -242,7 +308,9 @@ def build_json_report(
         if index is not None:
             seen_indices.add(index)
         failures = [
-            _attribute_failure(reason, model_case).to_dict()
+            _attribute_failure(reason, model_case)
+            .rendered(pictures, decimal_comma)
+            .to_dict()
             for reason in result.failure_reasons
         ]
         entry: dict[str, Any] = {

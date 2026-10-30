@@ -204,7 +204,7 @@ the console line and the JSON `crashDetail` are never blank/null there.
 ## JSON run report (`report/json_report.py`)
 
 `build_json_report(suite_result, cut_suite=None, crash_detail=None,
-cut_file=None, program_file=None)` -> dict; `format_json_report(dict)` ->
+cut_file=None, program_file=None, pictures=None, decimal_comma=False)` -> dict; `format_json_report(dict)` ->
 str. Written by `run --json-report`. Adds what the XML cannot carry: per-case
 `.cut` line numbers and tags (from the parsed `MockTestSuite`), per-failure
 attribution (`kind` expect/verify/unknown, the failing directive's `.cut`
@@ -215,7 +215,16 @@ first matched against each directive's exact rendered head
 itself contain `", got "`; only a reason no directive renders to falls
 back to splitting on the LAST `", got "`; `actual` is only `rstrip()`ped
 (#335) -- its leading spaces belong to the value, so a JUSTIFIED RIGHT
-or right-aligned edited field's whole difference stays visible), and a synthesized `"not_run"` entry for every selected case the
+or right-aligned edited field's whole difference stays visible; with
+`pictures` -- `run` passes `record_rewrite.field_pictures` -- a plain
+numeric field's `actual` is the value it holds, rendered by
+`record_rewrite.display_numeric_value`: implied decimal point, sign and
+`P` scaling applied, leading zeros dropped (`0001234-` in a `S9(5)V99` is
+`-12.34`, `123` in a `9(3)PP` is `12300`; GnuCOBOL 3.1's zero-padded `P`
+image `00123` too), with the raw image under `actualRaw` and the
+`message` reading `got -12.34 (displayed as 0001234-)`; the console
+listing gets the same text through `json_report.readable_suite`; an
+alphanumeric or edited field's `actual` is as displayed, #374), and a synthesized `"not_run"` entry for every selected case the
 binary never printed a START marker for. An EXPECT failure head is split
 into name/operator/expected by `_EXPECT_HEAD_RE` (the operator is one of
 `model.EXPECT_OPERATORS`, echoed verbatim by the driver's FAIL line;
