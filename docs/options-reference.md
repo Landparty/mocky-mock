@@ -905,6 +905,13 @@ TESTCASE "region lookup" USING PROVIDER StateCodes
 This expands into three ordinary test cases, named
 `"region lookup [row 1: NY]"`, etc.
 
+A placeholder inside a quoted literal gets the row value's text without
+its quotes, so `"{State}"` is `"NY"` whether the row says `"NY"` or `NY`,
+and a value can be embedded in a longer literal: `EXPECT WS-MSG TO BE
+"Region: {ExpectedRegion}"`. A placeholder outside quotes gets the row
+value exactly as written (`MOVE {State}` needs `ROW "NY"`, or a number or
+data-name).
+
 A comma between two digits is read as a decimal comma, not a separator,
 for programs with `DECIMAL-POINT IS COMMA`: `ROW 100,5, 125,62` has two
 values. Separate values with a comma and a space. `PROVIDER` must be declared before any
