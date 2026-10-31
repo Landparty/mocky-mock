@@ -32,6 +32,11 @@ _MOCK_RE = re.compile(r"^__MOCKYMOCK__ MOCK: (?P<label>.+)$")
 _RECORD_RE = re.compile(
     rf"^__MOCKYMOCK__ RECORD (?P<id>\S+) (?P<name>{_SUBSCRIPTED_NAME}): (?P<value>.*)$"
 )
+# Emitted instead of a RECORD marker for a CAPTURE target whose mocked
+# CALL never ran in the case (issue #384): recorded as a None value.
+_UNREACHED_RE = re.compile(
+    rf"^__MOCKYMOCK__ UNREACHED (?P<id>\S+) (?P<name>{_SUBSCRIPTED_NAME})$"
+)
 _SUMMARY_RE = re.compile(
     r"^__MOCKYMOCK__ SUMMARY: RUN=(?P<run>\d+) FAILURES=(?P<failures>\d+)$"
 )
@@ -46,8 +51,9 @@ class TestResult:
     #: Mock labels in firing order. Only populated by a --trace run.
     mock_hits: list[str] = field(default_factory=list)
     #: (data-name, raw displayed value) pairs. Only populated by a
-    #: --record-expectations run.
-    recorded: list[tuple[str, str]] = field(default_factory=list)
+    #: --record-expectations run. The value is None for a CAPTURE target
+    #: whose mocked CALL never ran in the case (an UNREACHED marker).
+    recorded: list[tuple[str, str | None]] = field(default_factory=list)
 
     @property
     def crashed(self) -> bool:
@@ -209,6 +215,10 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
                     (m.group("id"), m.group("name"), m.group("value"))
                 )
                 pending = (suite.orphan_records, len(suite.orphan_records) - 1)
+        elif (m := _UNREACHED_RE.match(line)) is not None:
+            target = by_id.get(m.group("id"))
+            if target is not None:
+                target.recorded.append((m.group("name"), None))
         elif (m := _SUMMARY_RE.match(line)) is not None:
             suite.tests_run = int(m.group("run"))
             suite.failures = int(m.group("failures"))

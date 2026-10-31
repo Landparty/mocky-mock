@@ -412,7 +412,14 @@ it replaces a provider-bound `TESTCASE` with one ordinary `MockTestCase`
 per row, substituting `{ColumnName}` tokens (`_PLACEHOLDER_RE`) into that
 case's `MOVE` and `EXPECT` values only -- `MOCK` bodies, `MOVE` targets,
 `EXPECT` data-names, `PERFORM` target/thru, and `VERIFY` stay untouched
-and identical across every row. A `{Column}` token naming one of the
+and identical across every row. A token outside a literal (`MOVE {State}`)
+gets the raw row text, quotes and all; a token inside a quoted literal
+(`MOVE "{State}"`, `TO BE "State: {Name}"`, `_quoted_spans`) gets the row
+value's content -- a quoted row's quotes dropped and its doubled quotes
+undone (`_literal_content`), the template literal's own quote doubled --
+so `ROW "NY"` and `ROW NY` give the same literal and `ROW "O'Hare, IL"`
+can sit inside `"..."` (issue #376; a quoted placeholder with a quoted row
+used to become `""NY""`, which lint passed and cobc rejected). A `{Column}` token naming one of the
 bound provider's own columns inside a `MOCK` body is a `CutParseError`
 at that line (`_reject_mock_body_placeholder`; `*>` comment lines are
 exempt) -- left verbatim it linted clean and failed cobc on

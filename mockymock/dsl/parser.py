@@ -692,14 +692,53 @@ def _reject_name_placeholder(
             )
 
 
+def _literal_content(raw: str) -> str:
+    """A row value as text to put inside a literal: a quoted value's
+    content with its doubled quotes undone (`"O""K"` -> `O"K`), anything
+    else as written."""
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        return raw[1:-1].replace(raw[0] * 2, raw[0])
+    return raw
+
+
+def _quoted_spans(text: str) -> list[tuple[str | None, str]]:
+    """`text` cut into (quote, segment) pieces: quote is `"` or `'` for the
+    inside of a literal (a doubled quote inside stays in it), None for the
+    text between literals."""
+    pieces: list[tuple[str | None, str]] = []
+    quote: str | None = None
+    start = index = 0
+    while index < len(text):
+        char = text[index]
+        if quote is None and char in "'\"":
+            pieces.append((None, text[start : index + 1]))
+            quote, start = char, index + 1
+        elif quote is not None and char == quote:
+            if text[index + 1 : index + 2] == quote:
+                index += 2  # a doubled quote is part of the literal
+                continue
+            pieces.append((quote, text[start:index]))
+            pieces.append((None, char))
+            quote, start = None, index + 1
+        index += 1
+    pieces.append((quote, text[start:]))
+    return pieces
+
+
 def _substitute(
     text: str, provider: DataProvider, row: list[str], case_name: str, line_no: int
 ) -> str:
-    """Replace every `{ColumnName}` token in `text` with that column's raw
-    row value. An unknown column is a CutParseError, not a silent no-op --
-    same fail-closed convention as the rest of this parser."""
+    """Replace every `{ColumnName}` token in `text` with that column's row
+    value. An unknown column is a CutParseError, not a silent no-op --
+    same fail-closed convention as the rest of this parser.
 
-    def repl(match: re.Match[str]) -> str:
+    Outside a literal the raw row text goes in, quotes and all (`MOVE
+    {State}` with `ROW "NY"` is `MOVE "NY"`). Inside one (`MOVE "{State}"`,
+    `TO BE "State: {Name}"`) the row value's content goes in, its quotes
+    dropped and the template literal's quote doubled, so a quoted and an
+    unquoted ROW give the same literal (issue #376)."""
+
+    def value_of(match: re.Match[str]) -> str:
         column = match.group(1)
         if column not in provider.header:
             raise CutParseError(
@@ -709,7 +748,17 @@ def _substitute(
             )
         return row[provider.header.index(column)]
 
-    return _PLACEHOLDER_RE.sub(repl, text)
+    out: list[str] = []
+    for quote, segment in _quoted_spans(text):
+        if quote is None:
+            out.append(_PLACEHOLDER_RE.sub(value_of, segment))
+        else:
+
+            def in_literal(match: re.Match[str], q: str = quote) -> str:
+                return _literal_content(value_of(match)).replace(q, q * 2)
+
+            out.append(_PLACEHOLDER_RE.sub(in_literal, segment))
+    return "".join(out)
 
 
 def _display_value(raw: str) -> str:

@@ -744,3 +744,25 @@ def test_fail_reason_containing_a_raw_newline_is_truncated_at_the_newline():
     suite = parse_stdout(stdout)
     assert suite.results[0].failure_reasons == ["expected 5, got 6"]
     assert suite.orphan_failures == []
+
+
+def test_format_console_escapes_terminal_control_characters():
+    """Issue #375: an ESC sequence held in a failing field cleared the
+    terminal; the console line shows it as \\xNN, tab is kept."""
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: e\x1bsuite\n"
+        "__MOCKYMOCK__ CASE 001 START: esc\x07case\n"
+        '__MOCKYMOCK__ CASE 001 FAIL: expected WS-F = "ABC", got '
+        "\x1b[2J\x1b[HABC\tx\x7f\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ CASE 999 FAIL: orphan \x00 reason\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=1\n"
+    )
+    suite = parse_stdout(stdout)
+    text = format_console(suite)
+    assert "\x1b" not in text and "\x07" not in text and "\x7f" not in text
+    assert "got \\x1b[2J\\x1b[HABC\tx\\x7f" in text
+    assert "TESTSUITE: e\\x1bsuite" in text
+    assert "[FAIL] esc\\x07case" in text
+    # The parsed result (what the JSON report is built from) keeps the bytes.
+    assert "\x1b[2J" in suite.results[0].failure_reasons[0]

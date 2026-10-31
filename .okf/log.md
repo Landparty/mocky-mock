@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-10-31 -- open-issue sweep
+
+* **#375** `format_console` escapes terminal control characters (C0 except tab, DEL) as `\xNN` in names and failure reasons (`_console_safe`); the JSON report keeps the value. Updated [report](report.md). Test: `tests/unit/test_report.py::test_format_console_escapes_terminal_control_characters`.
+
+* **#374** a failing numeric EXPECT reports the value the field holds: `record_rewrite.display_numeric_value` applies the implied point, sign and `P` scaling (both GnuCOBOL 3.2's stored-digits image and 3.1's zero-padded one); `build_json_report(pictures=, decimal_comma=)` renders `actual` and keeps `actualRaw`, and `run` prints the same through `json_report.readable_suite`. Updated [report](report.md). Tests: `tests/unit/test_expect_actual_rendering.py`.
+
+* **#376** a PROVIDER placeholder inside a quoted literal (`MOVE "{State}"`, `TO BE "State: {Name}"`) gets the row value's content, its quotes dropped and the template's quote doubled (`parser._quoted_spans`, `_literal_content`), so the options-reference example compiles and quoted and unquoted ROWs give the same literal; outside quotes the raw row text goes in as before. Updated [dsl](dsl.md) and `docs/options-reference.md`. Test: `tests/unit/test_provider_quoted_placeholders.py`.
+
+* **#384** A CAPTURE golden for a CALL the case never reaches is now skipped, not recorded. The driver wraps the record of each capture target in `IF tally = base` and DISPLAYs `__MOCKYMOCK__ UNREACHED <case> <name>` when the stub never ran, so `init`/`record` no longer pin the stub's initial value as if it were an argument passed (`splicer/driver.py`, `report/results.py`, `report/record_rewrite.py`).
+
 ## 2026-10-29 -- same-kind nesting in clause bodies; `clean` removes staged copybook copies
 
 A boundary whose clause body holds a statement of its own kind (`CALL ...

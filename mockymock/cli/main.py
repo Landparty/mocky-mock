@@ -1898,6 +1898,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         build_json_report,
         format_json_report,
         not_run_case_names,
+        readable_suite,
         risky_case_ids,
     )
     from mockymock.report.record_rewrite import (
@@ -2225,9 +2226,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Under --record-expectations the run exists to fill in the missing
     # assertions, so labelling its cases risky would only be noise.
     risky = [] if stub_scan is not None else risky_case_ids(suite_result, suite)
+    # A numeric EXPECT's "got" is the field's raw DISPLAY image; the
+    # console and the JSON report show the value it holds (issue #374).
+    pictures = field_pictures(result.ast, checked.captures)
+    decimal_comma = decimal_point_is_comma(result.ast)
     print(
         format_console(
-            suite_result, crash_detail=crash_detail, not_run=not_run, risky=risky
+            readable_suite(suite_result, suite, pictures, decimal_comma),
+            crash_detail=crash_detail,
+            not_run=not_run,
+            risky=risky,
         )
     )
     if executed.stderr:
@@ -2240,7 +2248,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # "Never overwrite a hand-edited EXPECT" sections): every stub the
         # scanner found ends up in exactly one of recorded/skipped, and the
         # file is only ever touched when at least one stub was recorded.
-        pictures = field_pictures(result.ast, checked.captures)
         recording = build_recording_report(
             stub_scan,
             suite_result,
@@ -2260,7 +2267,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             cut_text,
             recording,
             pictures,
-            decimal_comma=decimal_point_is_comma(result.ast),
+            decimal_comma=decimal_comma,
         )
         if rewritten is not None:
             cut_path.write_text(rewritten, encoding="utf-8", newline="")
@@ -2293,6 +2300,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             crash_detail=crash_detail,
             cut_file=str(cut_path),
             program_file=str(source_path),
+            pictures=pictures,
+            decimal_comma=decimal_comma,
         )
     )
     if args.json_report:
