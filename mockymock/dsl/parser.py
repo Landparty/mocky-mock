@@ -753,12 +753,11 @@ def _substitute(
         if quote is None:
             out.append(_PLACEHOLDER_RE.sub(value_of, segment))
         else:
-            out.append(
-                _PLACEHOLDER_RE.sub(
-                    lambda m, q=quote: _literal_content(value_of(m)).replace(q, q * 2),
-                    segment,
-                )
-            )
+
+            def in_literal(match: re.Match[str], q: str = quote) -> str:
+                return _literal_content(value_of(match)).replace(q, q * 2)
+
+            out.append(_PLACEHOLDER_RE.sub(in_literal, segment))
     return "".join(out)
 
 
