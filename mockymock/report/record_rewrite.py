@@ -271,7 +271,7 @@ def build_recording_report(
     of 1-based case index and uppercased item name): today's date or time
     recorded as a golden fails on a later run.
     """
-    recorded_by_case: dict[str, dict[str, list[str]]] = {}
+    recorded_by_case: dict[str, dict[str, list[str | None]]] = {}
     for result in suite_result.results:
         queues = recorded_by_case.setdefault(result.case_id, {})
         for name, value in result.recorded:
@@ -300,6 +300,16 @@ def build_recording_report(
             report.skipped.append(SkippedStub(stub.line, stub.data_name, reason))
             continue
         value = queue.pop(0)
+        if value is None:
+            report.skipped.append(
+                SkippedStub(
+                    stub.line,
+                    stub.data_name,
+                    "the CALL it captures was not reached in this case, so it "
+                    "still holds its initial value, not an argument passed",
+                )
+            )
+            continue
         base_name = _leaf_name(stub.data_name)
         clock_source = (clock_fields or {}).get(base_name)
         if clock_source is not None and (
