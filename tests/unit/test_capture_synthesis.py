@@ -271,6 +271,7 @@ _TWO_SITES = """\
        01  WS-NAME            PIC X(5).
        01  WS-QTY             PIC 9(3).
        01  WS-OTHER           PIC 9(3).
+       01  WS-WIDE            PIC 9(5).
 
        PROCEDURE DIVISION.
        MAIN-PARA.
@@ -297,9 +298,17 @@ def test_a_key_with_several_agreeing_call_sites_is_still_captured():
 
 
 def test_only_the_argument_the_sites_disagree_on_is_left_uncaptured():
-    text = _scaffold(_TWO_SITES.format(second="WS-OTHER"))
+    text = _scaffold(_TWO_SITES.format(second="WS-WIDE"))
     assert "CAPTURE ARG 1 INTO UT-CAP-SUB-1" in text
     assert "CAPTURE ARG 2" not in text
+
+
+def test_different_items_of_one_layout_are_captured_into_one_field():
+    """WS-QTY and WS-OTHER are both PIC 9(3): one synthesized field mirrors
+    either, so the sites agree (an IMS program's DLI-GU and DLI-ISRT
+    function codes through one CBLTDLI mock are the motivating case)."""
+    text = _scaffold(_TWO_SITES.format(second="WS-OTHER"))
+    assert "CAPTURE ARG 2 INTO UT-CAP-SUB-2" in text
 
 
 def test_an_argument_a_site_does_not_pass_is_left_uncaptured():
@@ -412,3 +421,30 @@ def test_generate_does_not_scaffold_a_capture_the_splicer_refuses():
     program, surface, context = _context_and_surface(source)
     _, unresolved = plan_captures(program, parse_cut(text), surface, context.lines)
     assert unresolved == []
+
+
+def _two_site_plans(second: str):
+    program, surface, _ = _context_and_surface(_TWO_SITES.format(second=second))
+    suite = parse_cut(
+        'TESTSUITE "s"\n'
+        "\n"
+        'TESTCASE "c"\n'
+        '    MOCK CALL "SUB"\n'
+        "        CAPTURE ARG 2 INTO UT-CAP-SUB-2\n"
+        "    END-MOCK\n"
+        "    PERFORM MAIN-PARA\n"
+    )
+    return plan_captures(program, suite, surface)
+
+
+def test_the_splicer_synthesizes_one_field_for_items_of_one_layout():
+    plans, unresolved = _two_site_plans("WS-OTHER")
+    assert unresolved == []
+    assert capture_working_storage_lines(plans) == ["01  UT-CAP-SUB-2  PIC 9(3)."]
+
+
+def test_the_splicer_still_refuses_items_of_different_layouts():
+    plans, unresolved = _two_site_plans("WS-WIDE")
+    assert plans == []
+    assert len(unresolved) == 1
+    assert "names different items at different call sites" in unresolved[0]

@@ -224,6 +224,28 @@ def _site_argument(site, arg_index: int, lines, boundaries) -> tuple[str, str] |
     return ("item", name.upper())
 
 
+def _shared_item_declaration(
+    target: str, arguments: set[tuple[str, str]], index: dict[str, dict]
+) -> tuple[str, str] | None:
+    """`(declaration, reset_line)` for a capture whose matching CALL sites
+    pass DIFFERENT data items at that position, when one synthesized field
+    mirrors every one of them: all are uniquely-named items whose layouts
+    give the same declaration (an IMS program's `DLI-GU` and `DLI-ISRT`
+    function codes, both PIC X(4), through one `MOCK CALL "CBLTDLI"`).
+    None for a single argument (the ordinary path handles it), a literal,
+    or layouts that differ."""
+    if len(arguments) < 2 or any(kind != "item" for kind, _ in arguments):
+        return None
+    declarations = set()
+    for _, name in arguments:
+        item = index.get(name)
+        built = _declaration_for(target, item) if item is not None else None
+        if built is None:
+            return None
+        declarations.add(built)
+    return next(iter(declarations)) if len(declarations) == 1 else None
+
+
 def plan_captures(
     program, suite: MockTestSuite, surface, lines: list[str] | None = None
 ) -> tuple[list[CapturePlan], list[str]]:
@@ -237,7 +259,8 @@ def plan_captures(
     mirrors the item the generated MOVE will read.
 
     A directive matching several physical CALL sites whose argument `n`
-    names DIFFERENT items is unresolved, not guessed: one synthesized field
+    names DIFFERENT items is unresolved, not guessed, unless their layouts
+    are the same (`_shared_item_declaration`): one synthesized field
     cannot mirror two layouts, and picking either silently would make the
     capture wrong at one of the sites.
 
@@ -273,6 +296,26 @@ def plan_captures(
                     if argument is not None
                 }
                 source_names = {text for _, text in arguments}
+                shared = _shared_item_declaration(target, arguments, index)
+                if shared is not None:
+                    declaration, reset_line = shared
+                    existing = plans.get(target)
+                    if existing is not None:
+                        if existing.declaration != declaration:
+                            unresolved.append(
+                                f"{target} is captured from both "
+                                f"{existing.source_name} and "
+                                f"{', '.join(sorted(source_names))}, whose "
+                                f"layouts differ"
+                            )
+                        continue
+                    plans[target] = CapturePlan(
+                        target=target,
+                        source_name=", ".join(sorted(source_names)),
+                        declaration=declaration,
+                        reset_line=reset_line,
+                    )
+                    continue
                 if len(arguments) != 1:
                     unresolved.append(
                         f"CAPTURE ARG {arg_index} INTO {target} in MOCK "

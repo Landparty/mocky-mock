@@ -5,6 +5,21 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-01 -- IMS MPP scaffolds end their GU loop; imsmod example
+
+* `generate` no longer hangs an IMS MPP: a GU through the I/O PCB ends with
+  `QC` (`_is_message_pcb`), and a CBLTDLI key whose sites need different
+  end replies (GU loop plus ISRT) gates the reply on the captured function
+  code (`_dli_end_lines_by_function`) instead of leaving a TODO
+  ([dsl](dsl.md)).
+* Captures: different items at one argument position share a synthesized
+  field when their layouts give the same declaration
+  (`captures._shared_item_declaration`, and the generator's matching
+  check); different layouts still fail closed ([splicer](splicer.md)).
+* `examples/imsmod/`: PRTINQ (IMS MPP) with real PRTSTK (DB2) and PRTRATE
+  (rate file). Integration tests: the example passes, a LINKAGE mismatch
+  fails it, and the generated suite runs to the end.
+
 ## 2026-11-01 -- ordmod example; MQ placeholders answer CompCode
 
 * `examples/ordmod/`: a batch load module end to end (ORDMAIN with three real
