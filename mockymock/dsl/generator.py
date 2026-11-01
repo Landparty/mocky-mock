@@ -1378,8 +1378,12 @@ def _directive_for(
             # unmocked site loudly (2026-08-12 audit Finding 20).
             return None
         keyword = "MQ" if site.is_mq else "CALL"
+        # A bundle-less MQI placeholder answers the call's own CompCode and
+        # Reason (its last two USING arguments), as the data-driven path
+        # does: RETURN-CODE alone left a program's `IF WS-COMPCODE = 0`
+        # test reading whatever the field held before the call.
         body = _dli_success_reply(
-            _placeholder_body_for(category, key), site
+            _mq_success_reply(_placeholder_body_for(category, key), site), site
         ) + _call_loop_end_lines(site, context, None)
         return f'MOCK {keyword} "{key}"', _with_captures(category, key, body, context)
 

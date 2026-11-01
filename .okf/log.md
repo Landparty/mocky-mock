@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-01 -- ordmod example; MQ placeholders answer CompCode
+
+* `examples/ordmod/`: a batch load module end to end (ORDMAIN with three real
+  subprograms: DB2 in two, MQ in one, a log file in the one another real
+  subprogram CALLs). Integration tests: the example passes, and an inverted
+  limit test in the nested subprogram fails it.
+* `directive_snippet`'s MQ placeholder answers the call's CompCode and
+  Reason (`_mq_success_reply`), as the data-driven path already did
+  (`dsl.md`).
+
 ## 2026-11-01 -- `USE REAL CALL`: load-module suites
 
 Phase 1 of the integration-testing direction: `USE REAL CALL "X" FROM

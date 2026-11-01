@@ -119,3 +119,45 @@ def test_generate_real_writes_a_suite_that_runs(tmp_path: Path, capsys):
     capsys.readouterr()
     exit_code = main(["run", str(tmp_path / "PAYMAIN.cbl"), "--cut", str(cut)])
     assert exit_code == 0, capsys.readouterr().out
+
+
+ORDMOD_DIR = Path(__file__).parent.parent.parent / "examples" / "ordmod"
+
+
+def _run_ordmod(directory: Path, capsys) -> tuple[int, str]:
+    exit_code = main(
+        [
+            "run",
+            str(directory / "ORDMAIN.cbl"),
+            "--cut",
+            str(directory / "ORDMAIN.cut"),
+            "--copybook-path",
+            str(directory),
+        ]
+    )
+    return exit_code, capsys.readouterr().out
+
+
+@requires_docker
+def test_committed_ordmod_example_passes(capsys):
+    """Three real subprograms, two of them with DB2, MQ and a file of their
+    own, one CALLed by another real subprogram."""
+    exit_code, out = _run_ordmod(ORDMOD_DIR, capsys)
+    assert exit_code == 0, out
+    assert "3 run, 0 failed" in out
+
+
+@requires_docker
+def test_ordmod_catches_a_logic_change_in_a_nested_subprogram(tmp_path: Path, capsys):
+    for source in ORDMOD_DIR.iterdir():
+        if source.is_file():
+            (tmp_path / source.name).write_text(source.read_text())
+    validate = tmp_path / "ORDVAL.cbl"
+    validate.write_text(
+        validate.read_text().replace(
+            "WHEN LK-AMOUNT > WS-LIMIT", "WHEN LK-AMOUNT < WS-LIMIT"
+        )
+    )
+    exit_code, out = _run_ordmod(tmp_path, capsys)
+    assert exit_code == 1
+    assert "expected WS-ACCEPTED = 2, got 1" in out
