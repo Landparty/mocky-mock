@@ -538,6 +538,27 @@ the `.mockymock/` folders' reports and saved results, plus report files
 the older layout left next to programs. Journals are the assistant's own
 record and are kept unless `--all`. `--dry-run` lists without removing.
 
+## `mockymock runner`
+
+```bash
+LEGACYLENS_URL=http://backend:9999 RUNNER_TOKEN=... mockymock runner [--once]
+```
+
+Not for interactive use: the LegacyLens change-impact oracle worker. It
+claims baseline and compare jobs from the backend, runs each load module's
+suites with `run --record-baseline` / `--baseline`, and posts the results.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--url URL` | `$LEGACYLENS_URL` | Backend base URL. |
+| `--token-env VAR` | `RUNNER_TOKEN` | Environment variable holding the runner token. |
+| `--name NAME` | `mockymock@HOST` | Runner name the backend records. |
+| `--once` | off | Run the queued jobs, then exit. |
+| `--poll-interval S` | 10 | Seconds between claims when the queue is empty. |
+| `--suite-timeout S` | 900 | Seconds one `generate` or `run` may take. |
+| `--work-dir DIR` | temp folder | Where jobs are unpacked. |
+| `--keep` | off | Keep each job's unpacked folder. |
+
 ## `mockymock skills install`
 
 ```bash
@@ -611,6 +632,7 @@ mode plus every mode's contract.
 | `analyze` | no | *(forwarded to cobol-parser)* |
 | `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
 | `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
+| `runner` | yes (native GnuCOBOL) | `--url`, `--token-env`, `--name`, `--once`, `--poll-interval`, `--suite-timeout`, `--work-dir`, `--keep` |
 | `skills install` | no | `--project`, `--force`, `--skill` |
 | `skills plugin` | no | `--force` |
 | `skills mode` | no | `--set`, `--json` |

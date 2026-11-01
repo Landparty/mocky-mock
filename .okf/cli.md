@@ -1,7 +1,7 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean, runner) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
 timestamp: 2026-10-26T00:00:00Z
 ---
@@ -10,7 +10,7 @@ timestamp: 2026-10-26T00:00:00Z
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
 `--version` from `mockymock.__version__`). It defines eighteen subcommands —
-`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `suites`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal`, `clean` — each wired via `set_defaults(func=...)` and
+`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `suites`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal`, `clean`, `runner` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -38,6 +38,7 @@ mockymock skills    -> skills_cmd (install: no Docker, no parsing -- a copytree)
 mockymock report    -> report.test_report.build_report (parse + cobolparser analyzers + cli.checks; --execute/--mutate re-invoke run/mutate as subprocesses) -> report.html_report
 mockymock journal   -> report.journal.append_entry only  (no Docker, no parsing)
 mockymock clean     -> report.artifacts (removes .mockymock/ reports and saved results)
+mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle jobs, runs `run --record-baseline/--baseline` per suite as child processes)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -1736,3 +1737,34 @@ restores `choices=` also restores the import.
 - [dsl](dsl.md)
 - [coverage](coverage.md)
 - [dashboard](dashboard.md)
+
+## `mockymock runner` (LegacyLens change-impact oracle worker)
+
+`_cmd_runner` -> `mockymock/runner/`:
+
+* `runner/client.py` — `RunnerClient` (stdlib `urllib`): `claim(name)`
+  (`POST /api/v1/runner/jobs/claim`, `None` on 204), `download_pack(job)`,
+  `report(job_id, payload)`. Header `X-Runner-Token`; HTTP errors raise
+  `RunnerClientError` with `.status`.
+* `runner/jobs.py` — `extract_pack` (refuses entries leaving the folder,
+  symlinks, packs over 200 MB; returns the folder holding `oracle.json`),
+  `load_manifest` (version 1, kind `baseline`/`compare`), `run_suite`,
+  `run_pack`, `run_job` (unpack in a temp folder, a broken pack becomes the
+  job's `error`), `serve` (claim / run / report loop; retries an
+  unreachable backend, stops on 401/503, `--once` returns when the queue
+  is empty).
+* Each suite: when the pack has no `.cut` (a first baseline), the
+  manifest's `generate` command is run — only `mockymock generate PROGRAM
+  [--real PATH]...`, every path checked to stay inside the pack — with
+  `-o CUT --force --copybook-path`. Then `run PROGRAM --cut CUT
+  --copybook-path` with `--record-baseline .oracle-results/E.json`
+  (baseline) or `--baseline FILE --baseline-json .oracle-results/E.json`
+  (compare). Both are child processes (`python -m mockymock`, new
+  `mockymock/__main__.py`) with `--suite-timeout`. A compare suite without
+  a baseline or without its frozen `.cut` is an `error`, not a run.
+* The result payload per suite: `entry`, `cut_path`, `cut_text` (the `.cut`
+  it ran, which the backend freezes), `exit_code`, `log` (last 20,000
+  chars), and `baseline` / `comparison` / `error`.
+* Container: `docker/runner/Dockerfile` (debian trixie GnuCOBOL 3.2, native
+  toolchain through a linked tree at `/opt/gnucobol`, non-root user,
+  entrypoint `mockymock runner`). Design: docs/2026-11-01-runner-design.md.

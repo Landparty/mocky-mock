@@ -576,6 +576,27 @@ made of copybooks whose file names do not match their member names (see
 `copybook_path`. Journals are the assistant's own record and are kept
 unless `--all`. `--dry-run` lists without removing.
 
+### `mockymock runner`
+
+```bash
+LEGACYLENS_URL=http://backend:9999 RUNNER_TOKEN=... mockymock runner [--once]
+    [--name NAME] [--token-env VAR] [--poll-interval S] [--suite-timeout S]
+    [--work-dir DIR] [--keep]
+```
+
+The worker of the LegacyLens change-impact oracle
+([design](2026-11-01-runner-design.md)). It claims a baseline or compare
+job from the backend's runner API (`/api/v1/runner`, header
+`X-Runner-Token` from `$RUNNER_TOKEN` or `--token-env`), unpacks the job's
+pack, runs every suite listed in its `oracle.json` (scaffolding the `.cut`
+with `mockymock generate` when the pack has none), and posts the baselines
+or comparisons back. `--once` stops when the queue is empty; otherwise it
+asks again every `--poll-interval` seconds (default 10). Each `generate`
+and `run` is a child process limited to `--suite-timeout` seconds (default
+900). An unreachable backend is retried; a refused token (401) or a
+backend with the runner API off (503) stops it with exit 1. The container
+image is `docker/runner/Dockerfile` (GnuCOBOL 3.2, native toolchain).
+
 ### `mockymock skills install`
 
 ```bash
