@@ -24,7 +24,7 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 
 # stdout Protocol
 
-`parse_stdout` matches seven line shapes via regex, one case per marker kind:
+`parse_stdout` matches ten line shapes via regex, one case per marker kind:
 
 | Marker | Regex group(s) | Effect |
 |---|---|---|
@@ -35,6 +35,9 @@ results.parse_stdout()  ──► TestSuiteResult { results: [TestResult], tests
 | `__MOCKYMOCK__ SUMMARY: RUN=<n> FAILURES=<n>` | `run`, `failures` | sets `suite.tests_run` / `suite.failures` |
 | `__MOCKYMOCK__ MOCK: <label>` | `label` | appends to the `TestResult.mock_hits` of the case that is open (START seen, END not yet); a MOCK: between cases (BEFORE-ALL/AFTER-ALL) belongs to no case and is dropped (#334). **Trace mode only** — emitted by the splicer's mock dispatch blocks when `run --trace` is used |
 | `__MOCKYMOCK__ RECORD <id> <name>: <value>` | `id`, `name`, `value` | appends `(name, value)` to the matching `TestResult.recorded` (looked up by id, same as FAIL/END — **not** positional like `MOCK:`); an unknown id is recorded in `suite.orphan_records` as `(id, name, value)` rather than dropped. **`--record-expectations` mode only** — emitted by `splicer.driver.build_driver`'s `record_targets` addition (2026-08-04) |
+| `__MOCKYMOCK__ EVENT: <label> <key>` | `label` | appends a `BehaviourEvent` to the open case's `TestResult.events` (positional, like `MOCK:`). **Baseline mode only** (`run --record-baseline` / `--baseline`), emitted by `splicer.behaviour.site_lines` in every mocked branch |
+| `__MOCKYMOCK__ DATA: <hex>[+]` or `DATA: -` | `hex` | appends the hex of one value the boundary was sent to the open case's last event (`-` = not a data item, trailing `+` = cut at 32,768 bytes). Printed by the generated `UTHEXDMP` program. Baseline mode only |
+| `__MOCKYMOCK__ RC <id>: <value>` | `id`, `rc` | sets the matching `TestResult.return_code`, printed just before the case's END. Baseline mode only |
 
 The `MOCK` marker is the one shape carrying no case id: it is attributed
 positionally, to the case whose `START` most recently printed. That is
@@ -169,6 +172,22 @@ case unfinished: it embeds the same STOP RUN hypothesis and adds the other
 clean-exit cause, a GO TO out of the PERFORMed range (e.g. into another
 paragraph of a SECTION, which the GO-TO-exit rewrite does not cover), so
 the console line and the JSON `crashDetail` are never blank/null there.
+
+## Behaviour baselines (`report/baseline.py`) (2026-11-01)
+
+`run --record-baseline FILE` writes `build_baseline(suite_result, inputs,
+version)`: per case its name, status, `return_code`, `events` (label +
+hex values) and `output`, plus the SHA-256 of the `.cut`, the program and
+each real program under `inputs`. Lines of the program's own stdout seen
+while a case is open (not a marker, not a pending raw value) go to
+`TestResult.output`. `run --baseline FILE` reads it with `load_baseline`
+(`BaselineError` on a bad file, exit 2) and `compare()` matches cases by
+name: `same` / `differs` / `new` / `not-run`. `compare_case` reports the
+first differing event (which value, with the text when both are printable
+ASCII), the first differing output line, and RETURN-CODE or status changes.
+Only `differs` fails the run (`BaselineComparison.matches`).
+`format_comparison` is the console text, `to_dict()` the `--baseline-json`.
+Design: docs/2026-11-01-baseline-design.md.
 
 ## Bug-hunt corrections (2026-10-05)
 

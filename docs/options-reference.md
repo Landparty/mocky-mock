@@ -242,6 +242,9 @@ This is the only subcommand other than `setup` that requires Docker.
 | `--trace` | off | Replay one test case's execution: the statement path it actually took through the program, plus the mock timeline, in order. **Requires exactly one `--case` and no `--tag`** — a suite compiles and runs as a single binary, so a trace can only be attributed to one selected case. |
 | `--trace-json PATH` | none | Write a machine-readable execution trace to a file. Implies `--trace` (and the same one-case requirement). |
 | `--record-expectations` | off | Golden/characterization mode. For every `*> STUB EXPECT <name>` comment in the `.cut` file (see below), capture the value the program actually produced at runtime and rewrite that line into a real `EXPECT <name> TO BE <value>` line, in place. Never overwrites a hand-written `EXPECT`. Best-effort: prints a `recorded N, skipped M` summary and never changes the run's exit code. |
+| `--record-baseline FILE` | none | Behaviour baseline. Record what every case sends out of the program to FILE (JSON): each mocked boundary it reaches, in order, with the bytes of every value passed to it (CALL arguments, records written, SQL host variables, CICS FROM/COMMAREA), plus the program's own DISPLAY output and the RETURN-CODE the case ended with. USE REAL CALLs are not recorded: they stay inside the load module. See [the design](2026-11-01-baseline-design.md). |
+| `--baseline FILE` | none | Run the suite the same way and compare each case (matched by name) with the baseline: `SAME`, `DIFFERS` (with the first difference), `NEW` or `NOT RUN`. Exits 1 when any case differs, even if every `EXPECT` passed. Says which input files (`.cut`, program, real programs) changed since the baseline. |
+| `--baseline-json FILE` | none | Write the `--baseline` comparison as JSON. |
 
 Examples:
 
@@ -268,6 +271,10 @@ mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --verbose --keep-sandbox
 
 # Fill in every "*> STUB EXPECT" placeholder with real captured values
 mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --record-expectations
+
+# Record a behaviour baseline, then check a changed program against it
+mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --record-baseline baseline/ORDRPROC.json
+mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --baseline baseline/ORDRPROC.json
 ```
 
 `run` exits 0 only if every selected test case passed *and* the compiled
@@ -981,7 +988,7 @@ variables like `DOCKER_HOST`, but mockymock never reads or forwards them.)
 | `setup` | yes | *(none)* |
 | `generate` | no | `-o`, `--copybook-path`, `--with-data`, `--per-paragraph`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder` |
 | `fixtures` | no | `--scenarios`, `--seed`, `--rows`, `--copybook-path` |
-| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json]`, `--coverage-fail-under`, `--trace[-json]`, `--record-expectations` |
+| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json]`, `--coverage-fail-under`, `--trace[-json]`, `--record-expectations`, `--record-baseline`, `--baseline[-json]` |
 | `debug` | yes | `--cut`, `--case`, `--copybook-path`, `--dap-stdio` |
 | `lint` | no | `--cut`, `--copybook-path` |
 | `mutate` | yes (unless `--list`) | `--cut`, `--copybook-path`, `--list`, `--timeout`, `--json-report`, `--fail-under` |

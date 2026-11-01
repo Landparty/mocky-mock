@@ -5,6 +5,18 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-01 -- behaviour baselines (`run --record-baseline` / `--baseline`)
+
+* New `splicer/behaviour.py`: in baseline mode every mocked boundary prints
+  an EVENT marker and the hex of each value it was sent (via the generated
+  `UTHEXDMP` helper); the driver prints each case's RETURN-CODE
+  ([splicer](splicer.md)).
+* `report/results.py` parses EVENT/DATA/RC and keeps each case's own
+  DISPLAY output; new `report/baseline.py` writes, reads and compares
+  baselines ([report](report.md)).
+* `run --record-baseline FILE`, `--baseline FILE`, `--baseline-json FILE`
+  ([cli](cli.md)); design docs/2026-11-01-baseline-design.md.
+
 ## 2026-11-01 -- IMS MPP scaffolds end their GU loop; imsmod example
 
 * `generate` no longer hangs an IMS MPP: a GU through the I/O PCB ends with

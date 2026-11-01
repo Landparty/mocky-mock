@@ -562,10 +562,17 @@ Flow (`_cmd_fixtures`):
    to stderr as `mockymock fixtures: <exc>`, exit 1.
 5. `print(bundle.to_json())` to stdout, exit 0.
 
-## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--coverage-fail-under PERCENT] [--trace] [--trace-json PATH] [--timeout S] [--record-expectations]`
+## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--coverage-fail-under PERCENT] [--trace] [--trace-json PATH] [--timeout S] [--record-expectations] [--record-baseline FILE] [--baseline FILE] [--baseline-json FILE]`
 
 The full pipeline: parse, analyze, refuse-or-splice, compile in Docker, run,
 report. This is the only subcommand requiring the GnuCOBOL container.
+
+`--record-baseline FILE` / `--baseline FILE` (2026-11-01) turn on behaviour
+instrumentation (`behaviour` in `_cmd_run`; see [splicer](splicer.md) and
+[report](report.md)): the hexdump helper is compiled in as an extra source,
+`_finish_baseline` writes the baseline and/or prints the comparison
+(`--baseline-json` writes it), and a differing case makes the run exit 1.
+A baseline file that cannot be read exits 2 before anything compiles.
 
 Since the lint extraction (docs/2026-07-18-cut-lint-command-design.md), every
 pre-toolchain check (steps 2-10 below) lives in

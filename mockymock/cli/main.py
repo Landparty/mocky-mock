@@ -2097,6 +2097,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # splice_program mutates nothing, but keep our own copy to be explicit.
     normalized_lines = list(lines)
 
+    # --record-baseline / --baseline: every mocked boundary reports what it
+    # was sent (splicer.behaviour, report.baseline). A baseline to compare
+    # with is read before anything compiles, so a bad path fails fast.
+    behaviour = bool(args.record_baseline or args.baseline)
+    baseline_document = None
+    if args.baseline:
+        from mockymock.report.baseline import BaselineError, load_baseline
+
+        try:
+            baseline_document = load_baseline(Path(args.baseline))
+        except BaselineError as exc:
+            print(f"mockymock run: --baseline: {exc}")
+            return 2
+
     boundaries = collect_boundaries(result.ast)
     registry = TallyRegistry(suite)
     terminator_plans, _ = find_terminator_plans(
@@ -2116,6 +2130,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         goto_exit_plans=goto_exit_plans,
         trace=args.trace,
         fallthrough_traps=checked.fallthrough_traps,
+        behaviour=behaviour,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
 
@@ -2168,6 +2183,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
         condition_names=record_conditions,
+        behaviour=behaviour,
     )
 
     real_sources: list[tuple[str, list[str]]] = []
@@ -2186,9 +2202,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
                         shared_ws,
                         args.copybook_path,
                         trace=args.trace,
+                        behaviour=behaviour,
                     ),
                 )
             )
+    if behaviour:
+        from mockymock.splicer.behaviour import HEXDUMP_PROGRAM, hexdump_program
+
+        real_sources.append((f"{HEXDUMP_PROGRAM.lower()}.cbl", hexdump_program()))
 
     instrumented = _insert_driver(lines, artifact)
 
@@ -2539,9 +2560,76 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "after the last case (a STOP RUN, GOBACK, or abend) stopped it "
             "before AFTER-ALL, so the run is not counted as passed"
         )
-    if coverage_gate_failed:
+    baseline_differs = False
+    if behaviour:
+        baseline_differs = _finish_baseline(
+            args, suite_result, cut_path, source_path, real_programs, baseline_document
+        )
+    if coverage_gate_failed or baseline_differs:
         return 1
     return 0 if suite_result.all_passed and executed.exit_code == 0 else 1
+
+
+def _baseline_inputs(
+    cut_path: Path, source_path: Path, real_programs
+) -> dict[str, str]:
+    """SHA-256 of every file a baseline depends on, by role."""
+    from mockymock.report.baseline import sha256_file
+
+    inputs = {"cut": sha256_file(cut_path), "program": sha256_file(source_path)}
+    for prepared in real_programs or ():
+        inputs[f"real:{prepared.program_id.upper()}"] = sha256_file(
+            Path(prepared.spec.source)
+        )
+    return inputs
+
+
+def _finish_baseline(
+    args: argparse.Namespace,
+    suite_result,
+    cut_path: Path,
+    source_path: Path,
+    real_programs,
+    baseline_document,
+) -> bool:
+    """Write the --record-baseline file and/or compare with --baseline.
+    True when the run's behaviour differs from the baseline."""
+    import json
+
+    from mockymock import __version__
+    from mockymock.report.baseline import (
+        build_baseline,
+        compare,
+        format_comparison,
+        write_baseline,
+    )
+
+    inputs = _baseline_inputs(cut_path, source_path, real_programs)
+    differs = False
+    if baseline_document is not None:
+        comparison = compare(baseline_document, suite_result, inputs)
+        print(format_comparison(comparison))
+        if args.baseline_json:
+            _write_report_file(
+                "run",
+                "--baseline-json",
+                args.baseline_json,
+                json.dumps(comparison.to_dict(), indent=2) + "\n",
+            )
+        differs = not comparison.matches
+    if args.record_baseline:
+        document = build_baseline(suite_result, inputs, __version__)
+        target = Path(args.record_baseline)
+        try:
+            write_baseline(target, document)
+        except OSError as exc:
+            print(f"mockymock run: --record-baseline: cannot write {target}: {exc}")
+            return True
+        print(
+            f"mockymock run: recorded a baseline of {len(document['cases'])} "
+            f"case(s) to {target}"
+        )
+    return differs
 
 
 def _cmd_debug(args: argparse.Namespace) -> int:
@@ -4568,6 +4656,31 @@ def build_parser() -> argparse.ArgumentParser:
             "was recorded. Does not change the run's exit code. See "
             "docs/2026-08-04-record-expectations-design.md"
         ),
+    )
+    run_parser.add_argument(
+        "--record-baseline",
+        metavar="FILE",
+        help=(
+            "Record what every case sends out of the program (each mocked "
+            "boundary in order, the bytes of every value passed to it, the "
+            "program's DISPLAY output and RETURN-CODE) to FILE, as the "
+            "baseline later runs are compared with. See "
+            "docs/2026-11-01-baseline-design.md"
+        ),
+    )
+    run_parser.add_argument(
+        "--baseline",
+        metavar="FILE",
+        help=(
+            "Compare this run's behaviour with a baseline recorded by "
+            "--record-baseline, case by case (by name). Exits 1 when any "
+            "case's behaviour differs, even if every EXPECT passed"
+        ),
+    )
+    run_parser.add_argument(
+        "--baseline-json",
+        metavar="FILE",
+        help="Write the --baseline comparison as JSON to FILE",
     )
     run_parser.set_defaults(func=_cmd_run)
 
