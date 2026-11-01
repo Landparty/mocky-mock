@@ -76,6 +76,8 @@ program-scoped: `--program NAME` picks one (default: the outermost).
 | Synthetic test rows from a layout | `gen-data X.cpy --rows N --seed N` |
 | Test fixtures for a whole program | `gen-fixtures FILE --scenarios all` |
 | What interface does this callee expose? | `program-signature FILE` |
+| Do the CALLs match their callees' USING lists? | `call-check PATH... [--format text]` |
+| What breaks if this field gets a bigger PICTURE? | `widen-check FIELD PATH... --to '9(9)'` |
 | Do host variables match the DCLGEN? | `dclgen-check FILE` |
 | SQLCODE/RESP unchecked, dynamic SQL | `sql-cics-check FILE` |
 | What changed between two versions? | `diff OLD.cbl NEW.cbl` |
@@ -89,9 +91,13 @@ separately. `scan` runs
 analyzers over many files **in one process**, with per-file fault isolation —
 prefer it to looping the CLI over a directory. It takes file paths, a
 `--glob PATTERN` (repeatable) or `--files-from LIST`, not a bare directory.
+With `--cache-dir DIR`, a rerun reuses the report of every file whose source
+and copybooks are unchanged.
 
 Every subcommand emits JSON by default (`--compact` to shrink, `-o FILE` to
 write). `lint --format text` emits `file:line:column: severity [rule] message`.
+`lint`, `call-check` and `scan` also take `--format sarif` (SARIF 2.1.0, for
+code-scanning tools).
 
 ## Reading the output honestly
 
@@ -109,11 +115,13 @@ this," and that distinction is the point. Before asserting anything:
 
 Exit codes are meaningful and differ by subcommand: `0` ran to completion
 (findings alone never change it), `1` could not read/parse/write, `2` bad
-arguments (or, for `parse`/`batch`, parse errors), `3` a gate fired
-(`lint --fail-on`, `jcl --strict`). Two exceptions: `compare` exits `1` when
-the files differ (`2` for trouble), and `field-impact` exits `1` when the
-start matches nothing (the report is still printed). Never read a non-zero
-exit as "no findings".
+arguments, or a file that was missing or failed to parse (`parse`, `batch`,
+`scan`, `codebase-graph`, `copybook-impact`, `call-check`: the report is still
+written, but incomplete), `3` a gate fired (`--fail-on` on `lint`,
+`call-check` or `widen-check`; `jcl --strict`). Two exceptions: `compare`
+exits `1` when the files differ (`2` for trouble), and `field-impact` and
+`widen-check` exit `1` when the field matches nothing (`field-impact` still
+prints the report). Never read a non-zero exit as "no findings".
 
 ## After editing COBOL
 
