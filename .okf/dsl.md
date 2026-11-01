@@ -320,8 +320,10 @@ never emitted one. The reserved prefix is what keeps it from being a
 footgun: a mistyped real data name never starts with `UT-CAP-`, so it can
 never silently become a new field. Fail-closed on everything else:
 `UNRESOLVED_CAPTURE_TARGET` (raised from `run_static_checks` step 9)
-refuses a synthesized target whose argument names different items at
-different matching call sites, whose layout cannot be mirrored (a table, a
+refuses a synthesized target whose argument names different items of
+different layouts at different matching call sites (items that all mirror
+to the same declaration, such as an IMS program's `DLI-GU` and `DLI-ISRT`,
+both `PIC X(4)`, share one field), whose layout cannot be mirrored (a table, a
 PICTURE-less COMP-1/POINTER item, a group holding non-DISPLAY data whose
 bytes an alphanumeric copy would render unreadable), or whose name the
 program already declares. A target WITHOUT the prefix is untouched — it
@@ -1297,9 +1299,18 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   GNP/GHNP -> GE, GN/GHN -> GB; the function code is read from the first
   argument's VALUE literal). The reply is gated on `IF <tally> > 1` when a
   tally is known, unconditional in the bundle-less scaffold, and its VERIFY
-  becomes 2 unless the row itself already moves the end status. One MOCK
-  answers every site of its key, so when the key's sites would need
-  different replies (a GN loop plus an ISRT through the same CBLTDLI) the
+  becomes 2 unless the row itself already moves the end status. A GU
+  through an I/O PCB ends with `QC` (no more messages) instead of `GE`:
+  `_is_message_pcb` takes a PCB for the I/O PCB when the program sends
+  through it (a three-argument ISRT, PURG or CHNG) and never reads it with
+  a get-next. One MOCK answers every site of its key, so when the key's
+  sites need different replies (an IMS MPP's GU loop plus its ISRT through
+  the same CBLTDLI, or a GN loop plus an ISRT) the end reply is gated on
+  the function code the call passed, read from the key's scaffolded
+  `CAPTURE ARG 1` (`IF UT-CBLTDLI-TALLY > 1 AND UT-CAP-CBLTDLI-1 = "GU"`,
+  `_dli_end_lines_by_function`), and the key's VERIFY count is not fixed,
+  since the other functions' calls count too. Without that capture (the
+  function codes' layouts differ) or with a non-literal get function, the
   body gets a `*> TODO` comment instead.
 - **A CICS LINK server gets its commarea (#245).** The reset zeroes
   EIBCALEN before every case, and since #215 a mocked `EXEC CICS ABEND`

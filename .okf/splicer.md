@@ -329,7 +329,7 @@ target is declared `PIC X(<byte length>)`, since a MOVE into the same
 editing PICTURE edits the captured value again (#277).
 Anything unmirrorable (a table, a PICTURE-less `COMP-1`/`POINTER`, a group
 holding non-DISPLAY bytes, or one directive matching two sites whose
-argument `n` names different items) fails closed as
+argument `n` names different items of different layouts) fails closed as
 `UNRESOLVED_CAPTURE_TARGET` rather than emitting a declaration that would
 not compile or would compare against raw binary. Full grammar and
 `generate` behavior in [dsl](dsl.md)'s "Synthesized targets" section.

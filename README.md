@@ -217,6 +217,7 @@ rest each add one distinctive feature.
 | [`examples/raterte/`](examples/raterte/) | Dynamic `CALL` through an identifier, one mock covering multiple runtime targets |
 | [`examples/paymod/`](examples/paymod/) | A load module tested as one unit: `USE REAL CALL` links the real subprogram, whose own EXEC SQL the suite mocks |
 | [`examples/ordmod/`](examples/ordmod/) | A batch load module with three real subprograms: DB2, MQ and a log file inside them, one subprogram CALLed by another |
+| [`examples/imsmod/`](examples/imsmod/) | An IMS transaction (GU/ISRT on the I/O PCB) with two real subprograms: one reads DB2, the other a file |
 | [`examples/flowmock/`](examples/flowmock/) | Internal flow-target mocks (`MOCK PARAGRAPH` / `MOCK SECTION`) |
 | [`examples/taxfile/`](examples/taxfile/) | `BEFORE-EACH` shared mocks with per-case overrides, `FILE-STATUS IS` |
 | [`examples/custprog/`](examples/custprog/) | `MOCK SQL ... ROWS` cursor-fetch sugar, DCLGEN-style copybook includes |

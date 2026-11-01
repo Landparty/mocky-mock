@@ -161,3 +161,77 @@ def test_ordmod_catches_a_logic_change_in_a_nested_subprogram(tmp_path: Path, ca
     exit_code, out = _run_ordmod(tmp_path, capsys)
     assert exit_code == 1
     assert "expected WS-ACCEPTED = 2, got 1" in out
+
+
+IMSMOD_DIR = Path(__file__).parent.parent.parent / "examples" / "imsmod"
+
+
+def _imsmod_args(directory: Path, cut: Path) -> list[str]:
+    return [
+        "run",
+        str(directory / "PRTINQ.cbl"),
+        "--cut",
+        str(cut),
+        "--copybook-path",
+        str(directory),
+        "--timeout",
+        "30",
+    ]
+
+
+@requires_docker
+def test_committed_imsmod_example_passes(capsys):
+    """An IMS MPP whose real subprograms read DB2 and a file."""
+    exit_code = main(_imsmod_args(IMSMOD_DIR, IMSMOD_DIR / "PRTINQ.cut"))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "3 run, 0 failed" in out
+
+
+@requires_docker
+def test_imsmod_catches_a_linkage_mismatch_in_a_subprogram(tmp_path: Path, capsys):
+    for source in IMSMOD_DIR.iterdir():
+        if source.is_file():
+            (tmp_path / source.name).write_text(source.read_text())
+    stock = tmp_path / "PRTSTK.cbl"
+    text = stock.read_text()
+    assert "LK-ONHAND               PIC 9(7)." in text
+    stock.write_text(
+        text.replace(
+            "LK-ONHAND               PIC 9(7).", "LK-ONHAND               PIC 9(5)."
+        )
+    )
+    exit_code = main(_imsmod_args(tmp_path, tmp_path / "PRTINQ.cut"))
+    assert exit_code == 1, capsys.readouterr().out
+
+
+@requires_docker
+def test_generated_imsmod_suite_ends_its_gu_loop(tmp_path: Path, capsys):
+    """One MOCK CALL "CBLTDLI" answers the GU and the ISRT: the scaffold
+    used to leave it a TODO and hang until --timeout; it now answers QC to
+    the GU alone."""
+    for source in IMSMOD_DIR.iterdir():
+        if source.is_file():
+            (tmp_path / source.name).write_text(source.read_text())
+    cut = tmp_path / "generated.cut"
+    assert (
+        main(
+            [
+                "generate",
+                str(tmp_path / "PRTINQ.cbl"),
+                "--real",
+                str(tmp_path / "PRTSTK.cbl"),
+                "--real",
+                str(tmp_path / "PRTRATE.cbl"),
+                "--copybook-path",
+                str(tmp_path),
+                "-o",
+                str(cut),
+            ]
+        )
+        == 0
+    )
+    assert 'MOVE "QC" TO IOPCB(11:2)' in cut.read_text()
+    capsys.readouterr()
+    exit_code = main(_imsmod_args(tmp_path, cut))
+    assert exit_code == 0, capsys.readouterr().out
