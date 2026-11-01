@@ -248,6 +248,7 @@ def splice_program(
             sqlstate=sqlstate,
             passthrough=(_statement_lines(own, 1, len(own)) if site.opt_in else None),
             eib_resp_names=eib_resp_names,
+            real_statement=_statement_lines(own, 1, len(own)),
         )
         # What the DB2 precompiler puts after the statement for every
         # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).

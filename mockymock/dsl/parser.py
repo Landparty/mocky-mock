@@ -117,6 +117,13 @@ _HOOK_RE = re.compile(r"^(?P<hook>BEFORE-ALL|BEFORE-EACH|AFTER-EACH|AFTER-ALL)$"
 # missed terminator must not silently swallow the rest of the file.
 _END_BEFORE_RE = re.compile(r"^END-BEFORE\.?$", re.IGNORECASE)
 _END_AFTER_RE = re.compile(r"^END-AFTER\.?$", re.IGNORECASE)
+# `USE REAL CALL "X" FROM "path"`: run the real program X instead of a mock
+# (docs/2026-11-01-real-call-integration-design.md).
+_USE_REAL_RE = re.compile(
+    r"""^USE\s+REAL\s+CALL\s+(?P<q1>["'])(?P<key>[^"']*)(?P=q1)"""
+    r"""\s+FROM\s+(?P<q2>["'])(?P<path>[^"']*)(?P=q2)$""",
+    re.IGNORECASE,
+)
 _MOCK_QUOTED_RE = re.compile(
     rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"(?:\s+(?P<rows>ROWS))?$'
 )
@@ -1439,6 +1446,42 @@ def parse_cut(text: str) -> MockTestSuite:
             in_before = None
             mock_target = None
             mock_lines = {}
+        elif (m := _USE_REAL_RE.match(line)) is not None:
+            if mock_target is None:
+                if in_before is not None and in_before.startswith("AFTER"):
+                    raise CutParseError(
+                        f"line {line_no}: USE REAL not allowed inside "
+                        f"{in_before} (only MOVE and PERFORM are)"
+                    )
+                raise CutParseError(
+                    f"line {line_no}: USE REAL outside "
+                    f"TESTCASE/BEFORE-EACH/BEFORE-ALL"
+                )
+            if not m.group("key").strip():
+                raise CutParseError(
+                    f"line {line_no}: empty USE REAL CALL key -- the quoted "
+                    f"key must name the program the CALL runs"
+                )
+            if not m.group("path").strip():
+                raise CutParseError(
+                    f"line {line_no}: empty FROM path -- name the source "
+                    f"file of program {m.group('key')!r}"
+                )
+            _open_mock(
+                MockDirective(
+                    category=MockCategory.CALL,
+                    key=m.group("key").strip(),
+                    real_source=m.group("path").strip(),
+                    real_line=line_no,
+                ),
+                line_no,
+            )
+        elif line.upper().startswith("USE REAL"):
+            raise CutParseError(
+                f"line {line_no}: malformed USE REAL directive: {line!r} "
+                f'(write USE REAL CALL "PROGRAM" FROM "path/to/PROGRAM.cbl"; '
+                f"only static CALLs by literal can be real)"
+            )
         elif (m := _MOCK_QUOTED_RE.match(line)) is not None:
             if mock_target is None:
                 _reject_mock_outside(in_before, line_no)

@@ -20,6 +20,28 @@ fails CI rather than shipping silently unexplained.
 from __future__ import annotations
 
 REFUSAL_EXPLANATIONS: dict[str, str] = {
+    # --- USE REAL CALL (load-module integration tests,
+    # docs/2026-11-01-real-call-integration-design.md).
+    "REAL_SOURCE_NOT_FOUND": (
+        'A USE REAL CALL "<program>" FROM "<path>" names a file that does '
+        "not exist. The path is relative to the .cut file's folder. Point "
+        "it at the source of the program the CALL runs."
+    ),
+    "CONFLICTING_REAL_SOURCE": (
+        "Two USE REAL CALL lines name the same program with different "
+        "source files. One test binary holds one copy of each program, so "
+        "every USE REAL CALL of a program must name the same file."
+    ),
+    "REAL_PROGRAM_ID_MISMATCH": (
+        "The file a USE REAL CALL names declares another PROGRAM-ID than "
+        "the CALL's literal, so the CALL would never reach it. Point FROM "
+        "at the program's own source."
+    ),
+    "REAL_SOURCE_UNREADABLE": (
+        "The source of a USE REAL CALL program could not be read or its "
+        "COPY members could not be expanded. Check the file's encoding and "
+        "the --copybook-path folders."
+    ),
     # --- UNMOCKED_*: a boundary is reachable but no MOCK directive matches
     # it. Every one of these has a mechanical fix -- see
     # RefusalReason.suggested_fix / `generate --fill`.

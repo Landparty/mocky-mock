@@ -293,7 +293,16 @@ values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
 
 See `docs/2026-09-15-init-command-design.md`.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE] [--force]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--real SUBPROGRAM.cbl ...] [--fill CUT_FILE] [--force]`
+
+`--real SUBPROGRAM.cbl` (repeatable, 2026-11-01): a load-module suite.
+`dsl/module_suite.py` rewrites the scaffold: each `MOCK CALL` of a real
+program becomes one `USE REAL CALL ... FROM` in BEFORE-EACH (CAPTURE
+targets of the dropped block go with it), and every boundary of the real
+programs gets a `directive_snippet` placeholder there. `run`/`lint` link
+the programs (`checked.real_programs`); `debug`, `export` and `mutate`
+refuse such a suite (`checks.REAL_CALL_UNSUPPORTED`). See
+[docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.

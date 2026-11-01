@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mockymock import __version__
-from mockymock._lines import read_utf8_source, split_source_lines
+from mockymock._lines import SourceEncodingError, read_utf8_source, split_source_lines
 from mockymock.debugging_lines import activate_debugging_lines
 from mockymock.report.artifacts import fingerprint
 from mockymock.report.record_rewrite import numeric_edited_fields
@@ -1334,6 +1334,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             f"EXPECT what it computes), or try --scenarios"
         )
         return 1
+    if args.real:
+        linked = _link_real_programs(args, cut_text, output_path)
+        if linked is None:
+            return 1
+        cut_text = linked
     # Unlike run's auxiliary report flags, this file IS the deliverable:
     # a failed write is a failed command (same convention as export).
     if not _write_report_file("generate", "-o/--output", str(output_path), cut_text):
@@ -1363,6 +1368,45 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         # to prune, some of which are expected to be refused.
         return 0
     return _refuse_unusable_scaffold(source_path, output_path, args)
+
+
+def _link_real_programs(
+    args: argparse.Namespace, cut_text: str, output_path: Path
+) -> str | None:
+    """`generate --real`: the scaffold rewritten into a load-module suite,
+    or None (after printing why) when a subprogram cannot be linked."""
+    from cobolparser import parse_cobol
+
+    from mockymock.analysis.real_programs import RealSpec, prepare_real_program
+    from mockymock.dsl.module_suite import RealLink, link_real_programs
+
+    links: list[RealLink] = []
+    for raw in args.real:
+        path = Path(raw).resolve()
+        if not path.is_file():
+            print(f"mockymock generate: --real {raw}: no such file")
+            return None
+        try:
+            text = read_utf8_source(path)
+        except SourceEncodingError as exc:
+            print(f"mockymock generate: --real {raw}: {exc}")
+            return None
+        name = getattr(parse_cobol(text, filename=path.name).ast, "program_name", "")
+        if not name:
+            print(f"mockymock generate: --real {raw}: no PROGRAM-ID found")
+            return None
+        prepared, reasons = prepare_real_program(
+            RealSpec(str(name), path, 0), args.copybook_path
+        )
+        if prepared is None:
+            for reason in reasons:
+                print(f"mockymock generate: refused ({reason.code}): {reason.message}")
+            return None
+        links.append(RealLink(prepared))
+    linked, notes = link_real_programs(cut_text, links, output_path.resolve())
+    for note in notes:
+        print(f"mockymock generate: {note}")
+    return linked
 
 
 def _distinct_case_count(cut_text: str) -> int:
@@ -2085,6 +2129,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if cics_eib_plan_ is not None:
         reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
     reset_lines = reset_lines + extra_reset_lines_for(checked)
+    real_programs = checked.real_programs
+    if real_programs:
+        from mockymock.splicer.real_programs import (
+            cancel_lines,
+            instrument_real_program,
+            share_driver_state,
+        )
+
+        # Every real program starts each case from its VALUE clauses.
+        reset_lines = reset_lines + cancel_lines([p.spec for p in real_programs])
 
     # --record-expectations: scan the raw .cut text (not the parsed suite --
     # a "*> STUB EXPECT" line is an ordinary comment to parse_cut) against
@@ -2116,6 +2170,26 @@ def _cmd_run(args: argparse.Namespace) -> int:
         condition_names=record_conditions,
     )
 
+    real_sources: list[tuple[str, list[str]]] = []
+    if real_programs:
+        # USE REAL CALL: the programs share the driver's bookkeeping
+        # (EXTERNAL items) and are compiled into the same binary.
+        artifact, shared_ws = share_driver_state(artifact, registry)
+        for prepared in real_programs:
+            real_sources.append(
+                (
+                    f"real_{prepared.program_id.upper()}.cbl",
+                    instrument_real_program(
+                        prepared,
+                        suite,
+                        registry,
+                        shared_ws,
+                        args.copybook_path,
+                        trace=args.trace,
+                    ),
+                )
+            )
+
     instrumented = _insert_driver(lines, artifact)
 
     # --verbose needs the sandbox retained too: the instrumented-source path
@@ -2133,9 +2207,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
         instrumented_path.write_text(
             "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
         )
+        extra_sources = []
+        for name, real_lines in real_sources:
+            real_path = tmp / name
+            real_path.write_text(
+                "\n".join(real_lines) + "\n", encoding="utf-8", newline="\n"
+            )
+            extra_sources.append(real_path)
 
-        compiled = toolchain.compile_source(
-            instrumented_path, coverage=args.coverage, trace=args.trace
+        compiled = (
+            toolchain.compile_source(
+                instrumented_path,
+                coverage=args.coverage,
+                trace=args.trace,
+                extra_sources=extra_sources,
+            )
+            if extra_sources
+            else toolchain.compile_source(
+                instrumented_path, coverage=args.coverage, trace=args.trace
+            )
         )
         if not compiled.success:
             print("mockymock run: compile failed:")
@@ -2523,6 +2613,11 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     checked = run_static_checks(
         source_path, cut_path, args.copybook_path, case_names=args.case
     )
+    if checked.real_programs:
+        from mockymock.cli.checks import REAL_CALL_UNSUPPORTED
+
+        print(f"mockymock debug: {REAL_CALL_UNSUPPORTED}")
+        return 1
     for note in checked.notes:
         print(f"mockymock debug: {note}")
     if checked.linkage is not None:
@@ -3009,6 +3104,11 @@ def _cmd_export(args: argparse.Namespace) -> int:
         preserve_compiler_directives=True,
         model_rebinds=False,
     )
+    if checked.real_programs:
+        from mockymock.cli.checks import REAL_CALL_UNSUPPORTED
+
+        print(f"mockymock export: {REAL_CALL_UNSUPPORTED}")
+        return 1
     for note in checked.notes:
         print(f"mockymock export: {note}")
     if checked.unmodelled_rebinds:
@@ -4266,6 +4366,19 @@ def build_parser() -> argparse.ArgumentParser:
             "fixture stays mocked, just without generated data; valid "
             "with --with-data or --fixtures; an unmatched pair warns on "
             "stderr rather than silently doing nothing)"
+        ),
+    )
+    generate_parser.add_argument(
+        "--real",
+        action="append",
+        default=[],
+        metavar="SUBPROGRAM.cbl",
+        help=(
+            "Load-module suite: run this subprogram for real instead of "
+            "mocking its CALL (repeatable; USE REAL CALL, see "
+            "docs/2026-11-01-real-call-integration-design.md). Its CALL "
+            "mocks become USE REAL CALL lines and every boundary of the "
+            "subprogram gets a placeholder MOCK in BEFORE-EACH"
         ),
     )
     generate_parser.set_defaults(func=_cmd_generate)

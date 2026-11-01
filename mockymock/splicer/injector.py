@@ -241,8 +241,18 @@ def build_site_dispatch(
     sqlstate: bool = False,
     passthrough: list[str] | None = None,
     eib_resp_names: tuple[str, ...] = (),
+    real_statement: list[str] | None = None,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    `real_statement` is the site's own statement text (one entry per
+    source line, sentence period dropped). A case whose directive is a
+    `USE REAL CALL` (`MockDirective.is_real`) counts the call in its tally
+    and then runs that statement as written: the real subprogram is linked
+    into the test binary (docs/2026-11-01-real-call-integration-design.md).
+    Its own ON EXCEPTION / NOT ON EXCEPTION clauses run as part of it, so
+    the branch leaves `UT-MOCK-STATUS` at SPACES and the lifted-clause
+    guard after the dispatch selects nothing.
 
     `sqlstate` (issue #313): the program references SQLSTATE, so a `MOCK
     SQL ... ROWS` row also reports `"00000"` and its exhaustion `"02000"`
@@ -366,6 +376,15 @@ def build_site_dispatch(
                     f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
                     f'{site.label} {fired.key}"'
                 )
+        if directive.is_real:
+            if real_statement is None:
+                raise ValueError(
+                    f"USE REAL CALL {directive.key!r} matched the site at "
+                    f"line {site.line} but no statement text was given to "
+                    f"run it -- the orchestrator passes real_statement"
+                )
+            lines.extend(f"                   {text}" for text in real_statement)
+            continue
         if lifted_clauses:
             lines.append(f'                   MOVE "00" TO {OUTCOME_FIELD}')
         if directive.category is MockCategory.CICS:

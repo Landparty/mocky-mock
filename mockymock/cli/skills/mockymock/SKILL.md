@@ -251,6 +251,18 @@ the instrumented source path on a compile failure; `--keep-sandbox` keeps
 the evidence. Translate the code for the developer instead of forwarding
 it raw.
 
+## Load-module suites: real subprograms
+
+Once the entry program's unit suite is green, a load-module suite runs it
+with its in-module subprograms for real: `USE REAL CALL "PAYCALC" FROM
+"PAYCALC.cbl"` links the subprogram instead of mocking the CALL, and the
+suite's MOCKs answer the subprogram's own files, SQL, CICS and outside
+CALLs (a mock body names the data of the program its statement is in).
+Scaffold one with `mockymock generate MAIN.cbl --real SUB.cbl`, then
+`run --record-expectations`. Every boundary of a real program must be
+mocked in every case that makes it real; `lint` names each missing one.
+Example: `examples/paymod/`.
+
 ## Full reference
 
 - `reference/modes.md` -- `hands-on` / `guided` / `hands-off` in full:
