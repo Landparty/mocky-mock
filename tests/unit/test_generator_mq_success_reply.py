@@ -45,3 +45,43 @@ def test_the_looped_mqget_ends_its_drain_loop(tmp_path) -> None:
         "MOVE 2033 TO WS-REASON",
     ]
     assert 'VERIFY CALL "MQGET" WAS CALLED 2 TIMES' in cut
+
+
+def test_the_bundle_less_placeholder_answers_compcode_and_reason_too() -> None:
+    """The placeholder `directive_snippet` renders (lint's fix text,
+    `generate --fill`, and `generate --real`'s mocks for a real
+    subprogram's MQ calls) answers the same two arguments: RETURN-CODE
+    alone left `IF WS-COMPCODE = 0` reading whatever the field held."""
+    from cobolparser import parse_cobol
+
+    from mockymock.analysis.mock_surface import analyze
+    from mockymock.dsl.generator import directive_snippet
+
+    program = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MQPUB.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-HCONN    PIC S9(9) BINARY.
+       01 WS-HOBJ     PIC S9(9) BINARY.
+       01 WS-OD       PIC X(100).
+       01 WS-OPTIONS  PIC S9(9) BINARY.
+       01 WS-COMPCODE PIC S9(9) BINARY.
+       01 WS-REASON   PIC S9(9) BINARY.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "MQOPEN" USING WS-HCONN WS-OD WS-OPTIONS WS-HOBJ
+                               WS-COMPCODE WS-REASON
+           GOBACK.
+"""
+    result = parse_cobol(program)
+    surface = analyze(result.ast)
+    (site,) = [s for s in surface.boundary_sites if s.keys and s.keys[0] == "MQOPEN"]
+
+    snippet = directive_snippet(site, surface)
+
+    assert snippet is not None
+    body = [line.strip() for line in snippet.splitlines()]
+    assert body[0] == 'MOCK MQ "MQOPEN"'
+    assert "MOVE 0 TO WS-COMPCODE" in body
+    assert "MOVE 0 TO WS-REASON" in body

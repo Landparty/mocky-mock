@@ -1315,7 +1315,10 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
 - **MQ calls answer MQCC_OK / MQRC_NONE (#205).** By the MQI's fixed
   convention CompCode and Reason are an MQ call's last two USING
   arguments; `_mq_success_reply` replaces the fixture row's random numbers
-  there with `MOVE 0` for every `site.is_mq` CALL. A random CompCode sent
+  there with `MOVE 0` for every `site.is_mq` CALL. The bundle-less
+  placeholder (`directive_snippet`: lint's fix text, `--fill`, and the
+  mocks `generate --real` writes for a real subprogram's MQ calls) does the
+  same since 2026-11-01; before, it set only RETURN-CODE. A random CompCode sent
   the `IF WS-COMPCODE NOT = MQCC-OK ... GOBACK` idiom (MQCC-OK is a data
   item the solver cannot see) down the failure exit on the first call, so
   the happy path never ran and its later `VERIFY ... 1 TIMES` failed. With
