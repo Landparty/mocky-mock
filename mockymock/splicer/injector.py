@@ -60,11 +60,30 @@ _ADDRESS_WORDS = frozenset({"ADDRESS", "LENGTH"})
 
 
 def _literal_inner(token: str) -> str:
-    """The value cobolparser reports for a quoted literal token: prefix and
-    quotes removed, doubled quotes collapsed."""
+    """The value cobolparser before 3.1 reports for a quoted literal token:
+    prefix and quotes removed, doubled quotes collapsed."""
     start = token.index(token[-1])
     quote = token[-1]
     return token[start + 1 : -1].replace(quote * 2, quote)
+
+
+def reported_literal(name: str) -> str | None:
+    """`name` when cobolparser reported a CALL USING operand as a quoted
+    literal, else None. From cobol-parser 3.1 a literal operand keeps its
+    quotes, re-quoted with double quotes (`'D''E'` is `"D'E"`); earlier
+    releases stripped them, so there such a name is never quoted and the
+    statement text (`_call_using_literals`) is the only way to tell."""
+    match = _CALL_TOKEN_RE.fullmatch(name)
+    return name if match is not None and match.group("lit") else None
+
+
+def _same_literal(token: str, name: str) -> bool:
+    """True when the literal `token` from the statement text is the operand
+    cobolparser reported as `name`, in either release's spelling."""
+    inner = _literal_inner(token)
+    if inner == name:
+        return True
+    return reported_literal(name) is not None and _literal_inner(name) == inner
 
 
 def _operand_key(text: str) -> str:
@@ -144,7 +163,7 @@ def _call_using_literals(statement_text: str, names: list[str]) -> list[str | No
     result: list[str | None] = []
     for (text, is_literal), name in zip(operands, names, strict=True):
         if is_literal:
-            if _literal_inner(text) != name:
+            if not _same_literal(text, name):
                 return none
             result.append(text)
         else:
@@ -222,8 +241,18 @@ def build_site_dispatch(
     sqlstate: bool = False,
     passthrough: list[str] | None = None,
     eib_resp_names: tuple[str, ...] = (),
+    real_statement: list[str] | None = None,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    `real_statement` is the site's own statement text (one entry per
+    source line, sentence period dropped). A case whose directive is a
+    `USE REAL CALL` (`MockDirective.is_real`) counts the call in its tally
+    and then runs that statement as written: the real subprogram is linked
+    into the test binary (docs/2026-11-01-real-call-integration-design.md).
+    Its own ON EXCEPTION / NOT ON EXCEPTION clauses run as part of it, so
+    the branch leaves `UT-MOCK-STATUS` at SPACES and the lifted-clause
+    guard after the dispatch selects nothing.
 
     `sqlstate` (issue #313): the program references SQLSTATE, so a `MOCK
     SQL ... ROWS` row also reports `"00000"` and its exhaustion `"02000"`
@@ -347,6 +376,15 @@ def build_site_dispatch(
                     f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
                     f'{site.label} {fired.key}"'
                 )
+        if directive.is_real:
+            if real_statement is None:
+                raise ValueError(
+                    f"USE REAL CALL {directive.key!r} matched the site at "
+                    f"line {site.line} but no statement text was given to "
+                    f"run it -- the orchestrator passes real_statement"
+                )
+            lines.extend(f"                   {text}" for text in real_statement)
+            continue
         if lifted_clauses:
             lines.append(f'                   MOVE "00" TO {OUTCOME_FIELD}')
         if directive.category is MockCategory.CICS:
@@ -696,6 +734,60 @@ def build_goto_exit_replacement(exit_kind: str = "PARAGRAPH") -> list[str]:
     chain, it always ends the SAME paragraph the GO TO already lived in.
     STATUS: implemented, not yet verified against real GnuCOBOL."""
     return [f"           EXIT {exit_kind}"]
+
+
+_UNTIL_PREFIX = 'UNTIL UT-EARLY-EXIT = "Y" OR'
+
+
+def prefix_loop_conditions(lines: list[str], start: int, end: int) -> list[str]:
+    """Return a NEW list with every `UNTIL` keyword of the PERFORM statement
+    on lines [start, end] (1-indexed, inclusive) followed by
+    `UT-EARLY-EXIT = "Y" OR` -- a loop on the chain toward a neutralized
+    terminator (`TerminatorPlan.loop_performs`) then stops on the next test
+    of its condition instead of running again after the early exit. OR
+    binds loosest, so `UNTIL A AND B` becomes `flag OR (A AND B)`, and an
+    abbreviated `UNTIL X = 1 OR 2` keeps its own subject. Words inside
+    literals and `*>` comments are left alone; the line count never
+    changes, so other planned spans stay valid."""
+    result = list(lines)
+    quote: str | None = None
+    for index in range(start - 1, min(end, len(result))):
+        line = result[index]
+        out: list[str] = []
+        pos = 0
+        while pos < len(line):
+            char = line[pos]
+            if quote is not None:
+                out.append(char)
+                if char == quote:
+                    quote = None
+                pos += 1
+                continue
+            if char in "\"'":
+                quote = char
+                out.append(char)
+                pos += 1
+                continue
+            if line.startswith("*>", pos):
+                out.append(line[pos:])
+                break
+            if (
+                line[pos : pos + 5].upper() == "UNTIL"
+                and (pos == 0 or not (line[pos - 1].isalnum() or line[pos - 1] in "-_"))
+                and (
+                    pos + 5 == len(line)
+                    or not (line[pos + 5].isalnum() or line[pos + 5] in "-_")
+                )
+            ):
+                out.append(_UNTIL_PREFIX)
+                pos += 5
+                continue
+            out.append(char)
+            pos += 1
+        result[index] = "".join(out)
+        # A literal never continues past its line in normalized source.
+        quote = None
+    return result
 
 
 def build_chain_check(exit_kind: str = "PARAGRAPH") -> list[str]:

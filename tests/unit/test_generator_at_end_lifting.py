@@ -256,3 +256,23 @@ def test_a_clause_the_splice_lifts_is_not_copied_into_the_mock():
     assert "the splice runs this READ's own AT END clause (line 27)" in text
     assert "MOVE WS-END-MARKER TO WS-EOF-FLAG" not in text
     assert "TODO" not in text
+
+
+PERFORM_AT_END_SOURCE = IDENTIFIER_AT_END_SOURCE.replace(
+    "                   ADD 1 TO WS-TOTAL\n",
+    "                   PERFORM WRAP-UP\n",
+).replace(
+    "           END-READ.\n",
+    "           END-READ.\n\n       WRAP-UP.\n           ADD 1 TO WS-TOTAL.\n",
+)
+
+
+def test_a_clause_that_performs_a_paragraph_is_not_copied(splice_cannot_lift):
+    """`AT END PERFORM WRAP-UP` copied into the mock made the whole .cut
+    unreadable: the parser refuses a body PERFORM (issue #287), so lint
+    reported that instead of the program's real refusals. The clause now
+    becomes the TODO and the file parses (sweep of 2026-10-29)."""
+    text = _scaffold(PERFORM_AT_END_SOURCE, "rdloop.cbl")
+    assert "PERFORM WRAP-UP" not in text
+    assert "TODO: this program's AT END clause could not be auto-replicated" in text
+    parse_cut(text)

@@ -1,19 +1,25 @@
 ---
 type: Module
 title: Docker Runtime
-description: mockymock-cobc container lifecycle, docker exec-based compile/run, and the Docker-only sandbox model that replaced the local cobc toolchain.
-tags: [runtime, docker, gnucobol]
-timestamp: 2026-10-04T00:00:00Z
+description: mockymock-cobc container lifecycle, docker exec-based compile/run, the Docker sandbox model, and the opt-in native backend that runs a bundled GnuCOBOL tree instead.
+tags: [runtime, docker, gnucobol, native]
+timestamp: 2026-10-25T00:00:00Z
 ---
 
 # Overview
 
-mockymock is **Docker-only** for compilation and execution (decision
-2026-07-04, `docs/2026-07-04-docker-toolchain-design.md`). Nothing COBOL-related
-runs on the host: `cobc` and every compiled test binary live and execute
-exclusively inside a single long-lived container, `mockymock-cobc`. There is no
-`--toolchain` flag and no local-`cobc` fallback — if the daemon is unreachable,
-the CLI fails loudly and exits 1.
+mockymock compiles and executes in Docker by default (decision
+2026-07-04, `docs/2026-07-04-docker-toolchain-design.md`): `cobc` and every
+compiled test binary live and execute inside a single long-lived container,
+`mockymock-cobc`. If the daemon is unreachable, the CLI fails loudly and
+exits 1.
+
+The one exception is the **native backend** (2026-10-25, see
+**Native toolchain** below): when `MOCKYMOCK_GNUCOBOL_HOME` names a
+self-contained GnuCOBOL tree (the VS Code extension bundles one), the same
+compile/run/coverage/debug steps run on the host from that tree. Commands
+never import a backend directly: they call `runtime/toolchain.py`'s
+`active()` and use the module it returns.
 
 ```
 mockymock setup / mockymock run
@@ -303,6 +309,12 @@ re-mounted per run. Consequences:
   `ExecutionResult` fields stay `str` as documented and `report/results.py`'s
   `parse_stdout` never receives `None`.
 
+`compile_source(..., extra_sources=())` (2026-11-01, USE REAL CALL):
+further sources in the same sandbox, compiled into the same executable
+(`cobc -x main.cbl real_X.cbl ...`) by both backends; `run` passes the
+instrumented real programs only when a suite has some, so a monkeypatched
+`compile_source` without the parameter keeps working.
+
 # What compiler.py / executor.py still hold
 
 Both modules were reduced to shared types only — the local-subprocess
@@ -389,3 +401,69 @@ code alone when debugging a timeout report.
   build on this module's existing Docker toolchain.
 - [dashboard](dashboard.md) — `runtime/status.py`'s read-only `probe()`, the
   one place that inspects this toolchain without mutating it.
+
+
+# Native toolchain
+
+`mockymock/runtime/native_toolchain.py` has the same module-level interface
+as `docker_toolchain.py` (`ensure_toolchain`, `compile_source`, `run_binary`,
+`run_gcov`, `start_gdb_session`, `cobc_version`, `toolchain_failure`,
+`container_identity`, `docker_failure_line`, `WORK_ROOT`, `CONTAINER`,
+`ToolchainNotAvailableError`). `runtime/toolchain.py` picks one:
+
+| `MOCKYMOCK_TOOLCHAIN` | Backend |
+|-----------------------|---------|
+| unset / `auto` | native when `MOCKYMOCK_GNUCOBOL_HOME` is set, else Docker |
+| `docker` | Docker, even with a GnuCOBOL home set |
+| `native` | native (fails loudly if the home is unset or has no `bin/cobc`) |
+
+Any other value raises `ToolchainNotAvailableError`. Both backends raise
+that one class (`DockerNotAvailableError` is the same object), so every
+`except` keeps working.
+
+**Relocation.** cobc and libcob bake absolute install paths in at build time.
+`_env(home)` overrides every one from the tree's location: `COB_CONFIG_DIR`,
+`COB_COPY_DIR`, `COB_CFLAGS` (`-I<home>/include`, which carries `gmp.h`),
+`COB_LDFLAGS`, `COB_LIBS`, `COB_LIBRARY_PATH`, plus `PATH` and the loader
+path (`LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`; on Windows `PATH` covers
+DLLs). A variable the user already exported wins (`setdefault`).
+
+**C compiler.** cobc translates to C and calls the system compiler. A Linux
+or macOS tree does not carry one: `ensure_toolchain` reads `COB_CC` (env,
+else `cobc --info`, cached per process) and fails with what to install when
+it is not on `PATH`. A Windows tree is expected to be a MinGW build with gcc
+in `bin/`. gcov (`MOCKYMOCK_GCOV`, default `gcov`) and gdb are resolved to a
+full path on the child environment's `PATH` (`_resolve`) before they are
+spawned: Windows' CreateProcess looks a bare name up on the *parent's* `PATH`
+and ignores `env=`, so the tree's own `gcov.exe` / `gdb.exe` were not found
+(`[WinError 2]`). cobc is always spawned by full path.
+
+**Windows tree.** Verified 2026-10-25 with the build the Chocolatey
+`gnucobol` package (3.2.0.20240515) downloads: Arnold Trembley's 32-bit MinGW
+GC32-BDB (gcc 9.2, gcov, gdb, BDB, GMP, cJSON; no libxml2). It keeps
+`config/`, `copy/`, `extras/` at the root (no `share/`); `_tree_dir` finds
+both layouts. Smart App Control did not block compiled binaries there.
+
+**Behaviour kept from the container.** Same cobc flags (`-free -std=mvs`,
+`--coverage`, `-ftraceall`, `-g`); the compiler runs from the sandbox
+directory (gcov bakes the `.gcno` path in from the compiler's CWD) with
+`TMPDIR` pointed at the sandbox; timeouts exit 124 and kill the binary's
+whole **process group** (`start_new_session`, `killpg`; `taskkill /T` on
+Windows) the way `timeout -k` does in the container; a signal death is
+reported as `128 + signal` (so the SIGKILL check in `mutate` still reads 137).
+`container_identity()` is always None (no restarts to detect).
+
+**Not kept.** The container's hardening (`_HARDENING_FLAGS`: no network,
+pids/memory limits, dropped capabilities) has no equivalent: tests run as the
+user on the host. Windows Smart App Control / WDAC, one of the two reasons for
+going Docker-only, can still refuse freshly compiled binaries there.
+
+**Coverage numbers move with the host gcc.** gcov's executable-line count
+depends on the C compiler version: ACCTPRG's own lines are 97 under the
+image's gcc 14 and 110 under gcc 13. The integration tests that pin exact
+figures assert them only when the Docker backend is selected
+(`tests/integration/_docker.py`'s `pinned_coverage_toolchain()`).
+
+`runtime/status.py`'s `probe()` reports three checks for this backend
+(`home`, `cc`, `cobc`; `container` is `"native"`, `image` the home path), so
+the dashboard, `doctor` and `init`'s run gate work unchanged.

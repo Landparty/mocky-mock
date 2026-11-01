@@ -220,6 +220,21 @@ class MockDirective:
     terminal_line: int = 0
     """1-based .cut line of the `TERMINAL` group (0 when absent or built
     outside the parser)."""
+    real_source: str | None = None
+    """`USE REAL CALL "X" FROM "<path>"` (load-module integration tests,
+    docs/2026-11-01-real-call-integration-design.md): the path, as written
+    (relative to the `.cut` file), of the source of program X. The CALL is
+    not mocked: it runs the real program, compiled and linked into the
+    same test binary, whose own boundaries the suite's mocks answer. Only
+    ever set for a CALL directive, which then has no body, rows or
+    captures; the tally still counts each call, so VERIFY works."""
+    real_line: int = 0
+    """1-based .cut line of the `USE REAL CALL` statement (0 otherwise)."""
+
+    @property
+    def is_real(self) -> bool:
+        """Whether this directive runs the real program (`USE REAL CALL`)."""
+        return self.real_source is not None
 
     @property
     def program_name(self) -> str:
@@ -230,6 +245,8 @@ class MockDirective:
         """Human-readable form used in refusal messages and codegen traps,
         mirroring the .cut syntax: `CALL "X"`, `CALL WS-PGM` (dynamic),
         `READ INFILE`, `SQL "SELECT"`."""
+        if self.real_source is not None:
+            return f'REAL CALL "{self.key}"'
         if (
             self.category in FILE_OP_CATEGORIES
             or self.category in FLOW_CATEGORIES

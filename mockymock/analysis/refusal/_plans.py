@@ -62,6 +62,7 @@ from ._reachability import (
     _plain_perform_statements,
     _reachable_paragraphs,
     _safe_section_entry_points,
+    _section_member_modes,
     _source_ordered_paragraphs,
 )
 from ._types import _UNANNOTATED, RefusalReason
@@ -108,6 +109,11 @@ class TerminatorPlan:
     # field holds NORMAL (0) -- the splicer presets it to 0 before the mock
     # body, as a successful command would, and the body may override it.
     resp_field: str | None = None
+    # Out-of-line `PERFORM <name> UNTIL` loops on the chain (also in
+    # `chain_performs`, which gives each its check): the splicer prefixes
+    # each UNTIL with `UT-EARLY-EXIT = "Y" OR`, or the loop would go round
+    # again after the early exit (`_reachability._is_loop_perform`).
+    loop_performs: list = field(default_factory=list)
 
     @property
     def is_cics(self) -> bool:
@@ -593,14 +599,11 @@ def find_terminator_plans(
     unmocked boundary).
 
     Safe means: the terminator's enclosing paragraph is a top-level
-    paragraph (not a SECTION member) -- or is the first paragraph of a
-    SECTION whose only entry point, whole-program, is `PERFORM
-    <section-name>` (`_safe_section_entry_points`; see
-    docs/2026-07-10-section-scoped-terminator-support-design.md; notably,
-    for a SECTION-scoped terminator, the test's own perform_target must name
-    the SECTION itself, not the paragraph directly, as direct paragraph
-    naming (shape 3 of the design doc) bypasses the section entry point and
-    remains unverified) -- is reachable from the test's own
+    paragraph -- or a SECTION member entered one way only
+    (`_section_member_modes`: inside a `PERFORM <section-name>` range, or
+    only ever PERFORMed by its own name, counting every case's own
+    perform_target; see docs/2026-10-27-section-member-terminators-design.md)
+    -- is reachable from the test's own
     perform_target via `_plain_perform_edges_from` (a chain of nothing but
     plain, unconditional, top-level PERFORM statements), and no paragraph
     anywhere on that whole restricted-reachable chain -- not just the
@@ -654,17 +657,60 @@ def find_terminator_plans(
     # see find_goto_exit_plans' docstring.
     neutralized_goto = neutralized_goto_targets(program, scope_map, lines)
     safe_section_entries = _safe_section_entry_points(program)
-    safe_section_first_names = set(safe_section_entries.values())
-    # The restricted chain walk only ever enters a SECTION through its
-    # first paragraph, via PERFORM <section-name>, so a chain PERFORM held
-    # there must end with EXIT SECTION (issue #338).
+    # How each SECTION member is entered, across the whole program and
+    # every case's own PERFORM target: a member running inside a `PERFORM
+    # <section-name>` range leaves with EXIT SECTION, one only ever
+    # PERFORMed by its own name with EXIT PARAGRAPH; one entered both ways
+    # has no mode and is refused (2026-10-27; before, only a section's
+    # first paragraph, entered via its section name, was supported).
+    section_names = {name for name in getattr(procedure, "_sections", {}) if name}
+    case_entries = {
+        name
+        for case in suite.analysis_cases()
+        for name in (case.perform_target, case.perform_thru)
+        if name
+    }
+    member_why_not: dict[str, str] = {}
+    main_line_sections: set[str] = set()
+    member_modes = _section_member_modes(
+        program,
+        paragraph_entries=case_entries - section_names,
+        section_entries=case_entries & section_names,
+        why_not=member_why_not,
+        main_line_sections=main_line_sections,
+    )
+    # Every section's nameless main line is paragraph '' (a phantom "."
+    # node is "."): which section a terminator there sits in comes from
+    # the statement itself, never from that shared name.
+    main_line_owner: dict[int, str] = {}
+    for section_name, section in procedure._sections.items():
+        if not section_name:
+            continue
+        for paragraph in section.paragraphs:
+            if (paragraph.paragraph_name or "").strip("."):
+                continue
+            for statement in _find_statements_of_type(paragraph.statements, object):
+                main_line_owner[id(statement)] = section_name
+
+    def no_mode_reason(name: str) -> str:
+        return member_why_not.get(
+            name, "it is not entered one single way the analysis can verify"
+        )
+
+    member_names = {
+        paragraph.paragraph_name
+        for section in procedure._sections.values()
+        for paragraph in section.paragraphs
+    }
+    # A chain PERFORM held in a member running in section mode must end
+    # with EXIT SECTION too (issue #338).
     section_chain_performs = {
         id(perform)
         for section in procedure._sections.values()
         for paragraph in section.paragraphs
-        if paragraph.paragraph_name in safe_section_first_names
+        if member_modes.get(paragraph.paragraph_name) == "SECTION"
         for perform, _nested, _in_boundary in _plain_perform_statements(
-            paragraph.statements
+            paragraph.statements, include_loops=True
         )
     }
     # The GO TO fall-through hazard map is per case: a walk stops at the
@@ -743,6 +789,8 @@ def find_terminator_plans(
 
     from mockymock.analysis.flow_mocks import resolved_flow_targets
 
+    reach_cache: dict[tuple[str, str | None], set[str]] = {}
+
     # Hook PERFORM steps reach terminators exactly like a test case's own
     # PERFORM does (suite hooks), so they need plans/refusals too.
     for case in suite.analysis_cases():
@@ -767,10 +815,28 @@ def find_terminator_plans(
             cics_conditions=conditions,
         )
         reachable -= mocked_flow_names
+        entered_sections: set[str] = set()
+        loop_performs: list[PerformStatement] = []
         safe_names, chain_performs = _plain_perform_edges_from(
-            program, case.perform_target, safe_section_entries
+            program,
+            case.perform_target,
+            safe_section_entries,
+            member_modes,
+            main_line_sections=main_line_sections,
+            entered_sections=entered_sections,
+            loop_edges=loop_performs,
         )
-        chain_section_names = safe_names - (top_level_names | safe_section_first_names)
+        # Where the case can ALSO get to through a PERFORM the chain does
+        # not follow (THRU, TIMES, one inside a CALL's ON EXCEPTION, a
+        # SORT/MERGE/XML PARSE procedure): a terminator there returns into
+        # that PERFORM with no check after it, and the run goes on.
+        unchecked_reach = _unchecked_perform_reach(
+            program,
+            reachable,
+            {id(perform) for perform, _nested in chain_performs},
+            reach_cache,
+        )
+        chain_section_names = safe_names - (top_level_names | member_modes.keys())
         chain_go_to_names = safe_names & go_to_targets
         chain_fallthrough_names = safe_names & go_to_fallthrough.keys()
 
@@ -815,23 +881,26 @@ def find_terminator_plans(
                 continue
 
             paragraph_name = site.paragraph_name
+            owner = main_line_owner.get(key)
             problem = None
-            if paragraph_name not in top_level_names and (
-                paragraph_name not in safe_section_first_names
-                # A safe_section_first_names entry is only genuinely safe
-                # when reached via PERFORM <section-name> (an intermediate
-                # chain edge, or perform_target naming the section itself).
-                # _safe_section_entry_points already excludes any paragraph
-                # that is a PERFORM target anywhere -- so the only other way
-                # to land here is the test's own perform_target naming this
-                # paragraph directly, bypassing the section name entirely.
-                # That's shape 3 (docs/2026-07-10-section-scoped-terminator-
-                # support-design.md), still out of scope and unverified.
-                or paragraph_name == case.perform_target
+            if owner is not None and owner not in entered_sections:
+                problem = (
+                    f"is in the main line of SECTION '{owner}', which this "
+                    f"test's chain of plain PERFORM statements from "
+                    f"'{case.perform_target}' never enters with "
+                    f"`PERFORM {owner}` -- it is reached another way (a GO "
+                    f"TO, a conditional or looping PERFORM, or falling "
+                    f"through), so no EXIT SECTION is known to return "
+                    f"correctly from it"
+                )
+            elif (
+                paragraph_name not in top_level_names
+                and paragraph_name not in member_modes
             ):
                 problem = (
-                    "is inside a paragraph that belongs to a SECTION -- "
-                    "SECTION-scoped terminators are not yet supported"
+                    f"is inside SECTION member '{paragraph_name}', and "
+                    f"{no_mode_reason(paragraph_name)} -- no single EXIT "
+                    f"PARAGRAPH/SECTION is known to return correctly from it"
                 )
             elif paragraph_name in go_to_targets and paragraph_name in whenever_only:
                 problem = (
@@ -881,13 +950,35 @@ def find_terminator_plans(
                     f"statements -- this is the only shape this feature can "
                     f"safely neutralize today"
                 )
+            elif paragraph_name in unchecked_reach:
+                problem = (
+                    f"is also reached through {unchecked_reach[paragraph_name]}"
+                    f", which runs on after the early exit returns into it "
+                    f"(nothing stops a PERFORM ... THRU, VARYING or TIMES, "
+                    f"or an implicit PERFORM, at the early exit), so the "
+                    f"test would carry on past the point where the real "
+                    f"program stops"
+                )
             elif chain_section_names:
                 bad_name = sorted(chain_section_names)[0]
+                if bad_name in member_names:
+                    what = (
+                        f"a SECTION member, and {no_mode_reason(bad_name)} "
+                        f"-- no single EXIT "
+                        f"PARAGRAPH/SECTION is known to return correctly "
+                        f"from it"
+                    )
+                elif bad_name in section_names:
+                    what = (
+                        "a SECTION whose PERFORM range runs a member that "
+                        "cannot carry the early-exit check (it is entered "
+                        "another way too, or holds a PERFORM with no mode)"
+                    )
+                else:
+                    what = "not a paragraph or SECTION of this program"
                 problem = (
                     f"is only reachable through this test's own early-exit "
-                    f"propagation chain by way of '{bad_name}', which is "
-                    f"not a top-level paragraph (it belongs to a SECTION) "
-                    f"-- SECTION-scoped chains are not yet supported"
+                    f"propagation chain by way of '{bad_name}', {what}"
                 )
             elif chain_go_to_names:
                 # paragraph_name can't be a member here: the preceding elif
@@ -956,11 +1047,7 @@ def find_terminator_plans(
                 continue
 
             if key not in plans_by_statement:
-                exit_kind = (
-                    "SECTION"
-                    if paragraph_name in safe_section_first_names
-                    else "PARAGRAPH"
-                )
+                exit_kind = member_modes.get(paragraph_name, "PARAGRAPH")
                 plans_by_statement[key] = TerminatorPlan(
                     site=terminator_sites[key],
                     exit_kind=exit_kind,
@@ -977,11 +1064,91 @@ def find_terminator_plans(
                     plan.chain_performs.append(perform)
                     existing_ids.add(id(perform))
             plan.chain_spans.update(chain_spans)
+            loop_ids = {id(perform) for perform in plan.loop_performs}
+            for perform in loop_performs:
+                if id(perform) not in loop_ids:
+                    plan.loop_performs.append(perform)
+                    loop_ids.add(id(perform))
             for perform, _nested in chain_performs:
                 if id(perform) in section_chain_performs:
                     plan.chain_exit_kinds[id(perform)] = "SECTION"
 
     return list(plans_by_statement.values()), reasons
+
+
+def _unchecked_perform_reach(
+    program,
+    reachable: set[str],
+    checked_ids: set[int],
+    cache: dict[tuple[str, str | None], set[str]],
+) -> dict[str, str]:
+    """paragraph name -> a description of a PERFORM-like edge, among the
+    paragraphs in `reachable`, that reaches it but is not one of
+    `checked_ids` (the case's chain edges, each of which gets an early-exit
+    check after it): a `PERFORM ... THRU`, a `PERFORM ... TIMES`, any
+    PERFORM inside a CALL/file statement's clause body, or a SORT/MERGE
+    INPUT/OUTPUT or XML PARSE PROCESSING PROCEDURE. Keyed by bare name like
+    the rest of the planner, so it is over-inclusive for the nameless
+    main lines, never under-inclusive."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return {}
+    edges: list[tuple[str, str | None, str]] = []
+    for paragraph in _all_paragraphs(procedure):
+        if paragraph.paragraph_name not in reachable:
+            continue
+        for perform in _find_statements_of_type(paragraph.statements, PerformStatement):
+            if id(perform) in checked_ids or not perform.target_paragraph:
+                continue
+            if perform.inline_statements:
+                continue
+            edges.append(
+                (
+                    perform.target_paragraph,
+                    perform.thru_paragraph,
+                    f"the PERFORM {perform.target_paragraph}"
+                    + (
+                        f" THRU {perform.thru_paragraph}"
+                        if perform.thru_paragraph
+                        else ""
+                    )
+                    + f" at line {perform.location.line}",
+                )
+            )
+        for statement in _find_sort_merge_statements(paragraph.statements):
+            for attr, thru_attr in (
+                ("input_procedure", "input_procedure_thru"),
+                ("output_procedure", "output_procedure_thru"),
+            ):
+                start = getattr(statement, attr, None)
+                if start:
+                    edges.append(
+                        (
+                            start,
+                            getattr(statement, thru_attr, None),
+                            f"the SORT/MERGE procedure {start} at line "
+                            f"{statement.location.line}",
+                        )
+                    )
+        for statement in _find_xml_parse_statements(paragraph.statements):
+            start = getattr(statement, "processing_procedure", None)
+            if start:
+                edges.append(
+                    (
+                        start,
+                        getattr(statement, "processing_procedure_thru", None),
+                        f"the XML PARSE procedure {start} at line "
+                        f"{statement.location.line}",
+                    )
+                )
+    reach: dict[str, str] = {}
+    for start, thru, what in edges:
+        key = (start, thru)
+        if key not in cache:
+            cache[key] = _reachable_paragraphs(program, start, thru)[0]
+        for name in cache[key]:
+            reach.setdefault(name, what)
+    return reach
 
 
 def _thru_tail_problem(program, case) -> str | None:

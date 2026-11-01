@@ -132,6 +132,61 @@ def render_expect_value(
     return f'"{escaped}"'
 
 
+def display_numeric_value(
+    raw_value: str, picture: str | None, *, decimal_comma: bool = False
+) -> str | None:
+    """The value a plain numeric item holds, read from its raw DISPLAY
+    text: the implied decimal point placed, the sign applied, `P` scaling
+    positions put back (`123` in a `9(3)PP` is 12300, `12+` in a `SVPP99`
+    is 0.0012) and leading zeros dropped. None when `picture` is not a
+    plain numeric PICTURE (`9`, `V`, `P`, `S`) or the text is not that
+    shape, so the caller keeps the raw text (issue #374)."""
+    if not picture or is_alphanumeric_picture(picture):
+        return None
+    expanded = _PICTURE_REPEAT_RE.sub(
+        lambda m: m.group(1) * int(m.group(2)), picture.upper()
+    )
+    body = expanded[1:] if expanded.startswith("S") else expanded
+    if not body or set(body) - {"9", "V", "P"} or body.count("V") > 1:
+        return None
+    m = _RAW_NUMERIC_RE.match(delocalize_numeric(raw_value, decimal_comma))
+    if m is None or (m.group("lead") and m.group("trail")):
+        return None
+    digits = m.group("int")
+    stripped = body.replace("V", "")
+    leading_p = len(stripped) - len(stripped.lstrip("P"))
+    trailing_p = len(stripped) - len(stripped.rstrip("P"))
+    if (leading_p or trailing_p) and m.group("frac") is None:
+        # GnuCOBOL 3.2 DISPLAYs only the stored digits (`12+` for .0012 in
+        # a SVPP99); 3.1 pads them to the P positions with zeros (`0012+`,
+        # `00123` for 12300 in a 9(3)PP). Keep the stored digits.
+        stored = stripped.count("9")
+        extra = len(digits) - stored
+        if extra > 0:
+            if set(digits[:extra]) != {"0"}:
+                return None
+            digits = digits[extra:]
+    if m.group("frac") is not None:
+        # A runtime set to pretty-display printed the point itself.
+        whole, fraction = digits, m.group("frac")
+    elif leading_p:
+        # VPP99 / PP99: every digit sits after the point and the Ps.
+        whole, fraction = "0", "0" * leading_p + digits
+    else:
+        scale = len(body.partition("V")[2])
+        digits += "0" * trailing_p
+        if scale:
+            digits = digits.rjust(scale + 1, "0")
+            whole, fraction = digits[:-scale], digits[-scale:]
+        else:
+            whole, fraction = digits, ""
+    whole = whole.lstrip("0") or "0"
+    value = f"{whole}.{fraction}" if fraction else whole
+    if "-" in (m.group("lead"), m.group("trail")) and set(digits) != {"0"}:
+        value = f"-{value}"
+    return localize_numeric(value, decimal_comma)
+
+
 def has_p_scaling(picture: str | None) -> bool:
     """Whether `picture` is a numeric PICTURE with `P` scaling positions
     (`9(3)PP`, `SVP9(2)`). DISPLAY prints only the stored digits of such
@@ -216,7 +271,7 @@ def build_recording_report(
     of 1-based case index and uppercased item name): today's date or time
     recorded as a golden fails on a later run.
     """
-    recorded_by_case: dict[str, dict[str, list[str]]] = {}
+    recorded_by_case: dict[str, dict[str, list[str | None]]] = {}
     for result in suite_result.results:
         queues = recorded_by_case.setdefault(result.case_id, {})
         for name, value in result.recorded:
@@ -245,6 +300,16 @@ def build_recording_report(
             report.skipped.append(SkippedStub(stub.line, stub.data_name, reason))
             continue
         value = queue.pop(0)
+        if value is None:
+            report.skipped.append(
+                SkippedStub(
+                    stub.line,
+                    stub.data_name,
+                    "the CALL it captures was not reached in this case, so it "
+                    "still holds its initial value, not an argument passed",
+                )
+            )
+            continue
         base_name = _leaf_name(stub.data_name)
         clock_source = (clock_fields or {}).get(base_name)
         if clock_source is not None and (

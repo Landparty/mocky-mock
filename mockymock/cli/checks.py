@@ -28,11 +28,21 @@ if TYPE_CHECKING:
     from mockymock.analysis.cics_eib import CicsEibPlan
     from mockymock.analysis.linkage import AddressOfSite, LinkagePlan
     from mockymock.analysis.mock_surface import MockSurface
+    from mockymock.analysis.real_programs import PreparedReal
     from mockymock.analysis.refusal import RefusalReason
     from mockymock.dsl.model import MockTestSuite
     from mockymock.splicer.captures import CapturePlan
     from mockymock.splicer.snapshot import StateSnapshot
     from mockymock.splicer.source_map import ScopeMap
+
+
+#: What `debug`, `export` and `mutate` say about a suite with USE REAL CALL:
+#: only `run` and `lint` link real programs so far.
+REAL_CALL_UNSUPPORTED = (
+    "this suite has USE REAL CALL programs, which only `run` and `lint` "
+    "support so far -- debug, export and mutate a unit suite of the entry "
+    "program instead"
+)
 
 
 @dataclass
@@ -94,6 +104,9 @@ class StaticCheckResult:
     # fall-through (issue #351): not refused, but every splicing pipeline
     # replaces each with a trap that fails the case reaching it.
     fallthrough_traps: set[int] = field(default_factory=set)
+    # `USE REAL CALL` programs, analyzed (analysis.real_programs): every
+    # splice-and-compile pipeline instruments and links each one.
+    real_programs: list[PreparedReal] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -433,7 +446,7 @@ def _run_static_checks(
             )
         except CopybookNotFoundError as exc:
             out.problems.append(f"copybook expansion failed: {exc}")
-            out.problems.append(copybook_not_found_hint())
+            out.problems.append(copybook_not_found_hint(exc))
             return out
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             out.problems.append(f"copybook expansion failed: {exc}")
@@ -726,6 +739,14 @@ def _run_static_checks(
         )
         return out
 
+    # 7a. USE REAL CALL programs (docs/2026-11-01-real-call-integration-
+    # design.md): each is analyzed and gated on its own, and from here on
+    # the entry program's checks see only the directives meant for it --
+    # a MOCK that answers a site of a real program alone is not an
+    # unmatched mock of this one, and its body names that program's data.
+    if any(d.is_real for case in all_cases for d in case.mocks):
+        suite = _check_real_programs(out, suite, surface, cut_path, copybook_paths)
+
     # 7b. Every data-name the .cut writes into the driver must exist in the
     # program, or cobc rejects it at a line of a deleted sandbox copy
     # (issue #204). Checked against the transformed text, so a generated
@@ -962,3 +983,59 @@ def _run_static_checks(
             for problem in snapshot_problems
         )
     return out
+
+
+def _check_real_programs(
+    out: StaticCheckResult,
+    suite: MockTestSuite,
+    surface: MockSurface,
+    cut_path: Path,
+    copybook_paths: list[str] | None,
+) -> MockTestSuite:
+    """Step 7a of `_run_static_checks`: prepare and gate every real program
+    (problems and warnings go to `out`), and return the suite as the entry
+    program's own checks must see it."""
+    from mockymock.analysis.cut_names import check_cut_data_names
+    from mockymock.analysis.real_programs import (
+        check_real_program,
+        collect_real_specs,
+        entry_program_view,
+        matched_directive_ids,
+        prepare_real_program,
+        program_only_view,
+    )
+    from mockymock.analysis.refusal import check_clause_bodies
+    from mockymock.splicer.sqlca import transform_data_division_exec
+
+    def refuse(reasons) -> None:
+        for r in reasons:
+            out.problems.append(f"refused ({r.code}): {r.message}")
+            if r.suggested_fix:
+                out.problems.append("    Add to this TESTCASE (or BEFORE-EACH):")
+                out.problems.extend(
+                    f"    {line}" for line in r.suggested_fix.splitlines()
+                )
+
+    specs, spec_reasons = collect_real_specs(suite, cut_path)
+    refuse(spec_reasons)
+    elsewhere: set[int] = set()
+    for spec in specs:
+        prepared, reasons = prepare_real_program(spec, copybook_paths)
+        refuse(reasons)
+        if prepared is None:
+            continue
+        out.real_programs.append(prepared)
+        out.warnings.extend(prepared.warnings)
+        refuse(check_real_program(prepared, suite))
+        own = matched_directive_ids(prepared.surface, suite)
+        elsewhere |= own
+        view = program_only_view(suite, own)
+        transformed, _ = transform_data_division_exec(
+            prepared.lines, copybook_paths=copybook_paths
+        )
+        refuse(
+            check_cut_data_names(view, transformed, prepared.program_id, prepared.ast)
+        )
+        refuse(check_clause_bodies(prepared.surface, view, prepared.lines))
+    here = matched_directive_ids(surface, suite)
+    return entry_program_view(suite, elsewhere - here)

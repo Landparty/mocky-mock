@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-16T20:00:00Z
+timestamp: 2026-10-26T00:00:00Z
 ---
 
 # Overview
@@ -52,8 +52,8 @@ If no subcommand is given, `main()` prints help and returns 1 (`args` has no
    whole tool family reads (this CLI, `cobol-parser`, the COBOL Analyzer
    extension). Its `project:` section supplies the settings shared with every
    other tool (`copybook_path`, `seed`); its `mockymock:` section supplies
-   this CLI's own (`test_root`, `ai_mode`) and overrides anything `project:`
-   said. Schema reference: `docs/project-config.md` in the cobol-parser repo.
+   this CLI's own (`test_root`, `ai_mode`, `copybook_aliases`,
+   `copybook_extensions`) and overrides anything `project:` said. Schema reference: `docs/project-config.md` in the cobol-parser repo.
 2. **`mockymock.toml`** / `pyproject.toml`'s `[tool.mockymock]` -- the
    tool-specific file, unchanged.
 
@@ -111,7 +111,9 @@ suites as from the project root.
 `--cut`: `_resolve_program_and_cut()` (`cli/main.py`) fills in whichever one
 is missing from its same-stem sibling file via
 `mockymock/cli/discovery.py`'s `resolve_program_path`/`resolve_cut_path`
-(mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). `run`/`lint`
+(mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). A `.cut`
+passed as the program positional is taken as `--cut` (2026-10-26; `run`
+alone did this from b96e91a). `run`/`lint`
 with *neither* given fall into `_run_directory`/`_lint_directory`:
 `discover_cut_files()` walks the test root (config's `test_root`, default
 `.`; the exclude list applies to directories *below* the root only, so an
@@ -177,6 +179,31 @@ pairing with the rule that matched, or for one program its suites and
 `newSuitePath`; Docker-free and parse-free, it is what the VS Code
 extension pairs files with. `_programs_by_stem` is `lru_cache`d per
 process. Design: docs/2026-10-14-multi-suite-layout-design.md.
+
+**Copybook member-name aliasing (2026-10-29):** a mainframe export
+rarely lands as `GTTLBI0A.cpy`; it is `gttlbi0a.copy`, `DMTREN0A.dcl`,
+`Gttlbi0a.txt`, which cobol-parser's search (member as written, upper
+case first, `.cpy`/`.cbl`/`.cob` or none) never matches on a
+case-sensitive filesystem. `_apply_config_to_args` ends by calling
+`_with_copybook_aliases`, which appends one more directory, last, from
+`cli/copybook_aliases.stage_copybook_aliases`: `MEMBER.cpy` for every file
+in a searched directory (one level) whose extension is in
+`copybook_extensions` in any case (default `.cpy .cbl .cob .copy .cblcpy
+.dcl .dclgen .inc .txt` and none) but that the search would miss, plus
+each explicit `copybook_aliases` entry (`GTTLBI0A = "export/m0042.txt"`,
+relative to its config file, must exist; wins over an automatic match).
+`copybook_extensions = []` turns the automatic part off. The staging
+directory lives under `$TMPDIR/mockymock-copybook-aliases/<digest>`, keyed
+by member, path, size and mtime, so an unchanged copylib is staged once;
+files are hard-linked or copied, never symlinked (cobol-parser's
+traversal check rejects a link that resolves outside its directory), and a
+`<digest>.sources` manifest beside it lists the files it came from, which
+`mockymock clean` reads. Being
+last, a real `GTTLBI0A.cpy` anywhere earlier still wins, and every
+consumer of `args.copybook_path` sees the alias with no change of its own.
+A staging failure (`OSError`) prints a warning and leaves the list as it
+was. Both keys are read from `mockymock.toml` / `[tool.mockymock]` or
+`cobol.yml`'s `mockymock:` section; the near-miss hint now names them.
 
 **Conventional copybook folders (2026-10-24):** `effective_copybook_paths`
 now walks `_default_copybook_dirs(program)`: each of `copybooks`,
@@ -266,7 +293,16 @@ values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
 
 See `docs/2026-09-15-init-command-design.md`.
 
-## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--fill CUT_FILE] [--force]`
+## `mockymock generate <program> [-o/--output PATH] [--copybook-path DIR ...] [--with-data | --per-paragraph] [--fixtures PATH] [--seed N] [--scenarios happy|branches|all] [--rows N] [--placeholder CATEGORY:KEY ...] [--real SUBPROGRAM.cbl ...] [--fill CUT_FILE] [--force]`
+
+`--real SUBPROGRAM.cbl` (repeatable, 2026-11-01): a load-module suite.
+`dsl/module_suite.py` rewrites the scaffold: each `MOCK CALL` of a real
+program becomes one `USE REAL CALL ... FROM` in BEFORE-EACH (CAPTURE
+targets of the dropped block go with it), and every boundary of the real
+programs gets a `directive_snippet` placeholder there. `run`/`lint` link
+the programs (`checked.real_programs`); `debug`, `export` and `mutate`
+refuse such a suite (`checks.REAL_CALL_UNSUPPORTED`). See
+[docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
 Docker/GnuCOBOL — pure parse-and-analyze.
@@ -278,6 +314,26 @@ explicit `-o` included -- the same contract as `init`, which passes
 program's existing sibling `PROG.cut`) was silently replaced by a bare
 scaffold.
 
+**CALL arguments the layout index cannot hold (2026-10-29).**
+`dsl/call_arguments.py`: `fill_call_arguments()` runs on the self-generated
+bundle dict right after `add_entry_parameters()`. It reads cobol-parser's
+per-argument notes (`<CALL|DYNCALL> <key>: argument <arg> not resolvable in
+layout index`, and 3.1's `... is subscripted or reference-modified ...`),
+looks each argument up in the DATA DIVISION (`_find_item`, qualifiers
+honored, a name declared twice is not guessed) and lays it out with
+`flatten_record`: a group below level 01 as its elementary fields, a
+single-subscript table element as one occurrence whose `column` is the
+argument's own reference (`WS-CODE(WS-I)`), so the mock MOVEs into exactly
+the element the CALL passes. Values come from `ValueFactory`, seeded per
+(scenario, boundary, argument). A missing fixture is created (the CALL used
+to fall back to a placeholder with a key-mismatch warning); a BIDIRECTIONAL
+argument also gets the generator's own `stub`, an OUT-only one only the
+stub. Literal / figurative / `OMITTED` / `LENGTH OF` / `ADDRESS OF` /
+`FUNCTION` arguments have their note dropped (nothing to generate, as in
+cobol-parser 3.1); reference modification, several subscripts, a table
+nested in the element, or a column clash keep the note. Each fill prints a
+`note:` line on stderr.
+
 **A subprogram's USING parameters are its interface (2026-10-21, issue
 #275).** `dsl/entry_parameters.py`: `fixture_generator()` builds
 `ProgramFixtureGenerator(entry_parameters=True)` when the installed
@@ -285,8 +341,12 @@ cobol-parser knows the keyword (it then also targets branches on the
 parameters); otherwise `add_entry_parameters()` gives every scenario of the
 bundle dict the same `entry_parameters` fixture (category `ENTRY`, one
 PICTURE-valid row over the USING items' elementary fields) plus a `stub`
-expectation per LINKAGE field xref says the program writes, without the
-branch targeting. DFHEIBLK/DFHCOMMAREA are dropped (`without_cics_parameters`;
+expectation per LINKAGE field xref says the program writes (a level-88
+xref files as written -- `SET LK-NEG TO TRUE` -- counts for its
+conditional variable, resolved through the layout index), without the
+branch targeting. It runs on a native bundle too, adding only the stubs it
+lacks: cobol-parser 3.1's own list misses a field written only through its
+88s. DFHEIBLK/DFHCOMMAREA are dropped (`without_cics_parameters`;
 CICS supplies them, #245 handles the commarea). The scaffold MOVEs the row
 before the PERFORM (`generator._entry_parameter_lines`), so `run
 --record-expectations` fills the stubs. After writing, `generate` warns on
@@ -742,17 +802,18 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     and docs/2026-08-04-record-expectations-design.md.
 13. `_insert_driver(lines, artifact)` splices the driver in: WORKING-STORAGE
     additions go immediately after the `WORKING-STORAGE SECTION` header line;
-    procedure lines go immediately after `PROCEDURE DIVISION` (matched via
-    `line.strip().upper().startswith(...)`, first occurrence only — both
-    insertions are one-shot via `inserted_ws`/`inserted_proc` flags).
+    procedure lines go after the `PROCEDURE DIVISION` header's period
+    (the header's first line, or the later line a wrapped header ends on:
+    `PROCEDURE DIVISION` / `USING LK-A.` once had the driver spliced into
+    it, TPCTBIT1, 2026-10-27; first occurrence only — both insertions are
+    one-shot via `inserted_ws`/`inserted_proc` flags).
     When the first code line after the PROCEDURE DIVISION header is a
     statement rather than a paragraph/SECTION header (an unnamed main
     line), `_starts_unnamed_code` has a `UT-ORIGINAL-ENTRY.` header
     inserted before it, so that code is a paragraph nothing performs
     instead of more sentences of the last `UT-TESTCASE-<n>` paragraph
     (issue #264: it ran after the last case and its STOP RUN hid
-    SUMMARY). A header line with no period (a `USING` list running on)
-    gets no synthetic header.
+    SUMMARY). The check looks at the code after the header's period.
 14. Write the instrumented source into a fresh `sandbox_dir(root=docker_toolchain.WORK_ROOT)`
     as `<program-stem>.cbl` (LF newlines forced via `newline="\n"`).
 15. `docker_toolchain.compile_source(...)` — on failure, print stderr,
@@ -930,6 +991,13 @@ captured MI transcripts and end-to-end tested against a live container
   line N of a copybook became a live breakpoint on line N of the
   program. `stackTrace` frames fall back to `original_file` when no
   breakpoint has been set in the program.
+  A verified breakpoint reports the line gdb actually bound it to
+  (2026-10-14, `_bound_original_line`): gdb moves a breakpoint on a line
+  with no code of its own (`ELSE`, `END-IF`, a statement's second line)
+  to the next line that has some, and the program stops there. The
+  `bkpt` record's `line` is mapped back through `line_map`; the
+  requested line is kept only when the bound line is splicer-inserted
+  code with no original counterpart.
 
 Not yet verified (flagged in the design doc, not blocking v1): group
 items, `OCCURS` tables, `REDEFINES` in `variable_map.py`; deeper
@@ -1062,7 +1130,8 @@ cannot change the program, and `runner._equivalent_mutants` (one extra
 target (or an enclosing group) the next code line overwrites in full with
 a literal MOVE or a `SET <88> TO TRUE` (88 owners resolved from the
 parent's `ConditionNameItem` children), and an `arith-verb-swap` of
-`ADD/SUBTRACT n` on an unsigned, non-edited numeric field the previous
+`ADD/SUBTRACT n` on an unsigned, non-edited zoned or packed numeric field
+(not binary: GnuCOBOL wraps `0 - 5` in a `PIC 9(4) COMP` to 65531) the previous
 code line zeroes (`MOVE ZERO/0 TO f`, `INITIALIZE f`). Both statements
 must be single-line and complete, operands plain names or literals, and a
 statement ending a sentence it did not start (its period may close an IF)
@@ -1099,7 +1168,7 @@ survives however good the assertions are. After the kill loop,
 `runner._attach_zero_baseline_hints` re-runs `run_static_checks` once and
 `mutation.zero_baseline.zero_baseline_hint` sets `MutantResult.hint` on
 each *built* survivor where every receiving name on the mutated line is an
-unsigned, non-edited, non-OCCURS WORKING-STORAGE/LOCAL-STORAGE item whose
+unsigned, non-edited, non-OCCURS, non-binary WORKING-STORAGE/LOCAL-STORAGE item whose
 reset value is zero (VALUE zero, or no VALUE -- `splicer/reset.py`'s
 default) and no test case writes it (setup MOVE, mock ROWS/TERMINAL, `TO
 <name>` in a mock body). GIVING forms are skipped. Since 2026-10-09 at
@@ -1464,7 +1533,11 @@ Full design, including empirical validation of the wrapping algorithm and the th
 ## `mockymock skills install [--project] [--force] [--skill NAME ...] [--target claude|copilot|all]`
 
 Copies the packaged agent skills (`SKILL_NAMES`: `mockymock`,
-`cobol-analysis`, `cobol-test`, each under `mockymock/cli/skills/<name>/`)
+`cobol-analysis`, `cobol-test`, each under `mockymock/cli/skills/<name>/`;
+`cobol-analysis` is cobol-parser's `.claude/skills/cobol-analysis/` copied
+byte for byte by `scripts/sync_cobol_analysis_skill.py`, never edited here,
+and `tests/unit/test_cobol_analysis_skill_sync.py` fails on drift when a
+cobol-parser checkout sits next to this repo)
 to `~/.claude/skills/<name>` (default) or `./.claude/skills/<name>`
 (`--project`). `--skill` (repeatable) narrows the set; without it all
 three are installed. `--target` (2026-10-04) picks the assistant:
@@ -1589,7 +1662,14 @@ or everything under a directory (`os.walk`, entering `.mockymock` but no
 other hidden or dependency folder), plus the pre-#353 files
 (`<stem>.report.html` / `.report.json` / `.mutation.json` beside a
 same-stem `.cbl`/`.cut`). Journals are kept unless `--all`; an emptied
-`.mockymock/` is removed.
+`.mockymock/` is removed. It also removes the copybook-alias staging
+directories (`$TMPDIR/mockymock-copybook-aliases/<digest>`, see the
+copybook search above) built from files under the target (a program's or
+`.cut`'s folder) or under the config's `copybook_path` / `copybook_aliases`
+(`_clean_staged_aliases`): each has a `<digest>.sources` manifest beside
+it listing its source files (`copybook_aliases.staged_directories_for`).
+A staging directory with no manifest is removed by any `clean`; one being
+built (`.building-*`) never is (2026-10-29).
 
 ## `mockymock skills plugin [DIRECTORY] [--force]` (2026-10-04)
 

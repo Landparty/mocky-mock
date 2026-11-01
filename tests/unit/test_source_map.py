@@ -252,11 +252,14 @@ def test_call_with_handler_clause_is_unspliceable():
     assert "clause bodies" in site.unspliceable_reason
 
 
-def test_site_inside_handler_clause_is_unspliceable():
+def test_site_inside_handler_clause_gets_its_own_span():
+    # The enclosing CALL cannot be spliced (a CALL of its own kind in its
+    # clause body), but the handler's CALL can be, in place: the enclosing
+    # CALL then runs for real, and a case reaching it is refused unmocked.
     surface, _ = _annotated_surface(UNSAFE_SOURCE, "nestbad.cbl")
     site = _site(surface, "INHANDLER")
-    assert site.span is None
-    assert "boundary statement" in site.unspliceable_reason
+    assert site.nested_in_boundary
+    assert site.span == (22, 23), site.unspliceable_reason
 
 
 def test_nested_exec_sql_span_includes_end_exec():

@@ -103,7 +103,7 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   the equivalent plain `<`/`>` to keep emitted conditions to the
   simplest COBOL-85 relational forms) — keep that map in sync with
   `EXPECT_OPERATORS`. A value carrying an unquoted `AND`/`OR`
-  (`TO BE > 0 AND < 10`, `TO BE 7 OR 8`) is an abbreviated combined
+  (`TO BE GREATER THAN 0 AND < 10`, `TO BE 7 OR 8`) is an abbreviated combined
   condition; the driver negates it whole, `IF NOT (<name> <op> <value>)`
   (issue #265) -- except for a negated operator (`NOT TO BE 7 OR 8`),
   whose NOT COBOL would carry onto every abbreviated relation in the
@@ -116,7 +116,10 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   `... OR EQUAL 5`) raises `CutParseError` at the line instead of
   splicing leftover words into the generated IF
   (`_EXPECT_DANGLING_PHRASE_RE`, whole-word so `GREATER-VALUE` still
-  parses as an ordinary value). Likewise an EXPECT value ending in a
+  parses as an ordinary value). A value starting with a relational symbol
+  (`TO BE > 0 AND < 10`, which plain `TO BE` read as `= > 0 ...`) is
+  refused the same way, also when a PROVIDER row substitutes it
+  (`_reject_dangling_phrase`, 2026-10-26); symbols stay legal in the tail. Likewise an EXPECT value ending in a
   period outside quotes (`EXPECT WS-X TO BE 5.`, the COBOL sentence habit)
   raises `CutParseError` (`_reject_sentence_period`, 2026-09-27) --
   spliced into the generated `IF`, the period ended the sentence mid-IF
@@ -130,7 +133,8 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   item compares as its edited text, so `TO BE 100.00` never matched
   `"      100.00"`. `driver._compares_by_value` picks these (the leaf name
   is in `record_rewrite.numeric_edited_fields`, from the PICTURE via
-  `is_numeric_edited_picture`; the value is a plain signed decimal; no
+  `is_numeric_edited_picture`; the value is a plain signed decimal, its
+  point a period or, for a `DECIMAL-POINT IS COMMA` program, a comma; no
   reference modification), and the driver emits `MOVE <field> TO
   UT-DEEDIT-VALUE` (`PIC S9(18)V9(13)`, the de-editing MOVE, verified
   under GnuCOBOL with CR/DB, `*` and `$`) then the relation on that.
@@ -353,7 +357,10 @@ over the normalized lines, so a quoted literal is never captured (its
 value is fixed by the source) -- comparing bare names instead scaffolded a
 capture of `"ABC"` whenever an item ABC existed, and a refused one when one
 site passed the literal and another the item (fixed 2026-09-28, round 6).
-Under cobol-parser 1.8.x a CALL with a numeric literal operand loses it
+From cobol-parser 3.1 a quoted literal operand keeps its quotes in
+`using_parameters` (`'D''E'` reports as `"D'E"`); `injector.reported_literal`
+recognizes that spelling, the text re-scan accepts either one, and the
+text's own token is still the one moved. Under cobol-parser 1.8.x a CALL with a numeric literal operand loses it
 from `using_parameters`, the text re-scan then trusts nothing, and a quoted
 literal on that CALL still reads as a data-name -- consistently in both
 the generator and the splicer, so no refusal.
@@ -417,7 +424,14 @@ it replaces a provider-bound `TESTCASE` with one ordinary `MockTestCase`
 per row, substituting `{ColumnName}` tokens (`_PLACEHOLDER_RE`) into that
 case's `MOVE` and `EXPECT` values only -- `MOCK` bodies, `MOVE` targets,
 `EXPECT` data-names, `PERFORM` target/thru, and `VERIFY` stay untouched
-and identical across every row. A `{Column}` token naming one of the
+and identical across every row. A token outside a literal (`MOVE {State}`)
+gets the raw row text, quotes and all; a token inside a quoted literal
+(`MOVE "{State}"`, `TO BE "State: {Name}"`, `_quoted_spans`) gets the row
+value's content -- a quoted row's quotes dropped and its doubled quotes
+undone (`_literal_content`), the template literal's own quote doubled --
+so `ROW "NY"` and `ROW NY` give the same literal and `ROW "O'Hare, IL"`
+can sit inside `"..."` (issue #376; a quoted placeholder with a quoted row
+used to become `""NY""`, which lint passed and cobc rejected). A `{Column}` token naming one of the
 bound provider's own columns inside a `MOCK` body is a `CutParseError`
 at that line (`_reject_mock_body_placeholder`; `*>` comment lines are
 exempt) -- left verbatim it linted clean and failed cobc on
@@ -490,6 +504,17 @@ with a "is_dynamic" flag: it keeps every `(category, key)`-keyed structure
 a quoted static-CALL directive against a bare dynamic-CALL site, or vice
 versa — see the docstring on `MockCategory` in `model.py` for the full
 rationale.
+
+## `USE REAL CALL "X" FROM "<path>"` (2026-11-01)
+
+Allowed wherever a `MOCK` is (TESTCASE, BEFORE-EACH, BEFORE-ALL). The parser
+(`_USE_REAL_RE`) builds an ordinary CALL `MockDirective` with
+`real_source` (the path as written, relative to the `.cut`) and
+`real_line`; `MockDirective.is_real` tells it apart and `describe()` reads
+`REAL CALL "X"`. Because it is a directive, BEFORE-* precedence and the
+duplicate-MOCK rule apply unchanged. Static CALL by literal only; a
+malformed line fails with "malformed USE REAL directive". What it does
+downstream: [docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
 
 ## `*> STUB EXPECT` comments (`mockymock run --record-expectations`)
 
@@ -651,6 +676,18 @@ Rules:
   `MOVE SPACES` (issue #330): cobc rejects MOVE SPACES to a numeric or
   numeric-edited target, and this body is also lint's suggested fix and
   what `--fill` / `--per-paragraph` / `--placeholder` insert.
+- Dynamic CALL targets (`_per_target_body`, 2026-10-29): a `MOCK CALL
+  <identifier>` body, bundle-driven or placeholder, is wrapped in
+  `EVALUATE <identifier>` with one `WHEN "<program>"` per program name
+  `ProgramContext.dynamic_targets` knows for it (cobol-parser's
+  `DynamicCallAnalyzer`: VALUE clauses and literal MOVEs; SPACES / LOW- /
+  HIGH-VALUES / ZERO and all-digit values are dropped) and a `WHEN OTHER`,
+  each holding the same body, so the unedited mock behaves exactly as before
+  and a test edits one branch per callee. A comment above it lists the
+  targets (`..., and values this analysis cannot follow` when
+  `possible_values_incomplete`). One complete target, more than
+  `_MAX_TARGET_BRANCHES` (5), or an identifier declared twice gets the
+  comment only; no known target leaves the body untouched.
 - Per-category directive-line shape (`_directive_for`):
   - `CALL`: `MOCK CALL "name"` normally, `MOCK MQ "name"` if `site.is_mq`;
     returns `None` (site skipped) if no key was captured — emitting
@@ -945,7 +982,11 @@ paragraph-grouped path described above, unchanged. A real
   via `_sql_rows_directive` (`_sql_wants_rows` decides single vs. multi).
   Values render through `_bundle_rendered_value`: numeric-family
   `FieldSpec` categories render bare, everything else quoted and escaped.
-  A POINTER-family field gets `SET <field> TO NULL` and an INDEX field no
+  A POINTER-family field gets `SET <field> TO NULL` in a mock body, and
+  a comment instead among a TESTCASE's own setup lines (the caller's USING
+  values, `_entry_parameter_lines`), which take only MOVE: the `.cut`
+  parser refused the SET there (TPMSA000, 2026-10-27), and the per-case
+  reset already sets it to NULL. An INDEX field gets no
   line at all (`_row_move_line`, 2026-10-12): the bundle lays both out as
   numeric fields holding `0`, and `MOVE 0 TO <pointer>` is a cobc compile
   error (LESERV's `CALL 'CEEHDLR' USING HANDLER-ROUTINE ...`). An
@@ -1111,6 +1152,19 @@ paragraph-grouped path described above, unchanged. A real
   human reads should not silently contain code that did not come from the
   fixture data. The `*> TODO` remains the fallback when no `ProgramContext`
   was supplied or the clause could not be located.
+- **Per-site counts from a 3.1 bundle.** cobol-parser before 3.1 gave
+  every fixture its own `call_count` (1 for a CALL or a status-only
+  boundary; the row count, plus one for the end-of-file call when the
+  statement has AT END, for a fed one). From 3.1 (#363) it writes one per
+  `(category, key)` and only when control flow makes it exact. Everything
+  below (`_merged_call_counts`, `_conditional_call_count_keys`, the
+  MQGET/DL/I loop-end and FILE STATUS end-of-file overrides) starts from a
+  count per mocked key, so `_with_site_call_counts` first gives each key
+  the bundle left uncounted its per-site counts back; the analysis then
+  demotes or corrects them as it always did. A count the bundle wrote is
+  kept, and an `error status:` scenario is left alone (the bundle drops
+  its counts because the failure path makes them untrue). On an older
+  bundle every key is counted already, so nothing is added.
 - **Expectations** render via `_render_expectation(expectation,
   declared_keys, call_count_overrides=None, counted_boundaries=None)`:
   tier 1 (`call_count`) →
@@ -1201,7 +1255,20 @@ All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
   a GO TO target. A PERFORM in a branch that ends with `STOP RUN`/`GOBACK`
   doesn't count against its target. Everything else is demoted the same
   way, including a per-row CALL behind a loop's own `IF NOT EOF` guard.
-  Early exits (`IF ... GOBACK`) are not modeled.
+  A site after a statement that may end the run (a STOP RUN/GOBACK/EXIT
+  PROGRAM/CICS RETURN in an IF/EVALUATE/AT END body, or a conditional or
+  looping PERFORM of code holding one) is out of scope too, since the
+  error-status scenarios take that branch (2026-10-27); a paragraph the
+  stopping branch itself PERFORMs first keeps its count. A `PERFORM
+  <section>` counts only its range (`_section_range`: not the members
+  after an EXIT SECTION / GOBACK / GO TO), and a member the entry's
+  section range falls into that a straight PERFORM also names runs twice.
+- **READ with no AT END in a loop (2026-10-27).** The bundle's READ count
+  is its row count, right only for a read-until-end-of-file loop. A READ
+  with no AT END clause read inside a loop or under a condition (a keyed
+  READ in `PERFORM X 3 TIMES`, NIST IX301M) is demoted
+  (`_NO_END_READ_REASON`); a FILE STATUS loop keeps the count
+  `_status_read_eof` gives it.
 - **Sites that run more than once a pass (#290).** The bundle (cobol-parser
   2.x) gives every site `call_count` 1 however often it runs, so for every
   category but READ/RETURN `exact_count_scope` no longer treats a looping

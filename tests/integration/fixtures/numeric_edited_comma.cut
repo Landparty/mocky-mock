@@ -1,0 +1,11 @@
+TESTSUITE "numeric-edited EXPECT under DECIMAL-POINT IS COMMA"
+
+TESTCASE "an unquoted comma-decimal number compares the de-edited value"
+    PERFORM MAIN-PARA
+    EXPECT WS-OUT TO BE 1234,50
+    EXPECT WS-OUT TO BE 1234,5
+    EXPECT WS-OUT TO BE GREATER THAN 1234,49
+
+TESTCASE "a quoted string stays a byte-exact compare"
+    PERFORM MAIN-PARA
+    EXPECT WS-OUT TO BE " 1.234,50"

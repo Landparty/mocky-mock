@@ -5,12 +5,189 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-01 -- `USE REAL CALL`: load-module suites
+
+Phase 1 of the integration-testing direction: `USE REAL CALL "X" FROM
+"x.cbl"` links the real subprogram into the suite's binary, its own
+boundaries answered by the suite's mocks; `generate --real` scaffolds such
+a suite. New: `analysis/real_programs.py`, `splicer/real_programs.py`,
+`dsl/module_suite.py`, `examples/paymod/`, design
+[docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md). Updated [dsl](dsl.md), [analysis](analysis.md),
+[splicer](splicer.md), [runtime](runtime.md), [cli](cli.md). Tests:
+`tests/unit/test_real_call.py`, `tests/integration/test_real_call.py`.
+
+## 2026-10-31 -- open-issue sweep
+
+* **#375** `format_console` escapes terminal control characters (C0 except tab, DEL) as `\xNN` in names and failure reasons (`_console_safe`); the JSON report keeps the value. Updated [report](report.md). Test: `tests/unit/test_report.py::test_format_console_escapes_terminal_control_characters`.
+
+* **#374** a failing numeric EXPECT reports the value the field holds: `record_rewrite.display_numeric_value` applies the implied point, sign and `P` scaling (both GnuCOBOL 3.2's stored-digits image and 3.1's zero-padded one); `build_json_report(pictures=, decimal_comma=)` renders `actual` and keeps `actualRaw`, and `run` prints the same through `json_report.readable_suite`. Updated [report](report.md). Tests: `tests/unit/test_expect_actual_rendering.py`.
+
+* **#376** a PROVIDER placeholder inside a quoted literal (`MOVE "{State}"`, `TO BE "State: {Name}"`) gets the row value's content, its quotes dropped and the template's quote doubled (`parser._quoted_spans`, `_literal_content`), so the options-reference example compiles and quoted and unquoted ROWs give the same literal; outside quotes the raw row text goes in as before. Updated [dsl](dsl.md) and `docs/options-reference.md`. Test: `tests/unit/test_provider_quoted_placeholders.py`.
+
+* **#384** A CAPTURE golden for a CALL the case never reaches is now skipped, not recorded. The driver wraps the record of each capture target in `IF tally = base` and DISPLAYs `__MOCKYMOCK__ UNREACHED <case> <name>` when the stub never ran, so `init`/`record` no longer pin the stub's initial value as if it were an argument passed (`splicer/driver.py`, `report/results.py`, `report/record_rewrite.py`).
+
+## 2026-10-29 -- same-kind nesting in clause bodies; `clean` removes staged copybook copies
+
+A boundary whose clause body holds a statement of its own kind (`CALL ...
+ON EXCEPTION CALL "ERRLOG" ... END-CALL END-CALL`, `READ ... NOT AT END
+READ REF-FILE ... END-READ END-READ`) was refused outright, both for its
+span (`source_map._nested_clause_site_span`) and for the lift
+(`clause_bodies._lift`). Both now pair verbs with terminators the COBOL
+way, a terminator closing the nearest statement it has not closed yet, and
+refuse only when an inner one has no terminator of its own. Fixture:
+`tests/integration/fixtures/same_kind_nested_clauses.cbl`.
+
+`mockymock clean` now also removes the copybook-alias staging directories
+built from the target's files or the configured copybook path: each has a
+`<digest>.sources` manifest (`copybook_aliases.staged_directories_for`).
+Updated [splicer](splicer.md), [cli](cli.md).
+
+## 2026-10-29 -- corpus-sweep report with a diff against the last run
+
+`scripts/corpus_sweep.py` now tallies blockers per category and saves
+each run as a JSON snapshot (`--json`); `--baseline` diffs against an
+earlier one per category and names the programs that regressed or
+cleared, and `--fail-on-regression` exits 1 on a regression. It also
+takes `--corpus`, `--copybook-path`, `--timeout` and `--jobs`, so it can
+sweep a corpus outside this repo. The logic moved to
+`mockymock/report/sweep.py`. `docs/corpus-sweep-report.md` was not
+regenerated (the legacy-application checkout was not available).
+Updated [report](report.md).
+
+## 2026-10-29 -- boundaries nested in another boundary's clause body
+
+A CALL / file op / RELEASE / RETURN / console ACCEPT inside a READ /
+RETURN / WRITE / REWRITE / DELETE / START / CALL clause body (`READ ...
+NOT AT END CALL "X"`, `CALL ... ON EXCEPTION WRITE ERR-REC`) was refused
+both ways: the inner site got no span (`nested_in_boundary`), and mocking
+the outer statement refused UNLIFTABLE_CLAUSE_BODY. Clause headers are now
+scope-map boundaries (`clause_bodies.clause_header_positions`,
+`ScopeBoundary.clause_header`), such an inner site gets a span of its own
+(`source_map._in_boundary_problem`; `BoundarySite.span_lead` keeps an
+`AT END` that shares its line), and the lift accepts those boundaries
+(`_NESTABLE_BOUNDARY_TYPES`). The splicer splices the inner site in place
+when the outer is left alone, or into the outer's lifted clause body when
+the outer is mocked (`orchestrator._splice_into_lifted`), at any depth.
+EXEC blocks, terminators and other boundaries in a clause body stay
+refused; a statement of the outer's own kind in its bodies now refuses
+the lift (which END-xxx closes which is ambiguous). VSAMKSDS and BATCHSEQ
+generate clean; verified on GnuCOBOL 3.1.2. Updated [splicer](splicer.md),
+[analysis](analysis.md).
+
+## 2026-10-29 -- CALL arguments and dynamic CALL targets in `generate`
+
+A CALL argument cobol-parser's layout index cannot hold (a group below
+level 01, one table element) is laid out from the DATA DIVISION instead of
+left as a "not resolvable" note with no value (`dsl/call_arguments.py`,
+wired in `cli/main.py` after `add_entry_parameters`). A dynamic CALL's mock
+body branches on the program names its identifier is known to hold
+(`generator._per_target_body`). Pinned by
+`tests/unit/test_call_argument_resolution.py` and its integration twin.
+Updated [cli](cli.md), [dsl](dsl.md), [integration](integration.md).
+
+## 2026-10-29 -- copybook member-name aliasing
+
+The sweep's missing-copybook rows were mostly exports named
+`gttlbi0a.copy` / `DMTREN0A.dcl`: the files were on the search path but
+under a case or extension cobol-parser does not try. New
+`mockymock/cli/copybook_aliases.py` stages them as `MEMBER.cpy` in a
+directory appended last to every command's copybook path list, and two
+config keys tune it: `copybook_extensions` (which extensions count) and
+`copybook_aliases` (member = file, for names that match nothing). Tests:
+`tests/unit/test_copybook_aliases.py`. Updated [cli](cli.md).
+
+## 2026-10-29 -- cobol-parser 3.1 adopted
+
+- The `<3.1` cap is lifted: `cobol-parser>=1.7.7,!=1.8.2,<4`. The 22 unit
+  tests 3.1 broke pass again, on 3.0.0, 3.1.1 and cobol-parser main.
+  [dsl](dsl.md): `generate` restores per-site `call_count`s for the keys a
+  3.1 bundle leaves uncounted (`_with_site_call_counts`), and reads a
+  quoted literal CALL argument. [cli](cli.md): `add_entry_parameters` tops
+  up the native entry-parameter stubs (a field set only through its 88s).
+  [integration](integration.md), [testing](testing.md),
+  [publishing](publishing.md): the pin.
+
+## 2026-10-27 -- bug hunt after the SECTION-member support
+
+Six fixes, each reproduced on GnuCOBOL 3.2 and pinned by
+`tests/unit/test_bug_hunt_20261027.py` (+ the integration twin). The GO TO
+fall-through walk no longer stops at the end of a "safe" section it fell
+into from outside (`_exposed_sections`; lint missed unmocked code that
+then ran). `exact_count_scope` counts a `PERFORM <section>` as its range
+only, a member run by PERFORM and by falling in as running twice, and
+nothing after a statement that may end the run (error-status scenarios).
+`generate` demotes a looped READ with no AT END (bundle row count). A
+trailing EXIT PROGRAM ends a section range (`_ends_section_range`), and
+the no-mode refusal message names the real reason (`why_not`). Updated
+[analysis](analysis.md), [dsl](dsl.md).
+
+## 2026-10-27 -- GOBACK / STOP RUN in SECTION members
+
+A terminator in a SECTION member was refused unless it sat in the
+section's first paragraph entered via `PERFORM <section-name>`, so the
+common "whole program in one MAIN SECTION" layout could not be tested.
+`refusal._section_member_modes` now gives each member one entry mode:
+section mode (inside a `PERFORM <section>` range, including later members
+reached by fall-through) leaves with EXIT SECTION, paragraph mode (only
+PERFORMed by its own name) with EXIT PARAGRAPH. Members entered both ways,
+inside a THRU range, or GO TO targets still refuse. Verified on GnuCOBOL
+3.2; `docs/2026-10-27-section-member-terminators-design.md`. Updated
+[analysis](analysis.md), [splicer](splicer.md).
+
+## 2026-10-27 -- generate: no SET in case setup; driver after a wrapped header
+
+Two defects from a sweep over a real corpus. `generate` scaffolded a
+POINTER `PROCEDURE DIVISION USING` item as `SET <item> TO NULL` among the
+TESTCASE's setup lines, which the `.cut` parser refuses (TPMSA000); it is
+now a comment, the per-case reset already making it NULL. And a header
+wrapped as `PROCEDURE DIVISION` / `USING LK-A.` failed to compile under
+`run` though `lint` passed (TPCTBIT1): `procedure_header_clause_spans`
+searched only the header's first line for the clause, and
+`_insert_driver` put the driver after that first line, inside the header.
+The clause is now found on any header line and the driver goes after the
+header's period. Updated [dsl](dsl.md), [cli](cli.md).
+
+## 2026-10-26 -- cobol-analysis skill: one source, in cobol-parser
+
+`mockymock/cli/skills/cobol-analysis/` was a hand-edited copy of
+cobol-parser's skill and had drifted (no MCP paragraph). It is now
+cobol-parser's file byte for byte, copied by
+`scripts/sync_cobol_analysis_skill.py`; `test_cobol_analysis_skill_sync.py`
+compares the two when a cobol-parser checkout is next to this repo. The
+`mockymock` skill's reference list now names `suites` and `clean`.
+Updated [cli](cli.md).
+
+## 2026-10-26 -- debug: setBreakpoints reports the bound line
+
+A breakpoint on `END-IF` (or `ELSE`, or a statement's second line) was
+answered as verified on that line, while gdb had bound it to the next
+line with code and the program stopped there. The response now carries
+the bound line, mapped back to the original source. Updated [cli](cli.md).
+
+## 2026-10-26 -- cobol-parser capped below 3.1
+
+- [integration](integration.md), [testing](testing.md), [publishing](publishing.md):
+  the dependency is now `cobol-parser>=1.7.7,!=1.8.2,<3.1`. The scheduled
+  `cobol-parser-compat` job went red on 3.1.0/3.1.1 (21 unit tests): the
+  bundle's tier-1 `call_count` is now one per (category, key) and only when
+  exact (cobol-parser #363), and a literal CALL USING argument keeps its
+  quotes. The unit suite passes unchanged on 3.0.0.
+
+## 2026-10-25 -- native toolchain backend
+
+- [runtime](runtime.md): new **Native toolchain** section. `runtime/toolchain.py`
+  selects `docker_toolchain` or the new `native_toolchain` (a relocatable
+  GnuCOBOL tree named by `MOCKYMOCK_GNUCOBOL_HOME`, which the VS Code
+  extension bundles); `run`, `debug`, `mutate`, `setup` and `status.probe()`
+  go through it. Overview no longer says Docker-only.
+- [index](index.md): Runtime line updated.
+
 ## 2026-10-25 -- second field run (PREMCALC, RECFMT, LEDGRPT, DATECHK)
 
 `cobc` gets `-fno-arithmetic-osvs`: GnuCOBOL 3.2's OS/VS arithmetic, which
 `-std=mvs` turns on, gives 0 for `P * (1 - D)` when D is zero
 ([runtime](runtime.md)). `mutate` scores a suite with known-failing cases
-against its passing ones ([cli](cli.md)). A terminator chain through a paragraph after a closed `PERFORM X THRU X-EXIT` range's end is no longer refused as GO TO fall-through ([analysis](analysis.md)). A TESTCASE may hold several PERFORMs, with MOVEs between them, for a sequence of calls ([dsl](dsl.md)). `generate` writes UNSTRING-delimited records for a field the program splits ([dsl](dsl.md)), and `run` points a risky case still holding `*> STUB EXPECT` lines at `--record-expectations`. Lint warns `UNDECLARED_NAME` for a name the program uses and never declares ([cli](cli.md)). `mutate` prints a ready `equivalent.json` body for zero-baseline survivors ([cli](cli.md)). `report` always writes its JSON beside the HTML, and `journal --cut` resolves to the suite `report` reads ([cli](cli.md)). The libxml2 version line is also dropped from cobc's stderr ([runtime](runtime.md)).
+against its passing ones ([cli](cli.md)). A terminator chain through a paragraph after a closed `PERFORM X THRU X-EXIT` range's end is no longer refused as GO TO fall-through ([analysis](analysis.md)). A TESTCASE may hold several PERFORMs, with MOVEs between them, for a sequence of calls ([dsl](dsl.md)). `generate` writes UNSTRING-delimited records for a field the program splits, reading the delimiter with or without the quotes cobol-parser 3.1 keeps ([dsl](dsl.md)), and `run` points a risky case still holding `*> STUB EXPECT` lines at `--record-expectations`. Lint warns `UNDECLARED_NAME` for a name the program uses and never declares ([cli](cli.md)). `mutate` prints a ready `equivalent.json` body for zero-baseline survivors ([cli](cli.md)). `report` always writes its JSON beside the HTML, and `journal --cut` resolves to the suite `report` reads ([cli](cli.md)). The libxml2 version line is also dropped from cobc's stderr ([runtime](runtime.md)).
 
 ## 2026-10-25 -- field-run follow-ups to #346, #347, #349, #351
 

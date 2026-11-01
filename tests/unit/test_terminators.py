@@ -285,35 +285,54 @@ def test_find_terminator_plans_includes_intermediate_perform_in_chain():
     }
 
 
-def test_looping_perform_is_excluded_from_the_safe_chain():
-    """A PERFORM ... UNTIL used as an intermediate chain link is NOT a
-    "plain, unconditional" PERFORM: EXIT PARAGRAPH from inside its target
-    only ends the current iteration, not the loop, so its target must not
-    be treated as safely reachable. Here the terminator sits directly in
-    the perform_target paragraph (always in safe_names), so it's still
-    accepted -- but the loop's own PERFORM must NOT appear in
-    chain_performs, since instrumenting it would insert a chain-check that
-    fires on every iteration rather than once after the whole loop."""
+def test_looping_perform_is_a_chain_link_with_its_condition_extended():
+    """An out-of-line PERFORM ... UNTIL on the chain gets a check after it
+    like any chain PERFORM (it runs once, after the whole loop), and is
+    listed in loop_performs so the splicer extends its UNTIL: without that
+    an early exit inside the loop would just start the next iteration."""
     program, surface, scope_map, lines = _analyze(LOOP_SAFE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert reasons == []
     assert len(plans) == 1
-    assert plans[0].chain_performs == []
+    assert [p.target_paragraph for p in plans[0].chain_performs] == ["1000-LOOP-BODY"]
+    assert [p.target_paragraph for p in plans[0].loop_performs] == ["1000-LOOP-BODY"]
 
 
-def test_terminator_reached_only_through_a_loop_body_refuses():
-    """The terminator (STOP RUN) lives inside 1000-LOOP-BODY, which is
-    reachable ONLY as the target of a PERFORM ... UNTIL -- not a plain,
-    unconditional PERFORM. Confirmed empirically (a synthetic spliced
-    program with this shape kept iterating past a real STOP RUN instead
-    of stopping) that treating this as safe is a genuine correctness bug;
-    this must refuse instead."""
+def test_terminator_reached_through_a_loop_body_is_planned():
+    """STOP RUN inside 1000-LOOP-BODY, reached only as the target of a
+    PERFORM ... UNTIL. It used to refuse: the neutralized STOP RUN returned
+    into the loop, which kept iterating instead of stopping. The loop's
+    UNTIL now also tests UT-EARLY-EXIT (loop_performs), so the loop ends on
+    its next test and the check after it carries the exit on."""
     program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].site.paragraph_name == "1000-LOOP-BODY"
+    assert [p.target_paragraph for p in plans[0].loop_performs] == ["1000-LOOP-BODY"]
+
+
+LOOP_TERMINATOR_TIMES_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LOOPTIMES.
+
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-LOOP-BODY 3 TIMES.
+
+       1000-LOOP-BODY.
+           STOP RUN.
+"""
+
+
+def test_terminator_reached_only_through_a_times_loop_refuses():
+    """PERFORM ... TIMES has no condition to extend with the early-exit
+    flag, so it stays off the chain and its target's terminator refuses."""
+    program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_TIMES_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "not via a chain of plain, unconditional" in reasons[0].message
 
 
 LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE = """\
@@ -335,19 +354,10 @@ LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE = """\
 
 
 def test_terminator_reached_only_through_a_varying_loop_body_refuses():
-    """Same hazard as test_terminator_reached_only_through_a_loop_body_refuses
-    above, but for the out-of-line PERFORM ... VARYING form specifically --
-    a distinct cobolparser codepath from UNTIL/TIMES. This shape's VARYING
-    clause used to be silently dropped, mistagging perform_type "SIMPLE"
-    (indistinguishable from a safe plain PERFORM to
-    _plain_perform_edges_from); what protected it then was an unrelated
-    PARSE_WARNING refusal for the dropped clause -- see
-    tests/unit/test_refusal.py's OUT_OF_LINE_PERFORM_VARYING_SOURCE comment.
-    cobolparser now parses this correctly (perform_type == "VARYING", no
-    warnings -- test_refusal.py::test_out_of_line_perform_varying_parses_correctly),
-    so this pins that the *intended* mechanism -- the perform_type guard in
-    _plain_perform_edges_from -- independently still excludes it, rather
-    than relying on the parser bug's accidental safety net."""
+    """The out-of-line PERFORM ... VARYING form is not extended like UNTIL:
+    the counter is stepped before the condition is tested again, so the
+    test would see it one step past where the real run stops. Still a dead
+    end, still refused."""
     program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
@@ -823,34 +833,249 @@ def test_terminator_in_safe_section_reached_directly_by_test_target():
     assert plans[0].chain_performs == []
 
 
-def test_terminator_in_a_later_section_paragraph_still_refuses():
-    """Even though 1000-TERM-SECTION is a safe entry (its first paragraph
-    is never GO TO'd or directly PERFORMed elsewhere), the terminator
-    here sits in 1000-TERM-SECOND -- reached only by fall-through after
-    1000-TERM-FIRST, never PERFORMed by name anywhere this codebase's BFS
-    would follow. Shape 2 from
-    docs/2026-07-10-section-scoped-terminator-support-design.md,
-    deliberately still out of scope: pins the boundary as documented
-    intent, not an accident of the safe_section_first_names check."""
+def test_terminator_in_a_later_section_paragraph_reached_by_fall_through():
+    """Shape 2 of docs/2026-07-10-section-scoped-terminator-support-design.md,
+    supported since 2026-10-27: 1000-TERM-SECOND runs inside the `PERFORM
+    1000-TERM-SECTION` range by falling through from 1000-TERM-FIRST, so it
+    leaves with EXIT SECTION (verified against GnuCOBOL 3.2, see
+    docs/2026-10-27-section-member-terminators-design.md)."""
     program, surface, scope_map, lines = _analyze(SECTION_LATER_PARAGRAPH_UNSAFE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].site.paragraph_name == "1000-TERM-SECOND"
+    assert plans[0].exit_kind == "SECTION"
+
+
+def test_later_section_paragraph_after_a_diverting_one_is_not_in_section_mode():
+    """A member after one that provably diverts (its last statement is a
+    GOBACK) is never reached by fall-through, so PERFORMing it by name is
+    its only entry and EXIT PARAGRAPH returns from it."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTMODES.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RC PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           PERFORM A100-CHECK
+           GOBACK.
+       A100-CHECK.
+           IF WS-RC NOT = 0
+               STOP RUN
+           END-IF
+           DISPLAY "CHECKED".
+"""
+    program, surface, scope_map, lines = _analyze(source)
+    plans, reasons = find_terminator_plans(
+        surface, program, _suite("A000-START"), scope_map, lines
+    )
+    assert reasons == []
+    kinds = {p.site.paragraph_name: p.exit_kind for p in plans}
+    assert kinds == {"A000-START": "PARAGRAPH", "A100-CHECK": "PARAGRAPH"}
+    # The PERFORM in A000-START is a chain edge of a by-name entry: its
+    # check exits the paragraph, not the section.
+    for plan in plans:
+        assert set(plan.chain_exit_kinds.values()) <= {"PARAGRAPH"}
+
+    # Entered as the whole section instead, A000-START runs in section mode.
+    plans, reasons = find_terminator_plans(
+        surface, program, _suite("A000-MAIN"), scope_map, lines
+    )
+    assert reasons == []
+    kinds = {p.site.paragraph_name: p.exit_kind for p in plans}
+    assert kinds == {"A000-START": "SECTION", "A100-CHECK": "PARAGRAPH"}
+    perform = plans[0].chain_performs[0]
+    assert plans[0].chain_exit_kinds[id(perform)] == "SECTION"
+
+
+def test_section_member_entered_both_ways_still_refuses():
+    """A000-START is PERFORMed by name by one case and runs as the section's
+    range for another: no single EXIT verb returns from it."""
+    from mockymock.dsl.model import MockTestCase, MockTestSuite
+
+    program, surface, scope_map, lines = _analyze(SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE)
+    suite = MockTestSuite(
+        name="S",
+        test_cases=[
+            MockTestCase(name="a", perform_target="0000-MAIN-PROCESS"),
+            MockTestCase(name="b", perform_target="0000-MAIN-SECTION"),
+        ],
+    )
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
     assert plans == []
     assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "SECTION" in reasons[0].message
+    assert "entered both by its own name and as part of" in reasons[0].message
 
 
-def test_section_own_paragraph_terminator_refuses():
-    """The terminator's OWN paragraph (0000-MAIN-PROCESS) is a SECTION
-    member, reached directly as the case's perform_target -- distinct from
-    test_section_scoped_terminator_refuses, which tests the chain-level
-    check instead."""
-    program, surface, scope_map, lines = _analyze(SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE)
+def test_section_member_inside_a_thru_range_still_refuses():
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECTTHRU.
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-A THRU 1000-B
+           PERFORM 1000-B.
+       1000-S SECTION.
+       1000-A.
+           DISPLAY "A".
+       1000-B.
+           STOP RUN.
+"""
+    program, surface, scope_map, lines = _analyze(source)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
     assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "SECTION" in reasons[0].message
+    assert any(r.code == "UNSUPPORTED_TERMINATOR_LAYOUT" for r in reasons)
+
+
+def _section_refusals(source, perform_target):
+    program, surface, scope_map, lines = _analyze(source)
+    plans, reasons = find_terminator_plans(
+        surface, program, _suite(perform_target), scope_map, lines
+    )
+    return plans, reasons
+
+
+def test_section_range_running_an_unmoded_member_refuses():
+    """`PERFORM A000-MAIN` falls into A010-MID, which is also PERFORMed by
+    name elsewhere and so has no mode: its PERFORM X100-CHK would run
+    with no early-exit check after it, and A020-END would still run after
+    the GOBACK (review of 2026-10-27, reproduced on GnuCOBOL 3.2)."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SEC1.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N       PIC 99 VALUE 0.
+       01  WS-STEP    PIC X(10) VALUE SPACES.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           PERFORM X100-CHK
+           MOVE 'ONE' TO WS-STEP.
+       A010-MID.
+           PERFORM X100-CHK
+           MOVE 'AFTER' TO WS-STEP.
+       A020-END.
+           MOVE 'END' TO WS-STEP.
+       Q000-OTHER SECTION.
+       Q000-P.
+           PERFORM A010-MID.
+       X000-SUBS SECTION.
+       X100-CHK.
+           ADD 1 TO WS-N
+           IF WS-N = 2
+               MOVE 'STOPPED' TO WS-STEP
+               GOBACK
+           END-IF.
+"""
+    plans, reasons = _section_refusals(source, "A000-MAIN")
+    assert plans == []
+    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+
+
+def test_trailing_exit_paragraph_does_not_end_a_section_range():
+    """Inside `PERFORM A000-MAIN`, A000-START's trailing EXIT PARAGRAPH
+    only ends that paragraph: control falls into A010-CHK, which is also
+    PERFORMed by name -- entered two ways, so it refuses rather than get
+    an EXIT PARAGRAPH that would let A020-END run."""
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SEC3.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N       PIC 99 VALUE 0.
+       01  WS-STEP    PIC X(10) VALUE SPACES.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           PERFORM A010-CHK
+           MOVE 'ONE' TO WS-STEP
+           EXIT PARAGRAPH.
+       A010-CHK.
+           ADD 1 TO WS-N
+           IF WS-N = 2
+               MOVE 'STOPPED' TO WS-STEP
+               GOBACK
+           END-IF.
+       A020-END.
+           MOVE 'END' TO WS-STEP.
+"""
+    plans, reasons = _section_refusals(source, "A000-MAIN")
+    assert plans == []
+    assert "entered both by its own name and as part of" in reasons[0].message
+
+
+def test_sort_procedure_members_get_no_mode():
+    from mockymock.analysis.refusal import _section_member_modes
+
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECSORT.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT SORT-FILE ASSIGN TO SORTWK.
+       DATA DIVISION.
+       FILE SECTION.
+       SD  SORT-FILE.
+       01  SORT-REC PIC X(10).
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           SORT SORT-FILE ON ASCENDING KEY SORT-REC
+               INPUT PROCEDURE B000-IN
+               GIVING SORT-FILE
+           PERFORM B010-FEED
+           GOBACK.
+       B000-IN SECTION.
+       B010-FEED.
+           RELEASE SORT-REC.
+"""
+    program, _, _, _ = _analyze(source)
+    modes = _section_member_modes(program, paragraph_entries={"A000-START"})
+    assert modes.get("A000-START") == "PARAGRAPH"
+    assert "B010-FEED" not in modes
+
+
+def test_xml_parse_processing_procedure_members_get_no_mode():
+    from mockymock.analysis.refusal import _section_member_modes
+
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. XMLP.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-DOC     PIC X(20) VALUE '<a>1</a>'.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+       A000-START.
+           PERFORM B010-HND
+           XML PARSE WS-DOC PROCESSING PROCEDURE B010-HND
+           END-XML
+           GOBACK.
+       B000-H SECTION.
+       B010-HND.
+           GOBACK.
+"""
+    program, _, _, _ = _analyze(source)
+    modes = _section_member_modes(program, paragraph_entries={"A000-START"})
+    assert modes.get("A000-START") == "PARAGRAPH"
+    assert "B010-HND" not in modes
+
+
+def test_section_own_paragraph_reached_by_name_is_accepted():
+    """Shape 3, supported since 2026-10-27: the terminator's own paragraph
+    is a SECTION member PERFORMed by its own name (here the case's own
+    target) and never entered as its section's range, so its range is the
+    paragraph alone and EXIT PARAGRAPH returns from it."""
+    program, surface, scope_map, lines = _analyze(SECTION_OWN_PARAGRAPH_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert reasons == []
+    assert len(plans) == 1
+    assert plans[0].exit_kind == "PARAGRAPH"
 
 
 def test_terminator_sharing_its_line_refuses():

@@ -34,12 +34,17 @@ but one statement must get exactly one splice.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Sequence
 
-from mockymock.analysis.clause_bodies import lift_clause_bodies, scan_words
+from mockymock.analysis.clause_bodies import (
+    LiftedClause,
+    lift_clause_bodies,
+    scan_words,
+)
 from mockymock.analysis.flow_mocks import FlowMockPlan
-from mockymock.analysis.mock_surface import MockSurface
+from mockymock.analysis.mock_surface import BoundarySite, MockSurface
 from mockymock.analysis.refusal import (
     GotoExitPlan,
     TerminatorPlan,
@@ -57,9 +62,10 @@ from mockymock.splicer.injector import (
     build_site_dispatch,
     build_terminator_neutralization,
     build_unmocked_trap,
+    prefix_loop_conditions,
 )
 from mockymock.splicer.naming import TallyRegistry
-from mockymock.splicer.source_map import statement_span
+from mockymock.splicer.source_map import boundary_parents, statement_span
 from mockymock.splicer.stub_writer import comment_and_replace, insert_lines_after
 
 
@@ -129,7 +135,6 @@ def splice_program(
     program_words = {word.strip(",;()") for _, _, word in scan_words("\n".join(lines))}
     eib_resp_names = tuple(n for n in EIB_RESP_NAMES if n in program_words)
     spans: list[tuple[int, int, list[str]]] = []
-    seen_statement_ids: set[int] = set()
     sqlstate = any(_SQLSTATE_RE.search(line) for line in lines)
     # EXEC CICS RETURN/XCTL/ABEND plans (issue #215): the site keeps its
     # ordinary dispatch below, wrapped with the early exit.
@@ -137,20 +142,18 @@ def splice_program(
         id(plan.site.statement): plan for plan in terminator_plans if plan.is_cics
     }
 
+    # Pass 1: which sites get a splice, and how.
+    kinds: dict[int, tuple[BoundarySite, str]] = {}
     for site in surface.boundary_sites:
-        if site.category is None:
+        if site.category is None or id(site.statement) in kinds:
             continue
-        if id(site.statement) in seen_statement_ids:
-            continue
-
         mocked = any(
             directive_matches_site(directive, site)
             for case in suite.test_cases
             for directive in case.mocks
         )
-        replacement: list[str] | None
         if mocked:
-            replacement = None  # built once the site's span is known
+            kinds[id(site.statement)] = (site, "mock")
         elif site.category in EXEC_CATEGORIES:
             # Unmocked EXEC still has to go: cobc cannot compile it. The
             # refusal gate refuses any test case that can reach it (PERFORM
@@ -158,15 +161,32 @@ def splice_program(
             # are all modeled; DECLARATIVES and ALTER refuse the whole
             # program), so the trap only fires if reachability analysis and
             # reality disagree -- and then it fails loudly.
-            replacement = build_exec_trap(site.label, site.line)
+            kinds[id(site.statement)] = (site, "exec")
         elif id(site.statement) in fallthrough_traps:
-            replacement = build_unmocked_trap(site.label, site.line)
-        else:
-            # Unmocked non-EXEC sites are plain COBOL: leave them alone.
-            # (If one were reachable, the refusal gate already fired.)
-            continue
+            kinds[id(site.statement)] = (site, "trap")
+        # Unmocked non-EXEC sites are plain COBOL: leave them alone. (If
+        # one were reachable, the refusal gate already fired.)
 
-        seen_statement_ids.add(id(site.statement))
+    # A site nested in the clause body of another site that is spliced too
+    # (`READ ... NOT AT END CALL "X"` with both mocked) is not spliced in
+    # place: the enclosing splice comments its lines out. A mock of the
+    # enclosing statement re-runs its clause bodies from a lifted copy, and
+    # the nested site is spliced into that copy instead; a trap removes it
+    # with the rest of the statement.
+    parents = boundary_parents(surface)
+    inner: dict[int, list[BoundarySite]] = {}
+    enclosed: set[int] = set()
+    for key, (site, _) in kinds.items():
+        parent = parents.get(key)
+        while parent is not None and id(parent.statement) not in kinds:
+            parent = parents.get(id(parent.statement))
+        if parent is None:
+            continue
+        enclosed.add(key)
+        if kinds[id(parent.statement)][1] == "mock":
+            inner.setdefault(id(parent.statement), []).append(site)
+
+    def site_span(site: BoundarySite) -> tuple[int, int]:
         if site.nested:
             if site.span is None:
                 raise ValueError(
@@ -175,49 +195,82 @@ def splice_program(
                     f"gate (UNSUPPORTED_NESTED_MOCK_TARGET / NESTED_EXEC) "
                     f"should have refused it"
                 )
-            start, end = site.span
-        else:
-            if site.unspliceable_reason:
-                raise ValueError(
-                    f"top-level {site.label} site at line {site.line} "
-                    f"reached the splicer although it "
-                    f"{site.unspliceable_reason} -- the refusal gate "
-                    f"(UNSUPPORTED_MOCK_TARGET_LAYOUT / UNSPLICEABLE_EXEC) "
-                    f"should have refused it; splicing would delete the "
-                    f"sibling code sharing its line"
-                )
-            start, end = statement_span(site.statement, boundaries, last_line, lines)
-        if replacement is None:
-            replacement = build_site_dispatch(
-                site,
-                suite,
-                registry,
-                file_status_fields,
-                trace=trace,
-                statement_text=" ".join(lines[start - 1 : end]),
-                layout=surface.data_layout,
-                # A nested site with clauses of its own reaches here only
-                # with a span bounded by its own scope terminator (#258),
-                # so its bodies lift exactly like a top-level site's.
-                lifted_clauses=lift_clause_bodies(site.statement, lines, column_offset),
-                sqlstate=sqlstate,
-                passthrough=(
-                    _statement_lines(lines, start, end) if site.opt_in else None
-                ),
-                eib_resp_names=eib_resp_names,
+            return site.span
+        if site.unspliceable_reason:
+            raise ValueError(
+                f"top-level {site.label} site at line {site.line} "
+                f"reached the splicer although it "
+                f"{site.unspliceable_reason} -- the refusal gate "
+                f"(UNSUPPORTED_MOCK_TARGET_LAYOUT / UNSPLICEABLE_EXEC) "
+                f"should have refused it; splicing would delete the "
+                f"sibling code sharing its line"
             )
-            # What the DB2 precompiler puts after the statement for every
-            # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).
-            replacement += [
-                f"           {line}"
-                for line in whenever_check_lines(site.whenever_checks)
-            ]
-        cics_plan = cics_terminators.get(id(site.statement))
+        return statement_span(site.statement, boundaries, last_line, lines)
+
+    def site_replacement(site: BoundarySite, kind: str) -> list[str]:
+        """The site's replacement block, with every site nested in its
+        clause bodies already spliced into the lifted copy -- but neither
+        its span's clause-header lead nor a sentence period."""
+        if kind == "exec":
+            return build_exec_trap(site.label, site.line)
+        if kind == "trap":
+            return build_unmocked_trap(site.label, site.line)
+        start, end = site_span(site)
+        own = _without_lead(lines[start - 1 : end], site.span_lead, column_offset)
+        lifted = lift_clause_bodies(site.statement, lines, column_offset)
+        for child in inner.get(id(site.statement), []):
+            if lifted is None:
+                raise ValueError(
+                    f"{child.label} site at line {child.line} is nested in "
+                    f"the clause body of the mocked {site.label} at line "
+                    f"{site.line}, whose clause bodies cannot be lifted -- "
+                    f"the refusal gate (UNLIFTABLE_CLAUSE_BODY) should have "
+                    f"refused it"
+                )
+            lifted = _splice_into_lifted(
+                lifted,
+                site_span(child),
+                site_replacement(child, kinds[id(child.statement)][1]),
+                child,
+            )
+        replacement = build_site_dispatch(
+            site,
+            suite,
+            registry,
+            file_status_fields,
+            trace=trace,
+            statement_text=" ".join(own),
+            layout=surface.data_layout,
+            # A nested site with clauses of its own reaches here only with
+            # a span bounded by its own scope terminator (#258), so its
+            # bodies lift exactly like a top-level site's.
+            lifted_clauses=lifted,
+            sqlstate=sqlstate,
+            passthrough=(_statement_lines(own, 1, len(own)) if site.opt_in else None),
+            eib_resp_names=eib_resp_names,
+            real_statement=_statement_lines(own, 1, len(own)),
+        )
+        # What the DB2 precompiler puts after the statement for every
+        # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).
+        return replacement + [
+            f"           {line}" for line in whenever_check_lines(site.whenever_checks)
+        ]
+
+    for key, (site, kind) in kinds.items():
+        if key in enclosed:
+            continue
+        start, end = site_span(site)
+        replacement = site_replacement(site, kind)
+        cics_plan = cics_terminators.get(key)
         if cics_plan is not None:
             prefix, suffix = build_cics_terminator_exit(
                 cics_plan.exit_kind, cics_plan.resp_field
             )
             replacement = prefix + replacement + suffix
+        if site.span_lead:
+            # `AT END CALL "X"`: the header stays, on a line of its own.
+            lead_width = column_offset + len(site.span_lead)
+            replacement = [lines[start - 1][:lead_width].rstrip(), *replacement]
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /
         # paragraph), the replacement block must terminate the sentence too
@@ -369,6 +422,22 @@ def splice_program(
                 chain_check = chain_check[:-1] + [chain_check[-1] + "."]
             insertions.append((end, chain_check))
 
+    # Loop PERFORMs on a chain get their UNTIL extended in place first: the
+    # line count does not change, so every span and insertion point above
+    # stays valid.
+    seen_loop_ids: set[int] = set()
+    for plan in terminator_plans:
+        for perform in plan.loop_performs:
+            if id(perform) in seen_loop_ids:
+                continue
+            seen_loop_ids.add(id(perform))
+            nested_span = plan.chain_spans.get(id(perform))
+            if nested_span is not None:
+                start, end = nested_span
+            else:
+                start, end = statement_span(perform, boundaries, last_line, lines)
+            lines = prefix_loop_conditions(lines, start, end)
+
     ops: list[tuple[int, str, int, int, list[str]]] = [
         (start, "replace", start, end, replacement) for start, end, replacement in spans
     ] + [
@@ -395,3 +464,59 @@ def _statement_lines(lines: list[str], start: int, end: int) -> list[str]:
     if text and text[-1].endswith("."):
         text[-1] = text[-1][:-1].rstrip()
     return [line for line in text if line]
+
+
+def _without_lead(
+    span_lines: list[str], lead: str | None, column_offset: int = 0
+) -> list[str]:
+    """`span_lines` with the clause header a span opens with
+    (`BoundarySite.span_lead`, measured on the normalized source, which
+    `span_lines` sits `column_offset` columns right of) blanked out of its
+    first line."""
+    if not lead or not span_lines:
+        return list(span_lines)
+    width = column_offset + len(lead)
+    return [" " * width + span_lines[0][width:], *span_lines[1:]]
+
+
+def _splice_into_lifted(
+    lifted: tuple[LiftedClause, ...],
+    span: tuple[int, int],
+    replacement: list[str],
+    site: BoundarySite,
+) -> tuple[LiftedClause, ...]:
+    """`lifted` with the lines of `span` -- a site nested in one of its
+    clause bodies -- replaced by `replacement` in the body that holds them.
+    The span was validated against the source (`annotate_nested_sites`):
+    it opens with the site's own line, ends before the next statement,
+    clause header or scope word, and the lift copied those lines verbatim
+    (`LiftedClause.source_line_numbers`), less the clause header and any
+    sentence period, which stay the enclosing statement's."""
+    start, end = span
+    result = list(lifted)
+    for index, clause in enumerate(lifted):
+        numbers = clause.source_line_numbers
+        if start not in numbers:
+            continue
+        keep = [k for k, number in enumerate(numbers) if not start <= number <= end]
+        first = numbers.index(start)
+        before = [k for k in keep if k < first]
+        after = [k for k in keep if k > first]
+        result[index] = dataclasses.replace(
+            clause,
+            source_lines=(
+                *(clause.source_lines[k] for k in before),
+                *replacement,
+                *(clause.source_lines[k] for k in after),
+            ),
+            source_line_numbers=(
+                *(numbers[k] for k in before),
+                *(0 for _ in replacement),
+                *(numbers[k] for k in after),
+            ),
+        )
+        return tuple(result)
+    raise ValueError(
+        f"{site.label} site at line {site.line} is nested in a clause body "
+        f"the lift did not copy its line {start} from"
+    )

@@ -88,6 +88,7 @@ from mockymock.dsl.model import (
 
 from ._plans import find_terminator_plans
 from ._reachability import (
+    _exposed_sections,
     _fallthrough_flags,
     _fallthrough_safe_sections,
     _find_statements_of_type,
@@ -96,6 +97,7 @@ from ._reachability import (
     _reachable_paragraphs,
     _source_ordered_paragraphs,
     _walk_fallthrough_from,
+    _without_sections,
     duplicated_paragraph_names,
 )
 from ._types import (
@@ -873,10 +875,11 @@ def check_unresolved_copybooks_scoped(
     if not copy_indices:
         return [], []
     normalized_lines = split_source_lines(normalized)
-    whole_lines: set[int] = set()
+    whole_lines: dict[int, str] = {}
     scoped: list[ParagraphScopedRefusal] = []
     for index in copy_indices:
         line = tokens[index].location.line
+        member = _copy_member_label(tokens, index)
         owner = (
             _paragraph_owning_line(program, line, normalized_lines)
             if program is not None
@@ -886,7 +889,7 @@ def check_unresolved_copybooks_scoped(
             _copy_own_line_span(normalized_lines, line) if owner is not None else None
         )
         if owner is None or span is None:
-            whole_lines.add(line)
+            whole_lines.setdefault(line, member)
             continue
         scoped.append(
             ParagraphScopedRefusal(
@@ -894,7 +897,7 @@ def check_unresolved_copybooks_scoped(
                 reason=RefusalReason(
                     code="UNRESOLVED_COPYBOOK",
                     message=(
-                        f"unresolved COPY statement at line {line} (inside "
+                        f"unresolved COPY{member} at line {line} (inside "
                         f"paragraph '{owner}', which a selected test case "
                         f"can execute) -- the copybook's statements are "
                         f"missing from that paragraph's body, so splicing/"
@@ -917,7 +920,7 @@ def check_unresolved_copybooks_scoped(
         RefusalReason(
             code="UNRESOLVED_COPYBOOK",
             message=(
-                f"unresolved COPY statement at line {line} -- the DATA "
+                f"unresolved COPY{whole_lines[line]} at line {line} -- the DATA "
                 f"DIVISION section it belongs to has no expanded content "
                 f"(cobolparser does not raise a parse error for an "
                 f"unresolved COPY; it silently produces an empty data-item "
@@ -929,6 +932,17 @@ def check_unresolved_copybooks_scoped(
         for line in sorted(whole_lines)
     ]
     return reasons, scoped
+
+
+def _copy_member_label(tokens, index: int) -> str:
+    """` MEMBER` for the COPY token at `index` (its text-name, the next
+    token, quotes stripped), so the refusal names what to look for; the
+    old wording ` statement` when no name follows."""
+    if index + 1 < len(tokens):
+        name = str(tokens[index + 1].value or "").strip("'\"")
+        if name and name != ".":
+            return f" {name}"
+    return " statement"
 
 
 def _copy_own_line_span(
@@ -1043,6 +1057,7 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
     changed = True
     while changed:
         changed = False
+        walked: set[str] = set()
         for name in sorted(union & go_to_targets):
             reached = _walk_fallthrough_from(
                 name,
@@ -1057,6 +1072,7 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
                 # (e.g. an empty section): the closure is incomplete, so the
                 # union cannot be trusted to waive anything.
                 return None
+            walked.update(reached)
             for fallen in reached:
                 if fallen in union:
                     continue
@@ -1065,6 +1081,12 @@ def union_executed_paragraphs(program, suite: MockTestSuite) -> set[str] | None:
                     return None
                 union |= fallen_seen
                 changed = True
+        # A section fallen into from outside has no return marker at its
+        # end: walk again without stopping there.
+        exposed = _exposed_sections(paragraph_safe_section, section_members, walked)
+        if exposed:
+            paragraph_safe_section = _without_sections(paragraph_safe_section, exposed)
+            changed = True
     return union
 
 

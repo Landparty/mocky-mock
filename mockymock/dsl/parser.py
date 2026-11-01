@@ -117,6 +117,13 @@ _HOOK_RE = re.compile(r"^(?P<hook>BEFORE-ALL|BEFORE-EACH|AFTER-EACH|AFTER-ALL)$"
 # missed terminator must not silently swallow the rest of the file.
 _END_BEFORE_RE = re.compile(r"^END-BEFORE\.?$", re.IGNORECASE)
 _END_AFTER_RE = re.compile(r"^END-AFTER\.?$", re.IGNORECASE)
+# `USE REAL CALL "X" FROM "path"`: run the real program X instead of a mock
+# (docs/2026-11-01-real-call-integration-design.md).
+_USE_REAL_RE = re.compile(
+    r"""^USE\s+REAL\s+CALL\s+(?P<q1>["'])(?P<key>[^"']*)(?P=q1)"""
+    r"""\s+FROM\s+(?P<q2>["'])(?P<path>[^"']*)(?P=q2)$""",
+    re.IGNORECASE,
+)
 _MOCK_QUOTED_RE = re.compile(
     rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"(?:\s+(?P<rows>ROWS))?$'
 )
@@ -171,7 +178,13 @@ _EXPECT_RE = re.compile(
 # identifier like OR-FLAG or GREATER-VALUE parsing as an ordinary value.
 # NOT belongs here too: `TO BE NOT 5` (NOT after TO BE rather than before
 # it) otherwise parsed as the value `NOT 5` and generated `IF X NOT = NOT 5`.
-_EXPECT_DANGLING_PHRASE_RE = re.compile(r"^(?:GREATER|LESS|THAN|OR|EQUAL|NOT)(?:\s|$)")
+# A leading relational symbol too: `TO BE > 0 AND < 10` read as the value
+# `> 0 AND < 10` under plain `TO BE` and generated `IF NOT (X = > 0 ...)`,
+# which lint passed and cobc rejected. The phrase is `TO BE GREATER THAN
+# 0 AND < 10`; symbols are only for the abbreviated tail.
+_EXPECT_DANGLING_PHRASE_RE = re.compile(
+    r"^(?:(?:GREATER|LESS|THAN|OR|EQUAL|NOT)(?:\s|$)|[<>=])"
+)
 _VERIFY_QUOTED_RE = re.compile(
     rf'^VERIFY\s+(?:(?P<cat>{_QUOTED_CATS})\s+)?"(?P<key>[^"]*)"'
     rf"\s+WAS\s+(?:CALLED|PERFORMED)\s+(?P<expectation>.+)$"
@@ -460,6 +473,19 @@ def _reject_body_control_flow(line: str, line_no: int, directive: str) -> None:
         )
 
 
+def _reject_dangling_phrase(value: str, line_no: int, line: str) -> None:
+    """Refuse an EXPECT value that starts with a comparison word or a
+    relational symbol (see `_EXPECT_DANGLING_PHRASE_RE`)."""
+    if _EXPECT_DANGLING_PHRASE_RE.match(value.lstrip()):
+        raise CutParseError(
+            f"line {line_no}: malformed EXPECT comparison: {line!r} "
+            f"(expected [NOT] TO BE, [NOT] TO BE GREATER THAN "
+            f"[OR EQUAL TO], or [NOT] TO BE LESS THAN [OR EQUAL TO], "
+            f"followed by the value; write `TO BE GREATER THAN 0 AND < 10`, "
+            f"not `TO BE > 0 AND < 10`)"
+        )
+
+
 def _reject_sentence_period(value: str, line_no: int, verb: str = "EXPECT") -> None:
     """Refuse an EXPECT value ending in a period outside any quoted
     literal (`EXPECT WS-X TO BE 5.` -- the natural COBOL sentence habit).
@@ -710,14 +736,53 @@ def _reject_name_placeholder(
             )
 
 
+def _literal_content(raw: str) -> str:
+    """A row value as text to put inside a literal: a quoted value's
+    content with its doubled quotes undone (`"O""K"` -> `O"K`), anything
+    else as written."""
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        return raw[1:-1].replace(raw[0] * 2, raw[0])
+    return raw
+
+
+def _quoted_spans(text: str) -> list[tuple[str | None, str]]:
+    """`text` cut into (quote, segment) pieces: quote is `"` or `'` for the
+    inside of a literal (a doubled quote inside stays in it), None for the
+    text between literals."""
+    pieces: list[tuple[str | None, str]] = []
+    quote: str | None = None
+    start = index = 0
+    while index < len(text):
+        char = text[index]
+        if quote is None and char in "'\"":
+            pieces.append((None, text[start : index + 1]))
+            quote, start = char, index + 1
+        elif quote is not None and char == quote:
+            if text[index + 1 : index + 2] == quote:
+                index += 2  # a doubled quote is part of the literal
+                continue
+            pieces.append((quote, text[start:index]))
+            pieces.append((None, char))
+            quote, start = None, index + 1
+        index += 1
+    pieces.append((quote, text[start:]))
+    return pieces
+
+
 def _substitute(
     text: str, provider: DataProvider, row: list[str], case_name: str, line_no: int
 ) -> str:
-    """Replace every `{ColumnName}` token in `text` with that column's raw
-    row value. An unknown column is a CutParseError, not a silent no-op --
-    same fail-closed convention as the rest of this parser."""
+    """Replace every `{ColumnName}` token in `text` with that column's row
+    value. An unknown column is a CutParseError, not a silent no-op --
+    same fail-closed convention as the rest of this parser.
 
-    def repl(match: re.Match[str]) -> str:
+    Outside a literal the raw row text goes in, quotes and all (`MOVE
+    {State}` with `ROW "NY"` is `MOVE "NY"`). Inside one (`MOVE "{State}"`,
+    `TO BE "State: {Name}"`) the row value's content goes in, its quotes
+    dropped and the template literal's quote doubled, so a quoted and an
+    unquoted ROW give the same literal (issue #376)."""
+
+    def value_of(match: re.Match[str]) -> str:
         column = match.group(1)
         if column not in provider.header:
             raise CutParseError(
@@ -727,7 +792,17 @@ def _substitute(
             )
         return row[provider.header.index(column)]
 
-    return _PLACEHOLDER_RE.sub(repl, text)
+    out: list[str] = []
+    for quote, segment in _quoted_spans(text):
+        if quote is None:
+            out.append(_PLACEHOLDER_RE.sub(value_of, segment))
+        else:
+
+            def in_literal(match: re.Match[str], q: str = quote) -> str:
+                return _literal_content(value_of(match)).replace(q, q * 2)
+
+            out.append(_PLACEHOLDER_RE.sub(in_literal, segment))
+    return "".join(out)
 
 
 def _display_value(raw: str) -> str:
@@ -792,6 +867,11 @@ def _instantiate_row(
     # A {Placeholder} substituted from a ROW like `5.` reaches the same
     # generated IF as a literal one -- checked against the row's own line.
     for expectation in expectations:
+        _reject_dangling_phrase(
+            expectation.expected_value,
+            row_line,
+            f"EXPECT {expectation.data_name} ... {expectation.expected_value}",
+        )
         _reject_sentence_period(expectation.expected_value, row_line)
     for value, _ in setup_moves:
         _reject_sentence_period(value, row_line, "MOVE")
@@ -1425,6 +1505,42 @@ def parse_cut(text: str) -> MockTestSuite:
             in_before = None
             mock_target = None
             mock_lines = {}
+        elif (m := _USE_REAL_RE.match(line)) is not None:
+            if mock_target is None:
+                if in_before is not None and in_before.startswith("AFTER"):
+                    raise CutParseError(
+                        f"line {line_no}: USE REAL not allowed inside "
+                        f"{in_before} (only MOVE and PERFORM are)"
+                    )
+                raise CutParseError(
+                    f"line {line_no}: USE REAL outside "
+                    f"TESTCASE/BEFORE-EACH/BEFORE-ALL"
+                )
+            if not m.group("key").strip():
+                raise CutParseError(
+                    f"line {line_no}: empty USE REAL CALL key -- the quoted "
+                    f"key must name the program the CALL runs"
+                )
+            if not m.group("path").strip():
+                raise CutParseError(
+                    f"line {line_no}: empty FROM path -- name the source "
+                    f"file of program {m.group('key')!r}"
+                )
+            _open_mock(
+                MockDirective(
+                    category=MockCategory.CALL,
+                    key=m.group("key").strip(),
+                    real_source=m.group("path").strip(),
+                    real_line=line_no,
+                ),
+                line_no,
+            )
+        elif line.upper().startswith("USE REAL"):
+            raise CutParseError(
+                f"line {line_no}: malformed USE REAL directive: {line!r} "
+                f'(write USE REAL CALL "PROGRAM" FROM "path/to/PROGRAM.cbl"; '
+                f"only static CALLs by literal can be real)"
+            )
         elif (m := _MOCK_QUOTED_RE.match(line)) is not None:
             if mock_target is None:
                 _reject_mock_outside(in_before, line_no)
@@ -1535,13 +1651,7 @@ def parse_cut(text: str) -> MockTestSuite:
                     )
                 raise CutParseError(f"line {line_no}: EXPECT outside TESTCASE")
             _reject_unbalanced_subscript(m.group("name"), line_no)
-            if _EXPECT_DANGLING_PHRASE_RE.match(m.group("value")):
-                raise CutParseError(
-                    f"line {line_no}: malformed EXPECT comparison: {line!r} "
-                    f"(expected [NOT] TO BE, [NOT] TO BE GREATER THAN "
-                    f"[OR EQUAL TO], or [NOT] TO BE LESS THAN [OR EQUAL TO], "
-                    f"followed by the value)"
-                )
+            _reject_dangling_phrase(m.group("value"), line_no, line)
             _reject_sentence_period(m.group("value"), line_no)
             _reject_before_perform(case, "EXPECT", line_no)
             if m.group("comparison") and m.group("value").strip().upper() in (

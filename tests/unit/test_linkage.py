@@ -222,6 +222,23 @@ def test_wrapped_using_and_returning_are_blanked_up_to_the_period():
     assert out[first + 1].strip() == ""
 
 
+def test_using_clause_on_the_line_after_the_header_is_blanked():
+    """TPCTBIT1's shape: `PROCEDURE DIVISION` alone, `USING` on the next
+    line. Only the header's first line was searched for the clause, so the
+    USING list was left naming folded items."""
+    source = DEFAULT_ENTRY_USING_SOURCE.replace(
+        "       PROCEDURE DIVISION USING LNK-ITEM.\n",
+        "       PROCEDURE DIVISION\n           USING LNK-ITEM.\n",
+    )
+    program, lines = _parse(source)
+    spans = procedure_header_clause_spans(lines, program)
+    assert spans is not None and len(spans) == 1
+    out = neutralize(list(lines), program, linkage_plan(program))
+    using_line = spans[0][0] - 1
+    assert "USING" not in out[using_line].upper()
+    assert out[using_line].strip() == "."
+
+
 def test_chaining_header_is_still_refused():
     source = DEFAULT_ENTRY_USING_SOURCE.replace(
         "PROCEDURE DIVISION USING LNK-ITEM.", "PROCEDURE DIVISION CHAINING LNK-ITEM."

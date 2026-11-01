@@ -112,6 +112,7 @@ that. Never touches Docker.
 | `--scenarios {happy,branches,all}` | `happy` | `happy` = one "everything succeeds" scenario. `branches` = one scenario per reachable branch arm. `all` = branches plus fixed families (empty input, error status, boundary values). `--with-data` only. |
 | `--rows N` | generator default | Rows to generate per data table (`--rows 0` is honored, e.g. to force an immediate-EOF scenario). Mutually exclusive with `--fixtures`. |
 | `--placeholder CATEGORY:KEY` (repeatable) | none | Downgrade one boundary's generated mock body back to a plain placeholder, e.g. `--placeholder READ:INV-FILE`. |
+| `--real SUBPROGRAM.cbl` (repeatable) | none | Load-module suite: the subprogram runs for real (`USE REAL CALL ... FROM`), its own boundaries get placeholder MOCKs in BEFORE-EACH. |
 
 Examples:
 
@@ -290,7 +291,7 @@ Mutants that provably cannot change the program are reported as
 `equivalent`, with the reason, never built and never scored: deleting a
 MOVE / `SET <88> TO TRUE` whose fields the very next statement overwrites
 in full with a literal or another `SET <88> TO TRUE` (a dead store), and
-swapping `ADD n TO f` / `SUBTRACT n FROM f` on an unsigned field the
+swapping `ADD n TO f` / `SUBTRACT n FROM f` on an unsigned zoned or packed field the
 statement right before sets to zero (0 + n and 0 - n store the same
 magnitude). Only adjacent, single-line statements with plain operands
 qualify, so a real gap is never hidden.
@@ -591,7 +592,7 @@ mode plus every mode's contract.
 |---|---|---|
 | `setup` | yes | `--rebuild` |
 | `init` | yes (degrades) | `-o`, `--seed`, `--scenarios`, `--copybook-path`, `--force` |
-| `generate` | no | `-o`, `--fill`, `--copybook-path`, `--with-data`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder` |
+| `generate` | no | `-o`, `--fill`, `--copybook-path`, `--with-data`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder`, `--real` |
 | `fixtures` | no | `--scenarios`, `--seed`, `--rows`, `--copybook-path` |
 | `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json\|-fail-under]`, `--trace[-json]`, `--timeout`, `--record-expectations` |
 | `debug` | yes | `--cut`, `--case`, `--copybook-path`, `--dap-stdio` |

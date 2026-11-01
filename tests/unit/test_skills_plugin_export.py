@@ -55,6 +55,7 @@ def test_cli_writes_to_the_given_directory_and_prints_the_install_steps(
 
 def test_cli_defaults_to_the_home_directory(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     assert main(["skills", "plugin"]) == 0
     assert (
         tmp_path

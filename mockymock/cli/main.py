@@ -8,26 +8,36 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mockymock import __version__
-from mockymock._lines import read_utf8_source, split_source_lines
+from mockymock._lines import SourceEncodingError, read_utf8_source, split_source_lines
 from mockymock.debugging_lines import activate_debugging_lines
 from mockymock.report.artifacts import fingerprint
 from mockymock.report.record_rewrite import numeric_edited_fields
 
+if TYPE_CHECKING:
+    from mockymock.cli.config import MockymockConfig
+
 
 def _cmd_setup(args: argparse.Namespace) -> int:
-    from mockymock.runtime import docker_toolchain
+    from mockymock.runtime.toolchain import active as active_toolchain
+
+    toolchain = active_toolchain()
 
     try:
-        docker_toolchain.ensure_toolchain(force_rebuild=args.rebuild)
-        version = docker_toolchain.cobc_version()
-    except docker_toolchain.DockerNotAvailableError as exc:
+        toolchain.ensure_toolchain(force_rebuild=args.rebuild)
+        version = toolchain.cobc_version()
+    except toolchain.ToolchainNotAvailableError as exc:
         print(f"mockymock setup: {exc}")
         return 1
-    print(
-        f"mockymock setup: container {docker_toolchain.CONTAINER} ready " f"({version})"
-    )
+    if toolchain.CONTAINER == "native":
+        print(
+            f"mockymock setup: bundled GnuCOBOL at "
+            f"{toolchain.gnucobol_home()} ready ({version})"
+        )
+    else:
+        print(f"mockymock setup: container {toolchain.CONTAINER} ready ({version})")
     return 0
 
 
@@ -83,7 +93,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
             expansion = expand_copybooks(raw_source, copybook_paths=args.copybook_path)
         except CopybookNotFoundError as exc:
             print(f"mockymock fixtures: {exc}", file=sys.stderr)
-            print(copybook_not_found_hint(), file=sys.stderr)
+            print(copybook_not_found_hint(exc), file=sys.stderr)
             return 1
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             print(f"mockymock fixtures: {exc}", file=sys.stderr)
@@ -142,7 +152,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
 
     from mockymock.dsl.entry_parameters import fixture_generator
 
-    generator, _ = fixture_generator(args.rows)
+    generator = fixture_generator(args.rows)
     try:
         bundle = generator.generate_with_scenarios_from_file(
             str(source_path),
@@ -152,7 +162,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
         )
     except CopybookNotFoundError as exc:
         print(f"mockymock fixtures: {exc}", file=sys.stderr)
-        print(copybook_not_found_hint(), file=sys.stderr)
+        print(copybook_not_found_hint(exc), file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
         print(f"mockymock fixtures: {exc}", file=sys.stderr)
@@ -250,6 +260,11 @@ def _resolve_program_and_cut(
 
     program_arg = getattr(args, "program", None)
     cut_arg = getattr(args, "cut", None)
+    if program_arg and program_arg.lower().endswith(".cut") and cut_arg is None:
+        # `mockymock mutate PROG.cut`: the suite in the program's place, as
+        # `run` already accepts. Take it as --cut and infer the program,
+        # rather than "no .cut file found for PROG.cut".
+        cut_arg, program_arg = program_arg, None
     if program_arg is None and cut_arg is None:
         print(
             f"{command}: pass a program (and/or --cut) -- give at least "
@@ -320,9 +335,36 @@ def _apply_config_to_args(
             from mockymock.cli.discovery import effective_copybook_paths
 
             resolved = effective_copybook_paths(program_path, resolved)
+        resolved = _with_copybook_aliases(resolved, config)
         args.copybook_path = resolved
     if hasattr(args, "seed"):
         args.seed = resolve(args.seed, config.seed)
+
+
+def _with_copybook_aliases(paths: list[str], config: MockymockConfig) -> list[str]:
+    """`paths` plus, last, the staging directory that gives each copybook
+    the search cannot match as written (`gttlbi0a.copy` for member
+    GTTLBI0A) the name it does try -- see cli/copybook_aliases.py. Last,
+    so a file that already matches anywhere in `paths` still wins."""
+    from mockymock.cli.copybook_aliases import (
+        DEFAULT_COPYBOOK_EXTENSIONS,
+        stage_copybook_aliases,
+    )
+
+    extensions = config.copybook_extensions
+    if extensions is None:
+        extensions = DEFAULT_COPYBOOK_EXTENSIONS
+    try:
+        staged = stage_copybook_aliases(paths, config.copybook_aliases, extensions)
+    except OSError as exc:
+        # Aliasing is a convenience: a copylib that cannot be staged
+        # leaves the search exactly as configured, and a member it would
+        # have supplied still fails with the usual not-found hint.
+        print(f"mockymock: could not stage copybook aliases: {exc}", file=sys.stderr)
+        return paths
+    if staged is None or str(staged) in paths:
+        return paths
+    return [*paths, str(staged)]
 
 
 def _check_rows_non_negative(command: str, rows: int | None) -> bool:
@@ -1062,6 +1104,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         # of failing the command: an editor's "new test suite" button
         # should still produce a suite on a program the generator can't
         # handle. An explicit --with-data keeps the hard failure.
+        from mockymock.dsl.call_arguments import fill_call_arguments
         from mockymock.dsl.entry_parameters import (
             add_entry_parameters,
             fixture_generator,
@@ -1071,18 +1114,24 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         try:
             # A subprogram's USING parameters are its interface (#275): the
             # scaffold sets them and stubs what the program hands back.
-            generator, native_parameters = fixture_generator(args.rows)
+            generator = fixture_generator(args.rows)
             cp_bundle = generator.generate_with_scenarios_from_file(
                 str(source_path),
                 mode=args.scenarios,
                 seed=args.seed,
                 copybook_paths=args.copybook_path,
             )
-            bundle_data = cp_bundle.to_dict()
-            if not native_parameters:
-                bundle_data = add_entry_parameters(
-                    bundle_data, str(source_path), args.copybook_path
-                )
+            bundle_data = add_entry_parameters(
+                cp_bundle.to_dict(), str(source_path), args.copybook_path
+            )
+            # A CALL argument the layout index cannot hold (a 05-level
+            # group, one table element) gets its fields from the DATA
+            # DIVISION instead of no value at all.
+            bundle_data, filled_arguments = fill_call_arguments(
+                bundle_data, str(source_path), args.copybook_path
+            )
+            for line in filled_arguments:
+                print(f"mockymock generate: note: {line}", file=sys.stderr)
             bundle = load_fixture_bundle(without_cics_parameters(bundle_data))
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
@@ -1091,7 +1140,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             if isinstance(exc, CopybookNotFoundError) or isinstance(
                 exc.__cause__, CopybookNotFoundError
             ):
-                print(copybook_not_found_hint())
+                print(copybook_not_found_hint(exc))
                 return 1
             if args.with_data:
                 return 1
@@ -1132,7 +1181,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             )
         except CopybookNotFoundError as exc:
             print(f"mockymock generate: {exc}")
-            print(copybook_not_found_hint())
+            print(copybook_not_found_hint(exc))
             return 1
         except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
             print(f"mockymock generate: {exc}")
@@ -1285,6 +1334,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             f"EXPECT what it computes), or try --scenarios"
         )
         return 1
+    if args.real:
+        linked = _link_real_programs(args, cut_text, output_path)
+        if linked is None:
+            return 1
+        cut_text = linked
     # Unlike run's auxiliary report flags, this file IS the deliverable:
     # a failed write is a failed command (same convention as export).
     if not _write_report_file("generate", "-o/--output", str(output_path), cut_text):
@@ -1340,6 +1394,45 @@ def _hint_pending_stubs(cut_text: str, suite, suite_result, risky: list[str]) ->
             "to turn them into EXPECTs, then check the values recorded: "
             + ", ".join(repr(name) for name in pending)
         )
+
+
+def _link_real_programs(
+    args: argparse.Namespace, cut_text: str, output_path: Path
+) -> str | None:
+    """`generate --real`: the scaffold rewritten into a load-module suite,
+    or None (after printing why) when a subprogram cannot be linked."""
+    from cobolparser import parse_cobol
+
+    from mockymock.analysis.real_programs import RealSpec, prepare_real_program
+    from mockymock.dsl.module_suite import RealLink, link_real_programs
+
+    links: list[RealLink] = []
+    for raw in args.real:
+        path = Path(raw).resolve()
+        if not path.is_file():
+            print(f"mockymock generate: --real {raw}: no such file")
+            return None
+        try:
+            text = read_utf8_source(path)
+        except SourceEncodingError as exc:
+            print(f"mockymock generate: --real {raw}: {exc}")
+            return None
+        name = getattr(parse_cobol(text, filename=path.name).ast, "program_name", "")
+        if not name:
+            print(f"mockymock generate: --real {raw}: no PROGRAM-ID found")
+            return None
+        prepared, reasons = prepare_real_program(
+            RealSpec(str(name), path, 0), args.copybook_path
+        )
+        if prepared is None:
+            for reason in reasons:
+                print(f"mockymock generate: refused ({reason.code}): {reason.message}")
+            return None
+        links.append(RealLink(prepared))
+    linked, notes = link_real_programs(cut_text, links, output_path.resolve())
+    for note in notes:
+        print(f"mockymock generate: {note}")
+    return linked
 
 
 def _distinct_case_count(cut_text: str) -> int:
@@ -1875,6 +1968,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         build_json_report,
         format_json_report,
         not_run_case_names,
+        readable_suite,
         risky_case_ids,
     )
     from mockymock.report.record_rewrite import (
@@ -1892,9 +1986,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         format_trace_json,
         parse_trace,
     )
-    from mockymock.runtime import docker_toolchain
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
+    from mockymock.runtime.toolchain import active as active_toolchain
     from mockymock.splicer import cics_eib
     from mockymock.splicer.driver import build_driver
     from mockymock.splicer.linkage import extra_reset_lines
@@ -1903,6 +1997,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.splicer.reset import index_names, reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
+
+    toolchain = active_toolchain()
 
     # `mockymock run PROG.cut` is the natural mistake: the positional is the
     # COBOL source, so a .cut there is the suite. Take it as --cut and let the
@@ -2004,8 +2100,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        docker_toolchain.ensure_toolchain()
-    except docker_toolchain.DockerNotAvailableError as exc:
+        toolchain.ensure_toolchain()
+    except toolchain.ToolchainNotAvailableError as exc:
         print(f"mockymock run: {exc}")
         return 1
 
@@ -2059,6 +2155,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if cics_eib_plan_ is not None:
         reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
     reset_lines = reset_lines + extra_reset_lines_for(checked)
+    real_programs = checked.real_programs
+    if real_programs:
+        from mockymock.splicer.real_programs import (
+            cancel_lines,
+            instrument_real_program,
+            share_driver_state,
+        )
+
+        # Every real program starts each case from its VALUE clauses.
+        reset_lines = reset_lines + cancel_lines([p.spec for p in real_programs])
 
     # --record-expectations: scan the raw .cut text (not the parsed suite --
     # a "*> STUB EXPECT" line is an ordinary comment to parse_cut) against
@@ -2090,6 +2196,26 @@ def _cmd_run(args: argparse.Namespace) -> int:
         condition_names=record_conditions,
     )
 
+    real_sources: list[tuple[str, list[str]]] = []
+    if real_programs:
+        # USE REAL CALL: the programs share the driver's bookkeeping
+        # (EXTERNAL items) and are compiled into the same binary.
+        artifact, shared_ws = share_driver_state(artifact, registry)
+        for prepared in real_programs:
+            real_sources.append(
+                (
+                    f"real_{prepared.program_id.upper()}.cbl",
+                    instrument_real_program(
+                        prepared,
+                        suite,
+                        registry,
+                        shared_ws,
+                        args.copybook_path,
+                        trace=args.trace,
+                    ),
+                )
+            )
+
     instrumented = _insert_driver(lines, artifact)
 
     # --verbose needs the sandbox retained too: the instrumented-source path
@@ -2098,7 +2224,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # cruft behind after a run that actually succeeds -- see the explicit
     # cleanup below.
     with sandbox_dir_maybe_kept(
-        root=docker_toolchain.WORK_ROOT, keep=args.keep_sandbox or args.verbose
+        root=toolchain.WORK_ROOT, keep=args.keep_sandbox or args.verbose
     ) as tmp:
         if args.keep_sandbox:
             print(f"mockymock run: keeping sandbox {tmp}")
@@ -2107,9 +2233,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
         instrumented_path.write_text(
             "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
         )
+        extra_sources = []
+        for name, real_lines in real_sources:
+            real_path = tmp / name
+            real_path.write_text(
+                "\n".join(real_lines) + "\n", encoding="utf-8", newline="\n"
+            )
+            extra_sources.append(real_path)
 
-        compiled = docker_toolchain.compile_source(
-            instrumented_path, coverage=args.coverage, trace=args.trace
+        compiled = (
+            toolchain.compile_source(
+                instrumented_path,
+                coverage=args.coverage,
+                trace=args.trace,
+                extra_sources=extra_sources,
+            )
+            if extra_sources
+            else toolchain.compile_source(
+                instrumented_path, coverage=args.coverage, trace=args.trace
+            )
         )
         if not compiled.success:
             print("mockymock run: compile failed:")
@@ -2148,7 +2290,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         try:
             assert compiled.binary_path is not None  # implied by compiled.success
             trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
-            executed = docker_toolchain.run_binary(
+            executed = toolchain.run_binary(
                 compiled.binary_path,
                 timeout_seconds=args.timeout,
                 trace_path=trace_path,
@@ -2164,7 +2306,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             coverage_report = None
             instrumented_name = instrumented_path.name
             if args.coverage:
-                gcov_result = docker_toolchain.run_gcov(instrumented_path)
+                gcov_result = toolchain.run_gcov(instrumented_path)
                 if gcov_result.success:
                     # Only the raw gcov parse happens inside the sandbox
                     # (the .gcov file dies with it); the console text is
@@ -2200,9 +2342,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Under --record-expectations the run exists to fill in the missing
     # assertions, so labelling its cases risky would only be noise.
     risky = [] if stub_scan is not None else risky_case_ids(suite_result, suite)
+    # A numeric EXPECT's "got" is the field's raw DISPLAY image; the
+    # console and the JSON report show the value it holds (issue #374).
+    pictures = field_pictures(result.ast, checked.captures)
+    decimal_comma = decimal_point_is_comma(result.ast)
     print(
         format_console(
-            suite_result, crash_detail=crash_detail, not_run=not_run, risky=risky
+            readable_suite(suite_result, suite, pictures, decimal_comma),
+            crash_detail=crash_detail,
+            not_run=not_run,
+            risky=risky,
         )
     )
     if risky:
@@ -2217,7 +2366,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # "Never overwrite a hand-edited EXPECT" sections): every stub the
         # scanner found ends up in exactly one of recorded/skipped, and the
         # file is only ever touched when at least one stub was recorded.
-        pictures = field_pictures(result.ast, checked.captures)
         recording = build_recording_report(
             stub_scan,
             suite_result,
@@ -2237,7 +2385,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             cut_text,
             recording,
             pictures,
-            decimal_comma=decimal_point_is_comma(result.ast),
+            decimal_comma=decimal_comma,
         )
         if rewritten is not None:
             cut_path.write_text(rewritten, encoding="utf-8", newline="")
@@ -2270,6 +2418,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             crash_detail=crash_detail,
             cut_file=str(cut_path),
             program_file=str(source_path),
+            pictures=pictures,
+            decimal_comma=decimal_comma,
         )
     )
     if args.json_report:
@@ -2449,8 +2599,8 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         unavailable_names,
     )
     from mockymock.report.coverage import build_original_line_map
-    from mockymock.runtime import docker_toolchain
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
+    from mockymock.runtime.toolchain import active as active_toolchain
     from mockymock.splicer import cics_eib
     from mockymock.splicer.driver import build_driver
     from mockymock.splicer.linkage import extra_reset_lines
@@ -2459,6 +2609,8 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     from mockymock.splicer.reset import reset_move_lines
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
+
+    toolchain = active_toolchain()
 
     # Unlike --trace's plain-text mode, there is no useful human-facing
     # equivalent of a DAP session at a terminal -- refuse rather than
@@ -2489,6 +2641,11 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     checked = run_static_checks(
         source_path, cut_path, args.copybook_path, case_names=args.case
     )
+    if checked.real_programs:
+        from mockymock.cli.checks import REAL_CALL_UNSUPPORTED
+
+        print(f"mockymock debug: {REAL_CALL_UNSUPPORTED}")
+        return 1
     for note in checked.notes:
         print(f"mockymock debug: {note}")
     if checked.linkage is not None:
@@ -2509,8 +2666,8 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        docker_toolchain.ensure_toolchain()
-    except docker_toolchain.DockerNotAvailableError as exc:
+        toolchain.ensure_toolchain()
+    except toolchain.ToolchainNotAvailableError as exc:
         print(f"mockymock debug: {exc}")
         return 1
 
@@ -2574,14 +2731,14 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     # conversation, unlike run/trace/coverage's "compile, run, collect,
     # clean up" shape) -- it is only torn down once adapter.run() returns,
     # after the client disconnects.
-    with sandbox_dir_maybe_kept(root=docker_toolchain.WORK_ROOT, keep=False) as tmp:
+    with sandbox_dir_maybe_kept(root=toolchain.WORK_ROOT, keep=False) as tmp:
         instrumented_path = tmp / source_path.with_suffix(".cbl").name
         instrumented_path.write_text(
             "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
         )
 
         def launch_session(_dap_arguments: dict) -> DebugSession:
-            compiled = docker_toolchain.compile_source(instrumented_path, debug=True)
+            compiled = toolchain.compile_source(instrumented_path, debug=True)
             if not compiled.success:
                 raise RuntimeError(f"compile failed:\n{compiled.stderr}")
             assert compiled.binary_path is not None  # implied by compiled.success
@@ -2599,7 +2756,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
                     normalized_lines, normalized_lines, original_lines
                 ),
             )
-            gdb = GdbSession(docker_toolchain.start_gdb_session(compiled.binary_path))
+            gdb = GdbSession(toolchain.start_gdb_session(compiled.binary_path))
             return DebugSession(
                 gdb=gdb,
                 line_map=line_map,
@@ -2975,6 +3132,11 @@ def _cmd_export(args: argparse.Namespace) -> int:
         preserve_compiler_directives=True,
         model_rebinds=False,
     )
+    if checked.real_programs:
+        from mockymock.cli.checks import REAL_CALL_UNSUPPORTED
+
+        print(f"mockymock export: {REAL_CALL_UNSUPPORTED}")
+        return 1
     for note in checked.notes:
         print(f"mockymock export: {note}")
     if checked.unmodelled_rebinds:
@@ -3739,10 +3901,11 @@ def _cmd_clean(args: argparse.Namespace) -> int:
         print(f"mockymock clean: {target} does not exist")
         return 1
     candidates = _clean_candidates(target, include_journal=args.all)
-    if not candidates:
+    staged = _clean_staged_aliases(target, getattr(args, "_config", None))
+    if not candidates and not staged:
         print("mockymock clean: nothing to remove")
         return 0
-    failed = 0
+    failed = _remove_staged_aliases(staged, args.dry_run)
     for path in candidates:
         if args.dry_run:
             print(f"would remove {path}")
@@ -3761,8 +3924,45 @@ def _cmd_clean(args: argparse.Namespace) -> int:
             except OSError:
                 pass
     verb = "would remove" if args.dry_run else "removed"
-    print(f"mockymock clean: {verb} {len(candidates) - failed} file(s)")
+    summary = f"{len(candidates) + len(staged) - failed} file(s)"
+    if staged:
+        summary += f", {len(staged)} of them folder(s) of staged copybook copies"
+    print(f"mockymock clean: {verb} {summary}")
     return 1 if failed else 0
+
+
+def _clean_staged_aliases(target: Path, config) -> list[Path]:
+    """The copybook-alias staging directories (cli/copybook_aliases.py)
+    built from files under `target` (a program or `.cut`: its folder), or
+    under the config's copybook_path and copybook_aliases: copies of
+    renamed copybooks in the system temp folder that outlive every run."""
+    from mockymock.cli.copybook_aliases import staged_directories_for
+
+    roots = [target if target.is_dir() else target.parent]
+    if config is not None:
+        roots += [Path(entry) for entry in config.copybook_path]
+        roots += [Path(entry) for entry in config.copybook_aliases.values()]
+    return staged_directories_for(roots)
+
+
+def _remove_staged_aliases(staged: list[Path], dry_run: bool) -> int:
+    """Remove each staging directory and its manifest; the failure count."""
+    from mockymock.cli.copybook_aliases import manifest_path
+
+    failed = 0
+    for directory in staged:
+        if dry_run:
+            print(f"would remove {directory}")
+            continue
+        try:
+            shutil.rmtree(directory)
+            manifest_path(directory).unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"mockymock clean: could not remove {directory}: {exc}")
+            failed += 1
+            continue
+        print(f"removed {directory}")
+    return failed
 
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
@@ -3826,6 +4026,7 @@ def _insert_driver_with_origins(
     )
     seen_data_division = False
     entry_check_at: int | None = None
+    header_open = False
 
     for index, line in enumerate(lines):
         if index == entry_check_at and _starts_unnamed_code(lines, index):
@@ -3852,6 +4053,11 @@ def _insert_driver_with_origins(
             extend(ws_lines)
             inserted_ws = True
         if not inserted_proc and _PROCEDURE_DIVISION_RE.match(line):
+            header_open = True
+        if header_open and not inserted_proc and _ends_sentence(line):
+            # After the header's period, not its first line: a header
+            # wrapped onto later lines (`PROCEDURE DIVISION` / `USING
+            # LK-A.`) had the driver spliced into it (cobc: syntax error).
             extend([""])
             extend(artifact.procedure_lines)
             inserted_proc = True
@@ -3859,6 +4065,12 @@ def _insert_driver_with_origins(
     if inserted_proc:
         _insert_end_of_program_trap(result, inserted)
     return result, inserted
+
+
+def _ends_sentence(line: str) -> bool:
+    """Whether `line`'s code (before a `*>` comment) holds a period that
+    ends a sentence."""
+    return re.search(r"\.(?=\s|$)", line.split("*>", 1)[0]) is not None
 
 
 def _insert_end_of_program_trap(result: list[str], inserted: set[int]) -> None:
@@ -4024,7 +4236,10 @@ def build_parser() -> argparse.ArgumentParser:
             "mockymock-cobc container every other command compiles and runs "
             "against. Safe to re-run: a current image/container is left "
             "alone. See 'mockymock doctor' to check readiness without "
-            "building or starting anything."
+            "building or starting anything. With MOCKYMOCK_GNUCOBOL_HOME set "
+            "(a bundled GnuCOBOL tree; MOCKYMOCK_TOOLCHAIN=auto|docker|native "
+            "picks the backend) nothing is built: setup checks that tree and "
+            "its C compiler instead."
         ),
     )
     setup_parser.add_argument(
@@ -4238,6 +4453,19 @@ def build_parser() -> argparse.ArgumentParser:
             "fixture stays mocked, just without generated data; valid "
             "with --with-data or --fixtures; an unmatched pair warns on "
             "stderr rather than silently doing nothing)"
+        ),
+    )
+    generate_parser.add_argument(
+        "--real",
+        action="append",
+        default=[],
+        metavar="SUBPROGRAM.cbl",
+        help=(
+            "Load-module suite: run this subprogram for real instead of "
+            "mocking its CALL (repeatable; USE REAL CALL, see "
+            "docs/2026-11-01-real-call-integration-design.md). Its CALL "
+            "mocks become USE REAL CALL lines and every boundary of the "
+            "subprogram gets a placeholder MOCK in BEFORE-EACH"
         ),
     )
     generate_parser.set_defaults(func=_cmd_generate)

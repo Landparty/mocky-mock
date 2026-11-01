@@ -12,7 +12,7 @@ from cobolparser import parse_cobol
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.linkage import linkage_plan
-from mockymock.runtime import docker_toolchain as dt
+from mockymock.runtime.toolchain import active
 from mockymock.splicer.linkage import neutralize
 from tests.integration._docker import requires_docker
 
@@ -45,6 +45,7 @@ SOURCE = """\
 
 
 def _compile_and_run(source: str, name: str):
+    dt = active()
     dt.ensure_toolchain()
     dt.WORK_ROOT.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix="test-linkage-splice-", dir=dt.WORK_ROOT))

@@ -431,6 +431,9 @@ class ProgramContext:
     #: so a generated record holds the delimiters its parse looks for --
     #: see `_unstring_layouts`.
     unstring_layouts: dict[str, tuple[str, list[str]]] = field(default_factory=dict)
+    #: Dynamic CALL identifier -> (the program names it can hold, whether
+    #: that list is complete) -- see `_dynamic_call_targets`.
+    dynamic_targets: dict[str, tuple[list[str], bool]] = field(default_factory=dict)
 
     @classmethod
     def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
@@ -457,6 +460,7 @@ class ProgramContext:
             surface=surface,
             decimal_comma=decimal_point_is_comma(program),
             setup_lines=_commarea_setup_lines(program, lines),
+            dynamic_targets=_dynamic_call_targets(program, surface),
         )
 
     def names_under(self, name: str) -> set[str]:
@@ -696,6 +700,21 @@ def _extract_at_end_imperative(statement_text: str) -> str | None:
     return lifted or None
 
 
+def _body_lines_parse(body: list[str]) -> bool:
+    """Whether the `.cut` parser takes `body` as MOCK body lines: it refuses
+    one that leaves the body (`PERFORM <paragraph>`, GO TO, GOBACK, STOP
+    RUN, EXIT PROGRAM -- issue #287), and an `AT END PERFORM 9000-EOF`
+    copied in verbatim made the whole generated `.cut` unreadable."""
+    from mockymock.dsl.parser import CutParseError, _reject_body_control_flow
+
+    try:
+        for line_no, line in enumerate(body, 1):
+            _reject_body_control_flow(line, line_no, "READ")
+    except CutParseError:
+        return False
+    return True
+
+
 def _lifted_at_end_lines(
     site: BoundarySite, source: ProgramContext | None
 ) -> list[str]:
@@ -713,6 +732,8 @@ def _lifted_at_end_lines(
     lifted text carries a sentence-terminating period of its own: a period
     inside the spliced `EVALUATE` branch would close the enclosing sentence
     early and silently restructure the generated program's control flow.
+    Likewise when a line of it would not parse as a MOCK body line
+    (`_body_lines_parse`).
     """
     if source is None:
         return []
@@ -725,7 +746,7 @@ def _lifted_at_end_lines(
     if any(word == "." for _, _, word in _scan_words(lifted)):
         return []
     body = [line.strip() for line in lifted.splitlines() if line.strip()]
-    if not body:
+    if not body or not _body_lines_parse(body):
         return []
     return [
         f"*> replicated verbatim from this program's own READ ... AT END "
@@ -1214,6 +1235,84 @@ def _with_captures(
     return context.captures_for(category, key) + body
 
 
+#: Above this many known targets a per-target EVALUATE repeats the body
+#: too often to help; the targets are listed in a comment instead.
+_MAX_TARGET_BRANCHES = 5
+
+
+def _per_target_body(
+    key: str, body: list[str], context: ProgramContext | None
+) -> list[str]:
+    """A dynamic CALL's mock body, given the program names its identifier
+    is known to hold (`ProgramContext.dynamic_targets`): one `WHEN` per
+    target, each starting from the same generated body, so a test can make
+    each callee answer differently. `WHEN OTHER` keeps the body too, so a
+    value the analysis did not see behaves exactly as the unbranched mock.
+    A single target, too many, or an identifier the body cannot name
+    unqualified gets a comment naming the targets instead."""
+    if context is None:
+        return body
+    known = context.dynamic_targets.get(key.upper())
+    if not known:
+        return body
+    targets, complete = known
+    listed = ", ".join(f'"{target}"' for target in targets)
+    more = "" if complete else ", and values this analysis cannot follow"
+    comment = f"*> {key} can name {listed}{more}"
+    if (
+        len(targets) + (0 if complete else 1) < 2
+        or len(targets) > _MAX_TARGET_BRANCHES
+        or not context.is_unique_name(key)
+    ):
+        return [comment, *body]
+    lines = [comment, f"EVALUATE {key}"]
+    for target in targets:
+        lines.append(f'    WHEN "{target}"')
+        lines.extend(f"        {line}" for line in body or ["CONTINUE"])
+    lines.append("    WHEN OTHER")
+    lines.extend(f"        {line}" for line in body or ["CONTINUE"])
+    lines.append("END-EVALUATE")
+    return lines
+
+
+def _dynamic_call_targets(
+    program, surface: MockSurface
+) -> dict[str, tuple[list[str], bool]]:
+    """Identifier (uppercased) -> (the program names a dynamic CALL through
+    it can reach, whether that list is complete), from cobol-parser's
+    `DynamicCallAnalyzer` (VALUE clauses and MOVEs of literals). The
+    no-program sentinels a dispatcher tests first (SPACES, LOW-VALUES,
+    ZERO) and all-digit values are not program names and are left out."""
+    sites = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.DYNCALL and site.keys
+    ]
+    if not sites:
+        return {}
+    try:
+        from cobolparser.analysis.value_tracker import DynamicCallAnalyzer
+
+        DynamicCallAnalyzer().analyze(program)
+    except Exception:  # noqa: BLE001 -- an analysis gap never breaks generate
+        return {}
+    targets: dict[str, tuple[list[str], bool]] = {}
+    for site in sites:
+        statement = site.statement
+        names = list(targets.get(site.keys[0], ([], True))[0])
+        for value in getattr(statement, "possible_values", None) or []:
+            name = str(value).strip(" '\"\x00\xff").upper()
+            if name and not name.isdigit() and '"' not in name and name not in names:
+                names.append(name)
+        get_metadata = getattr(statement, "get_metadata", None)
+        incomplete = bool(
+            get_metadata("possible_values_incomplete") if get_metadata else False
+        )
+        complete = targets.get(site.keys[0], ([], True))[1] and not incomplete
+        targets[site.keys[0]] = (names, complete)
+    return {key: value for key, value in targets.items() if value[0]}
+
+
 def _placeholder_body_for(
     category: MockCategory, key: str, site: BoundarySite | None = None
 ) -> list[str]:
@@ -1294,9 +1393,8 @@ def _directive_for(
         # bare key = dynamic CALL through this identifier; quoting it would
         # turn the directive into a static-literal mock that never matches
         key = site.keys[0]
-        return f"MOCK CALL {key}", _with_captures(
-            category, key, _placeholder_body_for(category, key), context
-        )
+        body = _per_target_body(key, _placeholder_body_for(category, key), context)
+        return f"MOCK CALL {key}", _with_captures(category, key, body, context)
 
     if category in FILE_OP_CATEGORIES:
         if not site.keys:
@@ -1530,7 +1628,14 @@ def _call_end_reply(
     if key in _DLI_CALL_INTERFACES:
         if len(names) < 2 or not names[0] or not names[1]:
             return None
-        function = context.literal_value(names[0]) or names[0]
+        from mockymock.splicer.injector import _literal_inner, reported_literal
+
+        quoted = reported_literal(names[0])
+        function = (
+            _literal_inner(quoted)
+            if quoted is not None
+            else context.literal_value(names[0]) or names[0]
+        )
         end_status = _DLI_CALL_END.get(function.strip().upper())
         if end_status is None:
             return None
@@ -2105,16 +2210,22 @@ def _row_target(spec: FieldSpec, source: ProgramContext | None) -> str:
 # (it takes only SET, and NULL is its only data-free value) or an INDEX
 # item (its content is implementation-defined). cobol-parser's bundle lays
 # them out as numeric fields holding "0", and `MOVE 0 TO <pointer>` is a
-# compile error ("invalid MOVE statement").
+# compile error ("invalid MOVE statement"). A TESTCASE's own setup lines
+# (`in_mock_body=False`) take only MOVE, so there the pointer is left out:
+# the per-case WORKING-STORAGE reset (splicer/reset.py) already sets it to
+# NULL, and `SET ... TO NULL` there was refused by the .cut parser.
 def _row_move_line(
     row: dict[str, str],
     spec: FieldSpec,
     target: str,
     decimal_comma: bool = False,
+    in_mock_body: bool = True,
     source: ProgramContext | None = None,
 ) -> str | None:
     usage = (spec.usage or "").upper()
     if usage in _POINTER_USAGES:
+        if not in_mock_body:
+            return f"*> {target} ({usage}) starts NULL: the per-case reset sets it"
         return f"SET {target} TO NULL"
     if usage == "INDEX":
         return None
@@ -2157,12 +2268,30 @@ def _unstring_layouts(program) -> dict[str, tuple[str, list[str]]]:
             or not all(re.fullmatch(r"[A-Z0-9][A-Z0-9-]*", t) for t in targets)
         ):
             continue
-        layout = (delimiters[0], targets)
+        delimiter = _delimiter_literal(delimiters[0])
+        if delimiter is None:
+            continue
+        layout = (delimiter, targets)
         if source_name in found and found[source_name] != layout:
             found[source_name] = None
         else:
             found.setdefault(source_name, layout)
     return {name: layout for name, layout in found.items() if layout is not None}
+
+
+def _delimiter_literal(text: str) -> str | None:
+    """The characters an UNSTRING delimiter operand stands for, or None
+    when it names a data item or figurative constant. cobol-parser 3.1
+    keeps a literal's quotes (`'"|"'`); earlier releases stripped them,
+    so an unquoted operand made only of punctuation is read as that
+    literal too."""
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        quote = text[0]
+        content = text[1:-1].replace(quote * 2, quote)
+        return content or None
+    if re.search(r"[A-Za-z0-9]", text):
+        return None
+    return text
 
 
 def _picture_shape(picture: str | None) -> tuple[int, bool] | None:
@@ -2257,6 +2386,7 @@ def _row_move_lines(
     row: dict[str, str],
     fixture: BoundaryFixture,
     source: ProgramContext | None = None,
+    in_mock_body: bool = True,
 ) -> list[str]:
     lines = [
         line
@@ -2266,6 +2396,7 @@ def _row_move_lines(
                 spec,
                 _row_target(spec, source),
                 source is not None and source.decimal_comma,
+                in_mock_body,
                 source,
             )
             for spec in fixture.layout
@@ -3033,6 +3164,8 @@ def _bundle_directive_for(
                 call_count_override = CallCountOverride(count=2, from_placeholder=False)
             body = body + end_lines
 
+    if category is MockCategory.DYNCALL:
+        body = _per_target_body(fixture.key, body, source)
     body = _with_captures(category, fixture.key, body, source)
     lines = [_directive_header(category, fixture.key, site)]
     lines.extend(f"    {line}" for line in body)
@@ -3564,6 +3697,11 @@ _LOOPED_SITE_REASON = (
     "called inside a PERFORM loop (UNTIL/VARYING/TIMES) or from a paragraph "
     "PERFORMed more than once, which the bundle counts once"
 )
+_NO_END_READ_REASON = (
+    "read inside a loop that its AT END does not end (the READ has no AT "
+    "END clause: a keyed/random READ, or a loop run a fixed number of "
+    "TIMES), so the number of generated rows is not the number of reads"
+)
 _UNREACHED_SITE_REASON = (
     "also called from a paragraph this case's PERFORM never reaches (a CICS "
     "HANDLE CONDITION target, or code nothing PERFORMs), which the bundle's "
@@ -3663,6 +3801,102 @@ def _unlooped_read_counts(
     return counts
 
 
+def _endless_read_keys(
+    expectations: list[Expectation],
+    surface: MockSurface,
+    reachable: set[str] | None,
+    source: ProgramContext,
+) -> list[tuple[MockCategory, str]]:
+    """READ keys read inside a loop by a READ with no AT END clause. The
+    bundle's count for a READ is its row count, which is the number of
+    reads only when the loop runs until the read hits end of file (the
+    AT END, or a FILE STATUS loop, which `_status_read_eof` counts
+    itself). A keyed READ in `PERFORM X 3 TIMES` reads 3 times, not 10."""
+    keys: list[tuple[MockCategory, str]] = []
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        if category_str != MockCategory.READ.value:
+            continue
+        sites = _sites_for_key(MockCategory.READ, key, surface, reachable)
+        if any(
+            (site.nested or site_in_loop(site, source.looped))
+            and not getattr(site.statement, "at_end_clause", None)
+            for site in sites
+        ):
+            keys.append((MockCategory.READ, key))
+    return keys
+
+
+#: The fixed scenario family whose failure path cobol-parser (3.1+) leaves
+#: uncounted on purpose: the program's error path may skip the READ loop or
+#: the CLOSE, so only the failed boundary's own count is known.
+_ERROR_STATUS_SCENARIO_PREFIX = "error status:"
+
+
+def _with_site_call_counts(
+    bundle: FixtureBundle, surface: MockSurface
+) -> FixtureBundle:
+    """`bundle` with one `call_count` per fixture (per call site) for every
+    mocked (category, key) the bundle gave none.
+
+    Before 3.1, cobol-parser counted every fixture: 1 for a CALL or a
+    status-only boundary, and the row count (plus the call that hits end of
+    file, when the statement has AT END) for one that is fed rows. Since
+    3.1 (cobol-parser #363) it writes one count per (category, key), and
+    only when control flow makes it exact. `generate` does that exactness
+    analysis itself, per case and entry (`_conditional_call_count_keys`),
+    and adds counts the bundle cannot know (the extra MQGET or DL/I call
+    that ends a drain loop, a FILE STATUS read loop's end-of-file read), so
+    it needs a count to start from for every mocked key: a key the bundle
+    left uncounted gets the per-site counts back, and the analysis demotes
+    them to a commented VERIFY or corrects them as before. A count the
+    bundle did write is kept as it is. An "error status" scenario is left
+    alone: there the bundle drops counts because the failure path makes
+    them untrue, which no per-site count can repair."""
+    scenarios = []
+    for scenario in bundle.scenarios:
+        if scenario.name.lower().startswith(_ERROR_STATUS_SCENARIO_PREFIX):
+            scenarios.append(scenario)
+            continue
+        counted = {e.ref for e in scenario.expectations if e.kind == "call_count"}
+        added = [
+            Expectation(
+                kind="call_count",
+                ref=f"{fixture.category}:{fixture.key}",
+                value=_site_call_count(fixture, surface),
+                note="one per call site, restored by mockymock",
+            )
+            for fixture in scenario.fixtures
+            if f"{fixture.category}:{fixture.key}" not in counted
+        ]
+        if added:
+            scenario = replace(scenario, expectations=[*scenario.expectations, *added])
+        scenarios.append(scenario)
+    return replace(bundle, scenarios=scenarios)
+
+
+def _site_call_count(fixture: BoundaryFixture, surface: MockSurface) -> int:
+    """The count cobol-parser before 3.1 gave one fixture (see
+    `_with_site_call_counts`)."""
+    if fixture.direction == "STATUS_ONLY" or fixture.category in (
+        MockCategory.CALL.value,
+        MockCategory.DYNCALL.value,
+    ):
+        return 1
+    at_end = fixture.terminal is not None
+    for site in surface.boundary_sites:
+        if (
+            site.category is not None
+            and site.category.value == fixture.category
+            and site.line == fixture.line
+        ):
+            at_end = bool(getattr(site.statement, "at_end_clause", None))
+            break
+    return len(fixture.sequence) + (1 if at_end else 0)
+
+
 def _with_accept_keys(bundle: FixtureBundle) -> FixtureBundle:
     """`bundle` with every ACCEPT fixture and expectation keyed on the
     target's data-name, as mockymock keys the site (issue #311):
@@ -3711,7 +3945,9 @@ def _entry_parameter_lines(
     parameters = scenario.entry_parameters
     if parameters is None or not parameters.sequence:
         return []
-    moves = _row_move_lines(parameters.sequence[0], parameters, source)
+    moves = _row_move_lines(
+        parameters.sequence[0], parameters, source, in_mock_body=False
+    )
     if not moves:
         return []
     return [f"*> what the caller of {parameters.key} passes (USING)", *moves]
@@ -3724,7 +3960,7 @@ def _scaffold_with_bundle(
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
 ) -> str:
-    bundle = _with_accept_keys(bundle)
+    bundle = _with_accept_keys(_with_site_call_counts(bundle, surface))
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(
         mockymock_keys,
@@ -3836,6 +4072,15 @@ def _scaffold_with_bundle(
                 CallCountOverride(demote_reason=reason, from_placeholder=False),
             )
         if source is not None:
+            for key_pair in _endless_read_keys(
+                expectations, surface, reachable, source
+            ):
+                call_count_overrides.setdefault(
+                    key_pair,
+                    CallCountOverride(
+                        demote_reason=_NO_END_READ_REASON, from_placeholder=False
+                    ),
+                )
             for key_pair, count in _unlooped_read_counts(
                 expectations, surface, reachable, source
             ).items():

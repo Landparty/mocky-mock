@@ -15,7 +15,8 @@ two adjacent statements:
   `SET WS-FLAG-YES TO TRUE`. Deleting it leaves the same state.
 * **Zero, then add** (`arith-verb-swap`). An unsigned numeric field set to
   zero by the statement right before `ADD n TO f`: 0 + n and 0 - n store
-  the same magnitude in an unsigned field, whatever n is.
+  the same magnitude in an unsigned field, whatever n is. Zoned and packed
+  fields only: a binary one wraps (`zero_baseline.keeps_magnitude`).
 
 Conservative throughout: every operand must be a plain name or a literal,
 each statement must sit wholly on its own line, and nothing may come
@@ -33,7 +34,7 @@ from mockymock.mutation.operators import (
     Mutant,
     _statement_ends_on_line,
 )
-from mockymock.mutation.zero_baseline import _items_by_name
+from mockymock.mutation.zero_baseline import _items_by_name, keeps_magnitude
 
 _NAME = r"[A-Z0-9][A-Z0-9-]*"
 _PLAIN_NAME = re.compile(rf"^{_NAME}$", re.IGNORECASE)
@@ -217,6 +218,8 @@ def _unsigned_numeric(name: str, items: dict[str, list[object]]) -> bool:
     if len(found) != 1:
         return False
     item = found[0]
+    if not keeps_magnitude(item):
+        return False
     picture = getattr(item, "picture_clause", None)
     if picture is None or getattr(picture, "is_edited", False):
         return False

@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 from mockymock.cli.main import main
-from tests.integration._docker import requires_docker
+from tests.integration._docker import pinned_coverage_toolchain, requires_docker
 
 EXAMPLE_DIR = (
     Path(__file__).parent.parent.parent / "examples" / "real-world" / "DEPTIMSM"
@@ -63,6 +63,7 @@ def test_committed_deptimsm_example_reports_coverage(capsys):
     # of a page of unrelated captured stdout.
     match = re.search(r"coverage: \d+\.\d+% of \S+ own lines executed \(\d+/\d+\)", out)
     assert match is not None, "no coverage line in output"
-    assert match.group(0) == (
-        "coverage: 100.00% of DEPTIMSM.cbl's own lines executed (108/108)"
-    )
+    if pinned_coverage_toolchain():
+        assert match.group(0) == (
+            "coverage: 100.00% of DEPTIMSM.cbl's own lines executed (108/108)"
+        )

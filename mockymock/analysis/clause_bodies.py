@@ -30,11 +30,13 @@ refuses.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 
 from cobolparser.models.statements.call import CallStatement
 from cobolparser.models.statements.control import StopStatement
 from cobolparser.models.statements.io import (
+    IOAcceptStatement,
     IODeleteStatement,
     IOReadStatement,
     IORewriteStatement,
@@ -47,11 +49,13 @@ from cobolparser.models.statements.misc import (
     ExitStatement,
     GobackStatement,
     NextSentenceStatement,
+    ReleaseStatement,
     ReturnStatement,
 )
 
 from mockymock.analysis.mock_surface import (
     _BOUNDARY_STATEMENT_TYPES,
+    _FILE_OP_SPECS,
     _NESTED_STATEMENT_ATTRS,
     _nested_statement_lists,
 )
@@ -120,14 +124,36 @@ _GUARDS: dict[str, str] = {
     "on_overflow": f'{OUTCOME_FIELD} = "{EXCEPTION_OUTCOME}"',
 }
 
-#: Statements that may not run from a lifted body: another boundary (it
-#: would run unmocked), and anything that leaves the program or rewrites
-#: its control flow -- the test driver's PERFORM would not get control back
-#: the way the splicer's terminator transforms guarantee. A GO TO may: the
-#: lifted body is spliced into the same paragraph, so its target and the
-#: PERFORM range it jumps within are unchanged (issue #319).
+#: Boundary statements a lifted body may hold: a CALL, a file op, RELEASE /
+#: RETURN or a console ACCEPT nested in the clause (READ ... NOT AT END
+#: CALL "X", CALL ... ON EXCEPTION WRITE ERR-REC). Each is a boundary site
+#: of its own: when a case mocks it, the splicer splices its dispatch into
+#: the lifted copy (`splicer.orchestrator`), at the span
+#: `splicer.source_map.annotate_nested_sites` validated for it; when no
+#: case does, it is copied as it stands, and the refusal gate refuses any
+#: case that reaches it unmocked, exactly as anywhere else in the program.
+#: EXEC blocks stay forbidden: an unmocked one has to be trapped, and a
+#: nested one has no validated span.
+_NESTABLE_BOUNDARY_TYPES: tuple[type, ...] = (
+    CallStatement,
+    *(statement_type for statement_type, _ in _FILE_OP_SPECS),
+    ReleaseStatement,
+    ReturnStatement,
+    IOAcceptStatement,
+)
+
+#: Statements that may not run from a lifted body: any other boundary (an
+#: EXEC block, SORT/MERGE, ...), and anything that leaves the program or
+#: rewrites its control flow -- the test driver's PERFORM would not get
+#: control back the way the splicer's terminator transforms guarantee. A GO
+#: TO may: the lifted body is spliced into the same paragraph, so its
+#: target and the PERFORM range it jumps within are unchanged (issue #319).
 _FORBIDDEN_TYPES: tuple[type, ...] = (
-    *_BOUNDARY_STATEMENT_TYPES,
+    *(
+        statement_type
+        for statement_type in _BOUNDARY_STATEMENT_TYPES
+        if statement_type not in _NESTABLE_BOUNDARY_TYPES
+    ),
     GobackStatement,
     StopStatement,
     AlterStatement,
@@ -171,16 +197,16 @@ _FORBIDDEN_NAMES: tuple[tuple[type, str], ...] = (
 #: statement's terminator, which the lift removes, and swallow the next
 #: guard `WHEN`. `SIZE` opens one only before `ERROR` -- `STRING ...
 #: DELIMITED BY SIZE` is not a phrase (issue #326). A phrase whose owners
-#: are all boundaries (INVALID KEY, END-OF-PAGE) never appears in a lifted
-#: body, which holds no boundary; it is refused outright all the same.
+#: are file ops (AT END, INVALID KEY, END-OF-PAGE) belongs to a nested
+#: boundary statement (`_NESTABLE_BOUNDARY_TYPES`), safe on the same terms.
 _PHRASE_OWNERS: dict[str, frozenset[str]] = {
     "SIZE": frozenset({"ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "COMPUTE"}),
     "OVERFLOW": frozenset({"STRING", "UNSTRING", "CALL"}),
     "EXCEPTION": frozenset({"CALL", "ACCEPT", "DISPLAY", "XML", "JSON"}),
-    "END": frozenset({"SEARCH"}),
-    "INVALID": frozenset(),
-    "EOP": frozenset(),
-    "END-OF-PAGE": frozenset(),
+    "END": frozenset({"SEARCH", "READ", "RETURN"}),
+    "INVALID": frozenset({"READ", "WRITE", "REWRITE", "DELETE", "START"}),
+    "EOP": frozenset({"WRITE"}),
+    "END-OF-PAGE": frozenset({"WRITE"}),
 }
 
 #: Every verb that may own a conditional phrase.
@@ -208,13 +234,18 @@ class LiftedClause:
     `closers` are the END-IF / END-EVALUATE / END-SEARCH the sentence
     period closed for the last body (issue #319). `lines` ends with them
     too; `source_lines` does not (no source line holds them), so the splice
-    emits them after the verbatim lines."""
+    emits them after the verbatim lines.
+
+    `source_line_numbers` holds the 1-indexed line each `source_lines`
+    entry came from: the splicer splices a boundary nested in the body
+    (`_NESTABLE_BOUNDARY_TYPES`) by replacing the entries its span covers."""
 
     attr: str
     guard: str
     lines: tuple[str, ...]
     source_lines: tuple[str, ...] = ()
     closers: tuple[str, ...] = ()
+    source_line_numbers: tuple[int, ...] = ()
 
 
 def _spec(statement: object) -> tuple[tuple[str, ...], str] | None:
@@ -225,10 +256,24 @@ def _spec(statement: object) -> tuple[tuple[str, ...], str] | None:
 
 
 def _walk(statements: list):
+    """Every statement in `statements`, any depth -- except inside a nested
+    boundary's own clause bodies: those belong to that boundary, which is
+    spliced (and its own bodies lifted and checked) on its own account."""
+    for statement in statements:
+        yield statement
+        if isinstance(statement, _NESTABLE_BOUNDARY_TYPES):
+            continue
+        for nested in _nested_statement_lists(statement):
+            yield from _walk(nested)
+
+
+def _walk_all(statements: list):
+    """Every statement in `statements`, any depth, nested boundaries' own
+    clause bodies included."""
     for statement in statements:
         yield statement
         for nested in _nested_statement_lists(statement):
-            yield from _walk(nested)
+            yield from _walk_all(nested)
 
 
 def _clause_name(attr: str) -> str:
@@ -406,6 +451,73 @@ def _body_problem(words: list[str], at_period: bool) -> tuple[str | None, list[s
     return None, [_SCOPED_VERBS[verb] for verb in reversed(open_scopes)]
 
 
+def _header_begin(words: list, index: int, attr: str) -> int | None:
+    """The index in `words` of the first word of `attr`'s header, which
+    ends right before `words[index]` (the body's first word), or None when
+    no spelling of it (`_HEADERS`) does."""
+    for header in _HEADERS[attr]:
+        begin = index - len(header)
+        if begin < 0:
+            continue
+        if tuple(w for _, _, w in words[begin:index]) != header:
+            continue
+        if header[0] != "NOT" and begin > 0 and words[begin - 1][2] == "NOT":
+            continue
+        return begin
+    return None
+
+
+def clause_header_positions(
+    statement: object, lines: list[str]
+) -> list[tuple[int, int, str]]:
+    """`(line, column, clause name)` of every clause header of `statement`
+    (a READ / RETURN / WRITE / REWRITE / DELETE / START / CALL with clause
+    bodies), both 1-indexed against `lines` -- or [] when it has none or
+    any of them cannot be matched exactly.
+
+    `splicer.source_map.collect_scope_map` records these as span
+    boundaries: the AST locates no clause header, and a statement nested
+    in a clause body (`READ ... AT END CALL "X" NOT AT END ...`) must stop
+    before the next one. Only the text up to the last body's first
+    statement is scanned, so a program's every statement can afford it."""
+    spec = _spec(statement)
+    location = getattr(statement, "location", None)
+    start_line = getattr(location, "line", None)
+    if spec is None or not start_line:
+        return []
+    firsts: list[tuple[int, int, str]] = []
+    for attr in spec[0]:
+        body = getattr(statement, attr, None)
+        if not body:
+            continue
+        body_location = getattr(body[0], "location", None)
+        line = getattr(body_location, "line", None)
+        column = getattr(body_location, "column", None)
+        if not line or not column or line < start_line or line > len(lines):
+            return []
+        firsts.append((line, column, attr))
+    if not firsts:
+        return []
+    window = lines[start_line - 1 : max(line for line, _, _ in firsts)]
+    offsets = [0]
+    for text_line in window:
+        offsets.append(offsets[-1] + len(text_line) + 1)
+    words = list(scan_words("\n".join(window)))
+    index_at = {start: index for index, (start, _, _) in enumerate(words)}
+    positions: list[tuple[int, int, str]] = []
+    for line, column, attr in firsts:
+        index = index_at.get(offsets[line - start_line] + column - 1)
+        begin = None if index is None else _header_begin(words, index, attr)
+        if begin is None:
+            return []
+        offset = words[begin][0]
+        row = bisect_right(offsets, offset) - 1
+        positions.append(
+            (start_line + row, offset - offsets[row] + 1, _clause_name(attr))
+        )
+    return sorted(positions)
+
+
 def _lift(
     statement: object, lines: list[str], column_offset: int = 0
 ) -> tuple[tuple[LiftedClause, ...] | None, str | None]:
@@ -419,6 +531,12 @@ def _lift(
     spec = _spec(statement)
     assert spec is not None
     attrs, terminator = spec
+    verb = terminator.removeprefix("END-")
+    same_kind = any(
+        type(nested) is type(statement)
+        for attr in attrs
+        for nested in _walk_all(getattr(statement, attr, None) or [])
+    )
     unlocated = "its clause bodies could not be located in the source"
     location = getattr(statement, "location", None)
     start_line = getattr(location, "line", None)
@@ -469,18 +587,10 @@ def _lift(
         index = word_index_at(offset)
         if index is None:
             return None, unlocated
-        for header in _HEADERS[attr]:
-            begin = index - len(header)
-            if begin < 0:
-                continue
-            if tuple(w for _, _, w in words[begin:index]) != header:
-                continue
-            if header[0] != "NOT" and begin > 0 and words[begin - 1][2] == "NOT":
-                continue
-            header_starts.append(words[begin][0])
-            break
-        else:
+        begin = _header_begin(words, index, attr)
+        if begin is None:
             return None, f"its {_clause_name(attr)} header could not be matched"
+        header_starts.append(words[begin][0])
         body_word_indexes.append(index)
 
     lifted: list[LiftedClause] = []
@@ -490,13 +600,28 @@ def _lift(
             end = header_starts[position + 1]
         else:
             end = None
+            # A statement of its own kind in a body (CALL ... ON EXCEPTION
+            # CALL "ERRLOG" ... END-CALL END-CALL) takes the next
+            # terminator first: a terminator closes the nearest statement
+            # it has not closed yet.
+            open_inner = 0
             for start, _, word in words[body_word_indexes[position] :]:
-                if word in (terminator, "."):
+                if word == verb:
+                    open_inner += 1
+                elif word == terminator and open_inner:
+                    open_inner -= 1
+                elif word in (terminator, "."):
                     end = start
                     at_period = word == "."
                     break
             if end is None:
                 return None, f"its {_clause_name(attr)} body has no end"
+            if same_kind and (at_period or open_inner):
+                return None, (
+                    f"its {_clause_name(attr)} body holds a statement of its "
+                    f"own kind without a {terminator} of its own, so which "
+                    f"{terminator} closes which cannot be determined"
+                )
         body_text = text[offset:end]
         problem, closers = _body_problem(
             [w for _, _, w in scan_words(body_text)], at_period
@@ -504,7 +629,7 @@ def _lift(
         if problem is not None:
             return None, f"its {_clause_name(attr)} body cannot be lifted: {problem}"
         body_lines = tuple(
-            line.strip() for line in body_text.splitlines() if line.strip()
+            line.strip() for line in body_text.split("\n") if line.strip()
         ) + tuple(closers)
         # The body exactly as it stands in the source (issue #332), so the
         # line map pairs each emitted line with its source line. The
@@ -513,11 +638,21 @@ def _lift(
         line_start = text.rfind("\n", 0, offset) + 1
         lead = text[line_start:offset]
         verbatim = (lead if not lead.strip() else "") + body_text
-        source_lines = tuple(
-            line.rstrip() for line in verbatim.splitlines() if line.strip()
-        )
+        first_line = start_line + text.count("\n", 0, offset)
+        numbered = [
+            (first_line + index, line.rstrip())
+            for index, line in enumerate(verbatim.split("\n"))
+            if line.strip()
+        ]
         lifted.append(
-            LiftedClause(attr, _GUARDS[attr], body_lines, source_lines, tuple(closers))
+            LiftedClause(
+                attr,
+                _GUARDS[attr],
+                body_lines,
+                tuple(line for _, line in numbered),
+                tuple(closers),
+                tuple(number for number, _ in numbered),
+            )
         )
     return tuple(lifted), None
 

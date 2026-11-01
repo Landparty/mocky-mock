@@ -163,11 +163,59 @@ def _probe_cobc(container_usable: bool) -> tuple[Check, str | None]:
     return Check("cobc", label, OK, version), version
 
 
+def _probe_native() -> ToolchainStatus:
+    """The native backend's checks: the GnuCOBOL tree, the C compiler cobc
+    calls, and cobc itself. Same read-only contract as the Docker probe."""
+    from mockymock.runtime import native_toolchain
+
+    facts = native_toolchain.facts()
+    home_label, cc_label, cobc_label = (
+        "Bundled GnuCOBOL",
+        "C compiler",
+        "GnuCOBOL compiler",
+    )
+    home = str(facts.home) if facts.home is not None else "(unset)"
+    try:
+        native_toolchain._require_home()
+    except DockerNotAvailableError as exc:
+        checks = (
+            Check("home", home_label, DOWN, str(exc)),
+            Check("cc", cc_label, UNKNOWN, "no GnuCOBOL tree"),
+            Check("cobc", cobc_label, UNKNOWN, "no GnuCOBOL tree"),
+        )
+        return ToolchainStatus(False, _now(), home, "native", None, checks)
+    home_check = Check("home", home_label, OK, home)
+    try:
+        native_toolchain.ensure_toolchain()
+        cc = Check("cc", cc_label, OK, facts.c_compiler or "found")
+    except DockerNotAvailableError as exc:
+        cc = Check("cc", cc_label, DOWN, str(exc))
+    try:
+        version: str | None = native_toolchain.cobc_version(timeout=PROBE_TIMEOUT)
+        cobc = Check("cobc", cobc_label, OK, version or "unknown")
+    except DockerNotAvailableError as exc:
+        version = None
+        cobc = Check("cobc", cobc_label, DOWN, str(exc))
+    checks = (home_check, cc, cobc)
+    return ToolchainStatus(
+        ready=all(check.state == OK for check in checks),
+        checked_at=_now(),
+        image=home,
+        container="native",
+        cobc_version=version,
+        checks=checks,
+    )
+
+
 def probe() -> ToolchainStatus:
     """Probe the toolchain without touching it. Later checks short-circuit
     to `unknown` once an earlier one fails, mirroring the order
     `ensure_toolchain` works through them -- reporting "container missing"
     when the daemon is simply down would be noise, not information."""
+    from mockymock.runtime.toolchain import selected
+
+    if selected() == "native":
+        return _probe_native()
     daemon = _probe_daemon()
     if daemon.state != OK:
         checks = (

@@ -196,10 +196,13 @@ scope map past its own clause-body statement starts (every boundary in
 between must be one of those, or a scope word) and taking the first
 own-terminator after the last of them. Refused when there is no such
 terminator before the next statement that is not its own (the clause would
-run on to whatever closes the enclosing block -- not guessed), when a
-statement of its own kind sits in its clause bodies (which terminator is
-whose is ambiguous), or when anything but a period follows the terminator
-on its line. RETURN maps to `END-RETURN` (issue #340), so the SORT
+run on to whatever closes the enclosing block -- not guessed), or when
+anything but a period follows the terminator on its line. A statement of
+its own kind in its clause bodies (`CALL ... ON EXCEPTION CALL "ERRLOG"
+... END-CALL END-CALL`) is paired the COBOL way: a terminator closes the
+nearest statement it has not closed yet, so each inner one takes the next
+own-terminator first; one without a terminator of its own takes the
+outer's, which is then refused (2026-10-29; before, any such nesting was). RETURN maps to `END-RETURN` (issue #340), so the SORT
 OUTPUT PROCEDURE loop's nested `RETURN ... AT END ... END-RETURN` is
 spliced like the nested READ. Before #258 every nested site with clause
 bodies was refused, which made the standard inline read loop untestable.
@@ -551,6 +554,54 @@ the period closed appended, innermost first.
 `dsl.generator` asks the same function, so the scaffold
 stops copying an AT END clause the splice already re-runs (it reports end
 of file through the status field, or `MOVE "10" TO UT-MOCK-STATUS`).
+
+## Boundaries inside clause bodies (2026-10-29)
+
+A boundary in another boundary's clause body (`READ ... NOT AT END CALL
+"X"`, `CALL ... ON EXCEPTION WRITE ERR-REC`, any depth) is spliced:
+
+- **Spans.** `collect_scope_map` records every clause header of a
+  READ / RETURN / WRITE / REWRITE / DELETE / START / CALL as a boundary
+  (`ScopeBoundary.clause_header`, located by
+  `clause_bodies.clause_header_positions`; the AST has none). A
+  `nested_in_boundary` site whose category is not None and not EXEC, of a
+  `_NESTABLE_BOUNDARY_TYPES` type, under enclosing boundaries that are all
+  liftable types (`_in_boundary_problem`), then gets an ordinary nested
+  span that stops before the next header. When only its own clause header
+  precedes it on its first line (`AT END CALL "X"`), the span still starts
+  there and `BoundarySite.span_lead` holds the header text.
+- **Lift.** `_NESTABLE_BOUNDARY_TYPES` are no longer forbidden in a lifted
+  body (`_walk` does not descend into their own bodies; `_PHRASE_OWNERS`
+  lets READ/RETURN own AT END and the file ops INVALID KEY /
+  END-OF-PAGE). EXEC, SORT/MERGE, RECEIVE, INVOKE and report-writer verbs
+  still are. A statement of the outer's own kind in its bodies is fine
+  when each one is closed by its own END-xxx (the last body's end is found
+  by pairing verbs with terminators); one without refuses the lift.
+- **Splice.** `splice_program` decides every site's splice first, then
+  `boundary_parents` finds each spliced site's nearest spliced ancestor.
+  With none, it is spliced in place (the `span_lead` header re-emitted on
+  its own line first). Under a mocked ancestor, its replacement is spliced
+  into the ancestor's lifted copy (`_splice_into_lifted`, by
+  `LiftedClause.source_line_numbers`), recursively; under a trap it goes
+  with the ancestor. Its lines are never spliced twice.
+- An unmocked inner site is copied with the body and runs for real, so the
+  gate refuses any case reaching it (UNMOCKED_*), as anywhere else.
+
+# Real programs in one binary (real_programs.py, 2026-11-01)
+
+`build_site_dispatch(..., real_statement=)`: a case whose directive
+`is_real` adds to the tally and runs the original statement (the
+orchestrator always passes `_statement_lines(own, ...)`); it skips the
+`MOVE "00" TO UT-MOCK-STATUS`, so the lifted-clause guard selects nothing
+and the CALL's own ON EXCEPTION clauses run as part of it.
+`splicer/real_programs.py`: `share_driver_state` turns `UT-CURRENT-CASE`,
+`UT-FAIL-COUNT`, `UT-EARLY-EXIT` and every tally into `EXTERNAL` items
+(VALUE clauses become MOVEs at the top of the suite paragraph) and returns
+the declarations each real program gets, plus a **local**
+`UT-MOCK-STATUS` (shared, a callee's mock would overwrite the caller's
+outcome mid-dispatch); `instrument_real_program` splices a real program
+with the full suite and registry; `cancel_lines` adds `CANCEL "X"` to
+the WORKING-STORAGE reset. Design: [docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
 
 # Orchestration and Ordering Invariant (orchestrator.py)
 
@@ -1165,12 +1216,16 @@ future cobolparser fix that silences the warning without also fixing
 See `docs/2026-07-08-goback-stop-run-support-design.md`'s "Out of scope"
 section for the full writeup),
 never a `GO TO` target anywhere in the program
-(`refusal._go_to_targets`), never a `SECTION` member — except the one
-narrow, whole-program-verified shape: a `SECTION`'s own first paragraph,
-entered exclusively via `PERFORM <section-name>`
-(`refusal._safe_section_entry_points`), replaced with `EXIT SECTION`
-instead of `EXIT PARAGRAPH` (`TerminatorPlan.exit_kind`) — see
-`docs/2026-07-10-section-scoped-terminator-support-design.md`. Safe
+(`refusal._go_to_targets`), and, for a `SECTION` member, entered in
+only one way (`refusal._section_member_modes`, 2026-10-27): inside a
+`PERFORM <section-name>` range (the section's first paragraph, or a later
+one reached from it by fall-through) it leaves with `EXIT SECTION`;
+PERFORMed only by its own name it leaves with `EXIT PARAGRAPH`
+(`TerminatorPlan.exit_kind`, and `chain_exit_kinds` for a chain PERFORM
+held in a section-mode member). A member entered both ways, inside a
+THRU range, or a GO TO target is refused — see
+`docs/2026-10-27-section-member-terminators-design.md` (which extends
+`docs/2026-07-10-section-scoped-terminator-support-design.md`). Safe
 terminators
 are replaced with `MOVE "Y" TO UT-EARLY-EXIT` + `EXIT PARAGRAPH`
 (`injector.build_terminator_neutralization`); every intermediate
@@ -1469,7 +1524,7 @@ operator's *negation* via `_EXPECT_FAIL_CONDITIONS` since the generated
 IF guards the failure branch; `>=`/`<=` negate to plain `<`/`>` so every
 emitted condition stays a simple COBOL-85 relational — keep the map in
 sync with `model.EXPECT_OPERATORS`; a value with an unquoted `AND`/`OR`
-tail, i.e. an abbreviated combined condition such as `TO BE > 0 AND < 10`
+tail, i.e. an abbreviated combined condition such as `TO BE GREATER THAN 0 AND < 10`
 or `TO BE 7 OR 8`, instead compiles to `IF NOT (<name> <op> <value>)`,
 because swapping the operator would negate only the first relation, issue
 #265 -- or, for a negated operator (`NOT =`, `NOT >`, ...), to the

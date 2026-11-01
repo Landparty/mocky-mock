@@ -44,6 +44,8 @@ See `.okf/analysis.md` for the full refusal-package overview.
 
 from __future__ import annotations
 
+from bisect import bisect_left
+
 from cobolparser.models.program import CobolParagraph
 from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.models.statements.control import (
@@ -80,13 +82,72 @@ def _find_statements_of_type(
     nested inside IF/EVALUATE/SEARCH branches, inline PERFORM bodies, and
     IO clause bodies -- reusing mock_surface.py's `_nested_statement_lists`
     rather than reimplementing nested-statement detection."""
-    found = []
+    return [s for s in _flattened(statements) if isinstance(s, statement_type)]
+
+
+#: id(statement list) -> (that list, its length, every statement in it and
+#: its clause bodies, pre-order). The analyses walk the same paragraph
+#: bodies once per BFS, and a BFS runs once per paragraph in generate's
+#: exact-count pass: on a 400-section program the repeated walk was 90% of
+#: a 66 s generate (sweep 2026-10-29's 90 s timeouts). The list itself is
+#: kept so its id cannot be reused while the entry lives; the AST is never
+#: mutated after parsing, and a length change still invalidates the entry.
+_FLATTENED: dict[int, tuple[list, int, list]] = {}
+_FLATTENED_LIMIT = 50_000
+
+
+def _flattened(statements: list) -> list:
+    """Every statement in `statements` and, recursively, in each one's
+    clause bodies (`_nested_statement_lists`), pre-order -- cached per
+    list, see `_FLATTENED`."""
+    key = id(statements)
+    hit = _FLATTENED.get(key)
+    if hit is not None and hit[0] is statements and hit[1] == len(statements):
+        return hit[2]
+    found: list = []
     for statement in statements:
-        if isinstance(statement, statement_type):
-            found.append(statement)
+        found.append(statement)
         for nested in _nested_statement_lists(statement):
-            found.extend(_find_statements_of_type(nested, statement_type))
+            found.extend(_flattened(nested))
+    if len(_FLATTENED) >= _FLATTENED_LIMIT:
+        _FLATTENED.clear()
+    _FLATTENED[key] = (statements, len(statements), found)
     return found
+
+
+#: The last program `_per_program` memoized for, and its results keyed by
+#: (function name, arguments). One program at a time: generate and run
+#: analyze one AST, so keeping only the latest bounds the memory and holds
+#: the AST alive only until the next program is analyzed.
+#: Swapped as one tuple, so a call always reads the results of its own
+#: program even if another thread analyzes a different one meanwhile.
+_PROGRAM_MEMO: list[tuple[object, dict]] = [(None, {})]
+
+
+def _per_program(function):
+    """Memoize a whole-program analysis `function(program, *args)` whose
+    result depends only on the (never mutated) AST and its hashable
+    arguments: `_reachable_paragraphs` runs once per paragraph in
+    generate's exact-count pass and recomputed these each time (sweep
+    2026-10-29's 90 s timeouts). A set result is copied on the way out so
+    a caller that mutates it cannot poison the memo."""
+
+    def wrapper(program, *args, **kwargs):
+        memo = _PROGRAM_MEMO[0]
+        if memo[0] is not program:
+            memo = (program, {})
+            _PROGRAM_MEMO[0] = memo
+        results = memo[1]
+        key = (function.__name__, args, tuple(sorted(kwargs.items())))
+        if key not in results:
+            results[key] = function(program, *args, **kwargs)
+        value = results[key]
+        return set(value) if isinstance(value, set) else value
+
+    wrapper.__wrapped__ = function  # type: ignore[attr-defined]
+    wrapper.__name__ = function.__name__
+    wrapper.__doc__ = function.__doc__
+    return wrapper
 
 
 def _find_flow_statements(statements: list) -> list:
@@ -196,6 +257,47 @@ def _expand_thru_range(
 
 
 def _reachable_paragraphs(
+    program,
+    start: str,
+    thru: str | None = None,
+    skip_traversal: frozenset[str] | set[str] = frozenset(),
+    neutralized_goto: frozenset[str] | set[str] = frozenset(),
+    follow_whenever: bool = True,
+    cics_conditions: frozenset[str] | None = None,
+    direct_out: set[str] | None = None,
+) -> tuple[set[str], list[RefusalReason]]:
+    """`_reachable_bfs`, memoized per program (`_per_program`) unless the
+    caller wants `direct_out` filled: generate's exact-count pass and the
+    per-case gates ask for the same entry points again and again."""
+    if direct_out is not None:
+        return _reachable_bfs(
+            program,
+            start,
+            thru,
+            skip_traversal,
+            neutralized_goto,
+            follow_whenever,
+            cics_conditions,
+            direct_out,
+        )
+    seen, reasons = _reachable_bfs_memo(
+        program,
+        start,
+        thru,
+        frozenset(skip_traversal),
+        frozenset(neutralized_goto),
+        follow_whenever,
+        cics_conditions,
+    )
+    return set(seen), list(reasons)
+
+
+@_per_program
+def _reachable_bfs_memo(program, *args) -> tuple[set[str], list[RefusalReason]]:
+    return _reachable_bfs(program, *args)
+
+
+def _reachable_bfs(
     program,
     start: str,
     thru: str | None = None,
@@ -404,6 +506,13 @@ def _reachable_paragraphs(
         exclude_seeds={start} | ({thru} if thru else set()),
     )
     closure_started = False
+    # GO TO fall-through walks by origin name: a walk depends only on
+    # `paragraph_safe_section` and `active_ranges`, which change only when
+    # an exposed range or section is dropped (the cache is cleared then),
+    # so later fixpoint passes reuse the earlier passes' walks instead of
+    # re-walking every target each time.
+    walks: dict[str, list[str] | None] = {}
+    range_of: dict[str, str] | None = None
     while True:
         while stack:
             name = stack.pop()
@@ -576,22 +685,27 @@ def _reachable_paragraphs(
             break
         anchor_failed = False
         additions: list[str] = []
-        range_of = {
-            member: members[-1]
-            for members in active_ranges.values()
-            for member in members
-        }
+        if range_of is None:
+            range_of = {
+                member: members[-1]
+                for members in active_ranges.values()
+                for member in members
+            }
         exposed: set[tuple[str, str]] = set()
+        walked: set[str] = set()
+        added: set[str] = set()
         for name in sorted(hazard_sources):
-            reached = _walk_fallthrough_from(
-                name,
-                ordered,
-                index_by_name,
-                section_members,
-                paragraph_safe_section,
-                falls=falls,
-                range_of=range_of,
-            )
+            if name not in walks:
+                walks[name] = _walk_fallthrough_from(
+                    name,
+                    ordered,
+                    index_by_name,
+                    section_members,
+                    paragraph_safe_section,
+                    falls=falls,
+                    range_of=range_of,
+                )
+            reached = walks[name]
             if reached:
                 exposed.update(
                     key
@@ -613,16 +727,26 @@ def _reachable_paragraphs(
                 )
                 anchor_failed = True
                 continue
+            walked.update(reached)
             for fallen in reached:
-                if fallen not in seen and fallen not in additions:
+                if fallen not in seen and fallen not in added:
+                    added.add(fallen)
                     additions.append(fallen)
         if anchor_failed:
             break
-        if exposed:
-            # Walks stopped at an exposed range's end are no longer
-            # trustworthy: drop it and walk everything again.
+        exposed_sections = _exposed_sections(
+            paragraph_safe_section, section_members, walked
+        )
+        if exposed or exposed_sections:
+            # Walks stopped at an exposed range's or section's end are no
+            # longer trustworthy: drop it and walk everything again.
             for key in exposed:
                 del active_ranges[key]
+            paragraph_safe_section = _without_sections(
+                paragraph_safe_section, exposed_sections
+            )
+            walks.clear()
+            range_of = None
             stack.extend(additions)
             continue
         if not additions:
@@ -631,6 +755,7 @@ def _reachable_paragraphs(
     return seen, reasons
 
 
+@_per_program
 def _go_to_targets(
     program,
     include_whenever: bool = True,
@@ -713,6 +838,208 @@ def _safe_section_entry_points(program) -> dict[str, str]:
             continue
         safe_entries[section_name] = first_name
     return safe_entries
+
+
+def _ends_section_range(paragraph) -> bool:
+    """Whether control cannot fall from `paragraph` into the next member
+    while running inside a `PERFORM <section-name>` range. Narrower than
+    `_falls_through`: there a trailing EXIT PARAGRAPH ends only this
+    paragraph and control continues into the next member (GnuCOBOL 3.2).
+    A trailing EXIT PROGRAM does end the range: in the called subprogram it
+    is written for it returns to the caller, and in a test it is
+    neutralized like GOBACK (MOVE "Y" + EXIT SECTION). Only when the
+    program runs as the main program is it a no-op, and mockymock never
+    runs it that way unneutralized."""
+    statements = paragraph.statements
+    if not statements:
+        return False
+    last = statements[-1]
+    if isinstance(last, ExitStatement):
+        return last.exit_type in ("SECTION", "PROGRAM")
+    return not _falls_through(paragraph)
+
+
+def _section_range(section) -> list:
+    """The members that run when `section` is PERFORMed by name: its
+    first paragraph and each later one reached by falling through."""
+    members = []
+    for paragraph in section.paragraphs:
+        members.append(paragraph)
+        if _ends_section_range(paragraph):
+            break
+    return members
+
+
+def _section_member_modes(
+    program,
+    paragraph_entries: frozenset[str] | set[str] = frozenset(),
+    section_entries: frozenset[str] | set[str] = frozenset(),
+    why_not: dict[str, str] | None = None,
+    main_line_sections: set[str] | None = None,
+) -> dict[str, str]:
+    """SECTION member paragraph name -> how it is entered, for every member
+    entered in exactly one way: "SECTION" when it runs inside a `PERFORM
+    <section-name>` range -- the section's first paragraph, and each later
+    member reached by falling through from one that does not provably
+    divert (`_falls_through`) -- or "PARAGRAPH" when it is only ever
+    PERFORMed by its own name, so its range is the paragraph alone.
+
+    The early-exit propagation leaves such a member with `EXIT SECTION`
+    or `EXIT PARAGRAPH` respectively; both were verified against GnuCOBOL
+    3.2 (docs/2026-10-27-section-member-terminators-design.md). A member
+    entered both ways, a GO TO target, one inside a PERFORM ... THRU
+    range, or a name defined twice gets no entry: no single EXIT verb
+    returns correctly from it. `paragraph_entries` / `section_entries` are
+    the DSL-level entry points (a case's PERFORM target naming a member or
+    a section), invisible to the whole-program scan here.
+
+    When a THRU range cannot be expanded, the result falls back to the
+    2026-07-10 rule: only a safe section's first paragraph, entered via its
+    section name, as "SECTION".
+
+    `why_not`, when given, receives a short reason for each named member
+    left without a mode, for refusal messages.
+
+    Every section's nameless main line (and every phantom "." node) shares
+    one key here, so its "SECTION" entry only says that SOME section's main
+    line runs in section mode. `main_line_sections`, when given, receives
+    the names of the sections whose own main line does -- the per-section
+    answer a caller needs before trusting that shared key for one site."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return {}
+    sections = {
+        name: section
+        for name, section in getattr(procedure, "_sections", {}).items()
+        if name and section.paragraphs
+    }
+    if not sections:
+        return {}
+    go_to_targets = _go_to_targets(program)
+    duplicated = duplicated_paragraph_names(program)
+    performed_names: set[str] = set(paragraph_entries)
+    entered_sections: set[str] = set(section_entries)
+    thru_ranges: list[tuple[str, str]] = []
+    for paragraph in _all_paragraphs(procedure):
+        for statement in _find_statements_of_type(
+            paragraph.statements, PerformStatement
+        ):
+            target = statement.target_paragraph
+            if not target:
+                continue
+            if statement.thru_paragraph:
+                thru_ranges.append((target, statement.thru_paragraph))
+            elif target in sections:
+                entered_sections.add(target)
+            else:
+                performed_names.add(target)
+        # A SORT/MERGE INPUT/OUTPUT PROCEDURE is an implicit PERFORM, run
+        # with no early-exit check after it: its members get no mode.
+        for statement in _find_sort_merge_statements(paragraph.statements):
+            for procedure_attr, thru_attr in (
+                ("input_procedure", "input_procedure_thru"),
+                ("output_procedure", "output_procedure_thru"),
+            ):
+                start = getattr(statement, procedure_attr, None)
+                if start is None:
+                    continue
+                thru = getattr(statement, thru_attr, None) or start
+                thru_ranges.append((start, thru))
+        # So is an XML PARSE PROCESSING PROCEDURE.
+        for statement in _find_xml_parse_statements(paragraph.statements):
+            start = getattr(statement, "processing_procedure", None)
+            if start is None:
+                continue
+            thru = getattr(statement, "processing_procedure_thru", None) or start
+            thru_ranges.append((start, thru))
+
+    def fallback() -> dict[str, str]:
+        modes = {
+            first: "SECTION"
+            for section_name, first in _safe_section_entry_points(program).items()
+            if section_name in entered_sections and first not in paragraph_entries
+        }
+        if main_line_sections is not None:
+            main_line_sections.update(
+                section_name
+                for section_name, first in _safe_section_entry_points(program).items()
+                if section_name in entered_sections
+                and first not in paragraph_entries
+                and not (first or "").strip(".")
+            )
+        return modes
+
+    in_thru: set[str] = set()
+    if thru_ranges:
+        ordered = _source_ordered_paragraphs(procedure)
+        for start, thru in thru_ranges:
+            if start in sections:
+                start = sections[start].paragraphs[0].paragraph_name
+            if thru in sections:
+                thru = sections[thru].paragraphs[-1].paragraph_name
+            names, reason = _expand_thru_range(ordered, start, thru, "mode scan")
+            if reason is not None:
+                return fallback()
+            in_thru.update(names)
+
+    # A section named as a THRU endpoint or a SORT/MERGE/XML PARSE
+    # procedure also runs with no early-exit check after it.
+    thru_endpoints = {name for pair in thru_ranges for name in pair}
+    section_mode: set[str] = set()
+    for section_name in entered_sections & sections.keys():
+        if section_name in go_to_targets:
+            continue
+        for paragraph in _section_range(sections[section_name]):
+            section_mode.add(paragraph.paragraph_name)
+            if (
+                main_line_sections is not None
+                and not (paragraph.paragraph_name or "").strip(".")
+                and section_name not in thru_endpoints
+            ):
+                main_line_sections.add(section_name)
+
+    modes: dict[str, str] = {}
+    for section_name, section in sections.items():
+        for paragraph in section.paragraphs:
+            name = paragraph.paragraph_name
+            if not (name or "").strip("."):
+                # A section's nameless main line (or a phantom "." node)
+                # can only run inside its section's range.
+                if name in section_mode:
+                    modes[name] = "SECTION"
+                continue
+            by_section = name in section_mode
+            by_name = name in performed_names
+            if name in duplicated:
+                why = "its name is defined in more than one SECTION"
+            elif name in go_to_targets:
+                why = "it is a GO TO target"
+            elif section_name in go_to_targets:
+                why = f"its SECTION '{section_name}' is a GO TO target"
+            elif name in in_thru:
+                why = (
+                    "it lies inside a PERFORM ... THRU range or a SORT/MERGE/"
+                    "XML PARSE procedure, run with no early-exit check after it"
+                )
+            elif by_section and not by_name:
+                modes[name] = "SECTION"
+                continue
+            elif by_name and not by_section:
+                modes[name] = "PARAGRAPH"
+                continue
+            elif by_name:
+                why = (
+                    "it is entered both by its own name and as part of its "
+                    "section's PERFORM range"
+                )
+            else:
+                why = (
+                    "it is never PERFORMed, by its own name or as part of a "
+                    "PERFORMed section's range: control only falls into it"
+                )
+            if why_not is not None:
+                why_not[name] = why
+    return modes
 
 
 def _falls_through(paragraph) -> bool:
@@ -807,6 +1134,7 @@ def duplicated_paragraph_names(program) -> set[str]:
     return duplicated
 
 
+@_per_program
 def _fallthrough_safe_sections(program) -> set[str]:
     """SECTION names whose LAST paragraph a GO TO fall-through walk may
     treat as a hard stop (see `_walk_fallthrough_from`): reaching that
@@ -864,10 +1192,21 @@ def _fallthrough_safe_sections(program) -> set[str]:
         for paragraph in section.paragraphs:
             section_of[paragraph.paragraph_name] = section_name
 
+    # The enclosing section comes from the paragraph object, not its name:
+    # every section's nameless main line is named '', so a name lookup
+    # gave all of them the LAST such section, and a `GO TO <own-exit>` in
+    # one section's main line read as a jump in from outside.
+    enclosing_of: dict[int, str | None] = {}
+    for section_name, section in getattr(procedure, "_sections", {}).items():
+        for paragraph in section.paragraphs:
+            enclosing_of[id(paragraph)] = section_name or None
+
     external_go_to_targets: set[str] = set()
     external_performed_names: set[str] = set()
     for paragraph in _all_paragraphs(procedure):
-        enclosing_section = section_of.get(paragraph.paragraph_name)
+        enclosing_section = enclosing_of.get(
+            id(paragraph), section_of.get(paragraph.paragraph_name)
+        )
         for statement in _find_statements_of_type(
             paragraph.statements, PerformStatement
         ):
@@ -923,6 +1262,38 @@ def _paragraph_safe_section_map(
         for section, members in section_members.items()
         if section in safe_sections and section not in excluded
         for member in members
+    }
+
+
+def _exposed_sections(
+    paragraph_safe_section: dict[str, str],
+    section_members: dict[str, list[str]],
+    walked: set[str],
+) -> set[str]:
+    """The sections of `paragraph_safe_section` whose FIRST paragraph a
+    fall-through walk reached. A walk only reports paragraphs after its
+    own start, so that walk came from outside the section: control falls
+    into it off the end of the code before it, with no `PERFORM
+    <section-name>` active, and its last paragraph is no stop. The
+    whole-program scan in `_fallthrough_safe_sections` cannot see this
+    route."""
+    return {
+        section
+        for section in set(paragraph_safe_section.values())
+        if section_members.get(section) and section_members[section][0] in walked
+    }
+
+
+def _without_sections(
+    paragraph_safe_section: dict[str, str], sections: set[str]
+) -> dict[str, str]:
+    """`paragraph_safe_section` less every member of `sections`."""
+    if not sections:
+        return paragraph_safe_section
+    return {
+        member: section
+        for member, section in paragraph_safe_section.items()
+        if section not in sections
     }
 
 
@@ -1122,15 +1493,53 @@ def _walk_fallthrough_from(
         if section_paragraphs:
             stop_before = section_paragraphs[-1]
     range_end = (range_of or {}).get(anchor_name)
-    reached: list[str] = []
-    cursor = start
-    while falls[cursor] and cursor + 1 < len(ordered):
-        here = ordered[cursor].paragraph_name
-        if here in (stop_before, range_end):
-            break
-        cursor += 1
-        reached.append(ordered[cursor].paragraph_name)
-    return reached
+    # The walk advances while the paragraph at the cursor falls through and
+    # is not named `stop_before`/`range_end`, so it ends at the first of:
+    # a paragraph that does not fall through, the first paragraph at or
+    # after `start` bearing either name (by name, as nameless main lines
+    # share ''), or the last paragraph. Found by table lookups instead of
+    # a step-by-step walk: the closure re-walks every GO TO target once
+    # per pass, which made generate cubic in the paragraph count.
+    names, next_stop, positions = _walk_tables(ordered, falls)
+    stop = next_stop[start]
+    for limit in (stop_before, range_end):
+        if limit is None:
+            continue
+        at = positions.get(limit)
+        if at:
+            k = bisect_left(at, start)
+            if k < len(at) and at[k] < stop:
+                stop = at[k]
+    return names[start + 1 : stop + 1]
+
+
+#: (ordered, falls, tables) for the last `_walk_tables` call: one BFS
+#: walks many targets over the same `ordered`/`falls` lists.
+_WALK_TABLES: list = [(None, None, None)]
+
+
+def _walk_tables(
+    ordered: list, falls: list[bool]
+) -> tuple[list[str], list[int], dict[str, list[int]]]:
+    """For `_walk_fallthrough_from`: the paragraph names in source order;
+    for each index, the first index at or after it that does not fall
+    through (or the last index); and each name's indices, ascending."""
+    cached_ordered, cached_falls, cached = _WALK_TABLES[0]
+    if cached_ordered is ordered and cached_falls is falls:
+        return cached
+    names = [p.paragraph_name for p in ordered]
+    next_stop = [len(ordered) - 1] * len(ordered)
+    following = len(ordered) - 1
+    for index in range(len(ordered) - 1, -1, -1):
+        if not falls[index]:
+            following = index
+        next_stop[index] = following
+    positions: dict[str, list[int]] = {}
+    for index, name in enumerate(names):
+        positions.setdefault(name, []).append(index)
+    tables = (names, next_stop, positions)
+    _WALK_TABLES[0] = (ordered, falls, tables)
+    return tables
 
 
 def _go_to_fallthrough_targets(
@@ -1204,6 +1613,8 @@ def _go_to_fallthrough_targets(
     falls = _fallthrough_flags(ordered)
     stops = _first_non_fallthrough(falls)
 
+    last = len(ordered) - 1
+    safe = paragraph_safe_section or {}
     active = dict(closed_ranges or {})
     while True:
         range_of = {
@@ -1215,15 +1626,24 @@ def _go_to_fallthrough_targets(
             index_by_name,
             section_members,
             stops,
-            paragraph_safe_section,
+            last,
+            safe,
             range_of,
         )
-        # A walk only ever records paragraphs after its own start, so one
-        # reaching a range's first paragraph started outside that range.
-        exposed = {key for key, members in active.items() if members[0] in hazard}
-        if not exposed:
+        # A section fallen into from outside has no return marker at its
+        # end (see `_exposed_sections`), and a walk reaching a closed
+        # range's first paragraph started outside that range (a walk only
+        # records paragraphs after its own start): walk again without
+        # stopping at either.
+        exposed = _exposed_sections(safe, section_members, set(hazard))
+        exposed_ranges = {
+            key for key, members in active.items() if members[0] in hazard
+        }
+        if not exposed and not exposed_ranges:
             return hazard
-        for key in exposed:
+        if exposed:
+            safe = _without_sections(safe, exposed)
+        for key in exposed_ranges:
             del active[key]
 
 
@@ -1232,13 +1652,13 @@ def _fallthrough_hazards(
     ordered: list,
     index_by_name: dict[str, int],
     section_members: dict[str, list[str]],
-    stops: list,
-    paragraph_safe_section: dict[str, str] | None,
+    stops: list[int | None],
+    last: int,
+    paragraph_safe_section: dict[str, str],
     range_of: dict[str, str],
 ) -> dict[str, str]:
-    """One pass of `_go_to_fallthrough_targets`' walk, with `range_of`'s
+    """One pass of `_go_to_fallthrough_targets`' walks, with `range_of`'s
     closed-range ends as stops."""
-    last = len(ordered) - 1
     hazard: dict[str, str] = {}
     # Index -> the end index of the earlier walk that recorded it. Without
     # section stops, two walks that both pass through index k necessarily
@@ -1266,7 +1686,7 @@ def _fallthrough_hazards(
             anchor = members[0]
         stop = stops[start]
         end = last if stop is None else stop
-        section = (paragraph_safe_section or {}).get(anchor)
+        section = paragraph_safe_section.get(anchor)
         if section is not None:
             section_end = index_by_name.get(section_members[section][-1])
             if section_end is not None and start <= section_end < end:
@@ -1283,7 +1703,10 @@ def _fallthrough_hazards(
 
 
 def _plain_perform_statements(
-    statements: list, nested: bool = False, in_boundary: bool = False
+    statements: list,
+    nested: bool = False,
+    in_boundary: bool = False,
+    include_loops: bool = False,
 ) -> list[tuple[PerformStatement, bool, bool]]:
     """Recursively collect every plain, unconditional, single-shot,
     out-of-line PerformStatement in `statements` -- thru_paragraph is
@@ -1310,6 +1733,9 @@ def _plain_perform_statements(
     so a PERFORM is marked nested at every depth >= 1 while a genuinely
     top-level one (the initial call, nested defaults to False) stays
     unmarked. See docs/2026-07-10-conditionally-nested-intermediate-perform-design.md.
+
+    `include_loops` also collects an out-of-line `PERFORM <name> UNTIL`
+    (never VARYING, TIMES or THRU): see `_is_loop_perform`.
     """
     found: list[tuple[PerformStatement, bool, bool]] = []
     for statement in statements:
@@ -1317,7 +1743,10 @@ def _plain_perform_statements(
             isinstance(statement, PerformStatement)
             and statement.thru_paragraph is None
             and statement.target_paragraph
-            and statement.perform_type == "SIMPLE"
+            and (
+                statement.perform_type == "SIMPLE"
+                or (include_loops and _is_loop_perform(statement))
+            )
         ):
             found.append((statement, nested, in_boundary))
         child_in_boundary = in_boundary or isinstance(
@@ -1326,14 +1755,44 @@ def _plain_perform_statements(
         for nested_list in _nested_statement_lists(statement):
             found.extend(
                 _plain_perform_statements(
-                    nested_list, nested=True, in_boundary=child_in_boundary
+                    nested_list,
+                    nested=True,
+                    in_boundary=child_in_boundary,
+                    include_loops=include_loops,
                 )
             )
     return found
 
 
+def _is_loop_perform(statement) -> bool:
+    """An out-of-line `PERFORM <name> UNTIL ...` (no THRU). A terminator
+    neutralized under one leaves the loop with `UT-EARLY-EXIT` set but its
+    own condition unchanged, so the loop would run again, forever (a STOP
+    RUN in an error paragraph PERFORMed from the read loop). The splicer
+    prefixes its UNTIL with `UT-EARLY-EXIT = "Y" OR`
+    (`TerminatorPlan.loop_performs`), which ends it on the next test of its
+    condition, before or after the iteration, with nothing else run.
+
+    Not VARYING: its counter is stepped before the condition is tested
+    again, so the test would see it one step further than the real run
+    leaves it. Not TIMES: no condition to extend. Both stay dead ends."""
+    return (
+        isinstance(statement, PerformStatement)
+        and statement.thru_paragraph is None
+        and bool(statement.target_paragraph)
+        and statement.perform_type == "UNTIL"
+        and not getattr(statement, "inline_statements", None)
+    )
+
+
 def _plain_perform_edges_from(
-    program, start: str, safe_section_entries: dict[str, str] | None = None
+    program,
+    start: str,
+    safe_section_entries: dict[str, str] | None = None,
+    member_modes: dict[str, str] | None = None,
+    main_line_sections: set[str] | None = None,
+    entered_sections: set[str] | None = None,
+    loop_edges: list[PerformStatement] | None = None,
 ) -> tuple[set[str], list[tuple[PerformStatement, bool]]]:
     """BFS from `start` following plain (non-THRU), unconditional,
     single-shot PERFORM statements -- PerformStatement nodes with
@@ -1393,7 +1852,26 @@ def _plain_perform_edges_from(
     insertion-point computation applies. Deliberately NOT the same as
     `_reachable_paragraphs`: that function also follows GO TO and
     section/THRU fall-through edges, exactly the unsafe shapes this
-    restricted variant must exclude."""
+    restricted variant must exclude.
+
+    `member_modes` (`_section_member_modes`), when given, replaces the
+    first-paragraph-only SECTION rule: a PERFORM of a section resolves to
+    every member that runs in its range ("SECTION" mode: the first one and
+    those reached from it by fall-through), and a PERFORM naming a member
+    entered only that way ("PARAGRAPH" mode) resolves to it.
+
+    A section's nameless main line shares the key '' with every other
+    one, so `member_modes['']` cannot say which: `main_line_sections`
+    (from `_section_member_modes`), when given, limits a section's main
+    line to the sections whose own main line runs in section mode. The
+    walk itself keys each nameless member by identity, so every PERFORMed
+    section's main line is followed, not just the first one seen, and
+    `entered_sections`, when given, receives each section whose range the
+    walk entered -- the per-section answer for a site in a main line.
+
+    `loop_edges`, when given, makes the walk follow an out-of-line
+    `PERFORM <name> UNTIL` too (`_is_loop_perform`); each such
+    PERFORM is returned among the edges and also appended to it."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
         return set(), []
@@ -1404,40 +1882,79 @@ def _plain_perform_edges_from(
         for section in procedure._sections.values()
         for paragraph in section.paragraphs
     }
+    sections = {
+        name: section
+        for name, section in getattr(procedure, "_sections", {}).items()
+        if name and section.paragraphs
+    }
 
-    def resolve(name):
+    def resolve(name) -> list[tuple[str, CobolParagraph | None]]:
         if name in by_name:
-            return name, by_name[name]
+            return [(name, by_name[name])]
+        if member_modes is not None:
+            if name in sections:
+                # Every member the range runs must be instrumentable, or
+                # PERFORM nothing: one without a mode still runs, and a
+                # PERFORM in it would get no early-exit check (a dead end
+                # refuses). A mode-less member holding no PERFORM -- a GO
+                # TO's exit label, say -- has nothing to check.
+                members = []
+                for paragraph in _section_range(sections[name]):
+                    main_line = not (paragraph.paragraph_name or "").strip(".")
+                    if member_modes.get(paragraph.paragraph_name) == "SECTION" and (
+                        not main_line
+                        or main_line_sections is None
+                        or name in main_line_sections
+                    ):
+                        members.append((paragraph.paragraph_name, paragraph))
+                    elif _find_statements_of_type(
+                        paragraph.statements,
+                        (PerformStatement, SortStatement, MergeStatement),
+                    ):
+                        return [(name, None)]
+                if members:
+                    if entered_sections is not None:
+                        entered_sections.add(name)
+                    return members
+                return [(name, None)]
+            if member_modes.get(name) == "PARAGRAPH":
+                return [(name, section_member_by_name.get(name))]
+            return [(name, None)]
         first_name = safe_section_entries.get(name)
         if first_name is not None:
-            return first_name, section_member_by_name.get(first_name)
-        return name, None
+            return [(first_name, section_member_by_name.get(first_name))]
+        return [(name, None)]
 
-    start_name, start_paragraph = resolve(start)
-    seen = {start_name}
-    resolved = {}
-    stack = []
-    if start_paragraph is not None:
-        resolved[start_name] = start_paragraph
-        stack.append(start_name)
+    seen: set[str] = set()
+    walked: set[object] = set()
+    stack: list[CobolParagraph] = []
+
+    def visit(name) -> None:
+        for target_name, target_paragraph in resolve(name):
+            seen.add(target_name)
+            # By identity for a nameless main line ('' in every section).
+            key = (
+                target_name if (target_name or "").strip(".") else id(target_paragraph)
+            )
+            if key in walked:
+                continue
+            walked.add(key)
+            if target_paragraph is not None:
+                stack.append(target_paragraph)
+
+    visit(start)
     edges: list[tuple[PerformStatement, bool]] = []
     while stack:
-        name = stack.pop()
-        paragraph = resolved.get(name)
-        if paragraph is None:
-            continue
+        paragraph = stack.pop()
         for statement, nested, in_boundary in _plain_perform_statements(
-            paragraph.statements
+            paragraph.statements, include_loops=loop_edges is not None
         ):
             if in_boundary:
                 continue
             edges.append((statement, nested))
-            target_name, target_paragraph = resolve(statement.target_paragraph)
-            if target_name not in seen:
-                seen.add(target_name)
-                if target_paragraph is not None:
-                    resolved[target_name] = target_paragraph
-                    stack.append(target_name)
+            if loop_edges is not None and statement.perform_type != "SIMPLE":
+                loop_edges.append(statement)
+            visit(statement.target_paragraph)
     return seen, edges
 
 

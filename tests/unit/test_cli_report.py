@@ -66,7 +66,7 @@ def test_writes_html_into_the_artifact_folder_by_default(ordrproc, capsys):
     assert not (ordrproc / "ORDRPROC.report.html").exists()
     out = capsys.readouterr().out
     assert "[skipped] Run the suite under GnuCOBOL" in out
-    assert ".mockymock/ORDRPROC.report.html" in out
+    assert str(Path(".mockymock") / "ORDRPROC.report.html") in out
 
 
 def test_each_suite_of_a_program_gets_its_own_report(ordrproc, capsys):

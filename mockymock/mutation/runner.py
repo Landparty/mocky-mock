@@ -125,6 +125,7 @@ def _run_suite_once(
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.cli.checks import (
+        REAL_CALL_UNSUPPORTED,
         extra_reset_lines_for,
         extra_working_storage,
         run_static_checks,
@@ -132,9 +133,9 @@ def _run_suite_once(
     from mockymock.cli.main import _insert_driver
     from mockymock.report.coverage import map_coverage_to_original, parse_gcov
     from mockymock.report.results import parse_stdout
-    from mockymock.runtime import docker_toolchain
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
+    from mockymock.runtime.toolchain import active as active_toolchain
     from mockymock.splicer import cics_eib
     from mockymock.splicer.driver import build_driver
     from mockymock.splicer.linkage import extra_reset_lines
@@ -144,13 +145,17 @@ def _run_suite_once(
     from mockymock.splicer.source_map import collect_boundaries
     from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
-    with sandbox_dir_maybe_kept(root=docker_toolchain.WORK_ROOT, keep=False) as tmp:
+    toolchain = active_toolchain()
+
+    with sandbox_dir_maybe_kept(root=toolchain.WORK_ROOT, keep=False) as tmp:
         source_path = tmp / source_name
         source_path.write_text(source_text, encoding="utf-8", newline="\n")
 
         checked = run_static_checks(source_path, cut_path, copybook_paths)
         if checked.problems:
             return SuiteRun("stillborn", checked.problems[0], phase="checks")
+        if checked.real_programs:
+            return SuiteRun("stillborn", REAL_CALL_UNSUPPORTED, phase="checks")
         notes = list(checked.notes)
 
         result = checked.parse_result
@@ -217,8 +222,8 @@ def _run_suite_once(
         instrumented_path.write_text(
             "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
         )
-        identity = docker_toolchain.container_identity()
-        compiled = docker_toolchain.compile_source(
+        identity = toolchain.container_identity()
+        compiled = toolchain.compile_source(
             instrumented_path, coverage=collect_coverage
         )
         if not compiled.success:
@@ -234,7 +239,7 @@ def _run_suite_once(
         assert compiled.binary_path is not None  # implied by compiled.success
 
         started = time.monotonic()
-        execution = docker_toolchain.run_binary(
+        execution = toolchain.run_binary(
             compiled.binary_path, timeout_seconds=timeout_seconds
         )
         elapsed = time.monotonic() - started
@@ -263,7 +268,7 @@ def _run_suite_once(
         if collect_coverage and (status == "passed" or failing):
             # Must run while the sandbox still exists: gcov reads the
             # .gcda the binary wrote next to itself.
-            gcov = docker_toolchain.run_gcov(instrumented_path)
+            gcov = toolchain.run_gcov(instrumented_path)
             if gcov.success:
                 coverage = {
                     entry.line: entry.covered
@@ -334,11 +339,13 @@ def _restart_toolchain() -> bool:
     """Bring the toolchain container back up after a failure; whether it
     is up. Safe from several worker processes at once -- ensure_toolchain
     already settles the races on `docker run --name`."""
-    from mockymock.runtime import docker_toolchain
+    from mockymock.runtime.toolchain import active as active_toolchain
+
+    toolchain = active_toolchain()
 
     try:
-        docker_toolchain.ensure_toolchain()
-    except docker_toolchain.DockerNotAvailableError:
+        toolchain.ensure_toolchain()
+    except toolchain.ToolchainNotAvailableError:
         return False
     return True
 
@@ -372,16 +379,18 @@ def _run_fault(
     deadline, which in a container nothing else signals means the
     out-of-memory killer. Scored, either one moves the mutation score by a
     number that is Docker's, not the suite's."""
-    from mockymock.runtime import docker_toolchain
+    from mockymock.runtime.toolchain import active as active_toolchain
+
+    toolchain = active_toolchain()
 
     fault = _toolchain_fault(execution.stderr)
     if fault is not None:
         return fault
     if identity_before is not None:
-        now = docker_toolchain.container_identity()
+        now = toolchain.container_identity()
         if now is not None and now != identity_before:
             return (
-                f"toolchain failure: container {docker_toolchain.CONTAINER} "
+                f"toolchain failure: container {toolchain.CONTAINER} "
                 "was restarted during the run"
             )
     if execution.exit_code == SIGKILL_EXIT_CODE and elapsed < timeout_seconds:
@@ -399,11 +408,13 @@ def _toolchain_fault(stderr: str) -> str | None:
     text is the direct evidence; failing that, the container is asked
     whether it is still up, since a binary killed by the container going
     away leaves no message of its own."""
-    from mockymock.runtime import docker_toolchain
+    from mockymock.runtime.toolchain import active as active_toolchain
 
-    line = docker_toolchain.docker_failure_line(stderr)
+    toolchain = active_toolchain()
+
+    line = toolchain.docker_failure_line(stderr)
     if line is None:
-        line = docker_toolchain.toolchain_failure()
+        line = toolchain.toolchain_failure()
     return None if line is None else f"toolchain failure: {line}"
 
 
@@ -474,7 +485,7 @@ def default_jobs() -> int:
     never more than the machine has cores. The ceiling is not about CPUs
     -- it is the shared `mockymock-cobc` container's `--memory 1g`, which
     every concurrent `cobc` draws from at once (see
-    `runtime/docker_toolchain.py`'s hardening flags)."""
+    `runtime/toolchain.py`'s hardening flags)."""
     return max(1, min(4, os.cpu_count() or 1))
 
 
@@ -508,11 +519,13 @@ def run_mutation(
     classifies any mutant on a provably unexecuted line as `survived`
     without building it.
     """
-    from mockymock.runtime import docker_toolchain
+    from mockymock.runtime.toolchain import active as active_toolchain
+
+    toolchain = active_toolchain()
 
     try:
-        docker_toolchain.ensure_toolchain()
-    except docker_toolchain.DockerNotAvailableError as exc:
+        toolchain.ensure_toolchain()
+    except toolchain.ToolchainNotAvailableError as exc:
         return [str(exc)], None, []
 
     all_notes: list[str] = []

@@ -419,6 +419,15 @@ def _build_testcase_paragraph(
 ) -> list[str]:
     case_id = f"{index:03d}"
     case_mocks = {(mock.category, mock.key) for mock in case.mocks}
+    # CAPTURE target -> (tally, baseline) of the mock that fills it.
+    capture_tallies = {
+        target.upper(): (
+            registry.name(mock.category, mock.key),
+            registry.base_name(mock.category, mock.key),
+        )
+        for mock in case.mocks
+        for _, target in mock.captures
+    }
     before_each = suite.before_each_steps if suite is not None else []
     after_each = suite.after_each_steps if suite is not None else []
     lines = [f"       UT-TESTCASE-{case_id}."]
@@ -596,10 +605,24 @@ def _build_testcase_paragraph(
             lines.append(f'               DISPLAY "{marker}FALSE"')
             lines.append("           END-IF")
             continue
+        record = [
+            f'           DISPLAY "__MOCKYMOCK__ RECORD {case_id} {name}: " {name}',
+            _VALUE_END_DISPLAY.replace("               ", "           ", 1),
+        ]
+        capture = capture_tallies.get(name.partition("(")[0].strip().upper())
+        if capture is None:
+            lines.extend(record)
+            continue
+        # A CAPTURE target holds its initial value when the mocked CALL
+        # never ran in this case: say so instead of recording that value
+        # as "the argument passed" (issue #384).
+        lines.append(f"           IF {capture[0]} = {capture[1]}")
         lines.append(
-            f'           DISPLAY "__MOCKYMOCK__ RECORD {case_id} {name}: " {name}'
+            f'               DISPLAY "__MOCKYMOCK__ UNREACHED {case_id} {name}"'
         )
-        lines.append(_VALUE_END_DISPLAY.replace("               ", "           ", 1))
+        lines.append("           ELSE")
+        lines.extend(f"    {line}" for line in record)
+        lines.append("           END-IF")
 
     if any(step.kind == "PERFORM" for step in after_each):
         # Nor may one the case's PERFORM reached cut AFTER-EACH short: a
@@ -635,7 +658,7 @@ _EXPECT_FAIL_CONDITIONS = {
 #: digits, Enterprise COBOL's ARITH(EXTEND) maximum, so `export` stays
 #: compilable there too.
 _DEEDIT_FIELD = "UT-DEEDIT-VALUE"
-_NUMERIC_LITERAL_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$")
+_NUMERIC_LITERAL_RE = re.compile(r"^[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)$")
 
 
 def _compares_by_value(expectation, numeric_edited: frozenset[str] | set[str]) -> bool:

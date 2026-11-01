@@ -40,6 +40,17 @@ def _xml_safe(text: str) -> str:
     return _XML_ILLEGAL_RE.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
 
 
+# C0 control characters other than tab, and DEL: printed raw, an ESC
+# sequence held in a field clears or garbles the terminal (issue #375).
+_CONSOLE_CONTROL_RE = re.compile("[\x00-\x08\x0a-\x1f\x7f]")
+
+
+def _console_safe(text: str) -> str:
+    """Replace terminal control characters with a visible \\xNN escape.
+    Only the console line is escaped; the JSON report keeps the value."""
+    return _CONSOLE_CONTROL_RE.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
+
+
 def format_console(
     suite: TestSuiteResult,
     crash_detail: str | None = None,
@@ -51,7 +62,7 @@ def format_console(
     the binary early used to make them vanish from this listing.
     `risky`: case ids of the passing cases with no EXPECT/VERIFY
     (`json_report.risky_case_ids`); still passes, labelled as such."""
-    lines = [f"TESTSUITE: {suite.suite_name}"]
+    lines = [f"TESTSUITE: {_console_safe(suite.suite_name)}"]
     crashed_count = 0
     risky_ids = set(risky)
     for result in suite.results:
@@ -65,13 +76,13 @@ def format_console(
                 suffix = " (risky: asserts nothing)"
         else:
             status = "FAIL"
-        lines.append(f"  [{status}] {result.case_name}{suffix}")
+        lines.append(f"  [{status}] {_console_safe(result.case_name)}{suffix}")
         if result.crashed and crash_detail:
             lines.append(f"         {crash_detail}")
         for reason in result.failure_reasons:
-            lines.append(f"         {reason}")
+            lines.append(f"         {_console_safe(reason)}")
     for name in not_run:
-        lines.append(f"  [NOT RUN] {name}")
+        lines.append(f"  [NOT RUN] {_console_safe(name)}")
     # suite.tests_run/suite.failures are 0 whenever the SUMMARY line never
     # printed (a mid-suite crash prevents it), even though case lines were
     # clearly seen and rendered above -- fall back to counts reconstructed
@@ -106,7 +117,7 @@ def format_console(
     if suite.orphan_failures:
         lines.append("ORPHANED FAILURES (unknown case id):")
         for case_id, reason in suite.orphan_failures:
-            lines.append(f"  [{case_id}] {reason}")
+            lines.append(f"  [{case_id}] {_console_safe(reason)}")
     if suite.duplicate_case_starts:
         lines.append("DUPLICATE CASE IDS (a later START overwrote an earlier one):")
         for case_id, previous_name, new_name in suite.duplicate_case_starts:

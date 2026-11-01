@@ -1,9 +1,9 @@
 ---
 type: Module
 title: Test Result Reporting
-description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines.
+description: TestResult/TestSuiteResult data model plus console and JUnit XML formatters for compiled COBOL test runs; record_rewrite.py turns recorded RECORD markers into rewritten .cut EXPECT lines; sweep.py snapshots and diffs corpus sweeps.
 tags: [report, results, cli-output]
-timestamp: 2026-10-16T12:00:00Z
+timestamp: 2026-10-29T16:00:00Z
 ---
 # Overview
 
@@ -204,7 +204,7 @@ the console line and the JSON `crashDetail` are never blank/null there.
 ## JSON run report (`report/json_report.py`)
 
 `build_json_report(suite_result, cut_suite=None, crash_detail=None,
-cut_file=None, program_file=None)` -> dict; `format_json_report(dict)` ->
+cut_file=None, program_file=None, pictures=None, decimal_comma=False)` -> dict; `format_json_report(dict)` ->
 str. Written by `run --json-report`. Adds what the XML cannot carry: per-case
 `.cut` line numbers and tags (from the parsed `MockTestSuite`), per-failure
 attribution (`kind` expect/verify/unknown, the failing directive's `.cut`
@@ -215,7 +215,16 @@ first matched against each directive's exact rendered head
 itself contain `", got "`; only a reason no directive renders to falls
 back to splitting on the LAST `", got "`; `actual` is only `rstrip()`ped
 (#335) -- its leading spaces belong to the value, so a JUSTIFIED RIGHT
-or right-aligned edited field's whole difference stays visible), and a synthesized `"not_run"` entry for every selected case the
+or right-aligned edited field's whole difference stays visible; with
+`pictures` -- `run` passes `record_rewrite.field_pictures` -- a plain
+numeric field's `actual` is the value it holds, rendered by
+`record_rewrite.display_numeric_value`: implied decimal point, sign and
+`P` scaling applied, leading zeros dropped (`0001234-` in a `S9(5)V99` is
+`-12.34`, `123` in a `9(3)PP` is `12300`; GnuCOBOL 3.1's zero-padded `P`
+image `00123` too), with the raw image under `actualRaw` and the
+`message` reading `got -12.34 (displayed as 0001234-)`; the console
+listing gets the same text through `json_report.readable_suite`; an
+alphanumeric or edited field's `actual` is as displayed, #374), and a synthesized `"not_run"` entry for every selected case the
 binary never printed a START marker for. An EXPECT failure head is split
 into name/operator/expected by `_EXPECT_HEAD_RE` (the operator is one of
 `model.EXPECT_OPERATORS`, echoed verbatim by the driver's FAIL line;
@@ -363,6 +372,33 @@ found by matching the `*> STUB EXPECT` pattern — once a stub becomes a
 real `EXPECT` line (by this feature or by hand), it structurally cannot
 match that pattern again, so a second `--record-expectations` run finds
 nothing left to touch there. No provenance tracking needed.
+
+## Corpus-sweep snapshots and diffs (`report/sweep.py`) (2026-10-29)
+
+`scripts/corpus_sweep.py` runs `mockymock generate` over a corpus (the
+default corpus, or any `--corpus DIR`, repeatable, with `--copybook-path`
+for every program) and hands each run's stdout to
+`sweep.classify_output`, which turns it into a `ProgramResult`: a
+program is *blocked* when generate exited non-zero, raised (`EXCEPTION`)
+or ran past `--timeout` (`TIMEOUT`; that and `--jobs` run each program in
+a child process). Its blocker categories are the `refused (<CODE>)`
+codes, `PARSE_ERROR`, `UNRESOLVED_COPYBOOK` (also for the
+`--copybook-path` hint path, which prints no code), `NO_TEST_CASE`,
+`NO_SCENARIO`, or `OTHER` with the first printed line as `detail`, so a
+CLI wording change shows up as `OTHER` rather than silently zeroing a
+category. Refusal lines on a clean exit are not blockers. Unmockable
+boundary points are tallied apart, for clean programs too.
+
+`SweepSnapshot` saves as JSON (`--json`; `format: "mockymock-sweep"`,
+`version: 1`, programs keyed by a label relative to the corpus dir's
+parent, which must stay stable for the diff). `--baseline` loads an
+earlier one before sweeping and appends `render_diff`: per category the
+programs before/after and which programs gained or lost it; newly clean,
+newly blocked, blocked for a different reason, added, removed. A
+*regression* is a program in both runs blocked by a category it was not
+blocked by before; `--fail-on-regression` exits 1 on one. Blocker tallies
+count programs, boundary tallies count sites. Tests:
+`tests/unit/test_sweep_report.py`.
 
 ## Test report (`report/test_report.py`, `report/html_report.py`, `report/journal.py`) (2026-10-04)
 
@@ -597,6 +633,13 @@ died with an `ExpatError` (verified with `\x01`). Every name/reason/message
 now passes through `_xml_safe`, which replaces XML-1.0-illegal characters
 (controls other than tab/LF/CR, lone surrogates) with a visible `\xNN`
 escape so the document stays well-formed without hiding the evidence.
+
+**The console listing escapes terminal control characters (issue #375):**
+`format_console` passes the suite name, case names and failure reasons
+through `_console_safe`, which shows C0 controls (except tab) and DEL as
+`\xNN`, so an ESC sequence held in a failing field cannot clear or garble
+the terminal. Only the printed line is escaped; the parsed result, and the
+JSON report built from it, keep the real value.
 The console formatter deliberately does not sanitize.
 
 **No `time` attributes:** neither `<testsuite>` nor `<testcase>` carries
