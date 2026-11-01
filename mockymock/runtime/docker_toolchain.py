@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -382,6 +383,7 @@ def compile_source(
     coverage: bool = False,
     trace: bool = False,
     debug: bool = False,
+    extra_sources: Sequence[Path] = (),
 ) -> CompileResult:
     """Compile a free-form COBOL source file (which must live under
     WORK_ROOT) inside the container. The binary is written next to the
@@ -453,7 +455,16 @@ def compile_source(
         cmd.append("-ftraceall")
     if debug:
         cmd.append("-g")
-    cmd += ["-x", container_source, "-o", container_binary]
+    # `extra_sources` (USE REAL CALL, docs/2026-11-01-real-call-integration-
+    # design.md): the instrumented real subprograms, compiled into the same
+    # executable so the program's CALL resolves to them.
+    cmd += [
+        "-x",
+        container_source,
+        *(to_container_path(extra, WORK_ROOT) for extra in extra_sources),
+        "-o",
+        container_binary,
+    ]
     try:
         result = subprocess.run(
             cmd,

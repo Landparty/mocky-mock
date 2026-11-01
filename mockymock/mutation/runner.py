@@ -112,6 +112,7 @@ def _run_suite_once(
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
     from mockymock.cli.checks import (
+        REAL_CALL_UNSUPPORTED,
         extra_reset_lines_for,
         extra_working_storage,
         run_static_checks,
@@ -140,6 +141,8 @@ def _run_suite_once(
         checked = run_static_checks(source_path, cut_path, copybook_paths)
         if checked.problems:
             return SuiteRun("stillborn", checked.problems[0], phase="checks")
+        if checked.real_programs:
+            return SuiteRun("stillborn", REAL_CALL_UNSUPPORTED, phase="checks")
         notes = list(checked.notes)
 
         result = checked.parse_result

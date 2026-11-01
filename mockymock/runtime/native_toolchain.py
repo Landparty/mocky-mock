@@ -43,6 +43,7 @@ import shutil
 import signal
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -319,6 +320,7 @@ def compile_source(
     coverage: bool = False,
     trace: bool = False,
     debug: bool = False,
+    extra_sources: Sequence[Path] = (),
 ) -> CompileResult:
     """Compile a free-form COBOL source file next to itself, with the same
     flags as the container compile. The compiler runs from the source's
@@ -336,7 +338,15 @@ def compile_source(
         cmd.append("-ftraceall")
     if debug:
         cmd.append("-g")
-    cmd += ["-x", source_path.name, "-o", binary_path.name]
+    # `extra_sources`: the instrumented USE REAL CALL subprograms, linked
+    # into the same executable (they live in the same sandbox directory).
+    cmd += [
+        "-x",
+        source_path.name,
+        *(str(extra.relative_to(source_path.parent)) for extra in extra_sources),
+        "-o",
+        binary_path.name,
+    ]
     # cobc's intermediate C goes to TMPDIR; keep it in the sandbox so
     # nothing a run writes outlives the sandbox's cleanup.
     env = _env(home, {"TMPDIR": str(source_path.parent)})

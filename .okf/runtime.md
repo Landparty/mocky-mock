@@ -299,6 +299,12 @@ re-mounted per run. Consequences:
   `ExecutionResult` fields stay `str` as documented and `report/results.py`'s
   `parse_stdout` never receives `None`.
 
+`compile_source(..., extra_sources=())` (2026-11-01, USE REAL CALL):
+further sources in the same sandbox, compiled into the same executable
+(`cobc -x main.cbl real_X.cbl ...`) by both backends; `run` passes the
+instrumented real programs only when a suite has some, so a monkeypatched
+`compile_source` without the parameter keeps working.
+
 # What compiler.py / executor.py still hold
 
 Both modules were reduced to shared types only — the local-subprocess

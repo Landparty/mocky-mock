@@ -587,6 +587,22 @@ A boundary in another boundary's clause body (`READ ... NOT AT END CALL
 - An unmocked inner site is copied with the body and runs for real, so the
   gate refuses any case reaching it (UNMOCKED_*), as anywhere else.
 
+# Real programs in one binary (real_programs.py, 2026-11-01)
+
+`build_site_dispatch(..., real_statement=)`: a case whose directive
+`is_real` adds to the tally and runs the original statement (the
+orchestrator always passes `_statement_lines(own, ...)`); it skips the
+`MOVE "00" TO UT-MOCK-STATUS`, so the lifted-clause guard selects nothing
+and the CALL's own ON EXCEPTION clauses run as part of it.
+`splicer/real_programs.py`: `share_driver_state` turns `UT-CURRENT-CASE`,
+`UT-FAIL-COUNT`, `UT-EARLY-EXIT` and every tally into `EXTERNAL` items
+(VALUE clauses become MOVEs at the top of the suite paragraph) and returns
+the declarations each real program gets, plus a **local**
+`UT-MOCK-STATUS` (shared, a callee's mock would overwrite the caller's
+outcome mid-dispatch); `instrument_real_program` splices a real program
+with the full suite and registry; `cancel_lines` adds `CANCEL "X"` to
+the WORKING-STORAGE reset. Design: [docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
+
 # Orchestration and Ordering Invariant (orchestrator.py)
 
 `splice_program` computes every span **up front** against the original

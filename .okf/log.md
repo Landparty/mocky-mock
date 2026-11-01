@@ -5,6 +5,17 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-01 -- `USE REAL CALL`: load-module suites
+
+Phase 1 of the integration-testing direction: `USE REAL CALL "X" FROM
+"x.cbl"` links the real subprogram into the suite's binary, its own
+boundaries answered by the suite's mocks; `generate --real` scaffolds such
+a suite. New: `analysis/real_programs.py`, `splicer/real_programs.py`,
+`dsl/module_suite.py`, `examples/paymod/`, design
+[docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md). Updated [dsl](dsl.md), [analysis](analysis.md),
+[splicer](splicer.md), [runtime](runtime.md), [cli](cli.md). Tests:
+`tests/unit/test_real_call.py`, `tests/integration/test_real_call.py`.
+
 ## 2026-10-31 -- open-issue sweep
 
 * **#375** `format_console` escapes terminal control characters (C0 except tab, DEL) as `\xNN` in names and failure reasons (`_console_safe`); the JSON report keeps the value. Updated [report](report.md). Test: `tests/unit/test_report.py::test_format_console_escapes_terminal_control_characters`.

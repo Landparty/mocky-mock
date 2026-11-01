@@ -215,6 +215,7 @@ rest each add one distinctive feature.
 | [`examples/custinq/`](examples/custinq/) | `EXEC CICS` (`READ`/`RETURN`), `GOBACK` neutralization |
 | [`examples/claimseg/`](examples/claimseg/) | Raw `EXEC DLI` (`GU`/`ISRT`) |
 | [`examples/raterte/`](examples/raterte/) | Dynamic `CALL` through an identifier, one mock covering multiple runtime targets |
+| [`examples/paymod/`](examples/paymod/) | A load module tested as one unit: `USE REAL CALL` links the real subprogram, whose own EXEC SQL the suite mocks |
 | [`examples/flowmock/`](examples/flowmock/) | Internal flow-target mocks (`MOCK PARAGRAPH` / `MOCK SECTION`) |
 | [`examples/taxfile/`](examples/taxfile/) | `BEFORE-EACH` shared mocks with per-case overrides, `FILE-STATUS IS` |
 | [`examples/custprog/`](examples/custprog/) | `MOCK SQL ... ROWS` cursor-fetch sugar, DCLGEN-style copybook includes |
@@ -225,6 +226,7 @@ rest each add one distinctive feature.
 
 ### Beyond pass/fail
 
+- `USE REAL CALL "X" FROM "x.cbl"` -- load-module integration: the real subprogram is linked into the test binary and only the boundaries leaving the module are mocked, its own included; `mockymock generate MAIN.cbl --real X.cbl` scaffolds such a suite ([design](docs/2026-11-01-real-call-integration-design.md))
 - `mockymock run --coverage` — line coverage via GnuCOBOL/gcov ([design](docs/2026-07-17-coverage-reporting-design.md))
 - `mockymock run --trace` — replay one test case's execution path and mock timeline ([design](docs/2026-07-21-debug-trace-design.md))
 - `mockymock run --record-expectations` — golden/characterization mode: run the suite and turn every `*> STUB EXPECT <name>` comment in the `.cut` file into a real `EXPECT` line, filled in with the value the program actually produced ([design](docs/2026-08-04-record-expectations-design.md))

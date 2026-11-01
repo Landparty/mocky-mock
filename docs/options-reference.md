@@ -154,6 +154,7 @@ analyzing which boundaries (`CALL`, file I/O, `EXEC SQL`/`CICS`/`DLI`,
 | `--scenarios {happy,branches,all}` | `happy` | Which scenario set to generate. `happy` produces exactly one "everything succeeds" scenario. `branches` adds one scenario per reachable, satisfiable IF/EVALUATE/SEARCH branch arm. `all` additionally adds fixed families (empty input, error status, boundary values). Only meaningful with `--with-data`. |
 | `--rows N` | generator default | How many data rows to generate per data table (e.g. how many `READ` records a sequential-read loop gets). Must be `>= 0`; `--rows 0` is honored (useful for forcing an immediate-EOF scenario). Mutually exclusive with `--fixtures`. |
 | `--placeholder CATEGORY:KEY` (repeatable) | none | Downgrade one specific boundary's generated mock body back to an ordinary placeholder instead of bundle-seeded data — e.g. `--placeholder READ:INV-FILE`. The category is case-insensitive on input (upper-cased internally); the key must match the fixture's own key exactly. A pair that matches nothing prints a warning but does not fail the command. Only meaningful with `--with-data`/`--fixtures`. |
+| `--real SUBPROGRAM.cbl` (repeatable) | none | Scaffold a load-module suite: the subprogram runs for real (`USE REAL CALL`) instead of being mocked. Its `MOCK CALL` blocks become one `USE REAL CALL ... FROM` line in `BEFORE-EACH`, and every boundary of the subprogram gets a placeholder `MOCK` there. See `examples/paymod/`. |
 
 Examples:
 
@@ -770,6 +771,36 @@ END-MOCK
   code) and needs no `TERMINAL` group.
 - `ROWS` is only valid on `SQL` and `READ`; using it elsewhere is a parse
   error.
+
+### `USE REAL CALL "<program>" FROM "<path>"`
+
+Runs the real subprogram instead of mocking the CALL. The program is
+compiled from `<path>` (relative to the `.cut` file) into the same test
+binary, and the suite's `MOCK`s answer its own boundaries too: a
+`MOCK SQL` whose text matches an `EXEC SQL` inside the subprogram answers
+it there, and its body names the subprogram's data. Allowed in a
+`TESTCASE`, `BEFORE-EACH` or `BEFORE-ALL`; a `MOCK CALL` of the same
+program in a `TESTCASE` overrides a shared `USE REAL CALL`.
+
+```
+BEFORE-EACH
+    USE REAL CALL "PAYCALC" FROM "PAYCALC.cbl"
+END-BEFORE
+TESTCASE "prices one employee"
+    MOCK SQL "SELECT HOURLY_RATE"
+        MOVE 20.00 TO WS-RATE
+    END-MOCK
+    PERFORM 0000-MAIN
+    VERIFY CALL "PAYCALC" WAS CALLED ONCE
+```
+
+- Every boundary of the subprogram must be mocked in every case that
+  makes it real, or `run`/`lint` refuse with the `MOCK` to add.
+- Its PROGRAM-ID must be the CALL's literal (`REAL_PROGRAM_ID_MISMATCH`).
+- Each case starts the subprogram fresh (`CANCEL` between cases).
+- `VERIFY CALL` counts the real calls.
+- Static `CALL "literal"` only. `debug`, `export` and `mutate` do not
+  support these suites yet.
 
 ### `MOVE <value> TO <target>`
 

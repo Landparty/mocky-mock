@@ -330,6 +330,22 @@ After the site loop: any directive in `case.mocks` never matched → `UNMATCHED_
 3. `MockCategory.CALL`: exact match, `directive.key in site.keys`.
 4. Everything else (file ops, ACCEPT, DYNCALL): `directive.key.upper() in site.keys`.
 
+## `real_programs.py` -- USE REAL CALL programs (2026-11-01)
+
+Step 7a of `cli/checks.py` (`_check_real_programs`), so `lint` and `run`
+agree: `collect_real_specs` (FROM file exists, one file per program:
+`REAL_SOURCE_NOT_FOUND`, `CONFLICTING_REAL_SOURCE`), `prepare_real_program`
+(parse, whole-program refusals, `REAL_PROGRAM_ID_MISMATCH`, surface,
+nested-site spans; LINKAGE is **not** neutralized, the program is CALLed),
+`check_real_program` (every boundary site of the real program must be
+matched in every case that makes it real -- no reachability narrowing;
+`GOBACK` / `EXIT PROGRAM` / `CANCEL` / `STOP RUN` run as written, `STOP RUN`
+warns `REAL_PROGRAM_STOP_RUN`). Data names in the mocks answering a real
+program are checked against it (`program_only_view`); the entry program's
+own checks then run on `entry_program_view` (directives matching only
+real-program sites, and their VERIFYs, removed) while `out.suite` keeps
+the full suite for the driver. Design: [docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
+
 ## Dynamic CALL as its own category (`DYNCALL`)
 
 A dynamic `CALL WS-PGM-NAME` is mockable because mockymock never *links* a mocked CALL — the splicer comments out the whole statement and replaces it with an EVALUATE dispatch block, so nothing at runtime needs to resolve a program name. What the machinery needs is a static match key, and the identifier the CALL goes through is exactly that (`CallStatement.called_program == "WS-PGM-NAME"` when `is_dynamic` is True — verified against cobolparser 1.1.0/1.2.0).

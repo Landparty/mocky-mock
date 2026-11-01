@@ -493,6 +493,17 @@ a quoted static-CALL directive against a bare dynamic-CALL site, or vice
 versa — see the docstring on `MockCategory` in `model.py` for the full
 rationale.
 
+## `USE REAL CALL "X" FROM "<path>"` (2026-11-01)
+
+Allowed wherever a `MOCK` is (TESTCASE, BEFORE-EACH, BEFORE-ALL). The parser
+(`_USE_REAL_RE`) builds an ordinary CALL `MockDirective` with
+`real_source` (the path as written, relative to the `.cut`) and
+`real_line`; `MockDirective.is_real` tells it apart and `describe()` reads
+`REAL CALL "X"`. Because it is a directive, BEFORE-* precedence and the
+duplicate-MOCK rule apply unchanged. Static CALL by literal only; a
+malformed line fails with "malformed USE REAL directive". What it does
+downstream: [docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
+
 ## `*> STUB EXPECT` comments (`mockymock run --record-expectations`)
 
 ```
