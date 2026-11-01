@@ -117,6 +117,7 @@ def splice_program(
     goto_exit_plans: Sequence[GotoExitPlan] = (),
     column_offset: int = 0,
     fallthrough_traps: frozenset[int] | set[int] = frozenset(),
+    behaviour: bool = False,
 ) -> list[str]:
     """`fallthrough_traps` (`StaticCheckResult.fallthrough_traps`, issue
     #351): ids of unmocked boundary statements a case reaches only by GO
@@ -249,6 +250,7 @@ def splice_program(
             passthrough=(_statement_lines(own, 1, len(own)) if site.opt_in else None),
             eib_resp_names=eib_resp_names,
             real_statement=_statement_lines(own, 1, len(own)),
+            behaviour=behaviour,
         )
         # What the DB2 precompiler puts after the statement for every
         # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).

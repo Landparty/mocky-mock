@@ -184,6 +184,9 @@ Docker, execute, and report pass/fail.
 | `--trace` | off | Replay one test case's execution path plus the mock timeline, in order. **Requires exactly one `--case` and no `--tag`.** |
 | `--trace-json PATH` | none | Write a machine-readable execution trace. Implies `--trace`. |
 | `--record-expectations` | off | For every `*> STUB EXPECT <name>` comment, capture the value the program actually produced and rewrite it into a real `EXPECT`, in place. Never overwrites a hand-written `EXPECT`. Never changes the run's exit code. |
+| `--record-baseline FILE` | none | Record what every case sends out of the program (each mocked boundary in order, the bytes of each value passed to it, the program's DISPLAY output, RETURN-CODE) as a JSON baseline. |
+| `--baseline FILE` | none | Compare the run's behaviour with a recorded baseline, case by case. Exits 1 when any case differs, even if every `EXPECT` passed. |
+| `--baseline-json FILE` | none | Write the `--baseline` comparison as JSON. |
 
 Examples:
 
@@ -194,6 +197,8 @@ mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --case "rejects negative quantity"
 mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --coverage-json coverage.json
 mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --verbose --keep-sandbox
 mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --record-expectations
+mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --record-baseline baseline/ORDRPROC.json
+mockymock run ORDRPROC.cbl --cut ORDRPROC.cut --baseline baseline/ORDRPROC.json
 ```
 
 `run` exits 0 only if every selected test case passed *and* the compiled
@@ -533,6 +538,27 @@ the `.mockymock/` folders' reports and saved results, plus report files
 the older layout left next to programs. Journals are the assistant's own
 record and are kept unless `--all`. `--dry-run` lists without removing.
 
+## `mockymock runner`
+
+```bash
+LEGACYLENS_URL=http://backend:9999 RUNNER_TOKEN=... mockymock runner [--once]
+```
+
+Not for interactive use: the LegacyLens change-impact oracle worker. It
+claims baseline and compare jobs from the backend, runs each load module's
+suites with `run --record-baseline` / `--baseline`, and posts the results.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--url URL` | `$LEGACYLENS_URL` | Backend base URL. |
+| `--token-env VAR` | `RUNNER_TOKEN` | Environment variable holding the runner token. |
+| `--name NAME` | `mockymock@HOST` | Runner name the backend records. |
+| `--once` | off | Run the queued jobs, then exit. |
+| `--poll-interval S` | 10 | Seconds between claims when the queue is empty. |
+| `--suite-timeout S` | 900 | Seconds one `generate` or `run` may take. |
+| `--work-dir DIR` | temp folder | Where jobs are unpacked. |
+| `--keep` | off | Keep each job's unpacked folder. |
+
 ## `mockymock skills install`
 
 ```bash
@@ -594,7 +620,7 @@ mode plus every mode's contract.
 | `init` | yes (degrades) | `-o`, `--seed`, `--scenarios`, `--copybook-path`, `--force` |
 | `generate` | no | `-o`, `--fill`, `--copybook-path`, `--with-data`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder`, `--real` |
 | `fixtures` | no | `--scenarios`, `--seed`, `--rows`, `--copybook-path` |
-| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json\|-fail-under]`, `--trace[-json]`, `--timeout`, `--record-expectations` |
+| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json\|-fail-under]`, `--trace[-json]`, `--timeout`, `--record-expectations`, `--record-baseline`, `--baseline[-json]` |
 | `debug` | yes | `--cut`, `--case`, `--copybook-path`, `--dap-stdio` |
 | `lint` | no | `--cut`, `--copybook-path` |
 | `mutate` | yes (unless `--list`) | `--cut`, `--copybook-path`, `--list`, `--timeout`, `--json-report`, `--fail-under` |
@@ -606,6 +632,7 @@ mode plus every mode's contract.
 | `analyze` | no | *(forwarded to cobol-parser)* |
 | `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
 | `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
+| `runner` | yes (native GnuCOBOL) | `--url`, `--token-env`, `--name`, `--once`, `--poll-interval`, `--suite-timeout`, `--work-dir`, `--keep` |
 | `skills install` | no | `--project`, `--force`, `--skill` |
 | `skills plugin` | no | `--force` |
 | `skills mode` | no | `--set`, `--json` |

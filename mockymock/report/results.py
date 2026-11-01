@@ -37,9 +37,26 @@ _RECORD_RE = re.compile(
 _UNREACHED_RE = re.compile(
     rf"^__MOCKYMOCK__ UNREACHED (?P<id>\S+) (?P<name>{_SUBSCRIPTED_NAME})$"
 )
+# Emitted only by a baseline run (`splicer.behaviour`): a mocked boundary
+# firing, each value it sent (hex, or "-" for a literal argument), and the
+# RETURN-CODE a case ended with. EVENT/DATA carry no case id and are
+# attributed like MOCK:.
+_EVENT_RE = re.compile(r"^__MOCKYMOCK__ EVENT: (?P<label>.+)$")
+_DATA_RE = re.compile(r"^__MOCKYMOCK__ DATA: (?P<hex>[0-9A-F]*\+?|-)$")
+_RC_RE = re.compile(r"^__MOCKYMOCK__ RC (?P<id>\S+): (?P<rc>.*)$")
 _SUMMARY_RE = re.compile(
     r"^__MOCKYMOCK__ SUMMARY: RUN=(?P<run>\d+) FAILURES=(?P<failures>\d+)$"
 )
+
+
+@dataclass
+class BehaviourEvent:
+    """One mocked boundary firing in a baseline run: `label` is the
+    boundary and its key ("CALL DATEUTL"), `data` the hex of each value it
+    sent, in order ("-" for an argument that is not a data item)."""
+
+    label: str
+    data: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -54,6 +71,12 @@ class TestResult:
     #: --record-expectations run. The value is None for a CAPTURE target
     #: whose mocked CALL never ran in the case (an UNREACHED marker).
     recorded: list[tuple[str, str | None]] = field(default_factory=list)
+    #: Mocked boundary firings, in order. Only populated by a baseline run.
+    events: list[BehaviourEvent] = field(default_factory=list)
+    #: The RETURN-CODE the case ended with. Only set by a baseline run.
+    return_code: str | None = None
+    #: The program's own stdout lines while the case ran (its DISPLAYs).
+    output: list[str] = field(default_factory=list)
 
     @property
     def crashed(self) -> bool:
@@ -171,8 +194,12 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
         if marker_at < 0:
             if pending is not None:
                 continuation.append(line)
+            elif open_case is not None:
+                open_case.output.append(line)
             continue
         if marker_at > 0:
+            if pending is None and open_case is not None:
+                open_case.output.append(line[:marker_at])
             line = line[marker_at:]
         if _VALUE_END_RE.match(line) is not None:
             if pending is not None and continuation:
@@ -205,6 +232,16 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
         elif (m := _MOCK_RE.match(line)) is not None:
             if open_case is not None:
                 open_case.mock_hits.append(m.group("label"))
+        elif (m := _EVENT_RE.match(line)) is not None:
+            if open_case is not None:
+                open_case.events.append(BehaviourEvent(label=m.group("label")))
+        elif (m := _DATA_RE.match(line)) is not None:
+            if open_case is not None and open_case.events:
+                open_case.events[-1].data.append(m.group("hex"))
+        elif (m := _RC_RE.match(line)) is not None:
+            target = by_id.get(m.group("id"))
+            if target is not None:
+                target.return_code = m.group("rc").strip()
         elif (m := _RECORD_RE.match(line)) is not None:
             target = by_id.get(m.group("id"))
             if target is not None:
