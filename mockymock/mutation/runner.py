@@ -83,6 +83,13 @@ class SuiteRun:
     notes: list[str] = field(default_factory=list)
     coverage: dict[int, bool] | None = None
     phase: str = "run"
+    #: Every case the run reported, in order.
+    case_names: tuple[str, ...] = ()
+    #: The cases that failed, set only when the run is still scorable
+    #: without them: every one of them failed an EXPECT/VERIFY and ran to
+    #: its END, and at least one other case passed. A baseline like that
+    #: is scored against its passing cases (see `run_mutation`).
+    failing_cases: tuple[str, ...] = ()
 
 
 #: Detail recorded on a mutant the baseline's own coverage decided.
@@ -99,6 +106,8 @@ def _run_suite_once(
     timeout_seconds: int,
     *,
     collect_coverage: bool = False,
+    excluded_cases: tuple[str, ...] = (),
+    expected_cases: tuple[str, ...] = (),
 ) -> SuiteRun:
     """Run one full splice/compile/run pass over `source_text` and reduce
     it to a `SuiteRun`.
@@ -108,6 +117,10 @@ def _run_suite_once(
     line numbers. A gcov pass that produces nothing is not an error -- the
     verdict stands and `coverage` is left None, with the reason appended to
     `notes` so a silently-ungated run is never mistaken for a gated one.
+
+    `excluded_cases` are the baseline's failing cases: a pass whose only
+    failures are in them, and which reported every one of
+    `expected_cases`, is "passed".
     """
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
     from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
@@ -244,9 +257,15 @@ def _run_suite_once(
             # early 137 was ruled out by _run_fault above).
             return SuiteRun("timeout", f"no exit within {timeout_seconds}s", notes)
         status, detail = _classify_execution(execution, suite_result)
+        if status == "failed" and excluded_cases:
+            status, detail = _classify_without(
+                suite_result, excluded_cases, expected_cases
+            )
+        failing = _cleanly_failing_cases(suite_result) if status == "failed" else ()
+        case_names = tuple(case.case_name for case in suite_result.results)
 
         coverage: dict[int, bool] | None = None
-        if collect_coverage and status == "passed":
+        if collect_coverage and (status == "passed" or failing):
             # Must run while the sandbox still exists: gcov reads the
             # .gcda the binary wrote next to itself.
             gcov = toolchain.run_gcov(instrumented_path)
@@ -266,7 +285,54 @@ def _run_suite_once(
                     f"({gcov.stderr.strip() or 'gcov produced nothing'}) -- "
                     "every mutant will be compiled and run"
                 )
-        return SuiteRun(status, detail, notes, coverage)
+        return SuiteRun(
+            status,
+            detail,
+            notes,
+            coverage,
+            case_names=case_names,
+            failing_cases=failing,
+        )
+
+
+def _cleanly_failing_cases(suite_result) -> tuple[str, ...]:
+    """The failing cases of a run that can still be scored without them,
+    or () when it cannot: a case crashed (the cases after it never ran),
+    the output has anomalies, or nothing passed at all."""
+    results = suite_result.results
+    if (
+        not results
+        or suite_result.orphan_failures
+        or suite_result.duplicate_case_starts
+        or suite_result.tests_run != len(results)
+        or any(case.crashed for case in results)
+        or all(not case.passed for case in results)
+    ):
+        return ()
+    return tuple(case.case_name for case in results if not case.passed)
+
+
+def _classify_without(
+    suite_result, excluded: tuple[str, ...], expected: tuple[str, ...]
+) -> tuple[str, str]:
+    """(status, detail) of a mutant's run with the baseline's failing
+    cases left out. Killed only by a case that passed in the baseline;
+    a run that stopped short of the baseline's cases (a crash took the
+    rest with it) is killed too."""
+    if tuple(case.case_name for case in suite_result.results) != expected:
+        return "failed", "the run did not report every case the baseline did"
+    if suite_result.duplicate_case_starts:
+        return "failed", "duplicate CASE START markers in the run"
+    if suite_result.orphan_failures:
+        return "failed", "a CASE FAIL had no matching CASE START"
+    for case in suite_result.results:
+        if case.case_name in excluded:
+            continue
+        if case.failure_reasons:
+            return "failed", case.failure_reasons[0]
+        if case.crashed:
+            return "failed", f"case {case.case_name!r} crashed"
+    return "passed", ""
 
 
 def _restart_toolchain() -> bool:
@@ -511,7 +577,24 @@ def run_mutation(
             None,
             all_notes,
         )
-    if baseline.status != "passed":
+    excluded: tuple[str, ...] = ()
+    if baseline.status == "failed" and baseline.failing_cases:
+        # A suite with a known-failing case is still worth scoring: the
+        # cases that pass are tested against every mutant, and only they
+        # can kill one. Leaving the whole suite unscored for one red case
+        # is what the field run hit (RECFMT, 2026-10-25).
+        excluded = baseline.failing_cases
+        _merge_notes(
+            [
+                f"scored without {len(excluded)} case(s) that fail on the "
+                "unmutated program: "
+                + ", ".join(repr(name) for name in excluded)
+                + " -- only the other "
+                + f"{len(baseline.case_names) - len(excluded)} case(s) can "
+                "kill a mutant"
+            ]
+        )
+    elif baseline.status != "passed":
         return (
             [
                 f"baseline run is not green ({baseline.status}"
@@ -563,7 +646,9 @@ def run_mutation(
     )
     to_run = [(index, m) for index, m in enumerate(mutants) if index not in decided]
 
-    outcome = MutationOutcome(program=str(source_path), cut=str(cut_path))
+    outcome = MutationOutcome(
+        program=str(source_path), cut=str(cut_path), excluded_cases=list(excluded)
+    )
     try:
         ran = _run_mutants(
             [mutant for _, mutant in to_run],
@@ -573,6 +658,8 @@ def run_mutation(
             copybook_paths,
             timeout_seconds,
             jobs,
+            excluded,
+            baseline.case_names if excluded else (),
         )
     except Exception as exc:  # noqa: BLE001 -- worker pool failure, surfaced as-is
         return (
@@ -710,6 +797,8 @@ def _run_mutants(
     copybook_paths: list[str] | None,
     timeout_seconds: int,
     jobs: int,
+    excluded_cases: tuple[str, ...] = (),
+    expected_cases: tuple[str, ...] = (),
 ) -> list[tuple[MutantResult, list[str]]]:
     """Run every mutant and return its (result, notes) pair in the same
     order. Serial below two workers or two mutants; otherwise one process
@@ -724,6 +813,8 @@ def _run_mutants(
                 cut_path,
                 copybook_paths,
                 timeout_seconds,
+                excluded_cases,
+                expected_cases,
             )
             for mutant in mutants
         ]
@@ -742,6 +833,8 @@ def _run_mutants(
             cut_path,
             copybook_paths,
             timeout_seconds,
+            excluded_cases,
+            expected_cases,
         ),
     ) as pool:
         return list(pool.map(_run_one_mutant_in_worker, mutants))
@@ -758,8 +851,12 @@ def _init_worker(
     cut_path: Path,
     copybook_paths: list[str] | None,
     timeout_seconds: int,
+    excluded_cases: tuple[str, ...] = (),
+    expected_cases: tuple[str, ...] = (),
 ) -> None:
     _WORKER_ARGS.update(
+        excluded_cases=excluded_cases,
+        expected_cases=expected_cases,
         original_lines=original_lines,
         source_name=source_name,
         cut_path=cut_path,
@@ -776,6 +873,8 @@ def _run_one_mutant_in_worker(mutant: Mutant) -> tuple[MutantResult, list[str]]:
         _WORKER_ARGS["cut_path"],  # type: ignore[arg-type]
         _WORKER_ARGS["copybook_paths"],  # type: ignore[arg-type]
         _WORKER_ARGS["timeout_seconds"],  # type: ignore[arg-type]
+        _WORKER_ARGS["excluded_cases"],  # type: ignore[arg-type]
+        _WORKER_ARGS["expected_cases"],  # type: ignore[arg-type]
     )
 
 
@@ -786,6 +885,8 @@ def _run_one_mutant(
     cut_path: Path,
     copybook_paths: list[str] | None,
     timeout_seconds: int,
+    excluded_cases: tuple[str, ...] = (),
+    expected_cases: tuple[str, ...] = (),
 ) -> tuple[MutantResult, list[str]]:
     """Same (result, notes) shape as _run_suite_once, since a mutation can
     in principle change which paragraphs are reachable (a stmt-delete
@@ -796,14 +897,26 @@ def _run_one_mutant(
     patched[mutant.line - 1] = mutant.mutated
     patched_text = "\n".join(patched) + "\n"
     run = _run_suite_once(
-        patched_text, source_name, cut_path, copybook_paths, timeout_seconds
+        patched_text,
+        source_name,
+        cut_path,
+        copybook_paths,
+        timeout_seconds,
+        excluded_cases=excluded_cases,
+        expected_cases=expected_cases,
     )
     if run.status == "error" and _restart_toolchain():
         # One retry once the container is back: a container that died
         # once in a long run should cost that mutant a re-run, not its
         # verdict.
         run = _run_suite_once(
-            patched_text, source_name, cut_path, copybook_paths, timeout_seconds
+            patched_text,
+            source_name,
+            cut_path,
+            copybook_paths,
+            timeout_seconds,
+            excluded_cases=excluded_cases,
+            expected_cases=expected_cases,
         )
     if run.status == "error":
         # Never scored as anything: a mutant the toolchain failed under was

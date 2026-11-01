@@ -1,0 +1,11 @@
+TESTSUITE "GOBACK after a PERFORM THRU whose GO TO names its exit"
+
+TESTCASE "posts a positive amount"
+    MOVE 5 TO WS-AMT
+    PERFORM 0000-MAIN
+    EXPECT WS-TOTAL TO BE 6
+
+TESTCASE "rejects a negative amount"
+    MOVE -5 TO WS-AMT
+    PERFORM 0000-MAIN
+    EXPECT WS-REJECTS TO BE 1

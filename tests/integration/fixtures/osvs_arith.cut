@@ -1,0 +1,17 @@
+TESTSUITE "Arithmetic with a zero operand in parentheses"
+
+TESTCASE "a zero discount leaves the premium unchanged"
+    MOVE 100 TO WS-PREMIUM
+    MOVE 0 TO WS-DISCOUNT
+    PERFORM CALC-PARA
+    EXPECT WS-NET TO BE 100
+    EXPECT WS-LOADED TO BE 100
+    EXPECT WS-RECIPROCAL TO BE 200
+
+TESTCASE "a nonzero discount is applied"
+    MOVE 100 TO WS-PREMIUM
+    MOVE 0.1 TO WS-DISCOUNT
+    PERFORM CALC-PARA
+    EXPECT WS-NET TO BE 90
+    EXPECT WS-LOADED TO BE 110
+    EXPECT WS-RECIPROCAL TO BE 190

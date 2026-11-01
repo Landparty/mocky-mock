@@ -362,3 +362,30 @@ def test_looped_add_gets_no_hint_with_a_working_storage_copy(tmp_path, with_copy
         [survivor], program, cut, [str(copybooks)] if with_copy else None
     )
     assert survivor.hint == ""
+
+
+def test_console_offers_a_declaration_for_each_hinted_survivor(tmp_path):
+    """The LEDGRPT/RECFMT field run: first-reject counters whose ADD 1 ->
+    SUBTRACT 1 survivor the program never reaches from a non-zero count.
+    The console hands over the equivalent.json body, reasons left empty so
+    nothing is declared until a reviewer says why."""
+    from mockymock.mutation.declared import load_declarations, match_declarations
+
+    mutant = _swap_on("ADD 1 TO WS-PURGED")
+    outcome = MutationOutcome(
+        program="CNTPROG.cbl",
+        cut="tests/CNTPROG.cut",
+        results=[MutantResult(mutant=mutant, status="survived", hint="seed it")],
+    )
+    text = format_console(outcome)
+    assert "declare it in CNTPROG.equivalent.json" in text
+    body = text[text.index("    {") : text.index("\n    }") + 6]
+    snippet = "\n".join(line[4:] for line in body.splitlines())
+    path = tmp_path / "CNTPROG.equivalent.json"
+    path.write_text(snippet)
+    declarations, notes = load_declarations(path)
+    assert declarations == [] and 'no "reason"' in notes[0]
+    path.write_text(snippet.replace('"reason": ""', '"reason": "reviewed"'))
+    declarations, notes = load_declarations(path)
+    matched, stale = match_declarations([mutant], declarations)
+    assert matched == {0: "reviewed"} and stale == []

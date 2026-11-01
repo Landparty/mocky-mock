@@ -1371,6 +1371,32 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     return _refuse_unusable_scaffold(source_path, output_path, args)
 
 
+def _hint_pending_stubs(cut_text: str, suite, suite_result, risky: list[str]) -> None:
+    """Point a risky case that still holds `*> STUB EXPECT` comments (the
+    ones `generate` writes for what a program returns) at the run that
+    turns them into EXPECTs: those cases are risky only because nobody ran
+    it yet."""
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
+
+    try:
+        scan = scan_stub_expectations(cut_text, suite)
+    except Exception:  # noqa: BLE001 -- a hint, never a failure
+        return
+    stubbed = {f"{stub.case_index:03d}" for stub in scan.stubs}
+    pending = [
+        result.case_name
+        for result in suite_result.results
+        if result.case_id in risky and result.case_id in stubbed
+    ]
+    if pending:
+        print(
+            f"mockymock run: {len(pending)} risky case(s) still hold "
+            "`*> STUB EXPECT` comments -- re-run with --record-expectations "
+            "to turn them into EXPECTs, then check the values recorded: "
+            + ", ".join(repr(name) for name in pending)
+        )
+
+
 def _link_real_programs(
     args: argparse.Namespace, cut_text: str, output_path: Path
 ) -> str | None:
@@ -2350,6 +2376,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             risky=risky,
         )
     )
+    if risky:
+        _hint_pending_stubs(cut_text, suite, suite_result, risky)
     if executed.stderr:
         print("mockymock run: binary stderr:")
         print(executed.stderr.rstrip("\n"))
@@ -3746,11 +3774,13 @@ def _cmd_report(args: argparse.Namespace) -> int:
     html_path = Path(args.output) if args.output else artifact_path(cut_path, "report")
     html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(render_html(report), encoding="utf-8")
-    if args.json:
-        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(
-            json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+    # The JSON always goes with the HTML (into .mockymock/ by default),
+    # so the two are never in different folders; --json moves it.
+    json_path = Path(args.json) if args.json else html_path.with_suffix(".json")
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     for step in report["steps"]:
         print(
             f"mockymock report: [{step['status']:>7}] {step['title']}: {step['summary']}"
@@ -3762,10 +3792,64 @@ def _cmd_report(args: argparse.Namespace) -> int:
         f"{findings['low']} low finding(s)"
     )
     print(f"mockymock report: wrote {html_path}")
-    if args.json:
-        print(f"mockymock report: wrote {args.json}")
+    print(f"mockymock report: wrote {json_path}")
     failed = summary["failed"] or summary.get("runFailed")
     return 1 if failed or summary["levels"].get("none") else 0
+
+
+def _journal_suite(args: argparse.Namespace) -> Path | None:
+    """The `.cut` whose journal `journal --cut` appends to. The journal
+    goes beside the suite, and a journal written before the suite exists
+    (a plan step) used to land wherever the typed path pointed, which is
+    not where `generate` then put the suite (the 2026-10-25 field run's
+    first entries). A program path resolves to its suite, or to the place
+    `generate` would create it; a `.cut` that does not exist yet beside a
+    program whose suites `generate` puts elsewhere is redirected there,
+    and said so."""
+    from mockymock.cli.discovery import (
+        COBOL_SOURCE_EXTENSIONS,
+        DiscoveryError,
+        default_suite_path,
+        find_suites,
+    )
+
+    given = Path(args.cut)
+    layout = _layout(args)
+    program: Path | None = None
+    if given.suffix.lower() == ".cut":
+        if given.is_file():
+            return given
+        program = next(
+            (
+                given.with_suffix(ext)
+                for ext in COBOL_SOURCE_EXTENSIONS
+                if given.with_suffix(ext).is_file()
+            ),
+            None,
+        )
+        if program is None:
+            return given
+    elif given.is_file():
+        program = given
+    else:
+        print(f"mockymock journal: {given} does not exist; pass the suite's .cut")
+        return None
+    suites = find_suites(program, layout)
+    if len(suites) > 1:
+        listed = ", ".join(str(s) for s in suites)
+        print(f"mockymock journal: {program} has several suites ({listed}); pass --cut")
+        return None
+    try:
+        target = suites[0] if suites else default_suite_path(program, layout)
+    except DiscoveryError as exc:
+        print(f"mockymock journal: {exc}")
+        return None
+    if target.resolve() != given.resolve():
+        print(
+            f"mockymock journal: using the suite {target} ('mockymock report' "
+            "reads the journal beside it)"
+        )
+    return target
 
 
 def _cmd_journal(args: argparse.Namespace) -> int:
@@ -3782,7 +3866,10 @@ def _cmd_journal(args: argparse.Namespace) -> int:
     if args.file:
         path = Path(args.file)
     elif args.cut:
-        path = default_journal_path(Path(args.cut))
+        cut_path = _journal_suite(args)
+        if cut_path is None:
+            return 1
+        path = default_journal_path(cut_path)
     else:
         print("mockymock journal: pass --cut (journal next to it) or --file")
         return 1
@@ -5052,8 +5139,8 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument(
         "--json",
         help=(
-            "Also write the report as JSON here (the convention is "
-            ".mockymock/<cut stem>.report.json, next to the HTML)"
+            "Where to write the report as JSON (default: next to the HTML, "
+            ".mockymock/<cut stem>.report.json)"
         ),
     )
     report_parser.add_argument(
@@ -5130,7 +5217,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     journal_parser.add_argument(
         "--cut",
-        help="The suite; the journal is .mockymock/<cut stem>.journal.jsonl next to it",
+        help=(
+            "The suite (or its program); the journal is "
+            ".mockymock/<cut stem>.journal.jsonl next to the .cut"
+        ),
     )
     journal_parser.add_argument("--file", help="Explicit journal path instead")
     journal_parser.add_argument("--step", help="Step name, e.g. plan")

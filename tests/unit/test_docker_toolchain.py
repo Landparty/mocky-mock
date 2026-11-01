@@ -510,6 +510,7 @@ def test_compile_source_execs_cobc_with_container_paths(tmp_path):
             "cobc",
             "-free",
             "-std=mvs",
+            "-fno-arithmetic-osvs",
             "-x",
             "/work/mockymock-x/PROG.cbl",
             "-o",
@@ -535,6 +536,26 @@ def test_compile_source_failure_carries_cobc_stderr(tmp_path):
     assert result == CompileResult(
         success=False, binary_path=None, stdout="", stderr="PROG.cbl:7: syntax error"
     )
+
+
+def test_compile_source_drops_the_libxml_version_warning(tmp_path):
+    """The field run saw the libxml2 version line on every run; run_binary
+    already dropped it, and cobc links the same library."""
+    work, source = _work(tmp_path)
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain.subprocess.run",
+            return_value=_completed(
+                [],
+                returncode=1,
+                stderr="Warning: program compiled against libxml 212 using "
+                "older 209\nPROG.cbl:7: syntax error",
+            ),
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = compile_source(source)
+    assert result.stderr == "PROG.cbl:7: syntax error"
 
 
 def test_compile_source_fails_cleanly_when_binary_never_appears(tmp_path):
@@ -613,6 +634,7 @@ def test_compile_source_with_coverage_passes_flag_to_cobc(tmp_path):
             "cobc",
             "-free",
             "-std=mvs",
+            "-fno-arithmetic-osvs",
             "--coverage",
             "-x",
             "/work/mockymock-x/PROG.cbl",

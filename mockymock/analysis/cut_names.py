@@ -396,6 +396,7 @@ def check_cut_data_names(
         + suite.before_each_steps
         + suite.after_each_steps
         + suite.after_all_steps
+        + [step for case in suite.test_cases for step in case.steps]
     )
     for step in hook_steps:
         if step.kind == "MOVE":
@@ -443,3 +444,54 @@ def check_cut_data_names(
             value(directive.terminal_line, "TERMINAL value", row_value)
             assign_level(directive.terminal_line, "TERMINAL", row_field, row_value)
     return reasons
+
+
+_PROCEDURE_DIVISION_RE = re.compile(r"\bPROCEDURE\s+DIVISION\b", re.IGNORECASE)
+_COPY_RE = re.compile(r"^\s*COPY\s", re.IGNORECASE)
+
+
+def undeclared_program_names(program, lines: list[str]) -> list[tuple[int, str, str]]:
+    """(line in the parsed source, kind, name) for each name the PROCEDURE
+    DIVISION uses that nothing declares: cobc rejects the compile, and
+    lint used to pass the program (`MOVE 1 TO WS-TYPE-INDEX` with no such
+    item, the LEDGRPT field run). From cobol-parser's xref, filtered to
+    names that appear nowhere before PROCEDURE DIVISION in `lines` (the
+    copybook-expanded, SQL-transformed text) and are not special
+    registers -- the xref's own caveat is that some declarations (special
+    registers, SCREEN SECTION, dialect words) are invisible to it, and a
+    word declared anywhere above the PROCEDURE DIVISION is given the
+    benefit of the doubt. Best effort: an xref that fails reports none."""
+    try:
+        from cobolparser.analysis.xref import XrefAnalyzer
+
+        report = XrefAnalyzer().analyze(program)
+    except Exception:  # noqa: BLE001 -- no xref, no findings
+        return []
+    if not report.undefined:
+        return []
+    head: list[str] = []
+    for line in lines:
+        if _PROCEDURE_DIVISION_RE.search(line):
+            break
+        head.append(line)
+    if any(_COPY_RE.search(line) for line in head):
+        return []  # an unexpanded COPY may declare any of them
+    declared = _program_words(head) | set(data_item_levels(program))
+    declared |= _SPECIAL_REGISTERS | _harness_words()
+    found: list[tuple[int, str, str]] = []
+    for entry in report.entries:
+        name = str(entry.name).upper()
+        if name not in report.undefined or name in declared:
+            continue
+        if entry.kind not in ("data-item", "procedure"):
+            continue
+        lines_used = sorted(
+            {
+                ref.location.line
+                for ref in entry.references
+                if getattr(ref, "location", None) is not None
+            }
+        )
+        if lines_used:
+            found.append((lines_used[0], entry.kind, name))
+    return sorted(found)

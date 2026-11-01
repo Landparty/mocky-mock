@@ -426,6 +426,11 @@ class ProgramContext:
     #: Steps every generated case runs before its PERFORM so the program
     #: starts the way a real invocation would -- see `_commarea_setup_lines`.
     setup_lines: list[str] = field(default_factory=list)
+    #: Field name (uppercased) -> (delimiter, INTO targets) for every field
+    #: the program splits with `UNSTRING <field> DELIMITED BY "<literal>"`,
+    #: so a generated record holds the delimiters its parse looks for --
+    #: see `_unstring_layouts`.
+    unstring_layouts: dict[str, tuple[str, list[str]]] = field(default_factory=dict)
     #: Dynamic CALL identifier -> (the program names it can hold, whether
     #: that list is complete) -- see `_dynamic_call_targets`.
     dynamic_targets: dict[str, tuple[list[str], bool]] = field(default_factory=dict)
@@ -446,6 +451,7 @@ class ProgramContext:
                 program, collect_scope_map(program, lines), lines
             ),
             name_counts=_data_name_counts(program),
+            unstring_layouts=_unstring_layouts(program),
             status_read_eof=_status_driven_reads(
                 program, surface, looped_paragraphs_and_statements(program)
             ),
@@ -2337,6 +2343,7 @@ def _row_move_line(
     target: str,
     decimal_comma: bool = False,
     in_mock_body: bool = True,
+    source: ProgramContext | None = None,
 ) -> str | None:
     usage = (spec.usage or "").upper()
     if usage in _POINTER_USAGES:
@@ -2345,15 +2352,117 @@ def _row_move_line(
         return f"SET {target} TO NULL"
     if usage == "INDEX":
         return None
-    value = _bundle_rendered_value(
-        row.get(spec.column, ""), spec.category, decimal_comma
-    )
+    raw = row.get(spec.column, "")
+    if source is not None and spec.category == "alphanumeric":
+        raw = _delimited_value(raw, spec, source) or raw
+    value = _bundle_rendered_value(raw, spec.category, decimal_comma)
     if spec.category == "alphanumeric-edited":
         # The bundle gives the field's edited image, which is the bytes a
         # real record holds; a plain MOVE would edit it again ("N8/DF/B3"
         # into XX/XX/XX became "N8//D/F/", issue #277).
         return f"MOVE {value} TO {target}(1:)"
     return f"MOVE {value} TO {target}"
+
+
+def _unstring_layouts(program) -> dict[str, tuple[str, list[str]]]:
+    """Field -> (delimiter, INTO targets) for each `UNSTRING <field>
+    DELIMITED BY "<one literal>" INTO ...` in `program`. A field split
+    more than one way, or with a delimiter that is not one literal, is
+    left out: there is no single shape to give it."""
+    found: dict[str, tuple[str, list[str]] | None] = {}
+    try:
+        statements = program.find_all_by_type("UnstringStatement")
+    except Exception:  # noqa: BLE001 -- no AST walk, no layouts
+        return {}
+    for statement in statements:
+        source_name = str(getattr(statement, "source_operand", "") or "").upper()
+        delimiters = list(getattr(statement, "delimiters", None) or [])
+        targets = [
+            str(entry.get("target") or "").upper()
+            for entry in getattr(statement, "into_targets", None) or []
+            if isinstance(entry, dict)
+        ]
+        if (
+            not re.fullmatch(r"[A-Z0-9][A-Z0-9-]*", source_name)
+            or len(delimiters) != 1
+            or not isinstance(delimiters[0], str)
+            or not delimiters[0]
+            or len(targets) < 2
+            or not all(re.fullmatch(r"[A-Z0-9][A-Z0-9-]*", t) for t in targets)
+        ):
+            continue
+        delimiter = _delimiter_literal(delimiters[0])
+        if delimiter is None:
+            continue
+        layout = (delimiter, targets)
+        if source_name in found and found[source_name] != layout:
+            found[source_name] = None
+        else:
+            found.setdefault(source_name, layout)
+    return {name: layout for name, layout in found.items() if layout is not None}
+
+
+def _delimiter_literal(text: str) -> str | None:
+    """The characters an UNSTRING delimiter operand stands for, or None
+    when it names a data item or figurative constant. cobol-parser 3.1
+    keeps a literal's quotes (`'"|"'`); earlier releases stripped them,
+    so an unquoted operand made only of punctuation is read as that
+    literal too."""
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        quote = text[0]
+        content = text[1:-1].replace(quote * 2, quote)
+        return content or None
+    if re.search(r"[A-Za-z0-9]", text):
+        return None
+    return text
+
+
+def _picture_shape(picture: str | None) -> tuple[int, bool] | None:
+    """(character length, all digits) of a DISPLAY PICTURE, or None for one
+    this cannot size (edited, national, ...)."""
+    if not picture:
+        return None
+    text = re.sub(
+        r"([9XA])\((\d+)\)", lambda m: m.group(1) * int(m.group(2)), picture.upper()
+    )
+    text = text.replace("S", "").replace("V", "")
+    if not text or not re.fullmatch(r"[9XA]+", text):
+        return None
+    return len(text), set(text) == {"9"}
+
+
+def _delimited_value(raw: str, spec: FieldSpec, source: ProgramContext) -> str | None:
+    """The generated value for a field the program UNSTRINGs, rebuilt as
+    one part per INTO target joined by the delimiter: a random string
+    without the delimiter made every record take the program's reject path,
+    under a case still called "happy path" (the RECFMT field run). Each
+    part is sized to its target (digits for a numeric one) and drawn from
+    the generated value's own characters, so it stays seeded. None when
+    the field is not split, or a target cannot be sized."""
+    layout = source.unstring_layouts.get(spec.name.upper())
+    if layout is None:
+        return None
+    delimiter, targets = layout
+    shapes = [_picture_shape(source.pictures.get(target)) for target in targets]
+    if any(shape is None for shape in shapes):
+        return None
+    lengths = [shape[0] for shape in shapes if shape is not None]
+    budget = spec.size - len(delimiter) * (len(targets) - 1)
+    if budget < len(targets):
+        return None
+    while sum(lengths) > budget:
+        widest = lengths.index(max(lengths))
+        lengths[widest] -= 1
+    pool = [c for c in raw if c.isalnum() and c not in delimiter] or ["A"]
+    parts: list[str] = []
+    cursor = 0
+    for length, shape in zip(lengths, shapes, strict=True):
+        chars = [pool[(cursor + i) % len(pool)] for i in range(length)]
+        cursor += length
+        if shape is not None and shape[1]:
+            chars = [c if c.isdigit() else str(ord(c) % 10) for c in chars]
+        parts.append("".join(chars))
+    return delimiter.join(parts)
 
 
 def _record_length_move(
@@ -2411,6 +2520,7 @@ def _row_move_lines(
                 _row_target(spec, source),
                 source is not None and source.decimal_comma,
                 in_mock_body,
+                source,
             )
             for spec in fixture.layout
         )

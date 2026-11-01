@@ -1080,7 +1080,13 @@ statements deletes both (over-strong, not stillborn), and `stillborn`
 still lumps refusal-gate rejections in with compile errors.
 
 A real run baseline-checks the suite
-(red/empty baseline aborts with exit 1: every verdict would be noise),
+(an empty baseline, one with no passing case, or one where a case crashed
+aborts with exit 1: every verdict would be noise; since 2026-10-25 a
+baseline whose failing cases only failed an EXPECT/VERIFY is scored
+against its passing cases instead -- `SuiteRun.failing_cases`,
+`runner._classify_without`, `MutationOutcome.excluded_cases` /
+`excludedCases` in the JSON, and a sentence in `report`'s mutation step;
+a mutant that cuts the run short of the baseline's cases is killed),
 then for each mutant patches one original line and re-runs the exact
 `run` pipeline (static checks → splice → compile → run) in its own
 sandbox, classifying `killed` / `survived` / `timeout` (counts as a
@@ -1161,7 +1167,14 @@ each match `equivalent` with detail `declared equivalent: <reason>`
 before anything is built; ignored entries (no reason, no target, bad
 JSON) and entries matching no mutant come back as `notes`. The file's
 hash is part of `report/artifacts.fingerprint`, so a saved mutation
-result is not reused across an edit to it.
+result is not reused across an edit to it. When survivors carry the
+zero-baseline hint below, the console ends with a ready `equivalent.json`
+body for them (`report._declaration_snippet`), every `reason` left empty:
+it declares nothing until a reviewer says why the program never reaches
+the field with a non-zero value (the first-reject counters of the
+2026-10-25 field run). Not proven automatically: a case that seeds the
+field, a second reject, or a second PERFORM in a multi-call case kills
+such a mutant.
 
 **Zero-baseline hints (2026-10-04).** An `ADD..TO <-> SUBTRACT..FROM`
 swap on an unsigned numeric field that every case starts at zero is
@@ -1274,6 +1287,18 @@ rebinds itself (BASED, issue #226) are skipped. Detection is
 branch is still testable. Issue #288's option 2; its option 1 (an `OMIT
 <item>` statement folding the item BASED and setting its address to NULL
 per case) is not built and shares the BASED work with #226.
+
+**Undeclared program names (2026-10-25).** Step 7c
+(`cut_names.undeclared_program_names`) warns `UNDECLARED_NAME` at the
+program line of a data item or procedure name the PROCEDURE DIVISION uses
+and nothing declares (cobol-parser's `XrefAnalyzer.undefined`, minus any
+word that appears before PROCEDURE DIVISION, AST data items, special
+registers and harness words). It is the program's bug, not the `.cut`'s,
+which cobc would otherwise report against a sandbox copy. It is a warning,
+since the xref cannot see every declaration, and there are no findings at
+all while an unexpanded COPY remains above PROCEDURE DIVISION.
+`mockymock analyze lint` is cobol-parser's own lint and still has no such
+rule.
 
 **Unknown data-names (issue #204, 2026-10-16).** `run_static_checks` step
 7b (`analysis.cut_names.check_cut_data_names`, cumulative with step 8)
@@ -1607,7 +1632,10 @@ dialect risks, and a verification level no higher than L0.
 `.mockymock/<cut stem>.journal.jsonl` (`report.journal.default_journal_path`
 -> `report.artifacts.journal_path`, which keeps using a pre-#353
 `<cut stem>.journal.jsonl` next to the `.cut` when one exists and the new
-one does not).
+one does not). The JSON is always written, to `--json` or else beside
+the HTML (`html_path.with_suffix(".json")`, so
+`.mockymock/<cut stem>.report.json` by default; 2026-10-25, the field run
+found the two in different folders).
 `--scenarios none` skips the cobol-parser `ProgramFixtureGenerator`
 step (slow on large programs).
 
@@ -1631,6 +1659,14 @@ before any is written; unknown keys are refused); `--status` is the
 default status of entries that carry none (#390); it cannot be combined
 with the single-entry flags, which are no longer `required=True` so the
 check is `_cmd_journal`'s own.
+`--cut` goes through `main._journal_suite` (2026-10-25): an existing
+`.cut` is used as is; a program path resolves to its one suite
+(`discovery.find_suites`) or, before there is one, to
+`discovery.default_suite_path`, where `generate` will write it; a `.cut`
+that does not exist yet beside a same-stem program is redirected the same
+way and the console says so. A journal written before `generate` used to
+land beside the typed path while `report` read the one beside the suite.
+Several suites, or a path that is neither, exits 1.
 
 ## `mockymock clean [PROGRAM.cbl | PROGRAM.cut | DIR] [--all] [--dry-run]` (2026-10-22)
 

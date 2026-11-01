@@ -1546,6 +1546,7 @@ def _go_to_fallthrough_targets(
     program,
     go_to_targets: set[str],
     paragraph_safe_section: dict[str, str] | None = None,
+    closed_ranges: dict[tuple[str, str], list[str]] | None = None,
 ) -> dict[str, str]:
     """Every paragraph reachable ONLY by falling through past a GO TO
     target's own end -- an unmodeled shape the reachability BFS does not
@@ -1576,6 +1577,15 @@ def _go_to_fallthrough_targets(
     the specific reachability question they were asked, not every
     reachability question in the file.
 
+    `closed_ranges` (`_closed_perform_ranges`, built for the caller's own
+    entry point) adds the stop `_reachable_paragraphs` applies for them: a
+    walk from a GO TO target inside a closed `PERFORM A THRU B` range ends
+    at B, where that PERFORM's return fires -- the `PERFORM X THRU X-EXIT`
+    idiom whose `GO TO X-EXIT` never falls past X-EXIT. A walk from
+    outside a range that reaches its first paragraph means control can be
+    inside it with no PERFORM active, so that range is dropped and every
+    walk redone, as `_reachable_paragraphs` does.
+
     `paragraph_safe_section` (`_paragraph_safe_section_map`, built for the
     caller's own entry point) gives the walk the same section-end stop
     `_walk_fallthrough_from` has: a walk from a GO TO target inside a
@@ -1602,19 +1612,39 @@ def _go_to_fallthrough_targets(
 
     falls = _fallthrough_flags(ordered)
     stops = _first_non_fallthrough(falls)
-    last = len(ordered) - 1
 
+    last = len(ordered) - 1
     safe = paragraph_safe_section or {}
+    active = dict(closed_ranges or {})
     while True:
+        range_of = {
+            member: members[-1] for members in active.values() for member in members
+        }
         hazard = _fallthrough_hazards(
-            go_to_targets, ordered, index_by_name, section_members, stops, last, safe
+            go_to_targets,
+            ordered,
+            index_by_name,
+            section_members,
+            stops,
+            last,
+            safe,
+            range_of,
         )
         # A section fallen into from outside has no return marker at its
-        # end (see `_exposed_sections`): walk again without stopping there.
+        # end (see `_exposed_sections`), and a walk reaching a closed
+        # range's first paragraph started outside that range (a walk only
+        # records paragraphs after its own start): walk again without
+        # stopping at either.
         exposed = _exposed_sections(safe, section_members, set(hazard))
-        if not exposed:
+        exposed_ranges = {
+            key for key, members in active.items() if members[0] in hazard
+        }
+        if not exposed and not exposed_ranges:
             return hazard
-        safe = _without_sections(safe, exposed)
+        if exposed:
+            safe = _without_sections(safe, exposed)
+        for key in exposed_ranges:
+            del active[key]
 
 
 def _fallthrough_hazards(
@@ -1625,8 +1655,10 @@ def _fallthrough_hazards(
     stops: list[int | None],
     last: int,
     paragraph_safe_section: dict[str, str],
+    range_of: dict[str, str],
 ) -> dict[str, str]:
-    """One pass of `_go_to_fallthrough_targets`' walks."""
+    """One pass of `_go_to_fallthrough_targets`' walks, with `range_of`'s
+    closed-range ends as stops."""
     hazard: dict[str, str] = {}
     # Index -> the end index of the earlier walk that recorded it. Without
     # section stops, two walks that both pass through index k necessarily
@@ -1659,6 +1691,9 @@ def _fallthrough_hazards(
             section_end = index_by_name.get(section_members[section][-1])
             if section_end is not None and start <= section_end < end:
                 end = section_end
+        range_end = index_by_name.get(range_of.get(anchor, ""))
+        if range_end is not None and start <= range_end < end:
+            end = range_end
         for cursor in range(start + 1, end + 1):
             if recorded.get(cursor, -1) >= end:
                 break

@@ -373,7 +373,10 @@ def _run_static_checks(
     )
 
     from mockymock.analysis.cics_eib import cics_eib_plan
-    from mockymock.analysis.cut_names import check_cut_data_names
+    from mockymock.analysis.cut_names import (
+        check_cut_data_names,
+        undeclared_program_names,
+    )
     from mockymock.analysis.flow_mocks import check_flow_mocks
     from mockymock.analysis.flow_targets import normalize_flow_targets
     from mockymock.analysis.linkage import (
@@ -758,6 +761,21 @@ def _run_static_checks(
         )
     )
 
+    # 7c. A name the program uses and nothing declares (the program's own
+    # bug, not the .cut's): cobc will reject the compile, so lint says so
+    # first. A warning, not a refusal -- the xref cannot see every kind of
+    # declaration.
+    relabel = source_line_relabeler(out.source_location_map)
+    for line, kind, word in undeclared_program_names(parse_result.ast, transformed):
+        what = "paragraph or section" if kind == "procedure" else "data item"
+        out.warnings.append(
+            relabel(
+                f"warning (UNDECLARED_NAME): line {line}: {word} is used as a "
+                f"{what} but the program declares none -- cobc will reject "
+                "the compile unless a copybook it could not see declares it"
+            )
+        )
+
     # 8. Per-test-case checks, then flow-mock (MOCK PARAGRAPH/SECTION) and
     # terminator layout -- accumulated across all cases rather than
     # short-circuiting, matching `run`'s behavior. The neutralized-GO-TO
@@ -775,14 +793,29 @@ def _run_static_checks(
     matched_ids: set[int] = set()
     direct_ids: set[int] = set()
     fallthrough_warnings: list[RefusalReason] = []
+    # A multi-call case's own mocks need to be reached by one of its calls,
+    # not necessarily the last: its earlier PERFORMs are checked as hook
+    # steps below, and its unreached mocks refused after them.
+    stepped_ids = {
+        id(d)
+        for case in suite.test_cases
+        if any(step.kind == "PERFORM" for step in case.steps)
+        for d in case.mocks
+        if id(d) not in shared_ids
+    }
     for case_index, case in enumerate(suite.test_cases):
+        own_shared = (
+            shared_ids | {id(d) for d in case.mocks}
+            if any(step.kind == "PERFORM" for step in case.steps)
+            else shared_ids
+        )
         case_reasons = check_test_case(
             surface,
             parse_result.ast,
             case,
             out.file_status_fields,
             neutralized_goto=neutralized_goto,
-            shared=shared_ids,
+            shared=own_shared,
             matched_out=matched_ids,
             warnings_out=fallthrough_warnings,
             traps_out=out.fallthrough_traps,
@@ -819,11 +852,12 @@ def _run_static_checks(
             traps_out=out.fallthrough_traps,
             direct_matched_out=direct_ids,
         ):
-            where = (
-                check.hook
-                if check.for_case is None
-                else (f"{check.hook} (TESTCASE {check.for_case.name!r})")
-            )
+            if check.for_case is None:
+                where = check.hook
+            elif check.hook == "TESTCASE":
+                where = f"TESTCASE {check.for_case.name!r}"
+            else:
+                where = f"{check.hook} (TESTCASE {check.for_case.name!r})"
             problem = (
                 f"refused ({r.code}): {where} PERFORM {check.step.target}: {r.message}"
             )
@@ -833,7 +867,11 @@ def _run_static_checks(
             seen_hook_problems.add(key)
             out.problems.append(problem)
             if r.suggested_fix:
-                block = "BEFORE-ALL" if check.for_case is None else "BEFORE-EACH"
+                block = (
+                    "BEFORE-ALL"
+                    if check.for_case is None
+                    else "this TESTCASE" if check.hook == "TESTCASE" else "BEFORE-EACH"
+                )
                 out.problems.append(f"    Add to {block}:")
                 out.problems.extend(
                     f"    {line}" for line in r.suggested_fix.splitlines()
@@ -876,6 +914,15 @@ def _run_static_checks(
                 "boundary there is trapped and fails the case only if a test "
                 "really reaches it"
             )
+    for case in suite.test_cases:
+        for directive in case.mocks:
+            if id(directive) in stepped_ids and id(directive) not in matched_ids:
+                out.problems.append(
+                    f"refused (UNMATCHED_MOCK): TESTCASE {case.name!r}: MOCK "
+                    f"{directive.describe()} is not reached by any of its "
+                    "PERFORMs"
+                )
+                stepped_ids.discard(id(directive))
     for directive in shared_mocks:
         if id(directive) not in matched_ids:
             block = (
