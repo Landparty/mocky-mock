@@ -771,10 +771,10 @@ def _substitute(
 def _display_value(raw: str) -> str:
     """Strip one layer of matching quote characters for a human-readable
     generated case name -- cosmetic only; `_substitute` always uses the
-    raw, unstripped row text."""
-    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
-        return raw[1:-1]
-    return raw
+    raw, unstripped row text. A quoted value shows its content, doubled
+    quotes undone (`'it''s'` -> `it's`), as `_literal_content` substitutes
+    it."""
+    return _literal_content(raw)
 
 
 def _instantiate_row(

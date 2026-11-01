@@ -77,10 +77,13 @@ def _check_config_file() -> Check:
     try:
         config = load_config()
     except ConfigError as exc:
+        # DOWN, not WARN (#389): run / lint / init all refuse a config
+        # file that does not parse, and neither `setup` nor `run` fixes
+        # it, so doctor must not call the environment ready.
         return Check(
             id="config_file",
             label="config file",
-            state=WARN,
+            state=DOWN,
             detail=str(exc),
         )
     if config.source is None:
@@ -145,7 +148,7 @@ def gather_full_status() -> DoctorReport:
     """The toolchain probe plus doctor's own three checks. Never raises for
     an unreachable daemon or missing cobol-parser -- those show up as
     `DOWN`/`WARN` checks, not exceptions; a `ConfigError` from a
-    malformed config file is likewise downgraded to a `WARN` check here
+    malformed config file is likewise turned into a `DOWN` check here
     rather than propagated, since `doctor` itself must never crash on a
     broken environment -- that is exactly the case it exists to explain."""
     from mockymock.runtime.status import probe
@@ -153,7 +156,7 @@ def gather_full_status() -> DoctorReport:
     toolchain = probe()
     extra = (_check_cobol_parser(), _check_config_file(), _check_ai_mode())
     # Ready means nothing is DOWN. A WARN (a stopped container, a stale
-    # image, a malformed config file) is something `mockymock setup` or
+    # image) is something `mockymock setup` or
     # the next `run` sorts out on its own, not a failure the user must
     # fix first -- see docs/2026-09-15-doctor-command-design.md, "Exit
     # code": WARN -> 0. `probe()`'s own `ready` is stricter (it also
@@ -170,6 +173,7 @@ _STATE_LABEL = {OK: "OK", WARN: "WARN", DOWN: "FAIL", UNKNOWN: "N/A"}
 # explain what's wrong.
 _FIX_SUGGESTIONS = {
     "cobol_parser": "Install it: pip install cobol-parser (or reinstall mocky-mock's own [dev]/[fast] extras)",
+    "config_file": "Fix the config file: run, lint and init refuse to start until it parses",
 }
 
 
@@ -186,8 +190,8 @@ def format_doctor_text(report: DoctorReport) -> str:
     if report.ready:
         if any(c.state != OK for c in report.all_checks()):
             lines.append(
-                "mockymock doctor: ready (with warnings -- 'mockymock setup' "
-                "or the next 'mockymock run' sorts the [WARN] check(s) out)."
+                "mockymock doctor: ready (with warnings -- see the [WARN] "
+                "check(s) above)."
             )
         else:
             lines.append("mockymock doctor: ready.")

@@ -50,6 +50,17 @@ def default_report_path(cut_path: Path) -> Path:
     return artifact_path(cut_path, "report")
 
 
+#: How an entry's `time` is written (UTC).
+_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def entry_time(entry: dict[str, Any]) -> datetime | None:
+    """The `time` a batch entry carries, or None (append time)."""
+    if "time" not in entry:
+        return None
+    return datetime.strptime(str(entry["time"]), _TIME_FORMAT).replace(tzinfo=UTC)
+
+
 def append_entry(
     path: Path,
     *,
@@ -67,7 +78,7 @@ def append_entry(
     if not step.strip() or not summary.strip():
         raise JournalError("--step and --summary must not be empty")
     entry: dict[str, Any] = {
-        "time": (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "time": (now or datetime.now(UTC)).strftime(_TIME_FORMAT),
         "step": step.strip(),
         "status": status,
         "summary": summary.strip(),
@@ -87,7 +98,8 @@ _ENTRY_FIELDS = ("step", "summary", "status", "command", "decision")
 
 def parse_batch(text: str) -> list[dict[str, Any]]:
     """Entries for `mockymock journal --from`: a JSON array of objects, or
-    one object per line (the journal's own format). Every entry is checked
+    one object per line (the journal's own format; its `time` is kept, and
+    an entry without one gets the append time). Every entry is checked
     before any is written, so a bad line appends nothing rather than half a
     batch; each must carry `step` and `summary`, and may carry `status`,
     `command` and `decision` (issue #353: one process per program instead of
@@ -115,7 +127,9 @@ def parse_batch(text: str) -> list[dict[str, Any]]:
     for number, item in enumerate(raw, start=1):
         if not isinstance(item, dict):
             raise JournalError(f"entry {number}: not a JSON object")
-        unknown = sorted(set(item) - set(_ENTRY_FIELDS))
+        # `time` is what every line the journal itself writes carries: it
+        # is kept, so a journal can be replayed or merged (#390).
+        unknown = sorted(set(item) - set(_ENTRY_FIELDS) - {"time"})
         if unknown:
             raise JournalError(
                 f"entry {number}: unknown field(s) {', '.join(unknown)} "
@@ -128,6 +142,14 @@ def parse_batch(text: str) -> list[dict[str, Any]]:
             or not str(item.get("summary", "")).strip()
         ):
             raise JournalError(f"entry {number}: step and summary must not be empty")
+        if "time" in item:
+            try:
+                datetime.strptime(str(item["time"]), _TIME_FORMAT)
+            except ValueError:
+                raise JournalError(
+                    f"entry {number}: time {item['time']!r} is not "
+                    f"YYYY-MM-DDTHH:MM:SSZ"
+                ) from None
         status = item.get("status", "ok")
         if status not in STATUSES:
             raise JournalError(

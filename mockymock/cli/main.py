@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from mockymock import __version__
 from mockymock._lines import SourceEncodingError, read_utf8_source, split_source_lines
+from mockymock.analysis.flow_targets import ORIGINAL_ENTRY_PARAGRAPH
 from mockymock.debugging_lines import activate_debugging_lines
 from mockymock.report.artifacts import fingerprint
 from mockymock.report.record_rewrite import numeric_edited_fields
@@ -3685,7 +3686,13 @@ def _cmd_skills_mode(args: argparse.Namespace) -> int:
         except ModeError as exc:
             print(f"mockymock skills mode: {exc}")
             return 1
-        config = load_config()
+        try:
+            config = load_config()
+        except ConfigError as exc:
+            print(
+                f"mockymock skills mode: wrote {written}, but it no longer parses: {exc}"
+            )
+            return 1
         print(f"mockymock skills mode: {args.set} -> {written}")
 
     resolved = resolve_mode(config)
@@ -3768,6 +3775,7 @@ def _cmd_journal(args: argparse.Namespace) -> int:
         JournalError,
         append_entry,
         default_journal_path,
+        entry_time,
         parse_batch,
     )
 
@@ -3802,9 +3810,11 @@ def _cmd_journal(args: argparse.Namespace) -> int:
                     path,
                     step=entry["step"],
                     summary=entry["summary"],
-                    status=entry.get("status", "ok"),
+                    # --status is the default for entries without their own.
+                    status=entry.get("status", args.status or "ok"),
                     command=entry.get("command"),
                     decision=entry.get("decision"),
+                    now=entry_time(entry),
                 )
         except JournalError as exc:
             print(f"mockymock journal: {exc}")
@@ -3819,7 +3829,7 @@ def _cmd_journal(args: argparse.Namespace) -> int:
             path,
             step=args.step,
             summary=args.summary,
-            status=args.status,
+            status=args.status or "ok",
             command=args.command_text,
             decision=args.decision,
         )
@@ -4145,8 +4155,9 @@ def _insert_end_of_program_trap(result: list[str], inserted: set[int]) -> None:
 
 
 #: The paragraph header `_insert_driver_with_origins` gives a PROCEDURE
-#: DIVISION main line that has no paragraph name of its own.
-_ORIGINAL_ENTRY_PARAGRAPH = "UT-ORIGINAL-ENTRY"
+#: DIVISION main line that has no paragraph name of its own; the parsed
+#: program carries the same name (`name_unnamed_main_line`, #385).
+_ORIGINAL_ENTRY_PARAGRAPH = ORIGINAL_ENTRY_PARAGRAPH
 #: A paragraph or SECTION header: one word (or `<word> SECTION`) and a
 #: period, optionally followed by the paragraph's first sentence.
 _PROCEDURE_HEADER_RE = re.compile(
@@ -5136,8 +5147,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     journal_parser.add_argument(
         "--status",
-        default="ok",
-        help="ok, warn, fail, skipped, or info (default: ok)",
+        default=None,
+        help="ok, warn, fail, skipped, or info (default: ok); with --from, "
+        "the status of every entry that has none of its own",
     )
     journal_parser.add_argument(
         "--command",

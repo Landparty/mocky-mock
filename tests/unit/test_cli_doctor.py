@@ -82,11 +82,25 @@ def test_config_file_check_reports_the_found_file(tmp_path, monkeypatch):
     assert str(tmp_path / "mockymock.toml") in check.detail
 
 
-def test_config_file_check_downgrades_parse_error_to_warn(tmp_path, monkeypatch):
+def test_config_file_check_reports_parse_error_as_fail(tmp_path, monkeypatch):
+    # #389: run / lint / init refuse a config file that does not parse, so
+    # doctor must not call the environment ready.
     monkeypatch.chdir(tmp_path)
     (tmp_path / "mockymock.toml").write_text("seed = [\n")
     check = doctor_mod._check_config_file()
-    assert check.state == status.WARN
+    assert check.state == status.DOWN
+
+
+def test_unreadable_config_file_makes_doctor_not_ready(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mockymock.toml").write_text("seed = [\n")
+    monkeypatch.setattr(status, "probe", lambda: _fake_toolchain(ready=True))
+    report = doctor_mod.gather_full_status()
+    assert report.ready is False
+    text = doctor_mod.format_doctor_text(report)
+    assert "[FAIL] config file" in text
+    assert "-> Fix the config file" in text
+    assert "not ready" in text
 
 
 def test_all_checks_sorts_worst_first(monkeypatch):
@@ -171,12 +185,12 @@ def test_gather_full_status_warn_only_is_still_ready(monkeypatch):
     assert "not ready" not in text
 
 
-def test_cli_doctor_reports_a_malformed_config_file_as_warn(
+def test_cli_doctor_reports_a_malformed_config_file_as_fail(
     tmp_path, monkeypatch, capsys
 ):
     """`doctor` must never die on the environment it exists to explain:
-    a broken config file is a WARN line in the report, not an exit
-    before the report."""
+    a broken config file is a FAIL line in the report (#389: every other
+    command refuses it), not an exit before the report."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "mockymock.toml").write_text("seed = [\n")
     monkeypatch.setattr(status, "probe", lambda: _fake_toolchain(ready=True))
@@ -184,8 +198,9 @@ def test_cli_doctor_reports_a_malformed_config_file_as_warn(
     out = capsys.readouterr().out
     payload = json.loads(out)
     config_check = next(c for c in payload["checks"] if c["id"] == "config_file")
-    assert config_check["state"] == status.WARN
-    assert exit_code == 0
+    assert config_check["state"] == status.DOWN
+    assert payload["ready"] is False
+    assert exit_code != 0
 
 
 def test_ai_mode_check_reports_the_default_and_never_blocks_readiness(

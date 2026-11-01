@@ -822,6 +822,13 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     instead of more sentences of the last `UT-TESTCASE-<n>` paragraph
     (issue #264: it ran after the last case and its STOP RUN hid
     SUMMARY). The check looks at the code after the header's period.
+    The parsed program carries the same name (#385):
+    `analysis/flow_targets.name_unnamed_main_line`, run by
+    `normalize_flow_targets` after every parse, renames cobol-parser's
+    leading `""` paragraph (outside any SECTION, holding more than ENTRY
+    statements) to `ORIGINAL_ENTRY_PARAGRAPH`, so lint, reachability and
+    `generate` / `init` treat it as an ordinary paragraph and a case can
+    `PERFORM UT-ORIGINAL-ENTRY`.
 14. Write the instrumented source into a fresh `sandbox_dir(root=docker_toolchain.WORK_ROOT)`
     as `<program-stem>.cbl` (LF newlines forced via `newline="\n"`).
 15. `docker_toolchain.compile_source(...)` — on failure, print stderr,
@@ -1386,17 +1393,18 @@ shell over `cli/doctor.py`'s `gather_full_status()` ->
 
 Its checks are `runtime.status.probe()`'s four (`daemon`, `image`,
 `container`, `cobc`) plus three of its own: whether `cobolparser` imports,
-which project config file this invocation would load (reported `WARN`
-when that file is malformed, rather than taking the whole report down with
-it), and (2026-09-16) which AI assistant mode that config puts the
+which project config file this invocation would load (reported `DOWN`,
+shown `[FAIL]` with a fix line, when that file is malformed, rather than
+taking the whole report down with it: run / lint / init refuse such a file,
+so doctor no longer calls it ready, #389), and (2026-09-16) which AI assistant mode that config puts the
 packaged skill in. The `ai_mode` check is always `OK` — every mode is a
 valid way to work, so it reports rather than judges and `ready` can never
 turn on it; it loads the config a second time rather than sharing
 `_check_config_file`'s, whose signature its own tests call directly.
 
 Exit code is `0 if report.ready else 1`, where doctor's `ready` means **no
-check is `DOWN`** — a `WARN` such as a stopped container or a broken config
-file still exits 0, because `setup` or the next `run` resolves it. That is
+check is `DOWN`** — a `WARN` such as a stopped container or a stale image
+still exits 0, because `setup` or the next `run` resolves it. That is
 deliberately looser than `probe()`'s own `ready`, which requires every
 check to be `ok`. Full write-up, including the check-state table it shares
 with the dashboard, lives in [dashboard](dashboard.md); the design doc is
@@ -1616,8 +1624,11 @@ status or empty step/summary -> exit 2 with a message, nothing written.
 and `str.splitlines()` broke such an entry into unparseable pieces (#283).
 `--from FILE|-` (issue #353) appends a batch in one process: a JSON array
 or JSON lines, each object with `step`/`summary` and optional
-`status`/`command`/`decision` (`journal.parse_batch` validates every entry
-before any is written; unknown keys are refused); it cannot be combined
+`status`/`command`/`decision`, and the `time` every journal line carries
+(kept, `YYYY-MM-DDTHH:MM:SSZ`, so a journal can be replayed or merged, #390;
+`journal.entry_time`) (`journal.parse_batch` validates every entry
+before any is written; unknown keys are refused); `--status` is the
+default status of entries that carry none (#390); it cannot be combined
 with the single-entry flags, which are no longer `required=True` so the
 check is `_cmd_journal`'s own.
 

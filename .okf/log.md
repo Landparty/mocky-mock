@@ -51,6 +51,23 @@ prevent.
   Reason (`_mq_success_reply`), as the data-driven path already did
   (`dsl.md`).
 
+## 2026-11-01 -- open-issue sweep: #372, #385, #388-#391
+
+- [cli](cli.md): an unnamed main line is the paragraph `UT-ORIGINAL-ENTRY`
+  in the parsed program too (`flow_targets.name_unnamed_main_line`), so it
+  can be tested and scaffolded (#385); doctor's config-file check is
+  `DOWN` on a malformed file (#389); `journal --from` keeps `time` and takes
+  `--status` as the default (#390); `skills mode --set` replaces a quoted
+  `"ai_mode"` key and keeps the line's comment, and reports a file that no
+  longer parses (#391).
+- [dsl](dsl.md): a one-shot boundary (CALL, OPEN, CLOSE, ...) whose every
+  reachable site lies in the exact-count scope is counted once per site
+  (`generator._once_per_site_counts`), so an error-status case that stops
+  after the failing OPEN pins it once, not the whole run's count (#372);
+  a generated case name shows a quoted value's content with doubled quotes
+  undone (#388).
+- Tests: `tests/unit/test_issues_372_385_391.py`, `test_cli_doctor.py`.
+
 ## 2026-11-01 -- `USE REAL CALL`: load-module suites
 
 Phase 1 of the integration-testing direction: `USE REAL CALL "X" FROM
