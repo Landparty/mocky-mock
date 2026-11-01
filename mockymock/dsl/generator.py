@@ -3662,6 +3662,58 @@ def _conditional_call_count_keys(
     return keys
 
 
+#: Boundaries one statement invokes exactly once each time it runs.
+_ONE_SHOT_CATEGORIES = frozenset(
+    {
+        MockCategory.CALL,
+        MockCategory.DYNCALL,
+        MockCategory.OPEN,
+        MockCategory.CLOSE,
+        MockCategory.WRITE,
+        MockCategory.REWRITE,
+        MockCategory.DELETE,
+        MockCategory.START,
+        MockCategory.UNLOCK,
+        MockCategory.SQL,
+        MockCategory.CICS,
+    }
+)
+
+
+def _once_per_site_counts(
+    expectations: list[Expectation],
+    surface: MockSurface,
+    reachable: set[str] | None,
+    scope: tuple[set[str], set[int]],
+) -> dict[tuple[MockCategory, str], int]:
+    """The count of a one-shot boundary whose every reachable site is in
+    the case's exact scope: one per site, since each such site runs once
+    per `PERFORM entry`.
+
+    The bundle counts the program's whole main-line run, which can fall
+    through from the entry paragraph into the paragraphs after it (a
+    sectioned main line: `0000-START. PERFORM 1000-INIT ...` falling into
+    `1000-INIT`, so its OPEN is counted twice), while a case PERFORMs the
+    entry paragraph alone and returns at its end."""
+    counts: dict[tuple[MockCategory, str], int] = {}
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        try:
+            category = MockCategory(category_str)
+        except ValueError:
+            continue
+        if category not in _ONE_SHOT_CATEGORIES:
+            continue
+        sites = _sites_for_key(category, key, surface, reachable)
+        if not sites or not all(_site_in_scope(site, scope) for site in sites):
+            continue
+        if expectation.value != len(sites):
+            counts[(category, key)] = len(sites)
+    return counts
+
+
 def _site_in_scope(site: BoundarySite, scope: tuple[set[str], set[int]]) -> bool:
     paragraphs, statement_ids = scope
     return site.paragraph_name in paragraphs and id(site.statement) in statement_ids
@@ -3973,6 +4025,13 @@ def _scaffold_with_bundle(
                 )
             for key_pair, count in _unlooped_read_counts(
                 expectations, surface, reachable, source
+            ).items():
+                call_count_overrides.setdefault(
+                    key_pair, CallCountOverride(count=count, from_placeholder=False)
+                )
+        if scope is not None:
+            for key_pair, count in _once_per_site_counts(
+                expectations, surface, reachable, scope
             ).items():
                 call_count_overrides.setdefault(
                     key_pair, CallCountOverride(count=count, from_placeholder=False)

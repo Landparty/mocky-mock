@@ -1149,7 +1149,11 @@ paragraph-grouped path described above, unchanged. A real
   tier 1 (`call_count`) →
   `VERIFY <cat> <key> WAS CALLED n TIMES`, gated on `declared_keys` as
   above, `n` normally `expectation.value` but see `--placeholder`'s
-  `call_count_overrides` below; tier 2 (`field_equals`) → `EXPECT <name>
+  `call_count_overrides` below (and #372: `_once_per_site_counts` sets the
+  override of a one-shot category -- `_ONE_SHOT_CATEGORIES`: CALL, OPEN,
+  CLOSE, ... -- to its number of reachable sites when every one of them is
+  in the exact scope, so a case that stops right after a failing OPEN
+  pins it once rather than the bundle's whole-run count); tier 2 (`field_equals`) → `EXPECT <name>
   TO BE <value>`, the value rendered by `render_expect_value` with the
   field's PICTURE (`ProgramContext.pictures`, from `field_pictures`), so a
   folded `-3`/`1.5`/`007` in a `PIC X` field is quoted -- rendered bare it

@@ -224,6 +224,33 @@ def _assignment_line(mode: str) -> str:
     return f'{CONFIG_KEY} = "{mode}"\n'
 
 
+def _unquoted_key(text: str) -> str:
+    """A TOML key with one level of matching quotes removed."""
+    key = text.strip()
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in "\"'":
+        return key[1:-1]
+    return key
+
+
+def _trailing_comment(value: str) -> str:
+    """The ``# comment`` after a TOML value, quotes respected ("" if none)."""
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(value):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\" and quote == '"':
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "#":
+            return value[index:].rstrip("\r\n").rstrip()
+    return ""
+
+
 def _rewrite_mockymock_toml(path: Path, mode: str) -> None:
     """Replace an existing top-level `ai_mode = ...` line, or append one.
 
@@ -241,10 +268,15 @@ def _rewrite_mockymock_toml(path: Path, mode: str) -> None:
     lines = text.splitlines(keepends=True)
     for index, line in enumerate(lines):
         stripped = line.lstrip()
-        if stripped.startswith(CONFIG_KEY) and "=" in stripped:
-            if stripped.split("=", 1)[0].strip() == CONFIG_KEY:
-                lines[index] = _assignment_line(mode)
-                break
+        if "=" in stripped and _unquoted_key(stripped.split("=", 1)[0]) == CONFIG_KEY:
+            # TOML allows the key quoted ("ai_mode" / 'ai_mode'); keep the
+            # line's trailing comment.
+            comment = _trailing_comment(stripped.split("=", 1)[1])
+            new = _assignment_line(mode)
+            if comment:
+                new = new.rstrip("\n") + "  " + comment + "\n"
+            lines[index] = new
+            break
     else:
         if lines and not lines[-1].endswith("\n"):
             lines[-1] += "\n"
