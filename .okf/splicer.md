@@ -329,7 +329,7 @@ target is declared `PIC X(<byte length>)`, since a MOVE into the same
 editing PICTURE edits the captured value again (#277).
 Anything unmirrorable (a table, a PICTURE-less `COMP-1`/`POINTER`, a group
 holding non-DISPLAY bytes, or one directive matching two sites whose
-argument `n` names different items) fails closed as
+argument `n` names different items of different layouts) fails closed as
 `UNRESOLVED_CAPTURE_TARGET` rather than emitting a declaration that would
 not compile or would compare against raw binary. Full grammar and
 `generate` behavior in [dsl](dsl.md)'s "Synthesized targets" section.
@@ -1610,6 +1610,23 @@ defensive check; the refusal gate is expected to have already refused
   `DIBSTAT` and the other DIB fields in an `EXEC DLI` program that does not
   declare them; `splicer/cics_eib.py` then emits an `01 DLIDIB` layout
   (reset with `INITIALIZE DLIDIB`).
+
+## Behaviour instrumentation — `run --record-baseline` / `--baseline` (2026-11-01)
+
+`splicer/behaviour.py`. With `behaviour=True` (`splice_program`,
+`build_site_dispatch`, `instrument_real_program`, `build_driver`), every
+mocked branch of a dispatch prints `EVENT: <site.label> <directive.key>`
+after the FROM copy and before the body, then one `DATA` marker per value
+the statement sends (`payload_names`): CALL USING arguments (non-data
+arguments print `DATA: -`), the WRITE/REWRITE/RELEASE record, EXEC SQL host
+variables outside INTO lists (`sql_host_variables`, `GROUP.FIELD` ->
+`FIELD OF GROUP`), EXEC CICS FROM/COMMAREA items. A USE REAL CALL branch
+prints nothing. Each value is dumped as
+`MOVE LENGTH OF x TO UT-BT-LEN` + `CALL "UTHEXDMP" USING x UT-BT-LEN`;
+`hexdump_program()` is the free-form helper compiled into the binary (as an
+extra source, like a real program), and every instrumented program declares
+`UT-BT-LEN` (`LENGTH_DECLARATION`; local, not EXTERNAL). `build_driver`
+prints `RC <id>: ` RETURN-CODE before each case's END marker.
 
 ## `record_targets` — `mockymock run --record-expectations` (2026-08-04)
 

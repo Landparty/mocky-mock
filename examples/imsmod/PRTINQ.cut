@@ -1,0 +1,101 @@
+TESTSUITE "PRTINQ IMS transaction: DB2 stock, rate file lead time"
+
+*> PRTSTK and PRTRATE run for real. The IMS message queue (CBLTDLI on
+*> the IO-PCB), DB2 and the rate file are mocked, inside the
+*> subprograms too.
+BEFORE-EACH
+    USE REAL CALL "PRTSTK" FROM "PRTSTK.cbl"
+    USE REAL CALL "PRTRATE" FROM "PRTRATE.cbl"
+    *> PRTSTK: stock on hand (body runs in PRTSTK and names its data)
+    MOCK SQL "SELECT"
+        EVALUATE WS-PART
+            WHEN "P0000001"
+                MOVE 0 TO SQLCODE
+                MOVE 50 TO WS-QTY
+            WHEN "P0000002"
+                MOVE 0 TO SQLCODE
+                MOVE 2 TO WS-QTY
+            WHEN OTHER
+                MOVE 100 TO SQLCODE
+        END-EVALUATE
+    END-MOCK
+    *> PRTRATE: the supplier rate file
+    MOCK OPEN RATE-FILE
+    END-MOCK
+    MOCK READ RATE-FILE ROWS
+        (RATE-PART = "P0000009", RATE-DAYS = 30)
+        (RATE-PART = "P0000002", RATE-DAYS = 14)
+    END-MOCK
+    MOCK CLOSE RATE-FILE
+    END-MOCK
+END-BEFORE
+
+TESTCASE "two messages: one in stock, one on backorder with its lead time"
+    *> calls: 1 GU, 2 ISRT, 3 GU, 4 ISRT, 5 GU -> QC (queue empty)
+    MOCK CALL "CBLTDLI"
+        EVALUATE UT-CBLTDLI-TALLY
+            WHEN 1
+                MOVE SPACES TO IOPCB-STATUS
+                MOVE "P0000001" TO INQ-PART
+                MOVE 10 TO INQ-QTY
+            WHEN 3
+                MOVE SPACES TO IOPCB-STATUS
+                MOVE "P0000002" TO INQ-PART
+                MOVE 5 TO INQ-QTY
+            WHEN 5
+                MOVE "QC" TO IOPCB-STATUS
+            WHEN OTHER
+                MOVE SPACES TO IOPCB-STATUS
+        END-EVALUATE
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT WS-MSG-COUNT TO BE 2
+    EXPECT REPLY-PART TO BE "P0000002"
+    EXPECT REPLY-STATUS TO BE "BACKORDER"
+    EXPECT REPLY-ONHAND TO BE 2
+    EXPECT REPLY-DAYS TO BE 14
+    VERIFY CALL "CBLTDLI" WAS CALLED 5 TIMES
+    VERIFY CALL "PRTSTK" WAS CALLED 2 TIMES
+    VERIFY CALL "PRTRATE" WAS CALLED ONCE
+    VERIFY READ RATE-FILE WAS PERFORMED 2 TIMES
+
+TESTCASE "an unknown part answers UNKNOWN and never opens the rate file"
+    MOCK CALL "CBLTDLI"
+        EVALUATE UT-CBLTDLI-TALLY
+            WHEN 1
+                MOVE SPACES TO IOPCB-STATUS
+                MOVE "P0000404" TO INQ-PART
+                MOVE 1 TO INQ-QTY
+            WHEN 3
+                MOVE "QC" TO IOPCB-STATUS
+            WHEN OTHER
+                MOVE SPACES TO IOPCB-STATUS
+        END-EVALUATE
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT REPLY-STATUS TO BE "UNKNOWN"
+    EXPECT REPLY-ONHAND TO BE 0
+    VERIFY CALL "PRTRATE" WAS CALLED NEVER
+    VERIFY OPEN RATE-FILE WAS PERFORMED NEVER
+
+TESTCASE "a backorder part missing from the rate file answers NO SOURCE"
+    MOCK READ RATE-FILE ROWS
+        (RATE-PART = "P0000009", RATE-DAYS = 30)
+    END-MOCK
+    MOCK CALL "CBLTDLI"
+        EVALUATE UT-CBLTDLI-TALLY
+            WHEN 1
+                MOVE SPACES TO IOPCB-STATUS
+                MOVE "P0000002" TO INQ-PART
+                MOVE 99 TO INQ-QTY
+            WHEN 3
+                MOVE "QC" TO IOPCB-STATUS
+            WHEN OTHER
+                MOVE SPACES TO IOPCB-STATUS
+        END-EVALUATE
+    END-MOCK
+    PERFORM 0000-MAIN
+    EXPECT REPLY-STATUS TO BE "NO SOURCE"
+    EXPECT REPLY-DAYS TO BE 0
+    VERIFY READ RATE-FILE WAS PERFORMED 2 TIMES
+    VERIFY CLOSE RATE-FILE WAS PERFORMED ONCE

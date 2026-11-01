@@ -834,18 +834,22 @@ def _capture_lines_by_key(
             # One argument across every site, not one site: two CALLs
             # passing the same item agree. (Comparing the set's size against
             # the site count dropped every capture of any key with 2+ sites.)
-            if len(resolved) != 1:
-                continue  # disagreement between sites
-            argument = next(iter(resolved))
-            if argument is None or argument[0] != "item":
+            # Different items agree too when one synthesized field mirrors
+            # them all (DLI-GU and DLI-ISRT, both PIC X(4)): the splicer's
+            # `plan_captures` accepts exactly that.
+            arguments = [argument for argument in resolved if argument is not None]
+            if len(arguments) != len(resolved) or any(
+                kind != "item" for kind, _ in arguments
+            ):
                 continue  # a literal: nothing to observe
-            source_name = argument[1]
-            item = data_items.get(source_name)
-            if item is None:
-                continue
+            items = [data_items.get(name) for _, name in arguments]
             target = capture_target_name(category, key, index)
-            if _declaration_for(target, item) is None:
-                continue
+            declarations = {
+                _declaration_for(target, item) if item is not None else None
+                for item in items
+            }
+            if len(declarations) != 1 or None in declarations:
+                continue  # layouts disagree, or one cannot be mirrored
             if target in taken:
                 suffix = 2
                 while f"{target}-{suffix}" in taken:
@@ -1384,8 +1388,12 @@ def _directive_for(
             # unmocked site loudly (2026-08-12 audit Finding 20).
             return None
         keyword = "MQ" if site.is_mq else "CALL"
+        # A bundle-less MQI placeholder answers the call's own CompCode and
+        # Reason (its last two USING arguments), as the data-driven path
+        # does: RETURN-CODE alone left a program's `IF WS-COMPCODE = 0`
+        # test reading whatever the field held before the call.
         body = _dli_success_reply(
-            _placeholder_body_for(category, key), site
+            _mq_success_reply(_placeholder_body_for(category, key), site), site
         ) + _call_loop_end_lines(site, context, None)
         return f'MOCK {keyword} "{key}"', _with_captures(category, key, body, context)
 
@@ -1628,19 +1636,75 @@ def _call_end_reply(
     if key in _DLI_CALL_INTERFACES:
         if len(names) < 2 or not names[0] or not names[1]:
             return None
-        from mockymock.splicer.injector import _literal_inner, reported_literal
-
-        quoted = reported_literal(names[0])
-        function = (
-            _literal_inner(quoted)
-            if quoted is not None
-            else context.literal_value(names[0]) or names[0]
-        )
-        end_status = _DLI_CALL_END.get(function.strip().upper())
+        function = _dli_function(names[0], context).strip().upper()
+        if _is_message_pcb(names[1], context):
+            end_status = _DLI_MESSAGE_END.get(function)
+        else:
+            end_status = _DLI_CALL_END.get(function)
         if end_status is None:
             return None
         return ((f'"{end_status}"', f"{names[1]}(11:2)"),), {names[1]}
     return None
+
+
+#: The status an IMS message GU reports on the I/O PCB once the queue is
+#: empty: QC (no more messages).
+_DLI_MESSAGE_END = {"GU": "QC"}
+
+#: Get-next calls: a PCB read with one of them is taken for a database PCB
+#: (a GN loop over segments), even when the program also ISRTs through it.
+_DLI_GET_NEXT_CALLS = frozenset({"GN", "GHN", "GNP", "GHNP"})
+
+#: DL/I calls only a message (I/O or alternate) PCB takes. ISRT counts only
+#: with exactly three arguments (function, PCB, message): a database ISRT
+#: always names its segment in at least one SSA.
+_DLI_MESSAGE_ONLY_CALLS = frozenset({"PURG", "CHNG"})
+
+
+def _dli_function(argument: str, context: ProgramContext) -> str:
+    """The DL/I function code a CBLTDLI/CEETDLI call's first argument
+    holds: the literal itself, or the VALUE literal of the item it names,
+    else the name as written (which matches no known function)."""
+    from mockymock.splicer.injector import _literal_inner, reported_literal
+
+    quoted = reported_literal(argument)
+    if quoted is not None:
+        return _literal_inner(quoted)
+    return context.literal_value(argument) or argument
+
+
+def _dli_sites(context: ProgramContext) -> list[tuple[BoundarySite, list[str]]]:
+    """Every CBLTDLI/CEETDLI CALL site of the program with its USING names."""
+    sites = []
+    for site in context.surface.boundary_sites if context.surface else []:
+        if site.category is not MockCategory.CALL or not site.keys:
+            continue
+        if site.keys[0].upper() not in _DLI_CALL_INTERFACES:
+            continue
+        using = list(getattr(site.statement, "using_parameters", None) or [])
+        sites.append((site, [str(getattr(p, "name", "") or "") for p in using]))
+    return sites
+
+
+def _is_message_pcb(pcb: str, context: ProgramContext) -> bool:
+    """True when the program sends a message through `pcb` (a three-argument
+    ISRT, or a PURG/CHNG) and never reads it with a get-next: it is then an
+    I/O PCB, whose GU loop ends on QC ("no more messages"), never on a
+    database PCB's GE. Without this the scaffold of an IMS MPP ended its GU
+    loop with GE, which a `UNTIL IOPCB-STATUS = "QC"` loop never sees."""
+    wanted = pcb.upper()
+    sends = False
+    for _, names in _dli_sites(context):
+        if len(names) < 2 or names[1].upper() != wanted:
+            continue
+        function = _dli_function(names[0], context).strip().upper()
+        if function in _DLI_GET_NEXT_CALLS:
+            return False
+        if function in _DLI_MESSAGE_ONLY_CALLS or (
+            function == "ISRT" and len(names) == 3
+        ):
+            sends = True
+    return sends
 
 
 def _row_already_ends(
@@ -1701,6 +1765,9 @@ def _call_loop_end_lines(
     if not waits_on_reply:
         return []
     if len({reply[0] if reply else None for reply in replies}) != 1:
+        gated = _dli_end_lines_by_function(site, sites, replies, context, tally)
+        if gated is not None:
+            return gated
         return [
             f"*> TODO: a loop waits on this CALL's reply, but its "
             f"{len(sites)} sites need different end-of-data replies -- "
@@ -1713,6 +1780,62 @@ def _call_loop_end_lines(
     if tally is None:
         return moves
     return [f"IF {tally} > 1", *(f"    {move}" for move in moves), "END-IF"]
+
+
+def _dli_end_lines_by_function(
+    site: BoundarySite,
+    sites: list[BoundarySite],
+    replies: list[tuple[tuple[tuple[str, str], ...], set[str]] | None],
+    context: ProgramContext,
+    tally: str | None,
+) -> list[str] | None:
+    """The end-of-data reply of a CBLTDLI/CEETDLI key whose sites need
+    different ones (an IMS MPP's GU loop and its ISRT reply through one
+    `MOCK CALL "CBLTDLI"`), each gated on the function code the call
+    passed, read back from the key's scaffolded `CAPTURE ARG 1` (whose
+    MOVE runs before the body). None when that cannot be done: not a DL/I
+    key, no function-code capture, or a get site whose function code is
+    not a literal."""
+    if site.keys[0].upper() not in _DLI_CALL_INTERFACES:
+        return None
+    capture = next(
+        (
+            line.split(" INTO ", 1)[1].strip()
+            for line in context.captures_for(MockCategory.CALL, site.keys[0])
+            if line.upper().startswith("CAPTURE ARG 1 INTO ")
+        ),
+        None,
+    )
+    if capture is None:
+        return None
+    functions: dict[tuple[tuple[str, str], ...], list[str]] = {}
+    for other, reply in zip(sites, replies, strict=True):
+        if reply is None:
+            continue  # ISRT, REPL, ...: answered by the blank status
+        using = list(getattr(other.statement, "using_parameters", None) or [])
+        function = _dli_function(str(using[0].name), context).strip().upper()
+        if function not in _DLI_CALL_END:
+            return None
+        literal = f'"{function}"'
+        if literal not in functions.setdefault(reply[0], []):
+            functions[reply[0]].append(literal)
+    # The leading comment also keeps the callers from fixing the key's
+    # VERIFY count at "row + end reply": the other functions' calls (the
+    # ISRT per message) count too, and how many there are is not known.
+    lines: list[str] = [
+        "*> the end-of-data reply is gated on the DL/I function code, "
+        "since one mock answers every call of this key"
+    ]
+    for moves, literals in functions.items():
+        condition = " OR ".join(f"{capture} = {literal}" for literal in literals)
+        if len(literals) > 1:
+            condition = f"({condition})"
+        if tally is not None:
+            condition = f"{tally} > 1 AND {condition}"
+        lines.append(f"IF {condition}")
+        lines.extend(f"    MOVE {value} TO {target}" for value, target in moves)
+        lines.append("END-IF")
+    return lines
 
 
 #: The EIBRESP a CICS get-next command answers once nothing is left:
@@ -3772,6 +3895,58 @@ def _conditional_call_count_keys(
     return keys
 
 
+#: Boundaries one statement invokes exactly once each time it runs.
+_ONE_SHOT_CATEGORIES = frozenset(
+    {
+        MockCategory.CALL,
+        MockCategory.DYNCALL,
+        MockCategory.OPEN,
+        MockCategory.CLOSE,
+        MockCategory.WRITE,
+        MockCategory.REWRITE,
+        MockCategory.DELETE,
+        MockCategory.START,
+        MockCategory.UNLOCK,
+        MockCategory.SQL,
+        MockCategory.CICS,
+    }
+)
+
+
+def _once_per_site_counts(
+    expectations: list[Expectation],
+    surface: MockSurface,
+    reachable: set[str] | None,
+    scope: tuple[set[str], set[int]],
+) -> dict[tuple[MockCategory, str], int]:
+    """The count of a one-shot boundary whose every reachable site is in
+    the case's exact scope: one per site, since each such site runs once
+    per `PERFORM entry`.
+
+    The bundle counts the program's whole main-line run, which can fall
+    through from the entry paragraph into the paragraphs after it (a
+    sectioned main line: `0000-START. PERFORM 1000-INIT ...` falling into
+    `1000-INIT`, so its OPEN is counted twice), while a case PERFORMs the
+    entry paragraph alone and returns at its end."""
+    counts: dict[tuple[MockCategory, str], int] = {}
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        try:
+            category = MockCategory(category_str)
+        except ValueError:
+            continue
+        if category not in _ONE_SHOT_CATEGORIES:
+            continue
+        sites = _sites_for_key(category, key, surface, reachable)
+        if not sites or not all(_site_in_scope(site, scope) for site in sites):
+            continue
+        if expectation.value != len(sites):
+            counts[(category, key)] = len(sites)
+    return counts
+
+
 def _site_in_scope(site: BoundarySite, scope: tuple[set[str], set[int]]) -> bool:
     paragraphs, statement_ids = scope
     return site.paragraph_name in paragraphs and id(site.statement) in statement_ids
@@ -4083,6 +4258,13 @@ def _scaffold_with_bundle(
                 )
             for key_pair, count in _unlooped_read_counts(
                 expectations, surface, reachable, source
+            ).items():
+                call_count_overrides.setdefault(
+                    key_pair, CallCountOverride(count=count, from_placeholder=False)
+                )
+        if scope is not None:
+            for key_pair, count in _once_per_site_counts(
+                expectations, surface, reachable, scope
             ).items():
                 call_count_overrides.setdefault(
                     key_pair, CallCountOverride(count=count, from_placeholder=False)

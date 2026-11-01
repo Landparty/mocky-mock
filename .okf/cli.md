@@ -1,7 +1,7 @@
 ---
 type: Module
 title: CLI
-description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
+description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean, runner) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
 timestamp: 2026-10-26T00:00:00Z
 ---
@@ -10,7 +10,7 @@ timestamp: 2026-10-26T00:00:00Z
 
 `mockymock/cli/main.py` is the single argparse-based entry point (`prog="mockymock"`,
 `--version` from `mockymock.__version__`). It defines eighteen subcommands —
-`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `suites`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal`, `clean` — each wired via `set_defaults(func=...)` and
+`setup`, `init`, `generate`, `fixtures`, `run`, `debug`, `lint`, `mutate`, `collect`, `suites`, `explain`, `dashboard`, `doctor`, `export`, `analyze`, `skills`, `report`, `journal`, `clean`, `runner` — each wired via `set_defaults(func=...)` and
 dispatched from `main()`. All heavy imports (`cobolparser`, `mockymock.analysis`,
 `mockymock.splicer`, `mockymock.runtime`, `mockymock.dsl`, `mockymock.report`,
 `mockymock.debug`, `mockymock.web`) are
@@ -38,6 +38,7 @@ mockymock skills    -> skills_cmd (install: no Docker, no parsing -- a copytree)
 mockymock report    -> report.test_report.build_report (parse + cobolparser analyzers + cli.checks; --execute/--mutate re-invoke run/mutate as subprocesses) -> report.html_report
 mockymock journal   -> report.journal.append_entry only  (no Docker, no parsing)
 mockymock clean     -> report.artifacts (removes .mockymock/ reports and saved results)
+mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle jobs, runs `run --record-baseline/--baseline` per suite as child processes)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -562,10 +563,17 @@ Flow (`_cmd_fixtures`):
    to stderr as `mockymock fixtures: <exc>`, exit 1.
 5. `print(bundle.to_json())` to stdout, exit 0.
 
-## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--coverage-fail-under PERCENT] [--trace] [--trace-json PATH] [--timeout S] [--record-expectations]`
+## `mockymock run <program> --cut PATH [--junit-xml PATH] [--json-report PATH] [--case NAME ...] [--tag TAG ...] [--copybook-path DIR ...] [--keep-sandbox] [--verbose] [--coverage] [--coverage-out PATH] [--coverage-json PATH] [--coverage-fail-under PERCENT] [--trace] [--trace-json PATH] [--timeout S] [--record-expectations] [--record-baseline FILE] [--baseline FILE] [--baseline-json FILE]`
 
 The full pipeline: parse, analyze, refuse-or-splice, compile in Docker, run,
 report. This is the only subcommand requiring the GnuCOBOL container.
+
+`--record-baseline FILE` / `--baseline FILE` (2026-11-01) turn on behaviour
+instrumentation (`behaviour` in `_cmd_run`; see [splicer](splicer.md) and
+[report](report.md)): the hexdump helper is compiled in as an extra source,
+`_finish_baseline` writes the baseline and/or prints the comparison
+(`--baseline-json` writes it), and a differing case makes the run exit 1.
+A baseline file that cannot be read exits 2 before anything compiles.
 
 Since the lint extraction (docs/2026-07-18-cut-lint-command-design.md), every
 pre-toolchain check (steps 2-10 below) lives in
@@ -814,6 +822,13 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     instead of more sentences of the last `UT-TESTCASE-<n>` paragraph
     (issue #264: it ran after the last case and its STOP RUN hid
     SUMMARY). The check looks at the code after the header's period.
+    The parsed program carries the same name (#385):
+    `analysis/flow_targets.name_unnamed_main_line`, run by
+    `normalize_flow_targets` after every parse, renames cobol-parser's
+    leading `""` paragraph (outside any SECTION, holding more than ENTRY
+    statements) to `ORIGINAL_ENTRY_PARAGRAPH`, so lint, reachability and
+    `generate` / `init` treat it as an ordinary paragraph and a case can
+    `PERFORM UT-ORIGINAL-ENTRY`.
 14. Write the instrumented source into a fresh `sandbox_dir(root=docker_toolchain.WORK_ROOT)`
     as `<program-stem>.cbl` (LF newlines forced via `newline="\n"`).
 15. `docker_toolchain.compile_source(...)` — on failure, print stderr,
@@ -1403,17 +1418,18 @@ shell over `cli/doctor.py`'s `gather_full_status()` ->
 
 Its checks are `runtime.status.probe()`'s four (`daemon`, `image`,
 `container`, `cobc`) plus three of its own: whether `cobolparser` imports,
-which project config file this invocation would load (reported `WARN`
-when that file is malformed, rather than taking the whole report down with
-it), and (2026-09-16) which AI assistant mode that config puts the
+which project config file this invocation would load (reported `DOWN`,
+shown `[FAIL]` with a fix line, when that file is malformed, rather than
+taking the whole report down with it: run / lint / init refuse such a file,
+so doctor no longer calls it ready, #389), and (2026-09-16) which AI assistant mode that config puts the
 packaged skill in. The `ai_mode` check is always `OK` — every mode is a
 valid way to work, so it reports rather than judges and `ready` can never
 turn on it; it loads the config a second time rather than sharing
 `_check_config_file`'s, whose signature its own tests call directly.
 
 Exit code is `0 if report.ready else 1`, where doctor's `ready` means **no
-check is `DOWN`** — a `WARN` such as a stopped container or a broken config
-file still exits 0, because `setup` or the next `run` resolves it. That is
+check is `DOWN`** — a `WARN` such as a stopped container or a stale image
+still exits 0, because `setup` or the next `run` resolves it. That is
 deliberately looser than `probe()`'s own `ready`, which requires every
 check to be `ok`. Full write-up, including the check-state table it shares
 with the dashboard, lives in [dashboard](dashboard.md); the design doc is
@@ -1636,8 +1652,11 @@ status or empty step/summary -> exit 2 with a message, nothing written.
 and `str.splitlines()` broke such an entry into unparseable pieces (#283).
 `--from FILE|-` (issue #353) appends a batch in one process: a JSON array
 or JSON lines, each object with `step`/`summary` and optional
-`status`/`command`/`decision` (`journal.parse_batch` validates every entry
-before any is written; unknown keys are refused); it cannot be combined
+`status`/`command`/`decision`, and the `time` every journal line carries
+(kept, `YYYY-MM-DDTHH:MM:SSZ`, so a journal can be replayed or merged, #390;
+`journal.entry_time`) (`journal.parse_batch` validates every entry
+before any is written; unknown keys are refused); `--status` is the
+default status of entries that carry none (#390); it cannot be combined
 with the single-entry flags, which are no longer `required=True` so the
 check is `_cmd_journal`'s own.
 `--cut` goes through `main._journal_suite` (2026-10-25): an existing
@@ -1765,3 +1784,34 @@ restores `choices=` also restores the import.
 - [dsl](dsl.md)
 - [coverage](coverage.md)
 - [dashboard](dashboard.md)
+
+## `mockymock runner` (LegacyLens change-impact oracle worker)
+
+`_cmd_runner` -> `mockymock/runner/`:
+
+* `runner/client.py` — `RunnerClient` (stdlib `urllib`): `claim(name)`
+  (`POST /api/v1/runner/jobs/claim`, `None` on 204), `download_pack(job)`,
+  `report(job_id, payload)`. Header `X-Runner-Token`; HTTP errors raise
+  `RunnerClientError` with `.status`.
+* `runner/jobs.py` — `extract_pack` (refuses entries leaving the folder,
+  symlinks, packs over 200 MB; returns the folder holding `oracle.json`),
+  `load_manifest` (version 1, kind `baseline`/`compare`), `run_suite`,
+  `run_pack`, `run_job` (unpack in a temp folder, a broken pack becomes the
+  job's `error`), `serve` (claim / run / report loop; retries an
+  unreachable backend, stops on 401/503, `--once` returns when the queue
+  is empty).
+* Each suite: when the pack has no `.cut` (a first baseline), the
+  manifest's `generate` command is run — only `mockymock generate PROGRAM
+  [--real PATH]...`, every path checked to stay inside the pack — with
+  `-o CUT --force --copybook-path`. Then `run PROGRAM --cut CUT
+  --copybook-path` with `--record-baseline .oracle-results/E.json`
+  (baseline) or `--baseline FILE --baseline-json .oracle-results/E.json`
+  (compare). Both are child processes (`python -m mockymock`, new
+  `mockymock/__main__.py`) with `--suite-timeout`. A compare suite without
+  a baseline or without its frozen `.cut` is an `error`, not a run.
+* The result payload per suite: `entry`, `cut_path`, `cut_text` (the `.cut`
+  it ran, which the backend freezes), `exit_code`, `log` (last 20,000
+  chars), and `baseline` / `comparison` / `error`.
+* Container: `docker/runner/Dockerfile` (debian trixie GnuCOBOL 3.2, native
+  toolchain through a linked tree at `/opt/gnucobol`, non-root user,
+  entrypoint `mockymock runner`). Design: docs/2026-11-01-runner-design.md.
