@@ -5,6 +5,52 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-01 -- `mockymock runner` (change-impact oracle worker)
+
+* New `mockymock/runner/` (`client.py`, `jobs.py`) and `mockymock runner`:
+  claims LegacyLens baseline/compare jobs, runs each suite of the pack as a
+  child `mockymock generate` / `mockymock run --record-baseline|--baseline`,
+  and reports back ([cli](cli.md)). `python -m mockymock` works
+  (`mockymock/__main__.py`). Container: `docker/runner/Dockerfile`.
+  Design docs/2026-11-01-runner-design.md.
+
+## 2026-11-01 -- behaviour baselines (`run --record-baseline` / `--baseline`)
+
+* New `splicer/behaviour.py`: in baseline mode every mocked boundary prints
+  an EVENT marker and the hex of each value it was sent (via the generated
+  `UTHEXDMP` helper); the driver prints each case's RETURN-CODE
+  ([splicer](splicer.md)).
+* `report/results.py` parses EVENT/DATA/RC and keeps each case's own
+  DISPLAY output; new `report/baseline.py` writes, reads and compares
+  baselines ([report](report.md)).
+* `run --record-baseline FILE`, `--baseline FILE`, `--baseline-json FILE`
+  ([cli](cli.md)); design docs/2026-11-01-baseline-design.md.
+
+## 2026-11-01 -- IMS MPP scaffolds end their GU loop; imsmod example
+
+* `generate` no longer hangs an IMS MPP: a GU through the I/O PCB ends with
+  `QC` (`_is_message_pcb`), and a CBLTDLI key whose sites need different
+  end replies (GU loop plus ISRT) gates the reply on the captured function
+  code (`_dli_end_lines_by_function`) instead of leaving a TODO
+  ([dsl](dsl.md)).
+* Captures: different items at one argument position share a synthesized
+  field when their layouts give the same declaration
+  (`captures._shared_item_declaration`, and the generator's matching
+  check); different layouts still fail closed ([splicer](splicer.md)).
+* `examples/imsmod/`: PRTINQ (IMS MPP) with real PRTSTK (DB2) and PRTRATE
+  (rate file). Integration tests: the example passes, a LINKAGE mismatch
+  fails it, and the generated suite runs to the end.
+
+## 2026-11-01 -- ordmod example; MQ placeholders answer CompCode
+
+* `examples/ordmod/`: a batch load module end to end (ORDMAIN with three real
+  subprograms: DB2 in two, MQ in one, a log file in the one another real
+  subprogram CALLs). Integration tests: the example passes, and an inverted
+  limit test in the nested subprogram fails it.
+* `directive_snippet`'s MQ placeholder answers the call's CompCode and
+  Reason (`_mq_success_reply`), as the data-driven path already did
+  (`dsl.md`).
+
 ## 2026-11-01 -- open-issue sweep: #372, #385, #388-#391
 
 - [cli](cli.md): an unnamed main line is the paragraph `UT-ORIGINAL-ENTRY`

@@ -36,6 +36,7 @@ from mockymock.dsl.model import (
     MockCategory,
     MockTestSuite,
 )
+from mockymock.splicer.behaviour import site_lines as behaviour_site_lines
 from mockymock.splicer.cics_resp import cics_success_defaults
 from mockymock.splicer.driver import split_long_move
 from mockymock.splicer.io_copy import DataLayout, from_move, into_move
@@ -242,8 +243,14 @@ def build_site_dispatch(
     passthrough: list[str] | None = None,
     eib_resp_names: tuple[str, ...] = (),
     real_statement: list[str] | None = None,
+    behaviour: bool = False,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    `behaviour` (`run --record-baseline` / `--baseline`): every mocked
+    branch prints the site's EVENT marker and the bytes of what the
+    statement sends out (`splicer.behaviour`), after any FROM copy and
+    before the mock body. A USE REAL CALL branch prints nothing.
 
     `real_statement` is the site's own statement text (one entry per
     source line, sentence period dropped). A case whose directive is a
@@ -453,6 +460,18 @@ def build_site_dispatch(
         copy_from = from_move(site.statement)
         if copy_from is not None:
             lines.append(f"                   {copy_from}")
+        if behaviour:
+            for position, fired in enumerate(matches):
+                lines.extend(
+                    behaviour_site_lines(
+                        site.label,
+                        fired.key,
+                        site.statement if position == 0 else None,
+                        statement_text,
+                        directive.category.value,
+                        "                   ",
+                    )
+                )
         copy_into = into_move(
             site.statement,
             layout,

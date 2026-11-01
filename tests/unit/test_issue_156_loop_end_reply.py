@@ -109,19 +109,93 @@ def test_looped_cbltdli_get_next_reports_gb_through_the_pcb(tmp_path) -> None:
     assert 'MOVE "GB" TO DB-PCB(11:2)' in body
 
 
-def test_cbltdli_sites_needing_different_replies_get_a_todo(tmp_path) -> None:
-    """One MOCK CALL "CBLTDLI" answers every CBLTDLI site, so an ISRT next
-    to the looped GN cannot share a synthesized GB."""
-    cbl = IMS_LOOP_CBL.replace(
+def _with_isrt(cbl: str) -> str:
+    return cbl.replace(
         "           DISPLAY WS-COUNT\n",
         "           CALL 'CBLTDLI' USING DLI-ISRT DB-PCB WS-IO-AREA\n"
         "           DISPLAY WS-COUNT\n",
     )
+
+
+def test_cbltdli_sites_needing_different_replies_gate_on_the_function(
+    tmp_path,
+) -> None:
+    """One MOCK CALL "CBLTDLI" answers every CBLTDLI site, so the GN's GB
+    is gated on the function code the call passed (captured first): the
+    ISRT next to the looped GN keeps its blank status."""
+    body = _mock(
+        _scaffold(tmp_path, "IMSMIX", _with_isrt(IMS_LOOP_CBL)), 'MOCK CALL "CBLTDLI"'
+    )
+    lines = [line.strip() for line in body.splitlines()]
+    assert "CAPTURE ARG 1 INTO UT-CAP-CBLTDLI-1" in lines
+    gate = lines.index('IF UT-CAP-CBLTDLI-1 = "GN"')
+    assert lines[gate + 1 : gate + 3] == ['MOVE "GB" TO DB-PCB(11:2)', "END-IF"]
+    # Both calls succeed on a blank status first (issue #317).
+    assert lines.index("MOVE SPACES TO DB-PCB(11:2)") < gate
+
+
+def test_cbltdli_sites_whose_function_codes_differ_in_layout_get_a_todo(
+    tmp_path,
+) -> None:
+    """No one field mirrors a PIC X(4) and a PIC X(8) function code, so
+    there is no capture to gate on and the TODO stays."""
+    cbl = _with_isrt(IMS_LOOP_CBL).replace(
+        "01  DLI-ISRT        PIC X(4) VALUE 'ISRT'.",
+        "01  DLI-ISRT        PIC X(8) VALUE 'ISRT'.",
+    )
     body = _mock(_scaffold(tmp_path, "IMSMIX", cbl), 'MOCK CALL "CBLTDLI"')
     assert "*> TODO: a loop waits on this CALL's reply" in body
     assert '"GB" TO DB-PCB(11:2)' not in body
-    # Both calls succeed on a blank status (issue #317).
     assert "MOVE SPACES TO DB-PCB(11:2)" in body
+
+
+IMS_MPP_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. IMSMPP.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  DLI-GU          PIC X(4) VALUE 'GU  '.
+       01  DLI-ISRT        PIC X(4) VALUE 'ISRT'.
+       01  IN-MSG          PIC X(40).
+       01  OUT-MSG         PIC X(40).
+       01  WS-COUNT        PIC 9(4) VALUE 0.
+       LINKAGE SECTION.
+       01  IOPCB.
+           05  IO-LTERM    PIC X(8).
+           05  FILLER      PIC XX.
+           05  IO-STATUS   PIC XX.
+           05  FILLER      PIC X(20).
+       PROCEDURE DIVISION.
+           ENTRY 'DLITCBL' USING IOPCB.
+       MAIN-PARA.
+           CALL 'CBLTDLI' USING DLI-GU IOPCB IN-MSG
+           PERFORM UNTIL IO-STATUS = 'QC'
+               ADD 1 TO WS-COUNT
+               CALL 'CBLTDLI' USING DLI-ISRT IOPCB OUT-MSG
+               CALL 'CBLTDLI' USING DLI-GU IOPCB IN-MSG
+           END-PERFORM
+           GOBACK.
+"""
+
+
+def test_an_ims_mpp_gu_loop_ends_on_qc_through_the_io_pcb(tmp_path) -> None:
+    """The PCB a message is ISRTed through is the I/O PCB: its GU loop ends
+    on QC (no more messages), not a database PCB's GE, and only the GU
+    gets it."""
+    body = _mock(_scaffold(tmp_path, "IMSMPP", IMS_MPP_CBL), 'MOCK CALL "CBLTDLI"')
+    lines = [line.strip() for line in body.splitlines()]
+    gate = lines.index('IF UT-CAP-CBLTDLI-1 = "GU"')
+    assert lines[gate + 1] == 'MOVE "QC" TO IOPCB(11:2)'
+    assert '"GE"' not in body
+
+
+def test_the_generated_mpp_suite_counts_cbltdli_loosely(tmp_path) -> None:
+    """GU, ISRT, GU: the bundle's row-plus-end-reply count of 2 would be
+    wrong, so no exact VERIFY is written for the key."""
+    cut = _generate(tmp_path, "IMSMPP", IMS_MPP_CBL, "--seed", "1")
+    body = _mock(cut, 'MOCK CALL "CBLTDLI"')
+    assert 'IF UT-CBLTDLI-TALLY > 1 AND UT-CAP-CBLTDLI-1 = "GU"' in body
+    assert 'VERIFY CALL "CBLTDLI" WAS CALLED 2 TIMES' not in cut
 
 
 DLC_PRIMED_CBL = """\

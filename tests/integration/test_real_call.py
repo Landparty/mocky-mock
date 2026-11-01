@@ -119,3 +119,119 @@ def test_generate_real_writes_a_suite_that_runs(tmp_path: Path, capsys):
     capsys.readouterr()
     exit_code = main(["run", str(tmp_path / "PAYMAIN.cbl"), "--cut", str(cut)])
     assert exit_code == 0, capsys.readouterr().out
+
+
+ORDMOD_DIR = Path(__file__).parent.parent.parent / "examples" / "ordmod"
+
+
+def _run_ordmod(directory: Path, capsys) -> tuple[int, str]:
+    exit_code = main(
+        [
+            "run",
+            str(directory / "ORDMAIN.cbl"),
+            "--cut",
+            str(directory / "ORDMAIN.cut"),
+            "--copybook-path",
+            str(directory),
+        ]
+    )
+    return exit_code, capsys.readouterr().out
+
+
+@requires_docker
+def test_committed_ordmod_example_passes(capsys):
+    """Three real subprograms, two of them with DB2, MQ and a file of their
+    own, one CALLed by another real subprogram."""
+    exit_code, out = _run_ordmod(ORDMOD_DIR, capsys)
+    assert exit_code == 0, out
+    assert "3 run, 0 failed" in out
+
+
+@requires_docker
+def test_ordmod_catches_a_logic_change_in_a_nested_subprogram(tmp_path: Path, capsys):
+    for source in ORDMOD_DIR.iterdir():
+        if source.is_file():
+            (tmp_path / source.name).write_text(source.read_text())
+    validate = tmp_path / "ORDVAL.cbl"
+    validate.write_text(
+        validate.read_text().replace(
+            "WHEN LK-AMOUNT > WS-LIMIT", "WHEN LK-AMOUNT < WS-LIMIT"
+        )
+    )
+    exit_code, out = _run_ordmod(tmp_path, capsys)
+    assert exit_code == 1
+    assert "expected WS-ACCEPTED = 2, got 1" in out
+
+
+IMSMOD_DIR = Path(__file__).parent.parent.parent / "examples" / "imsmod"
+
+
+def _imsmod_args(directory: Path, cut: Path) -> list[str]:
+    return [
+        "run",
+        str(directory / "PRTINQ.cbl"),
+        "--cut",
+        str(cut),
+        "--copybook-path",
+        str(directory),
+        "--timeout",
+        "30",
+    ]
+
+
+@requires_docker
+def test_committed_imsmod_example_passes(capsys):
+    """An IMS MPP whose real subprograms read DB2 and a file."""
+    exit_code = main(_imsmod_args(IMSMOD_DIR, IMSMOD_DIR / "PRTINQ.cut"))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "3 run, 0 failed" in out
+
+
+@requires_docker
+def test_imsmod_catches_a_linkage_mismatch_in_a_subprogram(tmp_path: Path, capsys):
+    for source in IMSMOD_DIR.iterdir():
+        if source.is_file():
+            (tmp_path / source.name).write_text(source.read_text())
+    stock = tmp_path / "PRTSTK.cbl"
+    text = stock.read_text()
+    assert "LK-ONHAND               PIC 9(7)." in text
+    stock.write_text(
+        text.replace(
+            "LK-ONHAND               PIC 9(7).", "LK-ONHAND               PIC 9(5)."
+        )
+    )
+    exit_code = main(_imsmod_args(tmp_path, tmp_path / "PRTINQ.cut"))
+    assert exit_code == 1, capsys.readouterr().out
+
+
+@requires_docker
+def test_generated_imsmod_suite_ends_its_gu_loop(tmp_path: Path, capsys):
+    """One MOCK CALL "CBLTDLI" answers the GU and the ISRT: the scaffold
+    used to leave it a TODO and hang until --timeout; it now answers QC to
+    the GU alone."""
+    for source in IMSMOD_DIR.iterdir():
+        if source.is_file():
+            (tmp_path / source.name).write_text(source.read_text())
+    cut = tmp_path / "generated.cut"
+    assert (
+        main(
+            [
+                "generate",
+                str(tmp_path / "PRTINQ.cbl"),
+                "--real",
+                str(tmp_path / "PRTSTK.cbl"),
+                "--real",
+                str(tmp_path / "PRTRATE.cbl"),
+                "--copybook-path",
+                str(tmp_path),
+                "-o",
+                str(cut),
+            ]
+        )
+        == 0
+    )
+    assert 'MOVE "QC" TO IOPCB(11:2)' in cut.read_text()
+    capsys.readouterr()
+    exit_code = main(_imsmod_args(tmp_path, cut))
+    assert exit_code == 0, capsys.readouterr().out

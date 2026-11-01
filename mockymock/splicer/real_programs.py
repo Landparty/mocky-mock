@@ -101,6 +101,7 @@ def instrument_real_program(
     shared_working_storage: list[str],
     copybook_paths: list[str] | None,
     trace: bool = False,
+    behaviour: bool = False,
 ) -> list[str]:
     """The real program's source as it is compiled: every boundary site
     spliced into its case dispatch, EXEC blocks of the DATA DIVISION
@@ -117,9 +118,15 @@ def instrument_real_program(
         registry,
         file_status_fields=prepared.file_status_fields,
         trace=trace,
+        behaviour=behaviour,
     )
     lines, _ = transform_data_division_exec(lines, copybook_paths=copybook_paths)
-    return insert_working_storage(lines, shared_working_storage)
+    declarations = list(shared_working_storage)
+    if behaviour:
+        from mockymock.splicer.behaviour import LENGTH_DECLARATION
+
+        declarations.append(LENGTH_DECLARATION)
+    return insert_working_storage(lines, declarations)
 
 
 _WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\s*\.", re.IGNORECASE)

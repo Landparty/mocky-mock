@@ -186,6 +186,9 @@ class DriverArtifact:
     procedure_lines: list[str]
 
 
+_CASE_END_LINE_RE = re.compile(r'^\s*DISPLAY "__MOCKYMOCK__ CASE (\S+) END"\.$')
+
+
 def build_driver(
     suite: MockTestSuite,
     reset_lines: list[str],
@@ -195,6 +198,7 @@ def build_driver(
     snapshot: StateSnapshot | None = None,
     condition_names: frozenset[str] | set[str] = frozenset(),
     numeric_edited: frozenset[str] | set[str] = frozenset(),
+    behaviour: bool = False,
 ) -> DriverArtifact:
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
@@ -315,6 +319,23 @@ def build_driver(
             )
         )
         procedure.append("")
+
+    if behaviour:
+        # Baselines (`splicer.behaviour`): each case also reports the
+        # RETURN-CODE it ended with, just before its END marker.
+        from mockymock.splicer.behaviour import LENGTH_DECLARATION
+
+        working_storage.append(LENGTH_DECLARATION)
+        with_rc: list[str] = []
+        for line in procedure:
+            match = _CASE_END_LINE_RE.match(line)
+            if match is not None:
+                with_rc.append(
+                    f'           DISPLAY "__MOCKYMOCK__ RC {match.group(1)}: " '
+                    f"RETURN-CODE"
+                )
+            with_rc.append(line)
+        procedure = with_rc
 
     return DriverArtifact(
         working_storage_lines=working_storage, procedure_lines=procedure
