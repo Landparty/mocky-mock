@@ -16,6 +16,11 @@ from mockymock.analysis.flow_targets import ORIGINAL_ENTRY_PARAGRAPH
 from mockymock.debugging_lines import activate_debugging_lines
 from mockymock.report.artifacts import fingerprint
 from mockymock.report.record_rewrite import numeric_edited_fields
+from mockymock.splicer.headers import (
+    is_data_division,
+    is_procedure_division,
+    is_working_storage,
+)
 
 if TYPE_CHECKING:
     from mockymock.cli.config import MockymockConfig
@@ -4173,11 +4178,13 @@ def _insert_driver_with_origins(
     # synthesized where WORKING-STORAGE belongs: before the first section
     # that must follow it, or before the PROCEDURE DIVISION.
     has_ws = any(
-        _WS_HEADER_RE.match(line) for line in lines[: _first_procedure_index(lines)]
+        is_working_storage(lines, index)
+        for index in range(_first_procedure_index(lines))
     )
     seen_data_division = False
     entry_check_at: int | None = None
     header_open = False
+    header_ws = False
 
     for index, line in enumerate(lines):
         if index == entry_check_at and _starts_unnamed_code(lines, index):
@@ -4189,21 +4196,28 @@ def _insert_driver_with_origins(
             # performs.
             extend([f"       {_ORIGINAL_ENTRY_PARAGRAPH}."])
         if not inserted_ws and not has_ws:
-            if _DATA_DIVISION_RE.match(line):
+            if is_data_division(lines, index):
                 seen_data_division = True
             elif (
                 seen_data_division and _AFTER_WS_SECTION_RE.match(line)
-            ) or _PROCEDURE_DIVISION_RE.match(line):
+            ) or is_procedure_division(lines, index):
                 if not seen_data_division:
                     extend(["       DATA DIVISION."])
                 extend(["       WORKING-STORAGE SECTION."])
                 extend(ws_lines)
                 inserted_ws = True
         result.append(line)
-        if not inserted_ws and _WS_HEADER_RE.match(line):
+        if not inserted_ws and is_working_storage(lines, index):
+            header_ws = True
+        if header_ws and not inserted_ws and _ends_sentence(line):
+            # After the header's period: `WORKING-STORAGE` / `SECTION.`
+            # split over lines (see splicer.headers).
             extend(ws_lines)
             inserted_ws = True
-        if not inserted_proc and _PROCEDURE_DIVISION_RE.match(line):
+        if not inserted_proc and is_procedure_division(lines, index):
+            # Also a header whose words sit on separate lines
+            # (`PROCEDURE` / `DIVISION` / `.`, NIST NC113M): missing it left
+            # the program running its own main line outside every case.
             header_open = True
         if header_open and not inserted_proc and _ends_sentence(line):
             # After the header's period, not its first line: a header
@@ -4297,9 +4311,6 @@ def _starts_unnamed_code(lines: list[str], index: int) -> bool:
 # a tab): literal single-space checks missed them while cobc, cobolparser
 # and the `has_ws` check accepted them, so the driver's fields or
 # paragraphs were never inserted (issue #305).
-_WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\b", re.IGNORECASE)
-_DATA_DIVISION_RE = re.compile(r"^\s*DATA\s+DIVISION\b", re.IGNORECASE)
-_PROCEDURE_DIVISION_RE = re.compile(r"^\s*PROCEDURE\s+DIVISION\b", re.IGNORECASE)
 _END_PROGRAM_RE = re.compile(r"^\s*END\s+PROGRAM\b", re.IGNORECASE)
 #: DATA DIVISION sections that must come AFTER WORKING-STORAGE -- including a
 #: LINKAGE SECTION header `splicer.linkage.neutralize` commented out, whose
@@ -4312,8 +4323,8 @@ _AFTER_WS_SECTION_RE = re.compile(
 
 
 def _first_procedure_index(lines: list[str]) -> int:
-    for index, line in enumerate(lines):
-        if _PROCEDURE_DIVISION_RE.match(line):
+    for index in range(len(lines)):
+        if is_procedure_division(lines, index):
             return index
     return len(lines)
 

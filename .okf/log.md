@@ -5,6 +5,22 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-02 -- NIST CCVS85 check of "Create tests"; four generate/splice fixes
+
+* Ran the runner's `tests` job (generate `--scenarios all`, `--record-expectations`,
+  play, then replay the recorded suite) over all 459 NIST CCVS85 programs:
+  `scripts/nist_cobol85.py` (`expand` does EXEC85's X-card substitution,
+  `check` the create + replay), sample and numbers in
+  `examples/nist-cobol85/generated/README.md`, integration test
+  `tests/integration/test_nist_generated_suites.py`.
+* A `PROCEDURE` / `DIVISION` / `.` header split over lines got no driver,
+  so the program ran outside every case (NC113M): `splicer/headers.py`.
+* A READ whose rows move nothing emitted empty `WHEN`s cobc 3.1 rejects
+  (IX301M). Identical generated cases are left out with a `*> NOTE:`
+  (72 suites only ever ran their first paragraph). See [dsl](dsl.md).
+* `WRITE PRINT-REC IN PRINT-FILE` keys on the record name (SQ207M). See
+  [analysis](analysis.md). Tests: `tests/unit/test_nist_20261102_fixes.py`.
+
 ## 2026-11-02 -- Runner `tests` jobs (integration tests run in LegacyLens)
 
 * `mockymock runner` takes a third manifest kind, `tests`: scaffold the

@@ -1,0 +1,74 @@
+{
+  "DB101A": {
+    "refused": [
+      "UNSUPPORTED_ALTER",
+      "UNSUPPORTED_DECLARATIVES"
+    ],
+    "verdict": "refused"
+  },
+  "IC102A": {
+    "cases": 1,
+    "verdict": "green"
+  },
+  "IC222A": {
+    "refused": [
+      "UNSUPPORTED_NESTED_PROGRAM"
+    ],
+    "verdict": "refused"
+  },
+  "IF401M": {
+    "cases": 1,
+    "verdict": "green"
+  },
+  "IX106A": {
+    "cases": 2,
+    "verdict": "green"
+  },
+  "IX301M": {
+    "cases": 2,
+    "verdict": "green"
+  },
+  "IX401M": {
+    "cases": 4,
+    "verdict": "green"
+  },
+  "NC101A": {
+    "refused": [
+      "UNSUPPORTED_MOCK_TARGET_LAYOUT",
+      "UNSUPPORTED_TERMINATOR_LAYOUT"
+    ],
+    "verdict": "refused"
+  },
+  "NC113M": {
+    "cases": 1,
+    "verdict": "green"
+  },
+  "OBSQ1A": {
+    "cases": 1,
+    "verdict": "green"
+  },
+  "RL101A": {
+    "cases": 2,
+    "verdict": "green"
+  },
+  "RL301M": {
+    "cases": 6,
+    "verdict": "green"
+  },
+  "SG302M": {
+    "cases": 1,
+    "verdict": "green"
+  },
+  "SM301M": {
+    "cases": 1,
+    "verdict": "green"
+  },
+  "SQ107A": {
+    "cases": 1,
+    "verdict": "green"
+  },
+  "ST110A": {
+    "cases": 1,
+    "verdict": "green"
+  }
+}

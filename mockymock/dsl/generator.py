@@ -927,6 +927,41 @@ def _verification_comment_lines(scenario: Scenario) -> list[str]:
     return lines
 
 
+def _case_identity(case_lines: list[str]) -> tuple[str, ...]:
+    """A TESTCASE's body without its comments: two cases with the same one
+    mock the same boundaries the same way, PERFORM the same paragraph and
+    check the same things, so they run the same code and can only report
+    the same result, whatever their names claim."""
+    return tuple(
+        line.strip()
+        for line in case_lines
+        if line.strip() and not line.strip().startswith("*>")
+    )
+
+
+def _duplicate_scenarios_note(count: int, entries: list[str]) -> str:
+    """Why `count` scenarios got no TESTCASE of their own (NIST CCVS85,
+    2026-11-02: 72 of 112 green suites ran one case up to 83 times).
+
+    cobol-parser plans its scenarios (branch arms, failing boundaries,
+    boundary values) over the program's whole main-line run, which can
+    carry on past the entry paragraph: falling through into the next
+    paragraphs, or `GO TO` onward (NIST's `OPEN-FILES ... GO TO
+    CCVS1-EXIT`). A case PERFORMs the entry paragraph alone and returns at
+    its end, so a scenario whose branch or boundary lies beyond it keeps
+    none of what makes it different, and its case comes out identical to
+    an earlier one under a name claiming a path it never takes."""
+    shown = ", ".join(entries) or "the entry paragraph"
+    return (
+        f"{count} scenario(s) left out: each one's test case came out "
+        f"identical to an earlier case (same mocks, same PERFORM {shown}, "
+        f"same checks), so it could only repeat that case's result. A common "
+        f"cause: what the scenario targets lies beyond {shown} -- the "
+        f"program's main line runs on past it (falling through or GO TO), "
+        f"but a test case PERFORMs {shown} alone and returns at its end"
+    )
+
+
 def _quote_safe(name: str) -> str:
     """The .cut grammar cannot represent a double quote inside a quoted
     name (`"[^"]*"` -- no escape syntax), so a name containing one would
@@ -3138,14 +3173,21 @@ def _read_body(
         # alternate key; 04: length mismatch) comes with the record.
         return _row_move_lines(sequence[0], fixture, source) + status_lines
 
+    row_lines = [
+        _row_move_lines(row, fixture, source) + status_lines for row in sequence
+    ]
+    if not needs_exhaustion_branch and not any(row_lines):
+        # Rows that move nothing (a keyed READ of a record holding only its
+        # key, NIST IX301M): every call does the same nothing.
+        return []
     tally = registry.name(category, fixture.key)
     body = ["EVALUATE TRUE"]
-    for index, row in enumerate(sequence, start=1):
+    for index, lines in enumerate(row_lines, start=1):
         body.append(f"    WHEN {tally} = {index}")
-        body.extend(
-            f"        {line}"
-            for line in _row_move_lines(row, fixture, source) + status_lines
-        )
+        # A WHEN with no statement joins the next WHEN's condition, and a
+        # last one before END-EVALUATE fails cobc 3.1 ("invalid
+        # expression", NIST IX301M).
+        body.extend(f"        {line}" for line in lines or ["CONTINUE"])
     if needs_exhaustion_branch:
         body.append("    WHEN OTHER")
         body.extend(
@@ -4717,6 +4759,8 @@ def _scaffold_with_bundle(
             file=sys.stderr,
         )
     skipped_scenarios = 0
+    duplicate_scenarios: list[str] = []
+    emitted_bodies: set[tuple[str, ...]] = set()
     for scenario in bundle.scenarios:
         entry = scenario.entry or fallback_entry
         if not entry:
@@ -4725,14 +4769,15 @@ def _scaffold_with_bundle(
             # non-empty PROCEDURE DIVISION; reported below, not per-scenario.
             skipped_scenarios += 1
             continue
-        lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
-        lines.extend(f"    {line}" for line in _verification_comment_lines(scenario))
         # Only the sites this case can reach: a mock for a boundary in a
         # paragraph nothing PERFORMs from the entry (or reached only via a
         # CICS HANDLE) is UNMATCHED_MOCK to the very lint this file has to
         # pass (issue #143). Its VERIFY goes with it -- `_render_expectation`
         # drops counts for keys that got no MOCK directive.
         reachable = source.reachable_from(entry) if source is not None else None
+        case_start = len(lines)
+        lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
+        lines.extend(f"    {line}" for line in _verification_comment_lines(scenario))
         scenario_keys = (
             mockymock_keys
             if reachable is None
@@ -4847,8 +4892,22 @@ def _scaffold_with_bundle(
                     source,
                 )
             )
+        body = _case_identity(lines[case_start + 1 :])
+        if body in emitted_bodies:
+            del lines[case_start:]
+            duplicate_scenarios.append(scenario.name)
+            continue
+        emitted_bodies.add(body)
         lines.append("")
 
+    if duplicate_scenarios:
+        entries = sorted(
+            {scenario.entry or fallback_entry or "" for scenario in bundle.scenarios}
+            - {""}
+        )
+        note = _duplicate_scenarios_note(len(duplicate_scenarios), entries)
+        lines[2:2] = [f"*> NOTE: {note}", ""]
+        print(f"mockymock generate: note: {note}", file=sys.stderr)
     if skipped_scenarios:
         print(
             f"mockymock generate --with-data: WARNING: {skipped_scenarios} "

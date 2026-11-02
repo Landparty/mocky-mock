@@ -672,9 +672,13 @@ def _file_op_keys(statement, category: MockCategory) -> tuple[str, ...]:
     if category in (MockCategory.OPEN, MockCategory.CLOSE):
         return tuple(name.upper() for name in statement.file_names if name)
     if category in (MockCategory.WRITE, MockCategory.REWRITE):
-        name = statement.record_name
-    else:
-        name = statement.file_name
+        # A record name qualified by its file (`WRITE PRINT-REC IN
+        # PRINT-FILE`, NIST SQ207M) keys on the record name: the .cut
+        # grammar takes one bare COBOL name, and generate wrote the whole
+        # phrase into a MOCK the suite then failed to parse.
+        name = (statement.record_name or "").split()
+        return (name[0].upper(),) if name else ()
+    name = statement.file_name
     return (name.upper(),) if name else ()
 
 

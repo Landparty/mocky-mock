@@ -955,7 +955,19 @@ paragraph-grouped path described above, unchanged. A real
 `docs/fixture-bundle-schema.md`) switches to `_scaffold_with_bundle`:
 
 - **One `TESTCASE` per `bundle.scenarios[]` entry**, not per paragraph,
-  named from `scenario.name`, body `PERFORM <scenario.entry>`.
+  named from `scenario.name`, body `PERFORM <scenario.entry>`. A scenario
+  whose case comes out identical to an earlier one once comments are set
+  aside (`_case_identity`: same mocks, same PERFORM, same checks) is left
+  out, and a `*> NOTE:` under `TESTSUITE` (also on stderr) says how many
+  (2026-11-02). The bundle plans scenarios over the whole main-line run,
+  which can carry on past the entry paragraph by falling through or `GO
+  TO` (NIST's `OPEN-FILES ... GO TO CCVS1-EXIT`); a case PERFORMs the
+  entry alone, so on NIST 72 of 112 green suites repeated one case up to
+  83 times under branch names it never took.
+- **A READ whose generated rows move nothing** (a keyed READ of a record
+  holding only its key) gets no row `EVALUATE` at all, and an empty row
+  gets `CONTINUE`: `WHEN tally = 1 ... WHEN tally = 10 END-EVALUATE` with
+  no statement failed cobc 3.1 ("invalid expression", NIST IX301M).
 - **The join**: `_mockymock_boundary_keys(surface)` (this program's own
   walk — note it iterates *every* entry of `site.keys`, not just
   `keys[0]`, so a multi-file `OPEN A OUTPUT B` widens to both `(OPEN, A)`

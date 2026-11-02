@@ -32,6 +32,7 @@ from collections.abc import Sequence
 from mockymock.analysis.real_programs import PreparedReal, RealSpec
 from mockymock.dsl.model import MockTestSuite
 from mockymock.splicer.driver import DriverArtifact
+from mockymock.splicer.headers import is_data_division, is_procedure_division
 from mockymock.splicer.naming import TallyRegistry
 
 #: The driver fields every program of the binary shares.
@@ -130,11 +131,9 @@ def instrument_real_program(
 
 
 _WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\s*\.", re.IGNORECASE)
-_DATA_DIVISION_RE = re.compile(r"^\s*DATA\s+DIVISION\s*\.", re.IGNORECASE)
 _AFTER_WS_RE = re.compile(
     r"^\s*(LOCAL-STORAGE|LINKAGE|REPORT|SCREEN)\s+SECTION\s*\.", re.IGNORECASE
 )
-_PROCEDURE_RE = re.compile(r"^\s*PROCEDURE\s+DIVISION\b", re.IGNORECASE)
 
 
 def insert_working_storage(lines: list[str], declarations: list[str]) -> list[str]:
@@ -142,16 +141,18 @@ def insert_working_storage(lines: list[str], declarations: list[str]) -> list[st
     a WORKING-STORAGE SECTION synthesized where one belongs."""
     block = [f"       {line}" for line in declarations]
     for index, line in enumerate(lines):
-        if _PROCEDURE_RE.match(line):
+        if is_procedure_division(lines, index):
             break
         if _WS_HEADER_RE.match(line):
             return [*lines[: index + 1], *block, *lines[index + 1 :]]
     seen_data = False
     for index, line in enumerate(lines):
-        if _DATA_DIVISION_RE.match(line):
+        if is_data_division(lines, index):
             seen_data = True
             continue
-        if (seen_data and _AFTER_WS_RE.match(line)) or _PROCEDURE_RE.match(line):
+        if (seen_data and _AFTER_WS_RE.match(line)) or is_procedure_division(
+            lines, index
+        ):
             head = [] if seen_data else ["       DATA DIVISION."]
             return [
                 *lines[:index],
