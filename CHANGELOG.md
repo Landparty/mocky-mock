@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.14.0](https://github.com/Landparty/mocky-mock/compare/v0.13.0...v0.14.0) (2026-11-02)
+
+
+### Features
+
+* **runner:** log every step of a job and post the job's timeline ([4a9fa71](https://github.com/Landparty/mocky-mock/commit/4a9fa715cae117ebf2d753723bbc0099173fbedc))
+* **runner:** log every step of a job and post the job's timeline ([6297217](https://github.com/Landparty/mocky-mock/commit/62972178ac96c496e20e30f598eb02772b38bdf9))
+
+
+### Bug Fixes
+
+* alternate-key READ counts and CICS keys/resources in baselines ([#402](https://github.com/Landparty/mocky-mock/issues/402), [#400](https://github.com/Landparty/mocky-mock/issues/400)) ([#405](https://github.com/Landparty/mocky-mock/issues/405)) ([7f1984a](https://github.com/Landparty/mocky-mock/commit/7f1984a297b3a9397806237bced65f33f0f912f0))
+* **generate:** mock OPEN per mode, fail the right file of a multi-file OPEN, record shared captures bare ([753fffd](https://github.com/Landparty/mocky-mock/commit/753fffdbb443a73bd076ae7acc8b13b3f4df6b5a))
+* **generate:** mock OPEN per mode, fail the right file of a multi-file OPEN, record shared captures bare ([d3ff8aa](https://github.com/Landparty/mocky-mock/commit/d3ff8aac50800bd168fbefa0c284897ecf2bb501))
+* stress-test findings (fixed clock, merged case branches, DL/I rows, MQ codes, DFHAID, orphaned compilers) ([b8304bb](https://github.com/Landparty/mocky-mock/commit/b8304bb1959dc00d2671ea673122522cd4a1aab3))
+* stress-test findings: fixed test clock, merged case branches, DL/I rows per call, pinned MQ codes, DFHAID, no orphaned compilers ([d688651](https://github.com/Landparty/mocky-mock/commit/d688651434435c169a784047d12bbfb5b0d9178c))
+
 ## [0.13.0](https://github.com/Landparty/mocky-mock/compare/v0.12.0...v0.13.0) (2026-11-02)
 
 
