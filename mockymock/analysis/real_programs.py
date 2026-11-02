@@ -44,7 +44,12 @@ from mockymock.analysis.refusal._types import (
     _UNMOCKED_FILE_OP_CODE,
     _UNSUPPORTED_SITE_CODES,
 )
-from mockymock.dsl.model import MockDirective, MockTestCase, MockTestSuite
+from mockymock.dsl.model import (
+    MockCategory,
+    MockDirective,
+    MockTestCase,
+    MockTestSuite,
+)
 
 if TYPE_CHECKING:
     from mockymock.analysis.mock_surface import BoundarySite, MockSurface
@@ -361,6 +366,12 @@ def matched_directive_ids(surface: MockSurface, suite: MockTestSuite) -> set[int
             *suite.before_all_mocks,
         ]
         if any(directive_matches_site(directive, site) for site in sites)
+        or (
+            # A dynamic CALL can reach any real program
+            # (injector.real_dynamic_routes).
+            directive.is_real
+            and any(site.category is MockCategory.DYNCALL for site in sites)
+        )
     }
 
 

@@ -60,7 +60,8 @@ recorded with and `baselines/<ENTRY>.json`.
 
 Every `generate` and `run` is a child process with a timeout, so a suite
 that hangs or crashes is one suite's error, not a dead runner. The runner
-only runs `mockymock generate PROGRAM [--real PATH]...` from the manifest,
+only runs `mockymock generate PROGRAM [--scenarios happy|branches|all]
+[--real PATH]...` from the manifest,
 and refuses any path (in the zip or the manifest) that leaves the pack.
 
 ## Deployment

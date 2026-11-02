@@ -28,6 +28,7 @@ from pathlib import Path
 
 from mockymock.analysis.real_programs import PreparedReal
 from mockymock.dsl.model import MockCategory
+from mockymock.dsl.real_branches import add_found_cases
 
 _MOCK_CALL_RE = re.compile(r'^MOCK\s+(?:CALL|MQ)\s+"(?P<key>[^"]*)"(?:\s+ROWS)?$')
 _CAPTURE_RE = re.compile(
@@ -87,6 +88,8 @@ def link_real_programs(
 
     block: list[str] = []
     seen_headers: set[str] = set()
+    #: READ key -> its placeholder's body (the end-of-file answer).
+    read_placeholders: dict[str, list[str]] = {}
     for link in links:
         source = Path(link.prepared.spec.source)
         relative = Path(os.path.relpath(source, cut_path.parent)).as_posix()
@@ -109,6 +112,11 @@ def link_real_programs(
             if header in seen_headers:
                 continue
             seen_headers.add(header)
+            if site.category is MockCategory.READ and site.keys:
+                read_placeholders.setdefault(
+                    site.keys[0].upper(),
+                    [line.strip() for line in snippet.splitlines()[1:-1]],
+                )
             block.append(f"    *> {link.key} line {site.line} ({site.paragraph_name})")
             block.extend(snippet.splitlines())
 
@@ -126,6 +134,9 @@ def link_real_programs(
             if not inserted and _TESTSUITE_RE.match(line.strip()):
                 out.extend(["", "BEFORE-EACH", *block, "END-BEFORE"])
                 inserted = True
+    out, found_cases = add_found_cases(
+        out, [link.prepared for link in links], read_placeholders
+    )
     notes = [
         f"linked {len(links)} real program(s): "
         + ", ".join(link.key for link in links)
@@ -133,4 +144,9 @@ def link_real_programs(
         f"their boundaries are placeholder mocks in BEFORE-EACH, edit them "
         f"(or override one per TESTCASE) to give each case its data"
     ]
+    if found_cases:
+        notes.append(
+            f"added {found_cases} case(s) where a real program's READ returns "
+            f"the record its caller asks for"
+        )
     return "\n".join(out), notes

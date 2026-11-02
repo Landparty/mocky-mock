@@ -345,6 +345,10 @@ program are checked against it (`program_only_view`); the entry program's
 own checks then run on `entry_program_view` (directives matching only
 real-program sites, and their VERIFYs, removed) while `out.suite` keeps
 the full suite for the driver. Design: [docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
+A dynamic CALL can reach a real program (2026-11-02): `check_test_case`
+marks the case's USE REAL CALLs used when it reaches a `DYNCALL` site, and
+`matched_directive_ids` counts them for any surface with one
+([docs/2026-11-02-real-dynamic-call-design.md](../docs/2026-11-02-real-dynamic-call-design.md)).
 
 ## Dynamic CALL as its own category (`DYNCALL`)
 

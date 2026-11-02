@@ -23,8 +23,12 @@ from mockymock.splicer.behaviour import (
     HEXDUMP_PROGRAM,
     LENGTH_DECLARATION,
     cics_data_items,
+    cursor_host_variables,
     hexdump_program,
+    opened_cursor,
     payload_names,
+    returned_items,
+    site_lines,
     sql_host_variables,
 )
 from mockymock.splicer.driver import build_driver
@@ -253,8 +257,121 @@ def test_baseline_round_trips_and_bad_files_are_refused(tmp_path):
     (tmp_path / "other.json").write_text(json.dumps({"format": "x"}))
     with pytest.raises(BaselineError, match="not a mockymock baseline"):
         load_baseline(tmp_path / "other.json")
-    (tmp_path / "v2.json").write_text(
-        json.dumps({"format": "mockymock-baseline", "version": 2, "cases": []})
+    (tmp_path / "v9.json").write_text(
+        json.dumps({"format": "mockymock-baseline", "version": 9, "cases": []})
     )
     with pytest.raises(BaselineError, match="version"):
-        load_baseline(tmp_path / "v2.json")
+        load_baseline(tmp_path / "v9.json")
+    (tmp_path / "v1.json").write_text(
+        json.dumps({"format": "mockymock-baseline", "version": 1, "cases": []})
+    )
+    assert load_baseline(tmp_path / "v1.json")["version"] == 1
+
+
+# --- version 2: cursor inputs and returned LINKAGE ---------------------------
+
+
+def test_cursor_host_variables_come_from_each_declare():
+    lines = [
+        "       WORKING-STORAGE SECTION.",
+        "           EXEC SQL DECLARE CUSTCUR CURSOR FOR",
+        "               SELECT CUST_ID INTO :NOT-SENT FROM CUSTOMER",
+        "                WHERE REGION = :WS-REGION AND TIER > :T.TIER",
+        "           END-EXEC.",
+        "           EXEC SQL DECLARE C2 SCROLL CURSOR WITH HOLD FOR S1 END-EXEC.",
+        "           EXEC SQL DECLARE C3 CURSOR FOR SELECT A FROM B END-EXEC.",
+    ]
+    assert cursor_host_variables(lines) == {"CUSTCUR": ["WS-REGION", "TIER OF T"]}
+    assert opened_cursor("EXEC SQL OPEN CUSTCUR END-EXEC") == "CUSTCUR"
+    assert opened_cursor("EXEC SQL FETCH CUSTCUR INTO :A END-EXEC") is None
+
+
+def test_cursor_open_is_followed_by_the_cursor_inputs_event():
+    lines = site_lines(
+        "SQL",
+        "OPEN",
+        None,
+        "EXEC SQL OPEN CUSTCUR END-EXEC",
+        "SQL",
+        "    ",
+        cursor_hosts={"CUSTCUR": ["WS-REGION"]},
+    )
+    assert lines[0] == '    DISPLAY "__MOCKYMOCK__ EVENT: SQL OPEN"'
+    assert lines[1] == '    DISPLAY "__MOCKYMOCK__ EVENT: SQL CURSOR CUSTCUR"'
+    assert lines[2:] == [
+        "    MOVE LENGTH OF WS-REGION TO UT-BT-LEN",
+        f'    CALL "{HEXDUMP_PROGRAM}" USING WS-REGION UT-BT-LEN',
+    ]
+    # Without a DECLARE that names host variables, nothing is added.
+    assert site_lines("SQL", "OPEN", None, "EXEC SQL OPEN C9 END-EXEC", "SQL", "") == [
+        'DISPLAY "__MOCKYMOCK__ EVENT: SQL OPEN"'
+    ]
+
+
+def _parse(source: str):
+    from cobolparser import parse_cobol
+
+    return parse_cobol(source, filename="p.cbl").ast
+
+
+def test_returned_items_are_the_using_items_or_the_commarea():
+    called = _parse(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. P.\n"
+        "       DATA DIVISION.\n"
+        "       LINKAGE SECTION.\n"
+        "       01  LK-A PIC X.\n"
+        "       01  LK-B PIC X.\n"
+        "       PROCEDURE DIVISION USING LK-A LK-B.\n"
+        "           GOBACK.\n"
+    )
+    assert returned_items(called) == ["LK-A", "LK-B"]
+    cics = _parse(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. P.\n"
+        "       DATA DIVISION.\n"
+        "       LINKAGE SECTION.\n"
+        "       01  DFHCOMMAREA PIC X(8).\n"
+        "       PROCEDURE DIVISION.\n"
+        "           GOBACK.\n"
+    )
+    assert returned_items(cics) == ["DFHCOMMAREA"]
+    batch = _parse(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. P.\n"
+        "       PROCEDURE DIVISION.\n"
+        "           GOBACK.\n"
+    )
+    assert returned_items(batch) == []
+
+
+def test_driver_dumps_returned_items_before_the_rc_line():
+    suite = MockTestSuite(name="S", test_cases=[MockTestCase(name="one")])
+    artifact = build_driver(
+        suite, [], TallyRegistry(suite), behaviour=True, returned=["DFHCOMMAREA"]
+    )
+    procedure = artifact.procedure_lines
+    rc = next(i for i, line in enumerate(procedure) if "__MOCKYMOCK__ RC 001" in line)
+    assert procedure[rc - 3 : rc] == [
+        '           DISPLAY "__MOCKYMOCK__ EVENT: RETURNED LINKAGE"',
+        "           MOVE LENGTH OF DFHCOMMAREA TO UT-BT-LEN",
+        f'           CALL "{HEXDUMP_PROGRAM}" USING DFHCOMMAREA UT-BT-LEN',
+    ]
+
+
+def test_a_version_1_baseline_ignores_the_version_2_events():
+    old = _baseline()
+    old["version"] = 1
+    newer = _STDOUT.replace(
+        "__MOCKYMOCK__ RC 001",
+        "__MOCKYMOCK__ EVENT: RETURNED LINKAGE\n__MOCKYMOCK__ DATA: 41\n"
+        "__MOCKYMOCK__ RC 001",
+    )
+    comparison = compare(old, parse_stdout(newer), {"cut": "a"})
+    assert comparison.matches
+    assert comparison.notes and "version 1" in comparison.notes[0]
+    assert "note: baseline version 1" in format_comparison(comparison)
+    # A version-2 baseline compares them.
+    comparison = compare(_baseline(), parse_stdout(newer), {"cut": "a"})
+    assert not comparison.matches
+    assert comparison.notes == []

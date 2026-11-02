@@ -8,11 +8,18 @@ program hands to that boundary:
 * a CALL (static, dynamic, MQ): each USING argument, as the program
   passed it (before the mock body runs);
 * a WRITE / REWRITE / RELEASE: the record, after its FROM copy;
-* an EXEC SQL statement: each host variable outside an INTO list;
+* an EXEC SQL statement: each host variable outside an INTO list; an
+  `OPEN cursor` is followed by a `SQL CURSOR <name>` event with the
+  host variables of that cursor's DECLARE (what DB2 reads at OPEN);
 * an EXEC CICS command: each FROM / COMMAREA / INTO-free data option.
 
 Other boundaries (OPEN, READ, ACCEPT, ...) print the EVENT alone: what
 they send out is nothing, and what they answer is the mock's.
+
+At the end of each case, a program entered with parameters (its
+PROCEDURE DIVISION USING items, or a CICS program's DFHCOMMAREA) prints a
+`RETURNED LINKAGE` event with the bytes of each: that is what a called
+program or a LINKed CICS program hands back to its caller.
 
 A value is printed as hexadecimal by `UTHEXDMP`, a small program compiled
 into the same binary, so a COMP-3 or binary field reaches the report byte
@@ -78,6 +85,74 @@ _CICS_DATA_RE = re.compile(
     r"\b(FROM|COMMAREA|CHANNEL-DATA)\s*\(\s*([^()]+?(?:\([^()]*\))?)\s*\)",
     re.IGNORECASE,
 )
+
+
+#: Label of the pseudo-event that follows `SQL OPEN` with the cursor's
+#: DECLARE host variables, and of the end-of-case LINKAGE event.
+CURSOR_EVENT = "SQL CURSOR"
+RETURNED_EVENT = "RETURNED LINKAGE"
+#: Events a version-1 baseline never had (see report.baseline).
+V2_EVENT_PREFIXES = (CURSOR_EVENT + " ", RETURNED_EVENT)
+
+_DECLARE_CURSOR_RE = re.compile(
+    rf"EXEC\s+SQL\s+DECLARE\s+({_NAME})\s+(?:(?:NO\s+)?SCROLL\s+|"
+    rf"(?:IN)?SENSITIVE\s+(?:STATIC\s+|DYNAMIC\s+)?SCROLL\s+|ASENSITIVE\s+)?"
+    rf"CURSOR\b(.*?)END-EXEC",
+    re.IGNORECASE | re.DOTALL,
+)
+_OPEN_CURSOR_RE = re.compile(rf"\bSQL\s+OPEN\s+({_NAME})", re.IGNORECASE)
+
+
+def cursor_host_variables(source_lines: list[str]) -> dict[str, list[str]]:
+    """Host variables of each `EXEC SQL DECLARE c CURSOR FOR ...`, by
+    cursor name (upper case). A cursor over a prepared statement
+    (`FOR stmt`) has none: its inputs are the OPEN's own USING list."""
+    text = "\n".join(
+        line.split("*>", 1)[0] for line in source_lines if line[:1] not in ("*", "/")
+    )
+    out: dict[str, list[str]] = {}
+    for match in _DECLARE_CURSOR_RE.finditer(text):
+        names = sql_host_variables(match.group(2))
+        if names:
+            out[match.group(1).upper()] = names
+    return out
+
+
+def opened_cursor(statement_text: str) -> str | None:
+    """The cursor an `EXEC SQL OPEN c` statement opens, upper case."""
+    match = _OPEN_CURSOR_RE.search(statement_text)
+    return match.group(1).upper() if match else None
+
+
+def returned_items(program: object) -> list[str]:
+    """What a program hands back to its caller: its default entry's
+    PROCEDURE DIVISION USING items and, for a CICS program, DFHCOMMAREA
+    when its LINKAGE SECTION declares one."""
+    names: list[str] = []
+    procedure = program.get_division("PROCEDURE")  # type: ignore[attr-defined]
+    if procedure is not None:
+        for name in procedure.get_metadata("using_parameters") or []:
+            text = str(name).upper()
+            if _is_data_name(text) and text not in names:
+                names.append(text)
+    data = program.get_division("DATA")  # type: ignore[attr-defined]
+    sections = getattr(data, "_sections", {}) if data is not None else {}
+    linkage = sections.get("LINKAGE")
+    for item in getattr(linkage, "data_items", None) or []:
+        name = str(getattr(item, "name", "") or "").upper()
+        if name == "DFHCOMMAREA" and name not in names:
+            names.append(name)
+    return names
+
+
+def returned_lines(names: list[str], indent: str) -> list[str]:
+    """The end-of-case `RETURNED LINKAGE` event and one dump per item."""
+    if not names:
+        return []
+    lines = [f'{indent}DISPLAY "__MOCKYMOCK__ EVENT: {RETURNED_EVENT}"']
+    for name in names:
+        lines.extend(dump_lines(name, indent))
+    return lines
 
 
 def event_line(label: str, key: str, indent: str) -> str:
@@ -163,14 +238,26 @@ def site_lines(
     statement_text: str,
     category_value: str,
     indent: str,
+    cursor_hosts: dict[str, list[str]] | None = None,
 ) -> list[str]:
-    """The EVENT marker and the DATA dumps for one mocked site's branch."""
+    """The EVENT marker and the DATA dumps for one mocked site's branch.
+
+    `cursor_hosts` (`cursor_host_variables`): an `OPEN` of a cursor whose
+    DECLARE names host variables is followed by a `SQL CURSOR <name>`
+    event carrying them, since DB2 reads them at OPEN."""
     lines = [event_line(label, key, indent)]
     for name in payload_names(statement, statement_text, category_value):
         if name is None:
             lines.append(f'{indent}DISPLAY "__MOCKYMOCK__ DATA: -"')
         else:
             lines.extend(dump_lines(name, indent))
+    if category_value == "SQL" and cursor_hosts:
+        cursor = opened_cursor(statement_text)
+        hosts = cursor_hosts.get(cursor or "")
+        if cursor and hosts:
+            lines.append(event_line(CURSOR_EVENT, cursor, indent))
+            for name in hosts:
+                lines.extend(dump_lines(name, indent))
     return lines
 
 

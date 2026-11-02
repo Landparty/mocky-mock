@@ -244,6 +244,7 @@ def build_site_dispatch(
     eib_resp_names: tuple[str, ...] = (),
     real_statement: list[str] | None = None,
     behaviour: bool = False,
+    cursor_hosts: dict[str, list[str]] | None = None,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
 
@@ -251,6 +252,8 @@ def build_site_dispatch(
     branch prints the site's EVENT marker and the bytes of what the
     statement sends out (`splicer.behaviour`), after any FROM copy and
     before the mock body. A USE REAL CALL branch prints nothing.
+    `cursor_hosts` maps each cursor to its DECLARE's host variables, so a
+    mocked `OPEN` also records what the cursor's query reads.
 
     `real_statement` is the site's own statement text (one entry per
     source line, sentence period dropped). A case whose directive is a
@@ -470,6 +473,7 @@ def build_site_dispatch(
                         statement_text,
                         directive.category.value,
                         "                   ",
+                        cursor_hosts=cursor_hosts,
                     )
                 )
         copy_into = into_move(
@@ -608,7 +612,81 @@ def build_site_dispatch(
     lines.append("           END-EVALUATE")
     if lifted_clauses:
         lines.extend(clause_guard_lines(lifted_clauses, indent="           "))
-    return lines
+    return _route_real_dynamic_calls(
+        lines, site, suite, registry, trace, real_statement, bool(lifted_clauses)
+    )
+
+
+def real_dynamic_routes(
+    site: BoundarySite, suite: MockTestSuite
+) -> list[tuple[str, list[str]]]:
+    """(program name, case ids) for every `USE REAL CALL` a dynamic CALL
+    site may reach: in each listed case, the site runs that program for real
+    when its identifier holds the program's name. Empty for any other site.
+    See docs/2026-11-02-real-dynamic-call-design.md."""
+    if site.category is not MockCategory.DYNCALL or not site.keys:
+        return []
+    routes: dict[str, list[str]] = {}
+    for case_id, mocks in dispatch_entries(suite):
+        for directive in mocks:
+            if directive.is_real and directive.category is MockCategory.CALL:
+                cases = routes.setdefault(directive.key.upper(), [])
+                if case_id not in cases:
+                    cases.append(case_id)
+    return list(routes.items())
+
+
+def _route_real_dynamic_calls(
+    lines: list[str],
+    site: BoundarySite,
+    suite: MockTestSuite,
+    registry: TallyRegistry,
+    trace: bool,
+    real_statement: list[str] | None,
+    lifted: bool,
+) -> list[str]:
+    """`lines` (a dynamic CALL's mock dispatch) behind a check of the
+    CALL's identifier: when it names a program the case makes real, the
+    statement runs as written -- GnuCOBOL resolves the name to the program
+    linked into the test binary, exactly as a static real CALL does -- and
+    any other name falls through to the mocks."""
+    routes = real_dynamic_routes(site, suite)
+    if not routes:
+        return lines
+    if real_statement is None:
+        raise ValueError(
+            f"USE REAL CALL can answer the dynamic CALL at line {site.line} "
+            f"but no statement text was given to run it -- the orchestrator "
+            f"passes real_statement"
+        )
+    identifier = site.keys[0]
+    out: list[str] = []
+    if lifted:
+        # The real branch runs the statement's own exception clauses, so
+        # the lifted-clause guard after the mock dispatch must select none.
+        out.append(f"           MOVE SPACES TO {OUTCOME_FIELD}")
+    out.append("           EVALUATE TRUE")
+    for name, case_ids in routes:
+        out.append(f'               WHEN (UT-CURRENT-CASE = "{case_ids[0]}"')
+        out.extend(
+            f'                  OR UT-CURRENT-CASE = "{case_id}"'
+            for case_id in case_ids[1:]
+        )
+        out.append(f"                  ) AND FUNCTION UPPER-CASE({identifier})")
+        out.append(f'                        = "{name}"')
+        out.append(
+            f"                   ADD 1 TO {registry.name(MockCategory.CALL, name)}"
+        )
+        if trace:
+            out.append(
+                f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
+                f'{site.label} {name}"'
+            )
+        out.extend(f"                   {text}" for text in real_statement)
+    out.append("               WHEN OTHER")
+    out.extend(lines)
+    out.append("           END-EVALUATE")
+    return out
 
 
 def build_flow_dispatch(

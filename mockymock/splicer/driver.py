@@ -23,6 +23,7 @@ insertion point with no separate splice mechanism needed.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from mockymock.dsl.model import SUITE_PHASE_ID, HookStep, MockTestCase, MockTestSuite
@@ -199,6 +200,7 @@ def build_driver(
     condition_names: frozenset[str] | set[str] = frozenset(),
     numeric_edited: frozenset[str] | set[str] = frozenset(),
     behaviour: bool = False,
+    returned: Sequence[str] = (),
 ) -> DriverArtifact:
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
@@ -321,15 +323,18 @@ def build_driver(
         procedure.append("")
 
     if behaviour:
-        # Baselines (`splicer.behaviour`): each case also reports the
-        # RETURN-CODE it ended with, just before its END marker.
-        from mockymock.splicer.behaviour import LENGTH_DECLARATION
+        # Baselines (`splicer.behaviour`): each case also reports what it
+        # hands back to its caller (`returned`: the USING items or the
+        # DFHCOMMAREA) and the RETURN-CODE it ended with, just before its
+        # END marker.
+        from mockymock.splicer.behaviour import LENGTH_DECLARATION, returned_lines
 
         working_storage.append(LENGTH_DECLARATION)
         with_rc: list[str] = []
         for line in procedure:
             match = _CASE_END_LINE_RE.match(line)
             if match is not None:
+                with_rc.extend(returned_lines(list(returned), "           "))
                 with_rc.append(
                     f'           DISPLAY "__MOCKYMOCK__ RC {match.group(1)}: " '
                     f"RETURN-CODE"

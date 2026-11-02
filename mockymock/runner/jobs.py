@@ -54,6 +54,7 @@ MAX_PACK_BYTES = 200 * 1024 * 1024
 
 #: Flags of the manifest's `generate` command the runner passes on.
 _GENERATE_PATH_FLAGS = {"--real"}
+_GENERATE_SCENARIOS = {"happy", "branches", "all"}
 
 #: How mockymock itself is started for a suite: this interpreter's module.
 DEFAULT_COMMAND: tuple[str, ...] = (sys.executable, "-m", "mockymock")
@@ -189,6 +190,14 @@ def _generate_args(pack: Path, command: object) -> list[str]:
     index = 1
     while index < len(rest):
         flag = rest[index]
+        if flag == "--scenarios" and index + 1 < len(rest):
+            if rest[index + 1] not in _GENERATE_SCENARIOS:
+                raise JobPackError(
+                    f"generate --scenarios not allowed: {rest[index + 1]}"
+                )
+            args += [flag, rest[index + 1]]
+            index += 2
+            continue
         if flag not in _GENERATE_PATH_FLAGS or index + 1 >= len(rest):
             raise JobPackError(f"generate argument not allowed: {flag}")
         _inside(pack, rest[index + 1], f"generate {flag}")

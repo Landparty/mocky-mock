@@ -2319,6 +2319,14 @@ def _bundle_rendered_value(
     since a bundle row always carries one."""
     if field_category in _NUMERIC_FIELD_CATEGORIES:
         return localize_numeric(raw_value, decimal_comma)
+    if (
+        raw_value
+        and any(ord(ch) < 32 or ord(ch) > 126 for ch in raw_value)
+        and all(ord(ch) < 256 for ch in raw_value)
+    ):
+        # A byte no source character spells (`IF EIBAID = X'F3'`): a hex
+        # literal, so the field holds that byte rather than its UTF-8 form.
+        return "X'" + raw_value.encode("latin-1").hex().upper() + "'"
     escaped = raw_value.replace('"', '""')
     return f'"{escaped}"'
 

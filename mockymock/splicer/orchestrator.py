@@ -52,6 +52,7 @@ from mockymock.analysis.refusal import (
 )
 from mockymock.analysis.sql_whenever import whenever_check_lines
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
+from mockymock.splicer.behaviour import cursor_host_variables
 from mockymock.splicer.cics_resp import EIB_RESP_NAMES
 from mockymock.splicer.injector import (
     build_chain_check,
@@ -137,6 +138,9 @@ def splice_program(
     eib_resp_names = tuple(n for n in EIB_RESP_NAMES if n in program_words)
     spans: list[tuple[int, int, list[str]]] = []
     sqlstate = any(_SQLSTATE_RE.search(line) for line in lines)
+    # Baselines: a mocked `OPEN cursor` also records the cursor's DECLARE
+    # host variables (splicer.behaviour).
+    cursor_hosts = cursor_host_variables(lines) if behaviour else None
     # EXEC CICS RETURN/XCTL/ABEND plans (issue #215): the site keeps its
     # ordinary dispatch below, wrapped with the early exit.
     cics_terminators = {
@@ -251,6 +255,7 @@ def splice_program(
             eib_resp_names=eib_resp_names,
             real_statement=_statement_lines(own, 1, len(own)),
             behaviour=behaviour,
+            cursor_hosts=cursor_hosts,
         )
         # What the DB2 precompiler puts after the statement for every
         # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).

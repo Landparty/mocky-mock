@@ -50,7 +50,10 @@ def _manifest(kind: str = "baseline", **suite: object) -> dict:
         "entry": "PAYMAIN",
         "program": "src/PAYMAIN.cbl",
         "cut": "tests/PAYMAIN.cut",
-        "generate": "mockymock generate src/PAYMAIN.cbl --real src/PAYCALC.cbl",
+        "generate": (
+            "mockymock generate src/PAYMAIN.cbl --scenarios branches"
+            " --real src/PAYCALC.cbl"
+        ),
         "baseline": None,
     }
     entry.update(suite)
@@ -193,6 +196,10 @@ def test_compare_suite_without_its_frozen_cut_is_an_error(tmp_path: Path, fake_c
             "leaves the pack",
         ),
         ({"generate": None}, "no generate command"),
+        (
+            {"generate": "mockymock generate src/P.cbl --scenarios evil"},
+            "--scenarios not allowed",
+        ),
     ],
 )
 def test_suite_paths_and_commands_are_checked(

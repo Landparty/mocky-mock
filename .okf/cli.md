@@ -347,8 +347,12 @@ xref files as written -- `SET LK-NEG TO TRUE` -- counts for its
 conditional variable, resolved through the layout index), without the
 branch targeting. It runs on a native bundle too, adding only the stubs it
 lacks: cobol-parser 3.1's own list misses a field written only through its
-88s. DFHEIBLK/DFHCOMMAREA are dropped (`without_cics_parameters`;
-CICS supplies them, #245 handles the commarea). The scaffold MOVEs the row
+88s. A CICS program's DFHCOMMAREA and the EIB fields its branch paths test
+are kept (since 2026-11-02; cobol-parser makes them inputs of a CICS
+program): `without_cics_parameters` is gone, and `add_entry_parameters`
+still leaves both out of a USING list it builds itself. A byte no source
+character spells (`X'F3'` for EIBAID) is written as a hex literal
+(`_bundle_rendered_value`). The scaffold MOVEs the row
 before the PERFORM (`generator._entry_parameter_lines`), so `run
 --record-expectations` fills the stubs. After writing, `generate` warns on
 every case with no EXPECT/VERIFY/STUB EXPECT
@@ -1802,7 +1806,7 @@ restores `choices=` also restores the import.
   is empty).
 * Each suite: when the pack has no `.cut` (a first baseline), the
   manifest's `generate` command is run — only `mockymock generate PROGRAM
-  [--real PATH]...`, every path checked to stay inside the pack — with
+  [--scenarios happy|branches|all] [--real PATH]...`, every path checked to stay inside the pack — with
   `-o CUT --force --copybook-path`. Then `run PROGRAM --cut CUT
   --copybook-path` with `--record-baseline .oracle-results/E.json`
   (baseline) or `--baseline FILE --baseline-json .oracle-results/E.json`

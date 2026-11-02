@@ -603,6 +603,13 @@ outcome mid-dispatch); `instrument_real_program` splices a real program
 with the full suite and registry; `cancel_lines` adds `CANCEL "X"` to
 the WORKING-STORAGE reset. Design: [docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
 
+A **dynamic** CALL site (2026-11-02): `real_dynamic_routes(site, suite)`
+lists (program, case ids) of every USE REAL CALL in force, and
+`_route_real_dynamic_calls` wraps the mock dispatch in `EVALUATE TRUE /
+WHEN (cases) AND FUNCTION UPPER-CASE(<identifier>) = "X"` (tally, then the
+statement as written) `/ WHEN OTHER <mock dispatch>`. Design:
+[docs/2026-11-02-real-dynamic-call-design.md](../docs/2026-11-02-real-dynamic-call-design.md).
+
 # Orchestration and Ordering Invariant (orchestrator.py)
 
 `splice_program` computes every span **up front** against the original
@@ -1627,6 +1634,16 @@ prints nothing. Each value is dumped as
 extra source, like a real program), and every instrumented program declares
 `UT-BT-LEN` (`LENGTH_DECLARATION`; local, not EXTERNAL). `build_driver`
 prints `RC <id>: ` RETURN-CODE before each case's END marker.
+
+Version 2 (2026-11-02): `splice_program` computes `cursor_host_variables(lines)`
+(each `EXEC SQL DECLARE c CURSOR` -> its host variables) and passes it to
+`build_site_dispatch(cursor_hosts=...)`; `site_lines` follows an `OPEN c`
+event with an `EVENT: SQL CURSOR <c>` event dumping them. `build_driver`
+takes `returned=` (`returned_items(ast)`: the default entry's PROCEDURE
+DIVISION USING items, plus DFHCOMMAREA when LINKAGE declares it; `_cmd_run`
+passes it in baseline mode) and prints `EVENT: RETURNED LINKAGE` with one
+dump per item before the RC line. `V2_EVENT_PREFIXES` names both events for
+the version-1 comparison in `report/baseline.py`.
 
 ## `record_targets` — `mockymock run --record-expectations` (2026-08-04)
 

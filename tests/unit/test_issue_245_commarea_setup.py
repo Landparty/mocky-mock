@@ -30,8 +30,12 @@ def test_link_server_cases_pass_the_commarea(tmp_path, flags) -> None:
     lines = _generate(tmp_path, "CICSLINK", *flags).splitlines()
     performs = [i for i, line in enumerate(lines) if line.startswith("    PERFORM ")]
     assert performs
+    starts = [i for i, line in enumerate(lines) if line.startswith("TESTCASE ")]
     for index in performs:
-        assert lines[index - 1] == SEED
+        # In the case's own setup, before its PERFORM (the COMMAREA the
+        # caller passes may be MOVEd between them).
+        start = max((s for s in starts if s < index), default=0)
+        assert SEED in lines[start:index]
 
 
 def test_first_time_path_of_a_pseudo_conversational_program_is_kept(
