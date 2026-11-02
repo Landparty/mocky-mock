@@ -26,7 +26,11 @@ from typing import Any
 from mockymock.report.results import BehaviourEvent, TestResult, TestSuiteResult
 
 FORMAT = "mockymock-baseline"
-VERSION = 1
+#: 2 (2026-11-02): adds the `SQL CURSOR <name>` event after a cursor OPEN
+#: and the end-of-case `RETURNED LINKAGE` event. A version-1 baseline is
+#: still read: the comparison leaves those events out of the new run.
+VERSION = 2
+READABLE_VERSIONS = (1, 2)
 
 
 class BaselineError(ValueError):
@@ -83,10 +87,10 @@ def load_baseline(path: Path) -> dict[str, Any]:
         raise BaselineError(f"cannot read baseline {path}: {exc}") from exc
     if not isinstance(document, dict) or document.get("format") != FORMAT:
         raise BaselineError(f"{path} is not a mockymock baseline")
-    if document.get("version") != VERSION:
+    if document.get("version") not in READABLE_VERSIONS:
         raise BaselineError(
             f"{path} is baseline version {document.get('version')!r}; this "
-            f"mockymock reads version {VERSION}"
+            f"mockymock reads versions {', '.join(map(str, READABLE_VERSIONS))}"
         )
     if not isinstance(document.get("cases"), list):
         raise BaselineError(f"{path} has no cases list")
@@ -111,6 +115,8 @@ class BaselineComparison:
     cases: list[CaseComparison]
     #: Input files whose hash differs from the baseline's, by role.
     changed_inputs: list[str] = field(default_factory=list)
+    #: What the comparison could not cover (an older baseline format).
+    notes: list[str] = field(default_factory=list)
 
     @property
     def matches(self) -> bool:
@@ -129,6 +135,7 @@ class BaselineComparison:
             "matches": self.matches,
             "counts": self.counts(),
             "changed_inputs": list(self.changed_inputs),
+            "notes": list(self.notes),
             "cases": [
                 {"name": c.name, "verdict": c.verdict, "differences": c.differences}
                 for c in self.cases
@@ -233,6 +240,7 @@ def compare(
 ) -> BaselineComparison:
     """Compare a run with a baseline, case by case (matched by name)."""
     recorded = {case.get("name"): case for case in baseline.get("cases", [])}
+    legacy = baseline.get("version") == 1
     seen: set[str] = set()
     cases: list[CaseComparison] = []
     for result in suite_result.results:
@@ -241,7 +249,10 @@ def compare(
         if expected is None:
             cases.append(CaseComparison(result.case_name, "new"))
             continue
-        differences = compare_case(expected, _case_document(result))
+        actual = _case_document(result)
+        if legacy:
+            actual = _as_version_1(actual)
+        differences = compare_case(expected, actual)
         cases.append(
             CaseComparison(
                 result.case_name, "differs" if differences else "same", differences
@@ -256,9 +267,30 @@ def compare(
         for role in set(old_inputs) | set(inputs)
         if old_inputs.get(role) != inputs.get(role)
     )
-    return BaselineComparison(
-        suite=suite_result.suite_name, cases=cases, changed_inputs=changed
+    notes = (
+        [
+            "baseline version 1: cursor inputs and returned LINKAGE were not "
+            "recorded, so they are not compared; record a new baseline to "
+            "cover them"
+        ]
+        if legacy
+        else []
     )
+    return BaselineComparison(
+        suite=suite_result.suite_name, cases=cases, changed_inputs=changed, notes=notes
+    )
+
+
+def _as_version_1(case: dict[str, Any]) -> dict[str, Any]:
+    """A case document without the events version 1 did not record."""
+    from mockymock.splicer.behaviour import V2_EVENT_PREFIXES
+
+    events = [
+        event
+        for event in case.get("events") or []
+        if not str(event.get("label", "")).startswith(V2_EVENT_PREFIXES)
+    ]
+    return {**case, "events": events}
 
 
 def format_comparison(comparison: BaselineComparison) -> str:
@@ -286,6 +318,7 @@ def format_comparison(comparison: BaselineComparison) -> str:
                 "  the .cut file changed: its mocks may answer differently "
                 "than when the baseline was recorded"
             )
+    lines.extend(f"  note: {note}" for note in comparison.notes)
     return "\n".join(lines)
 
 

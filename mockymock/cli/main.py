@@ -2201,6 +2201,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             record_targets.setdefault(stub.case_index, []).append(stub.data_name)
 
     record_conditions = condition_names(result.ast) if record_targets else set()
+    from mockymock.splicer.behaviour import returned_items
+
     artifact = build_driver(
         suite,
         reset_lines,
@@ -2211,6 +2213,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
         condition_names=record_conditions,
         behaviour=behaviour,
+        returned=returned_items(result.ast) if behaviour else (),
     )
 
     real_sources: list[tuple[str, list[str]]] = []

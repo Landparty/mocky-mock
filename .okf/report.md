@@ -187,6 +187,11 @@ first differing event (which value, with the text when both are printable
 ASCII), the first differing output line, and RETURN-CODE or status changes.
 Only `differs` fails the run (`BaselineComparison.matches`).
 `format_comparison` is the console text, `to_dict()` the `--baseline-json`.
+Baseline `VERSION` is 2 (cursor inputs, returned LINKAGE); `load_baseline`
+also reads version 1 (`READABLE_VERSIONS`), and `compare()` then drops the
+version-2 events from the new run (`_as_version_1`) and adds a
+`BaselineComparison.notes` entry (`notes` in `to_dict()`, `note:` lines in
+the console text).
 Design: docs/2026-11-01-baseline-design.md.
 
 ## Bug-hunt corrections (2026-10-05)

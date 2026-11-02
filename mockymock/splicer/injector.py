@@ -244,6 +244,7 @@ def build_site_dispatch(
     eib_resp_names: tuple[str, ...] = (),
     real_statement: list[str] | None = None,
     behaviour: bool = False,
+    cursor_hosts: dict[str, list[str]] | None = None,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
 
@@ -251,6 +252,8 @@ def build_site_dispatch(
     branch prints the site's EVENT marker and the bytes of what the
     statement sends out (`splicer.behaviour`), after any FROM copy and
     before the mock body. A USE REAL CALL branch prints nothing.
+    `cursor_hosts` maps each cursor to its DECLARE's host variables, so a
+    mocked `OPEN` also records what the cursor's query reads.
 
     `real_statement` is the site's own statement text (one entry per
     source line, sentence period dropped). A case whose directive is a
@@ -470,6 +473,7 @@ def build_site_dispatch(
                         statement_text,
                         directive.category.value,
                         "                   ",
+                        cursor_hosts=cursor_hosts,
                     )
                 )
         copy_into = into_move(

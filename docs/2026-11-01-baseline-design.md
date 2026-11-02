@@ -28,8 +28,17 @@ For each test case, in order:
     `OMITTED`, `ADDRESS OF`) is recorded as `-`, so positions stay aligned.
   - WRITE / REWRITE / RELEASE: the record, after the FROM copy.
   - EXEC SQL: each host variable outside an INTO list, in order, once.
+    An `OPEN` of a cursor is followed by a `SQL CURSOR <name>` event with
+    the host variables of the cursor's `DECLARE` (what DB2 reads at OPEN;
+    the DECLARE itself is not a statement that runs). Since version 2.
   - EXEC CICS: the FROM and COMMAREA items.
   - Other boundaries (OPEN, READ, ACCEPT, ...): the event alone.
+- **What the program hands back to its caller**, at the end of each case,
+  as a `RETURNED LINKAGE` event: the bytes of each item of its
+  `PROCEDURE DIVISION USING` and, for a CICS program, its `DFHCOMMAREA`.
+  A called subprogram or a CICS `LINK` target does all its work through
+  these, so without them a change to its result compared as the same.
+  Since version 2.
 - **The program's own DISPLAY output** while the case ran.
 - **The RETURN-CODE** the case ended with, and its status (passed, failed,
   crashed).
@@ -51,7 +60,7 @@ there and ends in `+`.
 ```json
 {
   "format": "mockymock-baseline",
-  "version": 1,
+  "version": 2,
   "suite": "ORDMAIN load module: validate, publish, log",
   "recorded_at": "2026-11-01T22:10:00+00:00",
   "mockymock": "0.12.0",
@@ -70,6 +79,11 @@ there and ends in `+`.
   ]
 }
 ```
+
+Version 2 (2026-11-02) added the cursor and returned-LINKAGE events.
+A version-1 baseline is still read: the comparison leaves those events out
+of the new run and adds a note (`notes` in `--baseline-json`) saying they
+were not compared until a new baseline is recorded.
 
 `inputs` holds the SHA-256 of the `.cut`, the entry program and each real
 program. A comparison lists the ones that changed. A changed `.cut` is called
