@@ -455,3 +455,30 @@ def test_generate_keeps_the_bare_perform_when_the_main_line_is_refused(
     cases = parse_cut(_generate(tmp_path, UNMOCKABLE_TAIL)).test_cases
     assert {c.perform_thru for c in cases} == {None}
     assert "PERFORM their entry paragraph alone" in capsys.readouterr().err
+
+
+def test_comment_entries_become_comments():
+    """NIST SG101A / RW101A: AUTHOR and INSTALLATION text on the lines below
+    the paragraph name compiled as code in free form."""
+    from mockymock.cli.main import comment_out_comment_entries
+
+    lines = [
+        "IDENTIFICATION DIVISION.",
+        "PROGRAM-ID.",
+        "    SG101A.",
+        "AUTHOR.",
+        "    FEDERAL COMPILER TESTING CENTER.",
+        "INSTALLATION. GSA",
+        "    SOFTWARE DEVELOPMENT OFFICE.",
+        "",
+        "    FALLS CHURCH VIRGINIA 22041.",
+        "ENVIRONMENT DIVISION.",
+        "    AUTHOR.",
+    ]
+    out = comment_out_comment_entries(lines)
+    assert out[:4] == lines[:4]
+    assert out[4] == "      *> FEDERAL COMPILER TESTING CENTER."
+    assert out[5] == lines[5]
+    assert out[6].startswith("      *> SOFTWARE")
+    assert out[8].startswith("      *> FALLS")
+    assert out[9:] == lines[9:]

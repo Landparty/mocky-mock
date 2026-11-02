@@ -19,6 +19,16 @@ prevent.
 * A mocked statement after a finished sentence on its line (`PERFORM A. CLOSE
   F.`) is spliced, the sentence kept on its own line
   (`source_map.closed_sentence_lead`, `BoundarySite.span_lead`).
+* Falls back to the bare PERFORM when `lint` refuses more of the main-line
+  suite (`cli.main._main_line_or_bare`); which terminators run inside a
+  PERFORM is computed per range (`_plans._perform_frame_reach`); a count
+  after a branch holding a GO TO is not exact; reset MOVEs past 200
+  characters are wrapped (`driver.wrap_words`, NC207A's 48-deep `IN` chain
+  passed cobc's 512-byte line limit).
+* AUTHOR / INSTALLATION / DATE-WRITTEN / DATE-COMPILED / SECURITY / REMARKS
+  comment-entry continuation lines are commented out before the driver is
+  inserted (`cli.main.comment_out_comment_entries`): cobc's -std=mvs read an
+  indented second line as code (NIST RW101A-RW104A, SG101A).
 * Tests: `tests/unit/test_main_line_cases.py`,
   `tests/integration/test_main_line_case.py`; NIST numbers in
   `examples/nist-cobol85/generated/README.md`.

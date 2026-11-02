@@ -4232,6 +4232,7 @@ def _insert_driver_with_origins(
     line) is a routine overflow source, and it is not something any `.cut`
     edit can fix. Knowing the exact inserted range is what keeps that
     attribution a fact rather than a guess."""
+    lines = comment_out_comment_entries(lines)
     result: list[str] = []
     inserted: set[int] = set()
     inserted_ws = False
@@ -4305,6 +4306,43 @@ def _insert_driver_with_origins(
             result, inserted, program_end=getattr(artifact, "program_end", False)
         )
     return result, inserted
+
+
+#: An IDENTIFICATION DIVISION paragraph whose body is a comment-entry.
+_COMMENT_ENTRY_RE = re.compile(
+    r"^(\s*)(AUTHOR|INSTALLATION|DATE-WRITTEN|DATE-COMPILED|SECURITY|REMARKS)" r"\s*\.",
+    re.IGNORECASE,
+)
+
+
+def comment_out_comment_entries(lines: list[str]) -> list[str]:
+    """`lines` with the continuation lines of every comment-entry (`AUTHOR.`
+    / `INSTALLATION.` / ... followed by free text in Area B, NIST SG101A's
+    `FEDERAL COMPILER TESTING CENTER.`) turned into `*>` comments, line for
+    line. A fixed-format compiler ends a comment-entry at the next Area A
+    word; in the free-form source mockymock compiles, cobc read the text
+    as code. A continuation line is one indented deeper than its header,
+    up to the first that is not; only the IDENTIFICATION DIVISION (before
+    the first other DIVISION header) is looked at."""
+    result = list(lines)
+    header_indent: int | None = None
+    for index, line in enumerate(lines):
+        code = line.split("*>", 1)[0]
+        if not code.strip():
+            continue
+        if re.search(r"\b(ENVIRONMENT|DATA|PROCEDURE)\s+DIVISION\b", code, re.I):
+            break
+        indent = len(code) - len(code.lstrip())
+        if header_indent is not None and indent > header_indent:
+            if len(line) > 6 and line[6] in "*/" and not line[:6].strip():
+                continue  # a fixed-format comment line already
+            result[index] = "      *> " + line.strip()
+            continue
+        header_indent = None
+        match = _COMMENT_ENTRY_RE.match(code)
+        if match is not None:
+            header_indent = len(match.group(1))
+    return result
 
 
 def _ends_sentence(line: str) -> bool:

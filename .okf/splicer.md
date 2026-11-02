@@ -1283,8 +1283,15 @@ program. A STOP RUN/GOBACK/EXIT PROGRAM such a case reaches, that the chain
 rules above refuse, ends it instead with `MOVE "Y" TO UT-EARLY-EXIT` + `GO
 TO UT-PROGRAM-END` (`refusal.PROGRAM_END_PARAGRAPH`) -- provided no PERFORM,
 THRU range, SECTION PERFORM or SORT/MERGE/XML procedure of the program can
-reach its paragraph (`_unchecked_perform_reach` over the whole program,
-`_plans._main_line_end_problem`). Then the driver's own PERFORM is the only
+reach its paragraph (`_plans._perform_frame_reach`, `_main_line_end_problem`).
+That walk starts from each range, follows every GO TO out of it and the
+paragraphs control then falls into, but not past the range's own end: a
+PERFORM of a paragraph the main line also GO TOs returns at its end (NIST
+NC105A's `PERFORM MOVE-WRITE-F1-32`), where `_reachable_paragraphs`' fall-
+through closure would have it reach the rest of the program. With EXEC
+SQL/CICS in the program (WHENEVER / HANDLE CONDITION jump without a GO TO
+statement) or a range or target it cannot place, it uses
+`_reachable_paragraphs` instead. Then the driver's own PERFORM is the only
 one active when it runs, and the GO TO stays inside that PERFORM's range:
 the driver PERFORMs `THRU UT-PROGRAM-END` wherever a case names the last
 paragraph (`build_driver(program_end=refusal.program_end_thru(...))`), and

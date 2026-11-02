@@ -716,7 +716,14 @@ Rules:
   Mocks are computed from the whole range. NIST CCVS85's `OPEN-FILES`
   GO TOs on to the tests, so its cases used to test that paragraph alone.
   A program that also PERFORMs its terminator's paragraph keeps the bare
-  PERFORM.
+  PERFORM. So does a suite `lint` refuses more cases of than of the same
+  scenarios with a bare PERFORM (`cli.main._main_line_or_bare`, a note on
+  stderr): the longer range can reach statements no MOCK replaces (NIST
+  IX217A's WRITE ... INVALID KEY with no END-WRITE). Identical check lines
+  in a case are written once.
+- Exact counts (`analysis.exact_counts`): a site after a branch holding a GO
+  TO (`READ F AT END GO TO P-END`) gets no exact VERIFY count, like one
+  after a branch holding a STOP RUN (NIST RW301M).
 - `--per-paragraph` PERFORMs a paragraph `THRU` the exit the program
   itself names (`ProgramContext.thru_exit`: every `PERFORM X` in the
   program says `THRU` the same paragraph), and computes its mocks from that
