@@ -1698,3 +1698,18 @@ docs/2026-08-04-record-expectations-design.md.
   into results.
 - [report](report.md) — the `RECORD` marker in `parse_stdout`'s protocol
   table, and `record_rewrite.py`'s post-run `.cut` rewrite.
+
+## Merged case branches
+
+`build_site_dispatch` ends with `merge_identical_branches`: case branches of
+one site whose statements are identical become one branch named by stacked
+`WHEN`s, and a run of three or more consecutive case ids by one `WHEN "a"
+THRU "b"` (`_case_selectors`; ids are fixed-width digits, `SUITE` stays on its
+own). A generated suite mocks most sites alike in every case: HUGE01's 300
+WRITE sites x 305 cases spliced 490k lines before, which gcc could not
+compile.
+
+`UT-PASSED-ARG-<n>` in a mock body (`passed_argument_names`) becomes the
+quoted name of the site's n-th USING argument, so one MOCK answering several
+CALL sites can tell them apart (the generator's DL/I row dispatch uses
+`UT-PASSED-ARG-2 = "DB-PCB"`).

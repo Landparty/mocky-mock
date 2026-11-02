@@ -1620,3 +1620,17 @@ whose `MOCK READ <file>` returns the matching record once (`MOVE <item> TO
 <field>`, other fields from a seeded `ValueFactory`) and then the
 placeholder's end-of-file body. Design:
 [docs/2026-11-02-real-dynamic-call-design.md](../docs/2026-11-02-real-dynamic-call-design.md).
+
+## Generated DL/I, MQ and CICS replies (2026-11-02 stress test)
+
+- One `MOCK CALL "CBLTDLI"` answers every DL/I call, so with several
+  fixtures `_dli_rows_directive` dispatches on the captured function code
+  (and `UT-PASSED-ARG-2` when one function is used on several PCBs): each call
+  gets the row the bundle generated for it, and a pinned PCB status is kept.
+- The end-of-data reply (`_call_loop_end_lines`) goes only to the calls a
+  loop guard watches; a function/PCB gate is used when another call of the
+  key would otherwise receive it (`_dli_needs_gate`), the plain tally gate
+  when the only other call is a priming call.
+- `_mq_success_reply` leaves a CompCode / Reason the scenario pinned.
+- `mockymock/copybooks/system/` ships DFHAID and DFHBMSCA, searched after the
+  user's own copybook paths (`discovery.with_system_copybooks`).

@@ -336,7 +336,9 @@ def _apply_config_to_args(
             from mockymock.cli.discovery import effective_copybook_paths
 
             resolved = effective_copybook_paths(program_path, resolved)
-        resolved = _with_copybook_aliases(resolved, config)
+        from mockymock.cli.discovery import with_system_copybooks
+
+        resolved = with_system_copybooks(_with_copybook_aliases(resolved, config))
         args.copybook_path = resolved
     if hasattr(args, "seed"):
         args.seed = resolve(args.seed, config.seed)
@@ -5526,6 +5528,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        # The real command line: a runner that times this process out
+        # must not leave its cobc / test binary running.
+        from mockymock.runtime.native_toolchain import install_termination_handler
+
+        install_termination_handler()
     parser = build_parser()
     try:
         args = parser.parse_args(argv)

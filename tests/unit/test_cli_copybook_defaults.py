@@ -171,3 +171,18 @@ def test_hint_stays_one_line_when_nothing_looks_like_the_member(tmp_path):
     (tmp_path / "copybooks").mkdir()
     error = CopybookNotFoundError("GREETING", [str(tmp_path / "copybooks")])
     assert copybook_not_found_hint(error) == copybook_not_found_hint()
+
+
+def test_system_copybooks_follow_the_users_own_paths(tmp_path):
+    """CICS's DFHAID / DFHBMSCA ship with mockymock: an application export
+    never holds them, so ORDINQ's `COPY DFHAID` refused the whole suite
+    (stress test 2026-11-02). They come last, so the user's copy wins."""
+    from mockymock.cli.discovery import SYSTEM_COPYBOOK_DIR, with_system_copybooks
+
+    own = str(tmp_path)
+    assert with_system_copybooks([own]) == [own, str(SYSTEM_COPYBOOK_DIR)]
+    assert with_system_copybooks([]) == []
+    twice = with_system_copybooks(with_system_copybooks([own]))
+    assert twice == [own, str(SYSTEM_COPYBOOK_DIR)]
+    assert (SYSTEM_COPYBOOK_DIR / "DFHAID.cpy").is_file()
+    assert (SYSTEM_COPYBOOK_DIR / "DFHBMSCA.cpy").is_file()

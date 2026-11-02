@@ -307,8 +307,10 @@ class TestCodegen:
         )
         text = "\n".join(block)
         assert 'WHEN "001"' in text and 'WHEN "002"' in text
-        assert text.count('CALL "PAYCALC" USING PAY-AREA') == 2
-        assert text.count("ADD 1 TO UT-PAYCALC-TALLY") == 2
+        # Both cases run the same branch, emitted once (stress test
+        # 2026-11-02: one copy per case made HUGE01 uncompilable).
+        assert text.count('CALL "PAYCALC" USING PAY-AREA') == 1
+        assert text.count("ADD 1 TO UT-PAYCALC-TALLY") == 1
 
 
 class TestGenerateReal:

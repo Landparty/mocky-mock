@@ -1622,7 +1622,9 @@ _DLI_CALL_END = {
 }
 
 
-def _mq_success_reply(body: list[str], site: BoundarySite) -> list[str]:
+def _mq_success_reply(
+    body: list[str], site: BoundarySite, pinned: frozenset[str] = frozenset()
+) -> list[str]:
     """`body` with an MQI call's CompCode and Reason -- by the MQI's fixed
     convention its last two USING arguments -- answered MQCC_OK (0) and
     MQRC_NONE (0) instead of the random numbers the fixture row generated
@@ -1639,7 +1641,12 @@ def _mq_success_reply(body: list[str], site: BoundarySite) -> list[str]:
     names = [str(getattr(param, "name", "") or "") for param in using]
     if len(names) < 2 or not names[-1] or not names[-2]:
         return body
-    targets = {name.upper() for name in names[-2:]}
+    # A CompCode/Reason the scenario pinned is the point of the case (the
+    # `IF WS-COMPCODE NOT = 0` arm after an MQGET): its value stays.
+    keep = [name for name in names[-2:] if name.upper() not in pinned]
+    if not keep:
+        return body
+    targets = {name.upper() for name in keep}
     kept = [
         line
         for line in body
@@ -1648,7 +1655,7 @@ def _mq_success_reply(body: list[str], site: BoundarySite) -> list[str]:
             and line.upper().rsplit(" TO ", 1)[-1].strip() in targets
         )
     ]
-    return kept + [f"MOVE 0 TO {name}" for name in names[-2:]]
+    return kept + [f"MOVE 0 TO {name}" for name in keep]
 
 
 def _dli_success_reply(body: list[str], site: BoundarySite) -> list[str]:
@@ -1811,15 +1818,44 @@ def _call_loop_end_lines(
         if other.category is MockCategory.CALL and site.keys[0] in other.keys
     ] or [site]
     replies = [_call_end_reply(other, context) for other in sites]
-    waits_on_reply = any(
+    watched = [
         reply is not None
         and site_in_loop(other, context.looped)
-        and loop_guard_words(other, context.guards)
-        & _reply_watched_names(other, reply[1], context)
+        and bool(
+            loop_guard_words(other, context.guards)
+            & _reply_watched_names(other, reply[1], context)
+        )
         for other, reply in zip(sites, replies, strict=True)
-    )
-    if not waits_on_reply:
+    ]
+    if not any(watched):
         return []
+    if any(watched) and not all(
+        flag for flag, reply in zip(watched, replies, strict=True) if reply is not None
+    ):
+        # Only a loop that waits on a call's reply needs the end-of-data
+        # status. A get call whose reply no loop reads (an IMS MPP's GU on
+        # its DB PCB inside the message loop) keeps the row's own status:
+        # answering GE there too would send every case down the not-found
+        # path, so the found path and what it calls were never run.
+        kept = [
+            reply if flag else None
+            for flag, reply in zip(watched, replies, strict=True)
+        ]
+        # Every site that still needs a reply needs the same one. A tally
+        # gate alone would also hand it to the other calls of the key after
+        # the first (the ISRT, the GU on a database PCB): gate on the
+        # function code and PCB then. A priming GN outside the loop that
+        # matches the looped GN (issue #317) is the first call, so the
+        # tally gate alone is right for it.
+        distinct = {reply[0] for reply in kept if reply is not None}
+        if len(distinct) == 1:
+            if site.keys[0].upper() in _DLI_CALL_INTERFACES and _dli_needs_gate(
+                sites, watched, replies, context
+            ):
+                gated = _dli_end_lines_by_function(site, sites, kept, context, tally)
+                if gated is not None:
+                    return gated
+            replies = [reply for reply in kept if reply is not None]
     if len({reply[0] if reply else None for reply in replies}) != 1:
         gated = _dli_end_lines_by_function(site, sites, replies, context, tally)
         if gated is not None:
@@ -1836,6 +1872,32 @@ def _call_loop_end_lines(
     if tally is None:
         return moves
     return [f"IF {tally} > 1", *(f"    {move}" for move in moves), "END-IF"]
+
+
+def _dli_needs_gate(
+    sites: list[BoundarySite],
+    watched: list[bool],
+    replies: list[tuple[tuple[tuple[str, str], ...], set[str]] | None],
+    context: ProgramContext,
+) -> bool:
+    """Whether the key has a call the end-of-data reply must skip that is
+    not simply the first call: a non-get call (ISRT, REPL) or a get call
+    whose function code and PCB no looped call shares."""
+
+    def call_of(other: BoundarySite) -> tuple[str, str]:
+        using = list(getattr(other.statement, "using_parameters", None) or [])
+        function = _dli_function(str(using[0].name), context) if using else ""
+        pcb = str(using[1].name) if len(using) > 1 else ""
+        return function.strip().upper(), pcb.upper()
+
+    looped = {
+        call_of(other) for other, flag in zip(sites, watched, strict=True) if flag
+    }
+    return any(
+        reply is None or call_of(other) not in looped
+        for other, flag, reply in zip(sites, watched, replies, strict=True)
+        if not flag
+    )
 
 
 def _dli_end_lines_by_function(
@@ -1882,10 +1944,24 @@ def _dli_end_lines_by_function(
         "*> the end-of-data reply is gated on the DL/I function code, "
         "since one mock answers every call of this key"
     ]
+    pcbs_of: dict[str, set[str]] = {}
+    for _, names in _dli_sites(context):
+        if len(names) >= 2:
+            function = _dli_function(names[0], context).strip().upper()
+            pcbs_of.setdefault(function, set()).add(names[1].upper())
     for moves, literals in functions.items():
         condition = " OR ".join(f"{capture} = {literal}" for literal in literals)
         if len(literals) > 1:
             condition = f"({condition})"
+        shared = any(
+            len(pcbs_of.get(literal.strip('"'), ())) > 1 for literal in literals
+        )
+        target = moves[0][1] if moves else ""
+        if shared and target.endswith("(11:2)"):
+            # One function on several PCBs (an MPP's message GU and its
+            # GU on a database PCB): only the call on the PCB this reply
+            # is for ends the loop.
+            condition = f'{condition} AND UT-PASSED-ARG-2 = "{target[:-6].upper()}"'
         if tally is not None:
             condition = f"{tally} > 1 AND {condition}"
         lines.append(f"IF {condition}")
@@ -3345,7 +3421,7 @@ def _bundle_directive_for(
             fixture, loop_todo = _without_loop_control(fixture, site, source)
         body = _single_row_body(fixture, source, pinned) + loop_todo
         if category is MockCategory.CALL:
-            body = _dli_success_reply(_mq_success_reply(body, site), site)
+            body = _dli_success_reply(_mq_success_reply(body, site, pinned), site)
         if category is MockCategory.DLI and registry.known(category, fixture.key):
             body = body + _dli_loop_end_lines(
                 site, source, registry.name(category, fixture.key)
@@ -3387,6 +3463,95 @@ def _bundle_directive_for(
     lines.extend(f"    {line}" for line in body)
     lines.append("END-MOCK")
     return lines, call_count_override
+
+
+def _dli_rows_directive(
+    fixtures: list[BoundaryFixture],
+    mockymock_keys: dict[tuple[MockCategory, str], BoundarySite],
+    registry: TallyRegistry,
+    placeholder_keys: frozenset[tuple[str, str]],
+    source: ProgramContext,
+    pinned: frozenset[str],
+) -> tuple[list[str], CallCountOverride | None] | None:
+    """One `MOCK CALL "CBLTDLI"` answering each DL/I call with the row the
+    bundle generated for THAT call, or None when this is not such a group.
+
+    The bundle gives every CALL site its own fixture (the message GU on the
+    I/O PCB, the GU on a database PCB with the segment and the status the
+    scenario needs, the ISRT reply), but one MOCK answers every site of the
+    key, and it used to render the first fixture alone: the segment and
+    the DB PCB status a branch needed were dropped, so an MPP's found path
+    (and every subprogram it calls) never ran. The body now dispatches on
+    the function code the call passed and, when one function is used on
+    several PCBs, on the PCB it passed (`UT-PASSED-ARG-2`, which the
+    splicer replaces with the site's own argument name)."""
+    first = fixtures[0]
+    if first.category != MockCategory.CALL.value:
+        return None
+    if first.key.upper() not in _DLI_CALL_INTERFACES:
+        return None
+    if any((f.category, f.key) in placeholder_keys for f in fixtures):
+        return None
+    site = mockymock_keys.get((MockCategory.CALL, first.key))
+    if site is None:
+        return None
+    capture = next(
+        (
+            line.split(" INTO ", 1)[1].strip()
+            for line in source.captures_for(MockCategory.CALL, first.key)
+            if line.upper().startswith("CAPTURE ARG 1 INTO ")
+        ),
+        None,
+    )
+    if capture is None:
+        return None
+    by_line = {other.line: (other, names) for other, names in _dli_sites(source)}
+    rows: dict[tuple[str, str], tuple[BoundaryFixture, BoundarySite]] = {}
+    pcbs_of: dict[str, set[str]] = {}
+    for _other, names in by_line.values():
+        if len(names) >= 2:
+            function = _dli_function(names[0], source).strip().upper()
+            pcbs_of.setdefault(function, set()).add(names[1].upper())
+    for fixture in fixtures:
+        found = by_line.get(fixture.line or -1)
+        if found is None or len(found[1]) < 2 or not fixture.sequence:
+            return None
+        other, names = found
+        function = _dli_function(names[0], source).strip().upper()
+        rows.setdefault((function, names[1].upper()), (fixture, other))
+    if len(rows) < 2:
+        return None
+    body: list[str] = [
+        "*> each DL/I call gets the row generated for it: by the function code"
+        " it passed, and the PCB when one function is used on several",
+        "EVALUATE TRUE",
+    ]
+    end_lines: list[str] = []
+    if registry.known(MockCategory.CALL, first.key):
+        end_lines = _call_loop_end_lines(
+            site, source, registry.name(MockCategory.CALL, first.key)
+        )
+    ends_loop = bool(end_lines) and not end_lines[0].startswith("*> TODO")
+    for (function, pcb), (fixture, other) in rows.items():
+        fixture, todo = _without_loop_control(fixture, other, source)
+        # The end-of-data reply below ends the loop: no TODO saying so.
+        row = _single_row_body(fixture, source, pinned) + ([] if ends_loop else todo)
+        status_pinned = bool(source.names_under(pcb) & pinned) if pcb else False
+        if not status_pinned:
+            row = _dli_success_reply(row, other)
+        condition = f'{capture} = "{function}"'
+        if len(pcbs_of.get(function, ())) > 1:
+            condition += f' AND UT-PASSED-ARG-2 = "{pcb}"'
+        body.append(f"    WHEN {condition}")
+        body.extend(f"        {line}" for line in row or ["CONTINUE"])
+    body.append("END-EVALUATE")
+    override: CallCountOverride | None = None
+    body += end_lines
+    body = _with_captures(MockCategory.CALL, first.key, body, source)
+    lines = [_directive_header(MockCategory.CALL, first.key, site)]
+    lines.extend(f"    {line}" for line in body)
+    lines.append("END-MOCK")
+    return lines, override
 
 
 def _merged_status_only_body(fixtures: list[BoundaryFixture]) -> list[str]:
@@ -3458,6 +3623,12 @@ def _bundle_directive_for_group(
     as one site (a priming READ plus the READ inside the loop). Those
     render from the first fixture alone, whose rows end the loop; merging
     them as status-only left the READ mock empty and the loop endless."""
+    if len(fixtures) > 1 and source is not None:
+        merged = _dli_rows_directive(
+            fixtures, mockymock_keys, registry, placeholder_keys, source, pinned
+        )
+        if merged is not None:
+            return merged
     if len(fixtures) == 1 or any(f.direction != "STATUS_ONLY" for f in fixtures):
         return _bundle_directive_for(
             fixtures[0], mockymock_keys, registry, placeholder_keys, source, pinned
