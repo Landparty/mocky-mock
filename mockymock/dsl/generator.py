@@ -421,6 +421,8 @@ class ProgramContext:
     #: for the names under a CALL argument (a PCB's status field, an 88).
     data_items: list[dict] = field(default_factory=list)
     surface: MockSurface | None = None
+    #: False: never `main_line_thru` (cli.main._main_line_or_bare).
+    main_line: bool = True
     #: `main_line_thru`'s answer per entry (uppercased).
     _main_line: dict[str, str | None] = field(
         default_factory=dict, repr=False, compare=False
@@ -616,6 +618,8 @@ class ProgramContext:
         it falls into ends the case (`TerminatorPlan.exit_kind`
         "PROGRAM"). A program whose terminators sit in paragraphs it also
         PERFORMs keeps the bare PERFORM: the range would be refused."""
+        if not self.main_line:
+            return None
         key = entry.upper()
         if key not in self._main_line:
             self._main_line[key] = self._compute_main_line_thru(entry)

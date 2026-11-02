@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import re
 import shutil
@@ -1330,6 +1331,20 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             )
 
     output_path = _default_output(args, source_path)
+    if bundle is not None and "THRU" in cut_text:
+        cut_text = _main_line_or_bare(
+            source_path,
+            output_path,
+            args,
+            cut_text,
+            lambda: scaffold_cut(
+                program_name,
+                surface,
+                bundle,
+                frozenset(placeholder_pairs),
+                dataclasses.replace(program_context, main_line=False, _main_line={}),
+            ),
+        )
     case_count = cut_text.count("TESTCASE ")
     if case_count == 0 and bundle is None:
         # A suite with no TESTCASE runs as "0 run, 0 failed" and fails;
@@ -1472,6 +1487,49 @@ def _warn_asserting_nothing(command: str, cut_text: str, *, stubs_count: bool) -
     for label in empty:
         print(f"  {label}")
     return len(empty)
+
+
+def _refused_cases(source_path: Path, cut_path: Path, cut_text: str, args) -> int:
+    """How many of `cut_text`'s test cases `lint` refuses (all of them on a
+    whole-program refusal), checked through a scratch copy at `cut_path`'s
+    location."""
+    from mockymock.cli.checks import run_static_checks
+
+    scratch = cut_path.with_name(f".{cut_path.name}.main-line-check")
+    try:
+        scratch.parent.mkdir(parents=True, exist_ok=True)
+        scratch.write_text(cut_text, encoding="utf-8")
+        checked = run_static_checks(source_path, scratch, args.copybook_path)
+    finally:
+        scratch.unlink(missing_ok=True)
+    cases = len(checked.suite.test_cases) if checked.suite is not None else 0
+    if checked.problems:
+        return max(cases, 1)
+    return len(checked.unmocked_reasons)
+
+
+def _main_line_or_bare(
+    source_path: Path, cut_path: Path, args, main_line: str, bare
+) -> str:
+    """`main_line` (cases PERFORMing THRU the program's last paragraph,
+    `ProgramContext.main_line_thru`) unless `lint` refuses more of its
+    cases than of `bare()`'s, the same scenarios with a bare PERFORM of
+    the entry. Running the whole main line reaches more of the program,
+    and with it statements no generated MOCK can replace (NIST IX217A: a
+    WRITE INVALID KEY with no END-WRITE), where the shorter case ran."""
+    refused = _refused_cases(source_path, cut_path, main_line, args)
+    if refused == 0:
+        return main_line
+    alternative = bare()
+    if _refused_cases(source_path, cut_path, alternative, args) < refused:
+        print(
+            "mockymock generate: note: running the whole main line (PERFORM "
+            "THRU the last paragraph) would reach statements lint refuses -- "
+            "the cases PERFORM their entry paragraph alone instead",
+            file=sys.stderr,
+        )
+        return alternative
+    return main_line
 
 
 def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:

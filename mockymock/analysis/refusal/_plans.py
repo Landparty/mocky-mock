@@ -47,6 +47,7 @@ from mockymock.splicer.source_map import (
 from ._reachability import (
     _closed_perform_ranges,
     _expand_thru_range,
+    _falls_through,
     _fallthrough_safe_sections,
     _find_sort_merge_statements,
     _find_statements_of_type,
@@ -1046,12 +1047,7 @@ def find_terminator_plans(
                 # (2026-11-02): a terminator it only falls or jumps into,
                 # never PERFORMs, can end it with GO TO UT-PROGRAM-END.
                 if perform_entered is None:
-                    perform_entered = _unchecked_perform_reach(
-                        program,
-                        {p.paragraph_name for p in _all_paragraphs(procedure)},
-                        set(),
-                        reach_cache,
-                    )
+                    perform_entered = _perform_frame_reach(program, reach_cache)
                 end_problem = _main_line_end_problem(site, perform_entered)
                 if end_problem is None and existing is None:
                     plans_by_statement[key] = TerminatorPlan(
@@ -1196,26 +1192,19 @@ def _main_line_end_problem(site, perform_entered: dict[str, str]) -> str | None:
     return _terminator_return_code(site.statement)[1]
 
 
-def _unchecked_perform_reach(
-    program,
-    reachable: set[str],
-    checked_ids: set[int],
-    cache: dict[tuple[str, str | None], set[str]],
-) -> dict[str, str]:
-    """paragraph name -> a description of a PERFORM-like edge, among the
-    paragraphs in `reachable`, that reaches it but is not one of
-    `checked_ids` (the case's chain edges, each of which gets an early-exit
-    check after it): a `PERFORM ... THRU`, a `PERFORM ... TIMES`, any
-    PERFORM inside a CALL/file statement's clause body, or a SORT/MERGE
-    INPUT/OUTPUT or XML PARSE PROCESSING PROCEDURE. Keyed by bare name like
-    the rest of the planner, so it is over-inclusive for the nameless
-    main lines, never under-inclusive."""
+def _perform_edges(
+    program, reachable: set[str] | None, checked_ids: set[int]
+) -> list[tuple[str, str | None, str]]:
+    """(start, thru, description) of every PERFORM-like edge held by a
+    paragraph in `reachable` (every paragraph when None) other than the
+    PERFORMs in `checked_ids`: out-of-line PERFORMs, SORT/MERGE INPUT/OUTPUT
+    PROCEDUREs and XML PARSE PROCESSING PROCEDUREs."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
-        return {}
+        return []
     edges: list[tuple[str, str | None, str]] = []
     for paragraph in _all_paragraphs(procedure):
-        if paragraph.paragraph_name not in reachable:
+        if reachable is not None and paragraph.paragraph_name not in reachable:
             continue
         for perform in _find_statements_of_type(paragraph.statements, PerformStatement):
             if id(perform) in checked_ids or not perform.target_paragraph:
@@ -1261,8 +1250,129 @@ def _unchecked_perform_reach(
                         f"{statement.location.line}",
                     )
                 )
+    return edges
+
+
+def _perform_frame_reach(
+    program, cache: dict[tuple[str, str | None], set[str]]
+) -> dict[str, str]:
+    """paragraph name -> a PERFORM-like edge of the program (`_perform_edges`)
+    whose PERFORM can still be active while that paragraph runs.
+
+    From each edge's range (its paragraphs, or a SECTION's members), the
+    walk follows every GO TO out of the range, and from each GO TO target
+    the paragraphs control falls into (`_falls_through`); the range's own
+    end returns from the PERFORM, so the walk does not fall past it. That
+    is narrower than `_reachable_paragraphs`, whose fall-through closure
+    falls past ANY paragraph that is a GO TO target somewhere, even where
+    a PERFORM of it returns at its end: NIST's `PERFORM MOVE-WRITE-F1-32`
+    of a paragraph the main line also GO TOs looked as if it reached the
+    whole rest of the program. A program with EXEC SQL or EXEC CICS (a
+    WHENEVER or HANDLE CONDITION is a GO TO no statement shows), a range
+    that cannot be expanded, or a GO TO target that cannot be placed in
+    source order falls back to `_reachable_paragraphs` (over-inclusive,
+    never under)."""
+    from cobolparser.models.sql_statements import ExecSQLStatement
+    from cobolparser.parsers.statements.ibm_exec_statements import (
+        ExecCicsStatement,
+    )
+
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return {}
+    edges = _perform_edges(program, None, set())
+    ordered = _source_ordered_paragraphs(procedure)
+    paragraphs = _all_paragraphs(procedure)
+    precise = ordered is not None and not any(
+        _find_statements_of_type(p.statements, (ExecSQLStatement, ExecCicsStatement))
+        for p in paragraphs
+    )
+    sequence = ordered or []
+    names = [p.paragraph_name for p in sequence]
+    index: dict[str, int] = {}
+    for position, name in enumerate(names):
+        if name in index:
+            precise = False  # a duplicated name cannot be placed
+        index[name] = position
+    sections = {
+        name: [p.paragraph_name for p in section.paragraphs]
+        for name, section in getattr(procedure, "_sections", {}).items()
+        if name
+    }
+
+    def resolve(name: str) -> list[int] | None:
+        if name in sections:
+            members = [index[m] for m in sections[name] if m in index]
+            return members or None
+        return [index[name]] if name in index else None
+
+    def falls_from(position: int) -> list[int]:
+        """`position` and the paragraphs control falls into after it."""
+        chain = [position]
+        while _falls_through(sequence[chain[-1]]) and chain[-1] + 1 < len(names):
+            chain.append(chain[-1] + 1)
+        return chain
+
     reach: dict[str, str] = {}
     for start, thru, what in edges:
+        members = resolve(start) if precise else None
+        if members is not None and thru:
+            end = resolve(thru)
+            members = (
+                list(range(members[0], end[-1] + 1))
+                if end is not None and end[-1] >= members[0]
+                else None
+            )
+        found: set[str] | None = None
+        if members is not None:
+            in_range = set(members)
+            seen = set(members)
+            work = list(members)
+            while work and found is None:
+                paragraph = sequence[work.pop()]
+                for go in _find_statements_of_type(paragraph.statements, GoStatement):
+                    for target in _go_statement_raw_targets(go):
+                        positions = resolve(target)
+                        if positions is None:
+                            found = set()  # unplaceable: fall back below
+                            break
+                        for position in positions[:1]:
+                            if position in in_range:
+                                continue
+                            for reached in falls_from(position):
+                                if reached not in seen:
+                                    seen.add(reached)
+                                    work.append(reached)
+            if found is None:
+                found = {names[position] for position in seen}
+            else:
+                found = None
+        if found is None:
+            key = (start, thru)
+            if key not in cache:
+                cache[key] = _reachable_paragraphs(program, start, thru)[0]
+            found = cache[key]
+        for name in found:
+            reach.setdefault(name, what)
+    return reach
+
+
+def _unchecked_perform_reach(
+    program,
+    reachable: set[str],
+    checked_ids: set[int],
+    cache: dict[tuple[str, str | None], set[str]],
+) -> dict[str, str]:
+    """paragraph name -> a description of a PERFORM-like edge, among the
+    paragraphs in `reachable`, that reaches it but is not one of
+    `checked_ids` (the case's chain edges, each of which gets an early-exit
+    check after it): a `PERFORM ... THRU`, a `PERFORM ... TIMES`, any
+    PERFORM inside a CALL/file statement's clause body, or a SORT/MERGE
+    INPUT/OUTPUT or XML PARSE PROCESSING PROCEDURE. Keyed by bare name like
+    the rest of the planner, so it is over-inclusive for the nameless
+    main lines, never under-inclusive."""
+    reach: dict[str, str] = {}
+    for start, thru, what in _perform_edges(program, reachable, checked_ids):
         key = (start, thru)
         if key not in cache:
             cache[key] = _reachable_paragraphs(program, start, thru)[0]

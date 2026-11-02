@@ -347,3 +347,111 @@ def test_a_long_reset_move_is_wrapped():
     assert all(len(part) <= 104 for part in wrapped)
     assert " ".join(part.strip() for part in wrapped) == line.strip()
     assert wrap_words('           MOVE "A  B" TO X') == ['           MOVE "A  B" TO X']
+
+
+GO_TO_ON_END = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOEND.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT TFIL ASSIGN TO "IN".
+           SELECT TFIL2 ASSIGN TO "OUT".
+       DATA DIVISION.
+       FILE SECTION.
+       FD  TFIL.
+       01  TREC PIC X(4).
+       FD  TFIL2.
+       01  TREC2 PIC X(4).
+       PROCEDURE DIVISION.
+       P-CONTROL.
+           OPEN INPUT TFIL.
+           READ TFIL
+               AT END
+                   GO TO P-END.
+           OPEN OUTPUT TFIL2.
+           WRITE TREC2 FROM TREC.
+       P-END.
+           CLOSE TFIL.
+           STOP RUN.
+"""
+
+
+def test_a_count_after_a_go_to_branch_is_not_exact(tmp_path):
+    """NIST RW301M: `READ TFIL AT END GO TO RW301M-END` skips the OPEN
+    after it on empty input, which was VERIFYed as called once."""
+    program = tmp_path / "GOEND.cbl"
+    program.write_text(GO_TO_ON_END)
+    cut = tmp_path / "GOEND.cut"
+    main(["generate", str(program), "-o", str(cut), "--force", "--scenarios", "all"])
+    cases = {case.name: case for case in parse_cut(cut.read_text()).test_cases}
+    assert "empty input" in cases
+    assert not [v for v in cases["empty input"].verifications if "TFIL2" in str(v.key)]
+
+
+def test_a_perform_of_a_go_to_target_returns_at_its_end():
+    """NIST NC105A: `PERFORM MOVE-WRITE-F1-32`, a paragraph the main line
+    also GO TOs, returns at that paragraph's end -- it does not fall on
+    into TERMINATE-CCVS, so that STOP RUN still ends the main line."""
+    source = CCVS.replace(
+        "       TEST-1.\n           ADD 1 TO PASS-COUNTER.\n",
+        "       TEST-1.\n           ADD 1 TO PASS-COUNTER.\n"
+        "           PERFORM TEST-2.\n           GO TO TEST-2.\n",
+    )
+    program, surface, scope_map, lines = _analyze(source)
+    plans, reasons = find_terminator_plans(
+        surface, program, _suite("OPEN-FILES", "CCVS-999999"), scope_map, lines
+    )
+    assert reasons == []
+    assert [p.exit_kind for p in plans] == ["PROGRAM"]
+
+
+def test_a_go_to_out_of_a_performed_range_still_counts_as_inside_it():
+    source = CCVS.replace(
+        '       END-ROUTINE.\n           MOVE "END" TO PRINT-REC.\n',
+        '       END-ROUTINE.\n           MOVE "END" TO PRINT-REC.\n'
+        "           IF PASS-COUNTER = 9 GO TO TERMINATE-CCVS.\n",
+    )
+    program, surface, scope_map, lines = _analyze(source)
+    plans, reasons = find_terminator_plans(
+        surface, program, _suite("OPEN-FILES", "CCVS-999999"), scope_map, lines
+    )
+    assert plans == []
+    assert "the PERFORM END-ROUTINE at line" in reasons[0].message
+
+
+# TEST-2's WRITE, nested in an IF, has INVALID KEY and no END-WRITE, so no
+# MOCK can replace it: the whole main line reaches it, OPEN-FILES alone (here
+# falling through instead of GO TO) does not.
+UNMOCKABLE_TAIL = (
+    CCVS.replace(
+        "           GO TO CCVS1-EXIT.\n", "           MOVE 0 TO PASS-COUNTER.\n"
+    )
+    .replace(
+        "       TEST-2.\n           ADD 1 TO PASS-COUNTER.\n",
+        "       TEST-2.\n           ADD 1 TO PASS-COUNTER.\n"
+        "           IF PASS-COUNTER LESS THAN 9\n"
+        "               WRITE IX-REC\n"
+        "                   INVALID KEY ADD 1 TO PASS-COUNTER.\n"
+        "           ADD 1 TO PASS-COUNTER.\n",
+    )
+    .replace(
+        '           SELECT PRINT-FILE ASSIGN TO "PRT".\n',
+        '           SELECT PRINT-FILE ASSIGN TO "PRT".\n'
+        '           SELECT IX-FILE ASSIGN TO "IX" ORGANIZATION INDEXED\n'
+        "               ACCESS RANDOM RECORD KEY IX-KEY.\n",
+    )
+    .replace(
+        "       WORKING-STORAGE SECTION.\n",
+        "       FD  IX-FILE.\n       01  IX-REC.\n           05 IX-KEY PIC X(4).\n"
+        "       WORKING-STORAGE SECTION.\n",
+    )
+)
+
+
+def test_generate_keeps_the_bare_perform_when_the_main_line_is_refused(
+    tmp_path, capsys
+):
+    cases = parse_cut(_generate(tmp_path, UNMOCKABLE_TAIL)).test_cases
+    assert {c.perform_thru for c in cases} == {None}
+    assert "PERFORM their entry paragraph alone" in capsys.readouterr().err

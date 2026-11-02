@@ -352,9 +352,7 @@ def build_driver(
         procedure.append("       UT-RESET-WORKING-STORAGE.")
         for index, line in enumerate(reset_lines):
             last = index == len(reset_lines) - 1
-            procedure.extend(
-                wrap_words(f"           {line}" + ("." if last else ""))
-            )
+            procedure.extend(wrap_words(f"           {line}" + ("." if last else "")))
         procedure.append("")
 
     if restore_state:
