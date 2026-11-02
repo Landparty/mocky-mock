@@ -5,6 +5,7 @@ copybook_path list is kept)."""
 
 import argparse
 
+from mockymock.cli.discovery import SYSTEM_COPYBOOK_DIR
 from mockymock.cli.config import MockymockConfig
 from mockymock.cli.main import _apply_config_to_args, build_parser, main
 
@@ -35,14 +36,14 @@ def test_extra_paths_follow_the_config_list():
     args = _args("--extra-copybook-path", "zapp")
     args._config = MockymockConfig(copybook_path=("cfg1", "cfg2"))
     _apply_config_to_args(args)
-    assert args.copybook_path == ["cfg1", "cfg2", "zapp"]
+    assert args.copybook_path == ["cfg1", "cfg2", "zapp", str(SYSTEM_COPYBOOK_DIR)]
 
 
 def test_extra_paths_follow_an_explicit_list_and_skip_duplicates():
     args = _args("--copybook-path", "mine", "--extra-copybook-path", "mine")
     args._config = MockymockConfig(copybook_path=("cfg",))
     _apply_config_to_args(args)
-    assert args.copybook_path == ["mine"]
+    assert args.copybook_path == ["mine", str(SYSTEM_COPYBOOK_DIR)]
 
 
 def test_lint_keeps_the_config_copybooks_with_an_extra_path(

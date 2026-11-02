@@ -59,6 +59,7 @@ from mockymock.runtime.executor import (
     TIMEOUT_EXIT_CODE,
     ExecutionResult,
     _coerce_output,
+    fixed_clock_env,
 )
 
 #: The one name every command catches; the Docker module defines it, and
@@ -187,6 +188,7 @@ def _run(
         text=text,
         **kwargs,
     ) as proc:
+        _ACTIVE.add(proc)
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -195,7 +197,43 @@ def _run(
             raise subprocess.TimeoutExpired(
                 cmd, timeout, output=stdout, stderr=stderr
             ) from None
+        finally:
+            _ACTIVE.discard(proc)
         return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
+#: The cobc / test binary children running now. Each runs in its own
+#: session (so a timeout can kill its whole tree), which also means a
+#: SIGTERM or SIGKILL sent to mockymock never reaches them: when the
+#: oracle runner timed a suite out, HUGE01's cobc and gcc kept running for
+#: 20 minutes with 9 GB of memory (stress test 2026-11-02).
+_ACTIVE: set[subprocess.Popen] = set()
+
+
+def kill_active_children() -> None:
+    """Kill the process tree of every cobc / test binary running now."""
+    for proc in list(_ACTIVE):
+        if proc.poll() is None:
+            _kill_tree(proc)
+
+
+def install_termination_handler() -> None:
+    """On SIGTERM (or SIGHUP), kill the running children's trees and exit
+    143: the oracle runner terminates a suite that overran its timeout
+    this way. Only for the real command line (`mockymock`, `python -m
+    mockymock`), never a library caller's process."""
+    if _WINDOWS:
+        return
+
+    def terminate(signum: int, _frame: object) -> None:
+        kill_active_children()
+        raise SystemExit(128 + signum)
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(signum, terminate)
+        except ValueError:  # not the main thread
+            return
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -380,9 +418,9 @@ def run_binary(
         home = _require_home()
     except ToolchainNotAvailableError as exc:
         return ExecutionResult(NOT_FOUND_EXIT_CODE, "", f"{exc}\n")
-    extra: dict[str, str] = {}
+    extra: dict[str, str] = fixed_clock_env()
     if trace_path is not None:
-        extra = {
+        extra |= {
             "COB_SET_TRACE": "yes",
             "COB_TRACE_FILE": str(trace_path),
             "COB_TRACE_FORMAT": "%P|%S|%L",

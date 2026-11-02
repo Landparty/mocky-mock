@@ -23,6 +23,7 @@ from mockymock.runtime.executor import (
     TIMEOUT_EXIT_CODE,
     ExecutionResult,
     _coerce_output,
+    fixed_clock_env,
 )
 
 # Bundled under the package itself (not the repo-root docker/) so it ships
@@ -538,14 +539,18 @@ def run_binary(
     timeout_seconds = max(1, int(timeout_seconds))
     container_binary = to_container_path(binary_path, WORK_ROOT)
     container_dir = container_binary.rsplit("/", 1)[0]
-    trace_env: list[str] = []
+    trace_env: list[str] = [
+        arg
+        for name, value in fixed_clock_env().items()
+        for arg in ("-e", f"{name}={value}")
+    ]
     if trace_path is not None:
         # COB_TRACE_FILE must point inside the bind-mounted sandbox or the
         # host can never read the trace back. It is also always set
         # explicitly: left unset, GnuCOBOL can spill trace onto stderr and
         # pollute the run's diagnostics. Trace never reaches stdout, so the
         # __MOCKYMOCK__ protocol stays parseable either way.
-        trace_env = [
+        trace_env += [
             "-e",
             "COB_SET_TRACE=yes",
             "-e",

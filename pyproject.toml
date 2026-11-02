@@ -90,6 +90,9 @@ mockymock = ["py.typed"]
 # ships in the wheel -- `mockymock setup` needs it under any install mode,
 # including a bare `uv tool install` with no sibling checkout present.
 "mockymock.runtime" = ["docker/Dockerfile"]
+# IBM-supplied copybooks a program COPYs but an application export never
+# holds (cli/discovery.py SYSTEM_COPYBOOK_DIR).
+"mockymock.copybooks" = ["system/*.cpy"]
 # Same reasoning for the dashboard's static assets: they live under the
 # package and are resolved via Path(__file__), so they must be packaged
 # explicitly or `mockymock dashboard` 404s under `uv tool install`.

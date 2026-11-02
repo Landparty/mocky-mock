@@ -467,3 +467,26 @@ figures assert them only when the Docker backend is selected
 `runtime/status.py`'s `probe()` reports three checks for this backend
 (`home`, `cc`, `cobc`; `container` is `"native"`, `image` the home path), so
 the dashboard, `doctor` and `init`'s run gate work unchanged.
+
+# Fixed test clock
+
+Every test binary runs with `COB_CURRENT_DATE` set
+(`runtime/executor.py` `fixed_clock_env()`, used by both toolchains'
+`run_binary`): GnuCOBOL answers `FUNCTION CURRENT-DATE` and `ACCEPT ... FROM
+DATE / DAY / TIME / DAY-OF-WEEK` with it. Default `2026/01/15 10:30:00.00`
+(`DEFAULT_CURRENT_DATE`); `MOCKYMOCK_CURRENT_DATE` picks another instant,
+`real` keeps the wall clock, and a `COB_CURRENT_DATE` already exported wins.
+Without it a program that DISPLAYs or writes the date failed every recorded
+expectation and every oracle compare.
+
+# Children killed on termination
+
+The native toolchain runs cobc and the test binary in their own sessions
+(so a timeout kills the whole tree), which also means a signal to mockymock
+never reaches them. `native_toolchain._ACTIVE` tracks the running children;
+the real command line (`main(argv=None)`) installs
+`install_termination_handler()`, so SIGTERM / SIGHUP kills their trees and
+exits 128+signal. The oracle runner (`runner/jobs.py` `_stop`) stops a
+timed-out suite with SIGTERM to its process group, waits
+`TERMINATE_GRACE_SECONDS`, then SIGKILL. Before this, a timed-out HUGE01
+suite left cobc and gcc running for 20 minutes with 9 GB of memory.

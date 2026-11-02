@@ -574,7 +574,9 @@ def build_site_dispatch(
                 split
                 for answering in matches
                 for body in answering.body_lines
-                for split in split_long_move(f"                   {body}")
+                for split in split_long_move(
+                    f"                   {passed_argument_names(body, site)}"
+                )
             )
             if copy_into is not None:
                 lines.append(f"                   {copy_into}")
@@ -613,8 +615,113 @@ def build_site_dispatch(
     if lifted_clauses:
         lines.extend(clause_guard_lines(lifted_clauses, indent="           "))
     return _route_real_dynamic_calls(
-        lines, site, suite, registry, trace, real_statement, bool(lifted_clauses)
+        merge_identical_branches(lines),
+        site,
+        suite,
+        registry,
+        trace,
+        real_statement,
+        bool(lifted_clauses),
     )
+
+
+_CASE_WHEN_PREFIX = '               WHEN "'
+
+
+def merge_identical_branches(lines: list[str]) -> list[str]:
+    """`lines` (one site's `EVALUATE UT-CURRENT-CASE` dispatch) with the
+    case branches that run the same statements merged into one branch.
+
+    A generated suite mocks most sites the same way in every case, and
+    each case got its own copy of the body: HUGE01's 300 WRITE sites times
+    305 cases spliced 490k lines that gcc could not compile in 20 minutes.
+    Identical bodies now share one branch, named by stacked `WHEN`s, and a
+    run of three or more consecutive case numbers by one `WHEN "a" THRU
+    "b"` (the ids are fixed-width digits, so the alphanumeric range holds
+    exactly those cases). Branch order does not matter: one case id
+    selects at most one branch.
+    """
+    try:
+        start = next(
+            i for i, line in enumerate(lines) if line.startswith(_CASE_WHEN_PREFIX)
+        )
+        end = lines.index("               WHEN OTHER", start)
+    except (StopIteration, ValueError):
+        return lines
+    branches: dict[tuple[str, ...], list[str]] = {}
+    case_id = ""
+    body: list[str] = []
+    for line in [*lines[start:end], _CASE_WHEN_PREFIX + '"']:
+        if line.startswith(_CASE_WHEN_PREFIX):
+            if case_id:
+                branches.setdefault(tuple(body), []).append(case_id)
+            case_id = line[len(_CASE_WHEN_PREFIX) : -1]
+            body = []
+        else:
+            body.append(line)
+    if all(len(ids) == 1 for ids in branches.values()):
+        return lines
+    merged: list[str] = []
+    for branch_body, ids in branches.items():
+        merged.extend(
+            f"               WHEN {selector}" for selector in _case_selectors(ids)
+        )
+        merged.extend(branch_body)
+    return [*lines[:start], *merged, *lines[end:]]
+
+
+def _case_selectors(ids: list[str]) -> list[str]:
+    """`WHEN` selectors for `ids`, consecutive numeric runs of three or
+    more of the same width written as one THRU range."""
+    selectors: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if len(run) >= 3:
+            selectors.append(f'"{run[0]}" THRU "{run[-1]}"')
+        else:
+            selectors.extend(f'"{case}"' for case in run)
+        run.clear()
+
+    for case in ids:
+        if (
+            run
+            and case.isdigit()
+            and run[-1].isdigit()
+            and len(case) == len(run[-1])
+            and int(case) == int(run[-1]) + 1
+        ):
+            run.append(case)
+            continue
+        flush()
+        run.append(case)
+    flush()
+    return selectors
+
+
+#: `UT-PASSED-ARG-<n>` in a CALL mock's body stands for the name of the data
+#: item the call site passes as its n-th USING argument, as a literal: one
+#: `MOCK CALL "CBLTDLI"` answers every DL/I call of the program, and this is
+#: how its body tells a GU on the I/O PCB from a GU on a database PCB.
+#: Names, not line numbers: a frozen baseline `.cut` keeps working after an
+#: edit moves the calls.
+PASSED_ARG_RE = re.compile(r"\bUT-PASSED-ARG-(\d+)\b", re.IGNORECASE)
+
+
+def passed_argument_names(body: str, site: BoundarySite) -> str:
+    """`body` with each `UT-PASSED-ARG-<n>` replaced by the quoted name of
+    the site's n-th USING argument (`" "` when there is none)."""
+    if "UT-PASSED-ARG-" not in body.upper():
+        return body
+    using = list(getattr(site.statement, "using_parameters", None) or [])
+
+    def name(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if 1 <= index <= len(using):
+            return '"' + str(using[index - 1].name).upper().replace('"', "") + '"'
+        return '" "'
+
+    return PASSED_ARG_RE.sub(name, body)
 
 
 def real_dynamic_routes(

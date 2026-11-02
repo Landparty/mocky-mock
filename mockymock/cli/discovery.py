@@ -355,6 +355,23 @@ def effective_copybook_paths(
     return result
 
 
+#: Copybooks mockymock ships for system members a program COPYs but an
+#: application export never holds (CICS's DFHAID, DFHBMSCA).
+SYSTEM_COPYBOOK_DIR = Path(__file__).resolve().parent.parent / "copybooks" / "system"
+
+
+def with_system_copybooks(paths: list[str]) -> list[str]:
+    """`paths` with mockymock's own system members (`SYSTEM_COPYBOOK_DIR`)
+    searched last: nearly every CICS screen program COPYs DFHAID, and an
+    export of the application's source never holds it (stress test
+    2026-11-02: ORDINQ's suite was refused). A copy on the user's own
+    paths wins. With no paths at all the program is taken as COPY-free
+    and COPY stays unexpanded (UNRESOLVED_COPYBOOK), as before."""
+    if not paths or str(SYSTEM_COPYBOOK_DIR) in paths:
+        return paths
+    return [*paths, str(SYSTEM_COPYBOOK_DIR)]
+
+
 #: Copybook directory names a source tree conventionally uses, beside the
 #: program (`copybooks/`, the examples' layout) or beside the program's
 #: own folder (`cobol/` + `copybook/`, the usual mainframe export --

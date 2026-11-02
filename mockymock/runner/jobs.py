@@ -226,25 +226,58 @@ def _run_step_timed(
     command: Sequence[str], args: list[str], cwd: Path, timeout: float
 ) -> _Step:
     try:
-        completed = subprocess.run(
+        proc = subprocess.Popen(
             [*command, *args],
             cwd=cwd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             errors="replace",
-            timeout=timeout,
-            check=False,
+            start_new_session=sys.platform != "win32",
         )
-    except subprocess.TimeoutExpired as exc:
-        output = exc.stdout or ""
-        if isinstance(output, bytes):
-            output = output.decode("utf-8", "replace")
-        return _Step(None, output + f"\n(timed out after {timeout:.0f}s)\n", True)
     except OSError as exc:
         return _Step(None, f"cannot start {command[0]}: {exc}\n")
-    return _Step(
-        completed.returncode, (completed.stdout or "") + (completed.stderr or "")
-    )
+    with proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = _stop(proc)
+            return _Step(
+                None,
+                (stdout or "") + f"\n(timed out after {timeout:.0f}s)\n",
+                True,
+            )
+    return _Step(proc.returncode, (stdout or "") + (stderr or ""))
+
+
+#: How long a timed-out mockymock gets, after SIGTERM, to kill its own
+#: cobc and test binary before the runner kills its process group.
+TERMINATE_GRACE_SECONDS = 10.0
+
+
+def _stop(proc: subprocess.Popen) -> tuple[str, str]:
+    """Stop a timed-out mockymock: SIGTERM first, which makes it kill the
+    cobc / test binary it runs in their own sessions (a plain kill left
+    HUGE01's compiler running for 20 minutes, stress test 2026-11-02),
+    then SIGKILL to its whole process group."""
+    if sys.platform == "win32":
+        proc.kill()
+        return proc.communicate()
+    import os
+    import signal
+
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        proc.terminate()
+    try:
+        return proc.communicate(timeout=TERMINATE_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        return proc.communicate()
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
