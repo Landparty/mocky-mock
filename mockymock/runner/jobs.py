@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import shlex
 import shutil
 import socket
@@ -42,6 +43,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from mockymock.runner.client import RunnerClient, RunnerClientError
+from mockymock.runner.logs import LOGGER, JobLog, environment
 
 MANIFEST = "oracle.json"
 MANIFEST_VERSION = 1
@@ -76,6 +78,8 @@ class SuiteOutcome:
     baseline: dict[str, Any] | None = None
     comparison: dict[str, Any] | None = None
     error: str | None = None
+    #: Wall time of the suite's generate and run, in milliseconds.
+    duration_ms: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -85,6 +89,8 @@ class SuiteOutcome:
             "exit_code": self.exit_code,
             "log": self.log[-MAX_LOG_CHARS:],
         }
+        if self.duration_ms is not None:
+            out["duration_ms"] = self.duration_ms
         if self.baseline is not None:
             out["baseline"] = self.baseline
         if self.comparison is not None:
@@ -100,6 +106,7 @@ class _Step:
     log: str
     timed_out: bool = False
     extra: list[str] = field(default_factory=list)
+    duration_ms: int = 0
 
 
 def extract_pack(content: bytes, target: Path) -> Path:
@@ -209,6 +216,15 @@ def _generate_args(pack: Path, command: object) -> list[str]:
 def _run_step(
     command: Sequence[str], args: list[str], cwd: Path, timeout: float
 ) -> _Step:
+    started = time.monotonic()
+    step = _run_step_timed(command, args, cwd, timeout)
+    step.duration_ms = int((time.monotonic() - started) * 1000)
+    return step
+
+
+def _run_step_timed(
+    command: Sequence[str], args: list[str], cwd: Path, timeout: float
+) -> _Step:
     try:
         completed = subprocess.run(
             [*command, *args],
@@ -245,9 +261,53 @@ def run_suite(
     suite: dict[str, Any],
     command: Sequence[str] = DEFAULT_COMMAND,
     timeout: float = DEFAULT_SUITE_TIMEOUT,
+    job_log: JobLog | None = None,
 ) -> SuiteOutcome:
     """Run one suite of the manifest. Problems specific to the suite are
-    reported in the outcome's ``error``, never raised."""
+    reported in the outcome's ``error``, never raised; every step goes to
+    ``job_log``."""
+    entry = str(suite.get("entry") or "")
+    cut_name = str(suite.get("cut") or "")
+    job_log = job_log or JobLog()
+    started = time.monotonic()
+    job_log.event("suite started", entry=entry, cut=cut_name)
+    outcome = _run_suite(pack, manifest, suite, command, timeout, job_log)
+    outcome.duration_ms = int((time.monotonic() - started) * 1000)
+    if outcome.error:
+        job_log.warning(
+            "suite failed",
+            entry=entry,
+            error=outcome.error,
+            exit_code=outcome.exit_code,
+            duration_ms=outcome.duration_ms,
+        )
+    else:
+        job_log.event(
+            "suite finished",
+            entry=entry,
+            result=(
+                "baseline recorded"
+                if outcome.baseline is not None
+                else (
+                    "matches"
+                    if (outcome.comparison or {}).get("matches")
+                    else "differs"
+                )
+            ),
+            exit_code=outcome.exit_code,
+            duration_ms=outcome.duration_ms,
+        )
+    return outcome
+
+
+def _run_suite(
+    pack: Path,
+    manifest: dict[str, Any],
+    suite: dict[str, Any],
+    command: Sequence[str],
+    timeout: float,
+    job_log: JobLog,
+) -> SuiteOutcome:
     entry = str(suite.get("entry") or "")
     cut_name = str(suite.get("cut") or "")
     outcome = SuiteOutcome(entry=entry, cut_path=cut_name)
@@ -286,6 +346,15 @@ def run_suite(
             timeout,
         )
         log.append(f"$ mockymock {' '.join(generate)}\n{step.log}")
+        job_log.event(
+            "generate finished",
+            level=logging.WARNING if step.exit_code != 0 else logging.INFO,
+            entry=entry,
+            exit_code=step.exit_code,
+            timed_out=step.timed_out or None,
+            duration_ms=step.duration_ms,
+            command=f"mockymock {' '.join(generate)}",
+        )
         if not cut.is_file():
             outcome.exit_code = step.exit_code
             outcome.log = "".join(log)
@@ -304,6 +373,19 @@ def run_suite(
         args += ["--baseline", str(baseline_file), "--baseline-json", str(output)]
     step = _run_step(command, args, pack, timeout)
     log.append(f"$ mockymock run {program.relative_to(pack.resolve())}\n{step.log}")
+    job_log.event(
+        "run finished",
+        level=(
+            logging.WARNING
+            if step.timed_out or step.exit_code is None
+            else logging.INFO
+        ),
+        entry=entry,
+        exit_code=step.exit_code,
+        timed_out=step.timed_out or None,
+        duration_ms=step.duration_ms,
+        command=f"mockymock {' '.join(args[:2])}",
+    )
     outcome.exit_code = step.exit_code
     outcome.log = "".join(log)
     document = _read_json(output)
@@ -325,15 +407,23 @@ def run_pack(
     pack: Path,
     command: Sequence[str] = DEFAULT_COMMAND,
     timeout: float = DEFAULT_SUITE_TIMEOUT,
+    job_log: JobLog | None = None,
 ) -> dict[str, Any]:
     """Run every suite of an unpacked pack; the backend's result payload.
 
     Raises:
         JobPackError: The manifest is unusable.
     """
+    job_log = job_log or JobLog()
     manifest = load_manifest(pack)
+    job_log.event(
+        "manifest read",
+        kind=manifest["kind"],
+        load_module=manifest.get("load_module"),
+        suites=len(manifest["suites"]),
+    )
     outcomes = [
-        run_suite(pack, manifest, suite, command, timeout)
+        run_suite(pack, manifest, suite, command, timeout, job_log)
         for suite in manifest["suites"]
     ]
     return {"suites": [outcome.to_dict() for outcome in outcomes]}
@@ -345,19 +435,35 @@ def run_job(
     timeout: float = DEFAULT_SUITE_TIMEOUT,
     work_dir: Path | None = None,
     keep: bool = False,
+    job_log: JobLog | None = None,
 ) -> dict[str, Any]:
     """Unpack and run a job's pack; the result payload, with ``error`` set
-    when the whole job could not run."""
+    when the whole job could not run, and ``log``: the job's timeline."""
+    job_log = job_log or JobLog()
     work = Path(tempfile.mkdtemp(prefix="mockymock-oracle-", dir=work_dir))
     try:
         try:
             pack = extract_pack(content, work)
-            return run_pack(pack, command, timeout)
+            job_log.event("pack unpacked", bytes=len(content), folder=str(work))
+            payload = run_pack(pack, command, timeout, job_log)
         except JobPackError as exc:
-            return {"suites": [], "error": str(exc)}
+            job_log.error("job cannot run", error=str(exc))
+            payload = {"suites": [], "error": str(exc)}
     finally:
-        if not keep:
+        if keep:
+            job_log.event("work folder kept (--keep)", folder=str(work))
+        else:
             shutil.rmtree(work, ignore_errors=True)
+    failed = sum(1 for s in payload["suites"] if s.get("error"))
+    job_log.event(
+        "job finished",
+        level=logging.WARNING if failed or payload.get("error") else logging.INFO,
+        suites=len(payload["suites"]),
+        failed_suites=failed,
+        duration_ms=job_log.elapsed_ms(),
+    )
+    payload["log"] = job_log.text()
+    return payload
 
 
 def default_runner_name() -> str:
@@ -373,7 +479,7 @@ def serve(
     timeout: float = DEFAULT_SUITE_TIMEOUT,
     work_dir: Path | None = None,
     keep: bool = False,
-    log: Callable[[str], None] = print,
+    log: Callable[[str], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """Claim, run and report jobs until stopped.
@@ -384,6 +490,15 @@ def serve(
     except with ``once``, where it raises.
     """
     name = runner_name or default_runner_name()
+    say: Callable[[str], None] = log or (lambda message: LOGGER.info(message))
+    LOGGER.info(
+        "mockymock runner started",
+        extra={
+            "runner": name,
+            "backend": getattr(client, "base_url", None),
+            **environment(),
+        },
+    )
     ran = 0
     while True:
         try:
@@ -391,7 +506,12 @@ def serve(
         except RunnerClientError as exc:
             if once or exc.status in (401, 503):
                 raise
-            log(f"mockymock runner: {exc}; retrying in {poll_interval:.0f}s")
+            LOGGER.warning(
+                "backend unreachable, retrying",
+                extra={"error": str(exc), "retry_in_s": poll_interval},
+            )
+            if log is not None:
+                say(f"mockymock runner: {exc}; retrying in {poll_interval:.0f}s")
             sleep(poll_interval)
             continue
         if job is None:
@@ -400,20 +520,61 @@ def serve(
             sleep(poll_interval)
             continue
         job_id = str(job["id"])
-        log(f"mockymock runner: job {job_id} ({job.get('kind')}) claimed")
+        job_log = JobLog(job_id)
+        if log is not None:
+            say(f"mockymock runner: job {job_id} ({job.get('kind')}) claimed")
+        job_log.event(
+            "job claimed",
+            kind=job.get("kind"),
+            load_module_id=job.get("load_module_id"),
+            runner=name,
+        )
+        job_log.event("environment", **environment())
         try:
-            payload = run_job(
-                client.download_pack(job), command, timeout, work_dir, keep
+            started = time.monotonic()
+            content = client.download_pack(job)
+            job_log.event(
+                "pack downloaded",
+                bytes=len(content),
+                duration_ms=int((time.monotonic() - started) * 1000),
             )
+            payload = run_job(content, command, timeout, work_dir, keep, job_log)
         except RunnerClientError as exc:
-            payload = {"suites": [], "error": f"cannot download the pack: {exc}"}
+            job_log.error("cannot download the pack", error=str(exc))
+            payload = {
+                "suites": [],
+                "error": f"cannot download the pack: {exc}",
+                "log": job_log.text(),
+            }
+        except Exception as exc:  # noqa: BLE001 - report it rather than die silently
+            LOGGER.exception("job crashed", extra={"job_id": job_id})
+            job_log.error("runner crashed while running the job", error=repr(exc))
+            payload = {
+                "suites": [],
+                "error": f"the runner crashed: {exc!r}",
+                "log": job_log.text(),
+            }
         try:
             summary = client.report(job_id, payload)
         except RunnerClientError as exc:
-            log(f"mockymock runner: job {job_id}: cannot report the result: {exc}")
-        else:
-            log(
-                f"mockymock runner: job {job_id} {summary.get('status')}"
-                + (f", {summary['verdict']}" if summary.get("verdict") else "")
+            LOGGER.error(
+                "cannot report the result",
+                extra={"job_id": job_id, "error": str(exc)},
             )
+            if log is not None:
+                say(f"mockymock runner: job {job_id}: cannot report the result: {exc}")
+        else:
+            LOGGER.info(
+                "job reported",
+                extra={
+                    "job_id": job_id,
+                    "status": summary.get("status"),
+                    "verdict": summary.get("verdict"),
+                },
+            )
+            if log is not None:
+                say(
+                    f"mockymock runner: job {job_id} {summary.get('status')}"
+                    + (f", {summary['verdict']}" if summary.get("verdict") else "")
+                )
         ran += 1

@@ -558,6 +558,13 @@ suites with `run --record-baseline` / `--baseline`, and posts the results.
 | `--suite-timeout S` | 900 | Seconds one `generate` or `run` may take. |
 | `--work-dir DIR` | temp folder | Where jobs are unpacked. |
 | `--keep` | off | Keep each job's unpacked folder. |
+| `--log-file FILE` | stderr | Append the runner's log to this file. |
+| `--log-format text\|json` | `text` | `json`: one object per line (job_id, entry, exit_code, duration_ms...). |
+| `--log-level LEVEL` | `INFO` | Lowest level logged (DEBUG, INFO, WARNING, ERROR). |
+
+Each job's timeline (environment, download, each generate and run with
+its exit code and duration) is also posted with the result, so LegacyLens
+shows it as the run's log.
 
 ## `mockymock skills install`
 
@@ -632,7 +639,7 @@ mode plus every mode's contract.
 | `analyze` | no | *(forwarded to cobol-parser)* |
 | `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
 | `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
-| `runner` | yes (native GnuCOBOL) | `--url`, `--token-env`, `--name`, `--once`, `--poll-interval`, `--suite-timeout`, `--work-dir`, `--keep` |
+| `runner` | yes (native GnuCOBOL) | `--url`, `--token-env`, `--name`, `--once`, `--poll-interval`, `--suite-timeout`, `--work-dir`, `--keep`, `--log-file`, `--log-format`, `--log-level` |
 | `skills install` | no | `--project`, `--force`, `--skill` |
 | `skills plugin` | no | `--force` |
 | `skills mode` | no | `--set`, `--json` |

@@ -20,6 +20,15 @@ prevent.
   `tests/unit/test_vsam_read_forms.py::TestAlternateKeyCounts`,
   `tests/unit/test_baseline.py`.
 
+## 2026-11-02 -- Runner logging
+
+* `mockymock runner` logs each job's steps (`runner/logs.py`: `JobLog`,
+  `configure_logging`) and posts the job's timeline with the result as
+  `log`; suites report `duration_ms`. A job that crashes the runner is
+  reported as the job's `error` with its log. New flags `--log-file`,
+  `--log-format text|json`, `--log-level` ([cli](cli.md)). Tests:
+  `tests/unit/test_runner_logs.py`.
+
 ## 2026-11-02 -- OPEN modes, multi-file OPEN failures (integrated testing review)
 
 * `MOCK OPEN <file> INPUT | OUTPUT | I-O | EXTEND` and `VERIFY OPEN <file>
