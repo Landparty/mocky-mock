@@ -93,6 +93,8 @@ from mockymock.dsl.model import (
     MockDirective,
     MockTestCase,
     MockTestSuite,
+    read_access_matches,
+    split_read_access,
 )
 from mockymock.report.record_rewrite import (
     field_pictures,
@@ -1340,6 +1342,30 @@ def _placeholder_body_for(
     return list(_PLACEHOLDER_BODIES.get(category, []))
 
 
+def split_read_files(surface: MockSurface) -> set[str]:
+    """Files whose READ sites come in more than one access form (READ NEXT
+    and a keyed READ of one KSDS, say): each form gets its own `MOCK READ
+    <file> <form>`, with its own rows and tally, since one sequence of
+    records cannot answer a browse and a lookup alike."""
+    forms: dict[str, set[str]] = {}
+    for site in surface.boundary_sites:
+        if site.category is MockCategory.READ and site.read_form and site.keys:
+            forms.setdefault(site.keys[0].upper(), set()).add(site.read_form)
+    return {name for name, seen in forms.items() if len(seen) > 1}
+
+
+def read_site_key(site: BoundarySite, split: set[str]) -> str | None:
+    """`<file> <form>` for a READ site of a file in `split`, else None."""
+    if (
+        site.category is MockCategory.READ
+        and site.keys
+        and site.read_form
+        and site.keys[0].upper() in split
+    ):
+        return f"{site.keys[0]} {site.read_form}"
+    return None
+
+
 def file_op_key(site: BoundarySite, surface: MockSurface | None) -> str:
     """The key a MOCK for this file-op site uses. A multi-file `OPEN A B`
     is one site matched by a MOCK for any of its files, and two MOCKs
@@ -1349,6 +1375,10 @@ def file_op_key(site: BoundarySite, surface: MockSurface | None) -> str:
     keying the multi-file site on its first file left the other site
     needing a second MOCK that the first site then also matched (issue
     #312)."""
+    if surface is not None:
+        qualified = read_site_key(site, split_read_files(surface))
+        if qualified is not None:
+            return qualified
     if len(site.keys) > 1 and surface is not None:
         for key in site.keys:
             if any(
@@ -2045,8 +2075,13 @@ def _mockymock_boundary_keys(
     widening for them. SQL/CICS/DLI key on `_unique_prefix` instead, since
     they have no `.keys` at all (only free-form `match_text`)."""
     keys: dict[tuple[MockCategory, str], BoundarySite] = {}
+    split = split_read_files(surface)
     for site in surface.boundary_sites:
         if site.category is None or (site.nested and site.span is None):
+            continue
+        qualified = read_site_key(site, split)
+        if qualified is not None:
+            keys.setdefault((MockCategory.READ, qualified), site)
             continue
         if site.category in EXEC_CATEGORIES:
             prefix = _unique_prefix(site, surface)
@@ -2971,6 +3006,20 @@ def _read_body(
     the separate, unimplemented `ROWS FROM CSV` row-source extension for
     both `READ` and `SQL`)."""
     sequence = fixture.sequence
+    status_lines = [
+        f'MOVE "{code}" TO {name}'
+        for name, code in fixture.status.items()
+        if code not in _DEFAULT_SUCCESS_CODES
+    ]
+    if any(
+        not code.startswith("0")
+        for code in fixture.status.values()
+        if code not in _DEFAULT_SUCCESS_CODES
+    ):
+        # A failed READ (23 record not found, 35, 46, 9x ...) returns no
+        # record: the status alone, which the splice turns into the
+        # statement's INVALID KEY clause (or none) like the real READ.
+        return status_lines
     replicated, at_end, lifted = _at_end_handling(fixture, site, source)
     needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
 
@@ -2978,13 +3027,18 @@ def _read_body(
         return _read_exhaustion_lines(fixture, replicated, at_end, lifted)
 
     if len(sequence) == 1 and not needs_exhaustion_branch:
-        return _row_move_lines(sequence[0], fixture, source)
+        # A successful status other than 00 (02: another record has this
+        # alternate key; 04: length mismatch) comes with the record.
+        return _row_move_lines(sequence[0], fixture, source) + status_lines
 
     tally = registry.name(category, fixture.key)
     body = ["EVALUATE TRUE"]
     for index, row in enumerate(sequence, start=1):
         body.append(f"    WHEN {tally} = {index}")
-        body.extend(f"        {line}" for line in _row_move_lines(row, fixture, source))
+        body.extend(
+            f"        {line}"
+            for line in _row_move_lines(row, fixture, source) + status_lines
+        )
     if needs_exhaustion_branch:
         body.append("    WHEN OTHER")
         body.extend(
@@ -3811,9 +3865,18 @@ def _sites_for_key(
         and (
             _unique_prefix(site, surface) == key
             if category in EXEC_CATEGORIES
-            else key in site.keys
+            else _site_answers(site, key)
         )
     ]
+
+
+def _site_answers(site: BoundarySite, key: str) -> bool:
+    """Whether a bare-key MOCK of `key` answers `site`: one of its names,
+    or, for `READ <file> <form>`, its file and access form."""
+    file_key, access = split_read_access(key)
+    if site.category is MockCategory.READ and access is not None:
+        return file_key in site.keys and read_access_matches(access, site.read_form)
+    return key in site.keys
 
 
 _SEVERAL_SITES_REASON = (
@@ -3838,6 +3901,67 @@ _UNREACHED_SITE_REASON = (
     "HANDLE CONDITION target, or code nothing PERFORMs), which the bundle's "
     "count includes"
 )
+
+
+_BRANCH_NODE_TYPES = frozenset({"IfStatement", "EvaluateStatement", "WhenClause"})
+
+
+def _statement_under_branch(statement: object) -> bool:
+    """Whether `statement` sits inside an IF or EVALUATE of its paragraph."""
+    node = getattr(statement, "parent", None)
+    while node is not None and type(node).__name__ not in (
+        "CobolParagraph",
+        "CobolSection",
+        "CobolDivision",
+    ):
+        if type(node).__name__ in _BRANCH_NODE_TYPES:
+            return True
+        node = getattr(node, "parent", None)
+    return False
+
+
+def _paragraph_of(statement: object) -> str | None:
+    node = getattr(statement, "parent", None)
+    while node is not None:
+        if type(node).__name__ == "CobolParagraph":
+            return str(getattr(node, "paragraph_name", "") or "").upper() or None
+        node = getattr(node, "parent", None)
+    return None
+
+
+def _site_under_branch(site: BoundarySite, program: object) -> bool:
+    """Whether a case reaches `site` only through an IF/EVALUATE branch:
+    the statement is inside one, or every PERFORM of its paragraph is
+    (recursively). A site an earlier `IF ... GOBACK` merely guards is not:
+    the happy path still reaches it. A loop-end count (a browse READNEXT
+    answered by a row, then ENDFILE) holds only for a case that reaches the
+    loop, so for such a site it is demoted like any other conditional
+    count."""
+    if _statement_under_branch(site.statement):
+        return True
+    if program is None or not hasattr(program, "find_all_by_type"):
+        return False
+    performs = cast(Any, program).find_all_by_type("PerformStatement")
+    seen: set[str] = set()
+
+    def paragraph_under_branch(name: str) -> bool:
+        if name in seen:
+            return False
+        seen.add(name)
+        callers = [
+            perform
+            for perform in performs
+            if str(getattr(perform, "target_paragraph", "") or "").upper() == name
+        ]
+        if not callers:
+            return False
+        return all(
+            _statement_under_branch(perform)
+            or paragraph_under_branch(_paragraph_of(perform) or "")
+            for perform in callers
+        )
+
+    return paragraph_under_branch(site.paragraph_name.upper())
 
 
 def _conditional_call_count_keys(
@@ -4018,6 +4142,102 @@ def _endless_read_keys(
 _ERROR_STATUS_SCENARIO_PREFIX = "error status:"
 
 
+#: The cobol-parser note on a keyed READ whose key it cannot know; a
+#: keyed READ mock keeps the key the program asked for instead.
+_UNKNOWN_READ_KEY_NOTE = "the record key it reads by has no value known"
+
+
+def _with_read_forms(bundle: FixtureBundle, surface: MockSurface) -> FixtureBundle:
+    """`bundle` with each READ fixture fitted to the form of its READ site.
+
+    - A keyed READ (`KEY` / `KEY <alternate key>`) never moves to the key
+      it reads by: the record a KSDS returns has the key the program asked
+      for, so the program's own value stays.
+    - A status no READ of that form can give is dropped to success: an
+      INVALID KEY code (2x) on a READ NEXT / PREVIOUS, an end-of-file code
+      (1x) on a keyed READ. A file-wide error-status scenario otherwise
+      left a browse loop reading "23" forever.
+    - A file read in several forms (`split_read_files`) has its fixtures
+      keyed `<file> <form>` by the site at their line, so the browse and
+      the keyed lookup of one KSDS get their own MOCK. Its file-level call
+      counts are dropped: the per-form ones are restored per site
+      (`_with_site_call_counts`)."""
+    reads = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.READ and site.keys and site.read_form
+    ]
+    if not reads:
+        return bundle
+    split = split_read_files(surface)
+    sites = {(site.keys[0].upper(), site.line): site for site in reads}
+    first: dict[str, BoundarySite] = {}
+    for site in reads:
+        first.setdefault(site.keys[0].upper(), site)
+    dropped = {f"{MockCategory.READ.value}:{name}" for name in split}
+    scenarios = []
+    for scenario in bundle.scenarios:
+        fixtures = []
+        for fixture in scenario.fixtures:
+            name = fixture.key.upper()
+            if fixture.category == MockCategory.READ.value and name in first:
+                site = sites.get((name, fixture.line or 0)) or first[name]
+                fixture = _fit_read_fixture(fixture, site, surface)
+                if name in split:
+                    fixture = replace(fixture, key=f"{name} {site.read_form}")
+            fixtures.append(fixture)
+        expectations = [
+            e
+            for e in scenario.expectations
+            if not (e.kind == "call_count" and e.ref.upper() in dropped)
+        ]
+        scenarios.append(
+            replace(scenario, fixtures=fixtures, expectations=expectations)
+        )
+    keyed_lines = {
+        site.line
+        for site in reads
+        if site.read_form == "KEY" or str(site.read_form).startswith("KEY ")
+    }
+    unresolved = [
+        note
+        for note in bundle.unresolved
+        if not (
+            _UNKNOWN_READ_KEY_NOTE in note
+            and any(f"(line {line})" in note for line in keyed_lines)
+        )
+    ]
+    return replace(bundle, scenarios=scenarios, unresolved=unresolved)
+
+
+def _fit_read_fixture(
+    fixture: BoundaryFixture, site: BoundarySite, surface: MockSurface
+) -> BoundaryFixture:
+    """One READ fixture fitted to its site's form (`_with_read_forms`)."""
+    form = site.read_form or "NEXT"
+    keyed = form == "KEY" or form.startswith("KEY ")
+    impossible = "1" if keyed else "2"
+    status = {
+        name: ("00" if code.startswith(impossible) else code)
+        for name, code in fixture.status.items()
+    }
+    if not keyed:
+        return replace(fixture, status=status)
+    select = surface.file_selects.get(site.keys[0].upper())
+    key_field = form[len("KEY ") :] if form != "KEY" else None
+    if key_field is None and select is not None and select.organization == "INDEXED":
+        key_field = select.record_key
+    layout = [
+        spec
+        for spec in fixture.layout
+        if key_field is None or str(spec.name).upper() != key_field
+    ]
+    unresolved = [
+        note for note in fixture.unresolved if _UNKNOWN_READ_KEY_NOTE not in note
+    ]
+    return replace(fixture, status=status, layout=layout, unresolved=unresolved)
+
+
 def _with_site_call_counts(
     bundle: FixtureBundle, surface: MockSurface
 ) -> FixtureBundle:
@@ -4143,7 +4363,9 @@ def _scaffold_with_bundle(
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
 ) -> str:
-    bundle = _with_accept_keys(_with_site_call_counts(bundle, surface))
+    bundle = _with_accept_keys(
+        _with_site_call_counts(_with_read_forms(bundle, surface), surface)
+    )
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(
         mockymock_keys,
@@ -4250,10 +4472,22 @@ def _scaffold_with_bundle(
         for key_pair, reason in _conditional_call_count_keys(
             expectations, surface, reachable, scope, row_scope
         ):
-            call_count_overrides.setdefault(
-                key_pair,
-                CallCountOverride(demote_reason=reason, from_placeholder=False),
-            )
+            # Wins over a loop-end count (a browse's READNEXT answered once
+            # with a row and once with ENDFILE): that count holds only when
+            # the case reaches the loop, which here is not known.
+            existing = call_count_overrides.get(key_pair)
+            if existing is None or (
+                existing.demote_reason is None
+                and reason in (_CONDITIONAL_SITE_REASON, _UNREACHED_SITE_REASON)
+                and source is not None
+                and any(
+                    _site_under_branch(site, source.program)
+                    for site in _sites_for_key(*key_pair, surface, reachable)
+                )
+            ):
+                call_count_overrides[key_pair] = CallCountOverride(
+                    demote_reason=reason, from_placeholder=False
+                )
         if source is not None:
             for key_pair in _endless_read_keys(
                 expectations, surface, reachable, source

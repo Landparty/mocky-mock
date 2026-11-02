@@ -38,7 +38,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mockymock._lines import SourceEncodingError, read_utf8_source, split_source_lines
-from mockymock.analysis.refusal import RefusalReason, directive_matches_site
+from mockymock.analysis.refusal import (
+    RefusalReason,
+    directive_matches_site,
+    matching_directives,
+)
 from mockymock.analysis.refusal._types import (
     _UNMOCKED_CODES,
     _UNMOCKED_FILE_OP_CODE,
@@ -253,7 +257,7 @@ def check_real_program(
     reported: set[tuple[str, int]] = set()
     for _, case in active_cases(suite, prepared.spec.key):
         for site in prepared.surface.boundary_sites:
-            matches = [d for d in case.mocks if directive_matches_site(d, site)]
+            matches = matching_directives(case.mocks, site)
             if site.category is None:
                 # CANCEL, STOP RUN, GOBACK, EXIT PROGRAM run as written in a
                 # real program (STOP RUN is warned about in prepare); the

@@ -5,6 +5,18 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-02 -- VSAM: READ access forms, FILE STATUS cases
+
+* `MOCK READ <file> NEXT | PREVIOUS | KEY [<alt-key>]` and the matching
+  `VERIFY` forms; the most specific directive wins ([dsl](dsl.md)).
+* `generate` writes FILE STATUS cases (02 with a record, 23, 22, 35, ...)
+  from cobol-parser's file-status family, failing one statement each;
+  WRITE/REWRITE/DELETE statuses are set; a READNEXT count inside a branch is
+  no longer verified as unconditional.
+* `examples/oraclemix` has five VSAM programs (KSDS random and dynamic,
+  alternate key, ESDS, RRDS, CICS FILE browse) and a VSAMJOB. Tests:
+  `tests/unit/test_vsam_read_forms.py`.
+
 ## 2026-11-02 -- generated cases reach CICS screens, COMMAREA checks, lookups
 
 * With cobol-parser's CICS entry parameters, a generated case sets the
