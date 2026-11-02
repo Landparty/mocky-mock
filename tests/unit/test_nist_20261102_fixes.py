@@ -163,12 +163,34 @@ FALLS_THROUGH = """\
 """
 
 
-def test_scenarios_whose_case_repeats_an_earlier_one_are_left_out(tmp_path, capsys):
+def test_a_first_paragraph_that_runs_on_gets_main_line_cases(tmp_path, capsys):
     """START-UP falls through into MAIN-LINE, where the IF the branch
-    scenarios target sits; a case PERFORMs START-UP alone, so every branch
-    case came out identical to the happy path under a name claiming a
-    branch it never takes (NIST: IX215A ran one case 83 times)."""
-    text, err = _generate(tmp_path, "FALLS", FALLS_THROUGH, capsys)
+    scenarios target sits: every case runs the main line THRU the last
+    paragraph, so each branch case takes its own branch."""
+    text, _ = _generate(tmp_path, "FALLS", FALLS_THROUGH, capsys)
+    cases = parse_cut(text).test_cases
+    assert {(c.perform_target, c.perform_thru) for c in cases} == {
+        ("START-UP", "MAIN-LINE")
+    }
+    names = [case.name for case in cases]
+    assert any("IF@" in name and "THEN" in name for name in names)
+    assert any("IF@" in name and "ELSE" in name for name in names)
+    assert "left out" not in text
+
+
+# MAIN-LINE is PERFORMed too, so its STOP RUN cannot end a main-line range:
+# the cases keep their bare PERFORM START-UP.
+PERFORMED_TOO = FALLS_THROUGH + """       RETRY-PARA.
+           PERFORM MAIN-LINE.
+"""
+
+
+def test_scenarios_whose_case_repeats_an_earlier_one_are_left_out(tmp_path, capsys):
+    """A case PERFORMs START-UP alone, so every branch case came out
+    identical to the happy path under a name claiming a branch it never
+    takes (NIST: IX215A ran one case 83 times)."""
+    text, err = _generate(tmp_path, "FALLS", PERFORMED_TOO, capsys)
+    assert {c.perform_thru for c in parse_cut(text).test_cases} == {None}
     names = [case.name for case in parse_cut(text).test_cases]
     assert "happy path" in names
     assert not any("IF@" in name for name in names)

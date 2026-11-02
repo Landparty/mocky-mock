@@ -13,6 +13,7 @@ from mockymock.analysis.refusal import (
     _go_to_fallthrough_targets,
     check_terminator_layout,
     find_terminator_plans,
+    program_end_thru,
 )
 from mockymock.dsl.model import MockTestCase, MockTestSuite
 from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
@@ -1199,6 +1200,9 @@ THRU_TAIL_SOURCE = """\
 
        1000-EXIT.
            EXIT.
+
+       9000-OTHER.
+           ADD 100 TO WS-X.
 """
 
 
@@ -1242,6 +1246,19 @@ def test_terminator_under_a_hook_thru_range_with_real_tail_refuses():
     plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
     assert plans == []
     assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+
+
+def test_terminator_under_a_thru_range_to_the_program_end_ends_the_main_line():
+    """A range THRU the program's last paragraph runs to the end of the
+    program: the GOBACK, never PERFORMed, becomes GO TO UT-PROGRAM-END."""
+    program, surface, scope_map, lines = _analyze(THRU_TAIL_SOURCE)
+    suite = _thru_suite("1000-A", "9000-OTHER")
+    plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
+    assert reasons == []
+    assert [(p.site.label, p.exit_kind, p.chain_performs) for p in plans] == [
+        ("GOBACK", "PROGRAM", [])
+    ]
+    assert program_end_thru(program, plans) == "9000-OTHER"
 
 
 # Issue #219: STOP RUN RETURNING n / GOBACK RETURNING n set RETURN-CODE,

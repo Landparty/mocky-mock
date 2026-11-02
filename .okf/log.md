@@ -5,6 +5,24 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-02 -- Whole-main-line cases (NIST CCVS85)
+
+* A case PERFORMing THRU the program's last paragraph runs the main line to
+  the end of the program: a STOP RUN/GOBACK it falls or jumps into, and that
+  no PERFORM of the program reaches, ends it with `GO TO UT-PROGRAM-END`
+  (`TerminatorPlan.exit_kind` "PROGRAM"; the driver PERFORMs THRU that
+  paragraph, appended after the program's last one). See [splicer](splicer.md).
+* generate writes `PERFORM <first> THRU <last>` for a first paragraph the
+  program carries on past (`ProgramContext.main_line_thru`), when the range's
+  terminators are all accepted; repeated identical checks in a case are
+  written once. See [dsl](dsl.md).
+* A mocked statement after a finished sentence on its line (`PERFORM A. CLOSE
+  F.`) is spliced, the sentence kept on its own line
+  (`source_map.closed_sentence_lead`, `BoundarySite.span_lead`).
+* Tests: `tests/unit/test_main_line_cases.py`,
+  `tests/integration/test_main_line_case.py`; NIST numbers in
+  `examples/nist-cobol85/generated/README.md`.
+
 ## 2026-11-02 -- NIST CCVS85 check of "Create tests"; four generate/splice fixes
 
 * Ran the runner's `tests` job (generate `--scenarios all`, `--record-expectations`,

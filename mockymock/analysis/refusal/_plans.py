@@ -80,8 +80,11 @@ class TerminatorPlan:
     "SECTION" for the one SECTION-scoped shape
     docs/2026-07-10-section-scoped-terminator-support-design.md supports
     -- a terminator in a SECTION's first paragraph, entered exclusively
-    via PERFORM <section-name>. See
-    docs/2026-07-08-goback-stop-run-support-design.md and
+    via PERFORM <section-name>. "PROGRAM" (2026-11-02) is a terminator
+    that ends the main line of a case PERFORMing THRU the program's last
+    paragraph: it becomes `GO TO UT-PROGRAM-END` (`PROGRAM_END_PARAGRAPH`),
+    never runs inside a PERFORM of the program's own, and needs no chain.
+    See docs/2026-07-08-goback-stop-run-support-design.md and
     docs/2026-07-10-section-scoped-terminator-support-design.md."""
 
     site: BoundarySite
@@ -790,6 +793,11 @@ def find_terminator_plans(
     from mockymock.analysis.flow_mocks import resolved_flow_targets
 
     reach_cache: dict[tuple[str, str | None], set[str]] = {}
+    # A case PERFORMing THRU the program's last paragraph runs the main line
+    # to the end of the program: a STOP RUN/GOBACK it only falls or jumps
+    # into (never PERFORMs) ends it with `GO TO UT-PROGRAM-END`.
+    last_paragraph = program_last_paragraph(program)
+    perform_entered: dict[str, str] | None = None
 
     # Hook PERFORM steps reach terminators exactly like a test case's own
     # PERFORM does (suite hooks), so they need plans/refusals too.
@@ -881,6 +889,7 @@ def find_terminator_plans(
                 continue
 
             paragraph_name = site.paragraph_name
+            existing = plans_by_statement.get(key)
             owner = main_line_owner.get(key)
             problem = None
             if owner is not None and owner not in entered_sections:
@@ -1032,6 +1041,51 @@ def find_terminator_plans(
                     or _cics_resp_field(site.statement)[1]
                 )
 
+            if problem is not None and case.perform_thru == last_paragraph:
+                # The case runs the main line to the end of the program
+                # (2026-11-02): a terminator it only falls or jumps into,
+                # never PERFORMs, can end it with GO TO UT-PROGRAM-END.
+                if perform_entered is None:
+                    perform_entered = _unchecked_perform_reach(
+                        program,
+                        {p.paragraph_name for p in _all_paragraphs(procedure)},
+                        set(),
+                        reach_cache,
+                    )
+                end_problem = _main_line_end_problem(site, perform_entered)
+                if end_problem is None and existing is None:
+                    plans_by_statement[key] = TerminatorPlan(
+                        site=terminator_sites[key],
+                        exit_kind="PROGRAM",
+                        return_code=_terminator_return_code(site.statement)[0],
+                    )
+                    continue
+                if (
+                    end_problem is None
+                    and existing is not None
+                    and existing.exit_kind == "PROGRAM"
+                ):
+                    continue
+                problem += (
+                    f"; nor can it end the main line PERFORM "
+                    f"{case.perform_target} THRU {case.perform_thru} runs: it "
+                    + (
+                        end_problem
+                        or "also ends another test case's PERFORM with EXIT "
+                        "PARAGRAPH, and one statement cannot end both ways"
+                    )
+                )
+            elif (
+                problem is None
+                and existing is not None
+                and existing.exit_kind == "PROGRAM"
+            ):
+                problem = (
+                    "ends the main line of a test case that PERFORMs THRU "
+                    "the program's last paragraph, and this test case "
+                    "needs it to end its own PERFORM with EXIT PARAGRAPH "
+                    "instead -- one statement cannot end both ways"
+                )
             if problem is not None:
                 reasons.append(
                     RefusalReason(
@@ -1074,6 +1128,72 @@ def find_terminator_plans(
                     plan.chain_exit_kinds[id(perform)] = "SECTION"
 
     return list(plans_by_statement.values()), reasons
+
+
+#: The paragraph the splicer appends after a program's last paragraph when
+#: a terminator ends the main line (`TerminatorPlan.exit_kind` "PROGRAM"):
+#: the terminator becomes `GO TO` it, and a case PERFORMing THRU the
+#: program's last paragraph PERFORMs THRU it instead, so reaching it
+#: returns to the test.
+PROGRAM_END_PARAGRAPH = "UT-PROGRAM-END"
+
+
+def program_last_paragraph(program) -> str | None:
+    """The name of the last paragraph of the PROCEDURE DIVISION in source
+    order, or None when there is none (or the order cannot be trusted, or
+    the last one is a nameless main line or a phantom)."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return None
+    ordered = _source_ordered_paragraphs(procedure)
+    if not ordered:
+        return None
+    name = str(ordered[-1].paragraph_name or "")
+    if not name.strip("."):
+        return None
+    if sum(1 for p in ordered if p.paragraph_name == name) > 1:
+        return None
+    return name
+
+
+def program_end_thru(program, terminator_plans) -> str | None:
+    """The program's last paragraph when a plan ends the main line at
+    `PROGRAM_END_PARAGRAPH`, else None: the driver then appends that
+    paragraph after the program's last one and PERFORMs THRU it wherever a
+    case names that last paragraph (`build_driver(program_end=...)`)."""
+    if not any(plan.exit_kind == "PROGRAM" for plan in terminator_plans):
+        return None
+    return program_last_paragraph(program)
+
+
+def _main_line_end_problem(site, perform_entered: dict[str, str]) -> str | None:
+    """Why a terminator a case running THRU the program's last paragraph
+    reaches cannot end that case with `GO TO UT-PROGRAM-END`, or None.
+
+    The GO TO returns to the test only when the test's own PERFORM is the
+    one active PERFORM at that moment: the terminator must never run
+    inside a PERFORM of the program's own (any PERFORM, THRU range, SECTION
+    PERFORM or SORT/MERGE/XML procedure that can reach its paragraph), or
+    the jump would leave that PERFORM's range for good."""
+    if site.category is not None:
+        return "is an EXEC CICS command, not a STOP RUN/GOBACK"
+    if site.paragraph_name in perform_entered:
+        return (
+            f"is also reached through {perform_entered[site.paragraph_name]}, "
+            f"so it can run inside a PERFORM of the program's own, which "
+            f"a GO TO to the end of the program would leave for good"
+        )
+    if site.nested and site.span is None:
+        return (
+            f"is nested inside a conditional/loop body and cannot be "
+            f"safely spliced: {site.unspliceable_reason or _UNANNOTATED}"
+        )
+    if not site.nested and site.unspliceable_reason:
+        return (
+            f"{site.unspliceable_reason} -- splicing it would corrupt "
+            f"sibling code sharing its line(s)"
+        )
+    return _terminator_return_code(site.statement)[1]
 
 
 def _unchecked_perform_reach(

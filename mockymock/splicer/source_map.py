@@ -209,6 +209,8 @@ class ScopeBoundary:
     # `ON EXCEPTION`, ...; `word` holds its name): the AST locates none, but
     # a statement nested in a clause body must stop before the next one.
     clause_header: bool = False
+    # A paragraph or SECTION header (top_level too).
+    header: bool = False
 
 
 @dataclass
@@ -289,6 +291,7 @@ def collect_scope_map(program, lines: list[str]) -> ScopeMap:
                     section.location.column,
                     "",
                     top_level=True,
+                    header=True,
                 )
             )
     for paragraph in _all_paragraphs(procedure):
@@ -302,6 +305,7 @@ def collect_scope_map(program, lines: list[str]) -> ScopeMap:
                     paragraph.location.column,
                     "",
                     top_level=True,
+                    header=True,
                 )
             )
         _collect_statement_starts(
@@ -432,6 +436,11 @@ def annotate_nested_sites(
             site.span_lead = lead
         else:
             site.unspliceable_reason = _top_level_site_problem(site, scope_map, lines)
+            site.span_lead = (
+                closed_sentence_lead(cast(ASTNode, site.statement), lines)
+                if site.unspliceable_reason is None
+                else None
+            )
 
 
 def boundary_parents(surface: MockSurface) -> dict[int, BoundarySite]:
@@ -495,7 +504,10 @@ def _top_level_site_problem(
     boundary that ends the span before it):
 
     - code before the statement on its line (`MOVE ... CALL "X" ...` or a
-      one-line paragraph `P1. CALL "X".`) -- the sibling would be deleted;
+      one-line paragraph `P1. CALL "X".`) -- the sibling would be deleted.
+      Statements before it that close their sentence (`PERFORM A. CLOSE
+      F.`) are the exception: the splice emits them back on a line of
+      their own (`closed_sentence_lead`, `BoundarySite.span_lead`);
     - another top-level statement or paragraph/SECTION header after it on
       the same line (`CALL "A" CALL "B".`) -- ditto, and two mocked
       statements on one line would corrupt each other's replacement.
@@ -504,11 +516,13 @@ def _top_level_site_problem(
     ON EXCEPTION handler) share its span legitimately and are not checked
     here -- they are part of the statement being replaced.
     """
-    return statement_top_level_problem(cast(ASTNode, site.statement), scope_map, lines)
+    return statement_top_level_problem(
+        cast(ASTNode, site.statement), scope_map, lines, allow_lead=True
+    )
 
 
 def statement_top_level_problem(
-    statement, scope_map: ScopeMap, lines: list[str]
+    statement, scope_map: ScopeMap, lines: list[str], allow_lead: bool = False
 ) -> str | None:
     """The reason a top-level STATEMENT's whole-line splice/insertion
     would corrupt sibling code, or None when it owns its line -- the same
@@ -523,11 +537,58 @@ def statement_top_level_problem(
     of `site.statement`."""
     start = statement.location.line
     column = statement.location.column
-    if lines[start - 1][: column - 1].strip():
+    lead = closed_sentence_lead(statement, lines) if allow_lead else None
+    if lead is None and lines[start - 1][: column - 1].strip():
         return "does not start its own line"
-    if any(b.top_level and b.column != column for b in scope_map.at_line(start)):
+    if lead is not None and any(
+        b.header and b.column < column for b in scope_map.at_line(start)
+    ):
+        # A one-line paragraph `P1. CALL "X".`: a MOCK PARAGRAPH splices
+        # that same header line, so the lead is not split off.
+        return "does not start its own line"
+    if any(
+        b.top_level and b.column != column and (lead is None or b.column > column)
+        for b in scope_map.at_line(start)
+    ):
         return "shares its line with another statement or paragraph header"
     return None
+
+
+def closed_sentence_lead(statement, lines: list[str]) -> str | None:
+    """The code before `statement` on its start line when that code ends
+    a sentence (`PERFORM END-ROUTINE THRU END-ROUTINE-13. CLOSE PRINT-FILE.`,
+    or a one-line paragraph `P1. CALL "X".`), else None.
+
+    A splice can then keep that code: it emits it back on a line of its
+    own ahead of the replacement (`BoundarySite.span_lead`), and the
+    sentence it closes is complete without the statement. A lead that
+    does not end with a period is part of the statement's own sentence
+    (`MOVE A TO B CALL "X"`) and is never split off."""
+    start = statement.location.line
+    column = statement.location.column
+    prefix = lines[start - 1][: column - 1]
+    if not prefix.strip():
+        return None
+    code = _code_before(prefix)
+    if code is None or not code.rstrip().endswith("."):
+        return None
+    return prefix.rstrip()
+
+
+def _code_before(prefix: str) -> str | None:
+    """`prefix` (the start of a line, up to a statement) as code, or None
+    when it holds a `*>` comment or an unclosed literal: then the
+    statement's column cannot be trusted to follow a closed sentence."""
+    quote: str | None = None
+    for index, char in enumerate(prefix):
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif prefix.startswith("*>", index):
+            return None
+    return None if quote is not None else prefix
 
 
 def nested_statement_span(

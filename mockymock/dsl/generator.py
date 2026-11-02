@@ -421,6 +421,10 @@ class ProgramContext:
     #: for the names under a CALL argument (a PCB's status field, an 88).
     data_items: list[dict] = field(default_factory=list)
     surface: MockSurface | None = None
+    #: `main_line_thru`'s answer per entry (uppercased).
+    _main_line: dict[str, str | None] = field(
+        default_factory=dict, repr=False, compare=False
+    )
     #: `SPECIAL-NAMES. DECIMAL-POINT IS COMMA.`: every numeric literal the
     #: scaffold writes uses a comma (issue #230).
     decimal_comma: bool = False
@@ -595,6 +599,86 @@ class ProgramContext:
         if reasons or entry not in reached:
             return None
         return reached
+
+    def main_line_thru(self, entry: str) -> str | None:
+        """The program's last paragraph when a case PERFORMing `entry`
+        should run the whole main line (`PERFORM entry THRU <last>`), else
+        None (2026-11-02).
+
+        That is when `entry` is the program's first paragraph, the real
+        program carries on past it (its last statement is not a STOP RUN,
+        GOBACK or EXIT PROGRAM: it falls through, or GO TOs on, as the NIST
+        CCVS85 programs' `OPEN-FILES` does), and every STOP RUN/GOBACK the
+        longer range reaches can end it (`find_terminator_plans` refuses
+        none). A bare `PERFORM entry` tests that first paragraph alone and
+        returns at its end, where the program never stops; THRU the last
+        paragraph, the run goes on as the program does, and a terminator
+        it falls into ends the case (`TerminatorPlan.exit_kind`
+        "PROGRAM"). A program whose terminators sit in paragraphs it also
+        PERFORMs keeps the bare PERFORM: the range would be refused."""
+        key = entry.upper()
+        if key not in self._main_line:
+            self._main_line[key] = self._compute_main_line_thru(entry)
+        return self._main_line[key]
+
+    def _compute_main_line_thru(self, entry: str) -> str | None:
+        if self.program is None or self.surface is None:
+            return None
+        from cobolparser.models.statements.control import StopStatement
+        from cobolparser.models.statements.misc import (
+            ExitStatement,
+            GobackStatement,
+        )
+
+        from mockymock.analysis.refusal import (
+            find_terminator_plans,
+            program_last_paragraph,
+        )
+        from mockymock.analysis.refusal._reachability import (
+            _source_ordered_paragraphs,
+        )
+        from mockymock.splicer.source_map import collect_scope_map
+
+        procedure = self.program.get_division("PROCEDURE")  # type: ignore[attr-defined]
+        ordered = _source_ordered_paragraphs(procedure) if procedure else None
+        if not ordered:
+            return None
+        first = ordered[0]
+        if str(first.paragraph_name or "").upper() != entry.upper():
+            return None
+        last = program_last_paragraph(self.program)
+        if last is None or last.upper() == entry.upper():
+            return None
+        statements = list(first.statements)
+        if statements:
+            final = statements[-1]
+            if (
+                isinstance(final, GobackStatement)
+                or (isinstance(final, StopStatement) and final.stop_type == "RUN")
+                or (isinstance(final, ExitStatement) and final.exit_type == "PROGRAM")
+            ):
+                return None
+        suite = MockTestSuite(
+            name="MAIN-LINE",
+            test_cases=[
+                MockTestCase(
+                    name="main line",
+                    perform_target=str(first.paragraph_name),
+                    perform_thru=last,
+                )
+            ],
+        )
+        try:
+            _plans, reasons = find_terminator_plans(
+                self.surface,
+                self.program,
+                suite,
+                collect_scope_map(self.program, self.lines),
+                self.lines,
+            )
+        except Exception:  # noqa: BLE001 - any doubt keeps the bare PERFORM
+            return None
+        return None if reasons else last
 
     def whenever_quiet(self, directive_lines: list[str]) -> bool:
         """True when a TESTCASE with these MOCK lines provably never makes
@@ -4774,7 +4858,10 @@ def _scaffold_with_bundle(
         # CICS HANDLE) is UNMATCHED_MOCK to the very lint this file has to
         # pass (issue #143). Its VERIFY goes with it -- `_render_expectation`
         # drops counts for keys that got no MOCK directive.
-        reachable = source.reachable_from(entry) if source is not None else None
+        thru = source.main_line_thru(entry) if source is not None else None
+        reachable = (
+            source.reachable_from(entry, thru=thru) if source is not None else None
+        )
         case_start = len(lines)
         lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
         lines.extend(f"    {line}" for line in _verification_comment_lines(scenario))
@@ -4798,7 +4885,7 @@ def _scaffold_with_bundle(
             # Mocks that never make a WHENEVER fire never reach its handler
             # either: lint then leaves the handler out of the reachable set
             # and would refuse its boundaries' mocks as UNMATCHED (#244).
-            quiet = source.reachable_from(entry, follow_whenever=False)
+            quiet = source.reachable_from(entry, follow_whenever=False, thru=thru)
             if quiet is not None and quiet != reachable:
                 reachable = quiet
                 scenario_keys = {
@@ -4820,7 +4907,7 @@ def _scaffold_with_bundle(
         if source is not None:
             lines.extend(f"    {line}" for line in source.setup_lines)
         lines.extend(f"    {line}" for line in _entry_parameter_lines(scenario, source))
-        lines.append(f"    PERFORM {entry}")
+        lines.append(f"    PERFORM {entry}" + (f" THRU {thru}" if thru else ""))
         lines.extend(
             f"    {line}"
             for line in _capture_stub_lines(_capture_targets(directive_lines))
@@ -4880,18 +4967,22 @@ def _scaffold_with_bundle(
         counted_boundaries = _rendered_call_count_refs(
             expectations, declared_keys, call_count_overrides
         )
+        # One check per line: a record written by 80 WRITE sites (a NIST
+        # main line) gave 80 identical `*> STUB EXPECT` lines.
+        rendered: set[str] = set()
         for expectation in expectations:
-            lines.extend(
-                f"    {line}"
-                for line in _render_expectation(
-                    expectation,
-                    declared_keys,
-                    call_count_overrides,
-                    counted_boundaries,
-                    source.pictures if source is not None else None,
-                    source,
-                )
-            )
+            for line in _render_expectation(
+                expectation,
+                declared_keys,
+                call_count_overrides,
+                counted_boundaries,
+                source.pictures if source is not None else None,
+                source,
+            ):
+                if line.strip() and line in rendered:
+                    continue
+                rendered.add(line)
+                lines.append(f"    {line}")
         body = _case_identity(lines[case_start + 1 :])
         if body in emitted_bodies:
             del lines[case_start:]

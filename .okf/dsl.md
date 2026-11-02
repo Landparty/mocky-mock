@@ -707,6 +707,16 @@ Rules:
   transitively via `PERFORM` are not auto-mocked; those still need manual
   `.cut` edits (the run command's refusal gate names them precisely when
   missing).
+- Whole main line (2026-11-02, `ProgramContext.main_line_thru`): a
+  scenario whose entry is the program's first paragraph is generated as
+  `PERFORM <first> THRU <last paragraph>` when the program carries on past
+  that paragraph (its last statement is no STOP RUN/GOBACK/EXIT PROGRAM)
+  and `find_terminator_plans` refuses none of the terminators that range
+  reaches (they end the case at `UT-PROGRAM-END`, see [splicer](splicer.md)).
+  Mocks are computed from the whole range. NIST CCVS85's `OPEN-FILES`
+  GO TOs on to the tests, so its cases used to test that paragraph alone.
+  A program that also PERFORMs its terminator's paragraph keeps the bare
+  PERFORM.
 - `--per-paragraph` PERFORMs a paragraph `THRU` the exit the program
   itself names (`ProgramContext.thru_exit`: every `PERFORM X` in the
   program says `THRU` the same paragraph), and computes its mocks from that

@@ -1949,7 +1949,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     from mockymock._decimal import decimal_point_is_comma
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
+    from mockymock.analysis.refusal import (
+        find_goto_exit_plans,
+        find_terminator_plans,
+        program_end_thru,
+    )
     from mockymock.analysis.stub_expectations import scan_stub_expectations
     from mockymock.cli.checks import (
         extra_reset_lines_for,
@@ -2217,6 +2221,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
+        program_end=program_end_thru(result.ast, terminator_plans),
         condition_names=record_conditions,
         behaviour=behaviour,
         returned=returned_items(result.ast) if behaviour else (),
@@ -2680,7 +2685,11 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     import sys
 
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
+    from mockymock.analysis.refusal import (
+        find_goto_exit_plans,
+        find_terminator_plans,
+        program_end_thru,
+    )
     from mockymock.cli.checks import (
         extra_reset_lines_for,
         extra_working_storage,
@@ -2820,6 +2829,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
+        program_end=program_end_thru(result.ast, terminator_plans),
     )
     instrumented = _insert_driver(lines, artifact)
 
@@ -3192,7 +3202,11 @@ def _cmd_export(args: argparse.Namespace) -> int:
     identical pre-splice pipeline to `run` (via run_static_checks),
     stopping before compile_source/run_binary."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
+    from mockymock.analysis.refusal import (
+        find_goto_exit_plans,
+        find_terminator_plans,
+        program_end_thru,
+    )
     from mockymock.cli.checks import (
         extra_reset_lines_for,
         extra_working_storage,
@@ -3323,6 +3337,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
+        program_end=program_end_thru(result.ast, terminator_plans),
     )
     instrumented, driver_line_indices = _insert_driver_with_origins(lines, artifact)
 
@@ -4228,7 +4243,9 @@ def _insert_driver_with_origins(
             inserted_proc = True
             entry_check_at = index + 1
     if inserted_proc:
-        _insert_end_of_program_trap(result, inserted)
+        _insert_end_of_program_trap(
+            result, inserted, program_end=getattr(artifact, "program_end", False)
+        )
     return result, inserted
 
 
@@ -4238,11 +4255,16 @@ def _ends_sentence(line: str) -> bool:
     return re.search(r"\.(?=\s|$)", line.split("*>", 1)[0]) is not None
 
 
-def _insert_end_of_program_trap(result: list[str], inserted: set[int]) -> None:
+def _insert_end_of_program_trap(
+    result: list[str], inserted: set[int], program_end: bool = False
+) -> None:
     """Put `driver.end_of_program_trap_lines()` after the program's last
     line of code: before its `END PROGRAM`, or at the end of the source.
-    `inserted` is renumbered for the lines it pushes down."""
-    from mockymock.splicer.driver import end_of_program_trap_lines
+    `inserted` is renumbered for the lines it pushes down. With
+    `program_end` (`DriverArtifact.program_end`), the `UT-PROGRAM-END`
+    paragraph a main-line case runs THRU goes first, so it ends the
+    program's own last SECTION rather than the trap's."""
+    from mockymock.splicer.driver import end_of_program_lines_for
 
     start = _first_procedure_index(result)
     at = len(result)
@@ -4250,7 +4272,7 @@ def _insert_end_of_program_trap(result: list[str], inserted: set[int]) -> None:
         if _END_PROGRAM_RE.match(result[index]):
             at = index
             break
-    trap = end_of_program_trap_lines()
+    trap = end_of_program_lines_for(program_end)
     # A program may end on a sentence with no period (cobc accepts that at
     # the end of the source); the trap's header would then read as more of
     # that statement. Close it -- only then, as a redundant period warns.

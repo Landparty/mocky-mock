@@ -50,6 +50,14 @@ def test_generated_suite_is_created_and_replays(name: str, tmp_path: Path):
     assert result["replay"] == result["create"], result
     created = json.loads((tmp_path / name / "result.json").read_text())
     assert created["recorded"] is True
+    # A program whose first paragraph GO TOs or falls on runs its whole main
+    # line in every case (`PERFORM OPEN-FILES THRU CCVS-999999`).
+    performs = {
+        line.strip()
+        for line in created["cut_text"].splitlines()
+        if line.startswith("    PERFORM ")
+    }
+    assert performs == {expected["perform"]}, performs
     if expected["cases"] > 1:
         # No two generated cases may be the same test under two names.
         bodies = [

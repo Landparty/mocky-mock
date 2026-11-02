@@ -292,11 +292,14 @@ from ._gates import (
     union_executed_paragraphs,
 )
 from ._plans import (
+    PROGRAM_END_PARAGRAPH,
     GotoExitPlan,
     TerminatorPlan,
     find_goto_exit_plans,
     find_terminator_plans,
     neutralized_goto_targets,
+    program_end_thru,
+    program_last_paragraph,
 )
 from ._reachability import (
     _expand_thru_range,
@@ -336,6 +339,9 @@ __all__ = [
     "ParagraphScopedRefusal",
     "TerminatorPlan",
     "GotoExitPlan",
+    "PROGRAM_END_PARAGRAPH",
+    "program_end_thru",
+    "program_last_paragraph",
     "directive_matches_site",
     "matching_directives",
     "per_file_matches",

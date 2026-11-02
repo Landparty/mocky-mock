@@ -895,6 +895,15 @@ def build_terminator_neutralization(
     lines = []
     if return_code is not None:
         lines.append(f"           MOVE {return_code} TO RETURN-CODE")
+    if exit_kind == "PROGRAM":
+        # The end of the main line (`TerminatorPlan.exit_kind`): only the
+        # test's own `PERFORM ... THRU UT-PROGRAM-END` is active here.
+        from mockymock.analysis.refusal import PROGRAM_END_PARAGRAPH
+
+        return lines + [
+            '           MOVE "Y" TO UT-EARLY-EXIT',
+            f"           GO TO {PROGRAM_END_PARAGRAPH}",
+        ]
     return lines + [
         '           MOVE "Y" TO UT-EARLY-EXIT',
         f"           EXIT {exit_kind}",

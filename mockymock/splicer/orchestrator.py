@@ -280,10 +280,7 @@ def splice_program(
                 cics_plan.exit_kind, cics_plan.resp_field
             )
             replacement = prefix + replacement + suffix
-        if site.span_lead:
-            # `AT END CALL "X"`: the header stays, on a line of its own.
-            lead_width = column_offset + len(site.span_lead)
-            replacement = [lines[start - 1][:lead_width].rstrip(), *replacement]
+        replacement = _with_lead(lines, start, site, replacement, column_offset)
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /
         # paragraph), the replacement block must terminate the sentence too
@@ -317,6 +314,7 @@ def splice_program(
         replacement = ["           CONTINUE"]
         if _span_ends_sentence(lines, start, end):
             replacement = replacement[:-1] + [replacement[-1] + "."]
+        replacement = _with_lead(lines, start, site, replacement, column_offset)
         spans.append((start, end, replacement))
 
     # Terminator neutralization: replace the STOP RUN/GOBACK statement's
@@ -349,6 +347,7 @@ def splice_program(
             start, end = statement_span(site.statement, boundaries, last_line, lines)
         if _span_ends_sentence(lines, start, end):
             replacement = replacement[:-1] + [replacement[-1] + "."]
+        replacement = _with_lead(lines, start, site, replacement, column_offset)
         spans.append((start, end, replacement))
 
     # GO-TO-to-EXIT-PARAGRAPH splices (docs/2026-08-17-goto-exit-paragraph-
@@ -465,6 +464,23 @@ def splice_program(
         else:
             lines = insert_lines_after(lines, start, replacement)
     return lines
+
+
+def _with_lead(
+    lines: list[str],
+    start: int,
+    site: BoundarySite,
+    replacement: list[str],
+    column_offset: int,
+) -> list[str]:
+    """`replacement` behind the code the site's span opens with
+    (`BoundarySite.span_lead`): a clause header (`AT END CALL "X"`) or, at
+    the top level, statements that close their sentence (`PERFORM A.
+    CLOSE F.`). That code stays as written, on a line of its own."""
+    if not site.span_lead:
+        return replacement
+    lead_width = column_offset + len(site.span_lead)
+    return [lines[start - 1][:lead_width].rstrip(), *replacement]
 
 
 def _statement_lines(lines: list[str], start: int, end: int) -> list[str]:

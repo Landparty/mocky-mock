@@ -212,8 +212,12 @@ def _site_argument(site, arg_index: int, lines, boundaries) -> tuple[str, str] |
             start, end = site.span
         else:
             start, end = statement_span(site.statement, boundaries, len(lines), lines)
+        text = lines[start - 1 : end]
+        if site.span_lead and text:
+            text = [" " * len(site.span_lead) + text[0][len(site.span_lead) :]]
+            text += lines[start:end]
         literals = _call_using_literals(
-            " ".join(lines[start - 1 : end]), [str(param.name) for param in using]
+            " ".join(text), [str(param.name) for param in using]
         )
         if literals[arg_index - 1] is not None:
             return ("literal", str(literals[arg_index - 1]))

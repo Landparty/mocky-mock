@@ -155,6 +155,18 @@ the **start** line:
    line mutually refuse instead of corrupting each other: the first
    statement fails check 2, the second fails check 1).
 
+Exception (2026-11-02, NIST CCVS85's `PERFORM END-ROUTINE THRU
+END-ROUTINE-13. CLOSE PRINT-FILE.`): when the text before the statement is
+code that ends with a period, it is a finished sentence of its own
+(`source_map.closed_sentence_lead`; a quoted literal or `*>` comment in it
+disqualifies it). The site then owns its line after all: `span_lead` holds
+that text and every splice of the site (mock dispatch, terminator, WHENEVER)
+emits it back unchanged on a line of its own ahead of the replacement
+(`orchestrator._with_lead`), as for a nested site's clause header. A
+paragraph or SECTION header in that text (`P1. CALL "X".`, a header line
+MOCK PARAGRAPH splices) and anything after the statement on the line still
+refuse.
+
 `refusal.check_test_case` turns a matched top-level site's
 `unspliceable_reason` into `UNSUPPORTED_MOCK_TARGET_LAYOUT`;
 `refusal.check_nested_exec` turns an EXEC site's into `UNSPLICEABLE_EXEC`
@@ -1263,6 +1275,28 @@ returns. An earlier design (`GO TO` redirect into a `PERFORM ... THRU
 ...` range) was proven unsound by a verification spike and replaced
 before any of it shipped -- see
 [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md).
+
+**Terminators that end the main line (2026-11-02, `TerminatorPlan.exit_kind`
+"PROGRAM").** A case PERFORMing THRU the program's last paragraph
+(`refusal.program_last_paragraph`) runs the main line to the end of the
+program. A STOP RUN/GOBACK/EXIT PROGRAM such a case reaches, that the chain
+rules above refuse, ends it instead with `MOVE "Y" TO UT-EARLY-EXIT` + `GO
+TO UT-PROGRAM-END` (`refusal.PROGRAM_END_PARAGRAPH`) -- provided no PERFORM,
+THRU range, SECTION PERFORM or SORT/MERGE/XML procedure of the program can
+reach its paragraph (`_unchecked_perform_reach` over the whole program,
+`_plans._main_line_end_problem`). Then the driver's own PERFORM is the only
+one active when it runs, and the GO TO stays inside that PERFORM's range:
+the driver PERFORMs `THRU UT-PROGRAM-END` wherever a case names the last
+paragraph (`build_driver(program_end=refusal.program_end_thru(...))`), and
+`cli.main._insert_end_of_program_trap` puts `UT-PROGRAM-END. EXIT.` right
+after the program's last paragraph, ahead of the `UT-END-OF-PROGRAM` trap.
+This is not Approach A: that jumped out of the program's own pending
+PERFORM; here none is pending. A statement one case needs as EXIT
+PARAGRAPH and another as the main-line end is refused (`cannot end both
+ways`). The existing rules are tried first, so every terminator they
+already planned is planned the same way. Tests:
+`tests/unit/test_main_line_cases.py`,
+`tests/integration/test_main_line_case.py`.
 
 **EXEC CICS RETURN/XCTL/ABEND** (issue #215, option (a)): these never
 give control back, so `mock_surface.is_terminator_site` counts a CICS site
