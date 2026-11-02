@@ -5,6 +5,14 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-02 -- generated cases reach CICS screens, COMMAREA checks, lookups
+
+* With cobol-parser's CICS entry parameters, a generated case sets the
+  COMMAREA and the EIB fields (`EIBCALEN`, `EIBAID`) its branch path needs,
+  and numeric comparisons are also run at their edge ([cli](cli.md)).
+* `generate --real` adds a case where a real program's lookup READ returns
+  the record its caller asks for (`dsl/real_branches.py`, [dsl](dsl.md)).
+
 ## 2026-11-02 -- a dynamic CALL runs a real program; runner --scenarios
 
 * A `USE REAL CALL "X"` now also answers a dynamic `CALL WS-PGM` whose

@@ -48,3 +48,15 @@ END-EVALUATE
 LegacyLens' integration-test plan adds every resolved dynamic CALL target
 with source to a run unit's real programs, so its pack and change-impact
 oracle suites run them.
+
+## Lookup records in real subprograms
+
+`generate --real` answers a real program's READ with a placeholder that
+returns end-of-file at once, so a lookup routine (`PRTRATE`: read until
+`IF RATE-PART = LK-PART`) never ran its "found" path. `dsl/real_branches.py`
+finds every `IF <record field> = <LINKAGE item>` on a file the real program
+READs and adds one TESTCASE per match: the suite's first case again, with
+its own `MOCK READ <file>` that returns a record holding the caller's value
+(`MOVE LK-PART TO RATE-PART`, other fields from their PICTUREs) and then the
+placeholder's end-of-file answer. The mock body runs inside the real program,
+so it can name its LINKAGE items.

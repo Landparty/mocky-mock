@@ -1109,7 +1109,6 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         from mockymock.dsl.entry_parameters import (
             add_entry_parameters,
             fixture_generator,
-            without_cics_parameters,
         )
 
         try:
@@ -1133,7 +1132,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             )
             for line in filled_arguments:
                 print(f"mockymock generate: note: {line}", file=sys.stderr)
-            bundle = load_fixture_bundle(without_cics_parameters(bundle_data))
+            bundle = load_fixture_bundle(bundle_data)
         except Exception as exc:
             print(f"mockymock generate: fixture bundle generation failed: {exc}")
             # cobol-parser wraps the not-found error in a ProgramLayoutError;

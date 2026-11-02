@@ -1568,3 +1568,14 @@ translator, so an unexpanded one in spliced mock code was a raw cobc error
 naming no .cut line). Calls inside a string literal or after an inline `*>`
 stay text. A condition name not in `DFHRESP_VALUES` is a `CutParseError`,
 so `lint` reports it.
+
+## `real_branches.py` -- lookup cases for real subprograms (2026-11-02)
+
+`link_real_programs` (`generate --real`) keeps each READ placeholder's body
+and calls `add_found_cases`: for every `IF <record field> = <LINKAGE item>`
+(`key_matches`, resolved through cobol-parser's `ProgramLayoutIndex`) on a
+file the real program READs, one more TESTCASE, a copy of the first case,
+whose `MOCK READ <file>` returns the matching record once (`MOVE <item> TO
+<field>`, other fields from a seeded `ValueFactory`) and then the
+placeholder's end-of-file body. Design:
+[docs/2026-11-02-real-dynamic-call-design.md](../docs/2026-11-02-real-dynamic-call-design.md).

@@ -411,3 +411,28 @@ class TestRealDynamicCall:
         assert "CALL WS-RATE-PGM USING WS-RATE-AREA" in real
         assert "EVALUATE UT-CURRENT-CASE" in mocked
         assert text.endswith("END-EVALUATE\nEND-EVALUATE")
+
+
+class TestFoundRecordCases:
+    """`generate --real` adds a case where a real lookup finds its record."""
+
+    def test_the_lookup_comparison_is_found(self, tmp_path):
+        from mockymock.analysis.real_programs import RealSpec, prepare_real_program
+        from mockymock.dsl.real_branches import key_matches
+
+        source = tmp_path / "PRTRATE.cbl"
+        source.write_text((ORACLEMIX / "PRTRATE.cbl").read_text())
+        prepared, reasons = prepare_real_program(RealSpec("PRTRATE", source, 0), None)
+        assert reasons == [] and prepared is not None
+        (match,) = key_matches(prepared)
+        assert (match.file, match.record_field, match.linkage_item) == (
+            "RATE-FILE",
+            "RATE-PART",
+            "LK-PART",
+        )
+
+    def test_hex_literal_for_a_byte_no_character_spells(self):
+        from mockymock.dsl.generator import _bundle_rendered_value
+
+        assert _bundle_rendered_value("\xf3", "alphanumeric") == "X'F3'"
+        assert _bundle_rendered_value("AB", "alphanumeric") == '"AB"'

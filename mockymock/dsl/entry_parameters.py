@@ -32,40 +32,6 @@ def fixture_generator(rows: int | None) -> Any:
         return ProgramFixtureGenerator(options)
 
 
-#: The parameters of a CICS-translated program: CICS itself supplies them.
-#: The scaffold leaves the commarea to `_commarea_setup_lines` (#245).
-_CICS_PARAMETERS = frozenset({"DFHEIBLK", "DFHCOMMAREA"})
-
-
-def without_cics_parameters(bundle: dict[str, Any]) -> dict[str, Any]:
-    """Drop the DFHEIBLK / DFHCOMMAREA fields (and their stubs) from every
-    scenario's `entry_parameters`: they are not values a test supplies."""
-    for scenario in bundle.get("scenarios") or []:
-        parameters = scenario.get("entry_parameters")
-        if parameters is None:
-            continue
-        dropped = {
-            spec["qualified_name"]
-            for spec in parameters.get("layout") or []
-            if str(spec["qualified_name"]).split(".")[0].upper() in _CICS_PARAMETERS
-        }
-        if not dropped:
-            continue
-        parameters["layout"] = [
-            spec
-            for spec in parameters["layout"]
-            if spec["qualified_name"] not in dropped
-        ]
-        if not parameters["layout"]:
-            scenario["entry_parameters"] = None
-        scenario["expectations"] = [
-            e
-            for e in scenario.get("expectations") or []
-            if not (e.get("kind") == "stub" and e.get("ref") in dropped)
-        ]
-    return bundle
-
-
 def add_entry_parameters(
     bundle: dict[str, Any],
     program_path: str,
@@ -152,7 +118,7 @@ def _entry_parameter_layout(
     names = [
         str(n)
         for n in procedure.get_metadata("using_parameters") or []
-        if str(n).upper() not in _CICS_PARAMETERS
+        if str(n).upper() not in ("DFHEIBLK", "DFHCOMMAREA")
     ]
     if not names:
         return None
