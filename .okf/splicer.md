@@ -603,6 +603,13 @@ outcome mid-dispatch); `instrument_real_program` splices a real program
 with the full suite and registry; `cancel_lines` adds `CANCEL "X"` to
 the WORKING-STORAGE reset. Design: [docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
 
+A **dynamic** CALL site (2026-11-02): `real_dynamic_routes(site, suite)`
+lists (program, case ids) of every USE REAL CALL in force, and
+`_route_real_dynamic_calls` wraps the mock dispatch in `EVALUATE TRUE /
+WHEN (cases) AND FUNCTION UPPER-CASE(<identifier>) = "X"` (tally, then the
+statement as written) `/ WHEN OTHER <mock dispatch>`. Design:
+[docs/2026-11-02-real-dynamic-call-design.md](../docs/2026-11-02-real-dynamic-call-design.md).
+
 # Orchestration and Ordering Invariant (orchestrator.py)
 
 `splice_program` computes every span **up front** against the original

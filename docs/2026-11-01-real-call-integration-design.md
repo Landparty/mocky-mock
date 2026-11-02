@@ -51,8 +51,10 @@ TESTCASE "prices two employees through the real PAYCALC"
   over BEFORE-ALL), and a `MOCK CALL "X"` in one case overrides a shared
   `USE REAL CALL "X"`. A MOCK and a USE REAL of the same key in one block
   is the usual duplicate error.
-- Only a static CALL by literal can be real. A dynamic `CALL WS-PGM`
-  stays mockable through its identifier.
+- A static CALL by literal runs a real program. Since 2026-11-02 a
+  dynamic `CALL WS-PGM` does too, when the identifier holds a real
+  program's name; any other value goes to its `MOCK CALL WS-PGM`
+  (docs/2026-11-02-real-dynamic-call-design.md).
 - A MOCK in the suite answers the matching site in any program of the
   binary. Its body runs in that program, so it names that program's data
   (`WS-RATE` above is PAYCALC's).

@@ -1802,7 +1802,7 @@ restores `choices=` also restores the import.
   is empty).
 * Each suite: when the pack has no `.cut` (a first baseline), the
   manifest's `generate` command is run — only `mockymock generate PROGRAM
-  [--real PATH]...`, every path checked to stay inside the pack — with
+  [--scenarios happy|branches|all] [--real PATH]...`, every path checked to stay inside the pack — with
   `-o CUT --force --copybook-path`. Then `run PROGRAM --cut CUT
   --copybook-path` with `--record-baseline .oracle-results/E.json`
   (baseline) or `--baseline FILE --baseline-json .oracle-results/E.json`

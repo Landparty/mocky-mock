@@ -34,40 +34,40 @@ each `edits/` folder and prints every module's verdict. Before rounds 3, 4
 and 5 the previous round is accepted (a new baseline), so each round is
 compared on its own.
 
-## Results (2026-11-02, GnuCOBOL 3.1.2, generated suites)
+## Results (2026-11-02, GnuCOBOL 3.1.2, generated suites, one case per branch)
 
-| Module | 1 no-op edits | 2 behaviour edits | 3 copybook layout (`CUST-NAME` 20 -> 24) | 4 copybook comment |
-|---|---|---|---|---|
-| CUSTJOB | same | differs (`CUSTFMT` report line) | differs (`CUST-OUT` record) | same |
-| ACCTJOB | same | differs (REWRITE value) | differs (REWRITE record) | same |
-| DB2JOB | same | differs (cursor host variable `EAST` -> `WEST`) | differs (report line) | same |
-| MQLSN | same | differs (MQPUT reply) | - | - |
-| CUSTMENU | same | differs (SEND TEXT) | - | - |
-| CUSTINQ | same | same: the edit is on the second screen, the suite only runs the first | same: the first screen never shows `CUSTREC` | same |
-| CUSTVAL | same | same: the generated COMMAREA id is 0, the edit only moves the limit | - | - |
-| IMSBMP | same | same: the generated segment is already held, the edit is on the hold path | differs (GHN segment) | same |
-| PRTINQ | same | same: `PRTRATE`'s file is an empty placeholder mock, the found path never runs | - | - |
-| MISCJOB | incomplete: `NESTPGM` | incomplete | - | - |
+Suites are generated with `--scenarios branches` (one case per branch the
+generator can drive), and a dynamically called program with source runs
+for real (`USE REAL CALL` answers `CALL WS-RATE-PGM`).
+
+| Module | Cases | 1 no-op edits | 2 behaviour edits | 3 copybook layout (`CUST-NAME` 20 -> 24) | 4 copybook comment |
+|---|---|---|---|---|---|
+| CUSTJOB | 3 + 1 | same | differs (`CUSTFMT` report line) | differs (`CUST-OUT` record) | same |
+| ACCTJOB | 1 | same | differs (REWRITE value) | differs (REWRITE record) | same |
+| DB2JOB | 1 | same | differs (cursor host variable `EAST` -> `WEST`) | differs (report line) | same |
+| MQLSN | 7 | same | differs (MQPUT reply) | - | - |
+| CUSTMENU | 1 | same | differs (SEND TEXT) | - | - |
+| IMSBMP | 6 | same | differs (the hold path now has its own case) | differs (GHN segment) | same |
+| MISCJOB | 1 | incomplete: `NESTPGM` | differs (`RATECALC`'s rate, through the dynamic CALL) | - | - |
+| CUSTINQ | 3 | same | same: the edit is on the second screen; no case sets `EIBCALEN` | same | same |
+| CUSTVAL | 1 | same | same: the LINKAGE id is never driven, the edit only moves the limit | - | - |
+| PRTINQ | 3 | same | same: `PRTRATE`'s file is an empty placeholder mock, the found path never runs | - | - |
 
 Round 5 changes the value `CUSTVAL` returns in its COMMAREA on the path the
 suite does run: differs (`RETURNED LINKAGE`).
 
 What a "same" means: every case ran and sent out exactly what it did
-before. It says nothing about paths no case reaches. A generated suite has
-one case with generated data, so its coverage decides what the oracle can
-see:
+before. It says nothing about paths no case reaches:
 
-- **One case per suite.** `CUSTINQ` (first screen only), `IMSBMP` (the
-  segment is generated held) and `CUSTVAL` (id 0) never reach the edited
-  code.
+- **Branches the generator cannot drive**: a case per branch needs the
+  branch condition to depend on data the generator sets. `EIBCALEN` (CICS
+  second screen) and LINKAGE items (`CUSTVAL`) are not set yet.
 - **Boundaries inside real subprograms get placeholder mocks**
   (`generate --real`): an empty file, SQLCODE 0 with no data. `PRTRATE`
   never finds a rate.
 - **Nested programs** (`NESTPGM`): mockymock refuses multi-unit
   compilation units, so the suite is never recorded and every compare of
   `MISCJOB` is incomplete.
-- **Dynamic CALL targets** (`RATECALC`): mocked in `DYNDRV`'s suite, and
-  not an entry point of its own, so no suite runs a `RATECALC` change.
 - **On-disk data in the old layout**: `CUSTSUM` compares the same after the
   copybook widening because its mocked READs fill fields by name. A real
   file written with the old layout would be read wrongly; the oracle does

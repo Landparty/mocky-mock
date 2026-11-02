@@ -339,3 +339,75 @@ class TestGenerateReal:
         assert text.index("BEFORE-EACH") < text.index("TESTCASE")
         assert "1 MOCK CALL block(s) replaced" in notes[0]
         parse_cut(text)  # still a valid suite
+
+
+ORACLEMIX = Path(__file__).parent.parent.parent / "examples" / "oraclemix" / "src"
+
+_DYNDRV_CUT = """TESTSUITE "DYNDRV"
+
+BEFORE-EACH
+    USE REAL CALL "RATECALC" FROM "RATECALC.cbl"
+END-BEFORE
+
+TESTCASE "rated"
+    MOCK OPEN INV-IN
+    END-MOCK
+    MOCK OPEN INV-OUT
+    END-MOCK
+    MOCK READ INV-IN
+        MOVE "10" TO UT-MOCK-STATUS
+    END-MOCK
+    MOCK CLOSE INV-IN
+    END-MOCK
+    MOCK CLOSE INV-OUT
+    END-MOCK
+    MOCK CALL WS-RATE-PGM
+    END-MOCK
+    MOCK WRITE INV-OUT-REC
+    END-MOCK
+    PERFORM 0000-MAIN
+"""
+
+
+class TestRealDynamicCall:
+    """A USE REAL CALL program reached only through a dynamic CALL
+    (docs/2026-11-02-real-dynamic-call-design.md)."""
+
+    def _cut(self, tmp_path, cut=_DYNDRV_CUT):
+        for name in ("DYNDRV.cbl", "RATECALC.cbl"):
+            (tmp_path / name).write_text((ORACLEMIX / name).read_text())
+        cut_path = tmp_path / "DYNDRV.cut"
+        cut_path.write_text(cut)
+        return cut_path
+
+    def test_the_real_directive_is_used_by_the_dynamic_call(self, tmp_path):
+        cut_path = self._cut(tmp_path)
+        checked = run_static_checks(tmp_path / "DYNDRV.cbl", cut_path, None)
+        assert checked.problems == []
+        assert [p.program_id for p in checked.real_programs] == ["RATECALC"]
+
+    def test_the_dispatch_runs_the_statement_when_the_name_matches(self):
+        from cobolparser import parse_cobol
+
+        from mockymock.analysis.mock_surface import analyze
+        from mockymock.splicer.injector import build_site_dispatch
+
+        ast = parse_cobol((ORACLEMIX / "DYNDRV.cbl").read_text()).ast
+        (site,) = [
+            s for s in analyze(ast).boundary_sites if s.category is MockCategory.DYNCALL
+        ]
+        suite = parse_cut(_DYNDRV_CUT)
+        registry = TallyRegistry(suite)
+        lines = build_site_dispatch(
+            site,
+            suite,
+            registry,
+            real_statement=["CALL WS-RATE-PGM USING WS-RATE-AREA"],
+        )
+        text = "\n".join(line.strip() for line in lines)
+        assert text.startswith('EVALUATE TRUE\nWHEN (UT-CURRENT-CASE = "001"')
+        assert 'FUNCTION UPPER-CASE(WS-RATE-PGM)\n= "RATECALC"' in text
+        real, mocked = text.split("WHEN OTHER", 1)
+        assert "CALL WS-RATE-PGM USING WS-RATE-AREA" in real
+        assert "EVALUATE UT-CURRENT-CASE" in mocked
+        assert text.endswith("END-EVALUATE\nEND-EVALUATE")

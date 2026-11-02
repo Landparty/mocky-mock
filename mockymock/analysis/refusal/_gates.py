@@ -1703,6 +1703,14 @@ def check_test_case(
             matched_directives.add(id(directive))
             if site.paragraph_name not in fallthrough_only:
                 direct_matched.add(id(directive))
+        if site.category is MockCategory.DYNCALL:
+            # A dynamic CALL may reach any program the case makes real
+            # (injector.real_dynamic_routes): its USE REAL CALLs are used.
+            for directive in case.mocks:
+                if directive.is_real:
+                    matched_directives.add(id(directive))
+                    if site.paragraph_name not in fallthrough_only:
+                        direct_matched.add(id(directive))
 
         if not matches and site.opt_in:
             # A clock ACCEPT another case mocks (issue #240): this case

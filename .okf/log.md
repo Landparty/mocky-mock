@@ -5,6 +5,14 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-02 -- a dynamic CALL runs a real program; runner --scenarios
+
+* A `USE REAL CALL "X"` now also answers a dynamic `CALL WS-PGM` whose
+  identifier holds `X` ([splicer](splicer.md), [analysis](analysis.md));
+  other values still go to `MOCK CALL WS-PGM`.
+* The runner accepts `--scenarios happy|branches|all` in a manifest's
+  generate command ([cli](cli.md)); LegacyLens asks for `branches`.
+
 ## 2026-11-02 -- baselines version 2; oraclemix example
 
 * A cursor `OPEN` is followed by a `SQL CURSOR <name>` event with its
