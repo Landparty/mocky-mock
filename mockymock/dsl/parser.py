@@ -127,9 +127,14 @@ _USE_REAL_RE = re.compile(
 _MOCK_QUOTED_RE = re.compile(
     rf'^MOCK\s+(?P<cat>{_QUOTED_CATS})\s+"(?P<key>[^"]*)"(?:\s+(?P<rows>ROWS))?$'
 )
+# A READ's access form after its file (`MOCK READ CUST-KSDS NEXT`,
+# `... KEY`, `... KEY CK-BRANCH`; model.READ_ACCESS_WORDS).
+_READ_ACCESS = (
+    r"(?:\s+(?P<access>NEXT|PREVIOUS|KEY(?:\s+(?!ROWS\b)[A-Za-z0-9][A-Za-z0-9-]*)?))?"
+)
 _MOCK_BARE_RE = re.compile(
     rf"^MOCK\s+(?P<cat>{_BARE_CATS})\s+(?P<key>[A-Za-z0-9][A-Za-z0-9-]*)"
-    rf"(?:\s+(?P<rows>ROWS))?$"
+    rf"{_READ_ACCESS}(?:\s+(?P<rows>ROWS))?$"
 )
 # END-MOCK is deliberately more forgiving than the other keywords: an
 # optional trailing period (the natural COBOL habit) and any letter case
@@ -191,7 +196,7 @@ _VERIFY_QUOTED_RE = re.compile(
 )
 _VERIFY_BARE_RE = re.compile(
     rf"^VERIFY\s+(?P<cat>{_BARE_CATS})\s+(?P<key>[A-Za-z0-9][A-Za-z0-9-]*)"
-    rf"\s+WAS\s+(?:CALLED|PERFORMED)\s+(?P<expectation>.+)$"
+    rf"{_READ_ACCESS}\s+WAS\s+(?:CALLED|PERFORMED)\s+(?P<expectation>.+)$"
 )
 _COMMENT_RE = re.compile(r"^\*>")
 _ROW_RE = re.compile(r"^\((?P<pairs>.+)\)$")
@@ -527,6 +532,21 @@ def _reject_sentence_period(value: str, line_no: int, verb: str = "EXPECT") -> N
             f"drop it (a .cut {verb} is not a COBOL sentence, and "
             f"{consequence})"
         )
+
+
+def _bare_key(m: re.Match[str], category: MockCategory, line_no: int) -> str:
+    """A bare MOCK / VERIFY key, with the READ access form when one is
+    given (`CUST-KSDS NEXT`). Only READ takes one."""
+    key = m.group("key").upper()
+    access = m.group("access")
+    if access is None:
+        return key
+    if category is not MockCategory.READ:
+        raise CutParseError(
+            f"line {line_no}: {' '.join(access.split()).upper()} after "
+            f"{key} is a READ access form; only MOCK READ / VERIFY READ take one"
+        )
+    return f"{key} {' '.join(access.upper().split())}"
 
 
 def _resolve_category(cat: str | None, bare_key: bool = False) -> MockCategory:
@@ -1575,7 +1595,7 @@ def parse_cut(text: str) -> MockTestSuite:
             in_mock = _open_mock(
                 MockDirective(
                     category=category,
-                    key=m.group("key").upper(),
+                    key=_bare_key(m, category, line_no),
                     rows=[] if m.group("rows") else None,
                 ),
                 line_no,
@@ -1703,10 +1723,11 @@ def parse_cut(text: str) -> MockTestSuite:
                 raise CutParseError(f"line {line_no}: VERIFY outside TESTCASE")
             _validate_expectation(m.group("expectation"), line_no)
             _reject_before_perform(case, "VERIFY", line_no)
+            verify_category = _resolve_category(m.group("cat"), bare_key=True)
             case.verifications.append(
                 VerifyDirective(
-                    category=_resolve_category(m.group("cat"), bare_key=True),
-                    key=m.group("key").upper(),
+                    category=verify_category,
+                    key=_bare_key(m, verify_category, line_no),
                     expectation=m.group("expectation"),
                     line=line_no,
                 )

@@ -507,6 +507,27 @@ a quoted static-CALL directive against a bare dynamic-CALL site, or vice
 versa — see the docstring on `MockCategory` in `model.py` for the full
 rationale.
 
+### `MOCK READ <file> NEXT | PREVIOUS | KEY [<key>]` (2026-11-02)
+
+A file read several ways (a VSAM KSDS read by key, browsed with READ NEXT
+and READ PREVIOUS, or read by an alternate key) can be mocked per access
+form: `MOCK READ CUST-KSDS NEXT`, `MOCK READ CUST-KSDS PREVIOUS`, `MOCK READ
+CUST-KSDS KEY` (a keyed READ by the prime key) or `MOCK READ CUST-KSDS KEY
+CU-NAME` (by that alternate key). `VERIFY READ <file> <form> WAS CALLED`
+counts one form. Only `READ` takes a form; any other category raises
+`CutParseError`. The form is kept in the directive's key (`"CUST-KSDS
+NEXT"`); `MockDirective.file_key` is the bare file name, used for FILE
+STATUS lookups. `mock_surface.read_form_of` classifies each READ site
+(`BoundarySite.read_form`, from the SELECT's organization and access mode
+in `MockSurface.file_selects`), and `refusal.matching_directives` picks the
+most specific directive that matches a site (`_match_specificity`), so a
+plain `MOCK READ CUST-KSDS` still answers every form no qualified directive
+claims. `generate` qualifies a file's READ mocks only when its sites read
+it in more than one form (`split_read_files`); a keyed READ's rows drop the
+key field the program sets itself, and a status a form cannot return is
+replaced with `00`. A failed READ with a status other than `0x` is
+status-only (no record); `02`/`04` come with the record.
+
 ## `USE REAL CALL "X" FROM "<path>"` (2026-11-01)
 
 Allowed wherever a `MOCK` is (TESTCASE, BEFORE-EACH, BEFORE-ALL). The parser

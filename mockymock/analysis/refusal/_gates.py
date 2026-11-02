@@ -84,6 +84,8 @@ from mockymock.dsl.model import (
     MockDirective,
     MockTestCase,
     MockTestSuite,
+    read_access_matches,
+    split_read_access,
 )
 
 from ._plans import find_terminator_plans
@@ -184,7 +186,36 @@ def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool
         )
     if directive.category is MockCategory.CALL:
         return directive.key in site.keys
+    if directive.category is MockCategory.READ:
+        file_key, access = split_read_access(directive.key.upper())
+        if access is not None:
+            return file_key in site.keys and read_access_matches(access, site.read_form)
     return directive.key.upper() in site.keys
+
+
+def _match_specificity(directive: MockDirective) -> int:
+    """How narrowly a directive names its sites: a bare `MOCK READ F` 0,
+    `MOCK READ F NEXT|PREVIOUS|KEY` 1, `MOCK READ F KEY <name>` 2."""
+    if directive.category is not MockCategory.READ:
+        return 0
+    _, access = split_read_access(directive.key)
+    if access is None:
+        return 0
+    return 2 if " " in access else 1
+
+
+def matching_directives(
+    mocks: list[MockDirective], site: BoundarySite
+) -> list[MockDirective]:
+    """The directives of one case that answer `site`. When several READ
+    directives match, the most specific wins (`MOCK READ F KEY CK-BR` over
+    `MOCK READ F KEY` over `MOCK READ F`): a qualified MOCK takes its READ
+    form away from the bare one."""
+    matches = [d for d in mocks if directive_matches_site(d, site)]
+    if len(matches) > 1 and site.category is MockCategory.READ:
+        best = max(_match_specificity(d) for d in matches)
+        matches = [d for d in matches if _match_specificity(d) == best]
+    return matches
 
 
 #: Statements that can name several files or reports at once (`OPEN INPUT
@@ -1698,7 +1729,7 @@ def check_test_case(
                 )
             continue
 
-        matches = [d for d in case.mocks if directive_matches_site(d, site)]
+        matches = matching_directives(case.mocks, site)
         for directive in matches:
             matched_directives.add(id(directive))
             if site.paragraph_name not in fallthrough_only:
@@ -1854,7 +1885,7 @@ def check_test_case(
     for site in surface.boundary_sites:
         if site.category is None or id(site.statement) in already_checked_ids:
             continue
-        matches = [d for d in case.mocks if directive_matches_site(d, site)]
+        matches = matching_directives(case.mocks, site)
         if not matches:
             continue
         if len(matches) > 1 and not per_file_matches(matches, site):
@@ -2052,7 +2083,7 @@ def check_test_case(
             )
 
     for directive in case.mocks:
-        missing_status_field = directive.key.upper() not in file_status_fields
+        missing_status_field = directive.file_key.upper() not in file_status_fields
         if directive.file_status is not None and missing_status_field:
             reasons.append(
                 RefusalReason(

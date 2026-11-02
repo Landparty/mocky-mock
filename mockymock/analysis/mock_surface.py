@@ -326,6 +326,10 @@ class BoundarySite:
     # test case that does not mock it runs the real statement (the
     # dispatch's WHEN OTHER), so it is never refused as unmocked.
     opt_in: bool = False
+    # A READ site: its access form (`model.READ_ACCESS_WORDS`): "NEXT",
+    # "PREVIOUS", "KEY", or "KEY <alternate key>" -- what a qualified
+    # `MOCK READ <file> <form>` matches (`read_form_of`).
+    read_form: str | None = None
 
 
 @dataclass
@@ -386,6 +390,9 @@ class MockSurface:
     #: SECTION`, issue #267) are here too, with `whenever` None: spliced to
     #: CONTINUE, nothing else.
     whenever_sites: list[BoundarySite] = field(default_factory=list)
+    #: Every SELECT, by uppercased file name: organization, access mode and
+    #: keys, for the READ forms and the key a keyed READ asks for.
+    file_selects: dict[str, FileSelect] = field(default_factory=dict)
 
     def static_call_sites(self) -> list[CallSite]:
         return [c for c in self.call_sites if c.kind is CallKind.STATIC]
@@ -1044,6 +1051,12 @@ def analyze(program: CobolProgram) -> MockSurface:
     for paragraph in _all_paragraphs(procedure):
         _walk_statements(paragraph.statements, paragraph.paragraph_name, surface)
 
+    selects = file_selects(program)
+    surface.file_selects = selects
+    for site in surface.boundary_sites:
+        if site.category is MockCategory.READ:
+            site.read_form = read_form_of(site.statement, selects)
+
     states = handle_states(program)
     if states:
         for site in surface.boundary_sites:
@@ -1105,6 +1118,78 @@ def promote_clock_accepts(surface: MockSurface, mocks) -> list[BoundarySite]:
     surface.boundary_sites.extend(promoted)
     surface.boundary_sites.sort(key=lambda site: site.line)
     return promoted
+
+
+@dataclass(frozen=True)
+class FileSelect:
+    """What a SELECT says about how a file is read: organization, access
+    mode and its keys (uppercased; None/empty when not given)."""
+
+    organization: str | None
+    access_mode: str | None
+    record_key: str | None
+    alternate_keys: tuple[str, ...]
+    relative_key: str | None
+
+    @property
+    def keyed(self) -> bool:
+        """An indexed (KSDS) or relative (RRDS) file a READ without NEXT or
+        PREVIOUS reads by key: its access is RANDOM or DYNAMIC."""
+        return self.organization in ("INDEXED", "RELATIVE") and (
+            self.access_mode in ("RANDOM", "DYNAMIC")
+        )
+
+
+def file_selects(program: CobolProgram) -> dict[str, FileSelect]:
+    """Every SELECT of the program, by uppercased file name."""
+    selects: dict[str, FileSelect] = {}
+    environment = program.get_division("ENVIRONMENT")
+    if environment is None:
+        return selects
+    io_section = environment.get_section_by_name("INPUT-OUTPUT")
+    if not isinstance(io_section, CobolSection):
+        return selects
+    file_control = io_section.get_paragraph_by_name("FILE-CONTROL")
+    if file_control is None:
+        return selects
+
+    def upper(value: object) -> str | None:
+        return str(value).upper() if value else None
+
+    for statement in file_control.statements:
+        if not isinstance(statement, SelectStatement) or not statement.file_name:
+            continue
+        alternates = tuple(
+            str(entry.get("key")).upper()
+            for entry in getattr(statement, "alternate_keys", None) or []
+            if isinstance(entry, dict) and entry.get("key")
+        )
+        selects[statement.file_name.upper()] = FileSelect(
+            organization=upper(getattr(statement, "organization", None)),
+            access_mode=upper(getattr(statement, "access_mode", None)),
+            record_key=upper(getattr(statement, "record_key", None)),
+            alternate_keys=alternates,
+            relative_key=upper(getattr(statement, "relative_key", None)),
+        )
+    return selects
+
+
+def read_form_of(statement: object, selects: dict[str, FileSelect]) -> str:
+    """The access form of one READ: `NEXT` (READ NEXT, or any READ of a
+    file read sequentially), `PREVIOUS`, `KEY` (a random READ of an
+    indexed or relative file by its record or relative key) or `KEY
+    <name>` (`READ ... KEY IS <alternate key>`)."""
+    mode = str(getattr(statement, "access_mode", None) or "").upper()
+    if mode in ("NEXT", "PREVIOUS"):
+        return mode
+    file_name = str(getattr(statement, "file_name", None) or "").upper()
+    select = selects.get(file_name)
+    key_name = str(getattr(statement, "key_name", None) or "").upper()
+    if select is None or not select.keyed:
+        return "NEXT"
+    if key_name and key_name != select.record_key:
+        return f"KEY {key_name}"
+    return "KEY"
 
 
 def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:

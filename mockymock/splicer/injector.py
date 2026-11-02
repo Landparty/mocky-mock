@@ -28,7 +28,7 @@ from mockymock.analysis.clause_bodies import (
     clause_guard_lines,
 )
 from mockymock.analysis.mock_surface import BoundarySite
-from mockymock.analysis.refusal import directive_matches_site, per_file_matches
+from mockymock.analysis.refusal import matching_directives, per_file_matches
 from mockymock.dsl.model import (
     FILE_STATUS_CATEGORIES,
     SEQUENCED_CALL_CATEGORIES,
@@ -341,7 +341,7 @@ def build_site_dispatch(
     lines.append("           EVALUATE UT-CURRENT-CASE")
 
     for case_id, mocks in dispatch_entries(suite):
-        matches = [d for d in mocks if directive_matches_site(d, site)]
+        matches = matching_directives(mocks, site)
         if len(matches) > 1 and per_file_matches(matches, site):
             # A multi-file OPEN/CLOSE with one MOCK per file (issue #348):
             # the statement runs once and every file's directive answers
@@ -413,14 +413,14 @@ def build_site_dispatch(
                 field
                 for field in (
                     file_status_fields.get(key.upper())
-                    for key in [directive.key, *site.keys]
+                    for key in [directive.file_key, *site.keys]
                 )
                 if field
             )
             for default_field in default_fields:
                 lines.append(f'                   MOVE "00" TO {default_field}')
             for answering in matches:
-                status_field = file_status_fields.get(answering.key.upper())
+                status_field = file_status_fields.get(answering.file_key.upper())
                 if status_field and answering.file_status is not None:
                     lines.append(
                         f'                   MOVE "{answering.file_status}" '
@@ -484,13 +484,13 @@ def build_site_dispatch(
                 *(name for row in directive.rows or [] for name, _ in row),
                 *(name for name, _ in directive.terminal_row or []),
             ],
-            file_status_fields.get(directive.key.upper()),
+            file_status_fields.get(directive.file_key.upper()),
         )
         if directive.rows is not None and directive.category in (
             MockCategory.READ,
             MockCategory.RETURN,
         ):
-            status_field = file_status_fields.get(directive.key.upper())
+            status_field = file_status_fields.get(directive.file_key.upper())
             lifted_at_end = any(
                 clause.attr == "at_end_clause" for clause in lifted_clauses or ()
             )
@@ -589,7 +589,7 @@ def build_site_dispatch(
                 if label:
                     lines.append(f"                   GO TO {label}")
         if lifted_clauses:
-            outcome_status = file_status_fields.get(directive.key.upper())
+            outcome_status = file_status_fields.get(directive.file_key.upper())
             if outcome_status and directive.category in FILE_STATUS_CATEGORIES:
                 lines.append(
                     f"                   MOVE {outcome_status} TO {OUTCOME_FIELD}"

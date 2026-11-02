@@ -118,6 +118,36 @@ FLOW_CATEGORIES = frozenset({MockCategory.PARAGRAPH, MockCategory.SECTION})
 # TERMINAL group (there is no implicit-default fallback to lean on); see
 # refusal.py's UNRESOLVED_FILE_STATUS_TARGET check and injector.py's ROWS
 # dispatch, both widened from READ-only to (READ, RETURN).
+#: The READ forms a `MOCK READ <file> <form>` / `VERIFY READ <file> <form>`
+#: can name, so the READ NEXT, READ PREVIOUS and keyed READs of one VSAM
+#: file each get their own mock, rows and tally: `NEXT` (READ NEXT, and a
+#: READ of a file read sequentially), `PREVIOUS`, `KEY` (a random READ by
+#: the record key or any alternate key) and `KEY <data-name>` (a READ
+#: whose `KEY IS` names that alternate key). A bare `MOCK READ <file>`
+#: answers every form no qualified MOCK of the case answers.
+READ_ACCESS_WORDS = ("NEXT", "PREVIOUS", "KEY")
+
+
+def read_access_matches(access: str, form: str | None) -> bool:
+    """Whether a READ access qualifier answers a READ site of `form`:
+    `KEY` answers every keyed READ, `KEY <name>` only the READs by that
+    alternate key, `NEXT` / `PREVIOUS` their own form."""
+    if form is None:
+        return False
+    if access == "KEY":
+        return form == "KEY" or form.startswith("KEY ")
+    return access == form
+
+
+def split_read_access(key: str) -> tuple[str, str | None]:
+    """(file, access form or None) of a READ key: `"CUST-KSDS KEY CK-BR"`
+    -> `("CUST-KSDS", "KEY CK-BR")`. Any other key comes back whole."""
+    parts = key.split(None, 1)
+    if len(parts) == 2 and parts[1].split()[0].upper() in READ_ACCESS_WORDS:
+        return parts[0], " ".join(parts[1].upper().split())
+    return key, None
+
+
 FILE_STATUS_CATEGORIES = frozenset(
     {
         MockCategory.OPEN,
@@ -240,6 +270,13 @@ class MockDirective:
     def program_name(self) -> str:
         """v1 compat: the CALL key. Only meaningful for CALL directives."""
         return self.key
+
+    @property
+    def file_key(self) -> str:
+        """The file (or record) this directive names, without a READ access
+        qualifier: `CUST-KSDS` for `MOCK READ CUST-KSDS NEXT`. What a FILE
+        STATUS field and a site's keys are looked up by."""
+        return split_read_access(self.key)[0]
 
     def describe(self) -> str:
         """Human-readable form used in refusal messages and codegen traps,
