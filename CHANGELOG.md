@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.13.0](https://github.com/Landparty/mocky-mock/compare/v0.12.0...v0.13.0) (2026-11-02)
+
+
+### Features
+
+* **baseline:** record cursor inputs and what a program returns (baseline v2); oraclemix example ([20b4df8](https://github.com/Landparty/mocky-mock/commit/20b4df826e9f5b47f9c1de6720402cac2238fc2c))
+* behaviour baselines (run --record-baseline / --baseline) and mockymock runner ([#396](https://github.com/Landparty/mocky-mock/issues/396)) ([01b1476](https://github.com/Landparty/mocky-mock/commit/01b14768835d1de4cc163d3e6c8706d767eb2191))
+* **dsl:** USE REAL CALL links real subprograms into a suite (load-module tests) ([#392](https://github.com/Landparty/mocky-mock/issues/392)) ([a56090d](https://github.com/Landparty/mocky-mock/commit/a56090da4733e859253046a6e4375c6c780ea589))
+* **examples:** ordmod load module; MQ placeholders answer CompCode ([#393](https://github.com/Landparty/mocky-mock/issues/393)) ([31ba3df](https://github.com/Landparty/mocky-mock/commit/31ba3df43474f14d2da4ec14ed3b2ebc49cce645))
+* **generate:** CICS entry parameters from the bundle, hex literals, found-record cases in real subprograms ([b7ea7cb](https://github.com/Landparty/mocky-mock/commit/b7ea7cb05094155f5a2a303aacf5b6f598007414))
+* **oracle:** baseline v2, real dynamic CALL targets, runner --scenarios; oraclemix example ([c7e1c59](https://github.com/Landparty/mocky-mock/commit/c7e1c59e69e007b8d6f320fb1161487e0f8b98e5))
+* **real-call:** a dynamic CALL runs a USE REAL CALL program; runner allows --scenarios ([faa958b](https://github.com/Landparty/mocky-mock/commit/faa958b80a19e28c7c0d5e1c96b55b3ee2a0052b))
+* VSAM READ access forms, FILE STATUS cases, VSAM samples ([8c9df40](https://github.com/Landparty/mocky-mock/commit/8c9df40a3b19567d3e4f433cd2fa7dc9554eb46b))
+* VSAM READ access forms, FILE STATUS cases, VSAM samples ([2e1fef6](https://github.com/Landparty/mocky-mock/commit/2e1fef6e1c7329c3a4269d2b30efba7220a2fa2e))
+
+
+### Bug Fixes
+
+* **dsl:** a quoted PROVIDER placeholder takes the row value's content ([81c4541](https://github.com/Landparty/mocky-mock/commit/81c454170d76a81ab8bff8fab69f4e40e3790ad4)), closes [#376](https://github.com/Landparty/mocky-mock/issues/376)
+* **dsl:** give the in-literal placeholder substitution a typed function ([c530fb6](https://github.com/Landparty/mocky-mock/commit/c530fb686cc3de91bd7f3000056162c47668426a)), closes [#376](https://github.com/Landparty/mocky-mock/issues/376)
+* **generate:** IMS MPP scaffolds end their GU loop on QC ([#394](https://github.com/Landparty/mocky-mock/issues/394)) ([192245f](https://github.com/Landparty/mocky-mock/commit/192245f6d62cd57e2c0c3225c3db2b1860ddb731))
+* open-issue sweep ([#374](https://github.com/Landparty/mocky-mock/issues/374), [#375](https://github.com/Landparty/mocky-mock/issues/375), [#376](https://github.com/Landparty/mocky-mock/issues/376), [#384](https://github.com/Landparty/mocky-mock/issues/384)) ([3326b5f](https://github.com/Landparty/mocky-mock/commit/3326b5f9bf73425f53a7e720640ae3f818a74424))
+* **record:** skip a CAPTURE golden for a CALL that never ran ([3852224](https://github.com/Landparty/mocky-mock/commit/3852224ed03c2b552fa8356e5afd09207defbe6e)), closes [#384](https://github.com/Landparty/mocky-mock/issues/384)
+* **report:** escape terminal control characters in the console listing ([fe94b63](https://github.com/Landparty/mocky-mock/commit/fe94b637cac1814d5da2443af40c4b6370108c79)), closes [#375](https://github.com/Landparty/mocky-mock/issues/375)
+* **report:** show a failing numeric EXPECT's value, not its DISPLAY image ([8d8ff80](https://github.com/Landparty/mocky-mock/commit/8d8ff8012ae97ed1325e88a84a330795a1c999f1)), closes [#374](https://github.com/Landparty/mocky-mock/issues/374)
+* second field run (PREMCALC, RECFMT, LEDGRPT, DATECHK) ([#358](https://github.com/Landparty/mocky-mock/issues/358)) ([989b2a7](https://github.com/Landparty/mocky-mock/commit/989b2a7c4b3bcba65d8b35aeb84bd6ef7d97c9ba))
+* **skills:** resync the shipped cobol-analysis skill with cobol-parser ([4e65822](https://github.com/Landparty/mocky-mock/commit/4e65822c709b3237fa5ec515d79589d7567e573a))
+* test an unnamed main line, doctor fails on a broken config, journal and skills-mode fixes ([#395](https://github.com/Landparty/mocky-mock/issues/395)) ([9dbe216](https://github.com/Landparty/mocky-mock/commit/9dbe2160ba59d70df0925b3cde24a3348c038cd9))
+
+
+### Documentation
+
+* **oraclemix:** results after the branch-reach fixes ([0472567](https://github.com/Landparty/mocky-mock/commit/04725673b4b1312f3fe2f465d12b46404e674b22))
+
 ## [0.12.0](https://github.com/Landparty/mocky-mock/compare/v0.11.0...v0.12.0) (2026-10-29)
 
 
