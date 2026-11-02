@@ -1815,7 +1815,24 @@ restores `choices=` also restores the import.
   a baseline or without its frozen `.cut` is an `error`, not a run.
 * The result payload per suite: `entry`, `cut_path`, `cut_text` (the `.cut`
   it ran, which the backend freezes), `exit_code`, `log` (last 20,000
-  chars), and `baseline` / `comparison` / `error`.
+  chars), `duration_ms`, and `baseline` / `comparison` / `error`. The
+  payload also carries `log`: the job's timeline.
+* `runner/logs.py` (2026-11-02) — `JobLog(job_id)`: each step of a job
+  (`job claimed`, `environment` — mockymock and Python versions, platform,
+  `MOCKYMOCK_TOOLCHAIN`, `cobc --version` — `pack downloaded`, `pack
+  unpacked`, `manifest read`, per suite `suite started` / `generate
+  finished` / `run finished` / `suite finished` or `suite failed` with
+  `exit_code`, `timed_out`, `duration_ms`, then `job finished`) is kept as
+  timestamped text (`MAX_JOB_LOG_CHARS` 50,000, tail kept) and mirrored to
+  the `mockymock.runner` logger with the fields as `extra` (a field named
+  like a `LogRecord` attribute becomes `field_<name>`). `serve` posts the
+  text as the payload's `log`, also when the download fails or the job
+  crashes (an unexpected exception is reported as the job's `error`, not a
+  dead runner). `configure_logging(level, fmt, file)`: `TextFormatter`
+  (`time LEVEL message key=value`) or `JsonFormatter` (one object per line).
+  CLI: `--log-file` (append), `--log-format text|json`, `--log-level`;
+  without them the log goes to stderr as text. `serve(log=...)` still takes
+  a line callback (tests); without one the loop's messages go to the logger.
 * Container: `docker/runner/Dockerfile` (debian trixie GnuCOBOL 3.2, native
   toolchain through a linked tree at `/opt/gnucobol`, non-root user,
   entrypoint `mockymock runner`). Design: docs/2026-11-01-runner-design.md.

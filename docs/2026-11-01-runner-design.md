@@ -64,6 +64,17 @@ only runs `mockymock generate PROGRAM [--scenarios happy|branches|all]
 [--real PATH]...` from the manifest,
 and refuses any path (in the zip or the manifest) that leaves the pack.
 
+## Logging
+
+Each job keeps a timeline (`mockymock/runner/logs.py`): claimed, the
+runner's environment (mockymock, Python, toolchain, `cobc --version`),
+pack downloaded and unpacked, and per suite the generate and run with exit
+code, timeout and duration. The runner posts it with the result as `log`,
+so the backend stores it with the job and LegacyLens shows it next to the
+verdict; a download failure or a crash still posts it. The same steps go
+to the `mockymock.runner` logger: stderr by default, `--log-file`, and
+`--log-format json` for a log collector.
+
 ## Deployment
 
 `docker/runner/Dockerfile`: Debian trixie's GnuCOBOL 3.2, mockymock's
