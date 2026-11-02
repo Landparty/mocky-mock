@@ -54,6 +54,7 @@ from mockymock.analysis.sql_whenever import whenever_check_lines
 from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
 from mockymock.splicer.behaviour import cursor_host_variables
 from mockymock.splicer.cics_resp import EIB_RESP_NAMES
+from mockymock.splicer.file_keys import rewrite_foreign_record_keys
 from mockymock.splicer.injector import (
     build_chain_check,
     build_cics_terminator_exit,
@@ -129,7 +130,12 @@ def splice_program(
     shifted right of the normalized source the AST's columns index --
     `export` splices lines with the 7-column sequence area restored
     (issue #325); the only column-sensitive step, the clause-body lift,
-    needs it."""
+    needs it.
+
+    A SELECT whose RECORD KEY is declared outside the file's FD record
+    (CardDemo's CBEXPORT) is made compilable first
+    (`splicer.file_keys`): the file is mocked, so its key is never used."""
+    lines = rewrite_foreign_record_keys(lines, surface)
     last_line = len(lines)
     # EIBRESP / EIBRESP2 exist only when the program has an EIB (declared,
     # or synthesized because it references one); every CICS mock resets
