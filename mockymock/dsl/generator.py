@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Collection
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
@@ -3906,7 +3907,13 @@ def _sites_for_key(
     key: str,
     surface: MockSurface,
     reachable: set[str] | None = None,
+    among: Collection[str] = (),
 ) -> list[BoundarySite]:
+    """The sites a MOCK of `key` answers. `among` holds the other keys of
+    the same category the case mocks: a READ / OPEN site goes only to the
+    most specific of them that answers it, as at run time
+    (`matching_directives`), so a `READ F KEY IS ALT` site counts under
+    `READ F KEY ALT` and not also under `READ F KEY` (issue #402)."""
     return [
         site
         for site in surface.boundary_sites
@@ -3915,9 +3922,48 @@ def _sites_for_key(
         and (
             _unique_prefix(site, surface) == key
             if category in EXEC_CATEGORIES
-            else _site_answers(site, key)
+            else _site_answers(site, key) and _most_specific(site, key, among)
         )
     ]
+
+
+def _key_specificity(key: str) -> int:
+    """`F` 0, `F NEXT|PREVIOUS|KEY` or `F <open mode>` 1, `F KEY <name>` 2
+    -- the order `matching_directives` picks a READ / OPEN directive by."""
+    _, access = split_read_access(key)
+    if access is None:
+        return 0
+    return 2 if " " in access else 1
+
+
+def _most_specific(site: BoundarySite, key: str, among: Collection[str]) -> bool:
+    """Whether no key in `among` answers `site` more narrowly than `key`."""
+    if site.category not in (MockCategory.READ, MockCategory.OPEN):
+        return True
+    file_key = split_read_access(key)[0]
+    mine = _key_specificity(key)
+    return not any(
+        other != key
+        and split_read_access(other)[0] == file_key
+        and _key_specificity(other) > mine
+        and _site_answers(site, other)
+        for other in among
+    )
+
+
+def _count_keys(expectations: list[Expectation]) -> dict[MockCategory, set[str]]:
+    """The keys each category's call-count expectations name."""
+    keys: dict[MockCategory, set[str]] = {}
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        try:
+            category = MockCategory(category_str)
+        except ValueError:
+            continue
+        keys.setdefault(category, set()).add(key)
+    return keys
 
 
 def _site_answers(site: BoundarySite, key: str) -> bool:
@@ -4043,6 +4089,7 @@ def _conditional_call_count_keys(
     (the scope with `loops_exact=True`, falling back to `scope`): their
     counts come from the bundle's row data, which models the read loop."""
     keys: list[tuple[tuple[MockCategory, str], str]] = []
+    count_keys = _count_keys(expectations)
     for expectation in expectations:
         if expectation.kind != "call_count":
             continue
@@ -4051,11 +4098,12 @@ def _conditional_call_count_keys(
             category = MockCategory(category_str)
         except ValueError:
             continue
-        sites = _sites_for_key(category, key, surface, reachable)
+        among = count_keys.get(category, ())
+        sites = _sites_for_key(category, key, surface, reachable, among)
         if (
             reachable is not None
             and category not in (MockCategory.READ, MockCategory.RETURN)
-            and len(_sites_for_key(category, key, surface)) > len(sites)
+            and len(_sites_for_key(category, key, surface, among=among)) > len(sites)
         ):
             keys.append(((category, key), _UNREACHED_SITE_REASON))
         elif len(sites) > 1 and any(site.nested for site in sites):
@@ -4113,6 +4161,7 @@ def _once_per_site_counts(
     `1000-INIT`, so its OPEN is counted twice), while a case PERFORMs the
     entry paragraph alone and returns at its end."""
     counts: dict[tuple[MockCategory, str], int] = {}
+    count_keys = _count_keys(expectations)
     for expectation in expectations:
         if expectation.kind != "call_count":
             continue
@@ -4123,7 +4172,9 @@ def _once_per_site_counts(
             continue
         if category not in _ONE_SHOT_CATEGORIES:
             continue
-        sites = _sites_for_key(category, key, surface, reachable)
+        sites = _sites_for_key(
+            category, key, surface, reachable, count_keys.get(category, ())
+        )
         if not sites or not all(_site_in_scope(site, scope) for site in sites):
             continue
         if expectation.value != len(sites):
@@ -4146,13 +4197,14 @@ def _unlooped_read_counts(
     runs once per site, whatever number of rows the bundle generated for
     it; the bundle counts the rows (DORMACCT: "10 TIMES, got 1")."""
     counts: dict[tuple[MockCategory, str], int] = {}
+    among = _count_keys(expectations).get(MockCategory.READ, ())
     for expectation in expectations:
         if expectation.kind != "call_count":
             continue
         category_str, _, key = expectation.ref.partition(":")
         if category_str != MockCategory.READ.value:
             continue
-        sites = _sites_for_key(MockCategory.READ, key, surface, reachable)
+        sites = _sites_for_key(MockCategory.READ, key, surface, reachable, among)
         if sites and not any(
             site.nested or site_in_loop(site, source.looped) for site in sites
         ):
@@ -4172,13 +4224,14 @@ def _endless_read_keys(
     AT END, or a FILE STATUS loop, which `_status_read_eof` counts
     itself). A keyed READ in `PERFORM X 3 TIMES` reads 3 times, not 10."""
     keys: list[tuple[MockCategory, str]] = []
+    among = _count_keys(expectations).get(MockCategory.READ, ())
     for expectation in expectations:
         if expectation.kind != "call_count":
             continue
         category_str, _, key = expectation.ref.partition(":")
         if category_str != MockCategory.READ.value:
             continue
-        sites = _sites_for_key(MockCategory.READ, key, surface, reachable)
+        sites = _sites_for_key(MockCategory.READ, key, surface, reachable, among)
         if any(
             (site.nested or site_in_loop(site, source.looped))
             and not getattr(site.statement, "at_end_clause", None)
@@ -4574,7 +4627,12 @@ def _scaffold_with_bundle(
                 and source is not None
                 and any(
                     _site_under_branch(site, source.program)
-                    for site in _sites_for_key(*key_pair, surface, reachable)
+                    for site in _sites_for_key(
+                        *key_pair,
+                        surface,
+                        reachable,
+                        _count_keys(expectations).get(key_pair[0], ()),
+                    )
                 )
             ):
                 call_count_overrides[key_pair] = CallCountOverride(

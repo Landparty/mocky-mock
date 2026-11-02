@@ -371,7 +371,65 @@ def test_a_version_1_baseline_ignores_the_version_2_events():
     assert comparison.matches
     assert comparison.notes and "version 1" in comparison.notes[0]
     assert "note: baseline version 1" in format_comparison(comparison)
-    # A version-2 baseline compares them.
+    # A current baseline compares them.
     comparison = compare(_baseline(), parse_stdout(newer), {"cut": "a"})
     assert not comparison.matches
     assert comparison.notes == []
+
+
+# --- EXEC CICS keys and resources (issue #400) ------------------------------
+
+
+def test_cics_command_records_its_key_and_resources():
+    text = (
+        'EXEC CICS READ DATASET("CUSTFILE") INTO(WS-REC) RIDFLD(WS-CUST-ID) '
+        "LENGTH(WS-LEN) END-EXEC"
+    )
+    lines = site_lines("CICS", "READ", None, text, "CICS", "")
+    assert lines == [
+        'DISPLAY "__MOCKYMOCK__ EVENT: CICS READ"',
+        'DISPLAY "__MOCKYMOCK__ EVENT: CICS RIDFLD"',
+        "MOVE LENGTH OF WS-CUST-ID TO UT-BT-LEN",
+        f'CALL "{HEXDUMP_PROGRAM}" USING WS-CUST-ID UT-BT-LEN',
+        'DISPLAY "__MOCKYMOCK__ EVENT: CICS RESOURCE DATASET CUSTFILE"',
+    ]
+
+
+def test_cics_resource_named_by_a_variable_is_dumped():
+    text = "EXEC CICS LINK PROGRAM(WS-PGM) COMMAREA(WS-COMM) END-EXEC"
+    lines = site_lines("CICS", "LINK", None, text, "CICS", "")
+    assert lines[-3:] == [
+        'DISPLAY "__MOCKYMOCK__ EVENT: CICS RESOURCE PROGRAM"',
+        "MOVE LENGTH OF WS-PGM TO UT-BT-LEN",
+        f'CALL "{HEXDUMP_PROGRAM}" USING WS-PGM UT-BT-LEN',
+    ]
+    # MAPSET is its own option, not MAP; a literal RIDFLD records nothing.
+    text = "EXEC CICS SEND MAP('M1') MAPSET('MS1') FROM(M1O) END-EXEC"
+    labels = site_lines("CICS", "SEND", None, text, "CICS", "")
+    assert 'DISPLAY "__MOCKYMOCK__ EVENT: CICS RESOURCE MAP M1"' in labels
+    assert 'DISPLAY "__MOCKYMOCK__ EVENT: CICS RESOURCE MAPSET MS1"' in labels
+    text = "EXEC CICS DELETE FILE('F') RIDFLD('K1') END-EXEC"
+    assert not any(
+        "RIDFLD" in line
+        for line in site_lines("CICS", "DELETE", None, text, "CICS", "")
+    )
+
+
+def test_a_version_2_baseline_ignores_the_cics_key_and_resource_events():
+    old = _baseline()
+    old["version"] = 2
+    newer = _STDOUT.replace(
+        "__MOCKYMOCK__ RC 001",
+        "__MOCKYMOCK__ EVENT: CICS RIDFLD\n__MOCKYMOCK__ DATA: 41\n"
+        "__MOCKYMOCK__ EVENT: CICS RESOURCE FILE CUSTF\n"
+        "__MOCKYMOCK__ RC 001",
+    )
+    comparison = compare(old, parse_stdout(newer), {"cut": "a"})
+    assert comparison.matches
+    assert len(comparison.notes) == 1 and "version 2" in comparison.notes[0]
+    old["version"] = 1
+    comparison = compare(old, parse_stdout(newer), {"cut": "a"})
+    assert comparison.matches
+    assert len(comparison.notes) == 2
+    comparison = compare(_baseline(), parse_stdout(newer), {"cut": "a"})
+    assert not comparison.matches

@@ -11,7 +11,12 @@ program hands to that boundary:
 * an EXEC SQL statement: each host variable outside an INTO list; an
   `OPEN cursor` is followed by a `SQL CURSOR <name>` event with the
   host variables of that cursor's DECLARE (what DB2 reads at OPEN);
-* an EXEC CICS command: each FROM / COMMAREA / INTO-free data option.
+* an EXEC CICS command: each FROM / COMMAREA / CHANNEL-DATA option; then a
+  `CICS RIDFLD` event with the key it reads or writes by (READ, READNEXT,
+  STARTBR, DELETE, WRITE, ...), and one `CICS RESOURCE <OPTION>` event per
+  resource it names (FILE / DATASET, PROGRAM, QUEUE, TRANSID, MAP, MAPSET):
+  a literal name is part of the label (`CICS RESOURCE DATASET CUSTFILE`),
+  a data-name operand is dumped as its DATA.
 
 Other boundaries (OPEN, READ, ACCEPT, ...) print the EVENT alone: what
 they send out is nothing, and what they answer is the mock's.
@@ -87,12 +92,30 @@ _CICS_DATA_RE = re.compile(
 )
 
 
+# The key an EXEC CICS file command reads or writes by.
+_CICS_KEY_RE = re.compile(
+    r"\bRIDFLD\s*\(\s*([^()]+?(?:\([^()]*\))?)\s*\)", re.IGNORECASE
+)
+# The resources an EXEC CICS command targets.
+_CICS_RESOURCE_RE = re.compile(
+    r"\b(FILE|DATASET|PROGRAM|QUEUE|TRANSID|MAPSET|MAP)\s*\(\s*"
+    r"([^()]+?(?:\([^()]*\))?)\s*\)",
+    re.IGNORECASE,
+)
+
+
 #: Label of the pseudo-event that follows `SQL OPEN` with the cursor's
 #: DECLARE host variables, and of the end-of-case LINKAGE event.
 CURSOR_EVENT = "SQL CURSOR"
 RETURNED_EVENT = "RETURNED LINKAGE"
+#: Labels of the pseudo-events after an EXEC CICS command: its RIDFLD
+#: key, and each resource it names (issue #400).
+CICS_KEY_EVENT = "CICS RIDFLD"
+CICS_RESOURCE_EVENT = "CICS RESOURCE"
 #: Events a version-1 baseline never had (see report.baseline).
 V2_EVENT_PREFIXES = (CURSOR_EVENT + " ", RETURNED_EVENT)
+#: Events a version-2 baseline never had.
+V3_EVENT_PREFIXES = (CICS_KEY_EVENT, CICS_RESOURCE_EVENT + " ")
 
 _DECLARE_CURSOR_RE = re.compile(
     rf"EXEC\s+SQL\s+DECLARE\s+({_NAME})\s+(?:(?:NO\s+)?SCROLL\s+|"
@@ -208,6 +231,28 @@ def cics_data_items(statement_text: str) -> list[str]:
     return names
 
 
+def cics_target_lines(statement_text: str, indent: str) -> list[str]:
+    """The `CICS RIDFLD` and `CICS RESOURCE` events of one EXEC CICS
+    command: which record and which resource it reads, writes or starts.
+    A literal resource name is in the label; a data-name is dumped."""
+    lines: list[str] = []
+    key = _CICS_KEY_RE.search(statement_text)
+    if key and _is_data_name(key.group(1)):
+        lines.append(f'{indent}DISPLAY "__MOCKYMOCK__ EVENT: {CICS_KEY_EVENT}"')
+        lines.extend(dump_lines(key.group(1).strip().upper(), indent))
+    for match in _CICS_RESOURCE_RE.finditer(statement_text):
+        option, operand = match.group(1).upper(), match.group(2).strip()
+        if operand[:1] in "\"'":
+            name = operand.strip("\"'").strip()
+            lines.append(event_line(f"{CICS_RESOURCE_EVENT} {option}", name, indent))
+        elif _is_data_name(operand):
+            lines.append(
+                f'{indent}DISPLAY "__MOCKYMOCK__ EVENT: {CICS_RESOURCE_EVENT} {option}"'
+            )
+            lines.extend(dump_lines(operand.upper(), indent))
+    return lines
+
+
 def payload_names(
     statement: object, statement_text: str, category_value: str
 ) -> list[str | None]:
@@ -251,6 +296,8 @@ def site_lines(
             lines.append(f'{indent}DISPLAY "__MOCKYMOCK__ DATA: -"')
         else:
             lines.extend(dump_lines(name, indent))
+    if category_value == "CICS":
+        lines.extend(cics_target_lines(statement_text, indent))
     if category_value == "SQL" and cursor_hosts:
         cursor = opened_cursor(statement_text)
         hosts = cursor_hosts.get(cursor or "")

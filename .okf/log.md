@@ -5,6 +5,21 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-02 -- baselines version 3 (CICS keys and resources); alternate-key READ counts
+
+- #400: behaviour baselines record an EXEC CICS command's `RIDFLD` key and
+  the resources it names (`CICS RIDFLD`, `CICS RESOURCE <option>` events,
+  `splicer/behaviour.py`), so reading another record or file compares
+  `differs`. Baseline `VERSION` 3; version-1 and version-2 baselines are
+  still compared without these events, with a note. See `splicer.md`,
+  `report.md`, `docs/2026-11-01-baseline-design.md`.
+- #402: `generate` counted a `READ F KEY IS ALT` site under both `MOCK READ F
+  KEY` and `MOCK READ F KEY ALT`, so the generated happy path failed
+  (`VERIFY READ F KEY ... 2 TIMES, got 1`). Counts now give each site to the
+  most specific key, as the run-time gate does. See `dsl.md`. Tests:
+  `tests/unit/test_vsam_read_forms.py::TestAlternateKeyCounts`,
+  `tests/unit/test_baseline.py`.
+
 ## 2026-11-02 -- OPEN modes, multi-file OPEN failures (integrated testing review)
 
 * `MOCK OPEN <file> INPUT | OUTPUT | I-O | EXTEND` and `VERIFY OPEN <file>
