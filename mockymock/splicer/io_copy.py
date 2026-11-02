@@ -39,6 +39,9 @@ class DataLayout:
     file_records: dict[str, str] = field(default_factory=dict)
     #: Uppercased data-name -> the names of it and everything under it.
     subtrees: dict[str, frozenset[str]] = field(default_factory=dict)
+    #: Uppercased FD/SD file name -> every data-name declared under any of
+    #: its records (`splicer.file_keys`: a RECORD KEY must be one of them).
+    file_names: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
 def data_layout(program) -> DataLayout:
@@ -59,7 +62,12 @@ def data_layout(program) -> DataLayout:
             if name and file_name not in layout.file_records:
                 layout.file_records[file_name] = name
         for item in items:
-            _collect_subtree(item, layout.subtrees)
+            names = _collect_subtree(item, layout.subtrees)
+            metadata = getattr(item, "_metadata", None) or {}
+            file_name = str(metadata.get("fd_file_name") or "").upper()
+            if file_name:
+                known = layout.file_names.get(file_name, frozenset())
+                layout.file_names[file_name] = known | names
     return layout
 
 

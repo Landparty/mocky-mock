@@ -862,3 +862,33 @@ def test_before_all_snapshot_saves_every_indexed_by_index():
         "SET IX TO UT-SNAP-003",
         "SET IX2 TO UT-SNAP-004",
     ]
+
+
+UNNAMED_FILLER_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NONAME.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-TABLES.
+           05  WS-REASON-TABLE.
+               10      PIC X(8) VALUE '0000OK'.
+               10      PIC X(8) VALUE '3100BAD'.
+           05  WS-REASON-TAB REDEFINES WS-REASON-TABLE
+                                OCCURS 2 TIMES.
+               10  RSN-CODE        PIC X(4).
+               10  RSN-DESC        PIC X(4).
+           05  WS-COUNT            PIC 9(2).
+       PROCEDURE DIVISION.
+           GOBACK.
+"""
+
+
+def test_an_entry_written_without_a_data_name_is_filler():
+    """CardDemo's COPAUS1C: `10 PIC X(20) VALUE '...'` has no data-name.
+    cobol-parser names it ANONYMOUS-<level>-<line>; resetting it by that
+    name failed to compile ("'ANONYMOUS-10-67 ...' is not defined")."""
+    result = parse_cobol(UNNAMED_FILLER_SOURCE, filename="noname.cbl")
+    assert result.ast is not None, result.errors
+    lines = reset_move_lines(result.ast)
+    assert lines
+    assert not any("ANONYMOUS" in line for line in lines), lines

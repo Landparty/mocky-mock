@@ -424,7 +424,12 @@ def _top_level_items(section):
 
 def _is_filler(item) -> bool:
     """FILLER items are unaddressable in COBOL: MOVE/INITIALIZE cannot target
-    them by name, so reset generation must never emit a line for one."""
+    them by name, so reset generation must never emit a line for one. An
+    entry written without a data-name (`10 PIC X(20) VALUE 'A'.`, CardDemo's
+    COPAUS1C) is FILLER too: cobol-parser flags it `is_filler` and names it
+    `ANONYMOUS-<level>-<line>`, a name the compiler never saw."""
+    if getattr(item, "is_filler", False) is True:
+        return True
     name = getattr(item, "name", None)
     return not name or name.upper() == "FILLER"
 
