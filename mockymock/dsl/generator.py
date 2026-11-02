@@ -881,8 +881,7 @@ def _capture_stub_lines(targets: list[str]) -> list[str]:
     makes a captured argument useful without the author having to guess the
     value up front."""
     return [
-        f"*> STUB EXPECT {target} -- the value the program actually passed "
-        f"to this CALL"
+        f"*> STUB EXPECT {target} -- the value the program actually passed to this CALL"
         for target in targets
     ]
 
@@ -1111,8 +1110,7 @@ def _scaffold_placeholder(
         lines.append("")
     if unnamed:
         lines.append(
-            "*> Not scaffolded: these boundaries sit before the first "
-            "paragraph header,"
+            "*> Not scaffolded: these boundaries sit before the first paragraph header,"
         )
         lines.append(
             "*> where no PERFORM can reach them. Move them into a named "
@@ -1354,6 +1352,31 @@ def split_read_files(surface: MockSurface) -> set[str]:
     return {name for name, seen in forms.items() if len(seen) > 1}
 
 
+def split_open_files(surface: MockSurface) -> set[str]:
+    """Files OPENed by single-file OPEN statements in more than one mode
+    (`OPEN EXTEND F`, then `OPEN OUTPUT F` when it is missing, then `OPEN
+    INPUT F`): each mode gets its own `MOCK OPEN <file> <mode>`, so a case
+    can fail one of them (35 on the EXTEND) and let the others succeed. A
+    file of a multi-file OPEN keeps the bare key there."""
+    modes: dict[str, set[str]] = {}
+    for site in surface.boundary_sites:
+        if site.category is MockCategory.OPEN and len(site.keys) == 1:
+            name = site.keys[0].upper()
+            mode = site.open_modes.get(name)
+            if mode:
+                modes.setdefault(name, set()).add(mode)
+    return {name for name, seen in modes.items() if len(seen) > 1}
+
+
+def open_site_key(site: BoundarySite, split: set[str]) -> str | None:
+    """`<file> <mode>` for a single-file OPEN site of a file in `split`."""
+    if site.category is not MockCategory.OPEN or len(site.keys) != 1:
+        return None
+    name = site.keys[0].upper()
+    mode = site.open_modes.get(name)
+    return f"{site.keys[0]} {mode}" if name in split and mode else None
+
+
 def read_site_key(site: BoundarySite, split: set[str]) -> str | None:
     """`<file> <form>` for a READ site of a file in `split`, else None."""
     if (
@@ -1376,7 +1399,9 @@ def file_op_key(site: BoundarySite, surface: MockSurface | None) -> str:
     needing a second MOCK that the first site then also matched (issue
     #312)."""
     if surface is not None:
-        qualified = read_site_key(site, split_read_files(surface))
+        qualified = read_site_key(site, split_read_files(surface)) or open_site_key(
+            site, split_open_files(surface)
+        )
         if qualified is not None:
             return qualified
     if len(site.keys) > 1 and surface is not None:
@@ -2076,12 +2101,17 @@ def _mockymock_boundary_keys(
     they have no `.keys` at all (only free-form `match_text`)."""
     keys: dict[tuple[MockCategory, str], BoundarySite] = {}
     split = split_read_files(surface)
+    split_opens = split_open_files(surface)
     for site in surface.boundary_sites:
         if site.category is None or (site.nested and site.span is None):
             continue
         qualified = read_site_key(site, split)
         if qualified is not None:
             keys.setdefault((MockCategory.READ, qualified), site)
+            continue
+        qualified = open_site_key(site, split_opens)
+        if qualified is not None:
+            keys.setdefault((MockCategory.OPEN, qualified), site)
             continue
         if site.category in EXEC_CATEGORIES:
             prefix = _unique_prefix(site, surface)
@@ -3360,16 +3390,36 @@ def _bundle_directive_for(
 
 def _merged_status_only_body(fixtures: list[BoundaryFixture]) -> list[str]:
     """Merge STATUS_ONLY bodies across every fixture sharing one physical
-    site (see `_bundle_directive_for_group`): the first non-default status
-    code found across ANY of them, so an override on just one of a
-    multi-file OPEN/CLOSE's files (e.g. an "error status" scenario
+    site (see `_bundle_directive_for_group`), so an override on just one
+    of a multi-file OPEN/CLOSE's files (e.g. an "error status" scenario
     targeting only the input file) is not silently lost just because it
-    wasn't the file whose key the single MOCK directive happened to use."""
+    wasn't the file whose key the single MOCK directive happened to use.
+
+    `FILE-STATUS IS` sets the status field of the directive's own file
+    (the first fixture's), so a failure of another file of the statement
+    is a `MOVE` to that file's own field: `OPEN INPUT PARM-FILE CUST-KSDS`
+    failing CUST-KSDS with 35 used to set PARM-FILE's status instead. For
+    each field the first non-default code wins."""
+    if not fixtures or fixtures[0].category == "SQL":
+        for fixture in fixtures:
+            sql_body = _status_only_body(fixture)
+            if sql_body:
+                return sql_body
+        return []
+    own_fields = {name.upper() for name in fixtures[0].status}
+    codes: dict[str, str] = {}
     for fixture in fixtures:
-        body = _status_only_body(fixture)
-        if body:
-            return body
-    return []
+        for name, code in fixture.status.items():
+            if code not in _DEFAULT_SUCCESS_CODES:
+                codes.setdefault(name, code)
+    body: list[str] = []
+    for name, code in codes.items():
+        if name.upper() in own_fields:
+            if not any(line.startswith("FILE-STATUS IS") for line in body):
+                body.insert(0, f'FILE-STATUS IS "{code}"')
+        else:
+            body.append(f'MOVE "{code}" TO {name}')
+    return body
 
 
 def _bundle_directive_for_group(
@@ -3876,6 +3926,8 @@ def _site_answers(site: BoundarySite, key: str) -> bool:
     file_key, access = split_read_access(key)
     if site.category is MockCategory.READ and access is not None:
         return file_key in site.keys and read_access_matches(access, site.read_form)
+    if site.category is MockCategory.OPEN and access is not None:
+        return file_key in site.keys and site.open_modes.get(file_key) == access
     return key in site.keys
 
 
@@ -4210,6 +4262,44 @@ def _with_read_forms(bundle: FixtureBundle, surface: MockSurface) -> FixtureBund
     return replace(bundle, scenarios=scenarios, unresolved=unresolved)
 
 
+def _with_open_modes(bundle: FixtureBundle, surface: MockSurface) -> FixtureBundle:
+    """`bundle` with the OPEN fixtures of each file opened in several modes
+    (`split_open_files`) keyed `<file> <mode>` by the site at their line,
+    so a case that fails the OPEN EXTEND (35) does not fail the OPEN OUTPUT
+    that creates the file, or the OPEN INPUT that reads it back. Their
+    file-level call counts are dropped; `_with_site_call_counts` restores
+    one per mode."""
+    split = split_open_files(surface)
+    if not split:
+        return bundle
+    sites = {
+        (site.keys[0].upper(), site.line): site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.OPEN and len(site.keys) == 1
+    }
+    dropped = {f"{MockCategory.OPEN.value}:{name}" for name in split}
+    scenarios = []
+    for scenario in bundle.scenarios:
+        fixtures = []
+        for fixture in scenario.fixtures:
+            name = fixture.key.upper()
+            if fixture.category == MockCategory.OPEN.value and name in split:
+                site = sites.get((name, fixture.line or 0))
+                key = open_site_key(site, split) if site is not None else None
+                if key is not None:
+                    fixture = replace(fixture, key=key.upper())
+            fixtures.append(fixture)
+        expectations = [
+            e
+            for e in scenario.expectations
+            if not (e.kind == "call_count" and e.ref.upper() in dropped)
+        ]
+        scenarios.append(
+            replace(scenario, fixtures=fixtures, expectations=expectations)
+        )
+    return replace(bundle, scenarios=scenarios)
+
+
 def _fit_read_fixture(
     fixture: BoundaryFixture, site: BoundarySite, surface: MockSurface
 ) -> BoundaryFixture:
@@ -4364,7 +4454,9 @@ def _scaffold_with_bundle(
     source: ProgramContext | None = None,
 ) -> str:
     bundle = _with_accept_keys(
-        _with_site_call_counts(_with_read_forms(bundle, surface), surface)
+        _with_site_call_counts(
+            _with_open_modes(_with_read_forms(bundle, surface), surface), surface
+        )
     )
     mockymock_keys = _mockymock_boundary_keys(surface)
     _warn_on_key_mismatch(

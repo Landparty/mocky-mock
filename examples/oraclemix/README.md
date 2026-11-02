@@ -56,7 +56,7 @@ source runs for real (`USE REAL CALL` answers `CALL WS-RATE-PGM`).
 | CUSTINQ | 11 | same | differs (second screen: cases set `EIBCALEN` and `EIBAID`) | same | same |
 | CUSTVAL | 10 | same | differs (cases at the limit: 899999 and 900000) | - | - |
 | PRTINQ | 6 | same | differs (a case where `PRTRATE` finds the record asked for) | - | - |
-| VSAMJOB | 12 + 8 + 9 + 7 | same | differs in all 4 steps: `VSKSDSR` not-found message (READ `23` in the change path), `VSKSDSD` duplicate message (READ by alternate key `02`), `VSESDS` OPEN `35` message, `VSRRDS` failed-WRITE message (READ `23` then WRITE `22`) | - | - |
+| VSAMJOB | 12 + 8 + 8 + 7 | same | differs in all 4 steps: `VSKSDSR` not-found message (READ `23` in the change path), `VSKSDSD` duplicate message (READ by alternate key `02`), `VSESDS` OPEN `35` message, `VSRRDS` failed-WRITE message (READ `23` then WRITE `22`) | - | - |
 | VSCICS | 18 | same | differs (`DUPREC` response code returned in the COMMAREA) | - | - |
 
 Round 5 changes the value `CUSTVAL` returns in its COMMAREA when the id is

@@ -330,6 +330,10 @@ class BoundarySite:
     # "PREVIOUS", "KEY", or "KEY <alternate key>" -- what a qualified
     # `MOCK READ <file> <form>` matches (`read_form_of`).
     read_form: str | None = None
+    # An OPEN site: the mode each file it opens is opened in, by uppercased
+    # file name (`model.OPEN_MODE_WORDS`) -- what a qualified `MOCK OPEN
+    # <file> <mode>` matches (`open_modes_of`).
+    open_modes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -1056,6 +1060,8 @@ def analyze(program: CobolProgram) -> MockSurface:
     for site in surface.boundary_sites:
         if site.category is MockCategory.READ:
             site.read_form = read_form_of(site.statement, selects)
+        elif site.category is MockCategory.OPEN:
+            site.open_modes = open_modes_of(site.statement)
 
     states = handle_states(program)
     if states:
@@ -1190,6 +1196,18 @@ def read_form_of(statement: object, selects: dict[str, FileSelect]) -> str:
     if key_name and key_name != select.record_key:
         return f"KEY {key_name}"
     return "KEY"
+
+
+def open_modes_of(statement: object) -> dict[str, str]:
+    """The mode each file of an OPEN is opened in (`OPEN INPUT A OUTPUT B`
+    -> `{"A": "INPUT", "B": "OUTPUT"}`), by uppercased file name."""
+    per_file = getattr(statement, "file_modes", None) or {}
+    modes = {str(name).upper(): str(mode).upper() for name, mode in per_file.items()}
+    default = str(getattr(statement, "open_mode", None) or "").upper()
+    for name in getattr(statement, "file_names", None) or []:
+        if name and default:
+            modes.setdefault(str(name).upper(), default)
+    return modes
 
 
 def analyze_file_status_fields(program: CobolProgram) -> dict[str, str]:

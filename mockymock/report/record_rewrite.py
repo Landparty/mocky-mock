@@ -456,10 +456,26 @@ def field_pictures(program, captures=()) -> dict[str, str]:
             length = item.get("byte_length")
             pictures[name] = f"X({length})" if length else "X"
     for plan in captures:
-        source_picture = pictures.get(plan.source_name.upper())
+        # A capture shared by several call sites names them all ("WS-HIN,
+        # WS-HOUT", one layout); a literal's names none. Either way the
+        # synthesized declaration carries the PICTURE: without it a
+        # `PIC S9(9) BINARY` capture recorded `"+0000000000"` quoted, and
+        # the numeric field never equalled it on the next run.
+        names = [name.strip().upper() for name in plan.source_name.split(",")]
+        source_picture = next(
+            (pictures[name] for name in names if name in pictures), None
+        )
+        if source_picture is None:
+            match = _DECLARED_PICTURE_RE.search(plan.declaration)
+            source_picture = match.group(1) if match else None
         if source_picture is not None:
             pictures[plan.target.upper()] = source_picture
     return pictures
+
+
+#: The PICTURE of a synthesized capture declaration
+#: (`01  UT-CAP-X  PIC S9(9) BINARY.`).
+_DECLARED_PICTURE_RE = re.compile(r"\bPIC(?:TURE)?\s+(?:IS\s+)?([^\s.]+(?:\.[^\s.]+)*)")
 
 
 _ADDRESS_USAGES = _POINTER_USAGES | {"INDEX"}
