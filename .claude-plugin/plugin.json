@@ -1,7 +1,7 @@
 {
   "name": "cobol-testing",
   "description": "Test COBOL programs with AI: understand a program with cobol-parser, build and run a mockymock suite under GnuCOBOL with assertions grounded in its business rules, and get an HTML report of every step and what each test proves.",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "author": {
     "name": "Samuel Dion"
   },
