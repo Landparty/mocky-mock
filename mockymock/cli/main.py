@@ -4071,7 +4071,13 @@ def _cmd_runner(args: argparse.Namespace) -> int:
     import os
 
     from mockymock.runner import RunnerClient, RunnerClientError, serve
+    from mockymock.runner.logs import LOGGER, configure_logging
 
+    try:
+        configure_logging(args.log_level, args.log_format, args.log_file)
+    except (OSError, ValueError) as exc:
+        print(f"mockymock runner: cannot open the log: {exc}")
+        return 2
     url = args.url or os.environ.get("LEGACYLENS_URL", "")
     token = os.environ.get(args.token_env, "")
     if not url:
@@ -4097,10 +4103,13 @@ def _cmd_runner(args: argparse.Namespace) -> int:
             keep=args.keep,
         )
     except RunnerClientError as exc:
+        LOGGER.error("runner stopped", extra={"error": str(exc)})
         print(f"mockymock runner: {exc}")
         return 1
     except KeyboardInterrupt:
+        LOGGER.info("runner interrupted")
         return 0
+    LOGGER.info("runner finished", extra={"jobs": ran})
     print(f"mockymock runner: ran {ran} job(s)")
     return 0
 
@@ -5322,6 +5331,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep",
         action="store_true",
         help="Keep each job's unpacked folder (for debugging)",
+    )
+    runner_parser.add_argument(
+        "--log-file",
+        help="Append the runner's log to this file (default: stderr)",
+    )
+    runner_parser.add_argument(
+        "--log-format",
+        choices=("text", "json"),
+        default="text",
+        help="text (default) or json: one JSON object per line, for a log collector",
+    )
+    runner_parser.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="INFO",
+        help="Lowest level logged (default: INFO)",
     )
     runner_parser.set_defaults(func=_cmd_runner)
 
