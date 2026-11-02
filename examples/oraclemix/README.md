@@ -42,29 +42,35 @@ for real (`USE REAL CALL` answers `CALL WS-RATE-PGM`).
 
 | Module | Cases | 1 no-op edits | 2 behaviour edits | 3 copybook layout (`CUST-NAME` 20 -> 24) | 4 copybook comment |
 |---|---|---|---|---|---|
-| CUSTJOB | 3 + 1 | same | differs (`CUSTFMT` report line) | differs (`CUST-OUT` record) | same |
+| CUSTJOB | 5 + 1 | same | differs (`CUSTFMT` report line) | differs (`CUST-OUT` record) | same |
 | ACCTJOB | 1 | same | differs (REWRITE value) | differs (REWRITE record) | same |
 | DB2JOB | 1 | same | differs (cursor host variable `EAST` -> `WEST`) | differs (report line) | same |
-| MQLSN | 7 | same | differs (MQPUT reply) | - | - |
+| MQLSN | 9 | same | differs (MQPUT reply) | - | - |
 | CUSTMENU | 1 | same | differs (SEND TEXT) | - | - |
-| IMSBMP | 6 | same | differs (the hold path now has its own case) | differs (GHN segment) | same |
+| IMSBMP | 8 | same | differs (the hold path has its own case) | differs (GHN segment) | same |
 | MISCJOB | 1 | incomplete: `NESTPGM` | differs (`RATECALC`'s rate, through the dynamic CALL) | - | - |
-| CUSTINQ | 3 | same | same: the edit is on the second screen; no case sets `EIBCALEN` | same | same |
-| CUSTVAL | 1 | same | same: the LINKAGE id is never driven, the edit only moves the limit | - | - |
-| PRTINQ | 3 | same | same: `PRTRATE`'s file is an empty placeholder mock, the found path never runs | - | - |
+| CUSTINQ | 9 | same | differs (second screen: cases set `EIBCALEN` and `EIBAID`) | same | same |
+| CUSTVAL | 8 | same | differs (cases at the limit: 899999 and 900000) | - | - |
+| PRTINQ | 4 | same | differs (a case where `PRTRATE` finds the record asked for) | - | - |
 
-Round 5 changes the value `CUSTVAL` returns in its COMMAREA on the path the
-suite does run: differs (`RETURNED LINKAGE`).
+Round 5 changes the value `CUSTVAL` returns in its COMMAREA when the id is
+rejected: differs (`RETURNED LINKAGE`).
+
+What reaches those branches: a CICS program's COMMAREA and the EIB fields
+its branches test are generated inputs; a never-written `VALUE` item and
+`DFHRESP(...)` count as constants; each numeric comparison also gets a case
+at its edge; and a real subprogram that READs a record keyed by what its
+caller passes gets a case where the record is found.
 
 What a "same" means: every case ran and sent out exactly what it did
 before. It says nothing about paths no case reaches:
 
 - **Branches the generator cannot drive**: a case per branch needs the
-  branch condition to depend on data the generator sets. `EIBCALEN` (CICS
-  second screen) and LINKAGE items (`CUSTVAL`) are not set yet.
-- **Boundaries inside real subprograms get placeholder mocks**
-  (`generate --real`): an empty file, SQLCODE 0 with no data. `PRTRATE`
-  never finds a rate.
+  branch condition to depend on data the generator sets (for example,
+  `NOT NUMERIC` on a `PIC 9` item cannot be generated).
+- **Other boundaries inside real subprograms get placeholder mocks**
+  (`generate --real`): an empty file, SQLCODE 0 with no data, except the
+  found-record case above.
 - **Nested programs** (`NESTPGM`): mockymock refuses multi-unit
   compilation units, so the suite is never recorded and every compare of
   `MISCJOB` is incomplete.
