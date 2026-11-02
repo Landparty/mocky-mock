@@ -17,7 +17,13 @@ command when the pack has none (a first baseline), then runs it:
   and reports the baseline document with the ``.cut`` text it ran, which the
   backend freezes so every later compare uses the same mocks;
 * a compare job: ``mockymock run ... --baseline FILE --baseline-json FILE``,
-  and reports the comparison.
+  and reports the comparison;
+* a tests job (LegacyLens "integration tests"): when the suite is marked
+  ``"record": true`` (freshly scaffolded, its expected values still ``STUB
+  EXPECT`` placeholders), ``mockymock run --record-expectations`` first fills
+  them from what the code does now; then ``mockymock run --json-report FILE``
+  plays the suite and the runner reports the per-case report with the
+  ``.cut`` text it ran, which the backend keeps as the module's tests.
 
 Each mockymock command runs as a child process (``python -m mockymock``)
 with a timeout, so one suite that hangs or crashes does not take the
@@ -47,6 +53,8 @@ from mockymock.runner.logs import LOGGER, JobLog, environment
 
 MANIFEST = "oracle.json"
 MANIFEST_VERSION = 1
+#: Job kinds a manifest may name.
+KINDS = ("baseline", "compare", "tests")
 #: Characters of a command's output kept in a suite's log.
 MAX_LOG_CHARS = 20_000
 #: Seconds one `mockymock generate` or `mockymock run` may take.
@@ -77,6 +85,10 @@ class SuiteOutcome:
     log: str = ""
     baseline: dict[str, Any] | None = None
     comparison: dict[str, Any] | None = None
+    #: A tests job: the ``--json-report`` document (per-case status).
+    report: dict[str, Any] | None = None
+    #: A tests job: whether ``--record-expectations`` filled the suite first.
+    recorded: bool = False
     error: str | None = None
     #: Wall time of the suite's generate and run, in milliseconds.
     duration_ms: int | None = None
@@ -95,6 +107,9 @@ class SuiteOutcome:
             out["baseline"] = self.baseline
         if self.comparison is not None:
             out["comparison"] = self.comparison
+        if self.report is not None:
+            out["report"] = self.report
+            out["recorded"] = self.recorded
         if self.error:
             out["error"] = self.error
         return out
@@ -172,7 +187,7 @@ def load_manifest(pack: Path) -> dict[str, Any]:
         raise JobPackError(
             f"{MANIFEST} version {manifest.get('version')!r} is not supported"
         )
-    if manifest.get("kind") not in ("baseline", "compare"):
+    if manifest.get("kind") not in KINDS:
         raise JobPackError(f"{MANIFEST} kind {manifest.get('kind')!r} is unknown")
     suites = manifest.get("suites")
     if not isinstance(suites, list) or not suites:
@@ -318,19 +333,30 @@ def run_suite(
         job_log.event(
             "suite finished",
             entry=entry,
-            result=(
-                "baseline recorded"
-                if outcome.baseline is not None
-                else (
-                    "matches"
-                    if (outcome.comparison or {}).get("matches")
-                    else "differs"
-                )
-            ),
+            result=_finished_text(outcome),
             exit_code=outcome.exit_code,
             duration_ms=outcome.duration_ms,
         )
     return outcome
+
+
+def _finished_text(outcome: SuiteOutcome) -> str:
+    """How a suite that ran is summed up in the job's timeline."""
+    if outcome.baseline is not None:
+        return "baseline recorded"
+    if outcome.report is not None:
+        statuses = [
+            str(case.get("status"))
+            for case in outcome.report.get("cases") or []
+            if isinstance(case, dict)
+        ]
+        counted = [
+            f"{statuses.count(status)} {status.replace('_', ' ')}"
+            for status in ("passed", "failed", "crashed", "not_run")
+            if status in statuses
+        ]
+        return ", ".join(counted) or "no cases"
+    return "matches" if (outcome.comparison or {}).get("matches") else "differs"
 
 
 def _run_suite(
@@ -393,6 +419,19 @@ def _run_suite(
             outcome.log = "".join(log)
             outcome.error = "mockymock generate did not write the .cut"
             return outcome
+    if kind == "tests":
+        return _run_tests_suite(
+            pack,
+            suite,
+            program,
+            cut,
+            copybooks,
+            command,
+            timeout,
+            job_log,
+            outcome,
+            log,
+        )
     outcome.cut_text = cut.read_text(encoding="utf-8", errors="replace")
 
     results = pack / ".oracle-results"
@@ -433,6 +472,79 @@ def _run_suite(
         outcome.baseline = document
     else:
         outcome.comparison = document
+    return outcome
+
+
+def _run_tests_suite(
+    pack: Path,
+    suite: dict[str, Any],
+    program: Path,
+    cut: Path,
+    copybooks: Path,
+    command: Sequence[str],
+    timeout: float,
+    job_log: JobLog,
+    outcome: SuiteOutcome,
+    log: list[str],
+) -> SuiteOutcome:
+    """A tests job's suite: fill the expected values when asked, then play
+    the suite and keep its ``--json-report``."""
+    entry = outcome.entry
+    base = ["run", str(program), "--cut", str(cut), "--copybook-path", str(copybooks)]
+    shown = program.relative_to(pack.resolve())
+    if suite.get("record"):
+        step = _run_step(command, [*base, "--record-expectations"], pack, timeout)
+        log.append(f"$ mockymock run {shown} --record-expectations\n{step.log}")
+        job_log.event(
+            "record expectations finished",
+            level=(
+                logging.WARNING
+                if step.timed_out or step.exit_code is None
+                else logging.INFO
+            ),
+            entry=entry,
+            exit_code=step.exit_code,
+            timed_out=step.timed_out or None,
+            duration_ms=step.duration_ms,
+            command="mockymock run --record-expectations",
+        )
+        if step.timed_out:
+            outcome.exit_code = step.exit_code
+            outcome.cut_text = cut.read_text(encoding="utf-8", errors="replace")
+            outcome.log = "".join(log)
+            outcome.error = "mockymock run --record-expectations timed out"
+            return outcome
+        outcome.recorded = True
+    outcome.cut_text = cut.read_text(encoding="utf-8", errors="replace")
+
+    results = pack / ".oracle-results"
+    results.mkdir(exist_ok=True)
+    output = results / f"{entry or 'suite'}.report.json"
+    output.unlink(missing_ok=True)
+    step = _run_step(command, [*base, "--json-report", str(output)], pack, timeout)
+    log.append(f"$ mockymock run {shown}\n{step.log}")
+    job_log.event(
+        "run finished",
+        level=(
+            logging.WARNING
+            if step.timed_out or step.exit_code is None
+            else logging.INFO
+        ),
+        entry=entry,
+        exit_code=step.exit_code,
+        timed_out=step.timed_out or None,
+        duration_ms=step.duration_ms,
+        command="mockymock run --json-report",
+    )
+    outcome.exit_code = step.exit_code
+    outcome.log = "".join(log)
+    outcome.report = _read_json(output)
+    if outcome.report is None:
+        outcome.error = (
+            "mockymock run timed out"
+            if step.timed_out
+            else "mockymock run produced no report (the suite did not compile or run)"
+        )
     return outcome
 
 
@@ -496,7 +608,24 @@ def run_job(
         duration_ms=job_log.elapsed_ms(),
     )
     payload["log"] = job_log.text()
-    return payload
+    return without_nul(payload)
+
+
+def without_nul(value: Any) -> Any:
+    """``value`` with every NUL character in its strings written as ``\\x00``.
+
+    A suite's output can hold binary field values (``--record-expectations``
+    prints each recorded value, LOW-VALUES included), and the backend
+    refuses a request body with a NUL character, so the whole result would
+    be lost (seen on ACCTUPD's VSAM record, 2026-11-02).
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "\\x00") if "\x00" in value else value
+    if isinstance(value, dict):
+        return {key: without_nul(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [without_nul(item) for item in value]
+    return value
 
 
 def default_runner_name() -> str:

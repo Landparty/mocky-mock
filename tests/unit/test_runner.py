@@ -35,6 +35,14 @@ FAKE_MOCKYMOCK = textwrap.dedent("""
             Path(after("--baseline-json")).write_text(json.dumps(
                 {"matches": same, "counts": {"same": int(same), "differs": int(not same)}}))
             sys.exit(0 if same else 1)
+        cut = Path(after("--cut"))
+        if "--record-expectations" in args:
+            cut.write_text(cut.read_text().replace("*> STUB EXPECT X", "EXPECT X TO BE 1"))
+        if after("--json-report"):
+            status = "passed" if "EXPECT X TO BE 1" in cut.read_text() else "failed"
+            Path(after("--json-report")).write_text(json.dumps(
+                {"version": 1, "cases": [{"name": "c1", "status": status, "failures": []}]}))
+            sys.exit(0 if status == "passed" else 1)
     """)
 
 
@@ -385,3 +393,68 @@ def test_client_never_sends_the_token_to_another_host():
     client = RunnerClient("http://backend:9999", "secret")
     with pytest.raises(RunnerClientError, match="outside the backend"):
         client.download_pack({"id": "j1", "pack_url": "http://evil.example/pack"})
+
+
+def test_tests_job_generates_records_then_plays_the_suite(tmp_path: Path, fake_command):
+    fill = "TESTSUITE 'generated'\n*> STUB EXPECT X\n"
+    script = Path(fake_command[1])
+    script.write_text(
+        script.read_text().replace(
+            "TESTSUITE 'generated'\\n", fill.replace("\n", "\\n")
+        )
+    )
+    pack = extract_pack(_zip(_pack_files(_manifest("tests", record=True))), tmp_path)
+    (suite,) = run_pack(pack, command=fake_command)["suites"]
+    assert "error" not in suite, suite
+    assert suite["recorded"] is True
+    assert "EXPECT X TO BE 1" in suite["cut_text"]
+    assert suite["report"]["cases"][0]["status"] == "passed"
+    assert suite["exit_code"] == 0
+    assert "--record-expectations" in suite["log"]
+
+
+def test_tests_job_plays_a_frozen_suite_without_recording(tmp_path: Path, fake_command):
+    files = _pack_files(
+        _manifest("tests", record=False),
+        **{"tests/PAYMAIN.cut": "TESTSUITE\n*> STUB EXPECT X\n"},
+    )
+    pack = extract_pack(_zip(files), tmp_path)
+    (suite,) = run_pack(pack, command=fake_command)["suites"]
+    assert suite["recorded"] is False
+    assert suite["report"]["cases"][0]["status"] == "failed"
+    assert suite["exit_code"] == 1
+    assert "generate" not in suite["log"]
+    assert "--record-expectations" not in suite["log"]
+
+
+def test_tests_job_without_a_report_is_an_error(tmp_path: Path):
+    files = _pack_files(_manifest("tests"), **{"tests/PAYMAIN.cut": "T"})
+    pack = extract_pack(_zip(files), tmp_path)
+    (suite,) = run_pack(pack, command=[sys.executable, "-c", "pass"])["suites"]
+    assert suite["error"].startswith("mockymock run produced no report")
+    assert "report" not in suite
+
+
+def test_tests_job_recording_that_hangs_times_out(tmp_path: Path):
+    files = _pack_files(_manifest("tests", record=True), **{"tests/PAYMAIN.cut": "T"})
+    pack = extract_pack(_zip(files), tmp_path)
+    hang = [sys.executable, "-c", "import time; time.sleep(30)"]
+    (suite,) = run_pack(pack, command=hang, timeout=0.5)["suites"]
+    assert suite["error"] == "mockymock run --record-expectations timed out"
+
+
+def test_nul_characters_never_reach_the_backend():
+    from mockymock.runner.jobs import without_nul
+
+    payload = {"suites": [{"log": "recorded X = \x00\x00\x0c", "n": 3, "l": ["a\x00"]}]}
+    assert without_nul(payload) == {
+        "suites": [{"log": "recorded X = \\x00\\x00\x0c", "n": 3, "l": ["a\\x00"]}]
+    }
+
+
+def test_run_job_payload_has_no_nul(tmp_path: Path):
+    files = _pack_files(_manifest("tests"), **{"tests/PAYMAIN.cut": "T"})
+    noisy = [sys.executable, "-c", "print('LOW-VALUES: \\x00\\x00')"]
+    payload = run_job(_zip(files), command=noisy, work_dir=tmp_path)
+    assert "\x00" not in json.dumps(payload, ensure_ascii=False)
+    assert "\\x00\\x00" in payload["suites"][0]["log"]
