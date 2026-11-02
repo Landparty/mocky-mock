@@ -185,3 +185,23 @@ class TestGenerate:
     def test_a_browse_loop_count_is_not_asserted_where_it_may_not_run(self, tmp_path):
         cut = _generate(tmp_path, "VSCICS")
         assert 'VERIFY CICS "READNEXT" WAS CALLED 2 TIMES' not in cut
+
+
+class TestAlternateKeyCounts:
+    """Issue #402: a READ by an alternate key is counted under its own
+    `KEY <name>` directive only, as the run-time gate answers it."""
+
+    FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "VSXALT.cbl"
+
+    def _generated(self, tmp_path: Path, *extra: str) -> str:
+        source = tmp_path / "VSXALT.cbl"
+        source.write_text(self.FIXTURE.read_text())
+        out = tmp_path / "VSXALT.cut"
+        assert main(["generate", str(source), "-o", str(out), *extra]) == 0
+        return out.read_text()
+
+    @pytest.mark.parametrize("extra", [(), ("--scenarios", "all")])
+    def test_primary_and_alternate_key_reads_count_once_each(self, tmp_path, extra):
+        happy = _case(self._generated(tmp_path, *extra), "happy path")
+        assert "VERIFY READ CUST KEY WAS CALLED 1 TIMES" in happy
+        assert "VERIFY READ CUST KEY CK-BR WAS CALLED 1 TIMES" in happy

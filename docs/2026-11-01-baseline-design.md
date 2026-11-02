@@ -31,7 +31,11 @@ For each test case, in order:
     An `OPEN` of a cursor is followed by a `SQL CURSOR <name>` event with
     the host variables of the cursor's `DECLARE` (what DB2 reads at OPEN;
     the DECLARE itself is not a statement that runs). Since version 2.
-  - EXEC CICS: the FROM and COMMAREA items.
+  - EXEC CICS: the FROM, COMMAREA and CHANNEL-DATA items; then a
+    `CICS RIDFLD` event with the key the command reads or writes by, and
+    one `CICS RESOURCE <option>` event per FILE / DATASET, PROGRAM, QUEUE,
+    TRANSID, MAP and MAPSET it names (a literal name in the label, a
+    data-name dumped). Since version 3.
   - Other boundaries (OPEN, READ, ACCEPT, ...): the event alone.
 - **What the program hands back to its caller**, at the end of each case,
   as a `RETURNED LINKAGE` event: the bytes of each item of its

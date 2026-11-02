@@ -526,7 +526,11 @@ claims. `generate` qualifies a file's READ mocks only when its sites read
 it in more than one form (`split_read_files`); a keyed READ's rows drop the
 key field the program sets itself, and a status a form cannot return is
 replaced with `00`. A failed READ with a status other than `0x` is
-status-only (no record); `02`/`04` come with the record.
+status-only (no record); `02`/`04` come with the record. The generator's
+call counts follow the same rule (`_sites_for_key(..., among=)`,
+`_most_specific`): a `READ F KEY IS ALT` site is counted under `READ F KEY
+ALT` only, not also under `READ F KEY`, so a generated `VERIFY` matches the
+tally the run keeps (#402).
 
 ### `MOCK OPEN <file> INPUT | OUTPUT | I-O | EXTEND` (2026-11-02)
 

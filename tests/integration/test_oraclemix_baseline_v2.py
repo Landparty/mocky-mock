@@ -40,7 +40,7 @@ def _record(tmp_path: Path, program: str) -> dict:
 @requires_docker
 def test_cursor_open_records_the_declare_host_variables(tmp_path: Path):
     document = _record(tmp_path, "DB2RPT")
-    assert document["version"] == 2
+    assert document["version"] >= 2
     events = document["cases"][0]["events"]
     labels = [event["label"] for event in events]
     opened = labels.index("SQL OPEN")

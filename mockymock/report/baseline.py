@@ -29,8 +29,11 @@ FORMAT = "mockymock-baseline"
 #: 2 (2026-11-02): adds the `SQL CURSOR <name>` event after a cursor OPEN
 #: and the end-of-case `RETURNED LINKAGE` event. A version-1 baseline is
 #: still read: the comparison leaves those events out of the new run.
-VERSION = 2
-READABLE_VERSIONS = (1, 2)
+#: 3 (2026-11-02): adds the `CICS RIDFLD` and `CICS RESOURCE <option>`
+#: events after an EXEC CICS command (issue #400). A version-2 baseline is
+#: still read the same way: those events are left out of the new run.
+VERSION = 3
+READABLE_VERSIONS = (1, 2, 3)
 
 
 class BaselineError(ValueError):
@@ -240,7 +243,7 @@ def compare(
 ) -> BaselineComparison:
     """Compare a run with a baseline, case by case (matched by name)."""
     recorded = {case.get("name"): case for case in baseline.get("cases", [])}
-    legacy = baseline.get("version") == 1
+    version = baseline.get("version")
     seen: set[str] = set()
     cases: list[CaseComparison] = []
     for result in suite_result.results:
@@ -249,9 +252,7 @@ def compare(
         if expected is None:
             cases.append(CaseComparison(result.case_name, "new"))
             continue
-        actual = _case_document(result)
-        if legacy:
-            actual = _as_version_1(actual)
+        actual = _as_version(_case_document(result), version)
         differences = compare_case(expected, actual)
         cases.append(
             CaseComparison(
@@ -267,28 +268,40 @@ def compare(
         for role in set(old_inputs) | set(inputs)
         if old_inputs.get(role) != inputs.get(role)
     )
-    notes = (
-        [
+    notes: list[str] = []
+    if version == 1:
+        notes.append(
             "baseline version 1: cursor inputs and returned LINKAGE were not "
             "recorded, so they are not compared; record a new baseline to "
             "cover them"
-        ]
-        if legacy
-        else []
-    )
+        )
+    if version in (1, 2):
+        notes.append(
+            f"baseline version {version}: EXEC CICS keys (RIDFLD) and resource "
+            "names (FILE, PROGRAM, QUEUE, TRANSID, MAP) were not recorded, so "
+            "they are not compared; record a new baseline to cover them"
+        )
     return BaselineComparison(
         suite=suite_result.suite_name, cases=cases, changed_inputs=changed, notes=notes
     )
 
 
-def _as_version_1(case: dict[str, Any]) -> dict[str, Any]:
-    """A case document without the events version 1 did not record."""
-    from mockymock.splicer.behaviour import V2_EVENT_PREFIXES
+def _as_version(case: dict[str, Any], version: object) -> dict[str, Any]:
+    """A case document without the events an older baseline `version` did
+    not record."""
+    from mockymock.splicer.behaviour import V2_EVENT_PREFIXES, V3_EVENT_PREFIXES
 
+    newer: tuple[str, ...]
+    if version == 1:
+        newer = V2_EVENT_PREFIXES + V3_EVENT_PREFIXES
+    elif version == 2:
+        newer = V3_EVENT_PREFIXES
+    else:
+        return case
     events = [
         event
         for event in case.get("events") or []
-        if not str(event.get("label", "")).startswith(V2_EVENT_PREFIXES)
+        if not str(event.get("label", "")).startswith(newer)
     ]
     return {**case, "events": events}
 

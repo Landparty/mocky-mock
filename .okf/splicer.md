@@ -1645,6 +1645,16 @@ passes it in baseline mode) and prints `EVENT: RETURNED LINKAGE` with one
 dump per item before the RC line. `V2_EVENT_PREFIXES` names both events for
 the version-1 comparison in `report/baseline.py`.
 
+Version 3 (2026-11-02, issue #400): `site_lines` follows an EXEC CICS event
+with `cics_target_lines`: an `EVENT: CICS RIDFLD` dumping the RIDFLD
+data-name (a literal key records nothing), then one `CICS RESOURCE <option>`
+event per FILE / DATASET / PROGRAM / QUEUE / TRANSID / MAP / MAPSET operand,
+in text order: a quoted literal is part of the label (`CICS RESOURCE DATASET
+CUSTFILE`), a data-name is dumped. So a change of key or of target file
+compares `differs`. `V3_EVENT_PREFIXES` names these events for the version-1
+and version-2 comparisons. A batch keyed READ's RECORD KEY is still not
+recorded.
+
 ## `record_targets` — `mockymock run --record-expectations` (2026-08-04)
 
 `build_driver` takes an optional fourth parameter,
