@@ -126,6 +126,11 @@ FLOW_CATEGORIES = frozenset({MockCategory.PARAGRAPH, MockCategory.SECTION})
 #: whose `KEY IS` names that alternate key). A bare `MOCK READ <file>`
 #: answers every form no qualified MOCK of the case answers.
 READ_ACCESS_WORDS = ("NEXT", "PREVIOUS", "KEY")
+#: The OPEN modes a `MOCK OPEN <file> <mode>` / `VERIFY OPEN <file> <mode>`
+#: can name, so the OPEN EXTEND that finds a file missing (35) and the OPEN
+#: OUTPUT that then creates it get their own mock. A bare `MOCK OPEN
+#: <file>` answers every mode no qualified MOCK of the case answers.
+OPEN_MODE_WORDS = ("INPUT", "OUTPUT", "I-O", "EXTEND")
 
 
 def read_access_matches(access: str, form: str | None) -> bool:
@@ -141,9 +146,13 @@ def read_access_matches(access: str, form: str | None) -> bool:
 
 def split_read_access(key: str) -> tuple[str, str | None]:
     """(file, access form or None) of a READ key: `"CUST-KSDS KEY CK-BR"`
-    -> `("CUST-KSDS", "KEY CK-BR")`. Any other key comes back whole."""
+    -> `("CUST-KSDS", "KEY CK-BR")`, or of an OPEN key: `"AUD EXTEND"` ->
+    `("AUD", "EXTEND")`. Any other key comes back whole."""
     parts = key.split(None, 1)
-    if len(parts) == 2 and parts[1].split()[0].upper() in READ_ACCESS_WORDS:
+    if len(parts) == 2 and parts[1].split()[0].upper() in (
+        *READ_ACCESS_WORDS,
+        *OPEN_MODE_WORDS,
+    ):
         return parts[0], " ".join(parts[1].upper().split())
     return key, None
 

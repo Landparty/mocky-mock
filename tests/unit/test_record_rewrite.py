@@ -174,6 +174,46 @@ def test_field_pictures_covers_program_items_and_capture_targets():
     assert pictures["WS-GRP"] == "X(5)"
 
 
+def test_field_pictures_covers_shared_and_literal_captures():
+    """A capture shared by several CALL sites (MQOPEN's handle: WS-HIN at
+    one, WS-HOUT at the other) and a literal's capture have no single
+    source item: the PICTURE comes from the synthesized declaration, so a
+    binary handle records bare (`0000000000`), not as `"+0000000000"`
+    that the numeric field never equals."""
+    from cobolparser import parse_cobol
+
+    from mockymock.splicer.captures import CapturePlan
+
+    program = parse_cobol(
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. P.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01 WS-HIN PIC S9(9) BINARY.\n"
+        "       01 WS-HOUT PIC S9(9) BINARY.\n"
+        "       PROCEDURE DIVISION.\n"
+        "           STOP RUN.\n"
+    ).ast
+    shared = CapturePlan(
+        target="UT-CAP-MQOPEN-4",
+        source_name="WS-HIN, WS-HOUT",
+        declaration="01  UT-CAP-MQOPEN-4  PIC S9(9) BINARY.",
+        reset_line="MOVE ZERO TO UT-CAP-MQOPEN-4",
+    )
+    literal = CapturePlan(
+        target="UT-CAP-X-2",
+        source_name="+42",
+        declaration="01  UT-CAP-X-2  PIC S9(2).",
+        reset_line="MOVE ZERO TO UT-CAP-X-2",
+    )
+    pictures = field_pictures(program, [shared, literal])
+    assert pictures["UT-CAP-MQOPEN-4"] == "S9(9)"
+    assert pictures["UT-CAP-X-2"] == "S9(2)"
+    assert render_expect_value("+0000000000", pictures["UT-CAP-MQOPEN-4"]) == (
+        "0000000000"
+    )
+
+
 def test_rewrite_renders_a_signed_field_from_its_picture():
     scan = _scan()
     suite_result = _TestSuiteResult(

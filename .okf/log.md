@@ -5,6 +5,24 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-02 -- OPEN modes, multi-file OPEN failures (integrated testing review)
+
+* `MOCK OPEN <file> INPUT | OUTPUT | I-O | EXTEND` and `VERIFY OPEN <file>
+  <mode>`; `generate` mocks a file opened in several modes per mode, so a
+  35 on OPEN EXTEND no longer fails the OPEN OUTPUT and OPEN INPUT after it
+  ([dsl](dsl.md)).
+* A generated multi-file OPEN (`OPEN INPUT PARM-FILE CUST-KSDS`) failing its
+  second file set the first file's FILE STATUS; it now MOVEs the code to the
+  failing file's own field.
+* Multi-file per-file MOCKs match by file name without the mode
+  (`per_file_matches`). Tests: `tests/unit/test_open_modes.py`.
+* `run --record-expectations` recorded a capture shared by several CALL
+  sites (MQOPEN's object handle: WS-HIN at one, WS-HOUT at the other) or
+  of a literal as a quoted `"+0000000000"`, which the binary field never
+  equals: every case of a generated MQ integration-test pack failed on its
+  second run. `field_pictures` now takes such a capture's PICTURE from its
+  synthesized declaration (`test_record_rewrite.py`).
+
 ## 2026-11-02 -- VSAM: READ access forms, FILE STATUS cases
 
 * `MOCK READ <file> NEXT | PREVIOUS | KEY [<alt-key>]` and the matching

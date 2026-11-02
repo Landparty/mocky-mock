@@ -528,6 +528,22 @@ key field the program sets itself, and a status a form cannot return is
 replaced with `00`. A failed READ with a status other than `0x` is
 status-only (no record); `02`/`04` come with the record.
 
+### `MOCK OPEN <file> INPUT | OUTPUT | I-O | EXTEND` (2026-11-02)
+
+The same idea for OPEN: `MOCK OPEN AUD-ESDS EXTEND` answers only the OPENs
+of that file in that mode (`BoundarySite.open_modes`, per file, so each
+file of `OPEN INPUT A OUTPUT B` has its own), and `VERIFY OPEN <file>
+<mode>` counts them. Only `OPEN` takes a mode. A bare `MOCK OPEN <file>`
+answers every mode no qualified directive claims; on a multi-file OPEN the
+most specific directive is picked per file. `generate` qualifies a file's
+OPEN mocks when single-file OPENs open it in more than one mode
+(`split_open_files`, `_with_open_modes`), so a case can fail the OPEN
+EXTEND that finds a log missing (35) while the OPEN OUTPUT that creates it
+succeeds; before, the one `MOCK OPEN` gave 35 to all of them. On a
+multi-file OPEN mocked by one directive, a failure of a file other than
+the directive's own is a `MOVE "<code>" TO <its status field>` in the body
+(`_merged_status_only_body`); `FILE-STATUS IS` set the directive's file.
+
 ## `USE REAL CALL "X" FROM "<path>"` (2026-11-01)
 
 Allowed wherever a `MOCK` is (TESTCASE, BEFORE-EACH, BEFORE-ALL). The parser

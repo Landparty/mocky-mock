@@ -190,13 +190,18 @@ def directive_matches_site(directive: MockDirective, site: BoundarySite) -> bool
         file_key, access = split_read_access(directive.key.upper())
         if access is not None:
             return file_key in site.keys and read_access_matches(access, site.read_form)
+    if directive.category is MockCategory.OPEN:
+        file_key, mode = split_read_access(directive.key.upper())
+        if mode is not None:
+            return file_key in site.keys and site.open_modes.get(file_key) == mode
     return directive.key.upper() in site.keys
 
 
 def _match_specificity(directive: MockDirective) -> int:
-    """How narrowly a directive names its sites: a bare `MOCK READ F` 0,
-    `MOCK READ F NEXT|PREVIOUS|KEY` 1, `MOCK READ F KEY <name>` 2."""
-    if directive.category is not MockCategory.READ:
+    """How narrowly a directive names its sites: a bare `MOCK READ F` or
+    `MOCK OPEN F` 0, `MOCK READ F NEXT|PREVIOUS|KEY` or `MOCK OPEN F
+    <mode>` 1, `MOCK READ F KEY <name>` 2."""
+    if directive.category not in (MockCategory.READ, MockCategory.OPEN):
         return 0
     _, access = split_read_access(directive.key)
     if access is None:
@@ -207,14 +212,20 @@ def _match_specificity(directive: MockDirective) -> int:
 def matching_directives(
     mocks: list[MockDirective], site: BoundarySite
 ) -> list[MockDirective]:
-    """The directives of one case that answer `site`. When several READ
-    directives match, the most specific wins (`MOCK READ F KEY CK-BR` over
-    `MOCK READ F KEY` over `MOCK READ F`): a qualified MOCK takes its READ
-    form away from the bare one."""
+    """The directives of one case that answer `site`. When several READ or
+    OPEN directives of one file match, the most specific wins (`MOCK READ F
+    KEY CK-BR` over `MOCK READ F KEY` over `MOCK READ F`, `MOCK OPEN F
+    EXTEND` over `MOCK OPEN F`): a qualified MOCK takes its form away from
+    the bare one. Each file of a multi-file OPEN keeps its own best."""
     matches = [d for d in mocks if directive_matches_site(d, site)]
-    if len(matches) > 1 and site.category is MockCategory.READ:
-        best = max(_match_specificity(d) for d in matches)
-        matches = [d for d in matches if _match_specificity(d) == best]
+    if len(matches) > 1 and site.category in (MockCategory.READ, MockCategory.OPEN):
+        best: dict[str, int] = {}
+        for directive in matches:
+            file_key = directive.file_key.upper()
+            best[file_key] = max(best.get(file_key, 0), _match_specificity(directive))
+        matches = [
+            d for d in matches if _match_specificity(d) == best[d.file_key.upper()]
+        ]
     return matches
 
 
@@ -240,7 +251,7 @@ def per_file_matches(directives: list[MockDirective], site: BoundarySite) -> boo
     remain AMBIGUOUS_MOCK: which body would answer it is undefined."""
     if site.category not in _MULTI_FILE_CATEGORIES or len(directives) < 2:
         return False
-    keys = [d.key.upper() for d in directives]
+    keys = [d.file_key.upper() for d in directives]
     return len(set(keys)) == len(keys) and all(key in site.keys for key in keys)
 
 
@@ -500,8 +511,7 @@ def _whole_program_reasons(
             RefusalReason(
                 code="PARSE_ERROR",
                 message=(
-                    f"cobolparser reported {len(parse_result.errors)} parse "
-                    f"error(s)"
+                    f"cobolparser reported {len(parse_result.errors)} parse error(s)"
                 ),
             )
         )

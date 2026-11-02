@@ -57,6 +57,7 @@ import re
 from mockymock.dsl.model import (
     CAPTURE_CATEGORIES,
     FILE_STATUS_CATEGORIES,
+    OPEN_MODE_WORDS,
     ROWS_CATEGORIES,
     SEQUENCED_CALL_CATEGORIES,
     TERMINAL_CATEGORIES,
@@ -130,7 +131,8 @@ _MOCK_QUOTED_RE = re.compile(
 # A READ's access form after its file (`MOCK READ CUST-KSDS NEXT`,
 # `... KEY`, `... KEY CK-BRANCH`; model.READ_ACCESS_WORDS).
 _READ_ACCESS = (
-    r"(?:\s+(?P<access>NEXT|PREVIOUS|KEY(?:\s+(?!ROWS\b)[A-Za-z0-9][A-Za-z0-9-]*)?))?"
+    r"(?:\s+(?P<access>NEXT|PREVIOUS|INPUT|OUTPUT|I-O|EXTEND"
+    r"|KEY(?:\s+(?!ROWS\b)[A-Za-z0-9][A-Za-z0-9-]*)?))?"
 )
 _MOCK_BARE_RE = re.compile(
     rf"^MOCK\s+(?P<cat>{_BARE_CATS})\s+(?P<key>[A-Za-z0-9][A-Za-z0-9-]*)"
@@ -535,12 +537,20 @@ def _reject_sentence_period(value: str, line_no: int, verb: str = "EXPECT") -> N
 
 
 def _bare_key(m: re.Match[str], category: MockCategory, line_no: int) -> str:
-    """A bare MOCK / VERIFY key, with the READ access form when one is
-    given (`CUST-KSDS NEXT`). Only READ takes one."""
+    """A bare MOCK / VERIFY key, with the READ access form (`CUST-KSDS
+    NEXT`) or OPEN mode (`AUD-ESDS EXTEND`) when one is given. Only READ
+    and OPEN take one."""
     key = m.group("key").upper()
     access = m.group("access")
     if access is None:
         return key
+    if access.upper() in OPEN_MODE_WORDS:
+        if category is not MockCategory.OPEN:
+            raise CutParseError(
+                f"line {line_no}: {access.upper()} after {key} is an OPEN "
+                "mode; only MOCK OPEN / VERIFY OPEN take one"
+            )
+        return f"{key} {access.upper()}"
     if category is not MockCategory.READ:
         raise CutParseError(
             f"line {line_no}: {' '.join(access.split()).upper()} after "
@@ -1494,7 +1504,7 @@ def parse_cut(text: str) -> MockTestSuite:
                 )
             if seen_testcase:
                 raise CutParseError(
-                    f"line {line_no}: {hook} must appear before the " f"first TESTCASE"
+                    f"line {line_no}: {hook} must appear before the first TESTCASE"
                 )
             if hook in hook_steps:
                 raise CutParseError(
@@ -1533,8 +1543,7 @@ def parse_cut(text: str) -> MockTestSuite:
                         f"{in_before} (only MOVE and PERFORM are)"
                     )
                 raise CutParseError(
-                    f"line {line_no}: USE REAL outside "
-                    f"TESTCASE/BEFORE-EACH/BEFORE-ALL"
+                    f"line {line_no}: USE REAL outside TESTCASE/BEFORE-EACH/BEFORE-ALL"
                 )
             if not m.group("key").strip():
                 raise CutParseError(
@@ -1566,13 +1575,13 @@ def parse_cut(text: str) -> MockTestSuite:
                 _reject_mock_outside(in_before, line_no)
             if not m.group("key"):
                 raise CutParseError(
-                    f'line {line_no}: empty MOCK {m.group("cat")} key -- '
+                    f"line {line_no}: empty MOCK {m.group('cat')} key -- "
                     f"the quoted key must name what to mock"
                 )
             category = _resolve_category(m.group("cat"))
             if m.group("rows") and category not in ROWS_CATEGORIES:
                 raise CutParseError(
-                    f"line {line_no}: {_ROWS_SUPPORTED}, not MOCK " f'{m.group("cat")}'
+                    f"line {line_no}: {_ROWS_SUPPORTED}, not MOCK {m.group('cat')}"
                 )
             in_mock = _open_mock(
                 MockDirective(
@@ -1590,7 +1599,7 @@ def parse_cut(text: str) -> MockTestSuite:
             category = _resolve_category(m.group("cat"), bare_key=True)
             if m.group("rows") and category not in ROWS_CATEGORIES:
                 raise CutParseError(
-                    f"line {line_no}: {_ROWS_SUPPORTED}, not MOCK " f'{m.group("cat")}'
+                    f"line {line_no}: {_ROWS_SUPPORTED}, not MOCK {m.group('cat')}"
                 )
             in_mock = _open_mock(
                 MockDirective(

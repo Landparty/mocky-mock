@@ -983,7 +983,10 @@ def test_placeholder_on_secondary_grouped_key_still_downgrades():
     )
     assert result_without is not None
     without_placeholder, override_without = result_without
-    assert 'FILE-STATUS IS "35"' in "\n".join(without_placeholder)
+    # RPT-FILE's own status field, not INV-FILE's (FILE-STATUS IS would set
+    # the directive's file).
+    assert 'MOVE "35" TO WS-RPT-STATUS' in "\n".join(without_placeholder)
+    assert 'FILE-STATUS IS "35"' not in "\n".join(without_placeholder)
     assert override_without is None
 
     result_with = _bundle_directive_for_group(
