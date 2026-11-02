@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-02 -- Runner `tests` jobs (integration tests run in LegacyLens)
+
+* `mockymock runner` takes a third manifest kind, `tests`: scaffold the
+  suite when the pack has none, fill its expected values with `run
+  --record-expectations` when the suite is marked `record`, then play it
+  with `run --json-report` and report the per-case report and the filled
+  `.cut` (`runner/jobs.py` `_run_tests_suite`). LegacyLens keeps the suites
+  and replays them on later runs. See [cli](cli.md),
+  `docs/2026-11-01-runner-design.md`. Tests: `tests/unit/test_runner.py`.
+
 ## 2026-11-02 -- baselines version 3 (CICS keys and resources); alternate-key READ counts
 
 - #400: behaviour baselines record an EXEC CICS command's `RIDFLD` key and

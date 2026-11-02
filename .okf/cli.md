@@ -38,7 +38,7 @@ mockymock skills    -> skills_cmd (install: no Docker, no parsing -- a copytree)
 mockymock report    -> report.test_report.build_report (parse + cobolparser analyzers + cli.checks; --execute/--mutate re-invoke run/mutate as subprocesses) -> report.html_report
 mockymock journal   -> report.journal.append_entry only  (no Docker, no parsing)
 mockymock clean     -> report.artifacts (removes .mockymock/ reports and saved results)
-mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle jobs, runs `run --record-baseline/--baseline` per suite as child processes)
+mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle and integration-test jobs, runs `run --record-baseline/--baseline` or `--record-expectations` + `--json-report` per suite as child processes)
 ```
 
 If no subcommand is given, `main()` prints help and returns 1 (`args` has no
@@ -1799,7 +1799,7 @@ restores `choices=` also restores the import.
   `RunnerClientError` with `.status`.
 * `runner/jobs.py` — `extract_pack` (refuses entries leaving the folder,
   symlinks, packs over 200 MB; returns the folder holding `oracle.json`),
-  `load_manifest` (version 1, kind `baseline`/`compare`), `run_suite`,
+  `load_manifest` (version 1, kind `baseline`/`compare`/`tests`), `run_suite`,
   `run_pack`, `run_job` (unpack in a temp folder, a broken pack becomes the
   job's `error`), `serve` (claim / run / report loop; retries an
   unreachable backend, stops on 401/503, `--once` returns when the queue
@@ -1813,9 +1813,19 @@ restores `choices=` also restores the import.
   (compare). Both are child processes (`python -m mockymock`, new
   `mockymock/__main__.py`) with `--suite-timeout`. A compare suite without
   a baseline or without its frozen `.cut` is an `error`, not a run.
+* A `tests` job (2026-11-02, LegacyLens "integration tests": generate, play
+  with GnuCOBOL and record in the backend): a suite marked `"record": true`
+  is first run with `--record-expectations` (fills its `STUB EXPECT`
+  lines in place), then every suite runs with `--json-report
+  .oracle-results/E.report.json`. The suite reports `report` (the JSON
+  report, per-case `status`) and `recorded`; the `.cut` it reports is the
+  filled one, which the backend keeps and replays on the next run. No
+  report (compile failure, refusal) or a record step that times out is the
+  suite's `error`.
 * The result payload per suite: `entry`, `cut_path`, `cut_text` (the `.cut`
   it ran, which the backend freezes), `exit_code`, `log` (last 20,000
-  chars), `duration_ms`, and `baseline` / `comparison` / `error`. The
+  chars), `duration_ms`, and `baseline` / `comparison` / `report` +
+  `recorded` / `error`. The
   payload also carries `log`: the job's timeline.
 * `runner/logs.py` (2026-11-02) — `JobLog(job_id)`: each step of a job
   (`job claimed`, `environment` — mockymock and Python versions, platform,

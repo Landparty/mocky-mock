@@ -58,6 +58,17 @@ recorded with and `baselines/<ENTRY>.json`.
   the first difference per case). No baseline or no frozen `.cut` for a
   suite is reported as that suite's `error`.
 
+- **Tests** (added 2026-11-02, LegacyLens's "Create integration tests"):
+  scaffold the `.cut` when the pack has none; when the suite is marked
+  `"record": true` (a fresh scaffold whose expected values are still `STUB
+  EXPECT` placeholders), run `mockymock run --record-expectations` to fill
+  them from what the code does now; then play the suite with `mockymock run
+  --json-report` and report the per-case report (`report`), whether it was
+  recorded (`recorded`) and the `.cut` text. The backend keeps the filled
+  `.cut` files as the module's tests and sends them back, unrecorded, on
+  every later run, so a failing case means the code no longer does what it
+  did when the tests were created.
+
 Every `generate` and `run` is a child process with a timeout, so a suite
 that hangs or crashes is one suite's error, not a dead runner. The runner
 only runs `mockymock generate PROGRAM [--scenarios happy|branches|all]
