@@ -29,7 +29,9 @@ too: the scenarios that take that branch (`gen-fixtures`' error-status
 family is built to) never reach it. So is one after a branch holding a GO
 TO (`READ F AT END GO TO P-END`): the empty-input scenario jumps past it. A GO TO the splicer turns into EXIT
 PARAGRAPH is still not modeled: the statements after it are treated as
-running.
+running. In a program with USE AFTER EXCEPTION procedures nothing is in
+scope: a mocked exception outcome runs one, which may change what runs
+next.
 """
 
 from __future__ import annotations
@@ -132,6 +134,13 @@ def exact_count_scope(
     procedure = program.get_division("PROCEDURE") if program is not None else None
     if procedure is None:
         return None
+    from mockymock.analysis.declaratives import use_procedures
+
+    if use_procedures(program) is not None:
+        # A mocked file statement with an exception outcome runs a USE
+        # procedure, which may end a loop or change what runs next (NIST
+        # SQ122A): no count is exact.
+        return set(), set()
     ordered = _source_ordered_paragraphs(procedure)
     by_name: dict[str, Any] = {}
     for paragraph in _all_paragraphs(procedure):

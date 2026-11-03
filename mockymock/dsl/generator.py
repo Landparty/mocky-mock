@@ -647,7 +647,14 @@ class ProgramContext:
         ordered = _source_ordered_paragraphs(procedure) if procedure else None
         if not ordered:
             return None
-        first = ordered[0]
+        from mockymock.analysis.declaratives import declarative_paragraphs
+
+        # DECLARATIVES come first in the source; the main line starts after.
+        in_declaratives = declarative_paragraphs(self.program)
+        main = [p for p in ordered if p.paragraph_name not in in_declaratives]
+        if not main:
+            return None
+        first = main[0]
         if str(first.paragraph_name or "").upper() != entry.upper():
             return None
         last = program_last_paragraph(self.program)
@@ -2302,7 +2309,14 @@ def _mockymock_boundary_keys(
     keys: dict[tuple[MockCategory, str], BoundarySite] = {}
     split = split_read_files(surface)
     split_opens = split_open_files(surface)
-    for site in surface.boundary_sites:
+    # A site in the main line before one in DECLARATIVES (which come first
+    # in the source): a case's reach is checked against this one site, and
+    # a USE procedure is reached only through its file's statements.
+    ordered_sites = sorted(
+        surface.boundary_sites,
+        key=lambda s: s.paragraph_name in surface.declarative_names,
+    )
+    for site in ordered_sites:
         if site.category is None or (site.nested and site.span is None):
             continue
         qualified = read_site_key(site, split)
@@ -2530,6 +2544,12 @@ def _first_paragraph(program) -> str | None:
         for section in getattr(procedure, "_sections", {}).values()
         if getattr(section, "section_name", "")
     )
+    from mockymock.analysis.declaratives import declarative_paragraphs
+
+    # DECLARATIVES open the PROCEDURE DIVISION, but the program enters
+    # after END DECLARATIVES.
+    in_declaratives = declarative_paragraphs(program)
+    named = [pair for pair in named if pair[1] not in in_declaratives]
     if not named:
         return None
     return min(named, key=lambda pair: pair[0])[1]
@@ -4290,6 +4310,10 @@ _LOOPED_SITE_REASON = (
     "called inside a PERFORM loop (UNTIL/VARYING/TIMES) or from a paragraph "
     "PERFORMed more than once, which the bundle counts once"
 )
+_USE_PROCEDURE_REASON = (
+    "the program has USE AFTER EXCEPTION procedures, which a mocked error "
+    "or end-of-file outcome runs and which can change what runs next"
+)
 _NO_END_READ_REASON = (
     "read inside a loop that its AT END does not end (the READ has no AT "
     "END clause: a keyed/random READ, or a loop run a fixed number of "
@@ -4967,6 +4991,21 @@ def _scaffold_with_bundle(
             ).items():
                 call_count_overrides.setdefault(
                     key_pair, CallCountOverride(count=count, from_placeholder=False)
+                )
+        if surface.use_procedures is not None:
+            # A mocked file statement's exception outcome runs a USE
+            # procedure, which can end a read loop early or change what
+            # runs next (NIST SQ122A): no count is exact.
+            for expectation in expectations:
+                if expectation.kind != "call_count":
+                    continue
+                category_str, _, key = expectation.ref.partition(":")
+                try:
+                    key_pair = (MockCategory(category_str), key)
+                except ValueError:
+                    continue
+                call_count_overrides[key_pair] = CallCountOverride(
+                    demote_reason=_USE_PROCEDURE_REASON, from_placeholder=False
                 )
         counted_boundaries = _rendered_call_count_refs(
             expectations, declared_keys, call_count_overrides

@@ -44,6 +44,10 @@ import importlib
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mockymock.analysis.declaratives import UseProcedures
 
 from cobolparser.models.program import (
     CobolDivision,
@@ -397,6 +401,12 @@ class MockSurface:
     #: Every SELECT, by uppercased file name: organization, access mode and
     #: keys, for the READ forms and the key a keyed READ asks for.
     file_selects: dict[str, FileSelect] = field(default_factory=dict)
+    #: The program's USE AFTER EXCEPTION/ERROR procedures (DECLARATIVES),
+    #: which the splicer runs after a mocked file statement's exception
+    #: outcome (`analysis.declaratives`); None when it has none.
+    use_procedures: UseProcedures | None = None
+    #: Every paragraph and section name inside DECLARATIVES.
+    declarative_names: frozenset[str] = frozenset()
 
     def static_call_sites(self) -> list[CallSite]:
         return [c for c in self.call_sites if c.kind is CallKind.STATIC]
@@ -1061,6 +1071,10 @@ def analyze(program: CobolProgram) -> MockSurface:
 
     selects = file_selects(program)
     surface.file_selects = selects
+    from mockymock.analysis.declaratives import declarative_paragraphs, use_procedures
+
+    surface.use_procedures = use_procedures(program)
+    surface.declarative_names = frozenset(declarative_paragraphs(program))
     for site in surface.boundary_sites:
         if site.category is MockCategory.READ:
             site.read_form = read_form_of(site.statement, selects)

@@ -99,13 +99,14 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
     # --- Structural / whole-program refusals: no mock category exists for
     # these constructs at all.
     "UNSUPPORTED_DECLARATIVES": (
-        "The program contains a DECLARATIVES block. USE procedures run on "
-        "I/O conditions outside any PERFORM/GO TO edge, so mockymock's "
-        "reachability analysis structurally cannot see the boundary "
-        "statements inside them -- refused for the whole program, "
-        "unconditionally, same posture as SORT/MERGE below. There is no "
-        "workaround short of removing the DECLARATIVES section from the "
-        "copy under test."
+        "The program's DECLARATIVES hold a USE procedure mockymock cannot "
+        "run under mocks: USE BEFORE REPORTING (Report Writer GENERATE is "
+        "mocked whole, so it would never run), or a USE AFTER EXCEPTION "
+        "naming no file or open mode it can place. USE AFTER EXCEPTION/ERROR "
+        "procedures on files or open modes are supported: a mocked file "
+        "statement whose outcome is an exception PERFORMs the one that "
+        "applies, and USE FOR DEBUGGING procedures stay off, as in a "
+        "production run."
     ),
     "UNSUPPORTED_ALTER": (
         "The program contains an ALTER statement, which rewrites a GO "

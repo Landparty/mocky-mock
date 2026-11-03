@@ -59,7 +59,7 @@ from mockymock.runtime.executor import (
     TIMEOUT_EXIT_CODE,
     ExecutionResult,
     _coerce_output,
-    fixed_clock_env,
+    binary_run_env,
 )
 
 #: The one name every command catches; the Docker module defines it, and
@@ -418,7 +418,7 @@ def run_binary(
         home = _require_home()
     except ToolchainNotAvailableError as exc:
         return ExecutionResult(NOT_FOUND_EXIT_CODE, "", f"{exc}\n")
-    extra: dict[str, str] = fixed_clock_env()
+    extra: dict[str, str] = binary_run_env()
     if trace_path is not None:
         extra |= {
             "COB_SET_TRACE": "yes",

@@ -118,7 +118,11 @@ def statement_span(
 # test a directive directly after a mocked statement fell inside its span and
 # was commented out with it: a lost `REPLACE OFF.` left the REPLACE active
 # over the rest of the program, a lost `>>END-IF` failed cobc (#310).
-_DIRECTIVE_LINE = re.compile(r"\s*(>>|REPLACE\b)", re.IGNORECASE)
+#: `END DECLARATIVES.` is no AST node either, and ends the last USE
+#: procedure's last statement the same way (2026-11-03, NIST SQ212A: a
+#: STOP RUN's splice commented it out and cobc read the rest of the
+#: program as declaratives).
+_DIRECTIVE_LINE = re.compile(r"\s*(>>|REPLACE\b|END\s+DECLARATIVES\b)", re.IGNORECASE)
 
 
 def _trim_trailing_blank_lines(start: int, end: int, lines: list[str]) -> int:

@@ -5,6 +5,30 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-03 -- DECLARATIVES: USE AFTER EXCEPTION procedures run under mocks
+
+* A mocked file statement whose outcome is an exception (status not "0x")
+  PERFORMs the USE AFTER EXCEPTION/ERROR section that applies to its file,
+  as the runtime does after a real one: the statement's own AT END /
+  INVALID KEY clause handles its condition first (the USE clause is the
+  last WHEN of the lifted-clause `EVALUATE TRUE`). A USE naming the file
+  wins over one naming the open mode; mocked OPENs record each file's mode
+  in `UT-OPEN-MODE-<n>` for the statements after. Multi-file OPEN/CLOSE
+  check each file's FILE STATUS field. See [analysis](analysis.md)
+  (`analysis.declaratives`) and [splicer](splicer.md).
+* The reachability walk follows a file statement to its USE section(s);
+  the driver goes after `END DECLARATIVES.`; a statement span stops before
+  that line; a terminator inside DECLARATIVES never ends a main-line case
+  with GO TO; the generator's entry and main line skip DECLARATIVES; in a
+  program with USE procedures no VERIFY count is exact.
+* Test binaries run with `COB_SET_DEBUG=N` (`runtime.executor.binary_run_env`)
+  unless the user sets it: USE FOR DEBUGGING procedures stay off.
+* Still refused (UNSUPPORTED_DECLARATIVES): USE BEFORE REPORTING, a USE
+  AFTER naming no file or mode the parser read, or a file of no SELECT.
+* Tests: `tests/unit/test_declaratives.py`,
+  `tests/integration/test_declaratives.py` (fixture
+  `tests/fixtures/declaratives/DECL.cbl`).
+
 ## 2026-11-02 -- Whole-main-line cases (NIST CCVS85)
 
 * A case PERFORMing THRU the program's last paragraph runs the main line to

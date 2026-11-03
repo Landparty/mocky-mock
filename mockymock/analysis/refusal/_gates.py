@@ -669,19 +669,20 @@ def _check_unsupported_control_flow(program) -> list[RefusalReason]:
         None,
     )
     if declarative_section is not None:
-        reasons.append(
-            RefusalReason(
-                code="UNSUPPORTED_DECLARATIVES",
-                message=(
-                    f"program contains a DECLARATIVES block (section "
-                    f"'{declarative_section.section_name}', line "
-                    f"{declarative_section.location.line}) -- USE "
-                    f"procedures run on I/O conditions outside any "
-                    f"PERFORM/GO TO edge, so the reachability gate cannot "
-                    f"check the boundary statements inside them"
-                ),
+        # Modelled (2026-11-03): a mocked file statement whose outcome is an
+        # exception PERFORMs the USE AFTER procedure that applies, and the
+        # reachability walk follows that edge (`analysis.declaratives`).
+        # Only the USE forms that cannot run under mocks still refuse.
+        from mockymock.analysis.declaratives import unsupported_use
+
+        problem = unsupported_use(program)
+        if problem is not None:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_DECLARATIVES",
+                    message=f"program contains a DECLARATIVES block: {problem}",
+                )
             )
-        )
     declaratives_paragraph = None
     if declarative_section is None:
         for paragraph in _all_paragraphs(procedure):

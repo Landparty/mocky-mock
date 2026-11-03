@@ -4257,6 +4257,7 @@ def _insert_driver_with_origins(
     )
     seen_data_division = False
     entry_check_at: int | None = None
+    after_declaratives: bool | None = None
     header_open = False
     header_ws = False
 
@@ -4294,6 +4295,14 @@ def _insert_driver_with_origins(
             # the program running its own main line outside every case.
             header_open = True
         if header_open and not inserted_proc and _ends_sentence(line):
+            if after_declaratives is None:
+                after_declaratives = _opens_declaratives(lines, index + 1)
+            if after_declaratives and not _END_DECLARATIVES_RE.search(
+                line.split("*>", 1)[0]
+            ):
+                # DECLARATIVES must open the PROCEDURE DIVISION: the driver
+                # goes after `END DECLARATIVES.` (2026-11-03).
+                continue
             # After the header's period, not its first line: a header
             # wrapped onto later lines (`PROCEDURE DIVISION` / `USING
             # LK-A.`) had the driver spliced into it (cobc: syntax error).
@@ -4306,6 +4315,22 @@ def _insert_driver_with_origins(
             result, inserted, program_end=getattr(artifact, "program_end", False)
         )
     return result, inserted
+
+
+_DECLARATIVES_RE = re.compile(r"^\s*DECLARATIVES\s*\.", re.IGNORECASE)
+_END_DECLARATIVES_RE = re.compile(r"\bEND\s+DECLARATIVES\s*\.", re.IGNORECASE)
+
+
+def _opens_declaratives(lines: list[str], start: int) -> bool:
+    """Whether the first code line at or after `start` is `DECLARATIVES.`."""
+    for line in lines[start:]:
+        code = line.split("*>", 1)[0]
+        if not code.strip() or (
+            len(line) > 6 and line[6] in "*/" and not line[:6].strip()
+        ):
+            continue
+        return _DECLARATIVES_RE.match(code) is not None
+    return False
 
 
 #: An IDENTIFICATION DIVISION paragraph whose body is a comment-entry.

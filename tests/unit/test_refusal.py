@@ -1355,16 +1355,31 @@ ALTER_SOURCE = """\
 """
 
 
-def test_whole_program_check_refuses_declaratives():
-    """Audit finding 1.4: DECLARATIVES parse warning-free, but their USE
-    procedures run on I/O conditions outside any PERFORM/GO TO edge, so the
-    reachability gate structurally cannot check them -- unconditional
-    whole-program refusal, like SORT/MERGE."""
+def test_whole_program_check_accepts_use_after_exception_declaratives():
+    """Audit finding 1.4 refused every DECLARATIVES block. Since 2026-11-03
+    a mocked file statement's exception outcome PERFORMs the USE AFTER
+    procedure that applies and the reachability walk follows that edge
+    (`analysis.declaratives`), so a USE AFTER ERROR ON INPUT passes the
+    whole-program gate."""
     result = parse_cobol(DECLARATIVES_SOURCE, filename="declsamp.cbl")
     assert result.success, result.errors
-    assert not result.warnings  # precondition: nothing else would catch it
+    assert not result.warnings
     reasons = check_whole_program(result)
-    assert any(r.code == "UNSUPPORTED_DECLARATIVES" for r in reasons)
+    assert not any(r.code == "UNSUPPORTED_DECLARATIVES" for r in reasons)
+
+
+def test_whole_program_check_refuses_use_before_reporting():
+    """A USE BEFORE REPORTING runs before a Report Writer group, and
+    GENERATE is mocked whole: still refused."""
+    source = DECLARATIVES_SOURCE.replace(
+        "USE AFTER ERROR PROCEDURE ON INPUT.", "USE BEFORE REPORTING DETAIL-LINE."
+    )
+    result = parse_cobol(source, filename="declsamp.cbl")
+    reasons = check_whole_program(result)
+    assert any(
+        r.code == "UNSUPPORTED_DECLARATIVES" and "REPORTING" in r.message
+        for r in reasons
+    )
 
 
 def test_whole_program_check_refuses_declaratives_via_use_statement_fallback():

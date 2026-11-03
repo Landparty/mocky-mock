@@ -23,7 +23,7 @@ from mockymock.runtime.executor import (
     TIMEOUT_EXIT_CODE,
     ExecutionResult,
     _coerce_output,
-    fixed_clock_env,
+    binary_run_env,
 )
 
 # Bundled under the package itself (not the repo-root docker/) so it ships
@@ -541,7 +541,7 @@ def run_binary(
     container_dir = container_binary.rsplit("/", 1)[0]
     trace_env: list[str] = [
         arg
-        for name, value in fixed_clock_env().items()
+        for name, value in binary_run_env().items()
         for arg in ("-e", f"{name}={value}")
     ]
     if trace_path is not None:

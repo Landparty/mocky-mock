@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from cobolparser.models.statements.control import GoStatement, PerformStatement
 
 from mockymock.analysis.cics_handle import raised_conditions
+from mockymock.analysis.declaratives import declarative_paragraphs
 from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
@@ -1048,7 +1049,9 @@ def find_terminator_plans(
                 # never PERFORMs, can end it with GO TO UT-PROGRAM-END.
                 if perform_entered is None:
                     perform_entered = _perform_frame_reach(program, reach_cache)
-                end_problem = _main_line_end_problem(site, perform_entered)
+                end_problem = _main_line_end_problem(
+                    site, perform_entered, declarative_paragraphs(program)
+                )
                 if end_problem is None and existing is None:
                     plans_by_statement[key] = TerminatorPlan(
                         site=terminator_sites[key],
@@ -1162,7 +1165,11 @@ def program_end_thru(program, terminator_plans) -> str | None:
     return program_last_paragraph(program)
 
 
-def _main_line_end_problem(site, perform_entered: dict[str, str]) -> str | None:
+def _main_line_end_problem(
+    site,
+    perform_entered: dict[str, str],
+    declarative_names: frozenset[str] | set[str] = frozenset(),
+) -> str | None:
     """Why a terminator a case running THRU the program's last paragraph
     reaches cannot end that case with `GO TO UT-PROGRAM-END`, or None.
 
@@ -1173,6 +1180,11 @@ def _main_line_end_problem(site, perform_entered: dict[str, str]) -> str | None:
     the jump would leave that PERFORM's range for good."""
     if site.category is not None:
         return "is an EXEC CICS command, not a STOP RUN/GOBACK"
+    if site.paragraph_name in declarative_names:
+        return (
+            "is inside DECLARATIVES, which run under a PERFORM of their "
+            "own and which no GO TO may leave"
+        )
     if site.paragraph_name in perform_entered:
         return (
             f"is also reached through {perform_entered[site.paragraph_name]}, "

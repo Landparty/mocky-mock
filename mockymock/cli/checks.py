@@ -145,7 +145,18 @@ def extra_working_storage(checked: StaticCheckResult) -> list[str] | None:
         lines.extend(rebinding_working_storage_lines(checked.linkage.rebindings))
     lines.extend(capture_working_storage_lines(checked.captures))
     lines.extend(index_working_storage_lines(_index_names(checked)))
+    lines.extend(
+        f"01  {mode_field}  PIC X VALUE SPACE."
+        for _, mode_field in _open_mode_fields(checked)
+    )
     return lines or None
+
+
+def _open_mode_fields(checked: StaticCheckResult) -> list[tuple[str, str]]:
+    """(file, field) for the open modes the spliced OPENs record for the
+    program's USE AFTER EXCEPTION procedures (`analysis.declaratives`)."""
+    uses = checked.surface.use_procedures if checked.surface is not None else None
+    return uses.mode_fields() if uses is not None else []
 
 
 def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
@@ -158,8 +169,14 @@ def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
     from mockymock.splicer.captures import capture_reset_lines
     from mockymock.splicer.reset import index_reset_lines
 
-    return capture_reset_lines(checked.captures) + index_reset_lines(
-        _index_names(checked)
+    return (
+        capture_reset_lines(checked.captures)
+        + index_reset_lines(_index_names(checked))
+        # Every case starts with its files closed.
+        + [
+            f"MOVE SPACE TO {mode_field}"
+            for _, mode_field in _open_mode_fields(checked)
+        ]
     )
 
 
