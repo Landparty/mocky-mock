@@ -4403,14 +4403,16 @@ def comment_out_comment_entries(lines: list[str]) -> list[str]:
         code = line.split("*>", 1)[0]
         if not code.strip():
             continue
-        if re.search(r"\b(ENVIRONMENT|DATA|PROCEDURE)\s+DIVISION\b", code, re.I):
-            break
         indent = len(code) - len(code.lstrip())
         if header_indent is not None and indent > header_indent:
+            # Division headers too: NIST OBNC1M writes a whole program in
+            # Area B of its SECURITY paragraph.
             if len(line) > 6 and line[6] in "*/" and not line[:6].strip():
                 continue  # a fixed-format comment line already
             result[index] = "      *> " + line.strip()
             continue
+        if re.search(r"\b(ENVIRONMENT|DATA|PROCEDURE)\s+DIVISION\b", code, re.I):
+            break
         header_indent = None
         match = _COMMENT_ENTRY_RE.match(code)
         if match is not None:

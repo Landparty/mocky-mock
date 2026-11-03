@@ -5,6 +5,21 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-03 -- CANCEL names mocked, STOP literal answered, comment entries
+
+* The generator gives each case an empty `MOCK CALL` for every name a
+  reachable CANCEL carries that the case does not mock yet
+  (`generator._cancel_cover_lines`; a literal gets `MOCK CALL "X"`, a data
+  name the dynamic `MOCK CALL X`). The gate already took such a CANCEL as
+  a no-op; NIST IC203A and IC205A cancelled names they never CALL.
+* `STOP <literal>` is spliced to CONTINUE (`orchestrator.splice_program`,
+  annotated through `source_map._SPLICED_UNMOCKED_LABELS`): the operator
+  answers at once. UNSUPPORTED_STOP_LITERAL now refuses only one nested in
+  another boundary's clause body. NIST NC302M, OBNC1M.
+* `main.comment_out_comment_entries` no longer stops at a division header
+  written inside a comment entry (OBNC1M has a whole program in Area B of
+  its SECURITY paragraph).
+
 ## 2026-11-03 -- Nested and stacked programs tested through the outer one
 
 * UNSUPPORTED_NESTED_PROGRAM refuses only an object-oriented class now.

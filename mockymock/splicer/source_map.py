@@ -58,6 +58,10 @@ from mockymock.analysis.mock_surface import (
 )
 from mockymock.dsl.model import EXEC_CATEGORIES, MockCategory
 
+# Category-None sites the splicer still replaces: the terminators, and a
+# STOP <literal>, which becomes CONTINUE (the operator answers at once).
+_SPLICED_UNMOCKED_LABELS = _TERMINATOR_LABELS | {"STOP literal"}
+
 
 def collect_boundaries(program) -> list[int]:
     """Every SECTION-header, paragraph-header, and statement-start line,
@@ -438,7 +442,7 @@ def annotate_nested_sites(
     a mock does (`orchestrator.splice_program`)."""
     parents = boundary_parents(surface)
     for site in [*surface.boundary_sites, *surface.whenever_sites]:
-        if site.category is None and site.label not in _TERMINATOR_LABELS:
+        if site.category is None and site.label not in _SPLICED_UNMOCKED_LABELS:
             continue
         if site.nested:
             span, reason, lead = _nested_site_span(site, scope_map, lines, parents)

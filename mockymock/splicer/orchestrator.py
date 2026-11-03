@@ -331,6 +331,20 @@ def splice_program(
         replacement = _with_lead(lines, start, site, replacement, column_offset)
         spans.append((start, end, replacement))
 
+    # STOP <literal>: displays the literal and waits for the operator, then
+    # goes on with the next statement. Under a test the operator answers at
+    # once: CONTINUE. A nested one, or one with no safe span, is refused by
+    # the gate when a case reaches it, and left as written otherwise.
+    for site in surface.boundary_sites:
+        if site.label != "STOP literal" or site.nested or site.unspliceable_reason:
+            continue
+        start, end = statement_span(site.statement, boundaries, last_line, lines)
+        replacement = ["           CONTINUE"]
+        if _span_ends_sentence(lines, start, end):
+            replacement = replacement[:-1] + [replacement[-1] + "."]
+        replacement = _with_lead(lines, start, site, replacement, column_offset)
+        spans.append((start, end, replacement))
+
     # Terminator neutralization: replace the STOP RUN/GOBACK statement's
     # own span, exactly like any other boundary replacement above.
     seen_terminator_ids: set[int] = set()

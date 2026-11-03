@@ -271,10 +271,11 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "never reaches it."
     ),
     "UNSUPPORTED_STOP_LITERAL": (
-        "STOP <literal> displays the literal and waits for the operator "
-        "on the console before continuing -- a console read like an "
-        "unmocked ACCEPT. Replace it with DISPLAY, or isolate the "
-        "paragraph with MOCK PARAGRAPH."
+        "STOP <literal> waits for the operator on the console. mockymock "
+        "answers it at once (the statement becomes CONTINUE), except "
+        "inside another boundary statement's clause body (a CALL's ON "
+        "EXCEPTION, a READ's AT END). Move it out of the clause, or "
+        "isolate the paragraph with MOCK PARAGRAPH."
     ),
     "UNSUPPORTED_STATEMENT": (
         "mockymock does not model this statement at all: it is neither a "

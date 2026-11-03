@@ -1,0 +1,16 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. STOPLIT.
+       SECURITY.
+           A COMMENT ENTRY THAT LOOKS LIKE CODE:
+           PROCEDURE DIVISION.
+           FAKE-PARA.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-STEP            PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 1 TO WS-STEP
+           STOP "OPERATOR PLEASE CONTINUE"
+           MOVE 2 TO WS-STEP.
+       END-PARA.
+           STOP RUN.

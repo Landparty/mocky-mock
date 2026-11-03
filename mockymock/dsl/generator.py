@@ -4824,6 +4824,55 @@ def _entry_parameter_lines(
     return [f"*> what the caller of {parameters.key} passes (USING)", *moves]
 
 
+_MOCK_CALL_LINE = re.compile(r'^\s*MOCK\s+CALL\s+("?)([^"\s]+)\1', re.IGNORECASE)
+
+
+def _cancel_cover_lines(
+    surface: MockSurface,
+    reachable: Collection[str] | None,
+    directive_lines: list[str],
+) -> list[str]:
+    """An empty `MOCK CALL` for every program a reachable CANCEL names that
+    the case does not mock already (NIST IC203A: `CANCEL ID1, "IC205A",
+    ID2`, with ID2 never CALLed). The refusal gate accepts a CANCEL only
+    when the case mocks a CALL for each name it carries: with every CALL
+    mocked no real module is ever loaded, so the CANCEL is a no-op. A
+    literal name gets `MOCK CALL "X"`, a data name `MOCK CALL X` (the
+    dynamic form, keyed by the identifier)."""
+    mocked: set[tuple[bool, str]] = set()
+    for line in directive_lines:
+        match = _MOCK_CALL_LINE.match(line)
+        if match:
+            mocked.add((bool(match.group(1)), match.group(2).upper()))
+    lines: list[str] = []
+    for site in surface.boundary_sites:
+        if site.label != "CANCEL" or site.category is not None:
+            continue
+        if reachable is not None and site.paragraph_name not in reachable:
+            continue
+        statement = site.statement
+        names = list(getattr(statement, "program_names", ()) or ())
+        literal = list(getattr(statement, "program_names_literal", ()) or ())
+        for index, name in enumerate(names):
+            is_literal = index < len(literal) and literal[index]
+            if not name or (is_literal and '"' in name):
+                continue
+            pair = (is_literal, name.upper())
+            if pair in mocked:
+                continue
+            mocked.add(pair)
+            shown = f'"{name}"' if is_literal else name
+            lines.extend(
+                [
+                    f"*> CANCEL {shown} (line {site.line}): never CALLed here; "
+                    f"this mock keeps the CANCEL a no-op",
+                    f"MOCK CALL {shown}",
+                    "END-MOCK",
+                ]
+            )
+    return lines
+
+
 def _scaffold_with_bundle(
     suite_name: str,
     surface: MockSurface,
@@ -4932,6 +4981,10 @@ def _scaffold_with_bundle(
                     )
                 )
         lines.extend(f"    {line}" for line in directive_lines)
+        lines.extend(
+            f"    {line}"
+            for line in _cancel_cover_lines(surface, reachable, directive_lines)
+        )
         if source is not None:
             lines.extend(f"    {line}" for line in source.setup_lines)
         lines.extend(f"    {line}" for line in _entry_parameter_lines(scenario, source))

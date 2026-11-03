@@ -1711,6 +1711,15 @@ def check_test_case(
                 # doesn't need every OTHER test case in the suite to also
                 # satisfy check_test_case's unrelated matching rules.
                 pass
+            elif (
+                site.label == "STOP literal"
+                and not site.nested
+                and not site.unspliceable_reason
+            ):
+                # Spliced to CONTINUE (orchestrator.splice_program): the
+                # operator answers the console at once, and the program
+                # goes on with the next statement, as STOP <literal> does.
+                pass
             elif site.label in _UNSUPPORTED_SITE_CODES:
                 # INVOKE / CHAIN / Communication Module / STOP literal /
                 # an unknown statement class (mock_surface's fail-closed
