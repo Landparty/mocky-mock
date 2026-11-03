@@ -38,6 +38,7 @@ import re
 
 from mockymock._lines import split_source_lines
 from mockymock.analysis.refusal import RefusalReason, check_expansion_warnings
+from mockymock.splicer.headers import is_data_division, is_procedure_division
 
 SQLCA_FIELDS = [
     "01  SQLCA.",
@@ -67,8 +68,6 @@ SQLCA_FIELDS = [
     "        10  SQLSTATE         PIC X(5)  VALUE SPACES.",
 ]
 
-_DATA_DIVISION_RE = re.compile(r"^\s*DATA\s+DIVISION\s*\.", re.IGNORECASE)
-_PROCEDURE_DIVISION_RE = re.compile(r"^\s*PROCEDURE\s+DIVISION", re.IGNORECASE)
 _EXEC_SQL_RE = re.compile(r"\bEXEC\s+SQL\b", re.IGNORECASE)
 _END_EXEC_RE = re.compile(r"\bEND-EXEC\b", re.IGNORECASE)
 
@@ -252,9 +251,9 @@ def transform_data_division_exec(
             include_splice_end = None
         line = result[index]
         exec_match = None
-        if _DATA_DIVISION_RE.match(line):
+        if is_data_division(result, index):
             in_data_division = True
-        elif _PROCEDURE_DIVISION_RE.match(line):
+        elif is_procedure_division(result, index):
             in_data_division = False
         elif in_data_division:
             exec_match = _search_outside_literals(_EXEC_SQL_RE, line)

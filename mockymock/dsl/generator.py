@@ -421,6 +421,12 @@ class ProgramContext:
     #: for the names under a CALL argument (a PCB's status field, an 88).
     data_items: list[dict] = field(default_factory=list)
     surface: MockSurface | None = None
+    #: False: never `main_line_thru` (cli.main._main_line_or_bare).
+    main_line: bool = True
+    #: `main_line_thru`'s answer per entry (uppercased).
+    _main_line: dict[str, str | None] = field(
+        default_factory=dict, repr=False, compare=False
+    )
     #: `SPECIAL-NAMES. DECIMAL-POINT IS COMMA.`: every numeric literal the
     #: scaffold writes uses a comma (issue #230).
     decimal_comma: bool = False
@@ -595,6 +601,95 @@ class ProgramContext:
         if reasons or entry not in reached:
             return None
         return reached
+
+    def main_line_thru(self, entry: str) -> str | None:
+        """The program's last paragraph when a case PERFORMing `entry`
+        should run the whole main line (`PERFORM entry THRU <last>`), else
+        None (2026-11-02).
+
+        That is when `entry` is the program's first paragraph, the real
+        program carries on past it (its last statement is not a STOP RUN,
+        GOBACK or EXIT PROGRAM: it falls through, or GO TOs on, as the NIST
+        CCVS85 programs' `OPEN-FILES` does), and every STOP RUN/GOBACK the
+        longer range reaches can end it (`find_terminator_plans` refuses
+        none). A bare `PERFORM entry` tests that first paragraph alone and
+        returns at its end, where the program never stops; THRU the last
+        paragraph, the run goes on as the program does, and a terminator
+        it falls into ends the case (`TerminatorPlan.exit_kind`
+        "PROGRAM"). A program whose terminators sit in paragraphs it also
+        PERFORMs keeps the bare PERFORM: the range would be refused."""
+        if not self.main_line:
+            return None
+        key = entry.upper()
+        if key not in self._main_line:
+            self._main_line[key] = self._compute_main_line_thru(entry)
+        return self._main_line[key]
+
+    def _compute_main_line_thru(self, entry: str) -> str | None:
+        if self.program is None or self.surface is None:
+            return None
+        from cobolparser.models.statements.control import StopStatement
+        from cobolparser.models.statements.misc import (
+            ExitStatement,
+            GobackStatement,
+        )
+
+        from mockymock.analysis.refusal import (
+            find_terminator_plans,
+            program_last_paragraph,
+        )
+        from mockymock.analysis.refusal._reachability import (
+            _source_ordered_paragraphs,
+        )
+        from mockymock.splicer.source_map import collect_scope_map
+
+        procedure = self.program.get_division("PROCEDURE")  # type: ignore[attr-defined]
+        ordered = _source_ordered_paragraphs(procedure) if procedure else None
+        if not ordered:
+            return None
+        from mockymock.analysis.declaratives import declarative_paragraphs
+
+        # DECLARATIVES come first in the source; the main line starts after.
+        in_declaratives = declarative_paragraphs(self.program)
+        main = [p for p in ordered if p.paragraph_name not in in_declaratives]
+        if not main:
+            return None
+        first = main[0]
+        if str(first.paragraph_name or "").upper() != entry.upper():
+            return None
+        last = program_last_paragraph(self.program)
+        if last is None or last.upper() == entry.upper():
+            return None
+        statements = list(first.statements)
+        if statements:
+            final = statements[-1]
+            if (
+                isinstance(final, GobackStatement)
+                or (isinstance(final, StopStatement) and final.stop_type == "RUN")
+                or (isinstance(final, ExitStatement) and final.exit_type == "PROGRAM")
+            ):
+                return None
+        suite = MockTestSuite(
+            name="MAIN-LINE",
+            test_cases=[
+                MockTestCase(
+                    name="main line",
+                    perform_target=str(first.paragraph_name),
+                    perform_thru=last,
+                )
+            ],
+        )
+        try:
+            _plans, reasons = find_terminator_plans(
+                self.surface,
+                self.program,
+                suite,
+                collect_scope_map(self.program, self.lines),
+                self.lines,
+            )
+        except Exception:  # noqa: BLE001 - any doubt keeps the bare PERFORM
+            return None
+        return None if reasons else last
 
     def whenever_quiet(self, directive_lines: list[str]) -> bool:
         """True when a TESTCASE with these MOCK lines provably never makes
@@ -925,6 +1020,41 @@ def _verification_comment_lines(scenario: Scenario) -> list[str]:
     ]
     lines.extend(f"*>   - {reason}" for reason in reasons)
     return lines
+
+
+def _case_identity(case_lines: list[str]) -> tuple[str, ...]:
+    """A TESTCASE's body without its comments: two cases with the same one
+    mock the same boundaries the same way, PERFORM the same paragraph and
+    check the same things, so they run the same code and can only report
+    the same result, whatever their names claim."""
+    return tuple(
+        line.strip()
+        for line in case_lines
+        if line.strip() and not line.strip().startswith("*>")
+    )
+
+
+def _duplicate_scenarios_note(count: int, entries: list[str]) -> str:
+    """Why `count` scenarios got no TESTCASE of their own (NIST CCVS85,
+    2026-11-02: 72 of 112 green suites ran one case up to 83 times).
+
+    cobol-parser plans its scenarios (branch arms, failing boundaries,
+    boundary values) over the program's whole main-line run, which can
+    carry on past the entry paragraph: falling through into the next
+    paragraphs, or `GO TO` onward (NIST's `OPEN-FILES ... GO TO
+    CCVS1-EXIT`). A case PERFORMs the entry paragraph alone and returns at
+    its end, so a scenario whose branch or boundary lies beyond it keeps
+    none of what makes it different, and its case comes out identical to
+    an earlier one under a name claiming a path it never takes."""
+    shown = ", ".join(entries) or "the entry paragraph"
+    return (
+        f"{count} scenario(s) left out: each one's test case came out "
+        f"identical to an earlier case (same mocks, same PERFORM {shown}, "
+        f"same checks), so it could only repeat that case's result. A common "
+        f"cause: what the scenario targets lies beyond {shown} -- the "
+        f"program's main line runs on past it (falling through or GO TO), "
+        f"but a test case PERFORMs {shown} alone and returns at its end"
+    )
 
 
 def _quote_safe(name: str) -> str:
@@ -2179,7 +2309,14 @@ def _mockymock_boundary_keys(
     keys: dict[tuple[MockCategory, str], BoundarySite] = {}
     split = split_read_files(surface)
     split_opens = split_open_files(surface)
-    for site in surface.boundary_sites:
+    # A site in the main line before one in DECLARATIVES (which come first
+    # in the source): a case's reach is checked against this one site, and
+    # a USE procedure is reached only through its file's statements.
+    ordered_sites = sorted(
+        surface.boundary_sites,
+        key=lambda s: s.paragraph_name in surface.declarative_names,
+    )
+    for site in ordered_sites:
         if site.category is None or (site.nested and site.span is None):
             continue
         qualified = read_site_key(site, split)
@@ -2407,6 +2544,12 @@ def _first_paragraph(program) -> str | None:
         for section in getattr(procedure, "_sections", {}).values()
         if getattr(section, "section_name", "")
     )
+    from mockymock.analysis.declaratives import declarative_paragraphs
+
+    # DECLARATIVES open the PROCEDURE DIVISION, but the program enters
+    # after END DECLARATIVES.
+    in_declaratives = declarative_paragraphs(program)
+    named = [pair for pair in named if pair[1] not in in_declaratives]
     if not named:
         return None
     return min(named, key=lambda pair: pair[0])[1]
@@ -3138,14 +3281,21 @@ def _read_body(
         # alternate key; 04: length mismatch) comes with the record.
         return _row_move_lines(sequence[0], fixture, source) + status_lines
 
+    row_lines = [
+        _row_move_lines(row, fixture, source) + status_lines for row in sequence
+    ]
+    if not needs_exhaustion_branch and not any(row_lines):
+        # Rows that move nothing (a keyed READ of a record holding only its
+        # key, NIST IX301M): every call does the same nothing.
+        return []
     tally = registry.name(category, fixture.key)
     body = ["EVALUATE TRUE"]
-    for index, row in enumerate(sequence, start=1):
+    for index, lines in enumerate(row_lines, start=1):
         body.append(f"    WHEN {tally} = {index}")
-        body.extend(
-            f"        {line}"
-            for line in _row_move_lines(row, fixture, source) + status_lines
-        )
+        # A WHEN with no statement joins the next WHEN's condition, and a
+        # last one before END-EVALUATE fails cobc 3.1 ("invalid
+        # expression", NIST IX301M).
+        body.extend(f"        {line}" for line in lines or ["CONTINUE"])
     if needs_exhaustion_branch:
         body.append("    WHEN OTHER")
         body.extend(
@@ -4160,6 +4310,10 @@ _LOOPED_SITE_REASON = (
     "called inside a PERFORM loop (UNTIL/VARYING/TIMES) or from a paragraph "
     "PERFORMed more than once, which the bundle counts once"
 )
+_USE_PROCEDURE_REASON = (
+    "the program has USE AFTER EXCEPTION procedures, which a mocked error "
+    "or end-of-file outcome runs and which can change what runs next"
+)
 _NO_END_READ_REASON = (
     "read inside a loop that its AT END does not end (the READ has no AT "
     "END clause: a keyed/random READ, or a loop run a fixed number of "
@@ -4670,6 +4824,55 @@ def _entry_parameter_lines(
     return [f"*> what the caller of {parameters.key} passes (USING)", *moves]
 
 
+_MOCK_CALL_LINE = re.compile(r'^\s*MOCK\s+CALL\s+("?)([^"\s]+)\1', re.IGNORECASE)
+
+
+def _cancel_cover_lines(
+    surface: MockSurface,
+    reachable: Collection[str] | None,
+    directive_lines: list[str],
+) -> list[str]:
+    """An empty `MOCK CALL` for every program a reachable CANCEL names that
+    the case does not mock already (NIST IC203A: `CANCEL ID1, "IC205A",
+    ID2`, with ID2 never CALLed). The refusal gate accepts a CANCEL only
+    when the case mocks a CALL for each name it carries: with every CALL
+    mocked no real module is ever loaded, so the CANCEL is a no-op. A
+    literal name gets `MOCK CALL "X"`, a data name `MOCK CALL X` (the
+    dynamic form, keyed by the identifier)."""
+    mocked: set[tuple[bool, str]] = set()
+    for line in directive_lines:
+        match = _MOCK_CALL_LINE.match(line)
+        if match:
+            mocked.add((bool(match.group(1)), match.group(2).upper()))
+    lines: list[str] = []
+    for site in surface.boundary_sites:
+        if site.label != "CANCEL" or site.category is not None:
+            continue
+        if reachable is not None and site.paragraph_name not in reachable:
+            continue
+        statement = site.statement
+        names = list(getattr(statement, "program_names", ()) or ())
+        literal = list(getattr(statement, "program_names_literal", ()) or ())
+        for index, name in enumerate(names):
+            is_literal = index < len(literal) and literal[index]
+            if not name or (is_literal and '"' in name):
+                continue
+            pair = (is_literal, name.upper())
+            if pair in mocked:
+                continue
+            mocked.add(pair)
+            shown = f'"{name}"' if is_literal else name
+            lines.extend(
+                [
+                    f"*> CANCEL {shown} (line {site.line}): never CALLed here; "
+                    f"this mock keeps the CANCEL a no-op",
+                    f"MOCK CALL {shown}",
+                    "END-MOCK",
+                ]
+            )
+    return lines
+
+
 def _scaffold_with_bundle(
     suite_name: str,
     surface: MockSurface,
@@ -4717,6 +4920,8 @@ def _scaffold_with_bundle(
             file=sys.stderr,
         )
     skipped_scenarios = 0
+    duplicate_scenarios: list[str] = []
+    emitted_bodies: set[tuple[str, ...]] = set()
     for scenario in bundle.scenarios:
         entry = scenario.entry or fallback_entry
         if not entry:
@@ -4725,14 +4930,18 @@ def _scaffold_with_bundle(
             # non-empty PROCEDURE DIVISION; reported below, not per-scenario.
             skipped_scenarios += 1
             continue
-        lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
-        lines.extend(f"    {line}" for line in _verification_comment_lines(scenario))
         # Only the sites this case can reach: a mock for a boundary in a
         # paragraph nothing PERFORMs from the entry (or reached only via a
         # CICS HANDLE) is UNMATCHED_MOCK to the very lint this file has to
         # pass (issue #143). Its VERIFY goes with it -- `_render_expectation`
         # drops counts for keys that got no MOCK directive.
-        reachable = source.reachable_from(entry) if source is not None else None
+        thru = source.main_line_thru(entry) if source is not None else None
+        reachable = (
+            source.reachable_from(entry, thru=thru) if source is not None else None
+        )
+        case_start = len(lines)
+        lines.append(f'TESTCASE "{_quote_safe(scenario.name)}"')
+        lines.extend(f"    {line}" for line in _verification_comment_lines(scenario))
         scenario_keys = (
             mockymock_keys
             if reachable is None
@@ -4753,7 +4962,7 @@ def _scaffold_with_bundle(
             # Mocks that never make a WHENEVER fire never reach its handler
             # either: lint then leaves the handler out of the reachable set
             # and would refuse its boundaries' mocks as UNMATCHED (#244).
-            quiet = source.reachable_from(entry, follow_whenever=False)
+            quiet = source.reachable_from(entry, follow_whenever=False, thru=thru)
             if quiet is not None and quiet != reachable:
                 reachable = quiet
                 scenario_keys = {
@@ -4772,10 +4981,14 @@ def _scaffold_with_bundle(
                     )
                 )
         lines.extend(f"    {line}" for line in directive_lines)
+        lines.extend(
+            f"    {line}"
+            for line in _cancel_cover_lines(surface, reachable, directive_lines)
+        )
         if source is not None:
             lines.extend(f"    {line}" for line in source.setup_lines)
         lines.extend(f"    {line}" for line in _entry_parameter_lines(scenario, source))
-        lines.append(f"    PERFORM {entry}")
+        lines.append(f"    PERFORM {entry}" + (f" THRU {thru}" if thru else ""))
         lines.extend(
             f"    {line}"
             for line in _capture_stub_lines(_capture_targets(directive_lines))
@@ -4832,23 +5045,56 @@ def _scaffold_with_bundle(
                 call_count_overrides.setdefault(
                     key_pair, CallCountOverride(count=count, from_placeholder=False)
                 )
+        if surface.use_procedures is not None:
+            # A mocked file statement's exception outcome runs a USE
+            # procedure, which can end a read loop early or change what
+            # runs next (NIST SQ122A): no count is exact.
+            for expectation in expectations:
+                if expectation.kind != "call_count":
+                    continue
+                category_str, _, key = expectation.ref.partition(":")
+                try:
+                    key_pair = (MockCategory(category_str), key)
+                except ValueError:
+                    continue
+                call_count_overrides[key_pair] = CallCountOverride(
+                    demote_reason=_USE_PROCEDURE_REASON, from_placeholder=False
+                )
         counted_boundaries = _rendered_call_count_refs(
             expectations, declared_keys, call_count_overrides
         )
+        # One check per line: a record written by 80 WRITE sites (a NIST
+        # main line) gave 80 identical `*> STUB EXPECT` lines.
+        rendered: set[str] = set()
         for expectation in expectations:
-            lines.extend(
-                f"    {line}"
-                for line in _render_expectation(
-                    expectation,
-                    declared_keys,
-                    call_count_overrides,
-                    counted_boundaries,
-                    source.pictures if source is not None else None,
-                    source,
-                )
-            )
+            for line in _render_expectation(
+                expectation,
+                declared_keys,
+                call_count_overrides,
+                counted_boundaries,
+                source.pictures if source is not None else None,
+                source,
+            ):
+                if line.strip() and line in rendered:
+                    continue
+                rendered.add(line)
+                lines.append(f"    {line}")
+        body = _case_identity(lines[case_start + 1 :])
+        if body in emitted_bodies:
+            del lines[case_start:]
+            duplicate_scenarios.append(scenario.name)
+            continue
+        emitted_bodies.add(body)
         lines.append("")
 
+    if duplicate_scenarios:
+        entries = sorted(
+            {scenario.entry or fallback_entry or "" for scenario in bundle.scenarios}
+            - {""}
+        )
+        note = _duplicate_scenarios_note(len(duplicate_scenarios), entries)
+        lines[2:2] = [f"*> NOTE: {note}", ""]
+        print(f"mockymock generate: note: {note}", file=sys.stderr)
     if skipped_scenarios:
         print(
             f"mockymock generate --with-data: WARNING: {skipped_scenarios} "

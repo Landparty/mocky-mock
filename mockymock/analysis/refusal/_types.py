@@ -66,11 +66,11 @@ _UNSUPPORTED_SITE_CODES: dict[str, tuple[str, str]] = {
     ),
     "STOP literal": (
         "UNSUPPORTED_STOP_LITERAL",
-        "STOP <literal> displays the literal and then waits for the operator "
-        "on the console before continuing -- a console read like an "
-        "unmocked ACCEPT, so under a test runner it reads whatever stdin is "
-        "attached (or blocks until the executor timeout); replace it with "
-        "DISPLAY, or isolate the paragraph with MOCK PARAGRAPH",
+        "STOP <literal> waits for the operator on the console; mockymock "
+        "answers it at once (the statement becomes CONTINUE), but not inside "
+        "another boundary statement's clause body (a CALL's ON EXCEPTION, a "
+        "READ's AT END), which the splicer cannot rewrite there; move it out "
+        "of the clause, or isolate the paragraph with MOCK PARAGRAPH",
     ),
     _UNSUPPORTED_STATEMENT_LABEL: (
         "UNSUPPORTED_STATEMENT",

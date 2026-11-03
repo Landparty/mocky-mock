@@ -495,9 +495,9 @@ def test_out_of_line_perform_varying_parses_correctly():
 
 
 # Multi-program compilation units parse into ast.contained_programs with a
-# summary warning; mockymock's splicer and reachability BFS only ever look
-# at the first program's divisions, so these must refuse rather than test a
-# fraction of the file.
+# summary warning. Since 2026-11-03 mockymock tests the outermost unit of
+# nested/stacked PROGRAM-IDs (`flow_targets.detach_contained_programs`); an
+# object-oriented class still refuses.
 MULTI_PROGRAM_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. FIRSTPGM.
@@ -514,17 +514,33 @@ MULTI_PROGRAM_SOURCE = """\
 """
 
 
-def test_whole_program_check_flags_multi_program_units():
-    """A multi-unit compilation unit (nested/stacked PROGRAM-IDs, an OO
-    class) is refused under its own code: cobol-parser parses every unit
-    (the AST is complete), it is mockymock that only splices and gates the
-    outermost one -- so the reason names *that*, not dropped content."""
+def test_whole_program_check_accepts_stacked_and_nested_programs():
     result = parse_cobol(MULTI_PROGRAM_SOURCE, filename="multi.cbl")
     assert result.success, result.errors
+    assert check_whole_program(result) == []
+
+
+def test_whole_program_check_refuses_an_object_oriented_class():
+    """A unit that is not a PROGRAM (an OO class's factory/object/method)
+    keeps the refusal, under its own code rather than PARSE_WARNING."""
+    result = parse_cobol(MULTI_PROGRAM_SOURCE, filename="multi.cbl")
+    assert result.success, result.errors
+    result.ast.contained_programs[0].unit_kind = "CLASS"
     reasons = check_whole_program(result)
     assert [r.code for r in reasons] == ["UNSUPPORTED_NESTED_PROGRAM"]
     assert "outermost unit" in reasons[0].message
-    assert not any(r.code == "PARSE_WARNING" for r in reasons)
+
+
+def test_contained_programs_are_detached_from_the_outer_tree():
+    from mockymock.analysis.flow_targets import normalize_flow_targets
+
+    result = parse_cobol(MULTI_PROGRAM_SOURCE, filename="multi.cbl")
+    names = {p.paragraph_name for p in result.ast.find_all_by_type("CobolParagraph")}
+    assert "B-PARA" in names
+    normalize_flow_targets(result.ast)
+    names = {p.paragraph_name for p in result.ast.find_all_by_type("CobolParagraph")}
+    assert "B-PARA" not in names and "A-PARA" in names
+    assert [u.program_name for u in result.ast.contained_programs] == ["SECONDPGM"]
 
 
 COPY_PROGRAM_SOURCE = """\
@@ -1355,16 +1371,31 @@ ALTER_SOURCE = """\
 """
 
 
-def test_whole_program_check_refuses_declaratives():
-    """Audit finding 1.4: DECLARATIVES parse warning-free, but their USE
-    procedures run on I/O conditions outside any PERFORM/GO TO edge, so the
-    reachability gate structurally cannot check them -- unconditional
-    whole-program refusal, like SORT/MERGE."""
+def test_whole_program_check_accepts_use_after_exception_declaratives():
+    """Audit finding 1.4 refused every DECLARATIVES block. Since 2026-11-03
+    a mocked file statement's exception outcome PERFORMs the USE AFTER
+    procedure that applies and the reachability walk follows that edge
+    (`analysis.declaratives`), so a USE AFTER ERROR ON INPUT passes the
+    whole-program gate."""
     result = parse_cobol(DECLARATIVES_SOURCE, filename="declsamp.cbl")
     assert result.success, result.errors
-    assert not result.warnings  # precondition: nothing else would catch it
+    assert not result.warnings
     reasons = check_whole_program(result)
-    assert any(r.code == "UNSUPPORTED_DECLARATIVES" for r in reasons)
+    assert not any(r.code == "UNSUPPORTED_DECLARATIVES" for r in reasons)
+
+
+def test_whole_program_check_refuses_use_before_reporting():
+    """A USE BEFORE REPORTING runs before a Report Writer group, and
+    GENERATE is mocked whole: still refused."""
+    source = DECLARATIVES_SOURCE.replace(
+        "USE AFTER ERROR PROCEDURE ON INPUT.", "USE BEFORE REPORTING DETAIL-LINE."
+    )
+    result = parse_cobol(source, filename="declsamp.cbl")
+    reasons = check_whole_program(result)
+    assert any(
+        r.code == "UNSUPPORTED_DECLARATIVES" and "REPORTING" in r.message
+        for r in reasons
+    )
 
 
 def test_whole_program_check_refuses_declaratives_via_use_statement_fallback():
@@ -1403,16 +1434,27 @@ def test_whole_program_check_refuses_declaratives_via_use_statement_fallback():
     assert "USE statement" in declaratives[0].message
 
 
-def test_whole_program_check_refuses_alter():
-    """Audit finding 1.5: ALTER rewrites GO TO targets at runtime, so no
-    static reachability analysis is sound -- unconditional refusal."""
+def test_whole_program_check_accepts_alter_of_a_plain_go_to():
+    """Audit finding 1.5 refused every ALTER. Since 2026-11-03 the ALTER
+    runs real, the analyses see the altered GO TO as naming every ALTER
+    target (`analysis.alter`), and each case starts unaltered."""
     result = parse_cobol(ALTER_SOURCE, filename="altsamp.cbl")
     assert result.success, result.errors
     assert not result.warnings  # precondition: ALTER parses warning-free
-    reasons = check_whole_program(result)
-    alter = [r for r in reasons if r.code == "UNSUPPORTED_ALTER"]
+    assert not [r for r in check_whole_program(result) if r.code == "UNSUPPORTED_ALTER"]
+
+
+def test_whole_program_check_refuses_alter_of_a_paragraph_that_is_no_go_to():
+    source = ALTER_SOURCE.replace(
+        "       SWITCH-PARA.\n           GO TO P-ONE.\n",
+        '       SWITCH-PARA.\n           DISPLAY "X"\n           GO TO P-ONE.\n',
+    )
+    result = parse_cobol(source, filename="altsamp.cbl")
+    assert result.success, result.errors
+    alter = [r for r in check_whole_program(result) if r.code == "UNSUPPORTED_ALTER"]
     assert len(alter) == 1
-    assert "SWITCH-PARA" in alter[0].message or "MAIN-PARA" in alter[0].message
+    assert "'SWITCH-PARA'" in alter[0].message
+    assert "not one plain GO TO" in alter[0].message
 
 
 def test_whole_program_check_does_not_flag_clean_programs_for_control_flow():

@@ -1,0 +1,5 @@
+TESTSUITE "STOPLIT"
+
+TESTCASE "the program goes on after STOP literal"
+    PERFORM MAIN-PARA
+    EXPECT WS-STEP TO BE 2

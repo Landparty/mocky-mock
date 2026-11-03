@@ -348,7 +348,7 @@ def build_site_dispatch(
             # it, in the order the statement names the files. The first
             # one drives the branch; the others add their tally, status
             # and body below.
-            matches.sort(key=lambda d: site.keys.index(d.key.upper()))
+            matches.sort(key=lambda d: site.keys.index(d.file_key.upper()))
         elif len(matches) > 1:
             raise ValueError(
                 f"site at line {site.line} matched by multiple directives of "
@@ -895,6 +895,23 @@ def build_terminator_neutralization(
     lines = []
     if return_code is not None:
         lines.append(f"           MOVE {return_code} TO RETURN-CODE")
+    if exit_kind == "PROGRAM":
+        # The end of the main line (`TerminatorPlan.exit_kind`): only the
+        # test's own `PERFORM ... THRU UT-PROGRAM-END` is active here.
+        from mockymock.analysis.refusal import PROGRAM_END_PARAGRAPH
+
+        return lines + [
+            '           MOVE "Y" TO UT-EARLY-EXIT',
+            f"           GO TO {PROGRAM_END_PARAGRAPH}",
+        ]
+    if exit_kind == "RETURN":
+        # The case runs inside a CALL of the driver's own entry
+        # (`driver.call_frame_lines`): GOBACK returns to it from any
+        # PERFORM depth (2026-11-03).
+        return lines + [
+            '           MOVE "Y" TO UT-EARLY-EXIT',
+            "           GOBACK",
+        ]
     return lines + [
         '           MOVE "Y" TO UT-EARLY-EXIT',
         f"           EXIT {exit_kind}",

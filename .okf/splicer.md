@@ -155,6 +155,18 @@ the **start** line:
    line mutually refuse instead of corrupting each other: the first
    statement fails check 2, the second fails check 1).
 
+Exception (2026-11-02, NIST CCVS85's `PERFORM END-ROUTINE THRU
+END-ROUTINE-13. CLOSE PRINT-FILE.`): when the text before the statement is
+code that ends with a period, it is a finished sentence of its own
+(`source_map.closed_sentence_lead`; a quoted literal or `*>` comment in it
+disqualifies it). The site then owns its line after all: `span_lead` holds
+that text and every splice of the site (mock dispatch, terminator, WHENEVER)
+emits it back unchanged on a line of its own ahead of the replacement
+(`orchestrator._with_lead`), as for a nested site's clause header. A
+paragraph or SECTION header in that text (`P1. CALL "X".`, a header line
+MOCK PARAGRAPH splices) and anything after the statement on the line still
+refuse.
+
 `refusal.check_test_case` turns a matched top-level site's
 `unspliceable_reason` into `UNSUPPORTED_MOCK_TARGET_LAYOUT`;
 `refusal.check_nested_exec` turns an EXEC site's into `UNSPLICEABLE_EXEC`
@@ -1263,6 +1275,73 @@ returns. An earlier design (`GO TO` redirect into a `PERFORM ... THRU
 ...` range) was proven unsound by a verification spike and replaced
 before any of it shipped -- see
 [docs/2026-07-08-goback-stop-run-support-design.md](../docs/2026-07-08-goback-stop-run-support-design.md).
+
+**Terminators that end the main line (2026-11-02, `TerminatorPlan.exit_kind`
+"PROGRAM").** A case PERFORMing THRU the program's last paragraph
+(`refusal.program_last_paragraph`) runs the main line to the end of the
+program. A STOP RUN/GOBACK/EXIT PROGRAM such a case reaches, that the chain
+rules above refuse, ends it instead with `MOVE "Y" TO UT-EARLY-EXIT` + `GO
+TO UT-PROGRAM-END` (`refusal.PROGRAM_END_PARAGRAPH`) -- provided no PERFORM,
+THRU range, SECTION PERFORM or SORT/MERGE/XML procedure of the program can
+reach its paragraph (`_plans._perform_frame_reach`, `_main_line_end_problem`).
+That walk starts from each range, follows every GO TO out of it and the
+paragraphs control then falls into, but not past the range's own end: a
+PERFORM of a paragraph the main line also GO TOs returns at its end (NIST
+NC105A's `PERFORM MOVE-WRITE-F1-32`), where `_reachable_paragraphs`' fall-
+through closure would have it reach the rest of the program. With EXEC
+SQL/CICS in the program (WHENEVER / HANDLE CONDITION jump without a GO TO
+statement) or a range or target it cannot place, it uses
+`_reachable_paragraphs` instead. Then the driver's own PERFORM is the only
+one active when it runs, and the GO TO stays inside that PERFORM's range:
+the driver PERFORMs `THRU UT-PROGRAM-END` wherever a case names the last
+paragraph (`build_driver(program_end=refusal.program_end_thru(...))`), and
+`cli.main._insert_end_of_program_trap` puts `UT-PROGRAM-END. EXIT.` right
+after the program's last paragraph, ahead of the `UT-END-OF-PROGRAM` trap.
+This is not Approach A: that jumped out of the program's own pending
+PERFORM; here none is pending. A statement one case needs as EXIT
+PARAGRAPH and another as the main-line end is refused (`cannot end both
+ways`). The existing rules are tried first, so every terminator they
+already planned is planned the same way. Tests:
+`tests/unit/test_main_line_cases.py`,
+`tests/integration/test_main_line_case.py`.
+
+**Mixed-form SORT/MERGE (2026-11-03).** A SORT/MERGE site carrying
+`BoundarySite.sort_procedure` (a USING/GIVING file on one side, a procedure
+on the other) gets `PERFORM first [THRU thru]` before its dispatch for an
+INPUT PROCEDURE and after it for an OUTPUT PROCEDURE
+(`orchestrator.site_replacement`): the mock stands for the file side and
+the procedure runs as the SORT would run it, with its RELEASE/RETURN
+mocked. Tests: `tests/unit/test_sort_merge_mocking.py`,
+`tests/integration/test_sort_procedures_20261103.py`.
+
+**Terminators that GOBACK to the test (2026-11-03, `TerminatorPlan.exit_kind`
+"RETURN").** The last resort when neither the chain rules nor the main-line
+end fit: a GO TO target, a STOP RUN under a PERFORM ... THRU/TIMES/VARYING
+or a section member with no mode, a statement two cases need to end
+differently (NIST: the CCVS `GO TO` error exits, ST/SM programs). The
+driver then runs every case's PERFORM inside `CALL "MOCKYMOCK-RUN-CASE"`
+(`driver.CALL_FRAME_ENTRY`): `call_frame_lines` appends a `UT-RUN-CASE`
+paragraph holding `ENTRY "MOCKYMOCK-RUN-CASE"`, an `EVALUATE UT-CURRENT-CASE`
+of the cases' PERFORMs and `GOBACK`; each `UT-TESTCASE-NNN` CALLs it in
+place of its PERFORM (`build_driver(call_frame=refusal.needs_call_frame(...))`),
+and `cli.main.mark_recursive` adds `IS RECURSIVE` to the PROGRAM-ID (a
+program may not CALL itself while it runs otherwise; an INITIAL or
+RECURSIVE one is left alone). The terminator becomes `MOVE "Y" TO
+UT-EARLY-EXIT` + `GOBACK` (`build_terminator_neutralization("RETURN")`),
+which leaves every PERFORM the program has open, from any depth, as the
+real STOP RUN does; GnuCOBOL keeps the PERFORM stack per CALL, so the next
+case starts clean (verified on cobc 3.1 `-std=mvs`). One RETURN plan serves
+every case and replaces a plan an earlier case made. Refused
+(`_plans._return_problem`): an EXEC CICS terminator; a terminator an XML
+PARSE procedure can reach (the parser would be left inside the statement;
+`_perform_frame_reach(procedures_only=True)`); one that cannot be spliced
+(shares its line); and one a hook PERFORM step reaches, since hooks run
+outside the frame. A SORT/MERGE procedure may be left: GnuCOBOL ends the
+active sort when the CALL returns and the next case's SORT starts afresh
+(`tests/integration/test_sort_procedures_20261103.py`). Tests: `tests/unit/test_call_frame.py`,
+`tests/unit/test_terminators.py`,
+`tests/integration/test_call_frame_terminator.py` (fixture
+`tests/fixtures/terminators/DEEP.cbl`).
 
 **EXEC CICS RETURN/XCTL/ABEND** (issue #215, option (a)): these never
 give control back, so `mock_surface.is_terminator_site` counts a CICS site

@@ -178,16 +178,24 @@ STOP_LITERAL_BODY = """\
 """
 
 
-def test_stop_literal_is_a_console_read_refused_when_reachable():
+def test_stop_literal_is_spliced_to_continue_so_a_case_reaching_it_runs():
+    """2026-11-03 (NIST NC302M, OBNC1M): the operator answers at once."""
     program = _program(STOP_LITERAL_BODY)
     sites = _none_sites(program)
     assert [s.label for s in sites] == ["STOP literal", "STOP RUN"]
     assert sites[0].keys == ("PRESS ENTER TO CONTINUE",)
+    assert "UNSUPPORTED_STOP_LITERAL" not in _codes(program, _case())
+
+
+NESTED_STOP_LITERAL_BODY = """\
+       MAIN-PARA.
+           CALL "SUB" ON EXCEPTION STOP "NO SUB" END-CALL.
+"""
+
+
+def test_a_stop_literal_inside_a_boundary_clause_is_still_refused():
+    program = _program(NESTED_STOP_LITERAL_BODY)
     assert "UNSUPPORTED_STOP_LITERAL" in _codes(program, _case())
-    # STOP RUN keeps its own separate (terminator-plan) treatment
-    assert "UNSUPPORTED_STOP_LITERAL" not in _codes(
-        program, _case(target="STOP-RUN-PARA")
-    )
 
 
 # --- unknown statement class: the catch-all -------------------------------

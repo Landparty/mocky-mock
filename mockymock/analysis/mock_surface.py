@@ -44,6 +44,10 @@ import importlib
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mockymock.analysis.declaratives import UseProcedures
 
 from cobolparser.models.program import (
     CobolDivision,
@@ -154,8 +158,8 @@ _TERMINATE_TYPES = _optional_statement_types(
 # were the Communication Module, Report Writer and STOP-literal ones, each
 # of which now has its own branch below.
 #
-# Notes on the less obvious members: ALTER and USE are refused whole-
-# program elsewhere (UNSUPPORTED_ALTER / UNSUPPORTED_DECLARATIVES);
+# Notes on the less obvious members: ALTER and USE are handled whole-
+# program elsewhere (`analysis.alter`, `analysis.declaratives`);
 # SUPPRESS only ever appears inside a Report Writer USE BEFORE REPORTING
 # declarative (same refusal); ENTRY is handled by analysis.linkage;
 # COMMIT/ROLLBACK are file-commit verbs whose files are all mocked or
@@ -334,6 +338,12 @@ class BoundarySite:
     # file name (`model.OPEN_MODE_WORDS`) -- what a qualified `MOCK OPEN
     # <file> <mode>` matches (`open_modes_of`).
     open_modes: dict[str, str] = field(default_factory=dict)
+    # A mixed-form SORT/MERGE site (a USING/GIVING file on one side, an
+    # INPUT/OUTPUT PROCEDURE on the other, 2026-11-03): (side, first, thru)
+    # of its procedure, side "INPUT" or "OUTPUT". The mock answers the file
+    # side, and the splice PERFORMs the procedure before it (INPUT) or after
+    # it (OUTPUT), as the SORT would (`mixed_sort_procedure`).
+    sort_procedure: tuple[str, str, str | None] | None = None
 
 
 @dataclass
@@ -397,6 +407,16 @@ class MockSurface:
     #: Every SELECT, by uppercased file name: organization, access mode and
     #: keys, for the READ forms and the key a keyed READ asks for.
     file_selects: dict[str, FileSelect] = field(default_factory=dict)
+    #: The program's USE AFTER EXCEPTION/ERROR procedures (DECLARATIVES),
+    #: which the splicer runs after a mocked file statement's exception
+    #: outcome (`analysis.declaratives`); None when it has none.
+    use_procedures: UseProcedures | None = None
+    #: Every paragraph and section name inside DECLARATIVES.
+    declarative_names: frozenset[str] = frozenset()
+    #: `ALTER P TO PROCEED TO <its own target>` for every paragraph an
+    #: ALTER changes: each case starts with the GO TOs as written
+    #: (`analysis.alter.alter_reset_lines`).
+    alter_resets: tuple[str, ...] = ()
 
     def static_call_sites(self) -> list[CallSite]:
         return [c for c in self.call_sites if c.kind is CallKind.STATIC]
@@ -479,6 +499,25 @@ def _is_plain_sort_merge(statement: SortStatement | MergeStatement) -> bool:
         getattr(statement, "input_procedure", None) is None
         and statement.output_procedure is None
     )
+
+
+def mixed_sort_procedure(
+    statement: SortStatement | MergeStatement,
+) -> tuple[str, str, str | None] | None:
+    """(side, first, thru) of a mixed-form SORT/MERGE's one procedure: an
+    INPUT PROCEDURE with GIVING files, or USING files with an OUTPUT
+    PROCEDURE. None for any other shape."""
+    input_procedure = getattr(statement, "input_procedure", None)
+    output_procedure = statement.output_procedure
+    using = getattr(statement, "using_files", None)
+    giving = getattr(statement, "giving_files", None)
+    if input_procedure and not output_procedure and giving and not using:
+        thru = getattr(statement, "input_procedure_thru", None)
+        return ("INPUT", input_procedure.upper(), thru.upper() if thru else None)
+    if output_procedure and not input_procedure and using and not giving:
+        thru = getattr(statement, "output_procedure_thru", None)
+        return ("OUTPUT", output_procedure.upper(), thru.upper() if thru else None)
+    return None
 
 
 def _is_pure_procedure_sort(statement: SortStatement | MergeStatement) -> bool:
@@ -672,9 +711,13 @@ def _file_op_keys(statement, category: MockCategory) -> tuple[str, ...]:
     if category in (MockCategory.OPEN, MockCategory.CLOSE):
         return tuple(name.upper() for name in statement.file_names if name)
     if category in (MockCategory.WRITE, MockCategory.REWRITE):
-        name = statement.record_name
-    else:
-        name = statement.file_name
+        # A record name qualified by its file (`WRITE PRINT-REC IN
+        # PRINT-FILE`, NIST SQ207M) keys on the record name: the .cut
+        # grammar takes one bare COBOL name, and generate wrote the whole
+        # phrase into a MOCK the suite then failed to parse.
+        name = (statement.record_name or "").split()
+        return (name[0].upper(),) if name else ()
+    name = statement.file_name
     return (name.upper(),) if name else ()
 
 
@@ -762,11 +805,21 @@ def _classify_statement(
             # statements inside them are classified as their own,
             # independently mockable, boundary sites below.
             pass
-        else:
+        elif (procedure := mixed_sort_procedure(statement)) is not None:
             # A USING/GIVING file paired with a procedure clause on the
-            # other side: neither whole-statement replacement (would skip
-            # the procedure's own logic) nor leaving it real (would touch
-            # a physical file mockymock cannot seed/read) is safe.
+            # other side (2026-11-03): mocked like the plain form, and the
+            # splice PERFORMs the procedure on its side of the mock, so its
+            # own logic still runs (RELEASE/RETURN inside it are their own
+            # sites).
+            category = _SORT_MERGE_MOCKABLE_CATEGORY[type(statement)]
+            name = statement.file_name or ""
+            site = add_site(
+                category, category.value, keys=(name.upper(),) if name else ()
+            )
+            site.sort_procedure = procedure
+        else:
+            # Both procedure clauses AND a file, or neither side readable:
+            # a shape the grammar does not allow, left refused.
             add_site(None, "SORT/MERGE")
         return
 
@@ -1057,6 +1110,13 @@ def analyze(program: CobolProgram) -> MockSurface:
 
     selects = file_selects(program)
     surface.file_selects = selects
+    from mockymock.analysis.declaratives import declarative_paragraphs, use_procedures
+
+    surface.use_procedures = use_procedures(program)
+    surface.declarative_names = frozenset(declarative_paragraphs(program))
+    from mockymock.analysis.alter import alter_reset_lines
+
+    surface.alter_resets = tuple(alter_reset_lines(program))
     for site in surface.boundary_sites:
         if site.category is MockCategory.READ:
             site.read_form = read_form_of(site.statement, selects)

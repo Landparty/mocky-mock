@@ -41,6 +41,18 @@ def fixed_clock_env() -> dict[str, str]:
     return {"COB_CURRENT_DATE": value}
 
 
+def binary_run_env() -> dict[str, str]:
+    """The environment every test binary runs with: the fixed clock
+    (`fixed_clock_env`), and GnuCOBOL's debugging switch off
+    (`COB_SET_DEBUG`, IBM's object-time DEBUG option) unless the user set
+    it: a USE FOR DEBUGGING procedure then never runs, as in a production
+    run, whatever the shell running the tests has set (2026-11-03)."""
+    env = fixed_clock_env()
+    if not os.environ.get("COB_SET_DEBUG"):
+        env["COB_SET_DEBUG"] = "N"
+    return env
+
+
 @dataclass
 class ExecutionResult:
     exit_code: int

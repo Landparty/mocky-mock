@@ -62,8 +62,10 @@ from cobolparser.models.statements.misc import (
 from cobolparser.parsers.statements.ibm_exec_statements import ExecCicsStatement
 
 from mockymock.analysis.cics_handle import all_handler_labels, handler_labels
+from mockymock.analysis.declaratives import use_procedures
 from mockymock.analysis.mock_surface import (
     _BOUNDARY_STATEMENT_TYPES,
+    _FILE_OP_SPECS,
     _XML_JSON_TYPES,
     XML_PROCESSING_PROCEDURE_RE,
     _all_paragraphs,
@@ -73,6 +75,19 @@ from mockymock.analysis.mock_surface import (
 from mockymock.analysis.sql_whenever import whenever_actions, whenever_targets
 
 from ._types import RefusalReason
+
+#: The file statement types (OPEN ... UNLOCK) a USE procedure can follow.
+_FILE_OP_TYPES: tuple[type, ...] = tuple(t for t, _ in _FILE_OP_SPECS)
+
+
+def _file_op_statement_keys(statement) -> tuple[str, ...]:
+    """The file / record names a file statement names (its site keys)."""
+    from mockymock.analysis.mock_surface import _file_op_keys
+
+    for statement_type, category in _FILE_OP_SPECS:
+        if isinstance(statement, statement_type):
+            return _file_op_keys(statement, category)
+    return ()
 
 
 def _find_statements_of_type(
@@ -202,6 +217,14 @@ def _source_ordered_paragraphs(procedure) -> list | None:
     return paragraphs
 
 
+def _section_of(paragraph) -> str | None:
+    """The name of the SECTION holding `paragraph`, or None."""
+    parent = getattr(paragraph, "parent", None)
+    if type(parent).__name__ != "CobolSection":
+        return None
+    return getattr(parent, "section_name", None)
+
+
 def _expand_thru_range(
     ordered,
     start: str,
@@ -225,6 +248,30 @@ def _expand_thru_range(
             ),
         )
     names = [p.paragraph_name for p in ordered]
+    # A SECTION endpoint (`SORT ... OUTPUT PROCEDURE OUTPROC THRU
+    # OUTPROC-EXIT`, NIST ST108A): the range starts at the start section's
+    # first paragraph and ends at the thru section's last one.
+    sections = [_section_of(p) for p in ordered]
+    first, last = start, thru
+    if start not in names and start in sections:
+        first = names[sections.index(start)]
+    if thru not in names and thru in sections:
+        last = names[len(sections) - 1 - sections[::-1].index(thru)]
+    if (first, last) != (start, thru):
+        members, reason = _expand_thru_range(ordered, first, last, origin, missing_code)
+        if reason is not None:
+            return members, reason
+        covered = {
+            name
+            for name in sections
+            if name
+            and all(
+                member in members
+                for member, section in zip(names, sections, strict=True)
+                if section == name
+            )
+        }
+        return members + sorted(covered - set(members)), None
     for endpoint in (start, thru):
         count = names.count(endpoint)
         if count == 0:
@@ -473,6 +520,7 @@ def _reachable_bfs(
                 )
             )
 
+    uses = use_procedures(program)
     seen: set[str] = set()
     whenever = whenever_actions(program) if follow_whenever else {}
     go_to_targets = _go_to_targets(
@@ -618,6 +666,17 @@ def _reachable_bfs(
                             reasons.append(problem)
                         stack.extend(members)
 
+            # A USE AFTER EXCEPTION/ERROR procedure: the splicer PERFORMs
+            # it after a mocked file statement whose outcome is an
+            # exception, as the runtime runs it after a real one
+            # (2026-11-03, `analysis.declaratives`).
+            if uses is not None:
+                for statement in _find_statements_of_type(
+                    by_name[name].statements, _FILE_OP_TYPES
+                ):
+                    for file_key in _file_op_statement_keys(statement):
+                        for section in uses.sections_for(uses.file_of(file_key)):
+                            push_target(section, name, "USE AFTER EXCEPTION")
             # XML PARSE ... PROCESSING PROCEDURE p [THRU q]: the same
             # implicit-PERFORM shape (2026-09-02). A cobol-parser that
             # keeps the clause as text without exposing

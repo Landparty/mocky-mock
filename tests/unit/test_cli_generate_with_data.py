@@ -491,7 +491,7 @@ _GOTO_MAIN = """\
        PROCEDURE DIVISION.
        0000-MAIN.
            PERFORM 1000-STEP
-           STOP RUN.
+           DISPLAY "X" STOP RUN.
        1000-STEP.
            ADD 1 TO WS-X
            IF WS-X < 3
@@ -502,7 +502,8 @@ _GOTO_MAIN = """\
 
 def test_generate_fails_when_lint_refuses_the_scaffold_it_wrote(tmp_path, capsys):
     """Issue #231: a STOP RUN whose paragraph is itself a GO TO target
-    can't be neutralized, which lint refuses as
+    can't be neutralized (and, sharing its line with a DISPLAY, cannot be
+    spliced into a GOBACK to the test either), which lint refuses as
     UNSUPPORTED_TERMINATOR_LAYOUT. No MOCK block can fix that, so generate
     says so and exits 1 instead of 0 -- while still writing the file.
     (CHKCLR, this test's first subject, became testable once a GO TO to

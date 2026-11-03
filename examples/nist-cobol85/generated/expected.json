@@ -1,0 +1,92 @@
+{
+  "DB101A": {
+    "cases": 1,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
+  },
+  "IC102A": {
+    "cases": 1,
+    "perform": "PERFORM CALL-TEST-001 THRU CALL-EXIT-001",
+    "verdict": "green"
+  },
+  "IC203A": {
+    "cases": 15,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
+  },
+  "IC222A": {
+    "cases": 5,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
+  },
+  "IF401M": {
+    "cases": 1,
+    "perform": "PERFORM IF401M-ACOS THRU IF401M-END",
+    "verdict": "green"
+  },
+  "IX106A": {
+    "cases": 48,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
+  },
+  "IX301M": {
+    "cases": 2,
+    "perform": "PERFORM IX301M-CONTROL",
+    "verdict": "green"
+  },
+  "IX401M": {
+    "cases": 4,
+    "perform": "PERFORM IX401M-CONTROL",
+    "verdict": "green"
+  },
+  "NC101A": {
+    "cases": 1,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
+  },
+  "NC113M": {
+    "cases": 1,
+    "perform": "PERFORM OPEN-FILES THRU BLANK-LINE-PRINT",
+    "verdict": "green"
+  },
+  "NC302M": {
+    "cases": 1,
+    "perform": "PERFORM NC302M-CONTROL",
+    "verdict": "green"
+  },
+  "OBSQ1A": {
+    "cases": 1,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
+  },
+  "RL101A": {
+    "cases": 3,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
+  },
+  "RL301M": {
+    "cases": 6,
+    "perform": "PERFORM RL301M-CONTROL",
+    "verdict": "green"
+  },
+  "SG302M": {
+    "cases": 1,
+    "perform": "PERFORM SG302M-CONTROL",
+    "verdict": "green"
+  },
+  "SM301M": {
+    "cases": 1,
+    "perform": "PERFORM SM301M-CONTROL",
+    "verdict": "green"
+  },
+  "SQ107A": {
+    "cases": 8,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
+  },
+  "ST110A": {
+    "cases": 1,
+    "perform": "PERFORM SORT-PARAGRAPH",
+    "verdict": "green"
+  }
+}

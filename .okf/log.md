@@ -5,6 +5,152 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-03 -- CANCEL names mocked, STOP literal answered, comment entries
+
+* The generator gives each case an empty `MOCK CALL` for every name a
+  reachable CANCEL carries that the case does not mock yet
+  (`generator._cancel_cover_lines`; a literal gets `MOCK CALL "X"`, a data
+  name the dynamic `MOCK CALL X`). The gate already took such a CANCEL as
+  a no-op; NIST IC203A and IC205A cancelled names they never CALL.
+* `STOP <literal>` is spliced to CONTINUE (`orchestrator.splice_program`,
+  annotated through `source_map._SPLICED_UNMOCKED_LABELS`): the operator
+  answers at once. UNSUPPORTED_STOP_LITERAL now refuses only one nested in
+  another boundary's clause body. NIST NC302M, OBNC1M.
+* `main.comment_out_comment_entries` no longer stops at a division header
+  written inside a comment entry (OBNC1M has a whole program in Area B of
+  its SECURITY paragraph).
+
+## 2026-11-03 -- Nested and stacked programs tested through the outer one
+
+* UNSUPPORTED_NESTED_PROGRAM refuses only an object-oriented class now.
+  Nested and stacked PROGRAM-IDs: `normalize_flow_targets` detaches the
+  contained units from the outer tree (`flow_targets.
+  detach_contained_programs`), a CALL to one is mocked like any CALL, and
+  their source still compiles after the driver's end-of-program trap
+  (placed before the first nested `IDENTIFICATION DIVISION`; spans stop
+  before it and before `END PROGRAM`). See [analysis](analysis.md).
+* `mark_recursive` finds a program name on the line after `PROGRAM-ID.`
+  (NIST IC222A).
+* Tests: `tests/unit/test_refusal.py`, `tests/unit/test_call_frame.py`,
+  `tests/integration/test_nested_programs.py` (fixture
+  `tests/fixtures/nested/`); all 12 NIST IC nested-program suites green.
+
+## 2026-11-03 -- ALTER runs real under mocks
+
+* UNSUPPORTED_ALTER no longer refuses every ALTER: the analyses see an
+  altered paragraph's GO TO as naming its own target and every ALTER target
+  (`analysis.alter`, applied in `normalize_flow_targets`), the ALTER runs
+  real, and every case starts with `ALTER P TO PROCEED TO <own target>`
+  (`MockSurface.alter_resets`). A `GO TO.` with no target falls into the
+  next paragraph until ALTERed (GnuCOBOL). Still refused: an altered
+  paragraph that is not one plain GO TO, or a `GO TO.` with nothing after
+  it. See [analysis](analysis.md).
+* Tests: `tests/unit/test_alter.py`, `tests/integration/test_alter.py`
+  (fixture `tests/fixtures/alter/`).
+
+## 2026-11-03 -- SORT/MERGE with a file and a procedure, THRU with SECTION ends
+
+* A SORT/MERGE mixing a USING/GIVING file with an INPUT/OUTPUT PROCEDURE is
+  mocked on its file side (`MOCK SORT <sd>`), and the splice PERFORMs the
+  procedure on its other side (`BoundarySite.sort_procedure`,
+  `mock_surface.mixed_sort_procedure`): no more UNSUPPORTED_SORT_MERGE for
+  it. See [analysis](analysis.md) and [splicer](splicer.md).
+* A THRU range may name SECTIONs as endpoints (`_expand_thru_range`; NIST
+  ST108A `OUTPUT PROCEDURE OUTPROC THRU OUTPROC-EXIT`).
+* A terminator inside a SORT/MERGE procedure may GOBACK to the test (the
+  call frame): GnuCOBOL ends the active sort and the next case's SORT runs
+  afresh. XML PARSE procedures still refuse.
+* Tests: `tests/unit/test_thru_section_endpoints.py`,
+  `tests/unit/test_sort_merge_mocking.py`,
+  `tests/integration/test_sort_procedures_20261103.py` (fixtures
+  `tests/fixtures/sort_merge/`).
+
+## 2026-11-03 -- Terminators GOBACK to the test through a call frame
+
+* A STOP RUN/GOBACK/EXIT PROGRAM that no EXIT verb returns from (a GO TO
+  target, under a THRU/TIMES/VARYING PERFORM, a statement two cases need to
+  end differently) no longer refuses UNSUPPORTED_TERMINATOR_LAYOUT: the
+  driver runs each case's PERFORM inside a CALL of its own entry
+  (`MOCKYMOCK-RUN-CASE`, PROGRAM-ID marked IS RECURSIVE) and the terminator
+  becomes `GOBACK` out of it (`TerminatorPlan.exit_kind` "RETURN"). Still
+  refused: EXEC CICS, inside an XML PARSE procedure (SORT/MERGE since the
+  entry above), an
+  unspliceable statement, or one a hook PERFORM reaches. See
+  [splicer](splicer.md).
+* Reset: a picture with a CURRENCY SIGN symbol (NIST NC107A `PIC WWWWW`) is
+  numeric-edited, never `MOVE SPACES`.
+* Tests: `tests/unit/test_call_frame.py`,
+  `tests/integration/test_call_frame_terminator.py`; the terminator tests
+  that refused these shapes now assert the RETURN plan.
+
+## 2026-11-03 -- DECLARATIVES: USE AFTER EXCEPTION procedures run under mocks
+
+* A mocked file statement whose outcome is an exception (status not "0x")
+  PERFORMs the USE AFTER EXCEPTION/ERROR section that applies to its file,
+  as the runtime does after a real one: the statement's own AT END /
+  INVALID KEY clause handles its condition first (the USE clause is the
+  last WHEN of the lifted-clause `EVALUATE TRUE`). A USE naming the file
+  wins over one naming the open mode; mocked OPENs record each file's mode
+  in `UT-OPEN-MODE-<n>` for the statements after. Multi-file OPEN/CLOSE
+  check each file's FILE STATUS field. See [analysis](analysis.md)
+  (`analysis.declaratives`) and [splicer](splicer.md).
+* The reachability walk follows a file statement to its USE section(s);
+  the driver goes after `END DECLARATIVES.`; a statement span stops before
+  that line; a terminator inside DECLARATIVES never ends a main-line case
+  with GO TO; the generator's entry and main line skip DECLARATIVES; in a
+  program with USE procedures no VERIFY count is exact.
+* Test binaries run with `COB_SET_DEBUG=N` (`runtime.executor.binary_run_env`)
+  unless the user sets it: USE FOR DEBUGGING procedures stay off.
+* Still refused (UNSUPPORTED_DECLARATIVES): USE BEFORE REPORTING, a USE
+  AFTER naming no file or mode the parser read, or a file of no SELECT.
+* Tests: `tests/unit/test_declaratives.py`,
+  `tests/integration/test_declaratives.py` (fixture
+  `tests/fixtures/declaratives/DECL.cbl`).
+
+## 2026-11-02 -- Whole-main-line cases (NIST CCVS85)
+
+* A case PERFORMing THRU the program's last paragraph runs the main line to
+  the end of the program: a STOP RUN/GOBACK it falls or jumps into, and that
+  no PERFORM of the program reaches, ends it with `GO TO UT-PROGRAM-END`
+  (`TerminatorPlan.exit_kind` "PROGRAM"; the driver PERFORMs THRU that
+  paragraph, appended after the program's last one). See [splicer](splicer.md).
+* generate writes `PERFORM <first> THRU <last>` for a first paragraph the
+  program carries on past (`ProgramContext.main_line_thru`), when the range's
+  terminators are all accepted; repeated identical checks in a case are
+  written once. See [dsl](dsl.md).
+* A mocked statement after a finished sentence on its line (`PERFORM A. CLOSE
+  F.`) is spliced, the sentence kept on its own line
+  (`source_map.closed_sentence_lead`, `BoundarySite.span_lead`).
+* Falls back to the bare PERFORM when `lint` refuses more of the main-line
+  suite (`cli.main._main_line_or_bare`); which terminators run inside a
+  PERFORM is computed per range (`_plans._perform_frame_reach`); a count
+  after a branch holding a GO TO is not exact; reset MOVEs past 200
+  characters are wrapped (`driver.wrap_words`, NC207A's 48-deep `IN` chain
+  passed cobc's 512-byte line limit).
+* AUTHOR / INSTALLATION / DATE-WRITTEN / DATE-COMPILED / SECURITY / REMARKS
+  comment-entry continuation lines are commented out before the driver is
+  inserted (`cli.main.comment_out_comment_entries`): cobc's -std=mvs read an
+  indented second line as code (NIST RW101A-RW104A, SG101A).
+* Tests: `tests/unit/test_main_line_cases.py`,
+  `tests/integration/test_main_line_case.py`; NIST numbers in
+  `examples/nist-cobol85/generated/README.md`.
+
+## 2026-11-02 -- NIST CCVS85 check of "Create tests"; four generate/splice fixes
+
+* Ran the runner's `tests` job (generate `--scenarios all`, `--record-expectations`,
+  play, then replay the recorded suite) over all 459 NIST CCVS85 programs:
+  `scripts/nist_cobol85.py` (`expand` does EXEC85's X-card substitution,
+  `check` the create + replay), sample and numbers in
+  `examples/nist-cobol85/generated/README.md`, integration test
+  `tests/integration/test_nist_generated_suites.py`.
+* A `PROCEDURE` / `DIVISION` / `.` header split over lines got no driver,
+  so the program ran outside every case (NC113M): `splicer/headers.py`.
+* A READ whose rows move nothing emitted empty `WHEN`s cobc 3.1 rejects
+  (IX301M). Identical generated cases are left out with a `*> NOTE:`
+  (72 suites only ever ran their first paragraph). See [dsl](dsl.md).
+* `WRITE PRINT-REC IN PRINT-FILE` keys on the record name (SQ207M). See
+  [analysis](analysis.md). Tests: `tests/unit/test_nist_20261102_fixes.py`.
+
 ## 2026-11-02 -- Runner `tests` jobs (integration tests run in LegacyLens)
 
 * `mockymock runner` takes a third manifest kind, `tests`: scaffold the

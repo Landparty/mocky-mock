@@ -132,6 +132,34 @@ def split_long_move(line: str, indent: str = "     ") -> list[str]:
     return lines
 
 
+#: Lines longer than this are wrapped (`wrap_words`), well under cobc
+#: -free's 512-byte limit.
+_WRAP_AT = 200
+
+
+def wrap_words(line: str, width: int = 100) -> list[str]:
+    """`line` as is when it is short, else wrapped at blanks onto lines of
+    about `width` characters, each under the first's indentation plus four.
+    A reset MOVE of an item nested 49 levels deep (NIST NC207A) names it
+    with a 48-deep `IN` chain: past 512 bytes cobc truncated the line and
+    the name came out ambiguous. A line holding a quote is left alone:
+    a blank inside a literal is not a place to break it."""
+    if len(line) <= _WRAP_AT or "'" in line or '"' in line:
+        return [line]
+    lead = line[: len(line) - len(line.lstrip())]
+    words = line.split()
+    lines: list[str] = []
+    current = lead + words[0]
+    for word in words[1:]:
+        if len(current) + 1 + len(word) > width:
+            lines.append(current)
+            current = lead + "    " + word
+        else:
+            current += " " + word
+    lines.append(current)
+    return lines
+
+
 def _display_operands(text: str) -> list[str]:
     """`text` as one or more quoted DISPLAY operands: one when short, else
     one per `_LITERAL_CHUNK` characters, so a long expected value never
@@ -181,10 +209,72 @@ def end_of_program_trap_lines() -> list[str]:
     ]
 
 
+def end_of_program_lines_for(program_end: bool) -> list[str]:
+    """What follows the program's last line: `program_end_lines()` when a
+    main-line case runs THRU `UT-PROGRAM-END`, then the trap section."""
+    return (program_end_lines() if program_end else []) + end_of_program_trap_lines()
+
+
 @dataclass
 class DriverArtifact:
     working_storage_lines: list[str]
     procedure_lines: list[str]
+    # `build_driver(program_end=...)`: `cli.main._insert_driver` appends
+    # the `UT-PROGRAM-END` paragraph after the program's last one.
+    program_end: bool = False
+    # `build_driver(call_frame=True)`: each case's PERFORM runs inside a
+    # CALL of the program's own `CALL_FRAME_ENTRY`, so a terminator planned
+    # with exit_kind "RETURN" can GOBACK to the case from any PERFORM depth;
+    # `cli.main._insert_driver` marks the PROGRAM-ID RECURSIVE.
+    call_frame: bool = False
+
+
+#: The ENTRY a call-frame driver CALLs to run one case's PERFORM
+#: (`build_driver(call_frame=True)`, 2026-11-03).
+CALL_FRAME_ENTRY = "MOCKYMOCK-RUN-CASE"
+CALL_FRAME_PARAGRAPH = "UT-RUN-CASE"
+
+
+def call_frame_lines(suite: MockTestSuite) -> list[str]:
+    """The paragraph a call-frame driver CALLs (`CALL_FRAME_ENTRY`): it
+    runs the current case's PERFORM and returns. A terminator the case
+    reaches GOBACKs out of it however deep in the program's own PERFORMs
+    it sits (`TerminatorPlan.exit_kind` "RETURN"); GnuCOBOL's PERFORM
+    stack is the CALL's own, so nothing of it is left behind."""
+    lines = [
+        f"       {CALL_FRAME_PARAGRAPH}.",
+        f'           ENTRY "{CALL_FRAME_ENTRY}"',
+        "           EVALUATE UT-CURRENT-CASE",
+    ]
+    for index, case in enumerate(suite.test_cases, start=1):
+        lines.append(f'               WHEN "{index:03d}"')
+        perform = f"                   PERFORM {case.perform_target}"
+        if case.perform_thru:
+            perform += f" THRU {case.perform_thru}"
+        lines.append(perform)
+    lines.append("           END-EVALUATE")
+    lines.append("           GOBACK.")
+    return lines
+
+
+def program_end_lines() -> list[str]:
+    """The paragraph a main-line case's terminator jumps to
+    (`refusal.PROGRAM_END_PARAGRAPH`, `TerminatorPlan.exit_kind`
+    "PROGRAM"): the end of that case's `PERFORM ... THRU` range, right
+    after the program's last paragraph."""
+    from mockymock.analysis.refusal import PROGRAM_END_PARAGRAPH
+
+    return ["", f"       {PROGRAM_END_PARAGRAPH}.", "           EXIT."]
+
+
+def _range_end(thru: str | None, program_end: str | None) -> str | None:
+    """A PERFORM's THRU paragraph as the driver writes it: the program's
+    last paragraph becomes `UT-PROGRAM-END` when the main line ends there."""
+    if thru is not None and program_end is not None and thru == program_end:
+        from mockymock.analysis.refusal import PROGRAM_END_PARAGRAPH
+
+        return PROGRAM_END_PARAGRAPH
+    return thru
 
 
 _CASE_END_LINE_RE = re.compile(r'^\s*DISPLAY "__MOCKYMOCK__ CASE (\S+) END"\.$')
@@ -201,7 +291,17 @@ def build_driver(
     numeric_edited: frozenset[str] | set[str] = frozenset(),
     behaviour: bool = False,
     returned: Sequence[str] = (),
+    program_end: str | None = None,
+    call_frame: bool = False,
 ) -> DriverArtifact:
+    """`program_end` (`refusal.program_end_thru`): the program's last
+    paragraph when a terminator ends the main line at `UT-PROGRAM-END`;
+    every PERFORM THRU it then runs THRU `UT-PROGRAM-END` instead.
+
+    `call_frame` (`refusal.needs_call_frame`): each case's own PERFORM
+    runs inside a CALL of `CALL_FRAME_ENTRY` (`call_frame_lines`), for a
+    terminator that GOBACKs to the case from inside the program's own
+    PERFORMs."""
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
     # yield "X--VIA-COPYBOOK-" -- a COBOL word cannot end with a hyphen and
@@ -289,9 +389,9 @@ def build_driver(
 
     if reset_lines:
         procedure.append("       UT-RESET-WORKING-STORAGE.")
-        for line in reset_lines[:-1]:
-            procedure.append(f"           {line}")
-        procedure.append(f"           {reset_lines[-1]}.")
+        for index, line in enumerate(reset_lines):
+            last = index == len(reset_lines) - 1
+            procedure.extend(wrap_words(f"           {line}" + ("." if last else "")))
         procedure.append("")
 
     if restore_state:
@@ -318,8 +418,12 @@ def build_driver(
                 restore_state=restore_state,
                 condition_names=condition_names,
                 numeric_edited=numeric_edited,
+                call_frame=call_frame,
             )
         )
+        procedure.append("")
+    if call_frame:
+        procedure.extend(call_frame_lines(suite))
         procedure.append("")
 
     if behaviour:
@@ -342,9 +446,23 @@ def build_driver(
             with_rc.append(line)
         procedure = with_rc
 
+    if program_end is not None:
+        procedure = [_with_program_end(line, program_end) for line in procedure]
     return DriverArtifact(
-        working_storage_lines=working_storage, procedure_lines=procedure
+        working_storage_lines=working_storage,
+        procedure_lines=procedure,
+        program_end=program_end is not None,
+        call_frame=call_frame,
     )
+
+
+def _with_program_end(line: str, program_end: str) -> str:
+    """`line` with a driver `PERFORM X THRU <program_end>` redirected to
+    `UT-PROGRAM-END` (`_range_end`)."""
+    match = re.fullmatch(r"(\s*PERFORM \S+ THRU )(\S+)", line)
+    if match is None:
+        return line
+    return match.group(1) + str(_range_end(match.group(2), program_end))
 
 
 def _step_lines(steps: list[HookStep]) -> list[str]:
@@ -442,6 +560,7 @@ def _build_testcase_paragraph(
     restore_state: bool = False,
     condition_names: frozenset[str] | set[str] = frozenset(),
     numeric_edited: frozenset[str] | set[str] = frozenset(),
+    call_frame: bool = False,
 ) -> list[str]:
     case_id = f"{index:03d}"
     case_mocks = {(mock.category, mock.key) for mock in case.mocks}
@@ -505,6 +624,9 @@ def _build_testcase_paragraph(
     perform_line = f"           PERFORM {case.perform_target}"
     if case.perform_thru:
         perform_line += f" THRU {case.perform_thru}"
+    if call_frame:
+        # `call_frame_lines` runs this case's PERFORM for it.
+        perform_line = f'           CALL "{CALL_FRAME_ENTRY}"'
     lines.append(perform_line)
     lines.append("")
 

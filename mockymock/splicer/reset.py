@@ -527,7 +527,16 @@ def _is_numeric(item) -> bool:
     if item.picture_clause is None:
         return False
     stripped = _REPEAT_GROUP_RE.sub("", item.picture_clause.pattern or "")
-    return any(c in _NUMERIC_PIC_CHARS for c in stripped.upper())
+    if any(c in _NUMERIC_PIC_CHARS for c in stripped.upper()):
+        return True
+    # Any symbol an alphanumeric(-edited) picture cannot hold is a
+    # CURRENCY SIGN the program chose (NIST NC107A's `PIC WWWWW` under
+    # `CURRENCY SIGN IS "W"`): numeric-edited.
+    return any(c not in _ALPHANUMERIC_PIC_CHARS for c in stripped.upper())
+
+
+#: The symbols of an alphanumeric or alphanumeric-edited (or national) PIC.
+_ALPHANUMERIC_PIC_CHARS = frozenset("AXBNGU0/")
 
 
 def _value_restore(item, name: str) -> str:

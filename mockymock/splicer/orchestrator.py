@@ -43,6 +43,7 @@ from mockymock.analysis.clause_bodies import (
     lift_clause_bodies,
     scan_words,
 )
+from mockymock.analysis.declaratives import MODE_CODES, USE_GUARD
 from mockymock.analysis.flow_mocks import FlowMockPlan
 from mockymock.analysis.mock_surface import BoundarySite, MockSurface
 from mockymock.analysis.refusal import (
@@ -51,7 +52,7 @@ from mockymock.analysis.refusal import (
     directive_matches_site,
 )
 from mockymock.analysis.sql_whenever import whenever_check_lines
-from mockymock.dsl.model import EXEC_CATEGORIES, MockTestSuite
+from mockymock.dsl.model import EXEC_CATEGORIES, MockCategory, MockTestSuite
 from mockymock.splicer.behaviour import cursor_host_variables
 from mockymock.splicer.cics_resp import EIB_RESP_NAMES
 from mockymock.splicer.file_keys import rewrite_foreign_record_keys
@@ -244,6 +245,9 @@ def splice_program(
                 site_replacement(child, kinds[id(child.statement)][1]),
                 child,
             )
+        lifted, use_before, use_after = _with_use_procedures(
+            site, surface, lifted, file_status_fields or {}
+        )
         replacement = build_site_dispatch(
             site,
             suite,
@@ -263,6 +267,16 @@ def splice_program(
             behaviour=behaviour,
             cursor_hosts=cursor_hosts,
         )
+        replacement = use_before + replacement + use_after
+        if site.sort_procedure is not None:
+            # A mixed-form SORT/MERGE: the mock answers its file side, and
+            # its procedure runs on the other side, as the SORT runs it.
+            side, first, thru = site.sort_procedure
+            perform = f"           PERFORM {first}" + (f" THRU {thru}" if thru else "")
+            if side == "INPUT":
+                replacement = [perform] + replacement
+            else:
+                replacement = replacement + [perform]
         # What the DB2 precompiler puts after the statement for every
         # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).
         return replacement + [
@@ -280,10 +294,7 @@ def splice_program(
                 cics_plan.exit_kind, cics_plan.resp_field
             )
             replacement = prefix + replacement + suffix
-        if site.span_lead:
-            # `AT END CALL "X"`: the header stays, on a line of its own.
-            lead_width = column_offset + len(site.span_lead)
-            replacement = [lines[start - 1][:lead_width].rstrip(), *replacement]
+        replacement = _with_lead(lines, start, site, replacement, column_offset)
         # If the replaced statement carried its sentence's terminating
         # period (i.e. it was the last statement of the sentence /
         # paragraph), the replacement block must terminate the sentence too
@@ -317,6 +328,21 @@ def splice_program(
         replacement = ["           CONTINUE"]
         if _span_ends_sentence(lines, start, end):
             replacement = replacement[:-1] + [replacement[-1] + "."]
+        replacement = _with_lead(lines, start, site, replacement, column_offset)
+        spans.append((start, end, replacement))
+
+    # STOP <literal>: displays the literal and waits for the operator, then
+    # goes on with the next statement. Under a test the operator answers at
+    # once: CONTINUE. A nested one, or one with no safe span, is refused by
+    # the gate when a case reaches it, and left as written otherwise.
+    for site in surface.boundary_sites:
+        if site.label != "STOP literal" or site.nested or site.unspliceable_reason:
+            continue
+        start, end = statement_span(site.statement, boundaries, last_line, lines)
+        replacement = ["           CONTINUE"]
+        if _span_ends_sentence(lines, start, end):
+            replacement = replacement[:-1] + [replacement[-1] + "."]
+        replacement = _with_lead(lines, start, site, replacement, column_offset)
         spans.append((start, end, replacement))
 
     # Terminator neutralization: replace the STOP RUN/GOBACK statement's
@@ -349,6 +375,7 @@ def splice_program(
             start, end = statement_span(site.statement, boundaries, last_line, lines)
         if _span_ends_sentence(lines, start, end):
             replacement = replacement[:-1] + [replacement[-1] + "."]
+        replacement = _with_lead(lines, start, site, replacement, column_offset)
         spans.append((start, end, replacement))
 
     # GO-TO-to-EXIT-PARAGRAPH splices (docs/2026-08-17-goto-exit-paragraph-
@@ -465,6 +492,91 @@ def splice_program(
         else:
             lines = insert_lines_after(lines, start, replacement)
     return lines
+
+
+#: The file statements a USE AFTER EXCEPTION procedure follows.
+_USE_CATEGORIES = frozenset(
+    {
+        MockCategory.OPEN,
+        MockCategory.CLOSE,
+        MockCategory.READ,
+        MockCategory.WRITE,
+        MockCategory.REWRITE,
+        MockCategory.DELETE,
+        MockCategory.START,
+        MockCategory.UNLOCK,
+    }
+)
+
+
+def _with_use_procedures(
+    site: BoundarySite,
+    surface: MockSurface,
+    lifted: tuple[LiftedClause, ...] | None,
+    file_status_fields: dict[str, str],
+) -> tuple[tuple[LiftedClause, ...] | None, list[str], list[str]]:
+    """What a mocked file statement adds for the program's USE AFTER
+    EXCEPTION procedures (`analysis.declaratives`): (its lifted clauses
+    with one more that PERFORMs the applicable USE section on an exception
+    outcome, lines to put before the dispatch, lines to put after it).
+
+    The added clause comes last in the clause `EVALUATE TRUE`, so an AT
+    END / INVALID KEY phrase of the statement handles its own condition
+    first, as at run time. An OPEN records each file's open mode first
+    (`UseProcedures.mode_field`). A statement naming several files (`OPEN
+    INPUT A OUTPUT B`, `CLOSE A B`) checks each file's own FILE STATUS
+    field after the dispatch instead: one outcome cannot speak for both."""
+    uses = surface.use_procedures
+    if (
+        uses is None
+        or site.category not in _USE_CATEGORIES
+        or site.paragraph_name in uses.declarative_names
+    ):
+        return lifted, [], []
+    files = list(dict.fromkeys(uses.file_of(key) for key in site.keys))
+    modes = site.open_modes or {}
+    before = [
+        f'           MOVE "{MODE_CODES[modes[name]]}" TO {mode_field}'
+        for name in files
+        if (mode_field := uses.mode_field(name)) is not None
+        and modes.get(name) in MODE_CODES
+    ]
+    after: list[str] = []
+    if len(files) == 1:
+        body = uses.perform_lines(files[0], modes.get(files[0]))
+        if body:
+            lifted = (
+                *(lifted or ()),
+                LiftedClause("use_procedure", USE_GUARD, tuple(body)),
+            )
+        return lifted, before, after
+    for name in files:
+        status = file_status_fields.get(name)
+        body = uses.perform_lines(name, modes.get(name))
+        if status and body:
+            after.append(
+                f'           IF {status} NOT = SPACES AND {status}(1:1) NOT = "0"'
+            )
+            after.extend(f"               {line}" for line in body)
+            after.append("           END-IF")
+    return lifted, before, after
+
+
+def _with_lead(
+    lines: list[str],
+    start: int,
+    site: BoundarySite,
+    replacement: list[str],
+    column_offset: int,
+) -> list[str]:
+    """`replacement` behind the code the site's span opens with
+    (`BoundarySite.span_lead`): a clause header (`AT END CALL "X"`) or, at
+    the top level, statements that close their sentence (`PERFORM A.
+    CLOSE F.`). That code stays as written, on a line of its own."""
+    if not site.span_lead:
+        return replacement
+    lead_width = column_offset + len(site.span_lead)
+    return [lines[start - 1][:lead_width].rstrip(), *replacement]
 
 
 def _statement_lines(lines: list[str], start: int, end: int) -> list[str]:

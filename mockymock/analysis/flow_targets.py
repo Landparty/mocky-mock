@@ -60,11 +60,25 @@ def name_unnamed_main_line(program) -> bool:
     return True
 
 
+def detach_contained_programs(program) -> None:
+    """Take the units nested in (or stacked after) *program* out of its
+    child list, in place: mockymock tests the outermost unit, and every
+    `find_all_by_type` walk over it must not see a contained unit's
+    paragraphs, data items or boundaries (2026-11-03). They stay in
+    `contained_programs`, and their source is compiled with the program;
+    a CALL to one is a boundary like any other, so it is mocked and the
+    contained code never runs under a test."""
+    for unit in list(getattr(program, "contained_programs", None) or []):
+        if unit in program.children:
+            program.remove_child(unit)
+
+
 def normalize_flow_targets(program) -> None:
     """Upper-case, in place, every PERFORM/GO TO target name of *program*
     (`target_paragraph`, `thru_paragraph`, `target_paragraphs`)."""
     if program is None:
         return
+    detach_contained_programs(program)
     name_unnamed_main_line(program)
     for type_name in _FLOW_STATEMENT_TYPES:
         for statement in program.find_all_by_type(type_name):
@@ -77,3 +91,7 @@ def normalize_flow_targets(program) -> None:
                 statement.target_paragraphs = [
                     t.upper() if isinstance(t, str) else t for t in targets
                 ]
+    # An ALTERed paragraph's GO TO can go to every ALTER target too.
+    from mockymock.analysis.alter import extend_altered_go_tos
+
+    extend_altered_go_tos(program)

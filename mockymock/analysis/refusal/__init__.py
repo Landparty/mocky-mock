@@ -57,13 +57,12 @@ in the program: DECLARATIVES (UNSUPPORTED_DECLARATIVES -- USE procedures
 run on I/O conditions, invisible to any PERFORM/GO TO edge; detected from
 cobol-parser's modelled ``is_declarative`` section flag first, with the
 older stray-paragraph artifact and the USE statement itself as fallbacks),
-ALTER (UNSUPPORTED_ALTER -- it rewrites GO TO targets at runtime, so no
-static edge set is sound), and a multi-unit compilation unit
-(UNSUPPORTED_NESTED_PROGRAM -- nested or stacked PROGRAM-IDs, or an
-object-oriented CLASS-ID with its factory/object/method units: cobol-parser
-parses every unit into ``contained_programs``, but the splicer and the
-reachability BFS only see the outermost one, so a contained unit's
-boundaries would go unmocked. Previously refused as PARSE_WARNING, which
+ALTER of a paragraph that cannot be restored between cases
+(UNSUPPORTED_ALTER; other ALTERs run real, `analysis.alter`), and a multi-unit compilation unit
+(UNSUPPORTED_NESTED_PROGRAM -- an object-oriented CLASS-ID with its
+factory/object/method units; nested and stacked PROGRAM-IDs are tested
+through the outermost unit since 2026-11-03, `flow_targets.
+detach_contained_programs`. Previously refused as PARSE_WARNING, which
 misdescribed a complete AST as "missing content").
 
 v2 matching model: every reachable mockable BoundarySite must be matched by
@@ -292,11 +291,15 @@ from ._gates import (
     union_executed_paragraphs,
 )
 from ._plans import (
+    PROGRAM_END_PARAGRAPH,
     GotoExitPlan,
     TerminatorPlan,
     find_goto_exit_plans,
     find_terminator_plans,
+    needs_call_frame,
     neutralized_goto_targets,
+    program_end_thru,
+    program_last_paragraph,
 )
 from ._reachability import (
     _expand_thru_range,
@@ -336,6 +339,10 @@ __all__ = [
     "ParagraphScopedRefusal",
     "TerminatorPlan",
     "GotoExitPlan",
+    "PROGRAM_END_PARAGRAPH",
+    "program_end_thru",
+    "needs_call_frame",
+    "program_last_paragraph",
     "directive_matches_site",
     "matching_directives",
     "per_file_matches",

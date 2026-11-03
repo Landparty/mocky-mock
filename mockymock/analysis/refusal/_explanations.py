@@ -99,38 +99,35 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
     # --- Structural / whole-program refusals: no mock category exists for
     # these constructs at all.
     "UNSUPPORTED_DECLARATIVES": (
-        "The program contains a DECLARATIVES block. USE procedures run on "
-        "I/O conditions outside any PERFORM/GO TO edge, so mockymock's "
-        "reachability analysis structurally cannot see the boundary "
-        "statements inside them -- refused for the whole program, "
-        "unconditionally, same posture as SORT/MERGE below. There is no "
-        "workaround short of removing the DECLARATIVES section from the "
-        "copy under test."
+        "The program's DECLARATIVES hold a USE procedure mockymock cannot "
+        "run under mocks: USE BEFORE REPORTING (Report Writer GENERATE is "
+        "mocked whole, so it would never run), or a USE AFTER EXCEPTION "
+        "naming no file or open mode it can place. USE AFTER EXCEPTION/ERROR "
+        "procedures on files or open modes are supported: a mocked file "
+        "statement whose outcome is an exception PERFORMs the one that "
+        "applies, and USE FOR DEBUGGING procedures stay off, as in a "
+        "production run."
     ),
     "UNSUPPORTED_ALTER": (
-        "The program contains an ALTER statement, which rewrites a GO "
-        "TO's target at runtime. mockymock's reachability analysis is "
-        "static and cannot model a control-flow edge that changes while "
-        "the program runs -- refused unconditionally. There is no "
-        "workaround short of removing the ALTER."
+        "The program ALTERs a paragraph mockymock cannot restore between "
+        "test cases: one that is not a single plain GO TO, or a GO TO with "
+        "no target and no paragraph after it. Other ALTERs run real, and "
+        "every case starts with the GO TOs as written."
     ),
     "UNSUPPORTED_SORT_MERGE": (
-        "A mixed-form SORT/MERGE: a USING/GIVING file paired with a "
-        "procedure clause on the other side. It touches a physical file "
-        "mockymock cannot seed/read AND runs a procedure whose other "
-        "logic a whole-statement mock would silently skip -- neither "
-        "mocking strategy is safe, so it's refused. A plain-file-form "
-        "SORT/MERGE (USING ... GIVING ..., no procedure clause) is "
-        "mockable via MOCK SORT/MOCK MERGE instead."
+        "A SORT/MERGE whose shape the grammar does not allow: both an "
+        "INPUT/OUTPUT PROCEDURE pair and a USING/GIVING file, so neither "
+        "side can be told apart from the other. A plain-file SORT/MERGE "
+        "(USING ... GIVING ...) and a mixed one (a file on one side, a "
+        "procedure on the other) are mocked with MOCK SORT/MOCK MERGE; a "
+        "SORT with both procedures is left real, with its RELEASE/RETURN "
+        "mocked."
     ),
     "UNSUPPORTED_NESTED_PROGRAM": (
-        "The parse carries cobol-parser's multi-unit signal: nested or "
-        "stacked PROGRAM-IDs, or an object-oriented CLASS-ID with its "
-        "FACTORY/OBJECT/METHOD-ID units. cobol-parser's AST is complete "
-        "(every unit is in contained_programs) -- what's missing is "
-        "mockymock's own support, since the splicer and reachability BFS "
-        "only see the outermost unit. Test the outermost program only, or "
-        "split the nested unit into its own compilation unit."
+        "The compilation unit holds an object-oriented CLASS-ID with its "
+        "FACTORY/OBJECT/METHOD-ID units, which mockymock does not test. "
+        "Nested and stacked PROGRAM-IDs are tested through the outermost "
+        "program, with a CALL to a contained program mocked like any CALL."
     ),
     "UNSUPPORTED_CICS_MACRO": (
         "A DFHVALUE(...) macro call, or a DFHRESP(...) call mockymock "
@@ -274,10 +271,11 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "never reaches it."
     ),
     "UNSUPPORTED_STOP_LITERAL": (
-        "STOP <literal> displays the literal and waits for the operator "
-        "on the console before continuing -- a console read like an "
-        "unmocked ACCEPT. Replace it with DISPLAY, or isolate the "
-        "paragraph with MOCK PARAGRAPH."
+        "STOP <literal> waits for the operator on the console. mockymock "
+        "answers it at once (the statement becomes CONTINUE), except "
+        "inside another boundary statement's clause body (a CALL's ON "
+        "EXCEPTION, a READ's AT END). Move it out of the clause, or "
+        "isolate the paragraph with MOCK PARAGRAPH."
     ),
     "UNSUPPORTED_STATEMENT": (
         "mockymock does not model this statement at all: it is neither a "

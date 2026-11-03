@@ -707,6 +707,23 @@ Rules:
   transitively via `PERFORM` are not auto-mocked; those still need manual
   `.cut` edits (the run command's refusal gate names them precisely when
   missing).
+- Whole main line (2026-11-02, `ProgramContext.main_line_thru`): a
+  scenario whose entry is the program's first paragraph is generated as
+  `PERFORM <first> THRU <last paragraph>` when the program carries on past
+  that paragraph (its last statement is no STOP RUN/GOBACK/EXIT PROGRAM)
+  and `find_terminator_plans` refuses none of the terminators that range
+  reaches (they end the case at `UT-PROGRAM-END`, see [splicer](splicer.md)).
+  Mocks are computed from the whole range. NIST CCVS85's `OPEN-FILES`
+  GO TOs on to the tests, so its cases used to test that paragraph alone.
+  A program that also PERFORMs its terminator's paragraph keeps the bare
+  PERFORM. So does a suite `lint` refuses more cases of than of the same
+  scenarios with a bare PERFORM (`cli.main._main_line_or_bare`, a note on
+  stderr): the longer range can reach statements no MOCK replaces (NIST
+  IX217A's WRITE ... INVALID KEY with no END-WRITE). Identical check lines
+  in a case are written once.
+- Exact counts (`analysis.exact_counts`): a site after a branch holding a GO
+  TO (`READ F AT END GO TO P-END`) gets no exact VERIFY count, like one
+  after a branch holding a STOP RUN (NIST RW301M).
 - `--per-paragraph` PERFORMs a paragraph `THRU` the exit the program
   itself names (`ProgramContext.thru_exit`: every `PERFORM X` in the
   program says `THRU` the same paragraph), and computes its mocks from that
@@ -955,7 +972,19 @@ paragraph-grouped path described above, unchanged. A real
 `docs/fixture-bundle-schema.md`) switches to `_scaffold_with_bundle`:
 
 - **One `TESTCASE` per `bundle.scenarios[]` entry**, not per paragraph,
-  named from `scenario.name`, body `PERFORM <scenario.entry>`.
+  named from `scenario.name`, body `PERFORM <scenario.entry>`. A scenario
+  whose case comes out identical to an earlier one once comments are set
+  aside (`_case_identity`: same mocks, same PERFORM, same checks) is left
+  out, and a `*> NOTE:` under `TESTSUITE` (also on stderr) says how many
+  (2026-11-02). The bundle plans scenarios over the whole main-line run,
+  which can carry on past the entry paragraph by falling through or `GO
+  TO` (NIST's `OPEN-FILES ... GO TO CCVS1-EXIT`); a case PERFORMs the
+  entry alone, so on NIST 72 of 112 green suites repeated one case up to
+  83 times under branch names it never took.
+- **A READ whose generated rows move nothing** (a keyed READ of a record
+  holding only its key) gets no row `EVALUATE` at all, and an empty row
+  gets `CONTINUE`: `WHEN tally = 1 ... WHEN tally = 10 END-EVALUATE` with
+  no statement failed cobc 3.1 ("invalid expression", NIST IX301M).
 - **The join**: `_mockymock_boundary_keys(surface)` (this program's own
   walk — note it iterates *every* entry of `site.keys`, not just
   `keys[0]`, so a multi-file `OPEN A OUTPUT B` widens to both `(OPEN, A)`

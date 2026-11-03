@@ -122,13 +122,9 @@ def test_check_lands_inside_the_inline_perform_body():
     assert check < end_perform
 
 
-def test_nested_chain_perform_without_a_safe_span_is_refused():
+def test_nested_chain_perform_without_a_safe_span_goes_back_to_the_test():
+    """No early-exit check fits after the glued PERFORM, so the terminators
+    GOBACK to the test from the driver's call frame instead (2026-11-03)."""
     *_, plans, reasons = _plan("GLUED-PARA")
-    assert plans == []
-    assert reasons
-    assert all(r.code == "UNSUPPORTED_TERMINATOR_LAYOUT" for r in reasons)
-    assert any(
-        "intermediate PERFORM STEP-PARA" in r.message
-        and "nested inside a conditional/loop body" in r.message
-        for r in reasons
-    )
+    assert plans and {p.exit_kind for p in plans} == {"RETURN"}
+    assert reasons == []

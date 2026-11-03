@@ -53,6 +53,7 @@ from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock._lines import split_source_lines
+from mockymock.analysis.alter import alter_problem as _alter_problem
 from mockymock.analysis.cics_handle import (
     parse_handle,
     raised_conditions,
@@ -207,6 +208,17 @@ def _match_specificity(directive: MockDirective) -> int:
     if access is None:
         return 0
     return 2 if " " in access else 1
+
+
+def _has_class_unit(program) -> bool:
+    """Whether the compilation unit holds an object-oriented class (a unit
+    whose `unit_kind` is not PROGRAM), or cannot say."""
+    if program is None:
+        return True
+    units = getattr(program, "program_units", None)
+    if units is None:
+        return True
+    return any(getattr(u, "unit_kind", "PROGRAM") != "PROGRAM" for u in units())
 
 
 def matching_directives(
@@ -539,6 +551,13 @@ def _whole_program_reasons(
             # was dropped (issue #272). The "could not be parsed and was
             # ignored" REPLACE warning still refuses below.
             continue
+        if text.startswith("Compilation unit contains ") and not _has_class_unit(
+            program
+        ):
+            # Nested or stacked PROGRAM-IDs (2026-11-03): mockymock tests the
+            # outermost unit (`flow_targets.detach_contained_programs`); a
+            # CALL to a contained program is a boundary, mocked like any.
+            continue
         if text.startswith("Compilation unit contains "):
             # cobol-parser parses every program unit of a multi-program
             # compilation unit (nested and stacked PROGRAM-IDs, and an OO
@@ -669,19 +688,20 @@ def _check_unsupported_control_flow(program) -> list[RefusalReason]:
         None,
     )
     if declarative_section is not None:
-        reasons.append(
-            RefusalReason(
-                code="UNSUPPORTED_DECLARATIVES",
-                message=(
-                    f"program contains a DECLARATIVES block (section "
-                    f"'{declarative_section.section_name}', line "
-                    f"{declarative_section.location.line}) -- USE "
-                    f"procedures run on I/O conditions outside any "
-                    f"PERFORM/GO TO edge, so the reachability gate cannot "
-                    f"check the boundary statements inside them"
-                ),
+        # Modelled (2026-11-03): a mocked file statement whose outcome is an
+        # exception PERFORMs the USE AFTER procedure that applies, and the
+        # reachability walk follows that edge (`analysis.declaratives`).
+        # Only the USE forms that cannot run under mocks still refuse.
+        from mockymock.analysis.declaratives import unsupported_use
+
+        problem = unsupported_use(program)
+        if problem is not None:
+            reasons.append(
+                RefusalReason(
+                    code="UNSUPPORTED_DECLARATIVES",
+                    message=f"program contains a DECLARATIVES block: {problem}",
+                )
             )
-        )
     declaratives_paragraph = None
     if declarative_section is None:
         for paragraph in _all_paragraphs(procedure):
@@ -726,20 +746,25 @@ def _check_unsupported_control_flow(program) -> list[RefusalReason]:
                     )
                 )
                 break
-    for paragraph in _all_paragraphs(procedure):
-        for statement in _find_statements_of_type(paragraph.statements, AlterStatement):
-            reasons.append(
-                RefusalReason(
-                    code="UNSUPPORTED_ALTER",
-                    message=(
-                        f"paragraph '{paragraph.paragraph_name}' (line "
-                        f"{statement.location.line}) contains an ALTER "
-                        f"statement -- ALTER rewrites GO TO targets at "
-                        f"runtime, so no static reachability analysis of "
-                        f"this program is sound"
-                    ),
+    # ALTER runs real (2026-11-03): the analyses see an altered GO TO as
+    # naming every ALTER target (`analysis.alter`), and each case starts
+    # with the GO TOs as written. Refused only when that cannot be done.
+    alter_problem = _alter_problem(program)
+    if alter_problem is not None:
+        for paragraph in _all_paragraphs(procedure):
+            statements = _find_statements_of_type(paragraph.statements, AlterStatement)
+            if statements:
+                reasons.append(
+                    RefusalReason(
+                        code="UNSUPPORTED_ALTER",
+                        message=(
+                            f"paragraph '{paragraph.paragraph_name}' (line "
+                            f"{statements[0].location.line}) contains an "
+                            f"ALTER statement, and {alter_problem}"
+                        ),
+                    )
                 )
-            )
+                break
     for paragraph in _all_paragraphs(procedure):
         if paragraph.paragraph_name.upper() in _PHANTOM_TERMINATOR_PARAGRAPH_NAMES:
             reasons.append(
@@ -1685,6 +1710,15 @@ def check_test_case(
                 # this function, so a safely-neutralizable terminator
                 # doesn't need every OTHER test case in the suite to also
                 # satisfy check_test_case's unrelated matching rules.
+                pass
+            elif (
+                site.label == "STOP literal"
+                and not site.nested
+                and not site.unspliceable_reason
+            ):
+                # Spliced to CONTINUE (orchestrator.splice_program): the
+                # operator answers the console at once, and the program
+                # goes on with the next statement, as STOP <literal> does.
                 pass
             elif site.label in _UNSUPPORTED_SITE_CODES:
                 # INVOKE / CHAIN / Communication Module / STOP literal /

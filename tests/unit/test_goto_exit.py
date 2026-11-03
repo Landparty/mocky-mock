@@ -547,9 +547,8 @@ def test_terminator_behind_a_real_fallthrough_paragraph_still_refuses():
 """
     program, surface, scope_map, lines = _analyze(source)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 # --- splice mechanics --------------------------------------------------------

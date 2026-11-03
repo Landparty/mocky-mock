@@ -2,8 +2,7 @@
 target only for a test case whose SQL mocks can make the WHENEVER fire
 (option B). A success-path case is no longer refused for the handler's
 GOBACK, and is not asked to mock the handler's own boundaries; a case that
-can fire it is still refused, naming the WHENEVER rather than a GO TO the
-program never wrote."""
+can fire it GOBACKs to the test from the driver's call frame (2026-11-03)."""
 
 from __future__ import annotations
 
@@ -78,12 +77,11 @@ def test_success_path_case_is_not_refused(tmp_path) -> None:
     assert _check(tmp_path, SUCCESS).problems == []
 
 
-def test_a_case_that_can_fire_the_whenever_is_refused_naming_it(tmp_path) -> None:
-    problems = _check(tmp_path, FAILURE).problems
-    assert len(problems) == 1
-    assert problems[0].startswith("refused (UNSUPPORTED_TERMINATOR_LAYOUT)")
-    assert "EXEC SQL WHENEVER at line 11" in problems[0]
-    assert "replace the `GO TO 9900-SQL-ERROR`" not in problems[0]
+def test_a_case_that_can_fire_the_whenever_goes_back_to_the_test(tmp_path) -> None:
+    """The handler's GOBACK, entered by the WHENEVER's GO TO, cannot end
+    the case with EXIT PARAGRAPH; it GOBACKs to the test from the driver's
+    call frame instead (2026-11-03), so the case is no longer refused."""
+    assert _check(tmp_path, FAILURE).problems == []
 
 
 def _sql(body: list[str] | None = None, rows=None) -> MockDirective:

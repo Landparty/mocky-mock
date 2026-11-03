@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import re
 import shutil
@@ -16,6 +17,11 @@ from mockymock.analysis.flow_targets import ORIGINAL_ENTRY_PARAGRAPH
 from mockymock.debugging_lines import activate_debugging_lines
 from mockymock.report.artifacts import fingerprint
 from mockymock.report.record_rewrite import numeric_edited_fields
+from mockymock.splicer.headers import (
+    is_data_division,
+    is_procedure_division,
+    is_working_storage,
+)
 
 if TYPE_CHECKING:
     from mockymock.cli.config import MockymockConfig
@@ -1325,6 +1331,20 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             )
 
     output_path = _default_output(args, source_path)
+    if bundle is not None and "THRU" in cut_text:
+        cut_text = _main_line_or_bare(
+            source_path,
+            output_path,
+            args,
+            cut_text,
+            lambda: scaffold_cut(
+                program_name,
+                surface,
+                bundle,
+                frozenset(placeholder_pairs),
+                dataclasses.replace(program_context, main_line=False, _main_line={}),
+            ),
+        )
     case_count = cut_text.count("TESTCASE ")
     if case_count == 0 and bundle is None:
         # A suite with no TESTCASE runs as "0 run, 0 failed" and fails;
@@ -1467,6 +1487,49 @@ def _warn_asserting_nothing(command: str, cut_text: str, *, stubs_count: bool) -
     for label in empty:
         print(f"  {label}")
     return len(empty)
+
+
+def _refused_cases(source_path: Path, cut_path: Path, cut_text: str, args) -> int:
+    """How many of `cut_text`'s test cases `lint` refuses (all of them on a
+    whole-program refusal), checked through a scratch copy at `cut_path`'s
+    location."""
+    from mockymock.cli.checks import run_static_checks
+
+    scratch = cut_path.with_name(f".{cut_path.name}.main-line-check")
+    try:
+        scratch.parent.mkdir(parents=True, exist_ok=True)
+        scratch.write_text(cut_text, encoding="utf-8")
+        checked = run_static_checks(source_path, scratch, args.copybook_path)
+    finally:
+        scratch.unlink(missing_ok=True)
+    cases = len(checked.suite.test_cases) if checked.suite is not None else 0
+    if checked.problems:
+        return max(cases, 1)
+    return len(checked.unmocked_reasons)
+
+
+def _main_line_or_bare(
+    source_path: Path, cut_path: Path, args, main_line: str, bare
+) -> str:
+    """`main_line` (cases PERFORMing THRU the program's last paragraph,
+    `ProgramContext.main_line_thru`) unless `lint` refuses more of its
+    cases than of `bare()`'s, the same scenarios with a bare PERFORM of
+    the entry. Running the whole main line reaches more of the program,
+    and with it statements no generated MOCK can replace (NIST IX217A: a
+    WRITE INVALID KEY with no END-WRITE), where the shorter case ran."""
+    refused = _refused_cases(source_path, cut_path, main_line, args)
+    if refused == 0:
+        return main_line
+    alternative = bare()
+    if _refused_cases(source_path, cut_path, alternative, args) < refused:
+        print(
+            "mockymock generate: note: running the whole main line (PERFORM "
+            "THRU the last paragraph) would reach statements lint refuses -- "
+            "the cases PERFORM their entry paragraph alone instead",
+            file=sys.stderr,
+        )
+        return alternative
+    return main_line
 
 
 def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
@@ -1944,7 +2007,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     from mockymock._decimal import decimal_point_is_comma
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
+    from mockymock.analysis.refusal import (
+        find_goto_exit_plans,
+        find_terminator_plans,
+        needs_call_frame,
+        program_end_thru,
+    )
     from mockymock.analysis.stub_expectations import scan_stub_expectations
     from mockymock.cli.checks import (
         extra_reset_lines_for,
@@ -2212,6 +2280,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
+        program_end=program_end_thru(result.ast, terminator_plans),
+        call_frame=needs_call_frame(terminator_plans),
         condition_names=record_conditions,
         behaviour=behaviour,
         returned=returned_items(result.ast) if behaviour else (),
@@ -2675,7 +2745,12 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     import sys
 
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
+    from mockymock.analysis.refusal import (
+        find_goto_exit_plans,
+        find_terminator_plans,
+        needs_call_frame,
+        program_end_thru,
+    )
     from mockymock.cli.checks import (
         extra_reset_lines_for,
         extra_working_storage,
@@ -2815,6 +2890,8 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
+        program_end=program_end_thru(result.ast, terminator_plans),
+        call_frame=needs_call_frame(terminator_plans),
     )
     instrumented = _insert_driver(lines, artifact)
 
@@ -3187,7 +3264,12 @@ def _cmd_export(args: argparse.Namespace) -> int:
     identical pre-splice pipeline to `run` (via run_static_checks),
     stopping before compile_source/run_binary."""
     from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import find_goto_exit_plans, find_terminator_plans
+    from mockymock.analysis.refusal import (
+        find_goto_exit_plans,
+        find_terminator_plans,
+        needs_call_frame,
+        program_end_thru,
+    )
     from mockymock.cli.checks import (
         extra_reset_lines_for,
         extra_working_storage,
@@ -3318,6 +3400,8 @@ def _cmd_export(args: argparse.Namespace) -> int:
         extra_working_storage_lines=extra_working_storage(checked),
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
+        program_end=program_end_thru(result.ast, terminator_plans),
+        call_frame=needs_call_frame(terminator_plans),
     )
     instrumented, driver_line_indices = _insert_driver_with_origins(lines, artifact)
 
@@ -4154,6 +4238,9 @@ def _insert_driver_with_origins(
     line) is a routine overflow source, and it is not something any `.cut`
     edit can fix. Knowing the exact inserted range is what keeps that
     attribution a fact rather than a guess."""
+    lines = comment_out_comment_entries(lines)
+    if getattr(artifact, "call_frame", False):
+        lines = mark_recursive(lines)
     result: list[str] = []
     inserted: set[int] = set()
     inserted_ws = False
@@ -4173,11 +4260,14 @@ def _insert_driver_with_origins(
     # synthesized where WORKING-STORAGE belongs: before the first section
     # that must follow it, or before the PROCEDURE DIVISION.
     has_ws = any(
-        _WS_HEADER_RE.match(line) for line in lines[: _first_procedure_index(lines)]
+        is_working_storage(lines, index)
+        for index in range(_first_procedure_index(lines))
     )
     seen_data_division = False
     entry_check_at: int | None = None
+    after_declaratives: bool | None = None
     header_open = False
+    header_ws = False
 
     for index, line in enumerate(lines):
         if index == entry_check_at and _starts_unnamed_code(lines, index):
@@ -4189,23 +4279,38 @@ def _insert_driver_with_origins(
             # performs.
             extend([f"       {_ORIGINAL_ENTRY_PARAGRAPH}."])
         if not inserted_ws and not has_ws:
-            if _DATA_DIVISION_RE.match(line):
+            if is_data_division(lines, index):
                 seen_data_division = True
             elif (
                 seen_data_division and _AFTER_WS_SECTION_RE.match(line)
-            ) or _PROCEDURE_DIVISION_RE.match(line):
+            ) or is_procedure_division(lines, index):
                 if not seen_data_division:
                     extend(["       DATA DIVISION."])
                 extend(["       WORKING-STORAGE SECTION."])
                 extend(ws_lines)
                 inserted_ws = True
         result.append(line)
-        if not inserted_ws and _WS_HEADER_RE.match(line):
+        if not inserted_ws and is_working_storage(lines, index):
+            header_ws = True
+        if header_ws and not inserted_ws and _ends_sentence(line):
+            # After the header's period: `WORKING-STORAGE` / `SECTION.`
+            # split over lines (see splicer.headers).
             extend(ws_lines)
             inserted_ws = True
-        if not inserted_proc and _PROCEDURE_DIVISION_RE.match(line):
+        if not inserted_proc and is_procedure_division(lines, index):
+            # Also a header whose words sit on separate lines
+            # (`PROCEDURE` / `DIVISION` / `.`, NIST NC113M): missing it left
+            # the program running its own main line outside every case.
             header_open = True
         if header_open and not inserted_proc and _ends_sentence(line):
+            if after_declaratives is None:
+                after_declaratives = _opens_declaratives(lines, index + 1)
+            if after_declaratives and not _END_DECLARATIVES_RE.search(
+                line.split("*>", 1)[0]
+            ):
+                # DECLARATIVES must open the PROCEDURE DIVISION: the driver
+                # goes after `END DECLARATIVES.` (2026-11-03).
+                continue
             # After the header's period, not its first line: a header
             # wrapped onto later lines (`PROCEDURE DIVISION` / `USING
             # LK-A.`) had the driver spliced into it (cobc: syntax error).
@@ -4214,8 +4319,105 @@ def _insert_driver_with_origins(
             inserted_proc = True
             entry_check_at = index + 1
     if inserted_proc:
-        _insert_end_of_program_trap(result, inserted)
+        _insert_end_of_program_trap(
+            result, inserted, program_end=getattr(artifact, "program_end", False)
+        )
     return result, inserted
+
+
+_PROGRAM_ID_RE = re.compile(
+    r'(PROGRAM-ID\s*\.\s*)("[^"]*"|\'[^\']*\'|[A-Z0-9][A-Z0-9_-]*)(\s*\.)',
+    re.IGNORECASE,
+)
+_PROGRAM_ID_NAME_LINE_RE = re.compile(
+    r'^(\s*)("[^"]*"|\'[^\']*\'|[A-Z0-9][A-Z0-9_-]*)(\s*\.)', re.IGNORECASE
+)
+
+
+def mark_recursive(lines: list[str]) -> list[str]:
+    """`lines` with the first PROGRAM-ID marked `IS RECURSIVE`: a
+    call-frame driver CALLs the program's own entry for every case
+    (`driver.call_frame_lines`), and a program that is not RECURSIVE may
+    not be CALLed while it runs. An INITIAL or already RECURSIVE program
+    is left as it is."""
+    result = list(lines)
+    for index, line in enumerate(lines):
+        code = line.split("*>", 1)[0]
+        if "PROGRAM-ID" not in code.upper():
+            continue
+        if re.search(r"\b(RECURSIVE|INITIAL)\b", code, re.IGNORECASE):
+            return result
+        if _PROGRAM_ID_RE.search(line):
+            result[index] = _PROGRAM_ID_RE.sub(r"\1\2 IS RECURSIVE\3", line, count=1)
+            return result
+        # `PROGRAM-ID.` with the name on a line of its own (NIST IC222A).
+        for after in range(index + 1, min(index + 4, len(lines))):
+            following = lines[after].split("*>", 1)[0]
+            if not following.strip():
+                continue
+            if re.search(r"\b(RECURSIVE|INITIAL)\b", following, re.IGNORECASE):
+                return result
+            result[after] = _PROGRAM_ID_NAME_LINE_RE.sub(
+                r"\1\2 IS RECURSIVE\3", lines[after], count=1
+            )
+            return result
+        return result
+    return result
+
+
+_DECLARATIVES_RE = re.compile(r"^\s*DECLARATIVES\s*\.", re.IGNORECASE)
+_END_DECLARATIVES_RE = re.compile(r"\bEND\s+DECLARATIVES\s*\.", re.IGNORECASE)
+
+
+def _opens_declaratives(lines: list[str], start: int) -> bool:
+    """Whether the first code line at or after `start` is `DECLARATIVES.`."""
+    for line in lines[start:]:
+        code = line.split("*>", 1)[0]
+        if not code.strip() or (
+            len(line) > 6 and line[6] in "*/" and not line[:6].strip()
+        ):
+            continue
+        return _DECLARATIVES_RE.match(code) is not None
+    return False
+
+
+#: An IDENTIFICATION DIVISION paragraph whose body is a comment-entry.
+_COMMENT_ENTRY_RE = re.compile(
+    r"^(\s*)(AUTHOR|INSTALLATION|DATE-WRITTEN|DATE-COMPILED|SECURITY|REMARKS)" r"\s*\.",
+    re.IGNORECASE,
+)
+
+
+def comment_out_comment_entries(lines: list[str]) -> list[str]:
+    """`lines` with the continuation lines of every comment-entry (`AUTHOR.`
+    / `INSTALLATION.` / ... followed by free text in Area B, NIST SG101A's
+    `FEDERAL COMPILER TESTING CENTER.`) turned into `*>` comments, line for
+    line. A fixed-format compiler ends a comment-entry at the next Area A
+    word; in the free-form source mockymock compiles, cobc read the text
+    as code. A continuation line is one indented deeper than its header,
+    up to the first that is not; only the IDENTIFICATION DIVISION (before
+    the first other DIVISION header) is looked at."""
+    result = list(lines)
+    header_indent: int | None = None
+    for index, line in enumerate(lines):
+        code = line.split("*>", 1)[0]
+        if not code.strip():
+            continue
+        indent = len(code) - len(code.lstrip())
+        if header_indent is not None and indent > header_indent:
+            # Division headers too: NIST OBNC1M writes a whole program in
+            # Area B of its SECURITY paragraph.
+            if len(line) > 6 and line[6] in "*/" and not line[:6].strip():
+                continue  # a fixed-format comment line already
+            result[index] = "      *> " + line.strip()
+            continue
+        if re.search(r"\b(ENVIRONMENT|DATA|PROCEDURE)\s+DIVISION\b", code, re.I):
+            break
+        header_indent = None
+        match = _COMMENT_ENTRY_RE.match(code)
+        if match is not None:
+            header_indent = len(match.group(1))
+    return result
 
 
 def _ends_sentence(line: str) -> bool:
@@ -4224,19 +4426,26 @@ def _ends_sentence(line: str) -> bool:
     return re.search(r"\.(?=\s|$)", line.split("*>", 1)[0]) is not None
 
 
-def _insert_end_of_program_trap(result: list[str], inserted: set[int]) -> None:
+def _insert_end_of_program_trap(
+    result: list[str], inserted: set[int], program_end: bool = False
+) -> None:
     """Put `driver.end_of_program_trap_lines()` after the program's last
     line of code: before its `END PROGRAM`, or at the end of the source.
-    `inserted` is renumbered for the lines it pushes down."""
-    from mockymock.splicer.driver import end_of_program_trap_lines
+    `inserted` is renumbered for the lines it pushes down. With
+    `program_end` (`DriverArtifact.program_end`), the `UT-PROGRAM-END`
+    paragraph a main-line case runs THRU goes first, so it ends the
+    program's own last SECTION rather than the trap's."""
+    from mockymock.splicer.driver import end_of_program_lines_for
 
     start = _first_procedure_index(result)
     at = len(result)
     for index in range(start, len(result)):
-        if _END_PROGRAM_RE.match(result[index]):
+        # The end of this program's PROCEDURE DIVISION: its END PROGRAM, or
+        # the first program nested in it (2026-11-03, NIST IC2xx).
+        if _END_PROGRAM_RE.match(result[index]) or _ID_DIVISION_RE.match(result[index]):
             at = index
             break
-    trap = end_of_program_trap_lines()
+    trap = end_of_program_lines_for(program_end)
     # A program may end on a sentence with no period (cobc accepts that at
     # the end of the source); the trap's header would then read as more of
     # that statement. Close it -- only then, as a redundant period warns.
@@ -4297,10 +4506,8 @@ def _starts_unnamed_code(lines: list[str], index: int) -> bool:
 # a tab): literal single-space checks missed them while cobc, cobolparser
 # and the `has_ws` check accepted them, so the driver's fields or
 # paragraphs were never inserted (issue #305).
-_WS_HEADER_RE = re.compile(r"^\s*WORKING-STORAGE\s+SECTION\b", re.IGNORECASE)
-_DATA_DIVISION_RE = re.compile(r"^\s*DATA\s+DIVISION\b", re.IGNORECASE)
-_PROCEDURE_DIVISION_RE = re.compile(r"^\s*PROCEDURE\s+DIVISION\b", re.IGNORECASE)
 _END_PROGRAM_RE = re.compile(r"^\s*END\s+PROGRAM\b", re.IGNORECASE)
+_ID_DIVISION_RE = re.compile(r"^\s*(IDENTIFICATION|ID)\s+DIVISION\b", re.IGNORECASE)
 #: DATA DIVISION sections that must come AFTER WORKING-STORAGE -- including a
 #: LINKAGE SECTION header `splicer.linkage.neutralize` commented out, whose
 #: items then belong to whatever section precedes them.
@@ -4312,8 +4519,8 @@ _AFTER_WS_SECTION_RE = re.compile(
 
 
 def _first_procedure_index(lines: list[str]) -> int:
-    for index, line in enumerate(lines):
-        if _PROCEDURE_DIVISION_RE.match(line):
+    for index in range(len(lines)):
+        if is_procedure_division(lines, index):
             return index
     return len(lines)
 

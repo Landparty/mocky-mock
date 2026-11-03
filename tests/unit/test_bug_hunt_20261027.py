@@ -289,11 +289,12 @@ NEVER_PERFORMED = """\
            EXIT.
        S2 SECTION.
        Q1.
-           MOVE 'Q1' TO WS-STEP
-           STOP RUN.
+           MOVE 'Q1' TO WS-STEP STOP RUN.
 """
 
 
+# The STOP RUN shares its line with the MOVE, so it cannot GOBACK to the test
+# instead either (2026-11-03): the refusal stands.
 def test_refusal_names_why_a_member_has_no_mode():
     """Q1 is never PERFORMed at all; the message used to say it was
     "entered more than one way (by its own name and as part of its

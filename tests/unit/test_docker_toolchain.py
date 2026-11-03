@@ -700,6 +700,8 @@ def test_run_binary_execs_via_container_timeout(tmp_path):
         "/work/mockymock-x",
         "-e",
         "COB_CURRENT_DATE=2026/01/15 10:30:00.00",
+        "-e",
+        "COB_SET_DEBUG=N",
         CONTAINER,
         "timeout",
         "-k",

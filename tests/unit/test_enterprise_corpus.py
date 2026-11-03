@@ -79,12 +79,16 @@ EXPECTED: dict[str, tuple[str, str | None]] = {
     "IMSMPP": ("scaffold", None),
     "DB2SP": ("scaffold", None),
     # -- refusals -------------------------------------------------------------
-    # USE procedures run on I/O conditions no PERFORM/GO TO edge reaches
-    "DECLARE": ("refused", "UNSUPPORTED_DECLARATIVES"),
+    # a mocked file statement's exception outcome PERFORMs the USE AFTER
+    # procedure that applies (2026-11-03, analysis.declaratives)
+    "DECLARE": ("scaffold", None),
+    # USE BEFORE REPORTING: Report Writer GENERATE is mocked whole
     "RPTWRTR": ("refused", "UNSUPPORTED_DECLARATIVES"),
-    # only the outermost unit is spliced and gated
-    "NESTED": ("refused", "UNSUPPORTED_NESTED_PROGRAM"),
-    "SUBPROG": ("refused", "UNSUPPORTED_NESTED_PROGRAM"),
+    # nested/stacked PROGRAM-IDs: the outermost unit is tested, a CALL to a
+    # contained program mocked like any (2026-11-03)
+    "NESTED": ("scaffold", None),
+    "SUBPROG": ("scaffold", None),
+    # an object-oriented class: only the outermost unit is spliced and gated
     "OOCOBOL": ("refused", "UNSUPPORTED_NESTED_PROGRAM"),
 }
 

@@ -25,12 +25,14 @@ from dataclasses import dataclass, field
 from cobolparser.models.statements.control import GoStatement, PerformStatement
 
 from mockymock.analysis.cics_handle import raised_conditions
+from mockymock.analysis.declaratives import declarative_paragraphs
 from mockymock.analysis.mock_surface import (
     BoundarySite,
     MockSurface,
     _all_paragraphs,
     _nested_statement_lists,
     is_terminator_site,
+    mixed_sort_procedure,
 )
 from mockymock.analysis.sql_whenever import (
     whenever_can_fire,
@@ -47,6 +49,7 @@ from mockymock.splicer.source_map import (
 from ._reachability import (
     _closed_perform_ranges,
     _expand_thru_range,
+    _falls_through,
     _fallthrough_safe_sections,
     _find_sort_merge_statements,
     _find_statements_of_type,
@@ -80,8 +83,19 @@ class TerminatorPlan:
     "SECTION" for the one SECTION-scoped shape
     docs/2026-07-10-section-scoped-terminator-support-design.md supports
     -- a terminator in a SECTION's first paragraph, entered exclusively
-    via PERFORM <section-name>. See
-    docs/2026-07-08-goback-stop-run-support-design.md and
+    via PERFORM <section-name>. "PROGRAM" (2026-11-02) is a terminator
+    that ends the main line of a case PERFORMing THRU the program's last
+    paragraph: it becomes `GO TO UT-PROGRAM-END` (`PROGRAM_END_PARAGRAPH`),
+    never runs inside a PERFORM of the program's own, and needs no chain.
+    "RETURN" (2026-11-03) is the last resort when no EXIT verb or chain
+    fits (a GO TO target, a PERFORM ... THRU/TIMES/VARYING, a statement
+    two cases need to end differently): the driver runs every case's
+    PERFORM inside a CALL of its own entry (`needs_call_frame`,
+    `driver.call_frame_lines`) and the terminator becomes `GOBACK` out of
+    it, from any PERFORM depth. It serves every case, needs no chain, and
+    is refused only inside an XML PARSE procedure, for a hook
+    PERFORM step, or when the statement cannot be spliced (`_return_problem`).
+    See docs/2026-07-08-goback-stop-run-support-design.md and
     docs/2026-07-10-section-scoped-terminator-support-design.md."""
 
     site: BoundarySite
@@ -790,10 +804,20 @@ def find_terminator_plans(
     from mockymock.analysis.flow_mocks import resolved_flow_targets
 
     reach_cache: dict[tuple[str, str | None], set[str]] = {}
+    # A case PERFORMing THRU the program's last paragraph runs the main line
+    # to the end of the program: a STOP RUN/GOBACK it only falls or jumps
+    # into (never PERFORMs) ends it with `GO TO UT-PROGRAM-END`.
+    last_paragraph = program_last_paragraph(program)
+    perform_entered: dict[str, str] | None = None
+    procedure_entered: dict[str, str] | None = None
 
     # Hook PERFORM steps reach terminators exactly like a test case's own
     # PERFORM does (suite hooks), so they need plans/refusals too.
     for case in suite.analysis_cases():
+        # A hook PERFORM step runs outside the driver's call frame, so a
+        # terminator it reaches cannot GOBACK to the test (exit_kind
+        # "RETURN"): the GOBACK would leave the test program itself.
+        is_hook = not any(case is own for own in suite.test_cases)
         # A terminator inside a paragraph/section this case flow-mocks
         # (MOCK PARAGRAPH/SECTION) is unreachable for this case -- the mock
         # dispatch replaces the body -- so it must not demand a plan or a
@@ -881,8 +905,20 @@ def find_terminator_plans(
                 continue
 
             paragraph_name = site.paragraph_name
+            existing = plans_by_statement.get(key)
             owner = main_line_owner.get(key)
             problem = None
+            hook_problem = None
+            if existing is not None and existing.exit_kind == "RETURN":
+                # GOBACK to the case serves every case (`_return_problem`),
+                # but not a hook step, which runs outside the call frame.
+                if not is_hook:
+                    continue
+                hook_problem = (
+                    "must GOBACK to the test case that reaches it, and a "
+                    "hook PERFORM step reaches it too, which runs outside "
+                    "the test case's call frame"
+                )
             if owner is not None and owner not in entered_sections:
                 problem = (
                     f"is in the main line of SECTION '{owner}', which this "
@@ -1032,6 +1068,74 @@ def find_terminator_plans(
                     or _cics_resp_field(site.statement)[1]
                 )
 
+            if problem is not None and case.perform_thru == last_paragraph:
+                # The case runs the main line to the end of the program
+                # (2026-11-02): a terminator it only falls or jumps into,
+                # never PERFORMs, can end it with GO TO UT-PROGRAM-END.
+                if perform_entered is None:
+                    perform_entered = _perform_frame_reach(program, reach_cache)
+                end_problem = _main_line_end_problem(
+                    site, perform_entered, declarative_paragraphs(program)
+                )
+                if end_problem is None and existing is None:
+                    plans_by_statement[key] = TerminatorPlan(
+                        site=terminator_sites[key],
+                        exit_kind="PROGRAM",
+                        return_code=_terminator_return_code(site.statement)[0],
+                    )
+                    continue
+                if (
+                    end_problem is None
+                    and existing is not None
+                    and existing.exit_kind == "PROGRAM"
+                ):
+                    continue
+                problem += (
+                    f"; nor can it end the main line PERFORM "
+                    f"{case.perform_target} THRU {case.perform_thru} runs: it "
+                    + (
+                        end_problem
+                        or "also ends another test case's PERFORM with EXIT "
+                        "PARAGRAPH, and one statement cannot end both ways"
+                    )
+                )
+            elif (
+                problem is None
+                and existing is not None
+                and existing.exit_kind == "PROGRAM"
+            ):
+                problem = (
+                    "ends the main line of a test case that PERFORMs THRU "
+                    "the program's last paragraph, and this test case "
+                    "needs it to end its own PERFORM with EXIT PARAGRAPH "
+                    "instead -- one statement cannot end both ways"
+                )
+            if hook_problem is not None:
+                problem = hook_problem
+            elif problem is not None and is_hook:
+                problem += (
+                    "; nor can it GOBACK to the test: a hook PERFORM step "
+                    "reaches it, which runs outside the test case's call frame"
+                )
+            elif problem is not None:
+                # Last resort (2026-11-03): the case runs inside a CALL of
+                # the driver's own entry, and the terminator GOBACKs to it
+                # from whatever PERFORM depth it sits at. It replaces any
+                # plan another case made for this statement: it serves them
+                # all.
+                if procedure_entered is None:
+                    procedure_entered = _perform_frame_reach(
+                        program, reach_cache, procedures_only=True
+                    )
+                return_problem = _return_problem(site, procedure_entered)
+                if return_problem is None:
+                    plans_by_statement[key] = TerminatorPlan(
+                        site=terminator_sites[key],
+                        exit_kind="RETURN",
+                        return_code=_terminator_return_code(site.statement)[0],
+                    )
+                    continue
+                problem += f"; nor can it GOBACK to the test: it {return_problem}"
             if problem is not None:
                 reasons.append(
                     RefusalReason(
@@ -1076,26 +1180,132 @@ def find_terminator_plans(
     return list(plans_by_statement.values()), reasons
 
 
-def _unchecked_perform_reach(
-    program,
-    reachable: set[str],
-    checked_ids: set[int],
-    cache: dict[tuple[str, str | None], set[str]],
-) -> dict[str, str]:
-    """paragraph name -> a description of a PERFORM-like edge, among the
-    paragraphs in `reachable`, that reaches it but is not one of
-    `checked_ids` (the case's chain edges, each of which gets an early-exit
-    check after it): a `PERFORM ... THRU`, a `PERFORM ... TIMES`, any
-    PERFORM inside a CALL/file statement's clause body, or a SORT/MERGE
-    INPUT/OUTPUT or XML PARSE PROCESSING PROCEDURE. Keyed by bare name like
-    the rest of the planner, so it is over-inclusive for the nameless
-    main lines, never under-inclusive."""
+#: The paragraph the splicer appends after a program's last paragraph when
+#: a terminator ends the main line (`TerminatorPlan.exit_kind` "PROGRAM"):
+#: the terminator becomes `GO TO` it, and a case PERFORMing THRU the
+#: program's last paragraph PERFORMs THRU it instead, so reaching it
+#: returns to the test.
+PROGRAM_END_PARAGRAPH = "UT-PROGRAM-END"
+
+
+def program_last_paragraph(program) -> str | None:
+    """The name of the last paragraph of the PROCEDURE DIVISION in source
+    order, or None when there is none (or the order cannot be trusted, or
+    the last one is a nameless main line or a phantom)."""
     procedure = program.get_division("PROCEDURE")
     if procedure is None:
-        return {}
+        return None
+    ordered = _source_ordered_paragraphs(procedure)
+    if not ordered:
+        return None
+    name = str(ordered[-1].paragraph_name or "")
+    if not name.strip("."):
+        return None
+    if sum(1 for p in ordered if p.paragraph_name == name) > 1:
+        return None
+    return name
+
+
+def program_end_thru(program, terminator_plans) -> str | None:
+    """The program's last paragraph when a plan ends the main line at
+    `PROGRAM_END_PARAGRAPH`, else None: the driver then appends that
+    paragraph after the program's last one and PERFORMs THRU it wherever a
+    case names that last paragraph (`build_driver(program_end=...)`)."""
+    if not any(plan.exit_kind == "PROGRAM" for plan in terminator_plans):
+        return None
+    return program_last_paragraph(program)
+
+
+def needs_call_frame(terminator_plans) -> bool:
+    """Whether a plan GOBACKs to its case (`exit_kind` "RETURN"): the
+    driver must then run each case's PERFORM inside a CALL of its own
+    entry (`build_driver(call_frame=True)`)."""
+    return any(plan.exit_kind == "RETURN" for plan in terminator_plans)
+
+
+def _return_problem(site, perform_entered: dict[str, str]) -> str | None:
+    """Why a terminator cannot end its case with `GOBACK` out of the
+    driver's call frame (`TerminatorPlan.exit_kind` "RETURN"), or None.
+
+    The GOBACK leaves every PERFORM the program has open, which is what a
+    STOP RUN does too. A SORT/MERGE procedure is left the same way: the
+    runtime ends the active sort when the CALL returns, and the next
+    case's SORT of the same file runs from the start (verified on
+    GnuCOBOL 3.1, 2026-11-03). An XML PARSE procedure is not: the parser
+    would be left inside the statement."""
+    if site.category is not None:
+        return "is an EXEC CICS command, not a STOP RUN/GOBACK"
+    via = perform_entered.get(site.paragraph_name, "")
+    if "XML PARSE" in via:
+        return (
+            f"can run inside {via}, which a GOBACK would leave with the "
+            f"statement still active"
+        )
+    if site.nested and site.span is None:
+        return (
+            f"is nested inside a conditional/loop body and cannot be "
+            f"safely spliced: {site.unspliceable_reason or _UNANNOTATED}"
+        )
+    if not site.nested and site.unspliceable_reason:
+        return (
+            f"{site.unspliceable_reason} -- splicing it would corrupt "
+            f"sibling code sharing its line(s)"
+        )
+    return _terminator_return_code(site.statement)[1]
+
+
+def _main_line_end_problem(
+    site,
+    perform_entered: dict[str, str],
+    declarative_names: frozenset[str] | set[str] = frozenset(),
+) -> str | None:
+    """Why a terminator a case running THRU the program's last paragraph
+    reaches cannot end that case with `GO TO UT-PROGRAM-END`, or None.
+
+    The GO TO returns to the test only when the test's own PERFORM is the
+    one active PERFORM at that moment: the terminator must never run
+    inside a PERFORM of the program's own (any PERFORM, THRU range, SECTION
+    PERFORM or SORT/MERGE/XML procedure that can reach its paragraph), or
+    the jump would leave that PERFORM's range for good."""
+    if site.category is not None:
+        return "is an EXEC CICS command, not a STOP RUN/GOBACK"
+    if site.paragraph_name in declarative_names:
+        return (
+            "is inside DECLARATIVES, which run under a PERFORM of their "
+            "own and which no GO TO may leave"
+        )
+    if site.paragraph_name in perform_entered:
+        return (
+            f"is also reached through {perform_entered[site.paragraph_name]}, "
+            f"so it can run inside a PERFORM of the program's own, which "
+            f"a GO TO to the end of the program would leave for good"
+        )
+    if site.nested and site.span is None:
+        return (
+            f"is nested inside a conditional/loop body and cannot be "
+            f"safely spliced: {site.unspliceable_reason or _UNANNOTATED}"
+        )
+    if not site.nested and site.unspliceable_reason:
+        return (
+            f"{site.unspliceable_reason} -- splicing it would corrupt "
+            f"sibling code sharing its line(s)"
+        )
+    return _terminator_return_code(site.statement)[1]
+
+
+def _perform_edges(
+    program, reachable: set[str] | None, checked_ids: set[int]
+) -> list[tuple[str, str | None, str]]:
+    """(start, thru, description) of every PERFORM-like edge held by a
+    paragraph in `reachable` (every paragraph when None) other than the
+    PERFORMs in `checked_ids`: out-of-line PERFORMs, SORT/MERGE INPUT/OUTPUT
+    PROCEDUREs and XML PARSE PROCESSING PROCEDUREs."""
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return []
     edges: list[tuple[str, str | None, str]] = []
     for paragraph in _all_paragraphs(procedure):
-        if paragraph.paragraph_name not in reachable:
+        if reachable is not None and paragraph.paragraph_name not in reachable:
             continue
         for perform in _find_statements_of_type(paragraph.statements, PerformStatement):
             if id(perform) in checked_ids or not perform.target_paragraph:
@@ -1122,12 +1332,20 @@ def _unchecked_perform_reach(
             ):
                 start = getattr(statement, attr, None)
                 if start:
+                    # A mixed-form SORT/MERGE is mocked, and the splice runs
+                    # its procedure with a plain PERFORM (2026-11-03): no
+                    # SORT is active inside it, so a GOBACK may leave it.
+                    what = (
+                        f"the PERFORM of procedure {start} that stands in "
+                        f"for the mocked {type(statement).__name__[:-9].upper()}"
+                        if mixed_sort_procedure(statement) is not None
+                        else f"the SORT/MERGE procedure {start}"
+                    )
                     edges.append(
                         (
                             start,
                             getattr(statement, thru_attr, None),
-                            f"the SORT/MERGE procedure {start} at line "
-                            f"{statement.location.line}",
+                            f"{what} at line {statement.location.line}",
                         )
                     )
         for statement in _find_xml_parse_statements(paragraph.statements):
@@ -1141,8 +1359,142 @@ def _unchecked_perform_reach(
                         f"{statement.location.line}",
                     )
                 )
+    return edges
+
+
+def _perform_frame_reach(
+    program,
+    cache: dict[tuple[str, str | None], set[str]],
+    procedures_only: bool = False,
+) -> dict[str, str]:
+    """paragraph name -> a PERFORM-like edge of the program (`_perform_edges`)
+    whose PERFORM can still be active while that paragraph runs.
+
+    From each edge's range (its paragraphs, or a SECTION's members), the
+    walk follows every GO TO out of the range, and from each GO TO target
+    the paragraphs control falls into (`_falls_through`); the range's own
+    end returns from the PERFORM, so the walk does not fall past it. That
+    is narrower than `_reachable_paragraphs`, whose fall-through closure
+    falls past ANY paragraph that is a GO TO target somewhere, even where
+    a PERFORM of it returns at its end: NIST's `PERFORM MOVE-WRITE-F1-32`
+    of a paragraph the main line also GO TOs looked as if it reached the
+    whole rest of the program. A program with EXEC SQL or EXEC CICS (a
+    WHENEVER or HANDLE CONDITION is a GO TO no statement shows), a range
+    that cannot be expanded, or a GO TO target that cannot be placed in
+    source order falls back to `_reachable_paragraphs` (over-inclusive,
+    never under). `procedures_only` keeps only the XML PARSE procedure
+    edges (`_return_problem`)."""
+    from cobolparser.models.sql_statements import ExecSQLStatement
+    from cobolparser.parsers.statements.ibm_exec_statements import (
+        ExecCicsStatement,
+    )
+
+    procedure = program.get_division("PROCEDURE")
+    if procedure is None:
+        return {}
+    edges = _perform_edges(program, None, set())
+    if procedures_only:
+        edges = [edge for edge in edges if "XML PARSE" in edge[2]]
+    ordered = _source_ordered_paragraphs(procedure)
+    paragraphs = _all_paragraphs(procedure)
+    # A procedure's own PERFORMs run inside it too: the over-inclusive
+    # walk, which follows them, for those.
+    precise = (
+        not procedures_only
+        and ordered is not None
+        and not any(
+            _find_statements_of_type(
+                p.statements, (ExecSQLStatement, ExecCicsStatement)
+            )
+            for p in paragraphs
+        )
+    )
+    sequence = ordered or []
+    names = [p.paragraph_name for p in sequence]
+    index: dict[str, int] = {}
+    for position, name in enumerate(names):
+        if name in index:
+            precise = False  # a duplicated name cannot be placed
+        index[name] = position
+    sections = {
+        name: [p.paragraph_name for p in section.paragraphs]
+        for name, section in getattr(procedure, "_sections", {}).items()
+        if name
+    }
+
+    def resolve(name: str) -> list[int] | None:
+        if name in sections:
+            members = [index[m] for m in sections[name] if m in index]
+            return members or None
+        return [index[name]] if name in index else None
+
+    def falls_from(position: int) -> list[int]:
+        """`position` and the paragraphs control falls into after it."""
+        chain = [position]
+        while _falls_through(sequence[chain[-1]]) and chain[-1] + 1 < len(names):
+            chain.append(chain[-1] + 1)
+        return chain
+
     reach: dict[str, str] = {}
     for start, thru, what in edges:
+        members = resolve(start) if precise else None
+        if members is not None and thru:
+            end = resolve(thru)
+            members = (
+                list(range(members[0], end[-1] + 1))
+                if end is not None and end[-1] >= members[0]
+                else None
+            )
+        found: set[str] | None = None
+        if members is not None:
+            in_range = set(members)
+            seen = set(members)
+            work = list(members)
+            while work and found is None:
+                paragraph = sequence[work.pop()]
+                for go in _find_statements_of_type(paragraph.statements, GoStatement):
+                    for target in _go_statement_raw_targets(go):
+                        positions = resolve(target)
+                        if positions is None:
+                            found = set()  # unplaceable: fall back below
+                            break
+                        for position in positions[:1]:
+                            if position in in_range:
+                                continue
+                            for reached in falls_from(position):
+                                if reached not in seen:
+                                    seen.add(reached)
+                                    work.append(reached)
+            if found is None:
+                found = {names[position] for position in seen}
+            else:
+                found = None
+        if found is None:
+            key = (start, thru)
+            if key not in cache:
+                cache[key] = _reachable_paragraphs(program, start, thru)[0]
+            found = cache[key]
+        for name in found:
+            reach.setdefault(name, what)
+    return reach
+
+
+def _unchecked_perform_reach(
+    program,
+    reachable: set[str],
+    checked_ids: set[int],
+    cache: dict[tuple[str, str | None], set[str]],
+) -> dict[str, str]:
+    """paragraph name -> a description of a PERFORM-like edge, among the
+    paragraphs in `reachable`, that reaches it but is not one of
+    `checked_ids` (the case's chain edges, each of which gets an early-exit
+    check after it): a `PERFORM ... THRU`, a `PERFORM ... TIMES`, any
+    PERFORM inside a CALL/file statement's clause body, or a SORT/MERGE
+    INPUT/OUTPUT or XML PARSE PROCESSING PROCEDURE. Keyed by bare name like
+    the rest of the planner, so it is over-inclusive for the nameless
+    main lines, never under-inclusive."""
+    reach: dict[str, str] = {}
+    for start, thru, what in _perform_edges(program, reachable, checked_ids):
         key = (start, thru)
         if key not in cache:
             cache[key] = _reachable_paragraphs(program, start, thru)[0]
