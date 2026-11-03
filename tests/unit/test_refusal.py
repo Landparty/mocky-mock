@@ -1418,16 +1418,27 @@ def test_whole_program_check_refuses_declaratives_via_use_statement_fallback():
     assert "USE statement" in declaratives[0].message
 
 
-def test_whole_program_check_refuses_alter():
-    """Audit finding 1.5: ALTER rewrites GO TO targets at runtime, so no
-    static reachability analysis is sound -- unconditional refusal."""
+def test_whole_program_check_accepts_alter_of_a_plain_go_to():
+    """Audit finding 1.5 refused every ALTER. Since 2026-11-03 the ALTER
+    runs real, the analyses see the altered GO TO as naming every ALTER
+    target (`analysis.alter`), and each case starts unaltered."""
     result = parse_cobol(ALTER_SOURCE, filename="altsamp.cbl")
     assert result.success, result.errors
     assert not result.warnings  # precondition: ALTER parses warning-free
-    reasons = check_whole_program(result)
-    alter = [r for r in reasons if r.code == "UNSUPPORTED_ALTER"]
+    assert not [r for r in check_whole_program(result) if r.code == "UNSUPPORTED_ALTER"]
+
+
+def test_whole_program_check_refuses_alter_of_a_paragraph_that_is_no_go_to():
+    source = ALTER_SOURCE.replace(
+        "       SWITCH-PARA.\n           GO TO P-ONE.\n",
+        '       SWITCH-PARA.\n           DISPLAY "X"\n           GO TO P-ONE.\n',
+    )
+    result = parse_cobol(source, filename="altsamp.cbl")
+    assert result.success, result.errors
+    alter = [r for r in check_whole_program(result) if r.code == "UNSUPPORTED_ALTER"]
     assert len(alter) == 1
-    assert "SWITCH-PARA" in alter[0].message or "MAIN-PARA" in alter[0].message
+    assert "'SWITCH-PARA'" in alter[0].message
+    assert "not one plain GO TO" in alter[0].message
 
 
 def test_whole_program_check_does_not_flag_clean_programs_for_control_flow():

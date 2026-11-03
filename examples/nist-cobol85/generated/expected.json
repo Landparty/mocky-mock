@@ -1,9 +1,8 @@
 {
   "DB101A": {
-    "refused": [
-      "UNSUPPORTED_ALTER"
-    ],
-    "verdict": "refused"
+    "cases": 1,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
   },
   "IC102A": {
     "cases": 1,

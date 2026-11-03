@@ -177,6 +177,8 @@ def extra_reset_lines_for(checked: StaticCheckResult) -> list[str]:
             f"MOVE SPACE TO {mode_field}"
             for _, mode_field in _open_mode_fields(checked)
         ]
+        # Every case starts with the program's GO TOs as written.
+        + list(checked.surface.alter_resets if checked.surface is not None else ())
     )
 
 

@@ -53,6 +53,7 @@ from cobolparser.models.statements.misc import AlterStatement, UseStatement
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock._lines import split_source_lines
+from mockymock.analysis.alter import alter_problem as _alter_problem
 from mockymock.analysis.cics_handle import (
     parse_handle,
     raised_conditions,
@@ -727,20 +728,25 @@ def _check_unsupported_control_flow(program) -> list[RefusalReason]:
                     )
                 )
                 break
-    for paragraph in _all_paragraphs(procedure):
-        for statement in _find_statements_of_type(paragraph.statements, AlterStatement):
-            reasons.append(
-                RefusalReason(
-                    code="UNSUPPORTED_ALTER",
-                    message=(
-                        f"paragraph '{paragraph.paragraph_name}' (line "
-                        f"{statement.location.line}) contains an ALTER "
-                        f"statement -- ALTER rewrites GO TO targets at "
-                        f"runtime, so no static reachability analysis of "
-                        f"this program is sound"
-                    ),
+    # ALTER runs real (2026-11-03): the analyses see an altered GO TO as
+    # naming every ALTER target (`analysis.alter`), and each case starts
+    # with the GO TOs as written. Refused only when that cannot be done.
+    alter_problem = _alter_problem(program)
+    if alter_problem is not None:
+        for paragraph in _all_paragraphs(procedure):
+            statements = _find_statements_of_type(paragraph.statements, AlterStatement)
+            if statements:
+                reasons.append(
+                    RefusalReason(
+                        code="UNSUPPORTED_ALTER",
+                        message=(
+                            f"paragraph '{paragraph.paragraph_name}' (line "
+                            f"{statements[0].location.line}) contains an "
+                            f"ALTER statement, and {alter_problem}"
+                        ),
+                    )
                 )
-            )
+                break
     for paragraph in _all_paragraphs(procedure):
         if paragraph.paragraph_name.upper() in _PHANTOM_TERMINATOR_PARAGRAPH_NAMES:
             reasons.append(

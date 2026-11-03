@@ -77,3 +77,7 @@ def normalize_flow_targets(program) -> None:
                 statement.target_paragraphs = [
                     t.upper() if isinstance(t, str) else t for t in targets
                 ]
+    # An ALTERed paragraph's GO TO can go to every ALTER target too.
+    from mockymock.analysis.alter import extend_altered_go_tos
+
+    extend_altered_go_tos(program)

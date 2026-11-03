@@ -109,11 +109,10 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "production run."
     ),
     "UNSUPPORTED_ALTER": (
-        "The program contains an ALTER statement, which rewrites a GO "
-        "TO's target at runtime. mockymock's reachability analysis is "
-        "static and cannot model a control-flow edge that changes while "
-        "the program runs -- refused unconditionally. There is no "
-        "workaround short of removing the ALTER."
+        "The program ALTERs a paragraph mockymock cannot restore between "
+        "test cases: one that is not a single plain GO TO, or a GO TO with "
+        "no target and no paragraph after it. Other ALTERs run real, and "
+        "every case starts with the GO TOs as written."
     ),
     "UNSUPPORTED_SORT_MERGE": (
         "A SORT/MERGE whose shape the grammar does not allow: both an "

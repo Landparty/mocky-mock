@@ -57,8 +57,8 @@ in the program: DECLARATIVES (UNSUPPORTED_DECLARATIVES -- USE procedures
 run on I/O conditions, invisible to any PERFORM/GO TO edge; detected from
 cobol-parser's modelled ``is_declarative`` section flag first, with the
 older stray-paragraph artifact and the USE statement itself as fallbacks),
-ALTER (UNSUPPORTED_ALTER -- it rewrites GO TO targets at runtime, so no
-static edge set is sound), and a multi-unit compilation unit
+ALTER of a paragraph that cannot be restored between cases
+(UNSUPPORTED_ALTER; other ALTERs run real, `analysis.alter`), and a multi-unit compilation unit
 (UNSUPPORTED_NESTED_PROGRAM -- nested or stacked PROGRAM-IDs, or an
 object-oriented CLASS-ID with its factory/object/method units: cobol-parser
 parses every unit into ``contained_programs``, but the splicer and the

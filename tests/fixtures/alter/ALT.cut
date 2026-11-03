@@ -1,0 +1,11 @@
+TESTSUITE "ALT"
+
+TESTCASE "an ALTER sends the GO TO elsewhere"
+    MOVE "B" TO WS-MODE
+    PERFORM MAIN-PARA
+    EXPECT WS-PATH TO BE "B"
+
+TESTCASE "the next case starts with the GO TO as written"
+    MOVE "A" TO WS-MODE
+    PERFORM MAIN-PARA
+    EXPECT WS-PATH TO BE "A"

@@ -5,6 +5,19 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-03 -- ALTER runs real under mocks
+
+* UNSUPPORTED_ALTER no longer refuses every ALTER: the analyses see an
+  altered paragraph's GO TO as naming its own target and every ALTER target
+  (`analysis.alter`, applied in `normalize_flow_targets`), the ALTER runs
+  real, and every case starts with `ALTER P TO PROCEED TO <own target>`
+  (`MockSurface.alter_resets`). A `GO TO.` with no target falls into the
+  next paragraph until ALTERed (GnuCOBOL). Still refused: an altered
+  paragraph that is not one plain GO TO, or a `GO TO.` with nothing after
+  it. See [analysis](analysis.md).
+* Tests: `tests/unit/test_alter.py`, `tests/integration/test_alter.py`
+  (fixture `tests/fixtures/alter/`).
+
 ## 2026-11-03 -- SORT/MERGE with a file and a procedure, THRU with SECTION ends
 
 * A SORT/MERGE mixing a USING/GIVING file with an INPUT/OUTPUT PROCEDURE is

@@ -158,8 +158,8 @@ _TERMINATE_TYPES = _optional_statement_types(
 # were the Communication Module, Report Writer and STOP-literal ones, each
 # of which now has its own branch below.
 #
-# Notes on the less obvious members: ALTER and USE are refused whole-
-# program elsewhere (UNSUPPORTED_ALTER / UNSUPPORTED_DECLARATIVES);
+# Notes on the less obvious members: ALTER and USE are handled whole-
+# program elsewhere (`analysis.alter`, `analysis.declaratives`);
 # SUPPRESS only ever appears inside a Report Writer USE BEFORE REPORTING
 # declarative (same refusal); ENTRY is handled by analysis.linkage;
 # COMMIT/ROLLBACK are file-commit verbs whose files are all mocked or
@@ -413,6 +413,10 @@ class MockSurface:
     use_procedures: UseProcedures | None = None
     #: Every paragraph and section name inside DECLARATIVES.
     declarative_names: frozenset[str] = frozenset()
+    #: `ALTER P TO PROCEED TO <its own target>` for every paragraph an
+    #: ALTER changes: each case starts with the GO TOs as written
+    #: (`analysis.alter.alter_reset_lines`).
+    alter_resets: tuple[str, ...] = ()
 
     def static_call_sites(self) -> list[CallSite]:
         return [c for c in self.call_sites if c.kind is CallKind.STATIC]
@@ -1110,6 +1114,9 @@ def analyze(program: CobolProgram) -> MockSurface:
 
     surface.use_procedures = use_procedures(program)
     surface.declarative_names = frozenset(declarative_paragraphs(program))
+    from mockymock.analysis.alter import alter_reset_lines
+
+    surface.alter_resets = tuple(alter_reset_lines(program))
     for site in surface.boundary_sites:
         if site.category is MockCategory.READ:
             site.read_form = read_form_of(site.statement, selects)
