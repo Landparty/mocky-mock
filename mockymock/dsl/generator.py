@@ -3282,9 +3282,7 @@ def _keyed_read_loop_not_found(
             continue
         # A loop with an UNTIL (not `PERFORM n TIMES`, which ends by its
         # count), or a GO TO loop.
-        if loop_guard_words(site, source.guards) or _in_goto_loop(
-            site, source.program
-        ):
+        if loop_guard_words(site, source.guards) or _in_goto_loop(site, source.program):
             looped = True
     if not looped:
         return None
