@@ -470,18 +470,11 @@ BOUNDARY_MIX_CBL = """\
 """
 
 
-def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys):
-    """The mock surface still detects boundaries no version can mock: a
+def test_generate_mocks_every_boundary_of_the_mix(tmp_path: Path, capsys):
+    """Every boundary of the mix is mockable since 2026-11-03, including a
     SORT/MERGE mixing a USING/GIVING file with a procedure clause on the
-    other side. generate must say so, not silently drop it -- otherwise
-    the scaffold looks like complete coverage of the program's boundary
-    points when it isn't. File I/O, console ACCEPT, dynamic CALL (since
-    the 2026-07-06 design), a plain-file-form SORT/MERGE (`USING ...
-    GIVING ...`, no procedure clause), and a RELEASE belonging to a
-    mixed-form SORT's INPUT PROCEDURE (independently mockable regardless
-    of the enclosing SORT's own shape) are all mockable and must NOT be
-    reported -- since the SORT/MERGE USING/GIVING + RELEASE/RETURN
-    mocking features."""
+    other side (mocked on its file side, its procedure PERFORMed): generate
+    reports nothing as not mockable and scaffolds a MOCK SORT for it."""
     program = tmp_path / "BOUNDMIX.cbl"
     program.write_text(BOUNDARY_MIX_CBL)
     output = tmp_path / "BOUNDMIX.cut"
@@ -490,17 +483,7 @@ def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys
 
     assert exit_code == 0
     out = capsys.readouterr().out
-    assert "not mockable" in out
-    # Only the not-mockable report: other warnings name test cases, and a
-    # test case is named after its paragraph (FEEDS-THE-SORT included).
-    report = out.split("not mockable", 1)[1]
-    assert "SORT/MERGE" in report
-    assert "SORTS-DATA-WITH-PROCEDURE" in report
-    assert "FEEDS-THE-SORT" not in report  # its RELEASE is independently mockable
-    assert "SORTS-DATA'" not in report  # the plain USING/GIVING form
-    assert "dynamic CALL" not in report
-    assert "file I/O" not in report
-    assert "console ACCEPT" not in report
+    assert "not mockable" not in out
     # The scaffold covers the static CALL, the dynamic CALL (bare key),
     # the READ, and the ACCEPT.
     scaffold = output.read_text()
@@ -508,6 +491,7 @@ def test_generate_reports_detected_unsupported_boundaries(tmp_path: Path, capsys
     assert "MOCK CALL WS-PGM-NAME" in scaffold
     assert "MOCK READ ORDER-FILE" in scaffold
     assert "MOCK ACCEPT WS-NAME" in scaffold
+    assert "MOCK SORT" in scaffold
 
 
 def test_generate_stays_quiet_when_everything_is_mockable(tmp_path: Path, capsys):

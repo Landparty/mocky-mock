@@ -1305,6 +1305,15 @@ already planned is planned the same way. Tests:
 `tests/unit/test_main_line_cases.py`,
 `tests/integration/test_main_line_case.py`.
 
+**Mixed-form SORT/MERGE (2026-11-03).** A SORT/MERGE site carrying
+`BoundarySite.sort_procedure` (a USING/GIVING file on one side, a procedure
+on the other) gets `PERFORM first [THRU thru]` before its dispatch for an
+INPUT PROCEDURE and after it for an OUTPUT PROCEDURE
+(`orchestrator.site_replacement`): the mock stands for the file side and
+the procedure runs as the SORT would run it, with its RELEASE/RETURN
+mocked. Tests: `tests/unit/test_sort_merge_mocking.py`,
+`tests/integration/test_sort_procedures_20261103.py`.
+
 **Terminators that GOBACK to the test (2026-11-03, `TerminatorPlan.exit_kind`
 "RETURN").** The last resort when neither the chain rules nor the main-line
 end fit: a GO TO target, a STOP RUN under a PERFORM ... THRU/TIMES/VARYING
@@ -1321,13 +1330,15 @@ RECURSIVE one is left alone). The terminator becomes `MOVE "Y" TO
 UT-EARLY-EXIT` + `GOBACK` (`build_terminator_neutralization("RETURN")`),
 which leaves every PERFORM the program has open, from any depth, as the
 real STOP RUN does; GnuCOBOL keeps the PERFORM stack per CALL, so the next
-case starts clean (verified on cobc 3.2 `-std=mvs`). One RETURN plan serves
+case starts clean (verified on cobc 3.1 `-std=mvs`). One RETURN plan serves
 every case and replaces a plan an earlier case made. Refused
-(`_plans._return_problem`): an EXEC CICS terminator; a terminator a
-SORT/MERGE or XML PARSE procedure can reach (the GOBACK would leave the
-statement active; `_perform_frame_reach(procedures_only=True)`); one that
-cannot be spliced (shares its line); and one a hook PERFORM step reaches,
-since hooks run outside the frame. Tests: `tests/unit/test_call_frame.py`,
+(`_plans._return_problem`): an EXEC CICS terminator; a terminator an XML
+PARSE procedure can reach (the parser would be left inside the statement;
+`_perform_frame_reach(procedures_only=True)`); one that cannot be spliced
+(shares its line); and one a hook PERFORM step reaches, since hooks run
+outside the frame. A SORT/MERGE procedure may be left: GnuCOBOL ends the
+active sort when the CALL returns and the next case's SORT starts afresh
+(`tests/integration/test_sort_procedures_20261103.py`). Tests: `tests/unit/test_call_frame.py`,
 `tests/unit/test_terminators.py`,
 `tests/integration/test_call_frame_terminator.py` (fixture
 `tests/fixtures/terminators/DEEP.cbl`).

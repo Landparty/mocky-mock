@@ -273,14 +273,17 @@ def test_release_and_return_are_independently_mockable():
     assert return_sites[0].paragraph_name == "EMIT-PARA"
 
 
-def test_mixed_using_and_output_procedure_stays_unmockable():
+def test_mixed_using_and_output_procedure_is_mocked_on_its_file_side():
+    """Since 2026-11-03 a mixed-form SORT is a SORT site keyed on its SD,
+    carrying the procedure the splice PERFORMs after the mock."""
     result = _parse(MIXED_SORT_SOURCE, "sortmixed.cbl")
     surface = analyze(result.ast)
     sort_site = next(
         s for s in surface.boundary_sites if s.statement.statement_type == "SORT"
     )
-    assert sort_site.category is None
-    assert sort_site.label == "SORT/MERGE"
+    assert sort_site.category is MockCategory.SORT
+    assert sort_site.keys == ("SORT-FILE",)
+    assert sort_site.sort_procedure == ("OUTPUT", "EMIT-PARA", None)
 
 
 # --- dsl/parser.py grammar --------------------------------------------------
@@ -582,27 +585,29 @@ def test_mock_return_rows_without_terminal_or_at_end_refuses_unresolved_status()
     assert any(r.code == "UNRESOLVED_FILE_STATUS_TARGET" for r in reasons)
 
 
-def test_mixed_form_still_refuses_unsupported_sort_merge():
+def test_mixed_form_needs_its_sort_mocked():
     result = _parse(MIXED_SORT_SOURCE, "sortmixed.cbl")
     surface = analyze(result.ast)
     file_status = analyze_file_status_fields(result.ast)
     reasons = check_test_case(surface, result.ast, _case("MAIN-PARA"), file_status)
-    assert any(r.code == "UNSUPPORTED_SORT_MERGE" for r in reasons)
+    codes = {r.code for r in reasons}
+    assert "UNSUPPORTED_SORT_MERGE" not in codes
+    assert "UNMOCKED_FILE_OP" in codes
 
 
-def test_mock_sort_against_mixed_form_site_is_unmatched():
-    # A category=None site never matches any directive (directive_matches_
-    # site's first check is category identity) -- mocking it anyway gets
-    # both the site-level UNSUPPORTED_SORT_MERGE AND an UNMATCHED_MOCK for
-    # the directive that named it but matched nothing.
+def test_mock_sort_and_return_cover_a_mixed_form_site():
     result = _parse(MIXED_SORT_SOURCE, "sortmixed.cbl")
     surface = analyze(result.ast)
     file_status = analyze_file_status_fields(result.ast)
-    case = _case("MAIN-PARA", mocks=[MockDirective(MockCategory.SORT, "SORT-FILE")])
+    case = _case(
+        "MAIN-PARA",
+        mocks=[
+            MockDirective(MockCategory.SORT, "SORT-FILE"),
+            MockDirective(MockCategory.RETURN, "SORT-FILE"),
+        ],
+    )
     reasons = check_test_case(surface, result.ast, case, file_status)
-    codes = {r.code for r in reasons}
-    assert "UNSUPPORTED_SORT_MERGE" in codes
-    assert "UNMATCHED_MOCK" in codes
+    assert not [r for r in reasons if r.code != "UNSUPPORTED_TERMINATOR_LAYOUT"]
 
 
 # --- dsl/generator.py scaffold ----------------------------------------------
@@ -633,18 +638,11 @@ def test_scaffold_omits_pure_procedure_sort_but_covers_release_and_return():
     assert "MOCK RETURN SORT-FILE" in cut_text
 
 
-def test_scaffold_omits_mixed_form_sort():
+def test_scaffold_mocks_a_mixed_form_sort_and_its_return():
     result = _parse(MIXED_SORT_SOURCE, "sortmixed.cbl")
     surface = analyze(result.ast)
     cut_text = scaffold_cut("SORTMIXED", surface)
-    assert "MOCK SORT" not in cut_text
-    assert "MOCK MERGE" not in cut_text
-    # RETURN inside the mixed-form's OUTPUT PROCEDURE IS an independently
-    # mockable site (see test_release_and_return_are_independently_
-    # mockable's docstring) and the scaffolder has no reachability
-    # awareness, so it IS scaffolded here -- even though this whole test
-    # case would still be refused UNSUPPORTED_SORT_MERGE by `run` on
-    # account of the SORT statement itself.
+    assert "MOCK SORT SORT-FILE" in cut_text
     assert "MOCK RETURN SORT-FILE" in cut_text
 
 

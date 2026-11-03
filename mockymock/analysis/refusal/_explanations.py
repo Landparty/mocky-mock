@@ -116,13 +116,13 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "workaround short of removing the ALTER."
     ),
     "UNSUPPORTED_SORT_MERGE": (
-        "A mixed-form SORT/MERGE: a USING/GIVING file paired with a "
-        "procedure clause on the other side. It touches a physical file "
-        "mockymock cannot seed/read AND runs a procedure whose other "
-        "logic a whole-statement mock would silently skip -- neither "
-        "mocking strategy is safe, so it's refused. A plain-file-form "
-        "SORT/MERGE (USING ... GIVING ..., no procedure clause) is "
-        "mockable via MOCK SORT/MOCK MERGE instead."
+        "A SORT/MERGE whose shape the grammar does not allow: both an "
+        "INPUT/OUTPUT PROCEDURE pair and a USING/GIVING file, so neither "
+        "side can be told apart from the other. A plain-file SORT/MERGE "
+        "(USING ... GIVING ...) and a mixed one (a file on one side, a "
+        "procedure on the other) are mocked with MOCK SORT/MOCK MERGE; a "
+        "SORT with both procedures is left real, with its RELEASE/RETURN "
+        "mocked."
     ),
     "UNSUPPORTED_NESTED_PROGRAM": (
         "The parse carries cobol-parser's multi-unit signal: nested or "

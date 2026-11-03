@@ -1150,15 +1150,17 @@ SORT_PROCEDURE_TERMINATOR_SOURCE = """\
 """
 
 
-def test_a_terminator_inside_a_sort_procedure_cannot_go_back_to_the_test():
-    """A GOBACK out of a SORT INPUT PROCEDURE would leave the SORT active."""
+def test_a_terminator_inside_a_sort_procedure_can_go_back_to_the_test():
+    """GnuCOBOL ends the active SORT when the CALL returns, and the next
+    case's SORT starts afresh, so a GOBACK may leave a SORT procedure."""
     from mockymock.analysis.refusal._plans import _perform_frame_reach, _return_problem
 
     program, surface, _, _ = _analyze(SORT_PROCEDURE_TERMINATOR_SOURCE)
     entered = _perform_frame_reach(program, {}, procedures_only=True)
     site = next(s for s in surface.boundary_sites if s.label == "STOP RUN")
-    problem = _return_problem(site, entered)
-    assert problem is not None and "SORT/MERGE" in problem
+    assert _return_problem(site, entered) is None
+    xml = {site.paragraph_name: "the XML PARSE procedure P at line 9"}
+    assert "XML PARSE" in (_return_problem(site, xml) or "")
 
 
 # Issue #212: EXIT PROGRAM in a called subprogram returns to the caller, but

@@ -217,6 +217,14 @@ def _source_ordered_paragraphs(procedure) -> list | None:
     return paragraphs
 
 
+def _section_of(paragraph) -> str | None:
+    """The name of the SECTION holding `paragraph`, or None."""
+    parent = getattr(paragraph, "parent", None)
+    if type(parent).__name__ != "CobolSection":
+        return None
+    return getattr(parent, "section_name", None)
+
+
 def _expand_thru_range(
     ordered,
     start: str,
@@ -240,6 +248,30 @@ def _expand_thru_range(
             ),
         )
     names = [p.paragraph_name for p in ordered]
+    # A SECTION endpoint (`SORT ... OUTPUT PROCEDURE OUTPROC THRU
+    # OUTPROC-EXIT`, NIST ST108A): the range starts at the start section's
+    # first paragraph and ends at the thru section's last one.
+    sections = [_section_of(p) for p in ordered]
+    first, last = start, thru
+    if start not in names and start in sections:
+        first = names[sections.index(start)]
+    if thru not in names and thru in sections:
+        last = names[len(sections) - 1 - sections[::-1].index(thru)]
+    if (first, last) != (start, thru):
+        members, reason = _expand_thru_range(ordered, first, last, origin, missing_code)
+        if reason is not None:
+            return members, reason
+        covered = {
+            name
+            for name in sections
+            if name
+            and all(
+                member in members
+                for member, section in zip(names, sections, strict=True)
+                if section == name
+            )
+        }
+        return members + sorted(covered - set(members)), None
     for endpoint in (start, thru):
         count = names.count(endpoint)
         if count == 0:

@@ -268,6 +268,15 @@ def splice_program(
             cursor_hosts=cursor_hosts,
         )
         replacement = use_before + replacement + use_after
+        if site.sort_procedure is not None:
+            # A mixed-form SORT/MERGE: the mock answers its file side, and
+            # its procedure runs on the other side, as the SORT runs it.
+            side, first, thru = site.sort_procedure
+            perform = f"           PERFORM {first}" + (f" THRU {thru}" if thru else "")
+            if side == "INPUT":
+                replacement = [perform] + replacement
+            else:
+                replacement = replacement + [perform]
         # What the DB2 precompiler puts after the statement for every
         # `EXEC SQL WHENEVER ... GO TO` above it (issue #195).
         return replacement + [

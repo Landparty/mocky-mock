@@ -32,6 +32,7 @@ from mockymock.analysis.mock_surface import (
     _all_paragraphs,
     _nested_statement_lists,
     is_terminator_site,
+    mixed_sort_procedure,
 )
 from mockymock.analysis.sql_whenever import (
     whenever_can_fire,
@@ -92,7 +93,7 @@ class TerminatorPlan:
     PERFORM inside a CALL of its own entry (`needs_call_frame`,
     `driver.call_frame_lines`) and the terminator becomes `GOBACK` out of
     it, from any PERFORM depth. It serves every case, needs no chain, and
-    is refused only inside a SORT/MERGE or XML PARSE procedure, for a hook
+    is refused only inside an XML PARSE procedure, for a hook
     PERFORM step, or when the statement cannot be spliced (`_return_problem`).
     See docs/2026-07-08-goback-stop-run-support-design.md and
     docs/2026-07-10-section-scoped-terminator-support-design.md."""
@@ -1227,13 +1228,15 @@ def _return_problem(site, perform_entered: dict[str, str]) -> str | None:
     driver's call frame (`TerminatorPlan.exit_kind` "RETURN"), or None.
 
     The GOBACK leaves every PERFORM the program has open, which is what a
-    STOP RUN does too -- except a SORT/MERGE or XML PARSE procedure: the
-    runtime would be left inside that statement, and the next case's
-    SORT would find it still running."""
+    STOP RUN does too. A SORT/MERGE procedure is left the same way: the
+    runtime ends the active sort when the CALL returns, and the next
+    case's SORT of the same file runs from the start (verified on
+    GnuCOBOL 3.1, 2026-11-03). An XML PARSE procedure is not: the parser
+    would be left inside the statement."""
     if site.category is not None:
         return "is an EXEC CICS command, not a STOP RUN/GOBACK"
     via = perform_entered.get(site.paragraph_name, "")
-    if "SORT/MERGE" in via or "XML PARSE" in via:
+    if "XML PARSE" in via:
         return (
             f"can run inside {via}, which a GOBACK would leave with the "
             f"statement still active"
@@ -1329,12 +1332,20 @@ def _perform_edges(
             ):
                 start = getattr(statement, attr, None)
                 if start:
+                    # A mixed-form SORT/MERGE is mocked, and the splice runs
+                    # its procedure with a plain PERFORM (2026-11-03): no
+                    # SORT is active inside it, so a GOBACK may leave it.
+                    what = (
+                        f"the PERFORM of procedure {start} that stands in "
+                        f"for the mocked {type(statement).__name__[:-9].upper()}"
+                        if mixed_sort_procedure(statement) is not None
+                        else f"the SORT/MERGE procedure {start}"
+                    )
                     edges.append(
                         (
                             start,
                             getattr(statement, thru_attr, None),
-                            f"the SORT/MERGE procedure {start} at line "
-                            f"{statement.location.line}",
+                            f"{what} at line {statement.location.line}",
                         )
                     )
         for statement in _find_xml_parse_statements(paragraph.statements):
@@ -1371,8 +1382,8 @@ def _perform_frame_reach(
     WHENEVER or HANDLE CONDITION is a GO TO no statement shows), a range
     that cannot be expanded, or a GO TO target that cannot be placed in
     source order falls back to `_reachable_paragraphs` (over-inclusive,
-    never under). `procedures_only` keeps only the SORT/MERGE and XML
-    PARSE procedure edges (`_return_problem`)."""
+    never under). `procedures_only` keeps only the XML PARSE procedure
+    edges (`_return_problem`)."""
     from cobolparser.models.sql_statements import ExecSQLStatement
     from cobolparser.parsers.statements.ibm_exec_statements import (
         ExecCicsStatement,
@@ -1383,9 +1394,7 @@ def _perform_frame_reach(
         return {}
     edges = _perform_edges(program, None, set())
     if procedures_only:
-        edges = [
-            edge for edge in edges if "SORT/MERGE" in edge[2] or "XML PARSE" in edge[2]
-        ]
+        edges = [edge for edge in edges if "XML PARSE" in edge[2]]
     ordered = _source_ordered_paragraphs(procedure)
     paragraphs = _all_paragraphs(procedure)
     # A procedure's own PERFORMs run inside it too: the over-inclusive

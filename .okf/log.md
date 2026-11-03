@@ -5,6 +5,23 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-03 -- SORT/MERGE with a file and a procedure, THRU with SECTION ends
+
+* A SORT/MERGE mixing a USING/GIVING file with an INPUT/OUTPUT PROCEDURE is
+  mocked on its file side (`MOCK SORT <sd>`), and the splice PERFORMs the
+  procedure on its other side (`BoundarySite.sort_procedure`,
+  `mock_surface.mixed_sort_procedure`): no more UNSUPPORTED_SORT_MERGE for
+  it. See [analysis](analysis.md) and [splicer](splicer.md).
+* A THRU range may name SECTIONs as endpoints (`_expand_thru_range`; NIST
+  ST108A `OUTPUT PROCEDURE OUTPROC THRU OUTPROC-EXIT`).
+* A terminator inside a SORT/MERGE procedure may GOBACK to the test (the
+  call frame): GnuCOBOL ends the active sort and the next case's SORT runs
+  afresh. XML PARSE procedures still refuse.
+* Tests: `tests/unit/test_thru_section_endpoints.py`,
+  `tests/unit/test_sort_merge_mocking.py`,
+  `tests/integration/test_sort_procedures_20261103.py` (fixtures
+  `tests/fixtures/sort_merge/`).
+
 ## 2026-11-03 -- Terminators GOBACK to the test through a call frame
 
 * A STOP RUN/GOBACK/EXIT PROGRAM that no EXIT verb returns from (a GO TO
@@ -13,7 +30,8 @@ prevent.
   driver runs each case's PERFORM inside a CALL of its own entry
   (`MOCKYMOCK-RUN-CASE`, PROGRAM-ID marked IS RECURSIVE) and the terminator
   becomes `GOBACK` out of it (`TerminatorPlan.exit_kind` "RETURN"). Still
-  refused: EXEC CICS, inside a SORT/MERGE or XML PARSE procedure, an
+  refused: EXEC CICS, inside an XML PARSE procedure (SORT/MERGE since the
+  entry above), an
   unspliceable statement, or one a hook PERFORM reaches. See
   [splicer](splicer.md).
 * Reset: a picture with a CURRENCY SIGN symbol (NIST NC107A `PIC WWWWW`) is

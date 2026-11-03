@@ -338,6 +338,12 @@ class BoundarySite:
     # file name (`model.OPEN_MODE_WORDS`) -- what a qualified `MOCK OPEN
     # <file> <mode>` matches (`open_modes_of`).
     open_modes: dict[str, str] = field(default_factory=dict)
+    # A mixed-form SORT/MERGE site (a USING/GIVING file on one side, an
+    # INPUT/OUTPUT PROCEDURE on the other, 2026-11-03): (side, first, thru)
+    # of its procedure, side "INPUT" or "OUTPUT". The mock answers the file
+    # side, and the splice PERFORMs the procedure before it (INPUT) or after
+    # it (OUTPUT), as the SORT would (`mixed_sort_procedure`).
+    sort_procedure: tuple[str, str, str | None] | None = None
 
 
 @dataclass
@@ -489,6 +495,25 @@ def _is_plain_sort_merge(statement: SortStatement | MergeStatement) -> bool:
         getattr(statement, "input_procedure", None) is None
         and statement.output_procedure is None
     )
+
+
+def mixed_sort_procedure(
+    statement: SortStatement | MergeStatement,
+) -> tuple[str, str, str | None] | None:
+    """(side, first, thru) of a mixed-form SORT/MERGE's one procedure: an
+    INPUT PROCEDURE with GIVING files, or USING files with an OUTPUT
+    PROCEDURE. None for any other shape."""
+    input_procedure = getattr(statement, "input_procedure", None)
+    output_procedure = statement.output_procedure
+    using = getattr(statement, "using_files", None)
+    giving = getattr(statement, "giving_files", None)
+    if input_procedure and not output_procedure and giving and not using:
+        thru = getattr(statement, "input_procedure_thru", None)
+        return ("INPUT", input_procedure.upper(), thru.upper() if thru else None)
+    if output_procedure and not input_procedure and using and not giving:
+        thru = getattr(statement, "output_procedure_thru", None)
+        return ("OUTPUT", output_procedure.upper(), thru.upper() if thru else None)
+    return None
 
 
 def _is_pure_procedure_sort(statement: SortStatement | MergeStatement) -> bool:
@@ -776,11 +801,21 @@ def _classify_statement(
             # statements inside them are classified as their own,
             # independently mockable, boundary sites below.
             pass
-        else:
+        elif (procedure := mixed_sort_procedure(statement)) is not None:
             # A USING/GIVING file paired with a procedure clause on the
-            # other side: neither whole-statement replacement (would skip
-            # the procedure's own logic) nor leaving it real (would touch
-            # a physical file mockymock cannot seed/read) is safe.
+            # other side (2026-11-03): mocked like the plain form, and the
+            # splice PERFORMs the procedure on its side of the mock, so its
+            # own logic still runs (RELEASE/RETURN inside it are their own
+            # sites).
+            category = _SORT_MERGE_MOCKABLE_CATEGORY[type(statement)]
+            name = statement.file_name or ""
+            site = add_site(
+                category, category.value, keys=(name.upper(),) if name else ()
+            )
+            site.sort_procedure = procedure
+        else:
+            # Both procedure clauses AND a file, or neither side readable:
+            # a shape the grammar does not allow, left refused.
             add_site(None, "SORT/MERGE")
         return
 
