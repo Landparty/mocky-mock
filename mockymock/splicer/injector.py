@@ -17,6 +17,7 @@ trap records a failure instead of silently doing nothing.
 
 from __future__ import annotations
 
+import bisect
 import re
 
 from cobolparser.models.statements.call import CallStatement
@@ -637,8 +638,11 @@ def merge_identical_branches(lines: list[str]) -> list[str]:
     305 cases spliced 490k lines that gcc could not compile in 20 minutes.
     Identical bodies now share one branch, named by stacked `WHEN`s, and a
     run of three or more consecutive case numbers by one `WHEN "a" THRU
-    "b"` (the ids are fixed-width digits, so the alphanumeric range holds
-    exactly those cases). Branch order does not matter: one case id
+    "b"`. The range is alphanumeric, so it is cut wherever another case id
+    of the dispatch sorts inside it: case ids are `f"{index:03d}"`, and
+    past case 999 `"1000"` sorts between `"100"` and `"101"` (#411). Every
+    case has a branch in every dispatch, so those are all the ids
+    `UT-CURRENT-CASE` can hold. Branch order does not matter: one case id
     selects at most one branch.
     """
     try:
@@ -661,18 +665,33 @@ def merge_identical_branches(lines: list[str]) -> list[str]:
             body.append(line)
     if all(len(ids) == 1 for ids in branches.values()):
         return lines
+    all_ids = [case for ids in branches.values() for case in ids]
     merged: list[str] = []
     for branch_body, ids in branches.items():
         merged.extend(
-            f"               WHEN {selector}" for selector in _case_selectors(ids)
+            f"               WHEN {selector}"
+            for selector in _case_selectors(ids, all_ids)
         )
         merged.extend(branch_body)
     return [*lines[:start], *merged, *lines[end:]]
 
 
-def _case_selectors(ids: list[str]) -> list[str]:
+def _case_selectors(ids: list[str], all_ids: list[str] | None = None) -> list[str]:
     """`WHEN` selectors for `ids`, consecutive numeric runs of three or
-    more of the same width written as one THRU range."""
+    more of the same width written as one THRU range.
+
+    A run is cut between two neighbours when an id of `all_ids` (the
+    dispatch's other case ids) sorts between them in the alphanumeric
+    comparison `UT-CURRENT-CASE` uses (shorter value padded with spaces,
+    which sort below digits in ASCII and EBCDIC alike), so a THRU range
+    never also selects another branch's case (#411)."""
+    own = set(ids)
+    width = max((len(case) for case in all_ids or ids), default=0)
+    outsiders = sorted(
+        case.ljust(width)
+        for case in all_ids or ()
+        if case not in own and case.isdigit()
+    )
     selectors: list[str] = []
     run: list[str] = []
 
@@ -683,6 +702,11 @@ def _case_selectors(ids: list[str]) -> list[str]:
             selectors.extend(f'"{case}"' for case in run)
         run.clear()
 
+    def separated(low: str, high: str) -> bool:
+        """Whether an outsider sorts strictly between `low` and `high`."""
+        at = bisect.bisect_right(outsiders, low.ljust(width))
+        return at < len(outsiders) and outsiders[at] < high.ljust(width)
+
     for case in ids:
         if (
             run
@@ -690,6 +714,7 @@ def _case_selectors(ids: list[str]) -> list[str]:
             and run[-1].isdigit()
             and len(case) == len(run[-1])
             and int(case) == int(run[-1]) + 1
+            and not separated(run[-1], case)
         ):
             run.append(case)
             continue
