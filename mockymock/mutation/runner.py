@@ -126,6 +126,7 @@ def _run_suite_once(
     from mockymock.analysis.refusal import (
         find_goto_exit_plans,
         find_terminator_plans,
+        needs_call_frame,
         program_end_thru,
     )
     from mockymock.cli.checks import (
@@ -220,6 +221,7 @@ def _run_suite_once(
             snapshot=checked.snapshot,
             numeric_edited=numeric_edited_fields(result.ast, checked.captures),
             program_end=program_end_thru(result.ast, terminator_plans),
+            call_frame=needs_call_frame(terminator_plans),
         )
         instrumented = _insert_driver(lines, artifact)
 

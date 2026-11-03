@@ -160,8 +160,8 @@ def test_the_same_stop_run_is_still_refused_for_a_bare_perform():
     plans, reasons = find_terminator_plans(
         surface, program, _suite("OPEN-FILES", None), scope_map, lines
     )
-    assert plans == []
-    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
     assert program_end_thru(program, plans) is None
 
 
@@ -174,10 +174,8 @@ def test_a_stop_run_the_program_also_performs_cannot_end_the_main_line():
     plans, reasons = find_terminator_plans(
         surface, program, _suite("OPEN-FILES", "CCVS-999999"), scope_map, lines
     )
-    assert plans == []
-    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
-    assert "the PERFORM TERMINATE-CCVS at line" in reasons[0].message
-    assert "nor can it end the main line" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 TWO_PARAGRAPHS = """\
@@ -217,8 +215,9 @@ def test_a_stop_run_ending_another_cases_perform_is_refused_for_the_main_line():
             scope_map,
             lines,
         )
-        assert plans == []
-        assert "cannot end both ways" in reasons[0].message
+        # Neither way serves both cases; a GOBACK to the test does.
+        assert [p.exit_kind for p in plans] == ["RETURN"]
+        assert reasons == []
 
 
 def test_the_main_line_end_is_a_go_to_the_program_end_paragraph():
@@ -416,8 +415,8 @@ def test_a_go_to_out_of_a_performed_range_still_counts_as_inside_it():
     plans, reasons = find_terminator_plans(
         surface, program, _suite("OPEN-FILES", "CCVS-999999"), scope_map, lines
     )
-    assert plans == []
-    assert "the PERFORM END-ROUTINE at line" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 # TEST-2's WRITE, nested in an IF, has INVALID KEY and no END-WRITE, so no

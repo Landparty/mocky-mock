@@ -796,3 +796,25 @@ def test_directive_with_no_captures_emits_no_extra_move():
     site = _call_site(["ORD-AMOUNT", "WS-DISCOUNT-PCT"])
     joined = "\n".join(_dispatch(_suite(), site))
     assert "CAPTURED" not in joined
+
+
+def test_a_multi_file_open_takes_mode_qualified_mocks_per_file():
+    """NIST IX106A: `OPEN INPUT SQ-FS1 OUTPUT RL-FR1` with `MOCK OPEN SQ-FS1
+    INPUT` and `MOCK OPEN RL-FR1 OUTPUT`: the files were ordered by the
+    directive's whole key ("SQ-FS1 INPUT"), which is no file of the site,
+    and the splice crashed."""
+    site = _site(MockCategory.OPEN, "OPEN", keys=("SQ-FS1", "RL-FR1"))
+    site.open_modes = {"SQ-FS1": "INPUT", "RL-FR1": "OUTPUT"}
+    case = MockTestCase(
+        name="a",
+        mocks=[
+            MockDirective(MockCategory.OPEN, "RL-FR1 OUTPUT"),
+            MockDirective(MockCategory.OPEN, "SQ-FS1 INPUT"),
+        ],
+    )
+    suite = MockTestSuite(name="S", test_cases=[case])
+    registry = TallyRegistry(suite)
+    lines = [line.strip() for line in build_site_dispatch(site, suite, registry)]
+    sq = registry.name(MockCategory.OPEN, "SQ-FS1 INPUT")
+    rl = registry.name(MockCategory.OPEN, "RL-FR1 OUTPUT")
+    assert lines.index(f"ADD 1 TO {sq}") < lines.index(f"ADD 1 TO {rl}")

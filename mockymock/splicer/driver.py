@@ -222,6 +222,39 @@ class DriverArtifact:
     # `build_driver(program_end=...)`: `cli.main._insert_driver` appends
     # the `UT-PROGRAM-END` paragraph after the program's last one.
     program_end: bool = False
+    # `build_driver(call_frame=True)`: each case's PERFORM runs inside a
+    # CALL of the program's own `CALL_FRAME_ENTRY`, so a terminator planned
+    # with exit_kind "RETURN" can GOBACK to the case from any PERFORM depth;
+    # `cli.main._insert_driver` marks the PROGRAM-ID RECURSIVE.
+    call_frame: bool = False
+
+
+#: The ENTRY a call-frame driver CALLs to run one case's PERFORM
+#: (`build_driver(call_frame=True)`, 2026-11-03).
+CALL_FRAME_ENTRY = "MOCKYMOCK-RUN-CASE"
+CALL_FRAME_PARAGRAPH = "UT-RUN-CASE"
+
+
+def call_frame_lines(suite: MockTestSuite) -> list[str]:
+    """The paragraph a call-frame driver CALLs (`CALL_FRAME_ENTRY`): it
+    runs the current case's PERFORM and returns. A terminator the case
+    reaches GOBACKs out of it however deep in the program's own PERFORMs
+    it sits (`TerminatorPlan.exit_kind` "RETURN"); GnuCOBOL's PERFORM
+    stack is the CALL's own, so nothing of it is left behind."""
+    lines = [
+        f"       {CALL_FRAME_PARAGRAPH}.",
+        f'           ENTRY "{CALL_FRAME_ENTRY}"',
+        "           EVALUATE UT-CURRENT-CASE",
+    ]
+    for index, case in enumerate(suite.test_cases, start=1):
+        lines.append(f'               WHEN "{index:03d}"')
+        perform = f"                   PERFORM {case.perform_target}"
+        if case.perform_thru:
+            perform += f" THRU {case.perform_thru}"
+        lines.append(perform)
+    lines.append("           END-EVALUATE")
+    lines.append("           GOBACK.")
+    return lines
 
 
 def program_end_lines() -> list[str]:
@@ -259,10 +292,16 @@ def build_driver(
     behaviour: bool = False,
     returned: Sequence[str] = (),
     program_end: str | None = None,
+    call_frame: bool = False,
 ) -> DriverArtifact:
     """`program_end` (`refusal.program_end_thru`): the program's last
     paragraph when a terminator ends the main line at `UT-PROGRAM-END`;
-    every PERFORM THRU it then runs THRU `UT-PROGRAM-END` instead."""
+    every PERFORM THRU it then runs THRU `UT-PROGRAM-END` instead.
+
+    `call_frame` (`refusal.needs_call_frame`): each case's own PERFORM
+    runs inside a CALL of `CALL_FRAME_ENTRY` (`call_frame_lines`), for a
+    terminator that GOBACKs to the case from inside the program's own
+    PERFORMs."""
     # Collapse each run of non-COBOL-word characters to a single hyphen and
     # strip hyphens at the ends: a title like "X (via copybook)" must not
     # yield "X--VIA-COPYBOOK-" -- a COBOL word cannot end with a hyphen and
@@ -379,8 +418,12 @@ def build_driver(
                 restore_state=restore_state,
                 condition_names=condition_names,
                 numeric_edited=numeric_edited,
+                call_frame=call_frame,
             )
         )
+        procedure.append("")
+    if call_frame:
+        procedure.extend(call_frame_lines(suite))
         procedure.append("")
 
     if behaviour:
@@ -409,6 +452,7 @@ def build_driver(
         working_storage_lines=working_storage,
         procedure_lines=procedure,
         program_end=program_end is not None,
+        call_frame=call_frame,
     )
 
 
@@ -516,6 +560,7 @@ def _build_testcase_paragraph(
     restore_state: bool = False,
     condition_names: frozenset[str] | set[str] = frozenset(),
     numeric_edited: frozenset[str] | set[str] = frozenset(),
+    call_frame: bool = False,
 ) -> list[str]:
     case_id = f"{index:03d}"
     case_mocks = {(mock.category, mock.key) for mock in case.mocks}
@@ -579,6 +624,9 @@ def _build_testcase_paragraph(
     perform_line = f"           PERFORM {case.perform_target}"
     if case.perform_thru:
         perform_line += f" THRU {case.perform_thru}"
+    if call_frame:
+        # `call_frame_lines` runs this case's PERFORM for it.
+        perform_line = f'           CALL "{CALL_FRAME_ENTRY}"'
     lines.append(perform_line)
     lines.append("")
 

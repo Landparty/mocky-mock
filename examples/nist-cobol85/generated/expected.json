@@ -1,8 +1,7 @@
 {
   "DB101A": {
     "refused": [
-      "UNSUPPORTED_ALTER",
-      "UNSUPPORTED_DECLARATIVES"
+      "UNSUPPORTED_ALTER"
     ],
     "verdict": "refused"
   },
@@ -23,8 +22,8 @@
     "verdict": "green"
   },
   "IX106A": {
-    "cases": 2,
-    "perform": "PERFORM OPEN-FILES",
+    "cases": 48,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
     "verdict": "green"
   },
   "IX301M": {

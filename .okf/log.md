@@ -5,6 +5,23 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-03 -- Terminators GOBACK to the test through a call frame
+
+* A STOP RUN/GOBACK/EXIT PROGRAM that no EXIT verb returns from (a GO TO
+  target, under a THRU/TIMES/VARYING PERFORM, a statement two cases need to
+  end differently) no longer refuses UNSUPPORTED_TERMINATOR_LAYOUT: the
+  driver runs each case's PERFORM inside a CALL of its own entry
+  (`MOCKYMOCK-RUN-CASE`, PROGRAM-ID marked IS RECURSIVE) and the terminator
+  becomes `GOBACK` out of it (`TerminatorPlan.exit_kind` "RETURN"). Still
+  refused: EXEC CICS, inside a SORT/MERGE or XML PARSE procedure, an
+  unspliceable statement, or one a hook PERFORM reaches. See
+  [splicer](splicer.md).
+* Reset: a picture with a CURRENCY SIGN symbol (NIST NC107A `PIC WWWWW`) is
+  numeric-edited, never `MOVE SPACES`.
+* Tests: `tests/unit/test_call_frame.py`,
+  `tests/integration/test_call_frame_terminator.py`; the terminator tests
+  that refused these shapes now assert the RETURN plan.
+
 ## 2026-11-03 -- DECLARATIVES: USE AFTER EXCEPTION procedures run under mocks
 
 * A mocked file statement whose outcome is an exception (status not "0x")

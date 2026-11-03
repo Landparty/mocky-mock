@@ -331,9 +331,8 @@ def test_terminator_reached_only_through_a_times_loop_refuses():
     flag, so it stays off the chain and its target's terminator refuses."""
     program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_TIMES_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE = """\
@@ -361,10 +360,8 @@ def test_terminator_reached_only_through_a_varying_loop_body_refuses():
     end, still refused."""
     program, surface, scope_map, lines = _analyze(LOOP_TERMINATOR_UNSAFE_VARYING_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "not via a chain of plain, unconditional" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_falls_through_true_for_empty_paragraph():
@@ -617,10 +614,8 @@ def test_go_to_reachable_terminator_refuses():
     reached from perform_target via a plain, otherwise-safe PERFORM."""
     program, surface, scope_map, lines = _analyze(GO_TO_OWN_PARAGRAPH_UNSAFE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "GO TO" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_go_to_target_refuses_even_when_a_different_case_uses_it_safely():
@@ -634,9 +629,8 @@ def test_go_to_target_refuses_even_when_a_different_case_uses_it_safely():
         test_cases=[MockTestCase(name="safe", perform_target="0000-MAIN-PROCESS")],
     )
     plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 GO_TO_FALLTHROUGH_UNSAFE_SOURCE = """\
@@ -718,11 +712,8 @@ def test_go_to_fallthrough_terminator_refuses():
         ],
     )
     plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "1000-DO-WORK" in reasons[0].message
-    assert "falling through" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_go_to_fallthrough_does_not_refuse_when_target_terminates():
@@ -741,11 +732,11 @@ def test_go_to_fallthrough_does_not_refuse_when_target_terminates():
         ],
     )
     plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
-    assert len(plans) == 1
-    assert plans[0].site.paragraph_name == "1000-AFTER"
-    assert len(reasons) == 1
-    assert "GO TO" in reasons[0].message
-    assert "falling through" not in reasons[0].message
+    by_paragraph = {p.site.paragraph_name: p.exit_kind for p in plans}
+    assert by_paragraph["1000-AFTER"] != "RETURN"
+    # 1000-DO-WORK's own STOP RUN (a GO TO target) GOBACKs to the test.
+    assert by_paragraph["1000-DO-WORK"] == "RETURN"
+    assert reasons == []
 
 
 def test_go_to_fallthrough_chain_paragraph_refuses():
@@ -758,11 +749,8 @@ def test_go_to_fallthrough_chain_paragraph_refuses():
     GO TO target."""
     program, surface, scope_map, lines = _analyze(GO_TO_FALLTHROUGH_CHAIN_UNSAFE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "1000-MIDDLE" in reasons[0].message
-    assert "falling through" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_section_touched_only_via_safe_entry_no_longer_refuses():
@@ -794,10 +782,8 @@ def test_chain_touching_a_genuinely_unsafe_section_still_refuses():
     chain_section_names."""
     program, surface, scope_map, lines = _analyze(CHAIN_SECTION_STILL_UNSAFE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "SECTION" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_terminator_in_safe_section_first_paragraph_is_accepted():
@@ -906,9 +892,8 @@ def test_section_member_entered_both_ways_still_refuses():
         ],
     )
     plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert "entered both by its own name and as part of" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_section_member_inside_a_thru_range_still_refuses():
@@ -927,8 +912,8 @@ def test_section_member_inside_a_thru_range_still_refuses():
 """
     program, surface, scope_map, lines = _analyze(source)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
-    assert plans == []
-    assert any(r.code == "UNSUPPORTED_TERMINATOR_LAYOUT" for r in reasons)
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def _section_refusals(source, perform_target):
@@ -973,8 +958,8 @@ def test_section_range_running_an_unmoded_member_refuses():
            END-IF.
 """
     plans, reasons = _section_refusals(source, "A000-MAIN")
-    assert plans == []
-    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_trailing_exit_paragraph_does_not_end_a_section_range():
@@ -1005,8 +990,8 @@ def test_trailing_exit_paragraph_does_not_end_a_section_range():
            MOVE 'END' TO WS-STEP.
 """
     plans, reasons = _section_refusals(source, "A000-MAIN")
-    assert plans == []
-    assert "entered both by its own name and as part of" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_sort_procedure_members_get_no_mode():
@@ -1099,20 +1084,81 @@ def test_intermediate_perform_sharing_its_line_refuses():
     chain_performs, not just built and left unused."""
     program, surface, scope_map, lines = _analyze(CHAIN_SHARED_LINE_SOURCE)
     plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
-    assert plans == []
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "does not start its own line" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_check_terminator_layout_is_reasons_only():
     program, surface, scope_map, lines = _analyze(SAFE_CHAIN_SOURCE)
     assert check_terminator_layout(surface, program, _suite(), scope_map, lines) == []
 
-    program, surface, scope_map, lines = _analyze(CHAIN_SECTION_STILL_UNSAFE_SOURCE)
+    program, surface, scope_map, lines = _analyze(GO_TO_SHARED_LINE_SOURCE)
     reasons = check_terminator_layout(surface, program, _suite(), scope_map, lines)
     assert len(reasons) == 1
     assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
+
+
+# The STOP RUN of GO_TO_OWN_PARAGRAPH_UNSAFE_SOURCE, sharing its line: no
+# EXIT verb returns from a GO TO target, and the GOBACK to the test cannot
+# be spliced in without corrupting the DISPLAY.
+GO_TO_SHARED_LINE_SOURCE = GO_TO_OWN_PARAGRAPH_UNSAFE_SOURCE.replace(
+    "           STOP RUN.\n", '           DISPLAY "X" STOP RUN.\n'
+)
+
+
+def test_a_terminator_no_exit_verb_returns_from_goes_back_to_the_test():
+    """A GO TO target's STOP RUN cannot use EXIT PARAGRAPH, so it GOBACKs
+    to the test from the driver's call frame (`exit_kind` "RETURN"), and
+    the driver must then CALL each case through that frame."""
+    from mockymock.analysis.refusal import needs_call_frame
+
+    program, surface, scope_map, lines = _analyze(GO_TO_OWN_PARAGRAPH_UNSAFE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert [p.exit_kind for p in plans] == ["RETURN"] and reasons == []
+    assert needs_call_frame(plans)
+    assert not needs_call_frame([])
+
+
+def test_a_terminator_sharing_its_line_cannot_go_back_to_the_test():
+    program, surface, scope_map, lines = _analyze(GO_TO_SHARED_LINE_SOURCE)
+    plans, reasons = find_terminator_plans(surface, program, _suite(), scope_map, lines)
+    assert plans == []
+    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
+    assert "nor can it GOBACK to the test" in reasons[0].message
+
+
+SORT_PROCEDURE_TERMINATOR_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SORTSTOP.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT SORT-FILE ASSIGN TO "SRT".
+       DATA DIVISION.
+       FILE SECTION.
+       SD  SORT-FILE.
+       01  SORT-REC PIC X(10).
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           SORT SORT-FILE ON ASCENDING KEY SORT-REC
+               INPUT PROCEDURE IS 1000-FEED
+               GIVING SORT-FILE.
+       1000-FEED.
+           GO TO 1000-STOP.
+       1000-STOP.
+           STOP RUN.
+"""
+
+
+def test_a_terminator_inside_a_sort_procedure_cannot_go_back_to_the_test():
+    """A GOBACK out of a SORT INPUT PROCEDURE would leave the SORT active."""
+    from mockymock.analysis.refusal._plans import _perform_frame_reach, _return_problem
+
+    program, surface, _, _ = _analyze(SORT_PROCEDURE_TERMINATOR_SOURCE)
+    entered = _perform_frame_reach(program, {}, procedures_only=True)
+    site = next(s for s in surface.boundary_sites if s.label == "STOP RUN")
+    problem = _return_problem(site, entered)
+    assert problem is not None and "SORT/MERGE" in problem
 
 
 # Issue #212: EXIT PROGRAM in a called subprogram returns to the caller, but
@@ -1215,9 +1261,8 @@ def test_terminator_under_a_cut_thru_range_with_real_tail_refuses():
     program, surface, scope_map, lines = _analyze(THRU_TAIL_SOURCE)
     suite = _thru_suite("1000-A", "1000-EXIT")
     plans, reasons = find_terminator_plans(surface, program, suite, scope_map, lines)
-    assert plans == []
-    assert [r.code for r in reasons] == ["UNSUPPORTED_TERMINATOR_LAYOUT"]
-    assert "fall through into '1000-B'" in reasons[0].message
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
 
 
 def test_terminator_under_a_cut_thru_range_with_exit_only_tail_is_planned():

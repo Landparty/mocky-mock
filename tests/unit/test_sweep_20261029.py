@@ -121,16 +121,18 @@ GO_TO_INTO_A_SECTION = """\
 """
 
 
-def test_a_main_line_entered_by_go_to_is_refused():
+def test_a_main_line_entered_by_go_to_goes_back_to_the_test():
     """Z999-ERROR is only ever entered by GO TO. Its STOP RUN was planned
     with EXIT SECTION because A000-MAIN's main line, also named '', is in
     section mode -- and EXIT SECTION there runs off the end of the
-    program instead of returning to the test."""
+    program instead of returning to the test. No EXIT verb fits, so it
+    GOBACKs to the test from the driver's call frame (2026-11-03)."""
     plans, reasons = _plans(GO_TO_INTO_A_SECTION, "A000-MAIN")
-    assert [p.site.label for p in plans] == ["GOBACK"]
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert "main line of SECTION 'Z999-ERROR'" in reasons[0].message
+    assert sorted((p.site.label, p.exit_kind) for p in plans)[1] == (
+        "STOP RUN",
+        "RETURN",
+    )
+    assert reasons == []
 
 
 ALSO_UNDER_A_THRU = """\
@@ -158,16 +160,15 @@ ALSO_UNDER_A_THRU = """\
 """
 
 
-def test_a_terminator_also_reached_under_a_thru_is_refused():
+def test_a_terminator_also_reached_under_a_thru_goes_back_to_the_test():
     """9999-ABEND is on the plain chain (via 1000-CHECK) but also reached
     from inside the PERFORM ... THRU range, where nothing ends the range at
     the early exit: 2000-STEP would return into 2000-EXIT and the main line
-    would carry on. Planned (and wrong) before."""
+    would carry on. Planned (and wrong) before; now it GOBACKs to the test
+    from the driver's call frame, out of every open PERFORM."""
     plans, reasons = _plans(ALSO_UNDER_A_THRU, "0000-MAIN")
-    stop_run = [r for r in reasons if "STOP RUN" in r.message]
-    assert len(stop_run) == 1
-    assert "PERFORM 2000-STEP THRU 2000-EXIT at line 9" in stop_run[0].message
-    assert all(p.site.label != "STOP RUN" for p in plans)
+    assert reasons == []
+    assert [p.exit_kind for p in plans if p.site.label == "STOP RUN"] == ["RETURN"]
 
 
 def test_prefix_loop_conditions_extends_each_until():

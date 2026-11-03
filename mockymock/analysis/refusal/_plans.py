@@ -86,6 +86,14 @@ class TerminatorPlan:
     that ends the main line of a case PERFORMing THRU the program's last
     paragraph: it becomes `GO TO UT-PROGRAM-END` (`PROGRAM_END_PARAGRAPH`),
     never runs inside a PERFORM of the program's own, and needs no chain.
+    "RETURN" (2026-11-03) is the last resort when no EXIT verb or chain
+    fits (a GO TO target, a PERFORM ... THRU/TIMES/VARYING, a statement
+    two cases need to end differently): the driver runs every case's
+    PERFORM inside a CALL of its own entry (`needs_call_frame`,
+    `driver.call_frame_lines`) and the terminator becomes `GOBACK` out of
+    it, from any PERFORM depth. It serves every case, needs no chain, and
+    is refused only inside a SORT/MERGE or XML PARSE procedure, for a hook
+    PERFORM step, or when the statement cannot be spliced (`_return_problem`).
     See docs/2026-07-08-goback-stop-run-support-design.md and
     docs/2026-07-10-section-scoped-terminator-support-design.md."""
 
@@ -800,10 +808,15 @@ def find_terminator_plans(
     # into (never PERFORMs) ends it with `GO TO UT-PROGRAM-END`.
     last_paragraph = program_last_paragraph(program)
     perform_entered: dict[str, str] | None = None
+    procedure_entered: dict[str, str] | None = None
 
     # Hook PERFORM steps reach terminators exactly like a test case's own
     # PERFORM does (suite hooks), so they need plans/refusals too.
     for case in suite.analysis_cases():
+        # A hook PERFORM step runs outside the driver's call frame, so a
+        # terminator it reaches cannot GOBACK to the test (exit_kind
+        # "RETURN"): the GOBACK would leave the test program itself.
+        is_hook = not any(case is own for own in suite.test_cases)
         # A terminator inside a paragraph/section this case flow-mocks
         # (MOCK PARAGRAPH/SECTION) is unreachable for this case -- the mock
         # dispatch replaces the body -- so it must not demand a plan or a
@@ -894,6 +907,17 @@ def find_terminator_plans(
             existing = plans_by_statement.get(key)
             owner = main_line_owner.get(key)
             problem = None
+            hook_problem = None
+            if existing is not None and existing.exit_kind == "RETURN":
+                # GOBACK to the case serves every case (`_return_problem`),
+                # but not a hook step, which runs outside the call frame.
+                if not is_hook:
+                    continue
+                hook_problem = (
+                    "must GOBACK to the test case that reaches it, and a "
+                    "hook PERFORM step reaches it too, which runs outside "
+                    "the test case's call frame"
+                )
             if owner is not None and owner not in entered_sections:
                 problem = (
                     f"is in the main line of SECTION '{owner}', which this "
@@ -1085,6 +1109,32 @@ def find_terminator_plans(
                     "needs it to end its own PERFORM with EXIT PARAGRAPH "
                     "instead -- one statement cannot end both ways"
                 )
+            if hook_problem is not None:
+                problem = hook_problem
+            elif problem is not None and is_hook:
+                problem += (
+                    "; nor can it GOBACK to the test: a hook PERFORM step "
+                    "reaches it, which runs outside the test case's call frame"
+                )
+            elif problem is not None:
+                # Last resort (2026-11-03): the case runs inside a CALL of
+                # the driver's own entry, and the terminator GOBACKs to it
+                # from whatever PERFORM depth it sits at. It replaces any
+                # plan another case made for this statement: it serves them
+                # all.
+                if procedure_entered is None:
+                    procedure_entered = _perform_frame_reach(
+                        program, reach_cache, procedures_only=True
+                    )
+                return_problem = _return_problem(site, procedure_entered)
+                if return_problem is None:
+                    plans_by_statement[key] = TerminatorPlan(
+                        site=terminator_sites[key],
+                        exit_kind="RETURN",
+                        return_code=_terminator_return_code(site.statement)[0],
+                    )
+                    continue
+                problem += f"; nor can it GOBACK to the test: it {return_problem}"
             if problem is not None:
                 reasons.append(
                     RefusalReason(
@@ -1163,6 +1213,42 @@ def program_end_thru(program, terminator_plans) -> str | None:
     if not any(plan.exit_kind == "PROGRAM" for plan in terminator_plans):
         return None
     return program_last_paragraph(program)
+
+
+def needs_call_frame(terminator_plans) -> bool:
+    """Whether a plan GOBACKs to its case (`exit_kind` "RETURN"): the
+    driver must then run each case's PERFORM inside a CALL of its own
+    entry (`build_driver(call_frame=True)`)."""
+    return any(plan.exit_kind == "RETURN" for plan in terminator_plans)
+
+
+def _return_problem(site, perform_entered: dict[str, str]) -> str | None:
+    """Why a terminator cannot end its case with `GOBACK` out of the
+    driver's call frame (`TerminatorPlan.exit_kind` "RETURN"), or None.
+
+    The GOBACK leaves every PERFORM the program has open, which is what a
+    STOP RUN does too -- except a SORT/MERGE or XML PARSE procedure: the
+    runtime would be left inside that statement, and the next case's
+    SORT would find it still running."""
+    if site.category is not None:
+        return "is an EXEC CICS command, not a STOP RUN/GOBACK"
+    via = perform_entered.get(site.paragraph_name, "")
+    if "SORT/MERGE" in via or "XML PARSE" in via:
+        return (
+            f"can run inside {via}, which a GOBACK would leave with the "
+            f"statement still active"
+        )
+    if site.nested and site.span is None:
+        return (
+            f"is nested inside a conditional/loop body and cannot be "
+            f"safely spliced: {site.unspliceable_reason or _UNANNOTATED}"
+        )
+    if not site.nested and site.unspliceable_reason:
+        return (
+            f"{site.unspliceable_reason} -- splicing it would corrupt "
+            f"sibling code sharing its line(s)"
+        )
+    return _terminator_return_code(site.statement)[1]
 
 
 def _main_line_end_problem(
@@ -1266,7 +1352,9 @@ def _perform_edges(
 
 
 def _perform_frame_reach(
-    program, cache: dict[tuple[str, str | None], set[str]]
+    program,
+    cache: dict[tuple[str, str | None], set[str]],
+    procedures_only: bool = False,
 ) -> dict[str, str]:
     """paragraph name -> a PERFORM-like edge of the program (`_perform_edges`)
     whose PERFORM can still be active while that paragraph runs.
@@ -1283,7 +1371,8 @@ def _perform_frame_reach(
     WHENEVER or HANDLE CONDITION is a GO TO no statement shows), a range
     that cannot be expanded, or a GO TO target that cannot be placed in
     source order falls back to `_reachable_paragraphs` (over-inclusive,
-    never under)."""
+    never under). `procedures_only` keeps only the SORT/MERGE and XML
+    PARSE procedure edges (`_return_problem`)."""
     from cobolparser.models.sql_statements import ExecSQLStatement
     from cobolparser.parsers.statements.ibm_exec_statements import (
         ExecCicsStatement,
@@ -1293,11 +1382,23 @@ def _perform_frame_reach(
     if procedure is None:
         return {}
     edges = _perform_edges(program, None, set())
+    if procedures_only:
+        edges = [
+            edge for edge in edges if "SORT/MERGE" in edge[2] or "XML PARSE" in edge[2]
+        ]
     ordered = _source_ordered_paragraphs(procedure)
     paragraphs = _all_paragraphs(procedure)
-    precise = ordered is not None and not any(
-        _find_statements_of_type(p.statements, (ExecSQLStatement, ExecCicsStatement))
-        for p in paragraphs
+    # A procedure's own PERFORMs run inside it too: the over-inclusive
+    # walk, which follows them, for those.
+    precise = (
+        not procedures_only
+        and ordered is not None
+        and not any(
+            _find_statements_of_type(
+                p.statements, (ExecSQLStatement, ExecCicsStatement)
+            )
+            for p in paragraphs
+        )
     )
     sequence = ordered or []
     names = [p.paragraph_name for p in sequence]

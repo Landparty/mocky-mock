@@ -1305,6 +1305,33 @@ already planned is planned the same way. Tests:
 `tests/unit/test_main_line_cases.py`,
 `tests/integration/test_main_line_case.py`.
 
+**Terminators that GOBACK to the test (2026-11-03, `TerminatorPlan.exit_kind`
+"RETURN").** The last resort when neither the chain rules nor the main-line
+end fit: a GO TO target, a STOP RUN under a PERFORM ... THRU/TIMES/VARYING
+or a section member with no mode, a statement two cases need to end
+differently (NIST: the CCVS `GO TO` error exits, ST/SM programs). The
+driver then runs every case's PERFORM inside `CALL "MOCKYMOCK-RUN-CASE"`
+(`driver.CALL_FRAME_ENTRY`): `call_frame_lines` appends a `UT-RUN-CASE`
+paragraph holding `ENTRY "MOCKYMOCK-RUN-CASE"`, an `EVALUATE UT-CURRENT-CASE`
+of the cases' PERFORMs and `GOBACK`; each `UT-TESTCASE-NNN` CALLs it in
+place of its PERFORM (`build_driver(call_frame=refusal.needs_call_frame(...))`),
+and `cli.main.mark_recursive` adds `IS RECURSIVE` to the PROGRAM-ID (a
+program may not CALL itself while it runs otherwise; an INITIAL or
+RECURSIVE one is left alone). The terminator becomes `MOVE "Y" TO
+UT-EARLY-EXIT` + `GOBACK` (`build_terminator_neutralization("RETURN")`),
+which leaves every PERFORM the program has open, from any depth, as the
+real STOP RUN does; GnuCOBOL keeps the PERFORM stack per CALL, so the next
+case starts clean (verified on cobc 3.2 `-std=mvs`). One RETURN plan serves
+every case and replaces a plan an earlier case made. Refused
+(`_plans._return_problem`): an EXEC CICS terminator; a terminator a
+SORT/MERGE or XML PARSE procedure can reach (the GOBACK would leave the
+statement active; `_perform_frame_reach(procedures_only=True)`); one that
+cannot be spliced (shares its line); and one a hook PERFORM step reaches,
+since hooks run outside the frame. Tests: `tests/unit/test_call_frame.py`,
+`tests/unit/test_terminators.py`,
+`tests/integration/test_call_frame_terminator.py` (fixture
+`tests/fixtures/terminators/DEEP.cbl`).
+
 **EXEC CICS RETURN/XCTL/ABEND** (issue #215, option (a)): these never
 give control back, so `mock_surface.is_terminator_site` counts a CICS site
 whose command is one of `CICS_TERMINATOR_COMMANDS` as a terminator too.

@@ -88,21 +88,30 @@ def test_expectation_mismatch_after_terminator_still_fails_loudly(
 
 
 @requires_docker
-def test_go_to_reachable_terminator_refuses_before_compiling(tmp_path: Path, capsys):
-    """The one deferred-scope shape this integration tier should verify
-    end-to-end: a GO TO-reachable terminator refuses cleanly instead of
-    reaching the (unsafe) splicer."""
+def test_go_to_reachable_terminator_goes_back_to_the_test(tmp_path: Path, capsys):
+    """A GO TO-reachable terminator, refused until 2026-11-03: no EXIT verb
+    returns from a GO TO target, so it GOBACKs to the test out of the
+    driver's call frame, and the next case still runs."""
     cbl_path = tmp_path / "GOTOTERM.cbl"
     cbl_path.write_text(
         "       IDENTIFICATION DIVISION.\n"
         "       PROGRAM-ID. GOTOTERM.\n"
         "\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  WS-STEP             PIC 9 VALUE 0.\n"
+        "\n"
         "       PROCEDURE DIVISION.\n"
         "       0000-MAIN-PROCESS.\n"
+        "           MOVE 1 TO WS-STEP\n"
         "           GO TO 1000-EXIT.\n"
         "\n"
         "       1000-EXIT.\n"
+        "           ADD 1 TO WS-STEP\n"
         "           STOP RUN.\n"
+        "\n"
+        "       2000-AFTER.\n"
+        "           MOVE 9 TO WS-STEP.\n"
     )
     cut_path = tmp_path / "GOTOTERM.cut"
     cut_path.write_text(
@@ -110,13 +119,17 @@ def test_go_to_reachable_terminator_refuses_before_compiling(tmp_path: Path, cap
         "\n"
         'TESTCASE "reaches terminator via GO TO"\n'
         "    PERFORM 0000-MAIN-PROCESS\n"
+        "    EXPECT WS-STEP TO BE 2\n"
+        'TESTCASE "the next case still runs"\n'
+        "    PERFORM 0000-MAIN-PROCESS\n"
+        "    EXPECT WS-STEP TO BE 2\n"
     )
 
     exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
     out = capsys.readouterr().out
 
-    assert exit_code == 1
-    assert "UNSUPPORTED_TERMINATOR_LAYOUT" in out
+    assert exit_code == 0, out
+    assert "2 run, 0 failed" in out
 
 
 @requires_docker
@@ -170,7 +183,7 @@ def test_terminator_inside_a_loop_body_stops_the_loop(tmp_path: Path, capsys):
 
 
 @requires_docker
-def test_terminator_via_out_of_line_perform_varying_refuses_via_terminator_layout(
+def test_terminator_via_out_of_line_perform_varying_goes_back_to_the_test(
     tmp_path: Path, capsys
 ):
     """Regression pin for a gap the 2026-07-09 final branch review
@@ -193,7 +206,8 @@ def test_terminator_via_out_of_line_perform_varying_refuses_via_terminator_layou
     (UNTIL loops are extended with the early-exit flag since 2026-10-29;
     VARYING is not, its counter would step once more) -- independently refuses this shape via `UNSUPPORTED_TERMINATOR_LAYOUT`
     against the real GnuCOBOL/Docker toolchain, rather than relying on the
-    old parser bug's accidental PARSE_WARNING safety net."""
+    old parser bug's accidental PARSE_WARNING safety net. (Since 2026-11-03
+    the shape no longer refuses: see the end of the test.)"""
     cbl_path = tmp_path / "VARYOUT.cbl"
     cbl_path.write_text(
         "       IDENTIFICATION DIVISION.\n"
@@ -217,13 +231,19 @@ def test_terminator_via_out_of_line_perform_varying_refuses_via_terminator_layou
         "\n"
         'TESTCASE "reaches terminator via out-of-line PERFORM VARYING"\n'
         "    PERFORM 0000-MAIN-PROCESS\n"
+        "    EXPECT WS-I TO BE 1\n"
+        'TESTCASE "the next case still runs"\n'
+        "    PERFORM 0000-MAIN-PROCESS\n"
+        "    EXPECT WS-I TO BE 1\n"
     )
 
     exit_code = main(["run", str(cbl_path), "--cut", str(cut_path)])
     out = capsys.readouterr().out
 
-    assert exit_code == 1
-    assert "UNSUPPORTED_TERMINATOR_LAYOUT" in out
+    # Since 2026-11-03 the STOP RUN GOBACKs to the test from the driver's
+    # call frame: the loop stops at its first iteration, as the program does.
+    assert exit_code == 0, out
+    assert "2 run, 0 failed" in out
     assert "PARSE_WARNING" not in out
 
 

@@ -178,11 +178,37 @@ def test_a_first_paragraph_that_runs_on_gets_main_line_cases(tmp_path, capsys):
     assert "left out" not in text
 
 
-# MAIN-LINE is PERFORMed too, so its STOP RUN cannot end a main-line range:
-# the cases keep their bare PERFORM START-UP.
-PERFORMED_TOO = FALLS_THROUGH + """       RETRY-PARA.
+# MAIN-LINE is PERFORMed too, so its STOP RUN cannot end a main-line range,
+# and sharing its line with the CLOSE it cannot be spliced into a GOBACK to
+# the test either: the cases keep their bare PERFORM START-UP.
+PERFORMED_TOO = (
+    FALLS_THROUGH.replace(
+        "           CLOSE IN-FILE.\n           STOP RUN.\n",
+        "           CLOSE IN-FILE. STOP RUN.\n",
+    )
+    + """       RETRY-PARA.
            PERFORM MAIN-LINE.
 """
+)
+
+
+def test_a_performed_main_line_runs_through_when_its_stop_run_can_goback(
+    tmp_path, capsys
+):
+    """With the STOP RUN on a line of its own, the planner GOBACKs from it to
+    the test (the call frame), so the main line runs THRU the last paragraph
+    and every branch case takes its own branch."""
+    source = FALLS_THROUGH + """       RETRY-PARA.
+           PERFORM MAIN-LINE.
+"""
+    text, _ = _generate(tmp_path, "FALLS", source, capsys)
+    cases = parse_cut(text).test_cases
+    assert {(c.perform_target, c.perform_thru) for c in cases} == {
+        ("START-UP", "RETRY-PARA")
+    }
+    names = [case.name for case in cases]
+    assert any("IF@" in name and "THEN" in name for name in names)
+    assert any("IF@" in name and "ELSE" in name for name in names)
 
 
 def test_scenarios_whose_case_repeats_an_earlier_one_are_left_out(tmp_path, capsys):

@@ -2010,6 +2010,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from mockymock.analysis.refusal import (
         find_goto_exit_plans,
         find_terminator_plans,
+        needs_call_frame,
         program_end_thru,
     )
     from mockymock.analysis.stub_expectations import scan_stub_expectations
@@ -2280,6 +2281,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
         program_end=program_end_thru(result.ast, terminator_plans),
+        call_frame=needs_call_frame(terminator_plans),
         condition_names=record_conditions,
         behaviour=behaviour,
         returned=returned_items(result.ast) if behaviour else (),
@@ -2746,6 +2748,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     from mockymock.analysis.refusal import (
         find_goto_exit_plans,
         find_terminator_plans,
+        needs_call_frame,
         program_end_thru,
     )
     from mockymock.cli.checks import (
@@ -2888,6 +2891,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
         program_end=program_end_thru(result.ast, terminator_plans),
+        call_frame=needs_call_frame(terminator_plans),
     )
     instrumented = _insert_driver(lines, artifact)
 
@@ -3263,6 +3267,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     from mockymock.analysis.refusal import (
         find_goto_exit_plans,
         find_terminator_plans,
+        needs_call_frame,
         program_end_thru,
     )
     from mockymock.cli.checks import (
@@ -3396,6 +3401,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         snapshot=checked.snapshot,
         numeric_edited=numeric_edited_fields(result.ast, checked.captures),
         program_end=program_end_thru(result.ast, terminator_plans),
+        call_frame=needs_call_frame(terminator_plans),
     )
     instrumented, driver_line_indices = _insert_driver_with_origins(lines, artifact)
 
@@ -4233,6 +4239,8 @@ def _insert_driver_with_origins(
     edit can fix. Knowing the exact inserted range is what keeps that
     attribution a fact rather than a guess."""
     lines = comment_out_comment_entries(lines)
+    if getattr(artifact, "call_frame", False):
+        lines = mark_recursive(lines)
     result: list[str] = []
     inserted: set[int] = set()
     inserted_ws = False
@@ -4315,6 +4323,30 @@ def _insert_driver_with_origins(
             result, inserted, program_end=getattr(artifact, "program_end", False)
         )
     return result, inserted
+
+
+_PROGRAM_ID_RE = re.compile(
+    r'(PROGRAM-ID\s*\.\s*)("[^"]*"|\'[^\']*\'|[A-Z0-9][A-Z0-9_-]*)(\s*\.)',
+    re.IGNORECASE,
+)
+
+
+def mark_recursive(lines: list[str]) -> list[str]:
+    """`lines` with the first PROGRAM-ID marked `IS RECURSIVE`: a
+    call-frame driver CALLs the program's own entry for every case
+    (`driver.call_frame_lines`), and a program that is not RECURSIVE may
+    not be CALLed while it runs. An INITIAL or already RECURSIVE program
+    is left as it is."""
+    result = list(lines)
+    for index, line in enumerate(lines):
+        code = line.split("*>", 1)[0]
+        if "PROGRAM-ID" not in code.upper():
+            continue
+        if re.search(r"\b(RECURSIVE|INITIAL)\b", code, re.IGNORECASE):
+            return result
+        result[index] = _PROGRAM_ID_RE.sub(r"\1\2 IS RECURSIVE\3", line, count=1)
+        return result
+    return result
 
 
 _DECLARATIVES_RE = re.compile(r"^\s*DECLARATIVES\s*\.", re.IGNORECASE)

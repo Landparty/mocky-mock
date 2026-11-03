@@ -1,0 +1,32 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DEEP.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT IN-FILE ASSIGN TO "IN" FILE STATUS IS IN-FS.
+       DATA DIVISION.
+       FILE SECTION.
+       FD IN-FILE.
+       01 IN-REC PIC X(10).
+       WORKING-STORAGE SECTION.
+       01 IN-FS PIC XX.
+       01 READS PIC 9 VALUE 0.
+       01 AFTER-READ PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-LINE.
+           OPEN INPUT IN-FILE
+           PERFORM READ-ONE
+           MOVE 1 TO AFTER-READ
+           PERFORM READ-ONE
+           MOVE 2 TO AFTER-READ
+           GO TO FINISH.
+       READ-ONE.
+           READ IN-FILE AT END GO TO NO-DATA.
+           ADD 1 TO READS.
+       READ-ONE-EXIT.
+           EXIT.
+       NO-DATA.
+           MOVE 9 TO AFTER-READ.
+       FINISH.
+           CLOSE IN-FILE
+           STOP RUN.
