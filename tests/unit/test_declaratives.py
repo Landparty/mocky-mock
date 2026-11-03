@@ -102,3 +102,21 @@ def test_a_span_stops_before_end_declaratives():
 
     lines = ["           STOP RUN.", "       END DECLARATIVES.", "       MAIN SECTION."]
     assert _trim_trailing_blank_lines(1, 2, lines) == 1
+
+
+def test_a_span_stops_before_a_nested_programs_header():
+    """2026-11-03, NIST IC2xx: the outer program's last statement runs to
+    the end of the file without this, and its splice commented out the
+    program nested after it."""
+    from mockymock.splicer.source_map import _trim_trailing_blank_lines
+
+    lines = [
+        "    STOP RUN.",
+        "",
+        "IDENTIFICATION DIVISION.",
+        "PROGRAM-ID. INNER.",
+        "END PROGRAM INNER.",
+    ]
+    assert _trim_trailing_blank_lines(1, len(lines), lines) == 1
+    lines = ["    STOP RUN.", "END PROGRAM OUTER."]
+    assert _trim_trailing_blank_lines(1, len(lines), lines) == 1

@@ -210,6 +210,17 @@ def _match_specificity(directive: MockDirective) -> int:
     return 2 if " " in access else 1
 
 
+def _has_class_unit(program) -> bool:
+    """Whether the compilation unit holds an object-oriented class (a unit
+    whose `unit_kind` is not PROGRAM), or cannot say."""
+    if program is None:
+        return True
+    units = getattr(program, "program_units", None)
+    if units is None:
+        return True
+    return any(getattr(u, "unit_kind", "PROGRAM") != "PROGRAM" for u in units())
+
+
 def matching_directives(
     mocks: list[MockDirective], site: BoundarySite
 ) -> list[MockDirective]:
@@ -539,6 +550,13 @@ def _whole_program_reasons(
             # cobol-parser applied it through EOF, as cobc does -- nothing
             # was dropped (issue #272). The "could not be parsed and was
             # ignored" REPLACE warning still refuses below.
+            continue
+        if text.startswith("Compilation unit contains ") and not _has_class_unit(
+            program
+        ):
+            # Nested or stacked PROGRAM-IDs (2026-11-03): mockymock tests the
+            # outermost unit (`flow_targets.detach_contained_programs`); a
+            # CALL to a contained program is a boundary, mocked like any.
             continue
         if text.startswith("Compilation unit contains "):
             # cobol-parser parses every program unit of a multi-program

@@ -5,6 +5,21 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-03 -- Nested and stacked programs tested through the outer one
+
+* UNSUPPORTED_NESTED_PROGRAM refuses only an object-oriented class now.
+  Nested and stacked PROGRAM-IDs: `normalize_flow_targets` detaches the
+  contained units from the outer tree (`flow_targets.
+  detach_contained_programs`), a CALL to one is mocked like any CALL, and
+  their source still compiles after the driver's end-of-program trap
+  (placed before the first nested `IDENTIFICATION DIVISION`; spans stop
+  before it and before `END PROGRAM`). See [analysis](analysis.md).
+* `mark_recursive` finds a program name on the line after `PROGRAM-ID.`
+  (NIST IC222A).
+* Tests: `tests/unit/test_refusal.py`, `tests/unit/test_call_frame.py`,
+  `tests/integration/test_nested_programs.py` (fixture
+  `tests/fixtures/nested/`); all 12 NIST IC nested-program suites green.
+
 ## 2026-11-03 -- ALTER runs real under mocks
 
 * UNSUPPORTED_ALTER no longer refuses every ALTER: the analyses see an

@@ -103,3 +103,37 @@ def test_a_custom_currency_picture_resets_as_numeric_edited():
     lines = reset_move_lines(result.ast)
     assert not any("SPACES TO WS-AMOUNT" in line for line in lines)
     assert any("SPACES TO WS-TEXT" in line for line in lines)
+
+
+def test_mark_recursive_finds_a_name_on_the_line_after_program_id():
+    """NIST IC222A: `PROGRAM-ID.` alone, the name on the next line."""
+    lines = ["       PROGRAM-ID.", "", "           IC222A.", "       AUTHOR. X."]
+    marked = mark_recursive(lines)
+    assert marked[2].strip() == "IC222A IS RECURSIVE."
+    assert marked[0] == lines[0] and marked[3] == lines[3]
+
+
+def test_the_end_of_program_trap_goes_before_a_nested_program():
+    from mockymock.cli.main import _insert_end_of_program_trap
+
+    lines = [
+        "       IDENTIFICATION DIVISION.",
+        "       PROGRAM-ID. OUTER.",
+        "       PROCEDURE DIVISION.",
+        "       MAIN-PARA.",
+        "           STOP RUN.",
+        "       IDENTIFICATION DIVISION.",
+        "       PROGRAM-ID. INNER.",
+        "       PROCEDURE DIVISION.",
+        "       INNER-PARA.",
+        "           GOBACK.",
+        "       END PROGRAM INNER.",
+        "       END PROGRAM OUTER.",
+    ]
+    result = list(lines)
+    _insert_end_of_program_trap(result, set())
+    trap = next(
+        i for i, line in enumerate(result) if "UT-END-OF-PROGRAM SECTION" in line
+    )
+    inner = next(i for i, line in enumerate(result) if "PROGRAM-ID. INNER" in line)
+    assert result.index(lines[4]) < trap < inner

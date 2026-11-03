@@ -10,10 +10,9 @@
     "verdict": "green"
   },
   "IC222A": {
-    "refused": [
-      "UNSUPPORTED_NESTED_PROGRAM"
-    ],
-    "verdict": "refused"
+    "cases": 5,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
   },
   "IF401M": {
     "cases": 1,

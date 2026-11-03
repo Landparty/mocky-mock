@@ -124,13 +124,10 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "mocked."
     ),
     "UNSUPPORTED_NESTED_PROGRAM": (
-        "The parse carries cobol-parser's multi-unit signal: nested or "
-        "stacked PROGRAM-IDs, or an object-oriented CLASS-ID with its "
-        "FACTORY/OBJECT/METHOD-ID units. cobol-parser's AST is complete "
-        "(every unit is in contained_programs) -- what's missing is "
-        "mockymock's own support, since the splicer and reachability BFS "
-        "only see the outermost unit. Test the outermost program only, or "
-        "split the nested unit into its own compilation unit."
+        "The compilation unit holds an object-oriented CLASS-ID with its "
+        "FACTORY/OBJECT/METHOD-ID units, which mockymock does not test. "
+        "Nested and stacked PROGRAM-IDs are tested through the outermost "
+        "program, with a CALL to a contained program mocked like any CALL."
     ),
     "UNSUPPORTED_CICS_MACRO": (
         "A DFHVALUE(...) macro call, or a DFHRESP(...) call mockymock "

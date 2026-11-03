@@ -4329,6 +4329,9 @@ _PROGRAM_ID_RE = re.compile(
     r'(PROGRAM-ID\s*\.\s*)("[^"]*"|\'[^\']*\'|[A-Z0-9][A-Z0-9_-]*)(\s*\.)',
     re.IGNORECASE,
 )
+_PROGRAM_ID_NAME_LINE_RE = re.compile(
+    r'^(\s*)("[^"]*"|\'[^\']*\'|[A-Z0-9][A-Z0-9_-]*)(\s*\.)', re.IGNORECASE
+)
 
 
 def mark_recursive(lines: list[str]) -> list[str]:
@@ -4344,7 +4347,20 @@ def mark_recursive(lines: list[str]) -> list[str]:
             continue
         if re.search(r"\b(RECURSIVE|INITIAL)\b", code, re.IGNORECASE):
             return result
-        result[index] = _PROGRAM_ID_RE.sub(r"\1\2 IS RECURSIVE\3", line, count=1)
+        if _PROGRAM_ID_RE.search(line):
+            result[index] = _PROGRAM_ID_RE.sub(r"\1\2 IS RECURSIVE\3", line, count=1)
+            return result
+        # `PROGRAM-ID.` with the name on a line of its own (NIST IC222A).
+        for after in range(index + 1, min(index + 4, len(lines))):
+            following = lines[after].split("*>", 1)[0]
+            if not following.strip():
+                continue
+            if re.search(r"\b(RECURSIVE|INITIAL)\b", following, re.IGNORECASE):
+                return result
+            result[after] = _PROGRAM_ID_NAME_LINE_RE.sub(
+                r"\1\2 IS RECURSIVE\3", lines[after], count=1
+            )
+            return result
         return result
     return result
 
@@ -4422,7 +4438,9 @@ def _insert_end_of_program_trap(
     start = _first_procedure_index(result)
     at = len(result)
     for index in range(start, len(result)):
-        if _END_PROGRAM_RE.match(result[index]):
+        # The end of this program's PROCEDURE DIVISION: its END PROGRAM, or
+        # the first program nested in it (2026-11-03, NIST IC2xx).
+        if _END_PROGRAM_RE.match(result[index]) or _ID_DIVISION_RE.match(result[index]):
             at = index
             break
     trap = end_of_program_lines_for(program_end)
@@ -4487,6 +4505,7 @@ def _starts_unnamed_code(lines: list[str], index: int) -> bool:
 # and the `has_ws` check accepted them, so the driver's fields or
 # paragraphs were never inserted (issue #305).
 _END_PROGRAM_RE = re.compile(r"^\s*END\s+PROGRAM\b", re.IGNORECASE)
+_ID_DIVISION_RE = re.compile(r"^\s*(IDENTIFICATION|ID)\s+DIVISION\b", re.IGNORECASE)
 #: DATA DIVISION sections that must come AFTER WORKING-STORAGE -- including a
 #: LINKAGE SECTION header `splicer.linkage.neutralize` commented out, whose
 #: items then belong to whatever section precedes them.

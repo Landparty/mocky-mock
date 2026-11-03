@@ -59,11 +59,10 @@ cobol-parser's modelled ``is_declarative`` section flag first, with the
 older stray-paragraph artifact and the USE statement itself as fallbacks),
 ALTER of a paragraph that cannot be restored between cases
 (UNSUPPORTED_ALTER; other ALTERs run real, `analysis.alter`), and a multi-unit compilation unit
-(UNSUPPORTED_NESTED_PROGRAM -- nested or stacked PROGRAM-IDs, or an
-object-oriented CLASS-ID with its factory/object/method units: cobol-parser
-parses every unit into ``contained_programs``, but the splicer and the
-reachability BFS only see the outermost one, so a contained unit's
-boundaries would go unmocked. Previously refused as PARSE_WARNING, which
+(UNSUPPORTED_NESTED_PROGRAM -- an object-oriented CLASS-ID with its
+factory/object/method units; nested and stacked PROGRAM-IDs are tested
+through the outermost unit since 2026-11-03, `flow_targets.
+detach_contained_programs`. Previously refused as PARSE_WARNING, which
 misdescribed a complete AST as "missing content").
 
 v2 matching model: every reachable mockable BoundarySite must be matched by

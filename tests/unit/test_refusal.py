@@ -495,9 +495,9 @@ def test_out_of_line_perform_varying_parses_correctly():
 
 
 # Multi-program compilation units parse into ast.contained_programs with a
-# summary warning; mockymock's splicer and reachability BFS only ever look
-# at the first program's divisions, so these must refuse rather than test a
-# fraction of the file.
+# summary warning. Since 2026-11-03 mockymock tests the outermost unit of
+# nested/stacked PROGRAM-IDs (`flow_targets.detach_contained_programs`); an
+# object-oriented class still refuses.
 MULTI_PROGRAM_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. FIRSTPGM.
@@ -514,17 +514,33 @@ MULTI_PROGRAM_SOURCE = """\
 """
 
 
-def test_whole_program_check_flags_multi_program_units():
-    """A multi-unit compilation unit (nested/stacked PROGRAM-IDs, an OO
-    class) is refused under its own code: cobol-parser parses every unit
-    (the AST is complete), it is mockymock that only splices and gates the
-    outermost one -- so the reason names *that*, not dropped content."""
+def test_whole_program_check_accepts_stacked_and_nested_programs():
     result = parse_cobol(MULTI_PROGRAM_SOURCE, filename="multi.cbl")
     assert result.success, result.errors
+    assert check_whole_program(result) == []
+
+
+def test_whole_program_check_refuses_an_object_oriented_class():
+    """A unit that is not a PROGRAM (an OO class's factory/object/method)
+    keeps the refusal, under its own code rather than PARSE_WARNING."""
+    result = parse_cobol(MULTI_PROGRAM_SOURCE, filename="multi.cbl")
+    assert result.success, result.errors
+    result.ast.contained_programs[0].unit_kind = "CLASS"
     reasons = check_whole_program(result)
     assert [r.code for r in reasons] == ["UNSUPPORTED_NESTED_PROGRAM"]
     assert "outermost unit" in reasons[0].message
-    assert not any(r.code == "PARSE_WARNING" for r in reasons)
+
+
+def test_contained_programs_are_detached_from_the_outer_tree():
+    from mockymock.analysis.flow_targets import normalize_flow_targets
+
+    result = parse_cobol(MULTI_PROGRAM_SOURCE, filename="multi.cbl")
+    names = {p.paragraph_name for p in result.ast.find_all_by_type("CobolParagraph")}
+    assert "B-PARA" in names
+    normalize_flow_targets(result.ast)
+    names = {p.paragraph_name for p in result.ast.find_all_by_type("CobolParagraph")}
+    assert "B-PARA" not in names and "A-PARA" in names
+    assert [u.program_name for u in result.ast.contained_programs] == ["SECONDPGM"]
 
 
 COPY_PROGRAM_SOURCE = """\
