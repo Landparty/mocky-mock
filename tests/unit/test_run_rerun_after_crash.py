@@ -72,3 +72,23 @@ def test_run_reruns_until_nothing_is_left(monkeypatch, capsys) -> None:
     assert "running them again without the case that stopped it" in (
         capsys.readouterr().out
     )
+
+
+def test_run_stops_when_every_rerun_crashes_on_its_first_case(
+    monkeypatch, capsys
+) -> None:
+    names = ["a", "b", "c", "d", "e", "f"]
+    calls: list[list[str] | None] = []
+
+    def fake_suite(args: argparse.Namespace) -> int:
+        calls.append(args.case)
+        chosen = args.case or names
+        args.not_run_after_crash = list(chosen[1:])
+        return 1
+
+    monkeypatch.setattr(cli, "_cmd_run_suite", fake_suite)
+    args = argparse.Namespace(case=None, tag=None, json_report=None)
+    assert cli._cmd_run(args) == 1
+    # The first run, then two reruns that each ran only their first case.
+    assert calls == [None, names[1:], names[2:]]
+    assert "3 case(s) left not run" in capsys.readouterr().out

@@ -12,11 +12,14 @@ prevent.
   their names in `args.not_run_after_crash`), again after each further
   crash, at most `_MAX_ISOLATION_RERUNS` times. A --json-report gets their
   results merged in (`_merge_rerun_reports`, entries carry `rerun: true`);
-  skipped under --case/--tag, JUnit, coverage, trace and baselines.
+  skipped under --case/--tag, JUnit, coverage, trace and baselines. It
+  stops after two reruns in a row in which only the first case ran and
+  crashed (`_MAX_STALLED_RERUNS`): the rest likely share the hang.
 * A keyed READ whose INVALID KEY clause the splice re-runs, inside a
   PERFORM UNTIL or a GO TO loop (`generator._in_goto_loop`), with no AT
   END, reports "23" (UT-MOCK-STATUS and its FILE STATUS) once its rows
-  run out (`_keyed_read_loop_not_found`). NIST IX102A.
+  run out (`_keyed_read_loop_not_found`). NIST IX102A. Not when any READ
+  of the file has an INVALID KEY that GOes TO back (a retry, NIST RL107A).
 * A looped DL/I get call ends on the not-found status its loop waits for
   (GE or GB): the UNTIL's own literal, or the literal of an IF on the PCB
   status that sets the UNTIL's flag (`_dli_guard_end_status`,

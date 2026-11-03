@@ -51,3 +51,16 @@ def test_a_read_outside_any_loop_keeps_its_rows_alone(tmp_path) -> None:
     program = PROGRAM.replace("           GO TO READ-PARA.\n", "")
     cut = _generate(tmp_path, "KEYLOOP", program, "--seed", "1")
     assert 'MOVE "23" TO UT-MOCK-STATUS' not in cut
+
+
+def test_an_invalid_key_that_retries_gets_no_not_found(tmp_path) -> None:
+    """NIST RL107A: `INVALID KEY ... GO TO` its own paragraph retries the
+    read, so a not-found reply would repeat forever."""
+    program = PROGRAM.replace(
+        "INVALID KEY GO TO DONE-PARA.", "INVALID KEY GO TO READ-PARA."
+    ).replace(
+        "           GO TO READ-PARA.\n",
+        "           IF WS-COUNT > 5 GO TO DONE-PARA.\n           GO TO READ-PARA.\n",
+    )
+    cut = _generate(tmp_path, "KEYLOOP", program, "--seed", "1")
+    assert 'MOVE "23" TO UT-MOCK-STATUS' not in cut

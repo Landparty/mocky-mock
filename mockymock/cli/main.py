@@ -2006,6 +2006,10 @@ def _directory_selections(
 #: The most times `run` builds the cases a crash kept from running again.
 _MAX_ISOLATION_RERUNS = 25
 
+#: Reruns in a row in which only the first case ran, and crashed, before
+#: `run` stops rerunning.
+_MAX_STALLED_RERUNS = 2
+
 
 def _cmd_run(args: argparse.Namespace) -> int:
     """`run` for one suite. When the binary crashes or times out part-way
@@ -2023,6 +2027,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     import tempfile
 
     reports: list[str] = []
+    stalled = 0
     for _ in range(_MAX_ISOLATION_RERUNS):
         print(
             f"mockymock run: the test binary stopped before {len(remaining)} "
@@ -2043,6 +2048,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     pass
         left = list(getattr(sub_args, "not_run_after_crash", None) or [])
         if not left or len(left) >= len(remaining):
+            break
+        # Only the first left-over case ran, and it crashed too: when that
+        # happens twice running, the cases share whatever hangs (a loop in
+        # code they all reach), and running each to its own timeout would
+        # outlast any job limit (NIST RL107A).
+        stalled = stalled + 1 if len(left) == len(remaining) - 1 else 0
+        if stalled >= _MAX_STALLED_RERUNS:
+            print(
+                f"mockymock run: {len(left)} case(s) left not run -- the "
+                f"cases before them each stopped the binary too, so they "
+                f"likely share the cause"
+            )
             break
         remaining = left
     if args.json_report and reports:

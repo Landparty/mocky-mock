@@ -3277,6 +3277,8 @@ def _keyed_read_loop_not_found(
             return None
         if not getattr(statement, "invalid_key_clause", None):
             continue
+        if _clause_goes_back(site, source.program):
+            return None
         lifted = lift_clause_bodies(statement, source.lines)
         if not lifted or not any(c.attr == "invalid_key_clause" for c in lifted):
             continue
@@ -3293,14 +3295,11 @@ def _keyed_read_loop_not_found(
     return reply
 
 
-def _in_goto_loop(site: BoundarySite, program: object) -> bool:
-    """Whether `site`'s paragraph, or one after it, holds a GO TO back to
-    that paragraph or one before it (source order): the `GO TO READ-TEST`
-    loop of programs written without PERFORM UNTIL."""
-    from cobolparser.models.statements.control import GoStatement
-
-    from mockymock.analysis.loops import walk_statements
-
+def _paragraph_order(
+    site: BoundarySite, program: object
+) -> tuple[list, set[str]] | None:
+    """(the paragraphs from `site`'s own on, in source order; the names of
+    that paragraph and every one before it), or None when unknown."""
     name = (site.paragraph_name or "").upper()
     procedure = (
         program.get_division("PROCEDURE")  # type: ignore[attr-defined]
@@ -3308,24 +3307,53 @@ def _in_goto_loop(site: BoundarySite, program: object) -> bool:
         else None
     )
     if not name or procedure is None:
-        return False
+        return None
     paragraphs = sorted(
         _all_paragraphs(procedure),
         key=lambda p: getattr(getattr(p, "location", None), "line", 0) or 0,
     )
     names = [str(getattr(p, "paragraph_name", "") or "").upper() for p in paragraphs]
     if name not in names:
-        return False
+        return None
     start = names.index(name)
-    earlier = set(names[: start + 1])
-    for paragraph in paragraphs[start:]:
-        for statement in walk_statements(list(paragraph.statements)):
-            if isinstance(statement, GoStatement) and any(
-                str(target or "").upper() in earlier
-                for target in statement.target_paragraphs
-            ):
-                return True
-    return False
+    return paragraphs[start:], set(names[: start + 1])
+
+
+def _goes_back(statements: list, earlier: set[str]) -> bool:
+    """Whether `statements` (nested bodies included) GO TO one of
+    `earlier`."""
+    from cobolparser.models.statements.control import GoStatement
+
+    from mockymock.analysis.loops import walk_statements
+
+    return any(
+        isinstance(statement, GoStatement)
+        and any(str(t or "").upper() in earlier for t in statement.target_paragraphs)
+        for statement in walk_statements(statements)
+    )
+
+
+def _in_goto_loop(site: BoundarySite, program: object) -> bool:
+    """Whether `site`'s paragraph, or one after it, holds a GO TO back to
+    that paragraph or one before it (source order): the `GO TO READ-TEST`
+    loop of programs written without PERFORM UNTIL."""
+    order = _paragraph_order(site, program)
+    if order is None:
+        return False
+    following, earlier = order
+    return any(_goes_back(list(p.statements), earlier) for p in following)
+
+
+def _clause_goes_back(site: BoundarySite, program: object) -> bool:
+    """Whether `site`'s INVALID KEY clause GOes TO its own paragraph or an
+    earlier one: a retry, which a not-found reply would repeat forever
+    (NIST RL107A: `READ RL-FR7 INVALID KEY ... GO TO TEST-13` inside
+    TEST-13)."""
+    order = _paragraph_order(site, program)
+    if order is None:
+        return True
+    clause = list(getattr(site.statement, "invalid_key_clause", None) or [])
+    return _goes_back(clause, order[1])
 
 
 def _read_body(
