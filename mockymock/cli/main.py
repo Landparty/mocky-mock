@@ -9,6 +9,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING
 
 from mockymock import __version__
@@ -2002,7 +2003,131 @@ def _directory_selections(
     return selections
 
 
+#: The most times `run` builds the cases a crash kept from running again.
+_MAX_ISOLATION_RERUNS = 25
+
+#: Reruns in a row in which only the first case ran, and crashed, before
+#: `run` stops rerunning.
+_MAX_STALLED_RERUNS = 2
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
+    """`run` for one suite. When the binary crashes or times out part-way
+    (one case looping forever, an abend), every case after it used to be
+    reported NOT RUN and nothing was learned about them, nor recorded
+    under --record-expectations (2026-11-03, NIST IX102A: a looping happy
+    path hid five cases). Those cases are built and run again on their
+    own, and again after each further crash, so one bad case costs only
+    itself. A --json-report gets their results merged in."""
+    exit_code = _cmd_run_suite(args)
+    remaining = list(getattr(args, "not_run_after_crash", None) or [])
+    if not remaining or not _can_rerun_left_over_cases(args):
+        return exit_code
+    import copy
+    import tempfile
+
+    reports: list[str] = []
+    stalled = 0
+    for _ in range(_MAX_ISOLATION_RERUNS):
+        print(
+            f"mockymock run: the test binary stopped before {len(remaining)} "
+            f"case(s) could run; running them again without the case that "
+            f"stopped it"
+        )
+        sub_args = copy.copy(args)
+        sub_args.case = remaining
+        sub_args.not_run_after_crash = None
+        with tempfile.TemporaryDirectory(prefix="mockymock-rerun-") as tmp:
+            if args.json_report:
+                sub_args.json_report = str(Path(tmp) / "report.json")
+            exit_code = _cmd_run_suite(sub_args) or exit_code
+            if args.json_report:
+                try:
+                    reports.append(Path(sub_args.json_report).read_text("utf-8"))
+                except OSError:
+                    pass
+        left = list(getattr(sub_args, "not_run_after_crash", None) or [])
+        if not left or len(left) >= len(remaining):
+            break
+        # Only the first left-over case ran, and it crashed too: when that
+        # happens twice running, the cases share whatever hangs (a loop in
+        # code they all reach), and running each to its own timeout would
+        # outlast any job limit (NIST RL107A).
+        stalled = stalled + 1 if len(left) == len(remaining) - 1 else 0
+        if stalled >= _MAX_STALLED_RERUNS:
+            print(
+                f"mockymock run: {len(left)} case(s) left not run -- the "
+                f"cases before them each stopped the binary too, so they "
+                f"likely share the cause"
+            )
+            break
+        remaining = left
+    if args.json_report and reports:
+        _merge_rerun_reports(Path(args.json_report), reports)
+    return exit_code
+
+
+def _can_rerun_left_over_cases(args: argparse.Namespace) -> bool:
+    """Whether `run`'s outputs survive running the left-over cases in a
+    second binary: not under a case/tag selection (that run already chose
+    its cases), and not for the outputs that describe one binary as a
+    whole (JUnit, coverage, trace, a behaviour baseline)."""
+    whole_binary = (
+        "case",
+        "tag",
+        "junit_xml",
+        "coverage",
+        "coverage_out",
+        "coverage_json",
+        "coverage_fail_under",
+        "trace",
+        "trace_json",
+        "record_baseline",
+        "baseline",
+    )
+    return not any(getattr(args, flag, None) for flag in whole_binary)
+
+
+def _merge_rerun_reports(path: Path, reruns: list[str]) -> None:
+    """The --json-report at `path` with each not-run case replaced by the
+    entry a rerun reported for it, and its summary counted again."""
+    import json
+
+    try:
+        report = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return
+    for text in reruns:
+        try:
+            rerun = json.loads(text)
+        except ValueError:
+            continue
+        found: dict[tuple[str, object], list[dict]] = {}
+        for entry in rerun.get("cases", []):
+            if entry.get("status") != "not_run":
+                found.setdefault((entry.get("name"), entry.get("line")), []).append(
+                    entry
+                )
+        cases = []
+        for entry in report.get("cases", []):
+            key = (entry.get("name"), entry.get("line"))
+            if entry.get("status") == "not_run" and found.get(key):
+                entry = dict(found[key].pop(0), rerun=True)
+            cases.append(entry)
+        report["cases"] = cases
+    statuses = [entry.get("status") for entry in report.get("cases", [])]
+    summary = report.setdefault("summary", {})
+    summary["testsRun"] = sum(1 for status in statuses if status != "not_run")
+    summary["casesFailed"] = statuses.count("failed")
+    summary["casesCrashed"] = statuses.count("crashed")
+    summary["casesNotRun"] = statuses.count("not_run")
+    summary["casesRisky"] = sum(
+        1 for entry in report.get("cases", []) if entry.get("risky")
+    )
+    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+
+def _cmd_run_suite(args: argparse.Namespace) -> int:
     import json
 
     from mockymock._decimal import decimal_point_is_comma
@@ -2352,6 +2477,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if not compiled.success:
             print("mockymock run: compile failed:")
             print(compiled.stderr)
+            diagnosis = _compile_failure_diagnosis(toolchain, tmp, normalized_lines)
+            if diagnosis:
+                print(f"mockymock run: {diagnosis}")
             if args.verbose or args.keep_sandbox:
                 print(f"mockymock run: instrumented source at {instrumented_path}")
             # Deliberately no cleanup here even under plain --verbose: the
@@ -2435,6 +2563,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     else:
         crash_detail = None
     not_run = not_run_case_names(suite_result, suite)
+    if crash_detail is not None and not_run:
+        # For `_cmd_run`: the cases this crash kept from running.
+        args.not_run_after_crash = list(not_run)
     # Under --record-expectations the run exists to fill in the missing
     # assertions, so labelling its cases risky would only be noise.
     risky = [] if stub_scan is not None else risky_case_ids(suite_result, suite)
@@ -4418,6 +4549,49 @@ def comment_out_comment_entries(lines: list[str]) -> list[str]:
         if match is not None:
             header_indent = len(match.group(1))
     return result
+
+
+_EXEC_RE = re.compile(r"\bEXEC\s+(SQL|CICS|DLI|SQLIMS)\b", re.IGNORECASE)
+
+
+def _compile_failure_diagnosis(
+    toolchain: ModuleType, tmp: Path, normalized_lines: list[str]
+) -> str | None:
+    """Whose compile failure this is, when that can be told: the program
+    as mockymock read it (copybooks expanded, nothing spliced) is compiled
+    on its own. It failing too means the program itself does not compile
+    under GnuCOBOL; it compiling means mockymock's changes broke it. None
+    when the program holds EXEC blocks (cobc cannot compile those without
+    mockymock's rewrite, so the check would prove nothing) or when the
+    check cannot run."""
+    if any(_EXEC_RE.search(line.split("*>", 1)[0]) for line in normalized_lines):
+        return None
+    probe = tmp / "UTPROBE" / "PROBE.cbl"
+    try:
+        probe.parent.mkdir(exist_ok=True)
+        probe.write_text("\n".join(normalized_lines) + "\n", encoding="utf-8")
+        result = toolchain.compile_source(probe)
+    except Exception:  # noqa: BLE001 -- a diagnosis must never hide the failure
+        return None
+    if result.success:
+        return (
+            "the program compiles on its own, so the code mockymock added "
+            "broke the compile -- a mockymock bug; please report it with "
+            "this program"
+        )
+    first = next(
+        (line.strip() for line in result.stderr.splitlines() if "error:" in line),
+        "",
+    )
+    # `PROBE.cbl:58: error: ...` -> `line 58: error: ...` (the normalized
+    # lines keep the program's own line numbers).
+    first = re.sub(r"^.*?PROBE\.cbl:(\d+):", r"line \1:", first)
+    return (
+        "the program does not compile under GnuCOBOL even without "
+        "mockymock's changes"
+        + (f" ({first})" if first else "")
+        + " -- fix that first; generated tests cannot run before it compiles"
+    )
 
 
 def _ends_sentence(line: str) -> bool:

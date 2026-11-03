@@ -63,6 +63,7 @@ from mockymock.analysis.clause_bodies import (
 from mockymock.analysis.exact_counts import exact_count_scope
 from mockymock.analysis.loops import (
     LoopGuard,
+    flag_branch_comparisons,
     loop_control_words,
     loop_exit_literal,
     loop_guard_words,
@@ -1467,6 +1468,10 @@ def _placeholder_body_for(
         # The ACCEPT's own target, subscript/qualifier included: the key is
         # its bare data-name (issue #311).
         target = site.accept_target if site is not None else None
+        if (target or key).upper() == "OMITTED":
+            # `ACCEPT OMITTED` waits for a key and stores nothing: the
+            # mock answers it at once (GnuCOBOL rejects INITIALIZE OMITTED).
+            return []
         return [f"INITIALIZE {target or key}"]
     return list(_PLACEHOLDER_BODIES.get(category, []))
 
@@ -1834,10 +1839,53 @@ def _call_end_reply(
             end_status = _DLI_MESSAGE_END.get(function)
         else:
             end_status = _DLI_CALL_END.get(function)
+            if end_status is not None:
+                end_status = (
+                    _dli_guard_end_status(site, names[1], context) or end_status
+                )
         if end_status is None:
             return None
         return ((f'"{end_status}"', f"{names[1]}(11:2)"),), {names[1]}
     return None
+
+
+def _dli_guard_end_status(
+    site: BoundarySite, pcb: str, context: ProgramContext
+) -> str | None:
+    """The not-found status a loop of the program waits for on `pcb`'s
+    status field (`PERFORM UNTIL ORD-PCB-STATUS = 'GE'`), when every such
+    loop names the same one. Whether a get-next ends with GB or GE depends
+    on its SSAs, which the generator does not evaluate: a qualified GN
+    reports GE at the end of its range, so the default GB never satisfied
+    that guard and the run spun until the timeout (2026-11-03, IMSORDER).
+    A loop on a flag (`UNTIL AT-END-OF-DB`) set in a branch on the status
+    (`IF PCB-STATUS-CODE = 'GE'  MOVE 'Y' TO WS-EOF`) counts too
+    (IMSPATIE)."""
+    watched = context.names_under(pcb)
+    flags: set[str] = set()
+    pairs: list[tuple[str, str]] = []
+    for guard in context.guards:
+        pairs += _STATUS_COMPARE_RE.findall(guard.until_text.upper())
+        for word in guard.words:
+            flags |= {word} | context.condition_owners(word)
+    statements = context.paragraph_statements(site.paragraph_name)
+    pairs += [
+        (name, literal.strip("'\""))
+        for name, literal in flag_branch_comparisons(statements, watched, flags)
+    ]
+    found = {
+        status for name, status in pairs if name in watched and status in _DLI_NOT_FOUND
+    }
+    return found.pop() if len(found) == 1 else None
+
+
+_STATUS_COMPARE_RE = re.compile(
+    r"([\w-]+)\s*(?:=|(?:IS\s+)?EQUALS?(?:\s+TO)?)\s*[\"']([A-Z]{2})[\"']"
+)
+
+
+#: The DL/I statuses that mean nothing more was found.
+_DLI_NOT_FOUND = frozenset({"GE", "GB"})
 
 
 #: The status an IMS message GU reports on the I/O PCB once the queue is
@@ -3201,6 +3249,113 @@ def _at_end_handling(
     return replicated, at_end, lifted
 
 
+def _keyed_read_loop_not_found(
+    fixture: BoundaryFixture, source: ProgramContext | None
+) -> dict[str, str] | None:
+    """The record-not-found reply ({field: "23"}) a keyed READ mock gives
+    once its rows run out, when a READ of that file with an INVALID KEY
+    clause the splice re-runs (`lift_clause_bodies`) runs in a loop -- a
+    PERFORM UNTIL or a GO TO back to its own paragraph or an earlier one --
+    and has no AT END clause. Such a loop ends only on INVALID KEY (NIST
+    IX102A: `IF COUNT = 0 ... GO TO READ-TEST-F2-05` around `READ ...
+    INVALID KEY GO TO ...-1`); a mock answering "00" forever hung the
+    run. The splice takes the clause on UT-MOCK-STATUS's "2x", and the
+    file's FILE STATUS field gets the same code. None otherwise."""
+    if source is None or source.surface is None:
+        return None
+    from mockymock.analysis.mock_surface import analyze_file_status_fields
+
+    key = fixture.key.upper()
+    looped = False
+    for site in source.surface.boundary_sites:
+        if site.category is not MockCategory.READ or not site.keys:
+            continue
+        if site.keys[0].upper() != key:
+            continue
+        statement = site.statement
+        if getattr(statement, "at_end_clause", None):
+            return None
+        if not getattr(statement, "invalid_key_clause", None):
+            continue
+        if _clause_goes_back(site, source.program):
+            return None
+        lifted = lift_clause_bodies(statement, source.lines)
+        if not lifted or not any(c.attr == "invalid_key_clause" for c in lifted):
+            continue
+        # A loop with an UNTIL (not `PERFORM n TIMES`, which ends by its
+        # count), or a GO TO loop.
+        if loop_guard_words(site, source.guards) or _in_goto_loop(site, source.program):
+            looped = True
+    if not looped:
+        return None
+    reply = {OUTCOME_FIELD: "23"}
+    status = analyze_file_status_fields(source.program).get(key)
+    if status:
+        reply[status] = "23"
+    return reply
+
+
+def _paragraph_order(
+    site: BoundarySite, program: object
+) -> tuple[list, set[str]] | None:
+    """(the paragraphs from `site`'s own on, in source order; the names of
+    that paragraph and every one before it), or None when unknown."""
+    name = (site.paragraph_name or "").upper()
+    procedure = (
+        program.get_division("PROCEDURE")  # type: ignore[attr-defined]
+        if program is not None
+        else None
+    )
+    if not name or procedure is None:
+        return None
+    paragraphs = sorted(
+        _all_paragraphs(procedure),
+        key=lambda p: getattr(getattr(p, "location", None), "line", 0) or 0,
+    )
+    names = [str(getattr(p, "paragraph_name", "") or "").upper() for p in paragraphs]
+    if name not in names:
+        return None
+    start = names.index(name)
+    return paragraphs[start:], set(names[: start + 1])
+
+
+def _goes_back(statements: list, earlier: set[str]) -> bool:
+    """Whether `statements` (nested bodies included) GO TO one of
+    `earlier`."""
+    from cobolparser.models.statements.control import GoStatement
+
+    from mockymock.analysis.loops import walk_statements
+
+    return any(
+        isinstance(statement, GoStatement)
+        and any(str(t or "").upper() in earlier for t in statement.target_paragraphs)
+        for statement in walk_statements(statements)
+    )
+
+
+def _in_goto_loop(site: BoundarySite, program: object) -> bool:
+    """Whether `site`'s paragraph, or one after it, holds a GO TO back to
+    that paragraph or one before it (source order): the `GO TO READ-TEST`
+    loop of programs written without PERFORM UNTIL."""
+    order = _paragraph_order(site, program)
+    if order is None:
+        return False
+    following, earlier = order
+    return any(_goes_back(list(p.statements), earlier) for p in following)
+
+
+def _clause_goes_back(site: BoundarySite, program: object) -> bool:
+    """Whether `site`'s INVALID KEY clause GOes TO its own paragraph or an
+    earlier one: a retry, which a not-found reply would repeat forever
+    (NIST RL107A: `READ RL-FR7 INVALID KEY ... GO TO TEST-13` inside
+    TEST-13)."""
+    order = _paragraph_order(site, program)
+    if order is None:
+        return True
+    clause = list(getattr(site.statement, "invalid_key_clause", None) or [])
+    return _goes_back(clause, order[1])
+
+
 def _read_body(
     fixture: BoundaryFixture,
     registry: TallyRegistry,
@@ -3272,6 +3427,13 @@ def _read_body(
         return status_lines
     replicated, at_end, lifted = _at_end_handling(fixture, site, source)
     needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
+    if not needs_exhaustion_branch and len(sequence) != 1:
+        not_found = _keyed_read_loop_not_found(fixture, source)
+        if not_found:
+            # The rows are the records the file holds: the read after the
+            # last finds none, as the real keyed READ would.
+            fixture = replace(fixture, terminal=not_found)
+            needs_exhaustion_branch = True
 
     if not sequence:
         return _read_exhaustion_lines(fixture, replicated, at_end, lifted)
@@ -4306,6 +4468,10 @@ _CONDITIONAL_SITE_REASON = (
     "called only under an IF/EVALUATE, or from a paragraph PERFORMed "
     "conditionally, so whether this case reaches it is not known"
 )
+_AFTER_STOP_REASON = (
+    "called after a branch that may end the run (an IF holding a GOBACK / "
+    "STOP RUN), so whether this case reaches it is not known"
+)
 _LOOPED_SITE_REASON = (
     "called inside a PERFORM loop (UNTIL/VARYING/TIMES) or from a paragraph "
     "PERFORMed more than once, which the bundle counts once"
@@ -4505,6 +4671,18 @@ def _once_per_site_counts(
         if expectation.value != len(sites):
             counts[(category, key)] = len(sites)
     return counts
+
+
+def _after_possible_stop(site: BoundarySite, scope: tuple[set[str], set[int]]) -> bool:
+    """Whether `site` is a top-level statement of a straight-path paragraph
+    that the scope still leaves out: it comes after a statement that may
+    end the run (`analysis.exact_counts`)."""
+    paragraphs, statement_ids = scope
+    return (
+        not site.nested
+        and site.paragraph_name in paragraphs
+        and id(site.statement) not in statement_ids
+    )
 
 
 def _site_in_scope(site: BoundarySite, scope: tuple[set[str], set[int]]) -> bool:
@@ -5011,6 +5189,9 @@ def _scaffold_with_bundle(
                 and source is not None
                 and any(
                     _site_under_branch(site, source.program)
+                    # After a branch that may end the run (`IF ... GOBACK`):
+                    # the scenario taking it never reaches the loop at all.
+                    or (row_scope is not None and not _site_in_scope(site, row_scope))
                     for site in _sites_for_key(
                         *key_pair,
                         surface,
@@ -5019,6 +5200,16 @@ def _scaffold_with_bundle(
                     )
                 )
             ):
+                if row_scope is not None and any(
+                    _after_possible_stop(site, row_scope)
+                    for site in _sites_for_key(
+                        *key_pair,
+                        surface,
+                        reachable,
+                        _count_keys(expectations).get(key_pair[0], ()),
+                    )
+                ):
+                    reason = _AFTER_STOP_REASON
                 call_count_overrides[key_pair] = CallCountOverride(
                     demote_reason=reason, from_placeholder=False
                 )

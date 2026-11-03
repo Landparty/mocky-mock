@@ -72,6 +72,14 @@ _UNSUPPORTED_SITE_CODES: dict[str, tuple[str, str]] = {
         "READ's AT END), which the splicer cannot rewrite there; move it out "
         "of the clause, or isolate the paragraph with MOCK PARAGRAPH",
     ),
+    "screen DISPLAY": (
+        "UNSUPPORTED_SCREEN_DISPLAY",
+        "a screen DISPLAY (AT / LINE / COLUMN / attributes / UPON CRT) "
+        "would switch GnuCOBOL to screen mode and hide the test results; "
+        "mockymock answers it with CONTINUE, but not inside another "
+        "boundary statement's clause body; move it out of the clause, or "
+        "isolate the paragraph with MOCK PARAGRAPH",
+    ),
     _UNSUPPORTED_STATEMENT_LABEL: (
         "UNSUPPORTED_STATEMENT",
         "mockymock does not model this statement: it is neither one of the "

@@ -70,6 +70,7 @@ from mockymock.analysis.linkage import (
 )
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
+    ANSWERED_LABELS,
     BoundarySite,
     MockSurface,
     NonInteractiveAccept,
@@ -1712,7 +1713,7 @@ def check_test_case(
                 # satisfy check_test_case's unrelated matching rules.
                 pass
             elif (
-                site.label == "STOP literal"
+                site.label in ANSWERED_LABELS
                 and not site.nested
                 and not site.unspliceable_reason
             ):
