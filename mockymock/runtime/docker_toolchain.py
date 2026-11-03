@@ -25,6 +25,7 @@ from mockymock.runtime.executor import (
     _coerce_output,
     binary_run_env,
 )
+from mockymock.runtime.reserved_words import not_reserved_flags, prepare_free_source
 
 # Bundled under the package itself (not the repo-root docker/) so it ships
 # inside the wheel and is found under any install mode -- editable sibling
@@ -455,6 +456,7 @@ def compile_source(
         # use the OS/VS rules anyway, and divisions come out the same both
         # ways, so the setting buys nothing and costs false failures.
         "-fno-arithmetic-osvs",
+        *not_reserved_flags(_prepared(source_path, extra_sources)),
     ]
     if coverage:
         cmd.append("--coverage")
@@ -730,3 +732,11 @@ def start_gdb_session(binary_path: Path) -> subprocess.Popen:
         errors="replace",
         bufsize=1,
     )
+
+
+def _prepared(source_path: Path, extra_sources: Sequence[Path]) -> str:
+    """Prepare every source cobc compiles (`prepare_free_source`); the
+    program's own text."""
+    for extra in extra_sources:
+        prepare_free_source(extra)
+    return prepare_free_source(source_path)

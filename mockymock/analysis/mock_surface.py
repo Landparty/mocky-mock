@@ -552,6 +552,11 @@ def _is_pure_procedure_sort(statement: SortStatement | MergeStatement) -> bool:
 # the literal set.
 _TERMINATOR_LABELS = frozenset({"STOP RUN", "GOBACK", "EXIT PROGRAM"})
 
+# Category-None sites the splicer replaces with CONTINUE: the console or
+# screen answers at once (STOP <literal> waits for the operator; a screen
+# DISPLAY would switch GnuCOBOL to screen mode).
+ANSWERED_LABELS = frozenset({"STOP literal", "screen DISPLAY"})
+
 # EXEC CICS commands that never give control back to the next statement
 # (issue #215): RETURN ends the task (or returns to the LINKing program),
 # XCTL transfers to another program for good, ABEND ends the task. They
@@ -859,6 +864,15 @@ def _classify_statement(
         # covered. The gate checks `keys` against the case's CALL/DYNCALL
         # directives; a CANCEL naming anything else refuses (UNMOCKED_CANCEL).
         add_site(None, "CANCEL", keys=tuple(statement.program_names))
+        return
+
+    if getattr(statement, "is_screen_display", False):
+        # DISPLAY ... AT / LINE / COL / HIGHLIGHT / UPON CRT writes to the
+        # screen: GnuCOBOL switches the terminal to screen mode, and every
+        # later DISPLAY of the test driver lands on that screen, out of the
+        # run's output (the case then looks like it never finished). Never
+        # a pass-through: spliced to CONTINUE, as STOP literal is.
+        add_site(None, "screen DISPLAY")
         return
 
     if isinstance(statement, StopStatement):

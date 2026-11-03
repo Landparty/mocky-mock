@@ -45,7 +45,7 @@ from mockymock.analysis.clause_bodies import (
 )
 from mockymock.analysis.declaratives import MODE_CODES, USE_GUARD
 from mockymock.analysis.flow_mocks import FlowMockPlan
-from mockymock.analysis.mock_surface import BoundarySite, MockSurface
+from mockymock.analysis.mock_surface import ANSWERED_LABELS, BoundarySite, MockSurface
 from mockymock.analysis.refusal import (
     GotoExitPlan,
     TerminatorPlan,
@@ -331,12 +331,12 @@ def splice_program(
         replacement = _with_lead(lines, start, site, replacement, column_offset)
         spans.append((start, end, replacement))
 
-    # STOP <literal>: displays the literal and waits for the operator, then
-    # goes on with the next statement. Under a test the operator answers at
-    # once: CONTINUE. A nested one, or one with no safe span, is refused by
+    # STOP <literal> (waits for the operator) and a screen DISPLAY (would
+    # switch GnuCOBOL to screen mode): under a test the console answers at
+    # once, CONTINUE. A nested one, or one with no safe span, is refused by
     # the gate when a case reaches it, and left as written otherwise.
     for site in surface.boundary_sites:
-        if site.label != "STOP literal" or site.nested or site.unspliceable_reason:
+        if site.label not in ANSWERED_LABELS or site.nested or site.unspliceable_reason:
             continue
         start, end = statement_span(site.statement, boundaries, last_line, lines)
         replacement = ["           CONTINUE"]

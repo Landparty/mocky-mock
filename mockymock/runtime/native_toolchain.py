@@ -61,6 +61,7 @@ from mockymock.runtime.executor import (
     _coerce_output,
     binary_run_env,
 )
+from mockymock.runtime.reserved_words import not_reserved_flags, prepare_free_source
 
 #: The one name every command catches; the Docker module defines it, and
 #: both backends raise it, so callers stay backend-agnostic.
@@ -369,7 +370,11 @@ def compile_source(
         home = _require_home()
     except ToolchainNotAvailableError as exc:
         return CompileResult(False, None, "", f"{exc}\n")
-    cmd = [str(home / "bin" / f"cobc{_EXE}"), *_COBC_DIALECT_FLAGS]
+    cmd = [
+        str(home / "bin" / f"cobc{_EXE}"),
+        *_COBC_DIALECT_FLAGS,
+        *not_reserved_flags(_prepared(source_path, extra_sources)),
+    ]
     if coverage:
         cmd.append("--coverage")
     if trace:
@@ -555,3 +560,11 @@ def facts() -> NativeFacts:
         except (ToolchainNotAvailableError, OSError, subprocess.TimeoutExpired):
             compiler = None
     return NativeFacts(home=home, c_compiler=compiler)
+
+
+def _prepared(source_path: Path, extra_sources: Sequence[Path]) -> str:
+    """Prepare every source cobc compiles (`prepare_free_source`); the
+    program's own text."""
+    for extra in extra_sources:
+        prepare_free_source(extra)
+    return prepare_free_source(source_path)

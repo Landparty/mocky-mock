@@ -5,6 +5,37 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-03 -- Foolproof generation: hangs, GnuCOBOL quirks, screen I/O
+
+* `run` builds and runs again the cases a crashed or timed-out binary kept
+  from running (`main._cmd_run` around `_cmd_run_suite`, which leaves
+  their names in `args.not_run_after_crash`), again after each further
+  crash, at most `_MAX_ISOLATION_RERUNS` times. A --json-report gets their
+  results merged in (`_merge_rerun_reports`, entries carry `rerun: true`);
+  skipped under --case/--tag, JUnit, coverage, trace and baselines.
+* A keyed READ whose INVALID KEY clause the splice re-runs, inside a
+  PERFORM UNTIL or a GO TO loop (`generator._in_goto_loop`), with no AT
+  END, reports "23" (UT-MOCK-STATUS and its FILE STATUS) once its rows
+  run out (`_keyed_read_loop_not_found`). NIST IX102A.
+* A looped DL/I get call ends on the not-found status its loop waits for
+  (GE or GB): the UNTIL's own literal, or the literal of an IF on the PCB
+  status that sets the UNTIL's flag (`_dli_guard_end_status`,
+  `loops.flag_branch_comparisons`). Samples IMSORDER, IMSPATIE.
+* A demoted VERIFY after an IF that may GOBACK/STOP RUN says so
+  (`_AFTER_STOP_REASON`); MQBATCH's MQGET is no longer `2 TIMES`.
+* GnuCOBOL quirks (`runtime/reserved_words.py`): `-fnot-reserved=CHAR`
+  when the program declares CHAR and never calls FUNCTION CHAR; a `$` in
+  column 7 of the free-form source is shifted right (cobc reads it as a
+  directive). NIST ST1xx.
+* Screen DISPLAYs (cobol-parser's `DisplayStatement.is_screen_display`:
+  AT, LINE/COL, attributes, UPON CRT) are spliced to CONTINUE like STOP
+  literal (`mock_surface.ANSWERED_LABELS`); a nested one is refused with
+  UNSUPPORTED_SCREEN_DISPLAY. A placeholder `ACCEPT OMITTED` mocks to
+  nothing.
+* A compile failure says whose it is (`main._compile_failure_diagnosis`):
+  the program compiled alone fails too (fix it first), or it compiles and
+  mockymock's splice broke it (a bug to report).
+
 ## 2026-11-03 -- CANCEL names mocked, STOP literal answered, comment entries
 
 * The generator gives each case an empty `MOCK CALL` for every name a

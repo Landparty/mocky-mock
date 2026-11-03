@@ -52,6 +52,7 @@ from mockymock.analysis.clause_bodies import (
 )
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
+    ANSWERED_LABELS,
     BoundarySite,
     MockSurface,
     _nested_statement_lists,
@@ -59,8 +60,8 @@ from mockymock.analysis.mock_surface import (
 from mockymock.dsl.model import EXEC_CATEGORIES, MockCategory
 
 # Category-None sites the splicer still replaces: the terminators, and a
-# STOP <literal>, which becomes CONTINUE (the operator answers at once).
-_SPLICED_UNMOCKED_LABELS = _TERMINATOR_LABELS | {"STOP literal"}
+# sites answered with CONTINUE (mock_surface.ANSWERED_LABELS).
+_SPLICED_UNMOCKED_LABELS = _TERMINATOR_LABELS | ANSWERED_LABELS
 
 
 def collect_boundaries(program) -> list[int]:

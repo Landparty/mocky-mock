@@ -44,7 +44,15 @@ def test_the_looped_mqget_ends_its_drain_loop(tmp_path) -> None:
         "MOVE 2 TO WS-COMPCODE",
         "MOVE 2033 TO WS-REASON",
     ]
-    assert 'VERIFY CALL "MQGET" WAS CALLED 2 TIMES' in cut
+    # The drain loop runs only past MQCONN's and MQOPEN's `IF ... GOBACK`:
+    # the cases taking either branch never reach it (2026-11-03, it was
+    # VERIFY ... 2 TIMES in every case, failing in those two), so no count
+    # is exact by construction.
+    assert 'VERIFY CALL "MQGET" WAS CALLED 2 TIMES' not in cut
+    assert (
+        '*> VERIFY CALL "MQGET" WAS CALLED <count not exact by construction -- '
+        "called after a branch that may end the run"
+    ) in cut
 
 
 def test_the_bundle_less_placeholder_answers_compcode_and_reason_too() -> None:

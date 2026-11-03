@@ -35,6 +35,10 @@ def _walk(statements: list):
             yield from _walk(nested)
 
 
+#: Every statement of a list, nested bodies included, in order.
+walk_statements = _walk
+
+
 def _is_loop(statement: PerformStatement) -> bool:
     return getattr(statement, "perform_type", "SIMPLE") != "SIMPLE"
 
@@ -234,6 +238,43 @@ def _branch_condition_words(statement) -> set[str]:
             words |= _expression_words(list(getattr(when, "selectors", None) or []))
         return words
     return set()
+
+
+def _equal_comparisons(node) -> list[tuple[str, str]]:
+    """(data name, literal) for each `name = literal` an IF condition
+    holds, through AND/OR but not under NOT (uppercased, quotes kept)."""
+    if node is None or isinstance(node, (str, dict, list, tuple)):
+        return []
+    if str(getattr(node, "expression_type", "") or "").upper() == "NOT":
+        return []
+    found: list[tuple[str, str]] = []
+    operator = str(getattr(node, "operator", "") or "").upper()
+    left = getattr(node, "left_operand", None)
+    right = getattr(node, "right_operand", None)
+    if operator in {"EQUAL", "=", "EQUALS"} and isinstance(left, str):
+        if isinstance(right, str):
+            found.append((left.strip().upper(), right.strip().upper()))
+    for attr in ("left_condition", "right_condition"):
+        found += _equal_comparisons(getattr(node, attr, None))
+    return found
+
+
+def flag_branch_comparisons(
+    statements: list, reply_names: set[str], flags: set[str]
+) -> list[tuple[str, str]]:
+    """The `name = literal` tests of the IFs on `reply_names` that write
+    one of `flags` (`IF PCB-STATUS = 'GE'  MOVE 'Y' TO WS-EOF` under
+    `PERFORM UNTIL AT-END-OF-DB`): what the reply must be for the loop to
+    end."""
+    found: list[tuple[str, str]] = []
+    for statement in _walk(statements):
+        if not isinstance(statement, IfStatement):
+            continue
+        if not _branch_condition_words(statement) & reply_names:
+            continue
+        if names_set_on_reply([statement], reply_names) & flags:
+            found += _equal_comparisons(getattr(statement, "condition", None))
+    return found
 
 
 def names_set_on_reply(statements: list, reply_names: set[str]) -> set[str]:

@@ -277,6 +277,13 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "EXCEPTION, a READ's AT END). Move it out of the clause, or "
         "isolate the paragraph with MOCK PARAGRAPH."
     ),
+    "UNSUPPORTED_SCREEN_DISPLAY": (
+        "A screen DISPLAY (AT, LINE, COLUMN, attributes, UPON CRT) would "
+        "switch GnuCOBOL to screen mode and hide the test results. "
+        "mockymock answers it with CONTINUE, except inside another "
+        "boundary statement's clause body. Move it out of the clause, or "
+        "isolate the paragraph with MOCK PARAGRAPH."
+    ),
     "UNSUPPORTED_STATEMENT": (
         "mockymock does not model this statement at all: it is neither a "
         "known pass-through (touches nothing outside the program) nor a "
