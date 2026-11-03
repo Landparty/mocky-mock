@@ -1783,8 +1783,13 @@ docs/2026-08-04-record-expectations-design.md.
 `build_site_dispatch` ends with `merge_identical_branches`: case branches of
 one site whose statements are identical become one branch named by stacked
 `WHEN`s, and a run of three or more consecutive case ids by one `WHEN "a"
-THRU "b"` (`_case_selectors`; ids are fixed-width digits, `SUITE` stays on its
-own). A generated suite mocks most sites alike in every case: HUGE01's 300
+THRU "b"` (`_case_selectors`; `SUITE` stays on its own). The range is an
+alphanumeric compare on `UT-CURRENT-CASE PIC X(9)`, and ids are only
+padded to three digits, so past case 999 `"1000"` sorts between `"100"` and
+`"101"`: a run is cut wherever another case id of the dispatch (every case
+has a branch in every dispatch) sorts between two of its neighbours (#411;
+before, case 1000 silently ran the mocks of the `"001" THRU "999"` branch).
+A generated suite mocks most sites alike in every case: HUGE01's 300
 WRITE sites x 305 cases spliced 490k lines before, which gcc could not
 compile.
 

@@ -39,6 +39,15 @@ prevent.
   the program compiled alone fails too (fix it first), or it compiles and
   mockymock's splice broke it (a bug to report).
 
+## 2026-11-03 -- THRU case ranges past case 999
+
+* `_case_selectors` cuts a merged `WHEN "a" THRU "b"` run wherever another
+  case id of the dispatch sorts inside it in the PIC X(9) compare, so case
+  1000 (`"1000"` sorts between `"100"` and `"101"`) no longer runs the
+  `"001" THRU "999"` branch's mocks (#411). See
+  [splicer.md](splicer.md#merged-case-branches). Tests:
+  `tests/unit/test_issue_411_case_ranges_past_999.py`.
+
 ## 2026-11-03 -- CANCEL names mocked, STOP literal answered, comment entries
 
 * The generator gives each case an empty `MOCK CALL` for every name a

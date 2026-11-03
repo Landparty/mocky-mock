@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.15.0](https://github.com/Landparty/mocky-mock/compare/v0.14.0...v0.15.0) (2026-11-03)
+
+
+### Features
+
+* **alter:** ALTER runs real under mocks, each case starts unaltered ([6d821bf](https://github.com/Landparty/mocky-mock/commit/6d821bfe326b0c01958773a47801a5e1ec706d26))
+* **declaratives:** run USE AFTER EXCEPTION procedures after mocked file statements ([ae2fb55](https://github.com/Landparty/mocky-mock/commit/ae2fb55259fad593966b6f80130d287c0e14e5ce))
+* **generate:** mock CANCEL names, answer STOP literal, skip comment entries ([37ced78](https://github.com/Landparty/mocky-mock/commit/37ced7896dab6b7c3f61d0a077c353a99cd8ce90))
+* **generate:** whole-main-line cases; a fallen-into STOP RUN ends them ([e5fbc4c](https://github.com/Landparty/mocky-mock/commit/e5fbc4c176bfe093d691c3ed668cea945ea06f9b))
+* **nested:** test nested and stacked programs through the outermost unit ([ca91e5a](https://github.com/Landparty/mocky-mock/commit/ca91e5a70e4bca455fa2919fefa4240de81aa759))
+* **runner:** tests jobs: generate, record expectations and play a load module's suites ([9203736](https://github.com/Landparty/mocky-mock/commit/92037364b9f5afdaa439215f16c1cc96f15156c8))
+* **runner:** tests jobs: generate, record expectations and play a load module's suites ([047821e](https://github.com/Landparty/mocky-mock/commit/047821eea575d85b852732bf654191df497e2260))
+* **sort:** mock a SORT/MERGE mixing a file with a procedure; THRU ranges with SECTION ends ([db37dfc](https://github.com/Landparty/mocky-mock/commit/db37dfc98fa99403b89696a2ec3c426408502806))
+* **terminators:** GOBACK to the test through a call frame when no EXIT verb fits ([fa836a3](https://github.com/Landparty/mocky-mock/commit/fa836a3c9bc7b7327b491f3a5553e7839dfaa977))
+
+
+### Bug Fixes
+
+* **generate:** comment out continued comment entries before inserting the driver ([8312e05](https://github.com/Landparty/mocky-mock/commit/8312e05651270ebffc72a7669207f035896b9dd8))
+* **generate:** main-line cases fall back to the bare PERFORM when lint refuses more ([df09b7f](https://github.com/Landparty/mocky-mock/commit/df09b7fa82b0731862362e66515c0b8c6ab87b17))
+* **generate:** NIST CCVS85 check of Create tests; four generate/splice fixes ([bdb2b84](https://github.com/Landparty/mocky-mock/commit/bdb2b840c8ac0ea0f1851aea45c3d1852a207efe))
+* **splicer:** compile CardDemo's CBEXPORT/CBIMPORT and COPAUS1C ([068bada](https://github.com/Landparty/mocky-mock/commit/068badaa4c8db5f808d79f0323fdc658d4ef7d13))
+* **splicer:** cut a merged THRU case range where case 1000+ sorts inside it ([#412](https://github.com/Landparty/mocky-mock/issues/412)) ([b889e48](https://github.com/Landparty/mocky-mock/commit/b889e4801f2a5c2d443b653cfbd6601bdd41df2f)), closes [#411](https://github.com/Landparty/mocky-mock/issues/411)
+
 ## [0.14.0](https://github.com/Landparty/mocky-mock/compare/v0.13.0...v0.14.0) (2026-11-02)
 
 
