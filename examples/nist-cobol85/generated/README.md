@@ -32,8 +32,10 @@ reports `NO TEST(S) FAILED`.
 | SQ107A | sequential I/O | | green, 8, whole main line |
 | ST110A | sort | | green, 1 |
 | NC101A | nucleus | the CCVS boilerplate most programs share; all 93 tests in one case | green, 1, whole main line |
-| DB101A | debugging | | refused: `UNSUPPORTED_ALTER`, `UNSUPPORTED_DECLARATIVES` |
-| IC222A | inter-program | nested programs | refused: `UNSUPPORTED_NESTED_PROGRAM` |
+| DB101A | debugging | ALTER, DECLARATIVES | green, 1, whole main line |
+| IC222A | inter-program | nested programs | green, 5, whole main line |
+| IC203A | inter-program | CANCEL of a program it never CALLs | green, 15, whole main line |
+| NC302M | nucleus | `STOP "literal"` | green, 1 |
 
 A case marked "whole main line" PERFORMs `OPEN-FILES THRU` the program's
 last paragraph (`expected.json`'s `perform`), and the STOP RUN the program
@@ -46,25 +48,37 @@ python scripts/nist_cobol85.py expand ../cobol-parser/examples/cobol /tmp/nist
 python scripts/nist_cobol85.py check /tmp/nist --out /tmp/nist-results --jobs 4
 ```
 
-459 programs, about 9 minutes on 4 cores:
+459 programs, about 10 minutes on 6 cores:
 
-- **292 green** (870 cases): every generated case passed on creation and
-  again on replay, with the same result. 266 of them run the whole main line
-  (230 `PERFORM OPEN-FILES THRU CCVS-999999`); 11 still PERFORM
-  `OPEN-FILES` alone, where generate keeps the bare PERFORM (the rules are
-  in `.okf/dsl.md`).
-- **159 refused** before anything compiled, so nothing ran unmocked:
-  DECLARATIVES (88), a terminator layout still unsupported (26), ALTER (15),
-  `UNSUPPORTED_PERFORM_THRU` (15), nested programs (12), parse warnings
-  (11, mostly the communication module), SORT/MERGE forms (9), and a few
-  others.
-- **8 fail**, none of them a wrong generated expectation:
-  - NC174A, NC211A and ST115A do not compile under `-std=mvs` even with
-    plain `cobc` (switch conditions, `NOTHING` and `CHAR` as data names).
-  - SQ109M, SQ110M and SQ210M never finish: the main line now reaches a
-    loop that does not end under GnuCOBOL (plain `cobc` on SQ109M writes
-    gigabytes of output too). SQ109M and SQ110M were green before only
-    because their cases stopped after `OPEN-FILES`.
+- **420 green**: every generated case passed on creation and again on
+  replay, with the same result. Earlier the same day 292 were green and
+  159 refused; mockymock now supports what those refusals were about:
+  DECLARATIVES (USE AFTER EXCEPTION procedures run after a mocked file
+  statement), STOP RUN/GOBACK reached where no EXIT verb fits (the case
+  returns through a call frame), SORT/MERGE mixing a file with an INPUT
+  or OUTPUT procedure, THRU ranges ending on a SECTION, ALTER, nested and
+  stacked programs, CANCEL, and `STOP "literal"`.
+- **25 refused** before anything compiled, so nothing ran unmocked:
+  - the communication module (9 CM programs, plus DB205A and DB304M):
+    GnuCOBOL does not implement the COMMUNICATION SECTION;
+  - a WRITE's AT END-OF-PAGE or a nested READ with no END-READ whose
+    clause cannot be re-run after a mock (SQ201M, SQ208M, SQ209M, SQ401M,
+    RL401M, EXEC85);
+  - a paragraph name defined in two SECTIONs (IX218A, NC102A, NC208A,
+    OBNC2M);
+  - a THRU range that ends before it starts (DB105A, NC102A, SG202A);
+  - DB104A (a mock target inside a nested statement) and NC303M (an ALTER
+    of a paragraph that is not one GO TO).
+- **14 fail**, none of them a wrong generated expectation:
+  - NC174A and NC211A do not compile with plain `cobc` either (switch
+    conditions, `NOTHING` as a data name).
+  - ST115A, ST137A, ST139A, ST140A, ST144A and ST147A name a data item
+    `CHAR`, which GnuCOBOL's IBM dialect (`-std=mvs`) reserves. Plain
+    `cobc` with its default dialect compiles them.
+  - SQ109M and SQ110M loop forever under plain `cobc` too (the optional
+    X-card lines EXEC85 drops leave their WRITE loop with no end).
+  - NC401M and SQ210M finish under plain `cobc` but time out under the
+    generated mocks; not looked into yet.
   - IX102A and IC114A loop waiting for a READ to report INVALID KEY / end
     of file that the generated default mock never gives.
 

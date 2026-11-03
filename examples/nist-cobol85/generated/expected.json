@@ -9,6 +9,11 @@
     "perform": "PERFORM CALL-TEST-001 THRU CALL-EXIT-001",
     "verdict": "green"
   },
+  "IC203A": {
+    "cases": 15,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
+  },
   "IC222A": {
     "cases": 5,
     "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
@@ -42,6 +47,11 @@
   "NC113M": {
     "cases": 1,
     "perform": "PERFORM OPEN-FILES THRU BLANK-LINE-PRINT",
+    "verdict": "green"
+  },
+  "NC302M": {
+    "cases": 1,
+    "perform": "PERFORM NC302M-CONTROL",
     "verdict": "green"
   },
   "OBSQ1A": {
