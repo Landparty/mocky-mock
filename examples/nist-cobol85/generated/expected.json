@@ -8,6 +8,7 @@
   },
   "IC102A": {
     "cases": 1,
+    "perform": "PERFORM CALL-TEST-001 THRU CALL-EXIT-001",
     "verdict": "green"
   },
   "IC222A": {
@@ -18,57 +19,67 @@
   },
   "IF401M": {
     "cases": 1,
+    "perform": "PERFORM IF401M-ACOS THRU IF401M-END",
     "verdict": "green"
   },
   "IX106A": {
     "cases": 2,
+    "perform": "PERFORM OPEN-FILES",
     "verdict": "green"
   },
   "IX301M": {
     "cases": 2,
+    "perform": "PERFORM IX301M-CONTROL",
     "verdict": "green"
   },
   "IX401M": {
     "cases": 4,
+    "perform": "PERFORM IX401M-CONTROL",
     "verdict": "green"
   },
   "NC101A": {
-    "refused": [
-      "UNSUPPORTED_MOCK_TARGET_LAYOUT",
-      "UNSUPPORTED_TERMINATOR_LAYOUT"
-    ],
-    "verdict": "refused"
+    "cases": 1,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
+    "verdict": "green"
   },
   "NC113M": {
     "cases": 1,
+    "perform": "PERFORM OPEN-FILES THRU BLANK-LINE-PRINT",
     "verdict": "green"
   },
   "OBSQ1A": {
     "cases": 1,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
     "verdict": "green"
   },
   "RL101A": {
-    "cases": 2,
+    "cases": 3,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
     "verdict": "green"
   },
   "RL301M": {
     "cases": 6,
+    "perform": "PERFORM RL301M-CONTROL",
     "verdict": "green"
   },
   "SG302M": {
     "cases": 1,
+    "perform": "PERFORM SG302M-CONTROL",
     "verdict": "green"
   },
   "SM301M": {
     "cases": 1,
+    "perform": "PERFORM SM301M-CONTROL",
     "verdict": "green"
   },
   "SQ107A": {
-    "cases": 1,
+    "cases": 8,
+    "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
     "verdict": "green"
   },
   "ST110A": {
     "cases": 1,
+    "perform": "PERFORM SORT-PARAGRAPH",
     "verdict": "green"
   }
 }

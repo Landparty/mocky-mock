@@ -7,7 +7,7 @@ from a run (`mockymock run --record-expectations`) and plays it
 (`--json-report`); then "Run tests" plays the recorded suite again, and it
 must give the same result. Run this after a change to the generator, the
 refusal gates or the splicer, and compare the summary with the last one
-(examples/nist-cobol85/generated/README.md has the 2026-11-02 numbers).
+(examples/nist-cobol85/generated/README.md has the 2026-11-03 numbers).
 
 The programs as cobol-parser ships them (`examples/cobol/`) are the raw
 population file entries: NIST's EXEC85 still has to substitute the X-cards
