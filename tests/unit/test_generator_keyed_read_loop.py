@@ -64,3 +64,32 @@ def test_an_invalid_key_that_retries_gets_no_not_found(tmp_path) -> None:
     )
     cut = _generate(tmp_path, "KEYLOOP", program, "--seed", "1")
     assert 'MOVE "23" TO UT-MOCK-STATUS' not in cut
+
+
+def _testcase(cut: str, name: str) -> str:
+    start = cut.index(f'TESTCASE "{name}"')
+    end = cut.find("TESTCASE ", start + 1)
+    return cut[start : end if end != -1 else None]
+
+
+def test_empty_input_keyed_read_finds_no_record(tmp_path) -> None:
+    """#415: with no rows, a single random READ with INVALID KEY (no loop)
+    can only fail with "23"; a bare mock "succeeded" and ran NOT INVALID
+    KEY on whatever the record area held."""
+    program = PROGRAM.replace("           GO TO READ-PARA.\n", "")
+    cut = _generate(tmp_path, "KEYLOOP", program, "--scenarios", "all")
+    empty = _testcase(cut, "empty input")
+    body = empty[empty.index("MOCK READ IX-FILE") :]
+    body = body[: body.index("END-MOCK")]
+    assert 'MOVE "23" TO UT-MOCK-STATUS' in body
+
+
+def test_empty_input_sequential_read_is_not_a_not_found(tmp_path) -> None:
+    """A READ with AT END (sequential) keeps its end-of-file reply."""
+    program = (
+        PROGRAM.replace("ACCESS MODE IS RANDOM", "ACCESS MODE IS SEQUENTIAL")
+        .replace("INVALID KEY GO TO DONE-PARA.", "AT END GO TO DONE-PARA.")
+        .replace("           MOVE WS-COUNT TO IX-KEY\n", "")
+    )
+    cut = _generate(tmp_path, "KEYLOOP", program, "--scenarios", "all")
+    assert '"23"' not in _testcase(cut, "empty input")
