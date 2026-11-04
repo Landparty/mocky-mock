@@ -3250,7 +3250,9 @@ def _at_end_handling(
 
 
 def _keyed_read_loop_not_found(
-    fixture: BoundaryFixture, source: ProgramContext | None
+    fixture: BoundaryFixture,
+    source: ProgramContext | None,
+    require_loop: bool = True,
 ) -> dict[str, str] | None:
     """The record-not-found reply ({field: "23"}) a keyed READ mock gives
     once its rows run out, when a READ of that file with an INVALID KEY
@@ -3260,13 +3262,21 @@ def _keyed_read_loop_not_found(
     IX102A: `IF COUNT = 0 ... GO TO READ-TEST-F2-05` around `READ ...
     INVALID KEY GO TO ...-1`); a mock answering "00" forever hung the
     run. The splice takes the clause on UT-MOCK-STATUS's "2x", and the
-    file's FILE STATUS field gets the same code. None otherwise."""
+    file's FILE STATUS field gets the same code. None otherwise.
+
+    With `require_loop` False the loop is not needed: a mock with no rows
+    (the "empty input" scenario) stands for a file with no records, and a
+    keyed READ of it can only
+    fail with "23" -- answering "00" ran the NOT INVALID KEY path on
+    whatever the record area held (issue #415). INVALID KEY is coded only
+    on a keyed READ (random access, or `READ ... KEY IS`), so the clause
+    is what marks the READ as keyed."""
     if source is None or source.surface is None:
         return None
     from mockymock.analysis.mock_surface import analyze_file_status_fields
 
     key = fixture.key.upper()
-    looped = False
+    looped = keyed = False
     for site in source.surface.boundary_sites:
         if site.category is not MockCategory.READ or not site.keys:
             continue
@@ -3282,11 +3292,12 @@ def _keyed_read_loop_not_found(
         lifted = lift_clause_bodies(statement, source.lines)
         if not lifted or not any(c.attr == "invalid_key_clause" for c in lifted):
             continue
+        keyed = True
         # A loop with an UNTIL (not `PERFORM n TIMES`, which ends by its
         # count), or a GO TO loop.
         if loop_guard_words(site, source.guards) or _in_goto_loop(site, source.program):
             looped = True
-    if not looped:
+    if not (looped if require_loop else keyed):
         return None
     reply = {OUTCOME_FIELD: "23"}
     status = analyze_file_status_fields(source.program).get(key)
@@ -3428,7 +3439,11 @@ def _read_body(
     replicated, at_end, lifted = _at_end_handling(fixture, site, source)
     needs_exhaustion_branch = bool(fixture.terminal) or bool(at_end)
     if not needs_exhaustion_branch and len(sequence) != 1:
-        not_found = _keyed_read_loop_not_found(fixture, source)
+        # In a loop, or with no rows at all (issue #415): the read after the
+        # last row finds no record.
+        not_found = _keyed_read_loop_not_found(
+            fixture, source, require_loop=bool(sequence)
+        )
         if not_found:
             # The rows are the records the file holds: the read after the
             # last finds none, as the real keyed READ would.

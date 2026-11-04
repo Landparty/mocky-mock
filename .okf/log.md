@@ -5,6 +5,17 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-04 -- Keyed READ with no rows left finds no record (#415)
+
+* The "23" reply of `_keyed_read_loop_not_found` no longer needs a loop
+  when the mock has no rows (the `--scenarios all` "empty input" case):
+  any READ of the file with an INVALID KEY clause the splice re-runs and no
+  AT END (a keyed READ) gets "23" (`require_loop=False`), so INVALID KEY
+  runs and `--record-expectations` records the not-found path. Mocks with
+  rows keep the loop rule (a non-looped READ past its last row still gets
+  no reply); the retry exclusion (RL107A) still applies. Tests:
+  `tests/unit/test_generator_keyed_read_loop.py`.
+
 ## 2026-11-03 -- Foolproof generation: hangs, GnuCOBOL quirks, screen I/O
 
 * `run` builds and runs again the cases a crashed or timed-out binary kept
