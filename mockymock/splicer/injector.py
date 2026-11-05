@@ -623,12 +623,17 @@ def build_site_dispatch(
                 )
             )
         else:
+            if any(uses_site_tally(answering.body_lines) for answering in matches):
+                lines.extend(
+                    f"                   {line}"
+                    for line in site_tally_lines(site, registry)
+                )
             lines.extend(
                 split
                 for answering in matches
                 for body in answering.body_lines
                 for split in split_long_move(
-                    f"                   {passed_argument_names(body, site)}"
+                    f"                   {passed_argument_names(body, site, registry)}"
                 )
             )
             if copy_into is not None:
@@ -790,10 +795,52 @@ def _case_selectors(ids: list[str], all_ids: list[str] | None = None) -> list[st
 #: edit moves the calls.
 PASSED_ARG_RE = re.compile(r"\bUT-PASSED-ARG-(\d+)\b", re.IGNORECASE)
 
+#: `UT-CALLING-PARAGRAPH` in a mock's body stands for the name of the
+#: paragraph holding the call site, as a literal: a DL/I program primes its
+#: loop with the same GHN on the same PCB the loop then repeats, and this is
+#: how the one `MOCK CALL "CBLTDLI"` answers the priming call and the loop
+#: call with different rows. A name, for the same reason as above.
+CALLING_PARAGRAPH_RE = re.compile(r"\bUT-CALLING-PARAGRAPH\b", re.IGNORECASE)
 
-def passed_argument_names(body: str, site: BoundarySite) -> str:
+#: `UT-SITE-TALLY` in a mock's body is the number of times this call site
+#: has been answered in the running case, this call included: unlike the
+#: key's tally it does not count the key's other sites, so "the second time
+#: the loop's GHN runs" stays the second whatever the priming call and the
+#: DLETs between them did.
+SITE_TALLY_RE = re.compile(r"\bUT-SITE-TALLY\b", re.IGNORECASE)
+
+
+def uses_site_tally(body_lines: list[str]) -> bool:
+    return any(SITE_TALLY_RE.search(line) for line in body_lines)
+
+
+def site_tally_lines(site: BoundarySite, registry: TallyRegistry) -> list[str]:
+    """Count this call in the site's own counter, restarting it when the
+    counter last counted for another case."""
+    tally = registry.site_tally(site.line)
+    case = registry.site_case(site.line)
+    return [
+        f"IF {case} NOT = UT-CURRENT-CASE",
+        f"    MOVE UT-CURRENT-CASE TO {case}",
+        f"    MOVE 0 TO {tally}",
+        "END-IF",
+        f"ADD 1 TO {tally}",
+    ]
+
+
+def passed_argument_names(
+    body: str, site: BoundarySite, registry: TallyRegistry | None = None
+) -> str:
     """`body` with each `UT-PASSED-ARG-<n>` replaced by the quoted name of
-    the site's n-th USING argument (`" "` when there is none)."""
+    the site's n-th USING argument (`" "` when there is none), each
+    `UT-CALLING-PARAGRAPH` by the quoted name of the site's paragraph and
+    each `UT-SITE-TALLY` by the site's own call counter."""
+    if CALLING_PARAGRAPH_RE.search(body):
+        paragraph = '"' + str(site.paragraph_name or "").upper() + '"'
+        body = CALLING_PARAGRAPH_RE.sub(lambda _m: paragraph, body)
+    if registry is not None and SITE_TALLY_RE.search(body):
+        tally = registry.site_tally(site.line)
+        body = SITE_TALLY_RE.sub(lambda _m: tally, body)
     if "UT-PASSED-ARG-" not in body.upper():
         return body
     using = list(getattr(site.statement, "using_parameters", None) or [])

@@ -361,6 +361,11 @@ def build_driver(
         working_storage.append(
             f"01  {registry.base_name(category, key)}      PIC 9(9) VALUE 0."
         )
+    for site_line, site_tally in registry.site_tallies():
+        working_storage.append(f"01  {site_tally}      PIC 9(9) VALUE 0.")
+        working_storage.append(
+            f"01  {registry.site_case(site_line)}      PIC X(9) VALUE SPACES."
+        )
     for category, key in _resumed_keys(suite):
         working_storage.append(
             f"01  {registry.start_name(category, key)}      PIC 9(9) VALUE 0."

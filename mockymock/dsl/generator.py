@@ -3799,6 +3799,7 @@ def _dli_rows_directive(
     placeholder_keys: frozenset[tuple[str, str]],
     source: ProgramContext,
     pinned: frozenset[str],
+    target_paragraph: str | None = None,
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """One `MOCK CALL "CBLTDLI"` answering each DL/I call with the row the
     bundle generated for THAT call, or None when this is not such a group.
@@ -3811,7 +3812,18 @@ def _dli_rows_directive(
     (and every subprogram it calls) never ran. The body now dispatches on
     the function code the call passed and, when one function is used on
     several PCBs, on the PCB it passed (`UT-PASSED-ARG-2`, which the
-    splicer replaces with the site's own argument name)."""
+    splicer replaces with the site's own argument name).
+
+    One function on one PCB called from several paragraphs (a GHN priming
+    the loop in 1000-INITIALIZE, the same GHN reading the next segment in
+    2500-GET-NEXT) is dispatched on the calling paragraph too
+    (`UT-CALLING-PARAGRAPH`). The status a scenario pins for a branch is
+    then given only at the call in the branch's own paragraph
+    (`target_paragraph`); the other calls report success, or the priming
+    call already answered the loop's status and the loop never ran while
+    the case was reported verified. The end-of-data reply counts the calls
+    of each site (`UT-SITE-TALLY`), not of the key, so the loop's own call
+    still returns its row once after the priming call."""
     first = fixtures[0]
     if first.category != MockCategory.CALL.value:
         return None
@@ -3833,21 +3845,37 @@ def _dli_rows_directive(
     if capture is None:
         return None
     by_line = {other.line: (other, names) for other, names in _dli_sites(source)}
-    rows: dict[tuple[str, str], tuple[BoundaryFixture, BoundarySite]] = {}
+    rows: dict[tuple[str, str, str], tuple[BoundaryFixture, BoundarySite]] = {}
     pcbs_of: dict[str, set[str]] = {}
-    for _other, names in by_line.values():
+    paragraphs_of: dict[tuple[str, str], set[str]] = {}
+    for other, names in by_line.values():
         if len(names) >= 2:
             function = _dli_function(names[0], source).strip().upper()
             pcbs_of.setdefault(function, set()).add(names[1].upper())
+            paragraphs_of.setdefault((function, names[1].upper()), set()).add(
+                str(other.paragraph_name or "").upper()
+            )
     for fixture in fixtures:
         found = by_line.get(fixture.line or -1)
         if found is None or len(found[1]) < 2 or not fixture.sequence:
             return None
         other, names = found
         function = _dli_function(names[0], source).strip().upper()
-        rows.setdefault((function, names[1].upper()), (fixture, other))
+        pcb = names[1].upper()
+        paragraph = (
+            str(other.paragraph_name or "").upper()
+            if len(paragraphs_of.get((function, pcb), ())) > 1
+            else ""
+        )
+        rows.setdefault((function, pcb, paragraph), (fixture, other))
     if len(rows) < 2:
         return None
+    target = (target_paragraph or "").upper()
+    # The PCBs whose status the scenario's branch reads right after a call
+    # in its own paragraph: only that call gets the pinned status.
+    pinned_at_target = {
+        pcb for (_f, pcb, paragraph) in rows if paragraph and paragraph == target
+    }
     body: list[str] = [
         "*> each DL/I call gets the row generated for it: by the function code"
         " it passed, and the PCB when one function is used on several",
@@ -3855,20 +3883,33 @@ def _dli_rows_directive(
     ]
     end_lines: list[str] = []
     if registry.known(MockCategory.CALL, first.key):
+        # Split by paragraph, the priming call and the loop's call are both
+        # counted by the key's tally: the loop's first call would already
+        # end it. Each site's own count does not see the priming call.
+        split = any(paragraph for (_f, _p, paragraph) in rows)
         end_lines = _call_loop_end_lines(
-            site, source, registry.name(MockCategory.CALL, first.key)
+            site,
+            source,
+            "UT-SITE-TALLY" if split else registry.name(MockCategory.CALL, first.key),
         )
     ends_loop = bool(end_lines) and not end_lines[0].startswith("*> TODO")
-    for (function, pcb), (fixture, other) in rows.items():
+    for (function, pcb, paragraph), (fixture, other) in rows.items():
         fixture, todo = _without_loop_control(fixture, other, source)
+        row_pinned = pinned
+        if pcb in pinned_at_target and paragraph != target:
+            row_pinned = frozenset()
         # The end-of-data reply below ends the loop: no TODO saying so.
-        row = _single_row_body(fixture, source, pinned) + ([] if ends_loop else todo)
-        status_pinned = bool(source.names_under(pcb) & pinned) if pcb else False
+        row = _single_row_body(fixture, source, row_pinned) + (
+            [] if ends_loop else todo
+        )
+        status_pinned = bool(source.names_under(pcb) & row_pinned) if pcb else False
         if not status_pinned:
             row = _dli_success_reply(row, other)
         condition = f'{capture} = "{function}"'
         if len(pcbs_of.get(function, ())) > 1:
             condition += f' AND UT-PASSED-ARG-2 = "{pcb}"'
+        if paragraph:
+            condition += f' AND UT-CALLING-PARAGRAPH = "{paragraph}"'
         body.append(f"    WHEN {condition}")
         body.extend(f"        {line}" for line in row or ["CONTINUE"])
     body.append("END-EVALUATE")
@@ -3922,6 +3963,7 @@ def _bundle_directive_for_group(
     placeholder_keys: frozenset[tuple[str, str]] = frozenset(),
     source: ProgramContext | None = None,
     pinned: frozenset[str] = frozenset(),
+    target_paragraph: str | None = None,
 ) -> tuple[list[str], CallCountOverride | None] | None:
     """Like `_bundle_directive_for`, but for every fixture that resolves
     to the SAME physical mockymock `BoundarySite` (only possible for
@@ -3952,7 +3994,13 @@ def _bundle_directive_for_group(
     them as status-only left the READ mock empty and the loop endless."""
     if len(fixtures) > 1 and source is not None:
         merged = _dli_rows_directive(
-            fixtures, mockymock_keys, registry, placeholder_keys, source, pinned
+            fixtures,
+            mockymock_keys,
+            registry,
+            placeholder_keys,
+            source,
+            pinned,
+            target_paragraph,
         )
         if merged is not None:
             return merged
@@ -3976,6 +4024,17 @@ def _bundle_directive_for_group(
     lines.extend(f"    {line}" for line in body)
     lines.append("END-MOCK")
     return lines, None
+
+
+_TARGET_ARM_RE = re.compile(r"\btargets branch arm ([A-Z0-9#@$-]+)@\d+:", re.IGNORECASE)
+
+
+def _target_paragraph(scenario: Scenario) -> str | None:
+    """The paragraph of the branch arm `scenario` is named for, from its
+    intent (`targets branch arm 2500-GET-NEXT@375:5/WHEN_2`), or None for
+    a scenario that targets no branch."""
+    match = _TARGET_ARM_RE.search(scenario.intent or "")
+    return match.group(1).upper() if match else None
 
 
 def _pinned_fields(scenario: Scenario) -> frozenset[str]:
@@ -4073,7 +4132,13 @@ def _bundle_mock_directives(
             preferred = file_op_key(group_site, surface)
             group.sort(key=lambda f: f.key != preferred)
         result = _bundle_directive_for_group(
-            group, mockymock_keys, registry, placeholder_keys, source, pinned
+            group,
+            mockymock_keys,
+            registry,
+            placeholder_keys,
+            source,
+            pinned,
+            _target_paragraph(scenario),
         )
         if result is not None:
             directive, override = result

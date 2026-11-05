@@ -5,6 +5,17 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-05 -- DL/I priming call and loop call get their own rows
+
+Test-generation bug hunt, round 2 (cobol-parser fixes ship separately).
+A priming GHN and the loop's GHN on the same PCB shared one row, pinned to
+the loop's status, so the loop never ran (ACCTPRG, LNRECOV). Rows are now
+dispatched on `UT-CALLING-PARAGRAPH`, the pinned status is given only in the
+targeted branch's paragraph, and the end reply counts `UT-SITE-TALLY`. See
+[dsl](dsl.md), [splicer](splicer.md);
+`tests/unit/test_bug_hunt_20261105_generation_round2.py`,
+`tests/integration/test_bug_hunt_20261105_generation_round2.py`.
+
 ## 2026-11-05 -- Resource mocks answer like the real statement
 
 Bug hunt over hand-written resource mocks; executed repros in
