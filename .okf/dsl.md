@@ -131,15 +131,20 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
 - `EXPECT <numeric-edited field> [NOT] TO BE [<comparison>] <unquoted
   number>` compares the de-edited value (issue #350): a numeric-edited
   item compares as its edited text, so `TO BE 100.00` never matched
-  `"      100.00"`. `driver._compares_by_value` picks these (the leaf name
-  is in `record_rewrite.numeric_edited_fields`, from the PICTURE via
+  `"      100.00"`. `driver._compares_by_value` picks these (the name,
+  `OF`/`IN` qualification resolved by `_qualified.qualified_member`, is in
+  `record_rewrite.numeric_edited_fields`, from the PICTURE via
   `is_numeric_edited_picture`; the value is a plain signed decimal, its
   point a period or, for a `DECIMAL-POINT IS COMMA` program, a comma; no
   reference modification), and the driver emits `MOVE <field> TO
   UT-DEEDIT-VALUE` (`PIC S9(18)V9(13)`, the de-editing MOVE, verified
   under GnuCOBOL with CR/DB, `*` and `$`) then the relation on that.
-  A quoted value, a data-name or a combined condition keeps the direct
-  compare. The FAIL line still shows the edited text.
+  An abbreviated combined condition whose operands are all unquoted
+  numbers (`TO BE GREATER THAN 0 AND LESS THAN 10`, `TO BE 5 OR 6`) is
+  de-edited the same way (`driver._combined_by_value`, 2026-11-05: it
+  compared the edited text `"  5"` with 0 and failed). A quoted value or a
+  data-name keeps the direct compare. The FAIL line still shows the edited
+  text.
 - `EXPECT <88-name> [NOT] TO BE TRUE|FALSE` tests a level-88
   condition-name (issue #189). TRUE/FALSE are not values any data item
   compares with, so `driver._condition_name_truth` emits `IF NOT <name>`
@@ -913,6 +918,20 @@ SEQUENCED branch calls `build_rows_block(tally, rows, row_suffix_moves=[],
 exhausted_moves=<TERMINAL MOVEs>)`. Worked example:
 `examples/real-world/ACCTPRG/ACCTPRG.cut`'s two "then stops at GB" cases;
 tests: `tests/unit/test_call_sequencing.py`.
+
+**A re-OPEN rewinds READ and FETCH rows (2026-11-05, round 2).** A `MOCK
+READ <file> ROWS` and a `MOCK SQL "FETCH ..." ROWS` hand out row
+`tally - rewind` (`TallyRegistry.row_cursor` / `rewind_name`, a `-REW`
+twin of the tally, zeroed at each case start). Every OPEN site naming the
+file, and every EXEC SQL OPEN of the cursor all of the FETCH key's sites
+fetch from (`orchestrator._open_rewind_lines`, `_sql_cursor`), moves the
+tally into it, so the rows start again at row 1 -- a real file is read
+again from its first record after CLOSE and OPEN, and a cursor fetched
+again from its first row. Before, the second pass got end of data at
+once. VERIFY still counts every call (the tally never rewinds). BEFORE-ALL
+hands a case its rows counted from its own last OPEN (`-START` minus the
+rewind). Behaviour change: a suite whose rows ran on across a re-OPEN
+now sees them again.
 
 **ROWS cursor across hooks (issue #223).** The tally is both the ROWS
 cursor and the VERIFY count. A case's tally starts at 0 -- or, for a key it

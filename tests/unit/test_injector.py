@@ -319,7 +319,9 @@ def test_dispatch_splices_rows_block_using_resolved_tally_name():
     joined = "\n".join(_dispatch(suite, site))
     assert "ADD 1 TO UT-SQL-FETCH-EMP-CURSOR-TALLY" in joined
     assert "EVALUATE TRUE" in joined
-    assert "WHEN UT-SQL-FETCH-EMP-CURSOR-TALLY = 1" in joined
+    assert (
+        "WHEN UT-SQL-FETCH-EMP-CURSOR-TALLY - UT-SQL-FETCH-EMP-CURSOR-REW = 1"
+    ) in joined
     assert 'MOVE "SMITH" TO EMP-NAME' in joined
     assert "WHEN OTHER" in joined
     assert "MOVE 100 TO SQLCODE" in joined
@@ -344,7 +346,7 @@ def test_sql_rows_row_that_sets_sqlcode_keeps_its_own_value():
     )
     suite = MockTestSuite(name="S", test_cases=[case])
     lines = [line.strip() for line in _dispatch(suite, site)]
-    second = lines.index("WHEN UT-SQL-FETCH-C1-TALLY = 2")
+    second = lines.index("WHEN UT-SQL-FETCH-C1-TALLY - UT-SQL-FETCH-C1-REW = 2")
     branch = lines[second + 1 : lines.index("WHEN OTHER", second)]
     assert branch == [
         "MOVE 0 TO SQLCODE",
