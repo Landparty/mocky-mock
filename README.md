@@ -73,7 +73,7 @@ is skipped automatically if it isn't.
 
 ## AI assistant skills
 
-mockymock ships three [Claude Code](https://claude.com/claude-code) skills,
+mockymock ships four [Claude Code](https://claude.com/claude-code) skills,
 also packaged as the `cobol-testing` plugin:
 
 | Skill | What it teaches the assistant |
@@ -81,6 +81,7 @@ also packaged as the `cobol-testing` plugin:
 | `cobol-test` | The whole job: understand the program, plan one test per business-rule arm, write assertions labelled `INTENT` (from a rule) or `CHARACTERIZATION` (from a run), run and mutation-test the suite, and hand over an HTML report. Start here. |
 | `mockymock` | The `.cut` DSL, every CLI flag, the paragraph-first loop. |
 | `cobol-analysis` | Which cobol-parser analyzer answers which question. |
+| `mockymock-setup` | Set a repository and VS Code workspace up for mockymock and its VS Code extension: finds the programs and copybooks, asks for what it cannot work out (copybook folders, source and test folders, toolchain, AI mode), writes `cobol.yml` and `.vscode/settings.json`, and checks every program's copybooks resolve. Ask "set this repo up for mockymock". |
 
 Install as a plugin (Claude Code), from GitHub:
 
@@ -110,7 +111,7 @@ mockymock skills plugin            # writes ~/.mockymock/claude-plugin
 for a single session instead.) Or copy the skills with the CLI:
 
 ```bash
-mockymock skills install            # all three, into ~/.claude/skills/
+mockymock skills install            # all four, into ~/.claude/skills/
 mockymock skills install --project  # into ./.claude/skills/ for the team
 mockymock skills install --skill cobol-test
 mockymock skills install --target copilot  # GitHub Copilot: ~/.copilot/skills/

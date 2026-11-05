@@ -10,7 +10,7 @@
     {
       "name": "cobol-testing",
       "source": "./",
-      "description": "COBOL testing skills: cobol-test (end to end), mockymock (.cut suites), cobol-analysis (cobol-parser analyzers)."
+      "description": "COBOL testing skills: cobol-test (end to end), mockymock (.cut suites), cobol-analysis (cobol-parser analyzers), mockymock-setup (set a repo and VS Code up for mockymock)."
     }
   ]
 }

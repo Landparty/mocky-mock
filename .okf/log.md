@@ -5,6 +5,19 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-05 -- `mockymock-setup` skill: set a repository up for the extension
+
+A fourth packaged skill (`SKILL_NAMES`), `mockymock-setup`: inspects a COBOL
+repository, asks the developer only what it cannot work out (copybook
+folders, `source_root`, `test_root`, `mockymock.toolchain`, `ai_mode`,
+optional editor settings), writes `cobol.yml` plus `.vscode/settings.json`,
+and proves it with `mockymock fixtures` on every program (no
+`UNRESOLVED_COPYBOOK`) and `mockymock suites`. `reference/settings.md`
+lists every key it may write; `tests/unit/test_mockymock_setup_skill.py`
+pins it against `config._KNOWN_KEYS`, `ai_mode.MODES` and the `MOCKYMOCK_*`
+variables the CLI reads. The extension's own settings (mocky-mock-vscode
+`package.json`) are checked by hand. See [cli](cli.md).
+
 ## 2026-11-05 -- DL/I priming call and loop call get their own rows
 
 Test-generation bug hunt, round 2 (cobol-parser fixes ship separately).
