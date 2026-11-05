@@ -441,7 +441,7 @@ by `check_test_case` and `find_terminator_plans`); the default `None`
 (whole-program callers: warning waiving, exact counts, loops) follows every
 label in force, fail closed; generate passes an empty set (its mocks raise
 nothing). Not covered: HANDLE AID / HANDLE ABEND (still ordinary CICS
-boundaries), EIBRESP is not set by `CONDITION IS`, and PUSH/POP HANDLE
+boundaries) and PUSH/POP HANDLE
 refuses any raised condition.
 
 **PROCEDURE DIVISION SQL declarations (issue #267).** `EXEC SQL DECLARE
@@ -619,7 +619,11 @@ A **dynamic** CALL site (2026-11-02): `real_dynamic_routes(site, suite)`
 lists (program, case ids) of every USE REAL CALL in force, and
 `_route_real_dynamic_calls` wraps the mock dispatch in `EVALUATE TRUE /
 WHEN (cases) AND FUNCTION UPPER-CASE(<identifier>) = "X"` (tally, then the
-statement as written) `/ WHEN OTHER <mock dispatch>`. Design:
+statement as written) `/ WHEN OTHER <mock dispatch>`. `<identifier>` is
+the reference as the CALL writes it (cobol-parser's
+`called_program_reference` metadata: `WS-TAB ( WS-I )`, `WS-PGM OF
+WS-GRP`), the bare key only when there is none (2026-11-05; the bare name
+of a table tested its first entry). Design:
 [docs/2026-11-02-real-dynamic-call-design.md](../docs/2026-11-02-real-dynamic-call-design.md).
 
 # Orchestration and Ordering Invariant (orchestrator.py)
@@ -1122,6 +1126,36 @@ The body's own MOVEs follow, so they win -- the same contract as a file
 op's implicit `MOVE "00"` to its FILE STATUS. This is the splice-side
 default for hand-written mocks; #253 is the separate
 `generate` scaffold fix that stopped writing a random RESP value.
+
+`CONDITION IS X` (2026-11-05) then moves X's `DFHRESP_VALUES` number to
+`EIBRESP` (when the program has one) before the `GO TO` of the HANDLE
+CONDITION label, or with nothing after it for an IGNOREd condition: real
+CICS reports the condition there either way, and a handler testing
+`EIBRESP = DFHRESP(NOTFND)` used to read the NORMAL default.
+
+# Success defaults for CALL, EXEC SQL and EXEC DLI mocks (injector.py, 2026-11-05)
+
+The same rule for the other boundaries whose outcome lives in a shared
+field (`injector._success_defaults`, emitted right after the CICS
+defaults, before captures and the body):
+
+- a static or dynamic CALL mock moves 0 to `RETURN-CODE`: a real CALL sets
+  the caller's RETURN-CODE from the callee's (0 unless the callee sets
+  one; verified under GnuCOBOL), and a mock left the caller's own earlier
+  value -- `MOVE 8 TO RETURN-CODE`, `CALL "LOGIT"`, `IF RETURN-CODE = 0`
+  took the wrong branch. A `USE REAL CALL` branch runs the CALL itself
+  and gets no default.
+- an EXEC SQL mock moves 0 to `SQLCODE` (and `"00000"` to `SQLSTATE` when
+  the program names it) when the program has an SQLCA (`SQLCA` or
+  `SQLCODE` among its words, `build_site_dispatch(sqlcode=...)`): an empty
+  `MOCK SQL "CLOSE C1"` after a FETCH loop ended on 100 reported 100.
+- an EXEC DLI mock moves SPACES to `DIBSTAT` when the program has a DIB
+  (`DIBSTAT` among its words, declared or synthesized by `cics_eib`;
+  `dibstat=...`): the GB a get-next loop ended on answered the next call.
+
+ROWS prefixes, TERMINAL groups and the body come after and win.
+`CALL "CBLTDLI"` / MQ calls report through their own arguments (PCB
+status, CompCode), which no default can name; their mocks set them.
 
 # DFHRESP Expansion (cics_resp.py, 2026-09-28)
 

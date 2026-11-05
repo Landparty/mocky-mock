@@ -38,7 +38,7 @@ from mockymock.dsl.model import (
     MockTestSuite,
 )
 from mockymock.splicer.behaviour import site_lines as behaviour_site_lines
-from mockymock.splicer.cics_resp import cics_success_defaults
+from mockymock.splicer.cics_resp import DFHRESP_VALUES, cics_success_defaults
 from mockymock.splicer.driver import split_long_move
 from mockymock.splicer.io_copy import DataLayout, from_move, into_move
 from mockymock.splicer.naming import TallyRegistry, assign
@@ -231,6 +231,22 @@ def dispatch_entries(suite: MockTestSuite) -> list[tuple[str, list]]:
     return entries
 
 
+def _success_defaults(
+    category: MockCategory, sqlcode: bool, sqlstate: bool, dibstat: bool
+) -> list[str]:
+    """The MOVEs that report success for a mocked CALL, EXEC SQL or EXEC
+    DLI statement before its own body runs (see `build_site_dispatch`)."""
+    if category in (MockCategory.CALL, MockCategory.DYNCALL):
+        return ["MOVE 0 TO RETURN-CODE"]
+    if category is MockCategory.SQL and sqlcode:
+        return ["MOVE 0 TO SQLCODE"] + (
+            ['MOVE "00000" TO SQLSTATE'] if sqlstate else []
+        )
+    if category is MockCategory.DLI and dibstat:
+        return ["MOVE SPACES TO DIBSTAT"]
+    return []
+
+
 def build_site_dispatch(
     site: BoundarySite,
     suite: MockTestSuite,
@@ -246,8 +262,28 @@ def build_site_dispatch(
     real_statement: list[str] | None = None,
     behaviour: bool = False,
     cursor_hosts: dict[str, list[str]] | None = None,
+    sqlcode: bool = False,
+    dibstat: bool = False,
 ) -> list[str]:
     """EVALUATE block replacing one mocked boundary statement.
+
+    Every mocked statement starts from the outcome the real one reports on
+    success, as the CICS RESP defaults below do, so a value an earlier
+    statement left behind never answers this one:
+
+    - a CALL (static or dynamic) moves 0 to RETURN-CODE: a real CALL
+      always sets the caller's RETURN-CODE from the callee's, 0 unless the
+      callee sets one. A mock left the caller's own earlier value there.
+    - an EXEC SQL mock moves 0 to SQLCODE (and "00000" to SQLSTATE when the
+      program names it) when `sqlcode` says the program has an SQLCA: DB2
+      sets them on every statement, so an empty `MOCK SQL "CLOSE C1"`
+      after a cursor loop ended by 100 used to report 100 for the CLOSE.
+    - an EXEC DLI mock moves SPACES to DIBSTAT when `dibstat` says the
+      program has a DIB: a blank status is IMS's "call succeeded", and the
+      GB a get-next loop ended on used to answer the next call too.
+
+    The body's own MOVEs and FILE-STATUS / ROWS / TERMINAL values come
+    after and win.
 
     `behaviour` (`run --record-baseline` / `--baseline`): every mocked
     branch prints the site's EVENT marker and the bytes of what the
@@ -403,6 +439,12 @@ def build_site_dispatch(
                 f"                   {move}"
                 for move in cics_success_defaults(site.statement, eib_resp_names)
             )
+        lines.extend(
+            f"                   {move}"
+            for move in _success_defaults(
+                directive.category, sqlcode, sqlstate, dibstat
+            )
+        )
         if directive.category in FILE_STATUS_CATEGORIES:
             # A statement naming several files (`OPEN INPUT A OUTPUT B`,
             # `CLOSE A B`) is one site matched by ONE directive (a second
@@ -492,8 +534,18 @@ def build_site_dispatch(
             MockCategory.RETURN,
         ):
             status_field = file_status_fields.get(directive.file_key.upper())
+            # A random READ by key (`site.read_form` KEY or KEY <alt>) that
+            # runs out of rows finds no record: status 23, which runs its
+            # INVALID KEY clause. Only a sequential read reaches end of file
+            # (10, AT END) -- reporting 10 for a keyed READ ran neither of
+            # its INVALID KEY / NOT INVALID KEY clauses.
+            keyed = directive.category is MockCategory.READ and (
+                site.read_form or ""
+            ).startswith("KEY")
+            end_status = "23" if keyed else "10"
+            end_clause = "invalid_key_clause" if keyed else "at_end_clause"
             lifted_at_end = any(
-                clause.attr == "at_end_clause" for clause in lifted_clauses or ()
+                clause.attr == end_clause for clause in lifted_clauses or ()
             )
             if (
                 directive.terminal_row is None
@@ -514,9 +566,9 @@ def build_site_dispatch(
             # program checking both would see.
             exhausted_moves: list[str] = []
             if lifted_clauses:
-                exhausted_moves.append(f'MOVE "10" TO {OUTCOME_FIELD}')
+                exhausted_moves.append(f'MOVE "{end_status}" TO {OUTCOME_FIELD}')
             if status_field is not None:
-                exhausted_moves.append(f'MOVE "10" TO {status_field}')
+                exhausted_moves.append(f'MOVE "{end_status}" TO {status_field}')
             if directive.terminal_row is not None:
                 exhausted_moves.extend(
                     assign(value, field) for field, value in directive.terminal_row
@@ -586,6 +638,12 @@ def build_site_dispatch(
                 # where EXEC CICS HANDLE CONDITION sent it (issue #268); an
                 # IGNOREd condition does nothing. A condition no handler
                 # covers was refused by lint (UNSUPPORTED_CICS_CONDITION).
+                # Real CICS reports the condition in EIBRESP whether a
+                # label or an IGNORE answers it; the RESP defaults above
+                # had just set it to NORMAL.
+                resp = DFHRESP_VALUES.get(directive.cics_condition.upper())
+                if resp is not None and "EIBRESP" in eib_resp_names:
+                    lines.append(f"                   MOVE {resp} TO EIBRESP")
                 label, _ = label_in_state(
                     site.cics_handle_state, directive.cics_condition
                 )
@@ -791,7 +849,13 @@ def _route_real_dynamic_calls(
             f"but no statement text was given to run it -- the orchestrator "
             f"passes real_statement"
         )
-    identifier = site.keys[0]
+    # The identifier as the CALL names it: a subscripted table entry
+    # (`CALL WS-PGM-TAB (WS-IDX)`) or a qualified name (`WS-PGM OF WS-GRP`).
+    # The bare key alone compared the table's FIRST entry, whatever the
+    # subscript selected, and is ambiguous for a name declared twice.
+    get_metadata = getattr(site.statement, "get_metadata", None)
+    reference = get_metadata("called_program_reference") if get_metadata else None
+    identifier = str(reference) if reference else site.keys[0]
     out: list[str] = []
     if lifted:
         # The real branch runs the statement's own exception clauses, so

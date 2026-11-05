@@ -856,6 +856,15 @@ STATUS field are absent). A RETURN or READ whose matched sites all have a
 liftable `AT END` clause is accepted without either (issue #341):
 exhausting the rows runs that clause, which ends the loop.
 
+A keyed READ (a random READ of an indexed or relative file,
+`BoundarySite.read_form` `KEY` / `KEY <alt>`) that runs out of rows finds
+no record instead (2026-11-05): the implicit default is `MOVE "23"`, the
+outcome field gets "23" too, so its INVALID KEY clause runs, and a keyed
+READ whose sites all have a liftable INVALID KEY clause needs neither a
+FILE STATUS field nor a TERMINAL group (`refusal._at_end_ends_rows`).
+Before, it reported 10 like a sequential read, which runs neither INVALID
+KEY nor NOT INVALID KEY.
+
 A `PERFORM ... UNTIL <flag> = <value>` loop driven by the READ's own
 `AT END`-set flag (rather than the file's `FILE STATUS` field) needs that
 flag's own `MOVE` inside the `TERMINAL` group too: the splicer replaces the

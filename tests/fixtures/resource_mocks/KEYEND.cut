@@ -1,0 +1,32 @@
+TESTSUITE "KEYEND"
+
+*> A random READ by key that runs out of rows finds no record: status 23
+*> and its INVALID KEY clause, not end of file (10), which ran neither.
+TESTCASE "a keyed KSDS READ out of rows is INVALID KEY 23"
+    MOCK READ CUST-FILE ROWS
+        ( CUST-NAME = "A" )
+        ( CUST-NAME = "B" )
+    END-MOCK
+    PERFORM KSDS-PARA
+    EXPECT WS-FOUND TO BE 2
+    EXPECT WS-MISSING TO BE 1
+    EXPECT WS-FS TO BE "23"
+
+TESTCASE "a relative READ out of rows is INVALID KEY 23"
+    MOCK READ REL-FILE ROWS
+        ( REL-REC = "A" )
+    END-MOCK
+    PERFORM RRDS-PARA
+    EXPECT WS-FOUND TO BE 1
+    EXPECT WS-MISSING TO BE 2
+    EXPECT WS-FS2 TO BE "23"
+
+*> No FILE STATUS and no TERMINAL group: the lifted INVALID KEY clause is
+*> what the exhausted rows run.
+TESTCASE "a keyed READ with no FILE STATUS ends its rows on INVALID KEY"
+    MOCK READ NOST-FILE ROWS
+        ( NOST-NAME = "A" )
+    END-MOCK
+    PERFORM NOSTATUS-PARA
+    EXPECT WS-FOUND TO BE 1
+    EXPECT WS-MISSING TO BE 2

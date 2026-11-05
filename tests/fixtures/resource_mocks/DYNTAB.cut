@@ -1,0 +1,11 @@
+TESTSUITE "DYNTAB"
+
+*> CALL WS-ENT(WS-I) with WS-I = 2: the second entry names the real
+*> program. The real-call route must test that entry, not the first one.
+TESTCASE "a subscripted dynamic CALL runs the entry the subscript selects for real"
+    USE REAL CALL "DYNSUB" FROM "DYNSUB.cbl"
+    MOCK CALL WS-ENT
+        MOVE "MOCK" TO WS-ARG
+    END-MOCK
+    PERFORM P2
+    EXPECT WS-ARG TO BE "REAL"
