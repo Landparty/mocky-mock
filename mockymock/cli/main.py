@@ -3908,8 +3908,8 @@ def _cmd_collect(args: argparse.Namespace) -> int:
 
 def _cmd_skills_install(args: argparse.Namespace) -> int:
     """Copy the packaged agent skills (mockymock, cobol-analysis,
-    cobol-test) into the skills directory of Claude Code and/or GitHub
-    Copilot (--target; skills_cmd.resolve_target names the directories),
+    cobol-test, mockymock-setup) into the skills directory of Claude Code
+    and/or GitHub Copilot (--target; skills_cmd.resolve_target names the directories),
     under the home directory or, with --project, the current one. Pure file copy -- no Docker, no config. Fail-closed
     across the set: if any target exists and --force is absent, nothing is
     written, so a half-installed set never mixes old and new copies."""
@@ -3955,7 +3955,8 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
     tools = " / ".join(TARGET_LABELS[a] for a in assistants)
     print(
         f"mockymock skills install: start a new {tools} session to pick up "
-        "the skills; ask it to test a COBOL program to start with cobol-test."
+        "the skills; ask it to set up this repository for mockymock "
+        "(mockymock-setup), or to test a COBOL program (cobol-test)."
     )
     return 0
 
@@ -5978,7 +5979,7 @@ def build_parser() -> argparse.ArgumentParser:
         "install",
         help=(
             "Install the packaged agent skills (mockymock, cobol-analysis, "
-            "cobol-test) so a Claude Code or GitHub Copilot session can use them"
+            "cobol-test, mockymock-setup) so a Claude Code or GitHub Copilot session can use them"
         ),
     )
     skills_install_parser.add_argument(
@@ -6010,8 +6011,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--skill",
         action="append",
         help=(
-            "Install only this skill (repeatable): mockymock, cobol-analysis "
-            "or cobol-test. Default: all three"
+            "Install only this skill (repeatable): mockymock, cobol-analysis, "
+            "cobol-test or mockymock-setup. Default: all four"
         ),
     )
     skills_install_parser.set_defaults(func=_cmd_skills_install)
