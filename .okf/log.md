@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-05 -- CLI first-run friendliness
+
+`mockymock --help` lists each command once, grouped (now including
+`explain`, `clean` and `runner`), with a quick start and the toolchain
+choice; a bare `mockymock` exits 2; a mistyped command gets a "did you
+mean"; `run PROG.cbl PROG.cut` points at `--cut`; `run`/`lint`/`init`/
+`generate` gain examples; path options show `FILE`/`DIR`; an invalid
+`MOCKYMOCK_TOOLCHAIN` is a clean error instead of a traceback; the
+Docker-missing message names the native toolchain. See [cli](cli.md#overview).
+
 ## 2026-11-05 -- `mockymock-setup` skill: set a repository up for the extension
 
 A fourth packaged skill (`SKILL_NAMES`), `mockymock-setup`: inspects a COBOL

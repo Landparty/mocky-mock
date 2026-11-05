@@ -141,7 +141,9 @@ def to_container_path(host_path: Path, work_root: Path = WORK_ROOT) -> str:
 _DAEMON_HINT = (
     "Docker is required: mockymock compiles and runs COBOL inside a "
     "GnuCOBOL container. Start Docker Desktop (or the docker service) "
-    "and re-run."
+    "and re-run. No Docker? Set MOCKYMOCK_GNUCOBOL_HOME to a GnuCOBOL "
+    "install (the folder holding bin/cobc) to compile natively; "
+    "'mockymock doctor' checks either setup."
 )
 
 

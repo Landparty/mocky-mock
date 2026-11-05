@@ -41,8 +41,31 @@ mockymock clean     -> report.artifacts (removes .mockymock/ reports and saved r
 mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle and integration-test jobs, runs `run --record-baseline/--baseline` or `--record-expectations` + `--json-report` per suite as child processes)
 ```
 
-If no subcommand is given, `main()` prints help and returns 1 (`args` has no
-`func` attribute).
+If no argument at all is given, `main()` prints help and returns 2 (a usage
+error, as `cobol-parser` and `jcl-parser` do).
+
+**Help and first-run behaviour (2026-11-05).** `build_parser()` builds a
+`_TopLevelParser`: `--help` prints the commands once, grouped
+(`_COMMAND_GROUPS_EPILOG`, then a quick start, the Docker / native toolchain
+choice and where defaults come from), not a second time as argparse's flat
+`{setup,init,...}` block. `_GROUPED_COMMANDS` is parsed from that epilog and
+`tests/unit/test_cli_friendliness.py` pins it against the registered
+subcommands, so a new command needs a line there. `_polish_help()` adds an
+examples (and, for `run` / `lint`, exit codes) epilog to `init`, `run`,
+`lint`, `generate` (`_COMMAND_EXAMPLES`, `_WrapDescriptionRawEpilog` keeps it
+as written) and replaces argparse's upper-cased dest metavars with `FILE`,
+`DIR` or `SECONDS` (`_tidy_metavar`). In `main()`:
+
+* a first word that is not a command is `mockymock: unknown command 'rnu'
+  (did you mean 'run'?)` on stderr, exit 2 (`_reject_unknown_command`);
+* a stray `.cut` argument (`run PROG.cbl PROG.cut`) is the subcommand's own
+  usage error with `(to name the test file, use --cut PROG.cut)`
+  (`_parse_command_line`);
+* a `ToolchainNotAvailableError` no command caught (`MOCKYMOCK_TOOLCHAIN=bogus`)
+  is one `mockymock <command>: ...` line, exit 1, not a traceback.
+
+The Docker-not-running message (`docker_toolchain._DAEMON_HINT`) also points
+at `MOCKYMOCK_GNUCOBOL_HOME` and `mockymock doctor`.
 
 ## The universal `cobol.yml` project config (2026-09-16)
 
