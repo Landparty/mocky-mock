@@ -145,6 +145,12 @@ def splice_program(
     eib_resp_names = tuple(n for n in EIB_RESP_NAMES if n in program_words)
     spans: list[tuple[int, int, list[str]]] = []
     sqlstate = any(_SQLSTATE_RE.search(line) for line in lines)
+    # A mocked SQL / DL/I statement reports success first (SQLCODE 0,
+    # DIBSTAT blank) when the program has those fields: an SQLCA (INCLUDE
+    # SQLCA, or its own copy), a DIB (declared, or synthesized because the
+    # program references DIBSTAT).
+    sqlcode = bool({"SQLCA", "SQLCODE"} & program_words)
+    dibstat = "DIBSTAT" in program_words
     # Baselines: a mocked `OPEN cursor` also records the cursor's DECLARE
     # host variables (splicer.behaviour).
     cursor_hosts = cursor_host_variables(lines) if behaviour else None
@@ -261,6 +267,8 @@ def splice_program(
             # bodies lift exactly like a top-level site's.
             lifted_clauses=lifted,
             sqlstate=sqlstate,
+            sqlcode=sqlcode,
+            dibstat=dibstat,
             passthrough=(_statement_lines(own, 1, len(own)) if site.opt_in else None),
             eib_resp_names=eib_resp_names,
             real_statement=_statement_lines(own, 1, len(own)),

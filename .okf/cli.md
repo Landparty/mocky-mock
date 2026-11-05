@@ -1337,6 +1337,17 @@ MOVE or a ROWS/TERMINAL field assigned the wrong kind (issue #251, which
 splices TRUE/FALSE as `SET`): TRUE/FALSE to a non-88, any other value to
 an 88, FALSE to an 88 with no `WHEN SET TO FALSE`
 (`cut_names.conditions_without_false`).
+The same step refuses `AMBIGUOUS_DATA_NAME` for a setup/hook MOVE target,
+an EXPECT data-name, or a bare-word MOVE/EXPECT value -- the names spliced
+into the driver -- that cobc cannot resolve to one item: declared under more
+than one group (one copybook COPYed twice with REPLACING, say) and not
+qualified enough, or qualified (`OF`/`IN`) by a group it is not inside
+(`cut_names.data_item_paths`, the enclosing group names per declaration).
+Before it, lint passed and the compile failed with "ambiguous; needs
+qualification", reported as a mockymock bug. Loose like the rest: skipped
+for a source holding more than one PROGRAM-ID, for a qualifier that is not a
+data item (an FD name), and for a word the harness or a special register
+also defines.
 
 ## `mockymock collect [program] --cut PATH [--json] [--boundaries] [--copybook-path DIR ...]`
 

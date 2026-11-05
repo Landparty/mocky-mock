@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from mockymock._lines import (
     SourceEncodingError,
     read_utf8_source,
+    split_cut_lines,
     split_source_lines,
 )
 from mockymock.debugging_lines import activate_debugging_lines
@@ -249,7 +250,7 @@ def cases_asserting_nothing(cut_text: str, *, stubs_count: bool) -> list[str]:
         suite = parse_cut(cut_text)
     except CutParseError:
         return []
-    lines = cut_text.splitlines()
+    lines = split_cut_lines(cut_text)
     starts = sorted({case.line for case in suite.test_cases if case.line})
     found: list[str] = []
     seen: set[int] = set()
@@ -749,7 +750,7 @@ def _run_static_checks(
     # same build (issue #269). Full-line comments are not spliced.
     suite_lines = [
         line
-        for line in read_utf8_source(cut_path).splitlines()
+        for line in split_cut_lines(read_utf8_source(cut_path))
         if not line.lstrip().startswith("*>")
     ]
     out.cics_eib = cics_eib_plan(parse_result.ast, lines, suite_lines)

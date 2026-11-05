@@ -172,6 +172,23 @@ def _display_operands(text: str) -> list[str]:
     ]
 
 
+def _display_lines(indent: str, text: str, tail: str = "") -> list[str]:
+    """`DISPLAY "<text>"<tail>` under `indent`, as one line when `text` is
+    short, else with `text` cut into one quoted operand per line
+    (`_display_operands`). A TESTSUITE / TESTCASE name or a MOCK SQL key is
+    the user's own text and has no length limit: written into one DISPLAY
+    literal, a long one pushed the line past cobc -free's 512 bytes, cobc
+    truncated it and the instrumented program failed to compile with
+    errors that blamed mockymock."""
+    operands = _display_operands(text)
+    if len(operands) == 1:
+        return [f"{indent}DISPLAY {operands[0]}{tail}"]
+    lines = [f"{indent}DISPLAY {operands[0]}"]
+    lines.extend(f"{indent}    {operand}" for operand in operands[1:])
+    lines[-1] += tail
+    return lines
+
+
 #: Closes a FAIL / RECORD marker that DISPLAYs a field's raw value (issue
 #: #285): a value holding byte X'0A' -- a binary halfword of 10 in a group,
 #: an LF in a PIC X -- splits its marker across lines, and every line
@@ -358,8 +375,8 @@ def build_driver(
 
     procedure: list[str] = []
     procedure.append(f"       {suite_paragraph}.")
-    procedure.append(
-        f'           DISPLAY "__MOCKYMOCK__ TESTSUITE: {_display_text(suite.name)}"'
+    procedure.extend(
+        _display_lines("           ", f"__MOCKYMOCK__ TESTSUITE: {suite.name}")
     )
     if suite.before_all_steps:
         if reset_lines:
@@ -588,9 +605,10 @@ def _build_testcase_paragraph(
     lines.append("           MOVE 0 TO RETURN-CODE")
     lines.append('           MOVE "N" TO UT-EARLY-EXIT')
     lines.extend(_case_tally_start_lines(case, registry, suite))
-    lines.append(
-        f'           DISPLAY "__MOCKYMOCK__ CASE {case_id} START: '
-        f'{_display_text(case.name)}"'
+    lines.extend(
+        _display_lines(
+            "           ", f"__MOCKYMOCK__ CASE {case_id} START: {case.name}"
+        )
     )
 
     if before_each:
@@ -641,10 +659,13 @@ def _build_testcase_paragraph(
                 f"           IF {'NOT ' if asserted else ''}{expectation.data_name}"
             )
             got = "FALSE" if asserted else "TRUE"
-            lines.append(
-                f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: expected '
-                f"{expectation.data_name} {expectation.operator} "
-                f'{_display_text(expectation.expected_value)}, got {got}"'
+            lines.extend(
+                _display_lines(
+                    "               ",
+                    f"__MOCKYMOCK__ CASE {case_id} FAIL: expected "
+                    f"{expectation.data_name} {expectation.operator} "
+                    f"{expectation.expected_value}, got {got}",
+                )
             )
             lines.append("               ADD 1 TO UT-FAIL-COUNT")
             lines.append("           END-IF")
@@ -691,11 +712,14 @@ def _build_testcase_paragraph(
                 )
             )
         if _literal_pieces(expectation.expected_value) is None:
-            lines.append(
-                f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: '
-                f"expected {expectation.data_name} {expectation.operator} "
-                f"{_display_text(expectation.expected_value)}, "
-                f'got " {expectation.data_name}'
+            lines.extend(
+                _display_lines(
+                    "               ",
+                    f"__MOCKYMOCK__ CASE {case_id} FAIL: expected "
+                    f"{expectation.data_name} {expectation.operator} "
+                    f"{expectation.expected_value}, got ",
+                    f" {expectation.data_name}",
+                )
             )
             lines.append(_VALUE_END_DISPLAY)
         else:
@@ -725,10 +749,14 @@ def _build_testcase_paragraph(
         condition = _verify_condition(verification.expectation, count)
         lines.append(f"           IF {condition}")
         lines.append(f"               COMPUTE UT-TALLY-EDITED = {tally} - {base}")
-        lines.append(
-            f'               DISPLAY "__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY '
-            f"{verification.category.keyword} {_display_text(verification.key)} WAS CALLED "
-            f'{verification.expectation}, got " FUNCTION TRIM(UT-TALLY-EDITED)'
+        lines.extend(
+            _display_lines(
+                "               ",
+                f"__MOCKYMOCK__ CASE {case_id} FAIL: VERIFY "
+                f"{verification.category.keyword} {verification.key} WAS CALLED "
+                f"{verification.expectation}, got ",
+                " FUNCTION TRIM(UT-TALLY-EDITED)",
+            )
         )
         lines.append("               ADD 1 TO UT-FAIL-COUNT")
         lines.append("           END-IF")

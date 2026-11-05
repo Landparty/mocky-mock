@@ -117,13 +117,14 @@ def read_program_line(cut_path: Path) -> str | None:
     text rather than parsing the whole suite, so a suite with a syntax
     error further down still pairs (and lint can then report that error
     against the right program)."""
+    from mockymock._lines import split_cut_lines
     from mockymock.dsl.parser import PROGRAM_RE
 
     try:
         text = cut_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    for raw in text.splitlines():
+    for raw in split_cut_lines(text):
         line = raw.strip()
         if line.startswith("TESTCASE"):
             break

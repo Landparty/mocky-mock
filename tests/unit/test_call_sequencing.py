@@ -233,6 +233,7 @@ def test_call_rows_dispatch_sequences_on_the_key_tally():
         "EVALUATE UT-CURRENT-CASE",
         'WHEN "001"',
         "ADD 1 TO UT-CBLTDLI-TALLY",
+        "MOVE 0 TO RETURN-CODE",
         "EVALUATE TRUE",
         "WHEN UT-CBLTDLI-TALLY = 1",
         'MOVE "  " TO CUST-STATUS',
@@ -283,8 +284,9 @@ def test_two_cases_each_get_their_own_rows_on_the_shared_tally():
     )
     lines = _dispatch(parse_cut(text))
     case_two = lines.index('WHEN "002"')
-    assert lines[case_two + 1 : case_two + 5] == [
+    assert lines[case_two + 1 : case_two + 6] == [
         "ADD 1 TO UT-CBLTDLI-TALLY",
+        "MOVE 0 TO RETURN-CODE",
         "EVALUATE TRUE",
         "WHEN UT-CBLTDLI-TALLY = 1",
         'MOVE "GB" TO CUST-STATUS',
@@ -344,9 +346,10 @@ def test_plain_call_mock_dispatch_is_unchanged():
         ],
     )
     suite = MockTestSuite(name="S", test_cases=[case])
-    assert _dispatch(suite)[:4] == [
+    assert _dispatch(suite)[:5] == [
         "EVALUATE UT-CURRENT-CASE",
         'WHEN "001"',
         "ADD 1 TO UT-CBLTDLI-TALLY",
+        "MOVE 0 TO RETURN-CODE",
         'MOVE "GB" TO CUST-STATUS',
     ]

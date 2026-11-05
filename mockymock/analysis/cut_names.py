@@ -41,6 +41,7 @@ _BODY_MOVE_RE = re.compile(
     r"^\s*MOVE\s+(?P<value>.+?)\s+TO\s+(?P<targets>[^.]+?)\s*\.?\s*$",
     re.IGNORECASE,
 )
+_PROGRAM_ID_RE = re.compile(r"\bPROGRAM-ID\b", re.IGNORECASE)
 _FLOAT_RE = re.compile(r"^\d+(?:\.\d+)?E[+-]?\d+$", re.IGNORECASE)
 
 #: Words that are values, not data-names, when written bare.
@@ -182,6 +183,55 @@ def data_item_levels(program) -> dict[str, set[int]]:
     return levels
 
 
+def data_item_paths(program) -> dict[str, list[tuple[str, ...]]]:
+    """Upper-cased data-item (and level-88) name -> one tuple per
+    declaration of the names of the groups it sits in, innermost first:
+    `05 CUST-ID` under `01 CUST-REC` is `("CUST-REC",)`. What COBOL
+    qualification (`CUST-ID OF CUST-REC`) is resolved against. Only the
+    program's own DATA DIVISION: a contained program's items are its own."""
+    paths: dict[str, list[tuple[str, ...]]] = {}
+    data = program.get_division("DATA") if program is not None else None
+    if data is None:
+        return paths
+    for kind in ("CobolDataItem", "ConditionNameItem"):
+        for item in data.find_all_by_type(kind):
+            name = str(getattr(item, "name", "") or "").upper()
+            if not name or name == "FILLER":
+                continue
+            groups: list[str] = []
+            node = getattr(item, "parent", None)
+            while node is not None and type(node).__name__ == "CobolDataItem":
+                group = str(getattr(node, "name", "") or "").upper()
+                if group and group != "FILLER":
+                    groups.append(group)
+                node = getattr(node, "parent", None)
+            paths.setdefault(name, []).append(tuple(groups))
+    return paths
+
+
+def _shortest_qualified(name: str, groups: tuple[str, ...], others) -> str:
+    """`name` qualified just enough to pick the declaration under `groups`
+    out of every declaration in `others` (one enclosing group when one
+    tells them apart, else the whole chain)."""
+    rivals = [g for g in others if g != groups]
+    for group in groups:
+        if not any(group in rival for rival in rivals):
+            return f"{name} OF {group}"
+    return " OF ".join((name, *groups)) if groups else name
+
+
+def _qualifies(groups: tuple[str, ...], qualifiers: list[str]) -> bool:
+    """Whether `qualifiers` (innermost first, as written after OF/IN) are
+    enclosing groups of a declaration, in that order."""
+    position = 0
+    for qualifier in qualifiers:
+        try:
+            position = groups.index(qualifier, position) + 1
+        except ValueError:
+            return False
+    return True
+
+
 def conditions_without_false(program) -> set[str]:
     """Upper-cased level-88 names none of whose declarations carry a
     `WHEN SET TO FALSE` value -- `SET <88> TO FALSE` does not compile for
@@ -263,6 +313,60 @@ def check_cut_data_names(
     owner = f" of {program_name}" if program_name else ""
     reasons: list[RefusalReason] = []
     seen: set[tuple[int, str, str]] = set()
+    where = f" in {program_name}" if program_name else ""
+    paths = data_item_paths(program)
+    # Not for a source holding more than one program: each has its own
+    # names, and the AST walk above sees the outer program's only.
+    single_program = sum(1 for line in lines if _PROGRAM_ID_RE.search(line)) <= 1
+    # A word the program text holds outside its DATA DIVISION items (a
+    # generated SQLCA field, an index name, a harness field) could be one
+    # more declaration the AST does not list: only the AST is counted, so
+    # the check stays on the side of letting cobc decide.
+    outside_ast = _harness_words() | _SPECIAL_REGISTERS | _suite_harness_words(suite)
+
+    def qualification(line: int, role: str, text: str) -> None:
+        """AMBIGUOUS_DATA_NAME for a name the driver writes that cobc
+        cannot resolve to one item: declared in more than one group and
+        not qualified enough (`CUST-ID` under both CUST-REC and OUT-REC),
+        or qualified by groups it is not in. Only for names spliced into
+        the driver, which runs in the entry program."""
+        words = _name_words(text)
+        if not words or not single_program or words[0] in outside_ast:
+            return
+        declared = paths.get(words[0], [])
+        qualifiers = words[1:]
+        if not declared or any(q not in paths for q in qualifiers):
+            return  # unknown words: UNKNOWN_DATA_NAME's business
+        matches = [groups for groups in declared if _qualifies(groups, qualifiers)]
+        if len(matches) == 1:
+            return
+        key = (line, role, " ".join(words))
+        if key in seen:
+            return
+        seen.add(key)
+        written = " ".join(text.split())
+        if not matches:
+            under = sorted(
+                {_shortest_qualified(words[0], g, declared) for g in declared}
+            )
+            message = (
+                f".cut line {line}: {role} {written} names no data item"
+                f"{where} -- {words[0]} is not inside "
+                f"{' OF '.join(qualifiers)}; it is declared as "
+                f"{', '.join(under)}"
+            )
+        else:
+            options = sorted(
+                {_shortest_qualified(words[0], g, matches) for g in matches if g}
+            )
+            hint = (
+                f"; qualify it, e.g. {' or '.join(options)}" if len(options) > 1 else ""
+            )
+            message = (
+                f".cut line {line}: {role} {written} is ambiguous{where} -- "
+                f"{words[0]} is declared {len(matches)} times{hint}"
+            )
+        reasons.append(RefusalReason(code="AMBIGUOUS_DATA_NAME", message=message))
 
     def unknown(word: str) -> bool:
         return word not in known
@@ -401,6 +505,9 @@ def check_cut_data_names(
     for step in hook_steps:
         if step.kind == "MOVE":
             name(step.line, "MOVE target", step.target)
+            qualification(step.line, "MOVE target", step.target)
+            if _is_bare_word_value(step.value):
+                qualification(step.line, "MOVE value", step.value)
             value(step.line, "MOVE value", step.value)
             assign_level(step.line, "MOVE", step.target, step.value)
     mocks = list(suite.before_all_mocks) + list(suite.before_each_mocks)
@@ -410,11 +517,17 @@ def check_cut_data_names(
             case.setup_moves, move_lines, strict=False
         ):
             name(line, "MOVE target", target)
+            qualification(line, "MOVE target", target)
             value(line, "MOVE value", move_value)
+            if _is_bare_word_value(move_value):
+                qualification(line, "MOVE value", move_value)
             assign_level(line, "MOVE", target, move_value)
         for expectation in case.expectations:
             line = expectation.line or case.line
             name(line, "EXPECT", expectation.data_name)
+            qualification(line, "EXPECT", expectation.data_name)
+            if _is_bare_word_value(expectation.expected_value):
+                qualification(line, "EXPECT value", expectation.expected_value)
             value(line, "EXPECT value", expectation.expected_value)
             expect_level(line, expectation.data_name, expectation.expected_value)
         mocks.extend(case.mocks)

@@ -5,6 +5,26 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-05 -- Resource mocks answer like the real statement
+
+Bug hunt over hand-written resource mocks; executed repros in
+`tests/fixtures/resource_mocks/` (`tests/integration/test_resource_mock_defaults_20261105.py`,
+unit side `tests/unit/test_resource_mock_defaults.py`).
+
+* Empty `MOCK SQL` reported the previous statement's SQLCODE (100 after a
+  cursor loop); empty `MOCK DLI` the previous DIBSTAT (GB); a mocked CALL
+  kept the caller's own RETURN-CODE, which a real CALL always replaces.
+  Each now starts from success (`injector._success_defaults`, see
+  [splicer](splicer.md)).
+* A keyed READ whose ROWS run out reports 23 and runs INVALID KEY, not 10
+  (which ran neither keyed clause); the INVALID KEY clause also counts as
+  the rows' end for the UNRESOLVED_FILE_STATUS_TARGET gate. See [dsl](dsl.md).
+* `USE REAL CALL` on a dynamic `CALL WS-TAB(WS-I)` routed on
+  `FUNCTION UPPER-CASE(WS-TAB)` (the first entry); it now uses the CALL's
+  own reference (`called_program_reference` metadata), subscript and
+  qualifiers included.
+* `CONDITION IS X` sets EIBRESP to X's code (it read NORMAL in the handler).
+
 ## 2026-11-05 -- Running suites: crash reruns, bounded output, runner fixes
 
 * Crash reruns pick the left-over cases by **position**, not name

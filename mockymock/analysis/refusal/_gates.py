@@ -164,10 +164,20 @@ def _at_end_ends_rows(directive: MockDirective, surface: MockSurface) -> bool:
     no FILE STATUS field still signals end-of-data (issue #341): every site
     the directive matches has an AT END clause the splice lifts, and once
     the rows run out the dispatch moves "10" to the outcome field, which
-    runs that clause -- what ends the loop in the real program too (#209)."""
+    runs that clause -- what ends the loop in the real program too (#209).
+    A random READ by key ends with "23" instead, which runs its INVALID KEY
+    clause, so for such a site that is the clause it needs."""
     sites = [s for s in surface.boundary_sites if directive_matches_site(directive, s)]
     return bool(sites) and all(
-        getattr(site.statement, "at_end_clause", None)
+        getattr(
+            site.statement,
+            (
+                "invalid_key_clause"
+                if (site.read_form or "").startswith("KEY")
+                else "at_end_clause"
+            ),
+            None,
+        )
         and clause_bodies_liftable(site.statement)
         for site in sites
     )

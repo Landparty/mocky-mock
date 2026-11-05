@@ -609,9 +609,22 @@ used both here and by `generator.py` to branch on key-syntax family.
 
 # Parser (`parser.py`)
 
-Single-pass line scanner over `text.splitlines()`, tracking three pieces of
-mutable state: current `suite`, current `case`, and current open `in_mock`
-directive (`None` when not inside a `MOCK...END-MOCK` block).
+Single-pass line scanner over `_lines.split_cut_lines(text)`, tracking three
+pieces of mutable state: current `suite`, current `case`, and current open
+`in_mock` directive (`None` when not inside a `MOCK...END-MOCK` block).
+
+**Line splitting and blanks (2026-11-05 bug hunt):** `.cut` text is split on
+`\n` / `\r\n` / `\r` only (`split_cut_lines`), never `str.splitlines()`,
+which also broke a line at a form feed, VT, NEL or U+2028: a page eject in a
+`*>` comment made the comment's tail an "unrecognized statement" and shifted
+every later line number. Every `.cut` reader that numbers lines uses it --
+the parser, `cli/checks.py`, `cli/discovery.read_program_line`,
+`analysis/stub_expectations`, `analysis/assertion_labels` and
+`report/record_rewrite` -- so lint, stub scanning and the
+`--record-expectations` rewrite agree. Each line then goes through
+`_plain_blanks`: any whitespace other than space/tab outside a quoted literal
+(a pasted no-break space) becomes a space, because a MOCK body line is spliced
+verbatim and cobc read `MOVE<NBSP>7` as one word.
 
 Key regexes, matched in this order per non-blank line:
 
@@ -855,6 +868,15 @@ where the same check only fires when BOTH the TERMINAL group and a FILE
 STATUS field are absent). A RETURN or READ whose matched sites all have a
 liftable `AT END` clause is accepted without either (issue #341):
 exhausting the rows runs that clause, which ends the loop.
+
+A keyed READ (a random READ of an indexed or relative file,
+`BoundarySite.read_form` `KEY` / `KEY <alt>`) that runs out of rows finds
+no record instead (2026-11-05): the implicit default is `MOVE "23"`, the
+outcome field gets "23" too, so its INVALID KEY clause runs, and a keyed
+READ whose sites all have a liftable INVALID KEY clause needs neither a
+FILE STATUS field nor a TERMINAL group (`refusal._at_end_ends_rows`).
+Before, it reported 10 like a sequential read, which runs neither INVALID
+KEY nor NOT INVALID KEY.
 
 A `PERFORM ... UNTIL <flag> = <value>` loop driven by the READ's own
 `AT END`-set flag (rather than the file's `FILE STATUS` field) needs that
