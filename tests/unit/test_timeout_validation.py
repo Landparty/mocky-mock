@@ -37,7 +37,7 @@ def test_run_binary_never_disables_the_container_kill(tmp_path, value) -> None:
 
     with (
         mock.patch(
-            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+            "mockymock.runtime.docker_toolchain._exec_binary", side_effect=fake_run
         ),
         mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
     ):

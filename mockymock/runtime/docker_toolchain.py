@@ -524,6 +524,28 @@ _LIBXML_VERSION_WARNING_RE = re.compile(
 )
 
 
+def _exec_binary(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess:
+    """Run `docker exec` of a test binary with its output read in bounded
+    memory, through the native backend's capped reader.
+
+    It used `subprocess.run(capture_output=True)`: a case looping over a
+    DISPLAY printed ~160 MB in 5 seconds and all of it was held, several
+    times over (400 MB of output peaked at 1.2 GB), enough to take a runner
+    down (2026-11-05; the native backend was fixed earlier the same day).
+    Raises `subprocess.TimeoutExpired` (with `not_kept`) and `OSError` like
+    `subprocess.run`."""
+    import os
+
+    from mockymock.runtime.native_toolchain import _not_kept_note, _run_capped
+
+    returncode, stdout, stderr, dropped = _run_capped(
+        argv, cwd=Path.cwd(), env=dict(os.environ), timeout=timeout
+    )
+    return subprocess.CompletedProcess(
+        argv, returncode, stdout, stderr + _not_kept_note(dropped).encode()
+    )
+
+
 def run_binary(
     binary_path: Path,
     timeout_seconds: int = 30,
@@ -561,7 +583,7 @@ def run_binary(
             "COB_TRACE_FORMAT=%P|%S|%L",
         ]
     try:
-        result = subprocess.run(
+        result = _exec_binary(
             [
                 "docker",
                 "exec",
@@ -582,16 +604,17 @@ def run_binary(
             # newlines turned a lone CR inside a DISPLAYed value into LF,
             # cutting a __MOCKYMOCK__ FAIL/RECORD marker in two before
             # parse_stdout's LF-only split ever saw it.
-            capture_output=True,
             timeout=timeout_seconds + 15,
-            check=False,
         )
     except subprocess.TimeoutExpired as exc:
+        from mockymock.runtime.native_toolchain import _not_kept_note
+
         return ExecutionResult(
             exit_code=TIMEOUT_EXIT_CODE,
             stdout=_coerce_output(exc.stdout),
             stderr=(
                 _coerce_output(exc.stderr)
+                + _not_kept_note(getattr(exc, "not_kept", 0))
                 + f"mockymock: docker exec did not return within "
                 f"{timeout_seconds + 15}s (container-side timeout is "
                 f"{timeout_seconds}s; the docker daemon may be wedged)\n"

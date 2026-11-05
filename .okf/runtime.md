@@ -461,8 +461,9 @@ up to `STDERR_CAPTURE_BYTES` (4 MiB). The bytes not kept are reported on
 stderr (`_not_kept_note`). A case looping over a DISPLAY until the timeout
 printed ~160 MB in 5 seconds and `communicate` held it several times over
 (730 MB; about a GB of output by the default 30 s), enough to take the
-runner image, which runs this backend, down. The Docker backend still
-captures with `subprocess.run`.
+runner image, which runs this backend, down. The Docker backend's
+`run_binary` reads `docker exec` the same way (`_exec_binary`, 2026-11-05:
+400 MB of output had peaked at 1.2 GB through `subprocess.run`).
 
 **Not kept.** The container's hardening (`_HARDENING_FLAGS`: no network,
 pids/memory limits, dropped capabilities) has no equivalent: tests run as the

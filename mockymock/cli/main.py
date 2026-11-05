@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING
@@ -2532,7 +2533,18 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
             print("mockymock run: compile failed:")
             print(compiled.stderr)
             diagnosis = _compile_failure_diagnosis(
-                toolchain, tmp, normalized_lines, compiled.stderr
+                toolchain,
+                tmp,
+                normalized_lines,
+                compiled.stderr,
+                real_programs=[
+                    (
+                        f"real_{prepared.program_id.upper()}.cbl",
+                        prepared.program_id,
+                        list(prepared.lines),
+                    )
+                    for prepared in real_programs
+                ],
             )
             if diagnosis:
                 print(f"mockymock run: {diagnosis}")
@@ -4642,7 +4654,11 @@ _UNRECOGNIZED_OPTION_RE = re.compile(r"unrecognized option '(?P<option>--?[\w-]+
 
 
 def _compile_failure_diagnosis(
-    toolchain: ModuleType, tmp: Path, normalized_lines: list[str], stderr: str = ""
+    toolchain: ModuleType,
+    tmp: Path,
+    normalized_lines: list[str],
+    stderr: str = "",
+    real_programs: Sequence[tuple[str, str, list[str]]] = (),
 ) -> str | None:
     """Whose compile failure this is, when that can be told: the program
     as mockymock read it (copybooks expanded, nothing spliced) is compiled
@@ -4655,7 +4671,13 @@ def _compile_failure_diagnosis(
     A cobc that rejects one of the flags the run itself asked for
     (`--coverage` on GnuCOBOL older than 3.2) is told apart first: the
     probe compiles without that flag, so it succeeded and the failure
-    used to be reported as a mockymock bug."""
+    used to be reported as a mockymock bug.
+
+    `real_programs` are the USE REAL CALL programs linked into the run, as
+    (file name in the sandbox, PROGRAM-ID, lines as mockymock read them):
+    they are compiled with the probe, unchanged. A real program that does
+    not compile was reported as "the program compiles on its own, so ... a
+    mockymock bug" (2026-11-05): only the program under test was probed."""
     option = _UNRECOGNIZED_OPTION_RE.search(stderr)
     if option is not None:
         return (
@@ -4664,15 +4686,46 @@ def _compile_failure_diagnosis(
             f"later) -- drop the option, or run with the mockymock-cobc "
             f"Docker image"
         )
-    if any(_EXEC_RE.search(line.split("*>", 1)[0]) for line in normalized_lines):
+    if _holds_exec(normalized_lines):
+        return None
+    # A real program with EXEC blocks cannot be probed either; an error in
+    # one leaves the verdict open.
+    reals = [real for real in real_programs if not _holds_exec(real[2])]
+    unprobed = {name for name, _, _ in real_programs} - {name for name, _, _ in reals}
+    if any(f"{name}:" in stderr for name in unprobed):
         return None
     probe = tmp / "UTPROBE" / "PROBE.cbl"
     try:
         probe.parent.mkdir(exist_ok=True)
         probe.write_text("\n".join(normalized_lines) + "\n", encoding="utf-8")
-        result = toolchain.compile_source(probe)
+        extra: list[Path] = []
+        for name, _, lines in reals:
+            extra.append(probe.parent / name)
+            extra[-1].write_text("\n".join(lines) + "\n", encoding="utf-8")
+        result = (
+            toolchain.compile_source(probe, extra_sources=extra)
+            if extra
+            else toolchain.compile_source(probe)
+        )
     except Exception:  # noqa: BLE001 -- a diagnosis must never hide the failure
         return None
+    if not result.success:
+        for name, program_id, _ in reals:
+            first = next(
+                (
+                    line.strip()
+                    for line in result.stderr.splitlines()
+                    if f"{name}:" in line and "error:" in line
+                ),
+                "",
+            )
+            if first:
+                first = re.sub(rf"^.*?{re.escape(name)}:(\d+):", r"line \1:", first)
+                return (
+                    f"the real program {program_id} (USE REAL CALL) does not "
+                    f"compile under GnuCOBOL even without mockymock's changes "
+                    f"({first}) -- fix it, or mock its CALL instead"
+                )
     if result.success:
         return (
             "the program compiles on its own, so the code mockymock added "
@@ -4692,6 +4745,11 @@ def _compile_failure_diagnosis(
         + (f" ({first})" if first else "")
         + " -- fix that first; generated tests cannot run before it compiles"
     )
+
+
+def _holds_exec(lines: list[str]) -> bool:
+    """Whether `lines` hold an EXEC block, which plain cobc cannot compile."""
+    return any(_EXEC_RE.search(line.split("*>", 1)[0]) for line in lines)
 
 
 def _ends_sentence(line: str) -> bool:
