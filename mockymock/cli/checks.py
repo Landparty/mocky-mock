@@ -274,13 +274,28 @@ def filter_suite_cases(
     suite: MockTestSuite,
     case_names: list[str] | None,
     tag_names: list[str] | None,
+    case_positions: list[int] | None = None,
 ) -> list[str]:
     """Filter `suite.test_cases` in place to the selection `--case`/`--tag`
     describe (a case is kept if it matches any requested name or carries any
     requested tag). Returns problem lines for selections that match nothing;
     an empty return means the filter applied cleanly (or no filter was
-    given)."""
+    given).
+
+    `case_positions` is `run`'s own selection for rerunning the cases a
+    crash kept from running: each TESTCASE's 1-based position in the
+    suite, which, unlike its name, is unique, and unlike its line survives
+    the `.cut` rewrite of `--record-expectations`. Selecting them by name
+    reran a crashed case whose name a later case shares, and never ran the
+    later one."""
     problems: list[str] = []
+    if case_positions is not None:
+        wanted_positions = set(case_positions)
+        suite.test_cases = [
+            case
+            for position, case in enumerate(suite.test_cases, start=1)
+            if position in wanted_positions
+        ]
     if not case_names and not tag_names:
         return problems
 
@@ -349,6 +364,7 @@ def run_static_checks(
     tag_names: list[str] | None = None,
     preserve_compiler_directives: bool = False,
     model_rebinds: bool = True,
+    case_positions: list[int] | None = None,
 ) -> StaticCheckResult:
     """Faithful transcription of `_cmd_run`'s pre-toolchain check sequence,
     including its short-circuit behavior: each numbered stage stops the
@@ -365,6 +381,7 @@ def run_static_checks(
         tag_names,
         preserve_compiler_directives,
         model_rebinds,
+        case_positions,
     )
     relabel = source_line_relabeler(out.source_location_map)
     out.problems = [
@@ -383,6 +400,7 @@ def _run_static_checks(
     tag_names: list[str] | None,
     preserve_compiler_directives: bool,
     model_rebinds: bool = True,
+    case_positions: list[int] | None = None,
 ) -> StaticCheckResult:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
@@ -545,7 +563,9 @@ def _run_static_checks(
     # The unselected cases still count towards whether a BEFORE-EACH/
     # BEFORE-ALL mock is reached at all (step 8's sweep, issue #250).
     all_cases = list(suite.test_cases)
-    selection_problems = filter_suite_cases(suite, case_names, tag_names)
+    selection_problems = filter_suite_cases(
+        suite, case_names, tag_names, case_positions
+    )
     if selection_problems:
         out.problems.extend(selection_problems)
         return out

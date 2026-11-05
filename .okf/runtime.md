@@ -453,6 +453,17 @@ Windows) the way `timeout -k` does in the container; a signal death is
 reported as `128 + signal` (so the SIGKILL check in `mutate` still reads 137).
 `container_identity()` is always None (no restarts to detect).
 
+**Bounded output capture (2026-11-05).** `run_binary` reads the binary's
+pipes through `_run_capped`, not `communicate`: stdout is kept as printed
+up to `STDOUT_CAPTURE_BYTES` (64 MiB), then only its `__MOCKYMOCK__` marker
+lines, up to `MARKER_CAPTURE_BYTES` (16 MiB) more (`_CappedStdout`); stderr
+up to `STDERR_CAPTURE_BYTES` (4 MiB). The bytes not kept are reported on
+stderr (`_not_kept_note`). A case looping over a DISPLAY until the timeout
+printed ~160 MB in 5 seconds and `communicate` held it several times over
+(730 MB; about a GB of output by the default 30 s), enough to take the
+runner image, which runs this backend, down. The Docker backend still
+captures with `subprocess.run`.
+
 **Not kept.** The container's hardening (`_HARDENING_FLAGS`: no network,
 pids/memory limits, dropped capabilities) has no equivalent: tests run as the
 user on the host. Windows Smart App Control / WDAC, one of the two reasons for

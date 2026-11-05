@@ -180,7 +180,11 @@ version)`: per case its name, status, `return_code`, `events` (label +
 hex values) and `output`, plus the SHA-256 of the `.cut`, the program and
 each real program under `inputs`. Lines of the program's own stdout seen
 while a case is open (not a marker, not a pending raw value) go to
-`TestResult.output`. `run --baseline FILE` reads it with `load_baseline`
+`TestResult.output`, at most `results.MAX_CASE_OUTPUT_LINES` (2000) of
+them: the rest are counted and hashed into one closing `(mockymock: N more
+output line(s) not kept, sha256 ...)` line, so a looping DISPLAY no longer
+costs a string per line while a baseline still tells two outputs apart
+(2026-11-05). `parse_stdout` walks the lines one at a time (`_lines`). `run --baseline FILE` reads it with `load_baseline`
 (`BaselineError` on a bad file, exit 2) and `compare()` matches cases by
 name: `same` / `differs` / `new` / `not-run`. `compare_case` reports the
 first differing event (which value, with the text when both are printable
