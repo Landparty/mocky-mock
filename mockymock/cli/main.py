@@ -2644,9 +2644,13 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     # console and the JSON report show the value it holds (issue #374).
     pictures = field_pictures(result.ast, checked.captures)
     decimal_comma = decimal_point_is_comma(result.ast)
+    # The JUnit XML reads the same rendered reasons: a CI page showing
+    # "expected 123.45, got -0012345" left the reader to place the implied
+    # decimal point and sign themselves.
+    readable = readable_suite(suite_result, suite, pictures, decimal_comma)
     print(
         format_console(
-            readable_suite(suite_result, suite, pictures, decimal_comma),
+            readable,
             crash_detail=crash_detail,
             not_run=not_run,
             risky=risky,
@@ -2706,7 +2710,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
             "run",
             "--junit-xml",
             args.junit_xml,
-            format_junit_xml(suite_result, crash_detail=crash_detail, not_run=not_run),
+            format_junit_xml(readable, crash_detail=crash_detail, not_run=not_run),
         )
 
     run_report = build_json_report(

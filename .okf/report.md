@@ -253,7 +253,8 @@ numeric field's `actual` is the value it holds, rendered by
 `-12.34`, `123` in a `9(3)PP` is `12300`; GnuCOBOL 3.1's zero-padded `P`
 image `00123` too), with the raw image under `actualRaw` and the
 `message` reading `got -12.34 (displayed as 0001234-)`; the console
-listing gets the same text through `json_report.readable_suite`; an
+listing and the `--junit-xml` file (since 2026-11-05; it used to show the
+raw image) get the same text through `json_report.readable_suite`; an
 alphanumeric or edited field's `actual` is as displayed, #374), and a synthesized `"not_run"` entry for every selected case the
 binary never printed a START marker for. An EXPECT failure head is split
 into name/operator/expected by `_EXPECT_HEAD_RE` (the operator is one of
@@ -372,7 +373,13 @@ TestSuiteResult (this module's parse_stdout)  ─┼─► build_recording_repor
   Issue #194 (2026-10-16): only *spaces* are trimmed (`rstrip(" ")`), since
   X'09'-X'0D'/X'1C'-X'1F' are field data (X'0C' ends a positive packed
   zero) and go to the hex-literal path; `field_pictures` maps a group item
-  to `X(length)` so it is always quoted/hex, never bare; and a stub on a
+  to `X(length)` so it is always quoted/hex, never bare (a name declared
+  more than once keeps its plain key only when every declaration has the
+  same PICTURE, and each declaration is also keyed by its dotted qualified
+  name, `OUT-REC.AMT`, which `picture_for` resolves `AMT OF OUT-REC`
+  against through `_qualified.qualified_lookup`; until 2026-11-05 such a
+  name had no PICTURE, so a record copybook COPYed twice recorded the raw
+  image `-0002468` as its golden and failed the next run); and a stub on a
   P-scaled PICTURE (`has_p_scaling`: `9(3)PP`, `SVP9(2)`) is skipped by
   `build_recording_report(..., pictures=...)`, because DISPLAY prints only
   the stored digits (12300 shows as `00123`).

@@ -26,6 +26,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from mockymock._qualified import qualified_member
 from mockymock.dsl.model import SUITE_PHASE_ID, HookStep, MockTestCase, MockTestSuite
 from mockymock.splicer.naming import TallyRegistry, assign, truth_set
 from mockymock.splicer.snapshot import StateSnapshot
@@ -352,6 +353,10 @@ def build_driver(
         working_storage.append("01  UT-TALLY-EDITED        PIC Z(8)9.")
     if any(
         _compares_by_value(expectation, numeric_edited)
+        or (
+            _has_combined_tail(expectation.expected_value)
+            and _combined_by_value(expectation, numeric_edited)
+        )
         for case in suite.test_cases
         for expectation in case.expectations
     ):
@@ -684,6 +689,13 @@ def _build_testcase_paragraph(
                 f"{expectation.expected_value.strip()}"
             )
         elif _has_combined_tail(expectation.expected_value):
+            subject = expectation.data_name
+            if _combined_by_value(expectation, numeric_edited):
+                # `TO BE GREATER THAN 0 AND LESS THAN 10` on a numeric-edited
+                # field: de-edited like the single-relation form above, or
+                # `"  5" > 0` compared the edited text and failed.
+                lines.append(f"           MOVE {subject} TO {_DEEDIT_FIELD}")
+                subject = _DEEDIT_FIELD
             # `TO BE > 0 AND < 10` / `TO BE 7 OR 8`: an abbreviated combined
             # condition. Swapping the operator would negate only its first
             # relation (`X NOT > 0 AND < 10`), so negate the whole condition
@@ -694,12 +706,12 @@ def _build_testcase_paragraph(
             operator = expectation.operator
             if operator.startswith("NOT "):
                 lines.append(
-                    f"           IF ({expectation.data_name} "
+                    f"           IF ({subject} "
                     f"{operator[len('NOT '):]} {expectation.expected_value})"
                 )
             else:
                 lines.append(
-                    f"           IF NOT ({expectation.data_name} "
+                    f"           IF NOT ({subject} "
                     f"{operator} {expectation.expected_value})"
                 )
         else:
@@ -848,8 +860,37 @@ def _compares_by_value(expectation, numeric_edited: frozenset[str] | set[str]) -
     base, paren, subscript = expectation.data_name.partition("(")
     if paren and ":" in subscript:
         return False
-    words = base.split()
-    return bool(words) and words[0].upper() in numeric_edited
+    return qualified_member(base, numeric_edited)
+
+
+#: The words and relation symbols of an abbreviated combined condition's
+#: tail (`0 AND LESS THAN 10`, `7 OR NOT = 8`): what is left once they
+#: are dropped are its operands.
+_CONDITION_WORDS = frozenset(
+    {"AND", "OR", "NOT", "IS", "GREATER", "LESS", "THAN", "EQUAL", "TO"}
+    | {"=", ">", "<", ">=", "<="}
+)
+
+
+def _combined_by_value(expectation, numeric_edited: frozenset[str] | set[str]) -> bool:
+    """Whether an abbreviated combined EXPECT (`TO BE > 0 AND < 10`) on a
+    numeric-edited field compares by de-edited value: every operand is an
+    unquoted number, as `_compares_by_value` asks of a single relation."""
+    if not numeric_edited:
+        return False
+    base, paren, subscript = expectation.data_name.partition("(")
+    if paren and ":" in subscript:
+        return False
+    operands = [
+        word
+        for word in expectation.expected_value.split()
+        if word.upper() not in _CONDITION_WORDS
+    ]
+    return (
+        bool(operands)
+        and all(_NUMERIC_LITERAL_RE.match(word) for word in operands)
+        and qualified_member(base, numeric_edited)
+    )
 
 
 def _condition_name_truth(expectation) -> bool | None:
