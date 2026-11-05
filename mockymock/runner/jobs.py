@@ -153,7 +153,16 @@ def extract_pack(content: bytes, target: Path) -> Path:
                 destination.mkdir(parents=True, exist_ok=True)
                 continue
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(archive.read(info))
+            try:
+                content = archive.read(info)
+            except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as exc:
+                # A corrupt member (bad CRC, a size that lies) or an
+                # unsupported compression or encryption: the pack is
+                # unusable, which the job reports, not a runner crash.
+                raise JobPackError(
+                    f"pack entry cannot be read: {info.filename}: {exc}"
+                ) from exc
+            destination.write_bytes(content)
     manifests = sorted(root.rglob(MANIFEST), key=lambda p: len(p.parts))
     if not manifests:
         raise JobPackError(f"pack has no {MANIFEST}")
@@ -257,9 +266,14 @@ def _run_step_timed(
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             stdout, stderr = _stop(proc)
+            # stderr too: what mockymock said before it was stopped (a
+            # traceback, the toolchain's complaint) is most of what tells
+            # a timeout apart from a hang.
             return _Step(
                 None,
-                (stdout or "") + f"\n(timed out after {timeout:.0f}s)\n",
+                (stdout or "")
+                + (stderr or "")
+                + f"\n(timed out after {timeout:.0f}s)\n",
                 True,
             )
     return _Step(proc.returncode, (stdout or "") + (stderr or ""))

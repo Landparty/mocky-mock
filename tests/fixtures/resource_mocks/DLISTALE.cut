@@ -1,0 +1,17 @@
+TESTSUITE "DLISTALE"
+
+*> The TERM mock has an empty body: DIBSTAT must read blank (success),
+*> not the GB the get-next loop ended on.
+TESTCASE "an empty DLI mock reports success after a get-next loop"
+    MOCK DLI "SCHD"
+    END-MOCK
+    MOCK DLI "GN" ROWS
+        ( SEG-AREA = "A" )
+        ( SEG-AREA = "B" )
+        TERMINAL ( DIBSTAT = "GB" )
+    END-MOCK
+    MOCK DLI "TERM"
+    END-MOCK
+    PERFORM MAIN-PARA
+    EXPECT WS-COUNT TO BE 2
+    EXPECT WS-MSG TO BE "TERM-OK"

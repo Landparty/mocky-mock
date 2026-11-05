@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 from mockymock._decimal import delocalize_numeric, localize_numeric
+from mockymock._lines import split_cut_lines
 from mockymock._qualified import qualified_lookup
 from mockymock.analysis.stub_expectations import (
     SkippedStub,
@@ -631,7 +632,7 @@ def rewrite_cut_text(
         scan_assertion_labels,
     )
 
-    lines = cut_text.splitlines()
+    lines = split_cut_lines(cut_text)
     recorded_lines: set[int] = set()
     for item in report.recorded:
         stub = item.stub
@@ -646,7 +647,7 @@ def rewrite_cut_text(
         recorded_lines.add(stub.line)
 
     if label:
-        original_lines = cut_text.splitlines()
+        original_lines = split_cut_lines(cut_text)
         covering = {
             a.line: a.label_line
             for a in scan_assertion_labels(cut_text)
@@ -672,7 +673,7 @@ def rewrite_cut_text(
                 indent = indent_text[: len(indent_text) - len(indent_text.lstrip())]
                 lines.insert(first - 1, f"{indent}{RECORDED_LABEL}")
     # The file's own newline convention, so a CRLF .cut is not rewritten
-    # as LF throughout (issue #199); splitlines() above already took the
+    # as LF throughout (issue #199); split_cut_lines() above already took the
     # "\r" off every line.
     newline = "\r\n" if "\r\n" in cut_text else "\n"
     text = newline.join(lines)

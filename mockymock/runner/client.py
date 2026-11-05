@@ -60,7 +60,7 @@ class RunnerClient:
         )
         if status == 204 or not body.strip():
             return None
-        job = json.loads(body)
+        job = _json(body, "claim")
         if not isinstance(job, dict) or not job.get("id"):
             raise RunnerClientError(
                 f"claim answered something that is not a job: {body[:200]!r}"
@@ -76,5 +76,17 @@ class RunnerClient:
     def report(self, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Post the outcome of ``job_id``; the backend's job summary."""
         _, body = self._request("POST", f"{API_PREFIX}/jobs/{job_id}/result", payload)
-        result = json.loads(body) if body.strip() else {}
+        result = _json(body, "report") if body.strip() else {}
         return result if isinstance(result, dict) else {}
+
+
+def _json(body: bytes, what: str) -> Any:
+    """`body` as JSON. A body that is not (a proxy's HTML page answered
+    with 200) is a RunnerClientError, which `serve` retries: as a bare
+    ValueError it stopped the runner (2026-11-05)."""
+    try:
+        return json.loads(body)
+    except ValueError as exc:
+        raise RunnerClientError(
+            f"{what} answered something that is not JSON: {body[:200]!r}"
+        ) from exc

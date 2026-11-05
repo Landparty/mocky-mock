@@ -49,6 +49,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from mockymock._lines import split_cut_lines
+
 ORPHAN_ASSERTION_LABEL = "ORPHAN_ASSERTION_LABEL"
 INTENT = "intent"
 CHARACTERIZATION = "characterization"
@@ -157,7 +159,7 @@ def scan_label_placement(
             case_label = label
         label = None
 
-    for line_no, raw in enumerate(cut_text.splitlines(), start=1):
+    for line_no, raw in enumerate(split_cut_lines(cut_text), start=1):
         stripped = raw.strip()
         if not stripped:
             if label is not None and labels[label].line not in covered:

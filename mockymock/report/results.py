@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import Any
 
 from mockymock.dsl.parser import _SUBSCRIPTED_NAME
 
@@ -47,6 +50,14 @@ _RC_RE = re.compile(r"^__MOCKYMOCK__ RC (?P<id>\S+): (?P<rc>.*)$")
 _SUMMARY_RE = re.compile(
     r"^__MOCKYMOCK__ SUMMARY: RUN=(?P<run>\d+) FAILURES=(?P<failures>\d+)$"
 )
+
+
+#: Lines of a case's own output (`TestResult.output`) kept as they are.
+#: A case looping over a DISPLAY until the timeout printed millions of
+#: lines, and keeping each one as a string took ~1 GB of memory per 5
+#: seconds of the loop (2026-11-05): the rest are counted and hashed into
+#: one closing line instead, so a baseline still tells two outputs apart.
+MAX_CASE_OUTPUT_LINES = 2_000
 
 
 @dataclass
@@ -152,6 +163,46 @@ def _append_continuation(pending: tuple[list, int], continuation: list[str]) -> 
         values[index] = current + tail
 
 
+def _lines(text: str) -> Iterator[str]:
+    """`text` split on LF only, one line at a time: a binary that looped
+    over a DISPLAY printed millions of lines, and `str.split` built them
+    all at once."""
+    start = 0
+    while True:
+        end = text.find("\n", start)
+        if end < 0:
+            yield text[start:]
+            return
+        yield text[start:end]
+        start = end + 1
+
+
+class _OutputCap:
+    """Keeps the first `MAX_CASE_OUTPUT_LINES` output lines of each case;
+    counts and hashes the rest, closed by `finish` into one line."""
+
+    def __init__(self) -> None:
+        self._over: dict[int, tuple[TestResult, list[int], Any]] = {}
+
+    def add(self, result: TestResult, line: str) -> None:
+        if len(result.output) < MAX_CASE_OUTPUT_LINES:
+            result.output.append(line)
+            return
+        entry = self._over.get(id(result))
+        if entry is None:
+            entry = self._over[id(result)] = (result, [0], hashlib.sha256())
+        entry[1][0] += 1
+        entry[2].update(line.encode("utf-8", "surrogatepass") + b"\n")
+
+    def finish(self) -> None:
+        for result, count, digest in self._over.values():
+            result.output.append(
+                f"(mockymock: {count[0]} more output line(s) not kept, "
+                f"sha256 {digest.hexdigest()})"
+            )
+        self._over.clear()
+
+
 def parse_stdout(stdout: str) -> TestSuiteResult:
     """Parse a compiled test binary's captured stdout into a TestSuiteResult.
 
@@ -173,6 +224,7 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
     # seen and whose END was not; between cases (BEFORE-ALL/AFTER-ALL) it
     # belongs to no case at all (issue #334).
     open_case: TestResult | None = None
+    output = _OutputCap()
 
     # Split on LF only (dropping a CRLF's CR), never `str.splitlines()`:
     # that also breaks on form feed, VT, \x1c-\x1e, NEL and U+2028 -- bytes
@@ -180,7 +232,7 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
     # DISPLAY writes them raw. A FAIL/RECORD marker carrying one was cut
     # there and the rest silently dropped: a truncated failure reason, and
     # a --record-expectations golden that fails the very next run.
-    for line in stdout.split("\n"):
+    for line in _lines(stdout):
         if line.endswith("\r"):
             line = line[:-1]
         # A marker need not start its physical line: a program's own
@@ -195,11 +247,11 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
             if pending is not None:
                 continuation.append(line)
             elif open_case is not None:
-                open_case.output.append(line)
+                output.add(open_case, line)
             continue
         if marker_at > 0:
             if pending is None and open_case is not None:
-                open_case.output.append(line[:marker_at])
+                output.add(open_case, line[:marker_at])
             line = line[marker_at:]
         if _VALUE_END_RE.match(line) is not None:
             if pending is not None and continuation:
@@ -269,4 +321,5 @@ def parse_stdout(stdout: str) -> TestSuiteResult:
             else:
                 suite.orphan_ends.append(case_id)
 
+    output.finish()
     return suite

@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import re
 
+from mockymock._lines import split_cut_lines
 from mockymock.dsl.model import (
     CAPTURE_CATEGORIES,
     FILE_STATUS_CATEGORIES,
@@ -286,6 +287,30 @@ def _strip_inline_comment(line: str) -> str:
         elif line.startswith("*>", index):
             return line[:index].rstrip()
     return line
+
+
+def _plain_blanks(line: str) -> str:
+    """`line` with every whitespace character other than a space or a tab
+    -- a no-break space pasted from a chat or a word processor, a form
+    feed, U+2028 -- turned into a space, outside quoted literals. The DSL
+    regexes read them as blanks, but a MOCK body line is spliced
+    verbatim, and cobc does not: `MOVE<NBSP>7 TO WS-B` passed lint and
+    then failed the compile ("'MOVE 7' is not defined"), reported as a
+    mockymock bug. Inside a literal the character is data and is kept."""
+    if line.isascii():
+        return line
+    out: list[str] = []
+    quote: str | None = None
+    for char in line:
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char.isspace() and char not in " \t":
+            char = " "
+        out.append(char)
+    return "".join(out)
 
 
 #: Lines inside a MOCK block that the DSL parses itself (rather than
@@ -1075,8 +1100,8 @@ def parse_cut(text: str) -> MockTestSuite:
         mock_target.append(directive)
         return directive
 
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.strip()
+    for line_no, raw_line in enumerate(split_cut_lines(text), start=1):
+        line = _plain_blanks(raw_line).strip()
         if not line:
             continue
         if not _COMMENT_RE.match(line):

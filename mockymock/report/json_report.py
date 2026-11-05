@@ -275,6 +275,34 @@ def not_run_case_names(
     ]
 
 
+def not_run_case_positions(
+    suite_result: TestSuiteResult, cut_suite: MockTestSuite | None
+) -> list[int]:
+    """1-based positions, in `cut_suite.test_cases`, of the cases
+    `not_run_case_names` names: unlike a name, a position picks one case."""
+    if cut_suite is None:
+        return []
+    seen = {_case_index(result.case_id) for result in suite_result.results}
+    return [
+        position
+        for position in range(1, len(cut_suite.test_cases) + 1)
+        if position not in seen
+    ]
+
+
+def report_case_positions(
+    suite_result: TestSuiteResult, cut_suite: MockTestSuite | None
+) -> list[int | None]:
+    """For each entry of `build_json_report`'s ``cases``, in order, the
+    1-based position in `cut_suite.test_cases` of the case it reports
+    (None for a result whose id is not a position): the ran cases first,
+    then the not-run ones, as `build_json_report` lists them."""
+    positions: list[int | None] = [
+        _case_index(result.case_id) for result in suite_result.results
+    ]
+    return positions + list(not_run_case_positions(suite_result, cut_suite))
+
+
 def build_json_report(
     suite_result: TestSuiteResult,
     cut_suite: MockTestSuite | None = None,

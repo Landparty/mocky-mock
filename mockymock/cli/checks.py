@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from mockymock._lines import (
     SourceEncodingError,
     read_utf8_source,
+    split_cut_lines,
     split_source_lines,
 )
 from mockymock.debugging_lines import activate_debugging_lines
@@ -249,7 +250,7 @@ def cases_asserting_nothing(cut_text: str, *, stubs_count: bool) -> list[str]:
         suite = parse_cut(cut_text)
     except CutParseError:
         return []
-    lines = cut_text.splitlines()
+    lines = split_cut_lines(cut_text)
     starts = sorted({case.line for case in suite.test_cases if case.line})
     found: list[str] = []
     seen: set[int] = set()
@@ -273,13 +274,28 @@ def filter_suite_cases(
     suite: MockTestSuite,
     case_names: list[str] | None,
     tag_names: list[str] | None,
+    case_positions: list[int] | None = None,
 ) -> list[str]:
     """Filter `suite.test_cases` in place to the selection `--case`/`--tag`
     describe (a case is kept if it matches any requested name or carries any
     requested tag). Returns problem lines for selections that match nothing;
     an empty return means the filter applied cleanly (or no filter was
-    given)."""
+    given).
+
+    `case_positions` is `run`'s own selection for rerunning the cases a
+    crash kept from running: each TESTCASE's 1-based position in the
+    suite, which, unlike its name, is unique, and unlike its line survives
+    the `.cut` rewrite of `--record-expectations`. Selecting them by name
+    reran a crashed case whose name a later case shares, and never ran the
+    later one."""
     problems: list[str] = []
+    if case_positions is not None:
+        wanted_positions = set(case_positions)
+        suite.test_cases = [
+            case
+            for position, case in enumerate(suite.test_cases, start=1)
+            if position in wanted_positions
+        ]
     if not case_names and not tag_names:
         return problems
 
@@ -348,6 +364,7 @@ def run_static_checks(
     tag_names: list[str] | None = None,
     preserve_compiler_directives: bool = False,
     model_rebinds: bool = True,
+    case_positions: list[int] | None = None,
 ) -> StaticCheckResult:
     """Faithful transcription of `_cmd_run`'s pre-toolchain check sequence,
     including its short-circuit behavior: each numbered stage stops the
@@ -364,6 +381,7 @@ def run_static_checks(
         tag_names,
         preserve_compiler_directives,
         model_rebinds,
+        case_positions,
     )
     relabel = source_line_relabeler(out.source_location_map)
     out.problems = [
@@ -382,6 +400,7 @@ def _run_static_checks(
     tag_names: list[str] | None,
     preserve_compiler_directives: bool,
     model_rebinds: bool = True,
+    case_positions: list[int] | None = None,
 ) -> StaticCheckResult:
     from cobolparser import parse_cobol
     from cobolparser.preprocess import (
@@ -544,7 +563,9 @@ def _run_static_checks(
     # The unselected cases still count towards whether a BEFORE-EACH/
     # BEFORE-ALL mock is reached at all (step 8's sweep, issue #250).
     all_cases = list(suite.test_cases)
-    selection_problems = filter_suite_cases(suite, case_names, tag_names)
+    selection_problems = filter_suite_cases(
+        suite, case_names, tag_names, case_positions
+    )
     if selection_problems:
         out.problems.extend(selection_problems)
         return out
@@ -729,7 +750,7 @@ def _run_static_checks(
     # same build (issue #269). Full-line comments are not spliced.
     suite_lines = [
         line
-        for line in read_utf8_source(cut_path).splitlines()
+        for line in split_cut_lines(read_utf8_source(cut_path))
         if not line.lstrip().startswith("*>")
     ]
     out.cics_eib = cics_eib_plan(parse_result.ast, lines, suite_lines)

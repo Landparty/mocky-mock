@@ -28,6 +28,52 @@ prevent.
   `tests/integration/test_qualified_names_declared_twice.py` (fixture
   `fixtures/qualified_twice/`, a copybook COPYed twice).
 
+## 2026-11-05 -- Resource mocks answer like the real statement
+
+Bug hunt over hand-written resource mocks; executed repros in
+`tests/fixtures/resource_mocks/` (`tests/integration/test_resource_mock_defaults_20261105.py`,
+unit side `tests/unit/test_resource_mock_defaults.py`).
+
+* Empty `MOCK SQL` reported the previous statement's SQLCODE (100 after a
+  cursor loop); empty `MOCK DLI` the previous DIBSTAT (GB); a mocked CALL
+  kept the caller's own RETURN-CODE, which a real CALL always replaces.
+  Each now starts from success (`injector._success_defaults`, see
+  [splicer](splicer.md)).
+* A keyed READ whose ROWS run out reports 23 and runs INVALID KEY, not 10
+  (which ran neither keyed clause); the INVALID KEY clause also counts as
+  the rows' end for the UNRESOLVED_FILE_STATUS_TARGET gate. See [dsl](dsl.md).
+* `USE REAL CALL` on a dynamic `CALL WS-TAB(WS-I)` routed on
+  `FUNCTION UPPER-CASE(WS-TAB)` (the first entry); it now uses the CALL's
+  own reference (`called_program_reference` metadata), subscript and
+  qualifiers included.
+* `CONDITION IS X` sets EIBRESP to X's code (it read NORMAL in the handler).
+
+## 2026-11-05 -- Running suites: crash reruns, bounded output, runner fixes
+
+* Crash reruns pick the left-over cases by **position**, not name
+  (`args.not_run_after_crash` holds suite positions; the rerun passes
+  `case_positions` to `run_static_checks` / `filter_suite_cases`). Two
+  cases sharing a name made the rerun run the crashed case again and never
+  the one left over. Reports are merged by position too
+  (`_merge_rerun_reports(first, reruns)`, each with
+  `json_report.report_case_positions`): `--record-expectations` moves the
+  lines between runs.
+* The merged report also replaces the saved `.mockymock/<suite>.run.json`
+  (`args.saved_run_report`), which `mockymock report` reuses: it kept every
+  rerun case as `not_run`. A rerun never writes the user's `--json-report`
+  itself.
+* Bounded memory for a case looping over a DISPLAY: `TestResult.output`
+  keeps 2000 lines plus a count+hash line (`results.MAX_CASE_OUTPUT_LINES`),
+  `parse_stdout` no longer `split`s the whole stdout, and the native
+  backend caps what it captures (`_run_capped`, see runtime.md). Before:
+  730 MB for 5 seconds of the loop.
+* Runner: a timed-out step's log keeps its stderr; a claim or report body
+  that is not JSON is a `RunnerClientError` (retried) instead of a
+  `ValueError` that stopped `serve`; a pack member that cannot be read (bad
+  CRC, unsupported compression) is a `JobPackError`.
+* Tests: `tests/unit/test_bug_hunt_20261105_runner.py`,
+  `tests/integration/test_bug_hunt_20261105_runner.py`.
+
 ## 2026-11-04 -- Keyed READ with no rows left finds no record (#415)
 
 * The "23" reply of `_keyed_read_loop_not_found` no longer needs a loop
