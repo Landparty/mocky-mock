@@ -606,14 +606,17 @@ mockymock skills install [--project] [--force] [--skill NAME ...] [--target clau
 Installs the packaged agent skills so a Claude Code or GitHub Copilot
 session can use them: `mockymock` (scaffold, edit and run `.cut` files), `cobol-test`
 (the whole job from understanding a program to the HTML report) and
-`cobol-analysis` (which cobol-parser subcommand answers which question).
+`cobol-analysis` (which cobol-parser subcommand answers which question) and
+`mockymock-setup` (sets a repository and VS Code workspace up for mockymock:
+asks for copybook folders, source and test folders and the toolchain, then
+writes `cobol.yml` and `.vscode/settings.json`).
 
 | Option | Default | Description |
 |---|---|---|
 | `--project` | off | Install into the current directory instead of the home directory: `./.claude/skills/<name>`, or `./.github/skills/<name>` for Copilot. |
 | `--target` | `claude` | Which assistant: `claude` (`~/.claude/skills/`), `copilot` (GitHub Copilot: `~/.copilot/skills/`, read by the Copilot CLI, cloud agent and VS Code / JetBrains agent mode) or `all`. The skill files are identical; they are standard Agent Skills. |
 | `--force` | off | Overwrite existing installs. Without it, any existing target refuses the whole install (nothing is written) so local edits are never silently clobbered. |
-| `--skill` | all three | Install only this skill (repeatable): `mockymock`, `cobol-analysis`, `cobol-test`. |
+| `--skill` | all four | Install only this skill (repeatable): `mockymock`, `cobol-analysis`, `cobol-test`, `mockymock-setup`. |
 
 ```bash
 mockymock skills install
@@ -633,7 +636,7 @@ it installs from disk with no clone and no network:
 ```
 <DIRECTORY>/.claude-plugin/marketplace.json      (marketplace "mocky-mock-local")
 <DIRECTORY>/cobol-testing/.claude-plugin/plugin.json
-<DIRECTORY>/cobol-testing/skills/{mockymock,cobol-analysis,cobol-test}/
+<DIRECTORY>/cobol-testing/skills/{mockymock,cobol-analysis,cobol-test,mockymock-setup}/
 ```
 
 | Option | Default | Description |

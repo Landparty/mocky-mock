@@ -1,6 +1,6 @@
 """Verify and install the cobol-testing skills from the dashboard.
 
-The cobol-testing plugin is three agent skills (`skills_cmd.SKILL_NAMES`)
+The cobol-testing plugin is four agent skills (`skills_cmd.SKILL_NAMES`)
 in the open Agent Skills format, which both Claude Code and GitHub Copilot
 read. The dashboard installs them the way `mockymock skills install
 --target <claude|copilot>` does -- a copy of the packaged skills into

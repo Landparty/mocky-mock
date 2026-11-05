@@ -70,11 +70,11 @@ from mockymock.analysis.linkage import (
 )
 from mockymock.analysis.mock_surface import (
     _TERMINATOR_LABELS,
-    ANSWERED_LABELS,
     BoundarySite,
     MockSurface,
     NonInteractiveAccept,
     _all_paragraphs,
+    is_answered_site,
     normalize_exec_text,
 )
 from mockymock.analysis.sql_whenever import is_sql_declaration, whenever_can_fire
@@ -1722,11 +1722,7 @@ def check_test_case(
                 # doesn't need every OTHER test case in the suite to also
                 # satisfy check_test_case's unrelated matching rules.
                 pass
-            elif (
-                site.label in ANSWERED_LABELS
-                and not site.nested
-                and not site.unspliceable_reason
-            ):
+            elif is_answered_site(site):
                 # Spliced to CONTINUE (orchestrator.splice_program): the
                 # operator answers the console at once, and the program
                 # goes on with the next statement, as STOP <literal> does.

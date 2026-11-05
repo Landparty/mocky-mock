@@ -307,12 +307,17 @@ def _status_driven_reads(
 
     status_fields = analyze_file_status_fields(program)
     access = _select_access_modes(program)
-    plain: dict[str, bool] = {}
+    split = split_read_files(surface)
+    plain: dict[str, tuple[str, bool]] = {}
     excluded: set[str] = set()
     for site in surface.boundary_sites:
         if site.category is not MockCategory.READ or not site.keys:
             continue
-        key = site.keys[0].upper()
+        name = site.keys[0].upper()
+        # A file read in several forms is decided per form: its browse
+        # (`MOCK READ <file> NEXT`) ends on "10" even when a keyed READ of
+        # the same file answers "23" (issue #417).
+        key = _read_mock_key(site, split)
         statement = site.statement
         sequential = (
             not getattr(statement, "at_end_clause", None)
@@ -320,18 +325,15 @@ def _status_driven_reads(
             and not getattr(statement, "key_name", None)
             and (
                 (getattr(statement, "access_mode", None) or "").upper() == "NEXT"
-                or access.get(key, "") in ("", "SEQUENTIAL")
+                or access.get(name, "") in ("", "SEQUENTIAL")
             )
         )
-        if not sequential or key not in status_fields:
+        if not sequential or name not in status_fields:
             excluded.add(key)
             continue
-        plain[key] = plain.get(key, False) or site_in_loop(site, looped)
-    return {
-        key: (status_fields[key], is_looped)
-        for key, is_looped in plain.items()
-        if key not in excluded
-    }
+        _, was_looped = plain.get(key, ("", False))
+        plain[key] = (status_fields[name], was_looped or site_in_loop(site, looped))
+    return {key: entry for key, entry in plain.items() if key not in excluded}
 
 
 def _status_read_eof(
@@ -1486,6 +1488,12 @@ def split_read_files(surface: MockSurface) -> set[str]:
         if site.category is MockCategory.READ and site.read_form and site.keys:
             forms.setdefault(site.keys[0].upper(), set()).add(site.read_form)
     return {name for name, seen in forms.items() if len(seen) > 1}
+
+
+def _read_mock_key(site: BoundarySite, split: set[str]) -> str:
+    """The upper-case MOCK key a READ site's fixture carries: `<file>
+    <form>` for a split file (`read_site_key`), else the file name."""
+    return (read_site_key(site, split) or site.keys[0]).upper()
 
 
 def split_open_files(surface: MockSurface) -> set[str]:
@@ -3276,11 +3284,13 @@ def _keyed_read_loop_not_found(
     from mockymock.analysis.mock_surface import analyze_file_status_fields
 
     key = fixture.key.upper()
+    # A split file's fixture is keyed `<file> <form>` (issue #417).
+    split = split_read_files(source.surface)
     looped = keyed = False
     for site in source.surface.boundary_sites:
         if site.category is not MockCategory.READ or not site.keys:
             continue
-        if site.keys[0].upper() != key:
+        if _read_mock_key(site, split) != key:
             continue
         statement = site.statement
         if getattr(statement, "at_end_clause", None):

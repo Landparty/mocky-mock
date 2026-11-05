@@ -1587,14 +1587,14 @@ Full design, including empirical validation of the wrapping algorithm and the th
 ## `mockymock skills install [--project] [--force] [--skill NAME ...] [--target claude|copilot|all]`
 
 Copies the packaged agent skills (`SKILL_NAMES`: `mockymock`,
-`cobol-analysis`, `cobol-test`, each under `mockymock/cli/skills/<name>/`;
+`cobol-analysis`, `cobol-test`, `mockymock-setup`, each under `mockymock/cli/skills/<name>/`;
 `cobol-analysis` is cobol-parser's `.claude/skills/cobol-analysis/` copied
 byte for byte by `scripts/sync_cobol_analysis_skill.py`, never edited here,
 and `tests/unit/test_cobol_analysis_skill_sync.py` fails on drift when a
 cobol-parser checkout sits next to this repo)
 to `~/.claude/skills/<name>` (default) or `./.claude/skills/<name>`
 (`--project`). `--skill` (repeatable) narrows the set; without it all
-three are installed. `--target` (2026-10-04) picks the assistant:
+four are installed. `--target` (2026-10-04) picks the assistant:
 `claude` (default, paths above), `copilot` (`~/.copilot/skills/<name>`,
 `--project`: `./.github/skills/<name>`, the directories GitHub Docs'
 "About agent skills" lists for personal/project skills) or `all`. The
@@ -1618,6 +1618,15 @@ declared in `pyproject.toml`'s `[tool.setuptools.package-data]` under
 along with the already-discovered `mockymock.cli` package the same way
 `mockymock/runtime/docker/` and `mockymock/web/static/` ride along with
 theirs.
+
+`mockymock-setup` (2026-11-05) is the one skill that is not about writing
+tests: it sets a repository / VS Code workspace up for the mocky-mock VS
+Code extension (detect, ask, write `cobol.yml` and `.vscode/settings.json`,
+verify with `fixtures` + `suites`). Its `reference/settings.md` is the
+single list of every setting across `cobol.yml`, `mockymock.toml`, the
+extension's `mockymock.*` settings and the `MOCKYMOCK_*` environment
+variables; `tests/unit/test_mockymock_setup_skill.py` fails when a config
+key, AI mode or environment variable is added without it.
 
 The packaged skill is not just a copytree of static reference material:
 its `SKILL.md` prescribes how an assistant works. Since 2026-08-16 it
