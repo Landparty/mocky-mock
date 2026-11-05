@@ -1,0 +1,22 @@
+TESTSUITE "RCCALL"
+
+*> A real CALL sets the caller's RETURN-CODE from the callee's, 0 when
+*> the callee sets none: an empty CALL mock must do the same.
+TESTCASE "an empty static CALL mock sets RETURN-CODE to 0"
+    MOCK CALL "LOGIT"
+    END-MOCK
+    PERFORM STATIC-PARA
+    EXPECT WS-MSG TO BE "RC-RESET"
+
+TESTCASE "an empty dynamic CALL mock sets RETURN-CODE to 0"
+    MOCK CALL WS-PGM
+    END-MOCK
+    PERFORM DYNAMIC-PARA
+    EXPECT WS-MSG TO BE "RC-RESET"
+
+TESTCASE "a CALL mock body still sets its own RETURN-CODE"
+    MOCK CALL "LOGIT"
+        MOVE 4 TO RETURN-CODE
+    END-MOCK
+    PERFORM STATIC-PARA
+    EXPECT WS-MSG TO BE "RC-KEPT"

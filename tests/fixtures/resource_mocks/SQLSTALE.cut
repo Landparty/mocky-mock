@@ -1,0 +1,29 @@
+TESTSUITE "SQLSTALE"
+
+*> The CLOSE mock has an empty body: it must report success (SQLCODE 0)
+*> like the real CLOSE, not the 100 the FETCH loop ended on.
+TESTCASE "an empty SQL mock reports success after a cursor loop"
+    MOCK SQL "OPEN C1"
+    END-MOCK
+    MOCK SQL "FETCH C1" ROWS
+        ( WS-NAME = "A" )
+        ( WS-NAME = "B" )
+    END-MOCK
+    MOCK SQL "CLOSE C1"
+    END-MOCK
+    PERFORM MAIN-PARA
+    EXPECT WS-COUNT TO BE 2
+    EXPECT WS-RESULT TO BE "CLOSED-OK"
+
+TESTCASE "a SQL mock body still sets its own SQLCODE"
+    MOCK SQL "OPEN C1"
+    END-MOCK
+    MOCK SQL "FETCH C1" ROWS
+        ( WS-NAME = "A" )
+    END-MOCK
+    MOCK SQL "CLOSE C1"
+        MOVE -501 TO SQLCODE
+    END-MOCK
+    PERFORM MAIN-PARA
+    EXPECT WS-COUNT TO BE 1
+    EXPECT WS-RESULT TO BE "CLOSE-ERR"

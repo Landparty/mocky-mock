@@ -1,0 +1,31 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CICSCOND.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-REC       PIC X(20).
+       01  WS-KEY       PIC X(5) VALUE "00001".
+       01  WS-MSG       PIC X(20) VALUE SPACES.
+       PROCEDURE DIVISION.
+       HANDLED-PARA.
+           EXEC CICS HANDLE CONDITION NOTFND(NF-PARA) END-EXEC
+           EXEC CICS READ FILE('CUST') INTO(WS-REC) RIDFLD(WS-KEY)
+           END-EXEC
+           MOVE "FOUND" TO WS-MSG
+           GO TO HANDLED-EXIT.
+       NF-PARA.
+           IF EIBRESP = DFHRESP(NOTFND)
+               MOVE "NOTFND-13" TO WS-MSG
+           ELSE
+               MOVE "NOTFND-WRONG" TO WS-MSG
+           END-IF.
+       HANDLED-EXIT.
+           EXIT.
+       IGNORED-PARA.
+           EXEC CICS IGNORE CONDITION NOTFND END-EXEC
+           EXEC CICS READ FILE('CUST') INTO(WS-REC) RIDFLD(WS-KEY)
+           END-EXEC
+           IF EIBRESP = DFHRESP(NOTFND)
+               MOVE "IGN-13" TO WS-MSG
+           ELSE
+               MOVE "IGN-WRONG" TO WS-MSG
+           END-IF.

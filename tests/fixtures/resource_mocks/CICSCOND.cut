@@ -1,0 +1,18 @@
+TESTSUITE "CICSCOND"
+
+*> CONDITION IS raises the condition: real CICS sets EIBRESP to its
+*> code (NOTFND = 13) whether a HANDLE CONDITION label or an IGNORE
+*> CONDITION is in force.
+TESTCASE "a handled condition sets EIBRESP"
+    MOCK CICS "READ"
+        CONDITION IS NOTFND
+    END-MOCK
+    PERFORM HANDLED-PARA THRU HANDLED-EXIT
+    EXPECT WS-MSG TO BE "NOTFND-13"
+
+TESTCASE "an ignored condition sets EIBRESP"
+    MOCK CICS "READ"
+        CONDITION IS NOTFND
+    END-MOCK
+    PERFORM IGNORED-PARA
+    EXPECT WS-MSG TO BE "IGN-13"
