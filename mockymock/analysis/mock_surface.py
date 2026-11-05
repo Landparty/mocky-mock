@@ -296,6 +296,9 @@ class BoundarySite:
     nested: bool
     statement: object
     is_mq: bool = False
+    # A dynamic CALL whose identifier can only name MQI entry points
+    # (`_mark_dynamic_mq_calls`): answered like a static MQ call.
+    mq_target: bool = False
     # True when an ancestor statement is itself a boundary statement (a
     # CALL/file-op clause body). Such a site still gets a span when every
     # such ancestor's clause bodies are lifted and re-run after a mock: the
@@ -1105,6 +1108,41 @@ def _walk_statements(
             )
 
 
+def _mark_dynamic_mq_calls(program: CobolProgram, surface: MockSurface) -> None:
+    """Set `BoundarySite.mq_target` on each dynamic CALL that can only reach
+    MQI entry points (`CALL WS-MQGET USING ...` with WS-MQGET VALUE
+    'MQGET', the usual IBM sample style): the splicer then answers it
+    MQCC_OK / MQRC_NONE like a static MQ call. The targets come from
+    cobol-parser's `DynamicCallAnalyzer` (VALUE clauses and MOVEs of
+    literals); an incomplete or mixed list leaves the site an ordinary
+    dynamic CALL."""
+    sites = [
+        site
+        for site in surface.boundary_sites
+        if site.category is MockCategory.DYNCALL and site.keys
+    ]
+    if not sites:
+        return
+    try:
+        from cobolparser.analysis.value_tracker import DynamicCallAnalyzer
+
+        DynamicCallAnalyzer().analyze(program)
+    except Exception:  # noqa: BLE001 -- an analysis gap only loses the default
+        return
+    for site in sites:
+        statement = site.statement
+        get_metadata = getattr(statement, "get_metadata", None)
+        if get_metadata is not None and get_metadata("possible_values_incomplete"):
+            continue
+        names = {
+            str(value).strip(" '\"\x00\xff").upper()
+            for value in getattr(statement, "possible_values", None) or []
+        }
+        names.discard("")
+        if names and names <= MQ_API_NAMES:
+            site.mq_target = True
+
+
 def analyze(program: CobolProgram) -> MockSurface:
     """Walk PROCEDURE DIVISION and classify every CALL/file-IO/EXEC/ACCEPT
     statement into per-site `BoundarySite` records (plus the v1 paragraph
@@ -1136,6 +1174,8 @@ def analyze(program: CobolProgram) -> MockSurface:
             site.read_form = read_form_of(site.statement, selects)
         elif site.category is MockCategory.OPEN:
             site.open_modes = open_modes_of(site.statement)
+
+    _mark_dynamic_mq_calls(program, surface)
 
     states = handle_states(program)
     if states:

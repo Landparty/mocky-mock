@@ -5,6 +5,28 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-05 -- CICS, MQ, file and cursor mocks answer like the real statement (round 2)
+
+Second bug hunt over hand-written mocks; executed repros in
+`tests/fixtures/cics_file_mocks/`
+(`tests/integration/test_cics_file_mock_bugs_20261105.py`, unit side
+`tests/unit/test_cics_file_mock_defaults_20261105.py`).
+
+* A mock body setting a CICS command's RESP field left EIBRESP at NORMAL
+  (and the other way round): `cics_resp.cics_resp_mirror` keeps them equal,
+  RESP2 / EIBRESP2 too. See [splicer](splicer.md).
+* An MQI call's CompCode / Reason kept the program's own value under an
+  empty `MOCK MQ` (or MQGET ROWS that set only the buffer): they now answer
+  MQCC_OK / MQRC_NONE first, also for a dynamic CALL that can only reach
+  MQI entry points (`BoundarySite.mq_target`).
+* CLOSE then OPEN of a file, or of a cursor, did not start its READ /
+  FETCH ROWS again: the second pass got end of data at once. A re-OPEN now
+  rewinds them (`-REW` field). See [dsl](dsl.md).
+* An EXEC CICS RETURN / XCTL in a HANDLE CONDITION handler (a GO TO
+  target), or under a PERFORM ... TIMES, was refused
+  UNSUPPORTED_TERMINATOR_LAYOUT: CICS terminators now take the GOBACK
+  call-frame fallback (and the main-line end) like STOP RUN.
+
 ## 2026-11-05 -- Assertions and reports on names declared twice
 
 * `record_rewrite.field_pictures` dropped every name declared more than

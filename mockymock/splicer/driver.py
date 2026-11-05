@@ -370,6 +370,10 @@ def build_driver(
         working_storage.append(
             f"01  {registry.start_name(category, key)}      PIC 9(9) VALUE 0."
         )
+    for category, key in registry.rewound_keys():
+        working_storage.append(
+            f"01  {registry.rewind_name(category, key)}      PIC 9(9) VALUE 0."
+        )
     if extra_working_storage_lines:
         working_storage.extend(extra_working_storage_lines)
 
@@ -387,10 +391,19 @@ def build_driver(
         if reset_lines:
             procedure.append("           PERFORM UT-RESET-WORKING-STORAGE")
         procedure.extend(_suite_phase_lines(suite, registry, suite.before_all_steps))
-        procedure.extend(
-            f"           MOVE {registry.name(*key)} TO {registry.start_name(*key)}"
-            for key in _resumed_keys(suite)
-        )
+        for resumed in _resumed_keys(suite):
+            procedure.append(
+                f"           MOVE {registry.name(*resumed)} TO "
+                f"{registry.start_name(*resumed)}"
+            )
+            if registry.rewound(*resumed):
+                # A case resumes the rows where BEFORE-ALL left them,
+                # counted from BEFORE-ALL's last OPEN: each case starts
+                # with no rewind of its own.
+                procedure.append(
+                    f"           SUBTRACT {registry.rewind_name(*resumed)} FROM "
+                    f"{registry.start_name(*resumed)}"
+                )
         if restore_state:
             procedure.append("           PERFORM UT-SAVE-STATE")
     for index in range(1, len(suite.test_cases) + 1):
@@ -501,10 +514,12 @@ def _step_lines(steps: list[HookStep]) -> list[str]:
 
 
 def _tally_zero_lines(mocks, registry: TallyRegistry) -> list[str]:
-    return [
-        f"           MOVE 0 TO {registry.name(category, key)}"
-        for category, key in dict.fromkeys((m.category, m.key) for m in mocks)
-    ]
+    lines = []
+    for category, key in dict.fromkeys((m.category, m.key) for m in mocks):
+        lines.append(f"           MOVE 0 TO {registry.name(category, key)}")
+        if registry.rewound(category, key):
+            lines.append(f"           MOVE 0 TO {registry.rewind_name(category, key)}")
+    return lines
 
 
 def _resumed_keys(suite: MockTestSuite) -> list[tuple]:
@@ -545,6 +560,8 @@ def _case_tally_start_lines(
         )
         lines.append(f"           MOVE {start} TO {tally}")
         lines.append(f"           MOVE {tally} TO {registry.base_name(*key)}")
+        if registry.rewound(*key):
+            lines.append(f"           MOVE 0 TO {registry.rewind_name(*key)}")
     return lines
 
 

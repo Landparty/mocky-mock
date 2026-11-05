@@ -1464,7 +1464,9 @@ def test_cics_terminator_splice_wraps_the_mock_dispatch_with_the_early_exit():
     assert 'IF UT-EARLY-EXIT = "Y"' in spliced
 
 
-def test_cics_terminator_off_a_plain_perform_chain_refuses():
+def test_cics_terminator_off_a_plain_perform_chain_goes_back_to_the_test():
+    # No EXIT chain fits a PERFORM ... TIMES, so the XCTL ends the case
+    # the way a STOP RUN there does: GOBACK out of the driver's call frame.
     source = CICS_TERMINATOR_SOURCE.replace(
         "PERFORM 1000-FIRST-TIME\n", "PERFORM 1000-FIRST-TIME 2 TIMES\n"
     )
@@ -1472,10 +1474,12 @@ def test_cics_terminator_off_a_plain_perform_chain_refuses():
     plans, reasons = find_terminator_plans(
         surface, program, _cics_suite(), scope_map, lines
     )
-    assert [p.site.statement.cics_command for p in plans] == ["RETURN"]
-    assert len(reasons) == 1
-    assert reasons[0].code == "UNSUPPORTED_TERMINATOR_LAYOUT"
-    assert reasons[0].message.startswith("EXEC CICS XCTL at line")
+    assert reasons == []
+    kinds = {p.site.statement.cics_command: p.exit_kind for p in plans}
+    assert kinds["XCTL"] == "RETURN"
+    from mockymock.analysis.refusal import needs_call_frame
+
+    assert needs_call_frame(plans)
 
 
 def test_falls_through_false_for_trailing_cics_return():

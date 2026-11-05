@@ -1,0 +1,34 @@
+TESTSUITE "MQOK"
+
+*> The queue manager sets CompCode and Reason (an MQI call's last two
+*> arguments) on every call: a mock that leaves them alone answers
+*> MQCC_OK / MQRC_NONE, not the program's own initial 99.
+TESTCASE "an empty MQOPEN mock succeeds"
+    MOCK MQ "MQOPEN"
+    END-MOCK
+    PERFORM OPEN-PARA
+    EXPECT W-MSG TO BE "OPENED"
+
+TESTCASE "a dynamic CALL that can only reach MQGET succeeds"
+    MOCK CALL W-MQGET
+    END-MOCK
+    PERFORM DYN-GET-PARA
+    EXPECT W-MSG TO BE "GOT"
+
+TESTCASE "MQGET rows answer OK until the TERMINAL 2033"
+    MOCK MQ "MQGET" ROWS
+        ( W-BUF = "M1" )
+        ( W-BUF = "M2" )
+        TERMINAL ( W-CC = 2, W-RC = 2033 )
+    END-MOCK
+    PERFORM LOOP-PARA
+    EXPECT W-N TO BE 2
+    EXPECT W-LAST TO BE "M2"
+
+TESTCASE "a CompCode the mock sets wins"
+    MOCK MQ "MQOPEN"
+        MOVE 2 TO W-CC
+        MOVE 2085 TO W-RC
+    END-MOCK
+    PERFORM OPEN-PARA
+    EXPECT W-MSG TO BE "OPEN-FAILED"
