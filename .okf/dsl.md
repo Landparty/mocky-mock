@@ -609,9 +609,22 @@ used both here and by `generator.py` to branch on key-syntax family.
 
 # Parser (`parser.py`)
 
-Single-pass line scanner over `text.splitlines()`, tracking three pieces of
-mutable state: current `suite`, current `case`, and current open `in_mock`
-directive (`None` when not inside a `MOCK...END-MOCK` block).
+Single-pass line scanner over `_lines.split_cut_lines(text)`, tracking three
+pieces of mutable state: current `suite`, current `case`, and current open
+`in_mock` directive (`None` when not inside a `MOCK...END-MOCK` block).
+
+**Line splitting and blanks (2026-11-05 bug hunt):** `.cut` text is split on
+`\n` / `\r\n` / `\r` only (`split_cut_lines`), never `str.splitlines()`,
+which also broke a line at a form feed, VT, NEL or U+2028: a page eject in a
+`*>` comment made the comment's tail an "unrecognized statement" and shifted
+every later line number. Every `.cut` reader that numbers lines uses it --
+the parser, `cli/checks.py`, `cli/discovery.read_program_line`,
+`analysis/stub_expectations`, `analysis/assertion_labels` and
+`report/record_rewrite` -- so lint, stub scanning and the
+`--record-expectations` rewrite agree. Each line then goes through
+`_plain_blanks`: any whitespace other than space/tab outside a quoted literal
+(a pasted no-break space) becomes a space, because a MOCK body line is spliced
+verbatim and cobc read `MOVE<NBSP>7` as one word.
 
 Key regexes, matched in this order per non-blank line:
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from mockymock._lines import split_cut_lines
 from mockymock.dsl.model import MockTestSuite
 from mockymock.dsl.parser import _DOTTED_NAME_RE, _SUBSCRIPTED_NAME, _TESTCASE_RE
 
@@ -97,7 +98,7 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
     (most commonly: that case was excluded by `--case`/`--tag` this run) is
     reported skipped rather than guessed at.
     """
-    raw_lines = cut_text.splitlines()
+    raw_lines = split_cut_lines(cut_text)
 
     # (line, kind): kind is "case", "provider-case" (TESTCASE ... USING
     # PROVIDER) or "provider-block" (a PROVIDER data block).

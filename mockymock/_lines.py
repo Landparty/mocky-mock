@@ -51,6 +51,23 @@ def split_source_lines(text: str) -> list[str]:
     return parts
 
 
+def split_cut_lines(text: str) -> list[str]:
+    """Split `.cut` suite text into its lines: on `\\n` / `\\r\\n` / `\\r`
+    only, whatever cobolparser does. `str.splitlines()` also broke a line
+    at a form feed, vertical tab, NEL or U+2028 -- a page eject copied
+    into a `*>` comment turned the comment's tail into an "unrecognized
+    statement", and every later `.cut` line number (in errors, reports
+    and `--record-expectations` rewrites) was off by one. Every reader of
+    `.cut` text that numbers its lines goes through here, so the parser,
+    lint, the stub scanner and the rewriter all agree."""
+    if not text:
+        return []
+    parts = _LINE_BREAK_RE.split(text)
+    if parts[-1] == "":
+        parts.pop()
+    return parts
+
+
 class SourceEncodingError(ValueError):
     """A `.cbl` / `.cut` input that is not valid UTF-8.
 

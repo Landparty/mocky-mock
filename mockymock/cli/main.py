@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import math
 import os
 import re
 import shutil
@@ -228,6 +229,41 @@ def _timeout_seconds(value: str) -> int:
         raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from None
     if seconds < 1:
         raise argparse.ArgumentTypeError("--timeout must be at least 1 second")
+    return seconds
+
+
+def _percent(value: str) -> float:
+    """argparse `type=` for a percentage gate (`--coverage-fail-under`,
+    `--fail-under`): a finite number from 0 to
+    100. A plain `type=float` took `nan` -- every `<` comparison with it
+    is false, so `--coverage-fail-under nan` silently never failed, and
+    `mutate --fail-under nan` crashed with a traceback after the whole
+    mutation run -- and took `150`, a gate no suite can ever pass."""
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid number: {value!r}") from None
+    if not math.isfinite(number) or not 0 <= number <= 100:
+        raise argparse.ArgumentTypeError(
+            f"must be a percentage from 0 to 100, got {value!r}"
+        )
+    return number
+
+
+def _positive_seconds(value: str) -> float:
+    """argparse `type=` for the runner's `--poll-interval` and
+    `--suite-timeout`: a finite number of seconds above 0. A negative
+    poll interval crashed the runner on its first idle `sleep()`, 0 made
+    it claim jobs in a busy loop against the backend, and a timeout of 0
+    or less killed every suite before it started."""
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid number: {value!r}") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a number of seconds above 0, got {value!r}"
+        )
     return seconds
 
 
@@ -2477,7 +2513,9 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         if not compiled.success:
             print("mockymock run: compile failed:")
             print(compiled.stderr)
-            diagnosis = _compile_failure_diagnosis(toolchain, tmp, normalized_lines)
+            diagnosis = _compile_failure_diagnosis(
+                toolchain, tmp, normalized_lines, compiled.stderr
+            )
             if diagnosis:
                 print(f"mockymock run: {diagnosis}")
             if args.verbose or args.keep_sandbox:
@@ -3969,7 +4007,9 @@ def _cmd_report(args: argparse.Namespace) -> int:
         return 1
     source_path, cut_path = pair
     _apply_config_to_args(args, source_path)
-    if args.mutation_threshold < 0 or args.mutation_threshold > 100:
+    # `not 0 <= x <= 100`, not `x < 0 or x > 100`: NaN fails every
+    # comparison, so it passed the old check and gated nothing.
+    if not 0 <= args.mutation_threshold <= 100:
         print("mockymock report: --mutation-threshold must be between 0 and 100")
         return 1
     journal = Path(args.journal) if args.journal else default_journal_path(cut_path)
@@ -4554,8 +4594,11 @@ def comment_out_comment_entries(lines: list[str]) -> list[str]:
 _EXEC_RE = re.compile(r"\bEXEC\s+(SQL|CICS|DLI|SQLIMS)\b", re.IGNORECASE)
 
 
+_UNRECOGNIZED_OPTION_RE = re.compile(r"unrecognized option '(?P<option>--?[\w-]+)'")
+
+
 def _compile_failure_diagnosis(
-    toolchain: ModuleType, tmp: Path, normalized_lines: list[str]
+    toolchain: ModuleType, tmp: Path, normalized_lines: list[str], stderr: str = ""
 ) -> str | None:
     """Whose compile failure this is, when that can be told: the program
     as mockymock read it (copybooks expanded, nothing spliced) is compiled
@@ -4563,7 +4606,20 @@ def _compile_failure_diagnosis(
     under GnuCOBOL; it compiling means mockymock's changes broke it. None
     when the program holds EXEC blocks (cobc cannot compile those without
     mockymock's rewrite, so the check would prove nothing) or when the
-    check cannot run."""
+    check cannot run.
+
+    A cobc that rejects one of the flags the run itself asked for
+    (`--coverage` on GnuCOBOL older than 3.2) is told apart first: the
+    probe compiles without that flag, so it succeeded and the failure
+    used to be reported as a mockymock bug."""
+    option = _UNRECOGNIZED_OPTION_RE.search(stderr)
+    if option is not None:
+        return (
+            f"this GnuCOBOL does not support {option.group('option')}, which "
+            f"the requested run needs (--coverage needs GnuCOBOL 3.2 or "
+            f"later) -- drop the option, or run with the mockymock-cobc "
+            f"Docker image"
+        )
     if any(_EXEC_RE.search(line.split("*>", 1)[0]) for line in normalized_lines):
         return None
     probe = tmp / "UTPROBE" / "PROBE.cbl"
@@ -5126,7 +5182,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--coverage-fail-under",
-        type=float,
+        type=_percent,
         metavar="PERCENT",
         help=(
             "Exit nonzero when the ORIGINAL .cbl's line coverage is below "
@@ -5376,7 +5432,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mutate_parser.add_argument(
         "--fail-under",
-        type=float,
+        type=_percent,
         help="Exit 1 if the mutation score (percent) is below this value",
     )
     mutate_parser.set_defaults(func=_cmd_mutate)
@@ -5696,13 +5752,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner_parser.add_argument(
         "--poll-interval",
-        type=float,
+        type=_positive_seconds,
         default=10.0,
         help="Seconds between claims when no job is queued (default: 10)",
     )
     runner_parser.add_argument(
         "--suite-timeout",
-        type=float,
+        type=_positive_seconds,
         default=900.0,
         help="Seconds one generate or run may take (default: 900)",
     )
